@@ -215,13 +215,14 @@ Local builds need Node.js 24, pnpm 10, Rust stable, the Tauri platform dependenc
 
 ```bash
 git clone https://github.com/t8y2/dbx.git ../dbx
-git -C ../dbx checkout 8559aec8bce4efeb4f52080da8ab1839733ef45b
+git -C ../dbx checkout "$(cat scripts/dbx-ref.txt)"
 ./scripts/prepare-dbx.sh
 ```
 
-The preparation script applies Aeroric's reviewed DBX dependency/security
-updates from `patches/dbx-security.patch`. It is idempotent and is also run by
-the checks and desktop-release workflows.
+The pinned commit lives in `scripts/dbx-ref.txt`, which the checks and
+desktop-release workflows read as well. The preparation script applies Aeroric's
+reviewed DBX dependency/security updates from `patches/dbx-security.patch`, warns
+when the checkout has drifted off the pinned commit, and is idempotent.
 
 ```bash
 pnpm dev            # Start Vite dev server on port 1420

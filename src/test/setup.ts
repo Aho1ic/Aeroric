@@ -40,6 +40,24 @@ if (typeof localStorage.clear !== "function") {
   });
 }
 
+// jsdom 未实现 window.matchMedia()，主题状态在初始化时就会调用它。
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 // jsdom 未实现 HTMLCanvasElement.getContext()，xterm 等组件在渲染时会调用它。
 // 提供一个最小的 2D context stub，消除测试日志中的 "Not implemented" 噪声。
 if (typeof HTMLCanvasElement !== "undefined") {

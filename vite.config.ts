@@ -12,6 +12,9 @@ export default defineConfig(async () => ({
     rolldownOptions: {
       output: {
         manualChunks(id) {
+          // i18n 词表是纯数据（en/zh 各约 2800 行），且被 i18n.tsx 静态引入，没法
+          // 按需加载；单独成块至少让它不再随应用代码一起失效重下。
+          if (id.includes("/src/i18n/")) return "i18n";
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("/react/") || id.includes("/react-dom/")) return "vendor-react";
           if (id.includes("/@xterm/xterm/")) return "vendor-xterm";

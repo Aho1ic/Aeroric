@@ -145,10 +145,20 @@ fn quote_powershell(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn quote_cmd(value: &str) -> Result<String, String> {
+/// cmd.exe 没有通用转义:`"` 能从引号里逃出去接 `&& ...`，而 `%VAR%` 在解析阶段就被
+/// 展开（加引号也拦不住）。两者都无法靠引用消除，只能拒绝。
+fn validate_cmd_value(value: &str, label: &str) -> Result<(), String> {
     if value.contains('"') {
-        return Err("Windows command paths cannot contain double quotes".to_string());
+        return Err(format!("{label} cannot contain double quotes"));
     }
+    if value.contains('%') {
+        return Err(format!("{label} cannot contain '%' on Windows"));
+    }
+    Ok(())
+}
+
+fn quote_cmd(value: &str) -> Result<String, String> {
+    validate_cmd_value(value, "Windows command paths")?;
     Ok(format!("\"{value}\""))
 }
 
@@ -258,12 +268,17 @@ fn build_local_runnable_file_command(
                 quote_powershell(&bash),
                 quote_powershell(file_path)
             ),
-            ("cmd", Some(path)) => format!(
-                "set \"CONDA_PREFIX={path}\" && set \"PATH={};%PATH%\" && {} {}\r",
-                conda_bin_path(path, "cmd"),
-                quote_cmd(&bash)?,
-                quote_cmd(file_path)?
-            ),
+            ("cmd", Some(path)) => {
+                // `set "VAR=value"` 不能再套一层引号，路径只能原样插入，
+                // 因此这里必须先校验，否则一个 `"` 就能接出 `&& <任意命令>`。
+                validate_cmd_value(path, "Conda path")?;
+                format!(
+                    "set \"CONDA_PREFIX={path}\" && set \"PATH={};%PATH%\" && {} {}\r",
+                    conda_bin_path(path, "cmd"),
+                    quote_cmd(&bash)?,
+                    quote_cmd(file_path)?
+                )
+            }
             ("cmd", None) => format!("{} {}\r", quote_cmd(&bash)?, quote_cmd(file_path)?),
             (_, Some(path)) => format!(
                 "CONDA_PREFIX={} PATH={}:\"$PATH\" {} {}\r",
@@ -425,5 +440,34 @@ mod tests {
             command.command.as_deref(),
             Some("\"C:\\Python 3\\python.exe\" \"C:\\Users\\Test User\\项目\\train.py\"\r")
         );
+    }
+
+    #[test]
+    fn cmd_file_commands_reject_unquotable_characters() {
+        let shell = ShellCommand {
+            program: "cmd.exe".to_string(),
+            args: Vec::new(),
+        };
+        // 加引号也拦不住 cmd.exe 的变量展开，所以 `%` 必须直接拒绝。
+        let expanded = build_local_runnable_file_command(
+            r"C:\scripts\%USERPROFILE%\train.py",
+            None,
+            None,
+            &shell,
+        );
+        assert!(expanded.is_err_and(|err| err.contains('%')));
+
+        // `"` 能从引号里逃出去接 `&& <任意命令>`。
+        let escaped = build_local_runnable_file_command("C:\\scripts\\a\".py", None, None, &shell);
+        assert!(escaped.is_err_and(|err| err.contains("double quotes")));
+
+        // conda 路径走 `set "VAR=value"`，不经过 quote_cmd，同样必须校验。
+        let conda = build_local_runnable_file_command(
+            r"C:\scripts\setup.sh",
+            Some("C:\\Conda\" && calc &&\""),
+            None,
+            &shell,
+        );
+        assert!(conda.is_err_and(|err| err.contains("Conda path")));
     }
 }

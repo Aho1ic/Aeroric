@@ -14,7 +14,7 @@ use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
-    HOST,
+    HOST, ORIGIN,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -48,6 +48,7 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "upgrade",
 ];
 const NON_RETRYABLE_STATUS_CODES: &[u16] = &[400, 405, 406, 413, 414, 415, 422, 501];
+const SEC_FETCH_SITE_HEADER: &str = "sec-fetch-site";
 
 #[derive(Clone)]
 pub(crate) struct ServerContext {
@@ -64,17 +65,24 @@ pub(crate) fn router(context: ServerContext) -> Router {
         .with_state(context)
 }
 
-async fn health_check() -> Json<Value> {
+async fn health_check(headers: HeaderMap) -> Response {
+    if request_is_cross_site(&headers) {
+        return cross_site_response();
+    }
     Json(json!({
         "status": "healthy",
         "timestamp": chrono::Utc::now().to_rfc3339(),
     }))
+    .into_response()
 }
 
 async fn proxy_request(State(context): State<ServerContext>, request: Request) -> Response {
     let started = Instant::now();
     let started_at = usage::unix_millis();
     let (mut parts, body) = request.into_parts();
+    if request_is_cross_site(&parts.headers) {
+        return cross_site_response();
+    }
     let route = match select_route(&parts.uri, &parts.headers) {
         Ok(route) => route,
         Err(message) => return json_error(StatusCode::NOT_FOUND, message),
@@ -596,6 +604,48 @@ fn request_is_authorized(config: &RouterRuntimeConfig, headers: &HeaderMap) -> b
     router_credentials(headers)
         .iter()
         .any(|credential| constant_time_secret_eq(credential, &config.access_token))
+}
+
+/// 判断请求是否来自浏览器的跨站上下文。
+///
+/// 绑定回环地址时 `request_is_authorized` 会放行不带 token 的请求 —— 本机的 agent CLI
+/// 需要这个（它们并不知道 router token），但这同时意味着任意网页里的
+/// `fetch("http://127.0.0.1:<port>/v1/messages")` 都能借用户的额度和上游凭据。
+/// CLI 客户端不会带 `Origin` / `Sec-Fetch-Site`，而浏览器一定会带，据此把两者分开。
+fn request_is_cross_site(headers: &HeaderMap) -> bool {
+    // Fetch Metadata 由浏览器强制写入，页面脚本无法伪造。
+    if let Some(site) = trimmed_header(headers, SEC_FETCH_SITE_HEADER) {
+        if site.eq_ignore_ascii_case("cross-site") {
+            return true;
+        }
+    }
+    // 没有 Fetch Metadata 的旧浏览器仍会为跨源请求带上 Origin。无法解析的取值
+    // （典型是 sandbox iframe / file:// 页面的 `null`）按不可信处理。
+    match trimmed_header(headers, ORIGIN.as_str()) {
+        Some(origin) => !origin_is_loopback(origin),
+        None => false,
+    }
+}
+
+fn trimmed_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn origin_is_loopback(origin: &str) -> bool {
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        // 只认 `localhost` 本身；`evil.localhost` 之类的子域不算本机来源。
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
 }
 
 fn router_credentials(headers: &HeaderMap) -> Vec<&str> {
@@ -2301,6 +2351,13 @@ fn unauthorized_response() -> Response {
     response
 }
 
+fn cross_site_response() -> Response {
+    json_error(
+        StatusCode::FORBIDDEN,
+        "cross-site browser requests are not allowed",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2609,6 +2666,55 @@ mod tests {
         let config =
             RouterRuntimeConfig::new("127.0.0.1", 43123, false, RouterUpstreams::default());
         assert!(request_is_authorized(&config, &HeaderMap::new()));
+    }
+
+    #[test]
+    fn agent_cli_requests_are_not_treated_as_cross_site() {
+        // CLI 客户端既不带 Origin 也不带 Fetch Metadata。
+        assert!(!request_is_cross_site(&HeaderMap::new()));
+
+        let mut direct = HeaderMap::new();
+        direct.insert("sec-fetch-site", HeaderValue::from_static("none"));
+        assert!(!request_is_cross_site(&direct));
+    }
+
+    #[test]
+    fn browser_cross_site_requests_are_rejected() {
+        let mut fetch_metadata = HeaderMap::new();
+        fetch_metadata.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(request_is_cross_site(&fetch_metadata));
+
+        // 旧浏览器没有 Fetch Metadata，但跨源请求一定带 Origin。
+        let mut remote_origin = HeaderMap::new();
+        remote_origin.insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert!(request_is_cross_site(&remote_origin));
+
+        // 不透明来源（sandbox iframe / file:// 页面）同样不可信。
+        let mut opaque_origin = HeaderMap::new();
+        opaque_origin.insert(ORIGIN, HeaderValue::from_static("null"));
+        assert!(request_is_cross_site(&opaque_origin));
+
+        // `localhost` 的子域会解析到回环地址，但并不是本机来源。
+        let mut lookalike = HeaderMap::new();
+        lookalike.insert(ORIGIN, HeaderValue::from_static("http://evil.localhost"));
+        assert!(request_is_cross_site(&lookalike));
+    }
+
+    #[test]
+    fn local_web_clients_are_allowed() {
+        for origin in [
+            "http://localhost:1420",
+            "http://127.0.0.1:43123",
+            "http://[::1]:43123",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
+            headers.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
+            assert!(
+                !request_is_cross_site(&headers),
+                "expected {origin} to be allowed"
+            );
+        }
     }
 
     #[test]

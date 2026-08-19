@@ -43,6 +43,22 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// 比较两个 token 摘要且不按字节提前返回。
+///
+/// `==` 会在第一个不同的字节上短路，泄漏"猜对了几位摘要前缀"这一信号。虽然拿到
+/// 摘要前缀还需要求原像才能伪造 token，但认证路径上没有必要留这个侧信道。
+fn constant_time_hash_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.is_empty() || left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right.iter())
+        .fold(0_u8, |difference, (l, r)| difference | (l ^ r))
+        == 0
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -255,7 +271,11 @@ impl AuthStore {
         if let Some(token) = device_token {
             let hash = hash_token(token);
             let now = now_ms();
-            if let Some(entry) = self.devices.iter_mut().find(|d| d.token_hash == hash) {
+            if let Some(entry) = self
+                .devices
+                .iter_mut()
+                .find(|d| constant_time_hash_eq(&d.token_hash, &hash))
+            {
                 entry.last_seen_at = now;
                 let device_id = entry.id.clone();
                 let _ = self.persist_devices();
@@ -370,6 +390,16 @@ mod tests {
         let token = generate_token().unwrap();
         assert!(!token.contains('+') && !token.contains('/') && !token.contains('='));
         assert_eq!(hash_token(&token).len(), 64);
+    }
+
+    #[test]
+    fn constant_time_hash_eq_matches_only_identical_digests() {
+        let hash = hash_token("device-token");
+        assert!(constant_time_hash_eq(&hash, &hash_token("device-token")));
+        assert!(!constant_time_hash_eq(&hash, &hash_token("other-token")));
+        // 长度不同（含空摘要）一律不匹配，避免把空字符串当成有效凭据。
+        assert!(!constant_time_hash_eq(&hash, &hash[..63]));
+        assert!(!constant_time_hash_eq("", ""));
     }
 
     #[test]

@@ -82,14 +82,14 @@ jobs:
 
       - name: Checkout dbx dependency
         shell: bash
-        env:
-          # Pin the dbx path-dependency to a known-good commit so a release tag
-          # always builds against the same dbx source. Cargo.lock does not
-          # constrain a `path` dependency's contents. Keep in sync with
-          # checks.yml and bump deliberately.
-          DBX_REF: 8559aec8bce4efeb4f52080da8ab1839733ef45b
         run: |
           set -euo pipefail
+          # Pin the dbx path-dependency to a known-good commit so a release tag
+          # always builds against the same dbx source. Cargo.lock does not
+          # constrain a `path` dependency's contents. The commit lives in
+          # scripts/dbx-ref.txt, shared with checks.yml and
+          # scripts/prepare-dbx.sh. Bump deliberately.
+          DBX_REF="$(tr -d '[:space:]' <scripts/dbx-ref.txt)"
           git init ../dbx
           git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
           git -C ../dbx checkout --detach "$DBX_REF"

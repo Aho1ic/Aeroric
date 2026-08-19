@@ -1,19 +1,19 @@
 import { useRef, useCallback, useEffect } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  createTerminalRingBuffer,
+  joinTerminalBuffer,
+  joinTerminalBufferFrom,
+  pushTerminalChunk,
+  terminalBufferAbsLength,
+  type TerminalRingBuffer,
+} from "../terminalRingBuffer";
 
 // ── Buffer constants ─────────────────────────────────────────────────────────
 
-const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB per task (in-memory limit)
-const MAX_BUFFER_CHUNKS = 256; // compact when chunks array exceeds this
 const DRAIN_FRAME_BUDGET = 128 * 1024; // 每帧最多处理 128KB，避免单帧写入时间过长
 
 // ── Buffer types & helpers ───────────────────────────────────────────────────
-
-interface TaskBuffer {
-  chunks: string[];
-  totalLen: number;
-  droppedLen: number;
-}
 
 export type TerminalWriteFn = (data: string, callback?: () => void) => void;
 export type TerminalResizeFn = (cols: number, rows: number) => void;
@@ -24,53 +24,14 @@ interface TerminalWriteState {
   generation: number;
 }
 
-function createTaskBuffer(): TaskBuffer {
-  return { chunks: [], totalLen: 0, droppedLen: 0 };
-}
-
 function createTerminalWriteState(generation = 0): TerminalWriteState {
   return { pending: [], ready: false, generation };
-}
-
-function pushToBuffer(buf: TaskBuffer, data: string): void {
-  buf.chunks.push(data);
-  buf.totalLen += data.length;
-  while (buf.totalLen > MAX_BUFFER_SIZE && buf.chunks.length > 0) {
-    const dropped = buf.chunks.shift()!;
-    buf.totalLen -= dropped.length;
-    buf.droppedLen += dropped.length;
-  }
-  if (buf.chunks.length > MAX_BUFFER_CHUNKS) {
-    const merged = buf.chunks.join("");
-    buf.chunks.length = 0;
-    buf.chunks.push(merged);
-  }
-}
-
-function getBufferAbsLen(buf: TaskBuffer): number {
-  return buf.totalLen + buf.droppedLen;
-}
-
-function joinBufferFrom(buf: TaskBuffer, absOffset: number): string {
-  const relOffset = absOffset - buf.droppedLen;
-  if (relOffset <= 0) return buf.chunks.join("");
-  let cum = 0;
-  for (let i = 0; i < buf.chunks.length; i++) {
-    const len = buf.chunks[i].length;
-    if (cum + len > relOffset) {
-      const parts = buf.chunks.slice(i);
-      parts[0] = parts[0].slice(relOffset - cum);
-      return parts.join("");
-    }
-    cum += len;
-  }
-  return "";
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useTerminalManager() {
-  const taskBufferRef = useRef<Record<string, TaskBuffer>>({});
+  const taskBufferRef = useRef<Record<string, TerminalRingBuffer>>({});
   const terminalSnapshotRef = useRef<Record<string, { snapshot: string; bufferLength: number }>>(
     {},
   );
@@ -132,7 +93,7 @@ export function useTerminalManager() {
         enqueueTerminalWrite(taskId, joined);
       }
       if (taskId in taskBufferRef.current) {
-        pushToBuffer(taskBufferRef.current[taskId], joined);
+        pushTerminalChunk(taskBufferRef.current[taskId], joined);
       }
 
       pendingOutputs.delete(taskId);
@@ -191,7 +152,7 @@ export function useTerminalManager() {
   // ── Public API ───────────────────────────────────────────────────────────
 
   const resetTaskTerminal = useCallback((taskId: string) => {
-    taskBufferRef.current[taskId] = createTaskBuffer();
+    taskBufferRef.current[taskId] = createTerminalRingBuffer();
     delete terminalSnapshotRef.current[taskId];
   }, []);
 
@@ -212,8 +173,8 @@ export function useTerminalManager() {
     if (writeFn) {
       writeFn(errMsg);
     }
-    const buf = taskBufferRef.current[taskId] ?? createTaskBuffer();
-    pushToBuffer(buf, errMsg);
+    const buf = taskBufferRef.current[taskId] ?? createTerminalRingBuffer();
+    pushTerminalChunk(buf, errMsg);
     taskBufferRef.current[taskId] = buf;
   }, []);
 
@@ -272,7 +233,7 @@ export function useTerminalManager() {
     const pendingLen = state?.pending.reduce((s, c) => s + c.length, 0) ?? 0;
     terminalSnapshotRef.current[taskId] = {
       snapshot,
-      bufferLength: buf ? Math.max(0, getBufferAbsLen(buf) - pendingLen) : 0,
+      bufferLength: buf ? Math.max(0, terminalBufferAbsLength(buf) - pendingLen) : 0,
     };
   }, []);
 
@@ -282,20 +243,20 @@ export function useTerminalManager() {
 
     if (!buf) return { initialData: "", rawReplayData: "" };
 
-    const rawReplayData = buf.chunks.join("");
+    const rawReplayData = joinTerminalBuffer(buf);
 
     if (!snapshotState?.snapshot) {
       return { initialData: rawReplayData, rawReplayData };
     }
 
-    const absLen = getBufferAbsLen(buf);
+    const absLen = terminalBufferAbsLength(buf);
     if (snapshotState.bufferLength < 0 || snapshotState.bufferLength > absLen) {
       return { initialData: rawReplayData, rawReplayData };
     }
 
     return {
       initialSnapshot: snapshotState.snapshot,
-      initialData: joinBufferFrom(buf, snapshotState.bufferLength),
+      initialData: joinTerminalBufferFrom(buf, snapshotState.bufferLength),
       rawReplayData,
     };
   }, []);

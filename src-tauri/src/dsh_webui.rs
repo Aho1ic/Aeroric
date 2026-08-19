@@ -78,6 +78,10 @@ pub struct DshWebUiManager {
     /// remain interactive after a turn ends, so the stream must outlive the
     /// command that admitted the first prompt.
     session_stream_aborts: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    /// The open reasoning block per task, folded into a single terminal row
+    /// instead of streamed. Keyed by task because one `dsh web` process serves
+    /// every task and their event streams interleave.
+    reasoning_folds: Arc<Mutex<HashMap<String, ReasoningFold>>>,
     /// Abort sender for the background `events.host` subscription.
     host_events_abort: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
@@ -124,6 +128,7 @@ impl DshWebUiManager {
             cancelled_tasks: Arc::new(Mutex::new(HashSet::new())),
             completed_tasks: Arc::new(Mutex::new(HashSet::new())),
             session_stream_aborts: Arc::new(Mutex::new(HashMap::new())),
+            reasoning_folds: Arc::new(Mutex::new(HashMap::new())),
             host_events_abort: Arc::new(Mutex::new(None)),
         }
     }
@@ -193,6 +198,7 @@ impl DshWebUiManager {
         }
         self.active_sessions.lock().clear();
         self.completed_tasks.lock().clear();
+        self.reasoning_folds.lock().clear();
         let processes = self.processes.write().drain().collect::<Vec<_>>();
         for (_, mut process) in processes {
             let _ = Self::stop_process(&mut process.child).await;
@@ -217,6 +223,7 @@ impl DshWebUiManager {
         if let Some(abort) = self.session_stream_aborts.lock().remove(task_id) {
             let _ = abort.send(());
         }
+        self.reasoning_folds.lock().remove(task_id);
         (active, true)
     }
 
@@ -1272,6 +1279,7 @@ pub async fn stop_dsh_webui(
                 let _ = sender.send(());
             }
             state.active_sessions.lock().remove(&task_id);
+            state.reasoning_folds.lock().remove(&task_id);
         }
         DshWebUiManager::stop_process(&mut process.child).await?;
     }
@@ -1409,7 +1417,10 @@ const ANSI_DIM: &str = "\x1b[2m";
 const ANSI_BOLD: &str = "\x1b[1m";
 const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_RED: &str = "\x1b[31m";
-const ANSI_CYAN: &str = "\x1b[36m";
+
+/// Widest folded fragment the bridge prints. Rows stay well inside a narrow
+/// split pane, so a folded summary never wraps into a second terminal line.
+const FOLD_SUMMARY_CHARS: usize = 96;
 
 /// Non-empty string field, matching how the harness treats a blank title.
 fn view_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -1428,15 +1439,156 @@ fn push_line(out: &mut String, style: &str, text: &str) {
     out.push_str("\r\n");
 }
 
-/// Write a multi-line block one terminal line at a time so an embedded `\n`
-/// cannot leave the cursor mid-column.
-fn push_block(out: &mut String, style: &str, prefix: &str, text: &str) {
-    for line in text.split('\n') {
-        push_line(
-            out,
-            style,
-            &format!("{prefix}{}", line.trim_end_matches('\r')),
-        );
+/// Drop ANSI escape sequences and control bytes from one line. Tool output is
+/// frequently styled, and a folded row that carried a cursor move or a
+/// half-open colour span would corrupt every row printed after it.
+fn plain_single_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\x1b' {
+            if character == '\t' {
+                out.push(' ');
+            } else if !character.is_control() {
+                out.push(character);
+            }
+            continue;
+        }
+        match characters.peek() {
+            // CSI: parameters and intermediates, terminated by a final byte.
+            Some('[') => {
+                let _ = characters.next();
+                for next in characters.by_ref() {
+                    if ('\x40'..='\x7e').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            // OSC: terminated by BEL or by ST (ESC \).
+            Some(']') => {
+                let _ = characters.next();
+                let mut saw_escape = false;
+                for next in characters.by_ref() {
+                    if saw_escape || next == '\x07' {
+                        break;
+                    }
+                    saw_escape = next == '\x1b';
+                }
+            }
+            _ => {
+                let _ = characters.next();
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+fn clip_fragment(text: &str) -> String {
+    if text.chars().count() <= FOLD_SUMMARY_CHARS {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(FOLD_SUMMARY_CHARS).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Reduce a possibly long, possibly styled body to the single line a folded row
+/// can carry: the first line with content, stripped of control bytes and
+/// clipped. `None` means the body had nothing to say.
+fn fold_summary(text: &str) -> Option<String> {
+    text.split('\n')
+        .map(plain_single_line)
+        .find(|line| !line.is_empty())
+        .map(|line| clip_fragment(&line))
+}
+
+/// Lines with content, used as a folded row's size hint. Blank lines are the
+/// padding of a body that is not being printed, so they are not counted.
+fn count_content_lines(text: &str) -> usize {
+    text.split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+fn plural(count: usize, one: &'static str, many: &'static str) -> &'static str {
+    if count == 1 {
+        one
+    } else {
+        many
+    }
+}
+
+/// One folded reasoning row per assistant block.
+///
+/// dsh's own web UI renders reasoning as a collapsed "Think" disclosure and
+/// settles on the block's first line once it finishes; nothing of the raw
+/// `reasoning-delta` stream reaches the transcript unless the row is expanded.
+/// The terminal has no disclosure to expand, so streaming those deltas verbatim
+/// buried the answer and every tool row under the model's scratch work. This
+/// accumulator keeps only what the folded row prints — the first line with
+/// content and how many lines followed it — and the full reasoning text stays
+/// available in the session record, which renders it as a collapsible block.
+#[derive(Default)]
+struct ReasoningFold {
+    /// First line with content, clipped to one terminal row.
+    summary: String,
+    summary_chars: usize,
+    /// The summary closes at the first newline that follows content.
+    summary_closed: bool,
+    /// Lines with content seen so far.
+    lines: usize,
+    /// Whether the line currently being accumulated carries content.
+    line_has_content: bool,
+}
+
+impl ReasoningFold {
+    fn push(&mut self, delta: &str) {
+        for character in delta.chars() {
+            if character == '\n' {
+                if self.line_has_content {
+                    self.lines += 1;
+                    self.summary_closed = !self.summary.is_empty();
+                }
+                self.line_has_content = false;
+                continue;
+            }
+            if character.is_control() {
+                continue;
+            }
+            if !character.is_whitespace() {
+                self.line_has_content = true;
+            }
+            if self.summary_closed || (self.summary.is_empty() && character.is_whitespace()) {
+                continue;
+            }
+            match self.summary_chars.cmp(&FOLD_SUMMARY_CHARS) {
+                std::cmp::Ordering::Less => self.summary.push(character),
+                std::cmp::Ordering::Equal => self.summary.push('…'),
+                std::cmp::Ordering::Greater => continue,
+            }
+            self.summary_chars += 1;
+        }
+    }
+
+    /// Close the block and return its folded row. `None` means no reasoning was
+    /// collected, so the terminal prints nothing at all.
+    fn take_row(&mut self) -> Option<String> {
+        if self.line_has_content {
+            self.lines += 1;
+        }
+        let fold = std::mem::take(self);
+        let summary = fold.summary.trim_end();
+        if summary.is_empty() {
+            return None;
+        }
+        let size = if fold.lines > 1 {
+            format!(" · {} lines", fold.lines)
+        } else {
+            String::new()
+        };
+        let mut out = String::from("\r\n");
+        push_line(&mut out, ANSI_DIM, &format!("✻ Thinking · {summary}{size}"));
+        Some(out)
     }
 }
 
@@ -1452,7 +1604,7 @@ fn diff_rows(old_text: Option<&str>, new_text: &str) -> Vec<(char, String)> {
             .collect();
     };
     let prev: Vec<&str> = old_text.split('\n').collect();
-    // A common prefix/suffix trim keeps the printed hunk tight without pulling a
+    // A common prefix/suffix trim keeps the counted hunk tight without pulling a
     // full LCS diff into the backend; results already arrive as focused hunks.
     let mut head = 0;
     while head < prev.len() && head < next.len() && prev[head] == next[head] {
@@ -1475,79 +1627,61 @@ fn diff_rows(old_text: Option<&str>, new_text: &str) -> Vec<(char, String)> {
     rows
 }
 
-fn push_diffs(out: &mut String, diffs: &[Value]) {
-    for diff in diffs {
-        let Some(path) = view_str(diff, "path") else {
-            continue;
-        };
-        let Some(new_text) = diff.get("newText").and_then(Value::as_str) else {
-            continue;
-        };
-        let old_text = diff.get("oldText").and_then(Value::as_str);
-        let label = if old_text.is_none() {
-            format!("  {path} (new file)")
-        } else {
-            format!("  {path}")
-        };
-        push_line(out, ANSI_CYAN, &label);
-        for (sign, line) in diff_rows(old_text, new_text) {
-            let style = if sign == '+' { ANSI_GREEN } else { ANSI_RED };
-            push_line(out, style, &format!("  {sign}{line}"));
+/// Name the files a change touches without printing any of it: the exact path
+/// when a change is single-file, a count otherwise. `None` means the harness
+/// sent a `diff` view with nothing usable in it.
+fn diff_paths_fragment(diffs: &[Value]) -> Option<String> {
+    let paths: Vec<&str> = diffs
+        .iter()
+        .filter_map(|diff| view_str(diff, "path"))
+        .collect();
+    match paths.as_slice() {
+        [] => None,
+        [path] => {
+            let created = diffs
+                .first()
+                .is_some_and(|diff| diff.get("oldText").is_some_and(Value::is_null));
+            Some(if created {
+                format!("{path} (new file)")
+            } else {
+                (*path).to_string()
+            })
         }
+        paths => Some(format!("{} files", paths.len())),
     }
 }
 
-fn push_numbered(out: &mut String, number: i64, text: &str) {
-    push_line(
-        out,
-        "",
-        &format!(
-            "{ANSI_DIM}{number:>6} │ {ANSI_RESET}{}",
-            text.trim_end_matches('\r')
-        ),
-    );
-}
-
-/// Render a pending-call view. A `diff` call carries the *proposed* change and
-/// the matching result repeats it once applied; in an append-only terminal only
-/// the paths are listed here so the change body is printed once, at result time.
+/// Render a pending-call view as one folded row: the tool's title plus a
+/// single-line hint of what it is about to do. dsh web shows the same header on
+/// a collapsed card and keeps the body — the full command, the proposed hunks,
+/// the raw input — behind a disclosure. A terminal has no disclosure, so the
+/// body is left to the session record and the insights trajectory.
 fn render_tool_call_view(view: &Value) -> Option<String> {
     let title = view_str(view, "title")?;
-    let mut out = String::from("\r\n");
+    let mut kind = String::new();
+    let mut detail: Vec<String> = Vec::new();
     match view.get("card").and_then(Value::as_str)? {
         "terminal" => {
-            push_line(&mut out, ANSI_BOLD, &format!("▸ {title}"));
-            if let Some(description) = view_str(view, "description") {
-                push_block(&mut out, ANSI_DIM, "  ", description);
-            }
-            if let Some(cwd) = view_str(view, "cwd") {
-                push_line(&mut out, ANSI_DIM, &format!("  cwd: {cwd}"));
+            if let Some(description) = view_str(view, "description").and_then(fold_summary) {
+                detail.push(description);
             }
         }
         "diff" => {
-            push_line(&mut out, ANSI_BOLD, &format!("▸ {title}"));
-            for diff in view.get("diffs").and_then(Value::as_array)?.iter() {
-                if let Some(path) = view_str(diff, "path") {
-                    push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
-                }
+            let diffs = view.get("diffs").and_then(Value::as_array)?;
+            if let Some(paths) = diff_paths_fragment(diffs) {
+                detail.push(paths);
             }
         }
         "generic" => {
             // rawInput is deliberately not printed: it is the unparsed tool
             // input and can be large. The insights trajectory shows it in full.
-            let kind = view_str(view, "kind")
-                .map(|kind| format!(" {ANSI_DIM}({kind}){ANSI_RESET}"))
-                .unwrap_or_default();
-            push_line(
-                &mut out,
-                "",
-                &format!("{ANSI_BOLD}▸ {title}{ANSI_RESET}{kind}"),
-            );
-            for location in view
+            if let Some(label) = view_str(view, "kind") {
+                kind = format!(" {ANSI_DIM}({label}){ANSI_RESET}");
+            }
+            if let Some(location) = view
                 .get("locations")
                 .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default()
+                .and_then(|locations| locations.first())
             {
                 if let Some(path) = view_str(location, "path") {
                     let line = location
@@ -1555,71 +1689,110 @@ fn render_tool_call_view(view: &Value) -> Option<String> {
                         .and_then(Value::as_i64)
                         .map(|line| format!(":{line}"))
                         .unwrap_or_default();
-                    push_line(&mut out, ANSI_DIM, &format!("  {path}{line}"));
+                    detail.push(format!("{path}{line}"));
                 }
             }
         }
         _ => return None,
     }
+    let mut row = format!("{ANSI_BOLD}▸ {title}{ANSI_RESET}{kind}");
+    if !detail.is_empty() {
+        row.push_str(&format!(" {ANSI_DIM}· {}{ANSI_RESET}", detail.join(" · ")));
+    }
+    let mut out = String::from("\r\n");
+    push_line(&mut out, "", &row);
     Some(out)
 }
 
-/// Render a completed-call view. Output is never truncated here — the harness
-/// already applies its own caps, and dropping lines would hide command output
-/// the raw fallback used to show in full.
+/// Render a completed-call view as one folded row that closes the call row
+/// printed just above it: a state glyph, the harness's replacement title when
+/// it sends one, and a one-line verdict. Bodies are summarized rather than
+/// printed — dsh web keeps them collapsed on the same row, and a terminal that
+/// dumped every command's output, every hunk and every matched line drowned the
+/// conversation it was supposed to frame.
 fn render_tool_result_view(view: &Value) -> Option<String> {
     let card = view.get("card").and_then(Value::as_str)?;
-    let title = view_str(view, "title");
-    let mut out = String::from("\r\n");
-    if let Some(title) = title {
-        push_line(&mut out, ANSI_BOLD, title);
-    }
+    let mut failed = false;
+    let mut detail: Vec<String> = Vec::new();
     match card {
         "terminal" => {
-            if let Some(output) = view.get("output").and_then(Value::as_str) {
-                if !output.is_empty() {
-                    push_block(&mut out, "", "", output.trim_end_matches('\n'));
-                }
-            }
             // exitCode and signal are mutually exclusive; a signal is the
             // stronger statement about how the run ended, so it wins.
             if let Some(signal) = view_str(view, "signal") {
-                push_line(&mut out, ANSI_RED, &format!("  ✖ {signal}"));
-            } else if let Some(code) = view.get("exitCode").and_then(Value::as_i64) {
-                if code != 0 {
-                    push_line(&mut out, ANSI_RED, &format!("  ✖ exit {code}"));
+                failed = true;
+                detail.push(signal.to_string());
+            } else if let Some(code) = view
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .filter(|code| *code != 0)
+            {
+                failed = true;
+                detail.push(format!("exit {code}"));
+            }
+            let output = view
+                .get("output")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match fold_summary(output) {
+                Some(summary) => {
+                    detail.push(summary);
+                    let lines = count_content_lines(output);
+                    if lines > 1 {
+                        detail.push(format!("{lines} lines"));
+                    }
                 }
+                None => detail.push("no output".to_string()),
             }
         }
-        "diff" => push_diffs(&mut out, view.get("diffs").and_then(Value::as_array)?),
-        "search" => match view.get("shape").and_then(Value::as_str)? {
-            "matches" => {
-                for file in view.get("files").and_then(Value::as_array)? {
-                    let Some(path) = view_str(file, "path") else {
-                        continue;
-                    };
-                    push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
-                    for entry in file
-                        .get("matches")
-                        .and_then(Value::as_array)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default()
-                    {
-                        if let (Some(number), Some(line)) = (
-                            entry.get("lineNumber").and_then(Value::as_i64),
-                            entry.get("line").and_then(Value::as_str),
-                        ) {
-                            push_numbered(&mut out, number, line);
-                        }
+        "diff" => {
+            let diffs = view.get("diffs").and_then(Value::as_array)?;
+            let paths = diff_paths_fragment(diffs)?;
+            let (mut added, mut removed) = (0usize, 0usize);
+            for diff in diffs {
+                let Some(new_text) = diff.get("newText").and_then(Value::as_str) else {
+                    continue;
+                };
+                for (sign, _) in diff_rows(diff.get("oldText").and_then(Value::as_str), new_text) {
+                    if sign == '+' {
+                        added += 1;
+                    } else {
+                        removed += 1;
                     }
                 }
             }
+            detail.push(format!("{paths} +{added} -{removed}"));
+        }
+        "search" => match view.get("shape").and_then(Value::as_str)? {
+            "matches" => {
+                let files = view.get("files").and_then(Value::as_array)?;
+                let hits: usize = files
+                    .iter()
+                    .map(|file| {
+                        file.get("matches")
+                            .and_then(Value::as_array)
+                            .map_or(0, Vec::len)
+                    })
+                    .sum();
+                let scope = match files.as_slice() {
+                    [file] => view_str(file, "path").unwrap_or("1 file").to_string(),
+                    files => format!("{} files", files.len()),
+                };
+                detail.push(format!(
+                    "{hits} {} in {scope}",
+                    plural(hits, "match", "matches")
+                ));
+            }
             "paths" => {
-                for path in view.get("paths").and_then(Value::as_array)? {
-                    if let Some(path) = path.as_str().filter(|path| !path.is_empty()) {
-                        push_line(&mut out, ANSI_CYAN, &format!("  {path}"));
-                    }
-                }
+                let paths: Vec<&str> = view
+                    .get("paths")
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .filter_map(|path| path.as_str().filter(|path| !path.is_empty()))
+                    .collect();
+                detail.push(match paths.as_slice() {
+                    [path] => (*path).to_string(),
+                    paths => format!("{} paths", paths.len()),
+                });
             }
             _ => return None,
         },
@@ -1628,61 +1801,55 @@ fn render_tool_result_view(view: &Value) -> Option<String> {
             let lines = view.get("lines").and_then(Value::as_array)?;
             let total = view.get("totalLines").and_then(Value::as_i64).unwrap_or(0);
             let offset = view.get("offset").and_then(Value::as_i64).unwrap_or(1);
-            push_line(
-                &mut out,
-                ANSI_DIM,
-                &format!("  {path} — {} of {total} lines from {offset}", lines.len()),
-            );
-            for line in lines {
-                if let (Some(number), Some(text)) = (
-                    line.get("number").and_then(Value::as_i64),
-                    line.get("text").and_then(Value::as_str),
-                ) {
-                    push_numbered(&mut out, number, text);
-                }
-            }
+            detail.push(format!(
+                "{path} — {} of {total} lines from {offset}",
+                lines.len()
+            ));
         }
         "web" => match view.get("kind").and_then(Value::as_str)? {
             "search" => {
-                if let Some(answer) = view_str(view, "answer") {
-                    push_block(&mut out, "", "  ", answer);
+                if let Some(answer) = view_str(view, "answer").and_then(fold_summary) {
+                    detail.push(answer);
                 }
-                for (index, source) in view
-                    .get("sources")
-                    .and_then(Value::as_array)?
-                    .iter()
-                    .enumerate()
-                {
-                    let Some(url) = view_str(source, "url") else {
-                        continue;
-                    };
-                    let label = view_str(source, "title").unwrap_or(url);
-                    push_line(&mut out, "", &format!("  {}. {label}", index + 1));
-                    push_line(&mut out, ANSI_DIM, &format!("     {url}"));
-                }
+                let sources = view.get("sources").and_then(Value::as_array)?;
+                detail.push(format!(
+                    "{} {}",
+                    sources.len(),
+                    plural(sources.len(), "source", "sources")
+                ));
             }
             "fetch" => {
                 let url = view_str(view, "url")?;
                 let status = view.get("statusCode").and_then(Value::as_i64)?;
-                let style = if (200..400).contains(&status) {
-                    ANSI_DIM
-                } else {
-                    ANSI_RED
-                };
-                push_line(&mut out, style, &format!("  {status} {url}"));
+                failed = !(200..400).contains(&status);
+                detail.push(format!("{status} {url}"));
             }
             _ => return None,
         },
-        // A generic result view adds only a replacement title, already written
-        // above; without one it says nothing the raw event does not carry.
+        // A generic result view carries only a replacement title; without one it
+        // says nothing the raw event does not already carry.
         "generic" => {
-            title?;
+            view_str(view, "title")?;
         }
         _ => return None,
     }
     if view.get("truncated") == Some(&Value::Bool(true)) {
-        push_line(&mut out, ANSI_DIM, "  … truncated by the harness");
+        detail.push("truncated by the harness".to_string());
     }
+    let glyph = if failed {
+        format!("{ANSI_RED}✖{ANSI_RESET}")
+    } else {
+        format!("{ANSI_GREEN}✔{ANSI_RESET}")
+    };
+    let mut row = format!("  {glyph}");
+    if let Some(title) = view_str(view, "title") {
+        row.push_str(&format!(" {title}"));
+    }
+    if !detail.is_empty() {
+        row.push_str(&format!(" {ANSI_DIM}· {}{ANSI_RESET}", detail.join(" · ")));
+    }
+    let mut out = String::new();
+    push_line(&mut out, "", &row);
     Some(out)
 }
 
@@ -1706,17 +1873,37 @@ fn render_tool_event_view(payload: &Value, expected: &str) -> Option<String> {
     }
 }
 
-fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
-    let Some(event) = payload.get("event") else {
-        return;
-    };
+/// Convert one `session/event` frame into terminal text.
+///
+/// `fold` carries the task's open reasoning block across frames: a
+/// `reasoning-delta` is accumulated instead of printed, and the folded row is
+/// flushed as soon as anything else claims the terminal — the assistant's answer,
+/// a tool row, or the end of the turn.
+fn session_event_terminal_output(payload: &Value, fold: &mut ReasoningFold) -> Option<String> {
+    let event = payload.get("event")?;
     let event_type = event
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let data = event.get("data").unwrap_or(&Value::Null);
     let output = match event_type {
-        "assistant/chunk" => data.get("chunk").and_then(json_text),
+        "assistant/chunk" => {
+            let chunk = data.get("chunk").unwrap_or(&Value::Null);
+            let chunk_type = chunk
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if chunk_type == "reasoning-delta" {
+                if let Some(text) = chunk.get("text").and_then(Value::as_str) {
+                    fold.push(text);
+                }
+                return None;
+            }
+            // text-delta is the answer itself and streams verbatim; every other
+            // chunk kind (block markers, tool-call deltas, usage, finish) carries
+            // no text and renders as nothing.
+            json_text(chunk)
+        }
         // assistant/message is the assembled durable copy of chunks already
         // rendered live. Emitting it again duplicates every completed answer.
         "assistant/message" => None,
@@ -1725,9 +1912,25 @@ fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
             Some(format!("\r\n▸ {name}\r\n"))
         }),
         "tool/result" => render_tool_event_view(payload, "result").or_else(|| {
-            data.get("message")
+            // Without a render intent the raw result is all there is, and a raw
+            // tool result is a whole model-facing body. Fold it to the same
+            // single row the render intent would have produced.
+            let failed = data.get("error").is_some_and(|error| !error.is_null());
+            let summary = data
+                .get("message")
                 .and_then(json_text)
                 .or_else(|| json_text(data))
+                .as_deref()
+                .and_then(fold_summary);
+            let glyph = if failed {
+                format!("{ANSI_RED}✖{ANSI_RESET}")
+            } else {
+                format!("{ANSI_GREEN}✔{ANSI_RESET}")
+            };
+            let detail = summary
+                .map(|summary| format!(" {ANSI_DIM}· {summary}{ANSI_RESET}"))
+                .unwrap_or_default();
+            Some(format!("  {glyph}{detail}\r\n"))
         }),
         "command/run" => {
             let name = data.get("name").and_then(Value::as_str).unwrap_or_default();
@@ -1737,7 +1940,22 @@ fn emit_session_event_output(payload: &Value, on_output: &Channel<String>) {
         "command/done" | "compaction/summary" => data.get("text").and_then(json_text),
         _ => None,
     };
-    if let Some(output) = output.filter(|text| !text.is_empty()) {
+    let output = output.filter(|text| !text.is_empty());
+    // The open reasoning block belongs above whatever displaced it, and a frame
+    // that renders nothing itself still settles a block left open by the model.
+    match (fold.take_row(), output) {
+        (Some(row), Some(output)) => Some(format!("{row}{output}")),
+        (Some(row), None) => Some(row),
+        (None, output) => output,
+    }
+}
+
+fn emit_session_event_output(
+    payload: &Value,
+    on_output: &Channel<String>,
+    fold: &mut ReasoningFold,
+) {
+    if let Some(output) = session_event_terminal_output(payload, fold) {
         send_terminal_text(on_output, &output);
     }
 }
@@ -1795,7 +2013,11 @@ fn dispatch_mux_frame(
     let result = match frame_type {
         "session/event" => {
             let _ = app.emit("dsh-session-event", &payload);
-            emit_session_event_output(&payload, on_output);
+            {
+                let mut folds = state.reasoning_folds.lock();
+                let fold = folds.entry(task_id.to_string()).or_default();
+                emit_session_event_output(&payload, on_output, fold);
+            }
             let event = payload.get("event").unwrap_or(&Value::Null);
             match event.get("type").and_then(Value::as_str) {
                 Some("turn/start") => {
@@ -1829,9 +2051,15 @@ fn dispatch_mux_frame(
                             json!({ "task_id": task_id, "status": "cancelled" }),
                         );
                     } else {
+                        // A DSH session stays interactive after a turn settles, so
+                        // the end of a turn is not the end of the task: it hands
+                        // the session back to the user. `done` is reserved for the
+                        // explicit completion path, matching how an interactive
+                        // Claude/Codex `Stop` maps to `input_required` in
+                        // `event_watcher`.
                         let _ = app.emit(
                             "task-status",
-                            json!({ "task_id": task_id, "status": "done" }),
+                            json!({ "task_id": task_id, "status": "input_required" }),
                         );
                     }
                 }
@@ -2278,6 +2506,7 @@ pub async fn run_dsh_task(
     let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
     state.clear_completed_task(&task_id);
     state.cancelled_tasks.lock().remove(&task_id);
+    state.reasoning_folds.lock().remove(&task_id);
     let web = ensure_dsh_webui(&agent, &state).await?;
     let base_url = web
         .url
@@ -2342,9 +2571,12 @@ pub async fn run_dsh_task(
             }
         }
         if prompt.trim().is_empty() {
+            // "Start terminal" with no prompt: the session is live and waiting
+            // for the composer, which is an interactive state, not a finished
+            // task. Completion stays an explicit user action.
             let _ = app.emit(
                 "task-status",
-                json!({ "task_id": task_id.clone(), "status": "done" }),
+                json!({ "task_id": task_id.clone(), "status": "input_required" }),
             );
             return Ok(());
         }
@@ -2367,9 +2599,11 @@ pub async fn run_dsh_task(
             .and_then(Value::as_str)
         {
             send_terminal_text(&on_output, &format!("\r\n{text}\r\n"));
+            // A slash command answers inline without opening a turn, so no
+            // turn/end will follow: settle the task as waiting for the user.
             let _ = app.emit(
                 "task-status",
-                json!({ "task_id": task_id.clone(), "status": "done" }),
+                json!({ "task_id": task_id.clone(), "status": "input_required" }),
             );
         }
         Ok(())
@@ -4752,16 +4986,18 @@ mod tests {
             for sequence in 0..3 {
                 let (stream, _) = listener.accept().await.expect("WebSocket connects");
                 let request_paths = server_paths.clone();
-                let mut socket = tokio_tungstenite::accept_hdr_async(
-                    stream,
+                // tungstenite fixes the callback's error type to a large HTTP response;
+                // this test callback only records the path and always accepts the response.
+                #[allow(clippy::result_large_err)]
+                let callback =
                     move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                           response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                         request_paths.lock().push(request.uri().path().to_string());
                         Ok(response)
-                    },
-                )
-                .await
-                .expect("WebSocket handshake succeeds");
+                    };
+                let mut socket = tokio_tungstenite::accept_hdr_async(stream, callback)
+                    .await
+                    .expect("WebSocket handshake succeeds");
                 socket
                     .send(Message::Text(
                         json!({
@@ -4930,12 +5166,116 @@ mod tests {
                 }
             }),
             &channel,
+            &mut ReasoningFold::default(),
         );
 
         assert_eq!(
             *received.lock(),
             vec!["第一行\r\nsecond\r\n第三行\r\nlast".to_string()]
         );
+    }
+
+    fn reasoning_chunk(text: &str) -> Value {
+        json!({
+            "event": {
+                "type": "assistant/chunk",
+                "data": { "chunk": { "type": "reasoning-delta", "index": 0, "text": text } }
+            }
+        })
+    }
+
+    fn text_chunk(text: &str) -> Value {
+        json!({
+            "event": {
+                "type": "assistant/chunk",
+                "data": { "chunk": { "type": "text-delta", "index": 1, "text": text } }
+            }
+        })
+    }
+
+    #[test]
+    fn folds_a_reasoning_block_into_one_row_above_the_answer() {
+        let mut fold = ReasoningFold::default();
+        // Nothing reaches the terminal while the model is still reasoning.
+        for delta in [
+            "Let me check the lint",
+            " configuration first.\nThe repo runs eslint",
+            " with --max-warnings 0.\n\nSo a warning fails the build.",
+        ] {
+            assert_eq!(
+                session_event_terminal_output(&reasoning_chunk(delta), &mut fold),
+                None
+            );
+        }
+
+        let rendered = session_event_terminal_output(&text_chunk("Done."), &mut fold)
+            .expect("the folded row is flushed by the answer");
+        assert!(rendered.contains("✻ Thinking · Let me check the lint configuration first."));
+        assert!(rendered.contains("3 lines"));
+        // Every later line of the block stays collapsed; the session record keeps
+        // the full text as a collapsible block.
+        assert!(!rendered.contains("eslint"));
+        assert!(rendered.ends_with("Done."));
+        // A blank separator, the folded row, then the answer on its own line.
+        assert_eq!(rendered.matches("\r\n").count(), 2);
+
+        // The block is consumed, so the answer keeps streaming on its own.
+        assert_eq!(
+            session_event_terminal_output(&text_chunk(" Nothing to fix."), &mut fold),
+            Some(" Nothing to fix.".to_string())
+        );
+    }
+
+    #[test]
+    fn settles_a_reasoning_block_left_open_at_the_end_of_a_turn() {
+        let mut fold = ReasoningFold::default();
+        assert_eq!(
+            session_event_terminal_output(&reasoning_chunk("Only one line"), &mut fold),
+            None
+        );
+        let rendered = session_event_terminal_output(
+            &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
+            &mut fold,
+        )
+        .expect("the open block settles with the turn");
+        assert!(rendered.contains("✻ Thinking · Only one line"));
+        // A single line needs no size hint.
+        assert!(!rendered.contains("lines"));
+    }
+
+    #[test]
+    fn prints_nothing_for_whitespace_only_reasoning() {
+        let mut fold = ReasoningFold::default();
+        assert_eq!(
+            session_event_terminal_output(&reasoning_chunk("\n \n"), &mut fold),
+            None
+        );
+        assert_eq!(
+            session_event_terminal_output(&text_chunk("Answer."), &mut fold),
+            Some("Answer.".to_string())
+        );
+    }
+
+    #[test]
+    fn folds_a_raw_tool_result_that_carries_no_render_intent() {
+        let mut fold = ReasoningFold::default();
+        let rendered = session_event_terminal_output(
+            &json!({
+                "event": {
+                    "type": "tool/result",
+                    "data": {
+                        "error": { "name": "ToolError", "code": "EACCES" },
+                        "message": { "content": [{ "type": "text", "text": "permission denied\nat open()\n" }] }
+                    }
+                }
+            }),
+            &mut fold,
+        )
+        .expect("a raw tool result still renders a row");
+        assert!(rendered.contains("✖"));
+        assert!(rendered.contains("permission denied"));
+        assert!(!rendered.contains("at open()"));
+        assert_eq!(rendered.matches("\r\n").count(), 1);
     }
 
     #[test]
@@ -5028,18 +5368,29 @@ mod tests {
     }
 
     #[test]
-    fn renders_terminal_result_output_and_failing_exit() {
+    fn folds_a_terminal_result_into_one_verdict_row() {
         let rendered = render_tool_event_view(
-            &result_payload(json!({ "title": "pnpm lint", "card": "terminal", "output": "2 problems\n", "exitCode": 1 })),
+            &result_payload(json!({
+                "title": "pnpm lint",
+                "card": "terminal",
+                "output": "2 problems\nsrc/a.ts:1 unused\n",
+                "exitCode": 1,
+            })),
             "result",
         )
         .expect("terminal result renders");
+        assert!(rendered.contains("✖"));
         assert!(rendered.contains("pnpm lint"));
-        assert!(rendered.contains("2 problems\r\n"));
-        assert!(rendered.contains("✖ exit 1"));
-        // Every emitted line carries an explicit CR; the xterm view runs with
+        assert!(rendered.contains("exit 1"));
+        // The first output line is the verdict's evidence; the rest of the body
+        // stays collapsed and is only counted.
+        assert!(rendered.contains("2 problems"));
+        assert!(!rendered.contains("src/a.ts:1 unused"));
+        assert!(rendered.contains("2 lines"));
+        // One row, terminated with an explicit CR: the xterm view runs with
         // convertEol disabled, so a bare LF would staircase the output.
-        assert!(!rendered.contains("problems\n\r"));
+        assert_eq!(rendered.matches("\r\n").count(), 1);
+        assert!(rendered.ends_with("\r\n"));
     }
 
     #[test]
@@ -5049,12 +5400,31 @@ mod tests {
             "result",
         )
         .expect("terminal result renders");
-        assert!(rendered.contains("✖ SIGKILL"));
+        assert!(rendered.contains("✖"));
+        assert!(rendered.contains("SIGKILL"));
         assert!(!rendered.contains("exit"));
+        assert!(rendered.contains("no output"));
     }
 
     #[test]
-    fn renders_an_edit_as_removed_then_added_rows() {
+    fn folds_a_styled_command_body_without_leaking_its_escapes() {
+        let rendered = render_tool_event_view(
+            &result_payload(json!({
+                "card": "terminal",
+                "output": "\u{1b}[31mFAIL\u{1b}[0m src/a.test.ts\nstack…\n",
+            })),
+            "result",
+        )
+        .expect("terminal result renders");
+        assert!(rendered.contains("FAIL src/a.test.ts"));
+        // A folded row must not carry the body's own colour spans or cursor
+        // moves into the rows printed after it.
+        assert_eq!(rendered.matches("\u{1b}[31m").count(), 0);
+        assert_eq!(rendered.matches("\r\n").count(), 1);
+    }
+
+    #[test]
+    fn folds_an_edit_into_a_path_and_a_line_count() {
         let rendered = render_tool_event_view(
             &result_payload(json!({
                 "card": "diff",
@@ -5063,16 +5433,14 @@ mod tests {
             "result",
         )
         .expect("diff result renders");
-        assert!(rendered.contains("src/a.ts"));
-        assert!(rendered.contains("-old"));
-        assert!(rendered.contains("+new"));
-        // The unchanged prefix and suffix are trimmed rather than reprinted.
+        assert!(rendered.contains("src/a.ts +1 -1"));
+        // The hunk itself belongs to the session record, not to the terminal.
+        assert!(!rendered.contains("new"));
         assert!(!rendered.contains("keep"));
-        assert!(!rendered.contains("tail"));
     }
 
     #[test]
-    fn renders_a_created_file_as_all_additions() {
+    fn folds_a_created_file_as_additions_only() {
         let rendered = render_tool_event_view(
             &result_payload(json!({
                 "card": "diff",
@@ -5081,28 +5449,42 @@ mod tests {
             "result",
         )
         .expect("diff result renders");
-        assert!(rendered.contains("src/new.ts (new file)"));
-        assert!(rendered.contains("+one"));
-        assert!(rendered.contains("+two"));
-        assert!(!rendered.contains("-"));
+        assert!(rendered.contains("src/new.ts (new file) +2 -0"));
     }
 
     #[test]
-    fn renders_search_and_read_with_file_line_numbers() {
+    fn folds_search_and_read_results_into_their_shape() {
         let matches = render_tool_event_view(
             &result_payload(json!({
                 "card": "search",
                 "shape": "matches",
                 "truncated": true,
-                "files": [{ "path": "src/a.ts", "matches": [{ "lineNumber": 12, "line": "const x = 1;" }] }],
+                "files": [{
+                    "path": "src/a.ts",
+                    "matches": [
+                        { "lineNumber": 12, "line": "const x = 1;" },
+                        { "lineNumber": 30, "line": "const y = 2;" },
+                    ],
+                }],
             })),
             "result",
         )
         .expect("search result renders");
-        assert!(matches.contains("src/a.ts"));
-        assert!(matches.contains("12 │ "));
-        assert!(matches.contains("const x = 1;"));
+        assert!(matches.contains("2 matches in src/a.ts"));
+        assert!(!matches.contains("const x = 1;"));
         assert!(matches.contains("truncated by the harness"));
+        assert_eq!(matches.matches("\r\n").count(), 1);
+
+        let paths = render_tool_event_view(
+            &result_payload(json!({
+                "card": "search",
+                "shape": "paths",
+                "paths": ["src/a.ts", "src/b.ts"],
+            })),
+            "result",
+        )
+        .expect("search result renders");
+        assert!(paths.contains("2 paths"));
 
         let read = render_tool_event_view(
             &result_payload(json!({
@@ -5116,14 +5498,11 @@ mod tests {
         )
         .expect("read result renders");
         assert!(read.contains("src/a.ts — 1 of 120 lines from 40"));
-        // The gutter is dim and reset before the line text, so the number and the
-        // text are not contiguous in the rendered string.
-        assert!(read.contains("40 │ "));
-        assert!(read.contains("line forty"));
+        assert!(!read.contains("line forty"));
     }
 
     #[test]
-    fn renders_web_search_sources_and_fetch_status() {
+    fn folds_web_search_sources_and_fetch_status() {
         let search = render_tool_event_view(
             &result_payload(json!({
                 "card": "web",
@@ -5135,22 +5514,43 @@ mod tests {
         )
         .expect("web search renders");
         assert!(search.contains("Yes."));
-        assert!(search.contains("1. Example A"));
-        assert!(search.contains("https://example.com/a"));
+        assert!(search.contains("1 source"));
+        assert!(!search.contains("https://example.com/a"));
 
         let fetch = render_tool_event_view(
             &result_payload(json!({ "card": "web", "kind": "fetch", "url": "https://example.com", "statusCode": 503 })),
             "result",
         )
         .expect("web fetch renders");
+        assert!(fetch.contains("✖"));
         assert!(fetch.contains("503 https://example.com"));
     }
 
     #[test]
-    fn lists_only_paths_for_a_pending_diff_call() {
-        // The result repeats the change once applied, so an append-only terminal
-        // prints the body there instead of twice.
-        let rendered = render_tool_event_view(
+    fn folds_a_pending_call_into_one_header_row() {
+        let terminal = render_tool_event_view(
+            &call_payload(json!({
+                "card": "terminal",
+                "title": "Bash",
+                "description": "pnpm lint\n--max-warnings 0",
+                "cwd": "/repo",
+            })),
+            "call",
+        )
+        .expect("terminal call renders");
+        assert!(terminal.contains("▸ Bash"));
+        assert!(terminal.contains("pnpm lint"));
+        // Only the first line of the command survives, and cwd belongs to the
+        // expanded card dsh web keeps behind its disclosure.
+        assert!(!terminal.contains("--max-warnings"));
+        assert!(!terminal.contains("/repo"));
+        // A call row opens with a blank separator and closes its own line.
+        assert!(terminal.starts_with("\r\n"));
+        assert_eq!(terminal.matches("\r\n").count(), 2);
+
+        // The result repeats the change once applied, so a folded call row names
+        // the files without printing any of the proposed hunk.
+        let diff = render_tool_event_view(
             &call_payload(json!({
                 "card": "diff",
                 "title": "Edit a.ts",
@@ -5159,9 +5559,9 @@ mod tests {
             "call",
         )
         .expect("diff call renders");
-        assert!(rendered.contains("▸ Edit a.ts"));
-        assert!(rendered.contains("src/a.ts"));
-        assert!(!rendered.contains("+new"));
+        assert!(diff.contains("▸ Edit a.ts"));
+        assert!(diff.contains("src/a.ts"));
+        assert!(!diff.contains("+new"));
     }
 
     #[test]

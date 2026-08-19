@@ -28,14 +28,15 @@ jobs:
 
       - name: Checkout dbx dependency
         shell: bash
-        env:
+        run: |
+          set -euo pipefail
           # Pin the dbx path-dependency to a known-good commit for reproducible
           # builds. `Cargo.toml` uses a `path = "../dbx/..."` dependency whose
           # source is NOT constrained by Cargo.lock, so without this pin every
-          # run would silently pull dbx's moving main HEAD. Bump deliberately.
-          DBX_REF: 8559aec8bce4efeb4f52080da8ab1839733ef45b
-        run: |
-          set -euo pipefail
+          # run would silently pull dbx's moving main HEAD. The commit lives in
+          # scripts/dbx-ref.txt so the workflows, the release workflow, and
+          # scripts/prepare-dbx.sh cannot drift apart. Bump deliberately.
+          DBX_REF="$(tr -d '[:space:]' <scripts/dbx-ref.txt)"
           git init ../dbx
           git -C ../dbx fetch --depth 1 https://github.com/t8y2/dbx.git "$DBX_REF"
           git -C ../dbx checkout --detach "$DBX_REF"
@@ -92,9 +93,15 @@ jobs:
       - name: Run cargo audit
         if: runner.os == 'Linux'
         working-directory: src-tauri
-        # rkyv is only present in Cargo.lock as rust_decimal's disabled optional
-        # dependency; `cargo tree -i rkyv` has no active path in this build.
-        run: cargo audit --ignore RUSTSEC-2026-0235
+        # rkyv 只作为 rust_decimal 的未启用可选依赖躺在 Cargo.lock 里，本构建没有它的
+        # 有效依赖路径，所以 RUSTSEC-2026-0235 不适用。先断言这一点仍然成立：一旦
+        # rkyv 真的被引入，这一步会直接失败，而不是被 --ignore 悄悄放过。
+        run: |
+          if cargo tree --locked --target all -i rkyv 2>/dev/null | grep -q .; then
+            echo "::error::rkyv is now an active dependency; RUSTSEC-2026-0235 must not be ignored."
+            exit 1
+          fi
+          cargo audit --ignore RUSTSEC-2026-0235
 
       - name: Audit remote protocol
         if: runner.os == 'Linux'

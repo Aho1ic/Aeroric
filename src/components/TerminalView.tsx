@@ -23,6 +23,14 @@ import {
 } from "./terminalShared";
 import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import {
+  createTerminalRingBuffer,
+  joinTerminalBuffer,
+  joinTerminalBufferFrom,
+  pushTerminalChunk,
+  terminalBufferAbsLength,
+  type TerminalRingBuffer,
+} from "../terminalRingBuffer";
+import {
   applyTerminalTextareaInputAttributes,
   attachLinuxIMEFix,
   attachMacWebKitShiftInputFix,
@@ -87,11 +95,15 @@ export function TerminalView({
   const rebuildRef = useRef<((theme: ThemeVariant, onComplete?: () => void) => void) | null>(null);
   const rebuildingRef = useRef(true);
   const pendingWriteCallbacksRef = useRef<Array<(() => void) | undefined>>([]);
-  const rawChunksRef = useRef<string[] | null>(null);
+  // 主题重建 / 快照恢复要重放原始输出，所以这里保留一份镜像；用环形缓冲是因为长跑
+  // 任务（尤其是 input_required 期间一直挂载着的终端）会无休止地往里追加。
+  const rawBufferRef = useRef<TerminalRingBuffer | null>(null);
 
-  if (rawChunksRef.current === null) {
+  if (rawBufferRef.current === null) {
+    const buffer = createTerminalRingBuffer();
     const raw = rawReplayData ?? initialData ?? "";
-    rawChunksRef.current = raw ? [raw] : [];
+    if (raw) pushTerminalChunk(buffer, raw);
+    rawBufferRef.current = buffer;
   }
 
   onInputRef.current = onInput;
@@ -105,7 +117,8 @@ export function TerminalView({
   const stableWriteRef = useRef<TerminalWriteFn | null>(null);
   if (stableWriteRef.current === null) {
     stableWriteRef.current = (data, callback) => {
-      rawChunksRef.current?.push(data);
+      const buffer = rawBufferRef.current;
+      if (buffer) pushTerminalChunk(buffer, data);
       const runtime = runtimeRef.current;
       if (rebuildingRef.current || !runtime) {
         pendingWriteCallbacksRef.current.push(callback);
@@ -215,11 +228,14 @@ export function TerminalView({
       onComplete?: () => void,
     ) => {
       if (disposed || runtimeRef.current !== runtime) return;
-      const raw = rawChunksRef.current?.join("") ?? "";
-      if (raw.length > renderedLength) {
+      // renderedLength 是**绝对**偏移（含已被环形缓冲裁掉的部分），所以这里比较和
+      // 续写都必须走绝对长度，不能用当前留存内容的 length。
+      const buffer = rawBufferRef.current;
+      const absLength = buffer ? terminalBufferAbsLength(buffer) : 0;
+      if (buffer && absLength > renderedLength) {
         // 恢复期间新到的输出属于"补齐历史"的一部分，同样不要走帧预算。
-        runtime.writer.writeImmediate(raw.slice(renderedLength), () =>
-          finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
+        runtime.writer.writeImmediate(joinTerminalBufferFrom(buffer, renderedLength), () =>
+          finishQueuedWrites(runtime, absLength, viewportY, wasAtBottom, hadFocus, onComplete),
         );
         return;
       }
@@ -266,7 +282,10 @@ export function TerminalView({
     rebuildRef.current = (theme, onComplete) => {
       if (disposed || rebuildingRef.current) return;
       const previous = runtimeRef.current;
-      const raw = rawChunksRef.current?.join("") ?? "";
+      const buffer = rawBufferRef.current;
+      const raw = buffer ? joinTerminalBuffer(buffer) : "";
+      // 与 raw 同一时刻取绝对长度：写入回调是异步的，届时缓冲可能已经又追加了内容。
+      const rawAbsLength = buffer ? terminalBufferAbsLength(buffer) : 0;
       rebuildingRef.current = true;
       setTerminalRestoring(Boolean(raw));
       const viewportY = previous?.term.buffer.active.viewportY ?? 0;
@@ -283,7 +302,7 @@ export function TerminalView({
         // 切换主题会重建 xterm 实例并重放整个缓冲，同样必须一次性灌入，
         // 否则换个主题就要再看一遍滚动动画。
         runtime.writer.writeImmediate(raw, () =>
-          finishQueuedWrites(runtime, raw.length, viewportY, wasAtBottom, hadFocus, onComplete),
+          finishQueuedWrites(runtime, rawAbsLength, viewportY, wasAtBottom, hadFocus, onComplete),
         );
       } else {
         finishQueuedWrites(runtime, 0, viewportY, wasAtBottom, hadFocus, onComplete);
@@ -301,7 +320,9 @@ export function TerminalView({
       lastSizeRef.current = { cols, rows };
     };
     const terminalGeneration = onRegisterRef.current(stableWriteRef.current, syncRemoteResize);
-    const restoredRawLength = rawChunksRef.current?.join("").length ?? 0;
+    const restoredRawLength = rawBufferRef.current
+      ? terminalBufferAbsLength(rawBufferRef.current)
+      : 0;
 
     const completeRestore = () => {
       finishQueuedWrites(runtime, restoredRawLength, 0, true, true, () => {
