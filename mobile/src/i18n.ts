@@ -21,6 +21,7 @@ const zh = {
 
   // 通知
   "notify.inputRequired": "任务等待确认",
+  "notify.turnIdle": "任务等待输入",
   "notify.done": "任务已完成",
   "notify.failed": "任务失败",
   "notify.body": "{name}",
@@ -294,6 +295,7 @@ const en: Record<MessageKey, string> = {
   "nav.newTask": "New task",
 
   "notify.inputRequired": "Task needs your confirmation",
+  "notify.turnIdle": "Task is waiting for you",
   "notify.done": "Task completed",
   "notify.failed": "Task failed",
   "notify.body": "{name}",

@@ -64,6 +64,8 @@ describe("WebView 胶水内联表", () => {
     expect(TERMINAL_HTML).toContain("term.scrollToBottom()");
     expect(TERMINAL_HTML).toContain('case "snapshotStart"');
     expect(TERMINAL_HTML).toContain('case "snapshotEnd"');
+    expect(TERMINAL_HTML).toContain('post({ type: "snapshot-started" })');
+    expect(TERMINAL_HTML).toContain('post({ type: "snapshot-complete" })');
     expect(TERMINAL_HTML).toContain('term.element.style.visibility = "visible"');
   });
 });

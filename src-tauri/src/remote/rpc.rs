@@ -35,21 +35,6 @@ pub(crate) fn rpc_capabilities_value() -> Value {
     json!(RPC_CAPABILITIES)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capability_contract_is_additive_and_contains_core_mobile_flows() {
-        let capabilities = rpc_capabilities_value();
-        let values = capabilities.as_array().expect("capability array");
-        assert!(values.iter().any(|value| value == "tasks.lifecycle"));
-        assert!(values.iter().any(|value| value == "tasks.models"));
-        assert!(values.iter().any(|value| value == "session.structured"));
-        assert!(values.iter().any(|value| value == "files.read"));
-    }
-}
-
 pub(crate) fn str_param(params: &Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -206,4 +191,19 @@ async fn tasks_get<R: Runtime>(app: &AppHandle<R>, params: Value) -> Result<Valu
         value["approval"] = serde_json::to_value(approval).map_err(|e| e.to_string())?;
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_contract_is_additive_and_contains_core_mobile_flows() {
+        let capabilities = rpc_capabilities_value();
+        let values = capabilities.as_array().expect("capability array");
+        assert!(values.iter().any(|value| value == "tasks.lifecycle"));
+        assert!(values.iter().any(|value| value == "tasks.models"));
+        assert!(values.iter().any(|value| value == "session.structured"));
+        assert!(values.iter().any(|value| value == "files.read"));
+    }
 }

@@ -3,7 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { Download, Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";
-import { agentDisplayLabel, agentFamily, isCodexLikeAgent, isDshAgent } from "../agents";
+import {
+  agentDisplayLabel,
+  agentFamily,
+  agentSupportsReasoningEffort,
+  isCodexLikeAgent,
+  isDshAgent,
+} from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import {
   clearAgentModelCache,
@@ -57,6 +63,7 @@ import {
   availableReasoningEffortsForFamily,
   findModelIgnoreCase,
   normalizeModelList,
+  NO_REASONING_EFFORTS,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../modelOptions";
@@ -366,15 +373,19 @@ export function NewTaskView({
         if (!initialDraft || agentChangedRef.current) {
           const rawEffort = result.reasoning_effort ?? null;
           const family = agentFamily(targetAgent, agentOptions);
-          const configEffort =
-            rawEffort &&
+          // dsh 的提供方 / 自定义提供方档案不参与推理强度传参,配置里的旧值一律忽略。
+          const effortAllowed = agentSupportsReasoningEffort(targetAgent, agentOptions);
+          const rawEffortIsValid =
+            rawEffort !== null &&
             (availableReasoningEffortsForFamily(family, models[0]) as readonly string[]).includes(
               rawEffort,
-            )
+            );
+          const fallbackEffort: ReasoningEffort | null = family === "dsh" ? null : "xhigh";
+          const configEffort = !effortAllowed
+            ? null
+            : rawEffortIsValid
               ? (rawEffort as ReasoningEffort)
-              : family === "dsh"
-                ? null
-                : ("xhigh" as ReasoningEffort);
+              : fallbackEffort;
           const configSpeed = result.reasoning_speed ?? null;
           setReasoningEffort((current) => (current === null ? configEffort : current));
           setSpeed((current) =>
@@ -565,10 +576,9 @@ export function NewTaskView({
   const agentSupportsModelSelection =
     agent === "claude" || codexLikeAgent || dshAgent || customAgent;
   const modelSelectable = agentSupportsModelSelection;
-  const availableEfforts = availableReasoningEffortsForFamily(
-    agentFamily(agent, agentOptions),
-    selectedModel,
-  );
+  const availableEfforts = agentSupportsReasoningEffort(agent, agentOptions)
+    ? availableReasoningEffortsForFamily(agentFamily(agent, agentOptions), selectedModel)
+    : NO_REASONING_EFFORTS;
   useEffect(() => {
     if (dshAgent && speed !== "standard") setSpeed("standard");
   }, [dshAgent, speed]);

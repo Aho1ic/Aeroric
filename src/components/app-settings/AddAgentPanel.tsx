@@ -88,6 +88,12 @@ const kindOptions: { kind: AgentSetupKind; labelKey: string; hintKey: string }[]
 /** dsh 官方 provider 的默认探测端点(留空 base URL 时使用)。 */
 const DSH_OFFICIAL_BASE_URL = "https://api.deepseek.com";
 
+/** dsh 官方 provider 标识:既用于卡片展示,也用于"另存一份官方配置"的 id 基底。 */
+const DSH_OFFICIAL_PROVIDER_ID = "deepseek-official";
+
+/** 另存官方配置时的展示名(与内置官方配置保持一致)。 */
+const DSH_OFFICIAL_PROFILE_LABEL = "DeepSeek";
+
 type DshProviderMode = "catalog" | "custom" | null;
 
 const DSH_API_PROTOCOLS: readonly DshApiProtocol[] = [
@@ -249,6 +255,8 @@ export function AddAgentPanel({
   const [dshOfficialSelectedModels, setDshOfficialSelectedModels] = useState<string[]>([]);
   const [dshOfficialBalance, setDshOfficialBalance] = useState<AgentBalance | null>(null);
   const [detectingDshOfficialModels, setDetectingDshOfficialModels] = useState(false);
+  // 勾选时改写内置官方配置,取消勾选时额外新建一份官方档案(默认覆盖)。
+  const [overrideDshOfficial, setOverrideDshOfficial] = useState(true);
   const modelInputRef = useRef<HTMLInputElement>(null);
   const dshOfficialModelInputRef = useRef<HTMLInputElement>(null);
 
@@ -441,22 +449,47 @@ export function AddAgentPanel({
     setSaved(false);
     setError(null);
     try {
+      let officialAgentId = "dsh";
       if (isDshKind && dshOfficialApiKey.trim()) {
-        await invoke<AppSettings>("update_builtin_agent_access", {
-          agent: "dsh",
-          baseUrl: "",
-          apiKey: dshOfficialApiKey.trim(),
-          clearApiKey: false,
-          models: dshOfficialSelectedModels.length > 0 ? dshOfficialSelectedModels : null,
-          proxyEnabled,
-        });
+        if (overrideDshOfficial) {
+          await invoke<AppSettings>("update_builtin_agent_access", {
+            agent: "dsh",
+            baseUrl: "",
+            apiKey: dshOfficialApiKey.trim(),
+            clearApiKey: false,
+            models: dshOfficialSelectedModels.length > 0 ? dshOfficialSelectedModels : null,
+            proxyEnabled,
+          });
+        } else {
+          // 不覆盖:额外新建一份官方档案。base_url 留空 ⇒ 后端不写自定义 provider
+          // 设置,dsh_model_provider_for 仍解析为 deepseek-official。
+          const officialDraft: AgentSetupDraft = {
+            id: `${DSH_OFFICIAL_PROVIDER_ID}_dsh`,
+            label: DSH_OFFICIAL_PROFILE_LABEL,
+            kind: "dsh",
+            base_url: "",
+            api_key: dshOfficialApiKey.trim(),
+            model: dshOfficialSelectedModels[0] ?? "",
+            models: dshOfficialSelectedModels,
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            dsh_api_protocol: dshApiProtocol,
+            ...(proxyEnabled ? { proxy_enabled: true } : {}),
+          };
+          const officialSettings = await invoke<AppSettings>("setup_agent_profile", {
+            draft: officialDraft,
+          });
+          officialAgentId =
+            officialSettings.custom_agents?.[officialSettings.custom_agents.length - 1]?.id ??
+            officialDraft.id;
+        }
       }
 
       if (isDshKind && !dshProviderMode) {
         await refreshLocalRouterRuntime();
         window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
         setSaved(true);
-        onSaved("dsh", "dsh");
+        onSaved(officialAgentId, "dsh");
         return;
       }
 
@@ -998,8 +1031,8 @@ export function AddAgentPanel({
                 <img src={deepseekLogo} alt="" />
               </span>
               <span className="dsh-provider-card__identity">
-                <strong>DeepSeek</strong>
-                <code>deepseek-official</code>
+                <strong>{DSH_OFFICIAL_PROFILE_LABEL}</strong>
+                <code>{DSH_OFFICIAL_PROVIDER_ID}</code>
               </span>
             </div>
 
@@ -1244,6 +1277,38 @@ export function AddAgentPanel({
               </span>
             </span>
           </label>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              aria-label={t("appSettings.dshOverrideOfficial")}
+              checked={overrideDshOfficial}
+              onChange={(event) => setOverrideDshOfficial(event.target.checked)}
+            />
+            <span>
+              <span style={{ display: "block", fontSize: 12.5, fontWeight: 650 }}>
+                {t("appSettings.dshOverrideOfficial")}
+              </span>
+              <span
+                style={{
+                  display: "block",
+                  marginTop: 3,
+                  fontSize: 11,
+                  color: "var(--text-hint)",
+                }}
+              >
+                {t("appSettings.dshOverrideOfficialHint")}
+              </span>
+            </span>
+          </label>
         </>
       ) : (
         <>
@@ -1311,10 +1376,14 @@ export function AddAgentPanel({
           disabled={saving || !canSave}
           onClick={handleSave}
         >
-          {isDshKind && !dshProviderMode ? <Save size={13} /> : <Plus size={13} />}
+          {isDshKind && !dshProviderMode && overrideDshOfficial ? (
+            <Save size={13} />
+          ) : (
+            <Plus size={13} />
+          )}
           {saving
             ? t("common.saving")
-            : isDshKind && !dshProviderMode
+            : isDshKind && !dshProviderMode && overrideDshOfficial
               ? t("common.save")
               : t("appSettings.addAgent")}
         </button>

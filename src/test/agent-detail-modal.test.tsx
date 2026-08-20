@@ -220,7 +220,7 @@ describe("Agent detail modal", () => {
     ).toBe(false);
   });
 
-  it("does not expose Claude-only 1M context for a custom DSH profile", async () => {
+  it("exposes neither 1M context nor reasoning effort for a custom DSH profile", async () => {
     render(
       <I18nProvider>
         <AgentDetailModal
@@ -233,8 +233,11 @@ describe("Agent detail modal", () => {
       </I18nProvider>,
     );
 
-    await screen.findByRole("group", { name: "推理强度" });
+    await screen.findByRole("tablist", { name: customDshProfile.label });
     expect(screen.queryByRole("checkbox", { name: /1M/ })).not.toBeInTheDocument();
+    // 推理强度 only exists for the built-in official config: a provider profile's
+    // model catalog carries no reasoning metadata, so it must not pass an effort.
+    expect(screen.queryByRole("group", { name: "推理强度" })).not.toBeInTheDocument();
   });
 
   it("saves built-in model changes only through the built-in update command", async () => {

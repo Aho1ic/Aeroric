@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -253,6 +253,11 @@ export function TerminalView({
       } else {
         runtime.term.scrollToLine(Math.min(viewportY, runtime.term.buffer.active.baseY));
       }
+      try {
+        runtime.term.refresh(0, Math.max(0, runtime.term.rows - 1));
+      } catch {
+        // The renderer can disappear while a theme rebuild is being replaced.
+      }
 
       const complete = () => {
         if (disposed || runtimeRef.current !== runtime) return;
@@ -425,17 +430,35 @@ export function TerminalView({
     return () => window.removeEventListener("aeroric:app-settings-changed", loadNewlineShortcut);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime || !isActive) return;
-    window.requestAnimationFrame(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // React can reveal an already-mounted terminal before its activation effect runs.
+    // Close that one-frame gap so the first painted frame is already bottom-anchored.
+    container.setAttribute("data-terminal-activating", "true");
+    let revealFrame: number | null = null;
+    const fitFrame = window.requestAnimationFrame(() => {
       const current = runtimeRef.current;
-      const container = containerRef.current;
-      if (!current || !container) return;
+      if (!current || !isActiveRef.current) {
+        container.removeAttribute("data-terminal-activating");
+        return;
+      }
       const size = fitTerminalAtBottom(current.fitAddon, current.term, container);
       if (size) notifyResize(size.cols, size.rows);
-      current.focus();
+      revealFrame = window.requestAnimationFrame(() => {
+        container.removeAttribute("data-terminal-activating");
+        runtimeRef.current?.focus();
+      });
     });
+
+    return () => {
+      window.cancelAnimationFrame(fitFrame);
+      if (revealFrame !== null) window.cancelAnimationFrame(revealFrame);
+      container.removeAttribute("data-terminal-activating");
+    };
   }, [isActive, notifyResize]);
 
   useEffect(() => {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
@@ -82,6 +82,17 @@ pub struct DshWebUiManager {
     /// instead of streamed. Keyed by task because one `dsh web` process serves
     /// every task and their event streams interleave.
     reasoning_folds: Arc<Mutex<HashMap<String, ReasoningFold>>>,
+    /// 每个任务的软换行状态。Web API 会话没有 PTY,harness 只发送未排版的
+    /// 文本增量,如果直接交给 xterm 就会在右边界把单词劈成两半。
+    terminal_wraps: Arc<Mutex<HashMap<String, TerminalWrap>>>,
+    /// Aeroric 自己下发的引导命令(当前是 `/permission <preset>`)。它属于参数
+    /// 传递而不是用户输入,`command/run` / `command/done` 的回显不应该占住终端
+    /// 最前面两行。
+    internal_commands: Arc<Mutex<HashMap<String, InternalCommandEcho>>>,
+    /// 会话 id → 持有它的 `dsh web` 实例 base URL。`active_sessions` 只覆盖活跃
+    /// 任务,任务结束后会话详情仍然要找回真正的实例,否则 `session.*` 会打到
+    /// 内置实例上。归属一旦确定就不会再变,缓存下来省掉重复的磁盘反查。
+    session_hosts: Arc<Mutex<HashMap<String, String>>>,
     /// Abort sender for the background `events.host` subscription.
     host_events_abort: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
@@ -91,6 +102,14 @@ struct ActiveDshSession {
     session_id: String,
     base_url: String,
     on_output: Channel<String>,
+}
+
+/// 一条等待被吞掉的内部命令回显。`command/run` 按命令名匹配,随后的
+/// `command/done` 一并吞掉——任务生命周期锁保证这期间不会有用户命令插进来。
+#[derive(Debug, Clone)]
+struct InternalCommandEcho {
+    name: String,
+    saw_run: bool,
 }
 
 pub(crate) struct SuspendedDshRuntime {
@@ -129,6 +148,9 @@ impl DshWebUiManager {
             completed_tasks: Arc::new(Mutex::new(HashSet::new())),
             session_stream_aborts: Arc::new(Mutex::new(HashMap::new())),
             reasoning_folds: Arc::new(Mutex::new(HashMap::new())),
+            terminal_wraps: Arc::new(Mutex::new(HashMap::new())),
+            internal_commands: Arc::new(Mutex::new(HashMap::new())),
+            session_hosts: Arc::new(Mutex::new(HashMap::new())),
             host_events_abort: Arc::new(Mutex::new(None)),
         }
     }
@@ -199,6 +221,9 @@ impl DshWebUiManager {
         self.active_sessions.lock().clear();
         self.completed_tasks.lock().clear();
         self.reasoning_folds.lock().clear();
+        self.terminal_wraps.lock().clear();
+        self.internal_commands.lock().clear();
+        self.session_hosts.lock().clear();
         let processes = self.processes.write().drain().collect::<Vec<_>>();
         for (_, mut process) in processes {
             let _ = Self::stop_process(&mut process.child).await;
@@ -224,6 +249,20 @@ impl DshWebUiManager {
             let _ = abort.send(());
         }
         self.reasoning_folds.lock().remove(task_id);
+        self.internal_commands.lock().remove(task_id);
+        // 收尾时把还攒在行尾的最后一个单词落地,再丢掉换行状态,否则中途完成
+        // 的任务会在终端里少掉一个词。
+        let pending = self
+            .terminal_wraps
+            .lock()
+            .remove(task_id)
+            .map(|mut wrap| wrap.flush())
+            .unwrap_or_default();
+        if !pending.is_empty() {
+            if let Some(active) = &active {
+                let _ = active.on_output.send(pending);
+            }
+        }
         (active, true)
     }
 
@@ -255,9 +294,110 @@ impl DshWebUiManager {
         {
             return false;
         }
-        send_terminal_text(on_output, text);
+        self.send_terminal_text_for_task(task_id, on_output, text);
         drop(active_sessions);
         drop(completed_tasks);
+        true
+    }
+
+    /// 记录任务当前的终端列宽。DSH 会话没有 PTY master,前端的 `resize_pty`
+    /// 因此只把尺寸存进 `pending_pty_sizes`,这里再读回来当作换行宽度。
+    fn sync_terminal_cols(&self, app: &AppHandle, task_id: &str) {
+        let mut wraps = self.terminal_wraps.lock();
+        let wrap = wraps.entry(task_id.to_string()).or_default();
+        sync_wrap_cols(app, task_id, wrap);
+    }
+
+    /// 唯一的终端写出口:先按任务列宽做软换行,再交给 `send_terminal_text`。
+    fn send_terminal_text_for_task(&self, task_id: &str, on_output: &Channel<String>, text: &str) {
+        let wrapped = {
+            let mut wraps = self.terminal_wraps.lock();
+            let wrap = wraps.entry(task_id.to_string()).or_default();
+            wrap.push(text)
+        };
+        if !wrapped.is_empty() {
+            let _ = on_output.send(wrapped);
+        }
+    }
+
+    /// 丢弃换行状态。新一轮任务启动时列宽和光标列都要从零开始。
+    fn clear_terminal_wrap(&self, task_id: &str) {
+        self.terminal_wraps.lock().remove(task_id);
+    }
+
+    /// 登记一条即将由 Aeroric 自己下发的命令,让它的终端回显被吞掉。
+    fn expect_internal_command(&self, task_id: &str, name: &str) {
+        self.internal_commands.lock().insert(
+            task_id.to_string(),
+            InternalCommandEcho {
+                name: name.to_string(),
+                saw_run: false,
+            },
+        );
+    }
+
+    fn clear_internal_command(&self, task_id: &str) {
+        self.internal_commands.lock().remove(task_id);
+    }
+
+    /// 记住某个会话由哪个 `dsh web` 实例持有。
+    fn remember_session_host(&self, session_id: &str, base_url: &str) {
+        self.session_hosts
+            .lock()
+            .insert(session_id.to_string(), base_url.to_string());
+    }
+
+    /// 已知的会话归属:先看活跃任务,再看缓存。
+    fn known_session_host(&self, session_id: &str) -> Option<String> {
+        let live = self
+            .active_sessions
+            .lock()
+            .values()
+            .find(|active| active.session_id == session_id)
+            .map(|active| active.base_url.clone());
+        live.or_else(|| self.session_hosts.lock().get(session_id).cloned())
+    }
+
+    /// 丢掉指向某个实例的会话归属缓存(实例停掉后 base URL 不再有效)。
+    fn forget_session_hosts_at(&self, base_url: &str) {
+        self.session_hosts.lock().retain(|_, host| host != base_url);
+    }
+
+    /// 这个 `session/event` 是否是被登记的内部命令回显。
+    fn is_internal_command_echo(&self, task_id: &str, payload: &Value) -> bool {
+        let Some(event) = payload.get("event") else {
+            return false;
+        };
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(event_type, "command/run" | "command/done") {
+            return false;
+        }
+        let mut pending = self.internal_commands.lock();
+        let Some(entry) = pending.get_mut(task_id) else {
+            return false;
+        };
+        if event_type == "command/run" {
+            let name = event
+                .get("data")
+                .and_then(|data| data.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if entry.saw_run || name != entry.name {
+                return false;
+            }
+            entry.saw_run = true;
+            return true;
+        }
+        // 命令的结果行紧跟在 run 之后,吞掉它就结束这条登记。反过来,还没见到
+        // 配对的 run 就先到的 done 属于别的命令:吞掉它会连登记一起清掉,真正
+        // 的引导命令回显反而会漏进终端。
+        if !entry.saw_run {
+            return false;
+        }
+        pending.remove(task_id);
         true
     }
 
@@ -418,6 +558,8 @@ impl DshWebUiManager {
         if let Some(process) = process.as_mut() {
             DshWebUiManager::stop_process(&mut process.child).await?;
         }
+        // 端口在重启后会变,旧 base URL 的归属缓存必须失效。
+        self.forget_session_hosts_at(&base_url);
         Ok(SuspendedDshRuntime {
             _lifecycle_guard: lifecycle_guard,
             agent: agent.to_string(),
@@ -467,6 +609,7 @@ impl DshWebUiManager {
             if let Some(active) = self.active_sessions.lock().get_mut(&task_id) {
                 active.base_url = base_url.clone();
             }
+            self.remember_session_host(&session.session_id, &base_url);
             let reconnect = tokio::time::timeout(
                 Duration::from_secs(10),
                 start_task_session_stream(
@@ -1289,6 +1432,9 @@ pub async fn stop_dsh_webui(
 
     if let Some(mut process) = process_opt {
         let base_url = process.state.url.clone();
+        if let Some(url) = &base_url {
+            state.forget_session_hosts_at(url);
+        }
         let task_ids = state
             .active_sessions
             .lock()
@@ -1428,8 +1574,268 @@ fn normalize_terminal_text(text: &str) -> String {
     normalized
 }
 
-fn send_terminal_text(on_output: &Channel<String>, text: &str) {
-    let _ = on_output.send(normalize_terminal_text(text));
+/// 把前端最近上报的列宽写进一个已经借到的换行状态。
+///
+/// `session/event` 每帧都要走这一步,而调用方多半已经持有 `terminal_wraps`
+/// 锁了,所以这里只接 `&mut TerminalWrap`:锁由调用方决定何时取,热路径上就
+/// 不必为同一张表加锁两次。
+fn sync_wrap_cols(app: &AppHandle, task_id: &str, wrap: &mut TerminalWrap) {
+    let Some((cols, _)) =
+        crate::pty::current_task_pty_size(&app.state::<crate::TaskManager>(), task_id)
+    else {
+        return;
+    };
+    wrap.set_cols(cols as usize);
+}
+
+/// 低于这个列数(或者前端还没上报过尺寸)就不做软换行:窄到这种程度时按词
+/// 折行只会把每个词排成竖列,不如交给 xterm 自己硬折。
+const MIN_WRAP_COLS: usize = 20;
+
+/// 制表位宽度,与 xterm 默认一致。
+const TAB_WIDTH: usize = 8;
+
+/// 待落地单词里的一段。转义序列不占列宽,但必须跟着单词一起搬到下一行,
+/// 否则换行会把一个半开的颜色区间拆开。
+#[derive(Debug)]
+enum WordPart {
+    Escape(String),
+    Glyph(char, usize),
+}
+
+/// 一个任务的软换行状态。
+///
+/// `cols` 是前端最近上报的终端列数;`column` 是跨 chunk 累积的光标列,因为
+/// 一段回答是按增量分多次到达的;`word` 是行尾尚未落地的单词——只有确定它
+/// 放得下当前行,才会写出去,这样右边界上就不会出现被劈成两半的单词。
+#[derive(Debug, Default)]
+struct TerminalWrap {
+    cols: usize,
+    column: usize,
+    word: Vec<WordPart>,
+    word_width: usize,
+}
+
+impl TerminalWrap {
+    fn wraps(&self) -> bool {
+        self.cols >= MIN_WRAP_COLS
+    }
+
+    fn set_cols(&mut self, cols: usize) {
+        if self.cols == cols {
+            return;
+        }
+        self.cols = cols;
+        // 变窄之后旧的光标列可能已经越界,按新宽度重新起一行计算。
+        if self.column >= cols {
+            self.column = 0;
+        }
+    }
+
+    /// 落地待定单词:整词放不下当前行时先换行,再逐字排布。超长单词(URL、
+    /// 长路径)仍然按列硬折,但折点落在行末,而不是把普通单词拦腰截断。
+    fn flush(&mut self) -> String {
+        if self.word.is_empty() {
+            self.word_width = 0;
+            return String::new();
+        }
+        let mut out = String::new();
+        let cols = self.cols;
+        let wraps = self.wraps();
+        if wraps
+            && self.column > 0
+            && self.column + self.word_width > cols
+            && self.word_width <= cols
+        {
+            out.push_str("\r\n");
+            self.column = 0;
+        }
+        for part in self.word.drain(..) {
+            match part {
+                WordPart::Escape(sequence) => out.push_str(&sequence),
+                WordPart::Glyph(character, width) => {
+                    if wraps && self.column > 0 && self.column + width > cols {
+                        out.push_str("\r\n");
+                        self.column = 0;
+                    }
+                    out.push(character);
+                    self.column += width;
+                }
+            }
+        }
+        self.word_width = 0;
+        out
+    }
+
+    /// 接入一段终端输出,返回可直接写给 xterm 的文本。
+    fn push(&mut self, text: &str) -> String {
+        let text = normalize_terminal_text(text);
+        if !self.wraps() {
+            let mut out = self.flush();
+            out.push_str(&text);
+            return out;
+        }
+        let cols = self.cols;
+        let mut out = String::with_capacity(text.len() + text.len() / 8);
+        let mut characters = text.chars().peekable();
+        while let Some(character) = characters.next() {
+            match character {
+                '\x1b' => {
+                    // 转义序列不占列宽,但要跟着单词一起搬到下一行,否则换行会
+                    // 落在一个半开的颜色区间里。
+                    let sequence = read_ansi_sequence(&mut characters);
+                    self.word.push(WordPart::Escape(sequence));
+                }
+                '\r' | '\n' => {
+                    out.push_str(&self.flush());
+                    out.push(character);
+                    self.column = 0;
+                }
+                '\t' => {
+                    out.push_str(&self.flush());
+                    let advance = TAB_WIDTH - self.column % TAB_WIDTH;
+                    if self.column + advance >= cols {
+                        out.push_str("\r\n");
+                        self.column = 0;
+                    } else {
+                        out.push('\t');
+                        self.column += advance;
+                    }
+                }
+                ' ' => {
+                    out.push_str(&self.flush());
+                    // 行末的空格本身就是断行点,换行取代这个空格,避免下一行
+                    // 以一个空格开头。
+                    if self.column + 1 >= cols {
+                        out.push_str("\r\n");
+                        self.column = 0;
+                    } else {
+                        out.push(' ');
+                        self.column += 1;
+                    }
+                }
+                _ if character.is_control() => {
+                    // 其它控制字节不占列宽,原样透传。
+                    out.push_str(&self.flush());
+                    out.push(character);
+                }
+                _ => {
+                    let width = terminal_char_width(character);
+                    if width == 2 {
+                        // CJK / emoji 每个字都能断行,不需要攒成单词。
+                        out.push_str(&self.flush());
+                        if self.column > 0 && self.column + width > cols {
+                            out.push_str("\r\n");
+                            self.column = 0;
+                        }
+                        out.push(character);
+                        self.column += width;
+                        continue;
+                    }
+                    self.word.push(WordPart::Glyph(character, width));
+                    self.word_width += width;
+                    // 单词本身已经宽过一整行,再攒下去也只能硬折,先落地。
+                    if self.word_width >= cols {
+                        out.push_str(&self.flush());
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// 读走一个完整的转义序列(ESC 已由调用方消费),原样返回以便透传。
+fn read_ansi_sequence(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut sequence = String::from("\x1b");
+    match characters.peek() {
+        // CSI:参数与中间字节,以 final byte 结束。
+        Some('[') => {
+            sequence.push('[');
+            let _ = characters.next();
+            for next in characters.by_ref() {
+                sequence.push(next);
+                if ('\x40'..='\x7e').contains(&next) {
+                    break;
+                }
+            }
+        }
+        // OSC:以 BEL 或 ST(ESC \)结束。
+        Some(']') => {
+            sequence.push(']');
+            let _ = characters.next();
+            let mut saw_escape = false;
+            for next in characters.by_ref() {
+                sequence.push(next);
+                if saw_escape || next == '\x07' {
+                    break;
+                }
+                saw_escape = next == '\x1b';
+            }
+        }
+        Some(_) => {
+            if let Some(next) = characters.next() {
+                sequence.push(next);
+            }
+        }
+        None => {}
+    }
+    sequence
+}
+
+/// 终端列宽近似:CJK / 全角 / 常见 emoji 占两列,组合符与零宽字符占零列,
+/// 其余按一列算。仓库没有引入 unicode-width,这里只覆盖 DSH 输出实际会出现
+/// 的区间——判宽偏窄只会让折行提前,不会把字符挤出右边界。
+fn terminal_char_width(character: char) -> usize {
+    let code = character as u32;
+    if matches!(
+        code,
+        0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x0591..=0x05BD
+            | 0x0610..=0x061A
+            | 0x064B..=0x065F
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x200B..=0x200F
+            | 0x20D0..=0x20FF
+            | 0xFE00..=0xFE0F
+            | 0xFE20..=0xFE2F
+            | 0xFEFF
+    ) {
+        return 0;
+    }
+    if matches!(
+        code,
+        0x1100..=0x115F
+            | 0x2E80..=0x303E
+            | 0x3041..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA000..=0xA4CF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F18E
+            | 0x1F191..=0x1F19A
+            | 0x1F200..=0x1F2FF
+            | 0x1F300..=0x1F64F
+            | 0x1F680..=0x1F6FF
+            | 0x1F7E0..=0x1F7EB
+            | 0x1F900..=0x1F9FF
+            | 0x1FA70..=0x1FAFF
+            | 0x20000..=0x2FFFD
+            | 0x30000..=0x3FFFD
+    ) {
+        return 2;
+    }
+    1
 }
 
 /// Minimal ANSI styling for the tool render-intent output. The dsh stream lands
@@ -1460,6 +1866,37 @@ fn push_line(out: &mut String, style: &str, text: &str) {
         out.push_str(ANSI_RESET);
     }
     out.push_str("\r\n");
+}
+
+/// 用户输入在终端里的回显行。Web API 会话没有 PTY,终端不会自动回显,不自己
+/// 打一行的话发出去的内容在终端里完全看不到。
+///
+/// 斜杠命令由 `command/run` 事件负责回显,这里跳过,避免同一条输入出现两次。
+fn user_prompt_echo(prompt: &str, image_count: usize) -> Option<String> {
+    let text = prompt.trim();
+    if text.starts_with('/') {
+        return None;
+    }
+    if text.is_empty() && image_count == 0 {
+        return None;
+    }
+    let attachment = match image_count {
+        0 => String::new(),
+        1 => format!(" {ANSI_DIM}· 1 image{ANSI_RESET}"),
+        count => format!(" {ANSI_DIM}· {count} images{ANSI_RESET}"),
+    };
+    // 续行缩进两格,与首行的 "❯ " 对齐。
+    let body = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n  ");
+    let mut out = String::from("\r\n");
+    push_line(
+        &mut out,
+        "",
+        &format!("{ANSI_BOLD}❯{ANSI_RESET} {body}{attachment}"),
+    );
+    Some(out)
 }
 
 /// Drop ANSI escape sequences and control bytes from one line. Tool output is
@@ -1973,13 +2410,40 @@ fn session_event_terminal_output(payload: &Value, fold: &mut ReasoningFold) -> O
     }
 }
 
+/// 是否是流式文本增量。这类事件后面还会有后续增量,行尾单词可以先攒着等下一
+/// 片;其它事件之后不保证还有输出,必须立刻落地。
+fn event_is_stream_delta(payload: &Value) -> bool {
+    let Some(event) = payload.get("event") else {
+        return false;
+    };
+    if event.get("type").and_then(Value::as_str) != Some("assistant/chunk") {
+        return false;
+    }
+    event
+        .get("data")
+        .and_then(|data| data.get("chunk"))
+        .and_then(|chunk| chunk.get("type"))
+        .and_then(Value::as_str)
+        == Some("text-delta")
+}
+
 fn emit_session_event_output(
     payload: &Value,
     on_output: &Channel<String>,
     fold: &mut ReasoningFold,
+    wrap: &mut TerminalWrap,
 ) {
     if let Some(output) = session_event_terminal_output(payload, fold) {
-        send_terminal_text(on_output, &output);
+        let wrapped = wrap.push(&output);
+        if !wrapped.is_empty() {
+            let _ = on_output.send(wrapped);
+        }
+    }
+    if !event_is_stream_delta(payload) {
+        let flushed = wrap.flush();
+        if !flushed.is_empty() {
+            let _ = on_output.send(flushed);
+        }
     }
 }
 
@@ -2036,10 +2500,16 @@ fn dispatch_mux_frame(
     let result = match frame_type {
         "session/event" => {
             let _ = app.emit("dsh-session-event", &payload);
-            {
+            // 会话记录仍然收录引导命令,只是它的回显不进终端。
+            if !state.is_internal_command_echo(task_id, &payload) {
                 let mut folds = state.reasoning_folds.lock();
                 let fold = folds.entry(task_id.to_string()).or_default();
-                emit_session_event_output(&payload, on_output, fold);
+                let mut wraps = state.terminal_wraps.lock();
+                let wrap = wraps.entry(task_id.to_string()).or_default();
+                // 列宽在这把锁里同步:被吞掉的引导命令回显不写终端,也就不需要
+                // 列宽,单独提前同步只会多加一次锁。
+                sync_wrap_cols(app, task_id, wrap);
+                emit_session_event_output(&payload, on_output, fold, wrap);
             }
             let event = payload.get("event").unwrap_or(&Value::Null);
             match event.get("type").and_then(Value::as_str) {
@@ -2525,11 +2995,20 @@ pub async fn run_dsh_task(
     client_time_zone: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    // 只有内置官方 dsh 配置带 reasoning 元数据的模型目录;提供方 / 自定义提供方
+    // 档案只做模型选择,即使前端回传了强度也一律丢弃。
+    let reasoning_effort = if agent == "dsh" {
+        reasoning_effort
+    } else {
+        None
+    };
     let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
     let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
     state.clear_completed_task(&task_id);
     state.cancelled_tasks.lock().remove(&task_id);
     state.reasoning_folds.lock().remove(&task_id);
+    state.clear_terminal_wrap(&task_id);
+    state.clear_internal_command(&task_id);
     let web = ensure_dsh_webui(&agent, &state).await?;
     let base_url = web
         .url
@@ -2551,6 +3030,8 @@ pub async fn run_dsh_task(
             on_output: on_output.clone(),
         },
     );
+    // 任务结束后活跃会话表会清空,归属另记一份,会话详情才找得回这个实例。
+    state.remember_session_host(&session_id, &base_url);
     let session_path = crate::session_dsh::dsh_session_path_for(&agent, &project_path, &session_id)
         .ok_or_else(|| "Could not resolve the DSH session log path".to_string())?;
     crate::session_dsh::register_dsh_session_with_preset(
@@ -2561,6 +3042,7 @@ pub async fn run_dsh_task(
         resolved_preset.as_deref(),
     );
     let result: Result<(), String> = async {
+        state.sync_terminal_cols(&app, &task_id);
         start_task_session_stream(&app, &state, &task_id, &api, &session_id, &on_output).await?;
         let models = api.models(&session_id).await?;
         if selected_model.is_some() || reasoning_effort.is_some() {
@@ -2586,10 +3068,14 @@ pub async fn run_dsh_task(
         }
         if let Some(mode) = permission_mode.as_deref() {
             let preset = dsh_permission_preset(mode)?;
+            // 权限预设是参数传递,不是用户输入:先登记,让 `/permission <preset>`
+            // 和它的结果行不出现在终端最前面两行。
+            state.expect_internal_command(&task_id, "permission");
             let command = api
                 .execute_command(&session_id, &format!("/permission {preset}"))
                 .await?;
             if command.is_null() {
+                state.clear_internal_command(&task_id);
                 return Err(
                     "DSH permission command is unavailable in this agent preset".to_string()
                 );
@@ -2609,6 +3095,10 @@ pub async fn run_dsh_task(
             "task-status",
             json!({ "task_id": task_id.clone(), "status": "pending" }),
         );
+        let image_count = images.as_ref().map_or(0, Vec::len);
+        if let Some(echo) = user_prompt_echo(&prompt, image_count) {
+            state.send_terminal_text_for_task(&task_id, &on_output, &echo);
+        }
         let admitted = api
             .prompt(
                 &session_id,
@@ -2623,7 +3113,7 @@ pub async fn run_dsh_task(
             .and_then(|command| command.get("text"))
             .and_then(Value::as_str)
         {
-            send_terminal_text(&on_output, &format!("\r\n{text}\r\n"));
+            state.send_terminal_text_for_task(&task_id, &on_output, &format!("\r\n{text}\r\n"));
             // A slash command answers inline without opening a turn, so no
             // turn/end will follow: settle the task as waiting for the user.
             let _ = app.emit(
@@ -2672,6 +3162,11 @@ pub async fn prompt_dsh_task(
         .ok_or_else(|| "This DSH task is not connected; resume it before sending".to_string())?;
     let api = DshApiClient::new(active.base_url)?;
     state.cancelled_tasks.lock().remove(&task_id);
+    state.sync_terminal_cols(&app, &task_id);
+    let image_count = images.as_ref().map_or(0, Vec::len);
+    if let Some(echo) = user_prompt_echo(&prompt, image_count) {
+        state.send_terminal_text_for_task(&task_id, &active.on_output, &echo);
+    }
     let value = api
         .prompt(
             &active.session_id,
@@ -2686,7 +3181,7 @@ pub async fn prompt_dsh_task(
         .and_then(|command| command.get("text"))
         .and_then(Value::as_str)
     {
-        send_terminal_text(&active.on_output, &format!("\r\n{text}\r\n"));
+        state.send_terminal_text_for_task(&task_id, &active.on_output, &format!("\r\n{text}\r\n"));
     } else {
         let _ = app.emit(
             "task-status",
@@ -3860,16 +4355,34 @@ async fn get_dsh_api_for_session(
     state: &DshWebUiManager,
     session_id: &str,
 ) -> Result<DshApiClient, String> {
-    let base_url = state
-        .active_sessions
-        .lock()
-        .values()
-        .find(|active| active.session_id == session_id)
-        .map(|active| active.base_url.clone());
-    match base_url {
-        Some(url) => DshApiClient::new(url),
-        None => get_dsh_api(state).await,
+    if let Some(url) = state.known_session_host(session_id) {
+        return DshApiClient::new(url);
     }
+    // 每个 dsh 族配置有独立的 DSH_HOME 与端口,会话只存在于持有它的那个实例里。
+    // 任务结束(或应用重启)后活跃会话表已经没有这条记录,必须先按磁盘反查出
+    // 归属的 agent,再确保它的实例在跑,否则会打到内置实例上拿到 not found。
+    //
+    // 反查要遍历每个 dsh home 下的每个 project 目录,是同步文件系统操作,
+    // 交给阻塞线程池,避免占住 tokio 工作线程。归属会缓存,这条路径每个会话
+    // 只走一次。
+    let owner = {
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::session_dsh::dsh_agent_owning_session(&session_id)
+        })
+        .await
+        .map_err(|e| format!("Could not resolve the DSH session owner: {e}"))?
+    };
+    if let Some(agent) = owner {
+        let web = ensure_dsh_webui(&agent, state).await?;
+        let url = web
+            .url
+            .ok_or_else(|| "DSH Web URL is unavailable".to_string())?;
+        state.remember_session_host(session_id, &url);
+        return DshApiClient::new(url);
+    }
+    // 磁盘上还没有这个会话的落盘目录(例如刚创建、尚未写入),退回内置实例。
+    get_dsh_api(state).await
 }
 
 #[tauri::command]
@@ -3994,7 +4507,7 @@ pub async fn get_dsh_session_history(
     before_seq: Option<u64>,
     max_messages: Option<u32>,
 ) -> Result<DshSessionHistory, String> {
-    get_dsh_api(&state)
+    get_dsh_api_for_session(&state, &session_id)
         .await?
         .session_history(&session_id, before_seq, max_messages)
         .await
@@ -4006,7 +4519,7 @@ pub async fn rename_dsh_session(
     session_id: String,
     title: String,
 ) -> Result<(String, u64), String> {
-    get_dsh_api(&state)
+    get_dsh_api_for_session(&state, &session_id)
         .await?
         .rename_session(&session_id, &title)
         .await
@@ -4018,7 +4531,7 @@ pub async fn fork_dsh_session(
     session_id: String,
     at_seq: Option<u64>,
 ) -> Result<String, String> {
-    get_dsh_api(&state)
+    get_dsh_api_for_session(&state, &session_id)
         .await?
         .fork_session(&session_id, at_seq)
         .await
@@ -4040,7 +4553,7 @@ pub async fn update_dsh_session_queue(
     item_id: String,
     action: Value,
 ) -> Result<(), String> {
-    get_dsh_api(&state)
+    get_dsh_api_for_session(&state, &session_id)
         .await?
         .update_session_queue(&session_id, &item_id, action)
         .await
@@ -5252,6 +5765,7 @@ mod tests {
             }),
             &channel,
             &mut ReasoningFold::default(),
+            &mut TerminalWrap::default(),
         );
 
         assert_eq!(
@@ -5268,7 +5782,6 @@ mod tests {
             }
         })
     }
-
     fn text_chunk(text: &str) -> Value {
         json!({
             "event": {
@@ -5276,6 +5789,120 @@ mod tests {
                 "data": { "chunk": { "type": "text-delta", "index": 1, "text": text } }
             }
         })
+    }
+
+    fn capture_terminal_channel() -> (Channel<String>, Arc<Mutex<Vec<String>>>) {
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = received.clone();
+        let channel = Channel::new(move |body| {
+            let tauri::ipc::InvokeResponseBody::Json(json) = body else {
+                panic!("terminal text must use a JSON channel payload");
+            };
+            captured
+                .lock()
+                .push(serde_json::from_str(&json).expect("channel payload is a string"));
+            Ok(())
+        });
+        (channel, received)
+    }
+
+    #[test]
+    fn soft_wraps_at_word_boundaries_instead_of_splitting_a_word() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(20);
+        let mut out = wrap.push("The quick brown fox jumps over the lazy dog");
+        out.push_str(&wrap.flush());
+        assert_eq!(out, "The quick brown fox\r\njumps over the lazy\r\ndog");
+        for row in out.split("\r\n") {
+            assert!(
+                row.chars().count() <= 20,
+                "row wider than the terminal: {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_a_word_whole_across_streamed_chunks() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(20);
+        let mut out = String::new();
+        // A DSH answer arrives one text-delta at a time, so the row-end word must
+        // survive the chunk boundary: "fo" + "x" is one word, not two.
+        for delta in ["The quick brown fo", "x jumps"] {
+            out.push_str(&wrap.push(delta));
+        }
+        out.push_str(&wrap.flush());
+        assert_eq!(out, "The quick brown fox\r\njumps");
+    }
+
+    #[test]
+    fn hard_folds_a_word_wider_than_the_row_at_the_row_edge() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(20);
+        let mut out = wrap.push(&"a".repeat(25));
+        out.push_str(&wrap.flush());
+        assert_eq!(out, format!("{}\r\n{}", "a".repeat(20), "a".repeat(5)));
+    }
+
+    #[test]
+    fn counts_cjk_glyphs_as_two_columns() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(20);
+        let out = wrap.push("中文换行测试终端宽度对");
+        assert_eq!(out, "中文换行测试终端宽度\r\n对");
+        assert_eq!(terminal_char_width('中'), 2);
+        assert_eq!(terminal_char_width('a'), 1);
+        assert_eq!(terminal_char_width('\u{200b}'), 0);
+    }
+
+    #[test]
+    fn moves_a_styled_word_to_the_next_row_with_its_escape_sequence() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(20);
+        let mut out = wrap.push("0123456789012345 \x1b[32mgreen\x1b[0m");
+        out.push_str(&wrap.flush());
+        assert_eq!(out, "0123456789012345 \r\n\x1b[32mgreen\x1b[0m");
+    }
+
+    #[test]
+    fn leaves_output_untouched_until_the_frontend_reports_a_width() {
+        let mut wrap = TerminalWrap::default();
+        let out = wrap.push("a very long line that nothing knows the width of\nsecond");
+        assert_eq!(
+            out,
+            "a very long line that nothing knows the width of\r\nsecond"
+        );
+    }
+
+    #[test]
+    fn flushes_the_row_end_word_once_the_stream_stops() {
+        let (channel, received) = capture_terminal_channel();
+        let mut fold = ReasoningFold::default();
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(40);
+        emit_session_event_output(&text_chunk("Answer"), &channel, &mut fold, &mut wrap);
+        // The trailing word is still open: a later delta may extend it.
+        assert!(received.lock().is_empty());
+
+        emit_session_event_output(
+            &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
+            &channel,
+            &mut fold,
+            &mut wrap,
+        );
+        assert_eq!(*received.lock(), vec!["Answer".to_string()]);
+    }
+
+    #[test]
+    fn echoes_the_submitted_prompt_and_leaves_slash_commands_to_the_command_event() {
+        assert_eq!(
+            user_prompt_echo("hello\nworld", 0),
+            Some("\r\n\x1b[1m❯\x1b[0m hello\r\n  world\r\n".to_string())
+        );
+        assert_eq!(user_prompt_echo("/permission read-only", 0), None);
+        assert_eq!(user_prompt_echo("   ", 0), None);
+        let with_images = user_prompt_echo("", 2).expect("an image-only prompt still echoes");
+        assert!(with_images.contains("2 images"));
     }
 
     #[test]
@@ -5361,6 +5988,71 @@ mod tests {
         assert!(rendered.contains("permission denied"));
         assert!(!rendered.contains("at open()"));
         assert_eq!(rendered.matches("\r\n").count(), 1);
+    }
+
+    #[test]
+    fn resolves_a_session_host_after_its_task_is_gone() {
+        let manager = DshWebUiManager::new();
+        let output = Channel::new(|_| Ok(()));
+        manager.active_sessions.lock().insert(
+            "task-1".to_string(),
+            ActiveDshSession {
+                session_id: "session-1".to_string(),
+                base_url: "http://127.0.0.1:5001".to_string(),
+                on_output: output,
+            },
+        );
+        manager.remember_session_host("session-1", "http://127.0.0.1:5001");
+
+        assert_eq!(
+            manager.known_session_host("session-1").as_deref(),
+            Some("http://127.0.0.1:5001")
+        );
+        // 任务结束后活跃会话表清空,归属仍然要指向持有它的那个实例,
+        // 否则 `session.history` 会打到内置实例上换回 "session not found"。
+        manager.active_sessions.lock().remove("task-1");
+        assert_eq!(
+            manager.known_session_host("session-1").as_deref(),
+            Some("http://127.0.0.1:5001")
+        );
+        assert!(manager.known_session_host("session-2").is_none());
+
+        // 实例停掉后 base URL 失效,缓存必须一起失效。
+        manager.forget_session_hosts_at("http://127.0.0.1:5001");
+        assert!(manager.known_session_host("session-1").is_none());
+    }
+
+    #[test]
+    fn swallows_only_the_bootstrap_permission_command_echo() {
+        let manager = DshWebUiManager::new();
+        fn run(name: &str, args: &str) -> Value {
+            json!({ "event": { "type": "command/run", "data": { "name": name, "args": args } } })
+        }
+        fn done(text: &str) -> Value {
+            json!({ "event": { "type": "command/done", "data": { "text": text } } })
+        }
+
+        manager.expect_internal_command("task-1", "permission");
+        // 启动时下发的 `/permission read-only` 和它的结果行都不进终端。
+        assert!(manager.is_internal_command_echo("task-1", &run("permission", " read-only")));
+        assert!(manager.is_internal_command_echo("task-1", &done("preset read-only")));
+        // 登记只吞一次:用户后面自己敲的 `/permission` 照常回显。
+        assert!(!manager.is_internal_command_echo("task-1", &run("permission", " full-access")));
+        assert!(!manager.is_internal_command_echo("task-1", &done("preset full-access")));
+
+        // 名字不匹配的命令不受影响,登记继续等它自己的回显。
+        manager.expect_internal_command("task-2", "permission");
+        assert!(!manager.is_internal_command_echo("task-2", &run("model", " deepseek-chat")));
+        assert!(manager.is_internal_command_echo("task-2", &run("permission", " plan")));
+        // 其它任务的事件不会被这条登记吞掉。
+        assert!(!manager.is_internal_command_echo("task-3", &run("permission", " plan")));
+
+        // 配对的 run 还没到就先来的 done 属于别的命令。吞掉它会连登记一起清掉,
+        // 随后真正的 `/permission` 回显就会漏进终端最前面。
+        manager.expect_internal_command("task-4", "permission");
+        assert!(!manager.is_internal_command_echo("task-4", &done("model set")));
+        assert!(manager.is_internal_command_echo("task-4", &run("permission", " read-only")));
+        assert!(manager.is_internal_command_echo("task-4", &done("preset read-only")));
     }
 
     #[test]

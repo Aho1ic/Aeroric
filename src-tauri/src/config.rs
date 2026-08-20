@@ -474,9 +474,14 @@ pub(crate) fn read_agent_reasoning_settings_from_settings(
     settings: &AppSettings,
 ) -> (Option<String>, Option<String>) {
     // dsh 的默认 effort 存在 Aeroric 设置中；Harness settings.yaml 没有对应根键。
+    // 只有内置官方 dsh 配置开放推理强度,提供方 / 自定义提供方档案返回 None,
+    // 前端因此不会展示也不会回传该参数。
     if crate::app_settings::agent_family_in(settings, agent)
         == crate::app_settings::AgentFamily::Dsh
     {
+        if agent != "dsh" {
+            return (None, None);
+        }
         return (
             Some(crate::app_settings::dsh_reasoning_effort_in(
                 settings, agent,

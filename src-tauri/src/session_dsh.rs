@@ -143,6 +143,48 @@ pub(crate) fn dsh_project_sessions_dir_for(agent: &str, project_path: &str) -> O
     Some(dsh_sessions_root_for(agent)?.join(dsh_project_key(project_path)))
 }
 
+/// 反查持有某个会话的 dsh 族 agent。
+///
+/// 会话按 `<home>/sessions/<projectKey>/<转义会话id>/session.jsonl` 落盘,而
+/// home 目录名就是 agent id,所以归属可以纯靠磁盘判定——不需要对应的 `dsh web`
+/// 实例还在跑,也不需要任务还是活跃状态。会话详情正是在任务结束后才打开的,
+/// 少了这一步请求就会打到内置实例上换回 "session not found"。
+pub(crate) fn dsh_agent_owning_session(session_id: &str) -> Option<String> {
+    let session_dir = dsh_encode_segment(session_id);
+    if session_dir.is_empty() {
+        return None;
+    }
+    let root = crate::platform::home_dir()?
+        .join(".aeroric")
+        .join("agent-homes");
+    for home in std::fs::read_dir(root).ok()?.flatten() {
+        let Some(agent) = home.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        // 目录名必须原样回推出同一个 home(排除被 sanitize 改写的名字),
+        // 而且只认 dsh 族配置:其它 agent 家族的 home 里没有这套布局。
+        if crate::dsh_home::dsh_home_for(&agent).ok().as_deref() != Some(&home.path())
+            || !crate::app_settings::is_dsh_agent(&agent)
+        {
+            continue;
+        }
+        let Ok(projects) = std::fs::read_dir(home.path().join("sessions")) else {
+            continue;
+        };
+        for project in projects.flatten() {
+            if project
+                .path()
+                .join(&session_dir)
+                .join("session.jsonl")
+                .is_file()
+            {
+                return Some(agent);
+            }
+        }
+    }
+    None
+}
+
 // ── Header 与格式探测 ────────────────────────────────────────────────────────
 
 fn parse_json(line: &str) -> Option<Value> {

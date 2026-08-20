@@ -1043,6 +1043,41 @@ describe("Agent config and debug panel UI", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith("dsh", "dsh"));
   });
 
+  it("adds a second official DSH config instead of overwriting when unchecked", async () => {
+    const user = userEvent.setup();
+    const onSaved = vi.fn();
+    renderAddAgentPanel(null, onSaved);
+
+    await user.click(screen.getByRole("button", { name: "DeepSeek Harness" }));
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.click(screen.getByRole("button", { name: "Fetch Available Models" }));
+    await user.click(await screen.findByLabelText("gpt-5.6-sol"));
+
+    const override = screen.getByLabelText("Overwrite the existing config");
+    expect(override).toBeChecked();
+    await user.click(override);
+    // Unchecked means "keep the built-in official config", so the primary
+    // action turns from Save into Add Agent.
+    await user.click(screen.getByRole("button", { name: "Add Agent" }));
+
+    expect(invoke).toHaveBeenCalledWith("setup_agent_profile", {
+      draft: {
+        id: "deepseek-official_dsh",
+        label: "DeepSeek",
+        kind: "dsh",
+        base_url: "",
+        api_key: "sk-test",
+        model: "gpt-5.6-sol",
+        models: ["gpt-5.6-sol"],
+        enable_1m_context: false,
+        enable_chat_completions_proxy: false,
+        dsh_api_protocol: "openai-completions",
+      },
+    });
+    expect(invoke).not.toHaveBeenCalledWith("update_builtin_agent_access", expect.anything());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("deepseek-official_dsh", "dsh"));
+  });
+
   it("creates a custom DSH provider with the selected API protocol", async () => {
     const user = userEvent.setup();
     renderAddAgentPanel();

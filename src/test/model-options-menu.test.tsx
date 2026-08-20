@@ -28,6 +28,15 @@ vi.mock("../hooks/useAgentOptions", () => ({
       codexLike: false,
       family: "dsh",
     },
+    {
+      value: "acme-gateway_dsh",
+      label: "Acme Gateway",
+      configFile: "",
+      configLang: "yaml",
+      codexLike: false,
+      family: "dsh",
+      custom: true,
+    },
   ],
 }));
 
@@ -136,6 +145,22 @@ describe("ModelOptionsMenu", () => {
         .map((item) => item.textContent),
     ).toEqual(["Off", "High", "Max"]);
     expect(within(reasoningMenu).queryByText("Model Default")).not.toBeInTheDocument();
+  });
+
+  it("drops the reasoning menu for a DSH provider profile", () => {
+    // Only the built-in official catalog declares reasoning metadata, so a
+    // provider profile offers model selection and nothing else.
+    renderMenu({
+      agent: "acme-gateway_dsh",
+      models: ["deepseek-v4-pro"],
+      selectedModel: "deepseek-v4-pro",
+      reasoningEffort: "high",
+    });
+
+    openMainMenu();
+    expect(screen.queryByRole("button", { name: "Reasoning effort" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Speed" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Model" })).toBeInTheDocument();
   });
 
   it("does not open a submenu before the 150ms stationary delay", () => {

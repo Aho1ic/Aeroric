@@ -170,3 +170,15 @@ export function isCodexLikeAgent(agent: AgentType, options?: AgentOption[]): boo
 export function isDshAgent(agent: AgentType, options?: AgentOption[]): boolean {
   return agentFamily(agent, options) === "dsh";
 }
+
+/**
+ * 推理强度是否对该 agent 配置开放。
+ *
+ * DSH 的 Off/High/Max 由内置官方模型目录声明,提供方 / 自定义提供方档案的目录
+ * 不保证带 reasoning 元数据,因此只有内置 `dsh` 允许选择并传参,其余 dsh 档案
+ * 只做模型选择。claude / codex 族不受此限制。
+ */
+export function agentSupportsReasoningEffort(agent: AgentType, options?: AgentOption[]): boolean {
+  if (agentFamily(agent, options) !== "dsh") return true;
+  return agent === "dsh";
+}

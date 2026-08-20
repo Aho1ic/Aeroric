@@ -18,7 +18,7 @@ import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
 import type { AgentOption, CustomAgentProfile } from "../../agents";
-import { isBuiltInAgent } from "../../agents";
+import { agentSupportsReasoningEffort, isBuiltInAgent } from "../../agents";
 import {
   CODEX_REASONING_EFFORTS,
   CLAUDE_REASONING_EFFORTS,
@@ -93,6 +93,8 @@ export function AgentDetailModal({
   const isCodex = option.codexLike === true;
   // DeepSeek API 为 OpenAI 兼容(/models + Bearer),模型探测复用 codex 通道。
   const agentIsDsh = option.family === "dsh";
+  // dsh 只有内置官方配置能选推理强度,提供方 / 自定义提供方档案不暴露该项。
+  const effortSupported = agentSupportsReasoningEffort(option.value, [option]);
   const isBuiltIn = isBuiltInAgent(option.value);
 
   const { language, t } = useI18n();
@@ -420,7 +422,9 @@ export function AgentDetailModal({
     (isBuiltIn || selectedModels.length > 0) &&
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
-    (agentIsDsh || fileState.status === "loaded") && reasoningEffort !== originalReasoningEffort;
+    effortSupported &&
+    (agentIsDsh || fileState.status === "loaded") &&
+    reasoningEffort !== originalReasoningEffort;
   const canSaveReasoningSpeed =
     !agentIsDsh && fileState.status === "loaded" && reasoningSpeed !== originalReasoningSpeed;
   const canSave1mContext =
@@ -1083,7 +1087,7 @@ export function AgentDetailModal({
                     )}
 
                     {/* Reasoning effort */}
-                    {(agentIsDsh || fileState.status === "loaded") && (
+                    {effortSupported && (agentIsDsh || fileState.status === "loaded") && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{

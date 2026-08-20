@@ -9,11 +9,12 @@ import {
 import { ChevronDown, ChevronRight, Cpu, Gauge, SlidersHorizontal, Zap } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { AgentType } from "../../types";
-import { agentFamily } from "../../agents";
+import { agentFamily, agentSupportsReasoningEffort } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
 import { useI18n } from "../../i18n";
 import {
   availableReasoningEffortsForFamily,
+  NO_REASONING_EFFORTS,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../../modelOptions";
@@ -99,9 +100,12 @@ export function ModelOptionsMenu({
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
   const family = agentFamily(agent, agentOptions);
-  const efforts = availableReasoningEffortsForFamily(family, selectedModel);
+  const efforts = agentSupportsReasoningEffort(agent, agentOptions)
+    ? availableReasoningEffortsForFamily(family, selectedModel)
+    : NO_REASONING_EFFORTS;
   // DSH uses its adapter-owned Off/High/Max efforts and has no speed control;
-  // Claude/Codex keep their existing effort and speed menus.
+  // Claude/Codex keep their existing effort and speed menus. Only the built-in
+  // DSH config exposes efforts — provider profiles are model-selection only.
   const showReasoning = efforts.length > 0;
   const showSpeed = family !== "dsh";
   const [open, setOpen] = useState(false);

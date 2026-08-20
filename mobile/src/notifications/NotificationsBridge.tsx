@@ -9,6 +9,7 @@ import { router } from "expo-router";
 import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { useConnection } from "../state/connection-context";
+import type { ApprovalRequest } from "../types";
 import { TaskNotificationGate } from "./notification-gate";
 import { taskMeta } from "./task-name-cache";
 
@@ -39,10 +40,19 @@ export function NotificationsBridge() {
   useEffect(() => {
     return onPush((push, data) => {
       if (push !== "task-status") return;
-      const payload = data as { task_id?: string; status?: string };
+      const payload = data as {
+        task_id?: string;
+        status?: string;
+        approval?: ApprovalRequest;
+      };
       if (!payload?.task_id || !payload.status) return;
       const meta = taskMeta(payload.task_id);
-      const note = gateRef.current.evaluate(payload.task_id, payload.status, meta?.name);
+      const note = gateRef.current.evaluate(
+        payload.task_id,
+        payload.status,
+        meta?.name,
+        payload.approval,
+      );
       if (!note) return;
       void Notifications.scheduleNotificationAsync({
         content: {

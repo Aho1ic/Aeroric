@@ -5,6 +5,7 @@ import {
   DSH_DEFAULT_MODELS,
   findModelIgnoreCase,
 } from "../modelOptions";
+import { agentSupportsReasoningEffort, type AgentOption } from "../agents";
 
 describe("dsh model options", () => {
   it("ships the DeepSeek catalog as the default dsh model list", () => {
@@ -33,5 +34,26 @@ describe("dsh model options", () => {
     );
     expect(availableReasoningEffortsForFamily("codex", "gpt-5.6-sol")).toContain("ultra");
     expect(availableReasoningEffortsForFamily("claude", undefined)).not.toContain("minimal");
+  });
+
+  it("opens reasoning effort to the built-in dsh config only", () => {
+    // Only the built-in official catalog declares reasoning metadata, so a dsh
+    // provider profile is model-selection only and must not pass an effort.
+    const options: AgentOption[] = [
+      {
+        value: "acme-gateway_dsh",
+        label: "Acme Gateway",
+        configFile: "",
+        configLang: "yaml",
+        codexLike: false,
+        family: "dsh",
+        custom: true,
+      },
+    ];
+    expect(agentSupportsReasoningEffort("dsh")).toBe(true);
+    expect(agentSupportsReasoningEffort("acme-gateway_dsh", options)).toBe(false);
+    // Other families keep their own effort catalogs, custom profiles included.
+    expect(agentSupportsReasoningEffort("claude")).toBe(true);
+    expect(agentSupportsReasoningEffort("codex")).toBe(true);
   });
 });

@@ -138,6 +138,43 @@ describe("TerminalView theme replay", () => {
     await waitFor(() => expect(onReady).toHaveBeenCalledWith(13));
   });
 
+  it("keeps a reactivated terminal hidden until its bottom-anchored frame", async () => {
+    const onReady = vi.fn();
+    const props = {
+      onInput: vi.fn(),
+      onResize: vi.fn(),
+      onRegisterTerminal: () => 17,
+      onReady,
+      terminalFontSize: 12 as const,
+      monoFontFamily: "monospace" as const,
+      themeVariant: "dark" as const,
+    };
+    const view = render(<TerminalView {...props} isActive={false} />);
+    await waitFor(() => expect(onReady).toHaveBeenCalledWith(17));
+
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+
+    view.rerender(<TerminalView {...props} isActive />);
+    const container = screen.getByTestId("agent-terminal");
+    expect(container).toHaveAttribute("data-terminal-activating", "true");
+
+    act(() => frames.shift()?.(0));
+    expect(container).toHaveAttribute("data-terminal-activating", "true");
+
+    act(() => frames.shift()?.(16));
+    expect(container).not.toHaveAttribute("data-terminal-activating");
+
+    requestFrame.mockRestore();
+    cancelFrame.mockRestore();
+  });
+
   it("keeps one stable ingress and rebuilds both theme directions from raw ANSI output", async () => {
     let registeredWrite: ((data: string, callback?: () => void) => void) | null = null;
     const onRegisterTerminal = vi.fn((write) => {

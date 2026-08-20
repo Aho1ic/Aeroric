@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ImagePlus, Send, X } from "lucide-react";
+import { ImagePlus, ListPlus, Navigation, Send, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { requestsDshSessionLogExport } from "../dshSessionLogExport";
 import { replaceDshTriggerToken, type DshTokenSpan } from "../dshInputTriggers";
@@ -289,50 +289,56 @@ export function DshComposer({ taskId, sessionId }: { taskId: string; sessionId?:
           }}
         />
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          {/* Button drops children at every `icon-*` size, so the glyph has to
+              come from the `icon` prop. Queue/Steer additionally keep a visible
+              label: the mode decides whether a submission interrupts the turn,
+              which is not readable from a bare glyph. */}
           <div style={{ display: "flex", gap: 4 }}>
             <Button
               type="button"
               variant={mode === "queue" ? "secondary" : "ghost"}
-              size="icon-sm"
+              size="xs"
+              icon={ListPlus}
               title={t("dsh.composer.queue")}
               aria-label={t("dsh.composer.queue")}
+              aria-pressed={mode === "queue"}
               onClick={() => setMode("queue")}
             >
-              Q
+              {t("dsh.composer.queueLabel")}
             </Button>
             <Button
               type="button"
               variant={mode === "steer" ? "secondary" : "ghost"}
-              size="icon-sm"
+              size="xs"
+              icon={Navigation}
               title={t("dsh.composer.steer")}
               aria-label={t("dsh.composer.steer")}
+              aria-pressed={mode === "steer"}
               onClick={() => setMode("steer")}
             >
-              S
+              {t("dsh.composer.steerLabel")}
             </Button>
           </div>
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
+              icon={ImagePlus}
               title={t("dsh.composer.attach")}
               aria-label={t("dsh.composer.attach")}
               onClick={() => fileRef.current?.click()}
-            >
-              <ImagePlus size={15} />
-            </Button>
+            />
             <Button
               type="button"
               variant="default"
               size="icon-sm"
+              icon={Send}
               title={t("dsh.composer.send")}
               aria-label={t("dsh.composer.send")}
               disabled={sending || (!text.trim() && images.length === 0)}
               onClick={() => void submit()}
-            >
-              <Send size={15} />
-            </Button>
+            />
           </div>
         </div>
       </div>

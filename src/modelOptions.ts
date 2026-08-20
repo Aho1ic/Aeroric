@@ -16,6 +16,9 @@ export type ReasoningEffort =
   | (typeof DSH_REASONING_EFFORTS)[number];
 export type TaskSpeed = "standard" | "fast";
 
+/** 不开放推理强度的配置共用这一份空列表,避免每次渲染都产生新引用。 */
+export const NO_REASONING_EFFORTS: readonly ReasoningEffort[] = [];
+
 /** dsh 内建默认模型目录(`@deepseek-ai/dsh-llm-deepseek` 的官方目录)。 */
 export const DSH_DEFAULT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 

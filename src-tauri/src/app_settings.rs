@@ -2082,6 +2082,14 @@ fn apply_dsh_reasoning_effort_update(
             "Reasoning effort is only supported here for DeepSeek Harness agents".to_string(),
         );
     }
+    // 只有内置官方 dsh 配置带 reasoning 元数据的模型目录;提供方 / 自定义提供方
+    // 档案不参与推理强度传参,前端也不会展示该项。
+    if agent != "dsh" {
+        return Err(
+            "Reasoning effort is only configurable for the built-in DeepSeek Harness agent"
+                .to_string(),
+        );
+    }
     let effort = effort.trim().to_ascii_lowercase();
     if !matches!(effort.as_str(), "off" | "high" | "max") {
         return Err("Invalid DeepSeek Harness reasoning effort".to_string());

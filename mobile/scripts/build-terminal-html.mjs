@@ -68,6 +68,7 @@ const glue = `
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(document.getElementById("root"));
+  term.element.style.visibility = "hidden";
   term.onData(function (d) {
     post({ type: "input", data: d });
   });
@@ -462,7 +463,8 @@ const glue = `
   // ── 电脑视图:保留桌面端 cols/rows,但按比例缩放到手机 WebView ──
   var rootEl = document.getElementById("root");
   var desktopMode = false;
-  var snapshotRestoring = false;
+  var snapshotRestoring = true;
+  var snapshotRevealPending = false;
   var layoutRevealFrame = null;
 
   function beginAtomicLayout() {
@@ -477,7 +479,8 @@ const glue = `
     term.element.style.visibility = "hidden";
   }
 
-  function finishAtomicLayout() {
+  function finishAtomicLayout(notifySnapshot) {
+    if (notifySnapshot) snapshotRevealPending = true;
     resetSubPx();
     term.scrollToBottom();
     try {
@@ -487,6 +490,10 @@ const glue = `
     layoutRevealFrame = requestAnimationFrame(function () {
       layoutRevealFrame = null;
       term.element.style.visibility = "visible";
+      if (snapshotRevealPending) {
+        snapshotRevealPending = false;
+        post({ type: "snapshot-complete" });
+      }
     });
   }
 
@@ -556,11 +563,19 @@ const glue = `
             });
             break;
           }
+          case "snapshotAwait":
+            snapshotRestoring = true;
+            beginAtomicLayout();
+            break;
           case "snapshotStart":
             snapshotRestoring = true;
             beginAtomicLayout();
             resetSubPx();
             term.reset();
+            if (msg.cols > 1 && msg.rows > 1) {
+              term.resize(msg.cols, msg.rows);
+            }
+            post({ type: "snapshot-started" });
             break;
           case "snapshotEnd":
             if (msg.mode === "desktop" && msg.cols > 1 && msg.rows > 1) {
@@ -569,7 +584,11 @@ const glue = `
               fitPhone();
             }
             snapshotRestoring = false;
-            finishAtomicLayout();
+            finishAtomicLayout(true);
+            break;
+          case "snapshotAbort":
+            snapshotRestoring = false;
+            finishAtomicLayout(true);
             break;
           case "resize":
             if (msg.cols > 1 && msg.rows > 1) {

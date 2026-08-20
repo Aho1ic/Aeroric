@@ -8,14 +8,25 @@ import {
   X,
 } from "lucide-react";
 import type { AgentOption } from "../agents";
-import { agentDisplayLabel, agentFamily, isCodexLikeAgent } from "../agents";
+import {
+  agentDisplayLabel,
+  agentFamily,
+  agentSupportsReasoningEffort,
+  isCodexLikeAgent,
+} from "../agents";
 import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
 import deepseekLogo from "../assets/deepseek.svg";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { getCachedAgentModels, refreshAgentModels } from "../hooks/agentModelCache";
 import { useI18n } from "../i18n";
-import { availableReasoningEfforts, type ReasoningEffort, type TaskSpeed } from "../modelOptions";
+import {
+  availableReasoningEfforts,
+  DSH_REASONING_EFFORTS,
+  NO_REASONING_EFFORTS,
+  type ReasoningEffort,
+  type TaskSpeed,
+} from "../modelOptions";
 import type { AgentType, PermissionMode, Task } from "../types";
 import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 import { Button } from "./ui/Button";
@@ -81,12 +92,16 @@ export function AgentConfigSwitchDialog({
   const codexLike = selectedOption?.family
     ? selectedOption.family === "codex"
     : isCodexLikeAgent(agent, agentOptions);
-  const efforts = useMemo(
+  // dsh 只有内置官方配置开放推理强度,提供方 / 自定义提供方档案仅做模型选择。
+  const effortAllowed = agentSupportsReasoningEffort(agent, agentOptions);
+  const efforts = useMemo<readonly ReasoningEffort[]>(
     () =>
-      family === "dsh"
-        ? (["off", "high", "max"] as const)
-        : availableReasoningEfforts(codexLike, selectedModel),
-    [codexLike, family, selectedModel],
+      !effortAllowed
+        ? NO_REASONING_EFFORTS
+        : family === "dsh"
+          ? DSH_REASONING_EFFORTS
+          : availableReasoningEfforts(codexLike, selectedModel),
+    [codexLike, effortAllowed, family, selectedModel],
   );
 
   useEffect(() => {
@@ -128,12 +143,14 @@ export function AgentConfigSwitchDialog({
         setSelectedModel(
           (current) => result.models.find((model) => model === current) ?? result.models[0] ?? "",
         );
+        const effortCatalog: readonly string[] =
+          family === "dsh"
+            ? DSH_REASONING_EFFORTS
+            : availableReasoningEfforts(codexLike, result.models[0]);
         if (
+          effortAllowed &&
           result.reasoning_effort &&
-          (family === "dsh"
-            ? ["off", "high", "max"]
-            : availableReasoningEfforts(codexLike, result.models[0])
-          ).includes(result.reasoning_effort as ReasoningEffort)
+          effortCatalog.includes(result.reasoning_effort)
         ) {
           setReasoningEffort((current) => current ?? (result.reasoning_effort as ReasoningEffort));
         }
@@ -150,7 +167,7 @@ export function AgentConfigSwitchDialog({
     return () => {
       cancelled = true;
     };
-  }, [agent, codexLike, family, open]);
+  }, [agent, codexLike, effortAllowed, family, open]);
 
   useEffect(() => {
     if (reasoningEffort && !efforts.includes(reasoningEffort)) setReasoningEffort(null);
@@ -170,7 +187,7 @@ export function AgentConfigSwitchDialog({
       const applied = await onSubmit({
         agent,
         selectedModel: selectedModel || undefined,
-        reasoningEffort,
+        reasoningEffort: effortAllowed ? reasoningEffort : null,
         speed: family === "dsh" ? "standard" : speed,
         permissionMode,
       });
@@ -330,28 +347,30 @@ export function AgentConfigSwitchDialog({
           </label>
 
           <div className="agent-config-switch-controls">
-            <div className="agent-config-switch-field">
-              <span className="agent-config-switch-label">{t("newTask.reasoningLabel")}</span>
-              <AnimatedSelectionGroup
-                value={reasoningEffort ?? (family === "dsh" ? "" : "default")}
-                options={[
-                  ...(family === "dsh"
-                    ? []
-                    : [{ value: "default", label: t("newTask.modelDefault") }]),
-                  ...efforts.map((effort) => ({
-                    value: effort,
-                    label: t(`newTask.reasoning.${effort}`),
-                  })),
-                ]}
-                onChange={(value) =>
-                  setReasoningEffort(value === "default" ? null : (value as ReasoningEffort))
-                }
-                ariaLabel={t("newTask.reasoningLabel")}
-                equalWidth
-                className="agent-config-switch-segmented reasoning"
-                itemClassName="agent-config-switch-segmented-item"
-              />
-            </div>
+            {efforts.length > 0 && (
+              <div className="agent-config-switch-field">
+                <span className="agent-config-switch-label">{t("newTask.reasoningLabel")}</span>
+                <AnimatedSelectionGroup
+                  value={reasoningEffort ?? (family === "dsh" ? "" : "default")}
+                  options={[
+                    ...(family === "dsh"
+                      ? []
+                      : [{ value: "default", label: t("newTask.modelDefault") }]),
+                    ...efforts.map((effort) => ({
+                      value: effort,
+                      label: t(`newTask.reasoning.${effort}`),
+                    })),
+                  ]}
+                  onChange={(value) =>
+                    setReasoningEffort(value === "default" ? null : (value as ReasoningEffort))
+                  }
+                  ariaLabel={t("newTask.reasoningLabel")}
+                  equalWidth
+                  className="agent-config-switch-segmented reasoning"
+                  itemClassName="agent-config-switch-segmented-item"
+                />
+              </div>
+            )}
 
             {family !== "dsh" && (
               <div className="agent-config-switch-field">

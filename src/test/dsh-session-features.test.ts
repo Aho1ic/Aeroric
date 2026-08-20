@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isDshSessionMissingError,
   mergeDshSessionEvents,
   projectDshSessionEvents,
   readDshHistoryPage,
@@ -148,5 +149,18 @@ describe("DSH advanced session projections", () => {
     );
     expect(features.trajectory[0].view).toBeUndefined();
     expect(features.trajectory[1].view).toEqual(intent);
+  });
+
+  it("recognises a missing session so the detail view can say so plainly", () => {
+    expect(
+      isDshSessionMissingError(
+        'DSH API session.history rejected the request: session "session-41b73201" not found',
+      ),
+    ).toBe(true);
+    // Everything else stays verbatim, so a dead `dsh web` remains diagnosable.
+    expect(isDshSessionMissingError("DSH API session.history failed: connection refused")).toBe(
+      false,
+    );
+    expect(isDshSessionMissingError("Workspace not found")).toBe(false);
   });
 });

@@ -833,8 +833,10 @@ pub(super) fn allocate_setup_agent_id(
         .unwrap_or(&requested);
     let base = if base.is_empty() { "agent" } else { base };
     let preferred = sanitize_custom_agent_id(&format!("{base}_{suffix}"));
+    // 内置 agent id 全部保留。当前 `preferred` 总会带上 `_{suffix}` 后缀,拼不出
+    // 裸 id,所以这里只是把不变量写全:内置集合一旦变化,自定义档案也不该占用。
     let is_used = |candidate: &str| {
-        matches!(candidate, "claude" | "claude_gpt55" | "codex")
+        matches!(candidate, "claude" | "claude_gpt55" | "codex" | "dsh")
             || settings
                 .custom_agents
                 .iter()
