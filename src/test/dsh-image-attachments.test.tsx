@@ -12,6 +12,8 @@ import {
 import { projectDshSessionEvents } from "../dshSessionFeatures";
 import { DshImageGallery, DshMessageImage } from "../components/DshImageGallery";
 import { DshSessionInsights } from "../components/DshSessionInsights";
+import { DshTrajectoryHost } from "../components/DshTrajectoryHost";
+import { DshTrajectoryOverlay } from "../components/DshTrajectoryOverlay";
 import { useDshImageLoader, type DshImageLoader } from "../hooks/useDshImageLoader";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -369,10 +371,13 @@ describe("DSH insights trajectory images", () => {
     });
     render(
       <I18nProvider>
-        <DshSessionInsights sessionId="session-1" />
+        <DshTrajectoryHost sessionId="session-1">
+          <DshSessionInsights />
+          <DshTrajectoryOverlay />
+        </DshTrajectoryHost>
       </I18nProvider>,
     );
-    await userEvent.click(screen.getByRole("button", { name: /Session details/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Trajectory/ }));
     const thumbnail = await screen.findByRole("button", {
       name: "history.png, click to view original",
     });

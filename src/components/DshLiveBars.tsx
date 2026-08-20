@@ -67,7 +67,7 @@ export function DshLiveBars({
         }}
       >
         <DshSessionLogExportButton sessionId={sessionId} />
-        <DshSessionInsights sessionId={sessionId} live={live} />
+        <DshSessionInsights />
       </div>
       {hasGoal && live?.goal && <GoalRow goal={live.goal} />}
       {live?.planMode && (

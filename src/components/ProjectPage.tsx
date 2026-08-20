@@ -2332,6 +2332,17 @@ export function ProjectPage({
                     taskStatus: task.status,
                     hasSessionPath: hasTaskSessionPath(task),
                   });
+                  // One descriptor for both the live bars and the trajectory
+                  // panel, so the trigger and the panel can never disagree about
+                  // which session they belong to.
+                  const dshTrajectory =
+                    resolveTaskSessionOwner(task, agentOptions).family === "dsh" &&
+                    task.dshSessionId
+                      ? {
+                          sessionId: task.dshSessionId,
+                          live: dshLive.sessions[task.dshSessionId],
+                        }
+                      : undefined;
                   return (
                     <RunningView
                       key={task.id}
@@ -2379,14 +2390,14 @@ export function ProjectPage({
                       monoFontFamily={monoFontFamily}
                       agentOptions={agentOptions}
                       liveBars={
-                        resolveTaskSessionOwner(task, agentOptions).family === "dsh" &&
-                        task.dshSessionId ? (
+                        dshTrajectory ? (
                           <DshLiveBars
-                            sessionId={task.dshSessionId}
-                            live={dshLive.sessions[task.dshSessionId]}
+                            sessionId={dshTrajectory.sessionId}
+                            live={dshTrajectory.live}
                           />
                         ) : undefined
                       }
+                      dshTrajectory={dshTrajectory}
                     />
                   );
                 })}

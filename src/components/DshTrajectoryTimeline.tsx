@@ -5,22 +5,23 @@
  * Drawn like a network panel's overview — context on the top lane, model replies
  * in the middle, tool calls below — so a slow turn is visible before any row is
  * read. Dragging selects an interval and the ledger narrows to the rows it
- * covers; the wheel zooms the visible window, which is navigation and never
- * changes the selection.
+ * covers; a click locates the operation under it in the ledger; the wheel zooms
+ * the visible window, which is navigation and never changes the selection.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Clock, Timer, X, ZoomOut } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Clock, ListTree, Timer, X, ZoomOut } from "lucide-react";
 import { useI18n } from "../i18n";
 import {
   deriveDshTimeline,
+  dshTimelineLocate,
   formatDshTimelineOffset,
   type DshTimelineMode,
   type DshTimelineRange,
 } from "../dshTrajectoryTimeline";
 import type { DshTimelineKind, DshTimelineRecord } from "../dshSessionFeatures";
 
-/** A drag thinner than this is a click, which clears the selection. */
+/** A drag thinner than this is a click, which locates instead of selecting. */
 const MINIMUM_DRAG_FRACTION = 0.004;
 /** Never zoom past four equal-width operations, where the shape stops reading. */
 const MINIMUM_SEQUENCE_WINDOW = 4;
@@ -66,6 +67,11 @@ export function DshTrajectoryTimeline({
   onModeChange,
   focus,
   onFocusChange,
+  onLocate,
+  turnsCollapsed,
+  onToggleTurns,
+  callsCollapsed,
+  onToggleCalls,
 }: {
   records: readonly DshTimelineRecord[];
   mode: DshTimelineMode;
@@ -73,6 +79,12 @@ export function DshTrajectoryTimeline({
   /** The active selection in the current domain, or null when the ledger is whole. */
   focus: DshTimelineRange | null;
   onFocusChange: (range: DshTimelineRange | null) => void;
+  /** Called with the anchor row of the operation a click landed nearest. */
+  onLocate?: (seq: number) => void;
+  turnsCollapsed?: boolean;
+  onToggleTurns?: () => void;
+  callsCollapsed?: boolean;
+  onToggleCalls?: () => void;
 }) {
   const { t } = useI18n();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -162,6 +174,38 @@ export function DshTrajectoryTimeline({
           <Clock size={12} aria-hidden="true" />
           {t("dsh.timeline.actualTime")}
         </button>
+        {onToggleTurns !== undefined && (
+          <button
+            type="button"
+            data-active={turnsCollapsed}
+            aria-pressed={turnsCollapsed ?? false}
+            title={
+              turnsCollapsed ? t("dsh.trajectory.expandTurns") : t("dsh.trajectory.collapseTurns")
+            }
+            onClick={onToggleTurns}
+          >
+            {turnsCollapsed ? (
+              <ChevronsUpDown size={12} aria-hidden="true" />
+            ) : (
+              <ChevronsDownUp size={12} aria-hidden="true" />
+            )}
+            {t("dsh.trajectory.turns")}
+          </button>
+        )}
+        {onToggleCalls !== undefined && (
+          <button
+            type="button"
+            data-active={callsCollapsed}
+            aria-pressed={callsCollapsed ?? false}
+            title={
+              callsCollapsed ? t("dsh.trajectory.expandCalls") : t("dsh.trajectory.collapseCalls")
+            }
+            onClick={onToggleCalls}
+          >
+            <ListTree size={12} aria-hidden="true" />
+            {t("dsh.trajectory.calls")}
+          </button>
+        )}
         <span className="dsh-timeline-span" role="status">
           {sequenceMode
             ? t("dsh.timeline.operations", { count: String(Math.round(span)) })
@@ -205,7 +249,15 @@ export function DshTrajectoryTimeline({
             if (drag === null) return;
             const range = { start: drag.start, end: atFraction(fractionOf(event)) };
             setDrag(null);
-            onFocusChange(wide(range) ? range : null);
+            if (wide(range)) {
+              onFocusChange(range);
+              return;
+            }
+            // A click is a pointing gesture, so it locates the operation under it
+            // and leaves the selection alone; double-click is what clears.
+            const located = dshTimelineLocate(model, range.end);
+            const seq = located?.record.seqs[0];
+            if (seq !== undefined) onLocate?.(seq);
           }}
           onPointerCancel={() => setDrag(null)}
           onDoubleClick={() => onFocusChange(null)}

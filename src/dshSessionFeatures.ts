@@ -176,6 +176,21 @@ function usageNumber(data: Dict, key: string): number {
   return number(usage(data)[key]) ?? 0;
 }
 
+/**
+ * Whether a streaming chunk carried model output.
+ *
+ * Time to first token is measured from the first chunk that actually produced
+ * something, so a chunk that only reports usage or a tool-call frame must not
+ * start the clock.
+ */
+function isTokenChunk(data: Dict): boolean {
+  const chunk = dict(data.chunk);
+  const kind = text(chunk.type) ?? "";
+  return (
+    kind === "text" || kind === "reasoning" || kind === "token" || text(chunk.text) !== undefined
+  );
+}
+
 function preview(event: DshSessionEvent): { title: string; detail?: string } {
   const data = eventData(event);
   switch (event.type) {
@@ -247,6 +262,27 @@ function parseJson(value: unknown): Dict {
   }
 }
 
+/**
+ * Readers the ledger fold in `dshTrajectoryLedger.ts` shares with this one.
+ *
+ * Both folds read the same durable events, so where a call id, an error flag or
+ * a usage block lives has to be stated once: a second copy would drift the first
+ * time the Harness moves a field, and the two surfaces would then disagree about
+ * the same session.
+ */
+export {
+  callId as dshEventCallId,
+  contentText as dshContentText,
+  dict as dshDict,
+  eventData as dshEventData,
+  isErrorResult as dshEventIsError,
+  isTokenChunk as dshIsTokenChunk,
+  number as dshNumber,
+  text as dshText,
+  usage as dshUsage,
+};
+export type { Dict as DshDict };
+
 function candidatePaths(value: unknown): string[] {
   const paths: string[] = [];
   const add = (candidate: unknown) => {
@@ -310,15 +346,9 @@ function updateStats(events: DshSessionEvent[]): DshStats {
     const stepKey = turn !== undefined && step !== undefined ? `${turn}:${step}` : undefined;
     if (event.type === "step/start" && stepKey) steps.set(stepKey, { start: eventTime(event) });
     if (event.type === "assistant/chunk" && stepKey) {
-      const chunk = dict(data.chunk);
-      const kind = text(chunk.type) ?? "";
-      const hasToken =
-        kind === "text" ||
-        kind === "reasoning" ||
-        kind === "token" ||
-        typeof chunk.text === "string";
       const open = steps.get(stepKey);
-      if (hasToken && open && open.firstToken === undefined) open.firstToken = eventTime(event);
+      if (isTokenChunk(data) && open && open.firstToken === undefined)
+        open.firstToken = eventTime(event);
     }
     if (event.type === "assistant/message" && stepKey) {
       const open = steps.get(stepKey);
@@ -572,15 +602,9 @@ function updateTimeline(events: DshSessionEvent[], titles: ReadonlyMap<number, s
       openSteps.set(stepKey, { start: eventTime(event) });
     }
     if (event.type === "assistant/chunk" && stepKey) {
-      const chunk = dict(eventData(event).chunk);
-      const kind = text(chunk.type) ?? "";
-      const hasToken =
-        kind === "text" ||
-        kind === "reasoning" ||
-        kind === "token" ||
-        text(chunk.text) !== undefined;
       const open = openSteps.get(stepKey);
-      if (hasToken && open && open.firstToken === undefined) open.firstToken = eventTime(event);
+      if (isTokenChunk(eventData(event)) && open && open.firstToken === undefined)
+        open.firstToken = eventTime(event);
     }
     if (event.type === "tool/result") {
       const id = callId(event);
@@ -704,4 +728,16 @@ export function readDshHistoryPage(entries: readonly unknown[]): {
     if (view !== undefined && seq !== undefined) views[seq] = view;
   }
   return { events, views };
+}
+
+/**
+ * Whether a history failure means the Harness has no such session.
+ *
+ * The RPC answers with the raw `session "<id>" not found`, which reads as a
+ * crash in the session detail view. Recognising it lets the UI show a plain
+ * "this session is gone" line instead, and leaves every other failure — a dead
+ * `dsh web`, a transport error — reported verbatim so it stays diagnosable.
+ */
+export function isDshSessionMissingError(message: string): boolean {
+  return /session\b[\s\S]*\bnot found/i.test(message);
 }

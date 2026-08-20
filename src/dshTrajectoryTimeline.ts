@@ -169,3 +169,41 @@ export function dshTimelineFocus(
 export function formatDshTimelineOffset(ms: number): string {
   return `${Math.round(ms).toLocaleString()} ms`;
 }
+
+/**
+ * The operation nearest a point in the active domain, for click-to-locate.
+ *
+ * A span that contains the point wins; otherwise the nearest one does. Ties break
+ * toward the earlier start and then the lower first row, so clicking the same
+ * pixel twice always lands on the same operation — including in the default
+ * projection, where every span is one slot wide and a click on a boundary is
+ * equidistant from two of them.
+ *
+ * @param model - The active projection.
+ * @param at - A point in that projection's domain.
+ * @returns The located span, or null when the session recorded no operation.
+ */
+export function dshTimelineLocate(
+  model: DshTimelineModel | null,
+  at: number,
+): DshTimelineSpan | null {
+  let best: DshTimelineSpan | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const span of model?.spans ?? []) {
+    const low = Math.min(span.start, span.end);
+    const high = Math.max(span.start, span.end);
+    const distance = at < low ? low - at : at > high ? at - high : 0;
+    if (distance > bestDistance) continue;
+    if (
+      best !== null &&
+      distance === bestDistance &&
+      (span.start > best.start ||
+        (span.start === best.start && (span.record.seqs[0] ?? 0) >= (best.record.seqs[0] ?? 0)))
+    ) {
+      continue;
+    }
+    best = span;
+    bestDistance = distance;
+  }
+  return best;
+}

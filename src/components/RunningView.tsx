@@ -8,12 +8,15 @@ import type {
   FontFamily,
   ProtocolFamily,
   ThemeVariant,
+  DshLiveSessionState,
 } from "../types";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
 import { DshComposer } from "./DshComposer";
+import { DshTrajectoryHost } from "./DshTrajectoryHost";
+import { DshTrajectoryOverlay } from "./DshTrajectoryOverlay";
 import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
@@ -117,6 +120,7 @@ export function RunningView({
   monoFontFamily,
   agentOptions,
   liveBars,
+  dshTrajectory,
 }: {
   task: Task;
   projectPath: string;
@@ -157,6 +161,8 @@ export function RunningView({
   monoFontFamily: FontFamily;
   agentOptions?: AgentOption[];
   liveBars?: ReactNode;
+  /** Present only for a dsh task with a session: enables the trajectory panel. */
+  dshTrajectory?: { sessionId: string; live?: DshLiveSessionState };
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -551,7 +557,7 @@ export function RunningView({
     </div>
   ) : undefined;
 
-  return (
+  const body = (
     <div
       style={{
         position: "absolute",
@@ -1012,7 +1018,10 @@ export function RunningView({
               })}
             </div>
           )}
-          <div style={{ flex: 1, minHeight: 0 }}>
+          {/* The positioning parent for the trajectory panel: this box is the
+              terminal's box, so `inset: 0` sizes the panel to the terminal
+              without measuring anything. */}
+          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
             <TerminalView
               key={terminalViewKey}
               onInput={isDshSession ? () => {} : onInput}
@@ -1030,6 +1039,7 @@ export function RunningView({
               highlightCursorLine
               dshVariant={sessionOwner.family === "dsh"}
             />
+            {dshTrajectory && <DshTrajectoryOverlay />}
           </div>
         </div>
       ) : (
@@ -1152,6 +1162,10 @@ export function RunningView({
       />
     </div>
   );
+
+  // One provider per dsh task, wrapping both the trigger in `liveBars` and the
+  // panel inside the terminal box, so the two share one session subscription.
+  return dshTrajectory ? <DshTrajectoryHost {...dshTrajectory}>{body}</DshTrajectoryHost> : body;
 }
 
 function MetricPill({ label, value }: { label: string; value: string }) {

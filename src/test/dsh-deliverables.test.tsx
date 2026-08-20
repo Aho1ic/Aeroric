@@ -12,6 +12,8 @@ import {
 } from "../dshDeliverables";
 import type { DshProducedFile } from "../dshSessionFeatures";
 import { DshSessionInsights } from "../components/DshSessionInsights";
+import { DshTrajectoryHost } from "../components/DshTrajectoryHost";
+import { DshTrajectoryOverlay } from "../components/DshTrajectoryOverlay";
 import { SessionView } from "../components/SessionView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -154,10 +156,13 @@ async function openTrajectory(page: ReturnType<typeof history>) {
   );
   render(
     <I18nProvider>
-      <DshSessionInsights sessionId="session-1" />
+      <DshTrajectoryHost sessionId="session-1">
+        <DshSessionInsights />
+        <DshTrajectoryOverlay />
+      </DshTrajectoryHost>
     </I18nProvider>,
   );
-  await userEvent.click(screen.getByRole("button", { name: /Session details/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Trajectory/ }));
 }
 
 describe("DSH trajectory produced-file references", () => {

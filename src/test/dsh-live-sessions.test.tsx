@@ -3,12 +3,15 @@ import { render, waitFor } from "@testing-library/react";
 import { listen } from "@tauri-apps/api/event";
 import { I18nProvider } from "../i18n";
 import { DshLiveBars } from "../components/DshLiveBars";
+import { DshTrajectoryHost } from "../components/DshTrajectoryHost";
 import { useDshLiveSessions } from "../hooks/useDshLiveSessions";
 import type { DshProjectionFrame, DshJobsFrame, DshQueueFrame } from "../types";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
 const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
 
@@ -120,26 +123,26 @@ describe("useDshLiveSessions — projection/jobs/queue consumption", () => {
 });
 
 describe("DshLiveBars rendering", () => {
-  it("renders the goal bar when a goal projection is present", () => {
-    const { getByText } = render(
+  /** The bars carry the trajectory trigger, so they render inside its host. */
+  function bars(live: Parameters<typeof DshLiveBars>[0]["live"]) {
+    return render(
       <Wrapper>
-        <DshLiveBars
-          sessionId="s1"
-          live={{
-            goal: { id: "g1", title: "Ship parity", revision: 1, phase: "active" },
-          }}
-        />
+        <DshTrajectoryHost sessionId="s1">
+          <DshLiveBars sessionId="s1" live={live} />
+        </DshTrajectoryHost>
       </Wrapper>,
     );
+  }
+
+  it("renders the goal bar when a goal projection is present", () => {
+    const { getByText } = bars({
+      goal: { id: "g1", title: "Ship parity", revision: 1, phase: "active" },
+    });
     expect(getByText("Ship parity")).toBeInTheDocument();
   });
 
   it("renders nothing when there is no live state", () => {
-    const { container } = render(
-      <Wrapper>
-        <DshLiveBars sessionId="s1" live={undefined} />
-      </Wrapper>,
-    );
+    const { container } = bars(undefined);
     expect(container.firstChild).toBeNull();
   });
 });

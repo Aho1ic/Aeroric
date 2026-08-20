@@ -5,8 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { I18nProvider } from "../i18n";
 import { projectDshSessionEvents } from "../dshSessionFeatures";
 import type { DshSessionEvent, DshTimelineRecord } from "../dshSessionFeatures";
-import { deriveDshTimeline, dshTimelineFocus } from "../dshTrajectoryTimeline";
+import { deriveDshTimeline, dshTimelineFocus, dshTimelineLocate } from "../dshTrajectoryTimeline";
 import { DshSessionInsights } from "../components/DshSessionInsights";
+import { DshTrajectoryHost } from "../components/DshTrajectoryHost";
+import { DshTrajectoryOverlay } from "../components/DshTrajectoryOverlay";
+import { DshTrajectoryTimeline } from "../components/DshTrajectoryTimeline";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -152,6 +155,35 @@ describe("dshTimelineFocus", () => {
   });
 });
 
+describe("dshTimelineLocate", () => {
+  const model = deriveDshTimeline(records(), { actualDuration: false, actualTime: false });
+
+  it("locates the operation the point falls inside", () => {
+    expect(dshTimelineLocate(model, 1.5)?.record.seqs).toEqual([4]);
+    expect(dshTimelineLocate(model, 2.5)?.record.seqs).toEqual([5, 6]);
+  });
+
+  it("locates the nearest operation when the point falls outside every one", () => {
+    // Equal-width slots leave no gaps, so the clock projection is where a point
+    // can land between two operations.
+    const timed = deriveDshTimeline(records(), { actualDuration: true, actualTime: true });
+    expect(dshTimelineLocate(timed, 1_450)?.record.seqs).toEqual([4]);
+    expect(dshTimelineLocate(timed, 1_480)?.record.seqs).toEqual([5, 6]);
+  });
+
+  it("breaks a tie on a boundary toward the earlier operation, every time", () => {
+    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([4]);
+    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([4]);
+  });
+
+  it("locates nothing in a session that recorded no operation", () => {
+    expect(dshTimelineLocate(null, 0)).toBeNull();
+    expect(
+      dshTimelineLocate(deriveDshTimeline([], { actualDuration: false, actualTime: false }), 0),
+    ).toBeNull();
+  });
+});
+
 async function openInsights() {
   invokeMock.mockImplementation((command) =>
     command === "get_dsh_session_history"
@@ -164,10 +196,13 @@ async function openInsights() {
   );
   render(
     <I18nProvider>
-      <DshSessionInsights sessionId="session-1" />
+      <DshTrajectoryHost sessionId="session-1">
+        <DshSessionInsights />
+        <DshTrajectoryOverlay />
+      </DshTrajectoryHost>
     </I18nProvider>,
   );
-  await userEvent.click(screen.getByRole("button", { name: /Session details/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Trajectory/ }));
   return await screen.findByLabelText(/Timeline overview/);
 }
 
@@ -214,23 +249,28 @@ describe("DSH trajectory timing overview", () => {
     const track = await openInsights();
     measureTrack(track);
     const list = document.querySelector(".dsh-trajectory-list") as HTMLElement;
-    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(6);
+    // Six events, four rows: the chunk is dropped and the result folds into its call.
+    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(4);
 
-    // The last third of the equal-width domain is the tool call and its result.
+    // The last third of the equal-width domain is the call the result folded into.
     drag(track, 0.8, 0.95);
-    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(2);
+    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(1);
     expect(within(list).getByText("Tool: write_file")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear focus/ }));
-    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(6);
+    expect(list.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(4);
   });
 
-  it("treats a click as clearing the focus rather than an empty selection", async () => {
+  it("leaves an existing selection alone when the gesture is a click, not a drag", async () => {
     const track = await openInsights();
     measureTrack(track);
     drag(track, 0.8, 0.95);
     expect(screen.getByRole("button", { name: /Clear focus/ })).toBeInTheDocument();
+    // A click points at an operation; clearing is the double-click's job, so the
+    // user does not lose the interval they just selected by tapping the track.
     drag(track, 0.5, 0.5);
+    expect(screen.getByRole("button", { name: /Clear focus/ })).toBeInTheDocument();
+    fireEvent.doubleClick(track);
     expect(screen.queryByRole("button", { name: /Clear focus/ })).not.toBeInTheDocument();
   });
 
@@ -240,7 +280,7 @@ describe("DSH trajectory timing overview", () => {
     drag(track, 0.8, 0.95);
     await userEvent.click(screen.getByRole("button", { name: /Duration/ }));
     expect(screen.queryByRole("button", { name: /Clear focus/ })).not.toBeInTheDocument();
-    expect(document.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(6);
+    expect(document.querySelectorAll(".dsh-trajectory-entry")).toHaveLength(4);
   });
 
   it("reports the domain in operations by default and in milliseconds once timed", async () => {
@@ -267,5 +307,69 @@ describe("DSH trajectory timing overview", () => {
     expect(screen.getByRole("button", { name: /Clear focus/ })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Reset zoom/ }));
     expect(screen.queryByRole("button", { name: /Reset zoom/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("DSH trajectory overview controls", () => {
+  /** The overview on its own, so locate and the fold controls are observable. */
+  function mount(props: Partial<Parameters<typeof DshTrajectoryTimeline>[0]> = {}) {
+    render(
+      <I18nProvider>
+        <DshTrajectoryTimeline
+          records={records()}
+          mode={{ actualDuration: false, actualTime: false }}
+          onModeChange={() => {}}
+          focus={null}
+          onFocusChange={() => {}}
+          {...props}
+        />
+      </I18nProvider>,
+    );
+    return screen.getByLabelText(/Timeline overview/);
+  }
+
+  it("reports the operation a click landed on as the row to locate", () => {
+    const onLocate = vi.fn();
+    const track = mount({ onLocate });
+    measureTrack(track);
+    drag(track, 0.9, 0.9);
+    expect(onLocate).toHaveBeenCalledWith(5);
+  });
+
+  it("locates nothing when the gesture was wide enough to be a selection", () => {
+    const onLocate = vi.fn();
+    const onFocusChange = vi.fn();
+    const track = mount({ onLocate, onFocusChange });
+    measureTrack(track);
+    drag(track, 0.1, 0.9);
+    expect(onLocate).not.toHaveBeenCalled();
+    // Fractions of the track map onto the three-slot domain, so a tenth-to-nine-
+    // tenths drag selects from 0.3 to 2.7 operations.
+    expect(onFocusChange).toHaveBeenCalledWith({
+      start: expect.closeTo(0.3, 6),
+      end: expect.closeTo(2.7, 6),
+    });
+  });
+
+  it("offers the fold controls only when the ledger can act on them", () => {
+    mount();
+    expect(screen.queryByRole("button", { name: /Turns/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Calls/ })).not.toBeInTheDocument();
+  });
+
+  it("toggles turns and calls, reporting the current fold state", async () => {
+    const onToggleTurns = vi.fn();
+    const onToggleCalls = vi.fn();
+    mount({ onToggleTurns, onToggleCalls, turnsCollapsed: true, callsCollapsed: false });
+    const turns = screen.getByRole("button", { name: /Turns/ });
+    const calls = screen.getByRole("button", { name: /Calls/ });
+    expect(turns).toHaveAttribute("aria-pressed", "true");
+    expect(turns).toHaveAttribute("title", "Expand all turns");
+    expect(calls).toHaveAttribute("aria-pressed", "false");
+    expect(calls).toHaveAttribute("title", "Collapse tool calls");
+    await userEvent.click(turns);
+    await userEvent.click(calls);
+    expect(onToggleTurns).toHaveBeenCalledTimes(1);
+    expect(onToggleCalls).toHaveBeenCalledTimes(1);
   });
 });
