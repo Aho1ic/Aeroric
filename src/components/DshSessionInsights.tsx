@@ -17,7 +17,7 @@ export function DshSessionInsights() {
   return (
     <button
       type="button"
-      className="dsh-insights-trigger"
+      className="dsh-view-trigger dsh-insights-trigger"
       title={t("dsh.insights.open")}
       // The tab now outlives a close, so this trigger names the view it opens
       // rather than reopening whichever one was last looked at.

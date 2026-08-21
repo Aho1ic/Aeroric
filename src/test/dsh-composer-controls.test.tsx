@@ -58,4 +58,29 @@ describe("DSH composer controls", () => {
     expect(mode).toHaveValue("steer");
     expect(mode).toHaveAttribute("title", "Steer the current turn");
   });
+
+  it("stacks the mode above the two glyph actions and leads with send", () => {
+    // The mode is a labelled row of its own, so it cannot be squeezed between two
+    // square buttons; send is a size up because it is the action of the row.
+    renderComposer();
+    const mode = screen.getByRole("combobox", { name: "Submission mode" });
+    const attach = screen.getByRole("button", { name: "Attach image" });
+    const send = screen.getByRole("button", { name: "Send message" });
+    const glyphRow = attach.parentElement;
+    expect(glyphRow).not.toBeNull();
+    expect(glyphRow).toContainElement(send);
+    // The glyph row is the mode's next sibling, which is what puts the mode above.
+    expect(mode.nextElementSibling).toBe(glyphRow);
+    expect(mode.style.width).toBe("100%");
+    expect(send.style.height).toBe("36px");
+    expect(attach.style.height).toBe("28px");
+  });
+
+  it("gives the draft three rows to start from", () => {
+    // A prompt is rarely one line; a 44px box made every submission scroll first.
+    renderComposer();
+    const draft = screen.getByRole("textbox");
+    expect(draft).toHaveAttribute("rows", "3");
+    expect(draft.style.minHeight).toBe("72px");
+  });
 });

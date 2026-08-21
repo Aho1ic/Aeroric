@@ -32,15 +32,19 @@ import {
  *
  * Session log / trajectory / the panel's own views all belong to the same
  * session as the badge they sit next to, and folding them into that row is what
- * gives the terminal back the strip they used to occupy on their own.
+ * gives the terminal back the strip they used to occupy on their own. All of
+ * them are borderless view triggers: they only jump somewhere, so none of them
+ * outranks the others.
  */
 export function DshTerminalHeaderActions({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
   const { openAt } = useDshTrajectory();
   return (
     <div className="dsh-terminal-header-actions">
-      <DshSessionLogExportButton sessionId={sessionId} />
+      {/* The trajectory is the session's own view and leads the group; the log
+          export is the archive of that same trajectory, so it reads next. */}
       <DshSessionInsights />
+      <DshSessionLogExportButton sessionId={sessionId} />
       {/* The trajectory view itself already has the trigger above, so the rest of
           the panel's tabs open straight into their own view. */}
       {dshInsightTabs

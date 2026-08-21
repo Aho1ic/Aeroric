@@ -283,10 +283,18 @@ pub(crate) fn parse_session_metrics_cached(path: &std::path::Path) -> SessionMet
 pub async fn read_session_metrics(session_path: String) -> Result<SessionMetrics, String> {
     tokio::task::spawn_blocking(move || {
         let path = std::path::Path::new(&session_path);
-        if !path.exists() {
-            return Err(format!("Session file not found: {}", session_path));
-        }
-        Ok(parse_session_metrics_cached(path))
+        // dsh transcripts come in two encodings under the same directory, and the
+        // path was pinned at session registration — before the first flush decided
+        // which one. Try the sibling before declaring the session unreadable, the
+        // same redirect `validate_session_path_for` applies for the session view.
+        let resolved = if path.exists() {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .and_then(crate::session_dsh::dsh_transcript_in)
+                .ok_or_else(|| format!("Session file not found: {}", session_path))?
+        };
+        Ok(parse_session_metrics_cached(&resolved))
     })
     .await
     .map_err(|e| format!("read_session_metrics join error: {}", e))?

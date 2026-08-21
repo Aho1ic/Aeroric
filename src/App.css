@@ -4490,27 +4490,9 @@ html:not(.dark) .xterm-helper-textarea {
   display: none !important;
 }
 
-/* DeepSeek Harness advanced session views. */
-.dsh-insights-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid var(--border-dim);
-  border-radius: 4px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.dsh-insights-trigger:hover {
-  border-color: var(--border-medium);
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
+/* DeepSeek Harness advanced session views.
+   轨迹 / 会话日志 与后面 5 个视图入口是同一类动作(都是跳转,不是主动作),
+   外形统一由无边框的 `.dsh-view-trigger` 提供;这两个类只补各自多出来的部件。 */
 .dsh-insights-trigger small {
   color: var(--text-hint);
   font-family: var(--font-mono);
@@ -4526,7 +4508,7 @@ html:not(.dark) .xterm-helper-textarea {
   margin-left: auto;
 }
 
-/* 视图入口比前两个胶囊再轻一档:它们只是跳转,不是主动作。 */
+/* 视图入口一律轻量:它们只是跳转,不是主动作。 */
 .dsh-view-trigger {
   display: inline-flex;
   align-items: center;
@@ -4541,7 +4523,7 @@ html:not(.dark) .xterm-helper-textarea {
   cursor: pointer;
 }
 
-.dsh-view-trigger:hover {
+.dsh-view-trigger:hover:not(:disabled) {
   border-color: var(--border-dim);
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -4554,28 +4536,8 @@ html:not(.dark) .xterm-helper-textarea {
   }
 }
 
-/* Session-log export capsule; shares the insights trigger's shape so the two
-   header actions read as one group. */
-.dsh-export-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid var(--border-dim);
-  border-radius: 4px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.dsh-export-trigger:hover:not(:disabled) {
-  border-color: var(--border-medium);
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
+/* Session-log export trigger; only the busy state is its own, the shape comes
+   from `.dsh-view-trigger` so the whole header group reads as one row. */
 .dsh-export-trigger:disabled {
   cursor: progress;
   color: var(--text-hint);
@@ -4738,9 +4700,10 @@ html.dark .dsh-trajectory-scrim {
   border: 1px solid var(--border-medium);
   border-radius: 6px;
   /* 与下方 composer 用同一个面色:浅色主题下 --bg-panel 是 62% 白的半透明,
-     压在深色终端上会透出灰底;--bg-card 与 composer 一致,不再发灰。 */
+     压在深色终端上会透出灰底;--bg-card 与 composer 一致,不再发灰。
+     刻意不加投影:面板底边与 composer 顶边紧邻,任何投影都会在浅色模式下
+     把两者读成上下两层,而它们本该是同一个平面。 */
   background: var(--bg-card);
-  box-shadow: 0 18px 48px color-mix(in srgb, #111827 26%, transparent);
   color: var(--text-primary);
 }
 
@@ -4836,7 +4799,6 @@ html.dark .dsh-trajectory-scrim {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
 }
 
 .dsh-timeline-controls button {
@@ -4965,12 +4927,14 @@ html.dark .dsh-trajectory-scrim {
 }
 
 /* 搜索 + 事件筛选现在挂在时间轴控制行的右端(见 DshTrajectoryTimeline 的
-   `controls` 插槽),不再自己占一行。 */
+   `controls` 插槽),不再自己占一行。整组不参与收缩:控制行是 wrap 的,一旦
+   允许压缩,分段按钮会先被压到标签折行,而"全部/消息/……"必须始终一行。 */
 .dsh-insight-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .dsh-insight-search {
@@ -5000,6 +4964,8 @@ html.dark .dsh-trajectory-scrim {
 
 .dsh-insight-segments {
   display: flex;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
   align-items: stretch;
   border: 1px solid var(--border-dim);
   border-radius: 4px;
@@ -5009,6 +4975,8 @@ html.dark .dsh-trajectory-scrim {
 .dsh-insight-segments button {
   min-height: 22px;
   padding: 0 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: none;
   border-right: 1px solid var(--border-dim);
   background: var(--bg-input);
@@ -6155,6 +6123,10 @@ html.dark .dsh-trajectory-scrim {
   }
   .dsh-insight-segments {
     overflow-x: auto;
+    /* 折行后独占一行,这里允许收缩:装不下时由上面的横向滚动接手,
+       按钮标签仍然 nowrap,不会折行。 */
+    flex-shrink: 1;
+    min-width: 0;
   }
   .dsh-insight-segments button {
     flex: 1 0 auto;

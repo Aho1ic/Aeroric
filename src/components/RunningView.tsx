@@ -252,6 +252,11 @@ export function RunningView({
 
   const handleSessionLoadFailed = useCallback(
     (failedPath: string) => {
+      // dsh 的 transcript 路径由 session id 确定性推导出来，重新发现不可能给出更好的
+      // 路径；而一个刚建好的会话在第一次落盘前本来就读不到文件。作废它只会把实时会话
+      // 打成"恢复失败"并挂上"会话文件中没有消息"的误报横幅，所以这里直接放过，让指标
+      // 轮询在文件落地后自己恢复。
+      if (isDshSession) return;
       // 只作废持久化路径：刚恢复出来的路径读不出来说明会话文件本身有问题，
       // 再作废一次只会和恢复流程来回打转。
       if (failedPath !== rawPersistedSessionPath) return;
@@ -261,7 +266,7 @@ export function RunningView({
       // 允许恢复流程为这个任务重跑一次。
       sessionRecoveryAttemptRef.current = null;
     },
-    [rawPersistedSessionPath],
+    [isDshSession, rawPersistedSessionPath],
   );
 
   useEffect(() => {
@@ -1073,94 +1078,109 @@ export function RunningView({
         />
       )}
 
-      {/* Status bar when task is done and no session path (terminal fallback) */}
-      {!isActive && !isDetached && !isInterrupted && !sessionPath && (
-        <div
-          style={{
-            padding: "10px 20px",
-            borderTop: "1px solid var(--border-dim)",
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "stretch",
-            gap: shouldShowNodeInstaller ? 10 : 0,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <StatusIcon status={task.status} />
-            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-              {task.status === "done"
-                ? t("task.completed")
-                : task.status === "failed"
-                  ? (task.failureReason ?? t("task.failed"))
-                  : t("task.cancelled")}
-            </span>
-          </div>
-          {shouldShowNodeInstaller && (
-            <div
-              data-testid="node-runtime-recovery"
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 10,
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid color-mix(in srgb, var(--warning) 45%, var(--border-dim))",
-                background: "color-mix(in srgb, var(--warning) 9%, var(--bg-input))",
-              }}
-            >
-              <AlertTriangle
-                size={16}
-                strokeWidth={2.1}
-                style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }}
-              />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 650, color: "var(--text-primary)" }}>
-                  {t("running.nodeInstallerTitle")}
-                </div>
-                <div
-                  style={{
-                    marginTop: 3,
-                    fontSize: 11.5,
-                    lineHeight: 1.45,
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  {t("running.nodeInstallerDescription")}
-                </div>
-                {nodeInstallerMessage && (
+      {/* Status bar when task is done and no session path (terminal fallback).
+          A dsh task ends with the composer flush against the window bottom: its
+          session stays interactive after a turn settles, so a status strip under
+          the input would report an outcome the session does not have. The Node
+          runtime recovery card is the one exception — it is an affordance, not a
+          verdict, and a dsh task on Windows needs it for the same reason. */}
+      {!isActive &&
+        !isDetached &&
+        !isInterrupted &&
+        !sessionPath &&
+        (!isDshSession || shouldShowNodeInstaller) && (
+          <div
+            style={{
+              padding: "10px 20px",
+              borderTop: "1px solid var(--border-dim)",
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: shouldShowNodeInstaller && !isDshSession ? 10 : 0,
+            }}
+          >
+            {!isDshSession && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <StatusIcon status={task.status} />
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {task.status === "done"
+                    ? t("task.completed")
+                    : task.status === "failed"
+                      ? (task.failureReason ?? t("task.failed"))
+                      : t("task.cancelled")}
+                </span>
+              </div>
+            )}
+            {shouldShowNodeInstaller && (
+              <div
+                data-testid="node-runtime-recovery"
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid color-mix(in srgb, var(--warning) 45%, var(--border-dim))",
+                  background: "color-mix(in srgb, var(--warning) 9%, var(--bg-input))",
+                }}
+              >
+                <AlertTriangle
+                  size={16}
+                  strokeWidth={2.1}
+                  style={{ color: "var(--warning)", flexShrink: 0, marginTop: 1 }}
+                />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 650, color: "var(--text-primary)" }}>
+                    {t("running.nodeInstallerTitle")}
+                  </div>
                   <div
-                    role="status"
                     style={{
-                      marginTop: 6,
+                      marginTop: 3,
                       fontSize: 11.5,
-                      lineHeight: 1.4,
-                      color:
-                        nodeInstallerState === "failed" ? "var(--danger)" : "var(--text-secondary)",
+                      lineHeight: 1.45,
+                      color: "var(--text-secondary)",
                     }}
                   >
-                    {nodeInstallerMessage}
+                    {t("running.nodeInstallerDescription")}
                   </div>
-                )}
+                  {nodeInstallerMessage && (
+                    <div
+                      role="status"
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11.5,
+                        lineHeight: 1.4,
+                        color:
+                          nodeInstallerState === "failed"
+                            ? "var(--danger)"
+                            : "var(--text-secondary)",
+                      }}
+                    >
+                      {nodeInstallerMessage}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  disabled={
+                    nodeInstallerState === "installing" || nodeInstallerState === "succeeded"
+                  }
+                  onClick={() => void handleInstallNode()}
+                >
+                  <Download size={13} strokeWidth={2.2} />
+                  <span>
+                    {nodeInstallerState === "installing"
+                      ? t("running.installingNodeJs")
+                      : nodeInstallerState === "succeeded"
+                        ? t("running.nodeInstallerReady")
+                        : t("running.installNodeJs")}
+                  </span>
+                </Button>
               </div>
-              <Button
-                size="sm"
-                disabled={nodeInstallerState === "installing" || nodeInstallerState === "succeeded"}
-                onClick={() => void handleInstallNode()}
-              >
-                <Download size={13} strokeWidth={2.2} />
-                <span>
-                  {nodeInstallerState === "installing"
-                    ? t("running.installingNodeJs")
-                    : nodeInstallerState === "succeeded"
-                      ? t("running.nodeInstallerReady")
-                      : t("running.installNodeJs")}
-                </span>
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
       <AgentConfigSwitchDialog
         task={task}
         open={switchConfigOpen}

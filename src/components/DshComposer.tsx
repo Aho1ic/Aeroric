@@ -240,7 +240,7 @@ export function DshComposer({ taskId, sessionId }: { taskId: string; sessionId?:
           ref={textRef}
           value={text}
           disabled={sending}
-          rows={2}
+          rows={3}
           placeholder={t("dsh.composer.placeholder")}
           onChange={(event) => {
             commitDraft(event.target.value);
@@ -276,8 +276,9 @@ export function DshComposer({ taskId, sessionId }: { taskId: string; sessionId?:
           style={{
             flex: 1,
             minWidth: 0,
-            minHeight: 44,
-            maxHeight: 140,
+            // 三行起步:一条提示词很少是一行,输入框太扁会让每次输入都先滚动一次。
+            minHeight: 72,
+            maxHeight: 200,
             resize: "vertical",
             padding: "8px 10px",
             border: "1px solid var(--border-medium)",
@@ -289,43 +290,49 @@ export function DshComposer({ taskId, sessionId }: { taskId: string; sessionId?:
             outline: "none",
           }}
         />
-        {/* One row of controls, ordered the way the submission reads: pick how it
-            lands, attach to it, send it. The mode is a select rather than two
-            pressed buttons — it is one exclusive choice, and its label stays
+        {/* Two stacked rows, ordered the way the submission reads: pick how it
+            lands, then attach to it and send it. The mode is a select rather than
+            two pressed buttons — it is one exclusive choice, and its label stays
             visible because whether a submission interrupts the turn is not
-            readable from a glyph. `Button` drops children at every `icon-*` size,
-            so those glyphs come from the `icon` prop. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            readable from a glyph. It takes the full width of the stack so it is
+            not the odd one out beside two square glyph buttons. `Button` drops
+            children at every `icon-*` size, so those glyphs come from the `icon`
+            prop; send is a size up because it is the one action of the row. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <Select
             value={mode}
             disabled={sending}
             aria-label={t("dsh.composer.mode")}
             title={t(mode === "queue" ? "dsh.composer.queue" : "dsh.composer.steer")}
             onChange={(event) => setMode(event.target.value === "steer" ? "steer" : "queue")}
-            style={{ minHeight: 30, padding: "0 6px", fontSize: 12 }}
+            style={{ width: "100%", minHeight: 30, padding: "0 6px", fontSize: 12 }}
           >
             <option value="queue">{t("dsh.composer.queueLabel")}</option>
             <option value="steer">{t("dsh.composer.steerLabel")}</option>
           </Select>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            icon={ImagePlus}
-            title={t("dsh.composer.attach")}
-            aria-label={t("dsh.composer.attach")}
-            onClick={() => fileRef.current?.click()}
-          />
-          <Button
-            type="button"
-            variant="default"
-            size="icon-sm"
-            icon={Send}
-            title={t("dsh.composer.send")}
-            aria-label={t("dsh.composer.send")}
-            disabled={sending || (!text.trim() && images.length === 0)}
-            onClick={() => void submit()}
-          />
+          <div
+            style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              icon={ImagePlus}
+              title={t("dsh.composer.attach")}
+              aria-label={t("dsh.composer.attach")}
+              onClick={() => fileRef.current?.click()}
+            />
+            <Button
+              type="button"
+              variant="default"
+              size="icon-lg"
+              icon={Send}
+              title={t("dsh.composer.send")}
+              aria-label={t("dsh.composer.send")}
+              disabled={sending || (!text.trim() && images.length === 0)}
+              onClick={() => void submit()}
+            />
+          </div>
         </div>
       </div>
       <input

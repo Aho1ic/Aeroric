@@ -1560,6 +1560,46 @@ fn json_text(value: &Value) -> Option<String> {
     None
 }
 
+/// Read a `turn/end` error reason into one display line.
+///
+/// dsh always hands the errored turn a structured `LlmFailure`
+/// (`{ message, code, status?, requestId? }`) — never a bare string and never a
+/// `text`/`content` shape, which is why `json_text` cannot see it and every turn
+/// failure used to reach the UI as the same opaque fallback sentence. The
+/// wording follows the Harness' own `displayFailureMessage`: `AUTH` names the
+/// credential instead of quoting the provider, everything else keeps the
+/// provider's message. The machine-routing facts are appended because they are
+/// what makes an upstream refusal actionable — the code names the class of
+/// failure and the status pins it to the provider boundary.
+fn dsh_failure_message(failure: &Value) -> String {
+    let Some(record) = failure.as_object() else {
+        return json_text(failure).unwrap_or_else(|| failure.to_string());
+    };
+    let code = record.get("code").and_then(Value::as_str);
+    if code == Some("AUTH") {
+        return "API key is invalid".to_string();
+    }
+    let message = record
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| failure.to_string());
+    let mut facts = Vec::new();
+    if let Some(code) = code.filter(|code| !code.is_empty() && *code != "UNKNOWN") {
+        facts.push(code.to_string());
+    }
+    if let Some(status) = record.get("status").and_then(Value::as_u64) {
+        facts.push(format!("HTTP {status}"));
+    }
+    if facts.is_empty() {
+        message
+    } else {
+        format!("{message} ({})", facts.join(" · "))
+    }
+}
+
 /// xterm is intentionally configured with `convertEol: false`, so the DSH
 /// bridge owns the line-ending contract. Normalize every newline form without
 /// touching ANSI escape bytes or Unicode text.
@@ -2482,6 +2522,26 @@ fn session_event_terminal_output(payload: &Value, fold: &mut ReasoningFold) -> O
             Some(format!("\r\n/{name}{args}\r\n"))
         }
         "command/done" | "compaction/summary" => data.get("text").and_then(json_text),
+        // A settled turn is the only place the harness reports why it stopped, and
+        // an interactive session keeps running afterwards — so the reason has to
+        // land in the terminal rather than only in the task's status. `completed`
+        // stays silent: the answer above it already said everything.
+        "turn/end" => {
+            let reason = data.get("reason").unwrap_or(&Value::Null);
+            match reason.get("kind").and_then(Value::as_str) {
+                Some("error") => {
+                    let failure = dsh_failure_message(reason.get("error").unwrap_or(&Value::Null));
+                    Some(format!("\r\n{ANSI_RED}✖ {failure}{ANSI_RESET}\r\n"))
+                }
+                Some("max-tokens") => Some(format!(
+                    "\r\n{ANSI_DIM}⚠ Turn stopped at the output-token ceiling{ANSI_RESET}\r\n"
+                )),
+                Some("blocked") => Some(format!(
+                    "\r\n{ANSI_DIM}⚠ Turn was blocked before it could run{ANSI_RESET}\r\n"
+                )),
+                _ => None,
+            }
+        }
         _ => None,
     };
     let output = output.filter(|text| !text.is_empty());
@@ -2612,17 +2672,7 @@ fn dispatch_mux_frame(
                         .get("kind")
                         .and_then(Value::as_str)
                         .unwrap_or("completed");
-                    if kind == "error" {
-                        let message = reason
-                            .get("error")
-                            .and_then(json_text)
-                            .or_else(|| reason.get("message").and_then(json_text))
-                            .unwrap_or_else(|| "DeepSeek Harness turn failed".to_string());
-                        let _ = app.emit(
-                            "task-status",
-                            json!({ "task_id": task_id, "status": "failed", "failure_reason": message }),
-                        );
-                    } else if matches!(kind, "aborted" | "interrupted" | "cancelled") {
+                    if matches!(kind, "aborted" | "interrupted" | "cancelled") {
                         let _ = app.emit(
                             "task-status",
                             json!({ "task_id": task_id, "status": "cancelled" }),
@@ -2634,6 +2684,14 @@ fn dispatch_mux_frame(
                         // explicit completion path, matching how an interactive
                         // Claude/Codex `Stop` maps to `input_required` in
                         // `event_watcher`.
+                        //
+                        // A failed turn settles the same way. The harness is still
+                        // alive and the composer still works, so marking the task
+                        // `failed` here would retire a live session and swap its
+                        // terminal for a static transcript — the reason is printed
+                        // into the terminal by `session_event_terminal_output`
+                        // instead. Only a boot or transport failure (see
+                        // `run_dsh_task`) genuinely ends the task.
                         let _ = app.emit(
                             "task-status",
                             json!({ "task_id": task_id, "status": "input_required" }),
@@ -6092,6 +6150,63 @@ mod tests {
         assert!(rendered.contains("✻ Thinking · Only one line"));
         // A single line needs no size hint.
         assert!(!rendered.contains("lines"));
+    }
+
+    #[test]
+    fn reads_the_structured_failure_a_turn_ends_with() {
+        // The Harness names the credential rather than quoting the provider.
+        assert_eq!(
+            dsh_failure_message(&json!({ "code": "AUTH", "message": "401 unauthorized" })),
+            "API key is invalid"
+        );
+        // The provider's own sentence survives, with the routing facts appended.
+        assert_eq!(
+            dsh_failure_message(
+                &json!({ "code": "RATE_LIMIT", "message": "too many requests", "status": 429 })
+            ),
+            "too many requests (RATE_LIMIT · HTTP 429)"
+        );
+        // `UNKNOWN` is the flattening placeholder for a non-LlmError cause and
+        // says nothing a reader can act on.
+        assert_eq!(
+            dsh_failure_message(&json!({ "code": "UNKNOWN", "message": "socket hang up" })),
+            "socket hang up"
+        );
+        // Nothing is dropped when the shape is not the documented one.
+        assert_eq!(dsh_failure_message(&json!("plain refusal")), "plain refusal");
+        assert_eq!(dsh_failure_message(&Value::Null), "null");
+    }
+
+    #[test]
+    fn prints_the_reason_a_turn_failed_into_the_terminal() {
+        let mut fold = ReasoningFold::default();
+        let rendered = session_event_terminal_output(
+            &json!({ "event": { "type": "turn/end", "data": { "reason": {
+                "kind": "error",
+                "error": { "code": "NO_ADAPTER", "message": "no adapter for mimo-v2.5-pro" }
+            } } } }),
+            &mut fold,
+        )
+        .expect("an errored turn prints its reason");
+        assert!(rendered.contains("✖ no adapter for mimo-v2.5-pro (NO_ADAPTER)"));
+        assert!(rendered.contains(ANSI_RED));
+
+        // A ceiling and a block are conditions the user has to know about too.
+        let capped = session_event_terminal_output(
+            &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "max-tokens" } } } }),
+            &mut fold,
+        )
+        .expect("a capped turn prints a notice");
+        assert!(capped.contains("output-token ceiling"));
+
+        // A completed turn stays silent: the answer above it already said it all.
+        assert_eq!(
+            session_event_terminal_output(
+                &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
+                &mut fold,
+            ),
+            None
+        );
     }
 
     #[test]

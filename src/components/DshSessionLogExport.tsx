@@ -58,8 +58,8 @@ export function useDshSessionLogExport(sessionId: string, includeDescendants = t
 }
 
 /**
- * Session-header capsule that downloads the session tree as a ZIP, mirroring the
- * Harness `Session log` header action.
+ * Session-header view trigger that downloads the session tree as a ZIP,
+ * mirroring the Harness `Session log` header action.
  */
 export function DshSessionLogExportButton({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
@@ -67,7 +67,7 @@ export function DshSessionLogExportButton({ sessionId }: { sessionId: string }) 
   return (
     <button
       type="button"
-      className="dsh-export-trigger"
+      className="dsh-view-trigger dsh-export-trigger"
       disabled={exporting}
       aria-busy={exporting}
       title={exporting ? t("dsh.export.preparing") : t("dsh.export.open")}

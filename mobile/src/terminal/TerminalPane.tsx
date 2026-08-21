@@ -20,11 +20,7 @@ import {
   TERMINAL_ACCESSORY_KEYS,
   type TerminalAccessoryKey,
 } from "./accessory-keys";
-import {
-  clampTerminalFontSize,
-  TERMINAL_DEFAULT_FONT_SIZE,
-  TERMINAL_FONT_STEP,
-} from "./font-size";
+import { clampTerminalFontSize, TERMINAL_DEFAULT_FONT_SIZE, TERMINAL_FONT_STEP } from "./font-size";
 import {
   decodeTerminalFrame,
   encodeTerminalFrame,
