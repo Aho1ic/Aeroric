@@ -21,6 +21,11 @@ import {
   type TerminalAccessoryKey,
 } from "./accessory-keys";
 import {
+  clampTerminalFontSize,
+  TERMINAL_DEFAULT_FONT_SIZE,
+  TERMINAL_FONT_STEP,
+} from "./font-size";
+import {
   decodeTerminalFrame,
   encodeTerminalFrame,
   jsonPayload,
@@ -39,6 +44,12 @@ let nextStreamId = 1;
 const ECHO_FLUSH_MAX_BYTES = 64;
 /** 距上次写入超过这个间隔,说明输出已空闲,下一个小片段立即写入。 */
 const ECHO_IDLE_GAP_MS = 40;
+/**
+ * 快照恢复兜底时限。恢复期间 WebView 被整块隐藏且不收触摸(见 terminalRestoring),
+ * 正常由 snapshot-complete 解除;若 SnapshotEnd 丢帧或胶水没回消息,终端会永久
+ * 不可见不可点 —— 症状就是「打字没反应」。到时强制收尾,至少恢复可见可用。
+ */
+const SNAPSHOT_RESTORE_TIMEOUT_MS = 4000;
 
 interface SnapshotMeta {
   cols?: number | null;
@@ -51,7 +62,8 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const streamIdRef = useRef(0);
   const [webReady, setWebReady] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [, setFontSize] = useState(13);
+  // 起始值与胶水里的 fontSize 对齐(font-size.ts 有说明,测试校验一致性)
+  const [, setFontSize] = useState(TERMINAL_DEFAULT_FONT_SIZE);
   const [imeFocused, setImeFocused] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -81,6 +93,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   const snapshotLayoutPendingRef = useRef(false);
   const snapshotWebReadyRef = useRef(false);
   const snapshotEndPendingRef = useRef(false);
+  const restoreWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatTimersRef = useRef<{
     timeout: ReturnType<typeof setTimeout> | null;
     interval: ReturnType<typeof setInterval> | null;
@@ -90,6 +103,11 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     webviewRef.current?.injectJavaScript(
       `window.__aeroricTerm && window.__aeroricTerm.handle(${JSON.stringify(msg)}); true;`,
     );
+  }, []);
+
+  const clearRestoreWatchdog = useCallback(() => {
+    if (restoreWatchdogRef.current) clearTimeout(restoreWatchdogRef.current);
+    restoreWatchdogRef.current = null;
   }, []);
 
   const completeSnapshotLayout = useCallback(() => {
@@ -222,6 +240,17 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
     setTerminalRestoring(true);
     setStreamError(null);
     injectTerm({ type: "snapshotAwait" });
+    // 兜底:恢复流程任一环节失联都不至于把终端永久留在隐藏且不可点的状态
+    clearRestoreWatchdog();
+    restoreWatchdogRef.current = setTimeout(() => {
+      restoreWatchdogRef.current = null;
+      if (!snapshotInProgressRef.current) return;
+      flushTermWrites(true, false);
+      snapshotInProgressRef.current = false;
+      snapshotWebReadyRef.current = false;
+      completeSnapshotLayout();
+      setTerminalRestoring(false);
+    }, SNAPSHOT_RESTORE_TIMEOUT_MS);
     sendBinary(
       encodeTerminalFrame({
         opcode: TerminalOpcode.Subscribe,
@@ -231,6 +260,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       }),
     );
     return () => {
+      clearRestoreWatchdog();
       sendBinary(
         encodeTerminalFrame({
           opcode: TerminalOpcode.Unsubscribe,
@@ -241,7 +271,18 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       );
       if (streamIdRef.current === streamId) streamIdRef.current = 0;
     };
-  }, [active, injectTerm, sendBinary, status, taskId, terminalSupported, webReady]);
+  }, [
+    active,
+    clearRestoreWatchdog,
+    completeSnapshotLayout,
+    flushTermWrites,
+    injectTerm,
+    sendBinary,
+    status,
+    taskId,
+    terminalSupported,
+    webReady,
+  ]);
 
   // ── 入站终端帧 ──
   useEffect(() => {
@@ -289,6 +330,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
         }
         case TerminalOpcode.Error:
           setStreamError(payloadText(frame.payload));
+          clearRestoreWatchdog();
           if (writeFrameRef.current !== null) cancelAnimationFrame(writeFrameRef.current);
           writeFrameRef.current = null;
           pendingWritesRef.current = "";
@@ -304,7 +346,14 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
       }
     });
-  }, [flushTermWrites, injectTerm, onBinary, queueTermWrite, requestSnapshotFinalLayout]);
+  }, [
+    clearRestoreWatchdog,
+    flushTermWrites,
+    injectTerm,
+    onBinary,
+    queueTermWrite,
+    requestSnapshotFinalLayout,
+  ]);
 
   const handleWebMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -351,6 +400,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           }
           break;
         case "snapshot-complete":
+          clearRestoreWatchdog();
           snapshotInProgressRef.current = false;
           snapshotWebReadyRef.current = false;
           snapshotEndPendingRef.current = false;
@@ -358,6 +408,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
           break;
         case "glue-error":
           setStreamError(msg.message || "Terminal rendering failed");
+          clearRestoreWatchdog();
           snapshotInProgressRef.current = false;
           snapshotWebReadyRef.current = false;
           snapshotEndPendingRef.current = false;
@@ -400,6 +451,7 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       }
     },
     [
+      clearRestoreWatchdog,
       flushTermWrites,
       handleWriteComplete,
       injectTerm,
@@ -410,9 +462,9 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
   );
 
   const adjustFont = useCallback(
-    (delta: number) => {
+    (steps: number) => {
       setFontSize((prev) => {
-        const next = Math.min(22, Math.max(9, prev + delta));
+        const next = clampTerminalFontSize(prev + steps * TERMINAL_FONT_STEP);
         const desktop = desktopSizeRef.current;
         if (viewModeRef.current === "desktop" && desktop) {
           injectTerm({ type: "fontSize", size: next, mode: "desktop", ...desktop });
@@ -503,9 +555,10 @@ export function TerminalPane({ taskId, active }: { taskId: string; active: boole
       snapshotEndPendingRef.current = false;
       snapshotLayoutPendingRef.current = false;
       snapshotLayoutBarrierRef.current = null;
+      clearRestoreWatchdog();
       stopRepeat();
     };
-  }, [stopRepeat]);
+  }, [clearRestoreWatchdog, stopRepeat]);
 
   if (!terminalSupported) {
     return (

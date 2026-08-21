@@ -19,6 +19,20 @@ const xtermJs = readFileSync(require.resolve("@xterm/xterm/lib/xterm.js"), "utf8
 const xtermCss = readFileSync(require.resolve("@xterm/xterm/css/xterm.css"), "utf8");
 const fitJs = readFileSync(require.resolve("@xterm/addon-fit/lib/addon-fit.js"), "utf8");
 
+/**
+ * 首帧字号,必须与 src/terminal/font-size.ts 的 TERMINAL_DEFAULT_FONT_SIZE 一致
+ * (glyph-fallback.test.ts 校验)。8px 在 393px 宽的手机上约 78 列。
+ */
+const DEFAULT_FONT_SIZE = 8;
+/** 小字号下拉开行距,补回可读性;不影响列数。 */
+const DEFAULT_LINE_HEIGHT = 1.15;
+/**
+ * 终端底色。刻意用不透明色:DOM renderer 的文字走系统子像素抗锯齿,而半透明
+ * 背景会让 WebKit 退回灰度抗锯齿 —— 8px 下字形明显发虚。取值等价于原先的
+ * rgba(8,12,22,0.9) 叠在应用暗色表面上的合成结果,观感与之前一致。
+ */
+const TERMINAL_BACKGROUND = "#080c16";
+
 const glue = `
 (function () {
   function post(obj) {
@@ -53,13 +67,14 @@ const glue = `
     });
   }
   var term = new Terminal({
-    fontSize: 13,
+    fontSize: ${DEFAULT_FONT_SIZE},
+    lineHeight: ${DEFAULT_LINE_HEIGHT},
     fontFamily: "Menlo, Consolas, 'DejaVu Sans Mono', monospace",
     scrollback: 10000,
     cursorBlink: true,
-    allowTransparency: true,
+    allowTransparency: false,
     theme: {
-      background: "rgba(8, 12, 22, 0.9)",
+      background: "${TERMINAL_BACKGROUND}",
       foreground: "#e0e0e0",
       cursor: "#e0e0e0",
       selectionBackground: "#3b82f666",
@@ -88,43 +103,51 @@ const glue = `
     "caret-color:transparent;z-index:20;pointer-events:none;";
   document.body.appendChild(ime);
   var composing = false;
-  var suppressNextInput = false;
+  var flushTimer = null;
+  /** 把 textarea 攒下的字符发给 PTY 并清空。composition 中不发:拼音中间态不进 PTY。 */
   function flushIme() {
-    if (ime.value) {
-      post({ type: "input", data: ime.value });
-      ime.value = "";
-    }
+    if (composing || !ime.value) return;
+    var data = ime.value;
+    ime.value = "";
+    post({ type: "input", data: data });
+  }
+  /**
+   * compositionend 与最终 input 的先后按引擎而异,延迟一个宏任务同时吃下两种顺序:
+   *   Chromium:input(composing 仍 true,不发)→ compositionend → 这里 flush 发出
+   *   WebKit:  compositionend → input(composing 已 false,当场 flush)→ 这里已空
+   * 两种都恰好发一次。若在 compositionend 里同步 flush 会漏掉 WebKit —— 那一刻
+   * 最终文本还没落进 textarea,读到空值,整个词就丢了。
+   */
+  function scheduleFlush() {
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = setTimeout(function () {
+      flushTimer = null;
+      flushIme();
+    }, 0);
   }
   ime.addEventListener("compositionstart", function () {
     composing = true;
-    suppressNextInput = false;
   });
   ime.addEventListener("compositionend", function () {
     composing = false;
-    flushIme();
+    scheduleFlush();
   });
-  // iOS/Android 的英文、数字、符号输入有时只触发 beforeinput/input,
-  // 不会进入 composition。beforeinput 直接发送可见字符,避免隐藏 textarea
-  // 的零尺寸/负 z-index 让非中文输入丢失。
+  // 这里刻意不拦 insertText:字符正常落进 textarea,由 input 事件统一 flush。
+  // 曾经在此 preventDefault 并置标志位跳过下一个 input,但 preventDefault 成功后
+  // 浏览器就不再派发 input,标志位无人清零 —— 下一次走别的路径的输入(iOS 纠错的
+  // insertReplacementText、词条替换、粘贴、composition 收尾补发的 input)会被误判成
+  // 「已处理」而整段丢弃,表现为间歇性丢字。
   ime.addEventListener("beforeinput", function (ev) {
     if (composing) return;
-    if (ev.inputType === "insertText" && ev.data) {
-      ev.preventDefault();
-      post({ type: "input", data: ev.data });
-      ime.value = "";
-      suppressNextInput = true;
-    } else if (ev.inputType === "deleteContentBackward" && !ime.value) {
+    // Android 软键盘删除不发 keydown,只有 beforeinput。textarea 已空说明没有待删的
+    // 本地字符,转成 DEL 交给 PTY。
+    if (ev.inputType === "deleteContentBackward" && !ime.value) {
       ev.preventDefault();
       post({ type: "input", data: "\u007f" });
     }
   });
   ime.addEventListener("input", function () {
-    if (suppressNextInput) {
-      suppressNextInput = false;
-      ime.value = "";
-      return;
-    }
-    if (!composing) flushIme();
+    flushIme();
   });
   ime.addEventListener("keydown", function (ev) {
     if (composing) return;
@@ -147,10 +170,15 @@ const glue = `
   });
   function focusIme() {
     term.blur();
-    ime.value = "";
+    // composition 中不清:清了 IME 与 textarea 状态就错位,后续输入会乱。
+    // 布局变化后 RN 侧会重新发 focus,那时可能正拼到一半。
+    if (!composing) ime.value = "";
     ime.focus({ preventScroll: true });
   }
   function blurIme() {
+    // 先把攒下的字符发走,否则收键盘/长按进选择模式时这段输入直接丢。
+    // 正在 composition 时 flushIme 自会跳过,收尾交给 blur 触发的 compositionend。
+    flushIme();
     ime.blur();
   }
 
@@ -657,9 +685,11 @@ const html = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <style>
 ${xtermCss}
-html, body, #root { height: 100%; margin: 0; padding: 0; background: transparent; }
+/* 整页不透明:WebKit 只在背景确定不透明时对文字用子像素抗锯齿,8px 下这是清晰度
+   的关键。页面若保持透明,合成到原生视图上只能拿到灰度抗锯齿,字形发虚。 */
+html, body, #root { height: 100%; margin: 0; padding: 0; background: ${TERMINAL_BACKGROUND}; }
 /* 滚动统一走 touch → xterm buffer viewport,避免 viewport 与画布双重滚动 */
-.xterm .xterm-viewport { overflow-y: hidden; background: transparent !important; }
+.xterm .xterm-viewport { overflow-y: hidden; background: ${TERMINAL_BACKGROUND} !important; }
 .xterm { touch-action: none; }
 .xterm .xterm-screen { transform-origin: top left; }
 /* 长按选区由脚本接管:屏蔽 iOS 原生长按放大镜/共享菜单,避免与自定义选区冲突。

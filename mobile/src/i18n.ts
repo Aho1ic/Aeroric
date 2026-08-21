@@ -171,13 +171,14 @@ const zh = {
 
   // 会话 tab
   "session.approvalTitle": "Agent 请求授权",
-  "session.waitingInput": "Agent 正在等待输入",
+  // 本轮结束、会话交回用户。不写"正在等待输入":那句听起来像 agent 卡住了在
+  // 催人,而这只是一轮跑完;输入框就在下方,不需要额外指路。
+  "session.turnSettled": "本轮已结束,可继续输入",
   "session.sending": "发送中…",
   "session.approve": "允许",
   "session.deny": "拒绝",
   "session.approvalStale": "授权请求变化后旧按钮会自动失效。",
   "session.approvalUnsupported": "当前桌面版本不支持从手机端处理授权,请使用电脑端。",
-  "session.replyHint": "请在下方发送回复,或切到「终端」标签继续操作。",
   "session.sshUnavailable": "SSH 远程任务暂不支持会话视图,请使用「终端」标签。",
   "session.unsupported": "当前桌面版本未提供结构化会话能力,请使用「终端」标签。",
   "session.notStarted":
@@ -443,14 +444,13 @@ const en: Record<MessageKey, string> = {
     "This desktop version does not support changing task status from mobile.",
 
   "session.approvalTitle": "Agent requests approval",
-  "session.waitingInput": "Agent is waiting for input",
+  "session.turnSettled": "Turn finished — send another message",
   "session.sending": "Sending…",
   "session.approve": "Approve",
   "session.deny": "Deny",
   "session.approvalStale": "These buttons expire automatically when the approval request changes.",
   "session.approvalUnsupported":
     "This desktop version cannot handle approvals from mobile. Use the desktop app instead.",
-  "session.replyHint": "Reply below, or switch to the Terminal tab to continue.",
   "session.sshUnavailable": "Session view is unavailable for SSH tasks — use the Terminal tab.",
   "session.unsupported":
     "This desktop version does not provide structured sessions — use the Terminal tab.",

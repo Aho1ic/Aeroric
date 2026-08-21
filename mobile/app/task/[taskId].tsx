@@ -37,8 +37,12 @@ export default function TaskDetailScreen() {
 
   const statusMeta = task ? taskStatusMeta(task.status) : null;
   const active = task ? taskAcceptsInput(task.status) : false;
+  // 只有"真审批"(带 approval,按钮在会话页)才值得把用户从终端拽走。
+  // `input_required` 本身还包含"本轮已结束、可以继续输入"——那时终端仍是最合适
+  // 的落点,agent 也可能只是刚停下一轮,拽走反而打断正在看的输出。
+  const needsApprovalAction = Boolean(task?.approval);
   const defaultTab: TaskTabKey =
-    active && task?.status !== "input_required" && terminalSupported ? "terminal" : "session";
+    active && !needsApprovalAction && terminalSupported ? "terminal" : "session";
   const requestedTab = selectedTab ?? defaultTab;
   const tab = availableTabs.includes(requestedTab) ? requestedTab : defaultTab;
   const showSession = tab === "session";

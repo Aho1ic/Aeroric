@@ -7,7 +7,7 @@
  */
 
 import { ChevronDown, ChevronRight, Paperclip, Wrench } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { t } from "../i18n";
 import { useConnection } from "../state/connection-context";
@@ -151,7 +151,13 @@ function renderContentPart(
   }
 }
 
-function MessageBlock({ message }: { message: SessionMessage }) {
+/**
+ * memo:agent 流式输出时 `session.appended` 推送很密,不 memo 会让整列表连同所有
+ * markdown 子树逐帧重渲染,把 JS 线程占满 —— 底部输入框的 native→JS→native 回写
+ * 随之变慢,打字回显发钝甚至打断 IME 的 composing region。
+ * `mergeAppended` 保持既有消息的引用稳定(只有被合并的末条会换新对象),memo 因此有实效。
+ */
+const MessageBlock = memo(function MessageBlock({ message }: { message: SessionMessage }) {
   if (message.content.length === 0) return null;
   const content = message.content.map((part, index) =>
     renderContentPart(part, index, message.role),
@@ -167,7 +173,64 @@ function MessageBlock({ message }: { message: SessionMessage }) {
     return <View style={styles.systemBlock}>{content}</View>;
   }
   return <View style={styles.assistantBlock}>{content}</View>;
-}
+});
+
+/**
+ * 输入框独立成 memo 组件,draft/sending 下沉到内部:消息推送不再触达输入框,
+ * 输入框自身的 setState 也不再触发整列表重渲染。
+ *
+ * 输入框恒可编辑 —— 之前 `editable` 跟着 `canSend`(即任务状态)实时门控,agent 一跑完
+ * 状态转 done/interrupted,正在打字的输入框瞬间变不可编辑:键盘被收、composing 内容
+ * 丢弃、后续键入无效,表现就是「打了字不显示」。现在只有发送按钮和提交时判定能不能发,
+ * 用户可以先把字打完再等状态允许。
+ */
+const Composer = memo(function Composer({
+  canSend,
+  onSubmit,
+}: {
+  canSend: boolean;
+  onSubmit: (text: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const submit = useCallback(() => {
+    const text = draft.trim();
+    if (!text || sending || !canSend) return;
+    setSending(true);
+    onSubmit(text)
+      .then(() => {
+        // 只在草稿仍是刚发出的内容时清空:输入框在往返期间可编辑,
+        // 用户可能已经接着打了下一句,不能连带抹掉。
+        setDraft((current) => (current.trim() === text ? "" : current));
+      })
+      .catch(() => {
+        // 错误由父组件展示,这里保留草稿供重试
+      })
+      .finally(() => setSending(false));
+  }, [canSend, draft, onSubmit, sending]);
+
+  const disabled = !canSend || !draft.trim() || sending;
+  return (
+    <View style={styles.composer}>
+      <TextInput
+        style={styles.input}
+        value={draft}
+        onChangeText={setDraft}
+        placeholder={canSend ? t("session.sendPlaceholder") : t("session.cannotSend")}
+        placeholderTextColor={theme.textHint}
+        multiline
+      />
+      <AnimatedPressable
+        style={[styles.sendButton, disabled && styles.sendDisabled]}
+        disabled={disabled}
+        onPress={submit}
+      >
+        <Text style={styles.sendText}>{sending ? "…" : t("session.send")}</Text>
+      </AnimatedPressable>
+    </View>
+  );
+});
 
 export function SessionPane({
   projectId,
@@ -185,8 +248,6 @@ export function SessionPane({
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const [responding, setResponding] = useState<"approve" | "deny" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const approvalsSupported = !capabilitiesReady || hasCapability("tasks.approvals");
@@ -252,16 +313,21 @@ export function SessionPane({
     });
   }, [onPush, task.id]);
 
-  const sendPrompt = useCallback(() => {
-    const text = draft.trim();
-    if (!text || sending) return;
-    setSending(true);
-    setActionError(null);
-    request("task.input", { taskId: task.id, text })
-      .then(() => setDraft(""))
-      .catch((err) => setActionError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setSending(false));
-  }, [draft, request, sending, task.id]);
+  // 引用稳定(只依赖 request 与 task.id),Composer 的 memo 才拦得住父组件重渲染。
+  // 失败时上抛,让 Composer 保留草稿。
+  const submitPrompt = useCallback(
+    (text: string) => {
+      setActionError(null);
+      return request("task.input", { taskId: task.id, text }).then(
+        () => undefined,
+        (err: unknown) => {
+          setActionError(err instanceof Error ? err.message : String(err));
+          throw err;
+        },
+      );
+    },
+    [request, task.id],
+  );
 
   const respond = useCallback(
     (action: "approve" | "deny") => {
@@ -283,7 +349,13 @@ export function SessionPane({
     [approvalsSupported, request, responding, task.approval, task.id],
   );
 
-  const showApproval = active && task.status === "input_required";
+  // 两种 `input_required` 的展示分家:
+  // - 带 `approval`:真审批,agent 被卡住等人点按钮 → 保留醒目告警卡片。
+  // - 不带 `approval`:本轮已结束、可以继续输入 → 一条细窄状态条。输入框就在
+  //   下方,再用整块告警卡片喊一遍既占屏又误导(听起来像 agent 卡了)。
+  const attention = active && task.status === "input_required";
+  const pendingApproval = attention ? task.approval : undefined;
+  const showTurnSettled = attention && !pendingApproval;
   const approvalTool = useMemo(() => {
     for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
       const content = messages[messageIndex]?.content ?? [];
@@ -297,18 +369,24 @@ export function SessionPane({
 
   return (
     <View style={styles.pane}>
-      {showApproval ? (
-        <View style={styles.approvalCard}>
-          <Text style={styles.approvalTitle}>
-            {task.approval ? t("session.approvalTitle") : t("session.waitingInput")}
+      {showTurnSettled ? (
+        <View style={styles.settledStrip}>
+          <View style={styles.settledDot} />
+          <Text style={styles.settledText} numberOfLines={1}>
+            {t("session.turnSettled")}
           </Text>
-          {task.approval && (task.approval.toolName || approvalTool) ? (
+        </View>
+      ) : null}
+      {pendingApproval ? (
+        <View style={styles.approvalCard}>
+          <Text style={styles.approvalTitle}>{t("session.approvalTitle")}</Text>
+          {pendingApproval.toolName || approvalTool ? (
             <Text style={styles.approvalDetail} numberOfLines={2}>
-              {t("session.tool")}:{task.approval.toolName ?? approvalTool?.name}
+              {t("session.tool")}:{pendingApproval.toolName ?? approvalTool?.name}
               {approvalTool?.input ? `\n${approvalTool.input}` : ""}
             </Text>
           ) : null}
-          {task.approval && approvalsSupported ? (
+          {approvalsSupported ? (
             <View style={styles.approvalButtons}>
               <AnimatedPressable
                 style={[styles.approvalButton, styles.approveButton]}
@@ -331,11 +409,7 @@ export function SessionPane({
             </View>
           ) : null}
           <Text style={styles.approvalHint}>
-            {task.approval
-              ? approvalsSupported
-                ? t("session.approvalStale")
-                : t("session.approvalUnsupported")
-              : t("session.replyHint")}
+            {approvalsSupported ? t("session.approvalStale") : t("session.approvalUnsupported")}
           </Text>
         </View>
       ) : null}
@@ -378,24 +452,7 @@ export function SessionPane({
         ))}
       </ScrollView>
 
-      <View style={styles.composer}>
-        <TextInput
-          style={styles.input}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={canSend ? t("session.sendPlaceholder") : t("session.cannotSend")}
-          placeholderTextColor={theme.textHint}
-          editable={canSend && !sending}
-          multiline
-        />
-        <AnimatedPressable
-          style={[styles.sendButton, (!canSend || !draft.trim() || sending) && styles.sendDisabled]}
-          disabled={!canSend || !draft.trim() || sending}
-          onPress={sendPrompt}
-        >
-          <Text style={styles.sendText}>{sending ? "…" : t("session.send")}</Text>
-        </AnimatedPressable>
-      </View>
+      <Composer canSend={canSend} onSubmit={submitPrompt} />
     </View>
   );
 }
@@ -487,6 +544,21 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(210,153,34,0.10)",
     gap: 10,
   },
+  // 「本轮已结束」状态条:单行、无边框、无警告色。够传达状态,不抢屏幕。
+  settledStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  settledDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: theme.textHint,
+  },
+  settledText: { color: theme.textHint, fontSize: 11.5, flex: 1 },
   approvalTitle: { color: theme.warning, fontSize: 14, fontWeight: "700" },
   approvalDetail: { color: theme.text, fontSize: 12.5 },
   approvalButtons: { flexDirection: "row", gap: 10 },

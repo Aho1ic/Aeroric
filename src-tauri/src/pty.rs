@@ -1704,6 +1704,7 @@ pub async fn run_task(
             project_path.clone(),
             final_prompt.clone(),
             created_at,
+            agent.clone(),
         );
     }
     // dsh 会话文件在进程启动时创建于托管 home 的项目目录下；headless
@@ -2284,6 +2285,7 @@ pub async fn resume_task(
             project_path.clone(),
             session_id,
             is_codex,
+            agent.clone(),
         );
     }
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();

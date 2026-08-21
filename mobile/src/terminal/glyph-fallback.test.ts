@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { TERMINAL_DEFAULT_FONT_SIZE } from "./font-size";
 import { EMOJI_FALLBACK_REPLACEMENTS, replaceEmojiFallbackGlyphs } from "./glyph-fallback";
 import { TERMINAL_HTML } from "./terminal-html.generated";
 
@@ -67,5 +68,21 @@ describe("WebView 胶水内联表", () => {
     expect(TERMINAL_HTML).toContain('post({ type: "snapshot-started" })');
     expect(TERMINAL_HTML).toContain('post({ type: "snapshot-complete" })');
     expect(TERMINAL_HTML).toContain('term.element.style.visibility = "visible"');
+  });
+
+  it("首帧字号与 font-size.ts 一致(改了 .mjs 忘重新生成会挂在这)", () => {
+    expect(TERMINAL_HTML).toContain(`fontSize: ${TERMINAL_DEFAULT_FONT_SIZE}`);
+  });
+
+  it("小字号可读性的两项前提:拉开行距 + 不透明底色", () => {
+    // 半透明背景会让 WebKit 把文字降级到灰度抗锯齿,8px 下笔画发虚
+    expect(TERMINAL_HTML).toContain("allowTransparency: false");
+    expect(TERMINAL_HTML).toContain("lineHeight: 1.15");
+  });
+
+  it("IME 不再用悬留标志位跳过 input 事件", () => {
+    // preventDefault 成功后浏览器不再派发 input,标志位无人清零会整段吞输入
+    expect(TERMINAL_HTML).not.toContain("suppressNextInput");
+    expect(TERMINAL_HTML).toContain("function scheduleFlush()");
   });
 });
