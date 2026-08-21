@@ -13,14 +13,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
-  BarChart3,
   CheckCircle2,
   Clock3,
-  FileOutput,
   FolderOpen,
   GitBranch,
   Loader2,
-  MessageSquareText,
   Search,
   Send,
   ThumbsDown,
@@ -49,17 +46,6 @@ import {
 } from "./DshTrajectoryLedger";
 import { DshTrajectoryTimeline } from "./DshTrajectoryTimeline";
 import { useDshTrajectory } from "./DshTrajectoryHost";
-
-type InsightTab = "trajectory" | "stats" | "files" | "workflows" | "schedules" | "feedback";
-
-const tabs: Array<{ id: InsightTab; icon: typeof Activity; labelKey: string }> = [
-  { id: "trajectory", icon: Activity, labelKey: "dsh.insights.trajectory" },
-  { id: "stats", icon: BarChart3, labelKey: "dsh.insights.stats" },
-  { id: "files", icon: FileOutput, labelKey: "dsh.insights.files" },
-  { id: "workflows", icon: GitBranch, labelKey: "dsh.insights.workflows" },
-  { id: "schedules", icon: Clock3, labelKey: "dsh.insights.schedules" },
-  { id: "feedback", icon: MessageSquareText, labelKey: "dsh.insights.feedback" },
-];
 
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -239,33 +225,37 @@ function TrajectoryPanel({
           onToggleTurns={() => setTurns((current) => dshLedgerFoldAll(!current.collapsed))}
           callsCollapsed={calls.collapsed}
           onToggleCalls={() => setCalls((current) => dshLedgerFoldAll(!current.collapsed))}
-        />
-        <div className="dsh-insight-toolbar">
-          <label className="dsh-insight-search">
-            <Search size={13} aria-hidden="true" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t("dsh.insights.search")}
-            />
-          </label>
-          <div
-            className="dsh-insight-segments"
-            role="group"
-            aria-label={t("dsh.insights.eventFilter")}
-          >
-            {(["all", "message", "tool", "lifecycle", "system"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                data-active={category === value}
-                onClick={() => setCategory(value)}
+          // Search and the category filter ride in the timeline's own control
+          // row: both are one-line controls that were costing a full row each.
+          controls={
+            <div className="dsh-insight-toolbar">
+              <label className="dsh-insight-search">
+                <Search size={13} aria-hidden="true" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t("dsh.insights.search")}
+                />
+              </label>
+              <div
+                className="dsh-insight-segments"
+                role="group"
+                aria-label={t("dsh.insights.eventFilter")}
               >
-                {t(`dsh.insights.filter.${value}`)}
-              </button>
-            ))}
-          </div>
-        </div>
+                {(["all", "message", "tool", "lifecycle", "system"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    data-active={category === value}
+                    onClick={() => setCategory(value)}
+                  >
+                    {t(`dsh.insights.filter.${value}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          }
+        />
         {hasMore && (
           <button
             type="button"
@@ -447,8 +437,9 @@ function FeedbackPanel({ sessionId }: { sessionId: string }) {
 
 export function DshTrajectoryOverlay() {
   const { t } = useI18n();
-  const { sessionId, live, history, loadImage, open, setOpen } = useDshTrajectory();
-  const [tab, setTab] = useState<InsightTab>("trajectory");
+  // The view selector moved to the terminal header, so the tab it picked lives
+  // in the host rather than here.
+  const { sessionId, live, history, loadImage, open, setOpen, tab } = useDshTrajectory();
   const panelRef = useRef<HTMLElement>(null);
 
   // The panel covers the terminal without covering the app, so xterm keeps the
@@ -497,7 +488,7 @@ export function DshTrajectoryOverlay() {
         <header className="dsh-insights-header">
           <div>
             <Activity size={16} />
-            <strong>{t("dsh.insights.title")}</strong>
+            <strong>{t(`dsh.insights.${tab === "trajectory" ? "title" : tab}`)}</strong>
             <code>{sessionId}</code>
           </div>
           <button
@@ -509,22 +500,6 @@ export function DshTrajectoryOverlay() {
             <X size={16} />
           </button>
         </header>
-        <nav className="dsh-insights-tabs" aria-label={t("dsh.insights.views")}>
-          {tabs.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                data-active={tab === item.id}
-                onClick={() => setTab(item.id)}
-              >
-                <Icon size={14} />
-                <span>{t(item.labelKey)}</span>
-              </button>
-            );
-          })}
-        </nav>
         <div className="dsh-insights-body" data-tab={tab}>
           {history.loading ? (
             <div className="dsh-insight-empty">

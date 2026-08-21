@@ -101,7 +101,7 @@ import { hasTaskSessionPath, resolveTaskSessionOwner } from "../taskSession";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { useDshLiveSessions } from "../hooks/useDshLiveSessions";
-import { DshLiveBars } from "./DshLiveBars";
+import { DshLiveBars, DshTerminalHeaderActions } from "./DshLiveBars";
 import { useI18n } from "../i18n";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { formatTerminalTabLabel } from "./terminalTabLabel";
@@ -2395,6 +2395,11 @@ export function ProjectPage({
                             sessionId={dshTrajectory.sessionId}
                             live={dshTrajectory.live}
                           />
+                        ) : undefined
+                      }
+                      headerActions={
+                        dshTrajectory ? (
+                          <DshTerminalHeaderActions sessionId={dshTrajectory.sessionId} />
                         ) : undefined
                       }
                       dshTrajectory={dshTrajectory}

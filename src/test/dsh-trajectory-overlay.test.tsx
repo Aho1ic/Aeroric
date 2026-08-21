@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { DshSessionEvent } from "../dshSessionFeatures";
 import type { Task } from "../types";
-import { DshLiveBars } from "../components/DshLiveBars";
+import { DshLiveBars, DshTerminalHeaderActions } from "../components/DshLiveBars";
 import { RunningView } from "../components/RunningView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -130,6 +130,7 @@ function renderRunningView() {
         terminalFontSize={11}
         monoFontFamily="monospace"
         liveBars={<DshLiveBars sessionId="session-1" live={{ planMode: false }} />}
+        headerActions={<DshTerminalHeaderActions sessionId="session-1" />}
         dshTrajectory={{ sessionId: "session-1" }}
       />
     </I18nProvider>,
@@ -213,29 +214,28 @@ describe("DSH trajectory panel placement", () => {
     expect(fetches).toHaveLength(1);
   });
 
-  it("keeps every view the session details dialog offered", async () => {
+  it("opens every view from the terminal header rather than a row of its own", async () => {
+    // The panel's tab row is gone: each view opens straight from the meta row,
+    // so the panel spends none of its height on a selector.
     const panel = await openTrajectory();
-    const nav = within(panel).getByRole("navigation", { name: "Trajectory views" });
-    expect(
-      within(nav)
-        .getAllByRole("button")
-        .map((button) => button.textContent),
-    ).toEqual(["Trajectory", "Stats", "Produced files", "Workflows", "Reminders", "Feedback"]);
+    expect(within(panel).queryByRole("navigation")).not.toBeInTheDocument();
 
-    await userEvent.click(within(nav).getByRole("button", { name: "Stats" }));
-    expect(within(panel).getByText("Steps")).toBeInTheDocument();
-    await userEvent.click(within(nav).getByRole("button", { name: "Produced files" }));
-    expect(
-      within(panel).getByText("This session has not produced an openable file."),
-    ).toBeInTheDocument();
-    await userEvent.click(within(nav).getByRole("button", { name: "Workflows" }));
-    expect(within(panel).getByText("This session has not run a workflow.")).toBeInTheDocument();
-    await userEvent.click(within(nav).getByRole("button", { name: "Reminders" }));
-    expect(within(panel).getByText("This session has no reminder records.")).toBeInTheDocument();
-    await userEvent.click(within(nav).getByRole("button", { name: "Feedback" }));
-    expect(
-      within(panel).getByRole("button", { name: "Send session feedback" }),
-    ).toBeInTheDocument();
+    for (const [view, assertion] of [
+      ["Stats", () => within(panel).getByText("Steps")],
+      [
+        "Produced files",
+        () => within(panel).getByText("This session has not produced an openable file."),
+      ],
+      ["Workflows", () => within(panel).getByText("This session has not run a workflow.")],
+      ["Reminders", () => within(panel).getByText("This session has no reminder records.")],
+      ["Feedback", () => within(panel).getByRole("button", { name: "Send session feedback" })],
+    ] as const) {
+      await userEvent.click(screen.getByRole("button", { name: view }));
+      expect(assertion()).toBeInTheDocument();
+    }
+    // And back: the trajectory trigger names the view it opens.
+    await userEvent.click(screen.getByRole("button", { name: /^Trajectory/ }));
+    expect(within(panel).getByPlaceholderText("Search events")).toBeInTheDocument();
   });
 
   it("closes on Escape, on the scrim, and on the close button", async () => {

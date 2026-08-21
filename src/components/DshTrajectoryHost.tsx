@@ -13,9 +13,42 @@
  */
 
 import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  Activity,
+  BarChart3,
+  Clock3,
+  FileOutput,
+  GitBranch,
+  MessageSquareText,
+} from "lucide-react";
 import type { DshLiveSessionState } from "../types";
 import { useDshSessionFeatures } from "../hooks/useDshSessionFeatures";
 import { useDshImageLoader, type DshImageLoader } from "../hooks/useDshImageLoader";
+
+export type DshInsightTab =
+  | "trajectory"
+  | "stats"
+  | "files"
+  | "workflows"
+  | "schedules"
+  | "feedback";
+
+/**
+ * The panel's views, listed here because the buttons that select them live in
+ * the terminal header while the views themselves render inside the panel.
+ */
+export const dshInsightTabs: ReadonlyArray<{
+  id: DshInsightTab;
+  icon: typeof Activity;
+  labelKey: string;
+}> = [
+  { id: "trajectory", icon: Activity, labelKey: "dsh.insights.trajectory" },
+  { id: "stats", icon: BarChart3, labelKey: "dsh.insights.stats" },
+  { id: "files", icon: FileOutput, labelKey: "dsh.insights.files" },
+  { id: "workflows", icon: GitBranch, labelKey: "dsh.insights.workflows" },
+  { id: "schedules", icon: Clock3, labelKey: "dsh.insights.schedules" },
+  { id: "feedback", icon: MessageSquareText, labelKey: "dsh.insights.feedback" },
+];
 
 export interface DshTrajectoryContextValue {
   sessionId: string;
@@ -25,6 +58,10 @@ export interface DshTrajectoryContextValue {
   loadImage: DshImageLoader;
   open: boolean;
   setOpen: (open: boolean) => void;
+  /** Which view the panel is showing; selected from the terminal header. */
+  tab: DshInsightTab;
+  /** Open the panel straight into one view. */
+  openAt: (tab: DshInsightTab) => void;
 }
 
 const DshTrajectoryContext = createContext<DshTrajectoryContextValue | null>(null);
@@ -41,6 +78,7 @@ export function DshTrajectoryHost({
   const history = useDshSessionFeatures(sessionId);
   const loadImage = useDshImageLoader(sessionId);
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<DshInsightTab>("trajectory");
   // Rebuilt on every render on purpose: the fold is a fresh projection whenever
   // an event arrives, which is exactly when the trigger's count and the panel's
   // rows both have to change.
@@ -51,6 +89,11 @@ export function DshTrajectoryHost({
     loadImage,
     open,
     setOpen,
+    tab,
+    openAt: (next) => {
+      setTab(next);
+      setOpen(true);
+    },
   };
   return <DshTrajectoryContext.Provider value={value}>{children}</DshTrajectoryContext.Provider>;
 }

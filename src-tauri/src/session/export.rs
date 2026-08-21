@@ -44,15 +44,19 @@ pub(super) fn export_session_markdown_inner(
         ));
     }
 
-    let session_file =
-        File::open(&canonical).map_err(|error| format!("Cannot open session file: {}", error))?;
-    let mut lines = Vec::new();
-    for line in BufReader::new(session_file).lines() {
-        let line = line.map_err(|error| format!("Cannot read session file: {}", error))?;
-        if !line.trim().is_empty() {
-            lines.push(line);
+    // 压缩的 dsh transcript 按字节读只会得到二进制帧,必须先解码成逻辑行。
+    let mut lines = match crate::session_dsh::read_compressed_dsh_lines(&canonical)? {
+        Some(decoded) => decoded,
+        None => {
+            let session_file = File::open(&canonical)
+                .map_err(|error| format!("Cannot open session file: {}", error))?;
+            BufReader::new(session_file)
+                .lines()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("Cannot read session file: {}", error))?
         }
-    }
+    };
+    lines.retain(|line| !line.trim().is_empty());
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
     let messages = if family == crate::app_settings::AgentFamily::Dsh {
         crate::session_dsh::parse_dsh_session_lines(&line_refs)?

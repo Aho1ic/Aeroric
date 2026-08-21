@@ -309,15 +309,23 @@ impl DshWebUiManager {
     }
 
     /// 唯一的终端写出口:先按任务列宽做软换行,再交给 `send_terminal_text`。
+    ///
+    /// 同时落一份终端历史。DSH 会话没有 PTY,`spawn_pty_reader` 那条持久化路径
+    /// (`pty.rs`)永远不会被走到;不在这里补写,任务结束后 `read_task_terminal_history`
+    /// 就是空的,结构化 transcript 一旦读不出来,兜底终端只能给用户一片空白。
     fn send_terminal_text_for_task(&self, task_id: &str, on_output: &Channel<String>, text: &str) {
         let wrapped = {
             let mut wraps = self.terminal_wraps.lock();
             let wrap = wraps.entry(task_id.to_string()).or_default();
             wrap.push(text)
         };
-        if !wrapped.is_empty() {
-            let _ = on_output.send(wrapped);
+        if wrapped.is_empty() {
+            return;
         }
+        let _ = crate::storage::append_task_terminal_history(task_id, &wrapped);
+        // 手机远程终端流 tee,与 PTY 路径对齐:无订阅者时近零开销。
+        crate::remote::terminal_hub::hub().publish(task_id, &wrapped);
+        let _ = on_output.send(wrapped);
     }
 
     /// 丢弃换行状态。新一轮任务启动时列宽和光标列都要从零开始。
@@ -1595,6 +1603,9 @@ const MIN_WRAP_COLS: usize = 20;
 /// 制表位宽度,与 xterm 默认一致。
 const TAB_WIDTH: usize = 8;
 
+/// 连续换行的上限,也就是最多留一个空行。
+const MAX_CONSECUTIVE_NEWLINES: usize = 2;
+
 /// 待落地单词里的一段。转义序列不占列宽,但必须跟着单词一起搬到下一行,
 /// 否则换行会把一个半开的颜色区间拆开。
 #[derive(Debug)]
@@ -1614,6 +1625,11 @@ struct TerminalWrap {
     column: usize,
     word: Vec<WordPart>,
     word_width: usize,
+    /// 已写出的尾部连续换行数,跨 chunk 累积——一段回答是分多次到达的,空行
+    /// 常常正好落在两个 chunk 的接缝上。
+    newline_run: usize,
+    /// 是否已经写出过实际内容。首屏之前的空行一律丢掉。
+    wrote_content: bool,
 }
 
 impl TerminalWrap {
@@ -1667,9 +1683,56 @@ impl TerminalWrap {
         out
     }
 
+    /// 压掉多余空行:连续空行最多留一个,首屏之前的空行全部丢掉。
+    ///
+    /// DSH 的各个渲染分支(工具卡片、推理折叠、用户回显)各自都会先写一个
+    /// `\r\n` 开头做间隔,markdown 正文自己又带空行,叠起来终端一屏能少放好几
+    /// 行内容。这里是唯一的写出口,统一在这里收口比逐个分支去调更可靠。
+    ///
+    /// 只含转义序列的"空行"照样透传序列(否则颜色区间会被拆开),但不算内容。
+    fn collapse_blank_lines(&mut self, text: String) -> String {
+        if text.is_empty() {
+            return text;
+        }
+        let mut out = String::with_capacity(text.len());
+        // `normalize_terminal_text` 已把换行统一成 `\r\n`,按 `\n` 切即可。
+        let mut segments = text.split('\n').peekable();
+        while let Some(segment) = segments.next() {
+            // 除最后一段外,每段后面都跟着一个被 split 吃掉的换行。
+            let terminated = segments.peek().is_some();
+            let body = segment.strip_suffix('\r').unwrap_or(segment);
+            let (visible, escapes) = split_ansi_sequences(body);
+            if visible.trim().is_empty() {
+                // 空行:转义序列照旧透传(否则颜色区间被拆),换行本身按上限收。
+                out.push_str(&escapes);
+                if !terminated {
+                    continue;
+                }
+                // 首屏之前的空行直接丢;之后连续换行到上限就停。
+                if self.wrote_content && self.newline_run < MAX_CONSECUTIVE_NEWLINES {
+                    out.push_str("\r\n");
+                    self.newline_run += 1;
+                }
+                continue;
+            }
+            out.push_str(body);
+            self.wrote_content = true;
+            if terminated {
+                out.push_str("\r\n");
+                self.newline_run = 1;
+            } else {
+                self.newline_run = 0;
+            }
+        }
+        out
+    }
+
     /// 接入一段终端输出,返回可直接写给 xterm 的文本。
     fn push(&mut self, text: &str) -> String {
-        let text = normalize_terminal_text(text);
+        let text = self.collapse_blank_lines(normalize_terminal_text(text));
+        if text.is_empty() {
+            return text;
+        }
         if !self.wraps() {
             let mut out = self.flush();
             out.push_str(&text);
@@ -1743,6 +1806,27 @@ impl TerminalWrap {
         }
         out
     }
+}
+
+/// 把一行拆成"可见文本"与"转义序列",一趟走完。
+///
+/// 判空行只能看可见部分:一行 SGR 颜色码的宽度是 0,但它仍要原样透传,否则
+/// 空行被压掉的同时会把一个半开的颜色区间也吃掉。
+fn split_ansi_sequences(text: &str) -> (String, String) {
+    if !text.contains('\x1b') {
+        return (text.to_string(), String::new());
+    }
+    let mut visible = String::with_capacity(text.len());
+    let mut escapes = String::new();
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\x1b' {
+            escapes.push_str(&read_ansi_sequence(&mut characters));
+        } else {
+            visible.push(character);
+        }
+    }
+    (visible, escapes)
 }
 
 /// 读走一个完整的转义序列(ESC 已由调用方消费),原样返回以便透传。
@@ -3009,6 +3093,12 @@ pub async fn run_dsh_task(
     state.reasoning_folds.lock().remove(&task_id);
     state.clear_terminal_wrap(&task_id);
     state.clear_internal_command(&task_id);
+    // 全新会话才清空终端历史(对齐 `pty::run_task`);带 session_id 进来的是恢复,
+    // 历史要留着,否则兜底终端会把之前那一段丢掉。
+    if session_id.is_none() {
+        let _ = crate::storage::truncate_task_terminal_history(&task_id);
+        crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
+    }
     let web = ensure_dsh_webui(&agent, &state).await?;
     let base_url = web
         .url
@@ -5862,6 +5952,55 @@ mod tests {
         let mut out = wrap.push("0123456789012345 \x1b[32mgreen\x1b[0m");
         out.push_str(&wrap.flush());
         assert_eq!(out, "0123456789012345 \r\n\x1b[32mgreen\x1b[0m");
+    }
+
+    /// 推一段并立刻收尾:行尾未落地的单词也一起写出来,便于断言完整文本。
+    fn push_and_flush(wrap: &mut TerminalWrap, text: &str) -> String {
+        let mut out = wrap.push(text);
+        out.push_str(&wrap.flush());
+        out
+    }
+
+    #[test]
+    fn collapses_runs_of_blank_lines_down_to_one() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(40);
+        // 渲染分支各写一个 \r\n 前缀,markdown 正文自己又带空行,叠起来一屏
+        // 白占好几行。
+        assert_eq!(
+            push_and_flush(&mut wrap, "first\n\n\n\n\nsecond"),
+            "first\r\n\r\nsecond"
+        );
+    }
+
+    #[test]
+    fn drops_blank_lines_before_the_first_row() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(40);
+        assert_eq!(push_and_flush(&mut wrap, "\n\n"), "");
+        assert_eq!(push_and_flush(&mut wrap, "\r\nfirst"), "first");
+        // 首屏之后的空行照常保留一个。
+        assert_eq!(push_and_flush(&mut wrap, "\n\n\nsecond"), "\r\n\r\nsecond");
+    }
+
+    #[test]
+    fn collapses_blank_lines_across_a_chunk_boundary() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(40);
+        assert_eq!(push_and_flush(&mut wrap, "first\n"), "first\r\n");
+        // 上一段已经以换行收尾,这一段开头的空行只能再补一个。
+        assert_eq!(push_and_flush(&mut wrap, "\n\n\nsecond"), "\r\nsecond");
+    }
+
+    #[test]
+    fn keeps_escape_sequences_from_a_dropped_blank_line() {
+        let mut wrap = TerminalWrap::default();
+        wrap.set_cols(40);
+        // 只含 SGR 的"空行"宽度为 0,但序列必须透传,否则颜色区间会被拆开。
+        assert_eq!(
+            push_and_flush(&mut wrap, "\x1b[32m\n\x1b[32mgreen\x1b[0m"),
+            "\x1b[32m\x1b[32mgreen\x1b[0m"
+        );
     }
 
     #[test]

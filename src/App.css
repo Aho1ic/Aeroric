@@ -1875,10 +1875,12 @@ body {
   border-radius: 12px;
   background: var(--terminal-bg, var(--bg-panel)) !important;
   font-family: var(--font-mono);
-  line-height: 22px;
-  /* 右侧留出一条明显的水槽:DSH 输出已在 Rust 侧按列软换行，可视留白让右边界
-   * 一眼可辨，也避免折行后的行尾字符贴到卡片圆角上。 */
-  padding: 9px 24px 9px 30px;
+  /* 不设 line-height:xterm 自己按字号算行高，写死 22px 会在小字号下白拉高每
+   * 一行，同样的高度装的行数比 claude / codex 终端少。 */
+  /* 右侧留出一条水槽:DSH 输出已在 Rust 侧按列软换行，可视留白让右边界一眼可
+   * 辨。但横向内边距是从 FitAddon 的可用宽度里扣的，扣得多列数就少、折行就多，
+   * 所以只留够看的量。 */
+  padding: 6px 12px 6px 14px;
   box-sizing: border-box;
 }
 
@@ -4514,6 +4516,44 @@ html:not(.dark) .xterm-helper-textarea {
   font-family: var(--font-mono);
 }
 
+/* 终端头部动作组:会话日志 / 轨迹 / 5 个视图入口,和模型·权限元信息同一行。
+   靠 margin-left: auto 推到行尾,元信息自己 min-width: 0 收缩。 */
+.dsh-terminal-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* 视图入口比前两个胶囊再轻一档:它们只是跳转,不是主动作。 */
+.dsh-view-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dsh-view-trigger:hover {
+  border-color: var(--border-dim);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 行内空间不够时视图入口只留图标,保证模型名 / 权限不被挤掉。 */
+@media (max-width: 1080px) {
+  .dsh-view-trigger span {
+    display: none;
+  }
+}
+
 /* Session-log export capsule; shares the insights trigger's shape so the two
    header actions read as one group. */
 .dsh-export-trigger {
@@ -4674,9 +4714,15 @@ html:not(.dark) .xterm-helper-textarea {
   z-index: 20;
 }
 
+/* 面板几乎铺满整个盒子,遮罩只是"点外面关闭"的命中区。深色下留一点压暗,
+   浅色下压暗会从面板边缘透出灰边,所以按主题分开给。 */
 .dsh-trajectory-scrim {
   position: absolute;
   inset: 0;
+  background: color-mix(in srgb, #111827 6%, transparent);
+}
+
+html.dark .dsh-trajectory-scrim {
   background: color-mix(in srgb, #111827 42%, transparent);
 }
 
@@ -4686,11 +4732,14 @@ html:not(.dark) .xterm-helper-textarea {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  /* 视图切换行已移到终端头部,面板只剩标题行 + 内容区两行。 */
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--border-medium);
   border-radius: 6px;
-  background: var(--bg-panel);
+  /* 与下方 composer 用同一个面色:浅色主题下 --bg-panel 是 62% 白的半透明,
+     压在深色终端上会透出灰底;--bg-card 与 composer 一致,不再发灰。 */
+  background: var(--bg-card);
   box-shadow: 0 18px 48px color-mix(in srgb, #111827 26%, transparent);
   color: var(--text-primary);
 }
@@ -4700,8 +4749,8 @@ html:not(.dark) .xterm-helper-textarea {
 }
 
 .dsh-insights-header {
-  min-height: 48px;
-  padding: 8px 12px 8px 16px;
+  min-height: 32px;
+  padding: 3px 8px 3px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4744,49 +4793,11 @@ html:not(.dark) .xterm-helper-textarea {
   color: var(--text-primary);
 }
 
-.dsh-insights-tabs {
-  display: flex;
-  min-width: 0;
-  overflow-x: auto;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border-dim);
-  background: var(--bg-root);
-}
-
-.dsh-insights-tabs button {
-  position: relative;
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 0 12px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  cursor: pointer;
-}
-
-.dsh-insights-tabs button[data-active="true"] {
-  color: var(--text-primary);
-}
-
-.dsh-insights-tabs button[data-active="true"]::after {
-  content: "";
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 0;
-  height: 2px;
-  background: var(--primary-action-bg);
-}
-
 .dsh-insights-body {
   position: relative;
   min-height: 0;
   overflow: auto;
-  padding: 14px 16px 20px;
+  padding: 8px 12px 12px;
 }
 
 .dsh-insight-empty {
@@ -4816,12 +4827,13 @@ html:not(.dark) .xterm-helper-textarea {
 .dsh-timeline {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 4px;
+  margin-bottom: 6px;
 }
 
 .dsh-timeline-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
@@ -4952,18 +4964,20 @@ html:not(.dark) .xterm-helper-textarea {
   pointer-events: none;
 }
 
+/* 搜索 + 事件筛选现在挂在时间轴控制行的右端(见 DshTrajectoryTimeline 的
+   `controls` 插槽),不再自己占一行。 */
 .dsh-insight-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .dsh-insight-search {
-  min-width: 180px;
-  max-width: 360px;
-  flex: 1 1 260px;
-  height: 30px;
+  min-width: 120px;
+  max-width: 220px;
+  flex: 0 1 180px;
+  height: 24px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4993,8 +5007,8 @@ html:not(.dark) .xterm-helper-textarea {
 }
 
 .dsh-insight-segments button {
-  min-height: 28px;
-  padding: 0 8px;
+  min-height: 22px;
+  padding: 0 6px;
   border: none;
   border-right: 1px solid var(--border-dim);
   background: var(--bg-input);
@@ -5922,8 +5936,8 @@ html:not(.dark) .xterm-helper-textarea {
   opacity: 0.65;
 }
 
+/* 输入框横向占满面板:不再给 max-width,textarea 自己 width: 100%。 */
 .dsh-feedback-panel {
-  max-width: 720px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -6130,16 +6144,14 @@ html:not(.dark) .xterm-helper-textarea {
 }
 
 @media (max-width: 720px) {
-  .dsh-insights-tabs button {
-    padding: 0 9px;
-  }
+  /* 窄面板里工具条从控制行末尾折到下一行,并整行铺开。 */
   .dsh-insight-toolbar {
-    align-items: stretch;
-    flex-direction: column;
+    flex-basis: 100%;
+    margin-left: 0;
   }
   .dsh-insight-search {
     max-width: none;
-    flex-basis: auto;
+    flex: 1 1 auto;
   }
   .dsh-insight-segments {
     overflow-x: auto;

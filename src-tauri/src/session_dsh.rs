@@ -1,19 +1,23 @@
 //! DeepSeek Harness(dsh)会话解析与发现。
 //!
-//! 目录布局(dsh `session-persistence-jsonl` 后端,Aeroric 受管 patch 固定
-//! `compression: none` + `packChunks: false`,因此 transcript 是"一行一事件"的
-//! 明文 JSONL):
+//! 目录布局(dsh `session-persistence-jsonl` 后端):
 //!
 //! ```text
-//! <DSH_HOME>/sessions/--<项目路径 slug>--/<转义会话id>/session.jsonl
+//! <DSH_HOME>/sessions/--<项目路径 slug>--/<转义会话id>/session.jsonl[.zstd]
 //! ```
+//!
+//! 后缀由插件的 `compression` 决定:`none` 落明文 `session.jsonl`,默认的 `zstd`
+//! 落 `session.jsonl.zstd`。Aeroric 受管 patch 请求 `compression: none`,但只有
+//! headless 走 `--patch`、web 走 home 层 `cordis.patch.yml`,而**已经存在的会话
+//! 不会被改写**——所以同一个 root 里明文与压缩产物长期并存,读取端必须逐会话按
+//! 后缀判定,不能全局假设一种编码。
 //!
 //! 首行为 header(`type: "session"`,带格式版本号);其后每行是
 //! `{type, seq, time, data}` 事件。header 版本不等于本模块支持的版本时
 //! **明确拒绝**(与 dsh 自身语义一致),而不是静默解析出错误内容。
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -26,6 +30,11 @@ use crate::TaskManager;
 
 /// 支持的 dsh 会话日志格式版本(`SESSION_FORMAT_VERSION`,dev preview 期为 0)。
 pub(crate) const DSH_SESSION_FORMAT_VERSION: u64 = 0;
+
+/// 明文 transcript 文件名(`compression: none`)。
+pub(crate) const DSH_TRANSCRIPT_RAW: &str = "session.jsonl";
+/// 压缩 transcript 文件名(插件默认 `compression: zstd`)。
+pub(crate) const DSH_TRANSCRIPT_ZSTD: &str = "session.jsonl.zstd";
 
 #[derive(Clone)]
 pub(crate) struct DshSessionInfo {
@@ -98,20 +107,75 @@ pub(crate) fn dsh_encode_segment(raw: &str) -> String {
     out
 }
 
+/// 会话目录里实际存在的 transcript。
+///
+/// 一个 root 只属于一种编码(插件在发现阶段就会拒绝相反的后缀),但 Aeroric
+/// 把 `compression` 从 zstd 切到 none 之后,同一 root 里旧的压缩产物仍然留在
+/// 磁盘上,所以这里按"存在即唯一"逐会话判定:明文优先,其次压缩,都不在返回
+/// `None`。
+pub(crate) fn dsh_transcript_in(session_dir: &Path) -> Option<PathBuf> {
+    let raw = session_dir.join(DSH_TRANSCRIPT_RAW);
+    if raw.is_file() {
+        return Some(raw);
+    }
+    let compressed = session_dir.join(DSH_TRANSCRIPT_ZSTD);
+    compressed.is_file().then_some(compressed)
+}
+
+/// 该 transcript 是否是 zstd 压缩产物。
+fn is_zstd_transcript(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zstd"))
+}
+
+/// 读出 transcript 的全部逻辑行。
+///
+/// 压缩产物是"多个独立 zstd frame 串接"(header 一帧,之后每个持久化批次一帧)。
+/// `zstd::stream::read::Decoder` 默认就会一直串接到 EOF(`single_frame()` 才是
+/// 只解第一帧),正好对上这个物理格式——**不要**加 `single_frame()`,否则只能拿到
+/// header 行、正文全丢。
+pub(crate) fn read_dsh_session_lines(path: &Path) -> Result<Vec<String>, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    if !is_zstd_transcript(path) {
+        return BufReader::new(file)
+            .lines()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string());
+    }
+    let mut text = String::new();
+    zstd::stream::read::Decoder::new(file)
+        .map_err(|error| error.to_string())?
+        .read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    Ok(text.lines().map(str::to_owned).collect())
+}
+
+/// 压缩 transcript 的全部行;明文 transcript 返回 `None`,让调用方保留自己的
+/// 按字节分页 / 尾部截断读法。
+pub(crate) fn read_compressed_dsh_lines(path: &Path) -> Result<Option<Vec<String>>, String> {
+    if !is_zstd_transcript(path) {
+        return Ok(None);
+    }
+    read_dsh_session_lines(path).map(Some)
+}
+
 /// Resolve the canonical JSONL path for a known session id.  The Web API
 /// returns the id only; Aeroric must derive the same path used by the official
 /// `session-persistence-jsonl` backend so history/export/resume all converge on
 /// one file instead of falling back to a PTY transcript.
+///
+/// 落盘前(`create` 不写任何字节,首个 `append` 才物化)两个候选都不存在,此时
+/// 返回明文路径:注册发生在会话创建时,路径要能先登记下来,和插件 `locate()`
+/// 可以在文件存在之前就返回目标的约定一致。
 pub(crate) fn dsh_session_path_for(
     agent: &str,
     project_path: &str,
     session_id: &str,
 ) -> Option<PathBuf> {
-    Some(
-        dsh_project_sessions_dir_for(agent, project_path)?
-            .join(dsh_encode_segment(session_id))
-            .join("session.jsonl"),
-    )
+    let session_dir =
+        dsh_project_sessions_dir_for(agent, project_path)?.join(dsh_encode_segment(session_id));
+    Some(dsh_transcript_in(&session_dir).unwrap_or_else(|| session_dir.join(DSH_TRANSCRIPT_RAW)))
 }
 
 /// 任意 dsh 族 agent(内建/自定义档案)的会话根目录。
@@ -145,8 +209,8 @@ pub(crate) fn dsh_project_sessions_dir_for(agent: &str, project_path: &str) -> O
 
 /// 反查持有某个会话的 dsh 族 agent。
 ///
-/// 会话按 `<home>/sessions/<projectKey>/<转义会话id>/session.jsonl` 落盘,而
-/// home 目录名就是 agent id,所以归属可以纯靠磁盘判定——不需要对应的 `dsh web`
+/// 会话按 `<home>/sessions/<projectKey>/<转义会话id>/session.jsonl[.zstd]` 落盘,
+/// 而 home 目录名就是 agent id,所以归属可以纯靠磁盘判定——不需要对应的 `dsh web`
 /// 实例还在跑,也不需要任务还是活跃状态。会话详情正是在任务结束后才打开的,
 /// 少了这一步请求就会打到内置实例上换回 "session not found"。
 pub(crate) fn dsh_agent_owning_session(session_id: &str) -> Option<String> {
@@ -172,12 +236,7 @@ pub(crate) fn dsh_agent_owning_session(session_id: &str) -> Option<String> {
             continue;
         };
         for project in projects.flatten() {
-            if project
-                .path()
-                .join(&session_dir)
-                .join("session.jsonl")
-                .is_file()
-            {
+            if dsh_transcript_in(&project.path().join(&session_dir)).is_some() {
                 return Some(agent);
             }
         }
@@ -223,11 +282,18 @@ fn header_meta(value: &Value) -> Option<(String, i64)> {
     Some((id, created_at))
 }
 
+/// 读 transcript 首行的 header。压缩产物的 header 单独占一帧,解码器会先吐出它,
+/// 所以两种编码都只要第一行——只是压缩路径没法按行 seek,交给统一读取器。
 pub(crate) fn read_dsh_session_header(path: &Path) -> Option<(String, i64)> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line).ok()?;
+    let first_line = if is_zstd_transcript(path) {
+        read_dsh_session_lines(path).ok()?.into_iter().next()?
+    } else {
+        let mut line = String::new();
+        BufReader::new(File::open(path).ok()?)
+            .read_line(&mut line)
+            .ok()?;
+        line
+    };
     let value = parse_json(first_line.trim())?;
     if value.get("type").and_then(Value::as_str) != Some("session") {
         return None;
@@ -491,10 +557,9 @@ pub(crate) fn newest_dsh_session_since(
     let entries = std::fs::read_dir(&dir).ok()?;
     let mut best: Option<(i64, String, PathBuf)> = None;
     for entry in entries.flatten() {
-        let path = entry.path().join("session.jsonl");
-        if !path.is_file() {
+        let Some(path) = dsh_transcript_in(&entry.path()) else {
             continue;
-        }
+        };
         let Some((session_id, created_at)) = read_dsh_session_header(&path) else {
             continue;
         };
@@ -528,10 +593,9 @@ pub(crate) fn discover_dsh_session_since(
     };
     let mut best: Option<(i64, String, PathBuf)> = None;
     for entry in entries.flatten() {
-        let path = entry.path().join("session.jsonl");
-        if !path.is_file() {
+        let Some(path) = dsh_transcript_in(&entry.path()) else {
             continue;
-        }
+        };
         if claimed.contains(path.to_string_lossy().as_ref()) {
             continue;
         }
@@ -641,6 +705,7 @@ pub(crate) fn register_dsh_session_with_preset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn project_key_matches_dsh_layout() {
@@ -716,6 +781,79 @@ mod tests {
             r#"{"type":"future/event","seq":2,"time":3,"data":{},"ignorable":true}"#.to_string(),
         ];
         assert_eq!(parse_dsh_session_lines(&lines).unwrap().len(), 0);
+    }
+
+    /// 按插件真实的落盘方式写压缩 transcript:每次 append 一个独立 zstd frame,
+    /// 物理文件是多个 frame 串接,而不是一个大 frame。
+    fn write_zstd_frames(path: &Path, batches: &[&[String]]) {
+        use std::io::Write;
+        let mut file = File::create(path).expect("transcript is writable");
+        for batch in batches {
+            let mut text = String::new();
+            for line in *batch {
+                text.push_str(line);
+                text.push('\n');
+            }
+            let frame = zstd::encode_all(text.as_bytes(), 0).expect("frame encodes");
+            file.write_all(&frame).expect("frame is writable");
+        }
+    }
+
+    fn temp_session_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aeroric-dsh-transcript-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("session dir is creatable");
+        dir
+    }
+
+    #[test]
+    fn reads_every_zstd_frame_of_a_compressed_transcript() {
+        let dir = temp_session_dir("frames");
+        let body: Vec<String> = (0..40)
+            .map(|seq| {
+                format!(
+                    r#"{{"type":"turn/start","seq":{seq},"time":{seq},"data":{{"turn":{seq}}}}}"#
+                )
+            })
+            .collect();
+        // header 单独一帧,正文分批追加——只解第一帧就只剩 header,正文全丢。
+        write_zstd_frames(
+            &dir.join(DSH_TRANSCRIPT_ZSTD),
+            &[&[header_line(0)], &body[..20], &body[20..]],
+        );
+        let path = dsh_transcript_in(&dir).expect("compressed transcript is found");
+        assert!(path.ends_with(DSH_TRANSCRIPT_ZSTD));
+        let lines = read_dsh_session_lines(&path).expect("transcript decodes");
+        assert_eq!(lines.len(), 41);
+        assert!(line_is_dsh_header(&lines[0]));
+        assert_eq!(lines[40], body[39]);
+        assert_eq!(
+            read_compressed_dsh_lines(&path).expect("decodes"),
+            Some(lines)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefers_the_plaintext_transcript_and_reads_it_as_lines() {
+        let dir = temp_session_dir("plaintext");
+        let raw = dir.join(DSH_TRANSCRIPT_RAW);
+        fs::write(&raw, format!("{}\n", header_line(0))).expect("raw transcript is writable");
+        write_zstd_frames(&dir.join(DSH_TRANSCRIPT_ZSTD), &[&[header_line(0)]]);
+        // 两种编码可以同时存在(改过 compression 的 home),明文优先。
+        let path = dsh_transcript_in(&dir).expect("transcript is found");
+        assert!(path.ends_with(DSH_TRANSCRIPT_RAW));
+        assert_eq!(read_dsh_session_lines(&path).unwrap().len(), 1);
+        // 明文不走解压分支,调用方据此回落到按字节分页的读取。
+        assert_eq!(read_compressed_dsh_lines(&path).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reports_no_transcript_before_the_first_append() {
+        let dir = temp_session_dir("empty");
+        assert_eq!(dsh_transcript_in(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

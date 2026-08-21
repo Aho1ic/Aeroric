@@ -1,10 +1,13 @@
 //! 内建 DeepSeek Harness(dsh)的托管 home(`DSH_HOME`)管理。
 //!
 //! Aeroric 不触碰用户自己的 `~/.dsh`,而是托管 `~/.aeroric/agent-homes/dsh`:
-//! - `settings.yaml` 与 home 层 `cordis.patch.yml`(用户可编辑)按需初始化,初始化后不再覆写;
+//! - `settings.yaml` 按需初始化,初始化后不再覆写;
 //! - Aeroric 受管的 patch 层单独放在 `aeroric.patch.yml`,启动 dsh 时以 `--patch` 注入
 //!   (dsh 的 `--patch` 覆盖层应用在 bundle/profile/home 层之后),固定两件事:
 //!   会话持久化为明文 JSONL 且不打包 chunk 行(供 Aeroric 直接解析),遥测行禁用;
+//! - home 层 `cordis.patch.yml` 归用户,但里面留一个标记界定的受管区块:`dsh web`
+//!   拒收父进程的 `--patch`,Web 会话只认 home 层,持久化设置必须从这里下去。
+//!   区块外的用户条目原样保留,且排在区块之后(后写覆盖前面的),用户改得回来;
 //! - 受管文件首行带 `# AERORIC_DSH_PATCH_VERSION=N` 标记,内容版本升级时整体重写,
 //!   与 `agent_scripts.rs` 的 wrapper 版本标记机制同型,不触碰用户自有文件。
 
@@ -14,6 +17,11 @@ use std::path::{Path, PathBuf};
 /// 受管 patch 内容版本;修改 `managed_patch_content` 后必须递增。
 const MANAGED_PATCH_VERSION: u32 = 1;
 const MANAGED_PATCH_MARKER_PREFIX: &str = "# AERORIC_DSH_PATCH_VERSION=";
+
+/// home 层受管区块的内容版本;修改 `home_patch_block` 后必须递增。
+const HOME_PATCH_BLOCK_VERSION: u32 = 1;
+const HOME_PATCH_BEGIN: &str = "# >>> AERORIC MANAGED BLOCK";
+const HOME_PATCH_END: &str = "# <<< AERORIC MANAGED BLOCK";
 pub(crate) const MANAGED_PATCH_FILE_NAME: &str = "aeroric.patch.yml";
 pub(crate) const PLUGINS_PATCH_FILE_NAME: &str = "aeroric.plugins.patch.yml";
 
@@ -302,6 +310,99 @@ fn managed_patch_content(sessions_root: &Path) -> String {
     )
 }
 
+/// home 层 `cordis.patch.yml` 里的受管区块。
+///
+/// `dsh web` 会拒绝父进程传进来的 `--patch`,所以 `aeroric.patch.yml` 那一层
+/// 只对 PTY 会话生效,Web 会话完全看不到——会话持久化因此仍按插件默认的 zstd
+/// 落盘。要让 Web 会话也听话,唯一能到达它的就是 home 层这个文件。
+///
+/// `config` 是整体替换(`applyEntryPatches` 对每个 key 做浅赋值),所以 `root`
+/// 必须一起重述,漏掉它插件会因为缺少必填项直接起不来。
+fn home_patch_block(sessions_root: &Path) -> String {
+    format!(
+        "{HOME_PATCH_BEGIN} v{HOME_PATCH_BLOCK_VERSION} >>>\n\
+         # Managed by Aeroric — regenerated automatically; do not edit inside this block.\n\
+         # 由 Aeroric 维护,请勿修改本区块;自定义条目写在区块外面即可(后写的覆盖前面的)。\n\
+         - id: session-persistence-jsonl\n\
+         \x20 config:\n\
+         \x20   root: {root}\n\
+         \x20   compression: none\n\
+         \x20   packChunks: false\n\
+         {HOME_PATCH_END} v{HOME_PATCH_BLOCK_VERSION} <<<\n",
+        root = yaml_quote(sessions_root.to_string_lossy().as_ref()),
+    )
+}
+
+/// 摘掉任意版本的受管区块,返回用户自己那部分。
+///
+/// 起止标记都按前缀匹配,旧版本区块一样会被摘干净;缺了结束标记就一路吃到
+/// 文件尾——宁可少留几行用户内容,也不能把半个区块留在文件里。
+fn strip_home_patch_block(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut inside = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !inside && trimmed.starts_with(HOME_PATCH_BEGIN) {
+            inside = true;
+            continue;
+        }
+        if inside {
+            if trimmed.starts_with(HOME_PATCH_END) {
+                inside = false;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// 用户那部分是不是"什么条目都没有"。
+///
+/// 初始模板写的是流式空序列 `[]`,它和后面的块式条目拼不到一起,得整行丢掉;
+/// 注释和空行则原样留着。
+fn home_patch_user_entries(rest: &str) -> Option<String> {
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(rest).ok()?;
+    let empty = match &parsed {
+        serde_yaml_ng::Value::Null => true,
+        serde_yaml_ng::Value::Sequence(items) => items.is_empty(),
+        // 不是序列的内容不认识,交回原文由调用方去校验合成结果。
+        _ => false,
+    };
+    if !empty {
+        return Some(rest.to_string());
+    }
+    let comments: String = rest
+        .lines()
+        .filter(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
+        .fold(String::new(), |mut acc, line| {
+            acc.push_str(line);
+            acc.push('\n');
+            acc
+        });
+    Some(comments)
+}
+
+/// 合成 home 层 patch 全文:受管区块在前,用户条目在后。
+///
+/// 顺序是有意的——同一个文件里后写的条目覆盖前面的,所以用户想改回压缩格式
+/// 随时能改(读取侧两种编码都认)。返回 `None` 表示合成结果不是合法的 patch
+/// 序列,调用方应当原样保留用户文件。
+fn compose_home_patch(existing: &str, sessions_root: &Path) -> Option<String> {
+    let rest = strip_home_patch_block(existing);
+    let user = home_patch_user_entries(&rest)?;
+    let mut composed = home_patch_block(sessions_root);
+    let user = user.trim_end();
+    if !user.is_empty() {
+        composed.push_str(user);
+        composed.push('\n');
+    }
+    // 写盘前校验:用户可能留了流式序列或缩进异常,拼出来未必还是合法序列。
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&composed).ok()?;
+    matches!(parsed, serde_yaml_ng::Value::Sequence(_)).then_some(composed)
+}
+
 fn managed_patch_marker_version(content: &str) -> Option<u32> {
     content
         .lines()
@@ -331,12 +432,22 @@ pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
     }
 
     let user_patch = home.join("cordis.patch.yml");
-    if !user_patch.exists() {
-        crate::storage::atomic_write_private(&user_patch, USER_PATCH_TEMPLATE)
-            .map_err(|error| format!("Failed to write dsh cordis.patch.yml: {error}"))?;
-    } else {
-        crate::storage::ensure_private_file_permissions(&user_patch)
-            .map_err(|error| format!("Failed to secure dsh cordis.patch.yml: {error}"))?;
+    let existing = fs::read_to_string(&user_patch).unwrap_or_else(|_| USER_PATCH_TEMPLATE.into());
+    match compose_home_patch(&existing, &sessions_root) {
+        Some(composed) if composed != existing => {
+            crate::storage::atomic_write_private(&user_patch, &composed)
+                .map_err(|error| format!("Failed to write dsh cordis.patch.yml: {error}"))?;
+        }
+        // 合成结果没变,或者用户文件解析不出来:都不动它,只把权限收紧。
+        _ => {
+            if user_patch.exists() {
+                crate::storage::ensure_private_file_permissions(&user_patch)
+                    .map_err(|error| format!("Failed to secure dsh cordis.patch.yml: {error}"))?;
+            } else {
+                crate::storage::atomic_write_private(&user_patch, USER_PATCH_TEMPLATE)
+                    .map_err(|error| format!("Failed to write dsh cordis.patch.yml: {error}"))?;
+            }
+        }
     }
 
     let managed = home.join(MANAGED_PATCH_FILE_NAME);
@@ -400,6 +511,88 @@ mod tests {
         assert!(fs::read_to_string(home.join("cordis.patch.yml"))
             .unwrap()
             .contains("tool-web"));
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn writes_the_home_patch_block_that_dsh_web_can_actually_see() {
+        let home = temp_home("home-block");
+        ensure_dsh_home_at(&home).unwrap();
+        let patch = fs::read_to_string(home.join("cordis.patch.yml")).unwrap();
+        // `dsh web` 拒收 --patch,持久化设置只能从 home 层下去。
+        assert!(patch.contains(HOME_PATCH_BEGIN));
+        assert!(patch.contains(HOME_PATCH_END));
+        assert!(patch.contains("compression: none"));
+        assert!(patch.contains("packChunks: false"));
+        // config 是整体替换,root 必须一起重述。
+        assert!(patch.contains("root: "));
+        assert!(!patch.contains("[]"));
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&patch).unwrap();
+        assert_eq!(parsed.as_sequence().map(Vec::len), Some(1));
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn keeps_home_patch_block_single_and_preserves_user_entries() {
+        let home = temp_home("home-merge");
+        ensure_dsh_home_at(&home).unwrap();
+        let patch_path = home.join("cordis.patch.yml");
+        let first = fs::read_to_string(&patch_path).unwrap();
+        // 重复初始化不追加第二个区块。
+        ensure_dsh_home_at(&home).unwrap();
+        assert_eq!(fs::read_to_string(&patch_path).unwrap(), first);
+
+        fs::write(
+            &patch_path,
+            format!("{first}- id: tool-web\n  disabled: true\n"),
+        )
+        .unwrap();
+        ensure_dsh_home_at(&home).unwrap();
+        let merged = fs::read_to_string(&patch_path).unwrap();
+        assert_eq!(merged.matches(HOME_PATCH_BEGIN).count(), 1);
+        assert!(merged.contains("tool-web"));
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&merged).unwrap();
+        let items = parsed.as_sequence().expect("patch is a sequence");
+        assert_eq!(items.len(), 2);
+        // 用户条目排在受管区块之后,后写的覆盖前面的。
+        assert_eq!(items[1]["id"].as_str(), Some("tool-web"));
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn replaces_a_stale_home_patch_block_version() {
+        let home = temp_home("home-old");
+        ensure_dsh_home_at(&home).unwrap();
+        let patch_path = home.join("cordis.patch.yml");
+        fs::write(
+            &patch_path,
+            "# >>> AERORIC MANAGED BLOCK v0 >>>\n- id: outdated\n\
+             # <<< AERORIC MANAGED BLOCK v0 <<<\n- id: tool-web\n  disabled: true\n",
+        )
+        .unwrap();
+        ensure_dsh_home_at(&home).unwrap();
+        let merged = fs::read_to_string(&patch_path).unwrap();
+        assert_eq!(merged.matches(HOME_PATCH_BEGIN).count(), 1);
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&merged).unwrap();
+        let items = parsed.as_sequence().expect("patch is a sequence");
+        let ids: Vec<_> = items
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert_eq!(ids, vec!["session-persistence-jsonl", "tool-web"]);
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn leaves_an_unparsable_home_patch_alone() {
+        let home = temp_home("home-broken");
+        ensure_dsh_home_at(&home).unwrap();
+        let patch_path = home.join("cordis.patch.yml");
+        let broken = "- id: tool-web\n   bad: [indent\n";
+        fs::write(&patch_path, broken).unwrap();
+        // 用户文件解析不出来时宁可不生效,也不能把它覆盖掉。
+        ensure_dsh_home_at(&home).unwrap();
+        assert_eq!(fs::read_to_string(&patch_path).unwrap(), broken);
         cleanup_temp_home(&home);
     }
 

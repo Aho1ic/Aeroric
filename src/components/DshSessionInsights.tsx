@@ -12,14 +12,16 @@ import { useDshTrajectory } from "./DshTrajectoryHost";
 
 export function DshSessionInsights() {
   const { t } = useI18n();
-  const { history, setOpen } = useDshTrajectory();
+  const { history, openAt } = useDshTrajectory();
   const count = history.features.events.length;
   return (
     <button
       type="button"
       className="dsh-insights-trigger"
       title={t("dsh.insights.open")}
-      onClick={() => setOpen(true)}
+      // The tab now outlives a close, so this trigger names the view it opens
+      // rather than reopening whichever one was last looked at.
+      onClick={() => openAt("trajectory")}
     >
       <Activity size={13} />
       <span>{t("dsh.insights.open")}</span>

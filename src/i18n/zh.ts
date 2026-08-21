@@ -2643,6 +2643,7 @@ export const zh: Record<string, string> = {
   "dsh.questionCancel": "取消",
   "dsh.questionSubmitting": "提交中...",
   "dsh.composer.placeholder": "向 DeepSeek Harness 会话发送消息",
+  "dsh.composer.mode": "提交方式",
   "dsh.composer.queue": "排队到下一轮",
   "dsh.composer.queueLabel": "排队",
   "dsh.composer.steer": "引导当前轮次",
@@ -2666,7 +2667,6 @@ export const zh: Record<string, string> = {
   // DSH 高级会话视图
   "dsh.insights.open": "轨迹",
   "dsh.insights.title": "DeepSeek Harness 轨迹",
-  "dsh.insights.views": "轨迹视图",
   "dsh.insights.trajectory": "轨迹",
   "dsh.insights.stats": "统计",
   "dsh.insights.files": "产物",

@@ -120,6 +120,7 @@ export function RunningView({
   monoFontFamily,
   agentOptions,
   liveBars,
+  headerActions,
   dshTrajectory,
 }: {
   task: Task;
@@ -161,6 +162,12 @@ export function RunningView({
   monoFontFamily: FontFamily;
   agentOptions?: AgentOption[];
   liveBars?: ReactNode;
+  /**
+   * Session-scoped actions pinned to the end of the meta row. They describe the
+   * same session as the badge beside them, and folding them in there is what
+   * keeps them from costing the terminal a strip of its own.
+   */
+  headerActions?: ReactNode;
   /** Present only for a dsh task with a session: enables the trajectory panel. */
   dshTrajectory?: { sessionId: string; live?: DshLiveSessionState };
 }) {
@@ -781,7 +788,7 @@ export function RunningView({
       </div>
       <div
         style={{
-          padding: "4px 20px 12px",
+          padding: "2px 20px 6px",
           borderBottom: "1px solid var(--border-dim)",
           flexShrink: 0,
         }}
@@ -850,6 +857,7 @@ export function RunningView({
                     )}
                   </>
                 ))}
+          {headerActions ?? null}
         </div>
         {task.worktreePath && task.worktreeBranch && task.baseBranch && (
           <div
@@ -916,144 +924,147 @@ export function RunningView({
         )}
       </div>
 
-      {liveBars ?? null}
+      {/* The positioning parent for the trajectory panel. It starts just under
+          the meta row and ends above the composer, so `inset: 0` gives the panel
+          the whole run area without covering the controls that drive it — and
+          without measuring anything. */}
+      <div style={s.runBodyWrap}>
+        {liveBars ?? null}
 
-      {/* Main content: terminal when active, session view when done/failed. */}
-      {isDetached || isInterrupted ? (
-        <div style={s.interruptedSessionWrap}>
-          <div ref={interruptedBannerRef} style={s.interruptedBanner}>
-            <div style={s.interruptedBannerIcon}>
-              <AlertTriangle size={14} strokeWidth={2.1} />
-            </div>
-            <div style={s.interruptedBannerBody}>
-              <div style={s.interruptedBannerTitle}>
-                {t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+        {/* Main content: terminal when active, session view when done/failed. */}
+        {isDetached || isInterrupted ? (
+          <div style={s.interruptedSessionWrap}>
+            <div ref={interruptedBannerRef} style={s.interruptedBanner}>
+              <div style={s.interruptedBannerIcon}>
+                <AlertTriangle size={14} strokeWidth={2.1} />
               </div>
-            </div>
-            <div style={s.interruptedBannerActions}>
-              <button
-                type="button"
-                title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
-                style={{
-                  ...s.interruptedPrimaryBtn,
-                  opacity: resumeAvailable ? 1 : 0.45,
-                  cursor: resumeAvailable ? "pointer" : "not-allowed",
-                }}
-                disabled={!resumeAvailable}
-                onClick={isDetached ? onReconnect : onResume}
-              >
-                <RotateCcw size={12} strokeWidth={2.1} />
-                <span>
-                  {isDetached
-                    ? bannerCompact
-                      ? t("running.reconnect")
-                      : t("running.reconnectTask")
-                    : bannerCompact
-                      ? t("running.resume")
-                      : t("running.resumeTask")}
-                </span>
-              </button>
-              {isInterrupted && onSwitchConfig && (
+              <div style={s.interruptedBannerBody}>
+                <div style={s.interruptedBannerTitle}>
+                  {t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+                </div>
+              </div>
+              <div style={s.interruptedBannerActions}>
                 <button
                   type="button"
-                  style={s.interruptedSecondaryBtn}
-                  onClick={() => setSwitchConfigOpen(true)}
-                  disabled={switchConfigOpen}
-                  title={t("running.switchConfig")}
+                  title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
+                  style={{
+                    ...s.interruptedPrimaryBtn,
+                    opacity: resumeAvailable ? 1 : 0.45,
+                    cursor: resumeAvailable ? "pointer" : "not-allowed",
+                  }}
+                  disabled={!resumeAvailable}
+                  onClick={isDetached ? onReconnect : onResume}
                 >
-                  <Settings2 size={12} strokeWidth={2.1} />
+                  <RotateCcw size={12} strokeWidth={2.1} />
                   <span>
-                    {bannerCompact ? t("running.switchConfigShort") : t("running.switchConfig")}
+                    {isDetached
+                      ? bannerCompact
+                        ? t("running.reconnect")
+                        : t("running.reconnectTask")
+                      : bannerCompact
+                        ? t("running.resume")
+                        : t("running.resumeTask")}
                   </span>
                 </button>
-              )}
-              {isInterrupted && (
-                <button type="button" style={s.interruptedSecondaryBtn} onClick={onMarkDone}>
-                  <CheckCircle2 size={12} strokeWidth={2.1} />
-                  <span>{bannerCompact ? t("status.done") : t("running.markDone")}</span>
+                {isInterrupted && onSwitchConfig && (
+                  <button
+                    type="button"
+                    style={s.interruptedSecondaryBtn}
+                    onClick={() => setSwitchConfigOpen(true)}
+                    disabled={switchConfigOpen}
+                    title={t("running.switchConfig")}
+                  >
+                    <Settings2 size={12} strokeWidth={2.1} />
+                    <span>
+                      {bannerCompact ? t("running.switchConfigShort") : t("running.switchConfig")}
+                    </span>
+                  </button>
+                )}
+                {isInterrupted && (
+                  <button type="button" style={s.interruptedSecondaryBtn} onClick={onMarkDone}>
+                    <CheckCircle2 size={12} strokeWidth={2.1} />
+                    <span>{bannerCompact ? t("status.done") : t("running.markDone")}</span>
+                  </button>
+                )}
+                <button type="button" style={s.interruptedDangerBtn} onClick={onCancel}>
+                  <X size={12} strokeWidth={2.1} />
+                  <span>{bannerCompact ? t("running.cancel") : t("running.cancelTask")}</span>
                 </button>
-              )}
-              <button type="button" style={s.interruptedDangerBtn} onClick={onCancel}>
-                <X size={12} strokeWidth={2.1} />
-                <span>{bannerCompact ? t("running.cancel") : t("running.cancelTask")}</span>
-              </button>
+              </div>
+            </div>
+            {sessionPath ? (
+              <SessionView
+                key={sessionPath}
+                sessionPath={sessionPath}
+                projectPath={projectPath}
+                isCodex={sessionOwner.codexLike}
+                family={sessionOwner.family}
+                fallback={terminalHistoryFallback}
+                onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
+              />
+            ) : (
+              <div style={s.interruptedNoSessionPane}>
+                {t(isDetached ? "running.detachedNoSession" : "running.interruptedNoSession")}
+              </div>
+            )}
+          </div>
+        ) : task.status === "done" && !sessionPath && sessionRecovery !== "failed" ? (
+          <div className="terminal-record-pane" style={s.interruptedNoSessionPane}>
+            {t("session.loading")}
+          </div>
+        ) : isActive || !sessionPath ? (
+          <div style={{ ...s.terminalContainer, display: "flex", flexDirection: "column" }}>
+            {!isActive && !sessionPath && (
+              <div
+                role="alert"
+                style={{
+                  flexShrink: 0,
+                  padding: "8px 14px",
+                  borderBottom: "1px solid var(--border-dim)",
+                  background: "color-mix(in srgb, var(--warning) 10%, var(--bg-panel))",
+                  color: "var(--text-secondary)",
+                  fontSize: 12,
+                }}
+              >
+                {t("session.terminalFallback", {
+                  error: sessionRecoveryError ?? t("session.noMessages"),
+                })}
+              </div>
+            )}
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <TerminalView
+                key={terminalViewKey}
+                onInput={isDshSession ? () => {} : onInput}
+                onResize={onResize}
+                onRegisterTerminal={onRegisterTerminal}
+                onReady={onTerminalReady}
+                onSnapshot={onSnapshot}
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                monoFontFamily={monoFontFamily}
+                isActive={visible}
+                initialData={terminalInitialData}
+                initialSnapshot={terminalInitialSnapshot}
+                rawReplayData={restoreState.rawReplayData}
+                highlightCursorLine
+                dshVariant={sessionOwner.family === "dsh"}
+              />
             </div>
           </div>
-          {sessionPath ? (
-            <SessionView
-              key={sessionPath}
-              sessionPath={sessionPath}
-              projectPath={projectPath}
-              isCodex={sessionOwner.codexLike}
-              family={sessionOwner.family}
-              fallback={terminalHistoryFallback}
-              onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
-            />
-          ) : (
-            <div style={s.interruptedNoSessionPane}>
-              {t(isDetached ? "running.detachedNoSession" : "running.interruptedNoSession")}
-            </div>
-          )}
-        </div>
-      ) : task.status === "done" && !sessionPath && sessionRecovery !== "failed" ? (
-        <div className="terminal-record-pane" style={s.interruptedNoSessionPane}>
-          {t("session.loading")}
-        </div>
-      ) : isActive || !sessionPath ? (
-        <div style={{ ...s.terminalContainer, display: "flex", flexDirection: "column" }}>
-          {!isActive && !sessionPath && (
-            <div
-              role="alert"
-              style={{
-                flexShrink: 0,
-                padding: "8px 14px",
-                borderBottom: "1px solid var(--border-dim)",
-                background: "color-mix(in srgb, var(--warning) 10%, var(--bg-panel))",
-                color: "var(--text-secondary)",
-                fontSize: 12,
-              }}
-            >
-              {t("session.terminalFallback", {
-                error: sessionRecoveryError ?? t("session.noMessages"),
-              })}
-            </div>
-          )}
-          {/* The positioning parent for the trajectory panel: this box is the
-              terminal's box, so `inset: 0` sizes the panel to the terminal
-              without measuring anything. */}
-          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-            <TerminalView
-              key={terminalViewKey}
-              onInput={isDshSession ? () => {} : onInput}
-              onResize={onResize}
-              onRegisterTerminal={onRegisterTerminal}
-              onReady={onTerminalReady}
-              onSnapshot={onSnapshot}
-              themeVariant={themeVariant}
-              terminalFontSize={terminalFontSize}
-              monoFontFamily={monoFontFamily}
-              isActive={visible}
-              initialData={terminalInitialData}
-              initialSnapshot={terminalInitialSnapshot}
-              rawReplayData={restoreState.rawReplayData}
-              highlightCursorLine
-              dshVariant={sessionOwner.family === "dsh"}
-            />
-            {dshTrajectory && <DshTrajectoryOverlay />}
-          </div>
-        </div>
-      ) : (
-        <SessionView
-          key={sessionPath}
-          sessionPath={sessionPath}
-          projectPath={projectPath}
-          isCodex={sessionOwner.codexLike}
-          sessionId={resumeSessionId}
-          family={sessionOwner.family}
-          fallback={terminalHistoryFallback}
-          onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
-        />
-      )}
+        ) : (
+          <SessionView
+            key={sessionPath}
+            sessionPath={sessionPath}
+            projectPath={projectPath}
+            isCodex={sessionOwner.codexLike}
+            sessionId={resumeSessionId}
+            family={sessionOwner.family}
+            fallback={terminalHistoryFallback}
+            onLoadFailed={() => handleSessionLoadFailed(sessionPath)}
+          />
+        )}
+        {dshTrajectory && <DshTrajectoryOverlay />}
+      </div>
 
       {isDshSession && (
         <DshComposer

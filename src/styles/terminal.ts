@@ -103,6 +103,19 @@ export const terminal = {
     cursor: "pointer",
     flexShrink: 0,
   },
+  /**
+   * The run area under the meta row: live bars plus the terminal or the session
+   * view. `position: relative` lives here so the dsh trajectory panel can cover
+   * the whole area at `inset: 0` without covering the meta row's own controls or
+   * the composer.
+   */
+  runBodyWrap: {
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    position: "relative" as const,
+  },
   terminalContainer: { flex: 1, overflow: "hidden" as const, padding: "14px 16px 16px" },
   interruptedSessionWrap: {
     flex: 1,

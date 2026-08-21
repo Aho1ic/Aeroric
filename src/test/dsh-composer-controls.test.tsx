@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { I18nProvider } from "../i18n";
 import { ToastProvider } from "../components/Toast";
@@ -26,44 +27,35 @@ describe("DSH composer controls", () => {
     invokeMock.mockReset();
   });
 
-  it("labels every control and draws an icon in it", () => {
-    // `Button` drops children at every `icon-*` size, so the four controls used
-    // to render as blank squares with no tooltip either.
+  it("labels every icon control and draws an icon in it", () => {
+    // `Button` drops children at every `icon-*` size, so these controls used to
+    // render as blank squares with no tooltip either.
     renderComposer();
-    const names = [
-      "Queue for the next turn",
-      "Steer the current turn",
-      "Attach image",
-      "Send message",
-    ];
-    for (const name of names) {
+    for (const name of ["Attach image", "Send message"]) {
       const control = screen.getByRole("button", { name });
       expect(control).toHaveAttribute("title", name);
       expect(control.querySelector("svg")).not.toBeNull();
     }
   });
 
-  it("keeps a readable label on the two submission modes", () => {
-    // The mode decides whether a submission interrupts the running turn, which
-    // no bare glyph conveys, so both keep their text next to the icon.
+  it("offers the two submission modes as one labelled choice", () => {
+    // Queue and steer are exclusive, so they read as one select rather than two
+    // pressed buttons. The label stays visible: whether a submission interrupts
+    // the running turn is not conveyed by a glyph.
     renderComposer();
-    expect(screen.getByRole("button", { name: "Queue for the next turn" })).toHaveTextContent(
-      "Queue",
-    );
-    expect(screen.getByRole("button", { name: "Steer the current turn" })).toHaveTextContent(
-      "Steer",
+    const mode = screen.getByRole("combobox", { name: "Submission mode" });
+    expect(mode).toHaveValue("queue");
+    expect(mode).toHaveAttribute("title", "Queue for the next turn");
+    expect(Array.from(mode.querySelectorAll("option")).map((option) => option.textContent)).toEqual(
+      ["Queue", "Steer"],
     );
   });
 
-  it("marks the active submission mode as pressed", () => {
+  it("switches the submission mode and names the one in effect", async () => {
     renderComposer();
-    expect(screen.getByRole("button", { name: "Queue for the next turn" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Steer the current turn" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    const mode = screen.getByRole("combobox", { name: "Submission mode" });
+    await userEvent.selectOptions(mode, "steer");
+    expect(mode).toHaveValue("steer");
+    expect(mode).toHaveAttribute("title", "Steer the current turn");
   });
 });

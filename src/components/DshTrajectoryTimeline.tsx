@@ -9,7 +9,7 @@
  * the visible window, which is navigation and never changes the selection.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronsDownUp, ChevronsUpDown, Clock, ListTree, Timer, X, ZoomOut } from "lucide-react";
 import { useI18n } from "../i18n";
 import {
@@ -72,6 +72,7 @@ export function DshTrajectoryTimeline({
   onToggleTurns,
   callsCollapsed,
   onToggleCalls,
+  controls,
 }: {
   records: readonly DshTimelineRecord[];
   mode: DshTimelineMode;
@@ -85,6 +86,11 @@ export function DshTrajectoryTimeline({
   onToggleTurns?: () => void;
   callsCollapsed?: boolean;
   onToggleCalls?: () => void;
+  /**
+   * Trailing content for the control row, right-aligned after the span readout.
+   * The ledger's search and filter live here so they cost no row of their own.
+   */
+  controls?: ReactNode;
 }) {
   const { t } = useI18n();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -128,7 +134,14 @@ export function DshTrajectoryTimeline({
     return () => track.removeEventListener("wheel", onWheel);
   }, [minimumWindow, model, view]);
 
-  if (model === null) return null;
+  // Nothing measured yet: the overview has nothing to draw, but the controls
+  // riding in its row belong to the ledger and must survive an empty timeline.
+  if (model === null)
+    return controls === undefined ? null : (
+      <div className="dsh-timeline">
+        <div className="dsh-timeline-controls">{controls}</div>
+      </div>
+    );
 
   const domain = view ?? { start: model.start, end: model.end };
   const span = Math.max(1e-6, domain.end - domain.start);
@@ -223,6 +236,7 @@ export function DshTrajectoryTimeline({
             {t("dsh.timeline.clearFocus")}
           </button>
         )}
+        {controls}
       </div>
       <div className="dsh-timeline-plot">
         <div className="dsh-timeline-labels" aria-hidden="true">

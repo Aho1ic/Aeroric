@@ -2741,6 +2741,7 @@ export const en: Record<string, string> = {
   "dsh.questionCancel": "Cancel",
   "dsh.questionSubmitting": "Submitting...",
   "dsh.composer.placeholder": "Message this DeepSeek Harness session",
+  "dsh.composer.mode": "Submission mode",
   "dsh.composer.queue": "Queue for the next turn",
   "dsh.composer.queueLabel": "Queue",
   "dsh.composer.steer": "Steer the current turn",
@@ -2764,7 +2765,6 @@ export const en: Record<string, string> = {
   // DSH advanced session views
   "dsh.insights.open": "Trajectory",
   "dsh.insights.title": "DeepSeek Harness trajectory",
-  "dsh.insights.views": "Trajectory views",
   "dsh.insights.trajectory": "Trajectory",
   "dsh.insights.stats": "Stats",
   "dsh.insights.files": "Produced files",

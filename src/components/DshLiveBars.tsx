@@ -4,6 +4,7 @@ import type { DshJobView, DshLiveSessionState, DshQueueItem, DshTodoItem } from 
 import { useI18n } from "../i18n";
 import { DshSessionInsights } from "./DshSessionInsights";
 import { DshSessionLogExportButton } from "./DshSessionLogExport";
+import { dshInsightTabs, useDshTrajectory } from "./DshTrajectoryHost";
 import {
   Circle,
   Check,
@@ -26,6 +27,43 @@ import {
  * which consumes the projection/jobs/queue push frames the backend already
  * forwards (no new RPC needed).
  */
+/**
+ * The session-scoped header actions, rendered at the end of the task's meta row.
+ *
+ * Session log / trajectory / the panel's own views all belong to the same
+ * session as the badge they sit next to, and folding them into that row is what
+ * gives the terminal back the strip they used to occupy on their own.
+ */
+export function DshTerminalHeaderActions({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n();
+  const { openAt } = useDshTrajectory();
+  return (
+    <div className="dsh-terminal-header-actions">
+      <DshSessionLogExportButton sessionId={sessionId} />
+      <DshSessionInsights />
+      {/* The trajectory view itself already has the trigger above, so the rest of
+          the panel's tabs open straight into their own view. */}
+      {dshInsightTabs
+        .filter((item) => item.id !== "trajectory")
+        .map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="dsh-view-trigger"
+              title={t(item.labelKey)}
+              onClick={() => openAt(item.id)}
+            >
+              <Icon size={13} />
+              <span>{t(item.labelKey)}</span>
+            </button>
+          );
+        })}
+    </div>
+  );
+}
+
 export function DshLiveBars({
   sessionId,
   live,
@@ -34,13 +72,16 @@ export function DshLiveBars({
   live: DshLiveSessionState | undefined;
 }) {
   const { t } = useI18n();
-  if (!live) return null;
 
   const hasTodo = live?.todo && live.todo.length > 0;
   const hasGoal = live?.goal != null;
   const hasJobs =
     live?.jobs && live.jobs.some((j) => j.status === "running" || j.status === "stopping");
   const hasQueue = live?.queue && live.queue.length > 0;
+  // The header actions moved into the meta row, so with nothing live to show
+  // this strip has no content of its own left: drop it instead of leaving an
+  // empty bordered band above the terminal.
+  if (!hasGoal && !live?.planMode && !hasTodo && !hasJobs && !hasQueue) return null;
 
   return (
     <div
@@ -50,25 +91,13 @@ export function DshLiveBars({
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        padding: "8px 14px",
+        padding: "6px 14px",
         borderBottom: "1px solid var(--border-dim)",
         background: "var(--bg-panel)",
         fontSize: 12,
         color: "var(--text-secondary)",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: 6,
-          minHeight: 22,
-        }}
-      >
-        <DshSessionLogExportButton sessionId={sessionId} />
-        <DshSessionInsights />
-      </div>
       {hasGoal && live?.goal && <GoalRow goal={live.goal} />}
       {live?.planMode && (
         <div

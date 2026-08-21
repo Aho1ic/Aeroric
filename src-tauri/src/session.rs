@@ -219,11 +219,69 @@ fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// transcript 是否应据这次 Codex 工具调用判定"等待用户审批"。
+///
+/// 纯判定,便于测试:hook 已独占审批信号时恒为 false,见
+/// `hooks_own_approval_signal`。
+fn codex_call_suggests_pending_approval(
+    name: &str,
+    arguments: &str,
+    project_path: &Path,
+    hooks_own_approval: bool,
+) -> bool {
+    if hooks_own_approval {
+        return false;
+    }
+    tool_call_requires_confirmation(name, arguments, project_path)
+}
+
+/// transcript 是否应据这条 assistant 行判定"等待用户审批"。
+///
+/// 纯判定,便于测试:hook 已独占审批信号时恒为 false,见
+/// `hooks_own_approval_signal`。
+fn claude_line_suggests_pending_approval(
+    value: &serde_json::Value,
+    hooks_own_approval: bool,
+) -> bool {
+    if hooks_own_approval {
+        return false;
+    }
+    value
+        .get("message")
+        .and_then(|message| message.get("stop_reason"))
+        .and_then(serde_json::Value::as_str)
+        == Some("tool_use")
+}
+
+/// 工具审批信号的归属:hook 链路可信时由 hook 独占,transcript 不再猜。
+///
+/// transcript 里"工具已发起、结果未回"这一个状态同时对应两件完全不同的事:
+/// 等待用户审批,和工具正在跑(build / test / 网络请求)。两者无法区分,所以
+/// 一旦据此上报 `input_required`,每次普通工具调用都会误报——实测一个会话里
+/// 54 次 Bash/Read/Edit 全部命中,慢工具期间界面会整段停在"需要确认",而 agent
+/// 其实正在干活。
+///
+/// hook 链路给的是真信号:Claude 的 `Notification`(带 tool_name)与 Codex 的
+/// `PermissionRequest` 只在审批提示真正出现时触发,且即时。此时 transcript 的
+/// 猜测不但多余,还会反向踩坏 hook:它 emit 的 `input_required` 不带 `approval`
+/// 字段,`remote::events_bridge` 会据此 clear 掉 hook 刚登记的审批,手机端于是
+/// 只剩一张没有按钮的空卡片。
+///
+/// 因此 hook 可信时(`use_hooks` 为真的同一判据)彻底关掉 transcript 的工具审批
+/// 猜测。hook 不可信时保留原行为——那条路径上它是唯一的审批信号来源。
+///
+/// 注:被关掉的只有"工具审批"这一类猜测。agent 显式提问(Codex 的
+/// `request_user_input`、末轮问句)是确定信号,不受影响。
+fn hooks_own_approval_signal(agent: &str) -> bool {
+    crate::hooks::usable_for(agent)
+}
+
 fn watch_codex_session(
     app: AppHandle,
     task_id: String,
     session_path: PathBuf,
     project_path: PathBuf,
+    agent: String,
 ) {
     use notify::{RecursiveMode, Watcher};
 
@@ -240,6 +298,7 @@ fn watch_codex_session(
     let mut waiting_for_user = false;
     let mut pending_confirmation_calls = HashSet::new();
     let mut awaiting_user_reply = false;
+    let hooks_own_approval = hooks_own_approval_signal(&agent);
 
     while is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
@@ -254,6 +313,7 @@ fn watch_codex_session(
                     &mut waiting_for_user,
                     &mut pending_confirmation_calls,
                     &mut awaiting_user_reply,
+                    hooks_own_approval,
                 );
             }
         }
@@ -269,6 +329,7 @@ fn watch_codex_session(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_codex_session_line(
     app: &AppHandle,
     task_id: &str,
@@ -277,6 +338,7 @@ fn process_codex_session_line(
     waiting_for_user: &mut bool,
     pending_confirmation_calls: &mut HashSet<String>,
     awaiting_user_reply: &mut bool,
+    hooks_own_approval: bool,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -304,11 +366,23 @@ fn process_codex_session_line(
                         .unwrap_or("");
 
                     if name == Some("request_user_input") {
+                        // 显式提问,与审批猜测无关,始终生效。
                         *awaiting_user_reply = true;
                     } else if name
-                        .map(|tool| tool_call_requires_confirmation(tool, arguments, project_path))
+                        .map(|tool| {
+                            codex_call_suggests_pending_approval(
+                                tool,
+                                arguments,
+                                project_path,
+                                hooks_own_approval,
+                            )
+                        })
                         .unwrap_or(false)
                     {
+                        // 命令形状猜测:hook 可信时由 `PermissionRequest` 独占,见
+                        // `hooks_own_approval_signal`。这里的猜测不看 permission mode,
+                        // full_access / auto_edit 下根本不会有人被问,却会让工具运行
+                        // 全程停在 input_required。
                         if let Some(call_id) = call_id {
                             pending_confirmation_calls.insert(call_id.to_string());
                         } else {
@@ -627,7 +701,7 @@ fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<Path
     claude_sessions_dir_for_agent_in(&home, agent, project_path)
 }
 
-fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) {
+fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf, agent: String) {
     use notify::{RecursiveMode, Watcher};
 
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
@@ -641,13 +715,20 @@ fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf) 
     let mut offset = 0u64;
     let mut partial = String::new();
     let mut waiting_for_user = false;
+    let hooks_own_approval = hooks_own_approval_signal(&agent);
 
     while is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
             // 手机远程:同批新行解析为结构化消息推送(无在线设备时零成本)
             crate::remote::publish_session_appended(&app, &task_id, &lines, false);
             for line in &lines {
-                process_claude_session_line(&app, &task_id, line, &mut waiting_for_user);
+                process_claude_session_line(
+                    &app,
+                    &task_id,
+                    line,
+                    &mut waiting_for_user,
+                    hooks_own_approval,
+                );
             }
         }
 
@@ -667,6 +748,7 @@ fn process_claude_session_line(
     task_id: &str,
     line: &str,
     waiting_for_user: &mut bool,
+    hooks_own_approval: bool,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -674,13 +756,13 @@ fn process_claude_session_line(
 
     match crate::protocol_decode::string_field(&value, "type") {
         Some("assistant") => {
-            // stop_reason == "tool_use" 是 Claude 暂停等待用户批准或拒绝工具调用的明确信号
-            let stop_reason = value
-                .get("message")
-                .and_then(|m| m.get("stop_reason"))
-                .and_then(serde_json::Value::as_str);
-
-            if stop_reason == Some("tool_use") && !*waiting_for_user {
+            // stop_reason == "tool_use" 只说明"这条消息以工具调用收尾",不说明有人
+            // 被问过:auto_edit / full_access 下,以及 ask 模式里已在 allowlist 的工具,
+            // 都不会有审批提示。hook 可信时改由 `Notification` 独占该信号,见
+            // `hooks_own_approval_signal`。
+            if claude_line_suggests_pending_approval(&value, hooks_own_approval)
+                && !*waiting_for_user
+            {
                 *waiting_for_user = true;
                 emit_active_task_status(app, task_id, "input_required");
             }
@@ -941,6 +1023,9 @@ pub async fn read_session_messages(
     tauri::async_runtime::spawn_blocking(move || {
         let canonical = validate_session_path_for(&session_path, &project_path, family)?;
         if family == crate::app_settings::AgentFamily::Dsh {
+            if let Some(lines) = crate::session_dsh::read_compressed_dsh_lines(&canonical)? {
+                return crate::session_dsh::parse_dsh_session_lines(&lines);
+            }
             let (lines, _) = read_session_tail(&canonical)?;
             return crate::session_dsh::parse_dsh_session_lines(&lines);
         }
@@ -966,6 +1051,24 @@ pub async fn read_session_message_page(
     let family = crate::app_settings::resolve_family_param(family.as_deref(), is_codex);
     tauri::async_runtime::spawn_blocking(move || {
         let canonical = validate_session_path_for(&session_path, &project_path, family)?;
+        if family == crate::app_settings::AgentFamily::Dsh {
+            // 压缩 transcript 没有"字节偏移 ↔ 行"的映射,字节游标无从落点:一次解出
+            // 全部行并宣告没有更早的页。dsh 单会话是百行级(实测 216 行 / 35 KB),
+            // 一次解完的代价可以忽略。明文 transcript 仍走下面的字节游标分页。
+            if let Some(lines) = crate::session_dsh::read_compressed_dsh_lines(&canonical)? {
+                // 首页之后不再重复返回同一份内容,否则前端的分页循环不会停。
+                let messages = if cursor.is_some() {
+                    Vec::new()
+                } else {
+                    crate::session_dsh::parse_dsh_session_lines(&lines)?
+                };
+                return Ok(SessionMessagePage {
+                    messages,
+                    next_cursor: None,
+                    has_more: false,
+                });
+            }
+        }
         let (lines, next_cursor, has_more) =
             read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES)?;
         let messages = if family == crate::app_settings::AgentFamily::Dsh {
@@ -1764,6 +1867,21 @@ pub(crate) fn validate_session_path(
 }
 
 /// family 版校验:dsh 的允许根为托管 DSH_HOME 的 sessions 目录。
+/// 把一个不存在的 dsh transcript 路径换成同目录里真实存在的那个编码。
+///
+/// 路径是在会话注册时定下的,那时候文件还没落地,压缩与否只能按当前配置猜。猜错
+/// 了(tasks.json 里存着 `session.jsonl`,盘上其实是 `session.jsonl.zstd`)读会话
+/// 就只会一直报 "Cannot resolve session path"。两种文件名互为兄弟,父目录不变,
+/// 调用方的根目录归属校验照旧生效。
+fn redirect_dsh_transcript(path: &Path) -> PathBuf {
+    if path.is_file() {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .and_then(crate::session_dsh::dsh_transcript_in)
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 pub(crate) fn validate_session_path_for(
     session_path: &str,
     project_path: &str,
@@ -1773,6 +1891,11 @@ pub(crate) fn validate_session_path_for(
     if !path.is_absolute() {
         return Err("Session path must be absolute".into());
     }
+    let path = if family == crate::app_settings::AgentFamily::Dsh {
+        redirect_dsh_transcript(path)
+    } else {
+        path.to_path_buf()
+    };
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("Cannot resolve session path: {}", e))?;
@@ -2230,12 +2353,16 @@ fn wait_for_session_file(session_id: &str, project_path: &str, is_codex: bool) -
 }
 
 /// 在 Session ID 确认后注册会话信息，并开始监视文件。
+///
+/// `agent` 用于判定 hook 链路是否已独占工具审批信号(见
+/// `hooks_own_approval_signal`),与 `pty.rs` 里 `use_hooks` 同源同判据。
 pub(crate) fn register_and_watch_session(
     app: &AppHandle,
     task_id: &str,
     session_id: &str,
     project_path: &str,
     is_codex: bool,
+    agent: &str,
 ) {
     let path = match wait_for_session_file(session_id, project_path, is_codex) {
         Some(p) => p,
@@ -2280,11 +2407,12 @@ pub(crate) fn register_and_watch_session(
 
     let app_clone = app.clone();
     let tid = task_id.to_string();
+    let agent_owned = agent.to_string();
     if is_codex {
         let pp = PathBuf::from(project_path);
-        thread::spawn(move || watch_codex_session(app_clone, tid, path, pp));
+        thread::spawn(move || watch_codex_session(app_clone, tid, path, pp, agent_owned));
     } else {
-        thread::spawn(move || watch_claude_session(app_clone, tid, path));
+        thread::spawn(move || watch_claude_session(app_clone, tid, path, agent_owned));
     }
 }
 
@@ -2338,6 +2466,7 @@ pub(crate) fn spawn_codex_session_recovery(
     project_path: String,
     prompt: String,
     created_at: i64,
+    agent: String,
 ) {
     thread::spawn(move || {
         // 30 秒覆盖 Codex 启动、trust/review 和首条消息落盘的常见延迟；任务
@@ -2359,6 +2488,7 @@ pub(crate) fn spawn_codex_session_recovery(
                     &recovered.session_id,
                     &project_path,
                     true,
+                    &agent,
                 );
                 return;
             }
@@ -2530,7 +2660,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
 
             attached = true;
             if should_start_watcher {
-                watch_claude_session(app.clone(), task_id.clone(), actual);
+                watch_claude_session(app.clone(), task_id.clone(), actual, agent.clone());
             }
             break;
         }
@@ -2596,7 +2726,7 @@ pub(crate) fn spawn_status_session_watcher(
 
     // ── 原始路径：Codex 或 Claude < 2.1.87 ──
     thread::spawn(move || {
-        run_status_session_watcher(app, task_id, project_path, is_codex, rx);
+        run_status_session_watcher(app, task_id, project_path, agent, is_codex, rx);
     });
 }
 
@@ -2605,6 +2735,7 @@ fn run_status_session_watcher(
     app: AppHandle,
     task_id: String,
     project_path: String,
+    agent: String,
     is_codex: bool,
     rx: mpsc::Receiver<String>,
 ) {
@@ -2678,7 +2809,14 @@ fn run_status_session_watcher(
                 };
 
                 if let Some(sid) = session_id {
-                    register_and_watch_session(&app, &task_id, &sid, &project_path, is_codex);
+                    register_and_watch_session(
+                        &app,
+                        &task_id,
+                        &sid,
+                        &project_path,
+                        is_codex,
+                        &agent,
+                    );
                     // Claude Code 的 /status 以全屏面板形式展示，需发送 ESC 关闭；
                     // Codex 无此面板，无需处理
                     if !is_codex {
@@ -2709,9 +2847,10 @@ pub(crate) fn spawn_resume_session_watcher(
     project_path: String,
     session_id: String,
     is_codex: bool,
+    agent: String,
 ) {
     thread::spawn(move || {
-        register_and_watch_session(&app, &task_id, &session_id, &project_path, is_codex);
+        register_and_watch_session(&app, &task_id, &session_id, &project_path, is_codex, &agent);
     });
 }
 
@@ -3434,6 +3573,56 @@ mod tests {
         assert!(!should_start_status_session_watcher(true, true, false));
     }
 
+    /// hook 可信时,transcript 不得再把"工具已发起、结果未回"当成等待审批。
+    ///
+    /// 回归的是这条链:普通工具调用(Bash/Read/Edit,实测一个会话 54 次)会写出
+    /// `stop_reason=tool_use`,旧实现据此 emit `input_required`,于是工具运行全程
+    /// 界面显示"需要确认"——而 agent 正在干活。且该 emit 不带 `approval` 字段,
+    /// `remote::events_bridge` 会清掉 hook 刚登记的真实审批,手机端只剩空卡片。
+    #[test]
+    fn tool_use_stop_reason_is_not_approval_when_hooks_own_the_signal() {
+        let tool_use_line = serde_json::json!({
+            "type": "assistant",
+            "message": { "stop_reason": "tool_use" }
+        });
+
+        // hook 可信:交给 Notification,transcript 闭嘴。
+        assert!(!claude_line_suggests_pending_approval(&tool_use_line, true));
+        // hook 不可信:保留旧行为,它是该路径下唯一的审批信号。
+        assert!(claude_line_suggests_pending_approval(&tool_use_line, false));
+
+        // 非工具收尾的普通结束,两种情况都不算等待审批。
+        let end_turn_line = serde_json::json!({
+            "type": "assistant",
+            "message": { "stop_reason": "end_turn" }
+        });
+        assert!(!claude_line_suggests_pending_approval(
+            &end_turn_line,
+            false
+        ));
+        assert!(!claude_line_suggests_pending_approval(&end_turn_line, true));
+    }
+
+    /// Codex 侧同理:命令形状猜测在 hook 可信时让位给 `PermissionRequest`。
+    #[test]
+    fn codex_command_shape_guess_defers_to_hook_permission_request() {
+        let project_root = Path::new("/repo");
+        let write_cmd = r#"{"cmd":"cargo test --manifest-path src-tauri/Cargo.toml"}"#;
+
+        assert!(!codex_call_suggests_pending_approval(
+            "exec_command",
+            write_cmd,
+            project_root,
+            true,
+        ));
+        assert!(codex_call_suggests_pending_approval(
+            "exec_command",
+            write_cmd,
+            project_root,
+            false,
+        ));
+    }
+
     #[test]
     fn read_only_command_detection_is_conservative() {
         assert!(looks_like_read_only_command("pwd && rg -n session src"));
@@ -3756,5 +3945,29 @@ mod tests {
         assert!(error.contains("paginated"), "unexpected error: {error}");
         assert!(source.exists(), "the source transcript must stay untouched");
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn redirects_a_dsh_transcript_path_to_the_encoding_on_disk() {
+        let dir = std::env::temp_dir().join("aeroric-dsh-redirect");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("session dir is creatable");
+        let raw = dir.join(crate::session_dsh::DSH_TRANSCRIPT_RAW);
+        let compressed = dir.join(crate::session_dsh::DSH_TRANSCRIPT_ZSTD);
+
+        // 注册时存的是明文名,盘上其实是压缩产物:必须改指到压缩文件,否则
+        // canonicalize 直接失败,会话详情只能退回终端兜底。
+        fs::write(&compressed, b"\x28\xb5\x2f\xfd").expect("transcript is writable");
+        assert_eq!(redirect_dsh_transcript(&raw), compressed);
+
+        // 明文存在就用明文,不改指。
+        fs::write(&raw, "{}\n").expect("transcript is writable");
+        assert_eq!(redirect_dsh_transcript(&raw), raw);
+
+        // 两个都没有:原样返回,由调用方报"路径解析不了"。
+        fs::remove_file(&raw).expect("raw transcript is removable");
+        fs::remove_file(&compressed).expect("compressed transcript is removable");
+        assert_eq!(redirect_dsh_transcript(&raw), raw);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
