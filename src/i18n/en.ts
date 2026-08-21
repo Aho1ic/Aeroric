@@ -2574,8 +2574,9 @@ export const en: Record<string, string> = {
   "usageStats.failed": "Failed to load statistics: {error}",
   "usageStats.empty": "No local usage was found for this range.",
   "usageStats.costNote":
-    "Cost is an API list-price estimate. Subscriptions, promotions, long-context pricing, and custom providers may differ.",
-  "usageStats.unpricedNote": "{count} requests use models without a known price and are excluded.",
+    "Cost is an API list-price estimate covering every model and agent. Subscriptions, promotions, long-context pricing, and custom providers may differ.",
+  "usageStats.estimatedNote":
+    "{count} requests use models without a published price; their cost is inferred from a comparable tier.",
   "timeline.title": "Timeline",
   "timeline.subtitle": "What you've been working on across all projects · Last 7 days",
   "timeline.today": "Today",

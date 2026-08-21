@@ -142,10 +142,12 @@ describe("agent options", () => {
     );
   });
 
-  it("constrains the agent menu to the viewport and scrolls long config lists", () => {
+  it("grows the agent menu to the longest config name without exceeding the viewport", () => {
     expect(composeAgentMenuContentStyle()).toEqual(
       expect.objectContaining({
+        width: "max-content",
         minWidth: "min(520px, calc(100vw - 16px))",
+        maxWidth: "calc(100vw - 16px)",
         maxHeight: "min(320px, var(--radix-select-content-available-height))",
         overflow: "hidden",
       }),
@@ -153,7 +155,8 @@ describe("agent options", () => {
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
         display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr) 1px minmax(0, 1fr)",
+        gridTemplateColumns:
+          "minmax(0, max-content) 1px minmax(0, max-content) 1px minmax(0, max-content)",
         overflow: "hidden",
       }),
     );

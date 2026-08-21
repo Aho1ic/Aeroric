@@ -29,6 +29,8 @@ export interface PairingOffer {
   hostId?: string;
   /** v2 起必填:E2EE 握手的信任根 */
   publicKey: string;
+  /** Optional two-phase pairing capability. Missing means the legacy flow. */
+  pairingConfirmationVersion?: 1;
 }
 
 export type TaskStatus =

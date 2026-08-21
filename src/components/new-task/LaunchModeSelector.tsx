@@ -16,7 +16,7 @@ import { useI18n } from "../../i18n";
 import { agentFamily, type AgentOption } from "../../agents";
 import type { ComposeMenu } from "./AgentPermSelector";
 import type { AgentType } from "../../types";
-import { nextComposeMenuState } from "./AgentPermSelector";
+import { MENU_ITEM_ICON_SIZE, nextComposeMenuState } from "./AgentPermSelector";
 import s from "../../styles";
 
 export type LaunchMode = "local" | "worktree" | "webui";
@@ -118,14 +118,21 @@ export function LaunchModeSelector({
     }
   }, [availableModes, launchMode, onSetLaunchMode]);
 
-  function modeIcon(mode: LaunchMode) {
+  function modeIcon(mode: LaunchMode, size: number) {
     if (mode === "local") {
-      return <Laptop size={13} strokeWidth={2} color="var(--accent)" />;
+      return <Laptop size={size} strokeWidth={2} color="var(--accent)" style={s.toolbarBtnIcon} />;
     }
     if (mode === "worktree") {
-      return <GitPullRequestArrow size={13} strokeWidth={2} color="var(--usage-codex)" />;
+      return (
+        <GitPullRequestArrow
+          size={size}
+          strokeWidth={2}
+          color="var(--usage-codex)"
+          style={s.toolbarBtnIcon}
+        />
+      );
     }
-    return <Globe size={13} strokeWidth={2} color="var(--usage-dsh)" />;
+    return <Globe size={size} strokeWidth={2} color="var(--usage-dsh)" style={s.toolbarBtnIcon} />;
   }
 
   function modeLabel(mode: LaunchMode) {
@@ -148,20 +155,24 @@ export function LaunchModeSelector({
         }}
       >
         <Select.Trigger
-          style={controlButtonStyle}
+          style={{
+            ...controlButtonStyle,
+            ...(compact ? null : { flex: "0 1 auto", minWidth: 0, maxWidth: 128 }),
+          }}
           aria-label={t("newTask.launchMode")}
           title={modeLabel(launchMode)}
+          data-launch-mode-trigger
         >
-          {modeIcon(launchMode)}
-          {!compact && <span>{modeLabel(launchMode)}</span>}
+          {modeIcon(launchMode, 14)}
+          {!compact && <span style={s.toolbarBtnLabel}>{modeLabel(launchMode)}</span>}
           {!compact && (
-            <Select.Icon>
+            <Select.Icon style={s.toolbarBtnIcon}>
               <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
             </Select.Icon>
           )}
         </Select.Trigger>
         <Select.Portal>
-          <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+          <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContentCompact}>
             <Select.Viewport>
               {availableModes.map((mode) => (
                 <Select.Item
@@ -173,7 +184,7 @@ export function LaunchModeSelector({
                   onMouseEnter={(e) => setMenuItemHover(e.currentTarget, true)}
                   onMouseLeave={(e) => setMenuItemHover(e.currentTarget, false)}
                 >
-                  {modeIcon(mode)}
+                  {modeIcon(mode, MENU_ITEM_ICON_SIZE)}
                   <Select.ItemText>{modeLabel(mode)}</Select.ItemText>
                 </Select.Item>
               ))}
@@ -206,20 +217,17 @@ export function LaunchModeSelector({
             aria-label={t("newTask.baseBranch")}
             title={baseBranch || t("newTask.selectBaseBranch")}
           >
-            <GitBranch size={13} strokeWidth={2} color="var(--success)" />
+            <GitBranch size={14} strokeWidth={2} color="var(--success)" style={s.toolbarBtnIcon} />
             {!compact && (
-              <span
-                style={{
-                  minWidth: 0,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {baseBranch || t("newTask.selectBaseBranch")}
-              </span>
+              <span style={s.toolbarBtnLabel}>{baseBranch || t("newTask.selectBaseBranch")}</span>
             )}
-            {!compact && <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />}
+            {!compact && (
+              <ChevronDown
+                size={12}
+                strokeWidth={2.5}
+                style={{ ...s.toolbarBtnIcon, opacity: 0.58 }}
+              />
+            )}
           </button>
         </Popover.Trigger>
         <Popover.Portal>

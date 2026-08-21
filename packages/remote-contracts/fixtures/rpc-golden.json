@@ -49,6 +49,43 @@
       "stats.summary"
     ]
   },
+  "pairingConfirmation": {
+    "offer": {
+      "v": 2,
+      "endpoints": ["ws://192.168.1.10:6790"],
+      "invite": "invite-token",
+      "hostName": "Aeroric",
+      "hostId": "host-1",
+      "publicKey": "public-key",
+      "pairingConfirmationVersion": 1
+    },
+    "authParams": {
+      "invite": "invite-token",
+      "deviceName": "Phone",
+      "pairingConfirmationVersion": 1
+    },
+    "provisionalResult": {
+      "deviceId": "device-1",
+      "deviceToken": "device-token",
+      "pairingId": "pairing-1",
+      "pairingConfirmationVersion": 1
+    },
+    "confirmRequest": {
+      "v": 2,
+      "id": 2,
+      "method": "pairing.confirm",
+      "params": {
+        "pairingId": "pairing-1",
+        "pairingConfirmationVersion": 1
+      }
+    },
+    "confirmAck": {
+      "v": 2,
+      "id": 2,
+      "ok": true,
+      "result": { "confirmed": true }
+    }
+  },
   "projectProjection": {
     "id": "project-1",
     "name": "Aeroric",

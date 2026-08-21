@@ -1,3 +1,4 @@
+import golden from "@aeroric/remote-contracts/fixtures";
 import { describe, expect, it } from "vitest";
 import { extractPairingCode, parsePairingOffer } from "./pairing-offer";
 
@@ -44,6 +45,20 @@ describe("parsePairingOffer", () => {
     expect(offer.hostName).toBe("我的 Mac");
     expect(offer.hostId).toBe("stable-host-id");
     expect(offer.publicKey).toBe("static-public-key");
+  });
+
+  it("loads the optional confirmation capability from the shared fixture", () => {
+    const offer = parsePairingOffer(encodeOffer(golden.pairingConfirmation.offer));
+
+    expect(offer.pairingConfirmationVersion).toBe(1);
+  });
+
+  it("ignores an unknown future confirmation version and keeps legacy pairing", () => {
+    const offer = parsePairingOffer(
+      encodeOffer({ ...VALID_OFFER, pairingConfirmationVersion: 99 }),
+    );
+
+    expect(offer.pairingConfirmationVersion).toBeUndefined();
   });
 
   it("rejects unsupported version", () => {

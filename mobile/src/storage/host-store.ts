@@ -8,13 +8,34 @@ import * as SecureStore from "expo-secure-store";
 import type { HostIdentity, PairedHost } from "../types";
 
 const STORE_KEY = "aeroric.hosts.v1";
+const PENDING_PAIRING_KEY = "aeroric.hosts.pending-pairing.v1";
 
 export interface HostStoreState {
   hosts: PairedHost[];
   activeHostId: string | null;
 }
 
-const EMPTY: HostStoreState = { hosts: [], activeHostId: null };
+function emptyHostStore(): HostStoreState {
+  return { hosts: [], activeHostId: null };
+}
+
+export type HostStoreLoadStage = "read" | "parse" | "schema";
+
+/**
+ * Loading is deliberately strict: callers must be able to distinguish an
+ * actually empty key from a value that could not be read or decoded. Otherwise
+ * the next successful write would silently replace credentials we failed to
+ * understand.
+ */
+export class HostStoreLoadError extends Error {
+  readonly stage: HostStoreLoadStage;
+
+  constructor(stage: HostStoreLoadStage, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "HostStoreLoadError";
+    this.stage = stage;
+  }
+}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -46,24 +67,93 @@ export function isPairedHost(value: unknown): value is PairedHost {
   return true;
 }
 
-export async function loadHostStore(): Promise<HostStoreState> {
+function decodeHostStore(raw: string): HostStoreState {
+  let parsed: unknown;
   try {
-    const raw = await SecureStore.getItemAsync(STORE_KEY);
-    if (!raw) return EMPTY;
-    const parsed = JSON.parse(raw) as Partial<HostStoreState>;
-    const hosts = Array.isArray(parsed.hosts) ? parsed.hosts.filter(isPairedHost) : [];
-    const activeHostId =
-      typeof parsed.activeHostId === "string" && hosts.some((h) => h.id === parsed.activeHostId)
-        ? parsed.activeHostId
-        : (hosts[0]?.id ?? null);
-    return { hosts, activeHostId };
-  } catch {
-    return EMPTY;
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new HostStoreLoadError("parse", "Saved hosts contain invalid JSON", { cause: error });
   }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HostStoreLoadError("schema", "Saved hosts have an invalid root value");
+  }
+  const candidate = parsed as { hosts?: unknown; activeHostId?: unknown };
+  if (!Array.isArray(candidate.hosts)) {
+    throw new HostStoreLoadError("schema", "Saved hosts are missing the hosts array");
+  }
+  const invalidIndex = candidate.hosts.findIndex((host) => !isPairedHost(host));
+  if (invalidIndex !== -1) {
+    throw new HostStoreLoadError(
+      "schema",
+      `Saved host at index ${invalidIndex} has an invalid structure`,
+    );
+  }
+  if (
+    candidate.activeHostId !== undefined &&
+    candidate.activeHostId !== null &&
+    typeof candidate.activeHostId !== "string"
+  ) {
+    throw new HostStoreLoadError("schema", "Saved active host id has an invalid structure");
+  }
+
+  const hosts = candidate.hosts as PairedHost[];
+  const activeHostId =
+    typeof candidate.activeHostId === "string" &&
+    hosts.some((host) => host.id === candidate.activeHostId)
+      ? candidate.activeHostId
+      : (hosts[0]?.id ?? null);
+  return { hosts, activeHostId };
+}
+
+async function readSecureValue(key: string, label: string): Promise<string | null> {
+  let raw: string | null;
+  try {
+    raw = await SecureStore.getItemAsync(key);
+  } catch (error) {
+    throw new HostStoreLoadError("read", `${label} could not be read`, { cause: error });
+  }
+  return raw;
+}
+
+export async function loadHostStore(): Promise<HostStoreState> {
+  const raw = await readSecureValue(STORE_KEY, "Saved hosts");
+  if (raw === null) return emptyHostStore();
+  return decodeHostStore(raw);
 }
 
 export async function saveHostStore(state: HostStoreState): Promise<void> {
   await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(state));
+}
+
+/** Stage credentials before asking the desktop to commit its device record. */
+export async function savePendingPairingHost(host: PairedHost): Promise<void> {
+  if (!isPairedHost(host)) {
+    throw new HostStoreLoadError("schema", "Pending pairing host has an invalid structure");
+  }
+  await SecureStore.setItemAsync(PENDING_PAIRING_KEY, JSON.stringify(host));
+}
+
+/** Load credentials left by an ACK-uncertain pairing attempt. */
+export async function loadPendingPairingHost(): Promise<PairedHost | null> {
+  const raw = await readSecureValue(PENDING_PAIRING_KEY, "Pending pairing credentials");
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new HostStoreLoadError("parse", "Pending pairing credentials contain invalid JSON", {
+      cause: error,
+    });
+  }
+  if (!isPairedHost(parsed)) {
+    throw new HostStoreLoadError("schema", "Pending pairing credentials have an invalid structure");
+  }
+  return parsed;
+}
+
+export async function clearPendingPairingHost(): Promise<void> {
+  await SecureStore.deleteItemAsync(PENDING_PAIRING_KEY);
 }
 
 function normalizeEndpoint(endpoint: string): string {

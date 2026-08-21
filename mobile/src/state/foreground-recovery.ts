@@ -17,7 +17,7 @@ export interface AppStateChangeSource {
  * are intentionally ignored here: a delayed duplicate could otherwise restart
  * a healthy but slow dial after its stale-dial threshold.
  */
-export function subscribeForegroundConnectionRecovery(
+export function subscribeForegroundRecovery(
   appState: AppStateChangeSource,
   notifyForeground: () => void,
 ): () => void {
@@ -29,3 +29,6 @@ export function subscribeForegroundConnectionRecovery(
   });
   return () => subscription.remove();
 }
+
+/** Backward-compatible name for the connection provider's existing caller. */
+export const subscribeForegroundConnectionRecovery = subscribeForegroundRecovery;

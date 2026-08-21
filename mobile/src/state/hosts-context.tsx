@@ -6,24 +6,33 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { AppState } from "react-native";
 import { t } from "../i18n";
 import type { HostIdentity, PairedHost } from "../types";
 import {
   addOrReplaceHost,
-  loadHostStore,
+  clearPendingPairingHost,
+  loadPendingPairingHost,
   mergeHostIdentity,
-  saveHostStore,
+  savePendingPairingHost,
   type HostStoreState,
 } from "../storage/host-store";
+import { subscribeForegroundRecovery } from "./foreground-recovery";
+import { HostStoreRepository, type HostStoreRepositorySnapshot } from "./host-store-repository";
 
 interface HostsContextValue {
   ready: boolean;
+  loadError: Error | null;
   hosts: PairedHost[];
   activeHost: PairedHost | null;
+  retryLoad: () => Promise<void>;
+  waitUntilReady: () => Promise<void>;
+  stagePendingPairingHost: (host: PairedHost) => Promise<void>;
+  promotePendingPairingHost: (host: PairedHost) => Promise<void>;
+  discardPendingPairingHost: () => Promise<void>;
   addHost: (host: PairedHost) => Promise<void>;
   removeHost: (hostId: string) => Promise<void>;
   setActiveHost: (hostId: string) => Promise<void>;
@@ -40,37 +49,73 @@ interface HostsContextValue {
 const HostsContext = createContext<HostsContextValue | null>(null);
 
 export function HostsProvider({ children }: { children: ReactNode }) {
-  const [ready, setReady] = useState(false);
-  const [state, setState] = useState<HostStoreState>({ hosts: [], activeHostId: null });
-  const stateRef = useRef(state);
-  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [repository] = useState(() => new HostStoreRepository());
+  const [snapshot, setSnapshot] = useState<HostStoreRepositorySnapshot>(() =>
+    repository.getSnapshot(),
+  );
+  const recoverPendingPairing = useCallback(async () => {
+    const pending = await loadPendingPairingHost();
+    if (!pending) return;
+    await repository.transact((current) => addOrReplaceHost(current, pending));
+    await clearPendingPairingHost();
+  }, [repository]);
 
   useEffect(() => {
-    let cancelled = false;
-    void loadHostStore().then((loaded) => {
-      if (cancelled) return;
-      stateRef.current = loaded;
-      setState(loaded);
-      setReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    const unsubscribe = repository.subscribe(setSnapshot);
+    void repository
+      .initialize()
+      .then(recoverPendingPairing)
+      .catch(() => {
+        // Main-store failures are exposed through `snapshot.loadError`. A
+        // pending-key failure leaves the credential untouched for a later
+        // foreground/startup retry.
+      });
+    return unsubscribe;
+  }, [recoverPendingPairing, repository]);
 
-  const transact = useCallback((update: (current: HostStoreState) => HostStoreState) => {
-    const operation = writeQueueRef.current.then(async () => {
-      const next = update(stateRef.current);
-      // 更新函数原样返回旧引用 = 无变化,跳过一次多余的 SecureStore 写入与重渲染
-      if (next === stateRef.current) return;
-      // SecureStore 成功后才发布 React 内存态，避免 UI 显示无法在重启后恢复的数据。
-      await saveHostStore(next);
-      stateRef.current = next;
-      setState(next);
-    });
-    writeQueueRef.current = operation.catch(() => {});
-    return operation;
-  }, []);
+  useEffect(
+    () =>
+      subscribeForegroundRecovery(AppState, () => {
+        void (async () => {
+          if (repository.getSnapshot().status === "error") {
+            await repository.retryLoad();
+          }
+          await recoverPendingPairing();
+        })().catch(() => {
+          // Keep the latest main-store error visible and any pending
+          // credential untouched; another foreground edge may try again.
+        });
+      }),
+    [recoverPendingPairing, repository],
+  );
+
+  const transact = useCallback(
+    (update: (current: HostStoreState) => HostStoreState) => {
+      return repository.transact(update);
+    },
+    [repository],
+  );
+
+  const retryLoad = useCallback(async () => {
+    await repository.retryLoad();
+    await recoverPendingPairing();
+  }, [recoverPendingPairing, repository]);
+  const waitUntilReady = useCallback(() => repository.waitUntilReady(), [repository]);
+  const stagePendingPairingHost = useCallback(
+    async (host: PairedHost) => {
+      await repository.waitUntilReady();
+      await savePendingPairingHost(host);
+    },
+    [repository],
+  );
+  const promotePendingPairingHost = useCallback(
+    async (host: PairedHost) => {
+      await repository.transact((current) => addOrReplaceHost(current, host));
+      await clearPendingPairingHost();
+    },
+    [repository],
+  );
+  const discardPendingPairingHost = useCallback(() => clearPendingPairingHost(), []);
 
   const addHost = useCallback(
     async (host: PairedHost) => {
@@ -129,9 +174,16 @@ export function HostsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<HostsContextValue>(
     () => ({
-      ready,
-      hosts: state.hosts,
-      activeHost: state.hosts.find((h) => h.id === state.activeHostId) ?? null,
+      ready: snapshot.status === "ready",
+      loadError: snapshot.loadError,
+      hosts: snapshot.state.hosts,
+      activeHost:
+        snapshot.state.hosts.find((host) => host.id === snapshot.state.activeHostId) ?? null,
+      retryLoad,
+      waitUntilReady,
+      stagePendingPairingHost,
+      promotePendingPairingHost,
+      discardPendingPairingHost,
       addHost,
       removeHost,
       setActiveHost,
@@ -140,13 +192,19 @@ export function HostsProvider({ children }: { children: ReactNode }) {
     }),
     [
       addHost,
-      ready,
       reconcileHostIdentity,
       removeHost,
+      retryLoad,
       setActiveHost,
-      state.activeHostId,
-      state.hosts,
+      stagePendingPairingHost,
+      snapshot.loadError,
+      snapshot.state.activeHostId,
+      snapshot.state.hosts,
+      snapshot.status,
       updateHostEndpoints,
+      waitUntilReady,
+      promotePendingPairingHost,
+      discardPendingPairingHost,
     ],
   );
 

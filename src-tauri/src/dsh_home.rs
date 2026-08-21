@@ -12,6 +12,7 @@
 //!   与 `agent_scripts.rs` 的 wrapper 版本标记机制同型,不触碰用户自有文件。
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// 受管 patch 内容版本;修改 `managed_patch_content` 后必须递增。
@@ -413,6 +414,118 @@ fn managed_patch_marker_version(content: &str) -> Option<u32> {
         .ok()
 }
 
+/// 迁移后给旧压缩产物留的备份后缀。
+///
+/// 插件只按精确文件名探测编码(`session.jsonl` / `session.jsonl.zstd`),project
+/// 层的扁平布局检查也只看这两个后缀,所以带 `.bak` 的文件对它完全隐形;Aeroric
+/// 侧 `dsh_transcript_in` 同样只匹配精确名。改名而不删除,迁移永不丢数据。
+const MIGRATED_ZSTD_SUFFIX: &str = ".bak";
+
+/// 把 root 里遗留的 zstd 会话产物对齐到受管的 `compression: none`。
+///
+/// 插件的 `session-persistence-jsonl` 在 load/list/save/delete 之前都会跑一遍
+/// **整个 root** 的编码校验,只要发现一个与当前 `compression` 相反后缀的产物就
+/// 直接抛错("use a separate root or select the matching compression mode")。
+/// Aeroric 的受管 patch 固定要求明文,但 patch 生效之前(或旧版本 web 会话)落
+/// 下的产物仍是 zstd——它们会把这个 home 的 dsh 永久堵死。读取端两种编码都认,
+/// 写入端不认,所以必须在启动前把磁盘对齐。
+///
+/// best-effort:单个会话失败只告警,不让 home 初始化连带失败(否则设置页与任务
+/// 启动会一起挂掉)。迁移后 root 里不再有 `.zstd`,重复调用是纯 readdir 空转。
+fn migrate_sessions_encoding(sessions_root: &Path) {
+    let Ok(projects) = fs::read_dir(sessions_root) else {
+        return;
+    };
+    for project in projects.flatten() {
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(sessions) = fs::read_dir(project.path()) else {
+            continue;
+        };
+        for session in sessions.flatten() {
+            if !session.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            if let Err(error) = migrate_session_dir(&session.path()) {
+                eprintln!(
+                    "dsh session encoding migration failed for {}: {error}",
+                    session.path().display()
+                );
+            }
+        }
+    }
+}
+
+/// 单个会话目录的编码迁移。
+///
+/// 明文已存在时不覆盖(与 `dsh_transcript_in` 的"明文优先"一致),只把压缩产物
+/// 移开。解压失败(产物损坏/截断)时同样移开:留着它会让整个 home 起不来,而单
+/// 个坏会话本来也读不出内容,备份文件仍在磁盘上可供事后取证。
+fn migrate_session_dir(session_dir: &Path) -> Result<(), String> {
+    let compressed = session_dir.join(crate::session_dsh::DSH_TRANSCRIPT_ZSTD);
+    if !compressed.is_file() {
+        return Ok(());
+    }
+    let raw = session_dir.join(crate::session_dsh::DSH_TRANSCRIPT_RAW);
+    let decoded = if raw.exists() {
+        None
+    } else {
+        match decode_zstd_transcript(&compressed) {
+            Ok(text) => Some(text),
+            Err(error) => {
+                eprintln!(
+                    "dsh transcript {} could not be decompressed ({error}); moving it aside",
+                    compressed.display()
+                );
+                None
+            }
+        }
+    };
+    if let Some(text) = decoded {
+        crate::storage::atomic_write_private(&raw, &text)
+            .map_err(|error| format!("failed to write {}: {error}", raw.display()))?;
+    }
+    let backup = backup_path_for(&compressed);
+    fs::rename(&compressed, &backup)
+        .map_err(|error| format!("failed to archive {}: {error}", compressed.display()))
+}
+
+/// 解出压缩 transcript 的全文。
+///
+/// 物理格式是"多个独立 zstd frame 串接",`Decoder` 默认一路串到 EOF,正好对上
+/// (加 `single_frame()` 只能拿到 header 帧),与 `session_dsh` 的读法同源。
+fn decode_zstd_transcript(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut text = String::new();
+    zstd::stream::read::Decoder::new(file)
+        .map_err(|error| error.to_string())?
+        .read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    Ok(text)
+}
+
+/// 备份路径;`.bak` 已被占用时追加序号,不覆盖上一次迁移留下的存档。
+fn backup_path_for(compressed: &Path) -> PathBuf {
+    let base = compressed.with_file_name(format!(
+        "{}{MIGRATED_ZSTD_SUFFIX}",
+        crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+    ));
+    if !base.exists() {
+        return base;
+    }
+    for index in 2u32.. {
+        let candidate = compressed.with_file_name(format!(
+            "{}{MIGRATED_ZSTD_SUFFIX}.{index}",
+            crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+        ));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    base
+}
+
 pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
     if let Some(parent) = home.parent() {
         crate::storage::ensure_private_dir(parent)?;
@@ -462,6 +575,10 @@ pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
         crate::storage::ensure_private_file_permissions(&managed)
             .map_err(|error| format!("Failed to secure {MANAGED_PATCH_FILE_NAME}: {error}"))?;
     }
+
+    // patch 落盘之后再对齐磁盘产物:受管层要求明文,root 里不能留下 zstd 产物,
+    // 否则插件自己的编码校验会把这个 home 的会话读写全部拒掉。
+    migrate_sessions_encoding(&sessions_root);
     Ok(())
 }
 
@@ -702,6 +819,135 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+        cleanup_temp_home(&home);
+    }
+
+    /// 造一个和插件物理格式一致的压缩 transcript:header 一帧,正文一帧,串接。
+    fn write_compressed_session(session_dir: &Path, header: &str, body: &str) -> PathBuf {
+        fs::create_dir_all(session_dir).unwrap();
+        let mut bytes = zstd::encode_all(format!("{header}\n").as_bytes(), 0).unwrap();
+        bytes.extend(zstd::encode_all(format!("{body}\n").as_bytes(), 0).unwrap());
+        let path = session_dir.join(crate::session_dsh::DSH_TRANSCRIPT_ZSTD);
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn session_dir_in(home: &Path, name: &str) -> PathBuf {
+        home.join("sessions").join("--project--").join(name)
+    }
+
+    #[test]
+    fn migrates_legacy_compressed_transcripts_to_plaintext() {
+        let home = temp_home("encoding-migrate");
+        ensure_dsh_home_at(&home).unwrap();
+        let session = session_dir_in(&home, "session-1");
+        let compressed = write_compressed_session(
+            &session,
+            r#"{"type":"session","version":0}"#,
+            r#"{"type":"message","seq":1}"#,
+        );
+
+        ensure_dsh_home_at(&home).unwrap();
+
+        // 受管层要求明文,root 里不能再留下插件会拒绝的相反后缀。
+        assert!(!compressed.exists());
+        let raw = session.join(crate::session_dsh::DSH_TRANSCRIPT_RAW);
+        let text = fs::read_to_string(&raw).unwrap();
+        assert_eq!(
+            text,
+            "{\"type\":\"session\",\"version\":0}\n{\"type\":\"message\",\"seq\":1}\n"
+        );
+        // 压缩产物只是改名归档,不删除。
+        assert!(session
+            .join(format!(
+                "{}{MIGRATED_ZSTD_SUFFIX}",
+                crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+            ))
+            .is_file());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&raw).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn keeps_existing_plaintext_when_both_encodings_are_present() {
+        let home = temp_home("encoding-both");
+        ensure_dsh_home_at(&home).unwrap();
+        let session = session_dir_in(&home, "session-2");
+        let compressed = write_compressed_session(&session, "compressed-header", "compressed-body");
+        let raw = session.join(crate::session_dsh::DSH_TRANSCRIPT_RAW);
+        fs::write(&raw, "plaintext-wins\n").unwrap();
+
+        ensure_dsh_home_at(&home).unwrap();
+
+        // 明文优先(与 dsh_transcript_in 一致),压缩产物只是移开。
+        assert_eq!(fs::read_to_string(&raw).unwrap(), "plaintext-wins\n");
+        assert!(!compressed.exists());
+        assert!(session
+            .join(format!(
+                "{}{MIGRATED_ZSTD_SUFFIX}",
+                crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+            ))
+            .is_file());
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn archives_corrupt_compressed_transcripts_instead_of_blocking_the_home() {
+        let home = temp_home("encoding-corrupt");
+        ensure_dsh_home_at(&home).unwrap();
+        let session = session_dir_in(&home, "session-3");
+        fs::create_dir_all(&session).unwrap();
+        let compressed = session.join(crate::session_dsh::DSH_TRANSCRIPT_ZSTD);
+        fs::write(&compressed, b"not really zstd").unwrap();
+
+        ensure_dsh_home_at(&home).unwrap();
+
+        // 坏产物留在原地会让整个 home 的 dsh 永久起不来,所以一律移开归档。
+        assert!(!compressed.exists());
+        assert!(!session
+            .join(crate::session_dsh::DSH_TRANSCRIPT_RAW)
+            .exists());
+        assert!(session
+            .join(format!(
+                "{}{MIGRATED_ZSTD_SUFFIX}",
+                crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+            ))
+            .is_file());
+        cleanup_temp_home(&home);
+    }
+
+    #[test]
+    fn session_encoding_migration_is_idempotent_and_keeps_earlier_archives() {
+        let home = temp_home("encoding-idempotent");
+        ensure_dsh_home_at(&home).unwrap();
+        let session = session_dir_in(&home, "session-4");
+        write_compressed_session(&session, "header-a", "body-a");
+        ensure_dsh_home_at(&home).unwrap();
+        let raw = session.join(crate::session_dsh::DSH_TRANSCRIPT_RAW);
+        let first = fs::read_to_string(&raw).unwrap();
+
+        // 空转一次不改动任何东西。
+        ensure_dsh_home_at(&home).unwrap();
+        assert_eq!(fs::read_to_string(&raw).unwrap(), first);
+
+        // 又出现一个压缩产物时,上一次的存档不能被覆盖。
+        write_compressed_session(&session, "header-b", "body-b");
+        ensure_dsh_home_at(&home).unwrap();
+        assert_eq!(fs::read_to_string(&raw).unwrap(), first);
+        let archive = format!(
+            "{}{MIGRATED_ZSTD_SUFFIX}",
+            crate::session_dsh::DSH_TRANSCRIPT_ZSTD
+        );
+        assert!(session.join(&archive).is_file());
+        assert!(session.join(format!("{archive}.2")).is_file());
         cleanup_temp_home(&home);
     }
 }

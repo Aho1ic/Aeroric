@@ -763,13 +763,24 @@ describe("RemoteConnection", () => {
 });
 
 describe("pairWithInvite", () => {
-  function pairHarness(serverKeys: TestServerKeys) {
+  function pairHarness(
+    serverKeys: TestServerKeys,
+    confirmation?: {
+      persistProvisionalCredentials: NonNullable<
+        Parameters<typeof pairWithInvite>[0]["persistProvisionalCredentials"]
+      >;
+      discardProvisionalCredentials?: () => Promise<void>;
+    },
+  ) {
     let ws: FakeWebSocket | null = null;
     const promise = pairWithInvite({
       endpoint: "ws://host:1",
       invite: "inv",
       deviceName: "iPhone",
       serverPublicKey: serverKeys.publicB64,
+      pairingConfirmationVersion: confirmation ? 1 : undefined,
+      persistProvisionalCredentials: confirmation?.persistProvisionalCredentials,
+      discardProvisionalCredentials: confirmation?.discardProvisionalCredentials,
       wsFactory: () => {
         ws = new FakeWebSocket();
         return ws;
@@ -821,6 +832,118 @@ describe("pairWithInvite", () => {
       await expect(promise).resolves.toMatchObject({ deviceId: "d1", deviceToken: "tok" });
     },
   );
+
+  it("persists provisional credentials before sending confirmation", async () => {
+    const keys = testGenerateServerKeys();
+    let socketRef: FakeWebSocket | null = null;
+    const persistProvisionalCredentials = vi.fn(async () => {
+      expect(socketRef?.frameFor("pairing.confirm")).toBeUndefined();
+    });
+    const harness = pairHarness(keys, { persistProvisionalCredentials });
+    socketRef = harness.socket();
+    harness.socket().open();
+    harness.socket().acceptHandshake(keys);
+    expect(harness.socket().lastFrame().params).toEqual({
+      invite: "inv",
+      deviceName: "iPhone",
+      pairingConfirmationVersion: 1,
+    });
+
+    harness.socket().replyOk({
+      deviceId: "d1",
+      deviceToken: "tok",
+      pairingId: "pair-1",
+      pairingConfirmationVersion: 1,
+    });
+    await flush();
+
+    expect(persistProvisionalCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "d1", deviceToken: "tok", pairingId: "pair-1" }),
+    );
+    const confirm = harness.socket().frameFor("pairing.confirm");
+    expect(confirm.params).toEqual({ pairingId: "pair-1", pairingConfirmationVersion: 1 });
+    harness.socket().receiveCtrl({
+      v: 2,
+      id: confirm.id,
+      ok: true,
+      result: { confirmed: true },
+    });
+
+    await expect(harness.promise).resolves.toMatchObject({
+      deviceId: "d1",
+      deviceToken: "tok",
+    });
+  });
+
+  it("does not confirm when provisional credential storage fails", async () => {
+    const keys = testGenerateServerKeys();
+    const failure = new Error("SecureStore unavailable");
+    const { promise, socket } = pairHarness(keys, {
+      persistProvisionalCredentials: async () => Promise.reject(failure),
+    });
+    socket().open();
+    socket().acceptHandshake(keys);
+    socket().replyOk({
+      deviceId: "d1",
+      deviceToken: "tok",
+      pairingId: "pair-1",
+      pairingConfirmationVersion: 1,
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      kind: "credential_storage",
+      message: "SecureStore unavailable",
+    });
+    expect(socket().frameFor("pairing.confirm")).toBeUndefined();
+  });
+
+  it("discards staged credentials after an explicit negative confirmation", async () => {
+    const keys = testGenerateServerKeys();
+    const persistProvisionalCredentials = vi.fn(async () => undefined);
+    const discardProvisionalCredentials = vi.fn(async () => undefined);
+    const { promise, socket } = pairHarness(keys, {
+      persistProvisionalCredentials,
+      discardProvisionalCredentials,
+    });
+    socket().open();
+    socket().acceptHandshake(keys);
+    socket().replyOk({
+      deviceId: "d1",
+      deviceToken: "tok",
+      pairingId: "pair-1",
+      pairingConfirmationVersion: 1,
+    });
+    await flush();
+    const confirm = socket().frameFor("pairing.confirm");
+    socket().receiveCtrl({ v: 2, id: confirm.id, ok: false, error: "disk full" });
+
+    await expect(promise).rejects.toMatchObject({ kind: "confirmation", message: "disk full" });
+    expect(persistProvisionalCredentials).toHaveBeenCalledTimes(1);
+    expect(discardProvisionalCredentials).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps staged credentials when the confirmation ACK is network-uncertain", async () => {
+    const keys = testGenerateServerKeys();
+    const discardProvisionalCredentials = vi.fn(async () => undefined);
+    const { promise, socket } = pairHarness(keys, {
+      persistProvisionalCredentials: async () => undefined,
+      discardProvisionalCredentials,
+    });
+    socket().open();
+    socket().acceptHandshake(keys);
+    socket().replyOk({
+      deviceId: "d1",
+      deviceToken: "tok",
+      pairingId: "pair-1",
+      pairingConfirmationVersion: 1,
+    });
+    await flush();
+    expect(socket().frameFor("pairing.confirm")).toBeDefined();
+    socket().dropped();
+
+    await expect(promise).rejects.toMatchObject({ kind: "network" });
+    expect(discardProvisionalCredentials).not.toHaveBeenCalled();
+  });
 
   it("rejects on auth failure with server message", async () => {
     const keys = testGenerateServerKeys();

@@ -3,20 +3,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("expo-secure-store", () => ({
   getItemAsync: vi.fn(),
   setItemAsync: vi.fn(),
+  deleteItemAsync: vi.fn(),
 }));
 
 import type { HostIdentity, PairedHost } from "../types";
 import * as SecureStore from "expo-secure-store";
 import {
   addOrReplaceHost,
+  clearPendingPairingHost,
   isPairedHost,
   isSameHost,
   loadHostStore,
+  loadPendingPairingHost,
   mergeHostIdentity,
+  savePendingPairingHost,
   type HostStoreState,
 } from "./host-store";
 
 const getItemAsync = vi.mocked(SecureStore.getItemAsync);
+const setItemAsync = vi.mocked(SecureStore.setItemAsync);
+const deleteItemAsync = vi.mocked(SecureStore.deleteItemAsync);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -35,7 +41,33 @@ function host(overrides: Partial<PairedHost>): PairedHost {
 }
 
 describe("host identity", () => {
-  it("rejects malformed persisted host records", async () => {
+  it("treats only a missing SecureStore key as an empty repository", async () => {
+    getItemAsync.mockResolvedValue(null);
+
+    await expect(loadHostStore()).resolves.toEqual({ hosts: [], activeHostId: null });
+  });
+
+  it("propagates native SecureStore read failures", async () => {
+    getItemAsync.mockRejectedValue(new Error("keychain unavailable"));
+
+    await expect(loadHostStore()).rejects.toMatchObject({
+      name: "HostStoreLoadError",
+      stage: "read",
+    });
+    expect(setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed persisted JSON without overwriting it", async () => {
+    getItemAsync.mockResolvedValue("{");
+
+    await expect(loadHostStore()).rejects.toMatchObject({
+      name: "HostStoreLoadError",
+      stage: "parse",
+    });
+    expect(setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects the complete store when one persisted host is malformed", async () => {
     getItemAsync.mockResolvedValue(
       JSON.stringify({
         hosts: [{ id: "broken", endpoints: ["ws://127.0.0.1:6790"] }, host({ id: "valid" })],
@@ -43,11 +75,21 @@ describe("host identity", () => {
       }),
     );
 
-    await expect(loadHostStore()).resolves.toEqual({
-      hosts: [host({ id: "valid" })],
-      activeHostId: "valid",
+    await expect(loadHostStore()).rejects.toMatchObject({
+      name: "HostStoreLoadError",
+      stage: "schema",
     });
     expect(isPairedHost({ id: "broken" })).toBe(false);
+    expect(setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy stores whose active host field is absent", async () => {
+    getItemAsync.mockResolvedValue(JSON.stringify({ hosts: [host({ id: "legacy" })] }));
+
+    await expect(loadHostStore()).resolves.toEqual({
+      hosts: [host({ id: "legacy" })],
+      activeHostId: "legacy",
+    });
   });
 
   it("keeps same-name hosts with different identities", () => {
@@ -87,6 +129,33 @@ describe("host identity", () => {
       endpoints: ["ws://192.168.1.10:6790/"],
     });
     expect(isSameHost(legacy, paired)).toBe(true);
+  });
+});
+
+describe("pending pairing credentials", () => {
+  it("round-trips a staged host under an independent SecureStore key", async () => {
+    const pending = host({ id: "pending" });
+    await savePendingPairingHost(pending);
+    expect(setItemAsync).toHaveBeenCalledWith(
+      "aeroric.hosts.pending-pairing.v1",
+      JSON.stringify(pending),
+    );
+
+    getItemAsync.mockResolvedValue(JSON.stringify(pending));
+    await expect(loadPendingPairingHost()).resolves.toEqual(pending);
+
+    await clearPendingPairingHost();
+    expect(deleteItemAsync).toHaveBeenCalledWith("aeroric.hosts.pending-pairing.v1");
+  });
+
+  it("does not turn an unreadable pending credential into an empty value", async () => {
+    getItemAsync.mockRejectedValue(new Error("device locked"));
+
+    await expect(loadPendingPairingHost()).rejects.toMatchObject({
+      name: "HostStoreLoadError",
+      stage: "read",
+    });
+    expect(deleteItemAsync).not.toHaveBeenCalled();
   });
 });
 

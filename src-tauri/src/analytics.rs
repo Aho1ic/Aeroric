@@ -332,8 +332,10 @@ pub(crate) struct UsageStatisticsTotals {
     pub(crate) cache_hit_rate: f64,
     pub(crate) request_count: u64,
     pub(crate) total_cost: f64,
+    /// 命中公开价目表的请求数。
     pub(crate) priced_request_count: u64,
-    pub(crate) unpriced_request_count: u64,
+    /// 无公开价目、按同档模型推算单价的请求数(成本仍计入 total_cost)。
+    pub(crate) estimated_request_count: u64,
 }
 
 #[derive(serde::Serialize, Clone, Default, Debug)]
@@ -367,12 +369,29 @@ pub(crate) struct UsageStatistics {
     pub(crate) breakdown: UsageStatisticsBreakdown,
 }
 
+/// 每 100 万 token 的美元单价。
 #[derive(Clone, Copy)]
 struct ModelPricing {
     input: f64,
     cached_input: f64,
     cache_write: f64,
     output: f64,
+}
+
+const fn price(input: f64, cached_input: f64, cache_write: f64, output: f64) -> ModelPricing {
+    ModelPricing {
+        input,
+        cached_input,
+        cache_write,
+        output,
+    }
+}
+
+/// 单价来源:命中价目表还是按同档推算。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PricingSource {
+    Listed,
+    Estimated,
 }
 
 fn request_date(val: &Value) -> Option<(f64, chrono::NaiveDate)> {
@@ -580,89 +599,203 @@ pub(crate) fn parse_dsh_usage_requests(content: &str) -> Vec<UsageRequest> {
     requests
 }
 
-fn pricing_for_request(request: &UsageRequest) -> Option<ModelPricing> {
-    let model = request.model.to_ascii_lowercase();
-
-    // dsh(DeepSeek)暂无稳定公开价目对齐,计为未定价请求,UI 显示 tokens 而非费用。
-    if request.agent == UsageAgent::Dsh {
-        let _ = &model;
-        return None;
-    }
-
-    if request.agent == UsageAgent::Codex {
-        let pricing = if model.starts_with("gpt-5.6-sol") {
-            (5.0, 0.5, 6.25, 30.0)
-        } else if model.starts_with("gpt-5.6-terra") {
-            (2.5, 0.25, 3.125, 15.0)
-        } else if model.starts_with("gpt-5.6-luna") {
-            (1.0, 0.1, 1.25, 6.0)
-        } else if model.starts_with("gpt-5.5-pro") || model.starts_with("gpt-5.4-pro") {
-            (30.0, 30.0, 0.0, 180.0)
-        } else if model.starts_with("gpt-5.5") {
-            (5.0, 0.5, 0.0, 30.0)
-        } else if model.starts_with("gpt-5.4-mini") {
-            (0.75, 0.075, 0.0, 4.5)
-        } else if model.starts_with("gpt-5.4-nano") {
-            (0.2, 0.02, 0.0, 1.25)
-        } else if model.starts_with("gpt-5.4") {
-            (2.5, 0.25, 0.0, 15.0)
-        } else if model.starts_with("gpt-5.3-codex") {
-            (1.75, 0.175, 0.0, 14.0)
-        } else {
-            return None;
-        };
-        return Some(ModelPricing {
-            input: pricing.0,
-            cached_input: pricing.1,
-            cache_write: pricing.2,
-            output: pricing.3,
-        });
-    }
-
-    let pricing = if model.contains("opus-4-8")
-        || model.contains("opus-4.8")
-        || model.contains("opus-4-7")
-        || model.contains("opus-4.7")
-        || model.contains("opus-4-6")
-        || model.contains("opus-4.6")
-        || model.contains("opus-4-5")
-        || model.contains("opus-4.5")
-    {
-        (5.0, 0.5, 6.25, 25.0)
-    } else if model.contains("sonnet-5") {
-        let introductory_end = chrono::NaiveDate::from_ymd_opt(2026, 8, 31)?;
-        if request.date <= introductory_end {
-            (2.0, 0.2, 2.5, 10.0)
-        } else {
-            (3.0, 0.3, 3.75, 15.0)
-        }
-    } else if model.contains("sonnet-4") {
-        (3.0, 0.3, 3.75, 15.0)
-    } else if model.contains("haiku-4-5") || model.contains("haiku-4.5") {
-        (1.0, 0.1, 1.25, 5.0)
-    } else if model.contains("haiku-3-5") || model.contains("haiku-3.5") {
-        (0.8, 0.08, 1.0, 4.0)
-    } else {
-        return None;
+/// 剥掉结尾的 ISO 发布日期,例如 `gpt-5-4-mini-2026-03-17`。
+fn strip_release_date(name: &str) -> Option<&str> {
+    let numeric = |part: &str, len: usize| {
+        part.len() == len && part.chars().all(|character| character.is_ascii_digit())
     };
-
-    Some(ModelPricing {
-        input: pricing.0,
-        cached_input: pricing.1,
-        cache_write: pricing.2,
-        output: pricing.3,
-    })
+    let (head, day) = name.rsplit_once('-')?;
+    let (head, month) = head.rsplit_once('-')?;
+    let (head, year) = head.rsplit_once('-')?;
+    (numeric(day, 2) && numeric(month, 2) && numeric(year, 4)).then_some(head)
 }
 
-fn estimated_request_cost(request: &UsageRequest) -> Option<f64> {
-    let pricing = pricing_for_request(request)?;
-    Some(
-        (request.input_tokens as f64 * pricing.input
-            + request.cache_read_tokens as f64 * pricing.cached_input
-            + request.cache_creation_tokens as f64 * pricing.cache_write
-            + request.output_tokens as f64 * pricing.output)
-            / 1_000_000.0,
-    )
+/// 归一化模型名,让一张价目表同时覆盖所有 harness(同一模型会以不同写法出现在
+/// codex / claude / dsh 三种会话里):
+/// - 去掉路由前缀:`anthropic/claude-opus-5` → `claude-opus-5`
+/// - `.` 统一成 `-`:`claude-opus-4.8` 与 `claude-opus-4-8` 归为同族
+/// - 去掉发布批次与推理档位后缀:`deepseek-v4-pro-0813`、`claude-opus-4-6-thinking`
+fn normalize_model(model: &str) -> String {
+    // 部署位置与推理档位不改变单价。
+    const SUFFIXES: [&str; 13] = [
+        "-non-reasoning",
+        "-reasoning",
+        "-thinking",
+        "-xhigh",
+        "-high",
+        "-medium",
+        "-low",
+        "-minimal",
+        "-aws",
+        "-gcp",
+        "-azure",
+        "-vertex",
+        "-preview",
+    ];
+
+    let mut name = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .trim()
+        .to_ascii_lowercase()
+        .replace('.', "-");
+    if let Some(stripped) = strip_release_date(&name) {
+        name = stripped.to_owned();
+    }
+    loop {
+        // 4 位及以上的纯数字尾段是发布批次(`deepseek-v4-pro-0813`)。
+        if let Some((head, batch)) = name.rsplit_once('-') {
+            if batch.len() >= 4 && batch.chars().all(|character| character.is_ascii_digit()) {
+                name = head.to_owned();
+                continue;
+            }
+        }
+        match SUFFIXES.iter().find_map(|suffix| name.strip_suffix(suffix)) {
+            Some(head) => name = head.to_owned(),
+            None => return name,
+        }
+    }
+}
+/// 公开 API 单价(USD / 1M token),按归一化模型名的子串匹配。
+///
+/// 顺序敏感:更长的族名必须排在其前缀之前,否则 `opus-4-8` 会先被 `opus-4` 命中。
+/// 不单独公示 cache write 单价的供应商(GLM / Grok / Kimi / MiniMax)保守按 input
+/// 计价;OpenAI 不对 cache write 计费,故取 0。
+const MODEL_PRICES: &[(&str, ModelPricing)] = &[
+    // Anthropic —— cache write = 1.25x input,cache read = 0.1x input。
+    ("claude-mythos-5", price(10.0, 1.0, 12.5, 50.0)),
+    ("mythos-5", price(10.0, 1.0, 12.5, 50.0)),
+    ("fable-5", price(10.0, 1.0, 12.5, 50.0)),
+    ("opus-5", price(5.0, 0.5, 6.25, 25.0)),
+    ("opus-4-8", price(5.0, 0.5, 6.25, 25.0)),
+    ("opus-4-7", price(5.0, 0.5, 6.25, 25.0)),
+    ("opus-4-6", price(5.0, 0.5, 6.25, 25.0)),
+    ("opus-4-5", price(5.0, 0.5, 6.25, 25.0)),
+    ("opus-4-1", price(15.0, 1.5, 18.75, 75.0)),
+    ("opus-4", price(15.0, 1.5, 18.75, 75.0)),
+    ("sonnet-5", price(2.0, 0.2, 2.5, 10.0)),
+    ("sonnet-4-6", price(3.0, 0.3, 3.75, 15.0)),
+    ("sonnet-4-5", price(3.0, 0.3, 3.75, 15.0)),
+    ("sonnet-4", price(3.0, 0.3, 3.75, 15.0)),
+    ("haiku-4-5", price(1.0, 0.1, 1.25, 5.0)),
+    ("haiku-3-5", price(0.8, 0.08, 1.0, 4.0)),
+    // OpenAI
+    ("gpt-5-6-sol", price(5.0, 0.5, 6.25, 30.0)),
+    ("gpt-5-6-terra", price(2.5, 0.25, 3.125, 15.0)),
+    ("gpt-5-6-luna", price(1.0, 0.1, 1.25, 6.0)),
+    ("gpt-5-5-pro", price(30.0, 30.0, 0.0, 180.0)),
+    ("gpt-5-5", price(5.0, 0.5, 0.0, 30.0)),
+    ("gpt-5-4-pro", price(30.0, 30.0, 0.0, 180.0)),
+    ("gpt-5-4-mini", price(0.75, 0.075, 0.0, 4.5)),
+    ("gpt-5-4-nano", price(0.2, 0.02, 0.0, 1.25)),
+    ("gpt-5-4", price(2.5, 0.25, 0.0, 15.0)),
+    ("gpt-5-3-codex", price(1.75, 0.175, 0.0, 14.0)),
+    // DeepSeek —— 表内为非高峰价,高峰时段(UTC 01–04、06–10)乘 2,见
+    // `deepseek_peak_multiplier`。cache write 按 cache miss 计价。
+    ("deepseek-v4-pro", price(0.66, 0.022, 0.66, 1.98)),
+    ("deepseek-v4-flash", price(0.22, 0.007, 0.22, 0.66)),
+    // Z.ai GLM
+    ("glm-5-3", price(1.4, 0.26, 1.4, 4.4)),
+    ("glm-5-2", price(1.4, 0.26, 1.4, 4.4)),
+    ("glm-5-1", price(1.4, 0.26, 1.4, 4.4)),
+    ("glm-5-turbo", price(1.2, 0.24, 1.2, 4.0)),
+    ("glm-5", price(1.0, 0.2, 1.0, 3.2)),
+    ("glm-4-7-flashx", price(0.07, 0.01, 0.07, 0.4)),
+    ("glm-4-7-flash", price(0.0, 0.0, 0.0, 0.0)),
+    ("glm-4-7", price(0.6, 0.11, 0.6, 2.2)),
+    ("glm-4-6", price(0.6, 0.11, 0.6, 2.2)),
+    ("glm-4-5-airx", price(1.1, 0.22, 1.1, 4.5)),
+    ("glm-4-5-air", price(0.2, 0.03, 0.2, 1.1)),
+    ("glm-4-5-x", price(2.2, 0.45, 2.2, 8.9)),
+    ("glm-4-5-flash", price(0.0, 0.0, 0.0, 0.0)),
+    ("glm-4-5", price(0.6, 0.11, 0.6, 2.2)),
+    // xAI Grok
+    ("grok-4-6", price(2.0, 0.5, 2.0, 6.0)),
+    ("grok-4-5", price(2.0, 0.3, 2.0, 6.0)),
+    ("grok-4-3", price(1.25, 0.2, 1.25, 2.5)),
+    ("grok-4-20", price(1.25, 0.2, 1.25, 2.5)),
+    ("grok-build", price(1.0, 0.2, 1.0, 2.0)),
+    // Moonshot Kimi
+    ("kimi-k3", price(3.0, 0.3, 3.0, 15.0)),
+    // Xiaomi MiMo —— cache write 目前免费。
+    ("mimo-v2-5-pro", price(0.435, 0.0036, 0.0, 0.87)),
+    ("mimo-v2-5", price(0.14, 0.0028, 0.0, 0.28)),
+    // MiniMax
+    ("minimax-m3", price(0.3, 0.06, 0.3, 1.2)),
+];
+
+/// 未收录模型的兜底单价:按名字里的档位关键字推算,保证任何模型都有成本估算,
+/// 而不是静默算作 0。命中此路径的请求计入 `estimated_request_count`。
+fn estimated_pricing_for(model: &str) -> ModelPricing {
+    if ["nano", "flash", "lite", "tiny", "air"]
+        .iter()
+        .any(|hint| model.contains(hint))
+    {
+        return price(0.2, 0.02, 0.2, 0.8);
+    }
+    if ["mini", "small", "haiku", "turbo"]
+        .iter()
+        .any(|hint| model.contains(hint))
+    {
+        return price(1.0, 0.1, 1.25, 5.0);
+    }
+    if ["opus", "fable", "pro", "max", "ultra", "sol", "sota"]
+        .iter()
+        .any(|hint| model.contains(hint))
+    {
+        return price(5.0, 0.5, 6.25, 25.0);
+    }
+    // 其余按主力档(Sonnet 5 / GPT-5.4 量级)估算。
+    price(2.5, 0.25, 3.125, 15.0)
+}
+
+/// DeepSeek 高峰时段(UTC 01:00–04:00、06:00–10:00)单价是非高峰的 2 倍。
+fn deepseek_peak_multiplier(timestamp: f64) -> f64 {
+    let Some(utc) = chrono::DateTime::from_timestamp(timestamp.trunc() as i64, 0) else {
+        return 1.0;
+    };
+    let hour = utc.hour();
+    if (1..4).contains(&hour) || (6..10).contains(&hour) {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+fn pricing_for_request(request: &UsageRequest) -> (ModelPricing, PricingSource) {
+    let model = normalize_model(&request.model);
+    let listed = MODEL_PRICES
+        .iter()
+        .find(|(family, _)| model.contains(family))
+        .map(|(_, pricing)| *pricing);
+
+    let (mut pricing, source) = match listed {
+        Some(pricing) => (pricing, PricingSource::Listed),
+        None => (estimated_pricing_for(&model), PricingSource::Estimated),
+    };
+
+    if model.contains("deepseek") {
+        let multiplier = deepseek_peak_multiplier(request.timestamp);
+        pricing = price(
+            pricing.input * multiplier,
+            pricing.cached_input * multiplier,
+            pricing.cache_write * multiplier,
+            pricing.output * multiplier,
+        );
+    }
+
+    (pricing, source)
+}
+
+fn estimated_request_cost(request: &UsageRequest) -> (f64, PricingSource) {
+    let (pricing, source) = pricing_for_request(request);
+    let cost = (request.input_tokens as f64 * pricing.input
+        + request.cache_read_tokens as f64 * pricing.cached_input
+        + request.cache_creation_tokens as f64 * pricing.cache_write
+        + request.output_tokens as f64 * pricing.output)
+        / 1_000_000.0;
+    (cost, source)
 }
 
 fn add_request(totals: &mut UsageStatisticsTotals, request: &UsageRequest) {
@@ -675,11 +808,23 @@ fn add_request(totals: &mut UsageStatisticsTotals, request: &UsageRequest) {
         .cache_read_tokens
         .saturating_add(request.cache_read_tokens);
     totals.request_count = totals.request_count.saturating_add(1);
-    if let Some(cost) = estimated_request_cost(request) {
-        totals.total_cost += cost;
-        totals.priced_request_count = totals.priced_request_count.saturating_add(1);
-    } else {
-        totals.unpriced_request_count = totals.unpriced_request_count.saturating_add(1);
+
+    let (cost, source) = estimated_request_cost(request);
+    totals.total_cost += cost;
+    // 零 token 的占位请求(如 Claude 的 `<synthetic>` 消息)不影响单价可信度,
+    // 不计入"按同档推算"的提示计数。
+    let billable = request.input_tokens
+        | request.output_tokens
+        | request.cache_creation_tokens
+        | request.cache_read_tokens;
+    match source {
+        PricingSource::Listed => {
+            totals.priced_request_count = totals.priced_request_count.saturating_add(1);
+        }
+        PricingSource::Estimated if billable > 0 => {
+            totals.estimated_request_count = totals.estimated_request_count.saturating_add(1);
+        }
+        PricingSource::Estimated => {}
     }
 }
 
@@ -973,11 +1118,12 @@ mod session_metrics_tests {
         assert_eq!(requests[0].cache_read_tokens, 50);
         assert_eq!(requests[0].cache_creation_tokens, 5);
         assert_eq!(requests[1].model, "deepseek-v4-pro");
-        // dsh 请求未定价:成本为 0、计入 unpriced。
+        // dsh 请求同样按公开价目计价,不再落进"未定价"。
         let mut totals = UsageStatisticsTotals::default();
         add_request(&mut totals, &requests[0]);
-        assert_eq!(totals.total_cost, 0.0);
-        assert_eq!(totals.unpriced_request_count, 1);
+        assert!(totals.total_cost > 0.0);
+        assert_eq!(totals.priced_request_count, 1);
+        assert_eq!(totals.estimated_request_count, 0);
     }
 
     #[test]
@@ -1255,7 +1401,7 @@ mod usage_statistics_tests {
     }
 
     #[test]
-    fn unknown_models_are_reported_as_unpriced() {
+    fn unknown_models_still_get_an_estimated_cost() {
         let requests = vec![UsageRequest {
             timestamp: 1.0,
             date: date(2026, 7, 15),
@@ -1277,7 +1423,168 @@ mod usage_statistics_tests {
         );
 
         assert_eq!(totals.priced_request_count, 0);
-        assert_eq!(totals.unpriced_request_count, 1);
+        assert_eq!(totals.estimated_request_count, 1);
+        assert!(totals.total_cost > 0.0);
+    }
+
+    fn pricing_of(model: &str, agent: UsageAgent) -> (ModelPricing, PricingSource) {
+        pricing_for_request(&UsageRequest {
+            timestamp: 0.0,
+            date: date(2026, 8, 21),
+            agent,
+            model: model.to_owned(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+        })
+    }
+
+    #[test]
+    fn model_names_normalize_across_harnesses() {
+        assert_eq!(
+            normalize_model("anthropic/claude-opus-5-aws"),
+            "claude-opus-5"
+        );
+        assert_eq!(normalize_model("claude-opus-4.8"), "claude-opus-4-8");
+        assert_eq!(
+            normalize_model("claude-opus-4-6-thinking"),
+            "claude-opus-4-6"
+        );
+        assert_eq!(normalize_model("gpt-5.4-mini-2026-03-17"), "gpt-5-4-mini");
+        assert_eq!(normalize_model("deepseek-v4-pro-0813"), "deepseek-v4-pro");
+        assert_eq!(
+            normalize_model("DeepSeek-V4-Flash-0731"),
+            "deepseek-v4-flash"
+        );
+        assert_eq!(normalize_model("z-ai/glm-5.2"), "glm-5-2");
+        assert_eq!(
+            normalize_model("grok-4.20-multi-agent-xhigh"),
+            "grok-4-20-multi-agent"
+        );
+    }
+
+    #[test]
+    fn the_same_model_is_priced_identically_under_every_agent() {
+        // 同一 Opus 5 会以裸名、路由前缀名、点号写法出现在不同 harness 的日志里。
+        for model in [
+            "claude-opus-5",
+            "anthropic/claude-opus-5-ps-aws-dst",
+            "claude-opus-5-2026-07-24",
+        ] {
+            for agent in [UsageAgent::Claude, UsageAgent::Codex, UsageAgent::Dsh] {
+                let (pricing, source) = pricing_of(model, agent);
+                assert_eq!(source, PricingSource::Listed, "{model}");
+                assert_eq!(pricing.input, 5.0, "{model}");
+                assert_eq!(pricing.output, 25.0, "{model}");
+                assert_eq!(pricing.cache_write, 6.25, "{model}");
+                assert_eq!(pricing.cached_input, 0.5, "{model}");
+            }
+        }
+    }
+
+    #[test]
+    fn longer_families_win_over_their_own_prefixes() {
+        assert_eq!(
+            pricing_of("claude-opus-4-8", UsageAgent::Claude).0.input,
+            5.0
+        );
+        assert_eq!(
+            pricing_of("claude-opus-4-1", UsageAgent::Claude).0.input,
+            15.0
+        );
+        assert_eq!(
+            pricing_of("claude-sonnet-4-6", UsageAgent::Claude).0.input,
+            3.0
+        );
+        assert_eq!(
+            pricing_of("claude-sonnet-5", UsageAgent::Claude).0.input,
+            2.0
+        );
+        assert_eq!(pricing_of("glm-5.2", UsageAgent::Codex).0.input, 1.4);
+        assert_eq!(pricing_of("glm-5", UsageAgent::Codex).0.input, 1.0);
+        assert_eq!(pricing_of("mimo-v2.5-pro", UsageAgent::Dsh).0.input, 0.435);
+        assert_eq!(pricing_of("mimo-v2.5", UsageAgent::Claude).0.input, 0.14);
+    }
+
+    #[test]
+    fn sonnet_5_keeps_its_two_dollar_rate_after_august_2026() {
+        // $2/$10 已从"限时"转为长期价,9/1 不再上调。
+        let (pricing, source) = pricing_for_request(&UsageRequest {
+            timestamp: 0.0,
+            date: date(2026, 12, 1),
+            agent: UsageAgent::Claude,
+            model: "claude-sonnet-5".to_owned(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+        });
+        assert_eq!(source, PricingSource::Listed);
+        assert_eq!(pricing.input, 2.0);
+        assert_eq!(pricing.output, 10.0);
+    }
+
+    #[test]
+    fn deepseek_peak_hours_double_the_rate() {
+        let at_utc_hour = |hour: u32| {
+            chrono::NaiveDate::from_ymd_opt(2026, 8, 21)
+                .and_then(|day| day.and_hms_opt(hour, 30, 0))
+                .map(|naive| naive.and_utc().timestamp() as f64)
+                .unwrap()
+        };
+
+        let off_peak = pricing_for_request(&UsageRequest {
+            timestamp: at_utc_hour(0),
+            date: date(2026, 8, 21),
+            agent: UsageAgent::Dsh,
+            model: "deepseek-v4-pro-0813".to_owned(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+        });
+        let peak = pricing_for_request(&UsageRequest {
+            timestamp: at_utc_hour(2),
+            date: date(2026, 8, 21),
+            agent: UsageAgent::Dsh,
+            model: "deepseek-v4-pro-0813".to_owned(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+        });
+
+        assert_eq!(off_peak.0.input, 0.66);
+        assert_eq!(off_peak.0.output, 1.98);
+        assert_eq!(peak.0.input, 1.32);
+        assert_eq!(peak.0.output, 3.96);
+    }
+
+    #[test]
+    fn zero_token_placeholder_requests_do_not_flag_estimated_pricing() {
+        let requests = vec![UsageRequest {
+            timestamp: 1.0,
+            date: date(2026, 7, 15),
+            agent: UsageAgent::Claude,
+            model: "<synthetic>".to_owned(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+        }];
+
+        let (totals, _) = aggregate_requests(
+            &requests,
+            date(2026, 7, 15),
+            date(2026, 7, 15),
+            None,
+            false,
+            None,
+        );
+
+        assert_eq!(totals.request_count, 1);
+        assert_eq!(totals.estimated_request_count, 0);
         assert_eq!(totals.total_cost, 0.0);
     }
 }

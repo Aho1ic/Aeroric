@@ -108,6 +108,13 @@ pub fn save_devices(devices: &[DeviceEntry]) -> Result<(), String> {
 
 struct PendingInvite {
     expires_at: Instant,
+    reserved_by: Option<String>,
+}
+
+struct PendingPairing {
+    invite_hash: String,
+    expires_at: Instant,
+    entry: DeviceEntry,
 }
 
 #[derive(Default)]
@@ -121,6 +128,8 @@ pub struct AuthStore {
     devices: Vec<DeviceEntry>,
     /// key = invite token 的 SHA-256 hex。
     invites: HashMap<String, PendingInvite>,
+    /// key = opaque pairing id. Entries remain memory-only until confirmation.
+    pending_pairings: HashMap<String, PendingPairing>,
     throttle: HashMap<IpAddr, ThrottleEntry>,
     /// false 仅用于单测,避免污染真实注册表文件。
     persist: bool,
@@ -138,6 +147,14 @@ pub enum AuthOutcome {
         device_name: String,
         device_token: String,
     },
+    /// Two-phase pairing: credentials are provisional and nothing durable has
+    /// changed yet. The invite stays reserved until `confirm_pairing`.
+    ProvisionalPaired {
+        device_id: String,
+        device_name: String,
+        device_token: String,
+        pairing_id: String,
+    },
     /// device token 验证成功。
     Authenticated { device_id: String },
 }
@@ -147,6 +164,7 @@ impl AuthStore {
         Self {
             devices: load_devices(),
             invites: HashMap::new(),
+            pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
             persist: true,
             #[cfg(test)]
@@ -162,6 +180,7 @@ impl AuthStore {
         Self {
             devices: Vec::new(),
             invites: HashMap::new(),
+            pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
             persist: false,
             persist_failure: None,
@@ -216,10 +235,13 @@ impl AuthStore {
             if let Some(oldest) = self
                 .invites
                 .iter()
+                .filter(|(_, invite)| invite.reserved_by.is_none())
                 .min_by_key(|(_, inv)| inv.expires_at)
                 .map(|(k, _)| k.clone())
             {
                 self.invites.remove(&oldest);
+            } else {
+                return Err("Too many pairing attempts are currently in progress".to_string());
             }
         }
         let token = generate_token()?;
@@ -227,6 +249,7 @@ impl AuthStore {
             hash_token(&token),
             PendingInvite {
                 expires_at: Instant::now() + INVITE_TTL,
+                reserved_by: None,
             },
         );
         Ok(token)
@@ -235,6 +258,116 @@ impl AuthStore {
     fn prune_invites(&mut self) {
         let now = Instant::now();
         self.invites.retain(|_, inv| inv.expires_at > now);
+        self.pending_pairings
+            .retain(|_, pending| pending.expires_at > now);
+    }
+
+    /// Reserve an invite and issue provisional credentials without changing
+    /// the durable device list. A second connection cannot use the same QR
+    /// while this reservation is alive.
+    pub fn begin_pairing(
+        &mut self,
+        peer: IpAddr,
+        invite_token: &str,
+        device_name: Option<&str>,
+    ) -> Result<AuthOutcome, String> {
+        if let Some(wait) = self.throttle_wait(peer) {
+            return Err(format!(
+                "Too many failed attempts; retry in {}s",
+                wait.as_secs().max(1)
+            ));
+        }
+        let outcome = self.begin_pairing_inner(invite_token, device_name);
+        match &outcome {
+            Ok(_) => {
+                self.throttle.remove(&peer);
+            }
+            Err(_) => self.record_failure(peer),
+        }
+        outcome
+    }
+
+    fn begin_pairing_inner(
+        &mut self,
+        invite_token: &str,
+        device_name: Option<&str>,
+    ) -> Result<AuthOutcome, String> {
+        self.prune_invites();
+        let invite_hash = hash_token(invite_token);
+        let invite = self
+            .invites
+            .get_mut(&invite_hash)
+            .ok_or_else(|| "Invalid or expired invite".to_string())?;
+        if invite.reserved_by.is_some() {
+            return Err("Pairing invite is already in use".to_string());
+        }
+
+        let pairing_id = generate_token()?;
+        let device_token = generate_token()?;
+        let entry = DeviceEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: device_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Unnamed device")
+                .chars()
+                .take(64)
+                .collect(),
+            token_hash: hash_token(&device_token),
+            created_at: now_ms(),
+            last_seen_at: now_ms(),
+        };
+        let expires_at = invite.expires_at;
+        invite.reserved_by = Some(pairing_id.clone());
+        self.pending_pairings.insert(
+            pairing_id.clone(),
+            PendingPairing {
+                invite_hash,
+                expires_at,
+                entry: entry.clone(),
+            },
+        );
+        Ok(AuthOutcome::ProvisionalPaired {
+            device_id: entry.id,
+            device_name: entry.name,
+            device_token,
+            pairing_id,
+        })
+    }
+
+    /// Atomically publish a provisional device and consume its invite. On a
+    /// persistence error every in-memory pending value remains retryable.
+    pub fn confirm_pairing(&mut self, pairing_id: &str) -> Result<(String, String), String> {
+        self.prune_invites();
+        let pending = self
+            .pending_pairings
+            .get(pairing_id)
+            .ok_or_else(|| "Unknown or expired pairing confirmation".to_string())?;
+        let mut next = self.devices.clone();
+        next.push(pending.entry.clone());
+        self.persist_device_list(&next)?;
+
+        let device_id = pending.entry.id.clone();
+        let device_name = pending.entry.name.clone();
+        let invite_hash = pending.invite_hash.clone();
+        self.devices = next;
+        self.pending_pairings.remove(pairing_id);
+        self.invites.remove(&invite_hash);
+        Ok((device_id, device_name))
+    }
+
+    /// Release a connection-scoped reservation while keeping the still-valid
+    /// QR invite available for a fresh attempt.
+    pub fn abort_pairing(&mut self, pairing_id: &str) -> bool {
+        let Some(pending) = self.pending_pairings.remove(pairing_id) else {
+            return false;
+        };
+        if let Some(invite) = self.invites.get_mut(&pending.invite_hash) {
+            if invite.reserved_by.as_deref() == Some(pairing_id) {
+                invite.reserved_by = None;
+            }
+        }
+        true
     }
 
     /// 认证入口。`invite`/`device_token` 二选一;成功前先过限流闸门。
@@ -287,7 +420,12 @@ impl AuthStore {
         if let Some(invite_token) = invite {
             self.prune_invites();
             let hash = hash_token(invite_token);
-            if !self.invites.contains_key(&hash) {
+            // 被两阶段配对预留的邀请码不能再走旧的一次性认证路径。
+            let usable = self
+                .invites
+                .get(&hash)
+                .is_some_and(|invite| invite.reserved_by.is_none());
+            if !usable {
                 return Err("Invalid or expired invite".to_string());
             }
             let device_token = generate_token()?;
@@ -378,6 +516,7 @@ mod tests {
         AuthStore {
             devices: Vec::new(),
             invites: HashMap::new(),
+            pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
             persist: false,
             persist_failure: None,
@@ -490,6 +629,80 @@ mod tests {
             store.authenticate_inner(Some(&invite), None, Some("Phone")),
             Ok(AuthOutcome::Paired { .. })
         ));
+        assert_eq!(store.devices().len(), 1);
+    }
+
+    #[test]
+    fn provisional_pairing_does_not_authorize_or_consume_the_invite() {
+        let mut store = empty_store();
+        let invite = store.create_invite().unwrap();
+        let Ok(AuthOutcome::ProvisionalPaired {
+            device_token,
+            pairing_id,
+            ..
+        }) = store.begin_pairing_inner(&invite, Some("Phone"))
+        else {
+            panic!("expected provisional pairing");
+        };
+
+        assert!(store.devices().is_empty());
+        assert!(store
+            .authenticate_inner(None, Some(&device_token), None)
+            .is_err());
+        assert!(store
+            .begin_pairing_inner(&invite, Some("Other phone"))
+            .is_err());
+
+        assert!(store.abort_pairing(&pairing_id));
+        assert!(matches!(
+            store.begin_pairing_inner(&invite, Some("Retry phone")),
+            Ok(AuthOutcome::ProvisionalPaired { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmation_atomically_publishes_the_device_and_consumes_the_invite() {
+        let mut store = empty_store();
+        let invite = store.create_invite().unwrap();
+        let Ok(AuthOutcome::ProvisionalPaired {
+            device_id,
+            device_token,
+            pairing_id,
+            ..
+        }) = store.begin_pairing_inner(&invite, Some("Phone"))
+        else {
+            panic!("expected provisional pairing");
+        };
+
+        assert_eq!(store.confirm_pairing(&pairing_id).unwrap().0, device_id);
+        assert!(matches!(
+            store.authenticate_inner(None, Some(&device_token), None),
+            Ok(AuthOutcome::Authenticated { .. })
+        ));
+        assert!(store.begin_pairing_inner(&invite, Some("Replay")).is_err());
+        assert!(!store.abort_pairing(&pairing_id));
+    }
+
+    #[test]
+    fn confirmation_persistence_failure_keeps_the_pending_pairing_retryable() {
+        let mut store = empty_store();
+        let invite = store.create_invite().unwrap();
+        let Ok(AuthOutcome::ProvisionalPaired { pairing_id, .. }) =
+            store.begin_pairing_inner(&invite, Some("Phone"))
+        else {
+            panic!("expected provisional pairing");
+        };
+        store.persist_failure = Some("disk full".to_string());
+
+        assert_eq!(
+            store.confirm_pairing(&pairing_id),
+            Err("disk full".to_string())
+        );
+        assert!(store.devices().is_empty());
+        assert!(store.begin_pairing_inner(&invite, Some("Other")).is_err());
+
+        store.persist_failure = None;
+        assert!(store.confirm_pairing(&pairing_id).is_ok());
         assert_eq!(store.devices().len(), 1);
     }
 

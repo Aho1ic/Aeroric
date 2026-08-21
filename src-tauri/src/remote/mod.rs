@@ -832,6 +832,9 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
             "hostId": host_id,
             // 桌面静态公钥:手机首连 pinning,E2EE 握手的信任根
             "publicKey": state.keys.public_b64(),
+            // Optional additive negotiation. Older phones ignore this field
+            // and continue using the legacy single-step pairing flow.
+            "pairingConfirmationVersion": protocol::PAIRING_CONFIRMATION_V1,
         });
         let code = URL_SAFE_NO_PAD.encode(offer.to_string());
         Ok(json!({

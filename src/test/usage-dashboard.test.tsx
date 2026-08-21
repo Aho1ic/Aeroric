@@ -31,7 +31,7 @@ const totals: UsageStatisticsTotals = {
   requestCount: 12,
   totalCost: 0.1234,
   pricedRequestCount: 10,
-  unpricedRequestCount: 2,
+  estimatedRequestCount: 2,
 };
 
 function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): UsageStatistics {
@@ -56,8 +56,9 @@ function result(rangeDays: UsageStatisticsRange, agent: UsageStatisticsAgent): U
     totals,
     series,
     breakdown: {
-      codex: { ...totals, totalTokens: 1000, requestCount: 8 },
-      claude: { ...totals, totalTokens: 500, requestCount: 4 },
+      // 每个 agent 的成本互不相同,便于断言逐 agent 成本而不是撞上总成本。
+      codex: { ...totals, totalTokens: 1000, requestCount: 8, totalCost: 0.0912 },
+      claude: { ...totals, totalTokens: 500, requestCount: 4, totalCost: 0.0322 },
     },
   };
 }
@@ -94,6 +95,9 @@ describe("UsageDashboard", () => {
     expect(screen.getByText("1.5K")).toBeInTheDocument();
     expect(screen.getByText("41.7%")).toBeInTheDocument();
     expect(screen.getByText("$0.1234")).toBeInTheDocument();
+    // 来源汇总逐 agent 展示成本估算。
+    expect(screen.getByText("$0.0912")).toBeInTheDocument();
+    expect(screen.getByText("$0.0322")).toBeInTheDocument();
     expect(screen.getByText("Hourly usage")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
 

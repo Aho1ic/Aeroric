@@ -29,7 +29,15 @@ function newHostId(): string {
 
 export default function PairScreen() {
   const { code: deepLinkCode } = useLocalSearchParams<{ code?: string }>();
-  const { addHost } = useHosts();
+  const {
+    addHost,
+    loadError,
+    retryLoad,
+    waitUntilReady,
+    stagePendingPairingHost,
+    promotePendingPairingHost,
+    discardPendingPairingHost,
+  } = useHosts();
   const [permission, requestPermission] = useCameraPermissions();
   const [manualCode, setManualCode] = useState("");
   const [pairing, setPairing] = useState(false);
@@ -43,10 +51,22 @@ export default function PairScreen() {
       setPairing(true);
       setError(null);
       try {
+        await waitUntilReady();
         const offer = parsePairingOffer(input);
         // 依次尝试 offer 中的地址(LAN → 自定义公网 → relay)
         const endpointErrors: Error[] = [];
         let pairedResult: Awaited<ReturnType<typeof pairWithInvite>> | null = null;
+        const hostId = offer.hostId ?? offer.publicKey;
+        const makeHost = (credentials: Awaited<ReturnType<typeof pairWithInvite>>): PairedHost => ({
+          id: hostId ?? newHostId(),
+          hostId,
+          name: offer.hostName,
+          endpoints: offer.endpoints,
+          publicKey: offer.publicKey,
+          deviceId: credentials.deviceId,
+          deviceToken: credentials.deviceToken,
+          pairedAt: Date.now(),
+        });
         for (const endpoint of offer.endpoints) {
           try {
             pairedResult = await pairWithInvite({
@@ -54,6 +74,13 @@ export default function PairScreen() {
               invite: offer.invite,
               deviceName: deviceDisplayName(),
               serverPublicKey: offer.publicKey,
+              pairingConfirmationVersion: offer.pairingConfirmationVersion,
+              persistProvisionalCredentials:
+                offer.pairingConfirmationVersion === 1
+                  ? async (credentials) => stagePendingPairingHost(makeHost(credentials))
+                  : undefined,
+              discardProvisionalCredentials:
+                offer.pairingConfirmationVersion === 1 ? discardPendingPairingHost : undefined,
             });
             break;
           } catch (err) {
@@ -65,18 +92,12 @@ export default function PairScreen() {
             ? preferredPairingError(endpointErrors)
             : new Error(t("pair.cannotReach"));
         }
-        const hostId = offer.hostId ?? offer.publicKey;
-        const host: PairedHost = {
-          id: hostId ?? newHostId(),
-          hostId,
-          name: offer.hostName,
-          endpoints: offer.endpoints,
-          publicKey: offer.publicKey,
-          deviceId: pairedResult.deviceId,
-          deviceToken: pairedResult.deviceToken,
-          pairedAt: Date.now(),
-        };
-        await addHost(host);
+        const host = makeHost(pairedResult);
+        if (offer.pairingConfirmationVersion === 1) {
+          await promotePendingPairingHost(host);
+        } else {
+          await addHost(host);
+        }
         router.replace("/");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -85,7 +106,13 @@ export default function PairScreen() {
         setPairing(false);
       }
     },
-    [addHost],
+    [
+      addHost,
+      discardPendingPairingHost,
+      promotePendingPairingHost,
+      stagePendingPairingHost,
+      waitUntilReady,
+    ],
   );
 
   // 深链进入(aeroric://pair?code=…):自动开始配对
@@ -113,7 +140,9 @@ export default function PairScreen() {
           <CameraView
             style={styles.camera}
             barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onBarcodeScanned={pairing ? undefined : ({ data }) => void handleCode(data)}
+            onBarcodeScanned={
+              pairing || loadError ? undefined : ({ data }) => void handleCode(data)
+            }
           />
         ) : (
           <View style={styles.cameraPlaceholder}>
@@ -150,13 +179,32 @@ export default function PairScreen() {
         multiline
       />
       <AnimatedPressable
-        style={[styles.primaryButton, (!manualCode.trim() || pairing) && styles.buttonDisabled]}
-        disabled={!manualCode.trim() || pairing}
+        style={[
+          styles.primaryButton,
+          (!manualCode.trim() || pairing || loadError) && styles.buttonDisabled,
+        ]}
+        disabled={!manualCode.trim() || pairing || Boolean(loadError)}
         onPress={() => void handleCode(manualCode)}
       >
         <Text style={styles.primaryButtonText}>{t("pair.connect")}</Text>
       </AnimatedPressable>
 
+      {loadError ? (
+        <View style={styles.loadErrorCard}>
+          <Text style={styles.errorText}>{t("hosts.loadFailed")}</Text>
+          <AnimatedPressable
+            style={styles.retryButton}
+            onPress={() => {
+              setError(null);
+              void retryLoad().catch(() => {
+                // The provider keeps the latest failure visible.
+              });
+            }}
+          >
+            <Text style={styles.retryButtonText}>{t("common.retry")}</Text>
+          </AnimatedPressable>
+        </View>
+      ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </ScrollView>
   );
@@ -219,5 +267,14 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.45 },
   primaryButtonText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  loadErrorCard: { gap: 10, alignItems: "flex-start" },
+  retryButton: {
+    borderRadius: radii.button,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  retryButtonText: { color: theme.text, fontSize: 13, fontWeight: "600" },
   errorText: { color: theme.danger, fontSize: 13, lineHeight: 19 },
 });

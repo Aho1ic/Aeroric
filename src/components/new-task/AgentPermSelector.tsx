@@ -8,7 +8,9 @@ import {
   CornerDownLeft,
   Hand,
   ListChecks,
+  PencilLine,
   Plus,
+  ShieldOff,
   Target,
   Zap,
 } from "lucide-react";
@@ -83,6 +85,19 @@ export function composePermissionLabel(mode: PermissionMode) {
   return "请求确认";
 }
 
+// 菜单项图标尺寸:与 13px 项文字匹配的常规大小。
+export const MENU_ITEM_ICON_SIZE = 16;
+
+function PermissionIcon({ mode, size }: { mode: PermissionMode; size: number }) {
+  if (mode === "auto_edit") {
+    return <PencilLine size={size} strokeWidth={2} color="var(--accent)" />;
+  }
+  if (mode === "full_access") {
+    return <ShieldOff size={size} strokeWidth={2} color="var(--danger)" />;
+  }
+  return <Hand size={size} strokeWidth={2} color="var(--warning)" />;
+}
+
 export function composeControlOrder(): string[] {
   return ["more", "agent", "preset", "permission", "launch", "branch", "model", "send"];
 }
@@ -115,8 +130,10 @@ export function composeModelMenuViewportStyle(): CSSProperties {
 export function composeAgentMenuContentStyle(): CSSProperties {
   return {
     ...s.toolbarMenuContent,
-    width: "min(640px, calc(100vw - 16px))",
+    // 按最长配置名撑开(上限为视口),配置名因此总能单行显示而不被迫换行。
+    width: "max-content",
     minWidth: "min(520px, calc(100vw - 16px))",
+    maxWidth: "calc(100vw - 16px)",
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
   };
@@ -125,7 +142,8 @@ export function composeAgentMenuContentStyle(): CSSProperties {
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr) 1px minmax(0, 1fr)",
+    gridTemplateColumns:
+      "minmax(0, max-content) 1px minmax(0, max-content) 1px minmax(0, max-content)",
     gap: 10,
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
@@ -313,7 +331,7 @@ export function AgentPermSelector({
           boxSizing: "border-box",
           width: "100%",
           minWidth: 0,
-          whiteSpace: "normal",
+          whiteSpace: "nowrap",
         }}
         onFocus={(e) => setMenuItemHover(e.currentTarget, true)}
         onBlur={(e) => setMenuItemHover(e.currentTarget, false)}
@@ -328,9 +346,8 @@ export function AgentPermSelector({
           }}
         />
         <Select.ItemText>
-          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-            {agentDisplayLabel(item, agentOptions)}
-          </span>
+          {/* 始终单行;仅当菜单被视口宽度夹住时才用省略号兜底。 */}
+          <span style={s.toolbarBtnLabel}>{agentDisplayLabel(item, agentOptions)}</span>
         </Select.ItemText>
       </Select.Item>
     );
@@ -431,9 +448,13 @@ export function AgentPermSelector({
           }}
         >
           <Select.Trigger
-            style={controlButtonStyle}
+            style={{
+              ...controlButtonStyle,
+              ...(compact ? null : { flex: "0 1 auto", minWidth: 0, maxWidth: 200 }),
+            }}
             aria-label={t("settings.agent")}
             title={agentDisplayLabel(agent, agentOptions)}
+            data-compose-agent-trigger
           >
             <img
               src={agentIcon(agent, agentOptions)}
@@ -442,9 +463,11 @@ export function AgentPermSelector({
                 opacity: isCodexLikeAgent(agent, agentOptions) ? 0.72 : 1,
               }}
             />
-            {!compact && <span>{agentDisplayLabel(agent, agentOptions)}</span>}
             {!compact && (
-              <Select.Icon>
+              <span style={s.toolbarBtnLabel}>{agentDisplayLabel(agent, agentOptions)}</span>
+            )}
+            {!compact && (
+              <Select.Icon style={s.toolbarBtnIcon}>
                 <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
               </Select.Icon>
             )}
@@ -501,27 +524,21 @@ export function AgentPermSelector({
               title={currentDshPreset.label}
               data-dsh-agent-preset-trigger
             >
-              <BookmarkPlus size={14} strokeWidth={2} color="var(--usage-dsh)" />
+              <BookmarkPlus
+                size={14}
+                strokeWidth={2}
+                color="var(--usage-dsh)"
+                style={s.toolbarBtnIcon}
+              />
+              {!compact && <span style={s.toolbarBtnLabel}>{currentDshPreset.label}</span>}
               {!compact && (
-                <span
-                  style={{
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {currentDshPreset.label}
-                </span>
-              )}
-              {!compact && (
-                <Select.Icon>
+                <Select.Icon style={s.toolbarBtnIcon}>
                   <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
                 </Select.Icon>
               )}
             </Select.Trigger>
             <Select.Portal>
-              <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+              <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContentCompact}>
                 <Select.Viewport>
                   {dshPresets.map(({ value, label }) => (
                     <Select.Item
@@ -533,7 +550,12 @@ export function AgentPermSelector({
                       onMouseEnter={(event) => setMenuItemHover(event.currentTarget, true)}
                       onMouseLeave={(event) => setMenuItemHover(event.currentTarget, false)}
                     >
-                      <BookmarkPlus size={13} strokeWidth={2} color="var(--usage-dsh)" />
+                      <BookmarkPlus
+                        size={MENU_ITEM_ICON_SIZE}
+                        strokeWidth={2}
+                        color="var(--usage-dsh)"
+                        style={s.toolbarBtnIcon}
+                      />
                       <Select.ItemText>{label}</Select.ItemText>
                     </Select.Item>
                   ))}
@@ -557,16 +579,18 @@ export function AgentPermSelector({
             aria-label={t("settings.defaultPermissionMode")}
             title={composePermissionLabel(permMode)}
           >
-            <Hand size={14} strokeWidth={2} color="var(--warning)" />
-            {!compact && <span>{composePermissionLabel(permMode)}</span>}
+            <span style={s.toolbarBtnIcon}>
+              <PermissionIcon mode={permMode} size={15} />
+            </span>
+            {!compact && <span style={s.toolbarBtnLabel}>{composePermissionLabel(permMode)}</span>}
             {!compact && (
-              <Select.Icon>
+              <Select.Icon style={s.toolbarBtnIcon}>
                 <ChevronDown size={12} strokeWidth={2.5} style={{ opacity: 0.58 }} />
               </Select.Icon>
             )}
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+            <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContentCompact}>
               <Select.Viewport>
                 {PERMS.map((perm) => (
                   <Select.Item
@@ -578,6 +602,9 @@ export function AgentPermSelector({
                     onMouseEnter={(e) => setMenuItemHover(e.currentTarget, true)}
                     onMouseLeave={(e) => setMenuItemHover(e.currentTarget, false)}
                   >
+                    <span style={s.toolbarBtnIcon}>
+                      <PermissionIcon mode={perm} size={MENU_ITEM_ICON_SIZE} />
+                    </span>
                     <Select.ItemText>{composePermissionLabel(perm)}</Select.ItemText>
                   </Select.Item>
                 ))}

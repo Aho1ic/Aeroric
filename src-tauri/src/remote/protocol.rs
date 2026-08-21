@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const RPC_V2: u32 = 2;
 pub const RPC_V3: u32 = 3;
+pub const PAIRING_CONFIRMATION_V1: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcVersion {
@@ -252,6 +253,10 @@ mod tests {
         assert_eq!(
             fixture["hello"]["capabilities"],
             crate::remote::rpc::rpc_capabilities_value()
+        );
+        assert_eq!(
+            fixture["pairingConfirmation"]["offer"]["pairingConfirmationVersion"],
+            PAIRING_CONFIRMATION_V1
         );
     }
 

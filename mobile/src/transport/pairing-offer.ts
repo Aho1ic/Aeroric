@@ -4,6 +4,7 @@
  * 纯 TS 无 RN 依赖,便于 vitest 覆盖。
  */
 
+import { PAIRING_CONFIRMATION_V1 } from "@aeroric/remote-contracts";
 import type { PairingOffer } from "../types";
 
 export const SUPPORTED_OFFER_VERSION = 2;
@@ -74,5 +75,9 @@ export function parsePairingOffer(input: string): PairingOffer {
     hostName: typeof offer.hostName === "string" && offer.hostName ? offer.hostName : "Aeroric",
     hostId: typeof offer.hostId === "string" && offer.hostId ? offer.hostId : undefined,
     publicKey: offer.publicKey,
+    pairingConfirmationVersion:
+      offer.pairingConfirmationVersion === PAIRING_CONFIRMATION_V1
+        ? PAIRING_CONFIRMATION_V1
+        : undefined,
   };
 }

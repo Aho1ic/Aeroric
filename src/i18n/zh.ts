@@ -2479,8 +2479,8 @@ export const zh: Record<string, string> = {
   "usageStats.failed": "加载统计失败：{error}",
   "usageStats.empty": "该时间范围内没有找到本地用量。",
   "usageStats.costNote":
-    "成本按 API 公开单价估算，订阅套餐、优惠、长上下文计价和自定义供应商可能不同。",
-  "usageStats.unpricedNote": "另有 {count} 个请求使用未知价格模型，未计入成本。",
+    "成本覆盖全部模型与 agent，按 API 公开单价估算；订阅套餐、优惠、长上下文计价和自定义供应商可能不同。",
+  "usageStats.estimatedNote": "其中 {count} 个请求的模型无公开价目，按同档模型单价推算。",
   "timeline.title": "时间线",
   "timeline.subtitle": "跨项目回顾你最近的工作 · 最近 7 天",
   "timeline.today": "今天",

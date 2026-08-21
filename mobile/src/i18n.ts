@@ -104,6 +104,7 @@ const zh = {
   "hosts.empty": "还没有配对的电脑。",
   "hosts.addNew": "+ 配对新电脑",
   "hosts.keepOneEndpoint": "至少保留一个 ws:// 或 wss:// 地址",
+  "hosts.loadFailed": "无法读取已保存的主机。为保护现有凭据，修复前不会继续配对或写入。",
 
   // 新建任务
   "newTask.offline": "未连接到电脑,连接恢复后才能创建任务。",
@@ -378,6 +379,8 @@ const en: Record<MessageKey, string> = {
   "hosts.empty": "No paired computers yet.",
   "hosts.addNew": "+ Pair a new computer",
   "hosts.keepOneEndpoint": "Keep at least one ws:// or wss:// address",
+  "hosts.loadFailed":
+    "Saved hosts could not be read. Pairing and writes are paused to protect existing credentials.",
 
   "newTask.offline": "Not connected — you can create tasks once the connection is back.",
   "newTask.unsupported": "This desktop version does not provide mobile task creation.",

@@ -350,8 +350,8 @@ describe("NewTaskView with dsh selected", () => {
     const branchButton = screen.getByRole("button", { name: "Base branch" });
 
     expect(s.newTaskOuter).toEqual(expect.objectContaining({ padding: "0 20px" }));
-    expect(s.composeCard).toEqual(expect.objectContaining({ maxWidth: 940 }));
-    expect(s.composeActionDock).toEqual(expect.objectContaining({ maxWidth: 940 }));
+    expect(s.composeCard).toEqual(expect.objectContaining({ maxWidth: 1040 }));
+    expect(s.composeActionDock).toEqual(expect.objectContaining({ maxWidth: 1040 }));
     expect(branchButton).toHaveStyle({
       flex: "0 1 132px",
       minWidth: "0",
@@ -376,6 +376,40 @@ describe("NewTaskView with dsh selected", () => {
       minWidth: "0",
       overflow: "hidden",
     });
+  });
+
+  it("keeps trigger icons visible and labels elided when a config name is long", async () => {
+    renderView({ ...dshDraft(), baseBranch: "main" });
+
+    const agentTrigger = await screen.findByRole("combobox", { name: "Agent" });
+
+    // 居中 + overflow hidden 会让首尾同时被裁,最左侧图标先消失,所以必须左对齐。
+    expect(s.toolbarBtn).toEqual(expect.objectContaining({ justifyContent: "flex-start" }));
+    expect(agentTrigger).toHaveStyle({ flex: "0 1 auto", minWidth: "0", maxWidth: "200px" });
+
+    // 挤压时先省略文字,图标(lucide SVG 默认可压缩)不能被压掉。
+    expect(s.toolbarBtnIcon).toEqual({ flexShrink: 0 });
+    for (const label of [
+      agentTrigger.querySelector("span"),
+      screen.getByRole("combobox", { name: "Agent preset" }).querySelector("span"),
+    ]) {
+      expect(label).toHaveStyle({
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      });
+    }
+  });
+
+  it("sizes short-label menus to their content instead of a fixed 180px", () => {
+    // 模式/预设/权限的选项文字很短,180px 下左右都是空白。
+    expect(s.toolbarMenuContentCompact).toEqual(
+      expect.objectContaining({
+        minWidth: 0,
+        width: "max-content",
+        maxWidth: "calc(100vw - 16px)",
+      }),
+    );
   });
 
   it("renders the DSH preset as an icon-only control in compact mode", () => {

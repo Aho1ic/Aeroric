@@ -52,7 +52,7 @@ export const panels = {
   },
   composeCard: {
     width: "100%",
-    maxWidth: 940,
+    maxWidth: 1040,
     background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: "var(--radius-lg) var(--radius-lg) 0 0",
@@ -214,7 +214,7 @@ export const panels = {
   },
   composeActionDock: {
     width: "100%",
-    maxWidth: 940,
+    maxWidth: 1040,
     marginTop: -1,
     padding: "6px 7px",
     borderRadius: "0 0 var(--radius-lg) var(--radius-lg)",
@@ -303,7 +303,9 @@ export const panels = {
   toolbarBtn: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "center",
+    // 左对齐:配合 overflow hidden，内容超宽时只裁尾部文字。居中会让首尾同时被裁,
+    // 最左侧的图标先消失。
+    justifyContent: "flex-start",
     gap: 4,
     minHeight: 26,
     padding: "3px 7px",
@@ -341,6 +343,17 @@ export const panels = {
     border: "1px solid var(--border-strong)",
     color: "var(--control-active-fg)",
   },
+  // trigger 内的图标:lucide SVG 默认可被 flex 压缩,挤压时会先被压扁再消失。
+  toolbarBtnIcon: {
+    flexShrink: 0,
+  },
+  // trigger 内的文字:先让它省略,而不是把兄弟图标挤出可视区。
+  toolbarBtnLabel: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+  },
   toolbarMenuContent: {
     background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
     backdropFilter: "blur(18px) saturate(1.16)",
@@ -350,6 +363,20 @@ export const panels = {
     boxShadow: "var(--shadow-popover)",
     padding: 5,
     minWidth: 180,
+    zIndex: zLayers.popover,
+  },
+  // 选项文字很短的菜单(模式/预设/权限):按内容宽度收紧,避免 180px 下大片空白。
+  toolbarMenuContentCompact: {
+    background: "color-mix(in srgb, var(--bg-card) 90%, transparent)",
+    backdropFilter: "blur(18px) saturate(1.16)",
+    WebkitBackdropFilter: "blur(18px) saturate(1.16)",
+    border: "1px solid var(--border-medium)",
+    borderRadius: "var(--radius-lg)",
+    boxShadow: "var(--shadow-popover)",
+    padding: 5,
+    minWidth: 0,
+    width: "max-content",
+    maxWidth: "calc(100vw - 16px)",
     zIndex: zLayers.popover,
   },
   toolbarActionMenuContent: {

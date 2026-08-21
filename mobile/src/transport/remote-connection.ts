@@ -11,6 +11,10 @@
  * 定时器与随机源可注入,保证 vitest 全覆盖。
  */
 
+import {
+  PAIRING_CONFIRMATION_V1,
+  type PairingConfirmationVersion,
+} from "@aeroric/remote-contracts";
 import type { HostIdentity } from "../types";
 import {
   E2eeSession,
@@ -61,7 +65,13 @@ export interface WebSocketLike {
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
-export type PairingFailureKind = "network" | "host_identity" | "invite" | "auth_response";
+export type PairingFailureKind =
+  | "network"
+  | "host_identity"
+  | "invite"
+  | "auth_response"
+  | "credential_storage"
+  | "confirmation";
 
 export class PairingError extends Error {
   constructor(
@@ -79,6 +89,8 @@ const pairingFailurePriority: Record<PairingFailureKind, number> = {
   auth_response: 2,
   host_identity: 3,
   invite: 4,
+  confirmation: 5,
+  credential_storage: 6,
 };
 
 /** Keep the most actionable failure after all advertised endpoints were tried. */
@@ -145,7 +157,12 @@ export interface AuthSuccess {
   rpcVersion?: RpcVersion;
   rpcVersions?: RpcVersion[];
   capabilities?: RpcCapability[];
+  pairingId?: string;
+  pairingConfirmationVersion?: PairingConfirmationVersion;
 }
+
+export type PairingCredentials = Required<Pick<AuthSuccess, "deviceId" | "deviceToken">> &
+  AuthSuccess;
 
 export class RemoteRpcError extends Error {
   readonly code: string;
@@ -1216,7 +1233,12 @@ export function pairWithInvite(options: {
   timeoutMs?: number;
   timers?: TimerApi;
   randomBytes?: RandomBytes;
-}): Promise<Required<Pick<AuthSuccess, "deviceId" | "deviceToken">> & AuthSuccess> {
+  pairingConfirmationVersion?: PairingConfirmationVersion;
+  /** Must durably stage the provisional token before confirmation is sent. */
+  persistProvisionalCredentials?: (credentials: PairingCredentials) => Promise<void>;
+  /** Called only after an explicit negative confirmation, never on an uncertain disconnect. */
+  discardProvisionalCredentials?: () => Promise<void>;
+}): Promise<PairingCredentials> {
   const wsFactory = options.wsFactory ?? defaultWsFactory;
   const timers = options.timers ?? defaultTimers;
   return new Promise((resolve, reject) => {
@@ -1224,7 +1246,8 @@ export function pairWithInvite(options: {
     let ws: WebSocketLike;
     let session: E2eeSession | null = null;
     let handshake: PendingHandshake | null = null;
-    let phase: "connecting" | "handshake" | "auth" = "connecting";
+    let phase: "connecting" | "handshake" | "auth" | "confirm" = "connecting";
+    let provisionalResult: PairingCredentials | null = null;
     let socketError: string | null = null;
     const disconnectedMessage = (event?: { code?: number; reason?: string }): string => {
       const closeDetails = [
@@ -1240,6 +1263,9 @@ export function pairWithInvite(options: {
       }
       if (phase === "handshake") {
         return `电脑在加密握手阶段断开连接,请确认二维码来自当前电脑${suffix}`;
+      }
+      if (phase === "confirm") {
+        return `电脑在确认配对持久化时断开连接；凭据已保留，可稍后恢复${suffix}`;
       }
       return `电脑在验证配对码时断开连接,请重新生成二维码${suffix}`;
     };
@@ -1292,7 +1318,13 @@ export function pairWithInvite(options: {
             v: PROTOCOL_VERSION,
             id: 1,
             method: "auth",
-            params: { invite: options.invite, deviceName: options.deviceName },
+            params: {
+              invite: options.invite,
+              deviceName: options.deviceName,
+              ...(options.pairingConfirmationVersion === PAIRING_CONFIRMATION_V1
+                ? { pairingConfirmationVersion: PAIRING_CONFIRMATION_V1 }
+                : {}),
+            },
           });
           ws.send(session.encryptFrame(KIND_CTRL, textEncoder.encode(payload)));
         } catch (err) {
@@ -1330,14 +1362,68 @@ export function pairWithInvite(options: {
             );
             return;
           }
+          if (frame.id === 2 && provisionalResult) {
+            if (frame.ok && (frame.result as { confirmed?: unknown } | undefined)?.confirmed) {
+              const result = provisionalResult;
+              finish(() => resolve(result));
+            } else {
+              const error =
+                typeof frame.error === "string"
+                  ? frame.error
+                  : (frame.error?.message ?? frame.error?.code);
+              try {
+                await options.discardProvisionalCredentials?.();
+              } catch {
+                // Keeping the pending key is safer than pretending its
+                // deletion succeeded. Startup recovery can inspect it later.
+              }
+              finish(() => reject(new PairingError("confirmation", error ?? "电脑未能确认配对")));
+            }
+            return;
+          }
           if (frame.id !== 1) return;
           if (frame.ok && frame.result?.deviceId && frame.result.deviceToken) {
-            const result = frame.result;
-            finish(() =>
-              resolve(
-                result as Required<Pick<AuthSuccess, "deviceId" | "deviceToken">> & AuthSuccess,
-              ),
-            );
+            const result = frame.result as PairingCredentials;
+            const usesConfirmation =
+              options.pairingConfirmationVersion === PAIRING_CONFIRMATION_V1 &&
+              result.pairingConfirmationVersion === PAIRING_CONFIRMATION_V1 &&
+              typeof result.pairingId === "string" &&
+              result.pairingId.length > 0;
+            if (!usesConfirmation) {
+              finish(() => resolve(result));
+              return;
+            }
+            if (!options.persistProvisionalCredentials) {
+              finish(() =>
+                reject(
+                  new PairingError("credential_storage", "配对凭据尚未持久化，无法向电脑确认授权"),
+                ),
+              );
+              return;
+            }
+            try {
+              await options.persistProvisionalCredentials(result);
+            } catch (error) {
+              finish(() => reject(pairingError("credential_storage", error)));
+              return;
+            }
+            if (settled) return;
+            provisionalResult = result;
+            phase = "confirm";
+            try {
+              const payload = JSON.stringify({
+                v: PROTOCOL_VERSION,
+                id: 2,
+                method: "pairing.confirm",
+                params: {
+                  pairingId: result.pairingId,
+                  pairingConfirmationVersion: PAIRING_CONFIRMATION_V1,
+                },
+              });
+              ws.send(session.encryptFrame(KIND_CTRL, textEncoder.encode(payload)));
+            } catch (error) {
+              finish(() => reject(pairingError("confirmation", error)));
+            }
           } else {
             const error =
               typeof frame.error === "string"

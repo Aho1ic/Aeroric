@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::stream::SplitSink;
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -28,7 +28,7 @@ use tokio_tungstenite::WebSocketStream;
 use super::auth::AuthOutcome;
 use super::protocol::{
     parse_auth_request, parse_request, push_json, select_rpc_version, RpcResponse, RpcVersion,
-    PROTOCOL_VERSION,
+    PAIRING_CONFIRMATION_V1, PROTOCOL_VERSION,
 };
 use super::{audit, crypto, orca_crypto, orca_rpc, rpc, RemoteState};
 
@@ -593,6 +593,7 @@ struct AuthenticatedFirstMessage {
     device_id: String,
     reply: String,
     paired_device_name: Option<String>,
+    provisional_pairing_id: Option<String>,
     rpc_version: RpcVersion,
 }
 
@@ -600,7 +601,12 @@ async fn abort_pending_pairing<R: Runtime>(
     app: &AppHandle<R>,
     authentication: &AuthenticatedFirstMessage,
 ) {
-    if authentication.paired_device_name.is_some() {
+    if let Some(pairing_id) = authentication.provisional_pairing_id.as_deref() {
+        app.state::<RemoteState>()
+            .auth
+            .lock()
+            .abort_pairing(pairing_id);
+    } else if authentication.paired_device_name.is_some() {
         super::abort_unconfirmed_pairing(app, &authentication.device_id).await;
     }
 }
@@ -660,6 +666,99 @@ async fn commit_pending_pairing_unless_stopped<R: Runtime>(
     }
     commit_pending_pairing(app, peer, authentication);
     true
+}
+
+/// Wait for the v1 confirmation on the same encrypted connection. Persistence
+/// failures are reported without dropping the in-memory reservation, so the
+/// peer may retry while the bounded authentication window remains open.
+async fn await_pairing_confirmation<R, S>(
+    app: &AppHandle<R>,
+    sink: &mut SplitSink<WebSocketStream<S>, Message>,
+    stream: &mut SplitStream<WebSocketStream<S>>,
+    session: &mut NegotiatedSession,
+    authentication: &AuthenticatedFirstMessage,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Option<String>
+where
+    R: Runtime,
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let expected_pairing_id = authentication.provisional_pairing_id.as_deref()?;
+    let deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
+    loop {
+        let received = tokio::select! {
+            biased;
+            _ = shutdown.changed() => return None,
+            received = tokio::time::timeout_at(deadline, stream.next()) => received,
+        };
+        let message = match received {
+            Ok(Some(Ok(message))) => message,
+            _ => return None,
+        };
+        if let Message::Ping(payload) = message {
+            if sink.send(Message::Pong(payload)).await.is_err() {
+                return None;
+            }
+            continue;
+        }
+        let text = match session.decrypt_message(&message) {
+            Ok(DecryptedMessage::Control(text)) => text,
+            _ => return None,
+        };
+        let req = match parse_auth_request(&text) {
+            Ok(req) => req,
+            Err(error) => {
+                let reply = RpcResponse::malformed(RpcVersion::V2, error).to_json();
+                if !send_encrypted(sink, session, crypto::KIND_CTRL, reply.as_bytes()).await {
+                    return None;
+                }
+                continue;
+            }
+        };
+        let pairing_id = req.params.get("pairingId").and_then(Value::as_str);
+        let confirmation_version = req
+            .params
+            .get("pairingConfirmationVersion")
+            .and_then(Value::as_u64);
+        if req.method != "pairing.confirm"
+            || pairing_id != Some(expected_pairing_id)
+            || confirmation_version != Some(u64::from(PAIRING_CONFIRMATION_V1))
+        {
+            let reply =
+                RpcResponse::failure(RpcVersion::V2, req.id, "Invalid pairing confirmation")
+                    .to_json();
+            if !send_encrypted(sink, session, crypto::KIND_CTRL, reply.as_bytes()).await {
+                return None;
+            }
+            continue;
+        }
+
+        let confirmation = {
+            let state = app.state::<RemoteState>();
+            let _lifecycle = state.lifecycle.lock().await;
+            if *shutdown.borrow() {
+                return None;
+            }
+            // guard 绑成局部变量,使其先于 `state` 释放。
+            let mut auth = state.auth.lock();
+            auth.confirm_pairing(expected_pairing_id)
+        };
+        match confirmation {
+            Ok((device_id, _)) if device_id == authentication.device_id => {
+                return Some(
+                    RpcResponse::success(RpcVersion::V2, req.id, json!({ "confirmed": true }))
+                        .to_json(),
+                );
+            }
+            Ok(_) => return None,
+            Err(error) => {
+                let reply = RpcResponse::failure(RpcVersion::V2, req.id, error).to_json();
+                if !send_encrypted(sink, session, crypto::KIND_CTRL, reply.as_bytes()).await {
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 /// 会话主循环:E2EE 握手 → 认证 → 请求循环。LAN 与 relay 数据连接共用。
@@ -787,9 +886,45 @@ pub(crate) async fn serve_ws<R, S>(
         return;
     }
 
+    let confirmation_reply = if authentication.provisional_pairing_id.is_some() {
+        // Hand provisional credentials to the phone while the invite and
+        // device remain memory-only. The phone must durably stage them before
+        // it sends the next encrypted control request.
+        if !send_encrypted_until_shutdown(
+            &mut sink,
+            &mut session,
+            crypto::KIND_CTRL,
+            authentication.reply.as_bytes(),
+            &mut shutdown,
+        )
+        .await
+        {
+            abort_pending_pairing(&app, &authentication).await;
+            return;
+        }
+        let reply = await_pairing_confirmation(
+            &app,
+            &mut sink,
+            &mut stream,
+            &mut session,
+            &authentication,
+            &mut shutdown,
+        )
+        .await;
+        let Some(reply) = reply else {
+            abort_pending_pairing(&app, &authentication).await;
+            let _ = sink.close().await;
+            return;
+        };
+        Some(reply)
+    } else {
+        None
+    };
+
     // A newly paired device is the only authentication outcome that can widen
-    // the listener. Existing device-token authentication cannot change that
-    // policy, so avoid an unnecessary rebind on every reconnect.
+    // the listener. In the confirmation flow this happens only after the
+    // durable device commit above; existing device-token authentication cannot
+    // change listener policy.
     if authentication.paired_device_name.is_some()
         && super::reconcile_listener_scope_for_current_policy(&app)
             .await
@@ -805,10 +940,9 @@ pub(crate) async fn serve_ws<R, S>(
         return;
     }
 
-    // Register before awaiting the auth reply, while holding the same auth
-    // lock used by revocation. This closes the otherwise reachable window in
-    // which authentication succeeded, revocation found no registered client,
-    // and this task subsequently registered a live session.
+    // Register before the final reply (legacy auth result or confirmation
+    // ACK), while holding the same auth lock used by revocation. This closes
+    // the otherwise reachable auth-to-register window.
     let state = app.state::<RemoteState>();
     let clients = state.clients.clone();
     let (tx, mut rx) = mpsc::channel::<Message>(OUTBOUND_QUEUE_CAPACITY);
@@ -831,7 +965,7 @@ pub(crate) async fn serve_ws<R, S>(
         return;
     };
     // A revoke can win immediately after registration. Check its disconnect
-    // signal before handing a newly paired device its token.
+    // signal before reporting the final commit to the peer.
     if *shutdown.borrow() || *disconnect_rx.borrow() {
         clients.unregister(client_id);
         abort_pending_pairing(&app, &authentication).await;
@@ -839,11 +973,14 @@ pub(crate) async fn serve_ws<R, S>(
         return;
     }
 
+    let final_reply = confirmation_reply
+        .as_deref()
+        .unwrap_or(authentication.reply.as_str());
     if !send_encrypted_until_shutdown(
         &mut sink,
         &mut session,
         crypto::KIND_CTRL,
-        authentication.reply.as_bytes(),
+        final_reply.as_bytes(),
         &mut shutdown,
     )
     .await
@@ -1077,10 +1214,11 @@ fn authenticate_first_message<R: Runtime>(
                     })
                     .to_string(),
                     paired_device_name: None,
+                    provisional_pairing_id: None,
                     rpc_version: RpcVersion::V2,
                 })
             }
-            Ok(AuthOutcome::Paired { .. }) => {
+            Ok(AuthOutcome::Paired { .. } | AuthOutcome::ProvisionalPaired { .. }) => {
                 Err(json!({ "type": "e2ee_error", "error": { "code": "bad_auth" } }).to_string())
             }
             Err(error) => {
@@ -1111,12 +1249,24 @@ fn authenticate_first_message<R: Runtime>(
     let invite = req.params.get("invite").and_then(Value::as_str);
     let device_token = req.params.get("deviceToken").and_then(Value::as_str);
     let device_name = req.params.get("deviceName").and_then(Value::as_str);
+    let pairing_confirmation = req
+        .params
+        .get("pairingConfirmationVersion")
+        .and_then(Value::as_u64)
+        == Some(u64::from(PAIRING_CONFIRMATION_V1));
 
     let state = app.state::<RemoteState>();
-    let outcome = state
-        .auth
-        .lock()
-        .authenticate(peer, invite, device_token, device_name);
+    let outcome = if pairing_confirmation && device_token.is_none() {
+        match invite {
+            Some(invite) => state.auth.lock().begin_pairing(peer, invite, device_name),
+            None => Err("Pairing confirmation requires an invite".to_string()),
+        }
+    } else {
+        state
+            .auth
+            .lock()
+            .authenticate(peer, invite, device_token, device_name)
+    };
     let audit_enabled = state.audit_enabled;
 
     let host = json!({
@@ -1147,6 +1297,35 @@ fn authenticate_first_message<R: Runtime>(
                 device_id,
                 reply: reply.to_json(),
                 paired_device_name: Some(device_name),
+                provisional_pairing_id: None,
+                rpc_version,
+            })
+        }
+        Ok(AuthOutcome::ProvisionalPaired {
+            device_id,
+            device_name,
+            device_token,
+            pairing_id,
+        }) => {
+            let reply = RpcResponse::success(
+                RpcVersion::V2,
+                req.id,
+                json!({
+                    "deviceId": device_id,
+                    "deviceToken": device_token,
+                    "pairingId": pairing_id,
+                    "pairingConfirmationVersion": PAIRING_CONFIRMATION_V1,
+                    "host": host,
+                    "rpcVersion": rpc_version.as_u32(),
+                    "rpcVersions": [3, 2],
+                    "capabilities": super::rpc::rpc_capabilities_value(),
+                }),
+            );
+            Ok(AuthenticatedFirstMessage {
+                device_id,
+                reply: reply.to_json(),
+                paired_device_name: Some(device_name),
+                provisional_pairing_id: Some(pairing_id),
                 rpc_version,
             })
         }
@@ -1172,6 +1351,7 @@ fn authenticate_first_message<R: Runtime>(
                 device_id,
                 reply: reply.to_json(),
                 paired_device_name: None,
+                provisional_pairing_id: None,
                 rpc_version,
             })
         }

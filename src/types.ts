@@ -839,8 +839,10 @@ export interface UsageStatisticsTotals {
   cacheHitRate: number;
   requestCount: number;
   totalCost: number;
+  /** 命中公开价目表的请求数。 */
   pricedRequestCount: number;
-  unpricedRequestCount: number;
+  /** 无公开价目、按同档模型推算单价的请求数（成本仍计入 totalCost）。 */
+  estimatedRequestCount: number;
 }
 
 export interface UsageStatisticsDay extends UsageStatisticsTotals {

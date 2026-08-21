@@ -490,6 +490,7 @@ function SourceSummary({
   title: string;
   locale: string;
 }) {
+  // 每个 agent 都带成本估算,便于核对总成本的构成。
   const max = Math.max(1, codex.totalTokens, claude.totalTokens, dsh?.totalTokens ?? 0);
   return (
     <section className="usage-panel" style={s.usageSourceSummary}>
@@ -498,7 +499,6 @@ function SourceSummary({
         {[
           { name: "Codex", totals: codex, color: "var(--accent)" },
           { name: "Claude", totals: claude, color: "var(--success)" },
-          // dsh 无 rate-limit API,来源汇总只展示本地聚合的 token 数(降级展示)。
           ...(dsh ? [{ name: "DeepSeek", totals: dsh, color: "var(--info, #4D6BFE)" }] : []),
         ].map((item) => (
           <div key={item.name} style={s.usageSourceRow}>
@@ -519,6 +519,7 @@ function SourceSummary({
             <span style={s.usageSourceValue}>
               {formatInteger(locale, item.totals.requestCount)} {requestLabel}
             </span>
+            <span style={s.usageSourceValue}>{formatCost(locale, item.totals.totalCost)}</span>
           </div>
         ))}
       </div>
@@ -778,9 +779,9 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
               <Info size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
                 {t("usageStats.costNote")}
-                {statistics.totals.unpricedRequestCount > 0
-                  ? ` ${t("usageStats.unpricedNote", {
-                      count: statistics.totals.unpricedRequestCount,
+                {statistics.totals.estimatedRequestCount > 0
+                  ? ` ${t("usageStats.estimatedNote", {
+                      count: statistics.totals.estimatedRequestCount,
                     })}`
                   : ""}
               </span>

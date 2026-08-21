@@ -680,6 +680,20 @@ fn read_custom_presets(home: &Path) -> Vec<DshAgentPreset> {
 }
 
 fn settings_snapshot_at(home: &Path, agent: &str) -> Result<DshSettingsSnapshot, String> {
+    settings_snapshot_with_inherited_default(home, agent, None)
+}
+
+/// 读取一个 home 的设置快照。
+///
+/// `inherited_default` 是"该 home 自己没写 `agent-presets.default` 时"的兜底,
+/// 由调用方从内建 dsh home 取(见 `get_dsh_settings_snapshot`);传 `None` 就是
+/// 纯本地语义。继承值必须在**目标 home** 里真实存在才采用,否则别的 home 独有的
+/// 自定义预设会被继承成一个前端校验不过的 id。
+fn settings_snapshot_with_inherited_default(
+    home: &Path,
+    agent: &str,
+    inherited_default: Option<&str>,
+) -> Result<DshSettingsSnapshot, String> {
     let document = read_settings_document(home)?;
     let shell = section(&document, "shell");
     let agent_loop = section(&document, "agent-loop");
@@ -703,15 +717,35 @@ fn settings_snapshot_at(home: &Path, agent: &str) -> Result<DshSettingsSnapshot,
             api_key_configured: credential_configured(home, agent),
         },
         default_preset: optional_string(agent_presets, "default")
+            .or_else(|| {
+                inherited_default
+                    .filter(|preset| preset_exists(home, preset))
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| DEFAULT_AGENT_PRESET.to_string()),
         custom_presets: read_custom_presets(home),
     })
 }
 
+/// 内建 dsh home 里保存的默认 Agent 预设。
+///
+/// 设置页的「DSH 插件 & 预设 → Agent 预设」始终写内建 home(`agent: "dsh"`),它是
+/// 全局默认;dsh-like 自定义档案各有自己的隔离 home,自己没写就继承这里。
+fn builtin_default_preset() -> Option<String> {
+    let home = crate::dsh_home::dsh_home().ok()?;
+    let document = read_settings_document(&home).ok()?;
+    optional_string(section(&document, "agent-presets"), "default")
+}
+
 #[tauri::command]
 pub fn get_dsh_settings_snapshot(agent: String) -> Result<DshSettingsSnapshot, String> {
     let home = crate::dsh_home::ensure_dsh_home_for(&agent)?;
-    settings_snapshot_at(&home, &agent)
+    // 内建 home 自己就是默认值的来源,不需要(也不能)再向自己继承。
+    let inherited = match crate::dsh_home::dsh_home() {
+        Ok(builtin) if builtin == home => None,
+        _ => builtin_default_preset(),
+    };
+    settings_snapshot_with_inherited_default(&home, &agent, inherited.as_deref())
 }
 
 /// Open only the DSH settings file resolved by the backend. The frontend never
@@ -956,6 +990,55 @@ mod tests {
         assert_eq!(snapshot.default_preset, "minimal");
         assert_eq!(snapshot.custom_presets[0].id, "my-agent");
         assert_eq!(snapshot.custom_presets[0].name.as_deref(), Some("My Agent"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn inherits_the_builtin_default_preset_only_when_the_home_has_none() {
+        let home = temp_home("inherit-preset");
+
+        // 自己没写 agent-presets.default 时继承内建 home 的全局默认。
+        let snapshot =
+            settings_snapshot_with_inherited_default(&home, "missing-test-agent", Some("minimal"))
+                .unwrap();
+        assert_eq!(snapshot.default_preset, "minimal");
+
+        // 自己显式写了就以本地为准,继承值不参与。
+        fs::write(
+            home.join("settings.yaml"),
+            "agent-presets:\n  default: code\n",
+        )
+        .unwrap();
+        let snapshot =
+            settings_snapshot_with_inherited_default(&home, "missing-test-agent", Some("minimal"))
+                .unwrap();
+        assert_eq!(snapshot.default_preset, "code");
+
+        // 继承值在本 home 不存在(别的 home 独有的自定义预设)时回落 standard。
+        fs::write(home.join("settings.yaml"), "foreign:\n  keep: yes\n").unwrap();
+        let snapshot = settings_snapshot_with_inherited_default(
+            &home,
+            "missing-test-agent",
+            Some("only-elsewhere"),
+        )
+        .unwrap();
+        assert_eq!(snapshot.default_preset, "standard");
+
+        // 本 home 里真实存在的自定义预设可以被继承。
+        let custom = home.join(".agent-presets").join("only-elsewhere");
+        fs::create_dir_all(&custom).unwrap();
+        fs::write(custom.join("agent.cordis.yml"), "[]\n").unwrap();
+        let snapshot = settings_snapshot_with_inherited_default(
+            &home,
+            "missing-test-agent",
+            Some("only-elsewhere"),
+        )
+        .unwrap();
+        assert_eq!(snapshot.default_preset, "only-elsewhere");
+
+        // 没有继承值时仍是纯本地语义。
+        let snapshot = settings_snapshot_at(&home, "missing-test-agent").unwrap();
+        assert_eq!(snapshot.default_preset, "standard");
         let _ = fs::remove_dir_all(home);
     }
 

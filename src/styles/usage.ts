@@ -371,7 +371,8 @@ export const usage = {
   usageSourceRow: {
     minWidth: 0,
     display: "grid",
-    gridTemplateColumns: "80px minmax(110px, 1fr) auto auto",
+    // 列:名称 / 占比条 / tokens / 请求数 / 成本估算。
+    gridTemplateColumns: "80px minmax(110px, 1fr) auto auto auto",
     alignItems: "center",
     gap: 12,
     color: "var(--text-secondary)",

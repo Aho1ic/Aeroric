@@ -6173,7 +6173,10 @@ mod tests {
             "socket hang up"
         );
         // Nothing is dropped when the shape is not the documented one.
-        assert_eq!(dsh_failure_message(&json!("plain refusal")), "plain refusal");
+        assert_eq!(
+            dsh_failure_message(&json!("plain refusal")),
+            "plain refusal"
+        );
         assert_eq!(dsh_failure_message(&Value::Null), "null");
     }
 
