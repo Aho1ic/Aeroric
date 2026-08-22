@@ -10,9 +10,9 @@
 
 ## 踩坑：鼠标上报有两个禁用来源
 
-2026-08-22 排查时只删掉 `src-tauri/src/pty.rs` 里 `build_claude_cmd` 强制的 `CLAUDE_CODE_DISABLE_MOUSE=1`，症状照旧——同一个变量还从 `launchctl setenv` 经 GUI 进程环境继承下来，而 `CommandBuilder::new()` 会快照父进程环境（见 `pty.rs` 中 `setup_env` 的注释）。**两个来源都得清，少一个都不生效。**
+2026-08-22 改完 `src-tauri/src/pty.rs` 里 `build_claude_cmd` 的 `CLAUDE_CODE_DISABLE_MOUSE=1` 后症状照旧，因为**跑的还是旧二进制**——`/Applications/Aeroric.app` 当时并没有被换掉。这个变量是旧二进制**逐个子进程注入**的，不是登录会话级污染：app 进程自己的环境里没有它（`ps eww -p <app pid>` 数出 0），`launchctl getenv CLAUDE_CODE_DISABLE_MOUSE` 也是空的，只有被它拉起的 claude 子进程有。
 
-排查手段：`ps eww -p <pid>` 看进程真实环境、`launchctl getenv <VAR>` 看登录会话级污染。`launchctl unsetenv` 只对之后启动的进程生效，已在跑的进程环境是固定的。
+所以验证"这类 env 改动生效了没"要看的是**新拉起的 agent 子进程**，而且前提是 app 本体确实已替换（比对 `Contents/MacOS/aeroric` 的时间戳，或直接在二进制里 grep 变量名）。顺带一个连带效应：`cargo test` 跑在 agent 自己的 shell 里，那个 shell 的环境就带着被注入的变量，而 `CommandBuilder::new()` 会快照父进程环境（见 `pty.rs` 中 `setup_env` 的注释），所以断言"env 为 None"会失败——要跟基线 `CommandBuilder` 对比才只证明"我们没有再自己设它"。
 
 配套的一个认知错误也记在这里：`d18976871` 的注释称关掉鼠标后"滚轮回退到 xterm 自身 scrollback"，这是错的（alt screen 没有 scrollback），错误前提又催生了"alt screen 里直接吞掉滚轮"的补丁，症状从"顶掉草稿"变成"完全没反应"。
 
