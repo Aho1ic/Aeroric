@@ -376,11 +376,13 @@ export interface SmartWriter {
   setSelectionPaused: (paused: boolean) => void;
   setCompositionPaused: (paused: boolean) => void;
   pauseForUserInput: (durationMs?: number) => void;
+  isIdle: () => boolean;
 }
 
 interface SmartWriterOptions {
   resumeOnAnyOutput?: boolean;
   themeAwareAnsiRemap?: boolean;
+  highlightPlainOutput?: boolean;
 }
 
 interface TerminalSelectionGuardOptions {
@@ -823,15 +825,34 @@ export function createSmartWriter(
   getThemeVariant: () => ThemeVariant = () => "dark",
   options: SmartWriterOptions = {},
 ): SmartWriter {
+  const shouldHighlightPlainOutput = options.highlightPlainOutput ?? !options.themeAwareAnsiRemap;
   const state = {
     pendingChunks: [] as Array<{ data: string; callback?: () => void }>,
     watermark: 0,
+    immediateWrites: 0,
     paused: false,
     selectionPaused: false,
     compositionPaused: false,
     inputPausedUntil: 0,
     drainScheduled: false,
+    sawTerminalControl: false,
   };
+
+  function transformOutput(data: string): string {
+    // PTY read / IPC batching boundaries are arbitrary and can split one CSI
+    // sequence into "\x1b[" and "12;40H". Once a stream has shown terminal
+    // control, keep later control-free chunks raw: inserting highlight SGR into
+    // the continuation would abort cursor addressing and scatter TUI fragments.
+    if (hasTerminalControlSequence(data) || data.includes("\r")) {
+      state.sawTerminalControl = true;
+    }
+    const highlighted =
+      shouldHighlightPlainOutput && !state.sawTerminalControl
+        ? colorizePlainTerminalOutput(data)
+        : data;
+    const remapOutput = options.themeAwareAnsiRemap ? remapAnsiForTheme : remapLightAnsiForeground;
+    return remapOutput(highlighted, getThemeVariant());
+  }
 
   function flushOne(data: string, callback?: () => void) {
     state.watermark += data.length;
@@ -911,8 +932,7 @@ export function createSmartWriter(
     if (state.inputPausedUntil > nowMs() && (hasInteractiveControl || options.resumeOnAnyOutput)) {
       state.inputPausedUntil = 0;
     }
-    const remapOutput = options.themeAwareAnsiRemap ? remapAnsiForTheme : remapLightAnsiForeground;
-    const output = remapOutput(colorizePlainTerminalOutput(data), getThemeVariant());
+    const output = transformOutput(data);
     const chunks = splitTerminalWriteChunk(output);
     for (let index = 0; index < chunks.length; index += 1) {
       state.pendingChunks.push({
@@ -929,14 +949,22 @@ export function createSmartWriter(
       callback?.();
       return;
     }
-    const remapOutput = options.themeAwareAnsiRemap ? remapAnsiForTheme : remapLightAnsiForeground;
-    const output = remapOutput(colorizePlainTerminalOutput(data), getThemeVariant());
+    const output = transformOutput(data);
     // 仍按 ANSI 边界切块（xterm 对超大单块写入不友好），但不受帧预算限制，
     // 由 xterm 自己的写队列在同一批里消化完。
     const chunks = splitTerminalWriteChunk(output);
+    state.immediateWrites += 1;
     for (let index = 0; index < chunks.length; index += 1) {
       const isLast = index === chunks.length - 1;
-      term.write(chunks[index], isLast ? callback : undefined);
+      term.write(
+        chunks[index],
+        isLast
+          ? () => {
+              state.immediateWrites -= 1;
+              callback?.();
+            }
+          : undefined,
+      );
     }
   }
 
@@ -957,6 +985,10 @@ export function createSmartWriter(
     if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
   }
 
+  function isIdle() {
+    return state.pendingChunks.length === 0 && state.watermark === 0 && state.immediateWrites === 0;
+  }
+
   return {
     write,
     writeImmediate,
@@ -964,7 +996,48 @@ export function createSmartWriter(
     setSelectionPaused,
     setCompositionPaused,
     pauseForUserInput,
+    isIdle,
   };
+}
+
+// ── Wheel policy ─────────────────────────────────────────────────────────────
+
+// 只有这三种协议会真的向程序上报滚轮（CoreMouseService 的 DEFAULT_PROTOCOLS）。
+// x10 不算：它的 events 只有 DOWN，restrict 直接拒掉 WHEEL。
+const APP_WHEEL_MOUSE_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "any"]);
+
+/**
+ * agent 终端的滚轮兜底：滚轮只是"翻看内容"的本地手势，绝不合成按键。
+ *
+ * xterm 在没有本地 scrollback 的 buffer（也就是 alt screen）里有一条兜底：把滚轮
+ * 翻译成 ESC[A / ESC[B 当方向键发给程序（CoreBrowserTerminal 的 always-on wheel
+ * listener）。对 agent 来说这等于"滚一下滚轮 = 按一下上下键"——Claude Code 的 Chat
+ * 键位是 up:"history:previous"，输入框立刻翻出上一条历史，把正在写的内容顶掉。
+ *
+ * 正常情况下 agent 自己会开鼠标上报（Claude Code 的 Scroll 键位把 wheelup/wheeldown
+ * 绑到 scroll:lineUp/lineDown），滚轮走下面第一条分支交给程序自己滚——pty.rs 曾用
+ * CLAUDE_CODE_DISABLE_MOUSE 关掉这个能力，已移除，理由见那边的注释。这里保留兜底是
+ * 为了用户自己关掉上报、或某个 agent 主动不开的情况：alt screen 本来就没有可翻的历史，
+ * 什么都不做远好过改写用户的输入框。另外两种情况保持 xterm 原样：
+ * - 程序开了 vt200/drag/any（agent、vim、tmux、less --mouse）→ 上报给程序，由它自己滚
+ * - normal buffer → ScrollableElement 已经滚过本地 scrollback 了（只有滚到顶/底
+ *   没滚动时事件才会冒泡到这里，此时 hasScrollback 为真，xterm 也不会合成按键）
+ *
+ * 不区分修饰键：ctrl / meta + 滚轮走同一条兜底，同样会变成方向键。
+ *
+ * 只给 agent 终端装（TerminalView）。shell / SSH / WSL 面板不装：那边跑的 less、man、
+ * git log、vim、htop 正是靠这条 alternate-scroll 方向键滚动的，吞掉等于它们也滚不动，
+ * 而 shell 里没有会被方向键顶掉的输入框。
+ */
+export function attachTerminalWheelScroll(term: Terminal): void {
+  term.attachCustomWheelEventHandler((event) => {
+    if (event.deltaY === 0) return true;
+    if (APP_WHEEL_MOUSE_MODES.has(term.modes.mouseTrackingMode)) return true;
+    if (term.buffer.active.type !== "alternate") return true;
+    // listener 是 { passive: false } 注册的，可以拦掉祖先容器的默认滚动。
+    event.preventDefault();
+    return false;
+  });
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────

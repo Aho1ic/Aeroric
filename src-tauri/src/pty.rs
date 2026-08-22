@@ -646,10 +646,18 @@ fn build_claude_cmd(
 ) -> CommandBuilder {
     let mut c = CommandBuilder::new(&launch.program);
     c.args(&launch.args);
-    // Claude Code 自 v2.1.150 起默认开启 xterm 鼠标上报（mouse mode 1002），会拦截
-    // 终端原生框选——表现为运行时拖动看似选中却不进选区态、无法复制。关掉它后滚轮回退
-    // 到 xterm 自身 scrollback，用户运行时即可直接拖动框选。官方开关，仅影响 Claude。
-    c.env("CLAUDE_CODE_DISABLE_MOUSE", "1");
+    // 这里曾设 CLAUDE_CODE_DISABLE_MOUSE=1（d18976871），为的是让运行时能直接拖动框选：
+    // 程序一开鼠标上报，xterm 就把拖动转发给程序并取消本地选区。但当时的理由「关掉后滚轮
+    // 回退到 xterm 自身 scrollback」是错的——实测 terminal-history：Claude Code 在第 200
+    // 字节就 ESC[?1049h 进 alt screen 并一直待到退出，alt buffer 根本没有 scrollback 可
+    // 回退。滚轮实际掉进 xterm 的 alt-screen 兜底（CoreBrowserTerminal 的 always-on wheel
+    // listener），被合成成 ESC[A / ESC[B 当方向键发给程序，正好撞上 Claude Code Chat 键位
+    // 的 up:"history:previous"——滚一下滚轮就把正在写的内容换成上一条历史。
+    //
+    // 所以不再代替用户关掉它：放开上报后由 Claude Code 自己的 Scroll 键位
+    // （wheelup/wheeldown → scroll:lineUp/lineDown）逐行滚动，滚轮回到"翻看内容"的语义。
+    // 代价是本地框选要按 ⌥Option（macOS，initTerminal 已开 macOptionClickForcesSelection）
+    // 或 Shift（Win/Linux），与 iTerm2 / VS Code 一致。
     match permission_mode {
         "ask" => {
             c.arg("--permission-mode");
@@ -3036,6 +3044,27 @@ mod tests {
             Some("ultracode"),
             false
         ));
+    }
+
+    // 别再把 CLAUDE_CODE_DISABLE_MOUSE 加回来：Claude Code 全程待在 alt screen，关掉鼠标
+    // 上报后滚轮不会回退到 scrollback（alt buffer 没有），而是被 xterm 合成成方向键发给
+    // 程序，撞上 Chat 键位的 history:previous，滚一下就顶掉用户正在写的内容。详见
+    // build_claude_cmd 的注释。
+    #[test]
+    fn claude_cmd_leaves_mouse_reporting_to_the_agent() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "claude".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_claude_cmd(&launch, "ask");
+        // 不能直接断言为 None：CommandBuilder::new 会快照父进程环境（见 setup_env 的注释），
+        // 跑测试的终端自己就可能带着这个变量。与基线对比才能只证明"我们没有再自己设它"，
+        // 同时保留用户在自己 shell 里显式关掉鼠标的自由（前端兜底会接住那种情况）。
+        let baseline = CommandBuilder::new("claude");
+        assert_eq!(
+            cmd.get_env("CLAUDE_CODE_DISABLE_MOUSE"),
+            baseline.get_env("CLAUDE_CODE_DISABLE_MOUSE")
+        );
     }
 
     #[test]

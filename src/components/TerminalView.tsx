@@ -20,6 +20,7 @@ import {
   attachCursorLineHighlight,
   applyTerminalFontSize,
   applyTerminalFontFamily,
+  attachTerminalWheelScroll,
 } from "./terminalShared";
 import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import {
@@ -151,6 +152,8 @@ export function TerminalView({
 
     const createRuntime = (theme: ThemeVariant): TerminalRuntime => {
       const { term, fitAddon } = initTerminal(theme, 1000, terminalFontSize, monoFontFamily);
+      // 只有 agent 终端需要这条兜底（shell 面板要留着 xterm 的 alternate scroll）。
+      attachTerminalWheelScroll(term);
       const serializeAddon = new SerializeAddon();
       term.loadAddon(serializeAddon);
       term.open(container);
@@ -392,11 +395,18 @@ export function TerminalView({
 
     return () => {
       disposed = true;
-      try {
-        const snapshot = runtimeRef.current?.serializeAddon.serialize();
-        if (snapshot) onSnapshotRef.current?.(snapshot);
-      } catch {
-        // Terminal teardown must remain best-effort.
+      const runtime = runtimeRef.current;
+      // xterm 的 write callback 之前，serialize 只能拿到旧画面或半个解析批次；若仍把
+      // 当前 raw buffer 末尾记作 snapshot 偏移，下次打开就会跳过未渲染的 TUI 帧，
+      // 后续相对光标更新只能叠在旧画面上，表现为文字散落/重叠。忙时保留上一个干净
+      // snapshot（没有则回放 raw），不要制造一个与 buffer 偏移不一致的新 snapshot。
+      if (!rebuildingRef.current && runtime?.writer.isIdle()) {
+        try {
+          const snapshot = runtime.serializeAddon.serialize();
+          if (snapshot) onSnapshotRef.current?.(snapshot);
+        } catch {
+          // Terminal teardown must remain best-effort.
+        }
       }
       onRegisterRef.current(null);
       rebuildRef.current = null;

@@ -11,6 +11,7 @@
 | 文档 | 描述 | 标签 |
 |------|------|------|
 | [终端渲染与选区卡顿排查](./xterm/rendering-and-selection-lag.md) | WKWebView 下 `.xterm` 合成层长帧的真因与定论，含 CSS containment 禁用、WebGL 保留的实测权衡，面向后续动渲染链路前的必读校准 | `xterm`, `wkwebview`, `composite`, `webgl`, `selection`, `regression-guard` |
+| [Agent 终端的滚轮语义与鼠标上报](./references/terminal-wheel-scroll.md) | 为什么 alt screen 里滚轮会顶掉输入框草稿、鼠标上报的两个禁用来源（含 launchd 污染这个坑）、滚轮兜底为何只装 agent 终端，以及"上报开/关"各自的代价 | `xterm`, `wheel`, `alt-screen`, `mouse-reporting`, `claude-code`, `env-inheritance` |
 
 
 ### 安全与凭据

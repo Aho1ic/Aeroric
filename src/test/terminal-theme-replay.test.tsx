@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const terminalState = vi.hoisted(() => ({
   deferWrites: false,
+  attachTerminalWheelScroll: vi.fn(),
   runtimes: [] as Array<{
     theme: string;
     writes: string[];
@@ -57,14 +58,28 @@ vi.mock("../components/terminalShared", () => ({
   },
   fitTerminalAtBottom: () => ({ cols: 80, rows: 24 }),
   createSmartWriter: (term: { write: (data: string, callback?: () => void) => void }) => ({
-    write: (data: string, callback?: () => void) => term.write(data, callback),
-    writeImmediate: (data: string, callback?: () => void) => term.write(data, callback),
-    pauseForUserInput: vi.fn(),
+    ...(() => {
+      let pendingWrites = 0;
+      const write = (data: string, callback?: () => void) => {
+        pendingWrites += 1;
+        term.write(data, () => {
+          pendingWrites -= 1;
+          callback?.();
+        });
+      };
+      return {
+        write,
+        writeImmediate: write,
+        pauseForUserInput: vi.fn(),
+        isIdle: () => pendingWrites === 0,
+      };
+    })(),
   }),
   attachMacWebKitTerminalGuard: () => vi.fn(),
   attachCursorLineHighlight: () => vi.fn(),
   applyTerminalFontSize: () => null,
   applyTerminalFontFamily: () => null,
+  attachTerminalWheelScroll: terminalState.attachTerminalWheelScroll,
 }));
 
 vi.mock("../components/terminalCopyHelper", () => ({ attachSmartCopy: () => vi.fn() }));
@@ -80,6 +95,7 @@ import { TerminalView } from "../components/TerminalView";
 describe("TerminalView theme replay", () => {
   beforeEach(() => {
     terminalState.deferWrites = false;
+    terminalState.attachTerminalWheelScroll.mockClear();
     terminalState.runtimes.length = 0;
     vi.stubGlobal(
       "ResizeObserver",
@@ -118,6 +134,23 @@ describe("TerminalView theme replay", () => {
     expect(container).toHaveAttribute("data-terminal-restoring", "true");
     await waitFor(() => expect(container).not.toHaveAttribute("data-terminal-restoring"));
     expect(onReady).toHaveBeenCalledWith(11);
+  });
+
+  // agent 终端必须装滚轮兜底：alt screen 里 xterm 会把滚轮合成成方向键，撞上 agent
+  // 输入框的历史绑定。shell 面板反过来要留着这条 alternate scroll（见 terminalShared）。
+  it("installs the wheel guard on every agent terminal it builds", () => {
+    render(
+      <TerminalView
+        onInput={vi.fn()}
+        onResize={vi.fn()}
+        onRegisterTerminal={() => 17}
+        terminalFontSize={12}
+        monoFontFamily="monospace"
+        themeVariant="dark"
+      />,
+    );
+
+    expect(terminalState.attachTerminalWheelScroll).toHaveBeenCalledTimes(1);
   });
 
   it("does not hide a new terminal that has no history to restore", async () => {
@@ -222,5 +255,35 @@ describe("TerminalView theme replay", () => {
     expect(
       onRegisterTerminal.mock.calls.filter(([write]) => typeof write === "function"),
     ).toHaveLength(1);
+  });
+
+  it("does not persist a snapshot while xterm still has queued output", async () => {
+    let registeredWrite: ((data: string, callback?: () => void) => void) | null = null;
+    const onSnapshot = vi.fn();
+    const onReady = vi.fn();
+    const view = render(
+      <TerminalView
+        onInput={vi.fn()}
+        onResize={vi.fn()}
+        onRegisterTerminal={(write) => {
+          if (write) registeredWrite = write;
+          return 19;
+        }}
+        onReady={onReady}
+        onSnapshot={onSnapshot}
+        terminalFontSize={12}
+        monoFontFamily="monospace"
+        themeVariant="dark"
+      />,
+    );
+
+    await waitFor(() => expect(onReady).toHaveBeenCalledWith(19));
+    terminalState.deferWrites = true;
+    act(() => registeredWrite?.("\x1b[2K\rpartial redraw"));
+    expect(terminalState.runtimes[0].pendingWriteCallbacks).toHaveLength(1);
+
+    view.unmount();
+
+    expect(onSnapshot).not.toHaveBeenCalled();
   });
 });
