@@ -6,11 +6,14 @@ import {
   isCodexLikeAgent,
 } from "../agents";
 import {
+  CONTROL_ICON_SIZE,
   composeAgentMenuContentStyle,
   composeAgentMenuColumnStyle,
   composeAgentMenuColumnViewportStyle,
   composeAgentMenuViewportStyle,
+  composeAgentTriggerStyle,
   composeControlOrder,
+  composeFixedControlStyle,
   composeModelMenuContentStyle,
   composeModelMenuViewportStyle,
   composePermissionLabel,
@@ -175,5 +178,28 @@ describe("agent options", () => {
         overscrollBehavior: "contain",
       }),
     );
+  });
+
+  it("sizes fixed-vocabulary compose triggers to their content instead of shrinking them", () => {
+    // 不给 flex-basis(否则 basis 比内容宽就留下空尾巴)、不许收缩(否则标签被省略)。
+    expect(composeFixedControlStyle()).toEqual({
+      flex: "0 0 auto",
+      width: "fit-content",
+      minWidth: 0,
+      maxWidth: "100%",
+    });
+  });
+
+  it("keeps the agent trigger unshrunk with room for the longest built-in config name", () => {
+    expect(composeAgentTriggerStyle()).toEqual({
+      flex: "0 0 auto",
+      width: "fit-content",
+      minWidth: 0,
+      maxWidth: "min(320px, 100%)",
+    });
+  });
+
+  it("uses one icon size across the compose toolbar triggers", () => {
+    expect(CONTROL_ICON_SIZE).toBe(14);
   });
 });

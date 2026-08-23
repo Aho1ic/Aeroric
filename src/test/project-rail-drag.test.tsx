@@ -33,7 +33,7 @@ function task(id: string, projectId: string, createdAt: number): Task {
 }
 
 describe("ProjectRail project dragging", () => {
-  it("lets the page own the collapsed state so the rail can release its width", () => {
+  it("keeps a slim strip with the toggle and footer actions while the page owns the collapsed state", () => {
     localStorage.setItem("aeroric:language", "en");
     function Harness() {
       const [collapsed, setCollapsed] = useState(false);
@@ -67,8 +67,18 @@ describe("ProjectRail project dragging", () => {
     render(<Harness />);
     fireEvent.click(screen.getAllByRole("button", { name: "Hide tasks" })[0]);
 
-    expect(screen.getByTestId("workspace").firstElementChild).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show tasks" })).not.toBeInTheDocument();
+    // 竖条只让出 52px,任务列表收起后开关和底部工具按钮都留在左侧。
+    expect(screen.getByTestId("project-rail-collapsed")).toHaveStyle({ width: "52px" });
+    expect(screen.getByRole("button", { name: "Show tasks" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+
+    const footer = screen.getByTestId("project-rail-collapsed-footer");
+    for (const name of ["Back home", "Agent settings", "Open project", "Switch to dark mode"]) {
+      expect(within(footer).getByRole("button", { name })).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Show tasks" }));
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
   });
 
   it("hides every project and action icon while the rail is collapsed", () => {
@@ -99,7 +109,8 @@ describe("ProjectRail project dragging", () => {
 
     expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button")).toHaveLength(1);
+    // 折叠后只剩「显示任务」+ 底部四颗工具按钮(NotificationBell 在本文件被 mock 掉)。
+    expect(screen.getAllByRole("button")).toHaveLength(5);
 
     fireEvent.click(screen.getByRole("button", { name: "Show tasks" }));
 

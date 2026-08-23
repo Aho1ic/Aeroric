@@ -16,7 +16,12 @@ import { useI18n } from "../../i18n";
 import { agentFamily, type AgentOption } from "../../agents";
 import type { ComposeMenu } from "./AgentPermSelector";
 import type { AgentType } from "../../types";
-import { MENU_ITEM_ICON_SIZE, nextComposeMenuState } from "./AgentPermSelector";
+import {
+  CONTROL_ICON_SIZE,
+  MENU_ITEM_ICON_SIZE,
+  composeFixedControlStyle,
+  nextComposeMenuState,
+} from "./AgentPermSelector";
 import s from "../../styles";
 
 export type LaunchMode = "local" | "worktree" | "webui";
@@ -157,13 +162,13 @@ export function LaunchModeSelector({
         <Select.Trigger
           style={{
             ...controlButtonStyle,
-            ...(compact ? null : { flex: "0 1 auto", minWidth: 0, maxWidth: 128 }),
+            ...(compact ? null : composeFixedControlStyle()),
           }}
           aria-label={t("newTask.launchMode")}
           title={modeLabel(launchMode)}
           data-launch-mode-trigger
         >
-          {modeIcon(launchMode, 14)}
+          {modeIcon(launchMode, CONTROL_ICON_SIZE)}
           {!compact && <span style={s.toolbarBtnLabel}>{modeLabel(launchMode)}</span>}
           {!compact && (
             <Select.Icon style={s.toolbarBtnIcon}>
@@ -208,16 +213,24 @@ export function LaunchModeSelector({
               ...(compact
                 ? null
                 : {
-                    flex: "0 1 132px",
+                    // 分支名长度不可控:按内容取宽(短名不再留 132px 的空尾巴),
+                    // 只有超长分支名才靠上限 + tooltip 省略。
+                    flex: "0 0 auto",
+                    width: "fit-content",
                     minWidth: 0,
-                    maxWidth: 132,
+                    maxWidth: "min(200px, 100%)",
                     overflow: "hidden",
                   }),
             }}
             aria-label={t("newTask.baseBranch")}
             title={baseBranch || t("newTask.selectBaseBranch")}
           >
-            <GitBranch size={14} strokeWidth={2} color="var(--success)" style={s.toolbarBtnIcon} />
+            <GitBranch
+              size={CONTROL_ICON_SIZE}
+              strokeWidth={2}
+              color="var(--success)"
+              style={s.toolbarBtnIcon}
+            />
             {!compact && (
               <span style={s.toolbarBtnLabel}>{baseBranch || t("newTask.selectBaseBranch")}</span>
             )}

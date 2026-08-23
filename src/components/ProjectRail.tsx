@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -748,6 +749,60 @@ export function ProjectRail({
     );
   };
 
+  const footerActions = getProjectRailFooterActions(singleProjectMode);
+
+  // 展开态(横排)与折叠态(竖排)共用同一份定义,两处按钮不会走偏。
+  const renderFooterAction = (action: ProjectRailFooterAction): ReactNode => {
+    switch (action) {
+      case "backHome":
+        return footerIconButton(
+          t("project.backHome"),
+          <Home size={14} strokeWidth={2.2} />,
+          onBack,
+          homeHov,
+          setHomeHov,
+        );
+      case "agentSettings":
+        return footerIconButton(
+          t("appSettings.agentSettings"),
+          <Bot size={14} strokeWidth={2.1} />,
+          openAgentSettings,
+          agentSettingsHov,
+          setAgentSettingsHov,
+        );
+      case "openProject":
+        return footerIconButton(
+          t("welcome.openProject"),
+          <Plus size={14} strokeWidth={2.5} />,
+          onOpen,
+          addHov,
+          setAddHov,
+        );
+      case "notifications":
+        return (
+          <NotificationBell
+            buttonStyle={{
+              width: 32,
+              height: 32,
+              justifyContent: "center",
+              border: "1px solid var(--border-dim)",
+              background: "var(--bg-card)",
+              opacity: 1,
+            }}
+            iconSize={14}
+          />
+        );
+      case "theme":
+        return footerIconButton(
+          isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
+          isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
+          onToggleTheme,
+          themeHov,
+          setThemeHov,
+        );
+    }
+  };
+
   const handleProjectClick = (project: Project) => {
     setSelectedTaskIds(new Set());
     taskSelectionAnchorRef.current = null;
@@ -805,11 +860,12 @@ export function ProjectRail({
   };
 
   if (effectiveCollapsed) {
-    // The page-level rail is controlled so the toggle can live in the terminal
-    // header. Keep the rail itself out of the flex row while collapsed.
-    if (controlledCollapsed === true) return null;
+    // 折叠后仍保留这条 52px 竖条:开关留在页面最左侧(而不是浮在中间区域上方遮住
+    // 任务头部的状态图标 / SSH 头部),底部那排工具按钮也不会随任务列表一起消失。
+    // 中间区域只让出 52px,终端仍占满其余宽度。
     return (
       <div
+        data-testid="project-rail-collapsed"
         style={{
           position: "relative",
           width: PROJECT_RAIL_COLLAPSED_WIDTH,
@@ -843,10 +899,31 @@ export function ProjectRail({
             background: "var(--bg-card)",
             color: "var(--text-muted)",
             cursor: "pointer",
+            flexShrink: 0,
           }}
         >
           <PanelLeftOpen size={15} strokeWidth={2} />
         </button>
+
+        {footerActions.length > 0 && (
+          <div
+            data-testid="project-rail-collapsed-footer"
+            style={{
+              marginTop: "auto",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 6,
+              paddingTop: 8,
+              borderTop: "1px solid var(--border-dim)",
+              width: "100%",
+            }}
+          >
+            {footerActions.map((action) => (
+              <Fragment key={action}>{renderFooterAction(action)}</Fragment>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -1369,53 +1446,9 @@ export function ProjectRail({
           borderTop: "1px solid var(--border-dim)",
         }}
       >
-        {getProjectRailFooterActions(singleProjectMode).includes("backHome") ? (
-          <>
-            {footerIconButton(
-              t("project.backHome"),
-              <Home size={14} strokeWidth={2.2} />,
-              onBack,
-              homeHov,
-              setHomeHov,
-            )}
-
-            {footerIconButton(
-              t("appSettings.agentSettings"),
-              <Bot size={14} strokeWidth={2.1} />,
-              openAgentSettings,
-              agentSettingsHov,
-              setAgentSettingsHov,
-            )}
-
-            {footerIconButton(
-              t("welcome.openProject"),
-              <Plus size={14} strokeWidth={2.5} />,
-              onOpen,
-              addHov,
-              setAddHov,
-            )}
-
-            <NotificationBell
-              buttonStyle={{
-                width: 32,
-                height: 32,
-                justifyContent: "center",
-                border: "1px solid var(--border-dim)",
-                background: "var(--bg-card)",
-                opacity: 1,
-              }}
-              iconSize={14}
-            />
-
-            {footerIconButton(
-              isDark ? t("theme.switchToLight") : t("theme.switchToDark"),
-              isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />,
-              onToggleTheme,
-              themeHov,
-              setThemeHov,
-            )}
-          </>
-        ) : null}
+        {footerActions.map((action) => (
+          <Fragment key={action}>{renderFooterAction(action)}</Fragment>
+        ))}
       </div>
 
       {onProjectRailWidthChange && (

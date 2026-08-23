@@ -353,9 +353,10 @@ describe("NewTaskView with dsh selected", () => {
     expect(s.composeCard).toEqual(expect.objectContaining({ maxWidth: 1040 }));
     expect(s.composeActionDock).toEqual(expect.objectContaining({ maxWidth: 1040 }));
     expect(branchButton).toHaveStyle({
-      flex: "0 1 132px",
+      flex: "0 0 auto",
+      width: "fit-content",
       minWidth: "0",
-      maxWidth: "132px",
+      maxWidth: "min(200px, 100%)",
       overflow: "hidden",
     });
     expect(modelButton).toHaveStyle({
@@ -370,35 +371,59 @@ describe("NewTaskView with dsh selected", () => {
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
     });
+    // 预设按内容取宽:原来的 148px flex-basis 比「标准模式」宽出一大截空尾巴。
     expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveStyle({
-      flex: "0 1 148px",
-      maxWidth: "148px",
+      flex: "0 0 auto",
+      width: "fit-content",
       minWidth: "0",
-      overflow: "hidden",
+      maxWidth: "100%",
     });
   });
 
-  it("keeps trigger icons visible and labels elided when a config name is long", async () => {
+  it("never shrinks the fixed-vocabulary triggers so their labels stay complete", async () => {
+    renderView({ ...dshDraft(), baseBranch: "main" });
+
+    await screen.findByRole("combobox", { name: "Model" });
+
+    // DSH 这一行比 claude/codex 多一颗预设 trigger,可收缩的话所有标签会一起被省略。
+    for (const name of ["Agent preset", "Default Permission Mode", "Launch mode"]) {
+      expect(screen.getByRole("combobox", { name })).toHaveStyle({ flex: "0 0 auto" });
+    }
+    expect(screen.getByRole("combobox", { name: "Launch mode" })).toHaveTextContent("Local");
+    expect(screen.getByRole("combobox", { name: "Agent preset" })).toHaveTextContent(
+      "Standard mode",
+    );
+
+    // 装不下时靠 toolbarLeft 换行,而不是把每个标签都截断。
+    expect(s.toolbarLeft).toEqual(expect.objectContaining({ flexWrap: "wrap" }));
+    expect(s.launchModeBar).toEqual(
+      expect.objectContaining({ flexShrink: 0, flexWrap: "wrap", overflow: "visible" }),
+    );
+  });
+
+  it("keeps trigger icons visible and gives the long DSH config name room to render", async () => {
     renderView({ ...dshDraft(), baseBranch: "main" });
 
     const agentTrigger = await screen.findByRole("combobox", { name: "Agent" });
 
     // 居中 + overflow hidden 会让首尾同时被裁,最左侧图标先消失,所以必须左对齐。
     expect(s.toolbarBtn).toEqual(expect.objectContaining({ justifyContent: "flex-start" }));
-    expect(agentTrigger).toHaveStyle({ flex: "0 1 auto", minWidth: "0", maxWidth: "200px" });
+    // 320px 放得下「DeepSeek Harness」;只有超长的自定义配置名才会退化成省略号。
+    expect(agentTrigger).toHaveStyle({
+      flex: "0 0 auto",
+      width: "fit-content",
+      minWidth: "0",
+      maxWidth: "min(320px, 100%)",
+    });
+    expect(agentTrigger).toHaveTextContent("DeepSeek Harness");
 
-    // 挤压时先省略文字,图标(lucide SVG 默认可压缩)不能被压掉。
+    // 图标(lucide SVG 默认可压缩)不能被压掉。
     expect(s.toolbarBtnIcon).toEqual({ flexShrink: 0 });
-    for (const label of [
-      agentTrigger.querySelector("span"),
-      screen.getByRole("combobox", { name: "Agent preset" }).querySelector("span"),
-    ]) {
-      expect(label).toHaveStyle({
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      });
-    }
+    expect(agentTrigger.querySelector("span")).toHaveStyle({
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
   });
 
   it("sizes short-label menus to their content instead of a fixed 180px", () => {

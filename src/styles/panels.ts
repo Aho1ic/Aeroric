@@ -247,21 +247,27 @@ export const panels = {
     borderRadius: "0 0 12px 12px",
     boxSizing: "border-box" as const,
   },
+  // 换行而不是压缩:composer 被 composeActionDock 的 1040px 上限夹住,DSH 还会多出
+  // 「预设」trigger。一行装不下时让控件掉到第二行,总比把每个标签都省略成半截好。
   toolbarLeft: {
     display: "flex",
     alignItems: "center",
     gap: 3,
+    rowGap: 4,
     minWidth: 0,
     flex: "0 1 auto",
-    flexWrap: "nowrap" as const,
+    flexWrap: "wrap" as const,
   },
   launchModeBar: {
     display: "flex",
     alignItems: "center",
     gap: 3,
+    rowGap: 4,
     minWidth: 0,
-    flexShrink: 1,
-    overflow: "hidden",
+    // 不收缩 + 不裁剪:启动模式与分支两颗按钮作为一个整体参与上面的换行。
+    flexShrink: 0,
+    flexWrap: "wrap" as const,
+    overflow: "visible",
     marginBottom: 0,
     padding: 0,
     boxSizing: "border-box" as const,

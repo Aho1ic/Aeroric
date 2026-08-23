@@ -1419,9 +1419,33 @@ describe("ProjectPage right toolbar", () => {
 
     await user.click(screen.getByRole("button", { name: "toggle ssh layout" }));
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
+    expect(screen.getByTestId("project-center-primary")).not.toBeVisible();
     await user.click(screen.getByTitle("SSH"));
     await user.click(screen.getByTitle("SSH"));
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
+  });
+
+  it("gives SSH the whole center on the project home so the composer cannot show through", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPageProps()} />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId("project-center-primary")).toBeVisible();
+
+    await user.click(screen.getByTitle("SSH"));
+
+    // 首页没有 agent 会话,SSH 只能是 full;--bg-panel 是半透明的,primary 留在它
+    // 背后就会把 composer 透出来,看着像 SSH 嵌进了首页。
+    expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
+    expect(screen.getByTestId("ssh-workspace")).toBeVisible();
+    expect(screen.getByTestId("project-center-primary")).not.toBeVisible();
+
+    await user.click(screen.getByTitle("SSH"));
+    expect(screen.getByTestId("project-center-primary")).toBeVisible();
   });
 
   it("keeps the Agent on the left and preserves the file workspace while SSH is split", async () => {

@@ -88,6 +88,39 @@ export function composePermissionLabel(mode: PermissionMode) {
 // 菜单项图标尺寸:与 13px 项文字匹配的常规大小。
 export const MENU_ITEM_ICON_SIZE = 16;
 
+// trigger 内图标的标准尺寸。工具条这一排必须统一,否则单颗图标会显得比邻居大一号。
+export const CONTROL_ICON_SIZE = 14;
+
+/**
+ * 词表固定的 trigger(预设 / 权限 / 启动模式)样式。
+ *
+ * 这些按钮的文字来自固定词表,宽度可以精确按内容算出来,所以既不该被 flex 压缩
+ * (压缩就会省略成「请求确…」),也不该给固定 flex-basis(basis 比内容宽就留下大片
+ * 空白——DSH 预设原来的 148px 就是这么来的)。装不下时由 toolbarLeft 换行兜底。
+ */
+export function composeFixedControlStyle(): CSSProperties {
+  return {
+    flex: "0 0 auto",
+    width: "fit-content",
+    minWidth: 0,
+    // 极端窄的容器下仍不许溢出到工具条外面。
+    maxWidth: "100%",
+  };
+}
+
+/**
+ * Agent trigger 样式:同样不收缩,但配置名是用户可自定义的,给一个宽上限 + tooltip
+ * 兜底。320px 能完整放下最长的内置名「DeepSeek Harness」以及绝大多数自定义名。
+ */
+export function composeAgentTriggerStyle(): CSSProperties {
+  return {
+    flex: "0 0 auto",
+    width: "fit-content",
+    minWidth: 0,
+    maxWidth: "min(320px, 100%)",
+  };
+}
+
 function PermissionIcon({ mode, size }: { mode: PermissionMode; size: number }) {
   if (mode === "auto_edit") {
     return <PencilLine size={size} strokeWidth={2} color="var(--accent)" />;
@@ -450,7 +483,7 @@ export function AgentPermSelector({
           <Select.Trigger
             style={{
               ...controlButtonStyle,
-              ...(compact ? null : { flex: "0 1 auto", minWidth: 0, maxWidth: 200 }),
+              ...(compact ? null : composeAgentTriggerStyle()),
             }}
             aria-label={t("settings.agent")}
             title={agentDisplayLabel(agent, agentOptions)}
@@ -513,19 +546,14 @@ export function AgentPermSelector({
             <Select.Trigger
               style={{
                 ...controlButtonStyle,
-                ...(compact
-                  ? null
-                  : {
-                      flex: "0 1 148px",
-                      maxWidth: 148,
-                    }),
+                ...(compact ? null : composeFixedControlStyle()),
               }}
               aria-label={t("newTask.dshAgentPreset")}
               title={currentDshPreset.label}
               data-dsh-agent-preset-trigger
             >
               <BookmarkPlus
-                size={14}
+                size={CONTROL_ICON_SIZE}
                 strokeWidth={2}
                 color="var(--usage-dsh)"
                 style={s.toolbarBtnIcon}
@@ -575,12 +603,16 @@ export function AgentPermSelector({
           }}
         >
           <Select.Trigger
-            style={controlButtonStyle}
+            style={{
+              ...controlButtonStyle,
+              ...(compact ? null : composeFixedControlStyle()),
+            }}
             aria-label={t("settings.defaultPermissionMode")}
             title={composePermissionLabel(permMode)}
+            data-compose-permission-trigger
           >
             <span style={s.toolbarBtnIcon}>
-              <PermissionIcon mode={permMode} size={15} />
+              <PermissionIcon mode={permMode} size={CONTROL_ICON_SIZE} />
             </span>
             {!compact && <span style={s.toolbarBtnLabel}>{composePermissionLabel(permMode)}</span>}
             {!compact && (

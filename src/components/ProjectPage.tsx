@@ -47,15 +47,7 @@ import {
   type ShellTerminalPanelHandle,
   type ShellSession,
 } from "./ShellTerminalPanel";
-import {
-  Columns2,
-  FileText,
-  Maximize2,
-  PanelLeftOpen,
-  Plus,
-  Terminal as TerminalIcon,
-  X,
-} from "lucide-react";
+import { Columns2, FileText, Maximize2, Plus, Terminal as TerminalIcon, X } from "lucide-react";
 import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
 import { WslTerminalPanel, type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
@@ -1623,10 +1615,15 @@ export function ProjectPage({
     agentConversationSelected &&
     !primaryWorkspaceOverride &&
     (!auxiliaryWorkspace || auxiliarySplit);
+  // SSH 全屏时中间区域完全归它:--bg-panel 三套主题都是半透明(玻璃质感),底下留着
+  // 别的层就会透出来——首页没有 agent 会话时,composer 会从 SSH 背后显出来,看着像
+  // SSH 嵌进了项目首页。split 布局不受影响(SSH 独占右栏,身后本来就没东西)。
+  const sshOwnsCenter = auxiliaryWorkspace === "ssh" && auxiliaryLayout === "full";
   const showPrimaryWorkspacePane =
-    !agentConversationSelected ||
-    primaryWorkspaceOverride ||
-    (auxiliaryWorkspace !== null && auxiliaryWorkspace !== "ssh");
+    !sshOwnsCenter &&
+    (!agentConversationSelected ||
+      primaryWorkspaceOverride ||
+      (auxiliaryWorkspace !== null && auxiliaryWorkspace !== "ssh"));
   const topRightPanelActive = topRightIdeTools.some((tool) => tool.panel === rightPanel);
   const showTopRightIdeTools =
     topRightIdeTools.length > 0 &&
@@ -1836,35 +1833,8 @@ export function ProjectPage({
           position: "relative",
         }}
       >
-        {projectRailCollapsed && !responsiveLayout.autoCollapseRail && !isDatabaseMode && (
-          <button
-            type="button"
-            data-testid="project-show-tasks"
-            title={t("task.showTasks")}
-            aria-label={t("task.showTasks")}
-            onClick={() => setProjectRailCollapsed(false)}
-            style={{
-              position: "absolute",
-              top: 7,
-              left: 8,
-              zIndex: 30,
-              width: 30,
-              height: 30,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              border: "1px solid var(--border-dim)",
-              borderRadius: 7,
-              background: "color-mix(in srgb, var(--bg-sidebar) 94%, transparent)",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              boxShadow: "var(--shadow-sm)",
-            }}
-          >
-            <PanelLeftOpen size={15} strokeWidth={2} />
-          </button>
-        )}
+        {/* 「显示任务」开关归 ProjectRail 的折叠竖条所有:浮在中间区域上方会压住
+            RunningView 头部的状态图标 / 任务名,以及 SSH 工作区的头部。 */}
         {showWorkspaceTabs && (
           <AnimatedSelectionTrack
             value={activeWorkspaceTabValue}
@@ -1880,7 +1850,7 @@ export function ProjectPage({
               display: "flex",
               alignItems: "center",
               gap: 5,
-              padding: projectRailCollapsed ? "4px 8px 4px 44px" : "4px 8px",
+              padding: "4px 8px",
               borderBottom: "1px solid var(--border-dim)",
               background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
               overflowX: "auto",
