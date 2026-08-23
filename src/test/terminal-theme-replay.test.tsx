@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const terminalState = vi.hoisted(() => ({
   deferWrites: false,
-  attachTerminalWheelScroll: vi.fn(),
+  // 返回完整句柄:TerminalView 卸载时调 dispose() 停掉待发的滚轮帧,sendInput 每次都问
+  // isReplayingWheel() 以决定要不要暂停输出。缺任一个都会在 unmount / 输入时炸。
+  attachTerminalWheelScroll: vi.fn(() => ({
+    dispose: () => {},
+    isReplayingWheel: () => false,
+  })),
   runtimes: [] as Array<{
     theme: string;
     writes: string[];

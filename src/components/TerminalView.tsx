@@ -153,7 +153,7 @@ export function TerminalView({
     const createRuntime = (theme: ThemeVariant): TerminalRuntime => {
       const { term, fitAddon } = initTerminal(theme, 1000, terminalFontSize, monoFontFamily);
       // 只有 agent 终端需要这条兜底（shell 面板要留着 xterm 的 alternate scroll）。
-      attachTerminalWheelScroll(term);
+      const wheelScroll = attachTerminalWheelScroll(term);
       const serializeAddon = new SerializeAddon();
       term.loadAddon(serializeAddon);
       term.open(container);
@@ -170,7 +170,9 @@ export function TerminalView({
         ? attachCursorLineHighlight(term, container)
         : () => {};
       const sendInput = (data: string) => {
-        writer.pauseForUserInput();
+        // 滚轮上报不算"用户输入":暂停输出会把 agent 的滚动重绘往后推,而滚动期间每帧
+        // 有好几条上报,累积起来就是可见的抖动。键入才需要这条让路逻辑。
+        if (!wheelScroll.isReplayingWheel()) writer.pauseForUserInput();
         onInputRef.current(data);
       };
       const disposeSmartCopy = attachSmartCopy(term, {
@@ -205,6 +207,8 @@ export function TerminalView({
         focus,
         dispose: () => {
           container.removeEventListener("pointerdown", handlePointerDown as EventListener);
+          // 先停掉待发的滚轮帧:rAF 回调若打在已 dispose 的 term 上会抛。
+          wheelScroll.dispose();
           disposeMacWebKitGuard();
           disposeCursorLineHighlight();
           disposeInputFix();

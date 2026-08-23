@@ -116,6 +116,13 @@ const LOW_WATER = 16 * 1024; // 16 KB：恢复写入
 export const TERMINAL_WRITE_CHUNK_SIZE = 16 * 1024;
 export const TERMINAL_FRAME_WRITE_BUDGET = 32 * 1024;
 export const TERMINAL_USER_INPUT_PAUSE_MS = 48;
+/**
+ * 本地 viewport 滚动的插值时长。
+ *
+ * 100ms 左右是"看得出是连续位移、又不会觉得画面追不上手"的区间；再长滚动会显得拖沓，
+ * 再短就退化回逐行跳。只影响 xterm 自己滚 scrollback 的场景，见 `initTerminal`。
+ */
+export const TERMINAL_SMOOTH_SCROLL_MS = 100;
 const ANSI_FG_RESET = "\x1b[39m";
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
@@ -1007,6 +1014,108 @@ export function createSmartWriter(
 const APP_WHEEL_MOUSE_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "any"]);
 
 /**
+ * 一次 DOM 滚轮事件最多放大成几行上报，按屏数算。
+ *
+ * macOS 的惯性甩动能在一个事件里给出上千 px 的 deltaY，不设上限就会一次往 pty 写
+ * 几百条鼠标序列。三屏足够覆盖正常的大幅翻页，又不会把管道灌爆。
+ */
+const MAX_WHEEL_LINES_PER_EVENT_SCREENS = 3;
+
+/**
+ * 每帧最多向程序发几条滚轮上报。
+ *
+ * 为什么要限：一条上报就是 agent 的一次整屏重绘。原来一次手势把全部行数**同步**灌进
+ * pty（实测一个普通档位 7 条、一次惯性甩动 72 条），agent 只能逐条重绘、逐屏回吐,
+ * 前端拿到的是一长串已经过时的中间态 —— 症状就是"手停了画面还在追"。
+ *
+ * 改成按帧分摊后，每帧只发这么多条，agent 的回吐与我们的发送交错进行，画面每帧都在动。
+ * 4 条 × 60fps = 240 行/秒，比任何真实手势都快，同时把管道深度压到 agent 追得上的量级。
+ */
+const MAX_WHEEL_REPORTS_PER_FRAME = 4;
+
+/**
+ * 未发送的滚轮行数上限（屏数）。
+ *
+ * 超出就丢掉最老的部分：惯性甩动能攒出上千行，全部发完要几十帧，那时用户早就松手了，
+ * 补完这些行只会让画面继续"自己滚"。留三屏足够覆盖一次正常的大幅翻页。
+ */
+const MAX_PENDING_WHEEL_SCREENS = 3;
+
+/**
+ * 每帧预算 = 待发行数 ÷ 这个除数(再夹进 1..MAX)。
+ *
+ * 为什么不用固定条数:固定 4 条/帧意味着每帧恰好跳 4 行(约 64px)然后停住,匀速直线,
+ * 台阶感就是"卡顿"的来源。按剩余量取商后,大甩动开头满速、尾部自然收窄到 1 行/帧 ——
+ * 指数衰减,也就是浏览器惯性滚动的 ease-out 手感。
+ *
+ * 取 3 而不是更大:一个普通档位约 7 行,3 → 3/2/1/1 四帧收敛,既有减速段又不显迟滞。
+ */
+const WHEEL_EASE_DIVISOR = 3;
+
+/**
+ * 等 agent 重绘的宽限时间,超过就无条件发下一批。
+ *
+ * 闭环必须有超时兜底:agent 已经滚到顶/底时一个字节都不会回吐,只等信号会把队列锁死,
+ * 症状是"滚到顶之后再往回滚要卡一下"。70ms 约四帧,足够覆盖一次全屏 TUI 重绘,
+ * 又不会在真的没有回吐时让手感明显发粘。
+ */
+export const WHEEL_REPAINT_GRACE_MS = 70;
+
+/** 行内没滚满一行的余量,按终端实例累计,方向反转时清零。 */
+interface WheelCarry {
+  lines: number;
+}
+
+/**
+ * 这次滚轮手势应该滚多少行（带符号，负数向上）。
+ *
+ * 不复用 xterm 的 `consumeWheelEvent`：它对 |deltaY| < 50 的事件乘 0.3 当"疑似触控板"
+ * 阻尼，而我们要的恰恰是"终端滚动行程 == 手上的行程"，那个阻尼是反向的。
+ *
+ * 三种 deltaMode 都要认：Firefox 给 LINE，部分环境给 PAGE，Chromium / WebKit 给 PIXEL。
+ * 只有 PIXEL 需要 cell 高度换算，所以另外两种在拿不到行高时也能正常工作。
+ */
+function wheelLinesForEvent(
+  event: WheelEvent,
+  rows: number,
+  cellHeight: number | null,
+  carry: WheelCarry,
+): number {
+  let lines: number;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    lines = event.deltaY;
+  } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    lines = event.deltaY * Math.max(rows, 1);
+  } else {
+    // PIXEL：物理像素 ÷ 行高 = 行数,这就是"行程一致"的定义。
+    if (cellHeight === null || cellHeight <= 0) return 0;
+    lines = event.deltaY / cellHeight;
+  }
+
+  // 方向一反就丢掉旧余量,否则上一段的残留会把回滚的第一下吃掉或多送一行。
+  if (carry.lines !== 0 && Math.sign(carry.lines) !== Math.sign(lines)) {
+    carry.lines = 0;
+  }
+  const total = carry.lines + lines;
+  // 触控板的一次微小位移不足一行,先攒着,别当成 0 丢掉——丢了就是"滚了没反应"。
+  const whole = Math.trunc(total);
+  carry.lines = total - whole;
+
+  const cap = Math.max(rows, 1) * MAX_WHEEL_LINES_PER_EVENT_SCREENS;
+  return Math.max(-cap, Math.min(cap, whole));
+}
+
+/** 从 DOM 量出一行的 CSS 像素高。xterm 没有公开 cell 尺寸,只能这么取。 */
+function measureCellHeight(term: Terminal): number | null {
+  const screen = term.element?.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen) return null;
+  const rows = Math.max(term.rows, 1);
+  const height = screen.getBoundingClientRect().height;
+  if (!(height > 0)) return null;
+  return height / rows;
+}
+
+/**
  * agent 终端的滚轮兜底：滚轮只是"翻看内容"的本地手势，绝不合成按键。
  *
  * xterm 在没有本地 scrollback 的 buffer（也就是 alt screen）里有一条兜底：把滚轮
@@ -1029,15 +1138,204 @@ const APP_WHEEL_MOUSE_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "an
  * git log、vim、htop 正是靠这条 alternate-scroll 方向键滚动的，吞掉等于它们也滚不动，
  * 而 shell 里没有会被方向键顶掉的输入框。
  */
-export function attachTerminalWheelScroll(term: Terminal): void {
+export function attachTerminalWheelScroll(term: Terminal): TerminalWheelScroll {
+  const carry: WheelCarry = { lines: 0 };
+  // 我们自己补发的那些 LINE 事件要原样交给 xterm,不能再进放大逻辑(否则递归)。
+  let replaying = false;
+  const pacer = createWheelReportPacer(term, () => {
+    replaying = true;
+    return () => {
+      replaying = false;
+    };
+  });
+
   term.attachCustomWheelEventHandler((event) => {
     if (event.deltaY === 0) return true;
-    if (APP_WHEEL_MOUSE_MODES.has(term.modes.mouseTrackingMode)) return true;
+    if (APP_WHEEL_MOUSE_MODES.has(term.modes.mouseTrackingMode)) {
+      if (replaying) return true;
+      return queueAppWheelReports(term, event, carry, pacer);
+    }
     if (term.buffer.active.type !== "alternate") return true;
     // listener 是 { passive: false } 注册的，可以拦掉祖先容器的默认滚动。
     event.preventDefault();
     return false;
   });
+
+  return {
+    dispose: () => pacer.cancel(),
+    // 合成事件是同步 dispatch 的,xterm 的 onData 就发生在 beginReplay/endReplay 之间,
+    // 所以这个标志天然精确 —— 比去正则匹配 \x1b[<…M 那串鼠标序列稳得多。
+    isReplayingWheel: () => replaying,
+  };
+}
+
+/** [`attachTerminalWheelScroll`] 的句柄。 */
+export interface TerminalWheelScroll {
+  /** 卸载时必须调:否则待发的 rAF 回调会打到已 dispose 的 term 上。 */
+  dispose: () => void;
+  /**
+   * 当前是否正在派发我们自己合成的滚轮事件。
+   *
+   * 调用方用它把"滚轮上报"和"用户敲键"分开:上报不该触发 `pauseForUserInput` ——
+   * 那会为每条上报挂起输出 48ms 并重绘两次光标行,而滚动期间每帧有好几条上报,
+   * 等于把 agent 的重绘反复往后推,正是我们要消除的抖动来源。
+   */
+  isReplayingWheel: () => boolean;
+}
+
+/** 按帧分摊发送滚轮上报的队列。 */
+interface WheelReportPacer {
+  /** 累计待发行数（带符号）并确保有一帧已排期。 */
+  enqueue: (lines: number, clientX: number, clientY: number) => void;
+  /** 取消尚未发出的帧。终端卸载时必须调,否则 rAF 回调会打到已 dispose 的 term 上。 */
+  cancel: () => void;
+}
+
+/**
+ * 把待发行数按帧分摊成鼠标上报,并与 agent 的重绘闭环。
+ *
+ * 两条独立的节流:
+ *
+ * 1. **闭环**:发出一批后等 `onWriteParsed`(每帧最多触发一次、解析完成后)再发下一批,
+ *    超过 [`WHEEL_REPAINT_GRACE_MS`] 无条件推进。原来是开环 —— 固定每帧灌 4 条,不管
+ *    agent 画完没有。一次全屏 TUI 重绘通常超过一帧,于是我们持续跑在 agent 前面:上报
+ *    堆在 pty 里,画面以"憋一下、跳一段"的方式回来,帧间距不均,这就是卡顿的主因。
+ *    闭环之后每次重绘对应一批上报,节奏由 agent 的实际能力决定,画面匀速。
+ *
+ * 2. **缓动**:每帧条数按 [`WHEEL_EASE_DIVISOR`] 取剩余量的商,尾部自然收窄成 1 行/帧。
+ *
+ * 方向反转时丢掉反向的余量 —— 用户已经改了主意,把旧方向补完只会让画面先往回跳一段。
+ * 总量仍被 [`MAX_PENDING_WHEEL_SCREENS`] 截断:惯性甩动能攒出上千行,补完只会让画面
+ * 在用户松手后继续自己滚。
+ */
+function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): WheelReportPacer {
+  let pendingLines = 0;
+  let coords = { clientX: 0, clientY: 0 };
+  let frameScheduled = false;
+  let cancelled = false;
+  // 等重绘的截止时刻;0 表示没在等。
+  let repaintDeadline = 0;
+
+  // 没有 onWriteParsed 的实现(测试替身、老版本)退回纯 rAF 节奏,不要因此把滚轮弄死。
+  const repaintSignal = typeof term.onWriteParsed === "function" ? term.onWriteParsed : null;
+  const disposeRepaint = repaintSignal?.call(term, () => {
+    if (repaintDeadline === 0) return;
+    // agent 这批画完了,立刻放行下一批,不必等到宽限期结束。
+    repaintDeadline = 0;
+    if (pendingLines !== 0) schedule();
+  });
+
+  const flush = () => {
+    frameScheduled = false;
+    if (cancelled || pendingLines === 0) return;
+    const element = term.element;
+    if (!element) {
+      pendingLines = 0;
+      return;
+    }
+    // 还在等上一批的重绘:重排一帧继续等,别加深管道深度。
+    if (repaintDeadline !== 0) {
+      if (nowMs() < repaintDeadline) {
+        schedule();
+        return;
+      }
+      repaintDeadline = 0;
+    }
+
+    const step = pendingLines < 0 ? -1 : 1;
+    const budget = Math.max(
+      1,
+      Math.min(MAX_WHEEL_REPORTS_PER_FRAME, Math.ceil(Math.abs(pendingLines) / WHEEL_EASE_DIVISOR)),
+    );
+    const thisFrame = Math.min(Math.abs(pendingLines), budget);
+    pendingLines -= step * thisFrame;
+
+    const endReplay = beginReplay();
+    try {
+      for (let index = 0; index < thisFrame; index += 1) {
+        element.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: step,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+            clientX: coords.clientX,
+            clientY: coords.clientY,
+            // 不冒泡:listener 就挂在 element 上,冒上去只会让祖先容器跟着滚。
+            bubbles: false,
+            cancelable: true,
+          }),
+        );
+      }
+    } finally {
+      endReplay();
+    }
+
+    // 只有能收到重绘信号时才闭环;收不到就退回纯 rAF,否则每批都要白等一个宽限期。
+    if (repaintSignal) repaintDeadline = nowMs() + WHEEL_REPAINT_GRACE_MS;
+    if (pendingLines !== 0) schedule();
+  };
+
+  const schedule = () => {
+    if (frameScheduled || cancelled) return;
+    frameScheduled = true;
+    scheduleFrame(flush);
+  };
+
+  return {
+    enqueue: (lines, clientX, clientY) => {
+      if (cancelled) return;
+      // 反向时丢掉旧方向的余量,否则画面会先往回跳一段再跟手。
+      if (pendingLines !== 0 && Math.sign(pendingLines) !== Math.sign(lines)) {
+        pendingLines = 0;
+      }
+      // 坐标用最新一次事件的:上报的格子位置该跟着当前指针。
+      coords = { clientX, clientY };
+      const cap = Math.max(term.rows, 1) * MAX_PENDING_WHEEL_SCREENS;
+      pendingLines = Math.max(-cap, Math.min(cap, pendingLines + lines));
+      schedule();
+    },
+    cancel: () => {
+      cancelled = true;
+      pendingLines = 0;
+      repaintDeadline = 0;
+      disposeRepaint?.dispose();
+    },
+  };
+}
+
+/**
+ * 把一次滚轮事件折算成 N 行待发上报,N = 这段行程真正跨过的行数,交给 pacer 按帧发出。
+ *
+ * 为什么需要这层：xterm 算出了行数却只发一条上报
+ * （`CoreBrowserTerminal.bindMouse` 的 wheel 分支，注释原文 "has been simplified to
+ * simply send a single up or down sequence"）。而 agent 那边一条上报就是一行
+ * （Claude Code 的 Scroll 键位 wheelup → `scroll:lineUp`），于是滚轮转多远都只滚一行 ——
+ * 这就是"滚了很长行程、终端几乎不动"的成因。`scrollSensitivity` 治不了它：倍数加在
+ * 被丢弃的那个行数上，下游只看正负号。
+ *
+ * 补发的手段是往 xterm 自己的 listener 上派发 `deltaMode = LINE`、`deltaY = ±1` 的合成
+ * 事件：走 LINE 分支时 `consumeWheelEvent` 既不碰 cell 高度也不碰触控板阻尼,一个事件
+ * 恰好等于一行上报。这样编码、协议门禁（vt200 / SGR 1006 …）、坐标换算全都还是 xterm
+ * 自己那套,我们不重复实现鼠标序列。
+ *
+ * 合成事件必须带上原事件的 clientX/clientY：`getMouseReportCoords` 用它算格子坐标,
+ * 缺了会拿不到 pos 而整条上报被丢掉。修饰键则故意不带 —— `_applyScrollModifier` 会对
+ * 带修饰键的事件乘 `fastScrollSensitivity`,那样每条合成事件就不再是一行了；快滚的
+ * 倍数已经体现在原事件的 deltaY 里。
+ */
+function queueAppWheelReports(
+  term: Terminal,
+  event: WheelEvent,
+  carry: WheelCarry,
+  pacer: WheelReportPacer,
+): boolean {
+  // 还没 open() 或拿不到行高：交回 xterm,至少还能滚一行,别把滚轮弄成完全没反应。
+  if (!term.element) return true;
+  const lines = wheelLinesForEvent(event, term.rows, measureCellHeight(term), carry);
+  // lines === 0 时不足一行的余量已经攒进 carry。这里仍要把事件吃掉,否则 xterm 会照旧
+  // 发一条上报,等于每个微小位移都滚一行,触控板会变得过于灵敏。
+  if (lines !== 0) pacer.enqueue(lines, event.clientX, event.clientY);
+  event.preventDefault();
+  return false;
 }
 
 // ── xterm initialization ─────────────────────────────────────────────────────
@@ -1069,6 +1367,12 @@ export function initTerminal(
     minimumContrastRatio: terminalMinimumContrastRatioForTheme(variant),
     allowTransparency: true,
     allowProposedApi: true,
+    // 本地 scrollback 滚动做成浏览器那样的连续位移（xterm 自己按 rAF 插值到目标行）。
+    // 只对 xterm 亲自滚 viewport 的场景生效：shell / SSH / WSL 面板，以及 agent 终端
+    // 不在 alt screen 的时候。开了鼠标上报的 alt screen 由 agent 重绘，这里管不到，
+    // 那条路径的手感由 attachTerminalWheelScroll 的闭环节流负责。
+    // 不影响 less / vim 依赖的 alternate-scroll 方向键路径（那条不走 viewport 滚动）。
+    smoothScrollDuration: TERMINAL_SMOOTH_SCROLL_MS,
     // 当运行中的 TUI（Claude Code / Codex）开启鼠标上报时，xterm 默认把拖动当作
     // 鼠标事件转发给程序并取消本地选区，导致 macOS 用户"运行时无法框选"。开启此项后
     // 按住 ⌥ Option 拖动可强制本地选区（iTerm2 / Terminal.app 的标准约定）。

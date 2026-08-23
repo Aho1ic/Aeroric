@@ -169,12 +169,16 @@ export function useTerminalManager() {
   }, []);
 
   const writeErrorToTerminal = useCallback((taskId: string, errMsg: string) => {
+    // xterm 不把裸 \n 当作回到行首。后端错误(agent 的多行 stderr、Rust 的
+    // 多行 Err)只带 \n，直接写进去会排成阶梯状，每行比上一行缩进更深，长堆栈
+    // 基本没法读。这里统一补 \r，已经是 \r\n 的不重复加。
+    const normalized = errMsg.replace(/\r?\n/g, "\r\n");
     const writeFn = terminalWriteRefs.current[taskId];
     if (writeFn) {
-      writeFn(errMsg);
+      writeFn(normalized);
     }
     const buf = taskBufferRef.current[taskId] ?? createTerminalRingBuffer();
-    pushTerminalChunk(buf, errMsg);
+    pushTerminalChunk(buf, normalized);
     taskBufferRef.current[taskId] = buf;
   }, []);
 

@@ -117,8 +117,52 @@ describe("terminal output highlighting", () => {
     defaultWriter.writeImmediate(raw);
     agentWriter.writeImmediate(raw);
 
-    expect(defaultWrite).toHaveBeenCalledWith(raw, undefined);
-    expect(agentWrite).toHaveBeenCalledWith("\x1b[48;2;17;21;26mcomposer", undefined);
+    expect(defaultWrite).toHaveBeenCalledWith(raw, expect.any(Function));
+    expect(agentWrite).toHaveBeenCalledWith("\x1b[48;2;17;21;26mcomposer", expect.any(Function));
+  });
+
+  it("keeps fragmented cursor controls raw across PTY chunks", () => {
+    const writes: string[] = [];
+    const write = vi.fn((data: string, callback?: () => void) => {
+      writes.push(data);
+      callback?.();
+    });
+    const writer = createSmartWriter({ write } as unknown as Terminal);
+
+    writer.write("\x1b[");
+    writer.write("12;40Herror 42");
+
+    expect(writes.join("")).toBe("\x1b[12;40Herror 42");
+  });
+
+  it("does not add semantic highlights to Agent TUI output", () => {
+    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    const writer = createSmartWriter({ write } as unknown as Terminal, () => "dark", {
+      themeAwareAnsiRemap: true,
+    });
+
+    writer.writeImmediate("running 42");
+
+    expect(write).toHaveBeenCalledWith("running 42", expect.any(Function));
+  });
+
+  it("reports pending live and immediate writes until xterm acknowledges them", () => {
+    const callbacks: Array<() => void> = [];
+    const write = vi.fn((_data: string, callback?: () => void) => {
+      if (callback) callbacks.push(callback);
+    });
+    const writer = createSmartWriter({ write } as unknown as Terminal);
+
+    expect(writer.isIdle()).toBe(true);
+    writer.write("live");
+    expect(writer.isIdle()).toBe(false);
+    callbacks.shift()?.();
+    expect(writer.isIdle()).toBe(true);
+
+    writer.writeImmediate("history");
+    expect(writer.isIdle()).toBe(false);
+    callbacks.shift()?.();
+    expect(writer.isIdle()).toBe(true);
   });
 
   it("splits large writes without breaking surrogate pairs", () => {
