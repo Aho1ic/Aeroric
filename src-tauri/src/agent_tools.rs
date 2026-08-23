@@ -1969,13 +1969,13 @@ fn dsh_install_result(
         progress: 100,
         // Claude/Codex 那条管线用 agent id 作登录命令,dsh 同理。
         login_command: "dsh".to_string(),
-        error_code: (!success).then(|| {
-            if cancelled {
-                AgentInstallErrorCode::Cancelled
-            } else {
-                AgentInstallErrorCode::InstallFailed
-            }
-        }),
+        error_code: if success {
+            None
+        } else if cancelled {
+            Some(AgentInstallErrorCode::Cancelled)
+        } else {
+            Some(AgentInstallErrorCode::InstallFailed)
+        },
         message,
         ..Default::default()
     }
