@@ -432,6 +432,8 @@ export const en: Record<string, string> = {
   "appSettings.installComplete": "Installation complete",
   "appSettings.installFailed": "Installation failed",
   "appSettings.cancelInstall": "Cancel",
+  "appSettings.operationRunningHint":
+    "This keeps running in the background. You can leave this page and the progress will still be here when you return.",
   "appSettings.updateSelectedAgents": "Install or Upgrade Selected",
   "appSettings.aeroricManaged": "Aeroric managed",
   "appSettings.loginCommand": "Login command",

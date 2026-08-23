@@ -5,11 +5,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentOption, CustomAgentProfile } from "../agents";
 import { AgentDetailModal } from "../components/app-settings/AgentDetailModal";
 import type { AppSettings } from "../components/app-settings/types";
+import { AgentVersionsProvider } from "../hooks/useAgentVersions";
 import { I18nProvider } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+
+/** 与 main.tsx 一致的组件树：AgentPathSection 的升级状态取自 AgentVersionsProvider。 */
+function TestProviders({ children }: { children: React.ReactNode }) {
+  return (
+    <I18nProvider>
+      <AgentVersionsProvider>{children}</AgentVersionsProvider>
+    </I18nProvider>
+  );
+}
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
@@ -95,7 +105,7 @@ const baseSettings: AppSettings = {
 
 function renderModal(option: AgentOption, themeVariant: "light" | "dark" = "light") {
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentDetailModal
         option={option}
         themeVariant={themeVariant}
@@ -103,7 +113,7 @@ function renderModal(option: AgentOption, themeVariant: "light" | "dark" = "ligh
         settings={baseSettings}
         onClose={vi.fn()}
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -185,7 +195,7 @@ describe("Agent detail modal", () => {
     const user = userEvent.setup();
 
     render(
-      <I18nProvider>
+      <TestProviders>
         <AgentDetailModal
           option={dshOption}
           themeVariant="light"
@@ -193,7 +203,7 @@ describe("Agent detail modal", () => {
           settings={dshSettings}
           onClose={vi.fn()}
         />
-      </I18nProvider>,
+      </TestProviders>,
     );
 
     const reasoningGroup = await screen.findByRole("group", { name: "推理强度" });
@@ -222,7 +232,7 @@ describe("Agent detail modal", () => {
 
   it("exposes neither 1M context nor reasoning effort for a custom DSH profile", async () => {
     render(
-      <I18nProvider>
+      <TestProviders>
         <AgentDetailModal
           option={customDshOption}
           themeVariant="light"
@@ -230,7 +240,7 @@ describe("Agent detail modal", () => {
           settings={{ ...baseSettings, custom_agents: [customDshProfile] }}
           onClose={vi.fn()}
         />
-      </I18nProvider>,
+      </TestProviders>,
     );
 
     await screen.findByRole("tablist", { name: customDshProfile.label });

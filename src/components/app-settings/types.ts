@@ -354,6 +354,29 @@ export interface AgentInstallProgress {
   message: string;
 }
 
+export type AgentOperationKind = "install" | "upgrade";
+export type AgentOperationState = "running" | "succeeded" | "failed" | "cancelled";
+
+/**
+ * 对应 Rust `AgentOperationSnapshot`：安装/升级的状态由后端持有。
+ * 前端退出设置页再进来时靠它对账，所以「升级中」不会退回「一键升级」。
+ */
+export interface AgentOperationSnapshot {
+  operation_id: string;
+  agent: AgentToolId;
+  requested_agent: string;
+  kind: AgentOperationKind;
+  state: AgentOperationState;
+  stage: AgentInstallStage;
+  progress: number;
+  message: string;
+  error_code?: AgentInstallErrorCode | null;
+  started_at_ms: number;
+  finished_at_ms?: number | null;
+  install_result?: AgentInstallResult;
+  upgrade_result?: AgentUpgradeResult;
+}
+
 export interface AgentInstallResult {
   operation_id: string;
   agent: AgentToolId;
@@ -438,6 +461,9 @@ export interface AppSettingsNavItem {
 }
 
 export const APP_SETTINGS_CHANGED_EVENT = "aeroric:app-settings-changed";
+
+/** 对应 Rust `agent_ops::AGENT_OPERATION_EVENT`：带完整快照的操作变更事件。 */
+export const AGENT_OPERATION_EVENT = "agent-operation-changed";
 export const SKILL_HUB_CHANGED_EVENT = "aeroric:skill-hub-changed";
 export const OPEN_APP_SETTINGS_EVENT = "aeroric:open-app-settings";
 export const START_DSH_CREATOR_DRAFT_EVENT = "aeroric:start-dsh-creator-draft";

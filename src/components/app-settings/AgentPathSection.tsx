@@ -11,7 +11,7 @@ import {
 } from "../../shortcuts";
 import {
   APP_SETTINGS_CHANGED_EVENT,
-  type AgentUpgradeResult,
+  type AgentToolId,
   type AgentVersions,
   type AppSettings,
   type AgentKey,
@@ -20,6 +20,7 @@ import { getAgentExecutablePlaceholder } from "./shared";
 import { agentDisplayLabel, isBuiltInAgent, type CustomAgentProfile } from "../../agents";
 import type { BuiltInAgentType } from "../../types";
 import { Button } from "../ui/Button";
+import { useAgentVersions } from "../../hooks/useAgentVersions";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
@@ -177,8 +178,12 @@ export const AgentPathSection = forwardRef<
   const [detecting, setDetecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [upgrading, setUpgrading] = useState(false);
-  const [upgradeResult, setUpgradeResult] = useState<AgentUpgradeResult | null>(null);
+  // 升级状态走全局 context（后端持有），这样关掉弹窗再打开仍显示「升级中」，
+  // 也不会因为本地标志丢失而重复触发升级。
+  const { operations, startOperation } = useAgentVersions();
+  const [operationAgent, setOperationAgent] = useState<AgentToolId | null>(
+    isBuiltInAgent(agentKey) && agentKey !== "claude_gpt55" ? (agentKey as AgentToolId) : null,
+  );
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const didAutoLoadRef = useRef(false);
@@ -352,21 +357,11 @@ export const AgentPathSection = forwardRef<
   ]);
 
   async function handleUpgrade() {
-    setUpgrading(true);
     setError(null);
-    setUpgradeResult(null);
-    try {
-      const [result] = await invoke<AgentUpgradeResult[]>("upgrade_agent_versions", {
-        agents: [agentKey],
-      });
-      setUpgradeResult(result ?? null);
-      await loadVersions(settings);
-      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setUpgrading(false);
-    }
+    // 后端幂等：已在跑就直接沿用现有操作，不会起第二次。
+    const snapshot = await startOperation(agentKey);
+    // 自定义 Agent 会归并到它的二进制 agent，记下来才能订阅到正确的快照。
+    if (snapshot) setOperationAgent(snapshot.agent);
   }
 
   async function handlePickDshSource() {
@@ -376,6 +371,26 @@ export const AgentPathSection = forwardRef<
     clearVersions();
     setSettings((prev) => ({ ...prev, dsh_path: selected }));
   }
+
+  const operation = operationAgent ? operations[operationAgent] : null;
+  const upgrading = operation?.state === "running";
+  const finishedOperation = operation && !upgrading ? operation : null;
+  const upgradeResult = finishedOperation
+    ? {
+        success: finishedOperation.state === "succeeded",
+        message: finishedOperation.message,
+      }
+    : null;
+
+  // 升级结束后刷新一次版本号；dsh 走托管安装时 dsh_path 也可能已被改写。
+  const lastSettledOperationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!finishedOperation) return;
+    if (lastSettledOperationRef.current === finishedOperation.operation_id) return;
+    lastSettledOperationRef.current = finishedOperation.operation_id;
+    void loadVersions(settings);
+    window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+  }, [finishedOperation, loadVersions, settings]);
 
   const currentCustomAgent = findCustomAgent(settings, agentKey);
   const originalCustomAgent = findCustomAgent(originalSettings, agentKey);

@@ -3,68 +3,104 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentUpdatesPanel } from "../components/app-settings/AgentUpdatesPanel";
 import { AgentVersionsProvider } from "../hooks/useAgentVersions";
+import {
+  AGENT_OPERATION_EVENT,
+  type AgentOperationSnapshot,
+} from "../components/app-settings/types";
 import { I18nProvider } from "../i18n";
 
-const { invokeMock, latestVersions, toolStatuses } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  latestVersions: [
-    { agent: "claude", version: "1.1.0", error_code: null as string | null, error: "" },
-    { agent: "codex", version: "1.1.0", error_code: null as string | null, error: "" },
-    { agent: "dsh", version: "0.1.0-rc.6", error_code: null as string | null, error: "" },
-  ],
-  toolStatuses: [
-    {
-      agent: "claude",
-      supported: true,
-      platform: "macos",
-      architecture: "aarch64",
-      libc: "",
-      installed: true,
-      version: "1.0.0",
-      path: "/usr/local/bin/claude",
-      channel: "standalone",
-      managed: false,
-      error_code: null as string | null,
-      error: "",
-    },
-    {
-      agent: "codex",
-      supported: true,
-      platform: "macos",
-      architecture: "aarch64",
-      libc: "",
-      installed: true,
-      version: "1.0.0",
-      path: "/usr/local/bin/codex",
-      channel: "npm",
-      managed: false,
-      error_code: null as string | null,
-      error: "",
-    },
-    {
-      agent: "dsh",
-      supported: true,
-      platform: "macos",
-      architecture: "aarch64",
-      libc: "",
-      installed: true,
-      version: "0.1.0-rc.5",
-      path: "/usr/local/bin/dsh",
-      channel: "npm",
-      managed: false,
-      error_code: null as string | null,
-      error: "",
-    },
-  ],
-}));
+const { invokeMock, listenMock, listeners, latestVersions, toolStatuses, operations } = vi.hoisted(
+  () => ({
+    invokeMock: vi.fn(),
+    listenMock: vi.fn(),
+    listeners: new Map<string, Array<(event: { payload: unknown }) => void>>(),
+    latestVersions: [
+      { agent: "claude", version: "1.1.0", error_code: null as string | null, error: "" },
+      { agent: "codex", version: "1.1.0", error_code: null as string | null, error: "" },
+      { agent: "dsh", version: "0.1.0-rc.6", error_code: null as string | null, error: "" },
+    ],
+    toolStatuses: [
+      {
+        agent: "claude",
+        supported: true,
+        platform: "macos",
+        architecture: "aarch64",
+        libc: "",
+        installed: true,
+        version: "1.0.0",
+        path: "/usr/local/bin/claude",
+        channel: "standalone",
+        managed: false,
+        error_code: null as string | null,
+        error: "",
+      },
+      {
+        agent: "codex",
+        supported: true,
+        platform: "macos",
+        architecture: "aarch64",
+        libc: "",
+        installed: true,
+        version: "1.0.0",
+        path: "/usr/local/bin/codex",
+        channel: "npm",
+        managed: false,
+        error_code: null as string | null,
+        error: "",
+      },
+      {
+        agent: "dsh",
+        supported: true,
+        platform: "macos",
+        architecture: "aarch64",
+        libc: "",
+        installed: true,
+        version: "0.1.0-rc.5",
+        path: "/usr/local/bin/dsh",
+        channel: "npm",
+        managed: false,
+        error_code: null as string | null,
+        error: "",
+      },
+    ],
+    // 后端 registry 的替身：`get_agent_operations` 直接返回它。
+    operations: [] as AgentOperationSnapshot[],
+  }),
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: listenMock,
 }));
+
+function snapshot(overrides: Partial<AgentOperationSnapshot> = {}): AgentOperationSnapshot {
+  return {
+    operation_id: "op-1",
+    agent: "dsh",
+    requested_agent: "dsh",
+    kind: "upgrade",
+    state: "running",
+    stage: "installing",
+    progress: 45,
+    message: "",
+    error_code: null,
+    started_at_ms: 1_000,
+    finished_at_ms: null,
+    ...overrides,
+  } as AgentOperationSnapshot;
+}
+
+/** 模拟后端 `AGENT_OPERATION_EVENT` 推送。 */
+async function emitOperation(payload: AgentOperationSnapshot) {
+  const handlers = listeners.get(AGENT_OPERATION_EVENT) ?? [];
+  await act(async () => {
+    for (const handler of handlers) handler({ payload });
+    await Promise.resolve();
+  });
+}
 
 function renderPanel() {
   return render(
@@ -76,70 +112,69 @@ function renderPanel() {
   );
 }
 
+/** 这些桩数据是模块级共享的，每个用例都要还原，否则跨 describe 互相污染。 */
+function resetFixtures() {
+  localStorage.setItem("aeroric:language", "en");
+  invokeMock.mockReset();
+  listenMock.mockReset();
+  listeners.clear();
+  operations.length = 0;
+  toolStatuses[0].installed = true;
+  toolStatuses[0].managed = false;
+  toolStatuses[0].version = "1.0.0";
+  toolStatuses[0].error_code = null;
+  toolStatuses[0].error = "";
+  toolStatuses[1].installed = true;
+  toolStatuses[1].managed = false;
+  toolStatuses[1].version = "1.0.0";
+  toolStatuses[1].error_code = null;
+  toolStatuses[1].error = "";
+  toolStatuses[2].installed = true;
+  toolStatuses[2].managed = false;
+  toolStatuses[2].version = "0.1.0-rc.5";
+  toolStatuses[2].error_code = null;
+  toolStatuses[2].error = "";
+  latestVersions[0].version = "1.1.0";
+  latestVersions[1].version = "1.1.0";
+  latestVersions[2].version = "0.1.0-rc.6";
+}
+
 describe("AgentUpdatesPanel", () => {
   beforeEach(() => {
-    localStorage.setItem("aeroric:language", "en");
-    invokeMock.mockReset();
-    toolStatuses[0].installed = true;
-    toolStatuses[0].managed = false;
-    toolStatuses[0].version = "1.0.0";
-    toolStatuses[0].error_code = null;
-    toolStatuses[0].error = "";
-    toolStatuses[1].installed = true;
-    toolStatuses[1].managed = false;
-    toolStatuses[1].version = "1.0.0";
-    toolStatuses[1].error_code = null;
-    toolStatuses[1].error = "";
-    toolStatuses[2].installed = true;
-    toolStatuses[2].managed = false;
-    toolStatuses[2].version = "0.1.0-rc.5";
-    toolStatuses[2].error_code = null;
-    toolStatuses[2].error = "";
-    latestVersions[0].version = "1.1.0";
-    latestVersions[1].version = "1.1.0";
-    latestVersions[2].version = "0.1.0-rc.6";
-    invokeMock.mockImplementation(
-      (
-        command: string,
-        args?: { agents?: string[]; request?: { operation_id: string; agents: string[] } },
-      ) => {
-        if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
-        if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
-        if (command === "upgrade_agent_versions") {
-          return Promise.resolve(
-            (args?.agents ?? []).map((agent) => ({
-              agent,
-              success: true,
-              previous_version: "1.0.0",
-              current_version: "1.1.0",
-              message: "",
-            })),
-          );
-        }
-        if (command === "install_agent_tools") {
-          return Promise.resolve(
-            (args?.request?.agents ?? []).map((agent) => ({
-              operation_id: args?.request?.operation_id ?? "",
-              agent,
-              success: true,
-              supported: true,
-              platform: "macos",
-              architecture: "aarch64",
-              libc: "",
-              version: "1.1.0",
-              path: `/managed/${agent}`,
-              channel: "aeroric-managed",
-              managed: true,
-              stage: "completed",
-              progress: 100,
-              login_command: agent,
-              message: "",
-            })),
-          );
-        }
-        return Promise.resolve(null);
-      },
-    );
+    resetFixtures();
+
+    listenMock.mockImplementation((event: string, handler: (e: { payload: unknown }) => void) => {
+      const existing = listeners.get(event) ?? [];
+      existing.push(handler);
+      listeners.set(event, existing);
+      return Promise.resolve(() => {
+        listeners.set(
+          event,
+          (listeners.get(event) ?? []).filter((candidate) => candidate !== handler),
+        );
+      });
+    });
+
+    invokeMock.mockImplementation((command: string, args?: { agent?: string }) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "get_agent_operations") return Promise.resolve([...operations]);
+      if (command === "start_agent_operation") {
+        const agent = (args?.agent ?? "dsh") as AgentOperationSnapshot["agent"];
+        const started = snapshot({
+          operation_id: `op-${agent}`,
+          agent,
+          requested_agent: agent,
+          kind: toolStatuses.find((row) => row.agent === agent)?.installed ? "upgrade" : "install",
+          stage: "detecting",
+          progress: 0,
+        });
+        operations.push(started);
+        return Promise.resolve(started);
+      }
+      if (command === "cancel_agent_operation") return Promise.resolve(true);
+      return Promise.resolve(null);
+    });
   });
 
   it("renders exactly one card for Claude Code and one for Codex", async () => {
@@ -159,6 +194,7 @@ describe("AgentUpdatesPanel", () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_agent_tool_status") return pendingStatuses;
       if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "get_agent_operations") return Promise.resolve([]);
       return Promise.resolve(null);
     });
 
@@ -197,6 +233,7 @@ describe("AgentUpdatesPanel", () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
       if (command === "get_agent_latest_versions") return Promise.reject("network_unavailable");
+      if (command === "get_agent_operations") return Promise.resolve([]);
       return Promise.resolve(null);
     });
     renderPanel();
@@ -207,7 +244,7 @@ describe("AgentUpdatesPanel", () => {
     expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
   });
 
-  it("upgrades only the Agent whose button was clicked", async () => {
+  it("starts the operation only for the Agent whose button was clicked", async () => {
     const user = userEvent.setup();
     renderPanel();
 
@@ -216,59 +253,66 @@ describe("AgentUpdatesPanel", () => {
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-        agents: ["codex"],
-        expectedVersions: { codex: "1.1.0" },
+      expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+        agent: "codex",
+        expectedVersion: "1.1.0",
       }),
     );
     expect(invokeMock).not.toHaveBeenCalledWith(
-      "upgrade_agent_versions",
-      expect.objectContaining({ agents: ["claude"] }),
+      "start_agent_operation",
+      expect.objectContaining({ agent: "claude" }),
     );
   });
 
-  it("shows the backend verification failure when the active version misses the target", async () => {
-    invokeMock.mockImplementation((command: string, args?: { agents?: string[] }) => {
-      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
-      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
-      if (command === "upgrade_agent_versions") {
-        return Promise.resolve(
-          (args?.agents ?? []).map((agent) => ({
-            agent,
-            success: false,
-            previous_version: "1.0.0",
-            current_version: "1.0.0",
-            message:
-              "verification failed: active path /usr/local/bin/codex; before 1.0.0; after 1.0.0; expected 1.1.0",
-          })),
-        );
-      }
-      return Promise.resolve(null);
-    });
+  it("routes every Agent, including dsh, through the single operation command", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[2]);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+        agent: "dsh",
+        expectedVersion: "0.1.0-rc.6",
+      }),
+    );
+    // 旧的分流命令都已下线：安装/升级统一由后端 registry 决策。
+    expect(invokeMock).not.toHaveBeenCalledWith("upgrade_agent_versions", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("install_agent_tools", expect.anything());
+  });
+
+  it("shows the backend verification failure reported on the finished snapshot", async () => {
     const user = userEvent.setup();
     renderPanel();
 
     const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
     await user.click(upgradeButtons[1]);
 
+    await emitOperation(
+      snapshot({
+        operation_id: "op-codex",
+        agent: "codex",
+        requested_agent: "codex",
+        kind: "upgrade",
+        state: "failed",
+        stage: "failed",
+        progress: 100,
+        error_code: "verification_failed",
+        message:
+          "verification failed: active path /usr/local/bin/codex; before 1.0.0; after 1.0.0; expected 1.1.0",
+        finished_at_ms: 2_000,
+      }),
+    );
+
     expect(await screen.findByText("Upgrade failed")).toBeVisible();
     expect(await screen.findByText(/active path \/usr\/local\/bin\/codex/)).toBeVisible();
   });
 
-  it("keeps multiple Agent upgrade buttons in the upgrading state independently", async () => {
+  it("keeps multiple Agent buttons in the working state independently", async () => {
     const user = userEvent.setup();
-    let resolveUpgrade!: (value: unknown[]) => void;
-    const pendingUpgrade = new Promise<unknown[]>((resolve) => {
-      resolveUpgrade = resolve;
-    });
-    invokeMock.mockImplementation((command: string, args?: { agents?: string[] }) => {
-      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
-      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
-      if (command === "upgrade_agent_versions") return pendingUpgrade;
-      return Promise.resolve(args?.agents?.map((agent) => ({ agent, success: true })) ?? null);
-    });
-
     renderPanel();
+
     const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
     await user.click(upgradeButtons[0]);
     await user.click(upgradeButtons[1]);
@@ -276,23 +320,32 @@ describe("AgentUpdatesPanel", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: "Upgrading..." })).toHaveLength(2);
     });
-    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-      agents: ["claude"],
-      expectedVersions: { claude: "1.1.0" },
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+      agent: "claude",
+      expectedVersion: "1.1.0",
     });
-    expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-      agents: ["codex"],
-      expectedVersions: { codex: "1.1.0" },
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+      agent: "codex",
+      expectedVersion: "1.1.0",
     });
 
-    resolveUpgrade([
-      { agent: "claude", success: true, current_version: "1.1.0" },
-      { agent: "codex", success: true, current_version: "1.1.0" },
-    ]);
+    for (const agent of ["claude", "codex"] as const) {
+      await emitOperation(
+        snapshot({
+          operation_id: `op-${agent}`,
+          agent,
+          requested_agent: agent,
+          state: "succeeded",
+          stage: "completed",
+          progress: 100,
+          finished_at_ms: 2_000,
+        }),
+      );
+    }
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Upgrade" })).toHaveLength(3));
   });
 
-  it("installs a missing built-in Agent instead of running the upgrade command", async () => {
+  it("labels the action Install and reports the install result for a missing Agent", async () => {
     toolStatuses[0].installed = false;
     toolStatuses[0].version = "";
     const user = userEvent.setup();
@@ -301,17 +354,42 @@ describe("AgentUpdatesPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Install" }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("install_agent_tools", {
-        request: {
-          operation_id: expect.any(String),
-          agents: ["claude"],
+      expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+        agent: "claude",
+        expectedVersion: "1.1.0",
+      }),
+    );
+
+    await emitOperation(
+      snapshot({
+        operation_id: "op-claude",
+        agent: "claude",
+        requested_agent: "claude",
+        kind: "install",
+        state: "succeeded",
+        stage: "completed",
+        progress: 100,
+        finished_at_ms: 2_000,
+        install_result: {
+          operation_id: "op-claude",
+          agent: "claude",
+          success: true,
+          supported: true,
+          platform: "macos",
+          architecture: "aarch64",
+          libc: "",
+          version: "1.1.0",
+          path: "/managed/claude",
+          channel: "aeroric-managed",
+          managed: true,
+          stage: "completed",
+          progress: 100,
+          login_command: "claude",
+          message: "",
         },
       }),
     );
-    expect(invokeMock).not.toHaveBeenCalledWith(
-      "upgrade_agent_versions",
-      expect.objectContaining({ agents: ["claude"] }),
-    );
+
     expect(await screen.findByText("/managed/claude")).toBeInTheDocument();
     expect(screen.getByText("Login command:")).toBeInTheDocument();
   });
@@ -332,7 +410,7 @@ describe("AgentUpdatesPanel", () => {
     }
   });
 
-  it("keeps the existing upgrade channel available on an unsupported install platform", async () => {
+  it("keeps the remaining Agents upgradable when one platform is unsupported", async () => {
     toolStatuses[0].error_code = "unsupported_platform";
     toolStatuses[0].error = "Managed installation is unavailable for linux/aarch64";
     const user = userEvent.setup();
@@ -344,27 +422,9 @@ describe("AgentUpdatesPanel", () => {
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-        agents: ["codex"],
-        expectedVersions: { codex: "1.1.0" },
-      }),
-    );
-  });
-
-  it("uses the managed installer to upgrade an Aeroric-managed Agent", async () => {
-    toolStatuses[1].managed = true;
-    const user = userEvent.setup();
-    renderPanel();
-
-    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
-    await user.click(upgradeButtons[1]);
-
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("install_agent_tools", {
-        request: {
-          operation_id: expect.any(String),
-          agents: ["codex"],
-        },
+      expect(invokeMock).toHaveBeenCalledWith("start_agent_operation", {
+        agent: "codex",
+        expectedVersion: "1.1.0",
       }),
     );
   });
@@ -375,10 +435,11 @@ describe("AgentUpdatesPanel", () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
       if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
-      if (command === "install_agent_tools") {
+      if (command === "get_agent_operations") return Promise.resolve([]);
+      if (command === "start_agent_operation") {
         return Promise.reject("operation_conflict: claude is already being installed");
       }
-      return Promise.resolve([]);
+      return Promise.resolve(null);
     });
     const user = userEvent.setup();
     renderPanel();
@@ -389,25 +450,150 @@ describe("AgentUpdatesPanel", () => {
       await screen.findByText("This Agent already has an installation in progress."),
     ).toBeVisible();
   });
+});
 
-  it("upgrades dsh through the npm channel even when it is not installed", async () => {
-    toolStatuses[2].installed = false;
-    toolStatuses[2].version = "";
+describe("AgentUpdatesPanel background operations", () => {
+  beforeEach(() => {
+    resetFixtures();
+
+    listenMock.mockImplementation((event: string, handler: (e: { payload: unknown }) => void) => {
+      const existing = listeners.get(event) ?? [];
+      existing.push(handler);
+      listeners.set(event, existing);
+      return Promise.resolve(() => {
+        listeners.set(
+          event,
+          (listeners.get(event) ?? []).filter((candidate) => candidate !== handler),
+        );
+      });
+    });
+
+    invokeMock.mockImplementation((command: string, args?: { agent?: string }) => {
+      if (command === "get_agent_tool_status") return Promise.resolve(toolStatuses);
+      if (command === "get_agent_latest_versions") return Promise.resolve(latestVersions);
+      if (command === "get_agent_operations") return Promise.resolve([...operations]);
+      if (command === "start_agent_operation") {
+        const agent = (args?.agent ?? "dsh") as AgentOperationSnapshot["agent"];
+        // 后端幂等：已有 running 快照时返回同一次操作。
+        const running = operations.find((row) => row.agent === agent && row.state === "running");
+        if (running) return Promise.resolve(running);
+        const started = snapshot({ operation_id: `op-${agent}`, agent, requested_agent: agent });
+        operations.push(started);
+        return Promise.resolve(started);
+      }
+      if (command === "cancel_agent_operation") return Promise.resolve(true);
+      return Promise.resolve(null);
+    });
+  });
+
+  it("shows the running upgrade with its progress bar on a fresh mount", async () => {
+    // 复现「退出设置页后台仍在升级，再进来」：挂载时后端已有 running 快照。
+    operations.push(snapshot({ operation_id: "op-dsh", stage: "downloading", progress: 62 }));
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: "Upgrading..." })).toBeInTheDocument();
+    expect(screen.getByText("Downloading")).toBeVisible();
+    expect(screen.getByText("62%")).toBeVisible();
+    expect(screen.getByText(/keeps running in the background/)).toBeVisible();
+    // 未点击任何按钮就已呈现忙碌态，说明状态来自后端对账而非本地 state。
+    expect(invokeMock).not.toHaveBeenCalledWith("start_agent_operation", expect.anything());
+  });
+
+  it("does not start a second operation when the running button is clicked again", async () => {
+    operations.push(snapshot({ operation_id: "op-dsh", progress: 30 }));
+    // 禁用按钮带 pointer-events: none，userEvent 默认会拒绝点击，这里跳过该检查
+    // 以证明「就算点得到也不会起第二次操作」。
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderPanel();
+
+    const runningButton = await screen.findByRole("button", { name: "Upgrading..." });
+    expect(runningButton).toBeDisabled();
+    await user.click(runningButton);
+
+    expect(invokeMock).not.toHaveBeenCalledWith("start_agent_operation", expect.anything());
+    expect(operations).toHaveLength(1);
+  });
+
+  it("restores the running state after the panel unmounts and mounts again", async () => {
+    const user = userEvent.setup();
+    const first = renderPanel();
+
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[2]);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Upgrading..." })).toBeInTheDocument(),
+    );
+
+    first.unmount();
+    renderPanel();
+
+    // 重新挂载后仍是「升级中」，不会退回「一键升级」。
+    expect(await screen.findByRole("button", { name: "Upgrading..." })).toBeInTheDocument();
+    const upgradeAgain = await screen.findAllByRole("button", { name: "Upgrade" });
+    expect(upgradeAgain).toHaveLength(2);
+    expect(operations).toHaveLength(1);
+  });
+
+  it("renders live progress for an upgrade, not just an install", async () => {
     const user = userEvent.setup();
     renderPanel();
 
-    // dsh 未安装时按钮文案为 Install,但动作走 npm 升级通道(无 tools_dir 安装机制)。
-    await user.click(await screen.findByRole("button", { name: "Install" }));
+    const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
+    await user.click(upgradeButtons[2]);
 
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("upgrade_agent_versions", {
-        agents: ["dsh"],
-        expectedVersions: { dsh: "0.1.0-rc.6" },
+    await emitOperation(
+      snapshot({
+        operation_id: "op-dsh",
+        kind: "upgrade",
+        stage: "verifying_install",
+        progress: 88,
       }),
     );
-    expect(invokeMock).not.toHaveBeenCalledWith(
-      "install_agent_tools",
-      expect.objectContaining({ request: expect.objectContaining({ agents: ["dsh"] }) }),
+
+    expect(await screen.findByText("Verifying installation")).toBeVisible();
+    expect(screen.getByText("88%")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Upgrading..." })).toBeInTheDocument();
+  });
+
+  it("cancels the running operation through the backend command", async () => {
+    operations.push(snapshot({ operation_id: "op-dsh", progress: 20 }));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("cancel_agent_operation", { agent: "dsh" }),
     );
+  });
+
+  it("refreshes versions once the running operation settles", async () => {
+    operations.push(snapshot({ operation_id: "op-dsh", progress: 20 }));
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Upgrading..." });
+    const statusCallsBefore = invokeMock.mock.calls.filter(
+      (call) => call[0] === "get_agent_tool_status",
+    ).length;
+
+    toolStatuses[2].version = "0.1.0-rc.6";
+    await emitOperation(
+      snapshot({
+        operation_id: "op-dsh",
+        state: "succeeded",
+        stage: "completed",
+        progress: 100,
+        finished_at_ms: 2_000,
+      }),
+    );
+
+    await waitFor(() => {
+      const statusCallsAfter = invokeMock.mock.calls.filter(
+        (call) => call[0] === "get_agent_tool_status",
+      ).length;
+      expect(statusCallsAfter).toBeGreaterThan(statusCallsBefore);
+    });
+    expect(await screen.findByText("Upgrade complete")).toBeVisible();
+    expect(await screen.findByText(/Current version: 0\.1\.0-rc\.6/)).toBeInTheDocument();
   });
 });

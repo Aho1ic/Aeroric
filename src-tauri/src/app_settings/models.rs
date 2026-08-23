@@ -53,6 +53,32 @@ pub(super) async fn resolve_remote_model_addresses(
     Ok(addresses)
 }
 
+/// 解析 base URL 的全部地址,**不过滤私网**,用于本机探测的地址故障转移。
+///
+/// 与 [`resolve_remote_model_addresses`] 的过滤是刻意的差别:那个函数服务于
+/// [`ModelDetectionPolicy::PairedDevice`],过滤是防手机端拿桌面端当跳板探内网的
+/// SSRF 闸门;本机用户填 `http://127.0.0.1:11434/v1`(Ollama)这类地址是正常用法,
+/// 在这里过滤会把能用的配置判死。
+///
+/// 解析失败返回空 vec 而非报错:故障转移是尽力而为的优化,拿不到地址就退回
+/// 让 reqwest 自己解析的普通路径,不能因此让探测直接失败。
+pub(super) async fn resolve_local_model_addresses(base_url: &url::Url) -> Vec<SocketAddr> {
+    let Some(host) = base_url.host_str() else {
+        return Vec::new();
+    };
+    // IP 字面量 host 无需故障转移:只有一个地址,换来换去还是它。
+    if host.parse::<IpAddr>().is_ok() {
+        return Vec::new();
+    }
+    let Some(port) = base_url.port_or_known_default() else {
+        return Vec::new();
+    };
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addresses) => addresses.collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 pub(super) fn validate_model_base_url(
     base_url: &str,
     policy: ModelDetectionPolicy,
@@ -112,7 +138,22 @@ const MODEL_DETECT_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// 全部候选探测的总时间预算。超出后停止继续尝试并回报已知错误,
 /// 避免「检测模型」按钮在慢上游上长时间无响应。
-const MODEL_DETECT_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+///
+/// 地址故障转移会把整条候选链重跑多次,因此这个预算由调用方换算成一个
+/// **共享 deadline**(见 [`fetch_agent_model_json_from_candidates`] 的 `deadline` 形参),
+/// 多次尝试共用同一上限,按钮最坏等待不随重试次数线性放大。
+pub(super) const MODEL_DETECT_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+
+/// 建连超时(含 TLS 握手)。
+///
+/// 存在这样的上游:某个 A 记录接受 TCP 却让 TLS 握手永不返回(实测
+/// `api.deepseek.com` 的 5 个地址里有 1 个如此)。hyper 的 happy-eyeballs 只在
+/// **TCP connect 失败**时换下一个地址 —— TCP 已经成功,它就锁定这条死连接,
+/// 于是整个请求耗到 [`MODEL_DETECT_REQUEST_TIMEOUT`] 才失败。
+///
+/// reqwest 的 `connect_timeout` 包住的是整个 connector(TCP + TLS),所以这个值
+/// 能把黑洞地址在 4s 内判死,剩下的预算留给真正可用的地址。
+pub(super) const MODEL_DETECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// 错误详情中保留的响应体长度上限,避免把整页 HTML 错误页塞进错误串。
 const ERROR_BODY_MAX_CHARS: usize = 200;
@@ -280,8 +321,24 @@ enum EndpointOutcome {
     Found(serde_json::Value),
     /// 端点不存在(404/405)或响应不是模型目录 —— 换下一个候选。
     Missing(String),
-    /// 鉴权/其它错误 —— 换端点也不会好转,但仍记录以便所有候选耗尽后回报。
+    /// 上游给了响应但拒绝(鉴权失败、Cloudflare 拦截等)—— 换端点不会好转,
+    /// 但仍记录以便所有候选耗尽后回报。
     Failed(String),
+    /// 请求根本没拿到响应(DNS / TLS / 建连 / 超时)。
+    ///
+    /// 必须与 [`EndpointOutcome::Failed`] 分开:这类失败既不能推断「API Key 无效」
+    /// (否则会掩盖成鉴权问题、并压掉公开目录兜底),也是唯一值得换 IP 地址重试的情形。
+    Transport(String),
+}
+
+/// 一轮探测里出现过哪几类失败,供调用方分别决策。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DetectionFailures {
+    /// 出现过「上游拒绝」(401/403/Cloudflare 等)。出现过就不能用公开目录兜底,
+    /// 否则会把「API Key 无效」显示成一份查不到权限的模型列表。
+    pub auth: bool,
+    /// 出现过传输层失败。换一个上游地址有可能好转。
+    pub transport: bool,
 }
 
 /// User-Agent 尝试顺序:先按 agent 类型用最贴近真实 CLI 的 UA(网关白名单通常按名称
@@ -338,6 +395,37 @@ fn truncate_body(body: &str) -> String {
     out
 }
 
+/// 把传输层错误连同 source 链上的真因拼成一句话。
+///
+/// `reqwest::Error` 的 `Display` 只写 `"error sending request for url (...)"`,**从不打印
+/// source** —— 于是超时、DNS 失败、TLS 失败在 UI 上长得一模一样,用户只能看到一句
+/// 无从下手的「发送请求失败」。这里沿 source 链取最深一层描述补上去。
+///
+/// 另外附一句可操作提示:传输层失败往往是上游某个 IP 无响应,配置代理即可绕开。
+fn describe_transport_error(error: &reqwest::Error) -> String {
+    let mut detail = error.to_string();
+    let mut deepest: Option<String> = None;
+    let mut current = std::error::Error::source(error);
+    while let Some(source) = current {
+        deepest = Some(source.to_string());
+        current = source.source();
+    }
+    // 最深一层通常是 `operation timed out` / `dns error` / `connection refused`;
+    // 它已被外层文案包含时(某些 source 只是复述)不重复追加。
+    if let Some(cause) = deepest.filter(|cause| {
+        let cause = cause.trim();
+        !cause.is_empty() && !detail.contains(cause)
+    }) {
+        detail = format!("{detail}: {cause}");
+    }
+    if error.is_timeout() || error.is_connect() {
+        detail.push_str(
+            " (upstream address did not respond; configure a proxy in Settings and retry)",
+        );
+    }
+    detail
+}
+
 fn describe_http_error(status: reqwest::StatusCode, body: &str) -> String {
     let body = truncate_body(body);
     if body.is_empty() {
@@ -373,7 +461,7 @@ async fn probe_model_endpoint(
                 Ok(response) => response,
                 Err(error) => {
                     // 传输层错误(DNS/TLS/超时)与鉴权头和 UA 无关,换组合没有意义。
-                    return EndpointOutcome::Failed(error.to_string());
+                    return EndpointOutcome::Transport(describe_transport_error(&error));
                 }
             };
 
@@ -432,16 +520,20 @@ async fn probe_model_endpoint(
 
 /// 按候选顺序探测模型目录端点。
 ///
-/// 返回 `Ok((json, endpoint))`;`auth_failed` 用于告知调用方是否出现过鉴权失败 ——
-/// 出现过就不能再用公开目录兜底,以免把「API Key 无效」显示成一份模型列表。
+/// 返回 `Ok((json, endpoint))`;`failures` 记录出现过哪几类失败,供调用方分别决定
+/// 「能否用公开目录兜底」(见 [`DetectionFailures::auth`])与「是否值得换上游地址重试」
+/// (见 [`DetectionFailures::transport`])。
+///
+/// `deadline` 由调用方给出而非在此自行计算:地址故障转移会把整条候选链重跑多次,
+/// 共用一个 deadline 才能保证总等待不随重试次数放大。
 pub(super) async fn fetch_agent_model_json_from_candidates(
     client: &reqwest::Client,
     candidates: &[String],
     kind: &AgentSetupKind,
     api_key: &str,
-    auth_failed: &mut bool,
+    failures: &mut DetectionFailures,
+    deadline: std::time::Instant,
 ) -> Result<(serde_json::Value, String), String> {
-    let deadline = std::time::Instant::now() + MODEL_DETECT_TOTAL_BUDGET;
     let mut errors: Vec<String> = Vec::new();
 
     for endpoint in candidates {
@@ -455,7 +547,11 @@ pub(super) async fn fetch_agent_model_json_from_candidates(
                 errors.push(format!("{endpoint} -> {detail}"));
             }
             EndpointOutcome::Failed(detail) => {
-                *auth_failed = true;
+                failures.auth = true;
+                errors.push(format!("{endpoint} -> {detail}"));
+            }
+            EndpointOutcome::Transport(detail) => {
+                failures.transport = true;
                 errors.push(format!("{endpoint} -> {detail}"));
             }
         }
@@ -861,6 +957,11 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// 测试用的共享 deadline:给足预算,让测试只考察探测逻辑而非超时。
+    fn test_deadline() -> std::time::Instant {
+        std::time::Instant::now() + MODEL_DETECT_TOTAL_BUDGET
+    }
+
     #[tokio::test]
     async fn retries_unauthorized_model_requests_with_api_key_headers() {
         // 首个 UA 组合返回 401(且不是「客户端未授权」),应改换鉴权头而不是换 UA。
@@ -871,13 +972,14 @@ mod tests {
         let endpoint = format!("{origin}/v1/models");
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let (value, used) = fetch_agent_model_json_from_candidates(
             &client,
             std::slice::from_ref(&endpoint),
             &AgentSetupKind::Codex,
             "sk-test",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap();
@@ -905,13 +1007,14 @@ mod tests {
         let endpoint = format!("{origin}/v1/models");
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let (value, _) = fetch_agent_model_json_from_candidates(
             &client,
             &[endpoint],
             &AgentSetupKind::Codex,
             "sk-test",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap();
@@ -956,20 +1059,21 @@ mod tests {
         );
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let (value, used) = fetch_agent_model_json_from_candidates(
             &client,
             &candidates,
             &AgentSetupKind::ClaudeCode,
             "sk-test",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap();
 
         assert_eq!(parse_model_ids(value), vec!["MiMo-VL"]);
         assert_eq!(used, format!("{origin}/v1/models"));
-        assert!(!auth_failed);
+        assert_eq!(failures, DetectionFailures::default());
         let seen = server.join().unwrap();
         // 404 不该触发 UA / 鉴权头重试,应立即换下一个候选。
         assert_eq!(seen.len(), 2);
@@ -990,13 +1094,14 @@ mod tests {
         ];
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let (value, used) = fetch_agent_model_json_from_candidates(
             &client,
             &candidates,
             &AgentSetupKind::ClaudeCode,
             "sk-test",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap();
@@ -1016,21 +1121,187 @@ mod tests {
         ]);
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let error = fetch_agent_model_json_from_candidates(
             &client,
             &[format!("{origin}/v1/models")],
             &AgentSetupKind::ClaudeCode,
             "sk-bad",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap_err();
 
-        assert!(auth_failed);
+        assert!(failures.auth);
+        // 上游给了响应,不是传输层失败 —— 不能触发地址故障转移。
+        assert!(!failures.transport);
         assert!(error.contains("HTTP 401"), "unexpected error: {error}");
         assert!(error.contains("无效的令牌"), "unexpected error: {error}");
         drop(server);
+    }
+
+    /// 传输层失败不能被记成鉴权失败。
+    ///
+    /// 记错的后果不只是文案难看:调用方靠 `failures.auth` 决定「要不要报错而不兜底」,
+    /// 靠 `failures.transport` 决定「要不要换上游地址重试」。把网络不通算成鉴权失败,
+    /// 会同时压掉兜底、又跳过故障转移,还把原因显示成「API Key 无效」。
+    #[tokio::test]
+    async fn transport_failure_is_not_reported_as_auth_failure() {
+        // 绑完立刻释放,拿到一个确定没人监听的端口 —— 连接会被立即拒绝。
+        let dead_port = {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut failures = DetectionFailures::default();
+        let error = fetch_agent_model_json_from_candidates(
+            &client,
+            &[format!("http://127.0.0.1:{dead_port}/v1/models")],
+            &AgentSetupKind::Dsh,
+            "sk-test",
+            &mut failures,
+            test_deadline(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(failures.transport, "unexpected failures: {failures:?}");
+        assert!(!failures.auth, "unexpected failures: {failures:?}");
+        assert!(
+            !error.contains("HTTP "),
+            "transport failure must not look like an HTTP status: {error}"
+        );
+    }
+
+    /// 传输层报错必须带上 source 链里的真因。
+    ///
+    /// `reqwest::Error` 的 `Display` 只写 `"error sending request for url (...)"`,用户拿到
+    /// 这句话完全无从下手 —— 超时、DNS 失败、连接被拒长得一模一样。
+    #[tokio::test]
+    async fn transport_error_carries_the_underlying_cause() {
+        let dead_port = {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut failures = DetectionFailures::default();
+        let error = fetch_agent_model_json_from_candidates(
+            &client,
+            &[format!("http://127.0.0.1:{dead_port}/v1/models")],
+            &AgentSetupKind::Dsh,
+            "sk-test",
+            &mut failures,
+            test_deadline(),
+        )
+        .await
+        .unwrap_err();
+
+        let lowered = error.to_ascii_lowercase();
+        assert!(
+            lowered.contains("refused") || lowered.contains("connect"),
+            "error should name the real cause, got: {error}"
+        );
+        // 建连失败要给出可操作提示(配代理),而不是只丢一句失败。
+        assert!(
+            error.contains("configure a proxy"),
+            "connect failure should hint at the proxy setting: {error}"
+        );
+    }
+
+    /// 绑一个端口再立刻释放,得到一个确定没人监听的端口。
+    fn dead_port() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// 首个地址是黑洞时,探测应换到下一个地址而不是直接失败。
+    ///
+    /// 这是本次修复的核心:`api.deepseek.com` 的 5 个 A 记录里有 1 个接受 TCP 却让 TLS
+    /// 永不返回,而 hyper 的 happy-eyeballs 只在 **TCP connect 失败**时换地址 —— TCP 已经
+    /// 成功,它就锁死在那条连接上。换地址只能由我们自己驱动。
+    ///
+    /// 测试里用「连接被拒」代替「TLS 卡死」当坏地址:两者都是传输层失败、走同一条分支,
+    /// 但前者立即返回,不必让测试真的等满建连超时。
+    #[tokio::test]
+    async fn retries_the_next_address_when_the_first_one_is_a_black_hole() {
+        let (origin, server) = serve_responses(vec![(200, r#"{"data":[{"id":"deepseek-v4"}]}"#)]);
+        let live_port = origin.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+        let black_hole = SocketAddr::from(([127, 0, 0, 1], dead_port()));
+        let live = SocketAddr::from(([127, 0, 0, 1], live_port));
+
+        // base URL 刻意不带端口:hyper-util 只在 URL 显式给了端口时才用 URL 的端口覆盖
+        // `resolve_to_addrs` 里的端口,不带端口才能让钉住的端口生效。
+        let base_url = validate_model_base_url(
+            "http://detect-failover.test/v1",
+            ModelDetectionPolicy::LocalUser,
+        )
+        .unwrap();
+
+        let detected = detect_models_over_http(
+            &AgentSetupKind::Dsh,
+            &base_url,
+            "sk-test",
+            ModelDetectionPolicy::LocalUser,
+            &ProxySettings::default(),
+            std::slice::from_ref(&black_hole),
+            &[black_hole, live],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(detected.models, vec!["deepseek-v4"]);
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    /// 配了代理时,loopback / 私网 base URL 仍须直连。
+    ///
+    /// 代理一般不会把请求转回发起方的 loopback,所以本机 base URL(Ollama、应用自带的
+    /// local_router)一旦被推去代理就会从「能用」变成「连不上」。用户没有理由为了让模型
+    /// 探测工作而手写这些例外。
+    #[tokio::test]
+    async fn keeps_loopback_base_urls_direct_even_when_a_proxy_is_configured() {
+        let (origin, server) = serve_responses(vec![(200, r#"{"data":[{"id":"local-model"}]}"#)]);
+        // 指向一个没人监听的端口:一旦请求真被推去代理,这个测试就会失败。
+        let proxy_settings = ProxySettings {
+            url: format!("http://127.0.0.1:{}", dead_port()),
+            ..ProxySettings::default()
+        };
+        let base_url =
+            validate_model_base_url(&format!("{origin}/v1"), ModelDetectionPolicy::LocalUser)
+                .unwrap();
+
+        let detected = detect_models_over_http(
+            &AgentSetupKind::Dsh,
+            &base_url,
+            "sk-test",
+            ModelDetectionPolicy::LocalUser,
+            &proxy_settings,
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(detected.models, vec!["local-model"]);
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn detect_no_proxy_rules_add_local_networks_without_dropping_user_rules() {
+        let rules = detect_no_proxy_rules("example.com, 203.0.113.0/24");
+        assert!(rules.starts_with("example.com,203.0.113.0/24,"));
+        for expected in ["127.0.0.1", "::1", "localhost", "10.0.0.0/8"] {
+            assert!(rules.contains(expected), "missing {expected} in {rules}");
+        }
+        // 用户已经写了的规则不重复追加。
+        let deduped = detect_no_proxy_rules("localhost");
+        assert_eq!(deduped.matches("localhost").count(), 1);
     }
 
     #[tokio::test]
@@ -1039,18 +1310,20 @@ mod tests {
         let (origin, server) = serve_responses(vec![(403, challenge_html)]);
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let mut auth_failed = false;
+        let mut failures = DetectionFailures::default();
         let error = fetch_agent_model_json_from_candidates(
             &client,
             &[format!("{origin}/v1/models")],
             &AgentSetupKind::Codex,
             "sk-test",
-            &mut auth_failed,
+            &mut failures,
+            test_deadline(),
         )
         .await
         .unwrap_err();
 
-        assert!(auth_failed);
+        assert!(failures.auth);
+        assert!(!failures.transport);
         assert!(error.contains("Cloudflare challenge blocked the API request"));
         assert!(error.contains("allow non-browser API clients"));
         assert!(!error.contains("<!DOCTYPE"));

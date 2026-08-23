@@ -7,11 +7,21 @@ import { AddAgentPanel } from "../components/app-settings/AddAgentPanel";
 import { AgentConfigPanel } from "../components/app-settings/AgentConfigPanel";
 import { ProxyPanel } from "../components/app-settings/ProxyPanel";
 import { DebugPanel } from "../components/debug/DebugPanel";
+import { AgentVersionsProvider } from "../hooks/useAgentVersions";
 import { I18nProvider } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+
+/** 与 main.tsx 一致的组件树：AgentPathSection 的升级状态取自 AgentVersionsProvider。 */
+function TestProviders({ children }: { children: React.ReactNode }) {
+  return (
+    <I18nProvider>
+      <AgentVersionsProvider>{children}</AgentVersionsProvider>
+    </I18nProvider>
+  );
+}
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
@@ -72,21 +82,21 @@ function mockInvokeForAgentConfig(content: string) {
 function renderAgentConfigPanel(content: string) {
   mockInvokeForAgentConfig(content);
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="codex"
         filePath="/Users/macbook/.codex/config.toml"
         lang="toml"
         themeVariant="light"
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
 function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
   mockInvokeForAgentConfig(content);
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="gpt55"
         agentLabel="GPT55"
@@ -96,7 +106,7 @@ function renderDeletableAgentConfigPanel(content: string, onDeleted = vi.fn()) {
         deletable
         onDeleted={onDeleted}
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
   return onDeleted;
 }
@@ -148,7 +158,7 @@ function renderModelManagedAgentConfigPanel() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="gpt55"
         agentLabel="GPT55"
@@ -158,7 +168,7 @@ function renderModelManagedAgentConfigPanel() {
         deletable
         onDeleted={vi.fn()}
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -192,7 +202,7 @@ function renderClaudeAgentConfigPanel() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="agentrouter"
         agentLabel="AgentRouter"
@@ -202,7 +212,7 @@ function renderClaudeAgentConfigPanel() {
         deletable
         onDeleted={vi.fn()}
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -238,7 +248,7 @@ function renderJovernaAgentConfigPanel() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="joverna"
         agentLabel="Joverna"
@@ -248,7 +258,7 @@ function renderJovernaAgentConfigPanel() {
         deletable
         onDeleted={vi.fn()}
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -271,14 +281,14 @@ function renderAgentConfigPanelWithMissingFile() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <AgentConfigPanel
         agentKey="codex"
         filePath="/Users/macbook/.codex/config.toml"
         lang="toml"
         themeVariant="light"
       />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -290,9 +300,9 @@ function renderDebugPanel() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <DebugPanel projectPath="/repo" width={220} onOpenLocation={vi.fn()} />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -319,9 +329,9 @@ function renderAddAgentPanel(
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <AddAgentPanel onSaved={onSaved} />
-    </I18nProvider>,
+    </TestProviders>,
   );
   return onSaved;
 }
@@ -343,9 +353,9 @@ function renderProxyPanel() {
     return Promise.resolve(undefined);
   });
   render(
-    <I18nProvider>
+    <TestProviders>
       <ProxyPanel />
-    </I18nProvider>,
+    </TestProviders>,
   );
 }
 
@@ -475,14 +485,14 @@ describe("Agent config and debug panel UI", () => {
       return Promise.resolve(undefined);
     });
     render(
-      <I18nProvider>
+      <TestProviders>
         <AgentConfigPanel
           agentKey="codex"
           filePath="/Users/macbook/.codex/config.toml"
           lang="toml"
           themeVariant="light"
         />
-      </I18nProvider>,
+      </TestProviders>,
     );
 
     await findConfigEditor('model = "gpt-5"\n');
@@ -784,9 +794,9 @@ describe("Agent config and debug panel UI", () => {
     });
 
     render(
-      <I18nProvider>
+      <TestProviders>
         <AddAgentPanel onSaved={vi.fn()} />
-      </I18nProvider>,
+      </TestProviders>,
     );
 
     await user.type(screen.getByLabelText("Base URL"), "https://example.com/v1");

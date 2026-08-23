@@ -11,9 +11,12 @@ use parking_lot::Mutex;
 use reqwest::redirect::{Attempt, Policy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::Command;
 use uuid::Uuid;
+
+mod dsh;
+mod node_bootstrap;
 
 const MAX_METADATA_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_CLAUDE_BINARY_BYTES: u64 = 384 * 1024 * 1024;
@@ -587,26 +590,67 @@ fn platform_support(agent: BuiltInAgent) -> InstallResult<()> {
     }
 }
 
+/// 进度事件对任意 agent 键通用(dsh 走的是新管线,不在 `BuiltInAgent` 里)。
+/// 同时写入后端操作注册表,这样退出设置页再进来仍能看到当前阶段。
 fn emit_progress(
     app: &AppHandle,
     operation_id: &str,
-    agent: BuiltInAgent,
+    agent: &str,
     stage: AgentInstallStage,
     progress: u8,
     error_code: Option<AgentInstallErrorCode>,
     message: impl Into<String>,
 ) {
+    let message = message.into();
+    crate::agent_ops::report_progress(app, agent, operation_id, stage.clone(), progress, &message);
     let _ = app.emit(
         INSTALL_EVENT,
         AgentInstallProgress {
             operation_id: operation_id.to_string(),
-            agent: agent.id().to_string(),
+            agent: agent.to_string(),
             stage,
             progress,
             error_code,
-            message: message.into(),
+            message,
         },
     );
+}
+
+/// 把"往哪个操作报进度"打包起来,免得每个阶段都重复传四个参数。
+pub(crate) struct ProgressSink<'a> {
+    pub(crate) app: &'a AppHandle,
+    pub(crate) operation_id: &'a str,
+    pub(crate) agent: &'a str,
+}
+
+impl ProgressSink<'_> {
+    pub(crate) fn emit(&self, stage: AgentInstallStage, progress: u8, message: impl Into<String>) {
+        emit_progress(
+            self.app,
+            self.operation_id,
+            self.agent,
+            stage,
+            progress,
+            None,
+            message,
+        );
+    }
+}
+
+/// 子进程 stdout+stderr 合并成一段可读日志,并限长避免把整个 npm 输出塞进 UI。
+fn combined_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = [stdout.as_str(), stderr.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if detail.chars().count() > 4000 {
+        format!("{}...", detail.chars().take(4000).collect::<String>())
+    } else {
+        detail
+    }
 }
 
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> InstallResult<()> {
@@ -763,13 +807,13 @@ struct DownloadedFile {
     sha256: String,
 }
 
-struct DownloadProgress<'a> {
-    app: &'a AppHandle,
-    operation_id: &'a str,
-    agent: BuiltInAgent,
-    start: u8,
-    end: u8,
-    message: String,
+pub(crate) struct DownloadProgress<'a> {
+    pub(crate) app: &'a AppHandle,
+    pub(crate) operation_id: &'a str,
+    pub(crate) agent: String,
+    pub(crate) start: u8,
+    pub(crate) end: u8,
+    pub(crate) message: String,
 }
 
 async fn download_to_file(
@@ -836,7 +880,7 @@ async fn download_to_file(
             emit_progress(
                 progress.app,
                 progress.operation_id,
-                progress.agent,
+                &progress.agent,
                 AgentInstallStage::Downloading,
                 progress.start.saturating_add(offset as u8),
                 None,
@@ -890,6 +934,46 @@ fn safe_archive_path(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
+/// 符号链接的 target 落在解包目录内吗?
+///
+/// 不能直接套 [`safe_archive_path`]:官方 Node 发行包里的 `bin/npm` 指向
+/// `../lib/node_modules/npm/bin/npm-cli.js`,合法的相对链接**本来就带 `..`**,
+/// 一律拒掉等于拒掉整个压缩包(见 `extract_tar_gz` 上的注释)。
+///
+/// 判据换成「按 link 所在目录逐段结算深度,过程中不许降到 0 以下」:`..` 减一、
+/// 普通段加一。深度为 0 时再遇到 `..` 就是逃出解包根,拒掉。绝对路径直接拒。
+fn safe_symlink_target(link_path: &Path, target: &Path) -> bool {
+    if target.is_absolute() {
+        return false;
+    }
+    // link 自身所在目录的深度:`bin/npm` 的父目录是 `bin`,深度 1。
+    let mut depth = link_path
+        .parent()
+        .map(|parent| {
+            parent
+                .components()
+                .filter(|component| matches!(component, Component::Normal(_)))
+                .count()
+        })
+        .unwrap_or(0);
+    for component in target.components() {
+        match component {
+            Component::ParentDir => {
+                // 已经在解包根上,再往上就出界了。
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            // 前缀 / 根:绝对路径的形态,上面已经拦过,这里兜底。
+            Component::Prefix(_) | Component::RootDir => return false,
+        }
+    }
+    true
+}
+
 fn extract_tar_gz(archive_path: &Path, output: &Path) -> InstallResult<()> {
     fs::create_dir_all(output)
         .map_err(|error| InstallError::from_io(error, "Create extraction directory failed"))?;
@@ -914,11 +998,33 @@ fn extract_tar_gz(archive_path: &Path, output: &Path) -> InstallResult<()> {
             ));
         }
         let entry_type = entry.header().entry_type();
-        if !(entry_type.is_file() || entry_type.is_dir()) {
+        // 符号链接必须放行:官方 Node 发行包里有 `bin/npm`、`bin/npx`、`bin/corepack`
+        // 三条相对链接,一律拒掉会让托管 Node 安装在 macOS / Linux 上必然失败
+        // ——而那条路径恰恰只在「机器上没有 Node」时才走到,没有退路。
+        // 硬链接仍然拒:Node 发行包里没有,放行只是白扩攻击面。
+        if !(entry_type.is_file() || entry_type.is_dir() || entry_type.is_symlink()) {
             return Err(InstallError::new(
                 AgentInstallErrorCode::ArchiveInvalid,
                 format!("Archive contains unsupported entry {}", path.display()),
             ));
+        }
+        if entry_type.is_symlink() {
+            // target 只允许指向解包目录内部:否则后续经这条链接写入就能落到目录外。
+            let target = entry.link_name().ok().flatten().ok_or_else(|| {
+                InstallError::new(
+                    AgentInstallErrorCode::ArchiveInvalid,
+                    format!("Archive symlink {} has no target", path.display()),
+                )
+            })?;
+            if !safe_symlink_target(&path, &target) {
+                return Err(InstallError::new(
+                    AgentInstallErrorCode::ArchiveInvalid,
+                    format!(
+                        "Archive symlink {} escapes the target directory",
+                        path.display()
+                    ),
+                ));
+            }
         }
         if entry_type.is_file() {
             extracted_bytes = extracted_bytes.saturating_add(entry.size());
@@ -940,6 +1046,87 @@ fn extract_tar_gz(archive_path: &Path, output: &Path) -> InstallResult<()> {
         }
     }
     Ok(())
+}
+
+/// Windows 的 Node 发行包是 zip,其余平台是 tar.gz。安全性检查与 tar 路径一致:
+/// 拒绝绝对路径、`..` 逃逸与超限解包体积。
+fn extract_zip(archive_path: &Path, output: &Path) -> InstallResult<()> {
+    fs::create_dir_all(output)
+        .map_err(|error| InstallError::from_io(error, "Create extraction directory failed"))?;
+    let file = fs::File::open(archive_path)
+        .map_err(|error| InstallError::from_io(error, "Open archive failed"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| {
+        InstallError::new(
+            AgentInstallErrorCode::ArchiveInvalid,
+            format!("Invalid archive: {error}"),
+        )
+    })?;
+    let mut extracted_bytes = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| {
+            InstallError::new(
+                AgentInstallErrorCode::ArchiveInvalid,
+                format!("Read archive entry failed: {error}"),
+            )
+        })?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(InstallError::new(
+                AgentInstallErrorCode::ArchiveInvalid,
+                "Archive contains an unsafe path",
+            ));
+        };
+        if !safe_archive_path(&relative) {
+            return Err(InstallError::new(
+                AgentInstallErrorCode::ArchiveInvalid,
+                "Archive contains an unsafe path",
+            ));
+        }
+        let target = output.join(&relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&target)
+                .map_err(|error| InstallError::from_io(error, "Create archive directory failed"))?;
+            continue;
+        }
+        extracted_bytes = extracted_bytes.saturating_add(entry.size());
+        if extracted_bytes > MAX_EXTRACTED_BYTES {
+            return Err(InstallError::new(
+                AgentInstallErrorCode::ResponseTooLarge,
+                "Extracted archive exceeds the allowed size",
+            ));
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| InstallError::from_io(error, "Create archive directory failed"))?;
+        }
+        let mut file = fs::File::create(&target)
+            .map_err(|error| InstallError::from_io(error, "Write archive entry failed"))?;
+        std::io::copy(&mut entry, &mut file)
+            .map_err(|error| InstallError::from_archive_io(error, "Extract archive failed"))?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&target, fs::Permissions::from_mode(mode));
+        }
+    }
+    Ok(())
+}
+
+/// 按扩展名分派解压方式。
+fn extract_archive(archive_path: &Path, output: &Path) -> InstallResult<()> {
+    let name = archive_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name.ends_with(".zip") {
+        extract_zip(archive_path, output)
+    } else {
+        extract_tar_gz(archive_path, output)
+    }
+}
+
+fn current_libc_is_musl() -> bool {
+    cfg!(target_os = "linux") && current_linux_libc() == LinuxLibc::Musl
 }
 
 #[cfg(unix)]
@@ -1042,7 +1229,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::PreparingEnvironment,
         8,
         None,
@@ -1124,7 +1311,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Downloading,
         14,
         None,
@@ -1140,7 +1327,7 @@ async fn install_claude(
         &DownloadProgress {
             app,
             operation_id,
-            agent,
+            agent: agent.id().to_string(),
             start: 14,
             end: 66,
             message: format!("Downloading Claude Code {version}"),
@@ -1150,7 +1337,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::VerifyingDownload,
         70,
         None,
@@ -1161,7 +1348,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Installing,
         78,
         None,
@@ -1170,7 +1357,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Installing,
         82,
         None,
@@ -1182,7 +1369,7 @@ async fn install_claude(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::VerifyingInstall,
         86,
         None,
@@ -1303,7 +1490,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::PreparingEnvironment,
         8,
         None,
@@ -1370,7 +1557,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Downloading,
         14,
         None,
@@ -1386,7 +1573,7 @@ async fn install_codex(
         &DownloadProgress {
             app,
             operation_id,
-            agent,
+            agent: agent.id().to_string(),
             start: 14,
             end: 18,
             message: "Downloading Codex checksum manifest".to_string(),
@@ -1403,7 +1590,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Downloading,
         20,
         None,
@@ -1419,7 +1606,7 @@ async fn install_codex(
         &DownloadProgress {
             app,
             operation_id,
-            agent,
+            agent: agent.id().to_string(),
             start: 20,
             end: 66,
             message: format!("Downloading Codex {version}"),
@@ -1429,7 +1616,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::VerifyingDownload,
         70,
         None,
@@ -1440,7 +1627,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Installing,
         78,
         None,
@@ -1458,7 +1645,7 @@ async fn install_codex(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::VerifyingInstall,
         86,
         None,
@@ -1491,7 +1678,7 @@ async fn install_one(
     emit_progress(
         app,
         operation_id,
-        agent,
+        agent.id(),
         AgentInstallStage::Detecting,
         2,
         None,
@@ -1510,7 +1697,7 @@ async fn install_one(
             emit_progress(
                 app,
                 operation_id,
-                agent,
+                agent.id(),
                 AgentInstallStage::RefreshingHooks,
                 94,
                 None,
@@ -1521,7 +1708,7 @@ async fn install_one(
             emit_progress(
                 app,
                 operation_id,
-                agent,
+                agent.id(),
                 AgentInstallStage::Completed,
                 100,
                 None,
@@ -1553,7 +1740,7 @@ async fn install_one(
             emit_progress(
                 app,
                 operation_id,
-                agent,
+                agent.id(),
                 stage.clone(),
                 100,
                 Some(error.code.clone()),
@@ -1569,6 +1756,511 @@ async fn install_one(
                 ..Default::default()
             }
         }
+    }
+}
+
+/// 该 agent 当前是否已装好(能报出版本号就算装好)。
+pub(crate) fn agent_is_installed(agent: &str) -> bool {
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from(&settings, agent);
+    crate::app_settings::detect_launch_version(&launch)
+        .is_some_and(|version| !version.trim().is_empty())
+}
+
+/// dsh 的安装/升级实现。三条策略都在这里收口,任何一条走不通都会落到托管安装,
+/// 而不是像以前那样直接抛 "detected channel: standalone"。
+async fn run_dsh_operation(
+    app: &AppHandle,
+    operation_id: &str,
+    kind: crate::agent_ops::AgentOperationKind,
+    cancelled: &AtomicBool,
+    expected_version: Option<&str>,
+) -> crate::agent_ops::OperationOutcome {
+    use crate::agent_ops::OperationOutcome;
+
+    let sink = ProgressSink {
+        app,
+        operation_id,
+        agent: "dsh",
+    };
+    sink.emit(
+        AgentInstallStage::Detecting,
+        2,
+        "Checking the current DeepSeek Harness installation",
+    );
+
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from(&settings, "dsh");
+    let configured = crate::app_settings::configured_agent_path(&settings, "dsh");
+    let active_program = if configured.trim().is_empty() {
+        launch.program.clone()
+    } else {
+        configured.clone()
+    };
+    let previous_version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
+
+    // 升级要替换文件,先挂起 DSH 运行时并在结束后恢复会话。
+    let webui = app.state::<crate::dsh_webui::DshWebUiManager>();
+    let suspended = match webui.suspend_for_upgrade("dsh").await {
+        Ok(suspended) => Some(suspended),
+        Err(error) => {
+            return OperationOutcome::Upgrade(crate::app_settings::AgentUpgradeResult {
+                agent: "dsh".to_string(),
+                success: false,
+                previous_version: previous_version.clone(),
+                current_version: previous_version,
+                message: format!("runtime-recovery: {error}"),
+                channels: vec![crate::app_settings::AgentUpgradeChannel {
+                    channel: "runtime-recovery".to_string(),
+                    success: false,
+                    message: error.clone(),
+                }],
+                runtime_recovery: Some(crate::dsh_webui::DshRuntimeRecovery {
+                    errors: vec![error],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+    };
+
+    let outcome = run_dsh_strategy(
+        &sink,
+        &settings,
+        &configured,
+        &active_program,
+        expected_version,
+        cancelled,
+    )
+    .await;
+
+    // 无论成败都要把运行时恢复回来;`resume_after_upgrade` 自己会跳过原本没在跑的实例。
+    let runtime_recovery = match suspended {
+        Some(suspended) => Some(webui.resume_after_upgrade(app, suspended).await),
+        None => None,
+    };
+
+    let (channels, channel, installed_launcher) = match outcome {
+        Ok(success) => (
+            success.channels,
+            success.channel,
+            success.installed_launcher,
+        ),
+        Err(error) => (
+            vec![crate::app_settings::AgentUpgradeChannel {
+                channel: "detection".to_string(),
+                success: false,
+                message: error.message,
+            }],
+            "detection".to_string(),
+            None,
+        ),
+    };
+
+    crate::app_settings::clear_cached_agent_versions();
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from(&settings, "dsh");
+    let current_version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
+
+    let mut channels = channels;
+    if let Some(recovery) = runtime_recovery.as_ref() {
+        if !recovery.errors.is_empty() {
+            channels.push(crate::app_settings::AgentUpgradeChannel {
+                channel: "runtime-recovery".to_string(),
+                success: false,
+                message: recovery.errors.join("\n"),
+            });
+        } else if recovery.restarted {
+            channels.push(crate::app_settings::AgentUpgradeChannel {
+                channel: "runtime-recovery".to_string(),
+                success: true,
+                message: format!(
+                    "restarted; reconnected {} session(s); cancelled {} running turn(s)",
+                    recovery.reconnected_sessions, recovery.cancelled_turns
+                ),
+            });
+        }
+    }
+    crate::app_settings::append_agent_upgrade_verification(
+        &mut channels,
+        &active_program,
+        &previous_version,
+        &current_version,
+        expected_version,
+    );
+
+    let success = channels.iter().all(|entry| entry.success);
+    let message = channels
+        .iter()
+        .map(|entry| format!("{}: {}", entry.channel, entry.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let managed = dsh::is_managed_program(&crate::app_settings::configured_agent_path(
+        &settings, "dsh",
+    ));
+
+    // 首次安装要回 Install:前端的安装路径与登录命令都只从 `install_result` 取,
+    // 回 Upgrade 会让 `kind == "install"` 的卡片拿不到这两项,只剩一句「安装完成」。
+    if kind == crate::agent_ops::AgentOperationKind::Install {
+        return OperationOutcome::Install(dsh_install_result(
+            operation_id,
+            success,
+            cancelled.load(Ordering::Relaxed),
+            current_version,
+            installed_launcher
+                .map(|launcher| launcher.to_string_lossy().into_owned())
+                .unwrap_or_else(|| crate::app_settings::configured_agent_path(&settings, "dsh")),
+            channel,
+            managed,
+            message,
+        ));
+    }
+
+    OperationOutcome::Upgrade(crate::app_settings::AgentUpgradeResult {
+        agent: "dsh".to_string(),
+        success,
+        previous_version,
+        current_version,
+        message,
+        channels,
+        channel,
+        managed,
+        runtime_recovery,
+    })
+}
+
+/// 把一次 DSH 首装的结果装成 `AgentInstallResult`。
+///
+/// 拆成独立函数是为了能不起 Tauri 就测:前端的安装路径与登录命令只从
+/// `install_result` 读,所以这里的 `path` / `login_command` 一错,卡片上就只剩
+/// 一句「安装完成」。
+#[allow(clippy::too_many_arguments)]
+fn dsh_install_result(
+    operation_id: &str,
+    success: bool,
+    cancelled: bool,
+    version: String,
+    path: String,
+    channel: String,
+    managed: bool,
+    message: String,
+) -> AgentInstallResult {
+    AgentInstallResult {
+        operation_id: operation_id.to_string(),
+        agent: "dsh".to_string(),
+        success,
+        supported: true,
+        platform: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        version,
+        path,
+        channel,
+        managed,
+        // 取消要如实报成 Cancelled:`start_agent_operation` 的 Install 分支用
+        // `stage == Cancelled` 判定这次操作是被取消还是真失败,一律回 Failed
+        // 会把用户自己点的取消显示成安装失败。
+        stage: if success {
+            AgentInstallStage::Completed
+        } else if cancelled {
+            AgentInstallStage::Cancelled
+        } else {
+            AgentInstallStage::Failed
+        },
+        progress: 100,
+        // Claude/Codex 那条管线用 agent id 作登录命令,dsh 同理。
+        login_command: "dsh".to_string(),
+        error_code: (!success).then(|| {
+            if cancelled {
+                AgentInstallErrorCode::Cancelled
+            } else {
+                AgentInstallErrorCode::InstallFailed
+            }
+        }),
+        message,
+        ..Default::default()
+    }
+}
+
+struct DshStrategyOutcome {
+    channels: Vec<crate::app_settings::AgentUpgradeChannel>,
+    channel: String,
+    /// 托管安装落地的启动器路径。只有 `Managed` 策略给得出来;源码 checkout 与包
+    /// 管理器都是原地升级,没有「新装到哪」这回事。首次安装要靠它在卡片上显示
+    /// 安装路径 —— 缺了就只有一句「安装完成」。
+    installed_launcher: Option<PathBuf>,
+}
+
+async fn run_dsh_strategy(
+    sink: &ProgressSink<'_>,
+    settings: &crate::app_settings::AppSettings,
+    configured: &str,
+    active_program: &str,
+    expected_version: Option<&str>,
+    cancelled: &AtomicBool,
+) -> InstallResult<DshStrategyOutcome> {
+    let strategy = dsh::resolve_strategy(configured, active_program);
+    let mut notes = Vec::new();
+
+    let strategy = match strategy {
+        dsh::DshStrategy::SourceCheckout { root } => {
+            sink.emit(
+                AgentInstallStage::PreparingEnvironment,
+                8,
+                "Checking the DSH source checkout",
+            );
+            match dsh::source_upgrade_block(&root, cancelled).await? {
+                None => match dsh::upgrade_source_checkout(sink, &root, cancelled).await {
+                    Ok(()) => {
+                        sink.emit(
+                            AgentInstallStage::RefreshingHooks,
+                            94,
+                            "Refreshing hook integration",
+                        );
+                        crate::hooks::cache_status(crate::hooks::ensure_installed());
+                        sink.emit(AgentInstallStage::Completed, 100, "Upgrade complete");
+                        return Ok(DshStrategyOutcome {
+                            channels: vec![crate::app_settings::AgentUpgradeChannel {
+                                channel: "source".to_string(),
+                                success: true,
+                                message: format!(
+                                    "upgraded the DSH source checkout at {} in place",
+                                    root.display()
+                                ),
+                            }],
+                            channel: "source".to_string(),
+                            installed_launcher: None,
+                        });
+                    }
+                    // 构建失败也不报死,降级到托管安装,保证"一定有结果"。
+                    Err(error) if error.code != AgentInstallErrorCode::Cancelled => {
+                        notes.push(format!(
+                            "in-place source upgrade failed, falling back to an Aeroric-managed install: {}",
+                            error.message
+                        ));
+                        dsh::DshStrategy::Managed
+                    }
+                    Err(error) => return Err(error),
+                },
+                Some(block) => {
+                    notes.push(format!(
+                        "using an Aeroric-managed install because {}",
+                        block.reason()
+                    ));
+                    dsh::DshStrategy::Managed
+                }
+            }
+        }
+        other => other,
+    };
+
+    match strategy {
+        dsh::DshStrategy::PackageManager => {
+            sink.emit(
+                AgentInstallStage::Installing,
+                45,
+                "Running the package manager upgrade",
+            );
+            let program = active_program.to_string();
+            let target = expected_version.map(str::to_string);
+            let channels = tokio::task::spawn_blocking(move || {
+                crate::app_settings::run_dsh_package_manager_upgrade(&program, target.as_deref())
+            })
+            .await
+            .map_err(|error| {
+                InstallError::new(
+                    AgentInstallErrorCode::Internal,
+                    format!("The upgrade worker failed: {error}"),
+                )
+            })?;
+            sink.emit(
+                AgentInstallStage::RefreshingHooks,
+                94,
+                "Refreshing hook integration",
+            );
+            crate::hooks::cache_status(crate::hooks::ensure_installed());
+            sink.emit(AgentInstallStage::Completed, 100, "Upgrade complete");
+            Ok(DshStrategyOutcome {
+                channels,
+                channel: "npm".to_string(),
+                installed_launcher: None,
+            })
+        }
+        dsh::DshStrategy::Managed | dsh::DshStrategy::SourceCheckout { .. } => {
+            let target_version = match expected_version {
+                Some(version) => version.to_string(),
+                None => {
+                    sink.emit(
+                        AgentInstallStage::Detecting,
+                        5,
+                        "Resolving the latest DeepSeek Harness version",
+                    );
+                    latest_dsh_version(cancelled).await?
+                }
+            };
+            let installed = dsh::install_managed(sink, &target_version, cancelled).await?;
+            sink.emit(
+                AgentInstallStage::RefreshingHooks,
+                94,
+                "Refreshing hook integration",
+            );
+            // 托管副本装好后把 dsh_path 指过去,否则下次启动还会用旧的活动安装。
+            let launcher = installed.launcher.to_string_lossy().into_owned();
+            if crate::app_settings::configured_agent_path(settings, "dsh") != launcher {
+                crate::app_settings::set_configured_dsh_path(&launcher).map_err(|error| {
+                    InstallError::new(
+                        AgentInstallErrorCode::Internal,
+                        format!("Cannot point dsh_path at the managed install: {error}"),
+                    )
+                })?;
+                notes.push(format!(
+                    "dsh_path now points at the managed install {launcher}"
+                ));
+            }
+            if installed.node_managed {
+                notes.push(
+                    "downloaded a private Node.js runtime into ~/.aeroric/tools/node".to_string(),
+                );
+            }
+            crate::hooks::cache_status(crate::hooks::ensure_installed());
+            sink.emit(AgentInstallStage::Completed, 100, "Installation complete");
+            let mut message = format!(
+                "installed {}@{} into {}",
+                dsh::DSH_NPM_PACKAGE,
+                installed.version,
+                installed.launcher.display()
+            );
+            if !notes.is_empty() {
+                message.push('\n');
+                message.push_str(&notes.join("\n"));
+            }
+            Ok(DshStrategyOutcome {
+                channels: vec![crate::app_settings::AgentUpgradeChannel {
+                    channel: "managed".to_string(),
+                    success: true,
+                    message,
+                }],
+                channel: "managed".to_string(),
+                installed_launcher: Some(installed.launcher),
+            })
+        }
+    }
+}
+
+/// 统一入口:内置 Claude/Codex 走原生安装管线,dsh 走上面那套策略,自定义 Agent
+/// 归并到它的二进制。
+pub(crate) async fn run_agent_operation(
+    app: &AppHandle,
+    operation_id: &str,
+    binary_agent: &str,
+    _requested_agent: &str,
+    kind: crate::agent_ops::AgentOperationKind,
+    expected_version: Option<&str>,
+    cancelled: &Arc<AtomicBool>,
+) -> crate::agent_ops::OperationOutcome {
+    use crate::agent_ops::{AgentOperationKind, OperationOutcome};
+
+    if binary_agent == "dsh" {
+        return run_dsh_operation(app, operation_id, kind, cancelled, expected_version).await;
+    }
+    let Some(agent) = BuiltInAgent::parse(binary_agent) else {
+        return OperationOutcome::Error {
+            code: AgentInstallErrorCode::InvalidAgent,
+            message: format!("Unknown agent {binary_agent}"),
+        };
+    };
+
+    // 未安装、或已是 Aeroric 托管副本时用原生安装管线;否则走包管理器升级。
+    let managed = status_for(agent).managed;
+    if kind == AgentOperationKind::Install || managed {
+        let (_guard, guard_cancelled) =
+            match OperationGuard::begin(operation_id.to_string(), vec![agent]) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return OperationOutcome::Error {
+                        code: error.code,
+                        message: error.message,
+                    }
+                }
+            };
+        // 注册表的取消标记与 install 管线自己的标记要联动。转发任务的生命周期绑在
+        // 这个 guard 上,install 一结束就 abort —— 否则安装成功时两个 flag 都不会
+        // 被置位,轮询循环会永远跑下去,每次操作泄漏一个任务。
+        let _bridge = CancellationBridge::spawn(cancelled.clone(), guard_cancelled.clone());
+        let result = install_one(app, operation_id, agent, &guard_cancelled).await;
+        return OperationOutcome::Install(result);
+    }
+
+    let sink = ProgressSink {
+        app,
+        operation_id,
+        agent: binary_agent,
+    };
+    sink.emit(
+        AgentInstallStage::Installing,
+        30,
+        "Running the package manager upgrade",
+    );
+    let agent_id = binary_agent.to_string();
+    let target = expected_version.map(str::to_string);
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::app_settings::run_builtin_agent_upgrade(&agent_id, target.as_deref())
+    })
+    .await;
+    match outcome {
+        Ok(Ok(result)) => {
+            sink.emit(
+                AgentInstallStage::RefreshingHooks,
+                94,
+                "Refreshing hook integration",
+            );
+            crate::hooks::cache_status(crate::hooks::ensure_installed());
+            sink.emit(AgentInstallStage::Completed, 100, "Upgrade complete");
+            OperationOutcome::Upgrade(result)
+        }
+        Ok(Err(message)) => OperationOutcome::Error {
+            code: AgentInstallErrorCode::InstallFailed,
+            message,
+        },
+        Err(error) => OperationOutcome::Error {
+            code: AgentInstallErrorCode::Internal,
+            message: format!("The upgrade worker failed: {error}"),
+        },
+    }
+}
+
+/// 把注册表的取消标记转发进 install 管线自己的标记。
+///
+/// 为什么还需要它:`cancel_agent_operation` 会直接按 operation_id 调
+/// `cancel_agent_tool_install`,正常路径上不依赖转发。但那条路径要求 guard 已经
+/// 登记完毕,所以「取消比 guard 注册更早到」这个窗口只能靠转发兜住。
+///
+/// 生命周期必须绑在调用方的作用域上:装完了就 abort。早先的实现把任务 detach 掉,
+/// 循环条件又只看两个 flag —— 安装**成功**时两者都不会被置位(`OperationGuard::drop`
+/// 只清 map 条目,不动 bool,而任务自己还攥着一份 Arc),于是每次操作都留下一个
+/// 永远以 100ms 轮询的任务。
+struct CancellationBridge(tokio::task::JoinHandle<()>);
+
+impl CancellationBridge {
+    fn spawn(outer: Arc<AtomicBool>, inner: Arc<AtomicBool>) -> Self {
+        // 已经取消了就不必等第一个 tick,立刻同步过去。
+        if outer.load(Ordering::Relaxed) {
+            inner.store(true, Ordering::Relaxed);
+        }
+        Self(tokio::spawn(async move {
+            while !inner.load(Ordering::Relaxed) {
+                if outer.load(Ordering::Relaxed) {
+                    inner.store(true, Ordering::Relaxed);
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }))
+    }
+}
+
+impl Drop for CancellationBridge {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -1625,8 +2317,14 @@ fn dsh_status() -> AgentToolStatus {
     } else {
         launch.program.clone()
     };
+    // 托管副本要先判,再落到包管理器检测:托管 shim 经 symlink 会命中
+    // `/node_modules/`,被 `detected_upgrade_manager` 误报成 npm。
+    let managed =
+        dsh::is_managed_program(&configured) || dsh::is_managed_program(&effective_program);
     let channel = if version.is_empty() {
         String::new()
+    } else if managed {
+        "managed".to_string()
     } else {
         crate::app_settings::upgrade_manager_for_path(&effective_program).to_string()
     };
@@ -1640,7 +2338,7 @@ fn dsh_status() -> AgentToolStatus {
         version,
         path: effective_program,
         channel,
-        managed: false,
+        managed,
         error_code: None,
         error: String::new(),
     }
@@ -1882,6 +2580,225 @@ mod tests {
         assert!(safe_archive_path(Path::new("bin/codex")));
         assert!(!safe_archive_path(Path::new("../outside")));
         assert!(!safe_archive_path(Path::new("/absolute")));
+    }
+
+    /// 官方 Node 发行包的 `bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js`
+    /// 必须放行,同时不能给出逃出解包目录的口子。
+    #[test]
+    fn symlink_targets_may_climb_out_of_their_own_directory_but_not_the_archive() {
+        // Node 发行包里真实存在的三条。
+        assert!(safe_symlink_target(
+            Path::new("bin/npm"),
+            Path::new("../lib/node_modules/npm/bin/npm-cli.js")
+        ));
+        assert!(safe_symlink_target(
+            Path::new("bin/npx"),
+            Path::new("../lib/node_modules/npm/bin/npx-cli.js")
+        ));
+        assert!(safe_symlink_target(
+            Path::new("bin/corepack"),
+            Path::new("../lib/node_modules/corepack/dist/corepack.js")
+        ));
+        // 同目录内的链接。
+        assert!(safe_symlink_target(
+            Path::new("bin/node"),
+            Path::new("node-24")
+        ));
+
+        // 逃逸:深度归零后再往上。
+        assert!(!safe_symlink_target(
+            Path::new("bin/evil"),
+            Path::new("../../etc/passwd")
+        ));
+        assert!(!safe_symlink_target(
+            Path::new("evil"),
+            Path::new("../outside")
+        ));
+        assert!(!safe_symlink_target(
+            Path::new("a/b/evil"),
+            Path::new("../../../outside")
+        ));
+        // 绝对 target。
+        assert!(!safe_symlink_target(
+            Path::new("bin/evil"),
+            Path::new("/etc/passwd")
+        ));
+        // 中途出界,即使末尾又走回来也不行。
+        assert!(!safe_symlink_target(
+            Path::new("evil"),
+            Path::new("../../tmp/x")
+        ));
+    }
+
+    fn tar_gz_with_symlink(archive: &Path, link_target: &str) {
+        let file = fs::File::create(archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+
+        let payload = b"console.log('npm')\n";
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path("lib/node_modules/npm/bin/npm-cli.js")
+            .unwrap();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_cksum();
+        builder.append(&header, &payload[..]).unwrap();
+
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        link.set_mode(0o777);
+        link.set_path("bin/npm").unwrap();
+        link.set_link_name(link_target).unwrap();
+        link.set_cksum();
+        builder.append(&link, &[][..]).unwrap();
+
+        builder.into_inner().unwrap().finish().unwrap();
+    }
+
+    /// 回归:整条托管 Node 安装都卡在这里 —— 拒掉符号链接等于拒掉整个 Node 发行包。
+    #[test]
+    fn extracting_a_node_shaped_archive_keeps_the_bin_symlinks() {
+        let root = std::env::temp_dir().join(format!("aeroric-symlink-ok-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let _cleanup = CleanupDir::new(root.clone());
+        let archive = root.join("node.tar.gz");
+        tar_gz_with_symlink(&archive, "../lib/node_modules/npm/bin/npm-cli.js");
+
+        let output = root.join("extracted");
+        extract_tar_gz(&archive, &output).expect("a Node-shaped archive extracts");
+
+        let link = output.join("bin").join("npm");
+        assert!(
+            fs::symlink_metadata(&link).is_ok(),
+            "bin/npm should exist as a link"
+        );
+        // 链接要真的能解到那个文件,否则 npm 起不来。
+        assert_eq!(
+            fs::read_to_string(&link).unwrap().trim(),
+            "console.log('npm')"
+        );
+    }
+
+    #[test]
+    fn extracting_an_archive_whose_symlink_escapes_is_refused() {
+        let root = std::env::temp_dir().join(format!("aeroric-symlink-bad-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let _cleanup = CleanupDir::new(root.clone());
+        let archive = root.join("evil.tar.gz");
+        tar_gz_with_symlink(&archive, "../../../../etc/passwd");
+
+        let error = extract_tar_gz(&archive, &root.join("extracted"))
+            .expect_err("an escaping symlink is rejected");
+        assert_eq!(error.code, AgentInstallErrorCode::ArchiveInvalid);
+        assert!(error.message.contains("escapes"));
+    }
+
+    /// 取消标记要能从注册表转发进 install 管线自己的标记。
+    #[tokio::test]
+    async fn the_cancellation_bridge_forwards_the_registry_flag() {
+        let outer = Arc::new(AtomicBool::new(false));
+        let inner = Arc::new(AtomicBool::new(false));
+        let bridge = CancellationBridge::spawn(outer.clone(), inner.clone());
+
+        outer.store(true, Ordering::Relaxed);
+        // 轮询间隔 100ms,给它几轮的余量。
+        for _ in 0..40 {
+            if inner.load(Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(inner.load(Ordering::Relaxed), "the flag is forwarded");
+        drop(bridge);
+    }
+
+    /// 已经取消了就不该等第一个 tick。
+    #[tokio::test]
+    async fn the_cancellation_bridge_syncs_an_already_cancelled_flag_immediately() {
+        let outer = Arc::new(AtomicBool::new(true));
+        let inner = Arc::new(AtomicBool::new(false));
+        let _bridge = CancellationBridge::spawn(outer, inner.clone());
+        assert!(inner.load(Ordering::Relaxed));
+    }
+
+    /// 安装成功时两个 flag 都不会被置位,所以转发任务只能靠 drop 收掉 ——
+    /// 否则每次操作都留下一个永远 100ms 轮询的任务。
+    #[tokio::test]
+    async fn dropping_the_cancellation_bridge_aborts_the_forwarding_task() {
+        let outer = Arc::new(AtomicBool::new(false));
+        let inner = Arc::new(AtomicBool::new(false));
+        let bridge = CancellationBridge::spawn(outer, inner);
+        let handle = bridge.0.abort_handle();
+        assert!(!handle.is_finished());
+        drop(bridge);
+        // abort 是异步生效的,让出一次给运行时收尾。
+        for _ in 0..40 {
+            if handle.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(handle.is_finished(), "the task is aborted on drop");
+    }
+
+    /// 首装的卡片全靠 `install_result` 里的 path / login_command 显示「装到哪、
+    /// 怎么登录」。托管安装要用真正落地的启动器路径,不是设置里那条旧路径。
+    #[test]
+    fn a_managed_first_install_reports_the_launcher_it_landed_on() {
+        let result = dsh_install_result(
+            "op-1",
+            true,
+            false,
+            "1.2.3".to_string(),
+            "/managed/bin/dsh".to_string(),
+            "managed".to_string(),
+            true,
+            "managed: installed".to_string(),
+        );
+        assert!(result.success);
+        assert_eq!(result.path, "/managed/bin/dsh");
+        assert_eq!(result.login_command, "dsh");
+        assert_eq!(result.stage, AgentInstallStage::Completed);
+        assert_eq!(result.progress, 100);
+        assert!(result.managed);
+        assert!(result.error_code.is_none());
+    }
+
+    /// 用户自己点的取消不能显示成安装失败:`start_agent_operation` 只看
+    /// `stage == Cancelled` 来区分这两者。
+    #[test]
+    fn a_cancelled_first_install_reports_cancelled_not_failed() {
+        let cancelled = dsh_install_result(
+            "op-2",
+            false,
+            true,
+            String::new(),
+            "/usr/local/bin/dsh".to_string(),
+            "managed".to_string(),
+            false,
+            "cancelled".to_string(),
+        );
+        assert_eq!(cancelled.stage, AgentInstallStage::Cancelled);
+        assert_eq!(cancelled.error_code, Some(AgentInstallErrorCode::Cancelled));
+
+        let failed = dsh_install_result(
+            "op-3",
+            false,
+            false,
+            String::new(),
+            "/usr/local/bin/dsh".to_string(),
+            "npm".to_string(),
+            false,
+            "npm: exited 1".to_string(),
+        );
+        assert_eq!(failed.stage, AgentInstallStage::Failed);
+        assert_eq!(
+            failed.error_code,
+            Some(AgentInstallErrorCode::InstallFailed)
+        );
     }
 
     #[test]

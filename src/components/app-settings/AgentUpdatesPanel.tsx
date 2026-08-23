@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useMemo, type CSSProperties } from "react";
 import { Check, Download, RefreshCw, Square, TriangleAlert } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { Button } from "../ui/Button";
@@ -8,12 +6,9 @@ import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import deepseekLogo from "../../assets/deepseek.svg";
 import {
-  APP_SETTINGS_CHANGED_EVENT,
   type AgentInstallErrorCode,
-  type AgentInstallProgress,
-  type AgentInstallResult,
   type AgentInstallStage,
-  type AgentUpgradeResult,
+  type AgentOperationSnapshot,
 } from "./types";
 import { useAgentVersions } from "../../hooks/useAgentVersions";
 
@@ -53,16 +48,9 @@ const stageKey: Record<AgentInstallStage, string> = {
   cancelled: "appSettings.installStage.cancelled",
 };
 
-function newOperationId() {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `agent-install-${Date.now()}`;
-}
-
-function installInvokeErrorMessage(reason: unknown, t: (key: string) => string) {
-  const message = String(reason);
-  const code = message.split(":", 1)[0] as AgentInstallErrorCode;
-  return code in installErrorKey ? t(installErrorKey[code]) : message;
+function operationErrorMessage(reason: string, t: (key: string) => string) {
+  const code = reason.split(":", 1)[0] as AgentInstallErrorCode;
+  return code in installErrorKey ? t(installErrorKey[code]) : reason;
 }
 
 type ProgressSnapshot = {
@@ -98,158 +86,25 @@ export function AgentUpdatesPanel() {
     refreshing,
     error: versionError,
     refreshVersions,
+    operations,
+    operationError,
+    clearOperationError,
+    startOperation,
+    cancelOperation,
   } = useAgentVersions();
-  const [upgradeResults, setUpgradeResults] = useState<Record<Agent, AgentUpgradeResult | null>>({
-    claude: null,
-    codex: null,
-    dsh: null,
-  });
-  const [installResults, setInstallResults] = useState<Record<Agent, AgentInstallResult | null>>({
-    claude: null,
-    codex: null,
-    dsh: null,
-  });
-  const [progress, setProgress] = useState<Record<Agent, AgentInstallProgress | null>>({
-    claude: null,
-    codex: null,
-    dsh: null,
-  });
-  const [busyAgents, setBusyAgents] = useState<Set<Agent>>(new Set());
-  const [operationIds, setOperationIds] = useState<Partial<Record<Agent, string>>>({});
-  const [operationKinds, setOperationKinds] = useState<
-    Partial<Record<Agent, "install" | "upgrade">>
-  >({});
-  const activeOperationsRef = useRef<Partial<Record<Agent, string>>>({});
-  const runningAgentsRef = useRef<Set<Agent>>(new Set());
-  const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<AgentInstallProgress>("agent-tool-install-progress", (event) => {
-      if (disposed) return;
-      const next = event.payload;
-      if (
-        (next.agent === "claude" || next.agent === "codex" || next.agent === "dsh") &&
-        activeOperationsRef.current[next.agent] === next.operation_id
-      ) {
-        setProgress((current) => ({ ...current, [next.agent]: next }));
-      }
-    }).then((release) => {
-      if (disposed) release();
-      else unlisten = release;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
-
-  async function runAgent(agent: Agent) {
-    const status = statuses[agent];
-    if (
-      !status ||
-      busyAgents.has(agent) ||
-      runningAgentsRef.current.has(agent) ||
-      (!status.installed && status.error_code === "unsupported_platform")
-    ) {
-      return;
-    }
-
-    // dsh 无 tools_dir 原生安装机制:安装与升级都走 npm 通道(upgrade_agent_versions)。
-    const isInstall = agent !== "dsh" && (!status.installed || status.managed);
-    const nextOperationId = isInstall ? newOperationId() : null;
-
-    // 每个 Agent 保持独立的忙碌状态和安装操作 ID，允许 Claude/Codex 同时升级。
-    runningAgentsRef.current.add(agent);
-    setBusyAgents((current) => {
-      const next = new Set(current);
-      next.add(agent);
-      return next;
-    });
-    setOperationKinds((current) => ({ ...current, [agent]: isInstall ? "install" : "upgrade" }));
-    if (nextOperationId) {
-      activeOperationsRef.current[agent] = nextOperationId;
-      setOperationIds((current) => ({ ...current, [agent]: nextOperationId }));
-    }
-    setProgress((current) => ({ ...current, [agent]: null }));
-    setInstallResults((current) => ({ ...current, [agent]: null }));
-    setUpgradeResults((current) => ({ ...current, [agent]: null }));
-    setActionError(null);
-
-    try {
-      if (isInstall && nextOperationId) {
-        const results = await invoke<AgentInstallResult[]>("install_agent_tools", {
-          request: {
-            operation_id: nextOperationId,
-            agents: [agent],
-          },
-        });
-        setInstallResults((current) => ({
-          ...current,
-          [agent]: results[0] ?? null,
-        }));
-      } else {
-        const expectedVersion = latestVersions[agent];
-        const results = await invoke<AgentUpgradeResult[]>(
-          "upgrade_agent_versions",
-          expectedVersion
-            ? { agents: [agent], expectedVersions: { [agent]: expectedVersion } }
-            : { agents: [agent] },
-        );
-        setUpgradeResults((current) => ({
-          ...current,
-          [agent]: results[0] ?? null,
-        }));
-      }
-      await refreshVersions({ forceLatest: true, forceStatus: true });
-      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
-    } catch (reason) {
-      setActionError(installInvokeErrorMessage(reason, t));
-    } finally {
-      if (nextOperationId && activeOperationsRef.current[agent] === nextOperationId) {
-        delete activeOperationsRef.current[agent];
-        setOperationIds((current) => {
-          const next = { ...current };
-          delete next[agent];
-          return next;
-        });
-      }
-      runningAgentsRef.current.delete(agent);
-      setBusyAgents((current) => {
-        const next = new Set(current);
-        next.delete(agent);
-        return next;
-      });
-      setOperationKinds((current) => {
-        const next = { ...current };
-        delete next[agent];
-        return next;
-      });
-    }
-  }
-
-  async function cancelInstall() {
-    const ids = Object.values(operationIds);
-    if (!ids.length) return;
-    await Promise.all(
-      ids.map((operationId) =>
-        invoke("cancel_agent_tool_install", { operationId }).catch((reason) =>
-          setActionError(String(reason)),
-        ),
-      ),
-    );
-  }
-
+  // 忙碌态、进度与结果全部来自后端快照：退出设置页再进来仍是「升级中」，
+  // 而且后端对同一 agent 是幂等的，重复点击不会起第二次升级。
   const agentsData: AgentData[] = useMemo(() => {
     return AGENTS.map((agent) => {
       const status = statuses[agent];
-      const installProgress = progress[agent];
-      const installResult = installResults[agent];
-      const upgradeResult = upgradeResults[agent];
-      const success = installResult?.success ?? upgradeResult?.success;
+      const operation: AgentOperationSnapshot | null = operations[agent];
+      const running = operation?.state === "running";
+      const finished = operation && !running ? operation : null;
+      const installResult = finished?.install_result;
+      const success = finished ? finished.state === "succeeded" : undefined;
       const resultErrorCode: AgentInstallErrorCode | undefined =
-        installResult?.success === false ? (installResult.error_code ?? undefined) : undefined;
+        finished?.state === "failed" ? (finished.error_code ?? undefined) : undefined;
 
       return {
         agent,
@@ -261,34 +116,27 @@ export function AgentUpdatesPanel() {
         managed: Boolean(status?.managed),
         currentVersion: status?.version ?? "",
         latestVersion: latestVersions[agent],
-        busy: busyAgents.has(agent),
-        progressSnapshot: installProgress
+        busy: running,
+        // 安装与升级一视同仁地显示进度条。
+        progressSnapshot: running
           ? {
-              stage: t(stageKey[installProgress.stage]),
-              percent: installProgress.progress,
+              stage: t(stageKey[operation.stage]),
+              percent: operation.progress,
             }
           : null,
         success,
-        isInstall: operationKinds[agent] === "install" || Boolean(installResult),
+        isInstall: operation?.kind === "install",
         resultErrorCode,
         loginCommand: installResult?.success ? installResult.login_command : undefined,
         installPath: installResult?.success && installResult.path ? installResult.path : undefined,
-        resultMessage: installResult?.message ?? upgradeResult?.message,
+        resultMessage: finished?.message || undefined,
       };
     });
-  }, [
-    statuses,
-    progress,
-    installResults,
-    upgradeResults,
-    latestVersions,
-    busyAgents,
-    operationKinds,
-    t,
-  ]);
+  }, [statuses, operations, latestVersions, t]);
 
-  const busy = busyAgents.size > 0;
-  const error = actionError ?? versionError;
+  const runningAgents = agentsData.filter((data) => data.busy);
+  const busy = runningAgents.length > 0;
+  const error = (operationError ? operationErrorMessage(operationError, t) : null) ?? versionError;
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "18px 20px" }}>
@@ -328,7 +176,9 @@ export function AgentUpdatesPanel() {
             variant="outline"
             size="sm"
             onClick={() => {
-              setActionError(null);
+              // 上一次操作的报错优先级高于 versionError，不清掉的话刷新成功了
+              // 顶部仍旧挂着那条旧错误。
+              clearOperationError();
               void refreshVersions({ forceLatest: true, forceStatus: true });
             }}
             disabled={busy}
@@ -349,13 +199,35 @@ export function AgentUpdatesPanel() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {agentsData.map((data) => (
-          <AgentCard key={data.agent} data={data} onRun={() => void runAgent(data.agent)} t={t} />
+          <AgentCard
+            key={data.agent}
+            data={data}
+            onRun={() => void startOperation(data.agent)}
+            t={t}
+          />
         ))}
       </div>
 
-      {Object.keys(operationIds).length > 0 && (
-        <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
-          <Button variant="outline" size="sm" onClick={() => void cancelInstall()}>
+      {busy && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 14,
+          }}
+        >
+          <div style={{ fontSize: 11, color: "var(--text-hint)", textAlign: "center" }}>
+            {t("appSettings.operationRunningHint")}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              for (const data of runningAgents) void cancelOperation(data.agent);
+            }}
+          >
             <Square size={11} />
             {t("appSettings.cancelInstall")}
           </Button>

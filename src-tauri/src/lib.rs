@@ -7,6 +7,7 @@ use tauri::Manager;
 use usage::CodexRpcClient;
 
 mod agent_assist;
+mod agent_ops;
 mod agent_tools;
 mod analytics;
 mod app_settings;
@@ -677,6 +678,9 @@ pub fn run() {
             agent_tools::get_agent_latest_versions,
             agent_tools::install_agent_tools,
             agent_tools::cancel_agent_tool_install,
+            agent_ops::start_agent_operation,
+            agent_ops::get_agent_operations,
+            agent_ops::cancel_agent_operation,
             node_runtime::install_nodejs_on_windows,
             app_settings::get_system_fonts,
             platform::get_platform_runtime_info,

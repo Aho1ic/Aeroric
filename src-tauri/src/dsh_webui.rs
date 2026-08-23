@@ -27,6 +27,15 @@ use api_client::{bounded_utf8_prefix, DSH_HTTP_ERROR_SNIPPET_BYTES};
 const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const DSH_WEB_OUTPUT_LIMIT: usize = 16 * 1024;
 const DSH_EVENT_CHANNEL_CAPACITY: usize = 64;
+/// 报错里最多列几个缺失产物。全列出来会有几十条,反而埋掉修复指引。
+const DSH_MISSING_ARTIFACT_SAMPLE: usize = 5;
+/// 等 lifecycle 锁最多等多久才改口告诉用户「在升级」。
+///
+/// 这把锁平时只被 start/stop 短暂占用,毫秒级就能拿到;但 `suspend_for_upgrade`
+/// 会攥着它跑完整个升级 —— 托管安装要下 Node、跑 pnpm build,几分钟很常见。
+/// 无上限地 await 就变成开终端点了没反应,连「为什么」都没有。超过这个阈值
+/// 就当成升级占用,回一条能看懂的错误。
+const DSH_LIFECYCLE_BUSY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -889,11 +898,8 @@ impl DshApiClient {
     }
 
     async fn execute_command(&self, session_id: &str, line: &str) -> Result<Value, String> {
-        self.remote_call(
-            "commands/execute",
-            json!({ "agentId": session_id, "line": line }),
-        )
-        .await
+        self.remote_call("commands/execute", execute_command_args(session_id, line))
+            .await
     }
 
     async fn list_message_feedback(&self, session_id: &str) -> Result<Value, String> {
@@ -1036,6 +1042,30 @@ impl DshApiClient {
         .await
         .map(|_| ())
     }
+}
+
+/// `commands/execute` 的 wire 参数。
+///
+/// gateway 按 remote 的**参数名**逐一精确匹配 wire 字段(assertExactArguments):
+/// 多一个是 `unexpected`,少一个是 `missing`,只有声明了 optional 的参数可省略。
+/// 上游签名是 `execute(agent, line, images, signal)`,`images` 是必填
+/// `readonly EncodedImageAttachment[]` —— 不带附件也必须显式给空数组,否则整个
+/// 请求被拒:`args fields do not match the descriptor: missing "images"`。
+/// 这条路径同时承载启动时下发的 `/permission <preset>`,所以漏掉它的表现是
+/// "一开终端就报错"。
+fn execute_command_args(session_id: &str, line: &str) -> Value {
+    json!({ "agentId": session_id, "line": line, "images": [] })
+}
+
+/// 传给 `dsh` 的子命令参数(在用户配置的 `launch.args` 之后)。
+///
+/// `--no-open`:我们只把 `dsh web` 当 headless RPC 后端,会话跑在 Aeroric 自己的
+/// 终端里。上游 web-app 的 `openBrowser` 默认为 true,不带这个 flag 每次拉起后端
+/// 都会顺带弹一个系统浏览器 —— 看起来就像"启动终端跳去了网页版"。
+/// `printUrl` 在 web-app 的 cordis.patch.yml 里硬编码 true、与 `openBrowser` 相互
+/// 独立,所以这里照常能读到启动 URL 那行。
+fn dsh_web_command_args() -> [&'static str; 4] {
+    ["web", "--port", "0", "--no-open"]
 }
 
 #[derive(Default)]
@@ -1247,6 +1277,190 @@ async fn wait_for_dsh_web_url(
     }
 }
 
+/// 一个包声明的、指向 `lib/` 的构建产物。只收 `.js`:`.d.ts` 缺失不影响运行。
+fn declared_lib_artifacts(package_dir: &Path) -> Vec<PathBuf> {
+    let Ok(raw) = std::fs::read_to_string(package_dir.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    // 只看 DSH 自己的包。node_modules 里的第三方包不该被我们当作构建目标。
+    if !value
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.starts_with("@deepseek-ai/"))
+    {
+        return Vec::new();
+    }
+
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |relative: &str| {
+        let trimmed = relative.trim_start_matches("./");
+        // 只认 lib/ 下的 js 产物;`./src/*` 这类通配导出不是构建输出。
+        if trimmed.starts_with("lib/") && trimmed.ends_with(".js") && !trimmed.contains('*') {
+            // `main` 与 `exports["."]` 常指向同一个文件,去重,否则同一个缺失
+            // 产物会在错误里报两遍、把计数也撑大。
+            if seen.insert(trimmed.to_string()) {
+                targets.push(package_dir.join(trimmed));
+            }
+        }
+    };
+
+    if let Some(main) = value.get("main").and_then(Value::as_str) {
+        push(main);
+    }
+    if let Some(exports) = value.get("exports").and_then(Value::as_object) {
+        for entry in exports.values() {
+            match entry {
+                Value::String(path) => push(path),
+                // 条件导出:只取 `default`,不追 `types`(那是 .d.ts)。
+                Value::Object(conditions) => {
+                    if let Some(path) = conditions.get("default").and_then(Value::as_str) {
+                        push(path);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    targets
+}
+
+/// checkout 里所有声明了 `lib/` 产物的包目录。
+///
+/// 不硬编码具体包名:上游新增包会自动纳入,删包也不会留下失效断言。
+fn dsh_package_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    // `packages/<group>/<pkg>` 两层,`apps/<pkg>` 一层。
+    let mut push_children = |parent: PathBuf, recurse: bool| {
+        let Ok(entries) = std::fs::read_dir(&parent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.join("package.json").is_file() {
+                dirs.push(path.clone());
+            }
+            if recurse {
+                if let Ok(children) = std::fs::read_dir(&path) {
+                    for child in children.flatten() {
+                        let child = child.path();
+                        if child.is_dir() && child.join("package.json").is_file() {
+                            dirs.push(child);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    push_children(root.join("packages"), true);
+    push_children(root.join("apps"), false);
+    dirs
+}
+
+/// checkout 是否具备启动 `dsh web` 所需的构建产物。
+///
+/// 之前这里只查 `apps/cli/lib/bin.js`,但 checkout 的启动命令是
+/// `pnpm --dir <root> dsh`,而该 script 是 `node --import tsx/esm apps/cli/src/bin.ts`
+/// —— 走的是 **src**,`lib/bin.js` 根本不参与启动。真正需要的是各包 `exports`/`main`
+/// 指向的 `lib/*.js`:plugin tree 与 typert loader 在运行时按这些导出解析。
+/// 于是"旧构建 + git pull 后新增包未构建"这种部分构建状态能顺利过闸,
+/// 直到 30 秒后报一句 "did not report its startup URL"。
+///
+/// 返回实际缺失的产物路径,便于把结论直接写进报错。
+fn dsh_checkout_missing_artifacts(root: &Path) -> Vec<PathBuf> {
+    dsh_package_dirs(root)
+        .into_iter()
+        .flat_map(|dir| declared_lib_artifacts(&dir))
+        .filter(|artifact| !artifact.is_file())
+        .collect()
+}
+
+/// 把缺失产物变成一句能照着做的错误。
+fn checkout_not_built_error(root: &Path, missing: &[PathBuf]) -> String {
+    let mut message = format!(
+        "DeepSeek Harness source at {} is not fully built: {} build artifact(s) are missing.",
+        root.display(),
+        missing.len()
+    );
+    for artifact in missing.iter().take(DSH_MISSING_ARTIFACT_SAMPLE) {
+        let shown = artifact
+            .strip_prefix(root)
+            .unwrap_or(artifact)
+            .to_string_lossy()
+            .replace('\\', "/");
+        message.push_str(&format!("\n  - {shown}"));
+    }
+    if missing.len() > DSH_MISSING_ARTIFACT_SAMPLE {
+        message.push_str(&format!(
+            "\n  ... and {} more",
+            missing.len() - DSH_MISSING_ARTIFACT_SAMPLE
+        ));
+    }
+    message.push_str(&format!(
+        "\n\nRun `pnpm install` and `pnpm run build` in {}, then retry. \
+         A stale build after `git pull` looks exactly like this. \
+         Alternatively, point the DSH executable at an Aeroric-managed install, \
+         which ships prebuilt bundles and needs neither pnpm nor a build step.",
+        root.display()
+    ));
+    message
+}
+
+/// DSH 启动输出里"构建不完整"的特征串。
+///
+/// 就绪闸门与这一层互为冗余:闸门按声明的 `exports` 判断,这一层按进程实际的
+/// 抱怨判断。上游改了产物布局导致闸门看不出问题时,这里仍能给出正确结论;
+/// 反之闸门能在启动前就拦下,不必等进程跑起来。
+const DSH_BUILD_FAILURE_SIGNATURES: &[&str] = &[
+    "plugin tree failed to load",
+    "client bundles not found",
+    "run `pnpm run build` before launch",
+    "failed to compose",
+];
+
+/// 输出是否表明 checkout 没构建完整。
+fn looks_like_incomplete_build(output: &str) -> bool {
+    if DSH_BUILD_FAILURE_SIGNATURES
+        .iter()
+        .any(|signature| output.contains(signature))
+    {
+        return true;
+    }
+    // `Cannot find module .../lib/xxx.js` 单独成立:缺的是构建产物,
+    // 而不是缺依赖(那会指向 node_modules)。
+    output.contains("Cannot find module")
+        && output.contains("/lib/")
+        && !output.contains("/node_modules/")
+}
+
+/// 给启动失败补上结论。
+///
+/// 裸抛 "did not report its startup URL" + 16KB 堆栈时,真正的原因
+/// (少了几个 lib 产物)埋在第 20 行开外,用户无从下手。
+fn explain_dsh_web_failure(error: String, launch_root: Option<&Path>) -> String {
+    if !looks_like_incomplete_build(&error) {
+        return error;
+    }
+    let remedy = match launch_root {
+        Some(root) => format!(
+            "The DeepSeek Harness source checkout at {} is not fully built. \
+             Run `pnpm install` and `pnpm run build` there, then retry. \
+             A stale build after `git pull` looks exactly like this.",
+            root.display()
+        ),
+        None => "The active DeepSeek Harness installation is missing build artifacts. \
+             Reinstall it, or switch to an Aeroric-managed install, which ships prebuilt bundles."
+            .to_string(),
+    };
+    format!("{remedy}\n\n{error}")
+}
+
 async fn ensure_dsh_webui_locked(
     agent: &str,
     state: &DshWebUiManager,
@@ -1282,12 +1496,30 @@ async fn ensure_dsh_webui_locked(
     let home = crate::dsh_home::ensure_dsh_home_for(agent)?;
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     if let Some(root) = &launch.working_dir {
-        let built_cli = root.join("apps").join("cli").join("lib").join("bin.js");
-        if !root.join("node_modules").is_dir() || !built_cli.is_file() {
+        if !root.join("node_modules").is_dir() {
             return Err(format!(
-                "DeepSeek Harness source is not ready at {}. Run `pnpm install` and `pnpm run build` in that directory, then retry.",
+                "DeepSeek Harness source at {} has no node_modules. Run `pnpm install` and `pnpm run build` in that directory, then retry.",
                 root.display()
             ));
+        }
+        // checkout 启动依赖 pnpm,而这条分支以前从不校验它:`working_dir` 恒为
+        // Some,所以下面那个 PATH 检查永远走不到,缺 pnpm 的机器会一路走到 spawn
+        // 的 ENOENT,报成"dsh 没装"——dsh 明明配好了,缺的是 pnpm。
+        if !launch.program.contains('/')
+            && !launch.program.contains('\\')
+            && crate::platform::detect_path(&launch.program).is_empty()
+        {
+            return Err(format!(
+                "`{}` was not found in PATH, so the DeepSeek Harness source checkout at {} cannot be launched. \
+                 Install pnpm (for example `corepack enable pnpm`), or point the DSH executable at an \
+                 Aeroric-managed install, which needs neither pnpm nor a build step.",
+                launch.program,
+                root.display()
+            ));
+        }
+        let missing = dsh_checkout_missing_artifacts(root);
+        if !missing.is_empty() {
+            return Err(checkout_not_built_error(root, &missing));
         }
     } else if !launch.program.contains('/') && !launch.program.contains('\\') {
         // A GUI app does not inherit the interactive shell's PATH. Resolve
@@ -1311,9 +1543,7 @@ async fn ensure_dsh_webui_locked(
     // Aeroric's headless overlays here makes the Web process exit immediately
     // with: "web takes none of parent --patch ...". Web/API settings are
     // persisted through DSH_HOME and its RPC, so no patch is needed here.
-    cmd.arg("web")
-        .arg("--port")
-        .arg("0")
+    cmd.args(dsh_web_command_args())
         .envs(launch.extra_env)
         .env("PATH", crate::app_settings::get_login_shell_path())
         .env("DSH_HOME", &home)
@@ -1365,7 +1595,10 @@ async fn ensure_dsh_webui_locked(
             Err(error) => {
                 let _ = DshWebUiManager::stop_process(&mut child).await;
                 finish_dsh_web_output_drains(stdout_drain, stderr_drain).await;
-                return Err(attach_startup_output(error, &output));
+                return Err(explain_dsh_web_failure(
+                    attach_startup_output(error, &output),
+                    launch.working_dir.as_deref(),
+                ));
             }
         };
 
@@ -1399,17 +1632,46 @@ async fn ensure_dsh_webui_locked(
             initial_state.error = Some(error.clone());
             let _ = DshWebUiManager::stop_process(&mut child).await;
             finish_dsh_web_output_drains(stdout_drain, stderr_drain).await;
-            return Err(attach_startup_output(error, &output));
+            return Err(explain_dsh_web_failure(
+                attach_startup_output(error, &output),
+                launch.working_dir.as_deref(),
+            ));
         }
     }
 
     Ok(initial_state)
 }
 
+/// 拿 lifecycle 锁,但别在升级期间无限期挂着。
+///
+/// 只有「等超了 **且** 确实有安装/升级在跑」才放弃。单看超时是不够的:另一次
+/// start 也会占着锁,而 DSH Web 冷启动本身就允许 30s
+/// ([`DSH_WEB_STARTUP_TIMEOUT`]),那种情况必须继续等 —— 等到了还能靠
+/// `newer_start_result` 直接复用它的结果。
+async fn acquire_lifecycle_guard<'lock>(
+    lifecycle_lock: &'lock Arc<AsyncMutex<()>>,
+    wait: Duration,
+    upgrade_is_running: impl Fn() -> bool,
+) -> Result<tokio::sync::MutexGuard<'lock, ()>, String> {
+    match tokio::time::timeout(wait, lifecycle_lock.lock()).await {
+        Ok(guard) => Ok(guard),
+        Err(_) if upgrade_is_running() => Err(
+            "DSH Web is busy finishing an install or upgrade. Try again once it completes."
+                .to_string(),
+        ),
+        // 不是升级占的锁 —— 那就是另一次启动,老实等完。
+        Err(_) => Ok(lifecycle_lock.lock().await),
+    }
+}
+
 async fn ensure_dsh_webui(agent: &str, state: &DshWebUiManager) -> Result<DshWebUiState, String> {
     let observed_generation = state.start_generation(agent);
     let lifecycle_lock = state.lifecycle_lock(agent);
-    let _lifecycle_guard = lifecycle_lock.lock().await;
+    let _lifecycle_guard =
+        acquire_lifecycle_guard(&lifecycle_lock, DSH_LIFECYCLE_BUSY_TIMEOUT, || {
+            crate::agent_ops::binary_operation_is_running(agent)
+        })
+        .await?;
     if let Some(result) = state.newer_start_result(agent, observed_generation) {
         return result;
     }
@@ -6280,6 +6542,33 @@ mod tests {
     }
 
     #[test]
+    fn sends_an_empty_image_list_with_every_command() {
+        let args = execute_command_args("session-1", "/permission read-only");
+        assert_eq!(args["agentId"], "session-1");
+        assert_eq!(args["line"], "/permission read-only");
+        // gateway 精确匹配 descriptor 参数名。`images` 缺席会让整个请求被拒
+        // (missing "images"),而这条路径也承载启动时的 `/permission`,
+        // 所以缺了它连终端都起不来。
+        assert_eq!(args["images"], json!([]));
+        // 多余字段同样会被拒(unexpected),所以字段集必须正好是这三个。
+        assert_eq!(
+            args.as_object().map(|fields| fields.len()),
+            Some(3),
+            "wire 字段必须与 execute(agent, line, images, signal) 的可传参数一一对应"
+        );
+    }
+
+    #[test]
+    fn keeps_the_web_backend_from_opening_a_browser() {
+        let args = dsh_web_command_args();
+        // 只当 headless RPC 后端用:少了 --no-open,上游默认会弹系统浏览器,
+        // 表现就是"启动终端跳到网页版"。
+        assert!(args.contains(&"--no-open"));
+        // 端口仍然交给 OS 选,启动 URL 由 stdout 那行回传。
+        assert_eq!(args, ["web", "--port", "0", "--no-open"]);
+    }
+
+    #[test]
     fn swallows_only_the_bootstrap_permission_command_echo() {
         let manager = DshWebUiManager::new();
         fn run(name: &str, args: &str) -> Value {
@@ -6399,6 +6688,58 @@ mod tests {
             shared.expect_err("the first attempt failed"),
             "shared startup failure"
         );
+    }
+
+    /// 升级会攥着 lifecycle 锁跑几分钟,这期间开终端必须拿到一句解释,
+    /// 而不是无限期挂在 await 上。这里用毫秒级超时,不必真等 3 秒。
+    #[tokio::test]
+    async fn acquiring_the_lifecycle_lock_gives_up_while_an_upgrade_holds_it() {
+        let manager = DshWebUiManager::new();
+        let lifecycle_lock = manager.lifecycle_lock("dsh");
+        let upgrade_guard = lifecycle_lock.clone().lock_owned().await;
+
+        let error = acquire_lifecycle_guard(&lifecycle_lock, Duration::from_millis(20), || true)
+            .await
+            .expect_err("the blocked start reports the upgrade instead of hanging");
+        assert!(
+            error.contains("install or upgrade"),
+            "unexpected error: {error}"
+        );
+
+        // 升级放手之后就该正常拿到锁。
+        drop(upgrade_guard);
+        let _reacquired = acquire_lifecycle_guard(&lifecycle_lock, Duration::from_secs(1), || true)
+            .await
+            .expect("the lock is available once the upgrade releases it");
+    }
+
+    /// 另一次 start 占着锁时不能改口说「在升级」:DSH Web 冷启动本身就允许 30s,
+    /// 等到了还能复用它的结果。
+    #[tokio::test]
+    async fn acquiring_the_lifecycle_lock_waits_out_a_concurrent_start() {
+        let manager = DshWebUiManager::new();
+        let lifecycle_lock = manager.lifecycle_lock("dsh");
+        let slow_start = lifecycle_lock.clone().lock_owned().await;
+
+        let waiter_lock = lifecycle_lock.clone();
+        let waiter = tokio::spawn(async move {
+            // 没有安装/升级在跑,所以超时也只能继续等。
+            acquire_lifecycle_guard(&waiter_lock, Duration::from_millis(20), || false)
+                .await
+                .map(|_| ())
+        });
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(
+            !waiter.is_finished(),
+            "the waiter keeps waiting instead of bailing out"
+        );
+        drop(slow_start);
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the waiter proceeds once the slow start releases the lock")
+            .expect("the waiter task completes")
+            .expect("waiting out a concurrent start is not an error");
     }
 
     #[test]
@@ -6659,5 +7000,136 @@ mod tests {
         // The `.` segment is gone and the chosen filename is preserved, so the
         // rename target cannot land outside the directory the dialog returned.
         assert_eq!(resolved, dir.join("dsh-session-x.zip"));
+    }
+
+    /// 造一个最小 checkout:一个包 + 声明的 lib 产物。
+    /// `built` 决定产物文件是否真的落盘。
+    fn fake_dsh_checkout(built: bool) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-readiness-{}", uuid::Uuid::new_v4()));
+        let package = root
+            .join("packages")
+            .join("context")
+            .join("session-reference");
+        std::fs::create_dir_all(package.join("lib")).expect("the package tree is created");
+        std::fs::write(
+            package.join("package.json"),
+            r#"{
+              "name": "@deepseek-ai/dsh-session-reference",
+              "main": "lib/index.js",
+              "exports": {
+                ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+                "./typert": { "default": "./lib/typert.host.js" },
+                "./src/*": "./src/*",
+                "./package.json": "./package.json"
+              }
+            }"#,
+        )
+        .expect("the manifest is written");
+        if built {
+            for name in ["index.js", "typert.host.js"] {
+                std::fs::write(package.join("lib").join(name), "export {};\n")
+                    .expect("the artifact is written");
+            }
+        }
+        root
+    }
+
+    /// 已构建的 checkout 必须放行。闸门若在这里误报,会把本来能用的机器彻底挡死。
+    #[test]
+    fn a_fully_built_checkout_passes_the_readiness_gate() {
+        let root = fake_dsh_checkout(true);
+        assert!(dsh_checkout_missing_artifacts(&root).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 本次 bug 的回归:`lib/typert.host.js` 缺失时必须在启动前就被认出来,
+    /// 而不是等 `dsh web` 跑起来再抛 "did not report its startup URL"。
+    #[test]
+    fn a_missing_typert_host_bundle_is_reported_with_its_path() {
+        let root = fake_dsh_checkout(false);
+        let missing = dsh_checkout_missing_artifacts(&root);
+        assert_eq!(missing.len(), 2, "both declared lib artifacts are missing");
+        let error = checkout_not_built_error(&root, &missing);
+        assert!(error.contains("typert.host.js"), "got: {error}");
+        assert!(error.contains("pnpm run build"), "got: {error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `./src/*` 这类通配导出与 `types` 指向的 .d.ts 都不是构建产物,
+    /// 不能让它们把一个健康的 checkout 判成未构建。
+    #[test]
+    fn wildcard_exports_and_type_declarations_are_not_treated_as_build_output() {
+        let root = fake_dsh_checkout(true);
+        let package = root
+            .join("packages")
+            .join("context")
+            .join("session-reference");
+        let declared = declared_lib_artifacts(&package);
+        assert!(declared
+            .iter()
+            .all(|path| path.extension().is_some_and(|e| e == "js")));
+        assert!(!declared
+            .iter()
+            .any(|path| path.to_string_lossy().contains('*')));
+        assert!(!declared
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".d.ts")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 第三方包不该被当成我们的构建目标,否则 vendor 目录会制造大量假缺失。
+    #[test]
+    fn packages_outside_the_deepseek_scope_declare_no_artifacts() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-dsh-thirdparty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("the directory is created");
+        std::fs::write(
+            root.join("package.json"),
+            r#"{ "name": "lodash", "main": "lib/index.js" }"#,
+        )
+        .expect("the manifest is written");
+        assert!(declared_lib_artifacts(&root).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 闸门放过时,进程自己的抱怨要能被翻译成结论。这是与闸门互为冗余的一层。
+    #[test]
+    fn build_failure_signatures_are_translated_into_a_conclusion() {
+        for output in [
+            "Error: dsh: plugin tree failed to load: loader fibers failed",
+            "client bundles not found; run `pnpm run build` before launch:",
+            "client-modules: 4 client packages failed to compose:",
+            "Cannot find module '/src/dsh/packages/context/session-reference/lib/typert.host.js'",
+        ] {
+            assert!(looks_like_incomplete_build(output), "missed: {output}");
+            let explained =
+                explain_dsh_web_failure(output.to_string(), Some(Path::new("/src/dsh")));
+            assert!(explained.contains("not fully built"), "got: {explained}");
+            assert!(explained.contains("pnpm run build"), "got: {explained}");
+            // 原始输出必须保留在后面,诊断只是前置结论,不能吞掉证据。
+            assert!(explained.contains(output), "the raw output survives");
+        }
+    }
+
+    /// 缺依赖(node_modules)不是构建问题,别给出"去 build"的错误指引。
+    #[test]
+    fn a_missing_dependency_is_not_reported_as_an_incomplete_build() {
+        let output = "Cannot find module '/src/dsh/node_modules/commander/index.js'";
+        assert!(!looks_like_incomplete_build(output));
+        assert_eq!(
+            explain_dsh_web_failure(output.to_string(), Some(Path::new("/src/dsh"))),
+            output
+        );
+    }
+
+    /// 无关失败(端口占用之类)必须原样透传,不能被套上构建结论。
+    #[test]
+    fn unrelated_startup_failures_pass_through_untouched() {
+        let output = "DSH Web exited before becoming ready (exit status: 1)".to_string();
+        assert_eq!(
+            explain_dsh_web_failure(output.clone(), Some(Path::new("/src/dsh"))),
+            output
+        );
     }
 }

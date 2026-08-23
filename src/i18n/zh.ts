@@ -405,6 +405,7 @@ export const zh: Record<string, string> = {
   "appSettings.installComplete": "安装完成",
   "appSettings.installFailed": "安装失败",
   "appSettings.cancelInstall": "取消",
+  "appSettings.operationRunningHint": "正在后台进行，可以离开此页面；再回来时会继续显示进度。",
   "appSettings.updateSelectedAgents": "安装或升级所选项",
   "appSettings.aeroricManaged": "Aeroric 托管",
   "appSettings.loginCommand": "登录命令",
