@@ -170,7 +170,9 @@ pub(super) fn build_codex_model_catalog(
 }
 
 pub(super) fn load_bundled_codex_catalog(codex_bin: &str) -> Option<String> {
-    let output = Command::new(codex_bin)
+    let mut command = Command::new(codex_bin);
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command
         .args(["debug", "models", "--bundled"])
         .output()
         .ok()?;

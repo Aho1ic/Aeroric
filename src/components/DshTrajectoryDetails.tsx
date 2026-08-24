@@ -125,9 +125,10 @@ function SummaryTab({
           </Field>
         )}
       </dl>
-      {/* The tabs above are a reading of the event; the event itself stays one
-          click away, which is what the old inline expander was for. */}
-      <details className="dsh-detail-raw">
+      {/* 上面的分栏是对事件的"解读",原始事件是事实来源,所以默认展开——查轨迹
+          的人多半就是来看原始 payload 的,再点一下纯属多余。仍然是 <details>,
+          用户可以自己收起来;不受控,收起状态不跨条目保留。 */}
+      <details className="dsh-detail-raw" open>
         <summary>{t("dsh.trajectory.detail.rawEvent")}</summary>
         <pre>{JSON.stringify(row.entry.event, null, 2)}</pre>
       </details>

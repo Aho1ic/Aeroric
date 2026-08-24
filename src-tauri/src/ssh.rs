@@ -539,6 +539,8 @@ pub(crate) fn std_ssh_port_forward_command(
 ) -> Command {
     let spec = ssh_port_forward_command_spec(connection, local_port, remote_host, remote_port);
     let mut cmd = Command::new(spec.program);
+    // 端口转发是后台常驻进程,Windows 上不压窗口会留一个 ssh 控制台在桌面。
+    crate::subprocess::configure_background_command(&mut cmd);
     cmd.args(spec.args);
     for (key, value) in spec.env {
         cmd.env(key, value);
@@ -594,6 +596,7 @@ pub(crate) fn std_ssh_command_for_remote_command(
 ) -> Command {
     let spec = ssh_command_spec_for_remote_command(connection, remote_command);
     let mut cmd = Command::new(spec.program);
+    crate::subprocess::configure_background_command(&mut cmd);
     cmd.args(spec.args);
     for (key, value) in spec.env {
         cmd.env(key, value);

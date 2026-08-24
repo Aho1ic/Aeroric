@@ -679,6 +679,8 @@ pub(super) fn build_agent_upgrade_commands(
 
 pub(super) fn run_agent_upgrade(command: &AgentUpgradeCommand) -> Result<String, String> {
     let mut process = Command::new(&command.program);
+    // 升级走的是 npm / pnpm 这类 .cmd shim,同样要压掉控制台窗口。
+    crate::subprocess::configure_background_command(&mut process);
     process
         .args(&command.args)
         .envs(get_login_shell_env().iter().cloned())

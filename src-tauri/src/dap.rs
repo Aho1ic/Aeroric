@@ -2573,6 +2573,7 @@ pub fn start_debug_config(
                 .ok_or_else(|| "Debug program cannot be empty".to_string())?;
             let breakpoint_targets = resolve_debug_breakpoint_targets(&root, &config.breakpoints)?;
             let mut command = Command::new("node");
+            crate::subprocess::configure_background_command(&mut command);
             command
                 .arg("--inspect-brk=127.0.0.1:0")
                 .arg(program)

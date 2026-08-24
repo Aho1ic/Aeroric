@@ -1534,6 +1534,10 @@ async fn ensure_dsh_webui_locked(
     }
 
     let mut cmd = Command::new(&launch.program);
+    // Windows 上 dsh 解析成 dsh.cmd,Rust 会经 cmd.exe 启动它。不带
+    // CREATE_NO_WINDOW 就会弹出一个真实的 cmd 控制台窗口,并且因为这是常驻
+    // sidecar,窗口会跟着整个会话一直停在桌面上——而不是一闪而过。
+    crate::subprocess::configure_background_tokio_command(&mut cmd);
     cmd.args(&launch.args);
     if let Some(working_dir) = &launch.working_dir {
         cmd.current_dir(working_dir);

@@ -364,6 +364,19 @@ describe("DSH trajectory detail column", () => {
     expect(within(details).getByText("Session timestamps")).toBeInTheDocument();
   });
 
+  it("shows the raw event expanded without a second click", async () => {
+    const panel = await openTrajectory();
+    await userEvent.click(within(panel).getByRole("button", { name: /Tool: bash/ }));
+    const details = detailColumn(panel);
+    // 查轨迹的人多半就是来看原始 payload 的,所以 <details> 带 open。
+    const raw = within(details).getByText("Raw event").closest("details");
+    expect(raw).not.toBeNull();
+    expect(raw).toHaveAttribute("open");
+    // 仍然可以自己收起来——是默认展开,不是不可折叠。
+    await userEvent.click(within(details).getByText("Raw event"));
+    expect(raw).not.toHaveAttribute("open");
+  });
+
   it("walks up the hierarchy to the reply that ordered the call", async () => {
     const panel = await openTrajectory();
     await userEvent.click(within(panel).getByRole("button", { name: /Tool: bash/ }));

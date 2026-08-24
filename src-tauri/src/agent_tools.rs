@@ -1193,6 +1193,7 @@ async fn command_output(
 
 async fn detect_version(program: &Path, cancelled: &AtomicBool) -> InstallResult<String> {
     let mut command = Command::new(program);
+    crate::subprocess::configure_background_tokio_command(&mut command);
     command.arg("--version");
     let output = command_output(command, cancelled, "Version verification failed").await?;
     if !output.status.success() {

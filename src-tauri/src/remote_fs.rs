@@ -391,10 +391,13 @@ fn std_scp_upload_command(
             detected
         };
         let mut command = Command::new(program);
+        crate::subprocess::configure_background_command(&mut command);
         command.arg("-e").arg("scp");
         command
     } else {
-        Command::new("scp")
+        let mut command = Command::new("scp");
+        crate::subprocess::configure_background_command(&mut command);
+        command
     };
 
     cmd.arg("-P").arg(connection.port.to_string()).arg("-r");

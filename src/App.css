@@ -4705,6 +4705,12 @@ html.dark .dsh-trajectory-scrim {
      刻意不加投影:面板底边与 composer 顶边紧邻,任何投影都会在浅色模式下
      把两者读成上下两层,而它们本该是同一个平面。 */
   background: var(--bg-card);
+  /* --bg-card 三套主题都是半透明(0.72 / 0.74 / 0.78),之前没有 backdrop-filter,
+     所以底下的终端文字是直接透上来的——看起来就是"玻璃太透"。这里补上磨砂,
+     用 --glass-blur(24px)而不是 compact(16px):面板铺满整个终端盒子,底下是
+     高对比度的等宽文字,弱模糊压不住。 */
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   color: var(--text-primary);
 }
 

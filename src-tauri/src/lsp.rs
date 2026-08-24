@@ -747,6 +747,7 @@ fn tokio_ssh_command_for_remote_command(
 ) -> Command {
     let spec = crate::ssh::ssh_command_spec_for_remote_command(connection, remote_command);
     let mut command = Command::new(spec.program);
+    crate::subprocess::configure_background_tokio_command(&mut command);
     command.args(spec.args);
     for (key, value) in spec.env {
         command.env(key, value);

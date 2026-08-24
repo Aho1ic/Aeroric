@@ -196,6 +196,7 @@ fn npm_install_command(runtime: &NodeRuntime, prefix: &Path, version: &str) -> C
     let mut command = match runtime.npm_cli.as_ref() {
         Some(npm_cli) => {
             let mut command = Command::new(&runtime.node);
+            crate::subprocess::configure_background_tokio_command(&mut command);
             command.arg(npm_cli);
             command
         }
@@ -368,6 +369,9 @@ fn tool_command(binary: &str) -> Command {
     } else {
         resolved
     });
+    // npm / git / node 在 Windows 上多为 .cmd shim,安装流程会连着跑好几条,
+    // 不加这个标志就是接连闪好几个控制台窗口。
+    crate::subprocess::configure_background_tokio_command(&mut command);
     command.env("PATH", crate::app_settings::get_login_shell_path());
     command
 }

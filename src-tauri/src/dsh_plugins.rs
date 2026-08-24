@@ -150,6 +150,9 @@ fn parse_dsh_config_dump(content: &str) -> Result<Vec<DshPlugin>, String> {
 fn command_for_agent(agent: &str, home: &Path) -> Command {
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let mut command = Command::new(&launch.program);
+    // 同 dsh_webui:dsh 在 Windows 上是 .cmd,不加这个标志每次列插件都会闪一个
+    // 控制台窗口。
+    crate::subprocess::configure_background_tokio_command(&mut command);
     command
         .args(launch.args)
         .envs(launch.extra_env)

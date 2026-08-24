@@ -679,6 +679,9 @@ fn spawn_exit_watcher(child: Arc<Mutex<Child>>, snapshot: Arc<Mutex<RunProcessSn
 fn shell_command(command: &str) -> Command {
     let shell = crate::platform::shell_command(command);
     let mut cmd = Command::new(shell.program);
+    // 运行配置的 stdout/stderr 都是 piped 后回显到应用内面板的,不需要真实控制台;
+    // 不压窗口的话每次运行都会闪一个 cmd。
+    crate::subprocess::configure_background_command(&mut cmd);
     cmd.args(shell.args);
     cmd
 }
