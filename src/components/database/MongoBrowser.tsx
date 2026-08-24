@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../lib/appDialog";
 import {
   ArrowDown,
   ArrowUp,

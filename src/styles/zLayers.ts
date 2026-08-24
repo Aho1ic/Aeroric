@@ -27,6 +27,8 @@ export const zLayers = {
   overlayNested: 3100,
   /** 三层嵌套模态(skill 管理 → 安装 → 冲突确认)。 */
   overlayNestedDeep: 3200,
+  /** 应用内确认框。必须高于所有嵌套模态 —— 它可能从最深那层里弹出。 */
+  overlayConfirm: 3300,
   /** Radix Select / Popover / DropdownMenu 等 Portal 浮层。 */
   popover: 4200,
   /** 从另一个浮层里展开的二级浮层(如 ModelOptionsMenu 的子菜单)。 */
@@ -42,7 +44,12 @@ export const zLayers = {
 export type ZLayer = keyof typeof zLayers;
 
 /** 遮罩层层级集合 —— 浮层必须严格高于其中每一个。 */
-export const OVERLAY_LAYERS: ZLayer[] = ["overlay", "overlayNested", "overlayNestedDeep"];
+export const OVERLAY_LAYERS: ZLayer[] = [
+  "overlay",
+  "overlayNested",
+  "overlayNestedDeep",
+  "overlayConfirm",
+];
 
 /** 浮层层级集合 —— 每一个都必须严格高于所有遮罩层。 */
 export const FLOATING_LAYERS: ZLayer[] = [

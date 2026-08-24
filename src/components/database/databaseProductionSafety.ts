@@ -1,4 +1,4 @@
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../lib/appDialog";
 import { databaseApi } from "../../lib/databaseApi";
 import type { AeroricDbConnectionConfig } from "../../types";
 import { dbxBoolean, dbxConfigRecord } from "./databaseConnectionDraft";

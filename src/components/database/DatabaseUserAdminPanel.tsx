@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../lib/appDialog";
 import { KeyRound, Lock, Play, RefreshCcw, Search, Trash2, Unlock, UserPlus } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";

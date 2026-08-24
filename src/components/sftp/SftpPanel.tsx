@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, prompt } from "../../lib/appDialog";
 import {
   ArrowRight,
   ArrowDown,
@@ -992,7 +992,7 @@ export function SftpPanel({
   const createFolder = useCallback(
     async (side: PaneSide) => {
       const pane = panes[side];
-      const name = window.prompt(t("sftp.newFolderName"));
+      const name = await prompt(t("sftp.newFolderName"), { title: t("sftp.newFolder") });
       if (!name) return;
       try {
         await createSftpDirectory(pane.endpoint, sshConnections, name);
@@ -1008,7 +1008,10 @@ export function SftpPanel({
     async (side: PaneSide) => {
       const pane = panes[side];
       if (!pane.selectedPath) return;
-      const name = window.prompt(t("sftp.renameTo"), sftpFileName(pane.selectedPath));
+      const name = await prompt(t("sftp.renameTo"), {
+        title: t("sftp.rename"),
+        defaultValue: sftpFileName(pane.selectedPath),
+      });
       if (!name) return;
       try {
         await renameSftpPath(pane.endpoint, sshConnections, pane.selectedPath, name);

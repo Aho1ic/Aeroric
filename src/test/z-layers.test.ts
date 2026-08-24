@@ -38,6 +38,8 @@ describe("z-index 层级量表", () => {
   it("遮罩层嵌套顺序单调递增", () => {
     expect(zLayers.overlay).toBeLessThan(zLayers.overlayNested);
     expect(zLayers.overlayNested).toBeLessThan(zLayers.overlayNestedDeep);
+    // 应用内确认框可能从最深那层嵌套模态里弹出,必须盖在它之上。
+    expect(zLayers.overlayNestedDeep).toBeLessThan(zLayers.overlayConfirm);
   });
 
   it("浮层内部顺序:二级浮层高于一级,右键菜单高于其捕获层", () => {
@@ -93,6 +95,7 @@ describe("z-index 层级量表", () => {
     const overlayValues = new Set<number>(OVERLAY_LAYERS.map((layer) => zLayers[layer]));
     for (const key of [
       "modalOverlay",
+      "appConfirmOverlay",
       "sshDialogOverlay",
       "databaseDialogOverlay",
       "fileSearchDialogBackdrop",

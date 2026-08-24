@@ -5,7 +5,8 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { confirm, prompt } from "../../lib/appDialog";
 import {
   ArrowDown,
   ArrowUp,
@@ -2414,8 +2415,11 @@ function DatabaseViewContent({
   ]);
 
   const renameLegacyConnection = useCallback(
-    (connection: DbConnectionConfig) => {
-      const nextName = window.prompt(t("database.renameConnectionPrompt"), connection.name)?.trim();
+    async (connection: DbConnectionConfig) => {
+      const nextName = await prompt(t("database.renameConnectionPrompt"), {
+        title: t("database.renameConnectionPrompt"),
+        defaultValue: connection.name,
+      });
       if (!nextName || nextName === connection.name) return;
       saveConnections(
         connections.map((item) => (item.id === connection.id ? { ...item, name: nextName } : item)),
@@ -2426,7 +2430,10 @@ function DatabaseViewContent({
 
   const renameDbxConnection = useCallback(
     async (connection: AeroricDbConnectionConfig) => {
-      const nextName = window.prompt(t("database.renameConnectionPrompt"), connection.name)?.trim();
+      const nextName = await prompt(t("database.renameConnectionPrompt"), {
+        title: t("database.renameConnectionPrompt"),
+        defaultValue: connection.name,
+      });
       if (!nextName || nextName === connection.name) return;
       const currentDbx =
         connection.dbx && typeof connection.dbx === "object"
@@ -2526,10 +2533,13 @@ function DatabaseViewContent({
 
   const moveDbxConnectionToGroup = useCallback(
     async (connection: AeroricDbConnectionConfig) => {
-      const nextGroup = window
-        .prompt(t("database.connectionGroupPrompt"), connection.connectionGroup ?? "")
-        ?.trim();
-      if (nextGroup === undefined) return;
+      // allowEmpty:清空输入就是"移出分组",不能和取消混为一谈。
+      const nextGroup = await prompt(t("database.connectionGroupPrompt"), {
+        title: t("database.moveToGroup"),
+        defaultValue: connection.connectionGroup ?? "",
+        allowEmpty: true,
+      });
+      if (nextGroup === null) return;
       await saveDbxConnectionMetadata(connection, { connectionGroup: nextGroup || null });
     },
     [saveDbxConnectionMetadata, t],
@@ -2537,7 +2547,10 @@ function DatabaseViewContent({
 
   const renameDbxConnectionGroup = useCallback(
     async (groupName: string) => {
-      const nextGroup = window.prompt(t("database.renameConnectionGroupPrompt"), groupName)?.trim();
+      const nextGroup = await prompt(t("database.renameConnectionGroupPrompt"), {
+        title: t("database.renameConnectionGroup"),
+        defaultValue: groupName,
+      });
       if (!nextGroup || nextGroup === groupName) return;
       setLoading(true);
       setError(null);
@@ -3236,9 +3249,10 @@ function DatabaseViewContent({
       if (action === "renameObject") {
         const objectType = dbxObjectRenameType(menu.object);
         if (!objectType || !canRenameDbxObject(connection, menu.object)) return;
-        const newName = window
-          .prompt(t("database.renameObjectNamePrompt"), menu.object.name)
-          ?.trim();
+        const newName = await prompt(t("database.renameObjectNamePrompt"), {
+          title: t("database.renameObjectNamePrompt"),
+          defaultValue: menu.object.name,
+        });
         if (!newName || newName === menu.object.name) return;
         setLoading(true);
         setError(null);
@@ -3402,9 +3416,10 @@ function DatabaseViewContent({
           menu.object.schema,
           dbxObjects,
         );
-        const targetName = window
-          .prompt(t("database.duplicateStructureNamePrompt"), defaultName)
-          ?.trim();
+        const targetName = await prompt(t("database.duplicateStructureNamePrompt"), {
+          title: t("database.duplicateStructureNamePrompt"),
+          defaultValue: defaultName,
+        });
         if (!targetName || targetName === menu.object.name) return;
         setLoading(true);
         setError(null);
@@ -4452,9 +4467,10 @@ function DatabaseViewContent({
         return;
       }
       if (action === "newGroup") {
-        const childName = window
-          .prompt(t("database.newConnectionGroupPrompt"), t("database.newConnectionGroupDefault"))
-          ?.trim();
+        const childName = await prompt(t("database.newConnectionGroupPrompt"), {
+          title: t("database.newConnectionGroupPrompt"),
+          defaultValue: t("database.newConnectionGroupDefault"),
+        });
         if (!childName) return;
         addExtraDbxConnectionGroup(`${menu.groupName}/${childName}`);
         return;
@@ -6874,15 +6890,18 @@ function DatabaseViewContent({
                         onChange={(event) => {
                           const val = event.currentTarget.value;
                           if (val === "custom") {
-                            const custom = window.prompt(
-                              t("database.gridCustomPageSize"),
-                              String(dbxGridPageSize),
-                            );
-                            if (custom) {
+                            // 应用内输入框是异步的,而 onChange 是同步回调 ——
+                            // 包一层 void async。
+                            void (async () => {
+                              const custom = await prompt(t("database.gridCustomPageSize"), {
+                                title: t("database.gridRowsPerPage"),
+                                defaultValue: String(dbxGridPageSize),
+                              });
+                              if (!custom) return;
                               const num = Number(custom);
                               if (Number.isFinite(num) && num >= 1 && num <= 10000)
                                 void changeDbxGridPageSize(num);
-                            }
+                            })();
                           } else {
                             void changeDbxGridPageSize(Number(val));
                           }

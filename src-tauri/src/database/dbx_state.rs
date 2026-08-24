@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use dbx_core::connection::AppState;
 use dbx_core::storage::Storage;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, Mutex, RwLock};
 
 use super::types::AeroricDbConnectionConfig;
 
@@ -11,6 +11,12 @@ pub(crate) struct DbxState {
     pub app_state: Arc<AppState>,
     pub connections: RwLock<HashMap<String, AeroricDbConnectionConfig>>,
     pub loaded_connections: RwLock<bool>,
+    /// 等待前端答复的生产库确认。key 是 request id,前端带着它回调
+    /// `respond_dbx_production_confirmation`。
+    ///
+    /// 挂在这里而不是 `AppState`:后者来自 dbx_core(path 依赖的外部 crate),
+    /// 不该为 Aeroric 的 UI 流程改它的形状。
+    pub pending_production_confirmations: Mutex<HashMap<String, oneshot::Sender<bool>>>,
 }
 
 impl DbxState {
@@ -33,6 +39,7 @@ impl DbxState {
             app_state,
             connections: RwLock::new(HashMap::new()),
             loaded_connections: RwLock::new(false),
+            pending_production_confirmations: Mutex::new(HashMap::new()),
         })
     }
 }

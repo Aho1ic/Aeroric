@@ -15,7 +15,7 @@ import {
 import type { LocalTarget, SshConnection, SshTarget, WslTarget } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }));
+vi.mock("../lib/appDialog", () => ({ confirm: vi.fn() }));
 
 class ResizeObserverMock {
   observe = vi.fn();

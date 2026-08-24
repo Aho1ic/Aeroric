@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { WslPanel, maskWslEnvironmentValue } from "../components/app-settings/WslPanel";
 import type {
@@ -14,7 +14,7 @@ import type {
 } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }));
+vi.mock("../lib/appDialog", () => ({ confirm: vi.fn() }));
 
 const status: WslStatus = {
   supported: true,

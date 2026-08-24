@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, prompt } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { DatabaseView } from "../components/database/DatabaseView";
 
@@ -12,9 +13,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: vi.fn(),
   open: vi.fn(),
   save: vi.fn(),
+}));
+
+vi.mock("../lib/appDialog", () => ({
+  confirm: vi.fn(),
+  prompt: vi.fn(),
 }));
 
 import { connection, dbxConnection, resetDatabaseViewMocks } from "./databaseViewTestUtils";
@@ -68,7 +73,7 @@ describe("DatabaseView object actions", () => {
 
   it("duplicates DBX table structure from the table context menu with SQL preview", async () => {
     const user = userEvent.setup();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce("users_archive");
+    vi.mocked(prompt).mockResolvedValueOnce("users_archive");
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -126,7 +131,10 @@ describe("DatabaseView object actions", () => {
 
     await user.click(screen.getByRole("menuitem", { name: "Duplicate structure" }));
 
-    expect(promptSpy).toHaveBeenCalledWith("New table name", "users_copy_2");
+    expect(prompt).toHaveBeenCalledWith("New table name", {
+      title: "New table name",
+      defaultValue: "users_copy_2",
+    });
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_build_duplicate_table_structure_sql", {
         options: {
@@ -154,7 +162,6 @@ describe("DatabaseView object actions", () => {
         sql: 'CREATE TABLE "public"."users_archive" (LIKE "public"."users" INCLUDING ALL);',
       }),
     });
-    promptSpy.mockRestore();
   });
 
   it("opens DBX view source from the view-specific Edit view menu item", async () => {
@@ -224,7 +231,7 @@ describe("DatabaseView object actions", () => {
 
   it("renames DBX table objects through dbx-core SQL preview", async () => {
     const user = userEvent.setup();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce("app_users");
+    vi.mocked(prompt).mockResolvedValueOnce("app_users");
     vi.mocked(confirm).mockResolvedValue(true);
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "db_load_connections") return Promise.resolve([]);
@@ -263,7 +270,10 @@ describe("DatabaseView object actions", () => {
     fireEvent.contextMenu(await screen.findByRole("button", { name: /^users\s+table$/i }));
     await user.click(screen.getByRole("menuitem", { name: "Rename" }));
 
-    expect(promptSpy).toHaveBeenCalledWith("New object name", "users");
+    expect(prompt).toHaveBeenCalledWith("New object name", {
+      title: "New object name",
+      defaultValue: "users",
+    });
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("dbx_build_rename_object_sql", {
         options: {
@@ -292,7 +302,6 @@ describe("DatabaseView object actions", () => {
         sql: 'ALTER TABLE "public"."users" RENAME TO "app_users";',
       }),
     });
-    promptSpy.mockRestore();
   });
 
   it("opens DBX routine source and uses routine-specific context menu actions", async () => {

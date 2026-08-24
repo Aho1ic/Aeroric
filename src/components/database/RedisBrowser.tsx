@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../lib/appDialog";
 import {
   Braces,
   Copy,

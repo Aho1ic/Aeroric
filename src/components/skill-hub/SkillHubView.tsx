@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../../lib/appDialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Settings as SettingsIcon,

@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../lib/appDialog";
 import { vi } from "vitest";
 import type { SshConnection } from "../types";
 

@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, prompt } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { DatabaseView } from "../components/database/DatabaseView";
 
@@ -12,9 +13,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: vi.fn(),
   open: vi.fn(),
   save: vi.fn(),
+}));
+
+vi.mock("../lib/appDialog", () => ({
+  confirm: vi.fn(),
+  prompt: vi.fn(),
 }));
 
 import {
@@ -1614,7 +1619,7 @@ describe("DatabaseView connection management", () => {
 
   it("pins and groups DBX connections from the sidebar context menu", async () => {
     const user = userEvent.setup();
-    const promptSpy = vi.spyOn(window, "prompt");
+    vi.mocked(prompt).mockResolvedValue(null);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -1671,7 +1676,7 @@ describe("DatabaseView connection management", () => {
     await user.click(screen.getByRole("menuitem", { name: "Copy name" }));
     expect(writeText).toHaveBeenCalledWith("Analytics");
 
-    promptSpy.mockReturnValueOnce("Archive");
+    vi.mocked(prompt).mockResolvedValueOnce("Archive");
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Analytics$/i }));
     await user.click(screen.getByRole("menuitem", { name: "New group" }));
     expect(await screen.findByRole("button", { name: /Analytics\/Archive/i })).toBeInTheDocument();
@@ -1698,7 +1703,7 @@ describe("DatabaseView connection management", () => {
       expect(savedReportsConnection()).toEqual(expect.objectContaining({ pinned: true }));
     });
 
-    promptSpy.mockReturnValueOnce("Warehouse");
+    vi.mocked(prompt).mockResolvedValueOnce("Warehouse");
     fireEvent.contextMenu(await screen.findByRole("button", { name: /Reports DB/i }));
     await user.click(screen.getByRole("menuitem", { name: "Move to group" }));
     await waitFor(() => {
@@ -1708,7 +1713,7 @@ describe("DatabaseView connection management", () => {
     });
     expect(await screen.findByRole("button", { name: /Warehouse/i })).toBeInTheDocument();
 
-    promptSpy.mockReturnValueOnce("Ops");
+    vi.mocked(prompt).mockResolvedValueOnce("Ops");
     fireEvent.contextMenu(screen.getByRole("button", { name: /Warehouse/i }));
     await user.click(screen.getByRole("menuitem", { name: "Rename group" }));
     await waitFor(() => {
@@ -1730,6 +1735,5 @@ describe("DatabaseView connection management", () => {
         cancelLabel: "Cancel",
       },
     );
-    promptSpy.mockRestore();
   });
 });

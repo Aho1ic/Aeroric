@@ -1,12 +1,34 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use dbx_core::db;
 use dbx_core::query::QueryExecutionOptions;
 use dbx_core::sql_risk::SqlRisk;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::oneshot;
 
 use super::connections;
 use super::dbx_state::DbxState;
+
+/// 生产库确认请求的事件名。前端在 `src/App.tsx` 里监听。
+const PRODUCTION_CONFIRM_EVENT: &str = "dbx-production-confirm-requested";
+
+/// 等前端答复的上限。取值偏宽松 —— 这是要人读 SQL 再决定的确认框,
+/// 但不能没有上限,否则前端不答会把查询永久挂住。
+const PRODUCTION_CONFIRM_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// 发给前端的生产库确认请求。文案由前端 i18n 拼,这里只给事实。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductionConfirmRequest {
+    request_id: String,
+    /// 连接名(已过滤控制字符)。
+    connection: String,
+    /// 被判定为生产库的库名;空数组表示整个连接都是生产环境。
+    databases: Vec<String>,
+    sql: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,40 +264,93 @@ pub(crate) async fn enforce_production_sql_confirmation(
 
     let connection = safe_dialog_label(&config.name);
     let databases = if assessment.production_databases.is_empty() {
-        "entire connection / 整个连接".to_string()
+        Vec::new()
     } else {
         assessment
             .production_databases
             .iter()
             .map(|database| safe_dialog_label(database))
             .collect::<Vec<_>>()
-            .join(", ")
     };
-    let message = format!(
-        "This statement can modify a protected production database.\n\
-         Connection: {connection}\n\
-         Database: {databases}\n\n\
-         此语句可能修改受保护的生产数据库。确认继续执行吗？"
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (responder, response) = oneshot::channel::<bool>();
+    state
+        .pending_production_confirmations
+        .lock()
+        .await
+        .insert(request_id.clone(), responder);
+
+    // 发结构化字段而不是拼好的提示语:文案交给前端 i18n,不再在 Rust 里
+    // 硬编码中英混排。sql 原样带上——前端弹窗要把它显示出来给人核对。
+    let emitted = app.emit(
+        PRODUCTION_CONFIRM_EVENT,
+        ProductionConfirmRequest {
+            request_id: request_id.clone(),
+            connection,
+            databases,
+            sql: sql.to_string(),
+        },
     );
-    let app = app.clone();
-    let approved = tokio::task::spawn_blocking(move || {
-        app.dialog()
-            .message(message)
-            .title("Production database warning / 生产数据库警告")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Execute / 执行".to_string(),
-                "Cancel / 取消".to_string(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|error| format!("Production confirmation dialog failed: {error}"))?;
+    if let Err(error) = emitted {
+        state
+            .pending_production_confirmations
+            .lock()
+            .await
+            .remove(&request_id);
+        return Err(format!("Production confirmation dispatch failed: {error}"));
+    }
+
+    // 超时是必需的:前端窗口关掉、事件监听没挂上、或渲染进程崩了,
+    // 都会让这个 await 永久挂住,连带把查询卡死。超时按拒绝处理。
+    let approved = match tokio::time::timeout(PRODUCTION_CONFIRM_TIMEOUT, response).await {
+        Ok(Ok(approved)) => approved,
+        // sender 被 drop(前端没答就重启了之类)同样按拒绝处理。
+        Ok(Err(_)) | Err(_) => false,
+    };
+
+    // 无论走哪条路都要清理条目,否则 map 会随失败的确认无限增长。
+    state
+        .pending_production_confirmations
+        .lock()
+        .await
+        .remove(&request_id);
+
     if approved {
         Ok(())
     } else {
         Err("Production database operation cancelled.".to_string())
     }
+}
+
+/// 取出并唤醒等待中的确认。抽成独立函数是为了能单测 —— `State<'_, DbxState>`
+/// 在测试里构造不出来,而这里的取出/唤醒/未知 id 三条分支才是要守住的逻辑。
+pub(crate) fn resolve_pending_production_confirmation(
+    pending: &mut HashMap<String, oneshot::Sender<bool>>,
+    request_id: &str,
+    approved: bool,
+) -> Result<(), String> {
+    match pending.remove(request_id) {
+        // send 失败只意味着等待方已经超时走了,不是调用方的错。
+        Some(responder) => {
+            let _ = responder.send(approved);
+            Ok(())
+        }
+        None => Err(format!(
+            "No pending production confirmation for request {request_id}"
+        )),
+    }
+}
+
+/// 前端答复生产库确认。`approved` 为 false 时上面的 await 会返回拒绝。
+#[tauri::command]
+pub async fn respond_dbx_production_confirmation(
+    state: State<'_, DbxState>,
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let mut pending = state.pending_production_confirmations.lock().await;
+    resolve_pending_production_confirmation(&mut pending, &request_id, approved)
 }
 
 #[tauri::command]
@@ -795,5 +870,81 @@ mod tests {
         .unwrap();
 
         assert_eq!(where_input, "\"id\" = 42");
+    }
+
+    /* 生产库确认的往返记账。
+     *
+     * 这条闸是后端边界:前端即便被 devtools 直接驱动 IPC 也绕不过它。
+     * 弹窗表面从原生 MessageBox 换成应用内弹窗后,「谁来唤醒等待方」
+     * 变成了一条 IPC 回调,下面守住它的三条分支。 */
+
+    #[tokio::test]
+    async fn answering_a_pending_confirmation_wakes_the_waiter() {
+        let mut pending = HashMap::new();
+        let (sender, receiver) = oneshot::channel::<bool>();
+        pending.insert("req-1".to_string(), sender);
+
+        resolve_pending_production_confirmation(&mut pending, "req-1", true).unwrap();
+
+        assert!(receiver.await.unwrap());
+        // 答复过的条目必须摘掉,否则同一个 id 能被答第二次。
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejecting_forwards_false_to_the_waiter() {
+        let mut pending = HashMap::new();
+        let (sender, receiver) = oneshot::channel::<bool>();
+        pending.insert("req-2".to_string(), sender);
+
+        resolve_pending_production_confirmation(&mut pending, "req-2", false).unwrap();
+
+        assert!(!receiver.await.unwrap());
+    }
+
+    #[test]
+    fn answering_an_unknown_request_is_an_error() {
+        let mut pending = HashMap::new();
+
+        let error = resolve_pending_production_confirmation(&mut pending, "nope", true)
+            .expect_err("unknown request id must not silently succeed");
+
+        assert!(error.contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn answering_after_the_waiter_gave_up_is_not_an_error() {
+        let mut pending = HashMap::new();
+        let (sender, receiver) = oneshot::channel::<bool>();
+        pending.insert("req-3".to_string(), sender);
+        // 等待方超时走了 —— send 会失败,但那不是前端的错,不该报给调用方。
+        drop(receiver);
+
+        resolve_pending_production_confirmation(&mut pending, "req-3", true).unwrap();
+    }
+
+    #[test]
+    fn confirm_request_payload_is_camel_case_for_the_frontend() {
+        let payload = ProductionConfirmRequest {
+            request_id: "req-4".to_string(),
+            connection: "prod".to_string(),
+            databases: vec!["orders".to_string()],
+            sql: "DELETE FROM orders".to_string(),
+        };
+
+        let json = serde_json::to_value(&payload).unwrap();
+
+        // 前端按 requestId 读;写成 request_id 会静默取到 undefined,
+        // 于是永远回不了这条确认,查询卡到超时。
+        assert_eq!(json["requestId"], "req-4");
+        assert_eq!(json["databases"][0], "orders");
+        assert_eq!(json["sql"], "DELETE FROM orders");
+    }
+
+    #[test]
+    fn dialog_labels_drop_control_characters() {
+        // 连接名/库名会原样进弹窗文案,控制字符要先滤掉。
+        assert_eq!(safe_dialog_label("prod\u{0007}db"), "proddb");
+        assert_eq!(safe_dialog_label("orders\npayments"), "orderspayments");
     }
 }

@@ -5,7 +5,7 @@ import {
   useCancellableInvoke,
 } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../lib/appDialog";
 import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, RotateCcw, Search, X } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";

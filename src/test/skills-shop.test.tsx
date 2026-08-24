@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
+vi.mock("../lib/appDialog", () => ({
   confirm: confirmMock,
 }));
 

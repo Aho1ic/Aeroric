@@ -21,6 +21,7 @@
   --z-overlay: 3000;
   --z-overlay-nested: 3100;
   --z-overlay-nested-deep: 3200;
+  --z-overlay-confirm: 3300;
   --z-popover: 4200;
   --z-popover-nested: 4300;
   --z-context-menu-backdrop: 4399;

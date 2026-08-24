@@ -811,6 +811,7 @@ export const zh: Record<string, string> = {
   "common.saving": "保存中...",
   "common.saved": "已保存",
   "common.cancel": "取消",
+  "common.confirm": "确认",
   "common.close": "关闭",
   "common.clear": "清除",
   "common.refresh": "刷新",

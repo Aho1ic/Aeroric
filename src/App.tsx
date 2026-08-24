@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm } from "./lib/appDialog";
 import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -381,12 +382,15 @@ function App() {
   const showToastRef = useRef(showToast);
   const formatSaveProjectsErrorRef = useRef(formatSaveProjectsError);
   const formatSaveTasksErrorRef = useRef(formatSaveTasksError);
+  // 生产库确认的文案要用最新语言,而挂 listener 的那个 effect 是 [] deps。
+  const tRef = useRef(t);
   useEffect(() => {
     agentOptionsRef.current = agentOptions;
     showToastRef.current = showToast;
     formatSaveProjectsErrorRef.current = formatSaveProjectsError;
     formatSaveTasksErrorRef.current = formatSaveTasksError;
-  }, [agentOptions, showToast, formatSaveProjectsError, formatSaveTasksError]);
+    tRef.current = t;
+  }, [agentOptions, showToast, formatSaveProjectsError, formatSaveTasksError, t]);
 
   const persistTasksForHook = useCallback(
     (projectId: string, allTasks: Task[]) => {
@@ -827,6 +831,46 @@ function App() {
       const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
       showToastRef.current(msg, "error");
     });
+    // 生产库写操作的后端闸。Rust 侧把执行挂住等这条答复(见
+    // src-tauri/src/database/query.rs 的 enforce_production_sql_confirmation),
+    // 所以无论确认、取消还是弹窗本身出错,都必须回一次 —— 不回会让查询
+    // 一直卡到后端超时。
+    const p18 = listen<{
+      requestId: string;
+      connection: string;
+      databases: string[];
+      sql: string;
+    }>("dbx-production-confirm-requested", (e) => {
+      const { requestId, connection, databases, sql } = e.payload;
+      void (async () => {
+        const translate = tRef.current;
+        let approved = false;
+        try {
+          const scope =
+            databases.length > 0
+              ? databases.join(", ")
+              : translate("database.productionEntireConnection");
+          approved = await confirm(
+            translate("database.productionSqlWarning", { connection, databases: scope, sql }),
+            {
+              title: translate("database.productionWarningTitle"),
+              kind: "warning",
+              okLabel: translate("database.execute"),
+              cancelLabel: translate("common.cancel"),
+            },
+          );
+        } catch (error) {
+          // 弹窗自身出错时保持 approved=false(拒绝)并显式吞掉:不吞会冒成
+          // unhandled rejection,而这里已经没有人 await 这个 async 了。
+          console.warn("production confirmation dialog failed", error);
+        }
+        try {
+          await invoke("respond_dbx_production_confirmation", { requestId, approved });
+        } catch (error) {
+          console.warn("failed to answer production confirmation", error);
+        }
+      })();
+    });
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
@@ -845,6 +889,7 @@ function App() {
       p15.then((fn) => fn());
       p16.then((fn) => fn());
       p17.then((fn) => fn());
+      p18.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

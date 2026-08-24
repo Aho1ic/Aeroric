@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { RemoteAccessPanel } from "../components/app-settings/RemoteAccessPanel";
 
@@ -23,7 +23,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
+vi.mock("../lib/appDialog", () => ({
   confirm: vi.fn(),
 }));
 

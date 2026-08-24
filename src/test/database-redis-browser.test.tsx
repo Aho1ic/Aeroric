@@ -2,12 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { RedisBrowser } from "../components/database/RedisBrowser";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }));
+vi.mock("../lib/appDialog", () => ({ confirm: vi.fn() }));
 
 describe("RedisBrowser", () => {
   beforeEach(() => {

@@ -20,9 +20,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(() => Promise.resolve(null)),
   save: vi.fn(() => Promise.resolve(null)),
-  confirm: vi.fn(() => Promise.resolve(false)),
   message: vi.fn(() => Promise.resolve()),
   ask: vi.fn(() => Promise.resolve(false)),
+}));
+
+vi.mock("../lib/appDialog", () => ({
+  confirm: vi.fn(() => Promise.resolve(false)),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({

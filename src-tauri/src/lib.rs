@@ -711,6 +711,7 @@ pub fn run() {
             database::schema::dbx_get_object_source,
             database::query::dbx_assess_production_sql,
             database::query::dbx_assess_production_target,
+            database::query::respond_dbx_production_confirmation,
             database::query::dbx_execute_query,
             database::query::dbx_execute_multi,
             database::query::dbx_cancel_query,

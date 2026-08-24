@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { AppDialogHost } from "./components/AppDialogHost";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./hooks/useNotifications";
 import { AgentVersionsProvider } from "./hooks/useAgentVersions";
@@ -75,6 +76,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
             </AgentVersionsProvider>
           </NotificationsProvider>
         </ToastProvider>
+        {/* 挂在 I18nProvider 内(要用 t() 取默认按钮文案),但在 App 之外 ——
+            它自己 createPortal 到 body,不参与 App 的布局。 */}
+        <AppDialogHost />
       </I18nProvider>
     </ErrorBoundary>
   </React.StrictMode>,

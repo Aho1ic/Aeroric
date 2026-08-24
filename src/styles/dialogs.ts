@@ -14,6 +14,19 @@ export const dialogs = {
     backdropFilter: "blur(10px) saturate(1.08)",
     WebkitBackdropFilter: "blur(10px) saturate(1.08)",
   },
+  /* 应用内确认框的遮罩。与 modalOverlay 同款,只抬到 overlayConfirm 层 ——
+   * 确认框可能从最深那层嵌套模态里弹出,必须盖在它之上。 */
+  appConfirmOverlay: {
+    position: "fixed" as const,
+    inset: 0,
+    background: "var(--overlay-bg)",
+    zIndex: zLayers.overlayConfirm,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backdropFilter: "blur(10px) saturate(1.08)",
+    WebkitBackdropFilter: "blur(10px) saturate(1.08)",
+  },
   modalBox: {
     width: "min(920px, calc(100vw - 48px), calc(133.333vh - 128px))",
     aspectRatio: "4 / 3",

@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
+vi.mock("../lib/appDialog", () => ({
   confirm: vi.fn(),
 }));
 

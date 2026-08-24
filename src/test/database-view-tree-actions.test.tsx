@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, prompt } from "../lib/appDialog";
 import { I18nProvider } from "../i18n";
 import { DatabaseView } from "../components/database/DatabaseView";
 
@@ -12,9 +13,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: vi.fn(),
   open: vi.fn(),
   save: vi.fn(),
+}));
+
+vi.mock("../lib/appDialog", () => ({
+  confirm: vi.fn(),
+  prompt: vi.fn(),
 }));
 
 import {
@@ -889,7 +894,7 @@ describe("DatabaseView tree actions", () => {
 
   it("supports DBX tree keyboard shortcuts for copy, refresh, rename, and delete", async () => {
     const user = userEvent.setup();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Renamed Source");
+    vi.mocked(prompt).mockResolvedValue("Renamed Source");
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -952,7 +957,10 @@ describe("DatabaseView tree actions", () => {
         connection: expect.objectContaining({ id: "dbx-source", name: "Renamed Source" }),
       });
     });
-    expect(promptSpy).toHaveBeenCalledWith("Rename connection", "DBX Source");
+    expect(prompt).toHaveBeenCalledWith("Rename connection", {
+      title: "Rename connection",
+      defaultValue: "DBX Source",
+    });
 
     fireEvent.keyDown(databaseButton, { key: "Delete" });
     await waitFor(() => {
@@ -966,7 +974,6 @@ describe("DatabaseView tree actions", () => {
       okLabel: "Drop database",
       cancelLabel: "Cancel",
     });
-    promptSpy.mockRestore();
   });
 
   it("sets a DBX database node as the default database", async () => {
