@@ -409,6 +409,8 @@ export interface AgentSetupDraft {
   models: string[];
   enable_1m_context: boolean;
   enable_chat_completions_proxy: boolean;
+  /** 空串表示自动探测(python3 → python → py);填了就固定用这一个,不回退。 */
+  bridge_python_path?: string;
   dsh_api_protocol?: DshApiProtocol;
   proxy_enabled?: boolean;
 }

@@ -56,8 +56,16 @@ const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
 const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=7";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
 const CLAUDE_CLI_RESOLUTION_MARKER: &str = "# AERORIC_CLAUDE_CLI_RESOLUTION=1";
-const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=5";
-const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=5";
+// v6:包装脚本追加 Aeroric 的 codex hook 片段(自定义 Agent 有隔离 CODEX_HOME,
+// 读不到 `~/.codex/config.toml` 里的 hook 块)。bump 后启动期自动重刷存量脚本。
+const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=6";
+// v7:bridge 启动前先探测出一个真正可用的 Python 3.9+(Windows 的 Microsoft Store
+// 别名桩会被 Get-Command 找到但一运行就退出),等待窗口放宽到 20s 并在失败时把
+// bridge 日志尾部带进报错。
+// v8:支持在设置里固定解释器路径(`bridge_python_path`),且 `--version`/`--help`
+// 探测直接短路不再拉起 bridge——桌面端的版本探测就是用 `--version` 跑这个脚本,
+// 旧结构会让没装 Python 的机器连版本都测不出来。
+const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=8";
 const LOCAL_CHAT_PROXY_BYPASS: &str = "127.0.0.1,localhost,::1";
 const CODEX_CHAT_PROXY_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -94,6 +102,11 @@ pub struct CustomAgentProfile {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    /// Chat Completions bridge 使用的 Python 解释器。为空表示自动探测
+    /// (python3 → python → py)。指定后不再回退自动探测:静默换用另一个
+    /// Python 比直接报错更难排查。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bridge_python_path: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub username: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -129,6 +142,9 @@ pub struct AgentSetupDraft {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    /// 见 `CustomAgentProfile::bridge_python_path`。
+    #[serde(default)]
+    pub bridge_python_path: String,
     #[serde(default)]
     pub dsh_api_protocol: String,
     #[serde(default)]
@@ -191,6 +207,10 @@ pub struct AgentConfigBundleAgent {
     pub enable_1m_context: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
+    /// 见 `CustomAgentProfile::bridge_python_path`。导出/导入配置包时一并带走,
+    /// 但换机后路径通常不成立,导入侧会重新预检。
+    #[serde(default)]
+    pub bridge_python_path: String,
     /// DSH keeps its reasoning default in Aeroric settings instead of settings.yaml.
     /// Optional so version-1 bundles written before DSH support remain importable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -746,6 +766,7 @@ fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomA
         base_url: normalize_base_url(&profile.base_url),
         api_key: profile.api_key.trim().to_string(),
         models: normalize_model_list(profile.models),
+        bridge_python_path: profile.bridge_python_path.trim().to_string(),
         enable_1m_context: family == AgentFamily::Claude && profile.enable_1m_context,
         enable_chat_completions_proxy: family == AgentFamily::Codex
             && profile.enable_chat_completions_proxy,
@@ -2605,7 +2626,8 @@ fn upsert_custom_agent_profile_unlocked(
             && (existing.base_url != profile.base_url
                 || existing.api_key != profile.api_key
                 || existing.models != profile.models
-                || existing.enable_chat_completions_proxy != profile.enable_chat_completions_proxy)
+                || existing.enable_chat_completions_proxy != profile.enable_chat_completions_proxy
+                || existing.bridge_python_path != profile.bridge_python_path)
     });
     if generated_settings_changed {
         let draft = AgentSetupDraft {
@@ -2618,6 +2640,7 @@ fn upsert_custom_agent_profile_unlocked(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            bridge_python_path: profile.bridge_python_path.clone(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -2789,6 +2812,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             models: normalize_setup_models(&draft),
             enable_1m_context: draft.enable_1m_context,
             enable_chat_completions_proxy: draft.enable_chat_completions_proxy,
+            bridge_python_path: draft.bridge_python_path.trim().to_string(),
             username: String::new(),
             password: String::new(),
         };
@@ -3215,6 +3239,7 @@ pub async fn update_custom_agent_models(
             models: models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            bridge_python_path: profile.bridge_python_path.clone(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -3250,11 +3275,92 @@ pub async fn update_custom_agent_models(
     Ok(normalized)
 }
 
+/// Chat Completions bridge 的 Python 预检结果,给设置界面用。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ChatBridgePythonStatus {
+    /// 这条路径/自动探测是否可用。
+    pub usable: bool,
+    /// 实际会被使用的解释器路径;不可用时为空。
+    pub program: String,
+    /// 探到的版本,形如 `3.12`。
+    pub version: String,
+    /// 是否来自用户显式配置(false 表示自动探测的结果)。
+    pub configured: bool,
+    /// 不可用的原因。
+    pub failure: String,
+    /// 自动探测时逐个候选的失败原因,用于告诉用户"查了哪些、各自为什么不行"。
+    pub checked: Vec<String>,
+}
+
+/// 预检 bridge 要用的 Python。
+///
+/// 必须真的执行解释器取版本号:Windows 预置的 Microsoft Store 别名桩存在、能被
+/// `where` 找到,但一运行就跳商店并以 9009 退出。只判断文件存在或命令可解析,
+/// 会把这种机器报成"可用",于是问题被推迟到启动终端时才炸。
+#[tauri::command]
+pub async fn probe_chat_bridge_python(
+    bridge_python_path: Option<String>,
+) -> Result<ChatBridgePythonStatus, String> {
+    let requested = bridge_python_path.unwrap_or_default().trim().to_string();
+    tokio::task::spawn_blocking(move || {
+        if requested.is_empty() {
+            return match resolve_chat_bridge_python() {
+                Ok(probe) => ChatBridgePythonStatus {
+                    usable: true,
+                    program: probe.program,
+                    version: probe.version.unwrap_or_default(),
+                    configured: false,
+                    failure: String::new(),
+                    checked: Vec::new(),
+                },
+                Err(failures) => ChatBridgePythonStatus {
+                    usable: false,
+                    program: String::new(),
+                    version: String::new(),
+                    configured: false,
+                    failure: String::new(),
+                    checked: failures
+                        .into_iter()
+                        .map(|probe| {
+                            format!(
+                                "{} -> {}",
+                                probe.program,
+                                probe.failure.unwrap_or_else(|| "unknown".to_string())
+                            )
+                        })
+                        .collect(),
+                },
+            };
+        }
+        let probe = probe_chat_bridge_python_program(&requested);
+        ChatBridgePythonStatus {
+            usable: probe.is_usable(),
+            program: if probe.is_usable() {
+                probe.program.clone()
+            } else {
+                String::new()
+            },
+            version: probe.version.clone().unwrap_or_default(),
+            configured: true,
+            failure: probe.failure.clone().unwrap_or_default(),
+            checked: Vec::new(),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// 开关 bridge,并可同时改解释器路径。
+///
+/// `bridge_python_path` 为 `None` 表示"这次不动解释器设置",`Some("")` 表示显式清空
+/// 回自动探测——两者语义不同,不能合并成一个空串。
 #[tauri::command]
 pub async fn update_custom_agent_chat_completions_proxy(
     id: String,
     enabled: bool,
+    bridge_python_path: Option<String>,
 ) -> Result<AppSettings, String> {
+    let bridge_python_path = bridge_python_path.map(|path| path.trim().to_string());
     let normalized = tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
@@ -3289,16 +3395,30 @@ pub async fn update_custom_agent_chat_completions_proxy(
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: enabled,
+            bridge_python_path: bridge_python_path
+                .clone()
+                .unwrap_or_else(|| profile.bridge_python_path.clone()),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
+        // 显式指定了解释器就必须当场验证。放进脚本再让用户去启动终端时才发现问题,
+        // 正是这次要消掉的那类反馈延迟。
+        if enabled && !draft.bridge_python_path.is_empty() {
+            let probe = probe_chat_bridge_python_program(&draft.bridge_python_path);
+            if let Some(failure) = probe.failure {
+                return Err(format!(
+                    "This Python cannot run the Chat Completions bridge: {failure}"
+                ));
+            }
+        }
         let script = build_codex_agent_script(&draft);
         let script_path = normalize_config_path(profile.path.clone());
         let path =
             write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
         profile.path = path.to_string_lossy().into_owned();
         profile.enable_chat_completions_proxy = enabled;
+        profile.bridge_python_path = draft.bridge_python_path.clone();
 
         let dir = aeroric_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -3351,6 +3471,7 @@ pub async fn update_custom_agent_context(
             models: profile.models.clone(),
             enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            bridge_python_path: profile.bridge_python_path.clone(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -4413,6 +4534,7 @@ mod tests {
             models: vec!["model".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         }
@@ -4489,6 +4611,7 @@ mod tests {
                 models: vec!["claude-opus".to_string()],
                 enable_1m_context: true,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 reasoning_effort: None,
             },
         )
@@ -4654,6 +4777,7 @@ mod tests {
                     models: Vec::new(),
                     enable_1m_context: false,
                     enable_chat_completions_proxy: false,
+                    bridge_python_path: String::new(),
                     username: String::new(),
                     password: String::new(),
                 },
@@ -4669,6 +4793,7 @@ mod tests {
                     models: Vec::new(),
                     enable_1m_context: false,
                     enable_chat_completions_proxy: false,
+                    bridge_python_path: String::new(),
                     username: String::new(),
                     password: String::new(),
                 },
@@ -4704,6 +4829,7 @@ mod tests {
                 models: Vec::new(),
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],
@@ -4750,6 +4876,7 @@ mod tests {
                 models: Vec::new(),
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: "alice".to_string(),
                 password: "secret".to_string(),
             }],

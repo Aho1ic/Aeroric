@@ -5,6 +5,7 @@ import { Check, Download, Eye, EyeOff, RefreshCw, Trash2, Upload, X, Zap } from 
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
+import { BridgePythonField } from "./BridgePythonField";
 import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -119,6 +120,8 @@ export function AgentDetailModal({
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [originalEnable1mContext, setOriginalEnable1mContext] = useState(false);
   const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
+  const [bridgePythonPath, setBridgePythonPath] = useState("");
+  const [originalBridgePythonPath, setOriginalBridgePythonPath] = useState("");
   const [originalEnableChatCompletionsProxy, setOriginalEnableChatCompletionsProxy] =
     useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort | null>(null);
@@ -223,6 +226,9 @@ export function AgentDetailModal({
         const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
         setEnableChatCompletionsProxy(proxyEnabled);
         setOriginalEnableChatCompletionsProxy(proxyEnabled);
+        const pinnedPython = profile?.bridge_python_path ?? "";
+        setBridgePythonPath(pinnedPython);
+        setOriginalBridgePythonPath(pinnedPython);
         setBaseUrl(profile?.base_url ?? "");
         setOriginalBaseUrl(profile?.base_url ?? "");
         setApiKey(profile?.api_key ?? "");
@@ -235,6 +241,8 @@ export function AgentDetailModal({
       setOriginalEnable1mContext(false);
       setEnableChatCompletionsProxy(false);
       setOriginalEnableChatCompletionsProxy(false);
+      setBridgePythonPath("");
+      setOriginalBridgePythonPath("");
       const creds = loadedSettings.builtin_agent_credentials?.[agentKey];
       const savedModels = normalizeModels(creds?.models ?? []);
       setBaseUrl(creds?.base_url ?? "");
@@ -337,6 +345,9 @@ export function AgentDetailModal({
           const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
           setEnableChatCompletionsProxy(proxyEnabled);
           setOriginalEnableChatCompletionsProxy(proxyEnabled);
+          const pinnedPython = profile?.bridge_python_path ?? "";
+          setBridgePythonPath(pinnedPython);
+          setOriginalBridgePythonPath(pinnedPython);
         }
       }
       setTransferMessage(t("appSettings.agentConfigImported"));
@@ -431,8 +442,9 @@ export function AgentDetailModal({
     Boolean(customProfile && option.family === "claude") &&
     enable1mContext !== originalEnable1mContext;
   const canSaveChatCompletionsProxy =
-    Boolean(customProfile?.codex_like) &&
-    enableChatCompletionsProxy !== originalEnableChatCompletionsProxy;
+    (Boolean(customProfile?.codex_like) &&
+      enableChatCompletionsProxy !== originalEnableChatCompletionsProxy) ||
+    bridgePythonPath.trim() !== originalBridgePythonPath.trim();
   const canDetectModels = isBuiltIn || agentIsDsh || Boolean(baseUrl.trim() && apiKey.trim());
   const isCredsDirty = baseUrl !== originalBaseUrl || apiKey !== originalApiKey;
   const hasAnyChanges =
@@ -512,12 +524,16 @@ export function AgentDetailModal({
         }
       }
 
-      if (canSaveChatCompletionsProxy && !isCredsDirty) {
+      const isBridgePythonDirty = bridgePythonPath.trim() !== originalBridgePythonPath.trim();
+      // `update_custom_agent_access` 带不了解释器路径,只有这个命令能把它落盘。
+      // 所以路径脏了就必须走这条分支,即使凭据也脏。
+      if (canSaveChatCompletionsProxy && (!isCredsDirty || isBridgePythonDirty)) {
         const nextSettings = await invoke<AppSettings>(
           "update_custom_agent_chat_completions_proxy",
           {
             id: agentKey,
             enabled: enableChatCompletionsProxy,
+            bridgePythonPath: bridgePythonPath.trim(),
           },
         );
         const profile =
@@ -526,6 +542,9 @@ export function AgentDetailModal({
         const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
         setEnableChatCompletionsProxy(proxyEnabled);
         setOriginalEnableChatCompletionsProxy(proxyEnabled);
+        const pinnedPython = profile?.bridge_python_path ?? "";
+        setBridgePythonPath(pinnedPython);
+        setOriginalBridgePythonPath(pinnedPython);
       } else if (canSaveChatCompletionsProxy) {
         setOriginalEnableChatCompletionsProxy(enableChatCompletionsProxy);
       }
@@ -1037,6 +1056,16 @@ export function AgentDetailModal({
                             </span>
                           </span>
                         </label>
+                      </div>
+                    )}
+
+                    {deletable && customProfile?.codex_like && enableChatCompletionsProxy && (
+                      <div style={{ marginBottom: 12 }}>
+                        <BridgePythonField
+                          value={bridgePythonPath}
+                          onChange={setBridgePythonPath}
+                          autoProbe
+                        />
                       </div>
                     )}
 

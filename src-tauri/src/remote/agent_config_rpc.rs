@@ -18,6 +18,9 @@ const MAX_BASE_URL_LEN: usize = 512;
 const MAX_API_KEY_LEN: usize = 512;
 const MAX_MODELS: usize = 64;
 const MAX_MODEL_LEN: usize = 128;
+/// 解释器路径上限。Windows 长路径可达 32767,但这里是人工填写的可执行文件路径,
+/// 1024 足够,同时挡住畸形超长输入。
+const MAX_BRIDGE_PYTHON_PATH_LEN: usize = 1024;
 
 fn notify_settings_changed<R: Runtime>(app: &AppHandle<R>) {
     // 配置已经原子落盘；通知失败不应让远端误以为保存失败并重复提交。
@@ -336,6 +339,8 @@ pub(crate) async fn agent_config_create<R: Runtime>(
         enable_1m_context: bool_param(&params, "enable1mContext")?.unwrap_or(false),
         enable_chat_completions_proxy: bool_param(&params, "enableChatCompletionsProxy")?
             .unwrap_or(false),
+        bridge_python_path: text_param(&params, "bridgePythonPath", MAX_BRIDGE_PYTHON_PATH_LEN)?
+            .unwrap_or_default(),
         dsh_api_protocol: text_param(&params, "apiProtocol", 64)?.unwrap_or_default(),
         proxy_enabled: bool_param(&params, "proxyEnabled")?.unwrap_or(false),
     };
@@ -401,6 +406,7 @@ mod tests {
             models: vec!["model".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         };
@@ -424,6 +430,7 @@ mod tests {
             models: vec!["deepseek-v4-pro".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         };

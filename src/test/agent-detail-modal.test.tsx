@@ -372,4 +372,108 @@ describe("Agent detail modal", () => {
       'model_reasoning_effort = "high"',
     );
   });
+
+  /// `update_custom_agent_access` 参数里没有解释器路径,只有
+  /// `update_custom_agent_chat_completions_proxy` 能把它落盘。所以凭据和路径同时改动时
+  /// 两条命令都得发,否则用户填的 Python 会被静默丢掉。
+  it("persists the pinned bridge Python even when credentials changed too", async () => {
+    const proxyProfile: CustomAgentProfile = {
+      ...customProfile,
+      enable_chat_completions_proxy: true,
+      bridge_python_path: "",
+    };
+    const proxySettings: AppSettings = { ...baseSettings, custom_agents: [proxyProfile] };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_agent_config_file") return Promise.resolve("#!/bin/sh\n");
+      if (command === "load_app_settings") return Promise.resolve(proxySettings);
+      if (command === "probe_chat_bridge_python") {
+        return Promise.resolve({
+          usable: true,
+          program: "/opt/miniconda3/bin/python3",
+          version: "3.12",
+          configured: true,
+          failure: "",
+          checked: [],
+        });
+      }
+      if (command === "update_custom_agent_chat_completions_proxy") {
+        return Promise.resolve({
+          ...proxySettings,
+          custom_agents: [{ ...proxyProfile, bridge_python_path: "/opt/miniconda3/bin/python3" }],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <TestProviders>
+        <AgentDetailModal
+          option={customOption}
+          themeVariant="light"
+          logo="/test-logo.svg"
+          settings={proxySettings}
+          onClose={vi.fn()}
+        />
+      </TestProviders>,
+    );
+
+    const pythonInput = await screen.findByLabelText("桥接使用的 Python");
+    await user.type(pythonInput, "/opt/miniconda3/bin/python3");
+    const apiKeyInput = screen.getByPlaceholderText("sk-...");
+    await user.clear(apiKeyInput);
+    await user.type(apiKeyInput, "sk-rotated");
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_chat_completions_proxy", {
+        id: "liwan",
+        enabled: true,
+        bridgePythonPath: "/opt/miniconda3/bin/python3",
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      "update_custom_agent_access",
+      expect.objectContaining({ id: "liwan", apiKey: "sk-rotated" }),
+    );
+  });
+
+  /// 关掉桥接时解释器输入必须一起消失:留着会让用户以为还生效。
+  it("hides the bridge Python field when the bridge is off", async () => {
+    const proxySettings: AppSettings = {
+      ...baseSettings,
+      custom_agents: [{ ...customProfile, enable_chat_completions_proxy: true }],
+    };
+    const user = userEvent.setup();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "read_agent_config_file") return Promise.resolve("#!/bin/sh\n");
+      if (command === "probe_chat_bridge_python") {
+        return Promise.resolve({
+          usable: false,
+          program: "",
+          version: "",
+          configured: false,
+          failure: "",
+          checked: ["python3 -> Python was not found"],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <TestProviders>
+        <AgentDetailModal
+          option={customOption}
+          themeVariant="light"
+          logo="/test-logo.svg"
+          settings={proxySettings}
+          onClose={vi.fn()}
+        />
+      </TestProviders>,
+    );
+
+    expect(await screen.findByLabelText("桥接使用的 Python")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("使用 Chat Completions 兼容桥接"));
+    expect(screen.queryByLabelText("桥接使用的 Python")).not.toBeInTheDocument();
+  });
 });

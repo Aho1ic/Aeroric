@@ -50,9 +50,19 @@ const TAG_BYTES = 16;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+/**
+ * 帧头/nonce 里的方向字节。手机是 initiator:发出的帧恒为
+ * `DIRECTION_MOBILE_TO_DESKTOP`,收到的帧恒为 `DIRECTION_DESKTOP_TO_MOBILE`
+ * (桌面端 orca_crypto.rs 的 `send` 用 direction=1、`recv` 用 direction=0)。
+ */
+const DIRECTION_MOBILE_TO_DESKTOP = 0;
+const DIRECTION_DESKTOP_TO_MOBILE = 1;
+
 export class OrcaE2EESession {
-  private mobileToDesktopCounter = 0n;
-  private desktopToMobileCounter = 0n;
+  /** 发送计数器:只随手机→桌面的帧递增。 */
+  private sendCounter = 0n;
+  /** 接收计数器:只随桌面→手机的帧递增,与发送计数器互不影响。 */
+  private receiveCounter = 0n;
 
   constructor(
     private readonly mobileToDesktopKey: Uint8Array,
@@ -66,47 +76,49 @@ export class OrcaE2EESession {
   }
 
   encryptText(plaintext: string): string {
-    return bytesToBase64(this.seal(textEncoder.encode(plaintext), ORCA_TEXT_KIND, 0));
+    return bytesToBase64(this.seal(textEncoder.encode(plaintext), ORCA_TEXT_KIND));
   }
 
   decryptText(frameB64: string): string {
-    return textDecoder.decode(this.open(bytesFromCanonicalBase64(frameB64), ORCA_TEXT_KIND, 1));
+    return textDecoder.decode(this.open(bytesFromCanonicalBase64(frameB64), ORCA_TEXT_KIND));
   }
 
   encryptBinary(plaintext: Uint8Array): Uint8Array {
-    return this.seal(plaintext, ORCA_BINARY_KIND, 0);
+    return this.seal(plaintext, ORCA_BINARY_KIND);
   }
 
   decryptBinary(frame: Uint8Array): Uint8Array {
-    return this.open(frame, ORCA_BINARY_KIND, 1);
+    return this.open(frame, ORCA_BINARY_KIND);
   }
 
-  private seal(payload: Uint8Array, kind: number, direction: 0 | 1): Uint8Array {
-    const key = direction === 0 ? this.mobileToDesktopKey : this.desktopToMobileKey;
-    const counter = direction === 0 ? this.mobileToDesktopCounter : this.desktopToMobileCounter;
+  private seal(payload: Uint8Array, kind: number): Uint8Array {
+    const counter = this.sendCounter;
     if (counter > MAX_UINT64) throw new Error("Orca E2EE counter exhausted");
+    const direction = DIRECTION_MOBILE_TO_DESKTOP;
     const header = encodeHeader(this.sessionId, direction, kind, counter);
     const nonce = encodeNonce(this.sessionId, direction, kind, counter);
     const plaintext = concatBytes([header, payload]);
-    const ciphertext = xsalsa20poly1305(key, nonce).encrypt(plaintext);
-    if (direction === 0) this.mobileToDesktopCounter = counter + 1n;
-    else this.desktopToMobileCounter = counter + 1n;
+    const ciphertext = xsalsa20poly1305(this.mobileToDesktopKey, nonce).encrypt(plaintext);
+    this.sendCounter = counter + 1n;
     return concatBytes([nonce, ciphertext]);
   }
 
-  private open(frame: Uint8Array, kind: number, direction: 0 | 1): Uint8Array {
+  private open(frame: Uint8Array, kind: number): Uint8Array {
     if (frame.length < NONCE_BYTES + HEADER_BYTES + TAG_BYTES) {
       throw new Error("Orca E2EE frame too short");
     }
-    const key = direction === 0 ? this.desktopToMobileKey : this.mobileToDesktopKey;
-    const counter = direction === 0 ? this.desktopToMobileCounter : this.mobileToDesktopCounter;
+    const counter = this.receiveCounter;
+    if (counter > MAX_UINT64) throw new Error("Orca E2EE counter exhausted");
+    const direction = DIRECTION_DESKTOP_TO_MOBILE;
     const nonce = encodeNonce(this.sessionId, direction, kind, counter);
     if (!equalBytes(frame.subarray(0, NONCE_BYTES), nonce)) {
       throw new Error("Orca E2EE nonce mismatch");
     }
     let plaintext: Uint8Array;
     try {
-      plaintext = xsalsa20poly1305(key, nonce).decrypt(frame.subarray(NONCE_BYTES));
+      plaintext = xsalsa20poly1305(this.desktopToMobileKey, nonce).decrypt(
+        frame.subarray(NONCE_BYTES),
+      );
     } catch {
       throw new Error("Orca E2EE authentication failed");
     }
@@ -114,8 +126,7 @@ export class OrcaE2EESession {
     if (!equalBytes(plaintext.subarray(0, HEADER_BYTES), header)) {
       throw new Error("Orca E2EE header mismatch");
     }
-    if (direction === 0) this.desktopToMobileCounter = counter + 1n;
-    else this.mobileToDesktopCounter = counter + 1n;
+    this.receiveCounter = counter + 1n;
     return plaintext.slice(HEADER_BYTES);
   }
 }

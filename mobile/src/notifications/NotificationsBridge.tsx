@@ -11,6 +11,7 @@ import { Platform } from "react-native";
 import { useConnection } from "../state/connection-context";
 import type { ApprovalRequest } from "../types";
 import { TaskNotificationGate } from "./notification-gate";
+import { TASK_NOTIFICATION_CHANNEL_ID, taskNotificationRequest } from "./notification-request";
 import { taskMeta } from "./task-name-cache";
 
 Notifications.setNotificationHandler({
@@ -30,7 +31,7 @@ export function NotificationsBridge() {
   useEffect(() => {
     void Notifications.requestPermissionsAsync().catch(() => {});
     if (Platform.OS === "android") {
-      void Notifications.setNotificationChannelAsync("task-status", {
+      void Notifications.setNotificationChannelAsync(TASK_NOTIFICATION_CHANNEL_ID, {
         name: "Aeroric tasks",
         importance: Notifications.AndroidImportance.HIGH,
       }).catch(() => {});
@@ -54,14 +55,9 @@ export function NotificationsBridge() {
         payload.approval,
       );
       if (!note) return;
-      void Notifications.scheduleNotificationAsync({
-        content: {
-          title: note.title,
-          body: note.body,
-          data: { taskId: note.taskId, projectId: meta?.projectId ?? "" },
-        },
-        trigger: null,
-      }).catch(() => {});
+      void Notifications.scheduleNotificationAsync(
+        taskNotificationRequest(note, meta?.projectId),
+      ).catch(() => {});
     });
   }, [onPush]);
 

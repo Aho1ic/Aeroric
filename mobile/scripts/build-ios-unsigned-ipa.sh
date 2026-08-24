@@ -46,6 +46,24 @@ if [[ "$bundle_id" != "$expected_bundle_id" ]]; then
   echo "Bundle ID 不符合 app.json: $bundle_id != $expected_bundle_id" >&2
   exit 1
 fi
+# ios/ 是 prebuild 生成物且不入库,本脚本又不跑 prebuild:app.json 改了版本但没
+# 重新 prebuild 时,这里会拿旧 Info.plist 静默打出上一个版本。取值口径对齐
+# @expo/config-plugins 的 ios/Version.js(缺省 buildNumber 为 "1")。
+short_version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app_path/Info.plist")"
+expected_short_version="$(node -p "const c=require('$mobile_root/app.json').expo; c.ios?.version || c.version || '1.0.0'")"
+if [[ "$short_version" != "$expected_short_version" ]]; then
+  echo "版本号不符合 app.json: $short_version != $expected_short_version" >&2
+  echo "请先运行 pnpm expo prebuild --platform ios 同步 ios/ 后重新打包" >&2
+  exit 1
+fi
+build_number="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app_path/Info.plist")"
+expected_build_number="$(node -p "require('$mobile_root/app.json').expo.ios?.buildNumber || '1'")"
+if [[ "$build_number" != "$expected_build_number" ]]; then
+  echo "Build number 不符合 app.json: $build_number != $expected_build_number" >&2
+  echo "请先运行 pnpm expo prebuild --platform ios 同步 ios/ 后重新打包" >&2
+  exit 1
+fi
+
 if [[ ! -f "$app_path/main.jsbundle" ]]; then
   echo "Release App 中缺少 main.jsbundle" >&2
   exit 1

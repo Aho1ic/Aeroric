@@ -349,6 +349,25 @@ fn toml_quote(s: &str) -> String {
     out
 }
 
+/// 自定义 codex-like Agent 的 hook 片段文件。
+///
+/// 这些 Agent 各有隔离的 `CODEX_HOME`(`agent-homes/{id}`),其 `config.toml`
+/// 由 Aeroric 生成的包装脚本在**每次启动时整体重写**,因此安装器写进
+/// `~/.codex/config.toml` 的 hook 块到不了它们。包装脚本改为在写完 config 后
+/// `cat` 追加此片段——内容由 Aeroric 单点维护,node 路径变化无需重刷脚本。
+pub fn codex_hooks_fragment_path() -> Result<PathBuf, String> {
+    Ok(hooks_dir()?.join("codex-hooks.toml"))
+}
+
+/// 写出(或刷新)供包装脚本追加的 codex hook 片段。
+fn write_codex_hooks_fragment(node_path: &str, script: &str) -> Result<PathBuf, String> {
+    let dir = hooks_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
+    let path = codex_hooks_fragment_path()?;
+    atomic_write(&path, &build_codex_block(node_path, script))?;
+    Ok(path)
+}
+
 /// 将 Aeroric 块写入(或更新)指定 TOML 内容。
 fn inject_codex_text(existing: &str, node_path: &str, script: &str) -> String {
     let block = build_codex_block(node_path, script);
@@ -518,26 +537,44 @@ fn readiness_for(agent: &str, status: &HookInstallStatus) -> HookAgentReadiness 
     }
 }
 
+/// 按协议族判断 hook 链路是否可用。抽成纯函数便于测试:调用方只需提供
+/// 已解析的 family 与安装状态,不触碰全局缓存。
+///
+/// 必须按 family 而非 agent 字面名判断。自定义 Agent(以及内建 `claude_gpt55`)
+/// 最终 exec 的都是真实 claude / codex 二进制,hook 能力与内建同族完全一致;
+/// 若按字面名返回 false,`hooks_own_approval_signal` 会随之为假,于是
+/// `session.rs` 里噪声极大的 transcript 猜测重新接管,把每次普通工具调用都
+/// 误报成 `input_required`(见 session.rs 中实测 54/54 全中的注释)。
+fn family_hooks_usable(
+    family: crate::app_settings::AgentFamily,
+    status: &HookInstallStatus,
+) -> bool {
+    use crate::app_settings::AgentFamily;
+
+    if status.node_path.is_empty() {
+        return false;
+    }
+    match family {
+        AgentFamily::Codex => {
+            status.codex_installed && crate::app_settings::codex_version_gte(CODEX_HOOK_MIN_VERSION)
+        }
+        AgentFamily::Claude => {
+            status.claude_installed
+                && crate::app_settings::claude_version_gte(CLAUDE_HOOK_MIN_VERSION)
+        }
+        // dsh 不走 claude/codex 的 hook 机制,状态由自身 WebUI 通道上报。
+        AgentFamily::Dsh => false,
+    }
+}
+
 /// 判断给定 agent 的 hook 链路是否可信、可替代轮询。
-/// 三条同时满足:node 可用 + 对应 agent 已安装 hook + agent 版本 ≥ 门槛。
+/// 三条同时满足:node 可用 + 对应协议族已安装 hook + 该族二进制版本 ≥ 门槛。
 /// 任一不满足返回 false,调用方应回退到 `/status` 轮询路径。
 ///
 /// 版本号统一走 `*_version_gte` 的全局带缓存探测,不再读取项目级 config 中的版本字段。
 pub fn usable_for(agent: &str) -> bool {
     let status = status_cache().lock().clone();
-    if status.node_path.is_empty() {
-        return false;
-    }
-    match agent {
-        "codex" => {
-            status.codex_installed && crate::app_settings::codex_version_gte(CODEX_HOOK_MIN_VERSION)
-        }
-        "claude" => {
-            status.claude_installed
-                && crate::app_settings::claude_version_gte(CLAUDE_HOOK_MIN_VERSION)
-        }
-        _ => false,
-    }
+    family_hooks_usable(crate::app_settings::agent_family(agent), &status)
 }
 
 // ── 对外入口 ────────────────────────────────────────────────────────────────
@@ -580,6 +617,16 @@ pub fn ensure_installed() -> HookInstallStatus {
             } else {
                 status.error = format!("{}; codex config: {}", status.error, e);
             }
+        }
+    }
+
+    // 自定义 codex-like Agent 读不到 `~/.codex/config.toml`(各有隔离 CODEX_HOME),
+    // 由包装脚本追加此片段。写失败只影响自定义 Agent,不改 codex_installed。
+    if let Err(e) = write_codex_hooks_fragment(&node, &script) {
+        if status.error.is_empty() {
+            status.error = format!("codex hooks fragment: {}", e);
+        } else {
+            status.error = format!("{}; codex hooks fragment: {}", status.error, e);
         }
     }
 
@@ -855,5 +902,73 @@ command = \"echo user-stop\"\n";
         assert!(!raw.contains(CODEX_BEGIN));
 
         let _ = fs::remove_file(&tmp);
+    }
+
+    // ── 按 family 判定 hook 可用性 ──────────────────────────────────────────
+
+    fn installed_status() -> HookInstallStatus {
+        HookInstallStatus {
+            node_path: "/node".to_string(),
+            script_path: "/script.mjs".to_string(),
+            claude_installed: true,
+            codex_installed: true,
+            error: String::new(),
+        }
+    }
+
+    /// node 缺失时任何 family 都不可用——hook 命令跑不起来。
+    #[test]
+    fn family_hooks_need_node() {
+        use crate::app_settings::AgentFamily;
+        let status = HookInstallStatus {
+            node_path: String::new(),
+            ..installed_status()
+        };
+        for family in [AgentFamily::Claude, AgentFamily::Codex, AgentFamily::Dsh] {
+            assert!(!family_hooks_usable(family, &status));
+        }
+    }
+
+    /// dsh 不走 claude/codex 的 hook 机制,即便两边都装好也必须为 false。
+    #[test]
+    fn dsh_family_never_uses_hooks() {
+        use crate::app_settings::AgentFamily;
+        assert!(!family_hooks_usable(AgentFamily::Dsh, &installed_status()));
+    }
+
+    /// 未安装对应 family 的 hook 时不可用,且两个 family 相互独立:
+    /// 只装了 codex 不能让 claude 族被判为可用,反之亦然。
+    #[test]
+    fn family_hooks_track_their_own_install_flag() {
+        use crate::app_settings::AgentFamily;
+        let codex_only = HookInstallStatus {
+            claude_installed: false,
+            ..installed_status()
+        };
+        assert!(!family_hooks_usable(AgentFamily::Claude, &codex_only));
+
+        let claude_only = HookInstallStatus {
+            codex_installed: false,
+            ..installed_status()
+        };
+        assert!(!family_hooks_usable(AgentFamily::Codex, &claude_only));
+    }
+
+    /// hook 片段必须与注入 `~/.codex/config.toml` 的块内容一致——自定义 Agent
+    /// 只能通过这个文件拿到 hook 配置。
+    #[test]
+    fn codex_hooks_fragment_matches_injected_block() {
+        let fragment = build_codex_block("/node", "/script.mjs");
+        assert!(fragment.contains(CODEX_BEGIN));
+        assert!(fragment.contains(CODEX_END));
+        for event in CODEX_EVENTS {
+            assert!(
+                fragment.contains(&format!("[[hooks.{}]]", event)),
+                "片段缺少 {event}"
+            );
+        }
+        // 追加到已有 config 末尾后仍须是合法 TOML。
+        let combined = format!("model = \"o4-mini\"\n[tui]\n\n{fragment}");
+        toml::from_str::<toml::Value>(&combined).expect("拼接后应为合法 TOML");
     }
 }

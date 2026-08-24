@@ -17,6 +17,7 @@ import {
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
+import { BridgePythonField } from "./BridgePythonField";
 import type { CustomAgentProfile } from "../../agents";
 import {
   CODEX_REASONING_EFFORTS,
@@ -113,6 +114,8 @@ export function AgentConfigPanel({
   const [originalEnableChatCompletionsProxy, setOriginalEnableChatCompletionsProxy] =
     useState(false);
   const [savingChatCompletionsProxy, setSavingChatCompletionsProxy] = useState(false);
+  const [bridgePythonPath, setBridgePythonPath] = useState("");
+  const [originalBridgePythonPath, setOriginalBridgePythonPath] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState<ModelReasoningEffort | null>(null);
   const [originalReasoningEffort, setOriginalReasoningEffort] =
     useState<ModelReasoningEffort | null>(null);
@@ -197,6 +200,8 @@ export function AgentConfigPanel({
       setOriginalEnable1mContext(false);
       setEnableChatCompletionsProxy(false);
       setOriginalEnableChatCompletionsProxy(false);
+      setBridgePythonPath("");
+      setOriginalBridgePythonPath("");
       return;
     }
     setDetectedBalance(null);
@@ -218,6 +223,9 @@ export function AgentConfigPanel({
         const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
         setEnableChatCompletionsProxy(proxyEnabled);
         setOriginalEnableChatCompletionsProxy(proxyEnabled);
+        const pinnedPython = profile?.bridge_python_path ?? "";
+        setBridgePythonPath(pinnedPython);
+        setOriginalBridgePythonPath(pinnedPython);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -324,6 +332,9 @@ export function AgentConfigPanel({
           const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
           setEnableChatCompletionsProxy(proxyEnabled);
           setOriginalEnableChatCompletionsProxy(proxyEnabled);
+          const pinnedPython = profile?.bridge_python_path ?? "";
+          setBridgePythonPath(pinnedPython);
+          setOriginalBridgePythonPath(pinnedPython);
         }
       }
       setTransferMessage(t("appSettings.agentConfigImported"));
@@ -522,12 +533,16 @@ export function AgentConfigPanel({
       const next = await invoke<AppSettings>("update_custom_agent_chat_completions_proxy", {
         id: agentKey,
         enabled: enableChatCompletionsProxy,
+        bridgePythonPath: bridgePythonPath.trim(),
       });
       const profile = next.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
       setCustomProfile(profile);
       const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
       setEnableChatCompletionsProxy(proxyEnabled);
       setOriginalEnableChatCompletionsProxy(proxyEnabled);
+      const pinnedPython = profile?.bridge_python_path ?? "";
+      setBridgePythonPath(pinnedPython);
+      setOriginalBridgePythonPath(pinnedPython);
       const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
       if (content !== null) {
         setFileState({ status: "loaded", content });
@@ -584,8 +599,9 @@ export function AgentConfigPanel({
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;
   const canSaveChatCompletionsProxy =
-    Boolean(customProfile?.codex_like) &&
-    enableChatCompletionsProxy !== originalEnableChatCompletionsProxy;
+    (Boolean(customProfile?.codex_like) &&
+      enableChatCompletionsProxy !== originalEnableChatCompletionsProxy) ||
+    bridgePythonPath.trim() !== originalBridgePythonPath.trim();
 
   return (
     <>
@@ -814,55 +830,65 @@ export function AgentConfigPanel({
         )}
 
         {deletable && customProfile?.codex_like && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              marginBottom: 18,
-            }}
-          >
-            <label
+          <div style={{ marginBottom: 18 }}>
+            <div
               style={{
                 display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                minWidth: 0,
-                color: "var(--text-secondary)",
-                cursor: "pointer",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
               }}
             >
-              <input
-                type="checkbox"
-                aria-label={t("appSettings.enableChatCompletionsProxy")}
-                checked={enableChatCompletionsProxy}
-                onChange={(event) => setEnableChatCompletionsProxy(event.target.checked)}
-              />
-              <span>
-                <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
-                  {t("appSettings.enableChatCompletionsProxy")}
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  minWidth: 0,
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={t("appSettings.enableChatCompletionsProxy")}
+                  checked={enableChatCompletionsProxy}
+                  onChange={(event) => setEnableChatCompletionsProxy(event.target.checked)}
+                />
+                <span>
+                  <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                    {t("appSettings.enableChatCompletionsProxy")}
+                  </span>
+                  <span
+                    style={{
+                      display: "block",
+                      marginTop: 3,
+                      fontSize: 11,
+                      color: "var(--text-hint)",
+                    }}
+                  >
+                    {t("appSettings.enableChatCompletionsProxyHint")}
+                  </span>
                 </span>
-                <span
-                  style={{
-                    display: "block",
-                    marginTop: 3,
-                    fontSize: 11,
-                    color: "var(--text-hint)",
-                  }}
-                >
-                  {t("appSettings.enableChatCompletionsProxyHint")}
-                </span>
-              </span>
-            </label>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleSaveChatCompletionsProxy}
-              disabled={savingChatCompletionsProxy || !canSaveChatCompletionsProxy}
-            >
-              {savingChatCompletionsProxy ? t("common.saving") : t("common.save")}
-            </Button>
+              </label>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSaveChatCompletionsProxy}
+                disabled={savingChatCompletionsProxy || !canSaveChatCompletionsProxy}
+              >
+                {savingChatCompletionsProxy ? t("common.saving") : t("common.save")}
+              </Button>
+            </div>
+            {enableChatCompletionsProxy && (
+              <div style={{ marginTop: 10 }}>
+                <BridgePythonField
+                  value={bridgePythonPath}
+                  onChange={setBridgePythonPath}
+                  autoProbe
+                />
+              </div>
+            )}
           </div>
         )}
 

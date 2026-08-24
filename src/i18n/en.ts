@@ -558,6 +558,17 @@ export const en: Record<string, string> = {
   "appSettings.enableChatCompletionsProxy": "Use Chat Completions compatibility bridge",
   "appSettings.enableChatCompletionsProxyHint":
     "For providers that reliably support only OpenAI /v1/chat/completions. Aeroric converts Codex Responses requests locally.",
+  "appSettings.bridgePython": "Bridge Python interpreter",
+  "appSettings.bridgePythonHint":
+    "Leave empty to detect automatically (python3 → python → py). Set a path to pin one, for example a conda environment.",
+  "appSettings.bridgePythonPlaceholder": "Auto-detect",
+  "appSettings.bridgePythonCheck": "Check",
+  "appSettings.bridgePythonChecking": "Checking…",
+  "appSettings.bridgePythonOk": "Python {version} · {program}",
+  "appSettings.bridgePythonMissing":
+    "No usable Python 3.9+ found. Install it from python.org and tick “Add python.exe to PATH”; the Microsoft Store alias stub does not count.",
+  "appSettings.bridgePythonChecked": "Checked: {checked}",
+  "appSettings.bridgePythonUnusable": "This interpreter cannot run the bridge: {failure}",
   "appSettings.availableModels": "Available Models",
   "appSettings.searchModels": "Search models",
   "appSettings.searchModelsPlaceholder": "Search or enter a model name",

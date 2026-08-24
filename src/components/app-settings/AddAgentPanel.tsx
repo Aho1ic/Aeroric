@@ -28,6 +28,7 @@ import {
   type DshApiProtocol,
 } from "./types";
 import { Button } from "../ui/Button";
+import { BridgePythonField } from "./BridgePythonField";
 import { ModelSelectionList } from "./ModelSelectionList";
 import { normalizeModelList, sameModel } from "../../modelOptions";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
@@ -238,6 +239,7 @@ export function AddAgentPanel({
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
+  const [bridgePythonPath, setBridgePythonPath] = useState("");
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [detectingModels, setDetectingModels] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -442,6 +444,10 @@ export function AddAgentPanel({
       models: setupModels,
       enable_1m_context: kind === "claude_code" && enable1mContext,
       enable_chat_completions_proxy: kind === "codex" && enableChatCompletionsProxy,
+      // 空串就是后端默认值,不必发出去。
+      ...(kind === "codex" && enableChatCompletionsProxy && bridgePythonPath.trim()
+        ? { bridge_python_path: bridgePythonPath.trim() }
+        : {}),
       ...(kind === "dsh" ? { dsh_api_protocol: dshApiProtocol } : {}),
       ...(proxyEnabled ? { proxy_enabled: true } : {}),
     };
@@ -963,6 +969,10 @@ export function AddAgentPanel({
             </span>
           </span>
         </label>
+      )}
+
+      {kind === "codex" && enableChatCompletionsProxy && (
+        <BridgePythonField value={bridgePythonPath} onChange={setBridgePythonPath} autoProbe />
       )}
 
       {kind === "claude_code" && (

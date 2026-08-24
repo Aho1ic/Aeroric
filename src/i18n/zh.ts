@@ -517,6 +517,17 @@ export const zh: Record<string, string> = {
   "appSettings.enableChatCompletionsProxy": "使用 Chat Completions 兼容桥接",
   "appSettings.enableChatCompletionsProxyHint":
     "适用于只稳定支持 OpenAI /v1/chat/completions 的渠道。Aeroric 会在本机将 Codex Responses 请求转换为 Chat Completions。",
+  "appSettings.bridgePython": "桥接使用的 Python",
+  "appSettings.bridgePythonHint":
+    "留空表示自动探测(python3 → python → py)。填写路径可固定使用某个解释器,例如 conda 环境里的 Python。",
+  "appSettings.bridgePythonPlaceholder": "自动探测",
+  "appSettings.bridgePythonCheck": "检测",
+  "appSettings.bridgePythonChecking": "检测中…",
+  "appSettings.bridgePythonOk": "Python {version} · {program}",
+  "appSettings.bridgePythonMissing":
+    "没找到可用的 Python 3.9+。请从 python.org 安装并勾选“Add python.exe to PATH”;Microsoft Store 的别名桩不算。",
+  "appSettings.bridgePythonChecked": "已检查:{checked}",
+  "appSettings.bridgePythonUnusable": "这个解释器无法运行桥接:{failure}",
   "appSettings.availableModels": "可用模型",
   "appSettings.searchModels": "搜索模型",
   "appSettings.searchModelsPlaceholder": "搜索或输入模型名称",

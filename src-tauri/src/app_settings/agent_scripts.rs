@@ -1,5 +1,383 @@
 use super::*;
 
+/// 把 Aeroric 的 codex hook 片段追加进本 Agent 隔离 `CODEX_HOME` 的 config.toml。
+///
+/// 自定义 Agent 读不到 `~/.codex/config.toml`,而本脚本每次启动都整体重写自己的
+/// config,所以必须在这里追加。片段路径固定、内容由桌面端维护(node 路径变化
+/// 不需要重刷脚本);文件缺失时静默跳过,hook 脚本本身在缺少 AERORIC_TASK_ID 时
+/// 也会零副作用退出,故用户手动运行本脚本同样安全。
+#[cfg(not(windows))]
+const CODEX_HOOKS_FRAGMENT_SHELL: &str = r#"aeroric_hooks_fragment="${AERORIC_CODEX_HOOKS_FRAGMENT:-$HOME/.aeroric/hooks/codex-hooks.toml}"
+if [ -r "$aeroric_hooks_fragment" ]; then
+  printf '\n' >> "$CODEX_HOME/config.toml"
+  cat -- "$aeroric_hooks_fragment" >> "$CODEX_HOME/config.toml"
+fi
+"#;
+
+/// PowerShell 版本,语义同 `CODEX_HOOKS_FRAGMENT_SHELL`。
+#[cfg(any(windows, test))]
+const CODEX_HOOKS_FRAGMENT_POWERSHELL: &str = r#"$aeroricHooksFragment = if ($env:AERORIC_CODEX_HOOKS_FRAGMENT) { $env:AERORIC_CODEX_HOOKS_FRAGMENT } else { Join-Path $HOME '.aeroric/hooks/codex-hooks.toml' }
+if (Test-Path -LiteralPath $aeroricHooksFragment) {
+  Add-Content -LiteralPath (Join-Path $env:CODEX_HOME 'config.toml') -Value ([Environment]::NewLine + (Get-Content -LiteralPath $aeroricHooksFragment -Raw))
+}
+"#;
+
+/// Chat Completions bridge 对 Python 的最低要求。`codex_chat_proxy.py` 用了 PEP 585
+/// 的 `dict[str, Any]` 作模块级别名,3.8 及更早会在 import 期直接 TypeError。
+///
+/// 这个下限同时被三处引用:桌面端预检、生成的 bash 脚本、生成的 PowerShell 脚本。
+/// 三处必须一致,否则预检说"可用"而启动仍然失败。
+pub(super) const CHAT_BRIDGE_PYTHON_MIN_MINOR: u32 = 9;
+
+/// 自动探测时的候选顺序。必须按这个顺序逐个实跑,不能依赖 `Get-Command a, b, c`
+/// 的返回顺序——它不保证按入参排序,可能先给出没装运行时的 `py.exe`。
+pub(super) const CHAT_BRIDGE_PYTHON_CANDIDATES: &[&str] = &["python3", "python", "py"];
+
+/// 一个 Python 候选的探测结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ChatBridgePythonProbe {
+    /// 解释器的可执行路径(自动探测时是解析后的结果)。
+    pub program: String,
+    /// 需要追加在脚本参数之前的固定参数,目前只有 `py -3`。
+    pub leading_args: Vec<String>,
+    /// 探到的版本,形如 `3.12`。
+    pub version: Option<String>,
+    /// 不可用的原因;`None` 表示这个候选可用。
+    pub failure: Option<String>,
+}
+
+impl ChatBridgePythonProbe {
+    pub fn is_usable(&self) -> bool {
+        self.failure.is_none()
+    }
+}
+
+/// 实跑一个解释器并判断它能不能承载 bridge。
+///
+/// 只看"文件存在"或"命令能找到"是不够的:Windows 预置的 Microsoft Store 别名桩
+/// (`%LOCALAPPDATA%\Microsoft\WindowsApps\python*.exe`)存在且能被 `where` 找到,
+/// 但一运行就跳商店并以非零码退出。所以这里必须真的执行一次取版本号。
+pub(super) fn probe_chat_bridge_python_program(program: &str) -> ChatBridgePythonProbe {
+    let leading_args: Vec<String> = if program_is_py_launcher(program) {
+        vec!["-3".to_string()]
+    } else {
+        Vec::new()
+    };
+    let mut probe = ChatBridgePythonProbe {
+        program: program.to_string(),
+        leading_args: leading_args.clone(),
+        version: None,
+        failure: None,
+    };
+
+    let mut command = Command::new(program);
+    crate::subprocess::configure_background_command(&mut command);
+    command
+        .args(&leading_args)
+        .arg("-c")
+        .arg("import sys; print(sys.version_info[0], sys.version_info[1])")
+        .env("PATH", get_login_shell_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            probe.failure = Some(error.to_string());
+            return probe;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("exited with status {}", output.status)
+        };
+        probe.failure = Some(detail);
+        return probe;
+    }
+
+    let Some((major, minor)) = parse_python_version_probe(&stdout) else {
+        let detail = if stdout.is_empty() { stderr } else { stdout };
+        probe.failure = Some(format!("unexpected version output: {detail}"));
+        return probe;
+    };
+    probe.version = Some(format!("{major}.{minor}"));
+    if major < 3 || (major == 3 && minor < CHAT_BRIDGE_PYTHON_MIN_MINOR) {
+        probe.failure = Some(format!(
+            "Python {major}.{minor} is too old (need 3.{CHAT_BRIDGE_PYTHON_MIN_MINOR}+)"
+        ));
+    }
+    probe
+}
+
+fn program_is_py_launcher(program: &str) -> bool {
+    let file_name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(file_name);
+    stem.eq_ignore_ascii_case("py")
+}
+
+/// 解析 `print(sys.version_info[0], sys.version_info[1])` 的输出。
+///
+/// 只认最后一行的两个整数:某些环境会在 stdout 前面插入告警,取最后一行最稳。
+fn parse_python_version_probe(text: &str) -> Option<(u32, u32)> {
+    text.lines().rev().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let major = parts.next()?.parse::<u32>().ok()?;
+        let minor = parts.next()?.parse::<u32>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((major, minor))
+    })
+}
+
+/// 按候选顺序找出第一个可用的解释器;全都不可用时返回逐个候选的失败原因。
+pub(super) fn resolve_chat_bridge_python(
+) -> Result<ChatBridgePythonProbe, Vec<ChatBridgePythonProbe>> {
+    let mut failures = Vec::new();
+    for candidate in CHAT_BRIDGE_PYTHON_CANDIDATES {
+        let resolved = detect_path(candidate);
+        let program = if resolved.is_empty() {
+            (*candidate).to_string()
+        } else {
+            resolved
+        };
+        let probe = probe_chat_bridge_python_program(&program);
+        if probe.is_usable() {
+            return Ok(probe);
+        }
+        failures.push(probe);
+    }
+    Err(failures)
+}
+
+/// 启动 Responses→Chat Completions bridge(PowerShell)。
+///
+/// 版本下限 3.9:`codex_chat_proxy.py` 用了 PEP 585 的 `dict[str, Any]` 作模块级
+/// 别名,3.8 及更早会在 import 期直接 TypeError。
+///
+/// 三处硬性要求,少一处都会在干净的 Windows 机器上表现为 bridge 启动失败:
+/// 1. 必须实际探测 `--version`。Windows 预置的 Microsoft Store 别名桩
+///    (`%LOCALAPPDATA%\Microsoft\WindowsApps\python*.exe`)能被 `Get-Command`
+///    找到,但一运行就跳商店并以非零码退出,只判断"命令存在"必然误判。
+/// 2. 候选必须按 python3→python→py 定序自己遍历。`Get-Command a, b, c` 不保证
+///    按入参顺序返回,`Select-Object -First 1` 可能先拿到没装运行时的 py.exe。
+/// 3. 等待窗口要够长,并在失败时带上 bridge 日志。首次冷启动叠加 Defender 实时
+///    扫描,Python 解释器起步经常超过原先的 2s 预算。
+///
+/// 配置了固定解释器时的选择逻辑(PowerShell)。
+///
+/// 不回退自动探测:用户明确指定了某个 conda 环境的 Python,却静默换用 PATH 上的另
+/// 一个,会让"为什么装的包不生效"变得极难排查。宁可直接报错说这条路径不可用。
+#[cfg(any(windows, test))]
+const CODEX_CHAT_BRIDGE_CONFIGURED_POWERSHELL: &str = r#"$bridgeInterpreter = $null
+$bridgeInterpreterArgs = @()
+$configuredBridgePython = BRIDGE_PYTHON_PATH_LITERAL
+if ($env:AERORIC_BRIDGE_PYTHON) { $configuredBridgePython = $env:AERORIC_BRIDGE_PYTHON }
+$configuredProbe = ''
+$configuredExit = -1
+$configuredArgs = @()
+if ([System.IO.Path]::GetFileNameWithoutExtension($configuredBridgePython) -eq 'py') { $configuredArgs += '-3' }
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  $configuredProbe = (& $configuredBridgePython @configuredArgs '-c' 'import sys; print(sys.version_info[0], sys.version_info[1])' 2>&1 | Out-String)
+  $configuredExit = $LASTEXITCODE
+} catch {
+  $configuredProbe = $_.Exception.Message
+} finally {
+  $ErrorActionPreference = $previousErrorAction
+}
+$configuredProbe = $configuredProbe.Trim()
+$configuredMatch = [regex]::Match($configuredProbe, '(?m)^\s*(\d+)\s+(\d+)\s*$')
+if ($configuredExit -ne 0 -or -not $configuredMatch.Success) {
+  throw ('The Python configured for this agent cannot run the Chat Completions bridge: ' + $configuredBridgePython + [Environment]::NewLine + $configuredProbe)
+}
+$configuredMajor = [int]$configuredMatch.Groups[1].Value
+$configuredMinor = [int]$configuredMatch.Groups[2].Value
+if ($configuredMajor -lt 3 -or ($configuredMajor -eq 3 -and $configuredMinor -lt 9)) {
+  throw ('The Python configured for this agent is too old for the Chat Completions bridge (need 3.9+): ' + $configuredBridgePython + ' is ' + $configuredMajor + '.' + $configuredMinor)
+}
+$bridgeInterpreter = $configuredBridgePython
+$bridgeInterpreterArgs = $configuredArgs
+"#;
+
+#[cfg(any(windows, test))]
+const CODEX_CHAT_BRIDGE_AUTODETECT_POWERSHELL: &str = r#"$bridgeInterpreter = $null
+$bridgeInterpreterArgs = @()
+$bridgeProbeNotes = @()
+foreach ($candidateName in @('python3', 'python', 'py')) {
+  $candidates = @(Get-Command $candidateName -CommandType Application -ErrorAction SilentlyContinue)
+  foreach ($candidate in $candidates) {
+    $candidateArgs = @()
+    if ($candidate.Name -eq 'py' -or $candidate.Name -eq 'py.exe') { $candidateArgs += '-3' }
+    $probeOutput = ''
+    $probeExit = -1
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $probeOutput = (& $candidate.Source @candidateArgs '-c' 'import sys; print(sys.version_info[0], sys.version_info[1])' 2>&1 | Out-String)
+      $probeExit = $LASTEXITCODE
+    } catch {
+      $probeOutput = $_.Exception.Message
+    } finally {
+      $ErrorActionPreference = $previousErrorAction
+    }
+    $probeOutput = $probeOutput.Trim()
+    $versionMatch = [regex]::Match($probeOutput, '(?m)^\s*(\d+)\s+(\d+)\s*$')
+    if ($probeExit -ne 0 -or -not $versionMatch.Success) {
+      $bridgeProbeNotes += ($candidate.Source + ' -> ' + $probeOutput)
+      continue
+    }
+    $probeMajor = [int]$versionMatch.Groups[1].Value
+    $probeMinor = [int]$versionMatch.Groups[2].Value
+    if ($probeMajor -lt 3 -or ($probeMajor -eq 3 -and $probeMinor -lt 9)) {
+      $bridgeProbeNotes += ($candidate.Source + ' -> Python ' + $probeMajor + '.' + $probeMinor + ' is too old')
+      continue
+    }
+    $bridgeInterpreter = $candidate.Source
+    $bridgeInterpreterArgs = $candidateArgs
+    break
+  }
+  if ($null -ne $bridgeInterpreter) { break }
+}
+if ($null -eq $bridgeInterpreter) {
+  $bridgeHint = 'This custom Codex agent requires Python 3.9+ to bridge Responses to Chat Completions. Install it from python.org (tick "Add python.exe to PATH"); the Microsoft Store alias stub does not count.'
+  if ($bridgeProbeNotes.Count -gt 0) {
+    $bridgeHint = $bridgeHint + [Environment]::NewLine + 'Checked: ' + ($bridgeProbeNotes -join '; ')
+  }
+  throw $bridgeHint
+}
+"#;
+
+/// 解释器选好之后的启动与等待,两种选择方式共用。
+#[cfg(any(windows, test))]
+const CODEX_CHAT_BRIDGE_WAIT_POWERSHELL: &str = r#"$proxyLog = Join-Path $agentHome 'codex-chat-proxy.log'
+$proxyErrorLog = Join-Path $agentHome 'codex-chat-proxy-err.log'
+if (-not $env:AERORIC_PROXY_LOG_LEVEL) { $env:AERORIC_PROXY_LOG_LEVEL = 'INFO' }
+$bridgeArgs = $bridgeInterpreterArgs + @(('"' + $proxyScript + '"'), '--port-file', ('"' + $portFile + '"'))
+$proxyProcess = Start-Process -FilePath $bridgeInterpreter -ArgumentList $bridgeArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $proxyLog -RedirectStandardError $proxyErrorLog
+$proxyPort = ''
+for ($attempt = 0; $attempt -lt 400; $attempt++) {
+  $proxyPort = Read-AeroricBridgePort $portFile
+  if ($proxyPort) { break }
+  if ($proxyProcess.HasExited) { break }
+  Start-Sleep -Milliseconds 50
+}
+if (-not $proxyPort) {
+  # 进程可能在最后一次轮询之后才落盘,退出前再确认一次。
+  $proxyPort = Read-AeroricBridgePort $portFile
+}
+if (-not $proxyPort) {
+  Stop-Process -Id $proxyProcess.Id -Force -ErrorAction SilentlyContinue
+  $bridgeFailure = 'Failed to start the local Chat Completions bridge.'
+  $bridgeFailure = $bridgeFailure + [Environment]::NewLine + 'Bridge: ' + $bridgeInterpreter
+  if ($proxyProcess.HasExited) {
+    $bridgeFailure = $bridgeFailure + ' (exited with code ' + $proxyProcess.ExitCode + ')'
+  }
+  foreach ($logPath in @($proxyErrorLog, $proxyLog)) {
+    $logTail = ''
+    try {
+      if (Test-Path -LiteralPath $logPath) {
+        $logTail = ((Get-Content -LiteralPath $logPath -Tail 20 -ErrorAction SilentlyContinue) -join [Environment]::NewLine).Trim()
+      }
+    } catch {
+      $logTail = ''
+    }
+    if ($logTail) {
+      $bridgeFailure = $bridgeFailure + [Environment]::NewLine + $logPath + ':' + [Environment]::NewLine + $logTail
+    }
+  }
+  throw $bridgeFailure
+}"#;
+
+/// 决定 bash 侧要探测哪些解释器候选。
+///
+/// 配置了固定路径就只试这一个,不把自动探测的候选拼进去——静默回退到 PATH 上的另一个
+/// Python 会让"为什么装的包不生效"极难排查。`AERORIC_BRIDGE_PYTHON` 可临时覆盖。
+///
+/// 路径必须走 `shell_quote`:conda 环境路径常带空格,裸插会被 shell 重新分词。
+#[cfg(not(windows))]
+fn codex_chat_bridge_configured_python_shell(configured_python: &str) -> String {
+    let configured_python = configured_python.trim();
+    if configured_python.is_empty() {
+        // 仍然读环境变量:未配置时也允许临时指定一个解释器。
+        return "configured_python=\"${AERORIC_BRIDGE_PYTHON:-}\"\n\
+                if [ -n \"$configured_python\" ]; then\n  \
+                python_candidates=(\"$configured_python\")\n\
+                else\n  \
+                python_candidates=(\"python3\" \"python\")\n\
+                fi\n"
+            .to_string();
+    }
+    format!(
+        "configured_python={configured}\n\
+         if [ -n \"${{AERORIC_BRIDGE_PYTHON:-}}\" ]; then\n  \
+         configured_python=\"$AERORIC_BRIDGE_PYTHON\"\n\
+         fi\n\
+         python_candidates=(\"$configured_python\")\n",
+        configured = shell_quote(configured_python),
+    )
+}
+
+/// 纯版本/帮助探测直接短路,不碰 bridge(PowerShell)。
+///
+/// 桌面端的 `detect_agent_version` 会用 `--version` 跑这个包装脚本。`codex --version`
+/// 既不需要 bridge 也不需要 config.toml,但旧结构会先把 bridge 拉起来——于是没装
+/// Python 的机器上版本探测直接失败,装了的机器上也要白等一次解释器冷启动。
+#[cfg(any(windows, test))]
+const CODEX_CHAT_BRIDGE_VERSION_BYPASS_POWERSHELL: &str = r#"if ($args.Count -eq 1 -and @('--version', '-V', '--help', '-h') -contains $args[0]) {
+  & CODEX_BIN_LITERAL @args
+  exit $LASTEXITCODE
+}
+"#;
+
+/// 拼出完整的 bridge 启动段(PowerShell):先选解释器,再启动并等端口。
+///
+/// `AERORIC_BRIDGE_PYTHON` 环境变量可临时覆盖配置里的路径,便于用户在不改设置的
+/// 情况下试另一个解释器。
+#[cfg(any(windows, test))]
+fn codex_chat_bridge_launch_powershell(configured_python: &str) -> String {
+    let configured_python = configured_python.trim();
+    let select = if configured_python.is_empty() {
+        CODEX_CHAT_BRIDGE_AUTODETECT_POWERSHELL.to_string()
+    } else {
+        CODEX_CHAT_BRIDGE_CONFIGURED_POWERSHELL.replace(
+            "BRIDGE_PYTHON_PATH_LITERAL",
+            &powershell_quote(configured_python),
+        )
+    };
+    format!("{select}{}", CODEX_CHAT_BRIDGE_WAIT_POWERSHELL)
+}
+
+/// 读取 bridge 落盘的端口号;文件不存在、还没写完或内容不是纯数字都返回空串。
+///
+/// 旧版只用 `Test-Path` 判断,文件已创建但还是空的时候会拿到空端口,继续拼出
+/// `http://127.0.0.1:/v1` 这种无效 base_url,把启动失败推迟成难查的请求错误。
+#[cfg(any(windows, test))]
+const CODEX_CHAT_BRIDGE_PORT_READER_POWERSHELL: &str = r#"function Read-AeroricBridgePort([string] $path) {
+  try {
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    $raw = [System.IO.File]::ReadAllText($path).Trim()
+    if ($raw -match '^[0-9]+$') { return $raw }
+  } catch {
+  }
+  return ''
+}
+"#;
+
 pub(super) fn normalize_model_list(models: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -263,14 +641,48 @@ chmod 700 "$proxy_script"
 
 port_file="$AGENT_HOME/codex-chat-proxy.port"
 rm -f "$port_file"
+# 只判断"命令存在"不够:PATH 上的 python 可能是 2.x,也可能是指向已删除运行时的
+# 陈旧 shim。bridge 用了 PEP 585 的 dict[str, Any],低于 3.9 会在 import 期报错。
 python_bin=""
-if command -v python3 >/dev/null 2>&1; then
-  python_bin="python3"
-elif command -v python >/dev/null 2>&1; then
-  python_bin="python"
-fi
+python_probe_notes=""
+{configured_python_setup}for candidate in "${{python_candidates[@]}}"; do
+  # 绝对路径用 -x 判断,裸名才走 command -v:配置里填的是具体解释器路径。
+  case "$candidate" in
+    */*) [ -x "$candidate" ] || {{
+      python_probe_notes="${{python_probe_notes}}${{candidate}} -> not an executable file; "
+      continue
+    }} ;;
+    *) command -v "$candidate" >/dev/null 2>&1 || continue ;;
+  esac
+  probe_output="$("$candidate" -c 'import sys; print(sys.version_info[0], sys.version_info[1])' 2>&1)" || {{
+    python_probe_notes="${{python_probe_notes}}${{candidate}} -> ${{probe_output}}; "
+    continue
+  }}
+  probe_major="${{probe_output%% *}}"
+  probe_minor="${{probe_output##* }}"
+  case "$probe_major$probe_minor" in
+    *[!0-9]*|"")
+      python_probe_notes="${{python_probe_notes}}${{candidate}} -> ${{probe_output}}; "
+      continue
+      ;;
+  esac
+  if [ "$probe_major" -gt 3 ] || {{ [ "$probe_major" -eq 3 ] && [ "$probe_minor" -ge 9 ]; }}; then
+    python_bin="$candidate"
+    break
+  fi
+  python_probe_notes="${{python_probe_notes}}${{candidate}} -> Python ${{probe_major}}.${{probe_minor}} is too old; "
+done
 if [ -z "$python_bin" ]; then
-  echo "This custom Codex agent requires Python 3 to bridge Responses to Chat Completions." >&2
+  if [ -n "$configured_python" ]; then
+    # 配置了固定解释器就不回退自动探测:用户明确指定了某个 conda 环境的 Python,
+    # 却静默换用 PATH 上的另一个,会让"为什么装的包不生效"极难排查。
+    echo "The Python configured for this agent cannot run the Chat Completions bridge: $configured_python" >&2
+  else
+    echo "This custom Codex agent requires Python 3.9+ to bridge Responses to Chat Completions." >&2
+  fi
+  if [ -n "$python_probe_notes" ]; then
+    echo "Checked: ${{python_probe_notes%; }}" >&2
+  fi
   exit 1
 fi
 proxy_log="$AGENT_HOME/codex-chat-proxy.log"
@@ -283,16 +695,39 @@ cleanup_proxy() {{
 }}
 trap cleanup_proxy EXIT
 
+# 冷启动叠加杀毒扫描时解释器起步可能远超 2s,窗口放宽到 20s,但进程一退出就立刻
+# 收敛,不白等。端口必须是纯数字,否则空文件会拼出 http://127.0.0.1:/v1。
 proxy_port=""
-for _ in $(seq 1 100); do
+for _ in $(seq 1 400); do
   if [ -s "$port_file" ]; then
-    proxy_port="$(cat "$port_file")"
-    break
+    candidate_port="$(cat "$port_file" 2>/dev/null || true)"
+    candidate_port="$(printf '%s' "$candidate_port" | tr -d '[:space:]')"
+    case "$candidate_port" in
+      ""|*[!0-9]*) ;;
+      *)
+        proxy_port="$candidate_port"
+        break
+        ;;
+    esac
   fi
-  sleep 0.02
+  kill -0 "$proxy_pid" 2>/dev/null || break
+  sleep 0.05
 done
+if [ -z "$proxy_port" ] && [ -s "$port_file" ]; then
+  # 进程可能在最后一次轮询之后才落盘,退出前再确认一次。
+  candidate_port="$(printf '%s' "$(cat "$port_file" 2>/dev/null || true)" | tr -d '[:space:]')"
+  case "$candidate_port" in
+    ""|*[!0-9]*) ;;
+    *) proxy_port="$candidate_port" ;;
+  esac
+fi
 if [ -z "$proxy_port" ]; then
   echo "Failed to start the local Chat Completions bridge." >&2
+  echo "Bridge: $python_bin $proxy_script" >&2
+  if [ -s "$proxy_log" ]; then
+    echo "$proxy_log:" >&2
+    tail -n 20 "$proxy_log" >&2
+  fi
   exit 1
 fi
 
@@ -307,6 +742,8 @@ fi
 }} > "$CODEX_HOME/config.toml"
 "#,
             proxy_script = CODEX_CHAT_PROXY_SCRIPT,
+            configured_python_setup =
+                codex_chat_bridge_configured_python_shell(&draft.bridge_python_path),
             config_before_base_url = config_before_base_url,
             config_after_base_url = config_after_base_url,
         )
@@ -337,7 +774,7 @@ set -euo pipefail
 AGENT_HOME="${{AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}}"
 mkdir -p "$AGENT_HOME"
 export CODEX_HOME="$AGENT_HOME"
-API_KEY_FILE="${{AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/{id}}}"
+{version_bypass}API_KEY_FILE="${{AERORIC_AGENT_API_KEY_FILE:-$HOME/.aeroric/agent-credentials/{id}}}"
 if [ ! -r "$API_KEY_FILE" ]; then
   echo "Aeroric API key file is missing: $API_KEY_FILE" >&2
   exit 1
@@ -359,6 +796,7 @@ AERORIC_CODEX_MODELS
 
 {proxy_setup}
 
+{hooks_fragment}
 {codex_bin} "$@" || codex_status=$?
 codex_status="${{codex_status:-0}}"
 unset api_key
@@ -371,6 +809,24 @@ exit "$codex_status"
         picker = picker,
         model_catalog = model_catalog,
         proxy_setup = proxy_setup,
+        hooks_fragment = CODEX_HOOKS_FRAGMENT_SHELL,
+        version_bypass = if use_proxy {
+            format!(
+                r#"# 纯版本/帮助探测直接短路,不碰 bridge:桌面端的版本探测会用 `--version`
+# 跑这个脚本,而 `codex --version` 既不需要 bridge 也不需要 config.toml。
+if [ "$#" -eq 1 ]; then
+  case "$1" in
+    --version|-V|--help|-h)
+      exec {codex_bin} "$1"
+      ;;
+  esac
+fi
+"#,
+                codex_bin = shell_quote(&codex_bin),
+            )
+        } else {
+            String::new()
+        },
         codex_bin = shell_quote(&codex_bin),
     )
 }
@@ -512,36 +968,21 @@ $env:no_proxy = $env:NO_PROXY
     let config_setup = if use_proxy {
         let (before, after) = split_codex_config_for_dynamic_base_url(&config);
         format!(
-            r#"$proxyScript = Join-Path $agentHome 'codex-chat-proxy.py'
+            r#"{port_reader}$proxyScript = Join-Path $agentHome 'codex-chat-proxy.py'
 [System.IO.File]::WriteAllText($proxyScript, {proxy_script}, $utf8NoBom)
 $portFile = Join-Path $agentHome 'codex-chat-proxy.port'
 Remove-Item -LiteralPath $portFile -Force -ErrorAction SilentlyContinue
-$pythonCommand = Get-Command python3, python, py -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $pythonCommand) {{
-  throw 'This custom Codex agent requires Python 3 to bridge Responses to Chat Completions.'
-}}
-$pythonArgs = @()
-if ($pythonCommand.Name -eq 'py.exe' -or $pythonCommand.Name -eq 'py') {{ $pythonArgs += '-3' }}
-$pythonArgs += @(('"' + $proxyScript + '"'), '--port-file', ('"' + $portFile + '"'))
-$proxyLog = Join-Path $agentHome 'codex-chat-proxy.log'
-$env:AERORIC_PROXY_LOG_LEVEL = if ($env:AERORIC_PROXY_LOG_LEVEL) {{ $env:AERORIC_PROXY_LOG_LEVEL }} else {{ 'INFO' }}
-$proxyProcess = Start-Process -FilePath $pythonCommand.Source -ArgumentList $pythonArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $proxyLog -RedirectStandardError (Join-Path $agentHome 'codex-chat-proxy-err.log')
-for ($attempt = 0; $attempt -lt 100; $attempt++) {{
-  if ((Test-Path -LiteralPath $portFile) -and (Get-Item -LiteralPath $portFile).Length -gt 0) {{ break }}
-  Start-Sleep -Milliseconds 20
-}}
-if (-not (Test-Path -LiteralPath $portFile)) {{
-  Stop-Process -Id $proxyProcess.Id -Force -ErrorAction SilentlyContinue
-  throw 'Failed to start the local Chat Completions bridge.'
-}}
-$proxyPort = (Get-Content -LiteralPath $portFile -Raw).Trim()
+$proxyProcess = $null
+{bridge_launch}
 $configContent = 'model = "' + $selectedModel + '"' + [Environment]::NewLine +
   'model_catalog_json = "model-catalog.json"' + [Environment]::NewLine +
   {before} + [Environment]::NewLine +
   'base_url = "http://127.0.0.1:' + $proxyPort + '/v1"' + [Environment]::NewLine +
   {after}
 "#,
+            port_reader = CODEX_CHAT_BRIDGE_PORT_READER_POWERSHELL,
             proxy_script = powershell_literal_block(CODEX_CHAT_PROXY_SCRIPT),
+            bridge_launch = codex_chat_bridge_launch_powershell(&draft.bridge_python_path),
             before = powershell_literal_block(before),
             after = powershell_literal_block(after),
         )
@@ -568,7 +1009,7 @@ $configContent = 'model = "' + $selectedModel + '"' + [Environment]::NewLine +
 $agentHome = if ($env:AERORIC_AGENT_HOME) {{ $env:AERORIC_AGENT_HOME }} else {{ Join-Path $HOME {relative_home} }}
 New-Item -ItemType Directory -Force -Path $agentHome | Out-Null
 $env:CODEX_HOME = $agentHome
-$apiKeyFile = if ($env:AERORIC_AGENT_API_KEY_FILE) {{ $env:AERORIC_AGENT_API_KEY_FILE }} else {{ Join-Path $HOME {api_key_file} }}
+{version_bypass}$apiKeyFile = if ($env:AERORIC_AGENT_API_KEY_FILE) {{ $env:AERORIC_AGENT_API_KEY_FILE }} else {{ Join-Path $HOME {api_key_file} }}
 if (-not (Test-Path -LiteralPath $apiKeyFile -PathType Leaf)) {{
   throw "Aeroric API key file is missing: $apiKeyFile"
 }}
@@ -585,6 +1026,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $agentHome 'model-catalog.json'), {model_catalog}, $utf8NoBom)
 {config_setup}
 [System.IO.File]::WriteAllText((Join-Path $agentHome 'config.toml'), $configContent, $utf8NoBom)
+{hooks_fragment}
 try {{
   & {codex_bin} @args
   exit $LASTEXITCODE
@@ -606,6 +1048,13 @@ try {{
         default_model = powershell_quote(&default_model),
         model_catalog = powershell_literal_block(&model_catalog),
         config_setup = config_setup,
+        hooks_fragment = CODEX_HOOKS_FRAGMENT_POWERSHELL,
+        version_bypass = if use_proxy {
+            CODEX_CHAT_BRIDGE_VERSION_BYPASS_POWERSHELL
+                .replace("CODEX_BIN_LITERAL", &powershell_quote(&codex_bin))
+        } else {
+            String::new()
+        },
         codex_bin = powershell_quote(&codex_bin),
     )
 }
@@ -1478,6 +1927,7 @@ pub(super) fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1530,6 +1980,7 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1677,6 +2128,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1700,6 +2152,309 @@ api_key = "sk-codex"
         assert!(!script.contains("sk-test"));
     }
 
+    fn hooks_fragment_test_draft(enable_chat_completions_proxy: bool) -> AgentSetupDraft {
+        bridge_test_draft(enable_chat_completions_proxy, "")
+    }
+
+    fn bridge_test_draft(
+        enable_chat_completions_proxy: bool,
+        bridge_python_path: &str,
+    ) -> AgentSetupDraft {
+        AgentSetupDraft {
+            id: "hooked".to_string(),
+            label: "Hooked".to_string(),
+            kind: AgentSetupKind::Codex,
+            base_url: "https://example.com/v1/".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-5.6".to_string(),
+            models: vec!["gpt-5.6".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy,
+            bridge_python_path: bridge_python_path.to_string(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        }
+    }
+
+    /// 自定义 codex Agent 的隔离 CODEX_HOME 读不到 `~/.codex/config.toml`,包装脚本
+    /// 必须自己追加 Aeroric 的 hook 片段;否则 hook 事件为零,状态判定会退回到
+    /// 噪声极大的 transcript 猜测,把每次工具调用都误报成"等待用户输入"。
+    #[cfg(not(windows))]
+    #[test]
+    fn codex_wrapper_appends_aeroric_hooks_fragment() {
+        for proxy in [false, true] {
+            let script = build_codex_agent_shell_script(&hooks_fragment_test_draft(proxy));
+            assert!(
+                script.contains(".aeroric/hooks/codex-hooks.toml"),
+                "proxy={proxy} 缺少 hook 片段默认路径"
+            );
+            assert!(
+                script
+                    .contains("cat -- \"$aeroric_hooks_fragment\" >> \"$CODEX_HOME/config.toml\""),
+                "proxy={proxy} 未把片段追加进本 Agent 的 config.toml"
+            );
+            // 必须在 config.toml 整体重写之后追加,否则会被覆盖掉。
+            // 锚点用重写分支特有的 `} > `,避免匹配到片段自身的 `>>` 追加。
+            let write = script
+                .rfind("} > \"$CODEX_HOME/config.toml\"")
+                .expect("config.toml 写入位置");
+            let append = script
+                .find("cat -- \"$aeroric_hooks_fragment\"")
+                .expect("片段追加位置");
+            assert!(append > write, "proxy={proxy} 片段追加早于 config 重写");
+            // 片段缺失时不能让 `set -e` 中断启动。
+            assert!(script.contains("if [ -r \"$aeroric_hooks_fragment\" ]; then"));
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn codex_powershell_wrapper_appends_aeroric_hooks_fragment() {
+        for proxy in [false, true] {
+            let script = build_codex_agent_powershell_script(&hooks_fragment_test_draft(proxy));
+            assert!(
+                script.contains(".aeroric/hooks/codex-hooks.toml"),
+                "proxy={proxy} 缺少 hook 片段默认路径"
+            );
+            let write = script
+                .rfind("'config.toml'), $configContent")
+                .expect("config.toml 写入位置");
+            let append = script
+                .find("Add-Content -LiteralPath (Join-Path $env:CODEX_HOME 'config.toml')")
+                .expect("片段追加位置");
+            assert!(append > write, "proxy={proxy} 片段追加早于 config 重写");
+            assert!(script.contains("if (Test-Path -LiteralPath $aeroricHooksFragment)"));
+        }
+    }
+
+    /// bridge 启动必须先探到一个真正能跑的 Python 3.9+。Windows 预置的 Microsoft
+    /// Store 别名桩能被 `Get-Command` 找到却一运行就退出,只判断"命令存在"会让
+    /// 干净装机的用户卡在无线索的 "Failed to start the local Chat Completions
+    /// bridge."。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_probes_a_usable_python_before_launching() {
+        let script = build_codex_agent_powershell_script(&hooks_fragment_test_draft(true));
+        // 必须真的执行解释器取版本,而不是只看命令是否存在。
+        assert!(script.contains("import sys; print(sys.version_info[0], sys.version_info[1])"));
+        assert!(script.contains("if ($probeExit -ne 0 -or -not $versionMatch.Success) {"));
+        assert!(script.contains("($probeMajor -eq 3 -and $probeMinor -lt 9)"));
+        // 候选要按 python3→python→py 定序自查:Get-Command 多入参不保证顺序,
+        // Select-Object -First 1 可能先拿到没装运行时的 py.exe。
+        assert!(script.contains("foreach ($candidateName in @('python3', 'python', 'py'))"));
+        assert!(!script.contains("Get-Command python3, python, py"));
+        // 失败时要给出可执行的下一步,并点名商店桩不算。
+        assert!(script.contains("requires Python 3.9+"));
+        assert!(script.contains("Microsoft Store alias stub does not count"));
+        assert!(script.contains("'Checked: ' + ($bridgeProbeNotes -join '; ')"));
+    }
+
+    /// bridge 起不来时必须把日志尾部带进报错,否则用户只看到一句没有线索的失败。
+    /// 等待窗口也要够长:首次冷启动叠加 Defender 实时扫描经常超过原先的 2s。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_waits_longer_and_reports_the_log_tail() {
+        let script = build_codex_agent_powershell_script(&hooks_fragment_test_draft(true));
+        assert!(script.contains("for ($attempt = 0; $attempt -lt 400; $attempt++) {"));
+        assert!(script.contains("Start-Sleep -Milliseconds 50"));
+        // 进程已经死了就别把 20s 白等完。
+        assert!(script.contains("if ($proxyProcess.HasExited) { break }"));
+        assert!(script.contains("Get-Content -LiteralPath $logPath -Tail 20"));
+        assert!(script.contains("' (exited with code ' + $proxyProcess.ExitCode + ')'"));
+        assert!(script.contains("Failed to start the local Chat Completions bridge."));
+    }
+
+    /// 端口必须校验成纯数字:旧版只用 `Test-Path`,文件已创建但还没写完时会拿到空
+    /// 端口,拼出 `http://127.0.0.1:/v1`,把启动失败推迟成难查的请求错误。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_rejects_a_half_written_port_file() {
+        let script = build_codex_agent_powershell_script(&hooks_fragment_test_draft(true));
+        assert!(script.contains("function Read-AeroricBridgePort([string] $path) {"));
+        assert!(script.contains("if ($raw -match '^[0-9]+$') { return $raw }"));
+        // 端口只能来自这个校验过的读取函数。
+        assert!(!script.contains("$proxyPort = (Get-Content -LiteralPath $portFile -Raw).Trim()"));
+        assert!(script.contains("$proxyPort = Read-AeroricBridgePort $portFile"));
+        // 端口读取函数要定义在使用之前。
+        let definition = script
+            .find("function Read-AeroricBridgePort")
+            .expect("端口读取函数定义");
+        let usage = script
+            .find("$proxyPort = Read-AeroricBridgePort")
+            .expect("端口读取函数调用");
+        assert!(definition < usage, "端口读取函数定义晚于调用");
+    }
+
+    /// 上面几个 bridge 测试都是字符串匹配,匹配得再全也证明不了脚本能被 shell 解析。
+    /// bridge 分支里有嵌套的 `case`/`$(...)`/花括号转义,漏一个反引号或大括号就会让
+    /// 生成的包装脚本在用户机器上直接语法错误,所以这里真的跑一次 `bash -n`。
+    #[cfg(not(windows))]
+    #[test]
+    fn generated_codex_shell_wrapper_parses_under_bash() {
+        let dir = std::env::temp_dir().join(format!(
+            "aeroric-codex-shell-syntax-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).expect("临时目录");
+        for proxy in [false, true] {
+            let script = build_codex_agent_shell_script(&hooks_fragment_test_draft(proxy));
+            let path = dir.join(format!("wrapper-proxy-{proxy}.sh"));
+            fs::write(&path, &script).expect("写入包装脚本");
+            let output = std::process::Command::new("bash")
+                .arg("-n")
+                .arg(&path)
+                .output()
+                .expect("执行 bash -n");
+            assert!(
+                output.status.success(),
+                "proxy={proxy} 生成的包装脚本语法错误: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 配置了固定解释器后不能再回退自动探测:用户明确指定某个 conda 环境的 Python,
+    /// 却静默换用 PATH 上的另一个,会让"为什么装的包不生效"极难排查。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_pins_the_configured_interpreter() {
+        let script =
+            build_codex_agent_powershell_script(&bridge_test_draft(true, r"C:\Py 3.12\python.exe"));
+        assert!(script.contains(r"$configuredBridgePython = 'C:\Py 3.12\python.exe'"));
+        // 固定路径分支下不能出现自动探测的候选遍历。
+        assert!(!script.contains("foreach ($candidateName in @('python3', 'python', 'py'))"));
+        // 固定路径同样要实跑校验版本,并且失败就报错而不是换一个。
+        assert!(script.contains("$configuredMatch = [regex]::Match($configuredProbe"));
+        assert!(script.contains("cannot run the Chat Completions bridge"));
+        assert!(script.contains("is too old for the Chat Completions bridge (need 3.9+)"));
+        // 环境变量可临时覆盖,便于不改设置就试另一个解释器。
+        assert!(script.contains("if ($env:AERORIC_BRIDGE_PYTHON)"));
+        // 启动与等待段两种选择方式共用。
+        assert!(script.contains("for ($attempt = 0; $attempt -lt 400; $attempt++) {"));
+    }
+
+    /// 没配置就仍然走自动探测,行为与 v7 一致。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_autodetects_when_unconfigured() {
+        let script = build_codex_agent_powershell_script(&bridge_test_draft(true, ""));
+        assert!(script.contains("foreach ($candidateName in @('python3', 'python', 'py'))"));
+        assert!(!script.contains("$configuredBridgePython"));
+    }
+
+    /// 解释器路径必须用单引号转义后再插进 PowerShell。conda 环境路径常带空格,而
+    /// `$` 之类字符裸插会被 PowerShell 重新解析。
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_quotes_the_configured_interpreter() {
+        let script = build_codex_agent_powershell_script(&bridge_test_draft(
+            true,
+            r"C:\it's\py$x\python.exe",
+        ));
+        // 单引号翻倍,`$` 在单引号里不插值。
+        assert!(script.contains(r"'C:\it''s\py$x\python.exe'"));
+    }
+
+    /// bash 侧固定解释器:只试这一个候选,且报错要点名是配置的那条路径。
+    #[cfg(not(windows))]
+    #[test]
+    fn shell_chat_bridge_pins_the_configured_interpreter() {
+        let script =
+            build_codex_agent_shell_script(&bridge_test_draft(true, "/opt/my env/bin/python3"));
+        // 路径要经过 shell_quote,带空格也不会被重新分词。
+        assert!(script.contains("configured_python='/opt/my env/bin/python3'"));
+        assert!(script.contains("python_candidates=(\"$configured_python\")"));
+        // 固定路径分支不能把自动探测的候选也拼进去。
+        assert!(!script.contains("python_candidates=(\"python3\" \"python\")"));
+        assert!(script.contains("The Python configured for this agent cannot run"));
+        // 绝对路径要用 -x 判断可执行,而不是 command -v。
+        assert!(script.contains("*/*) [ -x \"$candidate\" ]"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn shell_chat_bridge_autodetects_when_unconfigured() {
+        let script = build_codex_agent_shell_script(&bridge_test_draft(true, ""));
+        assert!(script.contains("python_candidates=(\"python3\" \"python\")"));
+        // 未配置时也允许用环境变量临时指定。
+        assert!(script.contains("configured_python=\"${AERORIC_BRIDGE_PYTHON:-}\""));
+    }
+
+    /// `--version` 探测不能拉起 bridge。桌面端的 `detect_agent_version` 就是用
+    /// `--version` 跑这个包装脚本,旧结构会让没装 Python 的机器连版本都测不出来,
+    /// 装了的机器也要白等一次解释器冷启动。
+    #[cfg(not(windows))]
+    #[test]
+    fn shell_chat_bridge_short_circuits_version_probes() {
+        let script = build_codex_agent_shell_script(&bridge_test_draft(true, ""));
+        let bypass = script
+            .find("--version|-V|--help|-h)")
+            .expect("版本短路分支");
+        let bridge = script.find("codex-chat-proxy.py").expect("bridge 启动位置");
+        assert!(bypass < bridge, "版本短路必须在 bridge 启动之前");
+        // 也要在读凭据之前:`codex --version` 不需要 API key。
+        let api_key = script.find("API_KEY_FILE=").expect("凭据读取位置");
+        assert!(bypass < api_key, "版本短路必须在读凭据之前");
+        // 不开 bridge 的脚本不需要这段短路。
+        assert!(
+            !build_codex_agent_shell_script(&bridge_test_draft(false, ""))
+                .contains("--version|-V|--help|-h)")
+        );
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn powershell_chat_bridge_short_circuits_version_probes() {
+        let script = build_codex_agent_powershell_script(&bridge_test_draft(true, ""));
+        let bypass = script
+            .find("@('--version', '-V', '--help', '-h') -contains $args[0]")
+            .expect("版本短路分支");
+        let bridge = script.find("codex-chat-proxy.py").expect("bridge 启动位置");
+        assert!(bypass < bridge, "版本短路必须在 bridge 启动之前");
+        let api_key = script.find("$apiKeyFile = ").expect("凭据读取位置");
+        assert!(bypass < api_key, "版本短路必须在读凭据之前");
+        assert!(
+            !build_codex_agent_powershell_script(&bridge_test_draft(false, ""))
+                .contains("-contains $args[0]")
+        );
+    }
+
+    /// 预检、bash、PowerShell 三处的版本下限必须一致,否则会出现"预检说可用、启动仍
+    /// 然失败"这种最难排查的组合。
+    #[test]
+    fn chat_bridge_python_floor_is_consistent_across_all_three_sites() {
+        assert_eq!(CHAT_BRIDGE_PYTHON_MIN_MINOR, 9);
+        #[cfg(not(windows))]
+        {
+            let script = build_codex_agent_shell_script(&bridge_test_draft(true, ""));
+            assert!(script.contains(&format!(
+                "[ \"$probe_minor\" -ge {CHAT_BRIDGE_PYTHON_MIN_MINOR} ]"
+            )));
+        }
+        #[cfg(any(windows, test))]
+        {
+            let script = build_codex_agent_powershell_script(&bridge_test_draft(true, ""));
+            assert!(script.contains(&format!("$probeMinor -lt {CHAT_BRIDGE_PYTHON_MIN_MINOR})")));
+        }
+    }
+
+    /// bash 侧与 PowerShell 侧共用同一个 bridge,校验强度必须保持一致。
+    #[cfg(not(windows))]
+    #[test]
+    fn shell_chat_bridge_probes_python_and_reports_the_log_tail() {
+        let script = build_codex_agent_shell_script(&hooks_fragment_test_draft(true));
+        assert!(script.contains("import sys; print(sys.version_info[0], sys.version_info[1])"));
+        assert!(script.contains("requires Python 3.9+"));
+        assert!(script.contains("[ \"$probe_minor\" -ge 9 ]"));
+        assert!(script.contains("for _ in $(seq 1 400); do"));
+        // 进程已经退出就立刻收敛,不白等满窗口。
+        assert!(script.contains("kill -0 \"$proxy_pid\" 2>/dev/null || break"));
+        assert!(script.contains("tail -n 20 \"$proxy_log\" >&2"));
+        // 空端口不能被当成有效端口用去拼 base_url。
+        assert!(script.contains("\"\"|*[!0-9]*) ;;"));
+    }
+
     /// 没有显式设置过推理强度的 Agent 一律默认 xhigh；模型目录必须同时声明该等级，
     /// 否则 Codex 会拒绝这个取值。
     #[test]
@@ -1714,6 +2469,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1761,6 +2517,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1790,6 +2547,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1814,6 +2572,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1933,6 +2692,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1961,6 +2721,7 @@ api_key = "sk-codex"
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -1984,6 +2745,7 @@ api_key = "sk-codex"
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         };
@@ -2021,6 +2783,7 @@ api_key = "sk-codex"
             models: Vec::new(),
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         };
@@ -2061,6 +2824,7 @@ fi
             models: Vec::new(),
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         };
@@ -2096,6 +2860,7 @@ fi
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         };
@@ -2142,6 +2907,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["gpt-5.6-sol".to_string()],
                 enable_1m_context: false,
                 enable_chat_completions_proxy: true,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],
@@ -2175,6 +2941,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
             proxy_enabled: false,
         });
@@ -2192,6 +2959,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["gpt-5.6-sol".to_string()],
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],
@@ -2232,6 +3000,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["gpt-5.6".to_string()],
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],
@@ -2269,6 +3038,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["claude-opus-4-6".to_string()],
                 enable_1m_context: true,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],
@@ -2348,6 +3118,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["claude-opus-4-6".to_string()],
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],

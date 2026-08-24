@@ -644,6 +644,7 @@ mod tests {
             models: vec!["gpt-test".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: true,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         });

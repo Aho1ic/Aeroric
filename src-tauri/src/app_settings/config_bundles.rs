@@ -244,6 +244,8 @@ pub(super) fn collect_agent_config_bundle_agent(
             models: credentials.models,
             enable_1m_context: credentials.enable_1m_context,
             enable_chat_completions_proxy: false,
+            // 内置 Agent 不走 bridge,没有解释器设置可带。
+            bridge_python_path: String::new(),
             reasoning_effort: (configured_agent_family(settings, agent) == AgentFamily::Dsh)
                 .then(|| dsh_reasoning_effort_in(settings, agent)),
         });
@@ -280,6 +282,7 @@ pub(super) fn collect_agent_config_bundle_agent(
         models: profile.models.clone(),
         enable_1m_context: profile.enable_1m_context,
         enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
+        bridge_python_path: profile.bridge_python_path.clone(),
         reasoning_effort: (family == AgentFamily::Dsh)
             .then(|| dsh_reasoning_effort_in(settings, &profile.id)),
     })
@@ -328,9 +331,27 @@ pub(super) fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
         enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
+        bridge_python_path: usable_imported_bridge_python_path(&agent.bridge_python_path),
         dsh_api_protocol: String::new(),
         proxy_enabled: false,
     })
+}
+
+/// 导入配置包时过滤解释器路径。
+///
+/// 导出机上的绝对路径在导入机上通常不成立(换机、换用户名、conda 环境名不同)。
+/// 直接照搬会生成一个必然启动失败的脚本,而清空则回退到自动探测——后者在多数机器
+/// 上可用,且失败信息里仍会列出每个候选的原因。所以只在实跑验证通过时保留。
+fn usable_imported_bridge_python_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if probe_chat_bridge_python_program(trimmed).is_usable() {
+        trimmed.to_string()
+    } else {
+        String::new()
+    }
 }
 
 pub(super) fn import_agent_config_entry(
@@ -469,6 +490,7 @@ pub(super) fn import_agent_config_entry(
                 models: agent.models,
                 enable_1m_context: agent.enable_1m_context,
                 enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
+                bridge_python_path: usable_imported_bridge_python_path(&agent.bridge_python_path),
                 username: String::new(),
                 password: String::new(),
             })
@@ -852,6 +874,7 @@ pub(super) fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBund
             models,
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             reasoning_effort: None,
         });
     }
@@ -931,6 +954,7 @@ mod tests {
             models: Vec::new(),
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             reasoning_effort: None,
         }
     }
@@ -1026,6 +1050,7 @@ mod tests {
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: true,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             username: String::new(),
             password: String::new(),
         });
@@ -1126,6 +1151,7 @@ mod tests {
             models: vec!["deepseek-v4-pro".to_string()],
             enable_1m_context: false,
             enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
             reasoning_effort: Some("off".to_string()),
         };
 

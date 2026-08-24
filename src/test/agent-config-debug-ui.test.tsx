@@ -149,10 +149,30 @@ function renderModelManagedAgentConfigPanel() {
     }
     if (command === "update_custom_agent_chat_completions_proxy") {
       configContent = "#!/bin/sh\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n";
-      const enabled = (args as { enabled: boolean }).enabled;
+      const { enabled, bridgePythonPath } = args as {
+        enabled: boolean;
+        bridgePythonPath: string;
+      };
       return Promise.resolve({
         ...appSettings,
-        custom_agents: [{ ...baseProfile, enable_chat_completions_proxy: enabled }],
+        custom_agents: [
+          {
+            ...baseProfile,
+            enable_chat_completions_proxy: enabled,
+            bridge_python_path: bridgePythonPath,
+          },
+        ],
+      });
+    }
+    if (command === "probe_chat_bridge_python") {
+      const path = (args as { bridgePythonPath: string }).bridgePythonPath;
+      return Promise.resolve({
+        usable: Boolean(path),
+        program: path,
+        version: path ? "3.12" : "",
+        configured: Boolean(path),
+        failure: "",
+        checked: path ? [] : ["python3 -> Python was not found"],
       });
     }
     return Promise.resolve(undefined);
@@ -617,11 +637,47 @@ describe("Agent config and debug panel UI", () => {
       expect(invoke).toHaveBeenCalledWith("update_custom_agent_chat_completions_proxy", {
         id: "gpt55",
         enabled: true,
+        bridgePythonPath: "",
       }),
     );
     expect(
       await findConfigEditor("#!/bin/sh\n# AERORIC_CODEX_CHAT_PROXY_VERSION=2\n"),
     ).toBeInTheDocument();
+  });
+
+  /// 缺失的 Python 必须在配置界面里就暴露,而不是等到启动终端时 wrapper 抛错。
+  it("pre-checks Python as soon as the bridge is switched on", async () => {
+    const user = userEvent.setup();
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    expect(screen.queryByLabelText("Bridge Python interpreter")).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+
+    expect(await screen.findByLabelText("Bridge Python interpreter")).toBeInTheDocument();
+    expect(await screen.findByText(/No usable Python 3\.9\+ found/)).toBeInTheDocument();
+    expect(screen.getByText(/python3 -> Python was not found/)).toBeInTheDocument();
+  });
+
+  it("pins a specific interpreter for an existing Codex agent", async () => {
+    const user = userEvent.setup();
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+    await user.type(
+      await screen.findByLabelText("Bridge Python interpreter"),
+      "/opt/miniconda3/envs/codex/bin/python",
+    );
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_chat_completions_proxy", {
+        id: "gpt55",
+        enabled: true,
+        bridgePythonPath: "/opt/miniconda3/envs/codex/bin/python",
+      }),
+    );
   });
 
   it("enables 1M context for an existing Claude agent", async () => {
@@ -841,6 +897,43 @@ describe("Agent config and debug panel UI", () => {
         enable_chat_completions_proxy: true,
       },
     });
+  });
+
+  it("creates a Codex agent with a pinned bridge interpreter", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "Liwan");
+    await user.type(screen.getByLabelText("Base URL"), "https://metapi.example");
+    await user.type(screen.getByLabelText("API Key"), "sk-test");
+    await user.type(screen.getByLabelText("Model"), "gpt-5.6-sol");
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+    await user.type(
+      screen.getByLabelText("Bridge Python interpreter"),
+      "/opt/miniconda3/envs/codex/bin/python",
+    );
+    await user.click(screen.getByRole("button", { name: /^Add Agent$/i }));
+
+    expect(invoke).toHaveBeenCalledWith(
+      "setup_agent_profile",
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          enable_chat_completions_proxy: true,
+          bridge_python_path: "/opt/miniconda3/envs/codex/bin/python",
+        }),
+      }),
+    );
+  });
+
+  /// 桥接关着时不该出现解释器输入,免得用户填了却不生效。
+  it("only offers the bridge interpreter once the bridge is enabled", async () => {
+    const user = userEvent.setup();
+    renderAddAgentPanel();
+
+    await user.type(screen.getByLabelText("Agent Name"), "Liwan");
+    expect(screen.queryByLabelText("Bridge Python interpreter")).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Use Chat Completions compatibility bridge"));
+    expect(screen.getByLabelText("Bridge Python interpreter")).toBeInTheDocument();
   });
 
   it("keeps detected models selectable when the API does not expose quota data", async () => {
