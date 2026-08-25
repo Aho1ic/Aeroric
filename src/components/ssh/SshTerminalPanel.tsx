@@ -9,20 +9,36 @@ import {
 } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Plug, Power, Server } from "lucide-react";
-import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
+import type {
+  FontFamily,
+  SshConnection,
+  SshHostKey,
+  SshHostKeyStatus,
+  TerminalFontSize,
+  ThemeVariant,
+} from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { themeFor } from "../terminalShared";
 import { createTerminalRuntime, type TerminalRuntime } from "../terminalRuntime";
 import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionList } from "./SshConnectionList";
+import { SshHostKeyDialog } from "./SshHostKeyDialog";
 import type { SshConnectionProtocol } from "./SshConnectionContextMenu";
-import { createSshShellId, shouldAttemptSshAutoConnect } from "./session";
+import { createSshShellId, shouldAttemptSshAutoConnect, sshHostKeyGate } from "./session";
+import { useSshGroups } from "./useSshGroups";
 import "@xterm/xterm/css/xterm.css";
 
 interface ActiveSshSession {
   shellId: string;
   connection: SshConnection;
+}
+
+/** 等待用户确认 host key 的连接。确认后才真正开会话。 */
+interface PendingHostKey {
+  connection: SshConnection;
+  target: string;
+  keys: SshHostKey[];
 }
 
 interface Props {
@@ -76,7 +92,10 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   );
   const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // 新建连接时预填的分组,来自分组标题上的 +。
+  const [dialogInitialGroup, setDialogInitialGroup] = useState("");
   const [activeSession, setActiveSession] = useState<ActiveSshSession | null>(null);
+  const [pendingHostKey, setPendingHostKey] = useState<PendingHostKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const autoConnectStartedRef = useRef<string | null>(null);
   activeRef.current = active;
@@ -102,17 +121,6 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     [connections, selectedId],
   );
   const terminalTheme = themeFor(themeVariant);
-  const connectionGroups = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          connections
-            .map((connection) => connection.group?.trim())
-            .filter((group): group is string => Boolean(group)),
-        ),
-      ),
-    [connections],
-  );
 
   useEffect(() => {
     if (initialConnectionId && initialConnectionId !== selectedId) {
@@ -134,6 +142,15 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     [onConnectionsChange],
   );
 
+  // 对话框下拉、列表、欢迎页视图共用同一份名单(store 订阅),否则一侧建的空分组
+  // 在另一侧看不到。
+  const {
+    groups: connectionGroups,
+    createGroup: handleCreateGroup,
+    deleteGroup: handleDeleteGroup,
+    renameGroup: handleRenameGroup,
+  } = useSshGroups(connections, saveConnections);
+
   const handleSaveConnection = useCallback(
     (connection: SshConnection) => {
       const exists = connections.some((item) => item.id === connection.id);
@@ -141,11 +158,15 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         ? connections.map((item) => (item.id === connection.id ? connection : item))
         : [connection, ...connections];
       saveConnections(next);
+      // 在对话框里手输的新分组也要进名单,否则它只在"有连接引用它"时才可见,
+      // 一旦把最后一条连接移走就消失了。
+      handleCreateGroup(connection.group ?? "");
       setSelectedId(connection.id);
       setDialogOpen(false);
+      setDialogInitialGroup("");
       setEditingConnection(null);
     },
-    [connections, saveConnections],
+    [connections, handleCreateGroup, saveConnections],
   );
 
   const handleDeleteConnection = useCallback(
@@ -167,12 +188,8 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     [activeSession, connections, onDeleteConnection, saveConnections, selectedId],
   );
 
-  const connectConnection = useCallback(
+  const startSession = useCallback(
     (connection: SshConnection) => {
-      if (!connection) return;
-      if (activeSession) {
-        invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
-      }
       const now = Date.now();
       const nextConnection = { ...connection, lastConnectedAt: now };
       saveConnections(
@@ -184,7 +201,36 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         connection: nextConnection,
       });
     },
-    [activeSession, connections, saveConnections],
+    [connections, saveConnections],
+  );
+
+  const connectConnection = useCallback(
+    (connection: SshConnection) => {
+      if (!connection) return;
+      if (activeSession) {
+        invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
+      }
+      setError(null);
+      // 后端对每次 ssh 调用都强制 StrictHostKeyChecking=yes,未登记的主机必然
+      // 连不上。先问一次:需要确认指纹就弹窗,让用户在 App 里完成命令行 ssh
+      // 那个 "Are you sure you want to continue connecting?" 步骤。
+      invoke<SshHostKeyStatus>("check_ssh_host_key", { connection })
+        .then((status) => {
+          const gate = sshHostKeyGate(status);
+          if (gate.action === "prompt") {
+            setPendingHostKey({ connection, target: gate.target, keys: gate.keys });
+            return;
+          }
+          startSession(connection);
+        })
+        .catch((e: unknown) => {
+          // 查不出来就照常连,由 ssh 给出真实结果 —— 这一步只为改善措辞,
+          // 不该变成新的失败点。
+          console.warn("check_ssh_host_key failed", e);
+          startSession(connection);
+        });
+    },
+    [activeSession, startSession],
   );
 
   const handleConnect = useCallback(() => {
@@ -323,14 +369,25 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
           onSelect={(connection) => setSelectedId(connection.id)}
           onCreate={() => {
             setEditingConnection(null);
+            setDialogInitialGroup("");
             setDialogOpen(true);
           }}
           onEdit={(connection) => {
             setEditingConnection(connection);
+            setDialogInitialGroup("");
             setDialogOpen(true);
           }}
           onDelete={handleDeleteConnection}
           onConnect={handleConnectionMenuAction}
+          groupNames={connectionGroups}
+          onCreateGroup={handleCreateGroup}
+          onDeleteGroup={handleDeleteGroup}
+          onRenameGroup={handleRenameGroup}
+          onCreateInGroup={(group) => {
+            setEditingConnection(null);
+            setDialogInitialGroup(group);
+            setDialogOpen(true);
+          }}
         />
       )}
 
@@ -379,11 +436,28 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         <SshConnectionDialog
           connection={editingConnection}
           groups={connectionGroups}
+          initialGroup={dialogInitialGroup}
           onClose={() => {
             setDialogOpen(false);
+            setDialogInitialGroup("");
             setEditingConnection(null);
           }}
           onSave={handleSaveConnection}
+        />
+      )}
+
+      {/* 与连接列表无关:嵌入模式下也要能确认 host key,否则那条路径永远连不上新主机。 */}
+      {pendingHostKey && (
+        <SshHostKeyDialog
+          connection={pendingHostKey.connection}
+          target={pendingHostKey.target}
+          keys={pendingHostKey.keys}
+          onTrusted={() => {
+            const { connection } = pendingHostKey;
+            setPendingHostKey(null);
+            startSession(connection);
+          }}
+          onCancel={() => setPendingHostKey(null)}
         />
       )}
     </div>

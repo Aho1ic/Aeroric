@@ -53,6 +53,7 @@ import {
 } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import type { SshProjectInput } from "./ssh/sshProject";
+import { useSshGroups } from "./ssh/useSshGroups";
 import { DockerIcon } from "./DockerIcon";
 import RecursiveHeroCanvas from "./recursive-hero-effect/RecursiveHeroCanvas";
 import { ProjectGroupDialog } from "./ProjectGroupDialog";
@@ -450,17 +451,8 @@ export function WelcomePage({
   const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
-  const sshGroups = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          sshConnections
-            .map((connection) => connection.group?.trim())
-            .filter((group): group is string => Boolean(group)),
-        ),
-      ),
-    [sshConnections],
-  );
+  // 与右侧栏 SSH 列表同源(store 订阅),空分组在这里的分组下拉里也要能选到。
+  const { groups: sshGroups } = useSshGroups(sshConnections, onSshConnectionsChange);
   const switchWelcomeView = useCallback((nextView: typeof view) => {
     setSftpOpen(false);
     setSftpConnectionId(undefined);

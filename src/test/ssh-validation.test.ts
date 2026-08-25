@@ -35,6 +35,7 @@ describe("validateSshConnectionDraft", () => {
         remotePath: "",
         group: "",
         autoSudoWithPassword: false,
+        useProxy: false,
       }),
     ).toEqual({
       name: "Name is required.",
@@ -59,6 +60,7 @@ describe("normalizeSshConnectionDraft", () => {
           remotePath: " /srv/app ",
           group: " 生产 ",
           autoSudoWithPassword: true,
+          useProxy: false,
         },
         123,
         456,
@@ -76,6 +78,29 @@ describe("normalizeSshConnectionDraft", () => {
     });
   });
 
+  /// 勾选状态必须能存下来,否则每次重开对话框都退回不走代理。
+  it("persists the proxy opt-in and omits it when unchecked", () => {
+    const base = {
+      name: "prod",
+      host: "server.example.com",
+      port: "22",
+      username: "deploy",
+      identityFile: "",
+      password: "",
+      remotePath: "",
+      group: "",
+      autoSudoWithPassword: false,
+    };
+
+    expect(normalizeSshConnectionDraft({ ...base, useProxy: true }, 1, 2)).toMatchObject({
+      useProxy: true,
+    });
+
+    expect(normalizeSshConnectionDraft({ ...base, useProxy: false }, 1, 2)).not.toHaveProperty(
+      "useProxy",
+    );
+  });
+
   it("preserves an explicit password while omitting blank passwords", () => {
     expect(
       normalizeSshConnectionDraft(
@@ -89,6 +114,7 @@ describe("normalizeSshConnectionDraft", () => {
           remotePath: "",
           group: "",
           autoSudoWithPassword: false,
+          useProxy: false,
         },
         123,
         456,
@@ -107,6 +133,7 @@ describe("normalizeSshConnectionDraft", () => {
           remotePath: "",
           group: "",
           autoSudoWithPassword: false,
+          useProxy: false,
         },
         123,
         456,
@@ -127,6 +154,7 @@ describe("normalizeSshConnectionDraft", () => {
           remotePath: "",
           group: "",
           autoSudoWithPassword: false,
+          useProxy: false,
         },
         123,
         456,

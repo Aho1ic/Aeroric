@@ -21,6 +21,14 @@ const SESSION_WAIT_POLL: Duration = Duration::from_millis(50);
 const SESSION_WAIT_MAX: Duration = Duration::from_millis(500);
 const PTY_READ_BUFFER_SIZE: usize = 32 * 1024;
 pub(crate) const PTY_EMIT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+/// 交互式远程终端(SSH / WSL shell)的合并窗口。
+///
+/// 这类会话里人在等自己的回显,agent 那档 16ms 会被感知成手感发粘;但完全不合并
+/// (`Immediate`)更糟 —— 每次 PTY read 单独发一条 IPC 消息,前端逐条跑控制符扫描与
+/// ANSI 重映射,TUI 重绘或大量输出时主线程被消息洪水占满,击键回显排在后面,
+/// 而且丢掉了有界 channel 的背压。4ms 相对网络 RTT 可忽略,却能把一次突发的
+/// 几十条消息合成一条。
+pub(crate) const PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL: Duration = Duration::from_millis(4);
 pub(crate) const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
 /// 有界 channel 容量：满时 reader 线程阻塞，反压传播至 OS 内核 PTY 缓冲区，
 /// 最终使写入进程（Claude/Codex）的 write() 系统调用阻塞，从源头限流。
@@ -1061,22 +1069,28 @@ fn startup_gate_text(input: &str) -> bool {
     trust_gate || hook_review_gate || hook_gate || bypass_gate || generic_gate
 }
 
+/// 累积尾窗并回答"当前窗口里还看得见门控吗"。
+///
+/// 返回的是**状态**而不是"刚刚触发",所以命中后不清空尾窗:调用方每次都用返回值
+/// 覆盖 `gate_pending`,误判的门控就能随着后续输出把旧文本挤出尾窗而自行解除。
+/// 旧实现命中即 `clear()` 并只把 `gate_pending` 置 true,一旦误判就再也清不掉,
+/// 只能等满 `STARTUP_GATE_MAX_WAIT`。
 fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
     let clean = strip_startup_ansi(output);
     if clean.is_empty() {
-        return false;
+        return startup_gate_text(tail);
     }
     tail.push_str(&clean);
-    if startup_gate_text(tail) {
-        tail.clear();
-        return true;
-    }
+    // 按字符边界截尾。`String::drain` 的字节下标落在多字节字符中间会 panic,
+    // 而这里的输入是 agent 启动输出 —— 中文 banner 一旦把尾窗顶过上限就会踩中,
+    // panic 发生在注入用的 blocking 任务里,结果是 prompt 静默不投递、
+    // 注册也不回收。改走 `trailing_window` 的边界对齐逻辑。
     const TAIL_LIMIT: usize = 512;
     if tail.len() > TAIL_LIMIT {
-        let keep_from = tail.len() - TAIL_LIMIT;
-        tail.drain(..keep_from);
+        let kept = trailing_window(tail, TAIL_LIMIT).to_string();
+        *tail = kept;
     }
-    false
+    startup_gate_text(tail)
 }
 
 pub(crate) fn register_initial_input_signal(
@@ -1156,10 +1170,12 @@ fn wait_for_initial_input_ready_with_cap(
             Ok(StartupSignal::Output(output)) => {
                 let now = Instant::now();
                 let first_output = *first_output_at.get_or_insert(now);
-                if startup_output_indicates_gate(&mut detection_tail, &output) {
-                    gate_pending = true;
+                let gate_visible = startup_output_indicates_gate(&mut detection_tail, &output);
+                // 用状态覆盖而非单向置位:门控文本被后续输出挤出尾窗即视为解除。
+                if gate_visible && !gate_pending {
                     user_confirmed_gate = false;
                 }
+                gate_pending = gate_visible;
                 if !gate_pending && now.duration_since(first_output) >= STARTUP_OUTPUT_MAX_WAIT {
                     return true;
                 }
@@ -1190,17 +1206,16 @@ fn wait_for_initial_input_ready_with_cap(
                     }
                     if Instant::now().duration_since(started_at) >= gate_max_wait {
                         // 门控迟迟没被应答:要么判定误报,要么用户已经放弃。
-                        // 两种情况都不该继续占用 blocking 线程。
-                        return false;
+                        // 无论哪种,晚投递也好过静默丢弃 —— 旧实现在这里返回 false,
+                        // prompt 就此消失,用户只看到一个空 composer,没有任何提示。
+                        return true;
                     }
                     continue;
                 }
-                if Instant::now().duration_since(first_output_at.unwrap())
-                    >= STARTUP_OUTPUT_MAX_WAIT
-                {
-                    return true;
-                }
-                continue;
+                // 输出已经静默了一个 STARTUP_OUTPUT_QUIET,视为启动稳定,不必再等满
+                // STARTUP_OUTPUT_MAX_WAIT。旧实现这里直接 continue,于是这个常量只
+                // 影响轮询粒度、早退从不发生,注入路径固定慢 STARTUP_OUTPUT_MAX_WAIT。
+                return true;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
         }
@@ -1295,10 +1310,18 @@ fn launch_supports_native_initial_prompt(
     is_codex: bool,
     launch: &crate::app_settings::AgentLaunchSpec,
 ) -> bool {
-    if uses_native_initial_prompt(agent, is_codex) {
-        return true;
-    }
+    uses_native_initial_prompt(agent, is_codex) || wrapper_forwards_initial_prompt(is_codex, launch)
+}
 
+/// 单看启动脚本本身是否会把位置参数转发给真实 CLI,不含内建 agent 的字面短路。
+///
+/// 与 `launch_supports_native_initial_prompt` 分开,是因为投递路径的决策需要区分
+/// "内建 claude/codex" 和 "Aeroric 生成的包装脚本":前者在被强制注入时保留 PTY
+/// 路径(启动门控可能先于 composer 出现),后者必须走 argv。
+fn wrapper_forwards_initial_prompt(
+    is_codex: bool,
+    launch: &crate::app_settings::AgentLaunchSpec,
+) -> bool {
     let Ok(content) = fs::read_to_string(&launch.program) else {
         return false;
     };
@@ -1324,6 +1347,39 @@ fn should_use_native_initial_prompt(
     force_prompt_injection: bool,
 ) -> bool {
     !force_prompt_injection && uses_native_initial_prompt(agent, is_codex)
+}
+
+/// 决定首条 prompt 走 argv 位置参数(true)还是 PTY 注入(false)。
+///
+/// 抽成纯函数是刻意的:这个判断原先内联在 `run_task` 里、没有任何测试,于是
+/// `hooks::usable_for` 改为按协议族判断(3e82e5c5)时,自定义 codex-like agent 的
+/// `use_hooks` 从 false 翻成 true,把它们从 argv 静默推回注入路径 —— 恰好抵消了
+/// 93cd54f4 "wrapper 能转发 argv 就优先 argv" 的修复,而没有一个测试报警。
+///
+/// 现在的规则不再看 `use_hooks`:
+/// - dsh:headless 一次性进程,只认 argv。
+/// - 未被强制注入:能转发 argv 就用 argv。
+/// - 被强制注入 + Aeroric 生成的包装脚本:仍用 argv。prompt 由 CLI 解析,不经过
+///   任何 TUI,startup 门控吃不到它;而注入路径依赖时序,门控误判时会把 prompt
+///   丢掉(见 `wait_for_initial_input_ready_with_cap` 的超时分支)。
+/// - 被强制注入 + 内建 claude/codex:保留注入。它们的 trust / hook-review 选择器
+///   可能先于 composer 出现,这条路径已长期验证,不在本次修复范围内。
+fn resolve_native_initial_prompt(
+    is_dsh: bool,
+    is_builtin_native: bool,
+    wrapper_forwards_argv: bool,
+    force_prompt_injection: bool,
+) -> bool {
+    if is_dsh {
+        return true;
+    }
+    if !(is_builtin_native || wrapper_forwards_argv) {
+        return false;
+    }
+    if !force_prompt_injection {
+        return true;
+    }
+    wrapper_forwards_argv && !is_builtin_native
 }
 
 pub(crate) fn should_force_prompt_injection(
@@ -1474,25 +1530,19 @@ pub async fn run_task(
 
     let force_prompt_injection =
         !is_dsh && should_force_prompt_injection(is_codex, force_prompt_injection);
+    // 包装脚本要读文件,只读一次。
+    let is_builtin_native = uses_native_initial_prompt(&agent, is_codex);
+    let wrapper_forwards_argv =
+        !is_builtin_native && wrapper_forwards_initial_prompt(is_codex, &launch);
     // dsh(headless)只接受 argv 位置参数投递 prompt,永远走 native 路径;
     // PTY 注入对无 composer 的一次性进程无意义。
-    let native_cli_args_supported = is_dsh
-        || uses_native_initial_prompt(&agent, is_codex)
-        || launch_supports_native_initial_prompt(&agent, is_codex, &launch);
-    // Built-in agents (claude/codex) always use native CLI args. Custom
-    // wrappers that forward positional args also prefer this path. The
-    // guarded PTY injection is only used when the wrapper cannot accept
-    // positional args, or when hooks are available (meaning trust/hook
-    // startup gates may need to be waited for before the prompt is safe to
-    // inject). When hooks are unavailable for a custom codex-like agent,
-    // there are no startup gates to wait for, so native CLI args are both
-    // safe and more reliable than timing-dependent PTY injection.
-    let use_native_initial_prompt = is_dsh
-        || ((should_use_native_initial_prompt(&agent, is_codex, force_prompt_injection)
-            || (!force_prompt_injection
-                && launch_supports_native_initial_prompt(&agent, is_codex, &launch))
-            || (force_prompt_injection && !use_hooks && native_cli_args_supported))
-            && native_cli_args_supported);
+    let native_cli_args_supported = is_dsh || is_builtin_native || wrapper_forwards_argv;
+    let use_native_initial_prompt = resolve_native_initial_prompt(
+        is_dsh,
+        is_builtin_native,
+        wrapper_forwards_argv,
+        force_prompt_injection,
+    );
     let uses_ultracode = should_use_ultracode_terminal_command(
         is_codex,
         reasoning_effort.as_deref(),
@@ -2848,8 +2898,9 @@ mod tests {
         ));
     }
 
+    /// 门控等到上限也没人应答时必须 fail-open:晚投递好过静默丢 prompt。
     #[test]
-    fn startup_input_gives_up_on_a_gate_that_is_never_answered() {
+    fn startup_input_delivers_late_when_a_gate_is_never_answered() {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender
             .send(StartupSignal::Output(
@@ -2861,8 +2912,66 @@ mod tests {
         let waiter = std::thread::spawn(move || {
             wait_for_initial_input_ready_with_cap(receiver, Duration::from_millis(50))
         });
-        assert!(!waiter.join().unwrap());
+        assert!(waiter.join().unwrap());
         drop(sender);
+    }
+
+    /// 误判的门控要能被后续输出解除,而不是把 prompt 押到上限。
+    #[test]
+    fn startup_input_recovers_from_a_false_positive_gate() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        // "? ... enable" 同窗命中通用门控规则,但这只是 banner。
+        sender
+            .send(StartupSignal::Output(
+                "press ? for shortcuts, enable telemetry".to_string(),
+            ))
+            .unwrap();
+        let waiter = std::thread::spawn(move || {
+            wait_for_initial_input_ready_with_cap(receiver, Duration::from_secs(30))
+        });
+        // 后续输出把门控文本挤出尾窗:够长即可,内容无关。
+        std::thread::sleep(Duration::from_millis(20));
+        sender
+            .send(StartupSignal::Output("loading modules. ".repeat(64)))
+            .unwrap();
+        // 没有 UserInput、也没有 SessionReady,仅靠输出推进就该放行。
+        assert!(waiter.join().unwrap());
+        drop(sender);
+    }
+
+    /// 输出静默一个 QUIET 即放行,不必等满 MAX_WAIT。
+    #[test]
+    fn startup_input_settles_on_quiet_output() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(StartupSignal::Output("agent ready".to_string()))
+            .unwrap();
+        let started = Instant::now();
+        let waiter = std::thread::spawn(move || wait_for_initial_input_ready(receiver));
+        assert!(waiter.join().unwrap());
+        assert!(
+            started.elapsed() < STARTUP_OUTPUT_MAX_WAIT,
+            "quiet settle should beat the max wait, took {:?}",
+            started.elapsed()
+        );
+        drop(sender);
+    }
+
+    /// 尾窗按字符边界截断:多字节输出顶过上限时不能 panic。
+    #[test]
+    fn startup_gate_tail_truncation_survives_multibyte_output() {
+        let mut tail = String::new();
+        // 每个汉字 3 字节,远超 512 字节上限,旧的字节下标 drain 会切在字符中间。
+        for _ in 0..8 {
+            let chunk = "正在加载模块".repeat(16);
+            assert!(!startup_output_indicates_gate(&mut tail, &chunk));
+        }
+        assert!(tail.len() <= 512);
+        // 截断后仍是合法 UTF-8,且门控判定继续工作。
+        assert!(startup_output_indicates_gate(
+            &mut tail,
+            "Do you trust this folder? [y/N]"
+        ));
     }
 
     #[test]
@@ -2942,7 +3051,10 @@ mod tests {
     }
 
     #[test]
-    fn startup_input_is_not_released_by_an_unanswered_gate() {
+    /// 通道断开(进程已退出)时不投递:没有活着的 composer 可以接收。
+    /// 与"门控等到上限"不同 —— 那种情况会 fail-open,见
+    /// `startup_input_delivers_late_when_a_gate_is_never_answered`。
+    fn startup_input_stops_when_the_channel_disconnects() {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender
             .send(StartupSignal::Output(

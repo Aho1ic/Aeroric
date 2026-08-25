@@ -34,6 +34,9 @@ pub struct SshConnection {
         skip_serializing_if = "is_false"
     )]
     pub auto_sudo_with_password: bool,
+    /// 勾选后这条连接每次都经设置里的全局代理建立。
+    #[serde(rename = "useProxy", default, skip_serializing_if = "is_false")]
+    pub use_proxy: bool,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "lastConnectedAt", skip_serializing_if = "Option::is_none")]
@@ -372,18 +375,34 @@ fn build_remote_resume_command(
     ))
 }
 
+/// ssh 在 host key 出问题时会用这些说法。整句匹配而不是拆成关键词组合,
+/// 因为 PTY 过滤器是在滑动窗口上找它们,拆开会被窗口边界切散。
+pub(crate) const HOST_KEY_FAILURE_PHRASES: [&str; 4] = [
+    "host key verification failed",
+    "remote host identification has changed",
+    "no matching host key",
+    "host key is known for",
+];
+
 /// `StrictHostKeyChecking=yes` makes ssh refuse hosts that are absent from
 /// known_hosts. That is the safe default, but ssh's own wording gives the user
 /// no way forward, so attach the concrete remediation to the raw stderr.
 pub(crate) fn annotate_ssh_error(connection: &SshConnection, error: impl Into<String>) -> String {
     let error = error.into();
     let lowered = error.to_ascii_lowercase();
-    let is_host_key_failure = lowered.contains("host key verification failed")
-        || lowered.contains("no matching host key")
+    let is_host_key_failure = HOST_KEY_FAILURE_PHRASES
+        .iter()
+        .any(|phrase| lowered.contains(phrase))
         || (lowered.contains("host key") && lowered.contains("changed"));
     if !is_host_key_failure {
         return error;
     }
+    format!("{error}\n\n{}", host_key_remediation(connection))
+}
+
+/// 出现 host key 失败时该怎么办。两条路都给:App 内确认(首次连接),
+/// 或者手动核对指纹(key 变更 —— 那可能是 MITM,必须人工介入)。
+pub(crate) fn host_key_remediation(connection: &SshConnection) -> String {
     let target = if connection.port == 22 {
         connection.host.clone()
     } else {
@@ -398,12 +417,112 @@ pub(crate) fn annotate_ssh_error(connection: &SshConnection, error: impl Into<St
         )
     };
     format!(
-        "{error}\n\nAeroric requires a verified host key (StrictHostKeyChecking=yes). \
-Add {target} to ~/.ssh/known_hosts before connecting, for example by running \
-`{scan}` after confirming the fingerprint, or by connecting once with your own \
-ssh client. If the key legitimately changed, remove the stale entry with \
-`ssh-keygen -R {target}` first."
+        "Aeroric requires a verified host key (StrictHostKeyChecking=yes). \
+If this is your first connection to {target}, open it from the SSH panel and \
+Aeroric will show you the host key fingerprint to confirm. You can also add it \
+yourself with `{scan}` after checking the fingerprint. If the key legitimately \
+changed, remove the stale entry with `ssh-keygen -R {target}` first — until then \
+every connection is refused, because a changed host key can also mean someone is \
+intercepting the connection."
     )
+}
+
+/// host key 失败只会出现在握手阶段。扫过这么多字节还没命中,说明会话已经进入
+/// 正常交互,继续扫描是纯开销:每个 chunk 都要做一次全量 `to_ascii_lowercase`
+/// 堆分配加四次全串搜索,整个会话持续付这笔钱。到点即解除。
+const HOST_KEY_SCAN_BYTE_BUDGET: usize = 64 * 1024;
+
+/// 在输出流里认出 host key 失败,并追加一段补救说明。
+///
+/// PTY 路径把 ssh 的原始输出直接流给终端,`annotate_ssh_error` 完全不在链上,
+/// 所以用户只能看到 ssh 那句没有出路的报错。这里在窗口里找整句,命中一次就
+/// 追加说明并停止扫描;始终没命中也会在 [`HOST_KEY_SCAN_BYTE_BUDGET`] 后停。
+///
+/// 数据本身原样放行,只在末尾追加 —— 过滤器不缓冲任何输出,不影响终端延迟。
+pub(crate) fn host_key_failure_hint_filter(
+    connection: &SshConnection,
+) -> crate::pty::PtyOutputFilter {
+    let hint = host_key_remediation(connection);
+    // 窗口至少要容纳最长的那句话,因为句子可能横跨两次读取。取两倍留出余量:
+    // 按字符边界裁剪会比目标位置多切掉几个字节,刚好等长会漏掉跨块的句子。
+    let window_size = HOST_KEY_FAILURE_PHRASES
+        .iter()
+        .map(|phrase| phrase.len())
+        .max()
+        .unwrap_or(64)
+        * 2;
+    let mut window = String::new();
+    let mut fired = false;
+    let mut scanned = 0usize;
+    Box::new(move |data| {
+        if fired {
+            return Some(data);
+        }
+        scanned = scanned.saturating_add(data.len());
+        window.push_str(&data.to_ascii_lowercase());
+        let matched = HOST_KEY_FAILURE_PHRASES
+            .iter()
+            .any(|phrase| window.contains(phrase));
+        if matched {
+            fired = true;
+            window.clear();
+            // PTY 是裸终端,换行必须带 \r,否则续行会从上一行末尾接着写。
+            return Some(format!("{data}\r\n\r\n{}\r\n", hint.replace('\n', "\r\n")));
+        }
+        if scanned >= HOST_KEY_SCAN_BYTE_BUDGET {
+            fired = true;
+            window.clear();
+            window.shrink_to_fit();
+            return Some(data);
+        }
+        if window.len() > window_size {
+            // 从字符边界处裁剪,否则多字节序列会被切断导致 panic。
+            let cut = window.len() - window_size;
+            let boundary = (cut..window.len())
+                .find(|index| window.is_char_boundary(*index))
+                .unwrap_or(window.len());
+            window.drain(..boundary);
+        }
+        Some(data)
+    })
+}
+
+/// 连接前的最后一道闸:主机确定不在 known_hosts 时,给一条带出路的错误,
+/// 而不是让用户从 PTY 里读 ssh 那句干巴巴的失败。
+///
+/// 只有**确定**未登记才拦。判断不了(`ssh-keygen` 跑不动等)一律放行,
+/// 让 ssh 去报真实错误 —— 这道闸的作用是改善措辞,不是增加拦截。
+pub(crate) fn ensure_host_key_known(connection: &SshConnection) -> Result<(), String> {
+    if crate::ssh_hostkey::is_host_known(connection) == Some(false) {
+        return Err(format!(
+            "Host key verification failed: {} is not in known_hosts.\n\n{}",
+            crate::ssh_hostkey::known_hosts_target(connection),
+            host_key_remediation(connection)
+        ));
+    }
+    Ok(())
+}
+
+/// 让 ssh 经全局代理连接:`ProxyCommand` 指向 Aeroric 自己的可执行文件。
+///
+/// ssh 会把这个字符串交给 shell 执行,所以路径必须按平台规则引用。`%h`/`%p` 由 ssh
+/// 替换成真实的目标主机和端口 —— 也正因为 ssh 始终知道真实主机名,
+/// known_hosts 校验不受代理影响。
+///
+/// 取不到自身路径时返回 `None`,调用方退化成直连,而不是让整条连接失败。
+pub(crate) fn proxy_command_arg() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = exe.to_str()?;
+    // Windows 的 ssh 用 cmd.exe 语义,单引号不是引用字符。
+    let quoted = if cfg!(windows) {
+        format!("\"{exe}\"")
+    } else {
+        shell_quote_posix(exe)
+    };
+    Some(format!(
+        "ProxyCommand={quoted} {} %h %p",
+        crate::ssh_proxy::SSH_PROXY_BRIDGE_FLAG
+    ))
 }
 
 fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
@@ -411,8 +530,19 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
     // Never silently trust a changed or previously unseen host key. Users can
     // provision the host key in their normal SSH known_hosts file first.
     args.extend(["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]);
+    if connection.use_proxy {
+        if let Some(proxy_command) = proxy_command_arg() {
+            args.extend(["-o".to_string(), proxy_command]);
+        }
+    }
     if force_tty {
         args.extend(["-o".to_string(), "IPQoS=none".to_string()]);
+        // 交互会话必须能发现对端已经不在了。默认 ServerAliveInterval=0 意味着
+        // NAT 超时或 Wi-Fi 切换后,ssh 不知道链路已断,终端表现为"敲了完全没反应"
+        // 一直到 TCP 自己超时(可能几分钟)。15s × 3 让失败在 45s 内明确暴露。
+        args.extend(["-o".to_string(), "ServerAliveInterval=15".to_string()]);
+        args.extend(["-o".to_string(), "ServerAliveCountMax=3".to_string()]);
+        args.extend(["-o".to_string(), "TCPKeepAlive=yes".to_string()]);
     }
     args.extend(["-p".to_string(), connection.port.to_string()]);
     if let Some(identity_file) = connection
@@ -648,6 +778,16 @@ fn sudo_password_output_filter(
     })
 }
 
+/// 串接两个过滤器。`first` 会缓冲数据(sudo 那个在等 marker),所以 `second`
+/// 只看得到 `first` 实际放出来的部分 —— 顺序不能反,否则 sudo 的 marker
+/// 检测会被打断。
+fn chain_output_filters(
+    mut first: crate::pty::PtyOutputFilter,
+    mut second: crate::pty::PtyOutputFilter,
+) -> crate::pty::PtyOutputFilter {
+    Box::new(move |data| first(data).and_then(&mut second))
+}
+
 fn spawn_remote_task_exit_monitor(
     app: AppHandle,
     task_id: String,
@@ -698,6 +838,7 @@ fn spawn_remote_task_pty(
     on_output: Channel<String>,
     initial_prelude: Option<Vec<u8>>,
     initial_prompt: Option<(Vec<u8>, Vec<u8>)>,
+    output_filter: Option<crate::pty::PtyOutputFilter>,
 ) -> Result<(), String> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -737,7 +878,7 @@ fn spawn_remote_task_pty(
         true,
         None,
         needs_initial_input.then_some(startup_tx),
-        None,
+        output_filter,
         None,
     );
     if needs_initial_input {
@@ -847,6 +988,7 @@ pub async fn open_ssh_shell(
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
     crate::pty::register_pty_handles(&task_manager, &shell_id, pair.master, writer, child)?;
+    let hint_filter = host_key_failure_hint_filter(&connection);
     let output_filter = if connection_can_auto_sudo(&connection) {
         let writer = task_manager
             .pty_writers
@@ -854,16 +996,19 @@ pub async fn open_ssh_shell(
             .get(&shell_id)
             .cloned()
             .ok_or_else(|| "Failed to initialize SSH sudo input".to_string())?;
-        Some(sudo_password_output_filter(
-            writer,
-            connection
-                .password
-                .as_deref()
-                .unwrap_or_default()
-                .to_string(),
+        Some(chain_output_filters(
+            sudo_password_output_filter(
+                writer,
+                connection
+                    .password
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            hint_filter,
         ))
     } else {
-        None
+        Some(hint_filter)
     };
 
     let app_cleanup = app.clone();
@@ -877,7 +1022,10 @@ pub async fn open_ssh_shell(
         app,
         shell_id,
         crate::pty::OutputSink::Channel(on_output),
-        crate::pty::PtyEmitMode::Immediate,
+        crate::pty::PtyEmitMode::Batched {
+            flush_interval: crate::pty::PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL,
+            max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
+        },
         reader,
         false,
         None,
@@ -964,7 +1112,9 @@ pub async fn run_remote_task(
     let _ = crate::storage::truncate_task_terminal_history(&task_id);
     // 历史清零 → 远程终端流水位换代,已订阅的手机端自动重新快照
     crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
+    ensure_host_key_known(&connection)?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
+    let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
         app,
         &task_manager,
@@ -975,6 +1125,7 @@ pub async fn run_remote_task(
         on_output,
         initial_prelude,
         initial_prompt,
+        Some(hint_filter),
     )
 }
 
@@ -1020,7 +1171,9 @@ pub async fn resume_remote_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    ensure_host_key_known(&connection)?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
+    let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
         app,
         &task_manager,
@@ -1031,6 +1184,7 @@ pub async fn resume_remote_task(
         on_output,
         initial_prelude,
         None,
+        Some(hint_filter),
     )
 }
 
@@ -1096,6 +1250,7 @@ mod tests {
             password: None,
             remote_path: None,
             auto_sudo_with_password: false,
+            use_proxy: false,
             created_at: 1,
             last_connected_at: None,
         };
@@ -1125,6 +1280,7 @@ mod tests {
             password: Some("secret".to_string()),
             remote_path: None,
             auto_sudo_with_password: false,
+            use_proxy: false,
             created_at: 1,
             last_connected_at: None,
         }]);
@@ -1150,6 +1306,7 @@ mod tests {
                 password: Some("old-secret".to_string()),
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1164,6 +1321,7 @@ mod tests {
                 password: Some("new-secret".to_string()),
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 2,
                 last_connected_at: None,
             },
@@ -1193,6 +1351,7 @@ mod tests {
                 password: None,
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1207,6 +1366,12 @@ mod tests {
                 "StrictHostKeyChecking=yes",
                 "-o",
                 "IPQoS=none",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "TCPKeepAlive=yes",
                 "-p",
                 "22",
                 "deploy@prod.example.com"
@@ -1228,6 +1393,7 @@ mod tests {
                 password: None,
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1242,6 +1408,12 @@ mod tests {
                 "StrictHostKeyChecking=yes",
                 "-o",
                 "IPQoS=none",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "TCPKeepAlive=yes",
                 "-p",
                 "2200",
                 "-i",
@@ -1288,6 +1460,7 @@ mod tests {
             password: Some("secret".to_string()),
             remote_path: Some("/srv/app".to_string()),
             auto_sudo_with_password: true,
+            use_proxy: false,
             created_at: 1,
             last_connected_at: None,
         };
@@ -1323,6 +1496,7 @@ mod tests {
                 password: None,
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1333,7 +1507,7 @@ mod tests {
             args.last().unwrap(),
             "deploy && whoami@prod.example.com; touch /tmp/bad"
         );
-        assert_eq!(args.len(), 8);
+        assert_eq!(args.len(), 14);
     }
 
     #[test]
@@ -1350,6 +1524,7 @@ mod tests {
                 password: Some("secret".to_string()),
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1382,6 +1557,7 @@ mod tests {
                 password: Some("secret".to_string()),
                 remote_path: None,
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1413,6 +1589,7 @@ mod tests {
                 password: None,
                 remote_path: Some("/srv/app".to_string()),
                 auto_sudo_with_password: false,
+                use_proxy: false,
                 created_at: 1,
                 last_connected_at: None,
             },
@@ -1632,5 +1809,229 @@ mod tests {
             filter("shell ready\n".to_string()),
             Some("shell ready\n".to_string())
         );
+    }
+
+    fn test_connection(port: u16) -> SshConnection {
+        SshConnection {
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: None,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        }
+    }
+
+    /// PTY 路径不经过 `annotate_ssh_error`,用户原本只能看到 ssh 那句没有出路的
+    /// 报错。过滤器必须原样放行数据并在后面追加补救说明。
+    #[test]
+    fn hint_filter_appends_remediation_to_host_key_failure() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        let out = filter("Host key verification failed.\r\n".to_string()).expect("passes through");
+
+        assert!(out.starts_with("Host key verification failed.\r\n"));
+        assert!(out.contains("StrictHostKeyChecking=yes"));
+        assert!(out.contains("ssh-keygen -R prod.example.com"));
+        // PTY 是裸终端,补充说明里不能留裸 \n。
+        assert!(!out.replace("\r\n", "").contains('\n'));
+    }
+
+    /// 用户实际遇到的那句报错(`No ED25519 host key is known for ...`)也必须命中。
+    #[test]
+    fn hint_filter_catches_the_unknown_host_wording() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        let out = filter(
+            "No ED25519 host key is known for prod.example.com and you have requested strict checking.\r\n"
+                .to_string(),
+        )
+        .expect("passes through");
+
+        assert!(out.contains("open it from the SSH panel"));
+    }
+
+    /// PTY 每次读取的边界是任意的,报错常被切成两半。
+    #[test]
+    fn hint_filter_matches_phrases_split_across_chunks() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        let first = filter("Host key verifi".to_string()).expect("passes through");
+        assert_eq!(first, "Host key verifi");
+        assert!(!first.contains("StrictHostKeyChecking"));
+
+        let second = filter("cation failed.\r\n".to_string()).expect("passes through");
+        assert!(second.contains("StrictHostKeyChecking=yes"));
+    }
+
+    #[test]
+    fn hint_filter_fires_once_and_then_passes_data_through() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        let first = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert!(first.contains("StrictHostKeyChecking=yes"));
+
+        let second = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert_eq!(second, "Host key verification failed.");
+    }
+
+    #[test]
+    fn hint_filter_leaves_normal_output_untouched() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        assert_eq!(
+            filter("Permission denied (publickey).\r\n".to_string()),
+            Some("Permission denied (publickey).\r\n".to_string())
+        );
+    }
+
+    /// 远程终端里有中文输出,窗口裁剪必须落在字符边界上,否则会 panic。
+    #[test]
+    fn hint_filter_survives_multibyte_output() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        for _ in 0..40 {
+            assert!(filter("正在构建项目…".to_string()).is_some());
+        }
+
+        let out = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert!(out.contains("StrictHostKeyChecking=yes"));
+    }
+
+    /// sudo 过滤器会吞掉 marker 并缓冲数据,串接后两个功能都不能失效。
+    #[test]
+    fn chained_filters_keep_both_behaviours() {
+        struct NoopWriter;
+        impl Write for NoopWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let connection = test_connection(22);
+        let writer: Arc<parking_lot::Mutex<Box<dyn Write + Send>>> =
+            Arc::new(parking_lot::Mutex::new(Box::new(NoopWriter)));
+        let mut filter = chain_output_filters(
+            sudo_password_output_filter(writer, "pw".to_string()),
+            host_key_failure_hint_filter(&connection),
+        );
+
+        // marker 被 sudo 过滤器吃掉,不会流到终端。
+        let out = filter("a__AERORIC_SUDO_PASSWORD_READY__b".to_string()).expect("passes through");
+        assert_eq!(out, "ab");
+
+        // host key 提示仍然生效。
+        let failure = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert!(failure.contains("StrictHostKeyChecking=yes"));
+    }
+
+    /// host key 失败只出现在握手阶段。扫过预算还没命中就必须解除,否则整个会话
+    /// 的每个 chunk 都要付一次全量 lowercase 堆分配 + 四次全串搜索,SSH 终端
+    /// 输出越多越粘手。
+    #[test]
+    fn host_key_hint_filter_disarms_after_the_scan_budget() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        // 先灌满预算,期间数据原样透传。
+        let chunk = "x".repeat(8 * 1024);
+        let mut pushed = 0usize;
+        while pushed < HOST_KEY_SCAN_BYTE_BUDGET {
+            assert_eq!(filter(chunk.clone()).expect("passes through"), chunk);
+            pushed += chunk.len();
+        }
+
+        // 解除之后即使真出现那句话,也不再追加提示 —— 这是刻意的取舍:
+        // 握手早已结束,此时的字样只可能来自远端 shell 的普通输出。
+        let out = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert_eq!(out, "Host key verification failed.");
+    }
+
+    /// 预算之内仍要命中,别把提示优化掉。
+    #[test]
+    fn host_key_hint_filter_still_fires_within_the_budget() {
+        let connection = test_connection(22);
+        let mut filter = host_key_failure_hint_filter(&connection);
+
+        assert_eq!(
+            filter("x".repeat(1024)).expect("passes through"),
+            "x".repeat(1024)
+        );
+        let out = filter("Host key verification failed.".to_string()).expect("passes through");
+        assert!(out.contains("StrictHostKeyChecking=yes"));
+    }
+
+    #[test]
+    fn remediation_mentions_both_the_in_app_and_manual_route() {
+        let remediation = host_key_remediation(&test_connection(2200));
+
+        assert!(remediation.contains("open it from the SSH panel"));
+        assert!(remediation.contains("ssh-keyscan -p 2200 prod.example.com"));
+        assert!(remediation.contains("ssh-keygen -R [prod.example.com]:2200"));
+    }
+
+    /// 没勾代理的连接不能被塞进 ProxyCommand,否则所有既有连接的行为都变了。
+    #[test]
+    fn proxy_command_is_absent_unless_the_connection_opts_in() {
+        let args = build_ssh_args(&test_connection(22), true);
+
+        assert!(!args.iter().any(|arg| arg.starts_with("ProxyCommand=")));
+    }
+
+    /// 勾了代理就必须带上 ProxyCommand,并且用 `%h %p` 让 ssh 填真实目标 ——
+    /// 写死主机名会让 known_hosts 校验和实际连接的对象脱钩。
+    #[test]
+    fn proxy_command_routes_through_our_own_bridge() {
+        let connection = SshConnection {
+            use_proxy: true,
+            ..test_connection(2200)
+        };
+
+        let args = build_ssh_args(&connection, true);
+        let proxy_command = args
+            .iter()
+            .find(|arg| arg.starts_with("ProxyCommand="))
+            .expect("proxy command present");
+
+        assert!(proxy_command.ends_with(" --ssh-proxy-bridge %h %p"));
+        // StrictHostKeyChecking 不能因为走代理而被放宽。
+        assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+        // 目标仍然是真实主机,代理只改传输层。
+        assert!(args.iter().any(|arg| arg == "deploy@prod.example.com"));
+        assert!(args.iter().any(|arg| arg == "2200"));
+    }
+
+    /// 自身路径含空格(macOS 的 `/Applications/Aeroric.app/...` 就是)时,
+    /// ssh 会把整个 ProxyCommand 交给 shell,没引用就会被切断。
+    #[test]
+    fn proxy_command_quotes_the_executable_path() {
+        let Some(proxy_command) = proxy_command_arg() else {
+            return;
+        };
+        let path_part = proxy_command
+            .trim_start_matches("ProxyCommand=")
+            .trim_end_matches(" --ssh-proxy-bridge %h %p");
+
+        if cfg!(windows) {
+            assert!(path_part.starts_with('"') && path_part.ends_with('"'));
+        } else {
+            assert!(path_part.starts_with('\'') && path_part.ends_with('\''));
+        }
     }
 }

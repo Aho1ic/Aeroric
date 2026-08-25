@@ -2274,10 +2274,24 @@ export const zh: Record<string, string> = {
   "ssh.field.identityFile": "密钥文件",
   "ssh.field.password": "密码",
   "ssh.field.remotePath": "远程路径",
+  "ssh.field.useProxy": "通过全局代理连接",
+  "ssh.field.useProxyHintConfigured":
+    "这条连接每次都经 {url} 建立，代理地址取自「应用 > 代理」。主机密钥仍然校验真实主机。",
+  "ssh.field.useProxyHintMissing":
+    "尚未配置代理。请先在「应用 > 代理」中设置，否则这条连接会退化为直连。",
   "ssh.field.autoSudoWithPassword": "连接后自动进入 sudo shell",
   "ssh.field.autoSudoWithPasswordHint":
     "非 root 用户使用已保存密码连接时，自动验证 sudo 并启动 sudo 登录 shell。",
   "ssh.defaultGroup": "默认分组",
+  "ssh.newGroup": "新建分组",
+  "ssh.groupName": "分组名称",
+  "ssh.groupEmpty": "该分组下暂无连接",
+  "ssh.deleteGroup": "删除分组",
+  "ssh.deleteGroupNamed": "删除分组「{group}」（组内连接会回到默认分组）",
+  "ssh.deleteGroupHint": "组内连接会回到默认分组，不会被删除",
+  "ssh.renameGroup": "重命名分组",
+  "ssh.groupMenu": "分组操作",
+  "ssh.createInGroup": "在「{group}」下新建连接",
   "ssh.noPasswordHint": "不会保存密码、口令短语或私钥内容。认证交给系统 SSH 和终端提示处理。",
   "ssh.passwordStorageHint":
     "密码以明文保存在本机 Aeroric 应用数据目录下仅所有者可读写的文件中（Unix 权限 0600），不会写入系统钥匙串。连接时通过 sshpass 环境变量交给系统 SSH。建议优先使用 SSH 密钥；密码可留空以在终端交互输入。",
@@ -2290,6 +2304,15 @@ export const zh: Record<string, string> = {
   "ssh.copied": "已复制",
   "ssh.disconnect": "断开",
   "ssh.selectAndConnect": "选择一个已保存连接，然后连接。",
+  "ssh.hostKey.title": "确认主机密钥",
+  "ssh.hostKey.body":
+    "这是首次连接 {target}，它的主机密钥还不在 known_hosts 中。核对下面的指纹后即可信任该主机。",
+  "ssh.hostKey.fingerprintLabel": "主机密钥指纹",
+  "ssh.hostKey.verifyHint":
+    "请与服务商控制台上显示的指纹逐字比对。若不一致请取消——可能有人正在中间人劫持这条连接。",
+  "ssh.hostKey.trust": "信任并连接",
+  "ssh.hostKey.trusting": "正在信任…",
+  "ssh.hostKey.cancel": "取消",
   "sshProject.title": "打开 SSH 项目",
   "sshProject.open": "打开 SSH 项目",
   "sshProject.connection": "连接",

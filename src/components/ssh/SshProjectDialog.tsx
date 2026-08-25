@@ -7,6 +7,8 @@ import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { sshProjectInputForConnection, type SshProjectInput } from "./sshProject";
 import { useCopyFeedback } from "./useCopyFeedback";
+import { SshGroupContextMenu } from "./SshGroupContextMenu";
+import { useSshGroups } from "./useSshGroups";
 
 export {
   deriveRemoteProjectName,
@@ -34,13 +36,30 @@ async function copyConnectionPassword(connection: SshConnection) {
   await navigator.clipboard.writeText(password);
 }
 
-function groupConnections(connections: SshConnection[], fallbackGroup: string) {
-  const map = new Map<string, SshConnection[]>();
+/**
+ * 分组 → 连接。命名分组按名单顺序在前(空分组也占位),未分组的落到末尾。
+ * 第三项标记是否为真实分组:默认分组只是未分组连接的容器,不能改名或删除。
+ */
+function groupConnections(
+  connections: SshConnection[],
+  namedGroups: string[],
+  fallbackGroup: string,
+): Array<[string, SshConnection[], boolean]> {
+  const buckets = new Map<string, SshConnection[]>(namedGroups.map((name) => [name, []]));
+  const ungrouped: SshConnection[] = [];
   for (const connection of connections) {
-    const group = connection.group?.trim() || fallbackGroup;
-    map.set(group, [...(map.get(group) ?? []), connection]);
+    const group = connection.group?.trim();
+    const bucket = group ? buckets.get(group) : undefined;
+    if (bucket) bucket.push(connection);
+    else if (group) buckets.set(group, [connection]);
+    else ungrouped.push(connection);
   }
-  return Array.from(map.entries());
+  const grouped: Array<[string, SshConnection[], boolean]> = Array.from(
+    buckets,
+    ([name, items]) => [name, items, true],
+  );
+  if (ungrouped.length > 0) grouped.push([fallbackGroup, ungrouped, false]);
+  return grouped;
 }
 
 function GroupNameDialog({
@@ -122,13 +141,21 @@ export function SshProjectPage({
     x: number;
     y: number;
   } | null>(null);
+  const [groupMenu, setGroupMenu] = useState<{ group: string; x: number; y: number } | null>(null);
+  // 与右侧栏 SSH 列表同源(store 订阅):那里建的空分组在这里也要看得到、删得掉。
+  const {
+    groups: storedGroups,
+    createGroup,
+    deleteGroup,
+    renameGroup,
+  } = useSshGroups(connections, onConnectionsChange);
   const selectedConnection = useMemo(
     () => connections.find((connection) => connection.id === selectedId) ?? connections[0] ?? null,
     [connections, selectedId],
   );
   const groupedConnections = useMemo(
-    () => groupConnections(connections, t("ssh.defaultGroup")),
-    [connections, t],
+    () => groupConnections(connections, storedGroups, t("ssh.defaultGroup")),
+    [connections, storedGroups, t],
   );
   const knownGroups = useMemo(
     () =>
@@ -136,6 +163,7 @@ export function SshProjectPage({
         new Set(
           [
             ...groups,
+            ...storedGroups,
             ...connections
               .map((connection) => connection.group?.trim())
               .filter((group): group is string => Boolean(group)),
@@ -143,7 +171,7 @@ export function SshProjectPage({
           ].filter(Boolean),
         ),
       ),
-    [connections, groups, initialGroup],
+    [connections, groups, storedGroups, initialGroup],
   );
   const selectedRemotePath = selectedConnection?.remotePath?.trim() ?? "";
   const canOpen = Boolean(selectedConnection && selectedRemotePath);
@@ -154,6 +182,8 @@ export function SshProjectPage({
       ? connections.map((item) => (item.id === connection.id ? connection : item))
       : [connection, ...connections];
     onConnectionsChange(nextConnections);
+    // 对话框里手输的新分组也要进名单,否则移走最后一条连接它就消失了。
+    createGroup(connection.group ?? "");
     setSelectedId(connection.id);
     setEditingConnection(null);
     setCreatingConnection(false);
@@ -195,7 +225,7 @@ export function SshProjectPage({
       </div>
 
       <div style={s.sshProjectPageBody}>
-        {connections.length === 0 ? (
+        {groupedConnections.length === 0 ? (
           <div style={s.sshEmptyState}>
             <Server size={28} />
             <div style={s.sshEmptyTitle}>{t("ssh.emptyTitle")}</div>
@@ -203,9 +233,21 @@ export function SshProjectPage({
           </div>
         ) : (
           <div style={s.sshProjectConnectionPicker}>
-            {groupedConnections.map(([group, grouped]) => (
+            {groupedConnections.map(([group, grouped, isNamed]) => (
               <section key={group} style={s.sshProjectGroupSection}>
-                <div style={s.sshProjectGroupTitle}>{group}</div>
+                <div
+                  style={s.sshProjectGroupTitle}
+                  onContextMenu={(event) => {
+                    // 默认分组不是真实分组,重命名/删除都无从落地。
+                    if (!isNamed) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setGroupMenu({ group, x: event.clientX, y: event.clientY });
+                  }}
+                >
+                  {group}
+                </div>
+                {grouped.length === 0 && <div style={s.sshSecretNote}>{t("ssh.groupEmpty")}</div>}
                 <div style={s.sshProjectCardGrid}>
                   {grouped.map((connection) => {
                     const selected = connection.id === selectedConnection?.id;
@@ -340,9 +382,26 @@ export function SshProjectPage({
         <GroupNameDialog
           onClose={() => setGroupDialogOpen(false)}
           onSubmit={(group) => {
+            // 先把分组登记进名单,这样即便用户放弃新建连接,空分组也留得住。
+            createGroup(group);
             setInitialGroup(group);
             setCreatingConnection(true);
             setGroupDialogOpen(false);
+          }}
+        />
+      )}
+      {groupMenu && (
+        <SshGroupContextMenu
+          group={groupMenu.group}
+          x={groupMenu.x}
+          y={groupMenu.y}
+          takenNames={storedGroups.filter((name) => name !== groupMenu.group)}
+          onClose={() => setGroupMenu(null)}
+          onRename={renameGroup}
+          onDelete={deleteGroup}
+          onCreateConnection={(group) => {
+            setInitialGroup(group);
+            setCreatingConnection(true);
           }}
         />
       )}

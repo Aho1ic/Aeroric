@@ -7,6 +7,8 @@ import { SshConnectionDialog } from "./SshConnectionDialog";
 import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConnectionContextMenu";
 import { SshTerminalPanel } from "./SshTerminalPanel";
 import { useCopyFeedback } from "./useCopyFeedback";
+import { SshGroupContextMenu } from "./SshGroupContextMenu";
+import { useSshGroups } from "./useSshGroups";
 import type { AuxiliaryWorkspaceLayout } from "../project-page/viewMode";
 
 export type SshWorkspaceLayout = AuxiliaryWorkspaceLayout;
@@ -15,23 +17,32 @@ function connectionTarget(connection: SshConnection): string {
   return `${connection.username}@${connection.host}:${connection.port}`;
 }
 
-function groupConnections(connections: SshConnection[], fallbackGroup: string) {
-  const map = new Map<string, SshConnection[]>();
+/**
+ * 分组 → 连接。命名分组按名单顺序在前(空分组也占位),未分组的落到末尾。
+ *
+ * 第三项标记该分组是否为"真实分组":默认分组只是未分组连接的容器,
+ * 重命名和删除都无从落地。
+ */
+function groupConnections(
+  connections: SshConnection[],
+  namedGroups: string[],
+  fallbackGroup: string,
+): Array<[string, SshConnection[], boolean]> {
+  const buckets = new Map<string, SshConnection[]>(namedGroups.map((name) => [name, []]));
+  const ungrouped: SshConnection[] = [];
   for (const connection of connections) {
-    const group = connection.group?.trim() || fallbackGroup;
-    map.set(group, [...(map.get(group) ?? []), connection]);
+    const group = connection.group?.trim();
+    const bucket = group ? buckets.get(group) : undefined;
+    if (bucket) bucket.push(connection);
+    else if (group) buckets.set(group, [connection]);
+    else ungrouped.push(connection);
   }
-  return Array.from(map.entries());
-}
-
-function connectionGroups(connections: SshConnection[]) {
-  return Array.from(
-    new Set(
-      connections
-        .map((connection) => connection.group?.trim())
-        .filter((group): group is string => Boolean(group)),
-    ),
+  const grouped: Array<[string, SshConnection[], boolean]> = Array.from(
+    buckets,
+    ([name, items]) => [name, items, true],
   );
+  if (ungrouped.length > 0) grouped.push([fallbackGroup, ungrouped, false]);
+  return grouped;
 }
 
 async function copyConnectionPassword(connection: SshConnection) {
@@ -43,17 +54,23 @@ async function copyConnectionPassword(connection: SshConnection) {
 function SshCardPicker({
   connections,
   selectedId,
+  namedGroups,
   onOpen,
   onEdit,
   onConnect,
   onDelete,
+  onRenameGroup,
+  onDeleteGroup,
 }: {
   connections: SshConnection[];
   selectedId: string | null;
+  namedGroups: string[];
   onOpen: (connection: SshConnection) => void;
   onEdit: (connection: SshConnection) => void;
   onConnect?: (connection: SshConnection, protocol: SshConnectionProtocol) => void;
   onDelete: (connection: SshConnection) => void;
+  onRenameGroup: (group: string, nextName: string) => void;
+  onDeleteGroup: (group: string) => void;
 }) {
   const { t } = useI18n();
   const { copiedId: copiedConnectionId, markCopied } = useCopyFeedback();
@@ -62,12 +79,13 @@ function SshCardPicker({
     x: number;
     y: number;
   } | null>(null);
+  const [groupMenu, setGroupMenu] = useState<{ group: string; x: number; y: number } | null>(null);
   const grouped = useMemo(
-    () => groupConnections(connections, t("ssh.defaultGroup")),
-    [connections, t],
+    () => groupConnections(connections, namedGroups, t("ssh.defaultGroup")),
+    [connections, namedGroups, t],
   );
 
-  if (connections.length === 0) {
+  if (connections.length === 0 && grouped.length === 0) {
     return (
       <div style={s.sshEmptyState}>
         <div style={s.sshEmptyTitle}>{t("ssh.emptyTitle")}</div>
@@ -78,9 +96,21 @@ function SshCardPicker({
 
   return (
     <div style={s.sshProjectConnectionPicker}>
-      {grouped.map(([group, items]) => (
+      {grouped.map(([group, items, isNamed]) => (
         <section key={group} style={s.sshProjectGroupSection}>
-          <div style={s.sshProjectGroupTitle}>{group}</div>
+          <div
+            style={s.sshProjectGroupTitle}
+            onContextMenu={(event) => {
+              // 默认分组不是真实分组,重命名/删除都无从落地。
+              if (!isNamed) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setGroupMenu({ group, x: event.clientX, y: event.clientY });
+            }}
+          >
+            {group}
+          </div>
+          {items.length === 0 && <div style={s.sshSecretNote}>{t("ssh.groupEmpty")}</div>}
           <div style={s.sshProjectCardGrid}>
             {items.map((connection) => {
               const selected = selectedId === connection.id;
@@ -160,6 +190,17 @@ function SshCardPicker({
           </div>
         </section>
       ))}
+      {groupMenu && (
+        <SshGroupContextMenu
+          group={groupMenu.group}
+          x={groupMenu.x}
+          y={groupMenu.y}
+          takenNames={namedGroups.filter((name) => name !== groupMenu.group)}
+          onClose={() => setGroupMenu(null)}
+          onRename={onRenameGroup}
+          onDelete={onDeleteGroup}
+        />
+      )}
       {contextMenu && (
         <SshConnectionContextMenu
           connection={contextMenu.connection}
@@ -252,7 +293,13 @@ export function SshWorkspace({
   const [showCards, setShowCards] = useState(true);
   const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const groups = useMemo(() => connectionGroups(connections), [connections]);
+  // 与右侧栏 SSH 列表同源(store 订阅):那里建的空分组在这里也要看得到、删得掉。
+  const {
+    groups,
+    createGroup,
+    deleteGroup: deleteGroupName,
+    renameGroup,
+  } = useSshGroups(connections, onConnectionsChange);
   const selectedConnection = selectedConnectionId
     ? connections.find((connection) => connection.id === selectedConnectionId)
     : null;
@@ -264,6 +311,8 @@ export function SshWorkspace({
       ? connections.map((item) => (item.id === connection.id ? connection : item))
       : [connection, ...connections];
     onConnectionsChange(next);
+    // 对话框里手输的新分组也要进名单,否则移走最后一条连接它就消失了。
+    createGroup(connection.group ?? "");
     setSelectedConnectionId(connection.id);
     setShowCards(false);
     setEditingConnection(null);
@@ -300,6 +349,9 @@ export function SshWorkspace({
           <SshCardPicker
             connections={connections}
             selectedId={selectedConnectionId}
+            namedGroups={groups}
+            onRenameGroup={renameGroup}
+            onDeleteGroup={deleteGroupName}
             onOpen={(connection) => {
               setSelectedConnectionId(connection.id);
               setShowCards(false);

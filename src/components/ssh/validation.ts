@@ -10,6 +10,7 @@ export interface SshConnectionDraft {
   password: string;
   remotePath: string;
   autoSudoWithPassword: boolean;
+  useProxy: boolean;
 }
 
 export type SshConnectionDraftErrors = Partial<Record<keyof SshConnectionDraft, string>>;
@@ -25,6 +26,7 @@ export function draftFromConnection(connection?: SshConnection | null): SshConne
     password: connection?.password ?? "",
     remotePath: connection?.remotePath ?? "",
     autoSudoWithPassword: Boolean(connection?.autoSudoWithPassword),
+    useProxy: Boolean(connection?.useProxy),
   };
 }
 
@@ -70,6 +72,7 @@ export function normalizeSshConnectionDraft(
     ...(password ? { password } : {}),
     ...(remotePath ? { remotePath } : {}),
     ...(draft.autoSudoWithPassword ? { autoSudoWithPassword: true } : {}),
+    ...(draft.useProxy ? { useProxy: true } : {}),
     createdAt: existing?.createdAt ?? now,
     ...(existing?.lastConnectedAt ? { lastConnectedAt: existing.lastConnectedAt } : {}),
   };

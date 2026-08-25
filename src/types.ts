@@ -108,9 +108,24 @@ export interface SshConnection {
   password?: string;
   remotePath?: string;
   autoSudoWithPassword?: boolean;
+  /** 勾选后这条连接每次都经「设置 > 代理」里配置的全局代理建立。 */
+  useProxy?: boolean;
   createdAt: number;
   lastConnectedAt?: number;
 }
+
+/** 服务端提供的一把 host key。`knownHostsLine` 只回传给后端落盘,不展示。 */
+export interface SshHostKey {
+  keyType: string;
+  fingerprint: string;
+  knownHostsLine: string;
+}
+
+/** `check_ssh_host_key` 的结果,决定连接前是否需要用户确认指纹。 */
+export type SshHostKeyStatus =
+  | { state: "trusted" }
+  | { state: "unknown"; target: string; keys: SshHostKey[] }
+  | { state: "unreachable"; target: string };
 
 export interface CondaEnvironment {
   name: string;

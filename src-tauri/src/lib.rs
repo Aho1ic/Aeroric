@@ -11,6 +11,9 @@ mod agent_ops;
 mod agent_tools;
 mod analytics;
 mod app_settings;
+/// 只在测试构建里编译:守卫 command 定义集合与 `generate_handler!` 注册集合一致。
+#[cfg(test)]
+mod command_registration_tests;
 mod conda;
 mod config;
 mod dap;
@@ -47,6 +50,8 @@ mod session_dsh;
 mod sftp;
 mod skills;
 mod ssh;
+mod ssh_hostkey;
+mod ssh_proxy;
 mod storage;
 mod storage_backend;
 mod storage_backend_baidu;
@@ -178,6 +183,11 @@ fn hide_main_window(window: tauri::Window) {
     hide_window_to_dock(window);
     #[cfg(not(target_os = "macos"))]
     let _ = window;
+}
+
+/// `main` 的前置分支:ssh 以 `--ssh-proxy-bridge` 拉起本程序时进入代理桥模式。
+pub fn try_run_ssh_proxy_bridge() -> bool {
+    ssh_proxy::try_run_ssh_proxy_bridge()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -489,6 +499,8 @@ pub fn run() {
             ssh::run_remote_task,
             ssh::resume_remote_task,
             ssh::cancel_remote_task,
+            ssh_hostkey::check_ssh_host_key,
+            ssh_hostkey::trust_ssh_host_key,
             wsl::get_wsl_status,
             wsl::list_wsl_distributions,
             wsl::probe_wsl_distribution,

@@ -2361,10 +2361,24 @@ export const en: Record<string, string> = {
   "ssh.field.identityFile": "Identity file",
   "ssh.field.password": "Password",
   "ssh.field.remotePath": "Remote path",
+  "ssh.field.useProxy": "Connect through the global proxy",
+  "ssh.field.useProxyHintConfigured":
+    "Every connection for this host is tunnelled through {url}, configured in Application > Proxy. Host key verification still applies to the real host.",
+  "ssh.field.useProxyHintMissing":
+    "No proxy is configured yet. Set one in Application > Proxy, otherwise this connection falls back to a direct one.",
   "ssh.field.autoSudoWithPassword": "Automatically enter sudo shell after connecting",
   "ssh.field.autoSudoWithPasswordHint":
     "When connecting as a non-root user with a saved password, validate sudo and start a sudo login shell.",
   "ssh.defaultGroup": "Default",
+  "ssh.newGroup": "New group",
+  "ssh.groupName": "Group name",
+  "ssh.groupEmpty": "No connections in this group yet",
+  "ssh.deleteGroup": "Delete group",
+  "ssh.deleteGroupNamed": "Delete group {group} (connections move to the default group)",
+  "ssh.deleteGroupHint": "Connections move back to the default group; none are deleted",
+  "ssh.renameGroup": "Rename group",
+  "ssh.groupMenu": "group actions",
+  "ssh.createInGroup": "New connection in {group}",
   "ssh.noPasswordHint":
     "Passwords, passphrases, and private key contents are not stored. Authentication is handled by system SSH and the terminal prompt.",
   "ssh.passwordStorageHint":
@@ -2378,6 +2392,15 @@ export const en: Record<string, string> = {
   "ssh.copied": "Copied",
   "ssh.disconnect": "Disconnect",
   "ssh.selectAndConnect": "Select a saved connection, then connect.",
+  "ssh.hostKey.title": "Verify host key",
+  "ssh.hostKey.body":
+    "This is your first connection to {target}, so its host key is not in known_hosts yet. Confirm the fingerprint below to trust this host.",
+  "ssh.hostKey.fingerprintLabel": "Host key fingerprint",
+  "ssh.hostKey.verifyHint":
+    "Compare this against the fingerprint from your server provider's console. If it does not match, cancel — someone may be intercepting the connection.",
+  "ssh.hostKey.trust": "Trust and connect",
+  "ssh.hostKey.trusting": "Trusting…",
+  "ssh.hostKey.cancel": "Cancel",
   "sshProject.title": "Open SSH project",
   "sshProject.open": "Open SSH project",
   "sshProject.connection": "Connection",

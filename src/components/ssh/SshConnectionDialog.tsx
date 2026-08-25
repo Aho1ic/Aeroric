@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import * as Select from "@radix-ui/react-select";
 import { Check, ChevronDown, Eye, EyeOff, Save, X } from "lucide-react";
 import type { SshConnection } from "../../types";
@@ -32,7 +33,7 @@ const FIELD_ORDER: Array<keyof SshConnectionDraft> = [
   "remotePath",
 ];
 
-type SshTextField = Exclude<keyof SshConnectionDraft, "autoSudoWithPassword">;
+type SshTextField = Exclude<keyof SshConnectionDraft, "autoSudoWithPassword" | "useProxy">;
 
 const TEXT_FIELD_ORDER: SshTextField[] = FIELD_ORDER as SshTextField[];
 
@@ -61,7 +62,23 @@ export function SshConnectionDialog({
   }));
   const [errors, setErrors] = useState<SshConnectionDraftErrors>({});
   const [showPassword, setShowPassword] = useState(false);
+  // 代理地址是"设置 > 代理"里那一份,这里只读出来显示,让用户知道会走哪个代理。
+  const [proxyUrl, setProxyUrl] = useState("");
   const isEditing = Boolean(connection);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<{ proxy_settings?: { url?: string } }>("load_app_settings")
+      .then((settings) => {
+        if (!cancelled) setProxyUrl(settings?.proxy_settings?.url?.trim() ?? "");
+      })
+      .catch(() => {
+        // 读不到就只显示通用提示,不影响勾选。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const labels = useMemo<Record<SshTextField, string>>(
     () => ({
@@ -254,6 +271,27 @@ export function SshConnectionDialog({
             <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={s.sshLabel}>{t("ssh.field.autoSudoWithPassword")}</span>
               <span style={s.sshSecretNote}>{t("ssh.field.autoSudoWithPasswordHint")}</span>
+            </span>
+          </label>
+          <label style={{ ...s.sshField, flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+            <input
+              type="checkbox"
+              checked={draft.useProxy}
+              onChange={(event) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  useProxy: event.target.checked,
+                }))
+              }
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={s.sshLabel}>{t("ssh.field.useProxy")}</span>
+              <span style={s.sshSecretNote}>
+                {proxyUrl
+                  ? t("ssh.field.useProxyHintConfigured", { url: proxyUrl })
+                  : t("ssh.field.useProxyHintMissing")}
+              </span>
             </span>
           </label>
           <div style={s.sshSecretNote}>{t("ssh.passwordStorageHint")}</div>
