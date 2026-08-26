@@ -1638,6 +1638,11 @@ export const en: Record<string, string> = {
   "database.transferCompleted": "Transfer completed.",
   "database.transferCancelled": "Transfer cancelled.",
   "database.transferFailed": "Transfer failed: {error}",
+  "database.cancelTransfer": "Cancel transfer",
+  "database.transferCancelling": "Cancelling…",
+  "database.transferSameTarget": "The source and target resolve to the same table.",
+  "database.dataCompareNoCommonPrimaryKey":
+    "The source and target tables have no matching primary-key column.",
   "database.comparePreviewEmpty": "Run the operation to preview DBX output.",
   "database.erDiagramHint": "Inspect table nodes and loaded column metadata.",
   "database.exportSvg": "Export SVG",
@@ -1645,6 +1650,7 @@ export const en: Record<string, string> = {
   "database.tableStructureHint": "Inspect table columns and prepare structure changes.",
   "database.selectSqlConnection": "Select a SQL-capable connection before using this tool.",
   "database.selectDbxSqlConnection": "Select a SQL-capable DBX connection to use this tool.",
+  "database.sourceConnectionUnavailable": "The source connection is unavailable.",
   "database.configuredDatabaseMissing": 'Configured database "{database}" was not found.',
   "database.selectTargetConnection": "Select a target connection.",
   "database.selectDbxTable": "Select a DBX SQL table to inspect or edit its structure.",
@@ -2720,6 +2726,10 @@ export const en: Record<string, string> = {
   "day.fri": "Fri",
   "day.sat": "Sat",
   "toast.initProjectConfigFailed": "Failed to initialize project config: {error}",
+  "toast.startupDegradedMemory":
+    "Aeroric could not open its data directory, so it started with an in-memory database. Anything you save now will be lost when you quit. Reason: {reason}",
+  "toast.startupDegradedFallbackDir":
+    "Aeroric could not use its normal data directory and fell back to {fallback}. Your data will not carry over to the next launch. Reason: {reason}",
   "toast.dshWebUiStartFailed": "Failed to start DeepSeek Harness Web UI: {error}",
   "toast.projectActionFailed": "{action} failed: {error}",
   "toast.cancelTaskFailed": "Failed to cancel task: {error}",
@@ -2763,6 +2773,67 @@ export const en: Record<string, string> = {
   "wsl.upgradeAgents": "Upgrade WSL Agents",
   "wsl.upgradingAgents": "Upgrading...",
   "toast.wslProjectUnavailable": "The WSL distribution for this project is unavailable.",
+
+  // System permissions (macOS TCC)
+  "permissions.navLabel": "Permissions",
+  "permissions.title": "System Permissions",
+  "permissions.subtitle":
+    "Commands your agents run in the terminal — screenshots, UI control, reading project files — use Aeroric's own system authorization. Grant what you need here so those calls do not fail silently.",
+  "permissions.summary": "{granted} of {total} granted",
+  "permissions.grantAll": "Grant All",
+  "permissions.grantingAll": "Requesting...",
+  "permissions.status.granted": "Granted",
+  "permissions.status.notGranted": "Not granted",
+  "permissions.status.unknown": "Unknown",
+  "permissions.action.grant": "Grant",
+  "permissions.action.checkAndGrant": "Check",
+  "permissions.action.openSettings": "System Settings",
+  "permissions.needsRestartTag": "restart required",
+  "permissions.restartRequired":
+    "Newly granted permissions only take effect after Aeroric restarts, because macOS caches the decision when the process launches.",
+  "permissions.restartNow": "Restart Now",
+  "permissions.manualRemaining":
+    "These can only be enabled by hand in System Settings: {names}. Use each row's System Settings button, tick Aeroric in the list, then come back and refresh.",
+  "permissions.unsupportedPlatform":
+    "This platform does not gate these capabilities behind per-app authorization, so there is nothing to grant here.",
+  "permissions.unknownBecauseProbePrompts":
+    "Checking this asks macOS for access, so it is not probed automatically. Press Check to run the prompt.",
+  "permissions.unknownReason": "Could not determine: {reason}",
+  "permissions.noQueryApi": "macOS exposes no way to query this",
+  "permissions.item.screen-recording.name": "Screen Recording",
+  "permissions.item.screen-recording.description":
+    "Needed whenever an agent takes a screenshot or reads window contents, including `screencapture` in the terminal.",
+  "permissions.item.accessibility.name": "Accessibility",
+  "permissions.item.accessibility.description":
+    "Lets agents drive other apps' interfaces — clicking, reading UI elements, and synthesizing keystrokes.",
+  "permissions.item.input-monitoring.name": "Input Monitoring",
+  "permissions.item.input-monitoring.description":
+    "Required to observe keyboard events outside the Aeroric window, which some automation and hotkey tooling depends on.",
+  "permissions.item.automation.name": "Automation",
+  "permissions.item.automation.description":
+    "Allows AppleScript and `osascript` to control other apps. Checked against System Events, the usual target for UI scripting.",
+  "permissions.item.full-disk-access.name": "Full Disk Access",
+  "permissions.item.full-disk-access.description":
+    "Lets agents reach protected locations such as Mail, Messages, and other apps' support directories. macOS only allows this to be enabled by hand.",
+  "permissions.item.microphone.name": "Microphone",
+  "permissions.item.microphone.description":
+    "Only needed if an agent or plugin records audio. macOS asks the first time such a tool runs.",
+  "permissions.item.camera.name": "Camera",
+  "permissions.item.camera.description":
+    "Only needed if an agent or plugin captures video. macOS asks the first time such a tool runs.",
+  "permissions.item.local-network.name": "Local Network",
+  "permissions.item.local-network.description":
+    "Used by phone remote access and LAN device discovery. macOS provides no way to query this one, so check it in System Settings.",
+  "permissions.item.folder-desktop.name": "Desktop Folder",
+  "permissions.item.folder-desktop.description":
+    "Needed to open and edit projects stored on your Desktop.",
+  "permissions.item.folder-documents.name": "Documents Folder",
+  "permissions.item.folder-documents.description":
+    "Needed to open and edit projects stored in Documents.",
+  "permissions.item.folder-downloads.name": "Downloads Folder",
+  "permissions.item.folder-downloads.description":
+    "Needed to open and edit projects stored in Downloads.",
+
   "errorBoundary.panelRenderError": "{label} failed to render",
   "errorBoundary.unknownError": "Unknown error",
   "errorBoundary.somethingWentWrong": "Something went wrong",

@@ -1296,7 +1296,13 @@ export function pairWithInvite(options: {
     ws.onopen = () => {
       if (handshake) {
         phase = "handshake";
-        ws.send(handshake.helloJson);
+        // send 抛出时 socket 可能仍是 open,onclose 不会触发,配对会一直挂到超时。
+        // 走既有失败路径立刻结束,与握手后各步的 send 一致。
+        try {
+          ws.send(handshake.helloJson);
+        } catch (err) {
+          finish(() => reject(pairingError("network", err)));
+        }
       }
     };
     let messageChain = Promise.resolve();

@@ -16,6 +16,7 @@ import {
   initTerminal,
   fitTerminalAtBottom,
   createSmartWriter,
+  createTerminalFitScheduler,
   attachMacWebKitTerminalGuard,
   attachCursorLineHighlight,
   applyTerminalFontSize,
@@ -373,28 +374,15 @@ export function TerminalView({
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    let resizeFrame: number | null = null;
-    let lastObservedContainerSize: { width: number; height: number } | null = null;
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (!isActiveRef.current) return;
-      const rect = entries[0]?.contentRect;
-      if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
-        if (
-          lastObservedContainerSize?.width === rect.width &&
-          lastObservedContainerSize?.height === rect.height
-        ) {
-          return;
-        }
-        lastObservedContainerSize = { width: rect.width, height: rect.height };
-      }
-      container.setAttribute("data-terminal-resizing", "true");
-      if (resizeFrame !== null) return;
-      resizeFrame = window.requestAnimationFrame(() => {
-        resizeFrame = null;
+    const fitScheduler = createTerminalFitScheduler(
+      container,
+      () => {
         const current = runtimeRef.current;
         if (current) fitRuntime(current);
-      });
-    });
+      },
+      () => !disposed && isActiveRef.current,
+    );
+    const resizeObserver = new ResizeObserver((entries) => fitScheduler.schedule(entries));
     resizeObserver.observe(container);
 
     return () => {
@@ -414,8 +402,7 @@ export function TerminalView({
       }
       onRegisterRef.current(null);
       rebuildRef.current = null;
-      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-      container.removeAttribute("data-terminal-resizing");
+      fitScheduler.dispose();
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       runtimeRef.current?.dispose();

@@ -87,23 +87,52 @@ smb2 = "0.18.1"
 dbx-core = { path = "../../dbx/crates/dbx-core", default-features = false }
 tauri-plugin-clipboard-manager = "2"
 
+# Windows 没有 mode 位,凭据文件"仅所有者可读写"只能改 DACL(`storage.rs` 的
+# `restrict_to_current_user`)。版本跟 tauri/tokio 已经拉进来的那份对齐,不引入第二套。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Threading",
+] }
+
 # Keep the Aeroric path dependency on the same compatibility forks as dbx.
 # The latest dbx-core uses the patched MySQL EOF/auth API and GaussDB-aware
 # PostgreSQL crates; resolving these from crates.io would silently produce an
 # incompatible lockfile.
+#
+# The revs/sources below mirror the dbx checkout pinned in `scripts/dbx-ref.txt`
+# (its own root `[patch.crates-io]`). When that pin moves, re-check this block —
+# `dbx` moved the MySQL fork to a different fork owner and started vendoring
+# tiberius, and either divergence resolves silently to a different crate.
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 ssfmt = { path = "vendor/ssfmt" }
 notify-types = { path = "vendor/notify-types" }
-mysql_async = { git = "https://github.com/t8y2/mysql_async.git", rev = "b615bb0b10b5975182a4aa069cabc3d09021f6ab" }
-tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
-postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
-postgres-protocol = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "115f9fef10f0fc3669b5337955e4eb461fc349a6" }
+mysql_async = { git = "https://github.com/zipg/mysql_async.git", rev = "4a9e60a62f5a48e35ef9ccc9fc8277d5012b19dd" }
+tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+postgres-protocol = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+# Keeps SQL Server result sets readable when a row carries an unpaired UTF-16
+# surrogate (dbx `vendor/tiberius/DBX-PATCH.md`). Resolving tiberius from
+# crates.io would drop that fix while still compiling.
+tiberius = { path = "../../dbx/vendor/tiberius" }
+# Win7-compatible API calls; dbx-core depends on pageant unconditionally.
+pageant = { path = "../../dbx/vendor/pageant" }
 
 [features]
-# DevTools (right-click → Inspect, remote webview debugging) is opt-in so it
-# never ships in release builds, where it would let anyone open the console and
-# drive IPC directly. `tauri dev` turns it on via tauri.conf.json > build.features.
+# DevTools(右键 → 检查、远程 webview 调试)保持 opt-in,这样 release 构建里没有
+# 它——否则任何人都能打开控制台直接驱动 IPC。
+#
+# 真正起作用的机制是 tauri 侧的 `#[cfg(any(debug_assertions, feature = "devtools"))]`
+# (见 tauri 2.11 的 src/webview/mod.rs):debug 构建自动带 devtools,所以
+# `tauri dev` 不需要任何配置就能用;release 构建只有显式
+# `cargo build --features devtools` 才会带上。
+#
+# 注意别改成在 tauri.conf.json 里写 `build.features`:那个字段会传给**所有** cargo
+# 命令(dev 和 build 都算),等于把 devtools 塞进 release 产物,与本条的目的相反。
 devtools = ["tauri/devtools"]
 
 [profile.dev]

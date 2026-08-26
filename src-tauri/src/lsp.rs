@@ -2832,6 +2832,7 @@ mod tests {
             password: None,
             remote_path: Some("/srv/app".to_string()),
             auto_sudo_with_password: false,
+            use_proxy: false,
             created_at: 0,
             last_connected_at: None,
         }

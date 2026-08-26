@@ -12,6 +12,7 @@ import {
   Plug,
   Route,
   Settings as SettingsIcon,
+  ShieldCheck,
   Smartphone,
   Type,
   Zap,
@@ -132,6 +133,9 @@ const mcpPanel = lazyPanel(() =>
 const wslPanel = lazyPanel(() =>
   import("./WslPanel").then(({ WslPanel }) => ({ default: WslPanel })),
 );
+const permissionsPanel = lazyPanel(() =>
+  import("./PermissionsPanel").then(({ PermissionsPanel }) => ({ default: PermissionsPanel })),
+);
 const usagePanel = lazyPanel(() =>
   import("../UsageDashboard").then(({ UsageDashboard }) => ({
     default: function UsageSettingsPanel() {
@@ -232,6 +236,15 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     icon: MonitorUp,
     platforms: ["windows"],
     ...wslPanel,
+  },
+  // 只有 macOS 有逐项授权模型(TCC);Windows / Linux 没有可查可改的应用级开关。
+  {
+    key: "permissions",
+    labelKey: "permissions.navLabel",
+    section: "application",
+    icon: ShieldCheck,
+    platforms: ["macos"],
+    ...permissionsPanel,
   },
   {
     key: ALL_AGENT_CONFIGS_NAV_KEY,

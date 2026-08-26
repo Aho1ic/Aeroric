@@ -380,6 +380,56 @@ export function isActiveTaskStatus(status: TaskStatus): boolean {
   );
 }
 
+// ── System permissions ───────────────────────────────────────────────────────
+
+/** "未授权"合并了"被拒绝"与"从未询问":对用户来说都是同一个动作。 */
+export type SystemPermissionStatus = "granted" | "notGranted" | "unknown";
+
+export interface SystemPermission {
+  /** 稳定标识,同时是 `permissions.item.<id>.*` 文案的 key 后缀。 */
+  id: string;
+  status: SystemPermissionStatus;
+  canRequestInApp: boolean;
+  canOpenSettings: boolean;
+  /** 授权后必须重启应用才生效。 */
+  needsRestart: boolean;
+  /** 检测本身会触发系统询问,所以列表里默认显示为未知。 */
+  probePrompts: boolean;
+  /** 检测失败的原因(后端英文原文),仅作补充说明。 */
+  detail?: string;
+}
+
+export interface SystemPermissionReport {
+  platform: string;
+  /** 本平台是否有逐项授权模型;false 时 `permissions` 为空。 */
+  supported: boolean;
+  permissions: SystemPermission[];
+}
+
+export interface SystemPermissionGrantAllResult {
+  report: SystemPermissionReport;
+  requested: string[];
+  /** 只能到系统设置里手工勾选、且当前仍未授权的权限。 */
+  manual: string[];
+}
+
+// ── Startup diagnostics ──────────────────────────────────────────────────────
+
+/**
+ * 一条启动期降级记录。
+ *
+ * 后端启动时若 `~/.aeroric` 不可写,会退到临时目录甚至内存库而不是崩溃退出;
+ * 这条记录就是那次降级的原因,前端启动后查一次并告知用户——否则「数据下次启动
+ * 就没了」会静默发生。
+ */
+export interface StartupDegradation {
+  /** 组件标识,如 `dbx-state`、`local-router`。 */
+  component: string;
+  reason: string;
+  /** 实际退到了哪儿(临时目录路径,或 `:memory:`)。 */
+  fallback: string;
+}
+
 // ── Notifications ────────────────────────────────────────────────────────────
 
 export interface NotificationItem {

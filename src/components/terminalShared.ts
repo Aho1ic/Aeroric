@@ -1451,6 +1451,74 @@ export function safeFit(
   }
 }
 
+/**
+ * 拖窗口 / 面板动画期间 ResizeObserver 每帧都报,合并成"停下来之后只 fit 一次"的窗口。
+ *
+ * 为什么必须合并,而不是每帧 fit 一次(实测见 zz-probe 的 resize storm):
+ * xterm 在 resize 时会 reflow scrollback —— 一条全宽 `─` 分隔线在变窄后占 2 个屏幕行。
+ * 于是 TUI 那一帧的**屏幕高度**变了,但 Ink 擦除上一帧用的是它自己记的**逻辑行数**,
+ * 擦不干净,帧顶部就留成了永久残留。每帧 resize 一次 = 每帧叠一条残留,拖一次窗口
+ * 叠十几条,就是用户看到的满屏 `────` 夹着旧文字。
+ *
+ * 120ms:比 60fps 的 16ms 帧间隔宽出一个数量级,足以吃掉整段拖动;又短到单次布局
+ * 变化(切侧栏、分屏)察觉不到延迟。期间容器一直挂着 data-terminal-resizing
+ * (CSS 里是 visibility:hidden),所以合并掉的中间帧本来就不可见。
+ */
+export const TERMINAL_RESIZE_SETTLE_MS = 120;
+
+export interface TerminalFitScheduler {
+  /** ResizeObserver 回调直接转进来。 */
+  schedule: (entries?: ResizeObserverEntry[]) => void;
+  /** 卸载时清掉待发的 timer,并摘掉 resizing 标记。 */
+  dispose: () => void;
+}
+
+/**
+ * 创建 resize 合并调度器。`fit` 只会在容器尺寸稳定 `settleMs` 之后被调用一次。
+ */
+export function createTerminalFitScheduler(
+  container: HTMLElement,
+  fit: () => void,
+  isActive: () => boolean,
+  settleMs = TERMINAL_RESIZE_SETTLE_MS,
+): TerminalFitScheduler {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastSize: { width: number; height: number } | null = null;
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  return {
+    schedule: (entries) => {
+      if (!isActive()) return;
+      const rect = entries?.[0]?.contentRect;
+      if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+        if (lastSize?.width === rect.width && lastSize?.height === rect.height) return;
+        lastSize = { width: rect.width, height: rect.height };
+      }
+      // 标记先挂上并一直保持到 fit 落地,拖动全程都不暴露中间画面。
+      container.setAttribute("data-terminal-resizing", "true");
+      clearTimer();
+      timer = setTimeout(() => {
+        timer = null;
+        if (!isActive()) {
+          container.removeAttribute("data-terminal-resizing");
+          return;
+        }
+        fit();
+      }, settleMs);
+    },
+    dispose: () => {
+      clearTimer();
+      container.removeAttribute("data-terminal-resizing");
+    },
+  };
+}
+
 const terminalRevealFrames = new WeakMap<HTMLElement, number>();
 
 /**

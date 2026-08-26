@@ -23,13 +23,29 @@ pub struct LocalRouterManager {
 }
 
 impl LocalRouterManager {
-    pub fn for_app() -> Result<Self, String> {
-        Ok(Self {
-            router: Arc::new(LocalRouterState::for_app().map_err(|error| error.to_string())?),
+    /// 启动期构造,永不失败。
+    ///
+    /// 只有「用量统计库放哪」这一件事会失败,而它失败不该让应用打不开——router
+    /// 本身还没启动,统计更是纯附属功能。原先 `run()` 里 `.expect()` 会在窗口出现
+    /// 之前 panic,现在退到临时目录并记进启动诊断。
+    pub fn for_app() -> Self {
+        let data_dir = crate::storage::resolve_data_dir();
+        if let Some(reason) = &data_dir.degraded_reason {
+            crate::startup_diagnostics::record(
+                "local-router",
+                reason.clone(),
+                data_dir.path.display().to_string(),
+            );
+        }
+        let database_path = data_dir.path.join("usage-statistics.sqlite3");
+        Self {
+            // `with_database_path` 只是存下路径,不碰磁盘,所以这里不会失败;
+            // 真正的建库延迟到第一次写用量时,那时的失败由 router 自己上报。
+            router: Arc::new(LocalRouterState::with_database_path(database_path)),
             starting: Arc::new(AtomicBool::new(false)),
             operation_lock: Mutex::new(()),
             lifecycle_error: Arc::new(RwLock::new(None)),
-        })
+        }
     }
 
     pub async fn shutdown(&self) {

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTerminalRuntime } from "../components/terminalRuntime";
+import { TERMINAL_RESIZE_SETTLE_MS } from "../components/terminalShared";
 
 const mocks = vi.hoisted(() => {
   const term = {
@@ -31,17 +32,24 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../components/terminalShared", () => ({
-  applyTerminalFontFamily: mocks.applyTerminalFontFamily,
-  applyTerminalFontSize: mocks.applyTerminalFontSize,
-  applyTerminalTheme: mocks.applyTerminalTheme,
-  attachMacWebKitTerminalGuard: mocks.attachMacWebKitTerminalGuard,
-  createSmartWriter: mocks.createSmartWriter,
-  fitTerminalAtBottom: mocks.fitTerminalAtBottom,
-  initTerminal: mocks.initTerminal,
-  loadWebglAddon: mocks.loadWebglAddon,
-  safeFit: mocks.safeFit,
-}));
+// createTerminalFitScheduler 用真实实现:resize 合并是这条路径的关键行为
+// (每帧 fit 一次会把 TUI 打成满屏残留),用假的就等于没测。
+vi.mock("../components/terminalShared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../components/terminalShared")>();
+  return {
+    applyTerminalFontFamily: mocks.applyTerminalFontFamily,
+    applyTerminalFontSize: mocks.applyTerminalFontSize,
+    applyTerminalTheme: mocks.applyTerminalTheme,
+    attachMacWebKitTerminalGuard: mocks.attachMacWebKitTerminalGuard,
+    createSmartWriter: mocks.createSmartWriter,
+    createTerminalFitScheduler: actual.createTerminalFitScheduler,
+    TERMINAL_RESIZE_SETTLE_MS: actual.TERMINAL_RESIZE_SETTLE_MS,
+    fitTerminalAtBottom: mocks.fitTerminalAtBottom,
+    initTerminal: mocks.initTerminal,
+    loadWebglAddon: mocks.loadWebglAddon,
+    safeFit: mocks.safeFit,
+  };
+});
 
 const inputDisposers = vi.hoisted(() => ({
   textarea: vi.fn(),
@@ -76,6 +84,8 @@ describe("createTerminalRuntime", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // resize 合并靠 setTimeout,必须能手动推进
+    vi.useFakeTimers();
     ResizeObserverMock.instances = [];
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     animationFrames = [];
@@ -83,6 +93,10 @@ describe("createTerminalRuntime", () => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shares initialization, appearance updates, resize, visibility, and cleanup", () => {
@@ -107,10 +121,11 @@ describe("createTerminalRuntime", () => {
     expect(mocks.term.open).toHaveBeenCalledWith(container);
     expect(ResizeObserverMock.instances[0]?.observe).toHaveBeenCalledWith(container);
 
+    // 连续两次上报合并成一次 fit,且要等尺寸稳定之后才落地
     ResizeObserverMock.instances[0]?.callback([], ResizeObserverMock.instances[0] as never);
     ResizeObserverMock.instances[0]?.callback([], ResizeObserverMock.instances[0] as never);
-    expect(animationFrames).toHaveLength(1);
-    animationFrames.shift()?.(0);
+    expect(mocks.fitTerminalAtBottom).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
     expect(mocks.fitTerminalAtBottom).toHaveBeenCalledOnce();
 
     const sameSize = { contentRect: { width: 640, height: 480 } } as ResizeObserverEntry;
@@ -121,8 +136,7 @@ describe("createTerminalRuntime", () => {
       [changedSize],
       ResizeObserverMock.instances[0] as never,
     );
-    expect(animationFrames).toHaveLength(1);
-    animationFrames.shift()?.(0);
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
     expect(mocks.fitTerminalAtBottom).toHaveBeenCalledTimes(2);
 
     runtime.fit();

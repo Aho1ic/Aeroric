@@ -36,6 +36,7 @@ mod lsp;
 mod mcp;
 mod node_runtime;
 mod notification;
+mod permissions;
 mod platform;
 mod ports;
 mod protocol_decode;
@@ -52,6 +53,7 @@ mod skills;
 mod ssh;
 mod ssh_hostkey;
 mod ssh_proxy;
+mod startup_diagnostics;
 mod storage;
 mod storage_backend;
 mod storage_backend_baidu;
@@ -190,16 +192,85 @@ pub fn try_run_ssh_proxy_bridge() -> bool {
     ssh_proxy::try_run_ssh_proxy_bridge()
 }
 
+/// 应用壳构建失败时把原因落到用户看得见的地方。
+///
+/// GUI 进程的 stderr 在双击启动时无处可见,所以三条路一起走:stderr(命令行启动时
+/// 有用)、`~/.aeroric/startup-error.log`(可让用户捞给我们;数据目录不可写时静默
+/// 跳过,反正那也常是失败本因)、以及原生弹窗(唯一能当场看到的)。
+fn report_fatal_startup_error(message: &str) {
+    eprintln!("[aeroric] fatal: cannot start application: {message}");
+
+    if let Ok(dir) = storage::aeroric_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            dir.join("startup-error.log"),
+            format!("cannot start application: {message}\n"),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // osascript 是系统自带的,不引入依赖,且此刻 Tauri 的对话框插件还不可用。
+        // 单引号在 AppleScript 字符串里需要转义,否则弹窗会因语法错误而不显示。
+        let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "display dialog \"Aeroric cannot start:\n\n{escaped}\" with title \"Aeroric\" buttons {{\"OK\"}} with icon stop"
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        // mshta 在所有受支持的 Windows 上都在,不用引 winapi。
+        let escaped = message
+            .replace('\'', " ")
+            .replace('\r', " ")
+            .replace('\n', " ");
+        let script = format!("javascript:alert('Aeroric cannot start: {escaped}');close()");
+        let _ = std::process::Command::new("mshta").arg(script).status();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // 桌面环境不一定装了哪个,依次试,都没有就只剩 stderr 与日志文件。
+        for (program, args) in [
+            (
+                "zenity",
+                vec![
+                    "--error".to_string(),
+                    format!("--text=Aeroric cannot start: {message}"),
+                ],
+            ),
+            (
+                "kdialog",
+                vec![
+                    "--error".to_string(),
+                    format!("Aeroric cannot start: {message}"),
+                ],
+            ),
+        ] {
+            if std::process::Command::new(program)
+                .args(&args)
+                .status()
+                .is_ok()
+            {
+                break;
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if notification::try_run_update_helper() {
         return;
     }
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
-            let dbx_state = crate::database::dbx_state::DbxState::new_blocking()
-                .expect("Failed to initialize DBX database state");
-            app.manage(dbx_state);
+            // 不再 `.expect()`:构造已改为逐级降级(见 `DbxState::new_blocking`),
+            // 磁盘不可用时退到临时目录或内存库,原因记进启动诊断由前端横幅告知。
+            app.manage(crate::database::dbx_state::DbxState::new_blocking());
             // 后台预热 login shell 环境，避免第一次启动任务时阻塞
             std::thread::spawn(|| {
                 crate::app_settings::get_login_shell_path();
@@ -235,10 +306,7 @@ pub fn run() {
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
         .manage(remote::RemoteState::new())
-        .manage(
-            local_router_commands::LocalRouterManager::for_app()
-                .expect("Failed to initialize local router state"),
-        )
+        .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
@@ -807,6 +875,12 @@ pub fn run() {
             notification::prepare_release_update,
             notification::restart_and_install_release_update,
             notification::install_release_update,
+            permissions::list_system_permissions,
+            permissions::request_system_permission,
+            permissions::request_all_system_permissions,
+            permissions::open_system_permission_settings,
+            permissions::restart_app_for_permissions,
+            startup_diagnostics::list_startup_degradations,
             usage::read_usage_snapshot,
             hooks::get_hook_status,
             hooks::get_hook_readiness,
@@ -830,26 +904,37 @@ pub fn run() {
             mcp::set_mcp_settings,
             mcp::test_mcp_server,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while running tauri application")
-        .run(|_app_handle, _event| {
-            if let tauri::RunEvent::Exit = _event {
-                let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
-                tauri::async_runtime::block_on(manager.shutdown());
-                let webui_manager = _app_handle.state::<dsh_webui::DshWebUiManager>();
-                tauri::async_runtime::block_on(webui_manager.shutdown_all());
-            }
-            // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
-            // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::Manager;
-                if let tauri::RunEvent::Reopen { .. } = _event {
-                    if let Some(window) = _app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+        .build(tauri::generate_context!());
+
+    // 这一层没有降级空间:应用壳都没建起来,谈不上"少个功能照样用"。
+    // 但原先的 `.expect()` 只会 panic——GUI 进程的 stderr 通常没人看得到,
+    // 用户体验是图标闪一下就消失。改成写日志 + 原生弹窗,让失败至少可见可报。
+    let app = match app {
+        Ok(app) => app,
+        Err(error) => {
+            report_fatal_startup_error(&error.to_string());
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|_app_handle, _event| {
+        if let tauri::RunEvent::Exit = _event {
+            let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
+            tauri::async_runtime::block_on(manager.shutdown());
+            let webui_manager = _app_handle.state::<dsh_webui::DshWebUiManager>();
+            tauri::async_runtime::block_on(webui_manager.shutdown_all());
+        }
+        // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
+        // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。
+        #[cfg(target_os = "macos")]
+        {
+            use tauri::Manager;
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(window) = _app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
             }
-        });
+        }
+    });
 }

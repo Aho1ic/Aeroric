@@ -10,6 +10,7 @@ import {
   type SettingsPanelProps,
 } from "../components/app-settings/panelRegistry";
 import { I18nProvider } from "../i18n";
+import { APP_PLATFORM } from "../platform";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../hooks/useAgentOptions", () => ({ useAgentOptions: () => [] }));
@@ -82,8 +83,10 @@ describe("settings panel registry", () => {
       (entry as { preload: () => Promise<void> }).preload = preloadSpies[index];
     });
 
+    // 必须用 dialog 自己用的那个平台值:平台受限的面板(WSL 只在 Windows、
+    // 权限只在 macOS)不会进 navItems,也就不会被预加载。
     const availableIndexes = SETTINGS_PANEL_REGISTRY.map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => !entry.platforms || entry.platforms.includes("macos"))
+      .filter(({ entry }) => !entry.platforms || entry.platforms.includes(APP_PLATFORM))
       .map(({ index }) => index);
 
     const view = renderDialog("general");

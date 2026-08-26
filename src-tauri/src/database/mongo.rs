@@ -100,6 +100,8 @@ pub async fn dbx_mongo_find_documents(
             filter.as_deref(),
             projection.as_deref(),
             sort.as_deref(),
+            // 新增的 collation 参数,None 等于原来的默认排序规则。
+            None,
         ),
     )
     .await

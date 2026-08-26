@@ -610,6 +610,10 @@ fn absorb_envelope(_agent: RouterAgent, envelope: &Value, destination: &mut Toke
                 .pointer("/prompt_tokens_details/cached_tokens")
                 .and_then(Value::as_u64)
         })
+        // DeepSeek Chat 的文档化缓存命中字段,放在链末兜底。官方端点目前把同值镜像进
+        // 未文档化的 prompt_tokens_details.cached_tokens(上面已命中),所以只有当上游
+        // 只发文档字段时(部分中转)这一步才生效;上游发任一标准字段时行为零变化。
+        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_u64))
     {
         destination.cache_read_tokens = value;
     }
@@ -698,6 +702,47 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, 4);
         assert_eq!(usage.response_id.as_deref(), Some("resp_123"));
         assert_eq!(usage.model.as_deref(), Some("gpt-5.6"));
+    }
+
+    #[test]
+    fn parses_deepseek_documented_cache_hit_tokens() {
+        // 只发 DeepSeek 文档字段、不镜像 prompt_tokens_details.cached_tokens 的上游
+        // (部分中转如此),缓存命中不能被记成 0。
+        let value = json!({
+            "id": "chat_123",
+            "model": "deepseek-chat",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 100,
+                "prompt_cache_hit_tokens": 600,
+                "prompt_cache_miss_tokens": 400
+            }
+        });
+        let mut capture = UsageCapture::new(RouterAgent::Codex, false, None);
+        capture.push(serde_json::to_string(&value).unwrap().as_bytes());
+        let usage = capture.finish();
+        assert_eq!(usage.input_tokens, 1000);
+        assert_eq!(usage.output_tokens, 100);
+        assert_eq!(usage.cache_read_tokens, 600);
+        assert_eq!(usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn prefers_standard_cache_field_over_deepseek_fallback() {
+        // 上游同时发标准字段与文档字段时,标准字段优先 —— 兜底位于链末,不改变既有路径。
+        let value = json!({
+            "model": "deepseek-chat",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 512},
+                "prompt_cache_hit_tokens": 600
+            }
+        });
+        let mut capture = UsageCapture::new(RouterAgent::Codex, false, None);
+        capture.push(serde_json::to_string(&value).unwrap().as_bytes());
+        let usage = capture.finish();
+        assert_eq!(usage.cache_read_tokens, 512);
     }
 
     #[tokio::test]

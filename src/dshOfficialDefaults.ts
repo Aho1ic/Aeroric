@@ -98,6 +98,8 @@ message-feedback|@deepseek-ai/dsh-message-feedback|1
 session-log-download|@deepseek-ai/dsh-session-log-export|1
 workspace|@deepseek-ai/dsh-workspace|1
 session-projection-cache|@deepseek-ai/dsh-session-projection-cache|1
+session-reference|@deepseek-ai/dsh-session-reference|1
+file-reference-local|@deepseek-ai/dsh-file-reference-local|1
 session-stats|@deepseek-ai/dsh-session-stats|1
 directory-picker|@deepseek-ai/dsh-host-directory-picker-auto|1
 plugin-inventory|@deepseek-ai/dsh-host-plugin-inventory|1
@@ -115,12 +117,15 @@ cordis-client-runner|@deepseek-ai/dsh-cordis-client-runner|1
 ui-theme|@deepseek-ai/dsh-client-ui-theme|1
 locale|@deepseek-ai/dsh-client-locale|1
 ui-layout|@deepseek-ai/dsh-client-ui-layout|1
+ui-renderer|@deepseek-ai/dsh-client-ui-renderer|1
 ui-sidebar|@deepseek-ai/dsh-client-ui-sidebar|1
 ui-settings|@deepseek-ai/dsh-client-ui-settings|1
 ui-settings-general|@deepseek-ai/dsh-client-ui-settings-general|1
 ui-settings-models|@deepseek-ai/dsh-client-ui-settings-models|1
 ui-settings-plugin-inventory|@deepseek-ai/dsh-client-ui-settings-plugin-inventory|1
 ui-conversation|@deepseek-ai/dsh-client-ui-conversation|1
+ui-brand-official|@deepseek-ai/dsh-client-ui-brand-official|1
+ui-attachment|@deepseek-ai/dsh-client-ui-attachment|1
 ui-tool|@deepseek-ai/dsh-client-ui-tool|1
 ui-cordis|@deepseek-ai/dsh-client-ui-cordis|1
 ui-workflow-run|@deepseek-ai/dsh-client-ui-workflow-run|1
@@ -130,6 +135,7 @@ ui-input-trigger|@deepseek-ai/dsh-client-ui-input-trigger|1
 ui-commands|@deepseek-ai/dsh-client-ui-commands|1
 ui-skill|@deepseek-ai/dsh-client-ui-skill|1
 ui-subagent|@deepseek-ai/dsh-client-ui-subagent|1
+ui-reference|@deepseek-ai/dsh-client-ui-reference|1
 ui-jobs|@deepseek-ai/dsh-client-ui-jobs|1
 ui-goal|@deepseek-ai/dsh-client-ui-goal|1
 ui-message-feedback|@deepseek-ai/dsh-client-ui-message-feedback|1

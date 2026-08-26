@@ -73,7 +73,7 @@ import {
 
 const EMPTY_PINNED_TREE_NODE_IDS = new Set<string>();
 
-interface DatabaseSidebarTreeProps {
+export interface DatabaseSidebarTreeProps {
   connections: DbConnectionConfig[];
   dbxConnections: AeroricDbConnectionConfig[];
   extraDbxConnectionGroups?: string[];

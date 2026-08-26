@@ -19,6 +19,7 @@ import type {
   SkillHubConfig,
   SshConnection,
   CondaEnvironment,
+  StartupDegradation,
 } from "./types";
 import type { AgentOption } from "./agents";
 import type { LocalRouterAgent, LocalRouterStatus } from "./components/app-settings/types";
@@ -649,6 +650,34 @@ function App() {
     });
     // Mount-only: callbacks are read through refs so a language switch never
     // re-runs startup normalization. See the ref sync effect above.
+  }, []);
+
+  useEffect(() => {
+    // 后端启动时若数据目录不可写,会退到临时目录甚至内存库继续启动(而不是像以前
+    // 那样在窗口出现前 panic)。降级本身是静默的,必须在这里说出来:否则用户会在
+    // 下次启动发现连接配置全没了,却不知道发生过什么。
+    invoke<StartupDegradation[]>("list_startup_degradations")
+      .then((degradations) => {
+        // 非数组一律当"没有降级":老版本后端没有这条命令时会拿到 null,
+        // 直接迭代会抛 TypeError 并把真正的降级提示一起吞掉。
+        if (!Array.isArray(degradations)) return;
+        for (const degradation of degradations) {
+          const isMemory = degradation.fallback === ":memory:";
+          showToastRef.current(
+            isMemory
+              ? tRef.current("toast.startupDegradedMemory", { reason: degradation.reason })
+              : tRef.current("toast.startupDegradedFallbackDir", {
+                  fallback: degradation.fallback,
+                  reason: degradation.reason,
+                }),
+            "warning",
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        // 查不到诊断本身不值得打扰用户,但要留痕:这条命令没注册会走到这里。
+        console.error("list_startup_degradations failed", e);
+      });
   }, []);
 
   useEffect(() => {

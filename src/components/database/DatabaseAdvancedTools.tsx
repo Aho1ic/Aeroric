@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Play, RefreshCcw } from "lucide-react";
+import { Play, RefreshCcw, Square } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
 import s from "../../styles";
 import type {
   AeroricDbConnectionConfig,
   DbxColumnInfo,
-  DbxDatabaseType,
   DbxObjectInfo,
   DbxTransferProgress,
 } from "../../types";
 import { Button as DbxButton } from "../ui/Button";
 import { confirmDbxProductionOperation } from "./databaseProductionSafety";
+import { listAllDbxObjects } from "./databaseViewModel";
 
 export type DatabaseAdvancedToolMode = "transfer" | "schema-diff" | "data-compare";
 
@@ -23,8 +23,6 @@ interface Props {
   table?: string | null;
   availableConnections?: AeroricDbConnectionConfig[];
   sourceObjects?: DbxObjectInfo[];
-  sourceColumnsByTable?: Record<string, DbxColumnInfo[]>;
-  sourceDatabaseType?: DbxDatabaseType | null;
 }
 
 function isSqlDbxConnection(connection: AeroricDbConnectionConfig) {
@@ -43,9 +41,10 @@ function tableNamesFromText(value: string) {
 }
 
 function objectToTableInfo(object: DbxObjectInfo) {
+  const objectType = object.object_type.toLowerCase();
   return {
     name: object.name,
-    table_type: object.object_type === "view" ? "VIEW" : "TABLE",
+    table_type: objectType.includes("view") ? "VIEW" : "TABLE",
     comment: object.comment ?? null,
     parent_schema: object.parent_schema ?? object.schema ?? null,
     parent_name: object.parent_name ?? null,
@@ -64,6 +63,51 @@ function columnsForDetail(columns: DbxColumnInfo[]) {
     numeric_precision: column.numeric_precision ?? null,
     numeric_scale: column.numeric_scale ?? null,
     character_maximum_length: column.character_maximum_length ?? null,
+  }));
+}
+
+type LoadedToolMetadata = {
+  objects: DbxObjectInfo[];
+  columnsByTable: Record<string, DbxColumnInfo[]>;
+};
+
+function metadataKey(object: DbxObjectInfo, fallbackSchema: string) {
+  return tableKey(object.schema ?? fallbackSchema, object.name);
+}
+
+async function loadToolMetadata(
+  connection: AeroricDbConnectionConfig,
+  database: string,
+  schema: string,
+  tableNames: string[],
+): Promise<LoadedToolMetadata> {
+  const objects = await listAllDbxObjects(connection.id, database || null, schema || null, {
+    objectTypes: ["TABLE", "VIEW", "MATERIALIZED_VIEW"],
+  });
+  const wanted = new Set(tableNames);
+  const selectedObjects = objects.filter((object) => wanted.has(object.name));
+  const columnsEntries = await Promise.all(
+    selectedObjects.map(async (object) => {
+      const columns = await databaseApi.dbxGetColumns(
+        connection.id,
+        object.name,
+        database || null,
+        object.schema ?? (schema || null),
+      );
+      return [metadataKey(object, schema), columns] as const;
+    }),
+  );
+  return { objects: selectedObjects, columnsByTable: Object.fromEntries(columnsEntries) };
+}
+
+function detailsForMetadata(metadata: LoadedToolMetadata, fallbackSchema: string) {
+  return metadata.objects.map((object) => ({
+    name: object.name,
+    columns: columnsForDetail(metadata.columnsByTable[metadataKey(object, fallbackSchema)] ?? []),
+    indexes: [],
+    foreign_keys: [],
+    triggers: [],
+    ddl: null,
   }));
 }
 
@@ -87,8 +131,6 @@ export function DatabaseAdvancedTools({
   table,
   availableConnections = [],
   sourceObjects = [],
-  sourceColumnsByTable = {},
-  sourceDatabaseType,
 }: Props) {
   const { t } = useI18n();
   const sqlConnections = useMemo(
@@ -103,15 +145,23 @@ export function DatabaseAdvancedTools({
     [connectionId, sqlConnections],
   );
   const [targetConnectionId, setTargetConnectionId] = useState(defaultTargetConnectionId);
+  const sourceConnection = useMemo(
+    () => sqlConnections.find((connection) => connection.id === connectionId) ?? null,
+    [connectionId, sqlConnections],
+  );
   const [sourceDatabase, setSourceDatabase] = useState(database ?? "");
   const [sourceSchema, setSourceSchema] = useState(schema ?? "");
   const [targetDatabase, setTargetDatabase] = useState(database ?? "");
   const [targetSchema, setTargetSchema] = useState(schema ?? "");
   const [tablesText, setTablesText] = useState(
-    table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "",
+    table ??
+      sourceObjects.find((object) => object.object_type.toLowerCase() === "table")?.name ??
+      "",
   );
   const [resultText, setResultText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [activeTransferId, setActiveTransferId] = useState<string | null>(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const targetConnection = useMemo(
     () => sqlConnections.find((connection) => connection.id === targetConnectionId) ?? null,
     [sqlConnections, targetConnectionId],
@@ -134,53 +184,42 @@ export function DatabaseAdvancedTools({
   useEffect(() => {
     if (!tablesText.trim()) {
       setTablesText(
-        table ?? sourceObjects.find((object) => object.object_type === "table")?.name ?? "",
+        table ??
+          sourceObjects.find((object) => object.object_type.toLowerCase() === "table")?.name ??
+          "",
       );
     }
   }, [sourceObjects, table, tablesText]);
 
   const selectedTables = useMemo(() => tableNamesFromText(tablesText), [tablesText]);
-  const selectedSourceObjects = useMemo(() => {
-    const wanted = new Set(selectedTables);
-    const matched = sourceObjects.filter((object) => wanted.has(object.name));
-    const matchedNames = new Set(matched.map((object) => object.name));
-    const syntheticObjects = selectedTables
-      .filter((tableName) => !matchedNames.has(tableName))
-      .map((tableName) => ({
-        name: tableName,
-        object_type: "table",
-        schema: sourceSchema || null,
-      }));
-    return [...matched, ...syntheticObjects];
-  }, [selectedTables, sourceObjects, sourceSchema]);
-
   const missingReason = !connectionId
     ? t("database.selectDbxSqlConnection")
-    : !targetConnection
-      ? t("database.selectTargetConnection")
-      : selectedTables.length === 0
-        ? t("database.selectDbxTable")
-        : "";
+    : !sourceConnection
+      ? t("database.sourceConnectionUnavailable")
+      : !targetConnection
+        ? t("database.selectTargetConnection")
+        : selectedTables.length === 0
+          ? t("database.selectDbxTable")
+          : "";
 
-  function sourceDetails() {
-    return selectedSourceObjects.map((object) => {
-      const key = tableKey(object.schema ?? sourceSchema, object.name);
-      return {
-        name: object.name,
-        columns: columnsForDetail(
-          sourceColumnsByTable[key] ?? sourceColumnsByTable[object.name] ?? [],
-        ),
-        indexes: [],
-        foreign_keys: [],
-        triggers: [],
-        ddl: null,
-      };
-    });
-  }
+  const sameTransferTarget =
+    mode === "transfer" &&
+    connectionId.trim() === targetConnectionId.trim() &&
+    sourceDatabase.trim() === targetDatabase.trim() &&
+    sourceSchema.trim() === targetSchema.trim();
+
+  const transferTargetsSelf =
+    Boolean(sourceConnection && targetConnection) &&
+    sameTransferTarget &&
+    selectedTables.length > 0;
+
+  const effectiveMissingReason = transferTargetsSelf
+    ? t("database.transferSameTarget")
+    : missingReason;
 
   async function run() {
-    if (missingReason) {
-      setResultText(missingReason);
+    if (effectiveMissingReason) {
+      setResultText(effectiveMissingReason);
       return;
     }
     setLoading(true);
@@ -212,19 +251,25 @@ export function DatabaseAdvancedTools({
           mode: "append" as const,
           batchSize: 500,
         };
+        setActiveTransferId(request.transferId);
+        setCancelRequested(false);
         setResultText(t("database.transferStarted"));
         const terminalProgress = await databaseApi.dbxStartTransfer(request, (progress) => {
           setResultText(transferProgressText(progress, t));
         });
         if (terminalProgress) setResultText(transferProgressText(terminalProgress, t));
       } else if (mode === "schema-diff") {
-        const tableInfos = selectedSourceObjects.map(objectToTableInfo);
-        const details = sourceDetails();
+        if (!targetConnection) return;
+        if (!sourceConnection) return;
+        const [sourceMetadata, targetMetadata] = await Promise.all([
+          loadToolMetadata(sourceConnection, sourceDatabase, sourceSchema, selectedTables),
+          loadToolMetadata(targetConnection, targetDatabase, targetSchema, selectedTables),
+        ]);
         const result = await databaseApi.dbxPrepareSchemaDiff({
-          sourceTables: tableInfos,
-          targetTables: tableInfos,
-          sourceDetails: details,
-          targetDetails: details,
+          sourceTables: sourceMetadata.objects.map(objectToTableInfo),
+          targetTables: targetMetadata.objects.map(objectToTableInfo),
+          sourceDetails: detailsForMetadata(sourceMetadata, sourceSchema),
+          targetDetails: detailsForMetadata(targetMetadata, targetSchema),
           sourceFunctions: [],
           targetFunctions: [],
           sourceSequences: [],
@@ -233,14 +278,54 @@ export function DatabaseAdvancedTools({
           targetRules: [],
           sourceOwners: [],
           targetOwners: [],
-          databaseType: sourceDatabaseType ?? "mysql",
+          databaseType: targetConnection.dbType,
           targetSchema,
           ignoreComments: false,
           cascadeDelete: false,
         });
         setResultText(JSON.stringify(result, null, 2));
       } else {
+        if (!targetConnection) return;
+        if (!sourceConnection) return;
         const sourceTable = selectedTables[0] ?? table ?? "";
+        const [sourceColumns, targetColumns] = await Promise.all([
+          databaseApi.dbxGetColumns(
+            sourceConnection.id,
+            sourceTable,
+            sourceDatabase || null,
+            sourceSchema || null,
+          ),
+          databaseApi.dbxGetColumns(
+            targetConnection.id,
+            sourceTable,
+            targetDatabase || null,
+            targetSchema || null,
+          ),
+        ]);
+        const targetByName = new Map(targetColumns.map((column) => [column.name, column]));
+        const sourcePrimaryKeys = sourceColumns
+          .filter((column) => column.is_primary_key)
+          .map((column) => column.name);
+        const targetPrimaryKeys = targetColumns
+          .filter((column) => column.is_primary_key)
+          .map((column) => column.name);
+        const targetPrimaryKeySet = new Set(targetPrimaryKeys);
+        const samePrimaryKeys =
+          sourcePrimaryKeys.length === targetPrimaryKeys.length &&
+          sourcePrimaryKeys.every((name) => targetPrimaryKeySet.has(name));
+        const columns = sourceColumns
+          .filter((column) => targetByName.has(column.name))
+          .map((column) => column.name);
+        const keyColumns = sourceColumns
+          .filter(
+            (column) =>
+              column.is_primary_key && targetByName.get(column.name)?.is_primary_key === true,
+          )
+          .map((column) => column.name);
+        if (keyColumns.length === 0 || !samePrimaryKeys) {
+          setResultText(t("database.dataCompareNoCommonPrimaryKey"));
+          return;
+        }
         const result = await databaseApi.dbxPrepareDataCompareFromTables({
           sourceConnectionId: connectionId,
           sourceDatabase,
@@ -250,8 +335,8 @@ export function DatabaseAdvancedTools({
           targetDatabase,
           targetSchema,
           targetTable: sourceTable,
-          columns: [],
-          keyColumns: [],
+          columns,
+          keyColumns,
           fetchBatchSize: 1000,
         });
         setResultText(JSON.stringify(result, null, 2));
@@ -260,6 +345,19 @@ export function DatabaseAdvancedTools({
       setResultText(String(err));
     } finally {
       setLoading(false);
+      setActiveTransferId(null);
+      setCancelRequested(false);
+    }
+  }
+
+  async function cancelTransfer() {
+    if (!activeTransferId || cancelRequested) return;
+    setCancelRequested(true);
+    try {
+      await databaseApi.dbxCancelTransfer(activeTransferId);
+    } catch (err) {
+      setCancelRequested(false);
+      setResultText(String(err));
     }
   }
 
@@ -277,15 +375,27 @@ export function DatabaseAdvancedTools({
           <div style={s.databaseWorkspaceTitle}>{title}</div>
           <div style={s.databaseDialogHint}>{t("database.advancedToolsHint")}</div>
         </div>
-        <DbxButton
-          variant="default"
-          size="sm"
-          icon={loading ? RefreshCcw : Play}
-          onClick={() => void run()}
-          disabled={loading || Boolean(missingReason)}
-        >
-          {mode === "transfer" ? t("database.startTransfer") : t("database.compare")}
-        </DbxButton>
+        {mode === "transfer" && loading ? (
+          <DbxButton
+            variant="destructive"
+            size="sm"
+            icon={Square}
+            onClick={() => void cancelTransfer()}
+            disabled={!activeTransferId || cancelRequested}
+          >
+            {cancelRequested ? t("database.transferCancelling") : t("database.cancelTransfer")}
+          </DbxButton>
+        ) : (
+          <DbxButton
+            variant="default"
+            size="sm"
+            icon={loading ? RefreshCcw : Play}
+            onClick={() => void run()}
+            disabled={loading || Boolean(effectiveMissingReason)}
+          >
+            {mode === "transfer" ? t("database.startTransfer") : t("database.compare")}
+          </DbxButton>
+        )}
       </div>
       <div style={s.databaseDialogFormGrid}>
         <label style={s.databaseDialogField}>
@@ -356,7 +466,7 @@ export function DatabaseAdvancedTools({
           />
         </label>
       </div>
-      {missingReason && <div style={s.databaseDialogHint}>{missingReason}</div>}
+      {effectiveMissingReason && <div style={s.databaseDialogHint}>{effectiveMissingReason}</div>}
       <pre style={s.databaseSqlPreview}>{resultText || t("database.comparePreviewEmpty")}</pre>
     </div>
   );

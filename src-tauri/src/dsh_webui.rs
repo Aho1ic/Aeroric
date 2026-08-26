@@ -422,9 +422,9 @@ impl DshWebUiManager {
         #[cfg(unix)]
         {
             if let Some(pid) = child.id() {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
-                }
+                // 发给整个进程组而不是单个 pid:dsh web 自己会拉起 node 之类的
+                // 子进程,只杀直接子进程会把它们留成孤儿继续占端口。
+                crate::subprocess::signal_process_group(pid, libc::SIGTERM);
 
                 for _ in 0..10 {
                     match child.try_wait() {
@@ -434,16 +434,16 @@ impl DshWebUiManager {
                     }
                 }
 
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGKILL);
-                }
+                crate::subprocess::signal_process_group(pid, libc::SIGKILL);
                 let _ = child.wait().await;
             }
         }
 
         #[cfg(windows)]
         {
-            let _ = child.kill().await;
+            crate::subprocess::terminate_tokio_process_tree(child)
+                .await
+                .map_err(|error| format!("Could not terminate DSH Web process tree: {error}"))?;
         }
 
         Ok(())
@@ -1537,7 +1537,9 @@ async fn ensure_dsh_webui_locked(
     // Windows 上 dsh 解析成 dsh.cmd,Rust 会经 cmd.exe 启动它。不带
     // CREATE_NO_WINDOW 就会弹出一个真实的 cmd 控制台窗口,并且因为这是常驻
     // sidecar,窗口会跟着整个会话一直停在桌面上——而不是一闪而过。
-    crate::subprocess::configure_background_tokio_command(&mut cmd);
+    // 同时把它放进独立进程组:dsh web 会再拉起自己的子进程,停止时必须能按组
+    // 收掉(见 `stop_process`),否则残留进程会一直占着端口。
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut cmd);
     cmd.args(&launch.args);
     if let Some(working_dir) = &launch.working_dir {
         cmd.current_dir(working_dir);

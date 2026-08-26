@@ -1,11 +1,19 @@
 # Orca kernel compatibility
 
-更新时间：2026-08-04
+更新时间：2026-08-24
 
-`/Users/lyx/Documents/orca` 已同步到 `stablyai/orca` 的 `upstream/main`，当前
-提交为 `a7ed5a45c2d7a9c6af777c9e1a3928d877e845ea`。Aeroric 本身是 Tauri/Rust
+已对照 `stablyai/orca` 的 `upstream/main` 提交
+`afd76a4df939e336180bd53611c5be8fa53d930b`（上次对照为
+`a7ed5a45c2d7a9c6af777c9e1a3928d877e845ea`）。Aeroric 本身是 Tauri/Rust
 应用，仓库中没有可升级的 Orca 包或共享 Git 历史；因此这里保留 Aeroric
 内核，并实现 Orca 最新移动 E2EE v2 的双栈兼容。
+
+本次对照结论：**线格式契约未变。** Orca 侧
+`mobile-e2ee-v2-key-schedule.ts`、`mobile-e2ee-v2-physical-channel.ts`、
+`mobile-e2ee-v2-client-session.ts`、`rpc/e2ee-crypto.ts`、`e2ee-keypair.ts`
+自上次对照以来全部零变更，下面宣称的兼容面依然成立。区间内 E2EE 相关的两处
+改动分别是遥测收敛（`e2ee-channel.ts`，关闭行为与错误码不变）与
+`onopen` 内 `send` 的失败兜底，均不影响协议。
 
 ## 已兼容
 

@@ -395,6 +395,13 @@ fn scp_base_spec(connection: &SshConnection) -> CommandSpec {
         ("scp".to_string(), Vec::new(), Vec::new())
     };
     args.extend(["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]);
+    // scp 认同一个 ProxyCommand。不接的话会出现"能列目录、传文件失败"的半瘫状态:
+    // 目录列举走 ssh(已带代理),传输走 scp。
+    if connection.use_proxy {
+        if let Some(proxy_command) = crate::ssh::proxy_command_arg() {
+            args.extend(["-o".to_string(), proxy_command]);
+        }
+    }
     args.push("-P".to_string());
     args.push(connection.port.to_string());
     args.push("-r".to_string());
@@ -1817,6 +1824,7 @@ mod tests {
             password: Some("secret".to_string()),
             remote_path: None,
             auto_sudo_with_password: false,
+            use_proxy: false,
             created_at: 1,
             last_connected_at: None,
         };
@@ -1845,6 +1853,42 @@ mod tests {
         );
     }
 
+    /// 目录列举走 ssh、传输走 scp。只给前者接代理会变成"能看不能传",
+    /// 所以 scp 必须同样带上 ProxyCommand。
+    #[test]
+    fn scp_follows_the_proxy_opt_in() {
+        let base = SshConnection {
+            id: "prod".to_string(),
+            name: "Prod".to_string(),
+            group: None,
+            host: "example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: None,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: true,
+            created_at: 1,
+            last_connected_at: None,
+        };
+
+        let with_proxy = super::scp_base_spec(&base);
+        assert!(with_proxy
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("ProxyCommand=") && arg.ends_with(" %h %p")));
+
+        let without_proxy = super::scp_base_spec(&SshConnection {
+            use_proxy: false,
+            ..base
+        });
+        assert!(!without_proxy
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("ProxyCommand=")));
+    }
+
     #[test]
     fn scp_upload_target_uses_unquoted_remote_path_for_sftp_mode() {
         let connection = SshConnection {
@@ -1858,6 +1902,7 @@ mod tests {
             password: None,
             remote_path: None,
             auto_sudo_with_password: false,
+            use_proxy: false,
             created_at: 1,
             last_connected_at: None,
         };

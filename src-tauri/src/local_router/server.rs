@@ -2854,7 +2854,7 @@ mod tests {
         let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
 
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let local_port = unused_port();
         let target = UpstreamTarget::with_details(
             "codex",
@@ -2971,7 +2971,7 @@ mod tests {
             },
         };
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3037,7 +3037,7 @@ mod tests {
             .unwrap(),
         ];
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3118,7 +3118,7 @@ mod tests {
             .unwrap(),
         ];
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3180,7 +3180,7 @@ mod tests {
         )
         .unwrap();
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let config = RouterRuntimeConfig::new(
             "127.0.0.1",
             unused_port(),
@@ -3267,7 +3267,7 @@ mod tests {
             },
         };
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3328,7 +3328,7 @@ mod tests {
         )
         .unwrap();
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3412,7 +3412,7 @@ mod tests {
             .unwrap(),
         ];
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",
@@ -3471,7 +3471,7 @@ mod tests {
         let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
 
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let target = UpstreamTarget::with_details(
             "claude",
             "Claude",
@@ -3549,7 +3549,7 @@ mod tests {
         )
         .unwrap();
         let database_path = temp_database_path();
-        let router = LocalRouterState::with_database_path(database_path.clone()).unwrap();
+        let router = LocalRouterState::with_database_path(database_path.clone());
         let info = router
             .start(RouterRuntimeConfig::new(
                 "127.0.0.1",

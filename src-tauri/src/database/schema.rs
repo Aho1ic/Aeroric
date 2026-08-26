@@ -51,6 +51,8 @@ pub async fn dbx_list_objects(
         limit,
         offset,
         object_types.as_deref(),
+        // 新增的 table_name_filter 参数,None 等于不额外按表名过滤。
+        None,
     )
     .await
 }

@@ -8,8 +8,8 @@
  */
 
 export const DSH_PROTOCOL_SNAPSHOT = {
-  sourceCommit: "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca",
-  packageVersion: "0.1.0-rc.7",
+  sourceCommit: "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+  packageVersion: "0.1.1-rc.2",
   protocolVersion: 2,
   rpcMethods: [
     "session.list",
@@ -90,11 +90,13 @@ export const DSH_PROTOCOL_SNAPSHOT = {
     "dynamicCordisRunner.reportRenderFailure",
     "dynamicCordisRunner.reportClientGuardFailure",
     "dynamicCordisRunner.invoke",
+    "fileReferences.list",
+    "sessionReferenceResolver.candidates",
   ],
   remoteEvents: [
     "agent-preset/selected",
     "commands/change",
-    "credentials/updated",
+    "credentials/reference-updated",
     "cordis/request-run",
     "cordis/request-run-resolved",
     "cordis/dynamic-package",

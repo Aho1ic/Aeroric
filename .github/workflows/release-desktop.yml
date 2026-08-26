@@ -347,9 +347,61 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
-      - name: Build ${{ matrix.name }} (macOS, unsigned)
+      # 没有 Developer ID 时退到 ad-hoc 签名(`signingIdentity: "-"`)。
+      #
+      # 为什么值得做:完全不签名的 .app 在 Apple Silicon 上会被判为「已损坏」而拒绝
+      # 启动(arm64 强制要求至少 ad-hoc 签名),而 Tauri 打包/我们重新 ditto 进 DMG
+      # 的过程会让链接器自动加的那份签名失效。ad-hoc 让包能正常打开,并且 TCC 在
+      # 同一份构建内能稳定记住授权——权限面板的「重启生效」才成立。
+      #
+      # 它换不来什么:ad-hoc 无法公证,Gatekeeper 首次打开仍需右键>打开;且 ad-hoc
+      # 的 designated requirement 绑 cdhash,每次重新构建都会变,所以跨版本升级后
+      # 系统权限仍需重新授予。要消掉这两点只能上 Developer ID。
+      #
+      # 刻意关掉 hardenedRuntime(默认 true):它是**公证**的前置条件,ad-hoc 既然
+      # 注定不公证,开着只剩风险——本应用会加载 SQLite 扩展 dylib 并拉起任意 agent
+      # 可执行文件,库校验一收紧就可能直接坏掉。签名路径不受影响,仍走默认 true。
+      - name: Prepare macOS ad-hoc signing config
         if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
-        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n '{
+            bundle: {
+              macOS: {
+                signingIdentity: "-",
+                hardenedRuntime: false
+              }
+            }
+          }' > tauri.macos-adhoc.json
+          cat tauri.macos-adhoc.json
+
+      - name: Build ${{ matrix.name }} (macOS, ad-hoc signed)
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
+        run: >
+          pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
+          --config tauri.macos-adhoc.json -- --locked
+
+      - name: Verify macOS ad-hoc signature
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Aeroric.app"
+          # 这一条是真正的闸门:bundle 级签名(Contents/_CodeSignature)缺失时它退 1。
+          # 实测过——把 _CodeSignature 删掉后 verify 退 1,而 `codesign --display` 仍
+          # 报 Signature=adhoc(因为内层 Mach-O 带着链接器加的那份),所以单看 display
+          # 是分辨不出「整包签好了」和「只有内层带签名」的。
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          # 附带确认这条路径产出的确实是 ad-hoc:签名配置被串到这一支时(比如误用了
+          # Developer ID)这里会红,免得状态说明与实际产物不一致。
+          if ! codesign --display --verbose=4 "$app_path" 2>&1 | grep -q 'Signature=adhoc'; then
+            echo "::error::Expected an ad-hoc signature on the app bundle"
+            codesign --display --verbose=4 "$app_path" || true
+            exit 1
+          fi
+          echo "ad-hoc signature verified"
+          rm -f tauri.macos-adhoc.json
 
       - name: Build ${{ matrix.name }} (Linux)
         if: runner.os == 'Linux'
@@ -462,8 +514,15 @@ jobs:
             echo "::error::Expected app bundle and DMG were not produced"
             exit 1
           fi
-          printf 'macOS installer is not Developer ID signed or notarized because repository signing secrets are not configured.\n' \
-            > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
+          {
+            printf 'macOS app bundle is ad-hoc signed (signingIdentity "-").\n'
+            printf 'It is NOT Developer ID signed and NOT notarized, because repository signing secrets are not configured.\n'
+            printf '\n'
+            printf 'What this means for you:\n'
+            printf '  - First launch: Gatekeeper will block a double-click. Right-click the app and choose Open, then confirm.\n'
+            printf '  - System permissions (Screen Recording, Accessibility, ...) are remembered within this build, but macOS\n'
+            printf '    ties them to the ad-hoc signature, which changes every release. Expect to re-grant them after updating.\n'
+          } > "$bundle_root/SIGNING_STATUS-${{ matrix.artifact_name }}.txt"
 
       - name: Record Linux signing policy
         if: runner.os == 'Linux'

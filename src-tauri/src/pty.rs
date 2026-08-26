@@ -1341,14 +1341,6 @@ fn wrapper_forwards_initial_prompt(
     has_wrapper_marker && (content.contains("\"$@\"") || content.contains("@args"))
 }
 
-fn should_use_native_initial_prompt(
-    agent: &str,
-    is_codex: bool,
-    force_prompt_injection: bool,
-) -> bool {
-    !force_prompt_injection && uses_native_initial_prompt(agent, is_codex)
-}
-
 /// 决定首条 prompt 走 argv 位置参数(true)还是 PTY 注入(false)。
 ///
 /// 抽成纯函数是刻意的:这个判断原先内联在 `run_task` 里、没有任何测试,于是
@@ -2810,10 +2802,6 @@ mod tests {
         assert!(uses_native_initial_prompt("codex", true));
         assert!(!uses_native_initial_prompt("local_codex", true));
         assert!(!uses_native_initial_prompt("local_tool", false));
-        assert!(should_use_native_initial_prompt("claude", false, false));
-        assert!(!should_use_native_initial_prompt("claude", false, true));
-        assert!(should_use_native_initial_prompt("codex", true, false));
-        assert!(!should_use_native_initial_prompt("codex", true, true));
         assert!(!should_force_prompt_injection(false, None));
         assert!(should_force_prompt_injection(false, Some(true)));
         assert!(should_force_prompt_injection(true, None));

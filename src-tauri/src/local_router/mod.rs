@@ -673,22 +673,20 @@ pub struct LocalRouterState {
 }
 
 impl LocalRouterState {
-    pub fn for_app() -> Result<Self, RouterError> {
-        crate::storage::ensure_aeroric_dirs().map_err(RouterError::storage)?;
-        let database_path = crate::storage::aeroric_dir()
-            .map_err(RouterError::storage)?
-            .join("usage-statistics.sqlite3");
-        Self::with_database_path(database_path)
-    }
-
-    pub fn with_database_path(database_path: PathBuf) -> Result<Self, RouterError> {
-        Ok(Self {
+    /// 纯构造:只存下路径,不碰磁盘,所以不返回 `Result`。
+    ///
+    /// 原先签名是 `Result<Self, RouterError>` 但函数体里没有一处会失败——真正的
+    /// 建库延迟到 `usage_store.initialize()`。保留假的错误分支会诱使调用方在启动
+    /// 路径上写 `.expect()`,那正是本次要消掉的 panic 来源;数据目录的选取交给
+    /// 调用方(见 `LocalRouterManager::for_app` 的降级)。
+    pub fn with_database_path(database_path: PathBuf) -> Self {
+        Self {
             usage_store: usage::UsageStore::new(database_path),
             metrics: Arc::new(RuntimeMetrics::default()),
             circuit_breakers: Arc::new(CircuitBreakerRegistry::default()),
             lifecycle: Mutex::new(()),
             running: Mutex::new(None),
-        })
+        }
     }
 
     pub async fn start(

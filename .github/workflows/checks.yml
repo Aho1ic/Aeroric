@@ -103,6 +103,41 @@ jobs:
           fi
           cargo audit --ignore RUSTSEC-2026-0235
 
+      # dbx-core 打开了 openssl 的 `vendored` feature，构建会把一整份 OpenSSL 的 C
+      # 源码（openssl-src）静态链进来。cargo audit / RustSec 只覆盖 Rust crate，
+      # **不覆盖这份 C 代码的 CVE**，所以这条链原本没有任何自动告警：OpenSSL 发了
+      # 公告，本仓库这边一片绿。
+      #
+      # 这一步把版本钉成显式常量。openssl-src 一旦变动（升级、或被别的依赖拉低），
+      # 这步就失败，强迫有人去 https://openssl-library.org/news/vulnerabilities-3.6/
+      # 对一遍公告，然后把下面的复核记录一起更新。
+      #
+      # 最近一次人工复核：2026-08-25，300.6.1+3.6.3（= OpenSSL 3.6.3）。
+      #   - 3.6.3 已修复 CVE-2026-45447（PKCS7_verify UAF，High）等 17 项。
+      #   - 3.6.4 另修 CVE-2026-14456 与 CVE-2026-54876，均为 Low：前者只影响
+      #     OpenSSL QUIC listener，后者需要调用方显式设置
+      #     X509_V_FLAG_OCSP_RESP_CHECK。本应用两者都不涉及，故不阻塞。
+      #
+      # 注意这只监控「版本变了」，不监控「已钉版本新增了 CVE」——后者仍需人工在
+      # 升级 dbx pin 时复核。
+      - name: Assert vendored OpenSSL version
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          expected="300.6.1+3.6.3"
+          actual="$(cargo tree --locked --target all -i openssl-src 2>/dev/null \
+            | head -n 1 | sed -n 's/^openssl-src v//p')"
+          if [ -z "$actual" ]; then
+            echo "::error::openssl-src is no longer in the dependency graph. If the vendored OpenSSL is genuinely gone, delete this step; otherwise investigate why the query failed."
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Vendored OpenSSL changed: expected $expected, found $actual. Review https://openssl-library.org/news/vulnerabilities-3.6/ then update the pin and the review note in this workflow."
+            exit 1
+          fi
+          echo "Vendored OpenSSL pinned at $actual (reviewed 2026-08-25)."
+
       - name: Audit remote protocol
         if: runner.os == 'Linux'
         working-directory: remote-protocol

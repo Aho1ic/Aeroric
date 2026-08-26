@@ -6,6 +6,7 @@ import {
   applyTerminalTheme,
   attachMacWebKitTerminalGuard,
   createSmartWriter,
+  createTerminalFitScheduler,
   fitTerminalAtBottom,
   initTerminal,
   loadWebglAddon,
@@ -56,10 +57,8 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
   const { container, isActive, onInput, onResize, scrollback = 5000 } = options;
   let currentThemeVariant = options.themeVariant;
   let disposed = false;
-  let resizeFrame: number | null = null;
   let visibilityFrame: number | null = null;
   let lastSize: TerminalRuntimeSize | null = null;
-  let lastObservedContainerSize: { width: number; height: number } | null = null;
 
   const terminalResult: InitTerminalResult = initTerminal(
     currentThemeVariant,
@@ -108,29 +107,8 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
     return recordSize(fitTerminalAtBottom(fitAddon, term, container));
   };
 
-  const scheduleFit = (entries?: ResizeObserverEntry[]) => {
-    if (disposed || !isActive()) return;
-    const rect = entries?.[0]?.contentRect;
-    if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
-      if (
-        lastObservedContainerSize?.width === rect.width &&
-        lastObservedContainerSize?.height === rect.height
-      ) {
-        return;
-      }
-      lastObservedContainerSize = { width: rect.width, height: rect.height };
-    }
-    container.setAttribute("data-terminal-resizing", "true");
-    if (resizeFrame !== null) return;
-    resizeFrame = window.requestAnimationFrame(() => {
-      resizeFrame = null;
-      if (isActive()) {
-        fit();
-      } else {
-        container.removeAttribute("data-terminal-resizing");
-      }
-    });
-  };
+  const fitScheduler = createTerminalFitScheduler(container, fit, () => !disposed && isActive());
+  const scheduleFit = (entries?: ResizeObserverEntry[]) => fitScheduler.schedule(entries);
   const resizeObserver = new ResizeObserver(scheduleFit);
   resizeObserver.observe(container);
 
@@ -170,8 +148,7 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
     dispose: () => {
       if (disposed) return;
       disposed = true;
-      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-      container.removeAttribute("data-terminal-resizing");
+      fitScheduler.dispose();
       if (visibilityFrame !== null) window.cancelAnimationFrame(visibilityFrame);
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);

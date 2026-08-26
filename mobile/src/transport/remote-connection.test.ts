@@ -999,6 +999,29 @@ describe("pairWithInvite", () => {
     });
   });
 
+  it("fails fast when the hello send throws instead of waiting out the timeout", async () => {
+    // send 抛出时 socket 仍是 open,onclose 不会触发。没有兜底的话配对要挂满 12 秒
+    // 才超时;这里不推进定时器,拿到 rejection 才说明走的是即时失败路径。
+    const keys = testGenerateServerKeys();
+    let socket: FakeWebSocket | null = null;
+    const promise = pairWithInvite({
+      endpoint: "ws://host:1",
+      invite: "inv",
+      deviceName: "iPhone",
+      serverPublicKey: keys.publicB64,
+      wsFactory: () => {
+        socket = new FakeWebSocket();
+        socket.send = () => {
+          throw new Error("socket write failed");
+        };
+        return socket;
+      },
+    });
+    socket!.open();
+    await expect(promise).rejects.toMatchObject({ kind: "network" });
+    expect(socket!.closed).toBe(true);
+  });
+
   it("prefers an invite or identity diagnosis over a later endpoint disconnect", () => {
     const selected = preferredPairingError([
       new PairingError("host_identity", "wrong host"),

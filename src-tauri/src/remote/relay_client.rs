@@ -64,14 +64,10 @@ async fn run<R: Runtime>(
         if *shutdown.borrow() {
             break;
         }
-        match run_control(&app, &relay_url, &relay_token, &mut shutdown).await {
+        let exit = run_control(&app, &relay_url, &relay_token, &mut shutdown).await;
+        match &exit {
             ControlExit::Shutdown => break,
-            ControlExit::Registered(err) => {
-                // 注册成功过:视为网络抖动,退避复位
-                backoff = INITIAL_BACKOFF;
-                set_relay_state(&app, &format!("error:{err}"));
-            }
-            ControlExit::Failed(err) => {
+            ControlExit::Registered(err) | ControlExit::Failed(err) => {
                 set_relay_state(&app, &format!("error:{err}"));
             }
         }
@@ -79,7 +75,7 @@ async fn run<R: Runtime>(
             _ = shutdown.changed() => break,
             _ = tokio::time::sleep(backoff) => {}
         }
-        backoff = (backoff * 2).min(MAX_BACKOFF);
+        backoff = backoff_after(&exit, backoff);
     }
     set_relay_state(&app, "off");
 }
@@ -91,6 +87,34 @@ enum ControlExit {
     Registered(String),
     /// 未完成注册即失败。
     Failed(String),
+}
+
+/// 一次控制连接结束后,下一次重连该等多久。
+///
+/// 注册成功过说明 relay 地址与 token 都是对的,断开更像网络抖动 → 退避复位,
+/// 手机侧尽快恢复可达。连注册都没成功(地址错、token 错、relay 没起来)则继续
+/// 指数退避到上限,避免对一个坏配置每秒敲一次。
+fn backoff_after(exit: &ControlExit, current: Duration) -> Duration {
+    match exit {
+        ControlExit::Registered(_) => INITIAL_BACKOFF,
+        _ => (current * 2).min(MAX_BACKOFF),
+    }
+}
+
+/// 把 relay 报的客户端地址解析成 IP。
+///
+/// 这个 IP 会喂给认证限流(`auth` 的失败节流)与审计日志,所以解析口径本身就是
+/// 安全边界的一部分:全都退化成同一个地址,就等于把所有 relay 客户端并进一个
+/// 限流桶,一个人试错会锁住其他人。解析不出来时用 `0.0.0.0` 归并,是"宁可并到
+/// 一起限流,也不放行"的选择。
+fn peer_ip_from_relay(peer: Option<&str>) -> IpAddr {
+    peer.and_then(|p| {
+        p.parse::<SocketAddr>()
+            .map(|addr| addr.ip())
+            .or_else(|_| p.parse::<IpAddr>())
+            .ok()
+    })
+    .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
 }
 
 async fn run_control<R: Runtime>(
@@ -215,15 +239,7 @@ fn dial_data_connection<R: Runtime>(
     let app = app.clone();
     let url = host_data_url(relay_url, &conn_id);
     // relay 报告的客户端地址用于认证限流与审计;解析失败按 0.0.0.0 归并限流
-    let peer_ip: IpAddr = peer
-        .as_deref()
-        .and_then(|p| {
-            p.parse::<SocketAddr>()
-                .map(|addr| addr.ip())
-                .or_else(|_| p.parse::<IpAddr>())
-                .ok()
-        })
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let peer_ip = peer_ip_from_relay(peer.as_deref());
     tauri::async_runtime::spawn(async move {
         match connect_async_with_config(&url, Some(ws_config()), false).await {
             Ok((ws, _)) => {
@@ -241,4 +257,95 @@ fn dial_data_connection<R: Runtime>(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_registered_connection_resets_the_backoff() {
+        // 注册成功过说明地址与 token 都对,断开是网络抖动:必须复位,否则一次长断线
+        // 之后手机要等到 60s 才可能重新连上。
+        let exit = ControlExit::Registered("relay connection lost".to_string());
+        assert_eq!(backoff_after(&exit, MAX_BACKOFF), INITIAL_BACKOFF);
+        assert_eq!(backoff_after(&exit, INITIAL_BACKOFF), INITIAL_BACKOFF);
+    }
+
+    #[test]
+    fn a_never_registered_connection_backs_off_exponentially_up_to_the_cap() {
+        // 地址错 / token 错 / relay 没起来时不能每秒敲一次。
+        let exit = ControlExit::Failed("connect failed".to_string());
+        let mut backoff = INITIAL_BACKOFF;
+        let mut seen = vec![backoff];
+        for _ in 0..10 {
+            backoff = backoff_after(&exit, backoff);
+            seen.push(backoff);
+        }
+        assert_eq!(
+            &seen[..7],
+            &[
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8),
+                Duration::from_secs(16),
+                Duration::from_secs(32),
+                Duration::from_secs(60),
+            ],
+            "got {seen:?}"
+        );
+        assert_eq!(
+            backoff, MAX_BACKOFF,
+            "must saturate, not overflow past the cap"
+        );
+    }
+
+    #[test]
+    fn distinct_relay_peers_get_distinct_rate_limit_buckets() {
+        // 这是本函数存在的理由:peer_ip 会喂给认证失败节流。全都退化成同一个 IP
+        // 就等于把所有 relay 客户端并进一个限流桶,一个人试错会锁住其他人。
+        assert_eq!(
+            peer_ip_from_relay(Some("1.2.3.4:5678")),
+            "1.2.3.4".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_ip_from_relay(Some("1.2.3.4")),
+            "1.2.3.4".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_ip_from_relay(Some("[::1]:443")),
+            "::1".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            peer_ip_from_relay(Some("2001:db8::1")),
+            "2001:db8::1".parse::<IpAddr>().unwrap()
+        );
+        assert_ne!(
+            peer_ip_from_relay(Some("1.2.3.4:1")),
+            peer_ip_from_relay(Some("1.2.3.5:1")),
+            "同一端口不同主机不能并进一个桶"
+        );
+    }
+
+    #[test]
+    fn an_unusable_peer_address_falls_back_to_a_shared_bucket() {
+        // 解析不出来时"宁可并到一起限流,也不放行":返回 0.0.0.0 而不是放弃限流。
+        let shared = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        assert_eq!(peer_ip_from_relay(None), shared);
+        assert_eq!(peer_ip_from_relay(Some("")), shared);
+        assert_eq!(peer_ip_from_relay(Some("not-an-address")), shared);
+        assert_eq!(peer_ip_from_relay(Some("1.2.3.4:notaport")), shared);
+        assert_eq!(peer_ip_from_relay(Some("999.1.1.1")), shared);
+    }
+
+    #[test]
+    fn relay_connections_carry_the_same_message_cap_as_lan_connections() {
+        // relay 与 LAN 直连共用 serve_ws,上限不一致会让同一台手机经 relay 与经
+        // 局域网表现不同(一边收得下、一边直接断),排查起来完全没有线索。
+        let config = ws_config();
+        assert_eq!(config.max_message_size, Some(1024 * 1024));
+        assert_eq!(config.max_frame_size, Some(1024 * 1024));
+        assert_eq!(MAX_MESSAGE_BYTES, 1024 * 1024);
+    }
 }

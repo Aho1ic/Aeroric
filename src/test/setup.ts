@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom";
+import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+
+// Testing Library 默认给 waitFor / findBy* 只留 1000ms。本仓库有多处真实防抖
+// (侧边栏搜索 180ms、任务落盘 350ms),叠上 v8 coverage 插桩与 CI 上的多进程争抢,
+// 1000ms 会被吃满 —— 这类失败与被测逻辑无关,只反映当时机器有多忙。
+// 放宽到 3000ms:通过路径不会因此变慢(waitFor 一满足就返回),只有真失败时多等 2s。
+configure({ asyncUtilTimeout: 3000 });
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),

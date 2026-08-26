@@ -243,3 +243,81 @@ describe("App boot", () => {
     expect(saves).toEqual([]);
   });
 });
+
+/**
+ * 启动降级提示。
+ *
+ * 背景:后端原先在 `~/.aeroric` 不可写时会 `.expect()` panic —— 窗口都没出现,
+ * 用户只看到图标闪一下。现在改成退到临时目录或内存库继续启动,代价是「数据不会
+ * 保留到下次启动」这件事完全静默。这一层就是把它说出来的地方,所以它不能沉默失败。
+ */
+describe("App boot: 启动降级提示", () => {
+  /**
+   * 复用启动 fixture,只截住 `list_startup_degradations`。
+   *
+   * 不自己手写 dispatcher:启动期还有一批探测调用(conda 环境等)对返回类型有要求,
+   * 漏一个就会在 App 渲染时抛错,那测的是我的替身而不是降级提示。
+   */
+  function installDegradations(degradations: unknown) {
+    installInvokeDispatcher({ projects: [project({ id: "p1" })] });
+    const base = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "list_startup_degradations") return degradations;
+      return base?.(command, args);
+    });
+  }
+
+  it("内存库降级会明确告诉用户数据退出即失", async () => {
+    installDegradations([{ component: "dbx-state", reason: "disk is full", fallback: ":memory:" }]);
+
+    renderApp();
+
+    // 文案要同时点出后果(退出丢失)与原因(磁盘满),只说"降级了"没有可操作性。
+    const toast = await screen.findByText(/in-memory database/i);
+    expect(toast.textContent).toMatch(/lost when you quit/i);
+    expect(toast.textContent).toContain("disk is full");
+  });
+
+  it("退到临时目录时报出实际落脚路径", async () => {
+    installDegradations([
+      {
+        component: "local-router",
+        reason: "home is read-only",
+        fallback: "/tmp/aeroric-fallback-1",
+      },
+    ]);
+
+    renderApp();
+
+    const toast = await screen.findByText(/fell back to/i);
+    // 路径必须出现:用户要能去那儿把数据捞出来。
+    expect(toast.textContent).toContain("/tmp/aeroric-fallback-1");
+    expect(toast.textContent).toContain("home is read-only");
+  });
+
+  it("没有降级时不弹任何告警", async () => {
+    installDegradations([]);
+
+    renderApp();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("list_startup_degradations", undefined);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // 一条假告警就会让用户学会忽略这个提示,那真出问题时也就看不见了。
+    expect(screen.queryByText(/fell back to|in-memory database/i)).toBeNull();
+  });
+
+  it("旧后端返回 null 时静默跳过而不是崩掉启动", async () => {
+    // 这条命令不存在的版本会拿到 null;直接迭代会抛 TypeError。
+    installDegradations(null);
+
+    renderApp();
+
+    // 启动链路照常走完,才说明这次异常没有把后面的 effect 一起带下去。
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_active_task_ids", undefined);
+    });
+    expect(screen.queryByText(/fell back to|in-memory database/i)).toBeNull();
+  });
+});

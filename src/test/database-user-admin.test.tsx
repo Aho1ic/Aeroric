@@ -81,6 +81,36 @@ describe("DatabaseUserAdminPanel", () => {
     });
   });
 
+  /**
+   * 面板里五个写操作(建用户 / 改密码 / 改登录 / 删用户 / 改权限)共用
+   * `executeConfirmed` 这一个出口,守卫就是里面那句 `if (!accepted) return`。
+   * 用最破坏性的 DROP USER 当载体:这里变红就说明五条路一起漏了。
+   */
+  it("drops nothing when the user declines the confirmation", async () => {
+    vi.mocked(confirm).mockResolvedValue(false);
+    const user = userEvent.setup();
+    renderPanel([["app", "%", "mysql_native_password"]]);
+    await screen.findByText("app@%");
+
+    await user.click(screen.getByRole("button", { name: "Drop user" }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    // 只读路径(列用户 / SHOW GRANTS)仍会走 dbx_execute_query,所以只断言写出口。
+    expect(invoke).not.toHaveBeenCalledWith("dbx_execute_multi", expect.anything());
+  });
+
+  it("shows the real DROP statement before dropping a user", async () => {
+    const user = userEvent.setup();
+    renderPanel([["app", "%", "mysql_native_password"]]);
+    await screen.findByText("app@%");
+
+    await user.click(screen.getByRole("button", { name: "Drop user" }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    // 弹窗必须写清删的是谁,否则多账号下极易误删。
+    expect(String(vi.mocked(confirm).mock.calls[0]?.[0])).toContain("DROP USER 'app'@'%'");
+  });
+
   it("redacts an altered password from confirmation while executing the real SQL", async () => {
     const user = userEvent.setup();
     renderPanel([["app", "%", "mysql_native_password"]]);

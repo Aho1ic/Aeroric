@@ -1,18 +1,63 @@
+# Aeroric 对 dbx path 依赖的本地补丁。由 scripts/prepare-dbx.sh 施加到
+# scripts/dbx-ref.txt 钉住的那个 commit 上。git apply 会跳过这段前言。
+#
+# 逐条改动的依据(2026-08-25 复核,证据都可当场复查):
+#
+# 1. quick-xml 0.37 -> 0.41 —— 安全升级,这是本补丁的主因。
+#    RUSTSEC-2026-0194(检查重复属性名时二次复杂度)与 RUSTSEC-2026-0195
+#    (NsReader 的命名空间声明无上限分配),两条都是 DoS,均 patched >= 0.41.0。
+#
+# 2. calamine 0.30.1 -> 0.36.1 —— 为了让第 1 条生效,不是 calamine 自身的漏洞。
+#    calamine 0.30.1 的依赖写死 quick-xml "0.37",不动它就换不掉 quick-xml。
+#    calamine 0.36.1 要求 quick-xml "0.41"。
+#    (calamine 唯一的 RustSec 公告 RUSTSEC-2021-0015 patched >= 0.17.0,本就不适用。)
+#
+# 3. crates/dbx-core/src/table_import.rs 的全部改动 —— 第 1 条强制的 API 迁移。
+#    quick-xml 0.41 把实体引用从 Event::Text 拆成了 Event::GeneralRef,
+#    并把 decode_and_unescape_value / unescape 换成
+#    decoded_and_normalized_value / xml10_content。不跟着改就编译不过。
+#
+# 4. russh 0.60 -> 0.62.5 —— 安全升级。RUSTSEC-2026-0154 / CVE-2026-46673
+#    (SSH agent 帧长度无上限,内存耗尽型 DoS),patched >= 0.60.3。
+#    顺带 default-features = false + 显式 ["flate2", "aws-lc-rs"],与
+#    dbx-core 已有的 rustls aws-lc-rs 后端保持一致。
+#
+# 5. tiberius 的 TLS 后端 rustls -> native-tls —— **当初的动机没有留下记录**,
+#    这条是事后按代码复核补写的,不要把下面的内容当成原始理由。
+#    现在能查到的事实:
+#      - 不是能力限制:vendored tiberius 支持 rustls feature
+#        (dbx/vendor/tiberius/Cargo.toml:244)。
+#      - 存在一个真实的技术约束:tiberius 的 rustls feature 拉的是 rustls 0.21
+#        那一代 —— tokio-rustls 0.24(还要 dangerous_configuration)、
+#        rustls-native-certs 0.6、rustls-pemfile 1
+#        (同文件 :120-155)。而 dbx-core 自己钉的是 rustls 0.23 + aws-lc-rs,
+#        锁定结果是 rustls 0.23.43 / tokio-rustls 0.26.4 / rustls-native-certs 0.8.4。
+#        开 tiberius 的 rustls 就会把差三代的第二套 rustls 栈一起塞进构建。
+#      - native-tls 也正是 tiberius 自己的默认 TLS 后端(同文件 :238-242)。
+#      - 这一条**不是** vendored OpenSSL 的来源:dbx-core 上游本来就有
+#        `openssl = { version = "0.10", features = ["vendored"] }`
+#        (crates/dbx-core/Cargo.toml:43),native-tls 只是多了一个使用者。
+#        vendored OpenSSL 的版本盯防见 .github/workflows/checks.yml 的
+#        "Assert vendored OpenSSL version" 一步。
+#    TODO:下次动 dbx pin 时确认「继续用 native-tls」仍是想要的结论;若改回
+#    rustls,需要先让 tiberius 那一侧升到 rustls 0.23 一代,否则会有两套 rustls。
+#
 diff --git a/crates/dbx-core/Cargo.toml b/crates/dbx-core/Cargo.toml
-index 84a0afa3d..c91f91c91 100644
+index 9604a6d4b..ef312c0fc 100644
 --- a/crates/dbx-core/Cargo.toml
 +++ b/crates/dbx-core/Cargo.toml
-@@ -45,19 +45,19 @@ sqlparser = { version = "0.62.0", features = ["visitor"] }
+@@ -48,20 +48,20 @@ sqlparser = { version = "0.62.0", features = ["visitor"] }
  redis = { version = "0.32.2", features = ["tokio-comp", "tls-rustls", "tls-rustls-insecure", "tokio-rustls-comp", "sentinel", "cluster-async"] }
  rustls = { version = "0.23", features = ["aws-lc-rs"] }
  rustls-pemfile = "2.2"
 -tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "chrono", "rust_decimal", "rustls", "sql-browser-tokio"] }
 +tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "chrono", "rust_decimal", "native-tls", "sql-browser-tokio"] }
- reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks"] }
+ reqwest = { version = "0.12", default-features = false, features = ["cookies", "json", "stream", "rustls-tls", "socks"] }
  prometheus-parse = "=0.2.5"
  futures = "0.3"
- iana-time-zone = "0.1"
- mongodb = "3.2.5"
+ mongodb = { version = "3.2.5", features = ["socks5-proxy"] }
+ aws-sdk-dynamodb = { version = "=1.104.0", optional = true }
+ rumqttc = { version = "0.24", features = ["websocket"], optional = true }
 -russh = "0.60"
 +russh = { version = "0.62.5", default-features = false, features = ["flate2", "aws-lc-rs"] }
  pageant = "0.2"
@@ -27,10 +72,10 @@ index 84a0afa3d..c91f91c91 100644
  jsonwebtoken = "9"
  aes-gcm = "0.10"
 diff --git a/crates/dbx-core/src/table_import.rs b/crates/dbx-core/src/table_import.rs
-index fc52a56ec..9df446c9e 100644
+index 1667669b5..e40820fcc 100644
 --- a/crates/dbx-core/src/table_import.rs
 +++ b/crates/dbx-core/src/table_import.rs
-@@ -11,8 +11,10 @@ use calamine::{
+@@ -12,8 +12,10 @@ use calamine::{
      ReaderRef as CalamineReaderRef,
  };
  use chrono::{DateTime, NaiveDate, NaiveDateTime};
@@ -42,7 +87,7 @@ index fc52a56ec..9df446c9e 100644
  use serde::{Deserialize, Serialize};
  use sha2::{Digest, Sha256};
  
-@@ -1275,13 +1277,31 @@ fn xml_local_name_eq(name: &[u8], expected: &[u8]) -> bool {
+@@ -1298,13 +1300,31 @@ fn xml_local_name_eq(name: &[u8], expected: &[u8]) -> bool {
  fn xml_attr_value<R>(reader: &XmlReader<R>, element: &BytesStart<'_>, key: &[u8]) -> Option<String> {
      element.attributes().flatten().find_map(|attr| {
          if xml_local_name_eq(attr.key.as_ref(), key) {
@@ -75,7 +120,7 @@ index fc52a56ec..9df446c9e 100644
  fn xlsx_builtin_temporal_kind(num_fmt_id: u16) -> Option<XlsxTemporalKind> {
      match num_fmt_id {
          14..=17 => Some(XlsxTemporalKind::Date),
-@@ -1608,7 +1628,10 @@ fn read_xlsx_shared_strings(
+@@ -1631,7 +1651,10 @@ fn read_xlsx_shared_strings(
                  phonetic_depth = phonetic_depth.saturating_add(1);
              }
              Ok(Event::Text(text)) if in_item && in_text => {
@@ -87,7 +132,7 @@ index fc52a56ec..9df446c9e 100644
              }
              Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"t") => {
                  in_text = false;
-@@ -1801,7 +1824,10 @@ fn open_xlsx_shared_strings_with_control(
+@@ -1824,7 +1847,10 @@ fn open_xlsx_shared_strings_with_control(
                  phonetic_depth = phonetic_depth.saturating_add(1);
              }
              Ok(Event::Text(text)) if in_item && in_text => {
@@ -99,7 +144,7 @@ index fc52a56ec..9df446c9e 100644
              }
              Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"t") => {
                  in_text = false;
-@@ -1998,10 +2024,16 @@ fn parse_xlsx_preview_file_with_options(
+@@ -2021,10 +2047,16 @@ fn parse_xlsx_preview_file_with_options(
                      inline_phonetic_depth = inline_phonetic_depth.saturating_add(1);
                  }
                  Ok(Event::Text(text)) if in_value => {
@@ -118,7 +163,7 @@ index fc52a56ec..9df446c9e 100644
                  }
                  Ok(Event::End(element)) if xml_local_name_eq(element.name().as_ref(), b"v") => {
                      in_value = false;
-@@ -2679,10 +2711,16 @@ fn stream_xlsx_rows_to_channel_with_control(
+@@ -2697,10 +2729,16 @@ fn stream_xlsx_rows_to_channel_with_control(
                  inline_phonetic_depth = inline_phonetic_depth.saturating_add(1);
              }
              Ok(Event::Text(text)) if in_value => {

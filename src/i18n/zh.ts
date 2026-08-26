@@ -1568,6 +1568,10 @@ export const zh: Record<string, string> = {
   "database.transferCompleted": "迁移完成。",
   "database.transferCancelled": "迁移已取消。",
   "database.transferFailed": "迁移失败：{error}",
+  "database.cancelTransfer": "取消迁移",
+  "database.transferCancelling": "正在取消…",
+  "database.transferSameTarget": "源表和目标表解析为同一张表。",
+  "database.dataCompareNoCommonPrimaryKey": "源表和目标表没有匹配的主键列。",
   "database.comparePreviewEmpty": "运行操作后在这里预览 DBX 输出。",
   "database.erDiagramHint": "查看表节点和已加载的列元数据。",
   "database.exportSvg": "导出 SVG",
@@ -1575,6 +1579,7 @@ export const zh: Record<string, string> = {
   "database.tableStructureHint": "查看表字段并准备结构变更。",
   "database.selectSqlConnection": "请先选择支持 SQL 的连接再使用此工具。",
   "database.selectDbxSqlConnection": "请选择支持 SQL 的 DBX 连接后再使用此工具。",
+  "database.sourceConnectionUnavailable": "源连接不可用。",
   "database.configuredDatabaseMissing": "未找到已配置的数据库“{database}”。",
   "database.selectTargetConnection": "请选择目标连接。",
   "database.selectDbxTable": "请选择 DBX SQL 表以查看或编辑表结构。",
@@ -2622,6 +2627,10 @@ export const zh: Record<string, string> = {
   "day.fri": "周五",
   "day.sat": "周六",
   "toast.initProjectConfigFailed": "初始化项目配置失败：{error}",
+  "toast.startupDegradedMemory":
+    "Aeroric 打不开数据目录，已改用内存数据库启动。现在保存的内容退出后会丢失。原因：{reason}",
+  "toast.startupDegradedFallbackDir":
+    "Aeroric 无法使用正常数据目录，已退到 {fallback}。数据不会保留到下次启动。原因：{reason}",
   "toast.dshWebUiStartFailed": "启动 DeepSeek Harness Web UI 失败：{error}",
   "toast.projectActionFailed": "{action} 失败：{error}",
   "toast.cancelTaskFailed": "取消任务失败：{error}",
@@ -2663,6 +2672,63 @@ export const zh: Record<string, string> = {
   "wsl.upgradeAgents": "升级 WSL Agent",
   "wsl.upgradingAgents": "升级中...",
   "toast.wslProjectUnavailable": "此项目对应的 WSL 发行版不可用。",
+
+  // 系统权限(macOS TCC)
+  "permissions.navLabel": "权限",
+  "permissions.title": "系统权限",
+  "permissions.subtitle":
+    "agent 在终端里执行的命令——截屏、控制界面、读取项目文件——用的是 Aeroric 自己的系统授权。在这里把需要的权限授予,这些调用才不会静默失败。",
+  "permissions.summary": "已获取 {granted} / {total}",
+  "permissions.grantAll": "一键获取全部",
+  "permissions.grantingAll": "申请中...",
+  "permissions.status.granted": "已获取",
+  "permissions.status.notGranted": "未获取",
+  "permissions.status.unknown": "未知",
+  "permissions.action.grant": "获取",
+  "permissions.action.checkAndGrant": "检测",
+  "permissions.action.openSettings": "系统设置",
+  "permissions.needsRestartTag": "需重启生效",
+  "permissions.restartRequired":
+    "刚获取的权限要重启 Aeroric 才生效——macOS 在进程启动时就缓存了授权判定。",
+  "permissions.restartNow": "立即重启",
+  "permissions.manualRemaining":
+    "以下权限只能在系统设置里手工勾选:{names}。点对应条目的「系统设置」,在列表里勾上 Aeroric,回来刷新即可。",
+  "permissions.unsupportedPlatform": "当前平台不通过应用级授权管控这些能力,无需在此获取。",
+  "permissions.unknownBecauseProbePrompts":
+    "检测这一项会触发 macOS 询问,所以不会自动探测。点「检测」即可弹出授权请求。",
+  "permissions.unknownReason": "无法确定:{reason}",
+  "permissions.noQueryApi": "macOS 没有提供查询接口",
+  "permissions.item.screen-recording.name": "屏幕录制",
+  "permissions.item.screen-recording.description":
+    "agent 截屏或读取窗口内容时必需,终端里执行 `screencapture` 也走这一项。",
+  "permissions.item.accessibility.name": "辅助功能",
+  "permissions.item.accessibility.description":
+    "让 agent 操作其他应用的界面:点击、读取界面元素、模拟按键。",
+  "permissions.item.input-monitoring.name": "输入监控",
+  "permissions.item.input-monitoring.description":
+    "在 Aeroric 窗口之外监听键盘事件所需,部分自动化与全局快捷键工具依赖它。",
+  "permissions.item.automation.name": "自动化",
+  "permissions.item.automation.description":
+    "允许 AppleScript 与 `osascript` 控制其他应用。这里以 System Events 为检测目标——界面脚本几乎都经过它。",
+  "permissions.item.full-disk-access.name": "完全磁盘访问",
+  "permissions.item.full-disk-access.description":
+    "让 agent 能访问邮件、信息等受保护位置和其他应用的支持目录。macOS 只允许手工开启。",
+  "permissions.item.microphone.name": "麦克风",
+  "permissions.item.microphone.description":
+    "仅在 agent 或插件需要录音时用到。这类工具首次运行时 macOS 会自行询问。",
+  "permissions.item.camera.name": "摄像头",
+  "permissions.item.camera.description":
+    "仅在 agent 或插件需要录像时用到。这类工具首次运行时 macOS 会自行询问。",
+  "permissions.item.local-network.name": "本地网络",
+  "permissions.item.local-network.description":
+    "手机远程连接与局域网设备发现需要。macOS 没有提供查询接口,请到系统设置里确认。",
+  "permissions.item.folder-desktop.name": "桌面文件夹",
+  "permissions.item.folder-desktop.description": "打开和编辑存放在「桌面」的项目所需。",
+  "permissions.item.folder-documents.name": "文档文件夹",
+  "permissions.item.folder-documents.description": "打开和编辑存放在「文档」的项目所需。",
+  "permissions.item.folder-downloads.name": "下载文件夹",
+  "permissions.item.folder-downloads.description": "打开和编辑存放在「下载」的项目所需。",
+
   "errorBoundary.panelRenderError": "{label}渲染出错",
   "errorBoundary.unknownError": "未知错误",
   "errorBoundary.somethingWentWrong": "出现错误",

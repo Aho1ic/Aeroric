@@ -62,6 +62,20 @@ vi.mock("../components/terminalShared", () => ({
     return { term, fitAddon: {} };
   },
   fitTerminalAtBottom: () => ({ cols: 80, rows: 24 }),
+  TERMINAL_RESIZE_SETTLE_MS: 120,
+  // 真实实现会把 fit 推迟到尺寸稳定之后。这里立即调用:本文件测的是历史回放与主题重建,
+  // 不是 resize 合并(那个由 terminal-resize-coalesce.test.ts 覆盖),而"隐藏到底部帧
+  // 就绪再显示"的断言需要 fit 真的跑起来。
+  createTerminalFitScheduler: (
+    container: HTMLElement,
+    fit: () => void,
+    isActive: () => boolean,
+  ) => ({
+    schedule: () => {
+      if (isActive()) fit();
+    },
+    dispose: () => container.removeAttribute("data-terminal-resizing"),
+  }),
   createSmartWriter: (term: { write: (data: string, callback?: () => void) => void }) => ({
     ...(() => {
       let pendingWrites = 0;

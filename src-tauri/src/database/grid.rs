@@ -196,6 +196,9 @@ pub async fn dbx_query_table_data(
     let db_type = database_type(&state, &request.connection_id).await;
     let sql = build_table_data_select_sql(TableDataSelectSqlOptions {
         database_type: db_type,
+        // dbx 的 JDBC 驱动画像与服务端投影是可选优化;这里全部留空以保持
+        // Aeroric 现有行为(SQL 分页 + 完整取值),避免静默改变结果集。
+        driver_profile: None,
         identifier_quote: identifier_quote.clone(),
         schema: schema.clone(),
         table_name: request.table.clone(),
@@ -204,10 +207,13 @@ pub async fn dbx_query_table_data(
         table_type: None,
         primary_keys,
         columns: column_names,
+        column_types: Vec::new(),
+        large_value_preview_size: None,
         fallback_order_columns: Vec::new(),
         order_by: request.order_by.clone(),
         limit: Some(page_size),
         offset: Some(offset),
+        use_driver_row_offset: false,
         where_input: request.where_input.clone(),
         include_row_id: false,
     });
@@ -220,6 +226,7 @@ pub async fn dbx_query_table_data(
             schema,
             table_name: request.table,
             where_input: request.where_input,
+            count_hint: None,
         });
 
     let result = dbx_core::query::execute_sql_statement_with_options(
@@ -377,6 +384,7 @@ mod tests {
             session_id: None,
             has_more: false,
             elasticsearch_raw_body: None,
+            messages: Vec::new(),
         };
 
         assert_eq!(first_u64_cell(&result), Some(42));
@@ -386,6 +394,8 @@ mod tests {
     fn builds_copy_insert_statement_with_dbx_core() {
         let statement = copy_insert_statement(DataGridCopyInsertStatementOptions {
             database_type: Some(DatabaseType::Postgres),
+            // None 表示沿用 database_type 的方言默认引号,Postgres 下仍是 `"`。
+            identifier_quote: None,
             table_meta: Some(test_table_meta()),
             columns: vec!["id".to_string(), "email".to_string()],
             column_types: None,
@@ -408,6 +418,7 @@ mod tests {
     fn builds_copy_update_statements_with_dbx_core() {
         let statements = copy_update_statements(DataGridCopyUpdateStatementOptions {
             database_type: Some(DatabaseType::Postgres),
+            identifier_quote: None,
             table_meta: test_table_meta(),
             columns: vec!["id".to_string(), "email".to_string()],
             source_columns: Some(vec![Some("id".to_string()), Some("email".to_string())]),

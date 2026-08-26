@@ -360,6 +360,8 @@ pub async fn dbx_redis_load_more(
         cursor,
         normalize_count(count),
         filter.as_deref(),
+        // 新增的 sort_direction 参数,None 等于原来的驱动默认顺序。
+        None,
     )
     .await
     .map(adapt_redis_collection_page)
@@ -848,6 +850,9 @@ mod tests {
             items: vec![RedisHashItem {
                 field: blob(b"role", RedisBlobEncoding::Utf8),
                 value: blob(b"admin", RedisBlobEncoding::Utf8),
+                // None = 服务端不暴露 hash field 过期时间,与 redis_hash_items
+                // 当前不透出该字段一致。
+                field_ttl: None,
             }],
             scan_cursor: Some(42),
         });
