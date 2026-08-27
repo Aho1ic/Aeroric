@@ -425,8 +425,9 @@ fn cf_string_to_rust(value: CFTypeRef) -> Option<String> {
 /// 以 `CFStringRef` 取字典键。这些键的值就是文档写明的字面量("identifier" 等),
 /// 直接建字符串比把一堆 extern static 拉进来更省事。
 fn dictionary_string(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<String> {
-    let key_ref =
-        unsafe { CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8) };
+    let key_ref = unsafe {
+        CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+    };
     if key_ref.is_null() {
         return None;
     }
@@ -437,8 +438,9 @@ fn dictionary_string(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<String> {
 }
 
 fn dictionary_i64(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<i64> {
-    let key_ref =
-        unsafe { CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8) };
+    let key_ref = unsafe {
+        CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+    };
     if key_ref.is_null() {
         return None;
     }
@@ -566,8 +568,7 @@ fn tcc_service(id: &str) -> Option<&'static str> {
 /// 这是 ad-hoc 签名升级后唯一的修法:旧记录绑的是上一版的 cdhash,系统设置里再点
 /// 开关也不会让它重新对上。
 pub(crate) fn reset(id: &str) -> Result<(), String> {
-    let service =
-        tcc_service(id).ok_or_else(|| format!("{id} has no TCC service to reset"))?;
+    let service = tcc_service(id).ok_or_else(|| format!("{id} has no TCC service to reset"))?;
     let bundle = bundle_identifier().ok_or_else(|| {
         "Not running from an app bundle, so there is no TCC record under this app's name"
             .to_string()
@@ -583,7 +584,10 @@ pub(crate) fn reset(id: &str) -> Result<(), String> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     Err(if stderr.is_empty() {
-        format!("tccutil reset {service} failed (exit {:?})", output.status.code())
+        format!(
+            "tccutil reset {service} failed (exit {:?})",
+            output.status.code()
+        )
     } else {
         stderr
     })
@@ -734,7 +738,10 @@ mod tests {
         assert!(!identity.subject.is_empty());
         assert!(!identity.signature.is_empty());
         // 测试二进制不在 app bundle 里,必须报出来而不是假装一切正常。
-        assert_eq!(identity.warning, Some(super::super::IdentityWarning::NotBundled));
+        assert_eq!(
+            identity.warning,
+            Some(super::super::IdentityWarning::NotBundled)
+        );
     }
 
     /// 不在 bundle 里跑时重置必须报错而不是对着空 bundle id 调 tccutil。

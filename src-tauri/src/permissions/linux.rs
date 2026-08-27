@@ -99,7 +99,11 @@ fn process_groups() -> Vec<u32> {
     status
         .lines()
         .find_map(|line| line.strip_prefix("Groups:"))
-        .map(|line| line.split_whitespace().filter_map(|g| g.parse().ok()).collect())
+        .map(|line| {
+            line.split_whitespace()
+                .filter_map(|g| g.parse().ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -148,9 +152,9 @@ fn screen_recording_probe() -> PermissionProbe {
             PermissionStatus::NotGranted,
             "Wayland needs xdg-desktop-portal for screen capture, and it is not installed",
         ),
-        Session::Unknown => {
-            PermissionProbe::unknown("No graphical session was detected (XDG_SESSION_TYPE is unset)")
-        }
+        Session::Unknown => PermissionProbe::unknown(
+            "No graphical session was detected (XDG_SESSION_TYPE is unset)",
+        ),
     }
 }
 
@@ -171,9 +175,9 @@ fn input_monitoring_probe() -> PermissionProbe {
             "Wayland does not expose global input to clients; \
              add this user to the 'input' group and log in again to read devices directly",
         ),
-        (Session::Unknown, _) => {
-            PermissionProbe::unknown("No graphical session was detected (XDG_SESSION_TYPE is unset)")
-        }
+        (Session::Unknown, _) => PermissionProbe::unknown(
+            "No graphical session was detected (XDG_SESSION_TYPE is unset)",
+        ),
     }
 }
 
@@ -181,7 +185,9 @@ fn input_monitoring_probe() -> PermissionProbe {
 fn device_probe(directory: &str, group: &str, what: &str) -> PermissionProbe {
     let path = Path::new(directory);
     if !path.is_dir() {
-        return PermissionProbe::unknown(format!("{directory} does not exist, so no {what} is available"));
+        return PermissionProbe::unknown(format!(
+            "{directory} does not exist, so no {what} is available"
+        ));
     }
     match std::fs::read_dir(path) {
         Ok(_) => PermissionProbe::explained(
@@ -217,11 +223,12 @@ fn video_probe() -> PermissionProbe {
         return PermissionProbe::unknown("No /dev/video* device is present");
     }
     // 能打开任意一个就算有摄像头能力:多摄像头机器上不该因为某一个被占用就报未授权。
-    let openable = cameras
-        .iter()
-        .any(|path| std::fs::File::open(path).is_ok());
+    let openable = cameras.iter().any(|path| std::fs::File::open(path).is_ok());
     if openable {
-        PermissionProbe::explained(PermissionStatus::Granted, "A /dev/video* device is openable")
+        PermissionProbe::explained(
+            PermissionStatus::Granted,
+            "A /dev/video* device is openable",
+        )
     } else {
         PermissionProbe::explained(
             PermissionStatus::NotGranted,
@@ -298,7 +305,11 @@ mod tests {
     fn every_descriptor_is_report_only() {
         // Linux 没有可点的授权动作,摆按钮就是骗人。
         for descriptor in DESCRIPTORS {
-            assert!(descriptor.report_only, "{} is not report-only", descriptor.id);
+            assert!(
+                descriptor.report_only,
+                "{} is not report-only",
+                descriptor.id
+            );
         }
     }
 

@@ -851,4 +851,3 @@ mod tests {
         assert!(!identity.signature.is_empty());
     }
 }
-

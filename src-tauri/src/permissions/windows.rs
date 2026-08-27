@@ -66,9 +66,7 @@ fn wide(value: &str) -> Vec<u16> {
 
 /// 读一个 `REG_SZ`。键或值不存在时返回 None——调用方据此区分"没记过"和"记着拒绝"。
 fn read_string(subkey: &str, value_name: &str) -> Option<String> {
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, RegGetValueW, RRF_RT_REG_SZ,
-    };
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 
     let subkey = wide(subkey);
     let name = wide(value_name);
