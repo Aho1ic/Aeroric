@@ -3082,6 +3082,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 models: vec!["claude-sonnet".to_string()],
                 enable_1m_context: false,
                 enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
                 username: String::new(),
                 password: String::new(),
             }],

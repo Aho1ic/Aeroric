@@ -231,10 +231,7 @@ fn report_fatal_startup_error(message: &str) {
     #[cfg(windows)]
     {
         // mshta 在所有受支持的 Windows 上都在,不用引 winapi。
-        let escaped = message
-            .replace('\'', " ")
-            .replace('\r', " ")
-            .replace('\n', " ");
+        let escaped = message.replace(['\'', '\r', '\n'], " ");
         let script = format!("javascript:alert('Aeroric cannot start: {escaped}');close()");
         let _ = std::process::Command::new("mshta").arg(script).status();
     }
