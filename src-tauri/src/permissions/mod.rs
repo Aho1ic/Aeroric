@@ -98,6 +98,9 @@ pub struct SystemPermission {
 }
 
 /// 授权记录不可靠的成因。返回机器码而不是文案,由前端 i18n 展示。
+// 两个变体都只由 macos.rs 构造(代码签名与 app bundle 都是 macOS 概念),
+// 编 Linux / Windows 时看着像死代码。
+#[allow(dead_code)]
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum IdentityWarning {
