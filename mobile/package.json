@@ -1,6 +1,6 @@
 {
   "name": "aeroric-mobile",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "main": "expo-router/entry",
   "dependencies": {
     "@aeroric/design-system": "workspace:*",
