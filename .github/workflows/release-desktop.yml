@@ -310,9 +310,15 @@ jobs:
         env:
           WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
 
+      # 刻意**不**写 shell: bash。Git Bash 会把 msys2 的 perl(/usr/bin/perl)顶到
+      # PATH 最前面,而它缺 Locale::Maketext::Simple —— openssl-src 的 ./Configure
+      # 经 OpenSSL::config → IPC::Cmd → Params::Check 依赖这个模块,于是 vendored
+      # OpenSSL 在 configure 阶段就退 2,Windows 两个架构一起挂。
+      # 默认 shell(pwsh)下 perl 解析到 Strawberry Perl,模块齐全:同一镜像、同一
+      # commit 下 checks.yml 的 clippy 正是这么把 openssl-sys 编过去的。
+      # 这一步的 run 是纯命令,不需要 bash 语法。
       - name: Build ${{ matrix.name }} (Windows)
         if: runner.os == 'Windows'
-        shell: bash
         run: >
           pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
           --config tauri.windows-release.json -- --locked
