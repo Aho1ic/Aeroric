@@ -7,23 +7,55 @@ import {
   PermissionsPanel,
   permissionsNeedingRestart,
 } from "../components/app-settings/PermissionsPanel";
-import type { SystemPermission, SystemPermissionReport, SystemPermissionStatus } from "../types";
+import type {
+  SystemPermission,
+  SystemPermissionIdentity,
+  SystemPermissionReport,
+  SystemPermissionStatus,
+} from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 function permission(overrides: Partial<SystemPermission> & { id: string }): SystemPermission {
+  const status = overrides.status ?? "notGranted";
   return {
-    status: "notGranted",
+    status,
+    // 默认两个视角一致(系统与本进程同步),需要测"未生效"的用例显式覆盖。
+    systemStatus: status,
+    processStatus: status,
+    restartRequired: false,
     canRequestInApp: true,
     canOpenSettings: true,
+    canReset: false,
     needsRestart: false,
     probePrompts: false,
+    reportOnly: false,
     ...overrides,
   };
 }
 
-function report(permissions: SystemPermission[], supported = true): SystemPermissionReport {
-  return { platform: "macos", supported, permissions };
+function identity(overrides: Partial<SystemPermissionIdentity> = {}): SystemPermissionIdentity {
+  return {
+    subject: "com.aeroric.desktop",
+    signature: "developer-id",
+    stableAcrossUpdates: true,
+    ...overrides,
+  };
+}
+
+function report(
+  permissions: SystemPermission[],
+  supported = true,
+  overrides: Partial<SystemPermissionReport> = {},
+): SystemPermissionReport {
+  return {
+    platform: "macos",
+    supported,
+    permissions,
+    identity: identity(),
+    freshProbe: true,
+    ...overrides,
+  };
 }
 
 const DEFAULT_REPORT = report([
@@ -195,6 +227,154 @@ describe("PermissionsPanel", () => {
     );
     expect(screen.queryByRole("button", { name: "Grant All" })).toBeNull();
   });
+
+  /**
+   * 这条覆盖用户报的那个 bug:系统设置里已开、本进程还没拿到。
+   * 面板必须报"已获取 + 重启生效",而不是"未获取"。
+   */
+  it("shows a system-granted permission as granted and asks for a restart, not as denied", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report([
+        permission({
+          id: "screen-recording",
+          status: "granted",
+          systemStatus: "granted",
+          processStatus: "notGranted",
+          restartRequired: true,
+          needsRestart: true,
+        }),
+      ]),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("Screen Recording")).toBeInTheDocument());
+    const screenRow = row("Screen Recording");
+    expect(within(screenRow).getByText("Granted")).toBeInTheDocument();
+    expect(within(screenRow).queryByText("Not granted")).toBeNull();
+    expect(within(screenRow).getByText(/still cannot use it/)).toBeInTheDocument();
+    // 首次加载就要出重启横幅:用户往往是先去设置里开了开关才来看这个面板。
+    expect(screen.getByRole("button", { name: "Restart Now" })).toBeInTheDocument();
+  });
+
+  it("explains an ad-hoc signature, which is why a granted switch can still read as denied", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report([permission({ id: "screen-recording", canReset: true })], true, {
+        identity: identity({
+          signature: "adhoc",
+          stableAcrossUpdates: false,
+          warning: "unstableSignature",
+        }),
+      }),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText(/ad-hoc signed/)).toBeInTheDocument());
+    expect(screen.getByText(/com\.aeroric\.desktop/)).toBeInTheDocument();
+  });
+
+  it("warns when running outside an app bundle, where grants land on the terminal instead", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report([permission({ id: "screen-recording" })], true, {
+        identity: identity({
+          subject: "/repo/target/debug/aeroric",
+          signature: "linker-signed",
+          stableAcrossUpdates: false,
+          warning: "notBundled",
+        }),
+      }),
+    );
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByText(/running outside an app bundle/)).toBeInTheDocument(),
+    );
+  });
+
+  it("re-authorizes a stuck permission by clearing the record and asking again", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_system_permissions") {
+        return Promise.resolve(
+          report([permission({ id: "screen-recording", canReset: true, needsRestart: true })]),
+        );
+      }
+      if (command === "reset_system_permission") {
+        return Promise.resolve(permission({ id: "screen-recording", canReset: true }));
+      }
+      if (command === "request_system_permission") {
+        return Promise.resolve(
+          permission({ id: "screen-recording", status: "granted", canReset: true }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected command: ${String(command)}`));
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("Screen Recording")).toBeInTheDocument());
+    await user.click(within(row("Screen Recording")).getByRole("button", { name: "Re-authorize" }));
+
+    await waitFor(() =>
+      expect(within(row("Screen Recording")).getByText("Granted")).toBeInTheDocument(),
+    );
+    expect(invoke).toHaveBeenCalledWith("reset_system_permission", { id: "screen-recording" });
+    expect(invoke).toHaveBeenCalledWith("request_system_permission", { id: "screen-recording" });
+    // 授权刚重建,不该再挂着上一次的"待重启"。
+    expect(screen.queryByRole("button", { name: "Restart Now" })).toBeNull();
+  });
+
+  it("hides the re-authorize button once a permission is granted", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report([permission({ id: "screen-recording", status: "granted", canReset: true })]),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("Screen Recording")).toBeInTheDocument());
+    expect(
+      within(row("Screen Recording")).queryByRole("button", { name: "Re-authorize" }),
+    ).toBeNull();
+  });
+
+  /** Linux:没有应用级开关,摆按钮就是骗人;成因才是可行动的信息。 */
+  it("reports Linux capabilities without offering buttons that would do nothing", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report(
+        [
+          permission({
+            id: "screen-recording",
+            status: "notGranted",
+            reportOnly: true,
+            canRequestInApp: false,
+            canOpenSettings: false,
+            detail: "Wayland needs xdg-desktop-portal for screen capture, and it is not installed",
+          }),
+        ],
+        true,
+        { platform: "linux", freshProbe: false },
+      ),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("Screen Recording")).toBeInTheDocument());
+    const screenRow = row("Screen Recording");
+    expect(within(screenRow).getByText(/xdg-desktop-portal/)).toBeInTheDocument();
+    expect(within(screenRow).getByText(/no per-app switch/)).toBeInTheDocument();
+    expect(within(screenRow).queryByRole("button")).toBeNull();
+    // 没有任何项目能在应用内请求时,"一键获取"不该出现。
+    expect(screen.queryByRole("button", { name: "Grant All" })).toBeNull();
+  });
+
+  it("says so when the system's current answer could not be read", async () => {
+    vi.mocked(invoke).mockResolvedValue(
+      report([permission({ id: "screen-recording" })], true, {
+        freshProbe: false,
+        freshProbeError: "Probe process timed out",
+      }),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText(/may be out of date/)).toBeInTheDocument());
+    expect(screen.getByText(/Probe process timed out/)).toBeInTheDocument();
+  });
 });
 
 describe("permissionsNeedingRestart", () => {
@@ -235,5 +415,20 @@ describe("permissionsNeedingRestart", () => {
         permission({ id: "input-monitoring", status: "granted", needsRestart: true }),
       ]),
     ).toEqual([]);
+  });
+
+  /** 后端的 restartRequired 不需要基线:它由新进程探测直接得出。 */
+  it("trusts the backend's restartRequired even with no baseline to compare against", () => {
+    expect(
+      permissionsNeedingRestart({}, [
+        permission({
+          id: "screen-recording",
+          status: "granted",
+          processStatus: "notGranted",
+          restartRequired: true,
+          needsRestart: true,
+        }),
+      ]),
+    ).toEqual(["screen-recording"]);
   });
 });

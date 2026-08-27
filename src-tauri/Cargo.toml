@@ -96,6 +96,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
   "Win32_System_Threading",
+  # 各项隐私开关记在注册表 CapabilityAccessManager\ConsentStore 下,权限面板要读它。
+  "Win32_System_Registry",
 ] }
 
 # Keep the Aeroric path dependency on the same compatibility forks as dbx.

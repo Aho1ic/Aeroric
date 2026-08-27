@@ -339,48 +339,42 @@ jobs:
           done
           rm -f tauri.windows-release.json
 
+      # `tauri.conf.json` 的基线是 ad-hoc(见那里的 macOS 段):没有 Developer ID 时
+      # **本地构建**也必须是规范 ad-hoc,否则只剩链接器签名,TCC 授权全部作废。
+      # 代价是基线把 hardenedRuntime 关了,而它是公证的前置条件,所以签名路径要在这里
+      # 显式开回来。signingIdentity 不用管:`APPLE_SIGNING_IDENTITY` 优先于 config。
+      - name: Prepare macOS signed config
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n '{ bundle: { macOS: { hardenedRuntime: true } } }' > tauri.macos-signed.json
+          cat tauri.macos-signed.json
+
       - name: Build ${{ matrix.name }} (macOS, signed and notarized)
         if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
-
-      # 没有 Developer ID 时退到 ad-hoc 签名(`signingIdentity: "-"`)。
-      #
-      # 为什么值得做:完全不签名的 .app 在 Apple Silicon 上会被判为「已损坏」而拒绝
-      # 启动(arm64 强制要求至少 ad-hoc 签名),而 Tauri 打包/我们重新 ditto 进 DMG
-      # 的过程会让链接器自动加的那份签名失效。ad-hoc 让包能正常打开,并且 TCC 在
-      # 同一份构建内能稳定记住授权——权限面板的「重启生效」才成立。
-      #
-      # 它换不来什么:ad-hoc 无法公证,Gatekeeper 首次打开仍需右键>打开;且 ad-hoc
-      # 的 designated requirement 绑 cdhash,每次重新构建都会变,所以跨版本升级后
-      # 系统权限仍需重新授予。要消掉这两点只能上 Developer ID。
-      #
-      # 刻意关掉 hardenedRuntime(默认 true):它是**公证**的前置条件,ad-hoc 既然
-      # 注定不公证,开着只剩风险——本应用会加载 SQLite 扩展 dylib 并拉起任意 agent
-      # 可执行文件,库校验一收紧就可能直接坏掉。签名路径不受影响,仍走默认 true。
-      - name: Prepare macOS ad-hoc signing config
-        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -n '{
-            bundle: {
-              macOS: {
-                signingIdentity: "-",
-                hardenedRuntime: false
-              }
-            }
-          }' > tauri.macos-adhoc.json
-          cat tauri.macos-adhoc.json
-
-      - name: Build ${{ matrix.name }} (macOS, ad-hoc signed)
-        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
         run: >
           pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
-          --config tauri.macos-adhoc.json -- --locked
+          --config tauri.macos-signed.json -- --locked
+
+      - name: Clean up macOS signed config
+        if: always() && runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE == 'true'
+        shell: bash
+        run: rm -f tauri.macos-signed.json
+
+      # ad-hoc 不再需要 overlay:`tauri.conf.json` 的基线就是 ad-hoc,CI 与本地构建
+      # 因此产出同一种签名——本地构建曾经只有链接器签名,那会让 TCC 授权全部作废。
+      #
+      # ad-hoc 换不来什么:无法公证,Gatekeeper 首次打开仍需右键>打开;且 designated
+      # requirement 绑 cdhash,每次重新构建都会变,所以跨版本升级后系统权限仍需重新
+      # 授予(权限面板会检测到并给出「重新授权」)。要消掉这两点只能上 Developer ID。
+      - name: Build ${{ matrix.name }} (macOS, ad-hoc signed)
+        if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }} -- --locked
 
       - name: Verify macOS ad-hoc signature
         if: runner.os == 'macOS' && env.AERORIC_SIGN_RELEASE != 'true'
@@ -401,7 +395,6 @@ jobs:
             exit 1
           fi
           echo "ad-hoc signature verified"
-          rm -f tauri.macos-adhoc.json
 
       - name: Build ${{ matrix.name }} (Linux)
         if: runner.os == 'Linux'

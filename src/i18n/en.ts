@@ -2788,14 +2788,28 @@ export const en: Record<string, string> = {
   "permissions.action.grant": "Grant",
   "permissions.action.checkAndGrant": "Check",
   "permissions.action.openSettings": "System Settings",
+  "permissions.action.reset": "Re-authorize",
+  "permissions.action.resetHint":
+    "Clears this app's stored authorization and asks again. Use this when System Settings shows the switch as on but Aeroric still cannot use the permission — the stored record is bound to an older build and cannot be revived by toggling the switch.",
   "permissions.needsRestartTag": "restart required",
+  "permissions.pendingRestartTag": "restart to take effect",
+  "permissions.grantedPendingRestart":
+    "The system has this granted, but the running process was started before that and still cannot use it. Restart Aeroric to pick it up.",
   "permissions.restartRequired":
-    "Newly granted permissions only take effect after Aeroric restarts, because macOS caches the decision when the process launches.",
+    "Some permissions are granted but not yet in effect: the decision was cached when this process launched. Restart Aeroric to pick them up.",
   "permissions.restartNow": "Restart Now",
   "permissions.manualRemaining":
     "These can only be enabled by hand in System Settings: {names}. Use each row's System Settings button, tick Aeroric in the list, then come back and refresh.",
   "permissions.unsupportedPlatform":
     "This platform does not gate these capabilities behind per-app authorization, so there is nothing to grant here.",
+  "permissions.reportOnly":
+    "This platform has no per-app switch for this. The row reports what is currently available; changing it means changing the session, the user's groups, or the sandbox.",
+  "permissions.identity.unstableSignature":
+    "This build is ad-hoc signed, so the system binds each authorization to this exact build ({subject}). After an update the switch still looks on in System Settings while the app is treated as different code and denied. Use Re-authorize on any row that is stuck, or install a Developer ID signed build to stop this from recurring.",
+  "permissions.identity.notBundled":
+    "Aeroric is running outside an app bundle ({subject}), which is what a dev build does. The system records these authorizations against the terminal or IDE that launched it, not against the installed app, so what you see here will not match the installed copy.",
+  "permissions.freshProbeFailed":
+    "Could not read the system's current answer ({reason}), so the states below are what this process cached at launch and may be out of date. Restart Aeroric to re-read them.",
   "permissions.unknownBecauseProbePrompts":
     "Checking this asks macOS for access, so it is not probed automatically. Press Check to run the prompt.",
   "permissions.unknownReason": "Could not determine: {reason}",

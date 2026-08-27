@@ -113,9 +113,11 @@ function StatusBadge({ status }: { status: SystemPermissionStatus }) {
 }
 
 /**
- * 判断"刚授予、但要重启才生效"。基线取面板首次加载时的状态:进程启动后拿到的权限
- * 对当前进程无效(macOS 在启动时缓存 TCC 判定),所以只要有这类项目由未授权翻成
- * 已授权,就得提示重启。
+ * 判断"已授权、但本进程还没拿到"。
+ *
+ * 首要依据是后端的 `restartRequired`:它由新进程探测得出(系统已授权 + 本进程未拿到),
+ * 不依赖面板看到过什么。基线只作为后备——新进程探测不可用时,仍能靠"由未授权翻成
+ * 已授权"这一迹象补上提示。
  */
 export function permissionsNeedingRestart(
   baseline: Record<string, SystemPermissionStatus>,
@@ -124,10 +126,11 @@ export function permissionsNeedingRestart(
   return permissions
     .filter(
       (permission) =>
-        permission.needsRestart &&
-        permission.status === "granted" &&
-        baseline[permission.id] !== undefined &&
-        baseline[permission.id] !== "granted",
+        permission.restartRequired ||
+        (permission.needsRestart &&
+          permission.status === "granted" &&
+          baseline[permission.id] !== undefined &&
+          baseline[permission.id] !== "granted"),
     )
     .map((permission) => permission.id);
 }
@@ -151,13 +154,12 @@ export function PermissionsPanel() {
 
   /** 合并一次结果:记录基线、累积待重启项目。 */
   const absorb = useCallback((next: SystemPermissionReport) => {
-    if (!baseline.current) {
-      baseline.current = statusMap(next.permissions);
-    } else {
-      const pending = permissionsNeedingRestart(baseline.current, next.permissions);
-      if (pending.length > 0) {
-        setRestartIds((current) => [...new Set([...current, ...pending])]);
-      }
+    // 基线只用于「探测不可用」时的后备判断,但 restartRequired 首次加载就要生效:
+    // 用户很可能是先在系统设置里开了开关、再打开这个面板的。
+    const pending = permissionsNeedingRestart(baseline.current ?? {}, next.permissions);
+    baseline.current ??= statusMap(next.permissions);
+    if (pending.length > 0) {
+      setRestartIds((current) => [...new Set([...current, ...pending])]);
     }
     setReport(next);
   }, []);
@@ -228,6 +230,38 @@ export function PermissionsPanel() {
     }
   }, []);
 
+  /**
+   * 清除该项授权记录后立刻重新请求。
+   *
+   * 这是 ad-hoc 签名升级后唯一的修法:旧记录绑的是上一版的 cdhash,系统设置里再点
+   * 开关也不会让它重新对上,必须清掉重新授权。
+   */
+  const resetOne = useCallback(async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      await invoke<SystemPermission>("reset_system_permission", { id });
+      const updated = await invoke<SystemPermission>("request_system_permission", { id });
+      setReport((current) =>
+        current
+          ? {
+              ...current,
+              permissions: current.permissions.map((permission) =>
+                permission.id === updated.id ? updated : permission,
+              ),
+            }
+          : current,
+      );
+      // 记录已经清掉,旧的"待重启"结论不再成立。
+      setRestartIds((ids) => ids.filter((restartId) => restartId !== id));
+      baseline.current = { ...(baseline.current ?? {}), [id]: "notGranted" };
+    } catch (nextError) {
+      setError(String(nextError));
+    } finally {
+      setBusyId(null);
+    }
+  }, []);
+
   const restart = useCallback(async () => {
     try {
       await invoke("restart_app_for_permissions");
@@ -241,7 +275,13 @@ export function PermissionsPanel() {
     () => permissions.filter((permission) => permission.status === "granted").length,
     [permissions],
   );
+  // Linux 全是只报告项,一个"一键获取"按钮点下去什么都不会发生,不如不摆。
+  const canGrantAny = useMemo(
+    () => permissions.some((permission) => permission.canRequestInApp),
+    [permissions],
+  );
   const busy = loading || grantingAll || busyId !== null;
+  const identityWarning = report?.identity.warning;
 
   return (
     <div
@@ -272,7 +312,7 @@ export function PermissionsPanel() {
             <RefreshCw size={14} className={loading ? "spin" : undefined} />
             {t("common.refresh")}
           </button>
-          {report?.supported ? (
+          {report?.supported && canGrantAny ? (
             <button style={s.primaryActionBtn} onClick={() => void grantAll()} disabled={busy}>
               <ShieldCheck size={14} />
               {grantingAll ? t("permissions.grantingAll") : t("permissions.grantAll")}
@@ -288,6 +328,25 @@ export function PermissionsPanel() {
       ) : null}
 
       {error ? <Banner tone="error" text={error} /> : null}
+
+      {/* 系统按什么身份记授权。签名不稳定时"设置里开着、应用报未获取"是必然结果,
+          这条横幅是那个假阴性唯一的解释入口。 */}
+      {identityWarning ? (
+        <Banner
+          tone="warning"
+          text={t(`permissions.identity.${identityWarning}`, {
+            subject: report?.identity.subject ?? "",
+          })}
+        />
+      ) : null}
+
+      {/* 探测失败时 systemStatus 退化为进程内的旧答案,可能又变回那个假阴性,说清楚。 */}
+      {report?.supported && !report.freshProbe && report.freshProbeError ? (
+        <Banner
+          tone="info"
+          text={t("permissions.freshProbeFailed", { reason: report.freshProbeError })}
+        />
+      ) : null}
 
       {restartIds.length > 0 ? (
         <Banner
@@ -324,6 +383,7 @@ export function PermissionsPanel() {
             working={busyId === permission.id}
             onRequest={() => void requestOne(permission.id)}
             onOpenSettings={() => void openSettings(permission.id)}
+            onReset={() => void resetOne(permission.id)}
           />
         ))}
       </div>
@@ -337,12 +397,14 @@ function PermissionRow({
   working,
   onRequest,
   onOpenSettings,
+  onReset,
 }: {
   permission: SystemPermission;
   busy: boolean;
   working: boolean;
   onRequest: () => void;
   onOpenSettings: () => void;
+  onReset: () => void;
 }) {
   const { t } = useI18n();
   const Icon = PERMISSION_ICONS[permission.id] ?? ShieldCheck;
@@ -352,6 +414,9 @@ function PermissionRow({
   const requestLabel = permission.probePrompts
     ? t("permissions.action.checkAndGrant")
     : t("permissions.action.grant");
+  // 系统记着未授权、而签名身份又不稳定时,「重新授权」比反复点「获取」有用:
+  // 旧记录绑的是上一版 cdhash,不清掉就永远对不上。
+  const canReset = permission.canReset && !granted;
 
   return (
     <div
@@ -378,7 +443,11 @@ function PermissionRow({
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12.5, fontWeight: 650 }}>{name}</span>
           <StatusBadge status={permission.status} />
-          {permission.needsRestart ? (
+          {permission.restartRequired ? (
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: BANNER_TONE.warning }}>
+              {t("permissions.pendingRestartTag")}
+            </span>
+          ) : permission.needsRestart ? (
             <span style={{ fontSize: 10.5, color: "var(--text-hint)" }}>
               {t("permissions.needsRestartTag")}
             </span>
@@ -387,13 +456,30 @@ function PermissionRow({
         <div style={{ marginTop: 4, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.55 }}>
           {t(`permissions.item.${permission.id}.description`)}
         </div>
-        {permission.status === "unknown" ? (
+        {/* 三种需要补一句的情形,按"用户此刻最想知道什么"排序。 */}
+        {permission.restartRequired ? (
+          <div
+            style={{ marginTop: 4, fontSize: 10.5, color: BANNER_TONE.warning, lineHeight: 1.5 }}
+          >
+            {t("permissions.grantedPendingRestart")}
+          </div>
+        ) : permission.status === "unknown" ? (
           <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--text-hint)", lineHeight: 1.5 }}>
             {permission.probePrompts
               ? t("permissions.unknownBecauseProbePrompts")
               : t("permissions.unknownReason", {
                   reason: permission.detail ?? t("permissions.noQueryApi"),
                 })}
+          </div>
+        ) : permission.detail ? (
+          // Linux 的会话 / 用户组成因就在这里:状态确定,但"为什么"才是可行动的信息。
+          <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--text-hint)", lineHeight: 1.5 }}>
+            {permission.detail}
+          </div>
+        ) : null}
+        {permission.reportOnly ? (
+          <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--text-hint)", lineHeight: 1.5 }}>
+            {t("permissions.reportOnly")}
           </div>
         ) : null}
       </div>
@@ -416,6 +502,17 @@ function PermissionRow({
           >
             <ExternalLink size={13} />
             {t("permissions.action.openSettings")}
+          </button>
+        ) : null}
+        {canReset ? (
+          <button
+            style={{ ...s.secondaryActionBtn, height: 30, fontSize: 12 }}
+            onClick={onReset}
+            disabled={busy}
+            title={t("permissions.action.resetHint")}
+          >
+            <RotateCw size={13} />
+            {t("permissions.action.reset")}
           </button>
         ) : null}
       </div>

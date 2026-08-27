@@ -27,85 +27,45 @@ const FOLDER_DOWNLOADS: &str = "folder-downloads";
 
 pub(crate) const SUPPORTED: bool = true;
 
+/// macOS 把 TCC 判定缓存在进程里,所以只有换进程才能问到系统当前记的账。
+pub(crate) const FRESH_PROBE_HELPS: bool = true;
+
+/// 除了没有 TCC 服务名的本地网络,每一项都能 `tccutil reset`,面板也一律能跳设置。
+/// 所以这里只需要描述"能不能在应用内请求"「改完要不要重启」「检测会不会弹框」。
+const fn tcc(
+    id: &'static str,
+    can_request_in_app: bool,
+    needs_restart: bool,
+    probe_prompts: bool,
+) -> PermissionDescriptor {
+    PermissionDescriptor {
+        id,
+        can_request_in_app,
+        can_open_settings: true,
+        can_reset: true,
+        needs_restart,
+        probe_prompts,
+        report_only: false,
+    }
+}
+
 /// 顺序即界面顺序:先放 agent 终端最常撞上的几项。
 pub(crate) const DESCRIPTORS: &[PermissionDescriptor] = &[
+    tcc(SCREEN_RECORDING, true, true, false),
+    tcc(ACCESSIBILITY, true, true, false),
+    tcc(INPUT_MONITORING, true, true, false),
+    tcc(AUTOMATION, true, false, false),
+    tcc(FULL_DISK_ACCESS, false, true, false),
+    tcc(MICROPHONE, false, false, false),
+    tcc(CAMERA, false, false, false),
+    // 本地网络没有 TCC 服务名,`tccutil reset` 无从下手。
     PermissionDescriptor {
-        id: SCREEN_RECORDING,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: true,
-        probe_prompts: false,
+        can_reset: false,
+        ..tcc(LOCAL_NETWORK, false, true, false)
     },
-    PermissionDescriptor {
-        id: ACCESSIBILITY,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: true,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: INPUT_MONITORING,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: true,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: AUTOMATION,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: FULL_DISK_ACCESS,
-        can_request_in_app: false,
-        can_open_settings: true,
-        needs_restart: true,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: MICROPHONE,
-        can_request_in_app: false,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: CAMERA,
-        can_request_in_app: false,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: LOCAL_NETWORK,
-        can_request_in_app: false,
-        can_open_settings: true,
-        needs_restart: true,
-        probe_prompts: false,
-    },
-    PermissionDescriptor {
-        id: FOLDER_DESKTOP,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: true,
-    },
-    PermissionDescriptor {
-        id: FOLDER_DOCUMENTS,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: true,
-    },
-    PermissionDescriptor {
-        id: FOLDER_DOWNLOADS,
-        can_request_in_app: true,
-        can_open_settings: true,
-        needs_restart: false,
-        probe_prompts: true,
-    },
+    tcc(FOLDER_DESKTOP, true, false, true),
+    tcc(FOLDER_DOCUMENTS, true, false, true),
+    tcc(FOLDER_DOWNLOADS, true, false, true),
 ];
 
 // ── 原生接口声明 ─────────────────────────────────────────────────────────────
@@ -188,6 +148,49 @@ extern "C" {
     fn objc_getClass(name: *const std::ffi::c_char) -> *const c_void;
     fn sel_registerName(name: *const std::ffi::c_char) -> *const c_void;
     fn objc_msgSend();
+}
+
+// ── 代码签名身份 ─────────────────────────────────────────────────────────────
+//
+// TCC 按「签名身份」记账,不只按 bundle id。ad-hoc 签名的 designated requirement 绑
+// cdhash,每次重新构建都变:系统设置里开关看着还在,实际已对不上 —— 这就是"设置里
+// 显示已开放、应用报未获取"的主因,必须能检测出来并告诉用户。
+
+const K_SEC_CS_SIGNING_INFORMATION: u32 = 1 << 1;
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+const K_CF_NUMBER_SINT64_TYPE: isize = 4;
+/// `CS_ADHOC`:没有真实签名主体。
+const CS_ADHOC: i64 = 0x0000_0002;
+/// `CS_LINKER_SIGNED`:链接器自动加的那份签名,连 Info.plist 都没覆盖。
+const CS_LINKER_SIGNED: i64 = 0x0002_0000;
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFBundleGetMainBundle() -> CFTypeRef;
+    fn CFBundleGetIdentifier(bundle: CFTypeRef) -> CFTypeRef;
+    fn CFStringCreateWithCString(
+        allocator: CFTypeRef,
+        c_str: *const std::ffi::c_char,
+        encoding: u32,
+    ) -> CFTypeRef;
+    fn CFStringGetCString(
+        string: CFTypeRef,
+        buffer: *mut std::ffi::c_char,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> Boolean;
+    fn CFDictionaryGetValue(dict: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+    fn CFNumberGetValue(number: CFTypeRef, number_type: isize, value_ptr: *mut c_void) -> Boolean;
+}
+
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    fn SecCodeCopySelf(flags: u32, code: *mut CFTypeRef) -> i32;
+    fn SecCodeCopySigningInformation(
+        code: CFTypeRef,
+        flags: u32,
+        information: *mut CFTypeRef,
+    ) -> i32;
 }
 
 const TYPE_APPLICATION_BUNDLE_ID: u32 = four_cc(*b"bund");
@@ -393,6 +396,199 @@ fn request_accessibility() -> bool {
     trusted
 }
 
+// ── 身份 ─────────────────────────────────────────────────────────────────────
+
+fn cf_string_to_rust(value: CFTypeRef) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let mut buffer = [0_i8; 512];
+    let ok = unsafe {
+        CFStringGetCString(
+            value,
+            buffer.as_mut_ptr(),
+            buffer.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let bytes: Vec<u8> = buffer
+        .iter()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect();
+    String::from_utf8(bytes).ok()
+}
+
+/// 以 `CFStringRef` 取字典键。这些键的值就是文档写明的字面量("identifier" 等),
+/// 直接建字符串比把一堆 extern static 拉进来更省事。
+fn dictionary_string(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<String> {
+    let key_ref =
+        unsafe { CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8) };
+    if key_ref.is_null() {
+        return None;
+    }
+    let value = unsafe { CFDictionaryGetValue(dict, key_ref) };
+    let result = cf_string_to_rust(value);
+    unsafe { CFRelease(key_ref) };
+    result
+}
+
+fn dictionary_i64(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<i64> {
+    let key_ref =
+        unsafe { CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8) };
+    if key_ref.is_null() {
+        return None;
+    }
+    let value = unsafe { CFDictionaryGetValue(dict, key_ref) };
+    let mut number: i64 = 0;
+    let ok = if value.is_null() {
+        0
+    } else {
+        unsafe {
+            CFNumberGetValue(
+                value,
+                K_CF_NUMBER_SINT64_TYPE,
+                (&mut number as *mut i64).cast(),
+            )
+        }
+    };
+    unsafe { CFRelease(key_ref) };
+    (ok != 0).then_some(number)
+}
+
+/// 只有以 app bundle 运行时才有 bundle id。`tauri dev` 跑的裸二进制拿不到,而那正是
+/// "授权记在终端/IDE 身上"的情形,值得区分。
+fn bundle_identifier() -> Option<String> {
+    let bundle = unsafe { CFBundleGetMainBundle() };
+    if bundle.is_null() {
+        return None;
+    }
+    cf_string_to_rust(unsafe { CFBundleGetIdentifier(bundle) })
+}
+
+/// 本进程自己的签名信息:(签名 identifier, csflags, team id)。
+fn signing_information() -> Option<(Option<String>, i64, Option<String>)> {
+    let mut code: CFTypeRef = std::ptr::null();
+    if unsafe { SecCodeCopySelf(0, &mut code) } != 0 || code.is_null() {
+        return None;
+    }
+    let mut info: CFTypeRef = std::ptr::null();
+    let status =
+        unsafe { SecCodeCopySigningInformation(code, K_SEC_CS_SIGNING_INFORMATION, &mut info) };
+    unsafe { CFRelease(code) };
+    if status != 0 || info.is_null() {
+        return None;
+    }
+    let identifier = dictionary_string(info, c"identifier");
+    let flags = dictionary_i64(info, c"flags").unwrap_or(0);
+    let team = dictionary_string(info, c"teamid");
+    unsafe { CFRelease(info) };
+    Some((identifier, flags, team))
+}
+
+/// 把 csflags 翻成一个人能读的签名种类,并回答"授权能不能跨升级保留"。
+fn classify_signature(flags: i64, team: Option<&str>) -> (&'static str, bool) {
+    if flags & CS_LINKER_SIGNED != 0 {
+        // 链接器自动加的签名:连 Info.plist 都没覆盖,requirement 就是一个裸 cdhash。
+        ("linker-signed", false)
+    } else if flags & CS_ADHOC != 0 {
+        ("adhoc", false)
+    } else if team.is_some_and(|value| !value.is_empty()) {
+        ("developer-id", true)
+    } else {
+        ("signed", true)
+    }
+}
+
+pub(crate) fn identity() -> super::AppIdentity {
+    let bundle = bundle_identifier();
+    let info = signing_information();
+    let (signing_id, signature, stable) = match &info {
+        Some((identifier, flags, team)) => {
+            let (kind, stable) = classify_signature(*flags, team.as_deref());
+            (identifier.clone(), kind, stable)
+        }
+        None => (None, "unsigned", false),
+    };
+    let subject = bundle
+        .clone()
+        .or_else(|| signing_id.clone())
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .map(|path| path.display().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // 没跑在 bundle 里是更要紧的解释(dev 构建的授权根本不记在本应用名下),
+    // 所以它优先于签名不稳定。
+    let warning = if bundle.is_none() {
+        Some(super::IdentityWarning::NotBundled)
+    } else if !stable {
+        Some(super::IdentityWarning::UnstableSignature)
+    } else {
+        None
+    };
+
+    super::AppIdentity {
+        subject,
+        signature: signature.to_string(),
+        stable_across_updates: stable,
+        warning,
+    }
+}
+
+// ── 重置授权 ─────────────────────────────────────────────────────────────────
+
+/// `tccutil` 的服务名。与 `settings_anchor` 不同,这是另一套命名。
+fn tcc_service(id: &str) -> Option<&'static str> {
+    Some(match id {
+        SCREEN_RECORDING => "ScreenCapture",
+        ACCESSIBILITY => "Accessibility",
+        INPUT_MONITORING => "ListenEvent",
+        AUTOMATION => "AppleEvents",
+        FULL_DISK_ACCESS => "SystemPolicyAllFiles",
+        MICROPHONE => "Microphone",
+        CAMERA => "Camera",
+        FOLDER_DESKTOP => "SystemPolicyDesktopFolder",
+        FOLDER_DOCUMENTS => "SystemPolicyDocumentsFolder",
+        FOLDER_DOWNLOADS => "SystemPolicyDownloadsFolder",
+        // 本地网络不在 TCC 服务表里。
+        _ => return None,
+    })
+}
+
+/// 清掉本应用该项的 TCC 记录,让下一次请求重新记一条(绑当前 cdhash)。
+///
+/// 这是 ad-hoc 签名升级后唯一的修法:旧记录绑的是上一版的 cdhash,系统设置里再点
+/// 开关也不会让它重新对上。
+pub(crate) fn reset(id: &str) -> Result<(), String> {
+    let service =
+        tcc_service(id).ok_or_else(|| format!("{id} has no TCC service to reset"))?;
+    let bundle = bundle_identifier().ok_or_else(|| {
+        "Not running from an app bundle, so there is no TCC record under this app's name"
+            .to_string()
+    })?;
+    let mut command = Command::new("tccutil");
+    command.args(["reset", service, &bundle]);
+    crate::subprocess::configure_background_command(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("Failed to run tccutil: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("tccutil reset {service} failed (exit {:?})", output.status.code())
+    } else {
+        stderr
+    })
+}
+
 // ── 系统设置跳转 ─────────────────────────────────────────────────────────────
 
 /// 隐私与安全性各面板的 anchor。`x-apple.systempreferences:` 在 Ventura 之后仍然
@@ -499,5 +695,54 @@ mod tests {
         let probe = folder_probe("Aeroric-does-not-exist-9f2b");
         assert_eq!(probe.status, PermissionStatus::Unknown);
         assert!(probe.detail.is_some());
+    }
+
+    /// 每个可重置的项目都得有 TCC 服务名,否则按钮点下去必然报错。
+    #[test]
+    fn resettable_descriptors_map_to_a_tcc_service() {
+        for descriptor in DESCRIPTORS {
+            assert_eq!(
+                descriptor.can_reset,
+                tcc_service(descriptor.id).is_some(),
+                "{} disagrees about being resettable",
+                descriptor.id
+            );
+        }
+    }
+
+    /// ad-hoc / linker 签名必须判为"授权不跨升级保留"——这条判断是给用户的解释所依赖的。
+    #[test]
+    fn adhoc_and_linker_signatures_are_unstable() {
+        assert_eq!(classify_signature(CS_ADHOC, None), ("adhoc", false));
+        assert_eq!(
+            classify_signature(CS_ADHOC | CS_LINKER_SIGNED, None),
+            ("linker-signed", false)
+        );
+        assert_eq!(
+            classify_signature(0, Some("ABCDE12345")),
+            ("developer-id", true)
+        );
+        // 有真实签名但没 team id(自签 / 企业签):当作稳定,requirement 不绑 cdhash。
+        assert_eq!(classify_signature(0, None), ("signed", true));
+        assert_eq!(classify_signature(0, Some("")), ("signed", true));
+    }
+
+    /// 身份必须能在测试进程里查出来(裸测试二进制是 linker-signed,不是 bundle)。
+    #[test]
+    fn identity_describes_the_running_code() {
+        let identity = identity();
+        assert!(!identity.subject.is_empty());
+        assert!(!identity.signature.is_empty());
+        // 测试二进制不在 app bundle 里,必须报出来而不是假装一切正常。
+        assert_eq!(identity.warning, Some(super::super::IdentityWarning::NotBundled));
+    }
+
+    /// 不在 bundle 里跑时重置必须报错而不是对着空 bundle id 调 tccutil。
+    #[test]
+    fn reset_without_a_bundle_is_rejected() {
+        assert!(reset(LOCAL_NETWORK).is_err());
+        if bundle_identifier().is_none() {
+            assert!(reset(SCREEN_RECORDING).is_err());
+        }
     }
 }

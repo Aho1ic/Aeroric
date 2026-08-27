@@ -388,22 +388,51 @@ export type SystemPermissionStatus = "granted" | "notGranted" | "unknown";
 export interface SystemPermission {
   /** 稳定标识,同时是 `permissions.item.<id>.*` 文案的 key 后缀。 */
   id: string;
+  /** 面向用户的结论:取系统记的账,与系统设置里看到的一致。 */
   status: SystemPermissionStatus;
+  /** 系统当前记的账(由新进程探测,不受本进程缓存影响)。 */
+  systemStatus: SystemPermissionStatus;
+  /** 本进程实际拿到的能力,决定 agent 现在跑命令会不会失败。 */
+  processStatus: SystemPermissionStatus;
+  /** 系统已授权但本进程还没拿到——重启即生效。 */
+  restartRequired: boolean;
   canRequestInApp: boolean;
   canOpenSettings: boolean;
+  /** 能否清除授权记录重来(macOS `tccutil reset`)。 */
+  canReset: boolean;
   /** 授权后必须重启应用才生效。 */
   needsRestart: boolean;
   /** 检测本身会触发系统询问,所以列表里默认显示为未知。 */
   probePrompts: boolean;
-  /** 检测失败的原因(后端英文原文),仅作补充说明。 */
+  /** 本平台没有应用级开关,这一项只报告事实、没有可点的动作(Linux)。 */
+  reportOnly: boolean;
+  /** 状态成因或检测失败的原因(后端英文原文),仅作补充说明。 */
   detail?: string;
+}
+
+/** 授权记录不可靠的成因。 */
+export type SystemPermissionIdentityWarning = "unstableSignature" | "notBundled";
+
+/** 系统按什么身份给本应用记授权。用来解释「设置里明明开了」的假阴性。 */
+export interface SystemPermissionIdentity {
+  /** 系统记账用的主体(macOS: bundle id;Windows: exe 路径)。 */
+  subject: string;
+  /** `developer-id` / `adhoc` / `linker-signed` / `signed` / `unsigned` / `not-applicable`。 */
+  signature: string;
+  /** 授权能否跨版本升级保留。 */
+  stableAcrossUpdates: boolean;
+  warning?: SystemPermissionIdentityWarning;
 }
 
 export interface SystemPermissionReport {
   platform: string;
-  /** 本平台是否有逐项授权模型;false 时 `permissions` 为空。 */
+  /** 本平台是否有可枚举的权限清单;false 时 `permissions` 为空。 */
   supported: boolean;
   permissions: SystemPermission[];
+  identity: SystemPermissionIdentity;
+  /** 新进程探测是否可用;false 时 `systemStatus` 退化为 `processStatus`。 */
+  freshProbe: boolean;
+  freshProbeError?: string;
 }
 
 export interface SystemPermissionGrantAllResult {

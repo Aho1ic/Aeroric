@@ -2687,13 +2687,27 @@ export const zh: Record<string, string> = {
   "permissions.action.grant": "获取",
   "permissions.action.checkAndGrant": "检测",
   "permissions.action.openSettings": "系统设置",
+  "permissions.action.reset": "重新授权",
+  "permissions.action.resetHint":
+    "清除本应用已存的授权记录并重新请求。适用于「系统设置里开关明明是开的、Aeroric 却仍然用不了」——那条记录绑的是旧版本构建,再点开关也不会重新生效。",
   "permissions.needsRestartTag": "需重启生效",
+  "permissions.pendingRestartTag": "重启后生效",
+  "permissions.grantedPendingRestart":
+    "系统已经授权,但当前进程是在那之前启动的,现在还用不了。重启 Aeroric 即可生效。",
   "permissions.restartRequired":
-    "刚获取的权限要重启 Aeroric 才生效——macOS 在进程启动时就缓存了授权判定。",
+    "有权限已获取但尚未生效:授权判定在本进程启动时就被缓存了。重启 Aeroric 即可生效。",
   "permissions.restartNow": "立即重启",
   "permissions.manualRemaining":
     "以下权限只能在系统设置里手工勾选:{names}。点对应条目的「系统设置」,在列表里勾上 Aeroric,回来刷新即可。",
   "permissions.unsupportedPlatform": "当前平台不通过应用级授权管控这些能力,无需在此获取。",
+  "permissions.reportOnly":
+    "当前平台对这一项没有应用级开关。此处只报告现在可用与否;要改变它,得改会话类型、用户组或沙箱配置。",
+  "permissions.identity.unstableSignature":
+    "当前是 ad-hoc 签名的构建,系统会把每条授权绑定到这一次构建({subject})。升级之后系统设置里的开关看着还是开的,但应用已被当成另一份代码而被拒绝。对卡住的条目点「重新授权」,或换用 Developer ID 签名的安装包以根治。",
+  "permissions.identity.notBundled":
+    "Aeroric 不是以 app bundle 的方式运行({subject}),dev 构建就是这种情形。系统会把这些授权记在拉起它的终端 / IDE 名下,而不是安装版应用名下,所以这里看到的状态与安装版并不一致。",
+  "permissions.freshProbeFailed":
+    "读不到系统当前的答案({reason}),下面的状态是本进程启动时缓存的,可能已经过期。重启 Aeroric 可重新读取。",
   "permissions.unknownBecauseProbePrompts":
     "检测这一项会触发 macOS 询问,所以不会自动探测。点「检测」即可弹出授权请求。",
   "permissions.unknownReason": "无法确定:{reason}",

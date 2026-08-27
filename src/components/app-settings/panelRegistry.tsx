@@ -237,13 +237,13 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     platforms: ["windows"],
     ...wslPanel,
   },
-  // 只有 macOS 有逐项授权模型(TCC);Windows / Linux 没有可查可改的应用级开关。
+  // 三个平台都有内容:macOS 是 TCC 逐项授权,Windows 读注册表 ConsentStore,
+  // Linux 没有应用级开关但会如实报告会话 / 用户组 / 沙箱带来的实际可用性。
   {
     key: "permissions",
     labelKey: "permissions.navLabel",
     section: "application",
     icon: ShieldCheck,
-    platforms: ["macos"],
     ...permissionsPanel,
   },
   {

@@ -192,6 +192,13 @@ pub fn try_run_ssh_proxy_bridge() -> bool {
     ssh_proxy::try_run_ssh_proxy_bridge()
 }
 
+/// `main` 的前置分支:权限面板以 `--probe-system-permissions` 拉起本程序,借一个**新
+/// 进程**问出系统当前记的授权(macOS 把 TCC 判定缓存在进程里,本进程问不到)。
+/// 必须在 Tauri 启动之前处理:探测进程不该开窗口,也不该初始化任何应用状态。
+pub fn try_run_permission_probe_bridge() -> bool {
+    permissions::try_run_probe_bridge()
+}
+
 /// 应用壳构建失败时把原因落到用户看得见的地方。
 ///
 /// GUI 进程的 stderr 在双击启动时无处可见,所以三条路一起走:stderr(命令行启动时
@@ -879,6 +886,7 @@ pub fn run() {
             permissions::request_system_permission,
             permissions::request_all_system_permissions,
             permissions::open_system_permission_settings,
+            permissions::reset_system_permission,
             permissions::restart_app_for_permissions,
             startup_diagnostics::list_startup_degradations,
             usage::read_usage_snapshot,
