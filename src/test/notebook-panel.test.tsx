@@ -16,6 +16,19 @@ vi.mock("@tauri-apps/api/core", () => ({
     Promise.resolve(harness.handle(command, args ?? {})),
 }));
 
+/* 剪贴板:面板写走 `navigator.clipboard.writeText`、读走 Tauri 的 clipboard 插件
+ * (与 Aeroric 别处一致)。
+ *
+ * 写侧**不自己 stub** —— `userEvent.setup()` 会装一个能往返读写的实现,而它在每个
+ * 测试里调用,时机在 `beforeEach` 之后,会覆盖掉我们自己装的那个(踩过)。
+ * 直接用它,顺带比手写 stub 更接近真实浏览器行为。
+ *
+ * 读侧要 mock:Tauri 插件在测试环境里不存在。让它转读 `navigator.clipboard`,
+ * 于是「复制 → 粘贴」在测试里是真的经过剪贴板走了一圈。 */
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  readText: () => navigator.clipboard.readText(),
+}));
+
 function renderNotebook() {
   return render(
     <I18nProvider>
@@ -339,6 +352,89 @@ describe("NotebookPanel", () => {
     // 会以裸 HTML 的形式显示在 markdown 编辑器里。
     await waitFor(() => expect(harness.richtextConversions).toBeGreaterThan(0));
     expect(harness.read("/vault/Legacy.md")).not.toContain("editor: richtext");
+  });
+
+  /** 在编辑器上开右键菜单并点某一项。 */
+  async function runContextAction(user: ReturnType<typeof userEvent.setup>, name: string) {
+    fireEvent.contextMenu(screen.getByRole("textbox", { name: "Quick note content" }));
+    await user.click(await screen.findByRole("menuitem", { name }));
+  }
+
+  it("copies the selection to the clipboard", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    setEditorValue("alpha beta");
+    selectEditorRange(0, 5);
+
+    await runContextAction(user, "Copy");
+
+    // 断言剪贴板真的收到了内容 —— 不是断言某个 API 被调用过。
+    // 旧实现用 document.execCommand,它作用于 DOM 选区,改不动 CodeMirror 的
+    // EditorState,所以这条断言在旧实现下必然失败。
+    await waitFor(async () => expect(await navigator.clipboard.readText()).toBe("alpha"));
+    // 复制不该改文档。
+    expect(editorValue()).toBe("alpha beta");
+  });
+
+  it("cuts the selection: clipboard gets it, document loses it", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    setEditorValue("alpha beta");
+    selectEditorRange(0, 6);
+
+    await runContextAction(user, "Cut");
+
+    await waitFor(async () => expect(await navigator.clipboard.readText()).toBe("alpha "));
+    await waitFor(() => expect(editorValue()).toBe("beta"));
+  });
+
+  it("pastes clipboard content over the selection", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    setEditorValue("keep REPLACE end");
+    await navigator.clipboard.writeText("pasted");
+    selectEditorRange(5, 12);
+
+    await runContextAction(user, "Paste");
+
+    await waitFor(() => expect(editorValue()).toBe("keep pasted end"));
+  });
+
+  it("does not cut when the clipboard write fails", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    setEditorValue("precious");
+    selectEditorRange(0, 8);
+
+    // 写剪贴板失败(WebView 权限被拒是真实场景)。
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+    });
+
+    await runContextAction(user, "Cut");
+
+    // 关键:复制失败就不能删 —— 否则内容既没进剪贴板也没留在文档里。
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(editorValue()).toBe("precious");
+  });
+
+  it("ignores copy with an empty selection", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    setEditorValue("text");
+    selectEditorRange(2, 2);
+    await navigator.clipboard.writeText("untouched");
+
+    await runContextAction(user, "Copy");
+
+    // 空选区不该把剪贴板清空 —— 用户可能正拿着别处复制的东西。
+    expect(await navigator.clipboard.readText()).toBe("untouched");
   });
 
   it("shows source and preview side by side in split mode", async () => {

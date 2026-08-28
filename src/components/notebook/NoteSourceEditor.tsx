@@ -31,6 +31,8 @@ export type NoteEditorHandle = {
   selectionEnd(): number;
   /** 当前是否有非空选区。 */
   hasSelection(): boolean;
+  /** 当前选中的文本。无选区时返回空串。剪切 / 复制用。 */
+  selectedText(): string;
   /** 用 `text` 替换 [from, to),并把光标/选区放到指定位置。 */
   replaceRange(from: number, to: number, text: string, cursor?: "select" | "after"): void;
   /** 把选区设为 [from, to) 并滚动到可见。 */
@@ -218,6 +220,12 @@ export function NoteSourceEditor({
       hasSelection: () => {
         const range = view()?.state.selection.main;
         return range ? !range.empty : false;
+      },
+      selectedText: () => {
+        const editor = view();
+        if (!editor) return "";
+        const range = editor.state.selection.main;
+        return editor.state.doc.sliceString(range.from, range.to);
       },
       replaceRange: (from, to, text, cursor = "select") => {
         const editor = view();

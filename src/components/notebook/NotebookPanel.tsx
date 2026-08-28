@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { zLayers } from "../../styles/zLayers";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { confirm } from "../../lib/appDialog";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookNote } from "./notebookStore";
@@ -920,6 +921,41 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     applyTable();
   };
 
+  /**
+   * 剪切 / 复制 / 粘贴。
+   *
+   * 走 `navigator.clipboard` + CodeMirror 事务,**不用 `document.execCommand`**。
+   * 后者已废弃,而且它作用于 DOM 的 contenteditable 选区 —— CodeMirror 的文档
+   * 状态在 `EditorState` 里,execCommand 改不动它。富文本编辑器还在时那条路能用,
+   * 换成 CodeMirror 之后就悄悄失效了(而当时的测试只断言 execCommand 被调用过,
+   * 不断言剪贴板真的发生了操作,所以没发现)。
+   *
+   * 写用 `navigator.clipboard.writeText`、读用 Tauri 的 clipboard 插件 ——
+   * 与 Aeroric 别处一致(见 `terminalCopyHelper.ts`)。`navigator.clipboard.readText`
+   * 在 WebView 里常因权限被拒,插件走的是系统 API。
+   */
+  const runClipboardAction = async (action: "cut" | "copy" | "paste") => {
+    const editor = sourceEditorRef.current;
+    if (!editor) return;
+    try {
+      if (action === "paste") {
+        const text = await readClipboardText();
+        if (!text) return;
+        editor.replaceRange(editor.selectionStart(), editor.selectionEnd(), text, "after");
+        return;
+      }
+      const selected = editor.selectedText();
+      if (!selected) return;
+      await navigator.clipboard?.writeText(selected);
+      if (action === "cut") {
+        // 复制成功之后才删 —— 反过来的话写剪贴板失败就等于丢内容。
+        editor.replaceRange(editor.selectionStart(), editor.selectionEnd(), "", "after");
+      }
+    } catch (error) {
+      setError(errorText(error));
+    }
+  };
+
   const runContextMenuAction = (action: string) => {
     const menu = contextMenu;
 
@@ -927,7 +963,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (!isClipboardAction && !menu?.canFormat) return;
     setContextMenu(null);
     if (isClipboardAction) {
-      if (typeof document.execCommand === "function") document.execCommand(action, false);
+      void runClipboardAction(action as "cut" | "copy" | "paste");
       return;
     }
     if (action === "bold") applyWrap("**", "**");
