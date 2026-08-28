@@ -1,12 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { Trash2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { NoteList } from "./NoteList";
 import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
+import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
+import {
+  NoteContextMenu,
+  isClipboardAction,
+  type NoteContextMenuAction,
+  type NoteContextMenuState,
+} from "./NoteContextMenu";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
-import { zLayers } from "../../styles/zLayers";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { confirm } from "../../lib/appDialog";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
@@ -33,12 +38,6 @@ import {
   removeNote,
   type VaultNote,
 } from "./notebookVault";
-
-type NotebookContextMenuState = {
-  x: number;
-  y: number;
-  canFormat: boolean;
-};
 
 type NotebookPointerDragState = {
   id: string;
@@ -156,14 +155,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const setError = useNotebookStore((state) => state.setError);
   const hydrate = useNotebookStore((state) => state.hydrate);
   /** 视图模式。`split` 只对 Markdown 有意义(富文本没有源码可并排)。 */
-  const [mode, setMode] = useState<"edit" | "wysiwyg" | "split" | "read">("edit");
+  const [mode, setMode] = useState<NoteViewMode>("edit");
   const [creating, setCreating] = useState(false);
   const [pendingTitleFocusId, setPendingTitleFocusId] = useState<string | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
-  const [contextMenu, setContextMenu] = useState<NotebookContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
   const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -514,7 +513,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   };
 
   /** 切到指定视图。分屏只对 Markdown 开放。 */
-  const switchMode = (next: "edit" | "wysiwyg" | "split" | "read") => {
+  const switchMode = (next: NoteViewMode) => {
     if (next === mode) return;
     captureCurrentScroll();
     setMode(next);
@@ -794,13 +793,13 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     }
   };
 
-  const runContextMenuAction = (action: string) => {
+  const runContextMenuAction = (action: NoteContextMenuAction) => {
     const menu = contextMenu;
 
-    const isClipboardAction = action === "cut" || action === "copy" || action === "paste";
-    if (!isClipboardAction && !menu?.canFormat) return;
+    const clipboard = isClipboardAction(action);
+    if (!clipboard && !menu?.canFormat) return;
     setContextMenu(null);
-    if (isClipboardAction) {
+    if (clipboard) {
       void runClipboardAction(action as "cut" | "copy" | "paste");
       return;
     }
@@ -812,21 +811,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (action === "numbered") applyList(true);
     if (action === "table") applyTable();
   };
-
-  const contextMenuItems = [
-    ["cut", t("notebook.cut")],
-    ["copy", t("notebook.copy")],
-    ["paste", t("notebook.paste")],
-    ["bold", t("notebook.bold")],
-    ["italic", t("notebook.italic")],
-    ["underline", t("notebook.underline")],
-    ["strike", t("notebook.strike")],
-    ["bullet", t("notebook.bulletList")],
-    ["numbered", t("notebook.numberedList")],
-    ["table", t("notebook.table")],
-  ];
-  const isClipboardAction = (action: string) =>
-    action === "cut" || action === "copy" || action === "paste";
 
   /**
    * 源码编辑器。编辑态和分屏态共用同一个节点。
@@ -974,107 +958,17 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {activeNote ? (
           <>
-            <div
-              style={{
-                minHeight: 38,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "0 10px",
-                borderBottom: "1px solid var(--border-dim)",
-              }}
-            >
-              <input
-                ref={titleInputRef}
-                aria-label={t("notebook.memoName")}
-                value={activeNote.title}
-                onChange={(event) => updateActiveNote({ title: event.currentTarget.value })}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  color: "var(--text-primary)",
-                  fontSize: 13,
-                  fontWeight: 700,
-                }}
-              />
-              {noteStats.words > 0 && (
-                <span
-                  style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}
-                  title={t("notebook.statsTitle", {
-                    words: String(noteStats.words),
-                    minutes: String(noteStats.readingMinutes),
-                  })}
-                >
-                  {t("notebook.stats", {
-                    words: String(noteStats.words),
-                    minutes: String(noteStats.readingMinutes),
-                  })}
-                </span>
-              )}
-              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{"Markdown"}</span>
-              {
-                // Markdown 有三态。用分段控件而不是循环切换按钮:三态下"下一个是
-                // 什么"不直观,用户要点两次才能到想去的地方。
-                <div
-                  role="group"
-                  aria-label={t("notebook.viewMode")}
-                  style={{ display: "inline-flex", flexShrink: 0 }}
-                >
-                  {(
-                    [
-                      ["edit", t("notebook.source")],
-                      ["wysiwyg", t("notebook.wysiwyg")],
-                      ["split", t("notebook.split")],
-                      ["read", t("notebook.read")],
-                    ] as const
-                  ).map(([value, label], index, all) => (
-                    <button
-                      key={value}
-                      type="button"
-                      aria-pressed={mode === value}
-                      onClick={() => switchMode(value)}
-                      style={{
-                        height: 26,
-                        border: "1px solid var(--border-medium)",
-                        // 三段拼成一个控件:只有首尾有圆角,中间的左边框省掉避免双线。
-                        borderRadius:
-                          index === 0
-                            ? "6px 0 0 6px"
-                            : index === all.length - 1
-                              ? "0 6px 6px 0"
-                              : 0,
-                        borderLeftWidth: index === 0 ? 1 : 0,
-                        background: mode === value ? "var(--control-active-bg)" : "var(--bg-card)",
-                        color: mode === value ? "var(--control-active-fg)" : "var(--text-primary)",
-                        cursor: "pointer",
-                        padding: "0 8px",
-                        fontSize: 12,
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              }
-              <button
-                type="button"
-                aria-label={t("common.delete")}
-                title={t("common.delete")}
-                onClick={deleteActiveNote}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  padding: 4,
-                }}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+            <NoteTitleBar
+              title={activeNote.title}
+              onTitleChange={(title) => updateActiveNote({ title })}
+              titleInputRef={titleInputRef}
+              words={noteStats.words}
+              readingMinutes={noteStats.readingMinutes}
+              mode={mode}
+              onModeChange={switchMode}
+              onDelete={deleteActiveNote}
+              t={t}
+            />
             {searchOpen && (
               <NoteFindBar
                 replaceOpen={replaceOpen}
@@ -1171,55 +1065,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           </div>
         )}
       </div>
-      {contextMenu && (
-        <div
-          role="menu"
-          data-notebook-context-menu
-          style={{
-            position: "fixed",
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: zLayers.contextMenu,
-            minWidth: 148,
-            padding: "4px 0",
-            border: "1px solid var(--border-dim)",
-            borderRadius: 7,
-            background: "var(--bg-sidebar)",
-            boxShadow: "var(--shadow-popover)",
-          }}
-        >
-          {contextMenuItems.map(([action, label]) => {
-            const disabled = !isClipboardAction(action) && !contextMenu.canFormat;
-            return (
-              <button
-                key={action}
-                type="button"
-                role="menuitem"
-                disabled={disabled}
-                onClick={() => runContextMenuAction(action)}
-                style={{
-                  width: "calc(100% - 8px)",
-                  height: 28,
-                  margin: "1px 4px",
-                  padding: "0 10px",
-                  border: "none",
-                  borderRadius: 5,
-                  background: "transparent",
-                  color: disabled ? "var(--text-muted)" : "var(--text-primary)",
-                  display: "flex",
-                  alignItems: "center",
-                  textAlign: "left",
-                  cursor: disabled ? "not-allowed" : "pointer",
-                  opacity: disabled ? 0.55 : 1,
-                  fontSize: 13,
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {contextMenu && <NoteContextMenu state={contextMenu} onAction={runContextMenuAction} t={t} />}
     </section>
   );
 }
