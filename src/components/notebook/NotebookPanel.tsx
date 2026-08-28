@@ -7,6 +7,7 @@ import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
 import { useNoteDragReorder } from "./useNoteDragReorder";
+import { useNoteFormatting } from "./useNoteFormatting";
 import {
   NoteContextMenu,
   isClipboardAction,
@@ -655,100 +656,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   // 放在 `reorderNote` 之后:const 不提升,写在前面调用会踩 TDZ。
   const drag = useNoteDragReorder(reorderNote);
 
-  const replaceSelection = (
-    transform: (selected: string) => string,
-    options: { allowCollapsed?: boolean; placeCursor?: "select" | "after" } = {},
-  ) => {
-    if (!activeNote) return;
-    const editor = sourceEditorRef.current;
-    const body = activeNote.body;
-    // 没有编辑器实例(阅读态点工具栏)时退化成"追加到末尾"。
-    const start = editor?.selectionStart() ?? body.length;
-    const end = editor?.selectionEnd() ?? body.length;
-    if (start === end && !options.allowCollapsed) return;
-    const selected = body.slice(start, end);
-    const replacement = transform(selected);
-
-    // 走 CodeMirror 的事务而不是"整体重设 value":后者会把撤销栈清掉,用户按
-    // ⌘Z 退不回格式化之前。事务里文档和选区一起改,一次撤销就能整个退回。
-    if (editor) {
-      editor.replaceRange(start, end, replacement, options.placeCursor ?? "select");
-      return;
-    }
-    updateActiveNote({
-      body: `${body.slice(0, start)}${replacement}${body.slice(end)}`,
-    });
-  };
-
-  const stripListPrefix = (line: string) => line.replace(/^\s*(?:[-*]\s+|\d+\.\s+)/, "");
-  const transformLines = (selected: string, transform: (line: string, index: number) => string) => {
-    const lines = selected.length > 0 ? selected.split(/\r?\n/) : [""];
-    return lines.map(transform).join("\n");
-  };
-  const applyWrap = (before: string, after: string) => {
-    replaceSelection((selected) => `${before}${selected}${after}`);
-  };
-  const applyLinePrefix = (prefix: string) => {
-    replaceSelection((selected) =>
-      transformLines(selected, (line) => `${prefix}${line.replace(/^#{1,6}\s+/, "")}`),
-    );
-  };
-  const applyList = (ordered: boolean) => {
-    replaceSelection((selected) =>
-      transformLines(selected, (line, index) => {
-        const text = stripListPrefix(line);
-        return `${ordered ? `${index + 1}.` : "-"} ${text}`;
-      }),
-    );
-  };
-  const applyBodyText = () => {
-    replaceSelection((selected) =>
-      transformLines(selected, (line) => stripListPrefix(line).replace(/^#{1,6}\s+/, "")),
-    );
-  };
-  const applyCodeBlock = () => {
-    replaceSelection((selected) => `\`\`\`\n${selected}\n\`\`\`\n`, {
-      allowCollapsed: true,
-      placeCursor: "after",
-    });
-  };
-  const applyTable = () => {
-    replaceSelection((selected) => {
-      const lines = selected.trim().length > 0 ? selected.split(/\r?\n/) : [""];
-      const rows = lines.map((line) => `| ${line.trim()} | |`).join("\n");
-      return `| Column 1 | Column 2 |\n| --- | --- |\n${rows}`;
-    });
-  };
-
-  const clearMarkdownBackground = () => {
-    replaceSelection((selected) =>
-      selected
-        .replace(/<mark>([\s\S]*?)<\/mark>/g, "$1")
-        .replace(/<span\s+style=["']background-color:[^"']+["']>([\s\S]*?)<\/span>/g, "$1"),
-    );
-  };
-
-  const applyInlineWrap = (before: string, after: string) => {
-    applyWrap(before, after);
-  };
-  const clearBackgroundCommand = () => {
-    clearMarkdownBackground();
-  };
-  const applyHeading = (prefix: string) => {
-    applyLinePrefix(prefix);
-  };
-  const applyListCommand = (ordered: boolean) => {
-    applyList(ordered);
-  };
-  const applyBodyCommand = () => {
-    applyBodyText();
-  };
-  const applyCodeBlockCommand = () => {
-    applyCodeBlock();
-  };
-  const applyTableCommand = () => {
-    applyTable();
-  };
+  // 工具栏和右键菜单共用这套命令。原来这里还有一层 `applyInlineWrap` →
+  // `applyWrap` 之类的纯别名(富文本时代要按编辑器分派),现在只剩一种编辑器,
+  // 那层转发没有作用,一并去掉。
+  const format = useNoteFormatting({
+    editorRef: sourceEditorRef,
+    body: activeNote?.body ?? null,
+    onBodyChange: (body) => updateActiveNote({ body }),
+  });
 
   /**
    * 剪切 / 复制 / 粘贴。
@@ -795,13 +710,13 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       void runClipboardAction(action as "cut" | "copy" | "paste");
       return;
     }
-    if (action === "bold") applyWrap("**", "**");
-    if (action === "italic") applyWrap("*", "*");
-    if (action === "underline") applyWrap("<u>", "</u>");
-    if (action === "strike") applyWrap("~~", "~~");
-    if (action === "bullet") applyList(false);
-    if (action === "numbered") applyList(true);
-    if (action === "table") applyTable();
+    if (action === "bold") format.applyWrap("**", "**");
+    if (action === "italic") format.applyWrap("*", "*");
+    if (action === "underline") format.applyWrap("<u>", "</u>");
+    if (action === "strike") format.applyWrap("~~", "~~");
+    if (action === "bullet") format.applyList(false);
+    if (action === "numbered") format.applyList(true);
+    if (action === "table") format.applyTable();
   };
 
   /**
@@ -913,13 +828,13 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
             {activeNote && (
               <NoteToolbar
                 enabled={canUseToolbar}
-                onInlineWrap={applyInlineWrap}
-                onHeading={applyHeading}
-                onList={applyListCommand}
-                onBodyText={applyBodyCommand}
-                onCodeBlock={applyCodeBlockCommand}
-                onTable={applyTableCommand}
-                onClearBackground={clearBackgroundCommand}
+                onInlineWrap={format.applyWrap}
+                onHeading={format.applyLinePrefix}
+                onList={format.applyList}
+                onBodyText={format.applyBodyText}
+                onCodeBlock={format.applyCodeBlock}
+                onTable={format.applyTable}
+                onClearBackground={format.clearBackground}
                 textColor={textColor}
                 onTextColorChange={setTextColor}
                 backgroundColor={backgroundColor}
