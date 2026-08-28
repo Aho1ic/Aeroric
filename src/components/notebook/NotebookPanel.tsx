@@ -1,26 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import {
-  Bold,
-  ChevronDown,
-  ChevronUp,
-  Code2,
-  Highlighter,
-  Italic,
-  List,
-  ListOrdered,
-  PaintBucket,
-  Palette,
-  Replace,
-  Search,
-  Strikethrough,
-  Table2,
-  Trash2,
-  Underline,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, Replace, Search, Trash2, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { NoteList } from "./NoteList";
+import { NoteToolbar } from "./NoteToolbar";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 import { zLayers } from "../../styles/zLayers";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
@@ -116,118 +99,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function ToolButton({
-  label,
-  children,
-  onClick,
-  onMouseDown,
-  pressed,
-  disabled = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  onClick: () => void;
-  onMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  pressed?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-pressed={typeof pressed === "boolean" ? pressed : undefined}
-      title={label}
-      disabled={disabled}
-      onMouseDown={onMouseDown}
-      onClick={onClick}
-      style={{
-        width: 26,
-        height: 26,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "1px solid var(--border-dim)",
-        borderRadius: 5,
-        background: pressed ? "var(--control-active-bg)" : "var(--bg-card)",
-        color: disabled
-          ? "var(--text-muted)"
-          : pressed
-            ? "var(--control-active-fg)"
-            : "var(--text-secondary)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.55 : 1,
-        flexShrink: 0,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function ColorTool({
-  label,
-  value,
-  children,
-  onMouseDown,
-  onChange,
-  disabled = false,
-}: {
-  label: string;
-  value: string;
-  children: React.ReactNode;
-  onMouseDown?: (event: React.MouseEvent<HTMLLabelElement>) => void;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label
-      title={label}
-      onMouseDown={onMouseDown}
-      style={{
-        position: "relative",
-        width: 34,
-        height: 26,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 2,
-        border: "1px solid var(--border-dim)",
-        borderRadius: 5,
-        background: "var(--bg-card)",
-        color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.55 : 1,
-        flexShrink: 0,
-      }}
-    >
-      {children}
-      <span
-        aria-hidden="true"
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: 2,
-          border: "1px solid var(--border-medium)",
-          background: value,
-        }}
-      />
-      <input
-        type="color"
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        style={{
-          position: "absolute",
-          inset: 0,
-          opacity: 0,
-          cursor: disabled ? "not-allowed" : "pointer",
-        }}
-      />
-    </label>
-  );
-}
-
 export type NotebookPanelProps = {
   width?: number | string;
   /** 源码编辑器的配色。默认 light,便于测试和独立使用时不必传。 */
@@ -257,7 +128,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ noteId: string; ratio: number } | null>(null);
   const createPanelRef = useRef<HTMLDivElement | null>(null);
-  const tablePickerAnchorRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const noteItemRefs = useRef<Map<string, HTMLElement>>(new Map());
   const notePointerDragRef = useRef<NotebookPointerDragState | null>(null);
@@ -1401,139 +1271,21 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               </div>
             )}
             {activeNote && (
-              <div
-                aria-label={t("notebook.markdownToolbar")}
-                style={{
-                  minHeight: 34,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "4px 8px",
-                  borderBottom: "1px solid var(--border-dim)",
-                  overflowX: "auto",
-                  flexShrink: 0,
-                }}
-              >
-                <ToolButton
-                  label={t("notebook.bold")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyInlineWrap("**", "**")}
-                >
-                  <Bold size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.italic")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyInlineWrap("*", "*")}
-                >
-                  <Italic size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.underline")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyInlineWrap("<u>", "</u>")}
-                >
-                  <Underline size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.strike")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyInlineWrap("~~", "~~")}
-                >
-                  <Strikethrough size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.highlight")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyInlineWrap("<mark>", "</mark>")}
-                >
-                  <Highlighter size={13} />
-                </ToolButton>
-                <ColorTool
-                  label={t("notebook.textColor")}
-                  value={textColor}
-                  disabled={!canUseToolbar}
-                  onChange={(value) => {
-                    setTextColor(value);
-                    applyInlineWrap(`<span style="color:${value}">`, "</span>");
-                  }}
-                >
-                  <Palette size={13} />
-                </ColorTool>
-                <ColorTool
-                  label={t("notebook.backgroundColor")}
-                  value={backgroundColor}
-                  disabled={!canUseToolbar}
-                  onChange={(value) => {
-                    setBackgroundColor(value);
-                    applyInlineWrap(`<span style="background-color:${value}">`, "</span>");
-                  }}
-                >
-                  <PaintBucket size={13} />
-                </ColorTool>
-                <ToolButton
-                  label={t("notebook.noColor")}
-                  disabled={!canUseToolbar}
-                  onClick={clearBackgroundCommand}
-                >
-                  Ø
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.heading")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyHeading("# ")}
-                >
-                  H1
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.subheading")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyHeading("## ")}
-                >
-                  H2
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.bodyText")}
-                  disabled={!canUseToolbar}
-                  onClick={applyBodyCommand}
-                >
-                  T
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.bulletList")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyListCommand(false)}
-                >
-                  <List size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.numberedList")}
-                  disabled={!canUseToolbar}
-                  onClick={() => applyListCommand(true)}
-                >
-                  <ListOrdered size={13} />
-                </ToolButton>
-                <ToolButton
-                  label={t("notebook.codeBlock")}
-                  disabled={!canUseToolbar}
-                  onClick={applyCodeBlockCommand}
-                >
-                  <Code2 size={13} />
-                </ToolButton>
-                <div
-                  ref={tablePickerAnchorRef}
-                  style={{ position: "relative", flexShrink: 0 }}
-                  data-notebook-table-picker
-                >
-                  <ToolButton
-                    label={t("notebook.table")}
-                    disabled={!canUseToolbar}
-                    onClick={applyTableCommand}
-                  >
-                    <Table2 size={13} />
-                  </ToolButton>
-                </div>
-              </div>
+              <NoteToolbar
+                enabled={canUseToolbar}
+                onInlineWrap={applyInlineWrap}
+                onHeading={applyHeading}
+                onList={applyListCommand}
+                onBodyText={applyBodyCommand}
+                onCodeBlock={applyCodeBlockCommand}
+                onTable={applyTableCommand}
+                onClearBackground={clearBackgroundCommand}
+                textColor={textColor}
+                onTextColorChange={setTextColor}
+                backgroundColor={backgroundColor}
+                onBackgroundColorChange={setBackgroundColor}
+                t={t}
+              />
             )}
             {mode === "edit" || mode === "wysiwyg" || mode === "split" ? (
               // 编辑态和分屏态用**同一套容器结构**,只改列数和预览列的存在性。
