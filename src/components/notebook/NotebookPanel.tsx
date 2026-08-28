@@ -5,6 +5,8 @@ import { NoteList } from "./NoteList";
 import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
+import { NoteContentArea } from "./NoteContentArea";
+import { useNoteDragReorder } from "./useNoteDragReorder";
 import {
   NoteContextMenu,
   isClipboardAction,
@@ -39,19 +41,11 @@ import {
   type VaultNote,
 } from "./notebookVault";
 
-type NotebookPointerDragState = {
-  id: string;
-  pointerId: number;
-  startY: number;
-  hasMoved: boolean;
-};
-
 type TextMatch = {
   start: number;
   end: number;
 };
 
-const POINTER_DRAG_MOVE_TOLERANCE = 5;
 /** 自动保存防抖。敲字期间不写盘,停手 800ms 后落一次。 */
 const AUTOSAVE_DELAY_MS = 800;
 export function findNotebookTextMatches(text: string, query: string): TextMatch[] {
@@ -129,9 +123,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const pendingScrollRestoreRef = useRef<{ noteId: string; ratio: number } | null>(null);
   const createPanelRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const noteItemRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const notePointerDragRef = useRef<NotebookPointerDragState | null>(null);
-  const suppressNextNoteClickRef = useRef(false);
   /** 每条笔记的自动保存定时器。按 id 分开,免得改 A 的防抖把 B 的保存吞掉。 */
   const autosaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /** 正在保存中的笔记。防止防抖到期时和上一次保存重入。 */
@@ -163,8 +154,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
-  const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
-  const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -663,6 +652,9 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     void persistOrder(vault, paths).catch((error) => setError(errorText(error)));
   };
 
+  // 放在 `reorderNote` 之后:const 不提升,写在前面调用会踩 TDZ。
+  const drag = useNoteDragReorder(reorderNote);
+
   const replaceSelection = (
     transform: (selected: string) => string,
     options: { allowCollapsed?: boolean; placeCursor?: "select" | "after" } = {},
@@ -845,78 +837,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     />
   ) : null;
 
-  const setNoteItemRef = (noteId: string) => (element: HTMLDivElement | null) => {
-    if (element) {
-      noteItemRefs.current.set(noteId, element);
-    } else {
-      noteItemRefs.current.delete(noteId);
-    }
-  };
-
-  const noteIdAtClientY = (clientY: number) => {
-    let fallback: string | null = null;
-    let fallbackDistance = Number.POSITIVE_INFINITY;
-    for (const [noteId, element] of noteItemRefs.current) {
-      const rect = element.getBoundingClientRect();
-      if (clientY >= rect.top && clientY <= rect.bottom) return noteId;
-      const center = rect.top + rect.height / 2;
-      const distance = Math.abs(clientY - center);
-      if (distance < fallbackDistance) {
-        fallback = noteId;
-        fallbackDistance = distance;
-      }
-    }
-    return fallback;
-  };
-
-  const resetNotePointerDrag = () => {
-    notePointerDragRef.current = null;
-    setDraggedNoteId(null);
-    setDragOverNoteId(null);
-  };
-
-  const handleNotePointerDown = (event: React.PointerEvent<HTMLButtonElement>, noteId: string) => {
-    if (event.button !== 0) return;
-    const currentTarget = event.currentTarget;
-    notePointerDragRef.current = {
-      id: noteId,
-      pointerId: event.pointerId,
-      startY: event.clientY,
-      hasMoved: false,
-    };
-    setDraggedNoteId(noteId);
-    setDragOverNoteId(noteId);
-    currentTarget.setPointerCapture?.(event.pointerId);
-  };
-
-  const handleNotePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = notePointerDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    if (Math.abs(event.clientY - drag.startY) > POINTER_DRAG_MOVE_TOLERANCE) {
-      drag.hasMoved = true;
-    }
-    setDragOverNoteId(noteIdAtClientY(event.clientY));
-  };
-
-  const handleNotePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = notePointerDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const targetId = drag.hasMoved ? noteIdAtClientY(event.clientY) : null;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    resetNotePointerDrag();
-    if (!targetId) return;
-    suppressNextNoteClickRef.current = true;
-    event.preventDefault();
-    reorderNote(drag.id, targetId);
-  };
-
-  const handleNotePointerCancel = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = notePointerDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    resetNotePointerDrag();
-  };
-
   return (
     <section
       aria-label={t("notebook.title")}
@@ -945,14 +865,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
         onStartRename={startRenameNote}
         onSelect={setActiveId}
         onCreate={addNote}
-        setNoteItemRef={setNoteItemRef}
-        onPointerDown={handleNotePointerDown}
-        onPointerMove={handleNotePointerMove}
-        onPointerUp={handleNotePointerUp}
-        onPointerCancel={handleNotePointerCancel}
-        draggedNoteId={draggedNoteId}
-        dragOverNoteId={dragOverNoteId}
-        suppressNextClickRef={suppressNextNoteClickRef}
+        setNoteItemRef={drag.setNoteItemRef}
+        onPointerDown={drag.onPointerDown}
+        onPointerMove={drag.onPointerMove}
+        onPointerUp={drag.onPointerUp}
+        onPointerCancel={drag.onPointerCancel}
+        draggedNoteId={drag.draggedNoteId}
+        dragOverNoteId={drag.dragOverNoteId}
+        suppressNextClickRef={drag.suppressNextClickRef}
         t={t}
       />
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -1007,57 +927,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
                 t={t}
               />
             )}
-            {mode === "edit" || mode === "wysiwyg" || mode === "split" ? (
-              // 编辑态和分屏态用**同一套容器结构**,只改列数和预览列的存在性。
-              //
-              // 不能写成「分屏时套一层 grid、编辑时直接放编辑器」—— React 按树中
-              // 位置 reconcile,位置变了就会卸载重挂 CodeMirror,光标和撤销栈全丢。
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: "grid",
-                  gridTemplateColumns:
-                    mode === "split" ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
-                }}
-              >
-                <div
-                  style={{
-                    minWidth: 0,
-                    minHeight: 0,
-                    display: "flex",
-                    borderRight: mode === "split" ? "1px solid var(--border-dim)" : "none",
-                  }}
-                >
-                  {sourceEditorNode}
-                </div>
-                {mode === "split" && (
-                  <div
-                    ref={splitPreviewRef}
-                    style={{ minWidth: 0, minHeight: 0, overflow: "auto", padding: 14 }}
-                  >
-                    <div
-                      ref={previewRef}
-                      className="md-preview notebook-markdown-preview"
-                      dangerouslySetInnerHTML={{ __html: markdownHtml }}
-                    />
-                  </div>
-                )}
-              </div>
-            ) : (
-              // 阅读态。所有笔记都是 Markdown,所以只有这一条路径 —— 富文本的
-              // `dangerouslySetInnerHTML` 分支随 contentEditable 一起删掉了。
-              <div
-                ref={readContentRef}
-                style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14 }}
-              >
-                <div
-                  ref={previewRef}
-                  className="md-preview notebook-markdown-preview"
-                  dangerouslySetInnerHTML={{ __html: markdownHtml }}
-                />
-              </div>
-            )}
+            <NoteContentArea
+              mode={mode}
+              sourceEditor={sourceEditorNode}
+              markdownHtml={markdownHtml}
+              readContentRef={readContentRef}
+              splitPreviewRef={splitPreviewRef}
+              previewRef={previewRef}
+            />
           </>
         ) : (
           <div style={{ margin: "auto", color: "var(--text-hint)", fontSize: 12 }}>
