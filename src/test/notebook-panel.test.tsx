@@ -5,6 +5,7 @@ import { I18nProvider } from "../i18n";
 import { NotebookPanel } from "../components/notebook/NotebookPanel";
 import { EditorView } from "@uiw/react-codemirror";
 import { NotebookVaultHarness } from "./notebookVaultHarness";
+import { registerAppDialogHandler, resetAppDialogHandlerForTests } from "../lib/appDialog";
 
 /* 随手记的笔记现在是磁盘上的 .md 文件,新建 / 保存 / 删除都要过 Tauri 命令。
  * 用一个内存 vault 顶上,这样这些测试仍然在验证真实行为(写进去能读回来、
@@ -843,5 +844,64 @@ describe("NotebookPanel", () => {
     // 排序要能被下一次加载读回来:重新挂载后顺序不变。
     const titles = screen.getAllByRole("button", { name: /^(First|Second)$/ });
     expect(titles.map((row) => row.textContent)).toEqual(["First", "Second"]);
+  });
+
+  it("does not resurrect a deleted note from a pending autosave", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    const notePath = harness.paths().find((path) => path.endsWith(".md")) ?? "";
+    expect(notePath).not.toBe("");
+
+    vi.useFakeTimers();
+    try {
+      // 敲字后立刻删除 —— 防抖还没到期。不取消那个定时器的话它会在 800ms 后
+      // 醒来,把刚进回收站的文件重新写出来,用户会看到"删掉的笔记又回来了"。
+      setEditorValue("about to be deleted");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(harness.read(notePath)).toBeUndefined();
+  });
+
+  it("keeps the version on disk when the user declines to overwrite a conflict", async () => {
+    // 磁盘上先有一条笔记,面板打开它。
+    const notePath = harness.seed("Shared.md", '---\ntitle: "Shared"\n---\n\nmine\n');
+    renderNotebook();
+    await screen.findByRole("button", { name: "Shared" });
+    await screen.findByRole("textbox", { name: "Quick note content" });
+
+    // 用户选「保留磁盘版本」。没注册 host 时 confirm 直接返回 false,也是这条
+    // 分支 —— 但那是巧合,显式注册才算真的钉住了用户的选择。
+    const requests: string[] = [];
+    const unregister = registerAppDialogHandler(async (request) => {
+      requests.push(request.kind);
+      return false;
+    });
+
+    try {
+      // 外部编辑器改了同一个文件 —— 面板手里的指纹过期了,下一次保存会撞冲突。
+      harness.externalWrite(notePath, '---\ntitle: "Shared"\n---\n\ntheirs\n');
+
+      setEditorValue("ours");
+      await waitFor(() => expect(requests).toEqual(["confirm"]));
+
+      // 磁盘保持外部那一版,不被覆盖。
+      await waitFor(() => expect(harness.read(notePath)).toContain("theirs"));
+      expect(harness.read(notePath)).not.toContain("ours");
+      // 编辑器换成磁盘的内容 —— 否则用户接着敲字,下一次保存又会撞同一个冲突。
+      await waitFor(() => expect(editorValue()).toContain("theirs"));
+    } finally {
+      unregister();
+      resetAppDialogHandlerForTests();
+    }
   });
 });

@@ -8,6 +8,8 @@ import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
 import { useNoteDragReorder } from "./useNoteDragReorder";
 import { useNoteFormatting } from "./useNoteFormatting";
+import { useNoteAutosave } from "./useNoteAutosave";
+import { toPanelNote, toVaultNote } from "./noteConverters";
 import {
   NoteContextMenu,
   isClipboardAction,
@@ -16,7 +18,6 @@ import {
 } from "./NoteContextMenu";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
-import { confirm } from "../../lib/appDialog";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookNote } from "./notebookStore";
 import { convertRichtextNotes, ensureDefaultVault } from "./notebookApi";
@@ -36,10 +37,8 @@ import {
   createNote as createVaultNote,
   listNotes,
   loadNote,
-  persistNote,
   persistOrder,
   removeNote,
-  type VaultNote,
 } from "./notebookVault";
 
 type TextMatch = {
@@ -47,8 +46,6 @@ type TextMatch = {
   end: number;
 };
 
-/** 自动保存防抖。敲字期间不写盘,停手 800ms 后落一次。 */
-const AUTOSAVE_DELAY_MS = 800;
 export function findNotebookTextMatches(text: string, query: string): TextMatch[] {
   const needle = query.toLocaleLowerCase();
   if (!needle) return [];
@@ -62,32 +59,6 @@ export function findNotebookTextMatches(text: string, query: string): TextMatch[
     offset = start + Math.max(1, needle.length);
   }
   return matches;
-}
-
-/** vault 层的笔记 → 面板的笔记。`id` 用文件路径,天然唯一。 */
-function toPanelNote(note: VaultNote): NotebookNote {
-  return {
-    id: note.path,
-    title: note.title,
-    body: note.body,
-    updatedAt: note.modifiedMs,
-    sig: note.sig,
-    frontmatter: note.frontmatter,
-    loaded: note.loaded,
-  };
-}
-
-/** 面板的笔记 → vault 层的笔记。 */
-function toVaultNote(note: NotebookNote): VaultNote {
-  return {
-    path: note.id,
-    title: note.title,
-    body: note.body,
-    frontmatter: note.frontmatter,
-    sig: note.sig,
-    modifiedMs: note.updatedAt,
-    loaded: note.loaded,
-  };
 }
 
 function errorText(error: unknown): string {
@@ -122,19 +93,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const splitPreviewRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ noteId: string; ratio: number } | null>(null);
-  const createPanelRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
-  /** 每条笔记的自动保存定时器。按 id 分开,免得改 A 的防抖把 B 的保存吞掉。 */
-  const autosaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  /** 正在保存中的笔记。防止防抖到期时和上一次保存重入。 */
-  const savingRef = useRef<Set<string>>(new Set());
-  /** 保存进行中又被改过的笔记。落盘后要补一次,否则那段编辑会丢。 */
-  const resaveRef = useRef<Set<string>>(new Set());
-  /** 最新的笔记列表。防抖回调触发时闭包里的 `notes` 已经过期了,要从这里读。 */
-  const notesRef = useRef<NotebookNote[]>([]);
-  /** 卸载时用的落盘函数。卸载 effect 的清理函数只捕获挂载那一刻的闭包,
-   *  所以要经 ref 才能拿到当前的实现。 */
-  const flushOnUnmountRef = useRef<(noteId: string) => Promise<void>>(async () => {});
   const notes = useNotebookStore((state) => state.notes);
   const setNotes = useNotebookStore((state) => state.setNotes);
   const activeId = useNotebookStore((state) => state.activeId);
@@ -148,7 +107,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const hydrate = useNotebookStore((state) => state.hydrate);
   /** 视图模式。`split` 只对 Markdown 有意义(富文本没有源码可并排)。 */
   const [mode, setMode] = useState<NoteViewMode>("edit");
-  const [creating, setCreating] = useState(false);
   const [pendingTitleFocusId, setPendingTitleFocusId] = useState<string | null>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
@@ -174,6 +132,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     [searchQuery, searchableText],
   );
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
+  const { scheduleSave, cancelSave } = useNoteAutosave({ notes, setNotes, onError: setError, t });
 
   // 初始化:确保 vault 存在 → 迁移 localStorage 遗留数据 → 列出笔记。
   //
@@ -221,11 +180,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     // 只在挂载时跑一次。vault 切换(P2 的多仓库)会另走一条显式路径。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // 防抖回调要读最新的列表,不能靠闭包 —— 定时器排队时 `notes` 已经旧了。
-  useEffect(() => {
-    notesRef.current = notes;
-  }, [notes]);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -276,23 +230,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     return () => observer.disconnect();
   }, [mode]);
 
-  // 卸载时把挂起的保存立刻发出去,不能只清定时器。
-  //
-  // 面板在 ProjectPage 里每次切视图都会卸载。只清定时器的话「敲完字马上切走」
-  // 会丢掉最后 800ms 的编辑 —— 这是最容易被用户撞到的丢数据路径。
-  //
-  // 不 await:清理函数是同步的。但 IPC 已经发出,后端会照常写完;这里只是拿不到
-  // 结果(拿到也没用,组件已经没了)。
-  useEffect(() => {
-    const timers = autosaveTimersRef.current;
-    return () => {
-      const pending = [...timers.keys()];
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-      for (const noteId of pending) void flushOnUnmountRef.current(noteId);
-    };
-  }, []);
-
   useEffect(() => {
     if (!activeId && notes[0]) setActiveId(notes[0].id);
     if (activeId && notes.length > 0 && !notes.some((note) => note.id === activeId)) {
@@ -323,17 +260,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       cancelled = true;
     };
   }, [activeId, notes, setNotes, setError]);
-
-  useEffect(() => {
-    if (!creating) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (target instanceof Node && createPanelRef.current?.contains(target)) return;
-      setCreating(false);
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [creating]);
 
   useLayoutEffect(() => {
     if (!pendingTitleFocusId || activeNote?.id !== pendingTitleFocusId) return;
@@ -387,84 +313,6 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       searchMatches.length === 0 ? 0 : Math.min(current, searchMatches.length - 1),
     );
   }, [searchMatches.length]);
-
-  /** 把一条笔记落盘。冲突时弹确认框,用户选覆盖才 force 重写。 */
-  const flushNote = async (noteId: string) => {
-    // 上一次保存还没回来就先让它跑完 —— 重入会让两次写用同一个旧基线,
-    // 后一次必然被判成冲突。
-    if (savingRef.current.has(noteId)) {
-      // 上一次保存还在飞。直接返回会把这期间的编辑丢掉(用户在慢速保存中
-      // 继续打字,最后几个字就没了),所以记下"还欠一次",等它落完再补。
-      resaveRef.current.add(noteId);
-      return;
-    }
-    savingRef.current.add(noteId);
-    try {
-      const current = notesRef.current.find((note) => note.id === noteId);
-      if (!current) return;
-      const result = await persistNote(toVaultNote(current));
-      if (result.status === "conflict") {
-        const overwrite = await confirm(t("notebook.conflictMessage", { name: current.title }), {
-          title: t("notebook.conflictTitle"),
-          kind: "warning",
-          okLabel: t("notebook.conflictOverwrite"),
-          cancelLabel: t("notebook.conflictKeepDisk"),
-        });
-        if (!overwrite) {
-          // 用户选了保留磁盘版本:重新读入,把编辑器里的内容换成磁盘的。
-          const reloaded = await loadNote(toVaultNote(current));
-          setNotes((list) =>
-            list.map((note) => (note.id === noteId ? toPanelNote(reloaded) : note)),
-          );
-          return;
-        }
-        const forced = await persistNote(toVaultNote(current), true);
-        if (forced.status === "saved") {
-          setNotes((list) =>
-            list.map((note) => (note.id === noteId ? { ...note, sig: forced.note.sig } : note)),
-          );
-        }
-        return;
-      }
-      // 只更新指纹,不回写正文 —— 保存期间用户可能又敲了几个字。
-      setNotes((list) =>
-        list.map((note) => (note.id === noteId ? { ...note, sig: result.note.sig } : note)),
-      );
-    } catch (error) {
-      setError(errorText(error));
-    } finally {
-      savingRef.current.delete(noteId);
-      // 保存期间又有编辑进来 —— 补一次,否则那些字永远落不了盘。
-      if (resaveRef.current.delete(noteId)) scheduleSave(noteId);
-    }
-  };
-
-  // 卸载路径不能走 flushNote:它在冲突时要弹确认框,而组件已经没了,那个
-  // Promise 永远不会 resolve。这里直接存,冲突就放弃本次写入 —— 静默覆盖别人
-  // 的改动比丢掉最后 800ms 的编辑更糟。
-  flushOnUnmountRef.current = async (noteId: string) => {
-    const target = notesRef.current.find((note) => note.id === noteId);
-    if (!target) return;
-    try {
-      await persistNote(toVaultNote(target));
-    } catch {
-      // 组件已卸载,没有能显示错误的地方。IPC 层的失败会进后端日志。
-    }
-  };
-
-  /** 安排一次防抖保存。 */
-  const scheduleSave = (noteId: string) => {
-    const timers = autosaveTimersRef.current;
-    const existing = timers.get(noteId);
-    if (existing) clearTimeout(existing);
-    timers.set(
-      noteId,
-      setTimeout(() => {
-        timers.delete(noteId);
-        void flushNote(noteId);
-      }, AUTOSAVE_DELAY_MS),
-    );
-  };
 
   const updateActiveNote = (patch: Partial<Pick<NotebookNote, "title" | "body">>) => {
     if (!activeNote) return;
@@ -610,13 +458,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const deleteActiveNote = () => {
     if (!activeNote) return;
     const target = activeNote;
-    // 挂起的自动保存要取消:文件都要进回收站了,再写一次没有意义,而且会
-    // 把刚删掉的文件重新创建出来。
-    const pending = autosaveTimersRef.current.get(target.id);
-    if (pending) {
-      clearTimeout(pending);
-      autosaveTimersRef.current.delete(target.id);
-    }
+    // 取消挂起的自动保存:文件都要进回收站了,再写一次没有意义。
+    //
+    // 它不是"防止删掉的文件被重新创建"的那道防线 —— 真正兜住这件事的是下面
+    // 的乐观移除 + flushNote 里的 `!current` 早退:定时器醒来时笔记已经不在
+    // notesRef 里了,那次写自然不会发生(实测把这行去掉,行为不变)。这行的
+    // 意义是省掉一次无用的 IPC,并且在将来有人把移除改成"等 IPC 成功再移除"
+    // 时仍然成立。
+    cancelSave(target.id);
     // 先从列表里移除,UI 立刻响应;失败再放回去。
     setNotes((current) => current.filter((note) => note.id !== target.id));
     void (async () => {
