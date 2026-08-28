@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { ChevronDown, ChevronUp, Replace, Search, Trash2, X } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { NoteList } from "./NoteList";
+import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 import { zLayers } from "../../styles/zLayers";
@@ -1075,200 +1076,25 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               </button>
             </div>
             {searchOpen && (
-              <div
-                role="search"
-                aria-label={t("notebook.findReplace")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "5px 8px",
-                  borderBottom: "1px solid var(--border-dim)",
-                  background: "var(--bg-sidebar)",
-                  flexWrap: "wrap",
+              <NoteFindBar
+                replaceOpen={replaceOpen}
+                onShowReplace={() => setReplaceOpen(true)}
+                query={searchQuery}
+                onQueryChange={(value) => {
+                  setSearchQuery(value);
+                  setActiveMatchIndex(0);
                 }}
-              >
-                <Search size={13} color="var(--text-muted)" />
-                <input
-                  ref={searchInputRef}
-                  aria-label={t("notebook.find")}
-                  value={searchQuery}
-                  onChange={(event) => {
-                    setSearchQuery(event.currentTarget.value);
-                    setActiveMatchIndex(0);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      closeNotebookSearch();
-                    } else if (event.key === "Enter") {
-                      event.preventDefault();
-                      moveNotebookMatch(event.shiftKey ? -1 : 1);
-                    }
-                  }}
-                  placeholder={t("notebook.findPlaceholder")}
-                  style={{
-                    width: 180,
-                    height: 26,
-                    border: "1px solid var(--border-medium)",
-                    borderRadius: 6,
-                    background: "var(--bg-input)",
-                    color: "var(--text-primary)",
-                    padding: "0 8px",
-                    fontSize: 12,
-                    outline: "none",
-                  }}
-                />
-                {replaceOpen && (
-                  <>
-                    <Replace size={13} color="var(--text-muted)" />
-                    <input
-                      aria-label={t("notebook.replace")}
-                      value={replacementText}
-                      onChange={(event) => setReplacementText(event.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          closeNotebookSearch();
-                        } else if (event.key === "Enter") {
-                          event.preventDefault();
-                          replaceCurrentNotebookMatch();
-                        }
-                      }}
-                      placeholder={t("notebook.replacePlaceholder")}
-                      style={{
-                        width: 150,
-                        height: 26,
-                        border: "1px solid var(--border-medium)",
-                        borderRadius: 6,
-                        background: "var(--bg-input)",
-                        color: "var(--text-primary)",
-                        padding: "0 8px",
-                        fontSize: 12,
-                        outline: "none",
-                      }}
-                    />
-                  </>
-                )}
-                <span
-                  aria-live="polite"
-                  style={{ minWidth: 54, fontSize: 11, color: "var(--text-muted)" }}
-                >
-                  {searchMatches.length > 0
-                    ? `${Math.min(activeMatchIndex + 1, searchMatches.length)}/${searchMatches.length}`
-                    : t("notebook.noMatches")}
-                </span>
-                <button
-                  type="button"
-                  aria-label={t("notebook.previousMatch")}
-                  title={t("notebook.previousMatch")}
-                  disabled={searchMatches.length === 0}
-                  onClick={() => moveNotebookMatch(-1)}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    border: "none",
-                    borderRadius: 5,
-                    background: "transparent",
-                    color: "var(--text-muted)",
-                    cursor: searchMatches.length > 0 ? "pointer" : "default",
-                  }}
-                >
-                  <ChevronUp size={13} />
-                </button>
-                <button
-                  type="button"
-                  aria-label={t("notebook.nextMatch")}
-                  title={t("notebook.nextMatch")}
-                  disabled={searchMatches.length === 0}
-                  onClick={() => moveNotebookMatch(1)}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    border: "none",
-                    borderRadius: 5,
-                    background: "transparent",
-                    color: "var(--text-muted)",
-                    cursor: searchMatches.length > 0 ? "pointer" : "default",
-                  }}
-                >
-                  <ChevronDown size={13} />
-                </button>
-                {replaceOpen && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={searchMatches.length === 0}
-                      onClick={replaceCurrentNotebookMatch}
-                      style={{
-                        height: 24,
-                        border: "1px solid var(--border-medium)",
-                        borderRadius: 5,
-                        background: "var(--bg-card)",
-                        color: "var(--text-secondary)",
-                        padding: "0 7px",
-                        cursor: searchMatches.length > 0 ? "pointer" : "default",
-                        fontSize: 11,
-                      }}
-                    >
-                      {t("notebook.replace")}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={searchMatches.length === 0}
-                      onClick={replaceAllNotebookMatches}
-                      style={{
-                        height: 24,
-                        border: "1px solid var(--border-medium)",
-                        borderRadius: 5,
-                        background: "var(--bg-card)",
-                        color: "var(--text-secondary)",
-                        padding: "0 7px",
-                        cursor: searchMatches.length > 0 ? "pointer" : "default",
-                        fontSize: 11,
-                      }}
-                    >
-                      {t("notebook.replaceAll")}
-                    </button>
-                  </>
-                )}
-                {!replaceOpen && (
-                  <button
-                    type="button"
-                    title={t("notebook.showReplace")}
-                    onClick={() => setReplaceOpen(true)}
-                    style={{
-                      height: 24,
-                      border: "1px solid var(--border-medium)",
-                      borderRadius: 5,
-                      background: "var(--bg-card)",
-                      color: "var(--text-secondary)",
-                      padding: "0 7px",
-                      cursor: "pointer",
-                      fontSize: 11,
-                    }}
-                  >
-                    {t("notebook.replace")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  aria-label={t("common.close")}
-                  title={t("common.close")}
-                  onClick={closeNotebookSearch}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    border: "none",
-                    borderRadius: 5,
-                    background: "transparent",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                  }}
-                >
-                  <X size={13} />
-                </button>
-              </div>
+                replacement={replacementText}
+                onReplacementChange={setReplacementText}
+                matchCount={searchMatches.length}
+                activeMatchIndex={activeMatchIndex}
+                onMove={moveNotebookMatch}
+                onReplaceOne={replaceCurrentNotebookMatch}
+                onReplaceAll={replaceAllNotebookMatches}
+                onClose={closeNotebookSearch}
+                inputRef={searchInputRef}
+                t={t}
+              />
             )}
             {activeNote && (
               <NoteToolbar
