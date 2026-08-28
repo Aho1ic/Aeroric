@@ -65,6 +65,35 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   });
 }
 
+// jsdom 未实现 Range.getClientRects() / getBoundingClientRect()。CodeMirror 6 在
+// requestAnimationFrame 里做文字测量时会调用它们，而 rAF 回调往往在测试结束、
+// DOM 已拆掉之后才执行 —— 报出来是 unhandled error，和被测逻辑无关。
+// 返回空矩形集合：jsdom 本来就没有布局，CodeMirror 拿到 0 尺寸会走它自己的降级路径。
+if (typeof Range !== "undefined") {
+  const emptyRect = () => ({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    bottom: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+    toJSON: () => ({}),
+  });
+  if (typeof Range.prototype.getClientRects !== "function") {
+    Range.prototype.getClientRects = function getClientRects() {
+      const list: DOMRect[] = [];
+      return Object.assign(list, {
+        item: (index: number) => list[index] ?? null,
+      }) as unknown as DOMRectList;
+    };
+  }
+  if (typeof Range.prototype.getBoundingClientRect !== "function") {
+    Range.prototype.getBoundingClientRect = emptyRect as unknown as () => DOMRect;
+  }
+}
+
 // jsdom 未实现 HTMLCanvasElement.getContext()，xterm 等组件在渲染时会调用它。
 // 提供一个最小的 2D context stub，消除测试日志中的 "Not implemented" 噪声。
 if (typeof HTMLCanvasElement !== "undefined") {

@@ -2499,7 +2499,7 @@ export function ProjectPage({
                           style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}
                         >
                           <ErrorBoundary label="随手记">
-                            <NotebookPanel width="100%" />
+                            <NotebookPanel width="100%" themeVariant={themeVariant} />
                           </ErrorBoundary>
                         </div>
                       ) : openDiff ? (

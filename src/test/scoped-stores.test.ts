@@ -38,11 +38,15 @@ describe("scoped workspace stores", () => {
   it("hydrates and updates notebook state through functional actions", () => {
     const store = createNotebookStore();
     const note = {
-      id: "note-1",
+      // 笔记落盘后 id 就是文件的绝对路径。
+      id: "/vault/note-1.md",
       title: "Plan",
       body: "",
       format: "markdown" as const,
       updatedAt: 1,
+      sig: null,
+      frontmatter: { title: "Plan", editor: "markdown" as const, extra: [] },
+      loaded: true,
     };
     store.getState().hydrate([note]);
     store.getState().setNotes((notes) => [{ ...notes[0], title: "Updated" }]);

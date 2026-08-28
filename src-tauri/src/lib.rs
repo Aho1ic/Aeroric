@@ -35,6 +35,7 @@ mod local_router_commands;
 mod lsp;
 mod mcp;
 mod node_runtime;
+mod notebook;
 mod notification;
 mod permissions;
 mod platform;
@@ -312,6 +313,7 @@ pub fn run() {
         .manage(remote::RemoteState::new())
         .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
+        .manage(notebook::state::NotebookState::default())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
@@ -908,6 +910,26 @@ pub fn run() {
             mcp::get_mcp_settings,
             mcp::set_mcp_settings,
             mcp::test_mcp_server,
+            notebook::notebook_register_vault,
+            notebook::notebook_unregister_vault,
+            notebook::notebook_list_vaults,
+            notebook::notebook_ensure_default_vault,
+            notebook::notebook_ensure_project_vault,
+            notebook::notebook_read_tree,
+            notebook::notebook_read_order,
+            notebook::notebook_write_order,
+            notebook::notebook_open_note,
+            notebook::notebook_close_note,
+            notebook::notebook_save_note,
+            notebook::notebook_create_note,
+            notebook::notebook_create_note_in_vault,
+            notebook::notebook_rename_to_title,
+            notebook::notebook_create_folder,
+            notebook::notebook_delete_note,
+            notebook::notebook_rename_note,
+            notebook::notebook_migrate_legacy,
+            notebook::notebook_convert_richtext,
+            notebook::notebook_html_to_markdown,
         ])
         .build(tauri::generate_context!());
 
