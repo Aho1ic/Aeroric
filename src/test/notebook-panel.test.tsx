@@ -308,6 +308,61 @@ describe("NotebookPanel", () => {
     await waitFor(() => expect(harness.read(notePath)).toContain("first second"));
   });
 
+  it("reports the save lifecycle in the status bar", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    const status = () => screen.getByRole("status").textContent ?? "";
+
+    // 刚建出来的笔记和磁盘一致。
+    expect(status()).toContain("Saved");
+
+    // 敲字之后到防抖到期之前是「未保存」—— 这段窗口正是状态栏存在的理由:
+    // 自动保存是静默的,用户切走之前没有别的办法确认那几个字落盘了没有。
+    setEditorValue("typed but not yet flushed");
+    await waitFor(() => expect(status()).toContain("Unsaved"));
+
+    // 防抖到期 → 落盘 → 回到「已保存」。
+    await waitFor(() => expect(status()).toContain("Saved"), { timeout: 3000 });
+  });
+
+  it("reports a failed save in the status bar", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+
+    const originalHandle = harness.handle;
+    harness.handle = (command, args) => {
+      if (command === "notebook_save_note") return Promise.reject(new Error("disk on fire"));
+      return originalHandle(command, args);
+    };
+
+    setEditorValue("this write will fail");
+    // 写失败必须看得见。静默失败 + 「已保存」是最坏的组合:用户会放心地切走。
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Save failed"), {
+      timeout: 3000,
+    });
+  });
+
+  it("reports saved after the user keeps the disk version of a conflict", async () => {
+    const notePath = harness.seed("Shared.md", '---\ntitle: "Shared"\n---\n\nmine\n');
+    renderNotebook();
+    await screen.findByRole("button", { name: "Shared" });
+
+    const unregister = registerAppDialogHandler(async () => false);
+    try {
+      harness.externalWrite(notePath, '---\ntitle: "Shared"\n---\n\ntheirs\n');
+      setEditorValue("ours");
+      // 选「保留磁盘版本」后编辑器换成磁盘那一版,两边一致了 —— 报「保存失败」
+      // 会让用户以为编辑丢了、去做多余的补救。
+      await waitFor(() => expect(editorValue()).toContain("theirs"), { timeout: 3000 });
+      await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Saved"));
+    } finally {
+      unregister();
+      resetAppDialogHandlerForTests();
+    }
+  });
+
   it("renders math and mermaid placeholders in reading mode", async () => {
     const user = userEvent.setup();
     harness.seed(
@@ -870,6 +925,25 @@ describe("NotebookPanel", () => {
     }
 
     expect(harness.read(notePath)).toBeUndefined();
+  });
+
+  it("does not carry a deleted note's save state onto a new note at the same path", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    const notePath = harness.paths().find((path) => path.endsWith(".md")) ?? "";
+
+    // 敲字(状态变成「未保存」)后立刻删掉,防抖还没到期。
+    setEditorValue("about to be deleted");
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Unsaved"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(harness.read(notePath)).toBeUndefined());
+
+    // 文件名会被回收利用:新笔记落在刚腾出来的同一个路径上。保存状态按路径存,
+    // 不随笔记消失一起清掉的话,新笔记一出生就顶着上一条的「未保存」。
+    await createNote(user);
+    expect(harness.paths()).toContain(notePath);
+    expect(screen.getByRole("status").textContent).toContain("Saved");
   });
 
   it("keeps the version on disk when the user declines to overwrite a conflict", async () => {

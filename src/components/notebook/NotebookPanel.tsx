@@ -27,6 +27,7 @@ import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
+import { NoteStatusBar } from "./NoteStatusBar";
 import { reorderSection } from "./noteSections";
 import { invalidateMermaidTheme, renderNoteVisualsLazy } from "./noteVisuals";
 import {
@@ -137,7 +138,12 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     [searchQuery, searchableText],
   );
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
-  const { scheduleSave, cancelSave } = useNoteAutosave({ notes, setNotes, onError: setError, t });
+  const { scheduleSave, cancelSave, saveStates } = useNoteAutosave({
+    notes,
+    setNotes,
+    onError: setError,
+    t,
+  });
 
   // 初始化:确保 vault 存在 → 迁移 localStorage 遗留数据 → 列出笔记。
   //
@@ -758,6 +764,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
                 />
               )}
             </div>
+            {/* 状态栏在正文+大纲那一格**下面**,横跨整宽 —— 它报的是整条笔记的
+                状态,不属于其中某一列。 */}
+            <NoteStatusBar
+              notePath={activeNote.id}
+              vault={vault}
+              saveState={saveStates[activeNote.id] ?? "saved"}
+              t={t}
+            />
           </>
         ) : (
           <div style={{ margin: "auto", color: "var(--text-hint)", fontSize: 12 }}>

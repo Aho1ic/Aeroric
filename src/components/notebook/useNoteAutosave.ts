@@ -15,7 +15,7 @@
  *    永远不会 resolve。
  */
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { confirm } from "../../lib/appDialog";
 import { toPanelNote, toVaultNote } from "./noteConverters";
 import type { NotebookNote } from "./notebookStore";
@@ -31,12 +31,22 @@ export type NoteAutosaveOptions = {
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
+/**
+ * 一条笔记相对磁盘的状态。**只用来显示**,保存逻辑不读它。
+ *
+ * 判定仍然全在 `savingRef` / `resaveRef` / 定时器表里 —— 那三个是 ref,写完立刻
+ * 生效;这里是 state,要等下一次渲染。让逻辑依赖它会引入一整类时序 bug。
+ */
+export type NoteSaveState = "pending" | "saving" | "saved" | "error";
+
 export type NoteAutosave = {
   /** 安排一次防抖保存。同一条笔记重复调用会重置计时。 */
   scheduleSave: (noteId: string) => void;
   /** 取消挂起的保存。删除笔记时调,省掉一次无用的写(不是防"文件复活"的
    *  主防线,见 NotebookPanel 的 deleteActiveNote 注释)。 */
   cancelSave: (noteId: string) => void;
+  /** 每条笔记的保存状态。缺省视为 `saved` —— 刚从磁盘读进来的就是和磁盘一致的。 */
+  saveStates: Record<string, NoteSaveState>;
 };
 
 function errorText(error: unknown): string {
@@ -60,10 +70,41 @@ export function useNoteAutosave({
   /** 卸载时用的落盘函数。卸载 effect 的清理函数只捕获挂载那一刻的闭包,
    *  所以要经 ref 才能拿到当前的实现。 */
   const flushOnUnmountRef = useRef<(noteId: string) => Promise<void>>(async () => {});
+  const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({});
+
+  /** 更新显示用的状态。值没变就不建新对象,免得白渲染一次。 */
+  const markSaveState = useCallback((noteId: string, next: NoteSaveState | null) => {
+    setSaveStates((current) => {
+      const now = current[noteId];
+      if (next === null) {
+        if (now === undefined) return current;
+        const copy = { ...current };
+        delete copy[noteId];
+        return copy;
+      }
+      if (now === next) return current;
+      return { ...current, [noteId]: next };
+    });
+  }, []);
 
   // 防抖回调要读最新的列表,不能靠闭包 —— 定时器排队时 `notes` 已经旧了。
   useEffect(() => {
     notesRef.current = notes;
+  }, [notes]);
+
+  // 笔记没了就把它的显示状态一起清掉,统一在这里做 —— 删除有乐观移除、冲突回读、
+  // 保存中被删几条路径,散在各处清容易漏掉一条,留着就是一条永不消失的幽灵状态。
+  useEffect(() => {
+    setSaveStates((current) => {
+      const keys = Object.keys(current);
+      if (keys.length === 0) return current;
+      const alive = new Set(notes.map((note) => note.id));
+      const stale = keys.filter((id) => !alive.has(id));
+      if (stale.length === 0) return current;
+      const copy = { ...current };
+      for (const id of stale) delete copy[id];
+      return copy;
+    });
   }, [notes]);
 
   /** 把一条笔记落盘。冲突时弹确认框,用户选覆盖才 force 重写。 */
@@ -77,6 +118,7 @@ export function useNoteAutosave({
       return;
     }
     savingRef.current.add(noteId);
+    markSaveState(noteId, "saving");
     try {
       const current = notesRef.current.find((note) => note.id === noteId);
       if (!current) return;
@@ -94,6 +136,8 @@ export function useNoteAutosave({
           setNotes((list) =>
             list.map((note) => (note.id === noteId ? toPanelNote(reloaded) : note)),
           );
+          // 编辑器内容已经换成磁盘那一版,两边一致 —— 报「已保存」而不是「失败」。
+          markSaveState(noteId, "saved");
           return;
         }
         const forced = await persistNote(toVaultNote(current), true);
@@ -102,13 +146,16 @@ export function useNoteAutosave({
             list.map((note) => (note.id === noteId ? { ...note, sig: forced.note.sig } : note)),
           );
         }
+        markSaveState(noteId, forced.status === "saved" ? "saved" : "error");
         return;
       }
       // 只更新指纹,不回写正文 —— 保存期间用户可能又敲了几个字。
       setNotes((list) =>
         list.map((note) => (note.id === noteId ? { ...note, sig: result.note.sig } : note)),
       );
+      markSaveState(noteId, "saved");
     } catch (error) {
+      markSaveState(noteId, "error");
       onError(errorText(error));
     } finally {
       savingRef.current.delete(noteId);
@@ -133,6 +180,7 @@ export function useNoteAutosave({
   /** 安排一次防抖保存。 */
   const scheduleSave = (noteId: string) => {
     const timers = autosaveTimersRef.current;
+    markSaveState(noteId, "pending");
     const existing = timers.get(noteId);
     if (existing) clearTimeout(existing);
     timers.set(
@@ -168,5 +216,5 @@ export function useNoteAutosave({
     };
   }, []);
 
-  return { scheduleSave, cancelSave };
+  return { scheduleSave, cancelSave, saveStates };
 }
