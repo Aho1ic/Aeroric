@@ -4,11 +4,12 @@ import { renderNoteMarkdown } from "../components/notebook/noteRender";
 
 describe("analyzeNote — 大纲", () => {
   it("按层级抽出标题", () => {
-    const { outline } = analyzeNote("# One\n\ntext\n\n## Two\n\n### Three\n");
+    const source = "# One\n\ntext\n\n## Two\n\n### Three\n";
+    const { outline } = analyzeNote(source);
     expect(outline).toEqual([
-      { level: 1, text: "One", anchor: "one" },
-      { level: 2, text: "Two", anchor: "two" },
-      { level: 3, text: "Three", anchor: "three" },
+      { level: 1, text: "One", anchor: "one", offset: 0 },
+      { level: 2, text: "Two", anchor: "two", offset: source.indexOf("## Two") },
+      { level: 3, text: "Three", anchor: "three", offset: source.indexOf("### Three") },
     ]);
   });
 
@@ -39,7 +40,7 @@ describe("analyzeNote — 大纲", () => {
 
   it("保留中文标题", () => {
     const { outline } = analyzeNote("# 发布计划\n");
-    expect(outline[0]).toEqual({ level: 1, text: "发布计划", anchor: "发布计划" });
+    expect(outline[0]).toEqual({ level: 1, text: "发布计划", anchor: "发布计划", offset: 0 });
   });
 
   it("吃掉 closed ATX 的尾部井号", () => {
@@ -84,6 +85,50 @@ describe("analyzeNote — 大纲", () => {
   it("未闭合的 frontmatter 当正文处理", () => {
     const { outline } = analyzeNote("---\n# Actually a heading\n");
     expect(outline.map((item) => item.text)).toEqual(["Actually a heading"]);
+  });
+});
+
+describe("analyzeNote — 标题偏移", () => {
+  /** 偏移的唯一判据:拿它去切源码,必须正好切在那行标题上。 */
+  const expectOffsetsPointAtHeadings = (source: string, headings: string[]) => {
+    const { outline } = analyzeNote(source);
+    expect(outline).toHaveLength(headings.length);
+    outline.forEach((item, index) => {
+      expect(source.slice(item.offset)).toMatch(new RegExp(`^${headings[index]}`));
+    });
+  };
+
+  it("指向标题行的行首", () => {
+    expectOffsetsPointAtHeadings("# A\n\nbody\n\n## B\n\nmore\n\n### C\n", [
+      "# A",
+      "## B",
+      "### C",
+    ]);
+  });
+
+  it("CRLF 源码的偏移不偏", () => {
+    // `\r\n` → `\n` 归一化后再算偏移,会让每一行都比真实位置少 1 个字符 ——
+    // 章节重排就会切在上一行的末尾,把标题黏到前一段里。
+    expectOffsetsPointAtHeadings("# A\r\n\r\nbody\r\n\r\n## B\r\n\r\nmore\r\n\r\n### C\r\n", [
+      "# A",
+      "## B",
+      "### C",
+    ]);
+  });
+
+  it("frontmatter 与代码块之后的偏移仍然对", () => {
+    expectOffsetsPointAtHeadings('---\ntitle: "T"\n---\n\n# A\n\n```sh\n# fake\n```\n\n## B\n', [
+      "# A",
+      "## B",
+    ]);
+  });
+
+  it("跳过的行也算进偏移", () => {
+    // CJK 与多字节字符按 UTF-16 码元算长度,和 String.slice 一致就行。
+    expectOffsetsPointAtHeadings("# 发布计划\n\n正文内容\n\n## 里程碑\n", [
+      "# 发布计划",
+      "## 里程碑",
+    ]);
   });
 });
 

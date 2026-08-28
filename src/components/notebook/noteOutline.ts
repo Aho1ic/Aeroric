@@ -14,6 +14,16 @@ export type OutlineItem = {
   text: string;
   /** 锚点 id,与 noteRender 生成的 heading id 一致。 */
   anchor: string;
+  /**
+   * 标题行在**源码**里的起始字符偏移。章节重排要用它切段。
+   *
+   * 为什么带在这里而不是重排时再扫一遍源码:Markio 的大纲来自 Rust 解析器、
+   * 重排的偏移来自前端正则,两个扫描器对 setext / 缩进 / 引用内标题 / YAML 里的
+   * `#` 判定不一致时索引就对不齐,会把段落移到错位置、静默损坏文档 —— 它只能在
+   * 数量不等时拒绝重排。这里偏移和大纲出自同一次扫描,那类错位在结构上就不可能
+   * 发生。
+   */
+  offset: number;
 };
 
 export type NoteStats = {
@@ -48,9 +58,29 @@ function stripInlineMarkup(text: string): string {
   );
 }
 
-/** 逐行扫描,跳过 frontmatter 与围栏代码块。 */
-function* contentLines(source: string): Generator<string> {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
+/** 一行正文,连同它在**原始源码**里的起始偏移。 */
+type ContentLine = {
+  text: string;
+  offset: number;
+};
+
+/**
+ * 逐行扫描,跳过 frontmatter 与围栏代码块。
+ *
+ * 偏移按**原始源码**算,所以这里不做 CRLF 归一化 —— `replace(/\r\n/g, "\n")`
+ * 会让 CRLF 文件的每一行都比真实位置少偏移 1,章节重排就会切错位置。改成保留
+ * 原串、逐行把行尾的 `\r` 摘掉。
+ */
+function* contentLines(source: string): Generator<ContentLine> {
+  const rawLines = source.split("\n");
+  // 行尾的 `\r` 不算内容,但**算偏移** —— 累加时要用原始长度。
+  const lines = rawLines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  const offsets: number[] = [];
+  let cursor = 0;
+  for (const line of rawLines) {
+    offsets.push(cursor);
+    cursor += line.length + 1; // +1 是那个 "\n"
+  }
   let index = 0;
 
   // frontmatter:必须从第一行的 `---` 开始
@@ -76,7 +106,7 @@ function* contentLines(source: string): Generator<string> {
       fence = fenceMatch[1]!;
       continue;
     }
-    yield line;
+    yield { text: line, offset: offsets[index]! };
   }
 }
 
@@ -103,14 +133,19 @@ export function analyzeNote(source: string): NoteStats {
   const outline: OutlineItem[] = [];
   let words = 0;
 
-  for (const line of contentLines(source ?? "")) {
+  for (const { text: line, offset } of contentLines(source ?? "")) {
     const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
       // 去掉可选的尾部 `###`(closed ATX)
       const raw = heading[2]!.replace(/\s+#+\s*$/, "");
       const text = stripInlineMarkup(raw);
       if (text) {
-        outline.push({ level: heading[1]!.length, text, anchor: slugifyHeading(text, used) });
+        outline.push({
+          level: heading[1]!.length,
+          text,
+          anchor: slugifyHeading(text, used),
+          offset,
+        });
         words += countWords(text);
       }
       continue;

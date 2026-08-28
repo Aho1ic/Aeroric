@@ -25,7 +25,9 @@ import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { renderNoteMarkdown } from "./noteRender";
-import { analyzeNote } from "./noteOutline";
+import { analyzeNote, type OutlineItem } from "./noteOutline";
+import { NoteOutlinePanel } from "./NoteOutlinePanel";
+import { reorderSection } from "./noteSections";
 import { invalidateMermaidTheme, renderNoteVisualsLazy } from "./noteVisuals";
 import {
   paneFromElement,
@@ -113,6 +115,9 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
+  /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
+   *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -355,6 +360,32 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (next === mode) return;
     captureCurrentScroll();
     setMode(next);
+  };
+
+  /**
+   * 点大纲跳到对应标题。
+   *
+   * 两条路径:源码态问 CodeMirror(它知道行高和折行,按偏移滚最准);阅读/分屏态
+   * 按 id 找渲染出来的标题节点 —— 锚点与 noteRender 生成的 heading id 一致,这一点
+   * 由 notebook-outline 的测试钉住。
+   */
+  const jumpToHeading = (item: OutlineItem) => {
+    if (mode === "edit" || mode === "wysiwyg") {
+      sourceEditorRef.current?.revealOffset(item.offset);
+      return;
+    }
+    const host = previewRef.current;
+    // 用 getElementById 会在整个 document 里找,可能撞上面板外同名的 id。
+    const target = host?.querySelector(`[id="${CSS.escape(item.anchor)}"]`);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  /** 拖动大纲重排章节。整段(含子标题与正文)一起移动。 */
+  const reorderHeadingSection = (sourceIndex: number, targetIndex: number) => {
+    if (!activeNote) return;
+    const next = reorderSection(activeNote.body, noteStats.outline, sourceIndex, targetIndex);
+    if (next === null) return;
+    updateActiveNote({ body: next });
   };
 
   const openNotebookSearch = (withReplace: boolean) => {
@@ -650,6 +681,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               readingMinutes={noteStats.readingMinutes}
               mode={mode}
               onModeChange={switchMode}
+              outlineOpen={outlineOpen}
+              onToggleOutline={() => setOutlineOpen((open) => !open)}
               onDelete={deleteActiveNote}
               t={t}
             />
@@ -691,14 +724,40 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
                 t={t}
               />
             )}
-            <NoteContentArea
-              mode={mode}
-              sourceEditor={sourceEditorNode}
-              markdownHtml={markdownHtml}
-              readContentRef={readContentRef}
-              splitPreviewRef={splitPreviewRef}
-              previewRef={previewRef}
-            />
+            {/*
+              大纲是正文右边的一列。这个 grid 容器**无条件渲染**,只有大纲那一列
+              按状态出现/消失 —— 把容器本身写成条件的话,开关大纲会改变
+              NoteContentArea 在树里的位置,CodeMirror 会被卸载重挂(光标和撤销栈
+              全丢)。大纲作为它**后面**的兄弟出现,不影响它的位置。
+            */}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: "grid",
+                gridTemplateColumns: outlineOpen ? "minmax(0, 1fr) 190px" : "minmax(0, 1fr)",
+                // 显式给行,别靠隐式 auto —— auto 行会按内容高度算,长笔记会把
+                // 容器撑出去而不是在内部滚动。
+                gridTemplateRows: "minmax(0, 1fr)",
+              }}
+            >
+              <NoteContentArea
+                mode={mode}
+                sourceEditor={sourceEditorNode}
+                markdownHtml={markdownHtml}
+                readContentRef={readContentRef}
+                splitPreviewRef={splitPreviewRef}
+                previewRef={previewRef}
+              />
+              {outlineOpen && (
+                <NoteOutlinePanel
+                  items={noteStats.outline}
+                  onJump={jumpToHeading}
+                  onReorder={reorderHeadingSection}
+                  t={t}
+                />
+              )}
+            </div>
           </>
         ) : (
           <div style={{ margin: "auto", color: "var(--text-hint)", fontSize: 12 }}>

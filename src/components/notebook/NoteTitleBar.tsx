@@ -6,7 +6,7 @@
  * `[[wikilink]]` 按文件名连接,静默改名会断链(见 notebookVault 的注释)。
  */
 
-import { Trash2 } from "lucide-react";
+import { List, Trash2 } from "lucide-react";
 import type React from "react";
 
 export type NoteViewMode = "edit" | "wysiwyg" | "split" | "read";
@@ -21,6 +21,9 @@ export type NoteTitleBarProps = {
   readingMinutes: number;
   mode: NoteViewMode;
   onModeChange: (mode: NoteViewMode) => void;
+  /** 大纲面板的开关。 */
+  outlineOpen: boolean;
+  onToggleOutline: () => void;
   onDelete: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
 };
@@ -33,6 +36,8 @@ export function NoteTitleBar({
   readingMinutes,
   mode,
   onModeChange,
+  outlineOpen,
+  onToggleOutline,
   onDelete,
   t,
 }: NoteTitleBarProps) {
@@ -78,6 +83,27 @@ export function NoteTitleBar({
         </span>
       )}
       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{"Markdown"}</span>
+      <button
+        type="button"
+        aria-label={outlineOpen ? t("notebook.hideOutline") : t("notebook.showOutline")}
+        title={outlineOpen ? t("notebook.hideOutline") : t("notebook.showOutline")}
+        aria-pressed={outlineOpen}
+        onClick={onToggleOutline}
+        style={{
+          height: 26,
+          border: "1px solid var(--border-medium)",
+          borderRadius: 6,
+          background: outlineOpen ? "var(--control-active-bg)" : "var(--bg-card)",
+          color: outlineOpen ? "var(--control-active-fg)" : "var(--text-primary)",
+          cursor: "pointer",
+          padding: "0 6px",
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+        }}
+      >
+        <List size={13} />
+      </button>
       {
         // Markdown 有三态。用分段控件而不是循环切换按钮:三态下"下一个是
         // 什么"不直观,用户要点两次才能到想去的地方。
