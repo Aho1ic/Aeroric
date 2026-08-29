@@ -6,7 +6,7 @@
  * `[[wikilink]]` 按文件名连接,静默改名会断链(见 notebookVault 的注释)。
  */
 
-import { History, List, PanelLeft, Trash2 } from "lucide-react";
+import { History, List, Maximize2, Minimize2, PanelLeft, Trash2 } from "lucide-react";
 import type React from "react";
 
 export type NoteViewMode = "edit" | "wysiwyg" | "split" | "read";
@@ -31,6 +31,13 @@ export type NoteTitleBarProps = {
   /** 打开版本历史。 */
   onOpenHistory: () => void;
   onDelete: () => void;
+  /* 全屏开关。
+   *
+   * 只有宿主给了 `onToggleFullScreen` 才渲染这个按钮 —— "全屏"要盖掉的是面板
+   * **外面**那圈(项目侧栏),面板自己无从下手。首页的随手记视图身边本来就没有
+   * 可让的东西,那里按钮不该出现:一个点了没反应的开关比没有更糟。 */
+  fullScreen?: boolean;
+  onToggleFullScreen?: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
@@ -49,6 +56,8 @@ export function NoteTitleBar({
   onToggleOutline,
   onOpenHistory,
   onDelete,
+  fullScreen = false,
+  onToggleFullScreen,
   t,
 }: NoteTitleBarProps) {
   return (
@@ -177,6 +186,25 @@ export function NoteTitleBar({
           ))}
         </div>
       }
+      {onToggleFullScreen && (
+        <button
+          type="button"
+          aria-label={fullScreen ? t("notebook.halfScreen") : t("notebook.fullScreen")}
+          title={fullScreen ? t("notebook.halfScreen") : t("notebook.fullScreen")}
+          aria-pressed={fullScreen}
+          onClick={onToggleFullScreen}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: fullScreen ? "var(--control-active-fg)" : "var(--text-muted)",
+            cursor: "pointer",
+            padding: 4,
+            flexShrink: 0,
+          }}
+        >
+          {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
+      )}
       {/* 版本历史。放在删除**左边**:两个按钮长得像,而点错的代价一边是打开一个
           面板、另一边是删掉笔记。 */}
       <button

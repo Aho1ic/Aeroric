@@ -63,6 +63,7 @@ import {
   resolveAuxiliaryWorkspace,
   shellCenterContentStyle,
   shellCenterLayerStyle,
+  shouldForceCollapseRail,
   shouldShowAgentTaskTabs,
   shouldShowRemoteSshTerminalLayer,
   shouldShowRemoteSshTerminal,
@@ -479,6 +480,9 @@ export function ProjectPage({
     compactComposeControls: false,
   });
   const [projectRailCollapsed, setProjectRailCollapsed] = useState(false);
+  /* 随手记全屏:把项目侧栏也让出去。
+     状态归这里而不是归面板,因为要让的东西在面板外面。 */
+  const [notesFullScreen, setNotesFullScreen] = useState(false);
   const [projectBodyWidth, setProjectBodyWidth] = useState(0);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
   const [filePreviewTarget, setFilePreviewTarget] = useState<{
@@ -1823,7 +1827,12 @@ export function ProjectPage({
         onRunTodo={onRunTodoTask}
         onResumeTask={onResumeTask}
         singleProjectMode={hubMode}
-        forceCollapsed={responsiveLayout.autoCollapseRail || isDatabaseMode}
+        forceCollapsed={shouldForceCollapseRail({
+          autoCollapseRail: responsiveLayout.autoCollapseRail,
+          isDatabaseMode,
+          isNotesMode,
+          notesFullScreen,
+        })}
         onShowReleasePage={onShowReleasePage}
       />
       <div
@@ -2499,7 +2508,12 @@ export function ProjectPage({
                           style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}
                         >
                           <ErrorBoundary label="随手记">
-                            <NotebookPanel width="100%" themeVariant={themeVariant} />
+                            <NotebookPanel
+                              width="100%"
+                              themeVariant={themeVariant}
+                              fullScreen={notesFullScreen}
+                              onFullScreenChange={setNotesFullScreen}
+                            />
                           </ErrorBoundary>
                         </div>
                       ) : openDiff ? (

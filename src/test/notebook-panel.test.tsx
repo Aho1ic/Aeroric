@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NotebookPanel } from "../components/notebook/NotebookPanel";
@@ -2517,6 +2518,88 @@ describe("NotebookPanel", () => {
       expect(wikiLinks()[0]!.textContent).toBe("换个说法");
       fireEvent.click(wikiLinks()[0]!);
       await screen.findByDisplayValue("Target");
+    });
+  });
+  describe("全屏 ⇄ 半屏", () => {
+    /** 宿主态由外面拿着,这里模拟 ProjectPage 那一侧。 */
+    function renderWithHost(initial = false) {
+      const seen: boolean[] = [];
+      function Host() {
+        const [full, setFull] = useState(initial);
+        return (
+          <I18nProvider>
+            <NotebookPanel
+              fullScreen={full}
+              onFullScreenChange={(next) => {
+                seen.push(next);
+                setFull(next);
+              }}
+            />
+          </I18nProvider>
+        );
+      }
+      render(<Host />);
+      return seen;
+    }
+
+    /* 按钮里那个图标的名字。
+     *
+     * 图标是唯一给到明眼用户的状态信号 —— aria-label 只喂给屏读。两态用同一个
+     * 图标的话,眼睛看到的是"点了没变化"。lucide 把名字写进 svg 的 class。 */
+    function iconOf(button: HTMLElement): string {
+      const cls = button.querySelector("svg")?.getAttribute("class") ?? "";
+      return cls.split(/\s+/).find((name) => name.startsWith("lucide-")) ?? "";
+    }
+
+    it("宿主接了回调时给出开关,点一次报 true 再点报 false", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      const seen = renderWithHost();
+      await screen.findByRole("button", { name: "Target" });
+      fireEvent.click(screen.getByRole("button", { name: "Target" }));
+      await screen.findByDisplayValue("Target");
+
+      const enter = screen.getByRole("button", { name: "Full screen" });
+      // 半屏态下 aria-pressed 必须是 false —— 屏读用户要能听出当前在哪一档。
+      expect(enter).toHaveAttribute("aria-pressed", "false");
+      expect(iconOf(enter)).toBe("lucide-maximize2");
+      fireEvent.click(enter);
+
+      // 进全屏后按钮换成回半屏,不是留着同一个标签 —— 否则用户看不出点过之后
+      // 发生了什么,也不知道再点一次会去哪。
+      const leave = await screen.findByRole("button", { name: "Half screen" });
+      expect(leave).toHaveAttribute("aria-pressed", "true");
+      expect(iconOf(leave)).toBe("lucide-minimize2");
+      expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
+      fireEvent.click(leave);
+
+      await screen.findByRole("button", { name: "Full screen" });
+      expect(seen).toEqual([true, false]);
+    });
+
+    it("宿主没接回调时不给这个按钮", async () => {
+      /* 全屏要盖掉的是面板外面那圈,面板自己动不了。首页的随手记视图身边没有
+         可让的东西 —— 那里画一个点了没反应的开关比不画更糟。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+      fireEvent.click(screen.getByRole("button", { name: "Target" }));
+      await screen.findByDisplayValue("Target");
+
+      expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Half screen" })).toBeNull();
+    });
+
+    it("宿主一开始就是全屏时按钮直接显示回半屏", async () => {
+      // 从别的视图切回随手记时全屏偏好还在,那时按钮不能显示成「进全屏」。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderWithHost(true);
+      await screen.findByRole("button", { name: "Target" });
+      fireEvent.click(screen.getByRole("button", { name: "Target" }));
+      await screen.findByDisplayValue("Target");
+
+      const leave = await screen.findByRole("button", { name: "Half screen" });
+      expect(iconOf(leave)).toBe("lucide-minimize2");
+      expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
     });
   });
 });

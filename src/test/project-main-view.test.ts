@@ -18,6 +18,7 @@ import {
   shouldShowRunningTaskInCenter,
   shouldShowShellInCenter,
   shouldShowTaskWorkspace,
+  shouldForceCollapseRail,
   shouldShowWorkspaceTabs,
 } from "../components/project-page/viewMode";
 import { projectVisibilityStyle } from "../components/project-page/visibility";
@@ -403,5 +404,39 @@ describe("project main view mode", () => {
     expect(shouldShowAgentTaskTabs({ taskCount: 0 })).toBe(false);
     expect(shouldShowAgentTaskTabs({ taskCount: 1 })).toBe(false);
     expect(shouldShowAgentTaskTabs({ taskCount: 4 })).toBe(false);
+  });
+});
+
+describe("shouldForceCollapseRail", () => {
+  const base = {
+    autoCollapseRail: false,
+    isDatabaseMode: false,
+    isNotesMode: false,
+    notesFullScreen: false,
+  };
+
+  it("随手记全屏时折叠侧栏", () => {
+    expect(shouldForceCollapseRail({ ...base, isNotesMode: true, notesFullScreen: true })).toBe(
+      true,
+    );
+  });
+
+  it("随手记半屏时不折叠", () => {
+    expect(shouldForceCollapseRail({ ...base, isNotesMode: true })).toBe(false);
+  });
+
+  it("离开随手记视图后侧栏回来,即使全屏偏好还留着", () => {
+    /* 全屏偏好是留着的(切回随手记还是全屏)。如果这里也跟着折叠,用户在别的
+       视图里就看不到项目列表了 —— 而那些视图里没有任何能把它放回来的开关。 */
+    expect(shouldForceCollapseRail({ ...base, notesFullScreen: true })).toBe(false);
+  });
+
+  it("窄屏自动折叠与数据库视图各自都能单独触发", () => {
+    expect(shouldForceCollapseRail({ ...base, autoCollapseRail: true })).toBe(true);
+    expect(shouldForceCollapseRail({ ...base, isDatabaseMode: true })).toBe(true);
+  });
+
+  it("三个来源都不成立时不折叠", () => {
+    expect(shouldForceCollapseRail(base)).toBe(false);
   });
 });

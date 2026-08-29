@@ -110,6 +110,10 @@ export type NotebookPanelProps = {
   width?: number | string;
   /** 源码编辑器的配色。默认 light,便于测试和独立使用时不必传。 */
   themeVariant?: ThemeVariant;
+  /* 全屏态。状态归宿主是因为要盖掉的东西在面板外面(项目侧栏),面板自己
+     动不了它。不给 `onFullScreenChange` 的宿主不会看到那个按钮。 */
+  fullScreen?: boolean;
+  onFullScreenChange?: (next: boolean) => void;
 };
 
 export function NotebookPanel(props: NotebookPanelProps) {
@@ -123,7 +127,12 @@ export function NotebookPanel(props: NotebookPanelProps) {
   );
 }
 
-function NotebookPanelContent({ width = "100%", themeVariant = "light" }: NotebookPanelProps) {
+function NotebookPanelContent({
+  width = "100%",
+  themeVariant = "light",
+  fullScreen = false,
+  onFullScreenChange,
+}: NotebookPanelProps) {
   const { t } = useI18n();
   /** CodeMirror 源码编辑器的命令句柄。替代原来直接操作 textarea 的做法。 */
   const sourceEditorRef = useRef<NoteEditorHandle | null>(null);
@@ -1379,6 +1388,10 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               onToggleOutline={() => setOutlineOpen((open) => !open)}
               onOpenHistory={() => openHistory(activeNote.id)}
               onDelete={() => deleteNoteById(activeNote.id)}
+              fullScreen={fullScreen}
+              onToggleFullScreen={
+                onFullScreenChange ? () => onFullScreenChange(!fullScreen) : undefined
+              }
               t={t}
             />
             {searchOpen && (

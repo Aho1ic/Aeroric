@@ -264,6 +264,28 @@ export function visibleDockPanel(
   return rightPanel;
 }
 
+/**
+ * 项目侧栏是否该被强制折叠。
+ *
+ * 三个来源:窄屏自动折叠、数据库视图、随手记全屏。合成一处而不是在 JSX 里连
+ * `||` 是为了能测 —— 尤其是最后一项:随手记的全屏偏好在离开随手记视图后仍然
+ * 留着(切回去还是全屏),那时侧栏必须自己回来,否则用户在别的视图里看不到
+ * 项目列表,而眼前又没有任何能让它回来的开关。
+ */
+export function shouldForceCollapseRail({
+  autoCollapseRail,
+  isDatabaseMode,
+  isNotesMode,
+  notesFullScreen,
+}: {
+  autoCollapseRail: boolean;
+  isDatabaseMode: boolean;
+  isNotesMode: boolean;
+  notesFullScreen: boolean;
+}): boolean {
+  return autoCollapseRail || isDatabaseMode || (isNotesMode && notesFullScreen);
+}
+
 export function projectResponsiveLayout({
   width,
   rightPanelWidth,
