@@ -58,6 +58,8 @@ export function NoteContextMenu({ state, onAction, t }: NoteContextMenuProps) {
   return (
     <div
       role="menu"
+      // 两个右键菜单(编辑区 / 列表)都是 role=menu,不给名字的话读屏里分不出来。
+      aria-label={t("notebook.formatText")}
       data-notebook-context-menu
       style={{
         position: "fixed",

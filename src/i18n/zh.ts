@@ -2635,6 +2635,8 @@ export const zh: Record<string, string> = {
   "notebook.expandAll": "全部展开",
   "notebook.collapse": "折叠",
   "notebook.expand": "展开",
+  "notebook.noteActions": "随手记操作",
+  "notebook.moveToTrash": "移入回收站",
   "notebook.noteStatus": "笔记状态",
   "notebook.saveStatePending": "未保存",
   "notebook.saveStateSaving": "正在保存…",

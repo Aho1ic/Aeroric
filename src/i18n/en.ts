@@ -2735,6 +2735,8 @@ export const en: Record<string, string> = {
   "notebook.expandAll": "Expand all",
   "notebook.collapse": "Collapse",
   "notebook.expand": "Expand",
+  "notebook.noteActions": "Quick note actions",
+  "notebook.moveToTrash": "Move to Trash",
   "notebook.noteStatus": "Note status",
   "notebook.saveStatePending": "Unsaved",
   "notebook.saveStateSaving": "Saving…",

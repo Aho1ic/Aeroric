@@ -172,6 +172,17 @@ export function migrateLegacyNotes(rawJson: string): Promise<MigrationReport> {
   return invoke<MigrationReport>("notebook_migrate_legacy", { rawJson });
 }
 
+/**
+ * 在系统文件管理器里揭示笔记文件。
+ *
+ * 借的是通用的 `open_in_system_file_manager`(不是 `notebook_*` 命令),所以放在
+ * 这里只为了让面板不出现裸 invoke。`vault` 传给后端当 allowlist 根:它会用
+ * `validate_path_within` 拒掉根之外的路径,免得这个入口退化成任意路径揭示器。
+ */
+export function revealNoteInFileManager(path: string, vault: string): Promise<void> {
+  return invoke<void>("open_in_system_file_manager", { path, projectPath: vault });
+}
+
 export function htmlToMarkdown(html: string): Promise<string> {
   return invoke<string>("notebook_html_to_markdown", { html });
 }

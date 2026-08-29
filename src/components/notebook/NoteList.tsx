@@ -27,6 +27,8 @@ export type NoteListProps = {
   onStartRename: (note: NotebookNote) => void;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  /** 行上右键。菜单本身由面板渲染(它持有 vault 和后端调用)。 */
+  onNoteContextMenu: (event: React.MouseEvent<HTMLDivElement>, noteId: string) => void;
   /** 拖拽命中检测需要每行的 DOM。 */
   setNoteItemRef: (noteId: string) => (element: HTMLDivElement | null) => void;
   onPointerDown: (event: React.PointerEvent<HTMLButtonElement>, noteId: string) => void;
@@ -53,6 +55,7 @@ export function NoteList({
   onStartRename,
   onSelect,
   onCreate,
+  onNoteContextMenu,
   setNoteItemRef,
   onPointerDown,
   onPointerMove,
@@ -168,6 +171,7 @@ export function NoteList({
                 key={note.id}
                 ref={setNoteItemRef(note.id)}
                 data-notebook-note-row
+                onContextMenu={(event) => onNoteContextMenu(event, note.id)}
                 style={{
                   minHeight: 30,
                   display: "flex",

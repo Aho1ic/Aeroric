@@ -16,11 +16,16 @@ import {
   type NoteContextMenuAction,
   type NoteContextMenuState,
 } from "./NoteContextMenu";
+import {
+  NoteListContextMenu,
+  type NoteListContextMenuAction,
+  type NoteListContextMenuState,
+} from "./NoteListContextMenu";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookNote } from "./notebookStore";
-import { convertRichtextNotes, ensureDefaultVault } from "./notebookApi";
+import { convertRichtextNotes, ensureDefaultVault, revealNoteInFileManager } from "./notebookApi";
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
@@ -117,6 +122,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [textColor, setTextColor] = useState("#2563eb");
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
+  const [listMenu, setListMenu] = useState<NoteListContextMenuState | null>(null);
   /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -289,6 +295,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       const target = event.target;
       if (target instanceof Element && target.closest("[data-notebook-context-menu]")) return;
       setContextMenu(null);
+      setListMenu(null);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -497,9 +504,11 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     })();
   };
 
-  const deleteActiveNote = () => {
-    if (!activeNote) return;
-    const target = activeNote;
+  /* 删除任意一条笔记。标题栏的删除按钮删当前这条,列表右键菜单删被点中的那条
+     —— 两者只差「目标是谁」,所以都走这里。 */
+  const deleteNoteById = (noteId: string) => {
+    const target = notes.find((note) => note.id === noteId);
+    if (!target) return;
     // 取消挂起的自动保存:文件都要进回收站了,再写一次没有意义。
     //
     // 它不是"防止删掉的文件被重新创建"的那道防线 —— 真正兜住这件事的是下面
@@ -610,6 +619,39 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (action === "table") format.applyTable();
   };
 
+  const runListMenuAction = (action: NoteListContextMenuAction) => {
+    const noteId = listMenu?.noteId;
+    setListMenu(null);
+    if (!noteId) return;
+    const target = notes.find((note) => note.id === noteId);
+    if (!target) return;
+
+    if (action === "rename") {
+      startRenameNote(target);
+      return;
+    }
+    if (action === "trash") {
+      deleteNoteById(noteId);
+      return;
+    }
+    if (action === "copyPath") {
+      // `note.id` 就是绝对路径(见 notebookStore 的注释)。
+      void navigator.clipboard
+        ?.writeText(noteId)
+        .catch((error: unknown) => setError(t("file.copyPathFailed", { error: errorText(error) })));
+      return;
+    }
+    // reveal:vault 当作 allowlist 根传下去 —— 后端的 validate_path_within 会
+    // 拒掉 vault 之外的路径,免得这个入口变成任意路径的揭示器。
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    void revealNoteInFileManager(noteId, vault).catch((error: unknown) =>
+      setError(errorText(error)),
+    );
+  };
+
   /**
    * 源码编辑器。编辑态和分屏态共用同一个节点。
    *
@@ -680,6 +722,12 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           onStartRename={startRenameNote}
           onSelect={setActiveId}
           onCreate={addNote}
+          onNoteContextMenu={(event, noteId) => {
+            event.preventDefault();
+            // 编辑区的菜单同时开着就没意义了,互斥。
+            setContextMenu(null);
+            setListMenu({ x: event.clientX, y: event.clientY, noteId });
+          }}
           setNoteItemRef={drag.setNoteItemRef}
           onPointerDown={drag.onPointerDown}
           onPointerMove={drag.onPointerMove}
@@ -707,7 +755,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               onToggleList={() => setListOpen((open) => !open)}
               outlineOpen={outlineOpen}
               onToggleOutline={() => setOutlineOpen((open) => !open)}
-              onDelete={deleteActiveNote}
+              onDelete={() => deleteNoteById(activeNote.id)}
               t={t}
             />
             {searchOpen && (
@@ -798,6 +846,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
         )}
       </div>
       {contextMenu && <NoteContextMenu state={contextMenu} onAction={runContextMenuAction} t={t} />}
+      {listMenu && <NoteListContextMenu state={listMenu} onAction={runListMenuAction} t={t} />}
     </section>
   );
 }

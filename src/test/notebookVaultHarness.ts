@@ -41,6 +41,9 @@ export class NotebookVaultHarness {
   order: string[] = [];
   /** 收尾迁移被调用过几次。用来确认它真的接进了启动流程。 */
   richtextConversions = 0;
+  /** 「在文件管理器里揭示」收到的参数。要断言的不只是被调用过,还有 allowlist
+   *  根传的是 vault —— 传错了这个入口就变成任意路径揭示器。 */
+  revealCalls: { path: string; projectPath: string }[] = [];
 
   /** 直接往 vault 里放一个文件,模拟「磁盘上已经有笔记」。 */
   seed(fileName: string, content: string): string {
@@ -95,6 +98,15 @@ export class NotebookVaultHarness {
       }
 
       case "notebook_close_note":
+        return undefined;
+
+      // 通用 fs 命令,不是 notebook_* 的。列表右键菜单的「在系统文件夹中打开」
+      // 借了它,所以这里也要认。
+      case "open_in_system_file_manager":
+        this.revealCalls.push({
+          path: String(args.path),
+          projectPath: String(args.projectPath),
+        });
         return undefined;
 
       case "notebook_read_order":

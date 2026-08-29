@@ -43,7 +43,7 @@ export type NoteAutosave = {
   /** 安排一次防抖保存。同一条笔记重复调用会重置计时。 */
   scheduleSave: (noteId: string) => void;
   /** 取消挂起的保存。删除笔记时调,省掉一次无用的写(不是防"文件复活"的
-   *  主防线,见 NotebookPanel 的 deleteActiveNote 注释)。 */
+   *  主防线,见 NotebookPanel 的 deleteNoteById 注释)。 */
   cancelSave: (noteId: string) => void;
   /** 每条笔记的保存状态。缺省视为 `saved` —— 刚从磁盘读进来的就是和磁盘一致的。 */
   saveStates: Record<string, NoteSaveState>;

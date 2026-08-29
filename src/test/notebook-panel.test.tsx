@@ -1018,4 +1018,94 @@ describe("NotebookPanel", () => {
       resetAppDialogHandlerForTests();
     }
   });
+
+  describe("笔记列表右键菜单", () => {
+    /** 在指定笔记那一行上右键,返回打开的菜单。 */
+    async function openListMenu(name: string) {
+      const row = screen.getByRole("button", { name }).closest("[data-notebook-note-row]");
+      if (!row) throw new Error(`no row for ${name}`);
+      fireEvent.contextMenu(row);
+      return screen.getByRole("menu", { name: "Quick note actions" });
+    }
+
+    it("在系统文件夹中打开:传的 allowlist 根是 vault", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open in System Folder" }));
+
+      // 后端用这个根做 validate_path_within。传成笔记自己的路径就等于没校验,
+      // 这个入口会退化成任意路径揭示器 —— 所以两个参数都要钉。
+      await waitFor(() => expect(harness.revealCalls).toHaveLength(1));
+      expect(harness.revealCalls[0]).toEqual({ path: "/vault/Target.md", projectPath: "/vault" });
+    });
+
+    it("复制完整路径", async () => {
+      // 调 setup() 是为了装上能往返读写的剪贴板实现(见文件头注释),句柄本身用不上。
+      userEvent.setup();
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Copy full path" }));
+
+      await waitFor(async () =>
+        expect(await navigator.clipboard.readText()).toBe("/vault/Target.md"),
+      );
+    });
+
+    it("移入回收站:删的是右键点中的那条,不是当前打开的那条", async () => {
+      // 这条是这个菜单最容易写错的地方 —— 沿用原来的 deleteActiveNote 会删错文件。
+      const kept = harness.seed("Kept.md", '---\ntitle: "Kept"\n---\n\nkeep me\n');
+      const doomed = harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\ndelete me\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Kept" });
+      await screen.findByRole("button", { name: "Doomed" });
+
+      // 打开 Kept(它成为 activeNote),然后右键 Doomed。
+      fireEvent.click(screen.getByRole("button", { name: "Kept" }));
+      await screen.findByDisplayValue("Kept");
+
+      await openListMenu("Doomed");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Trash" }));
+
+      await waitFor(() => expect(harness.read(doomed)).toBeUndefined());
+      expect(harness.read(kept)).toContain("keep me");
+    });
+
+    it("重命名:进入行内改名,不直接改文件名", async () => {
+      const notePath = harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename quick note" }));
+
+      // 改名走的是列表里那个 input(标题存 frontmatter),文件名保持不动 ——
+      // P4 的 wikilink 按文件名互链,静默改名会断链。
+      expect(screen.getByRole("textbox", { name: "Rename quick note" })).toHaveValue("Target");
+      expect(harness.paths()).toContain(notePath);
+    });
+
+    it("菜单和编辑区那个互斥", async () => {
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+
+      // 先开编辑区的菜单。
+      fireEvent.contextMenu(screen.getByRole("textbox", { name: "Quick note content" }));
+      expect(screen.getByRole("menu", { name: "Text" })).toBeInTheDocument();
+
+      // 再在列表行上右键 —— 两个菜单同时浮着没有意义,前一个要关掉。
+      const row = screen
+        .getByRole("button", { name: "Untitled quick note" })
+        .closest("[data-notebook-note-row]");
+      fireEvent.contextMenu(row as Element);
+      expect(screen.getByRole("menu", { name: "Quick note actions" })).toBeInTheDocument();
+      expect(screen.queryByRole("menu", { name: "Text" })).not.toBeInTheDocument();
+    });
+  });
 });
