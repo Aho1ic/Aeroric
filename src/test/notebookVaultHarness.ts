@@ -33,6 +33,39 @@ function hash64(text: string): string {
   return hash.toString();
 }
 
+/* 行内 `#标签` 的扫描。链接那一路能直接借前端的 `scanWikiLinks`(词法器就在前端),
+   标签的词法器只在 Rust 里 —— 前端那边只做聚合。所以这里写一个够用的复刻:跳
+   frontmatter 与代码块、`#` 前只允许行首或空白、纯数字不算。
+
+   真正的等价性由 `tags.rs` 自己的用例守;这里只需要让面板测试能拿到像样的输入。 */
+function harnessTagHits(content: string): { raw: string; line: number; preview: string }[] {
+  const lines = content.split("\n");
+  const hits: { raw: string; line: number; preview: string }[] = [];
+  let start = 0;
+  // 未闭合的 `---` 不算 frontmatter,和 Rust 侧一致。
+  if (lines[0]?.trim() === "---") {
+    const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (end > 0) start = end + 1;
+  }
+  let fenced = false;
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    // 行内代码整段跳过。
+    const bare = line.replace(/`[^`]*`/g, (span) => " ".repeat(span.length));
+    for (const match of bare.matchAll(/(^|\s)#([\p{L}\p{N}_/-]+)/gu)) {
+      const raw = match[2].replace(/[/-]+$/, "");
+      if (!raw || /^\d+$/.test(raw)) continue;
+      hits.push({ raw, line: index + 1, preview: line.trim() });
+    }
+  }
+  return hits;
+}
+
 export class NotebookVaultHarness {
   private files = new Map<string, HarnessFile>();
   /**
@@ -84,6 +117,10 @@ export class NotebookVaultHarness {
   failIconWrite: "read" | "write" | null = null;
   /** 让全库链接扫描失败,用来验反链面板的错误态。 */
   failLinkScan = false;
+  /** 让全库标签扫描失败,用来验标签面板的错误态。 */
+  failTagScan = false;
+  /** 全库标签扫描被调用了几次。验"只在标签那一档可见时扫"用。 */
+  tagScanCalls = 0;
 
   /** 当前的图标表。断言"真的写进去了"用。 */
   iconTable(): Record<string, string> {
@@ -272,6 +309,19 @@ export class NotebookVaultHarness {
           });
           // 没有链接的笔记不进结果,和 Rust 侧一致。
           if (links.length) sources.push({ path, links });
+        }
+        return sources;
+      }
+
+      case "notebook_vault_tags": {
+        this.tagScanCalls += 1;
+        if (this.failTagScan) throw new Error("scanning tags failed");
+        const sources: { path: string; tags: { raw: string; line: number; preview: string }[] }[] =
+          [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          const tags = harnessTagHits(this.files.get(path)?.content ?? "");
+          // 没有标签的笔记不进结果,和 Rust 侧一致。
+          if (tags.length) sources.push({ path, tags });
         }
         return sources;
       }

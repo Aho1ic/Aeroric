@@ -2647,3 +2647,89 @@ fn vault_links_walks_subdirectories_and_sorts_by_path() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+/// 扫出来的标签,按文件名后缀找那一篇。
+fn scanned_tags(sources: &[super::tags::NoteTagSource], name: &str) -> Option<Vec<String>> {
+    sources
+        .iter()
+        .find(|source| source.path.ends_with(name))
+        .map(|source| source.tags.iter().map(|tag| tag.raw.clone()).collect())
+}
+
+#[test]
+fn vault_tags_reports_inline_tags_with_line_numbers() {
+    let vault = temp_vault("tags-basic");
+    std::fs::write(
+        vault.join("a.md"),
+        "---\ntitle: A\ntags: [不算这个]\n---\n\n第一段\n见 #周报 与 #work/urgent\n",
+    )
+    .expect("seed");
+
+    let sources = super::tags::scan_vault_tags(&vault).expect("scan");
+    let source = sources
+        .iter()
+        .find(|s| s.path.ends_with("a.md"))
+        .expect("a.md");
+    // frontmatter 里的 `tags:` 是另一套机制,不在这一层。
+    assert_eq!(source.tags.len(), 2);
+    assert_eq!(source.tags[0].raw, "周报");
+    assert_eq!(source.tags[1].raw, "work/urgent");
+    // frontmatter 那几行也算进行号:跳转是按整篇源码的行数走的。
+    assert_eq!(source.tags[0].line, 7);
+    // 同一行的两个共用那一行的预览。
+    assert_eq!(source.tags[1].preview, "见 #周报 与 #work/urgent");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_tags_omits_notes_without_tags() {
+    let vault = temp_vault("tags-empty");
+    std::fs::write(vault.join("plain.md"), "没有标签,但有 ## 标题\n").expect("seed");
+    std::fs::write(vault.join("tagged.md"), "#周报\n").expect("seed");
+
+    let sources = super::tags::scan_vault_tags(&vault).expect("scan");
+    assert_eq!(scanned_tags(&sources, "plain.md"), None);
+    assert_eq!(
+        scanned_tags(&sources, "tagged.md"),
+        Some(vec!["周报".to_string()])
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_tags_skips_private_dirs_and_non_notes() {
+    let vault = temp_vault("tags-skip");
+    let private = vault.join(".notebook");
+    std::fs::create_dir_all(private.join("trash")).expect("mkdir");
+    // 回收站里的笔记已经被删了,让它给标签计数会让"3 篇"里有一篇点不开。
+    std::fs::write(private.join("trash/gone.md"), "#周报\n").expect("seed");
+    std::fs::write(vault.join("notes.txt"), "#周报\n").expect("seed");
+    std::fs::write(vault.join("real.md"), "#周报\n").expect("seed");
+
+    let sources = super::tags::scan_vault_tags(&vault).expect("scan");
+    assert_eq!(scanned_tags(&sources, "gone.md"), None);
+    assert_eq!(scanned_tags(&sources, "notes.txt"), None);
+    assert!(scanned_tags(&sources, "real.md").is_some());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_tags_walks_subdirectories_and_sorts_by_path() {
+    let vault = temp_vault("tags-sub");
+    std::fs::create_dir_all(vault.join("sub")).expect("mkdir");
+    std::fs::write(vault.join("sub/deep.md"), "#周报\n").expect("seed");
+    std::fs::write(vault.join("aaa.md"), "#周报\n").expect("seed");
+
+    let sources = super::tags::scan_vault_tags(&vault).expect("scan");
+    let paths: Vec<&str> = sources.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(paths.len(), 2);
+    // 排序保证两次扫描顺序一致,否则标签详情里那串引用的排列会漂移。
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_eq!(paths, sorted);
+
+    std::fs::remove_dir_all(&vault).ok();
+}

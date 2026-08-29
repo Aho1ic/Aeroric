@@ -17,22 +17,13 @@
 
 use std::path::Path;
 
-use super::fs_ops::{is_note_file, is_scan_skip_dir};
-
-/// 单个文件的扫描上限。超了整篇跳过 —— 反链面板不值得为一个几 MB 的文件卡住,
-/// 而正常笔记远小于这个数。
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+use super::vault_walk::{preview_line, walk_notes, WalkNext};
 
 /// 单篇笔记记多少条链接。超出的丢掉:一篇里 1000 条链接已经不是人写出来的。
 const MAX_LINKS_PER_FILE: usize = 1_000;
 
-/// 全库上限。和笔记树同一量级,防止 home 目录被挂成 vault 时扫到天荒地老。
+/// 全库链接上限。文件数 / 深度 / 单文件大小的上限在 `vault_walk` 那一层。
 const MAX_TOTAL_LINKS: usize = 20_000;
-const MAX_FILES: usize = 20_000;
-const MAX_DEPTH: usize = 12;
-
-/// 预览截断长度(按字符,不是字节)。
-const PREVIEW_CHARS: usize = 160;
 
 /// 一条 wikilink 出现。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -63,82 +54,30 @@ pub struct NoteLinkSource {
 /// 变大。
 pub(crate) fn scan_vault_links(root: &Path) -> Result<Vec<NoteLinkSource>, String> {
     let mut out = Vec::new();
-    let mut budget = Budget { files: 0, links: 0 };
-    walk(root, 0, &mut out, &mut budget)?;
-    // 按路径排序,和 `vault_index` 同一个理由:两次扫描的结果顺序要一致,否则
-    // 反链列表的排列会随文件系统遍历顺序漂移。
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
-}
-
-struct Budget {
-    files: usize,
-    links: usize,
-}
-
-fn walk(
-    dir: &Path,
-    depth: usize,
-    out: &mut Vec<NoteLinkSource>,
-    budget: &mut Budget,
-) -> Result<(), String> {
-    if depth > MAX_DEPTH || budget.files >= MAX_FILES || budget.links >= MAX_TOTAL_LINKS {
-        return Ok(());
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        // 读不动某个子目录(权限)不该让整次扫描失败 —— 其余笔记的反链仍然该出来。
-        Err(_) => return Ok(()),
-    };
-    for entry in entries.flatten() {
-        if budget.files >= MAX_FILES || budget.links >= MAX_TOTAL_LINKS {
-            return Ok(());
-        }
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        // 不跟软链,与笔记树 / 标题索引一致:跟了会让同一篇笔记以两个路径出现,
-        // 反链里就是两条一模一样的条目。
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            if is_scan_skip_dir(&name) {
-                continue;
-            }
-            walk(&path, depth + 1, out, budget)?;
-            continue;
-        }
-        if !is_note_file(&path) {
-            continue;
-        }
-        if let Ok(meta) = entry.metadata() {
-            if meta.len() > MAX_FILE_BYTES {
-                continue;
-            }
-        }
-        budget.files += 1;
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            // 非 UTF-8(或正在被写)的文件跳过。反链是只读视图,不值得为它报错。
-            continue;
-        };
+    let mut total = 0usize;
+    walk_notes(root, &mut |path, content| {
         // 整篇没有 `[[` 就不用逐行了。绝大多数笔记走这条捷径。
         if !content.contains("[[") {
-            continue;
+            return WalkNext::Continue;
         }
-        let links = scan_links(&content, MAX_TOTAL_LINKS - budget.links);
+        let links = scan_links(content, MAX_TOTAL_LINKS - total);
         if links.is_empty() {
-            continue;
+            return WalkNext::Continue;
         }
-        budget.links += links.len();
+        total += links.len();
         out.push(NoteLinkSource {
             path: path.to_string_lossy().to_string(),
             links,
         });
-    }
-    Ok(())
+        if total >= MAX_TOTAL_LINKS {
+            return WalkNext::Stop;
+        }
+        WalkNext::Continue
+    })?;
+    // 按路径排序,和 `vault_index` 同一个理由:两次扫描的结果顺序要一致,否则
+    // 反链列表的排列会随文件系统遍历顺序漂移。
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
 }
 
 /// 扫一篇正文里的所有 wikilink。
@@ -158,7 +97,7 @@ fn scan_links(content: &str, remaining: usize) -> Vec<NoteLinkRef> {
         if !line.contains("[[") {
             continue;
         }
-        let preview = preview_of(line);
+        let preview = preview_line(line);
         for found in scan_line(line) {
             if out.len() >= cap {
                 break;
@@ -225,17 +164,6 @@ fn scan_line(line: &str) -> Vec<LineHit> {
         cursor = body_start + bracket + 2;
     }
     out
-}
-
-/// 一行的预览:两端 trim,超长按字符截断并加省略号。
-fn preview_of(line: &str) -> String {
-    let trimmed = line.trim();
-    if trimmed.chars().count() <= PREVIEW_CHARS {
-        return trimmed.to_string();
-    }
-    let mut preview: String = trimmed.chars().take(PREVIEW_CHARS).collect();
-    preview.push('…');
-    preview
 }
 
 #[cfg(test)]
@@ -315,15 +243,6 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert!(hits[0].embed, "`![[..]]` 是嵌入");
         assert!(!hits[1].embed);
-    }
-
-    #[test]
-    fn preview_trims_and_truncates() {
-        assert_eq!(preview_of("   见 [[周报]]   "), "见 [[周报]]");
-        let long = "字".repeat(300);
-        let preview = preview_of(&long);
-        assert_eq!(preview.chars().count(), PREVIEW_CHARS + 1);
-        assert!(preview.ends_with('…'));
     }
 
     #[test]

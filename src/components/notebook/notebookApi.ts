@@ -10,6 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { NoteLinkSource } from "./noteBacklinks";
+import type { NoteTagSource } from "./noteTags";
 
 /** 文件指纹。`hash` 是字符串:u64 超出 JS 安全整数范围,走 number 会丢精度。 */
 export type NoteSig = {
@@ -389,6 +390,19 @@ export function writeNoteIcons(vault: string, icons: Record<string, string>): Pr
  */
 export function vaultLinks(vault: string): Promise<NoteLinkSource[]> {
   return invoke<NoteLinkSource[]>("notebook_vault_links", { vault });
+}
+
+/**
+ * 扫全库的行内 `#标签` 出现,给标签面板用。
+ *
+ * 和 `vaultLinks` 一样只做词法提取:聚合(折大小写、数处数篇数)在 `noteTags.ts`。
+ * 后端和前端共用一份归一化规则,靠两边同样的用例守住 —— 漂移的表现是"标签云里
+ * 有它、重命名却改不动",而那种偏差没人会往归一化上想。
+ *
+ * 只覆盖正文里的行内标签;frontmatter 的 `tags:` 归属性面板。
+ */
+export function vaultTags(vault: string): Promise<NoteTagSource[]> {
+  return invoke<NoteTagSource[]>("notebook_vault_tags", { vault });
 }
 
 /** 索引里一篇笔记的路径与真实标题。`path` 与笔记列表里的 `id` 是同一个值。 */

@@ -26,8 +26,10 @@ pub mod links;
 pub mod migrate;
 pub mod snapshots;
 pub mod state;
+pub mod tags;
 pub mod trash;
 pub mod vault_index;
+mod vault_walk;
 
 #[cfg(test)]
 mod tests;
@@ -488,6 +490,22 @@ pub async fn notebook_vault_links(
 ) -> Result<Vec<links::NoteLinkSource>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || links::scan_vault_links(&resolved)).await
+}
+
+/// 扫全库的行内 `#标签`,每篇一条(含标签文本、行号、行预览)。
+///
+/// 聚合(哪个标签有几处、分布在哪几篇)在前端做:那是纯计算,而且标签云的排序 /
+/// 筛选都要在同一份数据上反复算,来回过 IPC 只会更慢。
+///
+/// frontmatter 里的 `tags:` 不在这里 —— 那是另一套机制(要动 YAML),见 `tags.rs`
+/// 的模块注释。
+#[tauri::command]
+pub async fn notebook_vault_tags(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<tags::NoteTagSource>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || tags::scan_vault_tags(&resolved)).await
 }
 
 /// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。

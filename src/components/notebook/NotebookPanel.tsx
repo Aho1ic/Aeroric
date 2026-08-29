@@ -44,18 +44,17 @@ import {
   statNote,
   vaultIndex,
   vaultLinks,
+  vaultTags,
   writeNoteIcons,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
 import { NoteIconPicker, type NoteIconPickerState } from "./NoteIconPicker";
 import { noteIconOf, withNoteIcon, type NoteIconName } from "./noteIcons";
-import {
-  bodyOffsetOfFileLine,
-  collectBacklinks,
-  countBacklinks,
-  type NoteLinkSource,
-} from "./noteBacklinks";
+import { bodyOffsetOfFileLine, collectBacklinks, countBacklinks } from "./noteBacklinks";
 import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
+import { collectTags, countTagRefs, filterTags } from "./noteTags";
+import { NoteTagsPanel } from "./NoteTagsPanel";
+import { useVaultScan } from "./useVaultScan";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import {
   NotePropertiesSheet,
@@ -190,15 +189,13 @@ function NotebookPanelContent({
   /** 侧栏(大纲 / 反链)是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
-  /** 侧栏当前显示哪一档。两档共用那一列,而不是各占一列:面板一半宽的时候
+  /** 侧栏当前显示哪一档。三档共用那一列,而不是各占一列:面板一半宽的时候
    *  再切出去一列正文就没地方了。 */
-  const [sideTab, setSideTab] = useState<"outline" | "backlinks">("outline");
-  /** 全库链接扫描的结果。反链按它 + 链接索引算出来。 */
-  const [linkSources, setLinkSources] = useState<NoteLinkSource[]>([]);
-  const [linksLoading, setLinksLoading] = useState(false);
-  const [linksError, setLinksError] = useState<string | null>(null);
-  /** 手工「刷新」+1。外部编辑改了别人的笔记时,反链只能靠重扫发现。 */
-  const [linksToken, setLinksToken] = useState(0);
+  const [sideTab, setSideTab] = useState<"outline" | "backlinks" | "tags">("outline");
+  /** 标签档的筛选输入与展开的那一条。提到这一层 —— 切走再切回来不该清空,
+   *  用户切出去往往正是为了照着正文找该筛什么。 */
+  const [tagQuery, setTagQuery] = useState("");
+  const [openTag, setOpenTag] = useState<string | null>(null);
   /** 反链跳转的落点:换到那篇笔记之后光标要落到第几行(按**文件**数的行号)。
    *  用 state 而不是 ref —— 落点要在渲染时算成 prop 交给编辑器(见下面
    *  `backlinkCursorOffset` 的注释)。 */
@@ -402,34 +399,22 @@ function NotebookPanelContent({
     };
   }, [vault]);
 
-  /* 全库链接扫描。只在反链那一档**可见**时扫 —— 它读每个文件的全文,是整个面板
-     里最贵的一次 IO,而绝大多数时候用户根本没打开反链。
+  /* 全库扫描:反链和标签各一次,都只在自己那一档**可见**时扫。它们读每个文件的
+     全文,是整个面板里最贵的一次 IO,而绝大多数时候用户根本没打开侧栏。
 
-     依赖里有 `linksToken`(手工刷新)但没有当前笔记:扫描结果是全库的,换笔记
-     只是换一个筛选条件,不需要重扫。 */
-  useEffect(() => {
-    if (!vault || !outlineOpen || sideTab !== "backlinks") return;
-    let cancelled = false;
-    setLinksLoading(true);
-    setLinksError(null);
-    void (async () => {
-      try {
-        const sources = await vaultLinks(vault);
-        if (cancelled) return;
-        setLinkSources(sources);
-      } catch (error: unknown) {
-        if (cancelled) return;
-        /* 就地显示,不占用面板那条错误条:反链是只读视图,扫不动它不影响读写笔记。
-           上一次的结果留着 —— 比清空成"没有反链"诚实(那会看起来像扫完了)。 */
-        setLinksError(errorText(error));
-      } finally {
-        if (!cancelled) setLinksLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [linksToken, outlineOpen, sideTab, vault]);
+     刻意**不**合并成一次扫描:三档共用侧栏那一列(互斥),合起来只会让每次多做
+     一半没人看的提取。共享的是遍历那半边 —— 在 Rust 的 `vault_walk` 里。
+
+     取数的三条规则(只在可见时扫、报错留住旧结果、换笔记不重扫)在 `useVaultScan`
+     里,两档共用同一份:任何一条在两档之间漂移,表现都是"其中一档偶尔看起来是
+     空的",而那种偏差没人会往取数逻辑上想。 */
+  const linkScan = useVaultScan(
+    vault,
+    outlineOpen && sideTab === "backlinks",
+    vaultLinks,
+    errorText,
+  );
+  const tagScan = useVaultScan(vault, outlineOpen && sideTab === "tags", vaultTags, errorText);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -724,10 +709,26 @@ function NotebookPanelContent({
      索引一变(改标题、新建笔记)就重算 —— 同一批扫描结果在标题改过之后指向的
      可能已经不是这一篇了。 */
   const backlinkGroups = useMemo(
-    () => (activeNote ? collectBacklinks(linkSources, linkIndex, activeNote.id) : []),
-    [activeNote, linkIndex, linkSources],
+    () => (activeNote ? collectBacklinks(linkScan.data, linkIndex, activeNote.id) : []),
+    [activeNote, linkIndex, linkScan.data],
   );
   const backlinkCount = countBacklinks(backlinkGroups);
+
+  /* 全库标签。和反链不同,标签不按当前笔记筛 —— 标签档是"全库有哪些标签",
+     那正是它和大纲、反链的分工:另外两档都只讲当前这一篇。
+
+     标题用链接索引里的那份(frontmatter 里的真标题),不是路径 stem —— 改过标题的
+     笔记显示文件名会让人以为跳错了地方。索引里没有的退回 stem。 */
+  const tagEntries = useMemo(
+    () =>
+      collectTags(
+        tagScan.data,
+        (path) => indexedTitles.get(path) ?? path.replace(/^.*[/\\]/, "").replace(/\.md$/i, ""),
+      ),
+    [indexedTitles, tagScan.data],
+  );
+  const tagRefCount = countTagRefs(tagEntries);
+  const visibleTags = useMemo(() => filterTags(tagEntries, tagQuery), [tagEntries, tagQuery]);
 
   /* 反链行号 → 编辑器正文里的偏移。
    *
@@ -1647,10 +1648,14 @@ function NotebookPanelContent({
                           /* 计数直接写在标签上:反链的价值在于"有没有、有几条",
                              要点开才知道的话这一档大部分时候是白开的。没扫过时
                              不显示 0 —— 那会看起来像"确实没有"。 */
-                          linkSources.length
+                          linkScan.data.length
                             ? t("notebook.backlinksWithCount", { count: String(backlinkCount) })
                             : t("notebook.backlinks"),
                         ],
+                        /* 标签这一档不带计数:它数的是全库,和当前笔记无关,而三个
+                           按钮分 190px 的时候多两个字就会把另外两档挤成省略号。
+                           处数写在档内的标题行里。 */
+                        ["tags", t("notebook.tags")],
                       ] as const
                     ).map(([value, label], index, all) => (
                       <button
@@ -1693,14 +1698,31 @@ function NotebookPanelContent({
                       onReorder={reorderHeadingSection}
                       t={t}
                     />
-                  ) : (
+                  ) : sideTab === "backlinks" ? (
                     <NoteBacklinksPanel
                       groups={backlinkGroups}
                       count={backlinkCount}
-                      loading={linksLoading}
-                      error={linksError}
+                      loading={linkScan.loading}
+                      error={linkScan.error}
                       onJump={jumpToBacklink}
-                      onRefresh={() => setLinksToken((token) => token + 1)}
+                      onRefresh={linkScan.refresh}
+                      t={t}
+                    />
+                  ) : (
+                    <NoteTagsPanel
+                      entries={visibleTags}
+                      count={tagRefCount}
+                      loading={tagScan.loading}
+                      error={tagScan.error}
+                      query={tagQuery}
+                      onQueryChange={setTagQuery}
+                      openKey={openTag}
+                      /* 点已展开的那条收起来:侧栏只有一列宽,展开的引用会把标签
+                         清单顶下去,不给一条收起的路等于要靠滚动找回来。 */
+                      onToggle={(key) => setOpenTag((current) => (current === key ? null : key))}
+                      /* 跳转和反链共用一条路 —— 两边给的都是"某篇的某一行"。 */
+                      onJump={jumpToBacklink}
+                      onRefresh={tagScan.refresh}
                       t={t}
                     />
                   )}

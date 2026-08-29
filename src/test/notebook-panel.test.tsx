@@ -2845,6 +2845,28 @@ describe("NotebookPanel", () => {
       expect(harness.callCount("notebook_vault_links")).toBe(0);
     });
 
+    it("侧栏整个收起时不扫", async () => {
+      /* 门控是两个条件的与。上一条只验了"停在别的档上",这条验另一半 —— 而侧栏
+         默认就是收起的,漏掉这一半等于每次开着反链档的会话都在后台白扫。 */
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\n[[Alpha]]\n');
+      renderNotebook();
+      // 等笔记读进来 —— 侧栏的开关在那之前还不在场。
+      await screen.findByRole("button", { name: "Alpha" });
+      await openBacklinks();
+      await waitFor(() => expect(harness.callCount("notebook_vault_links")).toBe(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide outline" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("complementary", { name: "Backlinks" })).toBeNull(),
+      );
+      expect(harness.callCount("notebook_vault_links")).toBe(1);
+
+      // 重新展开时回到同一档,这时才该再扫(收起期间别人可能改过 vault)。
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await screen.findByRole("complementary", { name: "Backlinks" });
+      await waitFor(() => expect(harness.callCount("notebook_vault_links")).toBe(2));
+    });
+
     it("自引用不算,死链不算", async () => {
       harness.seed("self.md", '---\ntitle: "Self"\n---\n\n[[Self]] 指向我自己\n[[根本不存在]]\n');
       renderNotebook();
@@ -2978,6 +3000,272 @@ describe("NotebookPanel", () => {
       await screen.findByRole("complementary", { name: "Backlinks" });
       // 面板只有一半宽,两档共用一列;两个都在场意味着正文被挤没了。
       expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
+    });
+  });
+
+  describe("标签", () => {
+    /** 打开侧栏并切到标签档。 */
+    async function openTags() {
+      // 等笔记读进来 —— 侧栏的开关在笔记加载完之前还不在场。
+      fireEvent.click(await screen.findByRole("button", { name: "Show outline" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Tags" }));
+      return screen.findByRole("complementary", { name: "Tags" });
+    }
+
+    /** 标签清单里每一条的可及名。 */
+    function tagNames(): string[] {
+      return screen
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((name) => /^#\S+, \d+ uses/.test(name));
+    }
+
+    it("列出全库的标签,带处数和篇数", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 今天\n#work 又一处\n');
+      harness.seed("b.md", '---\ntitle: "B"\n---\n\n#home 家里\n');
+      renderNotebook();
+      const side = await openTags();
+
+      // 处数降序:`#work` 三处不到,两处,排在一处的 `#home` 前面。
+      await waitFor(() =>
+        expect(tagNames()).toEqual(["#work, 2 uses in 1 notes", "#home, 1 uses in 1 notes"]),
+      );
+      // 标题行报的是全库总处数和标签个数 —— 两个数不一样才看得出有没有对调。
+      expect(side).toHaveTextContent("3 uses across 2 tags");
+    });
+
+    it("大小写不同的同一个标签折成一条", async () => {
+      /* 折不折是个选择,但必须和重命名一致:数得出来却改不动正是 Markio 的缺陷
+         (索引用字符扫、重命名用另一条正则)。 */
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#Work 大写\n');
+      harness.seed("b.md", '---\ntitle: "B"\n---\n\n#work 小写\n');
+      renderNotebook();
+      await openTags();
+
+      // 显示用第一次见到的写法(`a.md` 在前),但两处算同一条。
+      await waitFor(() => expect(tagNames()).toEqual(["#Work, 2 uses in 2 notes"]));
+    });
+
+    it("代码块和行内代码里的 # 不算标签", async () => {
+      // `#include` 和 shell 注释是最常见的假阳性,而假标签会污染整张标签清单。
+      harness.seed(
+        "a.md",
+        '---\ntitle: "A"\n---\n\n```c\n#include <stdio.h>\n```\n\n`#inline` 也不算\n\n#real 这个算\n',
+      );
+      renderNotebook();
+      await openTags();
+
+      await waitFor(() => expect(tagNames()).toEqual(["#real, 1 uses in 1 notes"]));
+    });
+
+    it("点开一条标签就地展开它的引用,再点收起", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n第一行\n#work 在这里\n');
+      renderNotebook();
+      await openTags();
+
+      const entry = await screen.findByRole("button", { name: "#work, 1 uses in 1 notes" });
+      expect(entry).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(entry);
+
+      expect(await screen.findByRole("button", { name: "A, line 6" })).toBeInTheDocument();
+      expect(entry).toHaveAttribute("aria-expanded", "true");
+
+      /* 侧栏只有一列宽,展开的引用会把标签清单顶下去 —— 不给一条收起的路等于
+         要靠滚动找回来。 */
+      fireEvent.click(entry);
+      expect(screen.queryByRole("button", { name: "A, line 6" })).toBeNull();
+    });
+
+    it("点一条引用跳到那一篇的那一行", async () => {
+      /* 与反链共用同一条跳转路:两边给的都是"某篇的某一行"。这里也顺带钉住行号的
+         坐标系 —— 文件第 6 行是 `#work 在这里`,而正文(拆掉 frontmatter)里那一行的
+         行首在 4。 */
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n第一行\n#work 在这里\n');
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Target");
+      await openTags();
+
+      fireEvent.click(await screen.findByRole("button", { name: "#work, 1 uses in 1 notes" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Source, line 6" }));
+
+      expect(await screen.findByDisplayValue("Source")).toBeInTheDocument();
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("引用上报的是 frontmatter 里的标题,不是文件名", async () => {
+      /* 与 Markio 的实质差异之一:文件名是 `cao-gao`、标题是 Weekly,显示文件名会让
+         用户以为跳错了地方。 */
+      harness.seed("cao-gao.md", '---\ntitle: "Weekly"\n---\n\n#work 周报\n');
+      renderNotebook();
+      await openTags();
+
+      fireEvent.click(await screen.findByRole("button", { name: "#work, 1 uses in 1 notes" }));
+      expect(await screen.findByRole("button", { name: "Weekly, line 5" })).toBeInTheDocument();
+    });
+
+    it("筛选框按归一化 key 匹配,大小写和 # 都无关", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#Work #work/deep #home\n');
+      renderNotebook();
+      await openTags();
+      await waitFor(() => expect(tagNames()).toHaveLength(3));
+
+      const filter = screen.getByRole("searchbox", { name: "Filter tags" });
+      fireEvent.change(filter, { target: { value: "#WORK" } });
+      await waitFor(() =>
+        expect(tagNames()).toEqual(["#Work, 1 uses in 1 notes", "#work/deep, 1 uses in 1 notes"]),
+      );
+
+      // 子串匹配:层级标签的末段常常才是用户记得的那半。
+      fireEvent.change(filter, { target: { value: "deep" } });
+      await waitFor(() => expect(tagNames()).toEqual(["#work/deep, 1 uses in 1 notes"]));
+
+      fireEvent.change(filter, { target: { value: "zzz" } });
+      await waitFor(() => expect(screen.getByText("No matching tags.")).toBeInTheDocument());
+    });
+
+    it("筛选没匹配和全库没标签是两句不同的话", async () => {
+      // "没有匹配"要能和"全库确实没有标签"分开 —— 否则用户会以为筛选框坏了。
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\nbody\n');
+      renderNotebook();
+      await openTags();
+
+      expect(await screen.findByText("No inline #tags in this vault yet.")).toBeInTheDocument();
+    });
+
+    it("切走再切回来,筛选和展开都还在", async () => {
+      // 用户切出去往往正是为了照着正文找该筛什么,回来清空等于白跑一趟。
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 在这里\n#home 别处\n');
+      renderNotebook();
+      await openTags();
+      await waitFor(() => expect(tagNames()).toHaveLength(2));
+
+      fireEvent.change(screen.getByRole("searchbox", { name: "Filter tags" }), {
+        target: { value: "work" },
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "#work, 1 uses in 1 notes" }));
+      await screen.findByRole("button", { name: "A, line 5" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Outline" }));
+      await screen.findByRole("complementary", { name: "Outline" });
+      fireEvent.click(screen.getByRole("button", { name: "Tags" }));
+
+      await screen.findByRole("complementary", { name: "Tags" });
+      expect(screen.getByRole("searchbox", { name: "Filter tags" })).toHaveValue("work");
+      expect(screen.getByRole("button", { name: "A, line 5" })).toBeInTheDocument();
+    });
+
+    it("没打开标签档时不扫全库", async () => {
+      // 和反链一样读每个文件的全文,而两档互斥 —— 停在别的档上不该付这次 IO。
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "A" });
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      fireEvent.click(await screen.findByRole("button", { name: /^Backlinks/ }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(harness.tagScanCalls).toBe(0);
+      // 反之也成立:开着标签档时不该顺手把链接也扫一遍。
+      fireEvent.click(screen.getByRole("button", { name: "Tags" }));
+      await waitFor(() => expect(harness.tagScanCalls).toBe(1));
+      const linkScans = harness.callCount("notebook_vault_links");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(harness.callCount("notebook_vault_links")).toBe(linkScans);
+    });
+
+    it("侧栏整个收起时不扫,重新展开才再扫", async () => {
+      /* 门控是两个条件的与:停在别的档上不扫(上一条),侧栏收起来也不扫。只验其中
+         一个的话另一个可以整条去掉而测试全绿 —— 而侧栏默认就是收起的,漏掉这一半
+         等于每次开着标签档的会话都在后台白扫。 */
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work\n');
+      renderNotebook();
+      await openTags();
+      await waitFor(() => expect(harness.tagScanCalls).toBe(1));
+
+      // 收起侧栏:标签档还是"当前那一档",但它不在场了。
+      fireEvent.click(screen.getByRole("button", { name: "Hide outline" }));
+      await waitFor(() => expect(screen.queryByRole("complementary", { name: "Tags" })).toBeNull());
+      expect(harness.tagScanCalls).toBe(1);
+
+      // 重新展开时回到同一档,这时才该再扫一次(收起期间别人可能改过 vault)。
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await screen.findByRole("complementary", { name: "Tags" });
+      await waitFor(() => expect(harness.tagScanCalls).toBe(2));
+    });
+
+    it("换笔记不重扫 —— 标签清单是全库的", async () => {
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\n#work\n');
+      harness.seed("Beta.md", '---\ntitle: "Beta"\n---\n\nbody\n');
+      renderNotebook();
+      await openTags();
+      await waitFor(() => expect(harness.tagScanCalls).toBe(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+      await screen.findByDisplayValue("Alpha");
+      // 标签档和另外两档的分工就在这里:它讲全库,不讲当前这一篇。
+      expect(harness.tagScanCalls).toBe(1);
+      expect(tagNames()).toEqual(["#work, 1 uses in 1 notes"]);
+    });
+
+    it("刷新会重扫,能看到外部新加的标签", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\nbody\n');
+      renderNotebook();
+      await openTags();
+      await waitFor(() =>
+        expect(screen.getByText("No inline #tags in this vault yet.")).toBeInTheDocument(),
+      );
+
+      harness.seed("late.md", '---\ntitle: "Late"\n---\n\n#later 后来加的\n');
+      fireEvent.click(screen.getByRole("button", { name: "Rescan the vault for tags" }));
+
+      expect(
+        await screen.findByRole("button", { name: "#later, 1 uses in 1 notes" }),
+      ).toBeInTheDocument();
+    });
+
+    it("扫描进行中不能再点刷新", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work\n');
+      renderNotebook();
+      await openTags();
+      const refresh = () => screen.getByRole("button", { name: "Rescan the vault for tags" });
+      await waitFor(() => expect(refresh()).toBeEnabled());
+
+      // 不 await:扫描还挂在飞行中的那一瞬间正是要断言的状态。
+      fireEvent.click(refresh());
+      expect(refresh()).toBeDisabled();
+
+      await waitFor(() => expect(refresh()).toBeEnabled());
+    });
+
+    it("扫描失败就地报错,并留住上一次的结果", async () => {
+      /* 清空成"什么都没有"比留着旧结果更糟 —— 那看起来像扫完了、确实没有。 */
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work\n');
+      renderNotebook();
+      const side = await openTags();
+      await waitFor(() => expect(tagNames()).toEqual(["#work, 1 uses in 1 notes"]));
+
+      harness.failTagScan = true;
+      fireEvent.click(screen.getByRole("button", { name: "Rescan the vault for tags" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("scanning tags failed");
+      // 就地显示,不占用面板那条错误条:标签是只读视图,扫不动它不影响读写笔记。
+      expect(side).toContainElement(alert);
+      expect(tagNames()).toEqual(["#work, 1 uses in 1 notes"]);
+    });
+
+    it("三档共用一列,切到标签时另外两个都不在场", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\n---\n\n# 一级标题\n\n#work\n');
+      renderNotebook();
+      await openTags();
+
+      expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
+      expect(screen.queryByRole("complementary", { name: "Backlinks" })).toBeNull();
     });
   });
 });
