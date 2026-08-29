@@ -210,6 +210,14 @@ pub fn save_note(
         }
     }
 
+    // 快照记在冲突检查**之后**:报冲突的那次保存并没有写盘,给它留快照会用
+    // 一堆内容相同的条目把 30 条的保留窗口冲掉。
+    if resolved.exists() {
+        if let Ok(vault) = state.owning_vault(&resolved) {
+            super::snapshots::record_before_save(&vault, &resolved, content);
+        }
+    }
+
     atomic_write(&resolved, content)?;
     let sig = signature_for_bytes(&resolved, content.as_bytes()).map_err(|e| e.to_string())?;
     state.record_open(&resolved, sig.clone())?;

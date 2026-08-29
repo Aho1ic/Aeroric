@@ -66,6 +66,29 @@ impl NotebookState {
         Ok(list)
     }
 
+    /// 找出 `file` 属于哪个已注册 vault。
+    ///
+    /// 有 vault 嵌套时取**最长**的那个(项目 vault 可能在全局 vault 之下,
+    /// 或者反过来)。取错的后果不是拒绝访问,而是 vault 私有数据(历史快照、
+    /// 索引)写进了另一个 vault 的目录里 —— 那种错误只会在很久以后才被发现。
+    ///
+    /// 参数需已过 `resolve_in_vaults`。
+    pub fn owning_vault(&self, file: &Path) -> Result<PathBuf, String> {
+        let inner = self.inner.lock().map_err(|e| e.to_string())?;
+        inner
+            .vaults
+            .iter()
+            .filter(|vault| file.starts_with(vault))
+            .max_by_key(|vault| vault.components().count())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Notebook path is outside every registered vault ({})",
+                    file.display()
+                )
+            })
+    }
+
     /// 校验 `target` 落在某个已注册 vault 内,返回校验后的绝对路径。
     ///
     /// `allow_missing` 为 true 时目标可以尚不存在(新建 / 保存新文件场景),

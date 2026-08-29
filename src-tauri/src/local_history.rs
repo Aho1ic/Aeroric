@@ -9,9 +9,32 @@ const SNAPSHOT_EXTENSION: &str = "txt";
 const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LIST_ENTRIES: usize = 100;
 
+/// 快照仓库的位置与保留策略。
+///
+/// 抽出来是因为随手记要用同一套机制,但三件事不一样:目录(`.notebook/history`
+/// 而不是 `.aeroric/local-history`,前者已经被树扫描排除)、保留条数、以及
+/// **最小间隔**。间隔是关键差异:代码编辑器的快照由显式保存触发,随手记是每
+/// 800ms 自动保存 —— 不限流的话 30 条快照只覆盖二十几秒,历史面板就没用了。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HistoryLayout {
+    /// 相对仓库根的快照目录。
+    pub dir: &'static str,
+    /// 每个文件保留的快照上限,超出的从最旧开始删。
+    pub max_entries: usize,
+    /// 两次快照之间的最小间隔。0 表示每次写入都留一条。
+    pub min_interval_ms: u64,
+}
+
+/// 代码文件的布局:显式保存触发,不限流。
+const CODE_LAYOUT: HistoryLayout = HistoryLayout {
+    dir: HISTORY_DIR,
+    max_entries: MAX_LIST_ENTRIES,
+    min_interval_ms: 0,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct LocalHistoryEntry {
+pub struct LocalHistoryEntry {
     pub id: String,
     pub file_path: String,
     pub relative_path: String,
@@ -21,7 +44,7 @@ pub(crate) struct LocalHistoryEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct LocalHistorySnapshot {
+pub struct LocalHistorySnapshot {
     pub entry: LocalHistoryEntry,
     pub content: String,
 }
@@ -33,7 +56,34 @@ pub(crate) fn record_snapshot_before_write(
 ) -> Result<Option<LocalHistoryEntry>, String> {
     let root = validate_project_root(project_path)?;
     let file = validate_file_path(&root, file_path)?;
-    record_snapshot_for_file(&root, &file, Some(next_content))
+    record_snapshot_for_file(CODE_LAYOUT, &root, &file, Some(next_content))
+}
+
+/// 记一条快照。路径由调用方保证已校验 —— 随手记有自己的 vault allowlist,
+/// 不走这里的 `validate_*`。
+pub(crate) fn record_snapshot_in(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+    next_content: Option<&str>,
+) -> Result<Option<LocalHistoryEntry>, String> {
+    record_snapshot_for_file(layout, root, file, next_content)
+}
+
+/// 同上,但无视 `min_interval_ms` 强制留一条。
+///
+/// 用于回滚前的兜底快照:限流的存在是为了压掉自动保存的噪音,而回滚是用户
+/// 主动的破坏性操作 —— 恰好落在限流窗口里就丢掉兜底,等于让回滚不可撤销。
+pub(crate) fn force_snapshot_in(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+) -> Result<Option<LocalHistoryEntry>, String> {
+    let unthrottled = HistoryLayout {
+        min_interval_ms: 0,
+        ..layout
+    };
+    record_snapshot_for_file(unthrottled, root, file, None)
 }
 
 pub(crate) fn list_entries(
@@ -42,8 +92,16 @@ pub(crate) fn list_entries(
 ) -> Result<Vec<LocalHistoryEntry>, String> {
     let root = validate_project_root(project_path)?;
     let file = validate_file_path(&root, file_path)?;
-    let relative_path = relative_file_path(&root, &file)?;
-    let history_dir = history_dir_for_relative_path(&root, &relative_path);
+    list_entries_in(CODE_LAYOUT, &root, &file)
+}
+
+pub(crate) fn list_entries_in(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+) -> Result<Vec<LocalHistoryEntry>, String> {
+    let relative_path = relative_file_path(root, file)?;
+    let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
     if !history_dir.exists() {
         return Ok(Vec::new());
     }
@@ -79,7 +137,7 @@ pub(crate) fn list_entries(
             .cmp(&a.created_at_ms)
             .then_with(|| entry_id_sequence(&b.id).cmp(&entry_id_sequence(&a.id)))
     });
-    entries.truncate(MAX_LIST_ENTRIES);
+    entries.truncate(layout.max_entries);
     Ok(entries)
 }
 
@@ -90,8 +148,17 @@ pub(crate) fn read_entry(
 ) -> Result<LocalHistorySnapshot, String> {
     let root = validate_project_root(project_path)?;
     let file = validate_file_path(&root, file_path)?;
-    let entry = entry_for_id(&root, &file, entry_id)?;
-    let content = fs::read_to_string(entry_path(&root, &entry.relative_path, entry_id))
+    read_entry_in(CODE_LAYOUT, &root, &file, entry_id)
+}
+
+pub(crate) fn read_entry_in(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+    entry_id: &str,
+) -> Result<LocalHistorySnapshot, String> {
+    let entry = entry_for_id(layout, root, file, entry_id)?;
+    let content = fs::read_to_string(entry_path(layout, root, &entry.relative_path, entry_id))
         .map_err(|e| e.to_string())?;
     Ok(LocalHistorySnapshot { entry, content })
 }
@@ -104,7 +171,7 @@ pub(crate) fn restore_entry(
     let root = validate_project_root(project_path)?;
     let file = validate_file_path(&root, file_path)?;
     let snapshot = read_entry(project_path, file_path, entry_id)?;
-    let _ = record_snapshot_for_file(&root, &file, Some(&snapshot.content))?;
+    let _ = record_snapshot_for_file(CODE_LAYOUT, &root, &file, Some(&snapshot.content))?;
     fs::write(&file, snapshot.content.as_bytes()).map_err(|e| e.to_string())?;
     Ok(snapshot)
 }
@@ -144,11 +211,12 @@ pub async fn restore_local_history_entry(
 }
 
 fn record_snapshot_for_file(
+    layout: HistoryLayout,
     root: &Path,
     file: &Path,
     skip_if_content_matches: Option<&str>,
 ) -> Result<Option<LocalHistoryEntry>, String> {
-    if is_inside_history_dir(root, file) {
+    if is_inside_history_dir(layout, root, file) {
         return Ok(None);
     }
     let metadata = fs::metadata(file).map_err(|e| e.to_string())?;
@@ -162,16 +230,51 @@ fn record_snapshot_for_file(
     if skip_if_content_matches.is_some_and(|next| next == current_content) {
         return Ok(None);
     }
-    create_snapshot(root, file, &current_content)
+    let relative_path = relative_file_path(root, file)?;
+    let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
+    if within_min_interval(layout, &history_dir) {
+        return Ok(None);
+    }
+    create_snapshot(layout, root, file, &current_content)
+}
+
+/// 距上一条快照还没到最小间隔。
+///
+/// 判据用**最新一条快照的时间戳**,不是文件 mtime:mtime 每次自动保存都会动,
+/// 拿它算间隔等于不限流。目录读不动(不存在 / 权限)时返回 false —— 宁可多留
+/// 一条快照,也不要因为一次读目录失败就静默丢掉历史。
+fn within_min_interval(layout: HistoryLayout, history_dir: &Path) -> bool {
+    if layout.min_interval_ms == 0 {
+        return false;
+    }
+    let Some(latest) = latest_entry_timestamp_ms(history_dir) else {
+        return false;
+    };
+    now_ms().saturating_sub(latest) < layout.min_interval_ms
+}
+
+fn latest_entry_timestamp_ms(history_dir: &Path) -> Option<u64> {
+    fs::read_dir(history_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some(SNAPSHOT_EXTENSION) {
+                return None;
+            }
+            entry_id_timestamp_ms(path.file_stem()?.to_str()?)
+        })
+        .max()
 }
 
 fn create_snapshot(
+    layout: HistoryLayout,
     root: &Path,
     file: &Path,
     content: &str,
 ) -> Result<Option<LocalHistoryEntry>, String> {
     let relative_path = relative_file_path(root, file)?;
-    let history_dir = history_dir_for_relative_path(root, &relative_path);
+    let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
     fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
     let base_id = now_ms().to_string();
 
@@ -181,7 +284,7 @@ fn create_snapshot(
         } else {
             format!("{base_id}-{suffix}")
         };
-        let path = entry_path(root, &relative_path, &id);
+        let path = entry_path(layout, root, &relative_path, &id);
         let mut file_handle = match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -202,17 +305,22 @@ fn create_snapshot(
             created_at_ms: entry_id_timestamp_ms(&base_id).unwrap_or_else(now_ms),
             size,
         };
-        prune_history_dir(&history_dir, MAX_LIST_ENTRIES)?;
+        prune_history_dir(&history_dir, layout.max_entries)?;
         return Ok(Some(entry));
     }
 
     Err("Could not create a unique local history snapshot".to_string())
 }
 
-fn entry_for_id(root: &Path, file: &Path, entry_id: &str) -> Result<LocalHistoryEntry, String> {
+fn entry_for_id(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+    entry_id: &str,
+) -> Result<LocalHistoryEntry, String> {
     validate_entry_id(entry_id)?;
     let relative_path = relative_file_path(root, file)?;
-    let path = entry_path(root, &relative_path, entry_id);
+    let path = entry_path(layout, root, &relative_path, entry_id);
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     if !metadata.is_file() {
         return Err("Local history entry is not a file".to_string());
@@ -277,17 +385,23 @@ fn relative_file_path(root: &Path, file: &Path) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-fn history_dir_for_relative_path(root: &Path, relative_path: &str) -> PathBuf {
-    root.join(HISTORY_DIR)
+/// 每个文件一个子目录,名字是相对路径的 hex 编码 —— 免得目录名里出现分隔符,
+/// 也免得大小写不敏感的文件系统把 `A.md` 和 `a.md` 的历史混在一起。
+fn history_dir_for_relative_path(
+    layout: HistoryLayout,
+    root: &Path,
+    relative_path: &str,
+) -> PathBuf {
+    root.join(layout.dir)
         .join(hex_encode(relative_path.as_bytes()))
 }
 
-fn entry_path(root: &Path, relative_path: &str, entry_id: &str) -> PathBuf {
-    history_dir_for_relative_path(root, relative_path).join(format!("{entry_id}.txt"))
+fn entry_path(layout: HistoryLayout, root: &Path, relative_path: &str, entry_id: &str) -> PathBuf {
+    history_dir_for_relative_path(layout, root, relative_path).join(format!("{entry_id}.txt"))
 }
 
-fn is_inside_history_dir(root: &Path, file: &Path) -> bool {
-    file.starts_with(root.join(HISTORY_DIR))
+fn is_inside_history_dir(layout: HistoryLayout, root: &Path, file: &Path) -> bool {
+    file.starts_with(root.join(layout.dir))
 }
 
 fn entry_id_timestamp_ms(entry_id: &str) -> Option<u64> {

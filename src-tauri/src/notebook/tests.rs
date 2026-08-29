@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::fs_ops::{self, SaveOutcome};
 use super::migrate::{self, slugify};
-use super::state::{resolve_within, NotebookState};
+use super::snapshots;
+use super::state::{resolve_within, FileSig, NotebookState};
 
 /// 每个测试一个独立临时目录。用 pid + 纳秒 + 计数器命名,并行跑也不会撞。
 fn temp_vault(label: &str) -> PathBuf {
@@ -341,6 +342,396 @@ fn tree_lists_notes_and_hides_private_and_skip_dirs() {
     assert_eq!(children[0].name, "c.md");
 
     std::fs::remove_dir_all(&vault).ok();
+}
+
+// ── 版本历史(快照)─────────────────────────────────────────────────────────
+
+/// 无视最小间隔连造若干条快照。
+///
+/// 走 `NOTE_LAYOUT` 换掉间隔而不是自己拼一个 layout:保留上限和目录必须还是
+/// 生产用的那两个值,否则这些测试验的是测试自己的常量。
+fn force_snapshots(vault: &Path, file: &Path, count: usize) {
+    let layout = crate::local_history::HistoryLayout {
+        min_interval_ms: 0,
+        ..snapshots::NOTE_LAYOUT
+    };
+    for index in 0..count {
+        // 每次都改一下内容:`record_snapshot_in` 会跳过"下一版和当前一样"的写入。
+        std::fs::write(file, format!("version {index}\n")).expect("seed content");
+        crate::local_history::record_snapshot_in(layout, vault, file, None).expect("snapshot");
+    }
+}
+
+fn history_dir(vault: &Path) -> PathBuf {
+    vault.join(".notebook").join("history")
+}
+
+/// 把已有快照的 id 往前挪一小时,让最小间隔窗口过期。
+///
+/// 限流看的是**最新快照的 id**(时间戳),不是文件 mtime,所以改名就够了。
+/// 存在的意义:没有它,任何"窗口外再保存一次"的行为都得等三分钟才测得到,
+/// 于是限流会把别的守卫一起遮住 —— 那些守卫就永远处在测不到的状态。
+fn age_snapshots(vault: &Path) {
+    let root = history_dir(vault);
+    for note_dir in std::fs::read_dir(&root).expect("read history root") {
+        let note_dir = note_dir.expect("history entry").path();
+        for snapshot in std::fs::read_dir(&note_dir).expect("read note history") {
+            let snapshot = snapshot.expect("snapshot entry").path();
+            let stem = snapshot
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("snapshot stem");
+            let (base, suffix) = match stem.split_once('-') {
+                Some((base, suffix)) => (base, format!("-{suffix}")),
+                None => (stem, String::new()),
+            };
+            let aged: u64 = base.parse::<u64>().expect("timestamp id") - 60 * 60 * 1000;
+            std::fs::rename(&snapshot, note_dir.join(format!("{aged}{suffix}.txt")))
+                .expect("age snapshot");
+        }
+    }
+}
+
+#[test]
+fn save_snapshots_the_previous_content_not_the_new_one() {
+    let vault = temp_vault("snap-before");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(entries.len(), 1, "one save must leave exactly one snapshot");
+    let snapshot = snapshots::read(&state, &path, &entries[0].id).expect("read");
+    // 快照存的是被覆盖掉的那一版。存成新内容的话历史里根本没有可回滚的东西。
+    assert_eq!(snapshot.content, "v1\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rapid_autosaves_share_one_snapshot() {
+    let vault = temp_vault("snap-throttle");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v0\n").expect("create");
+    let mut sig = fs_ops::read_note(&state, &path).expect("open").sig;
+    // 自动保存每 800ms 一次。连着来五次,只该留下第一条(其余落在间隔窗口内)。
+    for index in 1..=5 {
+        let outcome = fs_ops::save_note(
+            &state,
+            &path,
+            &format!("v{index}\n"),
+            Some(sig.clone()),
+            false,
+        )
+        .expect("save");
+        match outcome {
+            SaveOutcome::Saved { sig: next } => sig = next,
+            SaveOutcome::Conflict { .. } => panic!("own saves must not conflict"),
+        }
+    }
+
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(
+        entries.len(),
+        1,
+        "autosave bursts must not burn the retention window"
+    );
+    let snapshot = snapshots::read(&state, &path, &entries[0].id).expect("read");
+    // 留下来的必须是**最早**那一版 —— 那才是用户想回到的地方。
+    assert_eq!(snapshot.content, "v0\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn saving_identical_content_adds_no_snapshot() {
+    let vault = temp_vault("snap-dedup");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    let saved = fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+    let sig = match saved {
+        SaveOutcome::Saved { sig } => sig,
+        SaveOutcome::Conflict { .. } => panic!("own save must not conflict"),
+    };
+    assert_eq!(snapshots::list(&state, &path).expect("list").len(), 1);
+
+    // 让限流窗口过期,否则下面那次保存被限流拦下,而不是被"内容没变"拦下 ——
+    // 两道守卫叠在一起就分不清是哪一道在起作用。
+    age_snapshots(&vault);
+    fs_ops::save_note(&state, &path, "v2\n", Some(sig), false).expect("save again");
+
+    // 内容一模一样的保存不该产生快照:回滚到一个和当前完全相同的版本毫无意义,
+    // 而这种条目会把 30 条的窗口占掉。
+    let entries = snapshots::list(&state, &path).expect("list again");
+    assert_eq!(entries.len(), 1, "identical save must not add a snapshot");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn editing_again_after_the_window_adds_a_snapshot() {
+    let vault = temp_vault("snap-window");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    let saved = fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+    let sig = match saved {
+        SaveOutcome::Saved { sig } => sig,
+        SaveOutcome::Conflict { .. } => panic!("own save must not conflict"),
+    };
+
+    age_snapshots(&vault);
+    fs_ops::save_note(&state, &path, "v3\n", Some(sig), false).expect("save again");
+
+    // 限流只压同一段编辑里的连续自动保存。窗口过去之后必须重新开始记 ——
+    // 不然一条笔记的历史会永远停在第一次编辑那里。
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(entries.len(), 2, "throttle must expire, not stop history");
+    let newest = snapshots::read(&state, &path, &entries[0].id).expect("read newest");
+    assert_eq!(newest.content, "v2\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn throttle_measures_from_the_newest_snapshot() {
+    let vault = temp_vault("snap-newest");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let mut sig = fs_ops::read_note(&state, &path).expect("open").sig;
+    let mut save = |content: &str, sig: FileSig| match fs_ops::save_note(
+        &state,
+        &path,
+        content,
+        Some(sig),
+        false,
+    )
+    .expect("save")
+    {
+        SaveOutcome::Saved { sig } => sig,
+        SaveOutcome::Conflict { .. } => panic!("own save must not conflict"),
+    };
+
+    sig = save("v2\n", sig);
+    // 第一条快照挪老,让它落在窗口外。
+    age_snapshots(&vault);
+    sig = save("v3\n", sig);
+    // 现在历史里一条老、一条新。第三次保存必须被**新**的那条挡住。
+    assert_eq!(snapshots::list(&state, &path).expect("list").len(), 2);
+
+    save("v4\n", sig);
+
+    // 拿最旧那条算间隔的话,窗口永远显示"早就过期了",限流从第二条快照起就
+    // 彻底失效 —— 自动保存会重新开始每 800ms 写一条。
+    let entries = snapshots::list(&state, &path).expect("list again");
+    assert_eq!(
+        entries.len(),
+        2,
+        "throttle must look at the newest snapshot, not the oldest"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn conflicted_save_leaves_no_snapshot() {
+    let vault = temp_vault("snap-conflict");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "original\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(vault.join("note.md"), "external\n").expect("external write");
+
+    let outcome =
+        fs_ops::save_note(&state, &path, "mine\n", Some(opened.sig), false).expect("save");
+    assert!(matches!(outcome, SaveOutcome::Conflict { .. }));
+
+    // 冲突的保存没有写盘,给它留快照等于用没发生过的改动挤掉真实历史。
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert!(entries.is_empty(), "conflict must not create a snapshot");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn restore_rolls_back_and_keeps_the_overwritten_version() {
+    let vault = temp_vault("snap-restore");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "first\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "second\n", Some(opened.sig), false).expect("save");
+    let entries = snapshots::list(&state, &path).expect("list");
+    let first_id = entries[0].id.clone();
+
+    let restored = snapshots::restore(&state, &path, &first_id).expect("restore");
+
+    assert_eq!(restored.content, "first\n");
+    assert_eq!(
+        std::fs::read_to_string(vault.join("note.md")).expect("read"),
+        "first\n"
+    );
+    // 回滚本身必须可撤销:被它覆盖掉的 "second" 要在历史里躺着,而且不能因为
+    // 落在最小间隔窗口内就被限流丢掉。
+    let after = snapshots::list(&state, &path).expect("list again");
+    assert_eq!(after.len(), 2, "rollback must snapshot what it overwrote");
+    let newest = snapshots::read(&state, &path, &after[0].id).expect("read newest");
+    assert_eq!(newest.content, "second\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn restore_returns_a_baseline_the_next_save_accepts() {
+    let vault = temp_vault("snap-baseline");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "first\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "second\n", Some(opened.sig), false).expect("save");
+    let entries = snapshots::list(&state, &path).expect("list");
+    let restored = snapshots::restore(&state, &path, &entries[0].id).expect("restore");
+
+    // 回滚换掉了磁盘内容,前端手里的基线跟着换成 restored.sig。不返回新指纹的话
+    // 下一次保存会撞上一个我们自己造出来的"冲突"。
+    let outcome = fs_ops::save_note(&state, &path, "third\n", Some(restored.sig), false)
+        .expect("save after restore");
+    assert!(
+        matches!(outcome, SaveOutcome::Saved { .. }),
+        "restore must hand back a usable baseline"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn snapshots_stay_out_of_the_note_tree() {
+    let vault = temp_vault("snap-hidden");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+
+    // 落在 vault 私有目录里 —— 那是树扫描唯一排除掉的地方。
+    assert!(
+        history_dir(&vault).is_dir(),
+        "snapshots must live under the private dir"
+    );
+    let tree = fs_ops::read_tree(&state, &vault.to_string_lossy()).expect("tree");
+    let names: Vec<&str> = tree.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(names, vec!["note.md"], "history leaked into the note tree");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn history_keeps_only_the_newest_thirty_snapshots() {
+    let vault = temp_vault("snap-retention");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "seed\n").expect("create");
+
+    force_snapshots(&vault, Path::new(&path), 34);
+
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(entries.len(), 30, "retention cap must hold on disk");
+    // 数一遍磁盘:`list` 自己也会截断,只看它的长度分不出"裁剪生效"和
+    // "裁剪没生效但列表截断了"。
+    let on_disk = std::fs::read_dir(history_dir(&vault))
+        .expect("read history root")
+        .filter_map(Result::ok)
+        .flat_map(|dir| std::fs::read_dir(dir.path()).expect("read note history"))
+        .filter_map(Result::ok)
+        .count();
+    assert_eq!(
+        on_disk, 30,
+        "old snapshot files must be deleted, not hidden"
+    );
+    // 留下来的是最新的那批。
+    let newest = snapshots::read(&state, &path, &entries[0].id).expect("read newest");
+    assert_eq!(newest.content, "version 33\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn same_millisecond_snapshots_do_not_overwrite_each_other() {
+    let vault = temp_vault("snap-collision");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "seed\n").expect("create");
+
+    // 连着造 12 条不限流的快照。id 的基数是毫秒时间戳,这个循环必然有几条撞在
+    // 同一毫秒 —— 撞了要靠 `-N` 后缀分开,而不是后来的覆盖先来的。
+    force_snapshots(&vault, Path::new(&path), 12);
+
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(
+        entries.len(),
+        12,
+        "same-millisecond snapshots got clobbered"
+    );
+    let unique: HashSet<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(unique.len(), 12, "snapshot ids must be unique");
+    // 内容也要各自独立,不能只是文件名不同。
+    let mut contents: Vec<String> = entries
+        .iter()
+        .map(|entry| {
+            snapshots::read(&state, &path, &entry.id)
+                .expect("read")
+                .content
+        })
+        .collect();
+    contents.sort();
+    contents.dedup();
+    assert_eq!(contents.len(), 12, "snapshot bodies must all survive");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn nested_vault_notes_snapshot_into_their_own_vault() {
+    let outer = temp_vault("snap-outer");
+    let inner = outer.join("project").join(".aeroric").join("notes");
+    std::fs::create_dir_all(&inner).expect("mkdir inner");
+    let state = registered_state(&outer);
+    state.register_vault(&inner).expect("register inner");
+    let path = note_path(&inner, "note.md");
+
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+
+    // 两个 vault 嵌套时快照必须落在**最内层**那个里。落到外层的话项目笔记的
+    // 历史会写进用户 home,而删掉项目目录后历史还在那儿。
+    assert!(
+        history_dir(&inner).is_dir(),
+        "snapshot must land in the innermost vault"
+    );
+    assert!(
+        !history_dir(&outer).exists(),
+        "snapshot leaked into the outer vault"
+    );
+
+    std::fs::remove_dir_all(&outer).ok();
 }
 
 // ── 迁移 ───────────────────────────────────────────────────────────────────

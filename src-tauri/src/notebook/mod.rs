@@ -19,6 +19,7 @@
 pub mod fs_ops;
 pub mod html2md;
 pub mod migrate;
+pub mod snapshots;
 pub mod state;
 
 #[cfg(test)]
@@ -241,6 +242,40 @@ pub async fn notebook_rename_note(
     to: String,
 ) -> Result<(), String> {
     fs_ops::rename_note(&state, &from, &to)
+}
+
+// ── 版本历史 ───────────────────────────────────────────────────────────────
+
+/// 列出一条笔记的快照,新的在前。
+///
+/// 不复用 `list_local_history`:那个命令按项目根 + `.aeroric/local-history`
+/// 定位,而随手记的仓库根是 vault、目录是 `.notebook/history`,而且校验走的是
+/// vault allowlist 而不是项目根。
+#[tauri::command]
+pub async fn notebook_list_snapshots(
+    state: State<'_, NotebookState>,
+    path: String,
+) -> Result<Vec<crate::local_history::LocalHistoryEntry>, String> {
+    snapshots::list(&state, &path)
+}
+
+#[tauri::command]
+pub async fn notebook_read_snapshot(
+    state: State<'_, NotebookState>,
+    path: String,
+    entry_id: String,
+) -> Result<crate::local_history::LocalHistorySnapshot, String> {
+    snapshots::read(&state, &path, &entry_id)
+}
+
+/// 回滚到某条快照。回滚前会把当前内容也存成一条快照,所以这一步可撤销。
+#[tauri::command]
+pub async fn notebook_restore_snapshot(
+    state: State<'_, NotebookState>,
+    path: String,
+    entry_id: String,
+) -> Result<snapshots::RestoredNote, String> {
+    snapshots::restore(&state, &path, &entry_id)
 }
 
 // ── 迁移 ───────────────────────────────────────────────────────────────────
