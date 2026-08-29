@@ -149,7 +149,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     [searchQuery, searchableText],
   );
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
-  const { scheduleSave, cancelSave, saveStates } = useNoteAutosave({
+  const { scheduleSave, cancelSave, flushSave, saveStates } = useNoteAutosave({
     notes,
     setNotes,
     onError: setError,
@@ -447,13 +447,34 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     updateActiveNote({ body: nextBody });
   };
 
+  /**
+   * 面板自己的快捷键作用域。
+   *
+   * 挂在 `onKeyDownCapture` 上,所以在面板内部按下的键先到这里。命中的键一律
+   * `stopPropagation` —— 面板外面还有 window 级的监听(ProjectPage 的命令面板等),
+   * 不拦住的话一次按键会触发两件事。
+   *
+   * 只拦真正有对应行为的键。没有行为却拦下来更糟:用户会以为快捷键坏了,而实际上
+   * 是被我们吞掉的。所以 ⌘K 不在这里 —— 随手记还没有插入链接那类功能给它接。
+   */
   const handleNotebookShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLocaleLowerCase();
-    if (key !== "f" && key !== "h") return;
-    event.preventDefault();
-    event.stopPropagation();
-    openNotebookSearch(key === "h");
+
+    if (key === "f" || key === "h") {
+      event.preventDefault();
+      event.stopPropagation();
+      openNotebookSearch(key === "h");
+      return;
+    }
+
+    // ⌘S:随手记本来就自动保存,但用户会条件反射地按。不接的话这个键会落到
+    // WebView 的默认行为(「保存网页」)上去。接住 = 立刻把挂起的改动写掉。
+    if (key === "s") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeNote) flushSave(activeNote.id);
+    }
   };
 
   const updateNoteTitle = (noteId: string, title: string) => {

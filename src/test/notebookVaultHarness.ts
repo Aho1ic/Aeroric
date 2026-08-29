@@ -44,6 +44,9 @@ export class NotebookVaultHarness {
   /** 「在文件管理器里揭示」收到的参数。要断言的不只是被调用过,还有 allowlist
    *  根传的是 vault —— 传错了这个入口就变成任意路径揭示器。 */
   revealCalls: { path: string; projectPath: string }[] = [];
+  /** 落盘次数。「⌘S 在没有改动时不写盘」只能靠它看出来 —— 内容不变的写从
+   *  `read()` 上看不出区别。 */
+  saveCalls = 0;
 
   /** 直接往 vault 里放一个文件,模拟「磁盘上已经有笔记」。 */
   seed(fileName: string, content: string): string {
@@ -117,6 +120,7 @@ export class NotebookVaultHarness {
         return undefined;
 
       case "notebook_save_note": {
+        this.saveCalls += 1;
         const path = String(args.path);
         const content = String(args.content);
         const expected = args.expected as HarnessSig | null;

@@ -415,11 +415,13 @@ describe("NotebookPanel", () => {
 
     const math = document.querySelector(".notebook-math");
     expect(math).not.toBeNull();
+    // 等的是「渲染完了」而不是 data-math-source:后者在 `await getKatex()` **之前**
+    // 就写上了(见 noteVisuals 的 renderMathBlock),等它会早一拍放行,满负载跑
+    // 整个套件时 KaTeX 的动态 import 还没回来,下面那条 `.katex` 就会扑空。
+    await waitFor(() => expect(math?.querySelector(".katex")).not.toBeNull());
     // 原式留在 data-math-source 里 —— 渲染后 textContent 变成 KaTeX 的
     // HTML+MathML 拼接,复制/导出还要用原式。
-    await waitFor(() => expect(math?.getAttribute("data-math-source")).toBe("E=mc^2"));
-    // 真的渲染成功了(不是走错误分支),KaTeX 会挂上自己的类。
-    expect(math?.querySelector(".katex")).not.toBeNull();
+    expect(math?.getAttribute("data-math-source")).toBe("E=mc^2");
     expect(math?.classList.contains("notebook-math-error")).toBe(false);
 
     const mermaid = document.querySelector(".notebook-mermaid");
@@ -1017,6 +1019,87 @@ describe("NotebookPanel", () => {
       unregister();
       resetAppDialogHandlerForTests();
     }
+  });
+
+  describe("⌘S", () => {
+    it("不等防抖,立刻落盘", async () => {
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+      const notePath = harness.paths().find((path) => path.endsWith(".md")) ?? "";
+
+      vi.useFakeTimers();
+      try {
+        setEditorValue("typed but not yet debounced");
+        // 防抖是 800ms,这里只走 100ms —— 自动保存还没到期。
+        await act(async () => {
+          vi.advanceTimersByTime(100);
+        });
+        expect(harness.read(notePath)).not.toContain("typed but not yet debounced");
+
+        fireEvent.keyDown(screen.getByRole("region", { name: "Quick Notes" }), {
+          key: "s",
+          metaKey: true,
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+
+      await waitFor(() => expect(harness.read(notePath)).toContain("typed but not yet debounced"));
+    });
+
+    it("没有改动时不写盘", async () => {
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+      // 新建后自身会落一次盘,等它安静下来再数。
+      await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Saved"));
+      const before = harness.saveCalls;
+
+      fireEvent.keyDown(screen.getByRole("region", { name: "Quick Notes" }), {
+        key: "s",
+        metaKey: true,
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // 空写不是无害的:推高 mtime,还会在别人改过磁盘时弹出一个用户没有理由
+      // 看到的冲突框 —— 他刚才什么都没改。
+      expect(harness.saveCalls).toBe(before);
+    });
+
+    it("不冒泡到面板外面", async () => {
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+
+      // 面板外面还有 window 级的键盘监听(ProjectPage 的命令面板就是一个)。
+      // 不拦住的话一次 ⌘S 会同时触发面板内和面板外两件事。
+      const escaped: string[] = [];
+      const spy = (event: KeyboardEvent) => escaped.push(event.key);
+      window.addEventListener("keydown", spy);
+      try {
+        fireEvent.keyDown(screen.getByRole("region", { name: "Quick Notes" }), {
+          key: "s",
+          metaKey: true,
+        });
+        expect(escaped).toEqual([]);
+
+        // 对照:没接的键照常放过去,不然用户会以为快捷键坏了。⌘K 现在就是这一类
+        // —— 随手记还没有插入链接那种功能给它接。
+        fireEvent.keyDown(screen.getByRole("region", { name: "Quick Notes" }), {
+          key: "k",
+          metaKey: true,
+        });
+        expect(escaped).toEqual(["k"]);
+      } finally {
+        window.removeEventListener("keydown", spy);
+      }
+    });
   });
 
   describe("笔记列表右键菜单", () => {

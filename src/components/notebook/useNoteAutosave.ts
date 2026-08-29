@@ -45,6 +45,8 @@ export type NoteAutosave = {
   /** 取消挂起的保存。删除笔记时调,省掉一次无用的写(不是防"文件复活"的
    *  主防线,见 NotebookPanel 的 deleteNoteById 注释)。 */
   cancelSave: (noteId: string) => void;
+  /** 立刻落盘挂起的改动(⌘S)。没有挂起的改动时是空操作。 */
+  flushSave: (noteId: string) => void;
   /** 每条笔记的保存状态。缺省视为 `saved` —— 刚从磁盘读进来的就是和磁盘一致的。 */
   saveStates: Record<string, NoteSaveState>;
 };
@@ -199,6 +201,22 @@ export function useNoteAutosave({
     autosaveTimersRef.current.delete(noteId);
   };
 
+  /**
+   * 立刻落盘,不等防抖(⌘S)。
+   *
+   * 没有挂起的改动就什么都不做。空写不是无害的:它会推高 mtime,而且在别人改过
+   * 磁盘的情况下会弹出一个用户没有理由看到的冲突框 —— 他刚才什么都没改。
+   *
+   * 所以 ⌘S 的语义是「别等那 800ms」,不是「无论如何写一次」。
+   */
+  const flushSave = (noteId: string) => {
+    const pending = autosaveTimersRef.current.get(noteId);
+    if (!pending) return;
+    clearTimeout(pending);
+    autosaveTimersRef.current.delete(noteId);
+    void flushNote(noteId);
+  };
+
   // 卸载时把挂起的保存立刻发出去,不能只清定时器。
   //
   // 面板在 ProjectPage 里每次切视图都会卸载。只清定时器的话「敲完字马上切走」
@@ -216,5 +234,5 @@ export function useNoteAutosave({
     };
   }, []);
 
-  return { scheduleSave, cancelSave, saveStates };
+  return { scheduleSave, cancelSave, flushSave, saveStates };
 }
