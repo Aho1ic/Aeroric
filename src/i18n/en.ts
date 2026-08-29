@@ -2722,6 +2722,8 @@ export const en: Record<string, string> = {
   "notebook.stats": "{words} words · {minutes} min",
   "notebook.statsTitle": "{words} words, about {minutes} min to read",
   "notebook.outline": "Outline",
+  "notebook.showList": "Show note list",
+  "notebook.hideList": "Hide note list",
   "notebook.showOutline": "Show outline",
   "notebook.hideOutline": "Hide outline",
   "notebook.outlineSections": "Sections",

@@ -2622,6 +2622,8 @@ export const zh: Record<string, string> = {
   "notebook.stats": "{words} 字 · {minutes} 分钟",
   "notebook.statsTitle": "{words} 字,预计阅读 {minutes} 分钟",
   "notebook.outline": "大纲",
+  "notebook.showList": "显示笔记列表",
+  "notebook.hideList": "隐藏笔记列表",
   "notebook.showOutline": "显示大纲",
   "notebook.hideOutline": "隐藏大纲",
   "notebook.outlineSections": "章节",

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom";
 import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+import { installResizeObserverStub } from "./resizeObserverStub";
 
 // Testing Library 默认给 waitFor / findBy* 只留 1000ms。本仓库有多处真实防抖
 // (侧边栏搜索 180ms、任务落盘 350ms),叠上 v8 coverage 插桩与 CI 上的多进程争抢,
@@ -137,3 +138,6 @@ if (typeof HTMLCanvasElement !== "undefined") {
     () => stubContext,
   ) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 }
+
+// jsdom 没有 ResizeObserver,面板的三档布局要靠它测。
+installResizeObserverStub();

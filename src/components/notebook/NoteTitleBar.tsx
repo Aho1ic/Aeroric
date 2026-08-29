@@ -6,7 +6,7 @@
  * `[[wikilink]]` 按文件名连接,静默改名会断链(见 notebookVault 的注释)。
  */
 
-import { List, Trash2 } from "lucide-react";
+import { List, PanelLeft, Trash2 } from "lucide-react";
 import type React from "react";
 
 export type NoteViewMode = "edit" | "wysiwyg" | "split" | "read";
@@ -21,6 +21,10 @@ export type NoteTitleBarProps = {
   readingMinutes: number;
   mode: NoteViewMode;
   onModeChange: (mode: NoteViewMode) => void;
+  /** 紧凑档才给笔记列表的开关 —— 别的档位列表一直在,按钮只是噪音。 */
+  showListToggle: boolean;
+  listOpen: boolean;
+  onToggleList: () => void;
   /** 大纲面板的开关。 */
   outlineOpen: boolean;
   onToggleOutline: () => void;
@@ -36,6 +40,9 @@ export function NoteTitleBar({
   readingMinutes,
   mode,
   onModeChange,
+  showListToggle,
+  listOpen,
+  onToggleList,
   outlineOpen,
   onToggleOutline,
   onDelete,
@@ -83,6 +90,29 @@ export function NoteTitleBar({
         </span>
       )}
       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{"Markdown"}</span>
+      {showListToggle && (
+        <button
+          type="button"
+          aria-label={listOpen ? t("notebook.hideList") : t("notebook.showList")}
+          title={listOpen ? t("notebook.hideList") : t("notebook.showList")}
+          aria-pressed={listOpen}
+          onClick={onToggleList}
+          style={{
+            height: 26,
+            border: "1px solid var(--border-medium)",
+            borderRadius: 6,
+            background: listOpen ? "var(--control-active-bg)" : "var(--bg-card)",
+            color: listOpen ? "var(--control-active-fg)" : "var(--text-primary)",
+            cursor: "pointer",
+            padding: "0 6px",
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          <PanelLeft size={13} />
+        </button>
+      )}
       <button
         type="button"
         aria-label={outlineOpen ? t("notebook.hideOutline") : t("notebook.showOutline")}

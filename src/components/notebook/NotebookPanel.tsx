@@ -28,6 +28,7 @@ import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
 import { NoteStatusBar } from "./NoteStatusBar";
+import { useNoteLayoutTier } from "./useNoteLayoutTier";
 import { reorderSection } from "./noteSections";
 import { invalidateMermaidTheme, renderNoteVisualsLazy } from "./noteVisuals";
 import {
@@ -119,6 +120,10 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
+
+  const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
+  /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
+  const [listOpen, setListOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -638,8 +643,15 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     />
   ) : null;
 
+  /* 列宽按档位给。紧凑档把列表压到 0 而**不卸载**它 —— 卸载会让列表的滚动位置
+     丢掉,而且开关一次就要重建整列。压到 0 之后 NoteList 自己的 170px 最小宽会
+     溢出来盖住正文,所以外面套一层 overflow:hidden 裁掉。 */
+  const listWidth = tier === "wide" ? 220 : 170;
+  const listCollapsed = tier === "compact" && !listOpen;
+
   return (
     <section
+      ref={panelRef}
       aria-label={t("notebook.title")}
       onKeyDownCapture={handleNotebookShortcut}
       style={{
@@ -648,34 +660,37 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
         minHeight: 0,
         height: "100%",
         display: "grid",
-        gridTemplateColumns: "170px minmax(0, 1fr)",
+        gridTemplateColumns: `${listCollapsed ? 0 : listWidth}px minmax(0, 1fr)`,
         background: "var(--bg-panel)",
         color: "var(--text-primary)",
       }}
     >
-      <NoteList
-        notes={notes}
-        activeNote={activeNote}
-        loading={loading}
-        loadError={loadError}
-        renamingNoteId={renamingNoteId}
-        renamingTitle={renamingTitle}
-        onRenamingTitleChange={setRenamingTitle}
-        onCommitRename={commitRenameNote}
-        onCancelRename={cancelRenameNote}
-        onStartRename={startRenameNote}
-        onSelect={setActiveId}
-        onCreate={addNote}
-        setNoteItemRef={drag.setNoteItemRef}
-        onPointerDown={drag.onPointerDown}
-        onPointerMove={drag.onPointerMove}
-        onPointerUp={drag.onPointerUp}
-        onPointerCancel={drag.onPointerCancel}
-        draggedNoteId={drag.draggedNoteId}
-        dragOverNoteId={drag.dragOverNoteId}
-        suppressNextClickRef={drag.suppressNextClickRef}
-        t={t}
-      />
+      {/* 压到 0 宽时 NoteList 的最小宽会溢出来盖住正文,这层负责裁掉。 */}
+      <div style={{ minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden" }}>
+        <NoteList
+          notes={notes}
+          activeNote={activeNote}
+          loading={loading}
+          loadError={loadError}
+          renamingNoteId={renamingNoteId}
+          renamingTitle={renamingTitle}
+          onRenamingTitleChange={setRenamingTitle}
+          onCommitRename={commitRenameNote}
+          onCancelRename={cancelRenameNote}
+          onStartRename={startRenameNote}
+          onSelect={setActiveId}
+          onCreate={addNote}
+          setNoteItemRef={drag.setNoteItemRef}
+          onPointerDown={drag.onPointerDown}
+          onPointerMove={drag.onPointerMove}
+          onPointerUp={drag.onPointerUp}
+          onPointerCancel={drag.onPointerCancel}
+          draggedNoteId={drag.draggedNoteId}
+          dragOverNoteId={drag.dragOverNoteId}
+          suppressNextClickRef={drag.suppressNextClickRef}
+          t={t}
+        />
+      </div>
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {activeNote ? (
           <>
@@ -687,6 +702,9 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               readingMinutes={noteStats.readingMinutes}
               mode={mode}
               onModeChange={switchMode}
+              showListToggle={tier === "compact"}
+              listOpen={listOpen}
+              onToggleList={() => setListOpen((open) => !open)}
               outlineOpen={outlineOpen}
               onToggleOutline={() => setOutlineOpen((open) => !open)}
               onDelete={deleteActiveNote}

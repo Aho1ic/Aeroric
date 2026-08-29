@@ -6,6 +6,7 @@ import { NotebookPanel } from "../components/notebook/NotebookPanel";
 import { EditorView } from "@uiw/react-codemirror";
 import { NotebookVaultHarness } from "./notebookVaultHarness";
 import { registerAppDialogHandler, resetAppDialogHandlerForTests } from "../lib/appDialog";
+import { triggerResize } from "./resizeObserverStub";
 
 /* 随手记的笔记现在是磁盘上的 .md 文件,新建 / 保存 / 删除都要过 Tauri 命令。
  * 用一个内存 vault 顶上,这样这些测试仍然在验证真实行为(写进去能读回来、
@@ -306,6 +307,45 @@ describe("NotebookPanel", () => {
     }
 
     await waitFor(() => expect(harness.read(notePath)).toContain("first second"));
+  });
+
+  it("collapses the note list in the compact tier and reopens it from the toggle", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    await user.type(screen.getByRole("textbox", { name: "Quick note name" }), "Compact");
+
+    // jsdom 一律量到 0,所以宽度得自己喂。400px 是面板在项目视图里的常见宽度。
+    const panel = screen.getByRole("region", { name: "Quick Notes" });
+    panel.getBoundingClientRect = () => ({ width: 400, height: 600 }) as DOMRect;
+    act(() => triggerResize());
+
+    // 紧凑档:列宽压到 0,整宽让给正文。列表**没有被卸载** —— 卸载会丢掉它的
+    // 滚动位置,而且开关一次就要重建整列。
+    expect(panel.style.gridTemplateColumns).toBe("0px minmax(0, 1fr)");
+    expect(screen.getByRole("button", { name: "Compact" })).toBeInTheDocument();
+
+    // 开关把它拉回来。
+    await user.click(screen.getByRole("button", { name: "Show note list" }));
+    expect(panel.style.gridTemplateColumns).toBe("170px minmax(0, 1fr)");
+
+    // 正文一路没丢。
+    expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Compact");
+  });
+
+  it("widens the note list in the wide tier and hides the list toggle", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+
+    const panel = screen.getByRole("region", { name: "Quick Notes" });
+    panel.getBoundingClientRect = () => ({ width: 1200, height: 600 }) as DOMRect;
+    act(() => triggerResize());
+
+    expect(panel.style.gridTemplateColumns).toBe("220px minmax(0, 1fr)");
+    // 宽档列表一直在,开关只会是噪音。
+    expect(screen.queryByRole("button", { name: "Show note list" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide note list" })).toBeNull();
   });
 
   it("reports the save lifecycle in the status bar", async () => {
