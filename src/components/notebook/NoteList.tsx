@@ -9,6 +9,8 @@
 
 import type React from "react";
 import { FileText, GripVertical, Plus, Trash2 } from "lucide-react";
+import { noteIconComponent } from "./NoteIconPicker";
+import type { NoteIconName } from "./noteIcons";
 import type { NotebookNote } from "./notebookStore";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 
@@ -42,6 +44,8 @@ export type NoteListProps = {
   dragOverNoteId: string | null;
   /** 拖拽结束后要吞掉紧随的 click,否则会误切换笔记。 */
   suppressNextClickRef: React.MutableRefObject<boolean>;
+  /** 一条笔记的自定义图标。返回 undefined 表示用默认图标。 */
+  iconOf?: (noteId: string) => NoteIconName | undefined;
   /** 列表底部的附件分区。由面板构造(它持有 vault 和插入逻辑)。 */
   attachmentSection?: React.ReactNode;
   t: (key: string, vars?: Record<string, string>) => string;
@@ -70,6 +74,7 @@ export function NoteList({
   draggedNoteId,
   dragOverNoteId,
   suppressNextClickRef,
+  iconOf,
   attachmentSection,
   t,
 }: NoteListProps) {
@@ -252,6 +257,27 @@ export function NoteList({
                 >
                   <GripVertical size={14} strokeWidth={2} />
                 </button>
+                {(() => {
+                  /* 自定义图标。`aria-hidden` + 不可聚焦:它是装饰,行的可及名
+                     由标题按钮给出。加进可及名会让屏读把"书 周报"读成一个整体,
+                     而"书"只是用户挑的一个符号。 */
+                  const iconName = iconOf?.(note.id);
+                  if (!iconName) return null;
+                  const Icon = noteIconComponent(iconName);
+                  return (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        flexShrink: 0,
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      <Icon size={13} />
+                    </span>
+                  );
+                })()}
                 <button
                   type="button"
                   title={note.title}

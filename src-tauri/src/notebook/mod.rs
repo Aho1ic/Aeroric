@@ -125,6 +125,29 @@ pub async fn notebook_write_order(
     blocking(move || fs_ops::write_order(&resolved, &names)).await
 }
 
+/// 读自定义图标(vault 相对路径 → 图标名)。缺失或损坏时返回空表 —— 图标丢了
+/// 只是回落到默认图标,不该让面板打不开。
+#[tauri::command]
+pub async fn notebook_read_icons(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || Ok(fs_ops::read_icons(&resolved))).await
+}
+
+/// 写自定义图标。整张表一起写 —— 图标只在用户点选时改,一次一张表比维护
+/// 增删两条命令简单,也不会出现"删到一半"的中间态。
+#[tauri::command]
+pub async fn notebook_write_icons(
+    state: State<'_, NotebookState>,
+    vault: String,
+    icons: std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || fs_ops::write_icons(&resolved, &icons)).await
+}
+
 #[tauri::command]
 pub async fn notebook_open_note(
     state: State<'_, NotebookState>,

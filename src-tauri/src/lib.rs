@@ -918,6 +918,8 @@ pub fn run() {
             notebook::notebook_read_tree,
             notebook::notebook_read_order,
             notebook::notebook_write_order,
+            notebook::notebook_read_icons,
+            notebook::notebook_write_icons,
             notebook::notebook_open_note,
             notebook::notebook_close_note,
             notebook::notebook_save_note,

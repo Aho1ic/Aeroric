@@ -40,10 +40,14 @@ import {
   restoreNoteSnapshot,
   restoreTrashItem,
   revealNoteInFileManager,
+  readNoteIcons,
   statNote,
   vaultIndex,
+  writeNoteIcons,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
+import { NoteIconPicker, type NoteIconPickerState } from "./NoteIconPicker";
+import { noteIconOf, withNoteIcon, type NoteIconName } from "./noteIcons";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import {
   NotePropertiesSheet,
@@ -164,6 +168,9 @@ function NotebookPanelContent({
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
   const [listMenu, setListMenu] = useState<NoteListContextMenuState | null>(null);
+  const [iconPicker, setIconPicker] = useState<NoteIconPickerState | null>(null);
+  /** 自定义图标表(vault 相对路径 → 图标名),来自 `.notebook/icons.json`。 */
+  const [noteIcons, setNoteIcons] = useState<Record<string, string>>({});
   /** 全库标题索引:路径 → frontmatter 里的真实标题。`[[链接]]` 的解析要用它。
    *
    * 笔记列表只读目录项,未读入的笔记 `title` 是文件名 stem。而标题存在
@@ -344,6 +351,26 @@ function NotebookPanelContent({
       } catch {
         /* 索引扫不动不该影响面板:笔记照样能读能写,只是按标题写的链接暂时解析
            不到(退化成只认文件名)。这不值得占用那条错误提示条。 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [vault]);
+
+  /* 自定义图标表。和标题索引一样只在 vault 就绪时读一次 —— 之后的改动都经过
+     `pickNoteIcon`,那里同时更新内存和磁盘。 */
+  useEffect(() => {
+    if (!vault) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const table = await readNoteIcons(vault);
+        if (cancelled) return;
+        setNoteIcons(table);
+      } catch {
+        /* 读不到就全用默认图标。这不该占用错误提示条:图标是装饰,而那条提示是
+           用来说"你的笔记出事了"的。 */
       }
     })();
     return () => {
@@ -1171,8 +1198,31 @@ function NotebookPanelContent({
     if (action === "table") format.applyTable();
   };
 
+  /* 选一个图标(null = 恢复默认)。
+   *
+   * 乐观更新:先换内存里那张表让列表当场变,再写盘。写失败就回滚并报错 ——
+   * 留着一个「看起来改了、重开面板又变回去」的图标比当场说失败更难查。 */
+  const pickNoteIcon = (noteId: string, icon: NoteIconName | null) => {
+    setIconPicker(null);
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    const next = withNoteIcon(noteIcons, vault, noteId, icon);
+    // 同一个引用表示没变化(重复点同一个图标),那就不必写盘。
+    if (next === noteIcons) return;
+    const previous = noteIcons;
+    setNoteIcons(next);
+    void writeNoteIcons(vault, next).catch((error: unknown) => {
+      setNoteIcons(previous);
+      setError(errorText(error));
+    });
+  };
+
   const runListMenuAction = (action: NoteListContextMenuAction) => {
     const noteId = listMenu?.noteId;
+    // 菜单马上关掉,但坐标要留着 —— 「改图标」的选择器接在同一个位置弹出。
+    const menuAt = listMenu ? { x: listMenu.x, y: listMenu.y } : null;
     setListMenu(null);
     if (!noteId) return;
     const target = notes.find((note) => note.id === noteId);
@@ -1195,6 +1245,13 @@ function NotebookPanelContent({
       // 而列表里的笔记正文往往还没读入,那个数会是 0。
       setActiveId(noteId);
       openProperties(noteId);
+      return;
+    }
+    if (action === "icon") {
+      // 沿用右键那一刻的坐标:选择器就该出现在鼠标那里,而菜单已经关掉了。
+      // 不切当前笔记 —— 改图标只动列表上的一个符号,把用户手上正在编辑的那篇
+      // 顶掉是纯粹的打扰。
+      setIconPicker({ x: menuAt?.x ?? 0, y: menuAt?.y ?? 0, noteId });
       return;
     }
     if (action === "trash") {
@@ -1297,6 +1354,7 @@ function NotebookPanelContent({
       {/* 压到 0 宽时 NoteList 的最小宽会溢出来盖住正文,这层负责裁掉。 */}
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden" }}>
         <NoteList
+          iconOf={(noteId) => noteIconOf(noteIcons, vault ?? "", noteId)}
           notes={notes}
           activeNote={activeNote}
           loading={loading}
@@ -1483,6 +1541,15 @@ function NotebookPanelContent({
       </div>
       {contextMenu && <NoteContextMenu state={contextMenu} onAction={runContextMenuAction} t={t} />}
       {listMenu && <NoteListContextMenu state={listMenu} onAction={runListMenuAction} t={t} />}
+      {iconPicker && (
+        <NoteIconPicker
+          state={iconPicker}
+          current={noteIconOf(noteIcons, vault ?? "", iconPicker.noteId)}
+          onPick={(icon) => pickNoteIcon(iconPicker.noteId, icon)}
+          onClose={() => setIconPicker(null)}
+          t={t}
+        />
+      )}
       {/* 历史面板铺在整个 grid 上面(它自己是 absolute inset:0),所以放在
           最后、两列**外面** —— 放进正文那一列的话会被列宽裁掉。 */}
       {history && historyNote && (

@@ -14,9 +14,13 @@ import { triggerResize } from "./resizeObserverStub";
  * 冲突真的会触发),而不是验证 mock 被调用过。 */
 let harness: NotebookVaultHarness;
 
+/* 注意 `async` 不是可以省的:harness 的失败分支是同步 `throw`,而真实 `invoke`
+ * 只会以 rejection 的形式报错。写成 `Promise.resolve(harness.handle(...))` 的话
+ * 抛错会在 promise 生成之前同步逃出调用点,凡是"发出去不等结果、用 .catch 收错"
+ * 的写法都会变成未捕获异常 —— 测到的是 mock 的怪癖,不是产品行为。 */
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (command: string, args?: Record<string, unknown>) =>
-    Promise.resolve(harness.handle(command, args ?? {})),
+  invoke: async (command: string, args?: Record<string, unknown>) =>
+    harness.handle(command, args ?? {}),
 }));
 
 /* 剪贴板:面板写走 `navigator.clipboard.writeText`、读走 Tauri 的 clipboard 插件
@@ -2600,6 +2604,177 @@ describe("NotebookPanel", () => {
       const leave = await screen.findByRole("button", { name: "Half screen" });
       expect(iconOf(leave)).toBe("lucide-minimize2");
       expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
+    });
+  });
+  describe("自定义图标", () => {
+    async function openRowMenu(name: string) {
+      const row = screen.getByRole("button", { name }).closest("[data-notebook-note-row]");
+      if (!row) throw new Error(`no row for ${name}`);
+      fireEvent.contextMenu(row);
+      return screen.getByRole("menu", { name: "Quick note actions" });
+    }
+
+    /** 打开某条笔记的图标选择器。 */
+    async function openPicker(name: string) {
+      await openRowMenu(name);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Change icon" }));
+      return screen.findByRole("dialog", { name: "Change icon" });
+    }
+
+    /** 行上那个装饰图标的 lucide 名字。没有就返回空串。 */
+    function rowIcon(name: string): string {
+      const row = screen.getByRole("button", { name }).closest("[data-notebook-note-row]");
+      const svg = row?.querySelector('span[aria-hidden="true"] svg');
+      const cls = svg?.getAttribute("class") ?? "";
+      return cls.split(/\s+/).find((n) => n.startsWith("lucide-")) ?? "";
+    }
+
+    it("挑一个图标:列表当场变,并且真的写进了图标表", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+      expect(rowIcon("Target")).toBe("");
+
+      await openPicker("Target");
+      fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+
+      await waitFor(() => expect(rowIcon("Target")).toBe("lucide-book"));
+      // 键是 vault 相对路径,不是绝对路径 —— vault 搬走之后图标还在。
+      await waitFor(() => expect(harness.iconTable()).toEqual({ "Target.md": "book" }));
+      // 挑完就关,不用再点一次。
+      expect(screen.queryByRole("dialog", { name: "Change icon" })).toBeNull();
+    });
+
+    it("上次会话留下的图标在面板打开时就显示出来", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seedIcons({ "Target.md": "flame" });
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await waitFor(() => expect(rowIcon("Target")).toBe("lucide-flame"));
+    });
+
+    it("恢复默认把图标去掉,并从表里删掉那个键", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nbody\n');
+      harness.seedIcons({ "Target.md": "book", "Other.md": "star" });
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+      await waitFor(() => expect(rowIcon("Target")).toBe("lucide-book"));
+
+      await openPicker("Target");
+      fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+
+      await waitFor(() => expect(rowIcon("Target")).toBe(""));
+      /* 键要真的被删掉而不是存成空串 —— 空串会一直占着位置,而且下一版如果给空串
+         赋了含义就会解释成别的东西。同时别人的图标不能被顺手清掉。 */
+      await waitFor(() => expect(harness.iconTable()).toEqual({ "Other.md": "star" }));
+    });
+
+    it("选择器开在右键的那个位置", async () => {
+      /* 右键菜单是在鼠标处弹的,图标选择器接着它出现,却跑到屏幕左上角的话,
+         用户得把鼠标横穿整个窗口才能选。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      const row = (await screen.findByRole("button", { name: "Target" })).closest(
+        "[data-notebook-note-row]",
+      );
+      if (!row) throw new Error("no row");
+      fireEvent.contextMenu(row, { clientX: 314, clientY: 159 });
+      fireEvent.click(screen.getByRole("menuitem", { name: "Change icon" }));
+
+      const picker = await screen.findByRole("dialog", { name: "Change icon" });
+      expect(picker.style.left).toBe("314px");
+      expect(picker.style.top).toBe("159px");
+      // 菜单本身要让位,两层浮层叠着看不清。
+      expect(screen.queryByRole("menu", { name: "Quick note actions" })).toBeNull();
+    });
+
+    it("没设过图标时「恢复默认」是禁用的", async () => {
+      // 无事可做的按钮点下去只会让人怀疑是不是没生效。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openPicker("Target");
+      expect(screen.getByRole("button", { name: "Reset to default" })).toBeDisabled();
+    });
+
+    it("当前图标在选择器里是按下态", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seedIcons({ "Target.md": "book" });
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openPicker("Target");
+      expect(screen.getByRole("button", { name: "Reading" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(screen.getByRole("button", { name: "Goal" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("写盘失败时图标回滚,并报错", async () => {
+      /* 留着一个「看起来改了、重开面板又变回去」的图标比当场说失败更难查。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      harness.failIconWrite = "write";
+      await openPicker("Target");
+      fireEvent.click(screen.getByRole("button", { name: "Reading" }));
+
+      expect(await screen.findByText("writing icons failed")).toBeInTheDocument();
+      await waitFor(() => expect(rowIcon("Target")).toBe(""));
+    });
+
+    it("改图标不把当前笔记顶掉", async () => {
+      // 改图标只动列表上的一个符号,把用户手上正在编辑的那篇顶掉是纯粹的打扰。
+      harness.seed("Editing.md", '---\ntitle: "Editing"\n---\n\n正在写\n');
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Editing" });
+      fireEvent.click(screen.getByRole("button", { name: "Editing" }));
+      await screen.findByDisplayValue("Editing");
+
+      await openPicker("Other");
+      fireEvent.click(screen.getByRole("button", { name: "Goal" }));
+
+      await waitFor(() => expect(rowIcon("Other")).toBe("lucide-target"));
+      // 标题框还是 Editing,不是 Other。
+      expect(screen.getByDisplayValue("Editing")).toBeInTheDocument();
+    });
+
+    it("图标是装饰,不进行的可及名", async () => {
+      /* 加进可及名会让屏读把「书 周报」读成一个整体,而「书」只是用户挑的一个符号。
+         这条同时守着测试自己:全库的行查询都按 `{ name: 标题 }` 找,图标一旦进了
+         可及名,那些查询会集体失配。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seedIcons({ "Target.md": "book" });
+      renderNotebook();
+
+      const row = await screen.findByRole("button", { name: "Target" });
+      expect(row.textContent).toBe("Target");
+      const decoration = row
+        .closest("[data-notebook-note-row]")
+        ?.querySelector('span[aria-hidden="true"] svg');
+      expect(decoration).not.toBeNull();
+    });
+
+    it("图标表读不出来时面板照常打开,只是没有图标", async () => {
+      // 图标是装饰,读失败不该占用那条"你的笔记出事了"的提示。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seedIcons({ "Target.md": "book" });
+      harness.failIconWrite = "read";
+      renderNotebook();
+
+      await screen.findByRole("button", { name: "Target" });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(rowIcon("Target")).toBe("");
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 });

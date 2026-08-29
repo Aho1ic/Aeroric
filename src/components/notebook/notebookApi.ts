@@ -364,6 +364,21 @@ export function statNote(path: string): Promise<NoteStat> {
   return invoke<NoteStat>("notebook_note_stat", { path });
 }
 
+/**
+ * 读自定义图标表(vault 相对路径 → 图标名)。
+ *
+ * 存在 vault 的 `.notebook/icons.json` 里,不是浏览器存储 —— 图标跟着笔记走,
+ * 用户同步或搬走整个 vault 时不会留在原来那台机器上。
+ */
+export function readNoteIcons(vault: string): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("notebook_read_icons", { vault });
+}
+
+/** 写自定义图标表。整张表一起写,不做增量合并。 */
+export function writeNoteIcons(vault: string, icons: Record<string, string>): Promise<void> {
+  return invoke<void>("notebook_write_icons", { vault, icons });
+}
+
 /** 索引里一篇笔记的路径与真实标题。`path` 与笔记列表里的 `id` 是同一个值。 */
 export type VaultIndexEntry = {
   path: string;

@@ -5,6 +5,7 @@
 //! - 写入前必须确认"磁盘上的内容还是我以为的那个",否则报冲突让用户决定
 //! - 新建用 `create_new`,不覆盖已有文件
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -434,4 +435,32 @@ pub fn write_order(vault: &Path, names: &[String]) -> Result<(), String> {
         .map_err(|e| format!("Cannot create {}: {e}", private.display()))?;
     let text = serde_json::to_string(names).map_err(|e| e.to_string())?;
     atomic_write(&order_file(vault), &text)
+}
+
+/// 自定义图标的落盘位置。
+fn icons_file(vault: &Path) -> PathBuf {
+    private_dir(vault).join("icons.json")
+}
+
+/// 读自定义图标(vault 相对路径 → 图标名)。
+///
+/// 存在 vault 私有目录而不是浏览器存储里,和 `order.json` 同一个理由:随手记刚
+/// 从 localStorage 迁到磁盘,图标该跟着笔记走 —— 用户同步或搬走整个 vault 时
+/// 图标不该留在原来那台机器上。
+///
+/// 键是 vault 相对路径而不是绝对路径,同样照 `order.json`:vault 整个目录被搬走
+/// 之后图标还在。
+pub fn read_icons(vault: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(icons_file(vault)) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// 写自定义图标。整张表一起写 —— 合并语义会让"恢复默认图标"变成写不掉的操作。
+///
+/// 不需要自己 `create_dir_all`:`atomic_write` 已经建过目标的父目录。
+pub fn write_icons(vault: &Path, icons: &BTreeMap<String, String>) -> Result<(), String> {
+    let text = serde_json::to_string(icons).map_err(|e| e.to_string())?;
+    atomic_write(&icons_file(vault), &text)
 }

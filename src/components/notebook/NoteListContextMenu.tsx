@@ -9,7 +9,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { Copy, FolderOpen, History, Info, Pencil, Trash2 } from "lucide-react";
+import { Copy, FolderOpen, History, Info, Pencil, Smile, Trash2 } from "lucide-react";
 import { zLayers } from "../../styles/zLayers";
 
 export type NoteListContextMenuState = {
@@ -21,6 +21,7 @@ export type NoteListContextMenuState = {
 
 export type NoteListContextMenuAction =
   | "rename"
+  | "icon"
   | "history"
   | "properties"
   | "reveal"
@@ -36,6 +37,7 @@ export type NoteListContextMenuProps = {
 export function NoteListContextMenu({ state, onAction, t }: NoteListContextMenuProps) {
   const items: [NoteListContextMenuAction, string, LucideIcon, boolean][] = [
     ["rename", t("notebook.renameMemo"), Pencil, false],
+    ["icon", t("notebook.iconChange"), Smile, false],
     ["history", t("notebook.historyOpen"), History, false],
     ["properties", t("notebook.propertiesOpen"), Info, false],
     ["reveal", t("file.openInSystemFolder"), FolderOpen, false],

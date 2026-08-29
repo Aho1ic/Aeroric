@@ -2501,3 +2501,61 @@ fn vault_index_finds_a_title_field_that_is_not_on_the_first_line() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+// ── 自定义图标 ─────────────────────────────────────────────────────────────
+
+#[test]
+fn icons_round_trip_through_the_private_dir() {
+    let vault = temp_vault("icons-round-trip");
+    let mut icons = std::collections::BTreeMap::new();
+    icons.insert("Note.md".to_string(), "book".to_string());
+    icons.insert("sub/Deep.md".to_string(), "target".to_string());
+
+    fs_ops::write_icons(&vault, &icons).expect("write");
+    assert_eq!(fs_ops::read_icons(&vault), icons);
+    // 落在 vault 私有目录里 —— 图标要跟着笔记走,用户搬走整个 vault 时不该留在
+    // 原来那台机器上。
+    assert!(vault.join(".notebook/icons.json").is_file());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn icons_read_returns_empty_when_missing_or_corrupt() {
+    let vault = temp_vault("icons-corrupt");
+    // 还没设过任何图标。
+    assert!(fs_ops::read_icons(&vault).is_empty());
+
+    std::fs::create_dir_all(fs_ops::private_dir(&vault)).expect("mkdir");
+    std::fs::write(vault.join(".notebook/icons.json"), "{ not json").expect("seed");
+    // 损坏的表回落到空,不该让面板打不开 —— 图标丢了只是回到默认图标。
+    assert!(fs_ops::read_icons(&vault).is_empty());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn icons_write_creates_the_private_dir_and_replaces_the_whole_table() {
+    let vault = temp_vault("icons-replace");
+    // 私有目录还不存在(全新 vault 里第一次设图标就是这个情形)。
+    assert!(!fs_ops::private_dir(&vault).exists());
+
+    let mut first = std::collections::BTreeMap::new();
+    first.insert("A.md".to_string(), "book".to_string());
+    first.insert("B.md".to_string(), "target".to_string());
+    fs_ops::write_icons(&vault, &first).expect("write");
+    // 目录是写的时候顺手建出来的,不需要调用方先准备好。
+    assert!(fs_ops::private_dir(&vault).is_dir());
+
+    // 整张表替换:第二次写只留 A,B 必须消失。合并语义会让"恢复默认图标"
+    // 变成写不掉的操作。
+    let mut second = std::collections::BTreeMap::new();
+    second.insert("A.md".to_string(), "flame".to_string());
+    fs_ops::write_icons(&vault, &second).expect("write");
+
+    let read = fs_ops::read_icons(&vault);
+    assert_eq!(read.get("A.md").map(String::as_str), Some("flame"));
+    assert_eq!(read.get("B.md"), None, "B 没被清掉");
+
+    std::fs::remove_dir_all(&vault).ok();
+}

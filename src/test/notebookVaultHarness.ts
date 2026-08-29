@@ -77,6 +77,20 @@ export class NotebookVaultHarness {
   failAttachmentReads = false;
   /** 让读文件元数据失败。属性面板的错误态只能从这里进。 */
   failNoteStat = false;
+  /** 自定义图标表(vault 相对路径 → 图标名)。 */
+  private icons: Record<string, string> = {};
+  /** 让图标的读或写失败。乐观更新的回滚路径只能从这里进。 */
+  failIconWrite: "read" | "write" | null = null;
+
+  /** 当前的图标表。断言"真的写进去了"用。 */
+  iconTable(): Record<string, string> {
+    return { ...this.icons };
+  }
+
+  /** 预置一张图标表(模拟上次会话留下的图标)。 */
+  seedIcons(table: Record<string, string>): void {
+    this.icons = { ...table };
+  }
 
   /** 让接下来 `count` 次附件保存抛错。 */
   failAttachmentSaves(count = 1): void {
@@ -201,6 +215,18 @@ export class NotebookVaultHarness {
           // 假时钟没有"创建时间"的概念。给 null 正好覆盖"文件系统不记它"那条路径。
           createdMs: null,
         };
+      }
+
+      case "notebook_read_icons":
+        if (this.failIconWrite === "read") throw new Error("reading icons failed");
+        // 真后端存 `.notebook/icons.json`。这里用一张内存表 —— 测试关心的是
+        // "写进去的能读回来"和"整张表替换",不是 JSON 落在哪。
+        return { ...this.icons };
+
+      case "notebook_write_icons": {
+        if (this.failIconWrite === "write") throw new Error("writing icons failed");
+        this.icons = { ...(args.icons as Record<string, string>) };
+        return undefined;
       }
 
       case "notebook_vault_index":
