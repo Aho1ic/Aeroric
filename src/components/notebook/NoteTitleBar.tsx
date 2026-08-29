@@ -6,7 +6,7 @@
  * `[[wikilink]]` 按文件名连接,静默改名会断链(见 notebookVault 的注释)。
  */
 
-import { List, PanelLeft, Trash2 } from "lucide-react";
+import { History, List, PanelLeft, Trash2 } from "lucide-react";
 import type React from "react";
 
 export type NoteViewMode = "edit" | "wysiwyg" | "split" | "read";
@@ -28,6 +28,8 @@ export type NoteTitleBarProps = {
   /** 大纲面板的开关。 */
   outlineOpen: boolean;
   onToggleOutline: () => void;
+  /** 打开版本历史。 */
+  onOpenHistory: () => void;
   onDelete: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
 };
@@ -45,6 +47,7 @@ export function NoteTitleBar({
   onToggleList,
   outlineOpen,
   onToggleOutline,
+  onOpenHistory,
   onDelete,
   t,
 }: NoteTitleBarProps) {
@@ -174,6 +177,23 @@ export function NoteTitleBar({
           ))}
         </div>
       }
+      {/* 版本历史。放在删除**左边**:两个按钮长得像,而点错的代价一边是打开一个
+          面板、另一边是删掉笔记。 */}
+      <button
+        type="button"
+        aria-label={t("notebook.historyOpen")}
+        title={t("notebook.historyOpen")}
+        onClick={onOpenHistory}
+        style={{
+          border: "none",
+          background: "transparent",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          padding: 4,
+        }}
+      >
+        <History size={14} />
+      </button>
       <button
         type="button"
         aria-label={t("common.delete")}

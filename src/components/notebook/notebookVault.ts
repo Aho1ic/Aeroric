@@ -126,17 +126,30 @@ export async function loadNote(note: VaultNote): Promise<VaultNote> {
 }
 
 /**
+ * 这条笔记落盘会长什么样。
+ *
+ * 抽出来是因为版本历史要拿它和快照比:快照存的是**整个文件**,只比 `body` 会把
+ * frontmatter 的每一行都报成删除。两边共用这一个函数,拼法不会各走一套。
+ */
+export function noteFileContent(note: VaultNote): string {
+  // 标题写回 frontmatter —— 它是标题的唯一权威来源。
+  const frontmatter: NoteFrontmatter = { ...note.frontmatter, title: note.title };
+  return joinNote(frontmatter, note.body);
+}
+
+/**
  * 保存。冲突时不写盘,把磁盘指纹交回调用方。
  *
  * `force` 只应在用户明确选择「覆盖」后为 true。
  */
 export async function persistNote(note: VaultNote, force = false): Promise<SaveResult> {
-  // 标题和编辑器模式都写回 frontmatter —— 它是这两项的唯一权威来源。
+  // 内容由 `noteFileContent` 拼;这里再算一遍 frontmatter 是为了放进返回的笔记里,
+  // 让调用方手上那份和磁盘一致。
   const frontmatter: NoteFrontmatter = {
     ...note.frontmatter,
     title: note.title,
   };
-  const content = joinNote(frontmatter, note.body);
+  const content = noteFileContent(note);
   const outcome = await saveNote(note.path, content, note.sig, force);
   if (outcome.status === "conflict") {
     return { status: "conflict", diskSig: outcome.disk };

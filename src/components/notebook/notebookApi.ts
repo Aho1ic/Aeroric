@@ -183,6 +183,41 @@ export function revealNoteInFileManager(path: string, vault: string): Promise<vo
   return invoke<void>("open_in_system_file_manager", { path, projectPath: vault });
 }
 
+/** 一条历史快照的元信息。`id` 是毫秒时间戳(同毫秒会带 `-N` 后缀)。 */
+export type NoteSnapshotEntry = {
+  id: string;
+  filePath: string;
+  relativePath: string;
+  createdAtMs: number;
+  size: number;
+};
+
+export type NoteSnapshot = {
+  entry: NoteSnapshotEntry;
+  content: string;
+};
+
+export type RestoredNote = {
+  content: string;
+  /** 回滚后的新基线。不换掉的话下一次保存会撞上一个我们自己造出来的冲突。 */
+  sig: NoteSig;
+  entry: NoteSnapshotEntry;
+};
+
+/** 列出一条笔记的历史快照,新的在前。每个笔记最多 30 条。 */
+export function listNoteSnapshots(path: string): Promise<NoteSnapshotEntry[]> {
+  return invoke<NoteSnapshotEntry[]>("notebook_list_snapshots", { path });
+}
+
+export function readNoteSnapshot(path: string, entryId: string): Promise<NoteSnapshot> {
+  return invoke<NoteSnapshot>("notebook_read_snapshot", { path, entryId });
+}
+
+/** 回滚到某条快照。回滚前后端会把当前内容也存成一条快照,所以这一步可撤销。 */
+export function restoreNoteSnapshot(path: string, entryId: string): Promise<RestoredNote> {
+  return invoke<RestoredNote>("notebook_restore_snapshot", { path, entryId });
+}
+
 export function htmlToMarkdown(html: string): Promise<string> {
   return invoke<string>("notebook_html_to_markdown", { html });
 }

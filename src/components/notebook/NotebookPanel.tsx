@@ -23,10 +23,19 @@ import {
   type NoteListContextMenuState,
 } from "./NoteListContextMenu";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
+import { deriveTitle, splitNote } from "./noteFrontmatter";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookNote } from "./notebookStore";
-import { convertRichtextNotes, ensureDefaultVault, revealNoteInFileManager } from "./notebookApi";
+import {
+  convertRichtextNotes,
+  ensureDefaultVault,
+  listNoteSnapshots,
+  readNoteSnapshot,
+  restoreNoteSnapshot,
+  revealNoteInFileManager,
+} from "./notebookApi";
+import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
@@ -48,6 +57,7 @@ import {
   createNote as createVaultNote,
   listNotes,
   loadNote,
+  noteFileContent,
   persistOrder,
   removeNote,
 } from "./notebookVault";
@@ -128,6 +138,26 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
+  /** 版本历史面板。`null` = 没开。开着时它铺满面板。 */
+  const [history, setHistory] = useState<NoteHistoryState | null>(null);
+  /** 历史面板针对的笔记。不跟着 `activeNote` 走 —— 面板开着的时候不能让别处
+   *  换掉当前笔记就把 diff 悄悄换成另一条笔记的。 */
+  const [historyNoteId, setHistoryNoteId] = useState<string | null>(null);
+  /**
+   * 编辑器的代数。回滚时 +1,把 CodeMirror 整个重建。
+   *
+   * 为什么不能只靠 `value` prop 换内容:`@uiw/react-codemirror` 对外部 value 变化
+   * 有一道「打字闩」—— 本地刚改过文档的 200ms 内,外部更新不会立刻应用,而是存进
+   * `pendingUpdate` 等闩到期。两个后果都不能接受:
+   *
+   * 1. 回滚后编辑器要过一会儿才换内容,用户会以为回滚没生效;
+   * 2. 那个挂起的闭包**捕获了当时的 value**。用户在闩到期前接着打字,闩一到期
+   *    就把用户刚打的字换成回滚后的内容 —— 静默丢编辑。
+   *
+   * 重建让闩和挂起的更新一起消失。代价是这条笔记的撤销栈清空,而回滚本身就是
+   * 一次整篇替换,撤销栈里的位置已经对不上了。
+   */
+  const [editorEpoch, setEditorEpoch] = useState(0);
 
   const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
   /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
@@ -140,6 +170,11 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [replacementText, setReplacementText] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
+  /** 历史面板针对的那条笔记。**不**回落到 activeNote:回落的话这条笔记被删掉后
+   *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
+  const historyNote = historyNoteId
+    ? (notes.find((note) => note.id === historyNoteId) ?? null)
+    : null;
   const markdownHtml = useMemo(
     () => renderNoteMarkdown(activeNote?.body ?? "").html,
     [activeNote?.body],
@@ -153,7 +188,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     [searchQuery, searchableText],
   );
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
-  const { scheduleSave, cancelSave, flushSave, saveStates } = useNoteAutosave({
+  const { scheduleSave, cancelSave, flushSave, settleSave, saveStates } = useNoteAutosave({
     notes,
     setNotes,
     onError: setError,
@@ -475,6 +510,113 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     updateActiveNote({ body: nextBody });
   };
 
+  /** 打开版本历史,并把快照列表拉回来。 */
+  const openHistory = (noteId: string) => {
+    setHistoryNoteId(noteId);
+    setHistory(freshHistoryState());
+    void (async () => {
+      try {
+        const entries = await listNoteSnapshots(noteId);
+        // 顺手选中最新那条:历史面板里"最近改了什么"是最常见的问题,让用户
+        // 多点一次没有意义。
+        const first = entries[0]?.id ?? null;
+        setHistory((current) =>
+          current ? { ...current, entries, selectedId: first, loading: false } : current,
+        );
+        if (first) loadSnapshot(noteId, first);
+      } catch (error) {
+        setHistory((current) =>
+          current ? { ...current, loading: false, error: errorText(error) } : current,
+        );
+      }
+    })();
+  };
+
+  const loadSnapshot = (noteId: string, entryId: string) => {
+    setHistory((current) =>
+      current ? { ...current, selectedId: entryId, snapshotLoading: true, error: null } : current,
+    );
+    void (async () => {
+      try {
+        const snapshot = await readNoteSnapshot(noteId, entryId);
+        setHistory((current) => {
+          // 用户可能在请求飞行途中点了另一条。回来的不是当前选中的那条就丢掉,
+          // 否则慢的那个响应会盖掉快的,diff 和高亮的条目对不上。
+          if (!current || current.selectedId !== entryId) return current;
+          return { ...current, snapshot, snapshotLoading: false };
+        });
+      } catch (error) {
+        setHistory((current) =>
+          current && current.selectedId === entryId
+            ? { ...current, snapshotLoading: false, error: errorText(error) }
+            : current,
+        );
+      }
+    })();
+  };
+
+  const restoreSnapshot = () => {
+    const noteId = historyNoteId;
+    const entryId = history?.selectedId;
+    if (!noteId || !entryId) return;
+    setHistory((current) => (current ? { ...current, restoring: true, error: null } : current));
+    void (async () => {
+      try {
+        // 先等挂起和在飞的保存全部落完,**再**回滚。
+        //
+        // 不等的话那次写入会在回滚之后落地,内容是回滚前的正文 —— 用户会看到
+        // 自己的恢复"没生效"。等它落完还有一个好处:那一版进了磁盘,于是回滚
+        // 前的兜底快照里包含它,"撤销这次回滚"能把它拿回来。
+        await settleSave(noteId);
+        const restored = await restoreNoteSnapshot(noteId, entryId);
+        // 快照存的是**整个文件**,frontmatter 也在里面。拆开再入内存,和
+        // `loadNote` 走同一条路 —— 直接塞进 `body` 的话 frontmatter 会变成正文的
+        // 一部分,下一次保存又给它套一层,标题也会跟着错。
+        const { frontmatter, body } = splitNote(restored.content);
+        setNotes((current) =>
+          current.map((note) =>
+            note.id === noteId
+              ? {
+                  ...note,
+                  // 标题跟着快照回滚:磁盘上已经是快照那一版了(后端原样写回),
+                  // 内存留着新标题的话下一次保存会把它写回去,回滚只成功一半。
+                  title: deriveTitle(restored.content, noteId),
+                  body,
+                  frontmatter,
+                  sig: restored.sig,
+                  updatedAt: restored.sig.mtimeMs,
+                }
+              : note,
+          ),
+        );
+        setEditorEpoch((epoch) => epoch + 1);
+        setHistory(null);
+        setHistoryNoteId(null);
+      } catch (error) {
+        setHistory((current) =>
+          current ? { ...current, restoring: false, error: errorText(error) } : current,
+        );
+      }
+    })();
+  };
+
+  const closeHistory = () => {
+    setHistory(null);
+    setHistoryNoteId(null);
+  };
+
+  // 目标笔记没了就把历史状态一起清掉。
+  //
+  // 光靠 `historyNote` 为 null 只是让面板不渲染,状态还挂着 —— 而文件名会被回收
+  // 利用(见「不把删掉那条的保存状态带给同路径的新笔记」),同路径的新笔记一出生
+  // 就会把上一条的快照列表连同「回滚」按钮一起接过去。
+  useEffect(() => {
+    if (!historyNoteId) return;
+    if (notes.some((note) => note.id === historyNoteId)) return;
+    setHistory(null);
+    setHistoryNoteId(null);
+  }, [notes, historyNoteId]);
+
   /**
    * 面板自己的快捷键作用域。
    *
@@ -716,6 +858,13 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       startRenameNote(target);
       return;
     }
+    if (action === "history") {
+      // 顺手切到这条笔记:历史面板的 diff 右侧是编辑器里的当前内容,不切的话
+      // 用户会看到 A 的快照和 B 的正文并排。
+      setActiveId(noteId);
+      openHistory(noteId);
+      return;
+    }
     if (action === "trash") {
       deleteNoteById(noteId);
       return;
@@ -748,7 +897,9 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     <NoteSourceEditor
       // key 带上笔记 id:切换笔记时要重建编辑器,否则 CodeMirror 会把新笔记的
       // 内容当成同一文档的编辑,撤销栈会跨笔记串起来。
-      key={activeNote.id}
+      //
+      // 后面那个 epoch 只在回滚时递增,理由见 `editorEpoch` 的注释。
+      key={`${activeNote.id}:${editorEpoch}`}
       editorRef={sourceEditorRef}
       ariaLabel={t("notebook.memoContent")}
       value={activeNote.body}
@@ -796,6 +947,10 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       onKeyDownCapture={handleNotebookShortcut}
       style={{
         width,
+        // 历史面板是 `absolute; inset:0`,要贴着这一层铺。没有它会一路找到更外面
+        // 的定位祖先(或视口),于是盖住整个窗口 —— 随手记只占项目视图一半时,
+        // 用户正在参照的另一半也被遮掉。两个右键菜单都是 `fixed`,不受影响。
+        position: "relative",
         minWidth: 0,
         minHeight: 0,
         height: "100%",
@@ -865,6 +1020,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
               onToggleList={() => setListOpen((open) => !open)}
               outlineOpen={outlineOpen}
               onToggleOutline={() => setOutlineOpen((open) => !open)}
+              onOpenHistory={() => openHistory(activeNote.id)}
               onDelete={() => deleteNoteById(activeNote.id)}
               t={t}
             />
@@ -957,6 +1113,25 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       </div>
       {contextMenu && <NoteContextMenu state={contextMenu} onAction={runContextMenuAction} t={t} />}
       {listMenu && <NoteListContextMenu state={listMenu} onAction={runListMenuAction} t={t} />}
+      {/* 历史面板铺在整个 grid 上面(它自己是 absolute inset:0),所以放在
+          最后、两列**外面** —— 放进正文那一列的话会被列宽裁掉。 */}
+      {history && historyNote && (
+        <NoteHistorySheet
+          noteTitle={historyNote.title || t("notebook.untitled")}
+          entries={history.entries}
+          selectedId={history.selectedId}
+          snapshotContent={history.snapshot?.content ?? null}
+          currentContent={noteFileContent(toVaultNote(historyNote))}
+          loading={history.loading}
+          snapshotLoading={history.snapshotLoading}
+          restoring={history.restoring}
+          error={history.error}
+          onSelect={(entryId) => historyNoteId && loadSnapshot(historyNoteId, entryId)}
+          onRestore={restoreSnapshot}
+          onClose={closeHistory}
+          t={t}
+        />
+      )}
     </section>
   );
 }

@@ -47,6 +47,8 @@ export type NoteAutosave = {
   cancelSave: (noteId: string) => void;
   /** 立刻落盘挂起的改动(⌘S)。没有挂起的改动时是空操作。 */
   flushSave: (noteId: string) => void;
+  /** 等到这条笔记没有任何在飞或挂起的写入。破坏性操作(回滚)之前必须先等它。 */
+  settleSave: (noteId: string) => Promise<void>;
   /** 每条笔记的保存状态。缺省视为 `saved` —— 刚从磁盘读进来的就是和磁盘一致的。 */
   saveStates: Record<string, NoteSaveState>;
 };
@@ -67,6 +69,9 @@ export function useNoteAutosave({
   const savingRef = useRef<Set<string>>(new Set());
   /** 保存进行中又被改过的笔记。落盘后要补一次,否则那段编辑会丢。 */
   const resaveRef = useRef<Set<string>>(new Set());
+  /** 正在飞的那次写入的 Promise。`savingRef` 只说明"有在飞的",拿不到可以 await
+   *  的东西 —— 回滚必须等写入真正落完才能动磁盘。 */
+  const inFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   /** 最新的笔记列表。防抖回调触发时闭包里的 `notes` 已经过期了,要从这里读。 */
   const notesRef = useRef<NotebookNote[]>([]);
   /** 卸载时用的落盘函数。卸载 effect 的清理函数只捕获挂载那一刻的闭包,
@@ -179,6 +184,15 @@ export function useNoteAutosave({
     }
   };
 
+  /** 起一次写入,并把它的 Promise 记下来供 `settleSave` 等待。 */
+  const startFlush = (noteId: string) => {
+    const promise = flushNote(noteId).finally(() => {
+      // 只有还是自己那个 Promise 才清掉 —— 中间可能已经换成了下一次写入。
+      if (inFlightRef.current.get(noteId) === promise) inFlightRef.current.delete(noteId);
+    });
+    inFlightRef.current.set(noteId, promise);
+  };
+
   /** 安排一次防抖保存。 */
   const scheduleSave = (noteId: string) => {
     const timers = autosaveTimersRef.current;
@@ -189,7 +203,7 @@ export function useNoteAutosave({
       noteId,
       setTimeout(() => {
         timers.delete(noteId);
-        void flushNote(noteId);
+        startFlush(noteId);
       }, AUTOSAVE_DELAY_MS),
     );
   };
@@ -214,7 +228,32 @@ export function useNoteAutosave({
     if (!pending) return;
     clearTimeout(pending);
     autosaveTimersRef.current.delete(noteId);
-    void flushNote(noteId);
+    startFlush(noteId);
+  };
+
+  /**
+   * 等到这条笔记安静下来:没有挂起的防抖,也没有在飞的写入。
+   *
+   * 存在的理由:`flushSave` 只是**发起**写入,它同步返回。回滚如果只调 flushSave
+   * 就动手,那次写入会在回滚之后落地,把刚恢复的内容覆盖回去 —— 而且它写的是
+   * 回滚前的正文,用户会看到自己的恢复"没生效"。
+   *
+   * 要循环:一次写入落完时可能又欠了一次(`resaveRef`,用户在保存期间继续打字),
+   * 那次补写会重新排一个防抖。每轮把定时器提前引爆再等,轮数设上限 —— 用户一直
+   * 在打字的话等下去没有尽头,几轮之后已经写进去的内容足够让回滚有兜底快照。
+   */
+  const settleSave = async (noteId: string) => {
+    for (let round = 0; round < 5; round += 1) {
+      const pending = autosaveTimersRef.current.get(noteId);
+      if (pending) {
+        clearTimeout(pending);
+        autosaveTimersRef.current.delete(noteId);
+        startFlush(noteId);
+      }
+      const inFlight = inFlightRef.current.get(noteId);
+      if (!inFlight) return;
+      await inFlight;
+    }
   };
 
   // 卸载时把挂起的保存立刻发出去,不能只清定时器。
@@ -234,5 +273,5 @@ export function useNoteAutosave({
     };
   }, []);
 
-  return { scheduleSave, cancelSave, flushSave, saveStates };
+  return { scheduleSave, cancelSave, flushSave, settleSave, saveStates };
 }

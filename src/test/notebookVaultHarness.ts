@@ -50,6 +50,26 @@ export class NotebookVaultHarness {
   /** 让下一次保存直接失败(磁盘满、权限、IPC 断)。保存失败态是「关 tab 要确认」
    *  的唯一入口,没有它那条分支进不去。冲突**不**走这里 —— 冲突是正常分支。 */
   failNextSave = false;
+  /**
+   * 版本历史快照,按路径分组,新的在前。
+   *
+   * 和 Rust 侧的差别:这里**不限流**,每次成功保存都留一条。真实后端两条快照之间
+   * 至少隔三分钟,但那个窗口按真实时钟算,而这里的时钟是假的 —— 照搬会让所有
+   * 保存都落在同一个窗口里,历史永远只有一条,面板测试也就没东西可看了。限流本身
+   * 由 Rust 侧的 `rapid_autosaves_share_one_snapshot` 覆盖。
+   */
+  private snapshots = new Map<string, { id: string; content: string; createdAtMs: number }[]>();
+  /** 让下一次快照相关的调用失败,用来验历史面板的错误态。 */
+  failNextSnapshotCall = false;
+  /**
+   * 挂起中的 `notebook_read_snapshot`,按调用顺序排。`holdSnapshotReads()` 之后
+   * 每次读快照都停在这里,要测试手工放行。
+   *
+   * 为什么需要它:面板里"回来的不是当前选中的那条就丢掉"这条守卫,只有在两个
+   * 请求**乱序**返回时才看得出来。默认 harness 是同步返回的,两个请求永远按发起
+   * 顺序完成,那条分支进不去 —— 于是守卫在测试里等于不存在。
+   */
+  private heldSnapshotReads: (() => void)[] | null = null;
 
   /** 直接往 vault 里放一个文件,模拟「磁盘上已经有笔记」。 */
   seed(fileName: string, content: string): string {
@@ -143,8 +163,79 @@ export class NotebookVaultHarness {
           if (stale) return { status: "conflict", disk };
         }
 
+        // 快照记在冲突判定之后、写盘之前,和 Rust 侧同序 —— 报冲突的那次保存
+        // 不留快照,存的是被覆盖掉的那一版。
+        if (existing && existing.content !== content) this.pushSnapshot(path, existing.content);
         this.files.set(path, { content, mtimeMs: (this.clock += 10) });
         return { status: "saved", sig: this.sigOf(path) };
+      }
+
+      case "notebook_list_snapshots": {
+        if (this.failNextSnapshotCall) {
+          this.failNextSnapshotCall = false;
+          throw new Error("history is unavailable");
+        }
+        const path = String(args.path);
+        return (this.snapshots.get(path) ?? []).map((snapshot) => ({
+          id: snapshot.id,
+          filePath: path,
+          relativePath: path.slice(VAULT.length + 1),
+          createdAtMs: snapshot.createdAtMs,
+          size: snapshot.content.length,
+        }));
+      }
+
+      case "notebook_read_snapshot": {
+        if (this.failNextSnapshotCall) {
+          this.failNextSnapshotCall = false;
+          throw new Error("snapshot is unreadable");
+        }
+        const path = String(args.path);
+        const entryId = String(args.entryId);
+        const found = (this.snapshots.get(path) ?? []).find((snapshot) => snapshot.id === entryId);
+        if (!found) throw new Error(`no such snapshot: ${entryId}`);
+        const payload = {
+          entry: {
+            id: found.id,
+            filePath: path,
+            relativePath: path.slice(VAULT.length + 1),
+            createdAtMs: found.createdAtMs,
+            size: found.content.length,
+          },
+          content: found.content,
+        };
+        const held = this.heldSnapshotReads;
+        if (!held) return payload;
+        // 挂住:`invoke` 的 mock 会 await 这个 promise,于是这次读要等测试放行。
+        return new Promise((resolve) => {
+          held.push(() => resolve(payload));
+        });
+      }
+
+      case "notebook_restore_snapshot": {
+        if (this.failNextSnapshotCall) {
+          this.failNextSnapshotCall = false;
+          throw new Error("rollback failed");
+        }
+        const path = String(args.path);
+        const entryId = String(args.entryId);
+        const found = (this.snapshots.get(path) ?? []).find((snapshot) => snapshot.id === entryId);
+        if (!found) throw new Error(`no such snapshot: ${entryId}`);
+        const existing = this.files.get(path);
+        // 兜底快照:被回滚覆盖掉的那一版要留下来,否则回滚不可撤销。
+        if (existing) this.pushSnapshot(path, existing.content);
+        this.files.set(path, { content: found.content, mtimeMs: (this.clock += 10) });
+        return {
+          content: found.content,
+          sig: this.sigOf(path),
+          entry: {
+            id: found.id,
+            filePath: path,
+            relativePath: path.slice(VAULT.length + 1),
+            createdAtMs: found.createdAtMs,
+            size: found.content.length,
+          },
+        };
       }
 
       case "notebook_create_note_in_vault": {
@@ -222,6 +313,49 @@ export class NotebookVaultHarness {
         throw new Error(`unexpected notebook command: ${command}`);
     }
   };
+
+  /** 记一条快照。新的在前,和后端 `list` 的顺序一致。 */
+  private pushSnapshot(path: string, content: string): void {
+    const list = this.snapshots.get(path) ?? [];
+    const createdAtMs = (this.clock += 10);
+    list.unshift({ id: String(createdAtMs), content, createdAtMs });
+    this.snapshots.set(path, list);
+  }
+
+  /** 直接塞一条快照,免得测试为了造历史先保存好几次。 */
+  seedSnapshot(path: string, content: string): string {
+    this.pushSnapshot(path, content);
+    return this.snapshots.get(path)![0].id;
+  }
+
+  snapshotCount(path: string): number {
+    return this.snapshots.get(path)?.length ?? 0;
+  }
+
+  /** 快照内容,新的在前。 */
+  snapshotContents(path: string): string[] {
+    return (this.snapshots.get(path) ?? []).map((snapshot) => snapshot.content);
+  }
+
+  /** 从现在起,读快照都停住不返回。 */
+  holdSnapshotReads(): void {
+    this.heldSnapshotReads = [];
+  }
+
+  /** 挂起的读快照有几个。 */
+  heldSnapshotReadCount(): number {
+    return this.heldSnapshotReads?.length ?? 0;
+  }
+
+  /** 放行第 `index` 个挂起的读快照(0 是最早发起的那个)。 */
+  releaseSnapshotRead(index: number): void {
+    const held = this.heldSnapshotReads;
+    if (!held) throw new Error("snapshot reads are not held");
+    const release = held[index];
+    if (!release) throw new Error(`no held snapshot read at ${index}`);
+    held[index] = () => {};
+    release();
+  }
 
   /** 与后端 `allocate_note_path` 同样的 slug + 去重规则。 */
   private allocate(title: string): string {

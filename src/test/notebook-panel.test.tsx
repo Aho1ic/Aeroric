@@ -1284,6 +1284,305 @@ describe("NotebookPanel", () => {
     });
   });
 
+  describe("版本历史", () => {
+    /** 打开当前笔记的历史面板,等它把列表拉回来。 */
+    async function openHistory() {
+      fireEvent.click(screen.getByRole("button", { name: "Version history" }));
+      return screen.findByRole("dialog", { name: /Version history/ });
+    }
+
+    function diffText(): string {
+      return screen.getByTestId("note-history-diff").textContent ?? "";
+    }
+
+    /* 快照列表项按 `aria-pressed` 找,不按文案:harness 的时钟是假的(从 1000 起),
+     * 相对时间会落到 `toLocaleString()` 那一支,文案跟着测试机的 locale 变。
+     * 顺序和后端 `list` 一致 —— 新的在前。 */
+    function historyEntries(dialog: HTMLElement): HTMLButtonElement[] {
+      return Array.from(dialog.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"));
+    }
+
+    it("打开就选中最新那条并显示它和当前内容的行级 diff", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nalpha\nbravo\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nalpha\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nalpha\nbravo-old\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await openHistory();
+
+      // 最新那条自动选中(列表里 seedSnapshot 后进的排最前)—— 历史面板里
+      // "最近改了什么"是最常见的问题,让用户多点一次没有意义。
+      await waitFor(() => expect(diffText()).toContain("-bravo-old"));
+      expect(diffText()).toContain("+bravo");
+      // 只差一行:frontmatter 和 `alpha` 都没动。按行号逐行比会把整篇报成改动。
+      expect(screen.getByText("2 lines differ from the current note")).toBeInTheDocument();
+    });
+
+    it("标题没改时 frontmatter 不进 diff", async () => {
+      // 快照存的是**整个文件**,当前内容只比 `body` 的话 frontmatter 那三行会
+      // 全部报成删除 —— 用户每次打开历史都看到一堆假改动。
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nsame line\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nsame line\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      await openHistory();
+
+      await screen.findByText("0 lines differ from the current note");
+      expect(diffText()).not.toContain("-title:");
+    });
+
+    it("慢的响应不盖掉快的", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nnow\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nolder body\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nnewer body\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      harness.holdSnapshotReads();
+      const dialog = await openHistory();
+      await waitFor(() => expect(historyEntries(dialog)).toHaveLength(2));
+      // 自动选中的那条(最新)先发起,停住。
+      await waitFor(() => expect(harness.heldSnapshotReadCount()).toBe(1));
+
+      // 用户在它飞行途中点了旧的那条。
+      fireEvent.click(historyEntries(dialog)[1]);
+      await waitFor(() => expect(harness.heldSnapshotReadCount()).toBe(2));
+
+      // 先放行**先发起**的那个(最新那条)。它已经不是当前选中的了。
+      harness.releaseSnapshotRead(0);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId("note-history-diff")).toBeNull();
+
+      // 再放行用户真正选的那条。
+      harness.releaseSnapshotRead(1);
+      await waitFor(() => expect(diffText()).toContain("-older body"));
+      // 这才是判据:被丢掉的那个响应没有留在界面上,高亮的条目和 diff 对得上。
+      expect(diffText()).not.toContain("newer body");
+      expect(historyEntries(dialog)[1]).toHaveAttribute("aria-pressed", "true");
+      expect(historyEntries(dialog)[0]).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("回滚先等在飞的保存落完,再动磁盘", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\ndisk\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nrolled back\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("-rolled back"));
+
+      // 关掉面板去敲字,让防抖挂着(800ms 还没到),再开回来点回滚。
+      fireEvent.click(screen.getByRole("button", { name: "Close version history" }));
+      setEditorValue("typed but not yet saved");
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("+typed but not yet saved"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      // 磁盘落到快照那一版。不等挂起的保存的话,那次写入会在回滚**之后**落地,
+      // 内容是回滚前的正文 —— 用户会看到自己的恢复"没生效"。
+      await waitFor(() => expect(harness.read(notePath)).toContain("rolled back"));
+      expect(harness.read(notePath)).not.toContain("typed but not yet saved");
+      // 编辑器也换成回滚后的内容。
+      await waitFor(() => expect(editorValue()).toContain("rolled back"));
+      // 那段编辑进了兜底快照(回滚前的磁盘版)—— 它落了盘才有这个效果,
+      // 「撤销这次回滚」能把它拿回来。
+      expect(harness.snapshotContents(notePath)[0]).toContain("typed but not yet saved");
+    });
+
+    it("回滚后接着打字,不会被延迟的外部更新覆盖", async () => {
+      /* `@uiw/react-codemirror` 对外部 value 变化有一道「打字闩」:本地刚改过文档的
+       * 200ms 内,外部更新存进 pendingUpdate 等闩到期。那个闭包捕获了当时的 value,
+       * 于是"回滚 → 立刻接着打字"会在闩到期时把用户刚打的字换成回滚后的内容。
+       * 面板靠回滚时重建编辑器(`editorEpoch`)绕开它。 */
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\ndisk\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nrolled back\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      // 先本地改一次,把闩点起来。
+      setEditorValue("just typed");
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("-rolled back"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+      // 编辑器立刻换成回滚后的内容,不用等闩。
+      await waitFor(() => expect(editorValue()).toContain("rolled back"));
+
+      // 闩的窗口内接着打字。
+      setEditorValue("typed right after the rollback");
+
+      // 等到闩肯定过期(200 tick × 1ms 的 interval,jsdom 里会更慢),确认那段字
+      // 还在 —— 被覆盖的话这里会变回 "rolled back"。
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(editorValue()).toBe("typed right after the rollback");
+      await waitFor(() => expect(harness.read(notePath)).toContain("typed right after the"));
+    });
+
+    it("回滚把标题一起带回去", async () => {
+      // 快照里 title 是旧的,后端原样写回整个文件。内存留着新标题的话下一次保存
+      // 会把它写回去,回滚只成功一半。
+      const notePath = harness.seed("Notes.md", '---\ntitle: "New name"\n---\n\nbody\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Old name"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "New name" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain('-title: "Old name"'));
+      fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      await screen.findByRole("button", { name: "Old name" });
+      expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Old name");
+
+      // 关键:回滚后再保存一次,frontmatter 不能出现第二份,标题也不能弹回去。
+      setEditorValue("body edited");
+      await waitFor(() => expect(harness.read(notePath)).toContain("body edited"));
+      const saved = harness.read(notePath) ?? "";
+      expect(saved).toContain('title: "Old name"');
+      expect(saved).not.toContain("New name");
+      expect(saved.match(/^---$/gm)).toHaveLength(2);
+    });
+
+    it("面板针对的笔记被删掉就关掉,不悄悄换成另一条", async () => {
+      const doomed = harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\ndelete me\n');
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nother body\n');
+      harness.seedSnapshot(doomed, '---\ntitle: "Doomed"\n---\n\nold body\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Doomed" }));
+      await screen.findByDisplayValue("Doomed");
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("-old body"));
+
+      // 从列表右键删掉它。回落到 activeNote 的话面板会留着,显示另一条笔记的
+      // diff,而「回滚」按钮打在那条上 —— 用户以为自己在恢复 Doomed。
+      const row = screen
+        .getByRole("button", { name: "Doomed" })
+        .closest("[data-notebook-note-row]");
+      fireEvent.contextMenu(row as Element);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Trash" }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /Version history/ })).toBeNull(),
+      );
+    });
+
+    it("目标笔记被回收的路径上出现新笔记时,历史不跟着复活", async () => {
+      // 文件名会被回收利用(见「不把删掉那条的保存状态带给同路径的新笔记」)。
+      // 删除时只让面板不渲染、状态留着的话,同路径的新笔记一出生就会把上一条的
+      // 快照列表连同「回滚」按钮一起接过去。
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+      const notePath = harness.paths().find((path) => path.endsWith(".md")) ?? "";
+      harness.seedSnapshot(notePath, '---\ntitle: ""\n---\n\nold body\n');
+
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("-old body"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(harness.read(notePath)).toBeUndefined());
+
+      // 新笔记落在刚腾出来的同一个路径上。
+      await createNote(user);
+      expect(harness.paths()).toContain(notePath);
+      expect(screen.queryByRole("dialog", { name: /Version history/ })).toBeNull();
+    });
+
+    it("Esc 关面板,不往外传", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nold\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      const escaped: string[] = [];
+      const spy = (event: KeyboardEvent) => escaped.push(event.key);
+      window.addEventListener("keydown", spy);
+      try {
+        const dialog = await openHistory();
+        fireEvent.keyDown(dialog, { key: "Escape" });
+
+        expect(screen.queryByRole("dialog", { name: /Version history/ })).toBeNull();
+        // 面板外面还有 window 级的 Esc 监听(会去关整个视图)。漏出去的话
+        // 一次 Esc 同时关掉历史和视图。
+        expect(escaped).toEqual([]);
+      } finally {
+        window.removeEventListener("keydown", spy);
+      }
+    });
+
+    it("没有历史时说明,而不是显示空白 diff", async () => {
+      harness.seed("Fresh.md", '---\ntitle: "Fresh"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Fresh" });
+
+      await openHistory();
+
+      await screen.findByText("No earlier versions yet");
+      expect(screen.queryByTestId("note-history-diff")).toBeNull();
+      expect(screen.getByRole("button", { name: "Restore" })).toBeDisabled();
+    });
+
+    it("列表拉不回来时把错误显示出来", async () => {
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      harness.failNextSnapshotCall = true;
+      await openHistory();
+
+      // 静默空列表会被读成"这条笔记没有历史",而它其实有。
+      await screen.findByText(/history is unavailable/);
+      expect(screen.queryByText("No earlier versions yet")).toBeNull();
+    });
+
+    it("回滚失败时留在面板上并报错", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\ndisk\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nold\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await openHistory();
+      await waitFor(() => expect(diffText()).toContain("-old"));
+
+      harness.failNextSnapshotCall = true;
+      fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      await screen.findByText(/rollback failed/);
+      // 面板不关:关掉的话用户以为回滚成功了,而磁盘没动。
+      expect(screen.getByRole("dialog", { name: /Version history/ })).toBeInTheDocument();
+      expect(harness.read(notePath)).toContain("disk");
+      expect(screen.getByRole("button", { name: "Restore" })).toBeEnabled();
+    });
+
+    it("面板铺在两列外面,贴着随手记面板而不是整个窗口", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nold\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      const dialog = await openHistory();
+
+      // 放进正文那一列的话会被列宽裁掉。
+      const panel = screen.getByRole("region", { name: "Quick Notes" });
+      expect(dialog.parentElement).toBe(panel);
+      // `absolute; inset:0` 需要一个定位祖先。缺了它会一路找到视口,把用户正在
+      // 参照的另一半视图也遮掉。
+      expect(panel.style.position).toBe("relative");
+      expect(dialog.style.position).toBe("absolute");
+    });
+  });
+
   describe("笔记列表右键菜单", () => {
     /** 在指定笔记那一行上右键,返回打开的菜单。 */
     async function openListMenu(name: string) {
@@ -1353,6 +1652,31 @@ describe("NotebookPanel", () => {
       // P4 的 wikilink 按文件名互链,静默改名会断链。
       expect(screen.getByRole("textbox", { name: "Rename quick note" })).toHaveValue("Target");
       expect(harness.paths()).toContain(notePath);
+    });
+
+    it("版本历史:打开的是右键点中的那条,并把它切成当前笔记", async () => {
+      const kept = harness.seed("Kept.md", '---\ntitle: "Kept"\n---\n\nkeep me\n');
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nother body\n');
+      harness.seedSnapshot(kept, '---\ntitle: "Kept"\n---\n\nold keep\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Other" });
+      await screen.findByRole("button", { name: "Kept" });
+
+      // 打开 Other(它成为 activeNote),然后右键 Kept 开历史。
+      fireEvent.click(screen.getByRole("button", { name: "Other" }));
+      await screen.findByDisplayValue("Other");
+
+      await openListMenu("Kept");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Version history" }));
+
+      // 面板标题跟着右键的那条。不切当前笔记的话,用户会看到 Kept 的快照和
+      // Other 的正文并排 —— diff 就是两条不同笔记的对比。
+      await screen.findByRole("dialog", { name: "Version history — Kept" });
+      await waitFor(() =>
+        expect(screen.getByTestId("note-history-diff").textContent).toContain("-old keep"),
+      );
+      expect(screen.getByTestId("note-history-diff").textContent).toContain("+keep me");
+      expect(screen.getByTestId("note-history-diff").textContent).not.toContain("other body");
     });
 
     it("菜单和编辑区那个互斥", async () => {
