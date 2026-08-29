@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { useI18n } from "../../i18n";
+import { confirm } from "../../lib/appDialog";
 import { NoteList } from "./NoteList";
 import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
@@ -33,6 +34,7 @@ import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
 import { NoteStatusBar } from "./NoteStatusBar";
+import { NoteTabStrip, type NoteTabItem } from "./NoteTabStrip";
 import { useNoteLayoutTier } from "./useNoteLayoutTier";
 import { reorderSection } from "./noteSections";
 import { invalidateMermaidTheme, renderNoteVisualsLazy } from "./noteVisuals";
@@ -130,6 +132,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
   /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
   const [listOpen, setListOpen] = useState(false);
+  /** 面板内开着的笔记(tab 条)。会话内状态,不落盘 —— 重开面板从当前那条重新开始。 */
+  const [openIds, setOpenIds] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -258,6 +262,30 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       setActiveId(notes[0].id);
     }
   }, [activeId, notes, setActiveId]);
+
+  /* tab 集合跟着笔记和当前选中项走,而不是在每个入口手工维护。
+
+     两件事:正在显示的那条必须有 tab(新建、外部打开、activeId 被上面那个 effect
+     纠正过,都会走到这里);已经不存在的笔记要摘掉 tab(删除、冲突回读、文件被
+     外部移走)。散在各个入口去 add/remove 一定会漏掉一条,漏掉的那条就是一个点不开
+     的死 tab。
+
+     盯的是 `activeNote?.id` 而不是 `activeId`:后者对不上时 activeNote 会退回
+     notes[0],tab 要跟着**真正显示的**那条走。
+
+     摘除这一半和下面 `tabItems` 那个 filter 互为冗余 —— 单独拆掉任何一个界面上都看
+     不出区别(实测两个都拆才有测试变红)。留着它是因为 `openIds` 不只喂渲染:关 tab
+     时要拿它算左邻居,混着已经不存在的 id 会让选中项跳到一条没有的笔记上。 */
+  const shownId = activeNote?.id ?? null;
+  useEffect(() => {
+    setOpenIds((current) => {
+      const alive = new Set(notes.map((note) => note.id));
+      const pruned = current.filter((id) => alive.has(id));
+      const needsShown = shownId !== null && !pruned.includes(shownId);
+      if (!needsShown && pruned.length === current.length) return current;
+      return needsShown ? [...pruned, shownId] : pruned;
+    });
+  }, [notes, shownId]);
 
   // 选中的笔记如果还没读入正文,按需读一次。列表只拿元数据,这样 vault 里
   // 有几百条笔记时打开面板依然是即时的。
@@ -553,6 +581,43 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     })();
   };
 
+  /**
+   * 关掉一个 tab。**不删笔记** —— 它还在列表里,点一下就回来。
+   *
+   * 保存状态决定要不要拦:
+   * - pending / saving:立刻落盘再关。这里不弹「有未保存的改动」那种框 —— 随手记
+   *   是自动保存的,拿一个一秒后自己就消失的状态去问用户,只会让人以为改动丢了。
+   * - error:这一档才确认。保存真的失败过,关掉就等于丢掉那段编辑。
+   */
+  const closeTab = (noteId: string) => {
+    const index = openIds.indexOf(noteId);
+    if (index < 0) return;
+    // 关的是当前这条时要先把选中项挪走,否则上面那个 effect 会立刻把 tab 加回来。
+    // 优先落到左边那个 —— 和大多数编辑器一致,关掉一串 tab 时手不用动。
+    const neighbour = openIds[index - 1] ?? openIds[index + 1] ?? null;
+
+    const detach = () => {
+      setOpenIds((current) => current.filter((id) => id !== noteId));
+      if (shownId === noteId && neighbour) setActiveId(neighbour);
+    };
+
+    if (saveStates[noteId] === "error") {
+      const name = notes.find((note) => note.id === noteId)?.title || t("notebook.untitled");
+      void confirm(t("notebook.closeUnsavedMessage", { name }), {
+        title: t("notebook.closeUnsavedTitle"),
+        kind: "warning",
+        okLabel: t("notebook.closeUnsavedConfirm"),
+        cancelLabel: t("notebook.closeUnsavedCancel"),
+      }).then((discard) => {
+        if (discard) detach();
+      });
+      return;
+    }
+
+    flushSave(noteId);
+    detach();
+  };
+
   const reorderNote = (draggedId: string, targetId: string) => {
     if (draggedId === targetId) return;
     let reordered: NotebookNote[] | null = null;
@@ -706,6 +771,18 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     />
   ) : null;
 
+  /* tab 条按打开顺序排,不跟列表的排序走 —— 列表可以被拖动重排,tab 跟着跳会
+     让人找不到刚才那条。`openIds` 里的 id 都保证还存在(见上面那个 effect),
+     这里的 filter 只是给 TS 收窄类型。 */
+  const tabItems: NoteTabItem[] = openIds
+    .map((id) => notes.find((note) => note.id === id))
+    .filter((note): note is NotebookNote => Boolean(note))
+    .map((note) => ({
+      id: note.id,
+      title: note.title,
+      saveState: saveStates[note.id] ?? "saved",
+    }));
+
   /* 列宽按档位给。紧凑档把列表压到 0 而**不卸载**它 —— 卸载会让列表的滚动位置
      丢掉,而且开关一次就要重建整列。压到 0 之后 NoteList 自己的 170px 最小宽会
      溢出来盖住正文,所以外面套一层 overflow:hidden 裁掉。 */
@@ -763,6 +840,18 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       <div style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {activeNote ? (
           <>
+            {/* 无条件渲染,「只开一条就不显示」的判断在组件自己里面。
+                这里**不是**为了躲重挂:`{cond && <X/>}` 在 cond 为假时那个位置仍然
+                占着一个 child slot,后面兄弟的位置不变,不会触发卸载(下面大纲那个
+                grid 是另一回事 —— 它条件化的是包在正文**外面**的容器)。
+                写成无条件只是为了让「什么时候该显示」只有一处答案。 */}
+            <NoteTabStrip
+              tabs={tabItems}
+              activeId={activeNote.id}
+              onSelect={setActiveId}
+              onClose={closeTab}
+              t={t}
+            />
             <NoteTitleBar
               title={activeNote.title}
               onTitleChange={(title) => updateActiveNote({ title })}

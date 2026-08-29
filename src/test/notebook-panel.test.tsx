@@ -1021,6 +1021,188 @@ describe("NotebookPanel", () => {
     }
   });
 
+  describe("笔记 tab 条", () => {
+    /** 播两条笔记并把它们都打开(点一下就会开出 tab)。 */
+    async function openTwoNotes() {
+      harness.seed("First.md", '---\ntitle: "First"\n---\n\none\n');
+      harness.seed("Second.md", '---\ntitle: "Second"\n---\n\ntwo\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "First" });
+      await screen.findByRole("button", { name: "Second" });
+      // 初始选中的那条已经有 tab 了,再点开另一条就是两个。
+      fireEvent.click(screen.getByRole("button", { name: "First" }));
+      await screen.findByDisplayValue("First");
+      fireEvent.click(screen.getByRole("button", { name: "Second" }));
+      await screen.findByDisplayValue("Second");
+    }
+
+    it("只开一条时不占地方", async () => {
+      const user = userEvent.setup();
+      renderNotebook();
+      await createNote(user);
+
+      // tab 条在只开一条时没有信息量,而随手记大多数时候就是开着一条。
+      expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    });
+
+    it("开第二条才出现,并且高亮当前那条", async () => {
+      await openTwoNotes();
+
+      const strip = screen.getByRole("tablist", { name: "Open quick notes" });
+      expect(strip).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "First" })).toHaveAttribute("aria-selected", "false");
+      expect(screen.getByRole("tab", { name: "Second" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("点 tab 切换笔记", async () => {
+      await openTwoNotes();
+
+      fireEvent.click(screen.getByRole("tab", { name: "First" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("First"),
+      );
+      expect(screen.getByRole("tab", { name: "First" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("tab 条消失时不重建编辑器", async () => {
+      /* 关掉非当前的那条 tab:tab 条从两个掉到一个因而整条消失,当前笔记却没变 ——
+         它的 CodeMirror 必须还是原来那个实例。
+
+         (开 tab 观察不到这件事:打开另一条笔记本来就会换实例,key 带着笔记 id。)
+
+         注:把 tab 条改成 `{tabs.length > 1 && <NoteTabStrip/>}` 并不会让这条测试
+         变红,实测过。cond 为假时那个位置仍然占着一个 child slot,兄弟不挪位。
+         这条测试钉的是「关 tab 不动当前编辑器」这个行为本身,不是某一种写法。 */
+      await openTwoNotes();
+      // 切回 First 并留下一个选区,然后关掉 Second 的 tab。
+      fireEvent.click(screen.getByRole("tab", { name: "First" }));
+      await screen.findByDisplayValue("First");
+      selectEditorRange(1, 3);
+
+      fireEvent.click(screen.getByRole("button", { name: "Close Second" }));
+      await waitFor(() => expect(screen.queryByRole("tablist")).not.toBeInTheDocument());
+
+      // 当前还是 First,所以它的编辑器必须是原来那个实例,选区还在。
+      expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("First");
+      const selection = editorView().state.selection.main;
+      expect([selection.from, selection.to]).toEqual([1, 3]);
+    });
+
+    it("关 tab 不删笔记", async () => {
+      await openTwoNotes();
+
+      fireEvent.click(screen.getByRole("button", { name: "Close Second" }));
+
+      await waitFor(() => expect(screen.queryByRole("tablist")).not.toBeInTheDocument());
+      // 笔记还在磁盘上,也还在列表里 —— 关 tab 只是收起来,点一下就回来。
+      expect(harness.read("/vault/Second.md")).toContain("two");
+      expect(screen.getByRole("button", { name: "Second" })).toBeInTheDocument();
+    });
+
+    it("关掉当前 tab 时落到左边那个", async () => {
+      /* 必须开三条并关**正中间**那条。两条的时候 index-1 和 index+1 都指向剩下的
+         同一个 tab,左右取反看不出区别;三条但关的是最后一条也一样(index+1 是
+         undefined,会回落到左边)—— 那样的断言是绿的但什么都没钉住。
+
+         而且 tab 的顺序是**打开顺序**,不是列表顺序:列表按修改时间倒序,所以初始
+         选中的是最后播的那条。下面先把顺序断言出来,免得这条测试哪天又悄悄变回
+         「关最后一个」。 */
+      harness.seed("First.md", '---\ntitle: "First"\n---\n\none\n');
+      harness.seed("Second.md", '---\ntitle: "Second"\n---\n\ntwo\n');
+      harness.seed("Third.md", '---\ntitle: "Third"\n---\n\nthree\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "First" });
+      for (const name of ["First", "Second"]) {
+        fireEvent.click(screen.getByRole("button", { name }));
+        await screen.findByDisplayValue(name);
+      }
+
+      // 初始选中 Third(最新),然后依次开 First、Second。
+      expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+        "Third",
+        "First",
+        "Second",
+      ]);
+
+      // 切到正中间的 First 再关掉它:左边是 Third,右边是 Second,两侧都有。
+      fireEvent.click(screen.getByRole("tab", { name: "First" }));
+      await screen.findByDisplayValue("First");
+      fireEvent.click(screen.getByRole("button", { name: "Close First" }));
+
+      // 落到左边的 Third,不是右边的 Second —— 和大多数编辑器一致,关掉一串 tab
+      // 时手不用动。
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Third"),
+      );
+    });
+
+    it("删掉笔记会把它的 tab 一起摘掉", async () => {
+      await openTwoNotes();
+      expect(screen.getByRole("tab", { name: "Second" })).toBeInTheDocument();
+
+      // 死 tab 是这里最容易漏的 bug:笔记没了但 tab 还在,点它什么都不会发生。
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(screen.queryByRole("tab", { name: "Second" })).toBeNull());
+    });
+
+    it("关 tab 时把挂起的改动落盘", async () => {
+      await openTwoNotes();
+      const editor = screen.getByRole("textbox", { name: "Quick note content" });
+      expect(editor).toBeInTheDocument();
+
+      vi.useFakeTimers();
+      try {
+        // 敲字后立刻关 tab —— 防抖还没到期。不落盘的话这段编辑就没了。
+        setEditorValue("typed then closed");
+        await act(async () => {
+          vi.advanceTimersByTime(100);
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Close Second" }));
+        await act(async () => {
+          await Promise.resolve();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+
+      await waitFor(() => expect(harness.read("/vault/Second.md")).toContain("typed then closed"));
+    });
+
+    it("保存失败过的 tab,关闭要确认;取消就留着", async () => {
+      await openTwoNotes();
+
+      const requests: string[] = [];
+      const unregister = registerAppDialogHandler(async (request) => {
+        requests.push(request.kind);
+        return false;
+      });
+
+      try {
+        // 让这一次保存真的失败,把 tab 顶到「保存失败」态。
+        harness.failNextSave = true;
+        setEditorValue("never lands on disk");
+        await waitFor(() =>
+          expect(screen.getByRole("status").textContent).toContain("Save failed"),
+        );
+
+        // 失败态的 tab 会改可访问名字,读屏才能听见状态栏播报不到的那一条。
+        expect(screen.getByRole("tab", { name: "Second (save failed)" })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Close Second" }));
+
+        // 自动保存的应用不该拿「未保存」去问用户 —— 但保存真的失败过是另一回事,
+        // 关掉就等于丢掉那段编辑,所以这一档要确认。用户选了取消,tab 得留着。
+        await waitFor(() => expect(requests).toEqual(["confirm"]));
+        expect(screen.getByRole("tab", { name: "Second (save failed)" })).toBeInTheDocument();
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+  });
+
   describe("⌘S", () => {
     it("不等防抖,立刻落盘", async () => {
       const user = userEvent.setup();

@@ -47,6 +47,9 @@ export class NotebookVaultHarness {
   /** 落盘次数。「⌘S 在没有改动时不写盘」只能靠它看出来 —— 内容不变的写从
    *  `read()` 上看不出区别。 */
   saveCalls = 0;
+  /** 让下一次保存直接失败(磁盘满、权限、IPC 断)。保存失败态是「关 tab 要确认」
+   *  的唯一入口,没有它那条分支进不去。冲突**不**走这里 —— 冲突是正常分支。 */
+  failNextSave = false;
 
   /** 直接往 vault 里放一个文件,模拟「磁盘上已经有笔记」。 */
   seed(fileName: string, content: string): string {
@@ -121,6 +124,10 @@ export class NotebookVaultHarness {
 
       case "notebook_save_note": {
         this.saveCalls += 1;
+        if (this.failNextSave) {
+          this.failNextSave = false;
+          throw new Error("disk is on fire");
+        }
         const path = String(args.path);
         const content = String(args.content);
         const expected = args.expected as HarnessSig | null;
