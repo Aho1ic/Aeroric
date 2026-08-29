@@ -43,11 +43,19 @@ import {
   readNoteIcons,
   statNote,
   vaultIndex,
+  vaultLinks,
   writeNoteIcons,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
 import { NoteIconPicker, type NoteIconPickerState } from "./NoteIconPicker";
 import { noteIconOf, withNoteIcon, type NoteIconName } from "./noteIcons";
+import {
+  bodyOffsetOfFileLine,
+  collectBacklinks,
+  countBacklinks,
+  type NoteLinkSource,
+} from "./noteBacklinks";
+import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import {
   NotePropertiesSheet,
@@ -179,9 +187,24 @@ function NotebookPanelContent({
   const [indexedTitles, setIndexedTitles] = useState<Map<string, string>>(() => new Map());
   /** 每存一个附件 +1。附件分区靠它知道该重扫了(它可能是折叠的,那时不扫)。 */
   const [attachmentToken, setAttachmentToken] = useState(0);
-  /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
+  /** 侧栏(大纲 / 反链)是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
+  /** 侧栏当前显示哪一档。两档共用那一列,而不是各占一列:面板一半宽的时候
+   *  再切出去一列正文就没地方了。 */
+  const [sideTab, setSideTab] = useState<"outline" | "backlinks">("outline");
+  /** 全库链接扫描的结果。反链按它 + 链接索引算出来。 */
+  const [linkSources, setLinkSources] = useState<NoteLinkSource[]>([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linksError, setLinksError] = useState<string | null>(null);
+  /** 手工「刷新」+1。外部编辑改了别人的笔记时,反链只能靠重扫发现。 */
+  const [linksToken, setLinksToken] = useState(0);
+  /** 反链跳转的落点:换到那篇笔记之后光标要落到第几行(按**文件**数的行号)。
+   *  用 state 而不是 ref —— 落点要在渲染时算成 prop 交给编辑器(见下面
+   *  `backlinkCursorOffset` 的注释)。 */
+  const [pendingBacklink, setPendingBacklink] = useState<{ noteId: string; line: number } | null>(
+    null,
+  );
   /** 版本历史面板。`null` = 没开。开着时它铺满面板。 */
   const [history, setHistory] = useState<NoteHistoryState | null>(null);
   /** 历史面板针对的笔记。不跟着 `activeNote` 走 —— 面板开着的时候不能让别处
@@ -373,10 +396,40 @@ function NotebookPanelContent({
            用来说"你的笔记出事了"的。 */
       }
     })();
+
     return () => {
       cancelled = true;
     };
   }, [vault]);
+
+  /* 全库链接扫描。只在反链那一档**可见**时扫 —— 它读每个文件的全文,是整个面板
+     里最贵的一次 IO,而绝大多数时候用户根本没打开反链。
+
+     依赖里有 `linksToken`(手工刷新)但没有当前笔记:扫描结果是全库的,换笔记
+     只是换一个筛选条件,不需要重扫。 */
+  useEffect(() => {
+    if (!vault || !outlineOpen || sideTab !== "backlinks") return;
+    let cancelled = false;
+    setLinksLoading(true);
+    setLinksError(null);
+    void (async () => {
+      try {
+        const sources = await vaultLinks(vault);
+        if (cancelled) return;
+        setLinkSources(sources);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        /* 就地显示,不占用面板那条错误条:反链是只读视图,扫不动它不影响读写笔记。
+           上一次的结果留着 —— 比清空成"没有反链"诚实(那会看起来像扫完了)。 */
+        setLinksError(errorText(error));
+      } finally {
+        if (!cancelled) setLinksLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [linksToken, outlineOpen, sideTab, vault]);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -665,6 +718,58 @@ function NotebookPanelContent({
     // 用 getElementById 会在整个 document 里找,可能撞上面板外同名的 id。
     const target = host?.querySelector(`[id="${CSS.escape(item.anchor)}"]`);
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  /* 当前笔记的反链。扫描结果是全库的,这里按链接索引把它折成"谁指向了这一篇"。
+     索引一变(改标题、新建笔记)就重算 —— 同一批扫描结果在标题改过之后指向的
+     可能已经不是这一篇了。 */
+  const backlinkGroups = useMemo(
+    () => (activeNote ? collectBacklinks(linkSources, linkIndex, activeNote.id) : []),
+    [activeNote, linkIndex, linkSources],
+  );
+  const backlinkCount = countBacklinks(backlinkGroups);
+
+  /* 反链行号 → 编辑器正文里的偏移。
+   *
+   * 反链的行号按**整个 .md 文件**数(frontmatter 那几行也算),而编辑器里装的是
+   * 拆掉 frontmatter 之后的正文,所以要换一次坐标系。用 `noteFileContent` 拼回
+   * 文件 —— 保存和版本历史 diff 用的是同一个函数,换行数与落盘的一致。 */
+  const backlinkOffsetIn = (note: NotebookNote, line: number): number =>
+    bodyOffsetOfFileLine(noteFileContent(toVaultNote(note)), note.body, line);
+
+  /* 交给编辑器的初始光标位置。
+   *
+   * 只在**目标笔记的正文已经到位**时给值:未读入的笔记 body 是空串,那时算出来的
+   * 偏移一律是 0,而编辑器只认它挂载那一刻的这个 prop(见它的 `pendingCursor`),给早了
+   * 就等于把光标钉在开头。 */
+  const backlinkCursorOffset =
+    pendingBacklink && activeNote?.id === pendingBacklink.noteId && activeNote.loaded
+      ? backlinkOffsetIn(activeNote, pendingBacklink.line)
+      : undefined;
+
+  useEffect(() => {
+    if (backlinkCursorOffset === undefined) return;
+    /* 落点已经交给编辑器了(重挂那一路走 prop,没重挂那一路 `jumpToBacklink` 里
+       已经直接设过)。清掉,否则下次因为别的原因重挂编辑器时会再跳一遍。 */
+    setPendingBacklink(null);
+  }, [backlinkCursorOffset]);
+
+  /**
+   * 点一条反链:换到那篇笔记,光标落到那一行的行首。
+   *
+   * 只记下"要落在哪",偏移由上面那个 memo 在正文到位后算、编辑器自己去落 —— 这里
+   * 直接调 handle 是不行的:正文常常还没读进来(列表只读目录项),而且换笔记时
+   * 编辑器会重挂,这一刻 ref 指着的还是上一篇那个正要被卸载的 view。
+   *
+   * 落光标而不是只滚过去:跳到一处引用之后,用户下一步大概率就是在那里改字;只滚
+   * 过去不放光标,他还得再点一下,而那一下很容易点歪到相邻的行。
+   *
+   * 阅读态没有编辑器,这一步自然不生效 —— 那一层也没有行的概念(渲染出来的段落和
+   * 源码行不是一对一),按行去猜位置只会滚到看起来随机的地方。
+   */
+  const jumpToBacklink = (path: string, line: number) => {
+    setPendingBacklink({ noteId: path, line });
+    setActiveId(path);
   };
 
   /** 拖动大纲重排章节。整段(含子标题与正文)一起移动。 */
@@ -1301,6 +1406,7 @@ function NotebookPanelContent({
           ? pendingScrollRestoreRef.current.ratio
           : undefined
       }
+      initialCursorOffset={backlinkCursorOffset}
       onChange={(next) => updateActiveNote({ body: normalizeEnglishPunctuation(next) })}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -1516,12 +1622,89 @@ function NotebookPanelContent({
                 previewRef={previewRef}
               />
               {outlineOpen && (
-                <NoteOutlinePanel
-                  items={noteStats.outline}
-                  onJump={jumpToHeading}
-                  onReorder={reorderHeadingSection}
-                  t={t}
-                />
+                /* 大纲和反链共用这一列。边框和底色提到这一层 —— 两个子面板各自
+                   再画一遍会在切换处出现双线。 */
+                <div
+                  style={{
+                    minWidth: 0,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    borderLeft: "1px solid var(--border-dim)",
+                    background: "var(--bg-sidebar)",
+                  }}
+                >
+                  <div
+                    role="group"
+                    aria-label={t("notebook.sidePanel")}
+                    style={{ display: "flex", padding: "6px 6px 0" }}
+                  >
+                    {(
+                      [
+                        ["outline", t("notebook.outline")],
+                        [
+                          "backlinks",
+                          /* 计数直接写在标签上:反链的价值在于"有没有、有几条",
+                             要点开才知道的话这一档大部分时候是白开的。没扫过时
+                             不显示 0 —— 那会看起来像"确实没有"。 */
+                          linkSources.length
+                            ? t("notebook.backlinksWithCount", { count: String(backlinkCount) })
+                            : t("notebook.backlinks"),
+                        ],
+                      ] as const
+                    ).map(([value, label], index, all) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={sideTab === value}
+                        onClick={() => setSideTab(value)}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          height: 22,
+                          border: "1px solid var(--border-medium)",
+                          borderRadius:
+                            index === 0
+                              ? "5px 0 0 5px"
+                              : index === all.length - 1
+                                ? "0 5px 5px 0"
+                                : 0,
+                          borderLeftWidth: index === 0 ? 1 : 0,
+                          background:
+                            sideTab === value ? "var(--control-active-bg)" : "var(--bg-card)",
+                          color:
+                            sideTab === value ? "var(--control-active-fg)" : "var(--text-primary)",
+                          cursor: "pointer",
+                          padding: "0 4px",
+                          fontSize: 10,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {sideTab === "outline" ? (
+                    <NoteOutlinePanel
+                      items={noteStats.outline}
+                      onJump={jumpToHeading}
+                      onReorder={reorderHeadingSection}
+                      t={t}
+                    />
+                  ) : (
+                    <NoteBacklinksPanel
+                      groups={backlinkGroups}
+                      count={backlinkCount}
+                      loading={linksLoading}
+                      error={linksError}
+                      onJump={jumpToBacklink}
+                      onRefresh={() => setLinksToken((token) => token + 1)}
+                      t={t}
+                    />
+                  )}
+                </div>
               )}
             </div>
             {/* 状态栏在正文+大纲那一格**下面**,横跨整宽 —— 它报的是整条笔记的

@@ -11,6 +11,7 @@
  */
 
 import { deriveTitle } from "../components/notebook/noteFrontmatter";
+import { scanWikiLinks } from "../components/notebook/noteLinks";
 
 export type HarnessSig = { mtimeMs: number; hash: string };
 
@@ -81,6 +82,8 @@ export class NotebookVaultHarness {
   private icons: Record<string, string> = {};
   /** 让图标的读或写失败。乐观更新的回滚路径只能从这里进。 */
   failIconWrite: "read" | "write" | null = null;
+  /** 让全库链接扫描失败,用来验反链面板的错误态。 */
+  failLinkScan = false;
 
   /** 当前的图标表。断言"真的写进去了"用。 */
   iconTable(): Record<string, string> {
@@ -173,8 +176,16 @@ export class NotebookVaultHarness {
     return { mtimeMs: file.mtimeMs, hash: hash64(file.content) };
   }
 
+  /** 每个命令被调了几次。用来钉住"不该重复扫盘"这类节流行为。 */
+  private callCounts = new Map<string, number>();
+
+  callCount(command: string): number {
+    return this.callCounts.get(command) ?? 0;
+  }
+
   /** 接管 `invoke`。未知命令直接抛,避免悄悄吞掉真实调用。 */
   handle = (command: string, args: Record<string, unknown> = {}): unknown => {
+    this.callCounts.set(command, (this.callCounts.get(command) ?? 0) + 1);
     switch (command) {
       case "notebook_ensure_default_vault":
         return VAULT;
@@ -240,6 +251,30 @@ export class NotebookVaultHarness {
             path,
             title: deriveTitle(this.files.get(path)?.content ?? "", path),
           }));
+
+      case "notebook_vault_links": {
+        if (this.failLinkScan) throw new Error("scanning links failed");
+        /* 真后端在 Rust 里手写了一个和前端正则等价的词法扫描(为了逐行拿行号、
+           不把整个 vault 的正文搬进 JS)。这里内容都在内存里,直接用前端的
+           `scanWikiLinks` —— 两边等价这件事由 `notebook-backlinks.test.ts` 和
+           `links.rs` 共享的那张黄金用例表守着,不靠这个 harness。 */
+        const sources: {
+          path: string;
+          links: { raw: string; line: number; preview: string; embed: boolean }[];
+        }[] = [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          const content = this.files.get(path)?.content ?? "";
+          const links: { raw: string; line: number; preview: string; embed: boolean }[] = [];
+          content.split("\n").forEach((line, index) => {
+            for (const hit of scanWikiLinks(line)) {
+              links.push({ raw: hit.raw, line: index + 1, preview: line.trim(), embed: hit.embed });
+            }
+          });
+          // 没有链接的笔记不进结果,和 Rust 侧一致。
+          if (links.length) sources.push({ path, links });
+        }
+        return sources;
+      }
 
       // 通用 fs 命令,不是 notebook_* 的。列表右键菜单的「在系统文件夹中打开」
       // 借了它,所以这里也要认。

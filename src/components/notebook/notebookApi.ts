@@ -9,6 +9,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import type { NoteLinkSource } from "./noteBacklinks";
 
 /** 文件指纹。`hash` 是字符串:u64 超出 JS 安全整数范围,走 number 会丢精度。 */
 export type NoteSig = {
@@ -377,6 +378,17 @@ export function readNoteIcons(vault: string): Promise<Record<string, string>> {
 /** 写自定义图标表。整张表一起写,不做增量合并。 */
 export function writeNoteIcons(vault: string, icons: Record<string, string>): Promise<void> {
   return invoke<void>("notebook_write_icons", { vault, icons });
+}
+
+/**
+ * 扫全库的 `[[wikilink]]` 出现,给反链面板用。
+ *
+ * 返回的是**未解析**的原始 body + 行号 + 行预览 —— 解析规则在 `noteLinks.ts`。
+ * 扫描必须在后端:反链要读全文(链接可能在最后一行),几百篇笔记意味着几百次
+ * IPC 往返加上把整个 vault 的正文搬进 JS 堆。
+ */
+export function vaultLinks(vault: string): Promise<NoteLinkSource[]> {
+  return invoke<NoteLinkSource[]>("notebook_vault_links", { vault });
 }
 
 /** 索引里一篇笔记的路径与真实标题。`path` 与笔记列表里的 `id` 是同一个值。 */

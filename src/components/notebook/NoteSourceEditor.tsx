@@ -8,7 +8,7 @@
  * 起止偏移"和"用新文本替换选区"两个能力。
  */
 
-import { useCallback, useImperativeHandle, useMemo, useRef, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import ReactCodeMirror, {
   EditorSelection,
   EditorView,
@@ -87,6 +87,17 @@ export type NoteSourceEditorProps = {
    * 面板那个 effect 跑的时候新 view 还不存在,恢复会静默失败。
    */
   initialScrollRatio?: number;
+  /**
+   * 挂载后要把光标放到的偏移。
+   *
+   * 和 `initialScrollRatio` 同一个理由必须走 prop:切换笔记时 CodeMirror 是**重新
+   * 挂载**的(key 带笔记 id),面板在 effect 里调 handle 时拿到的还是上一篇的 view,
+   * 选区会设在正要被卸载的编辑器上,静默失效。
+   *
+   * 给值的时机不限于挂载那一刻:目标笔记的正文晚于编辑器到位时(反链指向一篇还没
+   * 读入的笔记),这个 prop 会在之后某次渲染才第一次有值,那时也照样生效。
+   */
+  initialCursorOffset?: number;
   /**
    * 图片链接的解析上下文。笔记里的图是 `attachments/x.png` 这样的相对路径,
    * widget 单看 markdown 源码不知道它相对谁。
@@ -223,12 +234,24 @@ export function NoteSourceEditor({
   editorRef,
   wysiwyg = false,
   initialScrollRatio,
+  initialCursorOffset,
   attachments,
   onDropFiles,
 }: NoteSourceEditorProps) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   /** 初始滚动只应用一次:之后用户自己的滚动不该被 prop 覆盖。 */
   const scrollApplied = useRef(false);
+  /**
+   * 还没落下的初始光标。`undefined` = 没有待办。
+   *
+   * 不能在 `onCreateEditor` 里直接读 prop:ReactCodeMirror 要等 container 的 ref 落地
+   * (一次额外渲染)才建 view,比拿到 prop 的那次渲染晚一整轮 effect;而给这个 prop
+   * 的一方(反链跳转)在同一次 commit 的 effect 里就把落点清掉了 —— 它没法知道编辑器
+   * 什么时候才读。等回调真的跑起来,prop 已经是 `undefined`,光标停在 0。
+   *
+   * 消费掉就置回 `undefined`,顺带保证"只应用一次":用户之后自己移动光标不会被拽回去。
+   */
+  const pendingCursor = useRef<number | undefined>(undefined);
 
   const extensions = useMemo<Extension[]>(
     () => [
@@ -354,16 +377,38 @@ export function NoteSourceEditor({
 
   const handleChange = useCallback((next: string) => onChange(next), [onChange]);
 
-  /** ReactCodeMirror 把 view 建好后回调。这是能安全设滚动的最早时机。 */
+  /** 把光标放到 `at`(夹到文档长度内)。 */
+  const placeCursor = useCallback((view: EditorView, at: number) => {
+    pendingCursor.current = undefined;
+    // 文档可能比落点短(笔记在外部被截断过),越界的选区会让 CodeMirror 抛。
+    const clamped = Math.min(at, view.state.doc.length);
+    view.dispatch({ selection: EditorSelection.cursor(clamped), scrollIntoView: true });
+  }, []);
+
+  /* 收下一个新的落点。
+   *
+   * view 已经在场就当场落 —— 这是"笔记正文比编辑器晚到"那一路:反链指向的笔记还
+   * 没读入时,点下去只能先挂一个空编辑器,偏移要等正文回来才算得出来,那时不会再
+   * 有第二次挂载。view 还没建好则记下来,由 `onCreateEditor` 消费。 */
+  useEffect(() => {
+    if (initialCursorOffset === undefined) return;
+    const view = cmRef.current?.view;
+    if (view) placeCursor(view, initialCursorOffset);
+    else pendingCursor.current = initialCursorOffset;
+  }, [initialCursorOffset, placeCursor]);
+
+  /** ReactCodeMirror 把 view 建好后回调。这是能安全设滚动和光标的最早时机。 */
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
+      const cursor = pendingCursor.current;
+      if (cursor !== undefined) placeCursor(view, cursor);
       if (scrollApplied.current || initialScrollRatio === undefined) return;
       scrollApplied.current = true;
       const scroller = view.scrollDOM;
       const max = scroller.scrollHeight - scroller.clientHeight;
       scroller.scrollTop = initialScrollRatio * Math.max(0, max);
     },
-    [initialScrollRatio],
+    [initialScrollRatio, placeCursor],
   );
 
   return (

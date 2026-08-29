@@ -166,14 +166,8 @@ export function NoteOutlinePanel({ items, onJump, onReorder, t }: NoteOutlinePan
   return (
     <aside
       aria-label={t("notebook.outline")}
-      style={{
-        minWidth: 0,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        borderLeft: "1px solid var(--border-dim)",
-        background: "var(--bg-sidebar)",
-      }}
+      /* 边框和底色由外面那层侧栏容器画(大纲和反链共用一列,各画一遍会双线)。 */
+      style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}
     >
       <div
         style={{

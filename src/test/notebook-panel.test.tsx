@@ -2777,4 +2777,207 @@ describe("NotebookPanel", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
   });
+
+  describe("反链", () => {
+    /** 打开侧栏并切到反链档。 */
+    async function openBacklinks() {
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      // 没扫过之前标签上不带计数(那会看起来像"确实没有")。
+      fireEvent.click(await screen.findByRole("button", { name: /^Backlinks/ }));
+      return screen.findByRole("complementary", { name: "Backlinks" });
+    }
+
+    /** 反链列表里的跳转按钮的可及名。 */
+    function backlinkNames(): string[] {
+      return screen
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((name) => /line \d+$/.test(name));
+    }
+
+    it("按标题写的链接也出现在反链里", async () => {
+      /* 这是与 Markio 的实质差异:文件名是 `cao-gao`,标题是 Weekly。Markio 的
+         `find_backlinks` 按文件名 stem grep,这一类会整片漏掉。 */
+      harness.seed("cao-gao.md", '---\ntitle: "Weekly"\n---\n\nbody\n');
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n见 [[Weekly]] 这里\n');
+      renderNotebook();
+      /* 点的是文件名 `cao-gao` 而不是标题 —— 列表只读目录项,未读入的笔记行上
+         显示的是文件名 stem。这是列表的既有行为,不在反链范围内。 */
+      fireEvent.click(await screen.findByRole("button", { name: "cao-gao" }));
+      await screen.findByDisplayValue("Weekly");
+
+      await openBacklinks();
+      expect(await screen.findByText("见 [[Weekly]] 这里")).toBeInTheDocument();
+      // frontmatter 那三行也算进行号:跳转是按整篇源码的行数走的。
+      expect(backlinkNames()).toEqual(["Source, line 5"]);
+      // 计数进标签,不用点开才知道有没有。
+      expect(screen.getByRole("button", { name: "Backlinks (1)" })).toBeInTheDocument();
+    });
+
+    it("换到另一篇笔记时反链跟着换,不重扫", async () => {
+      /* 扫描结果是全库的,换笔记只是换一个筛选条件。重扫一遍是纯浪费,而反链档
+         的扫描是整个面板里最贵的一次 IO。 */
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\nbody\n');
+      harness.seed("Beta.md", '---\ntitle: "Beta"\n---\n\nbody\n');
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n[[Alpha]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+      await openBacklinks();
+      await screen.findByText("[[Alpha]]");
+      const scans = harness.callCount("notebook_vault_links");
+
+      fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+      await waitFor(() => expect(screen.getByText("No note links here yet.")).toBeInTheDocument());
+      expect(harness.callCount("notebook_vault_links")).toBe(scans);
+    });
+
+    it("没打开反链档时不扫全库", async () => {
+      // 读每个文件的全文,而绝大多数时候用户根本没打开反链。
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\n[[Alpha]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Alpha" });
+      // 侧栏开着但停在大纲档,也不该扫。
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(harness.callCount("notebook_vault_links")).toBe(0);
+    });
+
+    it("自引用不算,死链不算", async () => {
+      harness.seed("self.md", '---\ntitle: "Self"\n---\n\n[[Self]] 指向我自己\n[[根本不存在]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Self" }));
+      await openBacklinks();
+
+      await waitFor(() => expect(screen.getByText("No note links here yet.")).toBeInTheDocument());
+    });
+
+    it("点一条反链跳到来源笔记", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n第一行\n见 [[Target]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      await screen.findByDisplayValue("Target");
+      await openBacklinks();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Source, line 6" }));
+      // 标题框换成来源笔记 —— 反链的用途就是走到引用它的地方去。
+      expect(await screen.findByDisplayValue("Source")).toBeInTheDocument();
+
+      /* 光标落在那一行的行首。只切笔记不落光标的话用户还得自己找那一行,而一篇
+         长笔记里"第 6 行"根本不在视野内。
+
+         注意这个偏移是按**编辑器里的正文**算的,不是按文件:文件第 6 行是
+         `见 [[Target]]`,而正文(拆掉 frontmatter 之后)是 `第一行\n见 [[Target]]\n`,
+         那一行的行首在 4。两个坐标系差几行取决于 frontmatter 有多长。 */
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("跳到一篇还没读入的笔记也落在那一行", async () => {
+      /* 与上一条的差别只在"来源笔记的正文有没有到位",而这恰好是最常见的情形:
+         列表只读目录项,除了当前这篇之外都还没读入。正文比编辑器晚到时,落点是在
+         编辑器挂好之后才算出来的 —— 只在挂载那一刻读一次 prop 的写法在这里会静默
+         把光标留在开头。 */
+      /* src 先种、Target 后种:列表按 mtime 倒序,Target 成为挂载时的当前笔记,于是
+         src 从头到尾没被读入过(上一条里它恰好是当前笔记,一挂载就读了)。 */
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n第一行\n见 [[Target]]\n');
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Target");
+      await openBacklinks();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Source, line 6" }));
+      expect(await screen.findByDisplayValue("Source")).toBeInTheDocument();
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("刷新会重扫,能看到外部新加的引用", async () => {
+      /* 别人的笔记被外部编辑器改过时,反链只能靠重扫发现 —— 面板不监听整个
+         vault 的文件变化。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      await openBacklinks();
+      await waitFor(() => expect(screen.getByText("No note links here yet.")).toBeInTheDocument());
+
+      harness.seed("late.md", '---\ntitle: "Late"\n---\n\n[[Target]] 后来加的\n');
+      fireEvent.click(screen.getByRole("button", { name: "Rescan the vault for links" }));
+
+      expect(await screen.findByText("[[Target]] 后来加的")).toBeInTheDocument();
+    });
+
+    it("扫描失败就地报错,不占用面板那条错误条", async () => {
+      // 反链是只读视图,扫不动它不影响读写笔记。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      harness.failLinkScan = true;
+      const side = await openBacklinks();
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("scanning links failed");
+      expect(side).toContainElement(alert);
+    });
+
+    it("嵌入也算反链", async () => {
+      // `![[..]]` 是更强的引用,漏掉它会让"这篇被谁用了"的答案是错的。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n![[Target]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      await openBacklinks();
+
+      expect(await screen.findByText("![[Target]]")).toBeInTheDocument();
+      expect(backlinkNames()).toEqual(["Source, line 5"]);
+      /* 图标也要区分开:`![[..]]` 会把整篇内容搬过去,改标题之类的动作影响面比一条
+         链接大。lucide 把图标名写进 svg 的 class,据此断言身份。 */
+      const icon = screen.getByRole("button", { name: "Source, line 5" }).querySelector("svg");
+      expect(icon?.getAttribute("class")).toContain("lucide-image");
+    });
+
+    it("计数行报的是引用条数和来源篇数", async () => {
+      /* 两个数不一样才看得出有没有对调 —— 而"3 处引用分布在 1 篇里"和"1 处引用
+         分布在 3 篇里"对用户是完全不同的信息。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n[[Target]]\n又一处 [[Target]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      const side = await openBacklinks();
+
+      await waitFor(() => expect(side).toHaveTextContent("2 references in 1 notes"));
+      // 同一篇里的两处各算一条,标签上的计数与计数行一致。
+      expect(screen.getByRole("button", { name: "Backlinks (2)" })).toBeInTheDocument();
+    });
+
+    it("扫描进行中不能再点刷新", async () => {
+      // 重复点击会叠出并发扫描,而扫描是整个面板里最贵的一次 IO。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Target" }));
+      await openBacklinks();
+      const refresh = () => screen.getByRole("button", { name: "Rescan the vault for links" });
+      await waitFor(() => expect(refresh()).toBeEnabled());
+
+      // 不 await:扫描还挂在飞行中的那一瞬间正是要断言的状态。
+      fireEvent.click(refresh());
+      expect(refresh()).toBeDisabled();
+
+      await waitFor(() => expect(refresh()).toBeEnabled());
+    });
+
+    it("大纲与反链共用一列,切换时只有一个在场", async () => {
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\n# 一级标题\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      expect(await screen.findByRole("complementary", { name: "Outline" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /^Backlinks/ }));
+      await screen.findByRole("complementary", { name: "Backlinks" });
+      // 面板只有一半宽,两档共用一列;两个都在场意味着正文被挤没了。
+      expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
+    });
+  });
 });

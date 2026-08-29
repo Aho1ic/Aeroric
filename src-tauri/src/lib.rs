@@ -939,6 +939,7 @@ pub fn run() {
             notebook::notebook_attachment_read,
             notebook::notebook_note_stat,
             notebook::notebook_vault_index,
+            notebook::notebook_vault_links,
             notebook::notebook_list_snapshots,
             notebook::notebook_read_snapshot,
             notebook::notebook_restore_snapshot,

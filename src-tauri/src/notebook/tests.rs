@@ -2559,3 +2559,91 @@ fn icons_write_creates_the_private_dir_and_replaces_the_whole_table() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+/// 扫描结果里某个文件的链接 raw 列表。找不到那个文件就是 None(与"扫到了但没链接"
+/// 区分开 —— 后者根本不进结果)。
+fn scanned_links(sources: &[super::links::NoteLinkSource], name: &str) -> Option<Vec<String>> {
+    sources
+        .iter()
+        .find(|source| source.path.ends_with(name))
+        .map(|source| source.links.iter().map(|link| link.raw.clone()).collect())
+}
+
+#[test]
+fn vault_links_reports_raw_bodies_with_line_numbers() {
+    let vault = temp_vault("links-basic");
+    std::fs::write(
+        vault.join("a.md"),
+        "---\ntitle: A\n---\n\n第一段\n见 [[周报]] 与 ![[图]]\n尾巴\n",
+    )
+    .expect("seed");
+
+    let sources = super::links::scan_vault_links(&vault).expect("scan");
+    let source = sources
+        .iter()
+        .find(|s| s.path.ends_with("a.md"))
+        .expect("a.md");
+    assert_eq!(source.links.len(), 2);
+    assert_eq!(source.links[0].raw, "周报");
+    // frontmatter 也算进行号:前端跳转是按整篇源码的行数走的。
+    assert_eq!(source.links[0].line, 6);
+    assert!(!source.links[0].embed);
+    assert!(source.links[1].embed, "`![[图]]` 是嵌入");
+    // 同一行的两条共用那一行的预览。
+    assert_eq!(source.links[1].preview, "见 [[周报]] 与 ![[图]]");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_links_omits_notes_without_links() {
+    let vault = temp_vault("links-empty");
+    std::fs::write(vault.join("plain.md"), "没有任何链接\n").expect("seed");
+    std::fs::write(vault.join("linked.md"), "[[plain]]\n").expect("seed");
+
+    let sources = super::links::scan_vault_links(&vault).expect("scan");
+    // 没有链接的笔记不占位 —— 反链面板只关心"谁指向了谁",空条目只让 payload 变大。
+    assert_eq!(scanned_links(&sources, "plain.md"), None);
+    assert_eq!(
+        scanned_links(&sources, "linked.md"),
+        Some(vec!["plain".to_string()])
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_links_skips_private_dirs_and_non_notes() {
+    let vault = temp_vault("links-skip");
+    let private = vault.join(".notebook");
+    std::fs::create_dir_all(private.join("trash")).expect("mkdir");
+    // 回收站里的笔记不该有反链:它已经被删了,让它把别人指出来只会造出点不开的条目。
+    std::fs::write(private.join("trash/gone.md"), "[[target]]\n").expect("seed");
+    std::fs::write(vault.join("notes.txt"), "[[target]]\n").expect("seed");
+    std::fs::write(vault.join("real.md"), "[[target]]\n").expect("seed");
+
+    let sources = super::links::scan_vault_links(&vault).expect("scan");
+    assert_eq!(scanned_links(&sources, "gone.md"), None);
+    assert_eq!(scanned_links(&sources, "notes.txt"), None);
+    assert!(scanned_links(&sources, "real.md").is_some());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_links_walks_subdirectories_and_sorts_by_path() {
+    let vault = temp_vault("links-sub");
+    std::fs::create_dir_all(vault.join("sub")).expect("mkdir");
+    std::fs::write(vault.join("sub/deep.md"), "[[target]]\n").expect("seed");
+    std::fs::write(vault.join("aaa.md"), "[[target]]\n").expect("seed");
+
+    let sources = super::links::scan_vault_links(&vault).expect("scan");
+    let paths: Vec<&str> = sources.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(paths.len(), 2);
+    // 排序保证两次扫描顺序一致,否则反链列表的排列会随文件系统遍历顺序漂移。
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_eq!(paths, sorted);
+
+    std::fs::remove_dir_all(&vault).ok();
+}

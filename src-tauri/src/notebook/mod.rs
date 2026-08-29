@@ -22,6 +22,7 @@
 pub mod attachments;
 pub mod fs_ops;
 pub mod html2md;
+pub mod links;
 pub mod migrate;
 pub mod snapshots;
 pub mod state;
@@ -472,6 +473,21 @@ pub async fn notebook_vault_index(
 ) -> Result<Vec<vault_index::VaultIndexEntry>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || vault_index::scan_vault_titles(&resolved)).await
+}
+
+/// 扫全库的 `[[wikilink]]` 出现,给反链面板用。
+///
+/// 返回的是**未解析**的原始 body + 行号 + 行预览:解析规则(stem / 标题 / 路径的
+/// 优先级、`#小节`、`|别名`、歧义)在前端 `noteLinks.ts` 里,那份有测试。在 Rust
+/// 里抄一遍会得到两套会各自漂移的规则,而漂移的表现是"链接能点,反链面板里却
+/// 没有它"—— 没人会想到怀疑是两边不一致。
+#[tauri::command]
+pub async fn notebook_vault_links(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<links::NoteLinkSource>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || links::scan_vault_links(&resolved)).await
 }
 
 /// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。
