@@ -42,6 +42,8 @@ export type NoteListProps = {
   dragOverNoteId: string | null;
   /** 拖拽结束后要吞掉紧随的 click,否则会误切换笔记。 */
   suppressNextClickRef: React.MutableRefObject<boolean>;
+  /** 列表底部的附件分区。由面板构造(它持有 vault 和插入逻辑)。 */
+  attachmentSection?: React.ReactNode;
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
@@ -68,6 +70,7 @@ export function NoteList({
   draggedNoteId,
   dragOverNoteId,
   suppressNextClickRef,
+  attachmentSection,
   t,
 }: NoteListProps) {
   return (
@@ -285,6 +288,9 @@ export function NoteList({
           )
         )}
       </div>
+      {/* 附件在笔记之后:它是笔记的附属物,而且默认折叠 —— 放在上面会先占掉
+          一行,把真正要找的笔记挤下去。 */}
+      {attachmentSection}
     </aside>
   );
 }

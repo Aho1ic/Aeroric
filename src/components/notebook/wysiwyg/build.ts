@@ -30,6 +30,7 @@ import {
 } from "./inlineWidgets";
 import { MathWidget } from "./math";
 import { TableWidget } from "./table";
+import { needsVaultResolve } from "../attachmentUrls";
 import { parseImageMarkdown } from "../markdownImages";
 
 interface PendingDeco {
@@ -511,7 +512,10 @@ export function build(state: EditorState): BuildResult {
           const text = state.doc.sliceString(node.from, node.to);
           const parts = parseImageMarkdown(text);
           // 始终渲染图片 widget（点击进编辑浮层），不再光标显形 markdown 源码。
-          if (parts && isAbsoluteSafeUrl(parts.url)) {
+          // vault 里的相对路径也要进 widget:它是随手记最常见的图片来源(粘贴 /
+          // 拖入都产出相对链接)。退回源码的话用户会看到自己刚粘的图变成一行
+          // `![](attachments/x.png)`。src 由 widget 异步解析。
+          if (parts && (isAbsoluteSafeUrl(parts.url) || needsVaultResolve(parts.url))) {
             decos.push({
               from: node.from,
               to: node.to,

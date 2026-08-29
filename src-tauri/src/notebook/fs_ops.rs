@@ -70,11 +70,21 @@ pub enum SaveOutcome {
     Conflict { disk: FileSig },
 }
 
-fn is_skip_dir(name: &str) -> bool {
+/// 任何 vault 扫描都不该进入的目录。笔记树和附件扫描共用这一份。
+pub fn is_scan_skip_dir(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     SKIP_DIRS.iter().any(|skip| *skip == lower)
-        // vault 私有目录不进树:历史快照和索引不是用户的笔记。
+        // vault 私有目录:历史快照、回收站、索引都不是用户的笔记。
         || lower == VAULT_PRIVATE_DIR
+}
+
+/// 笔记树额外要跳过的目录。
+///
+/// 附件目录只跳**树**,不跳附件扫描 —— 后者的主战场就是它。树里留着它的后果是
+/// 一个永远展不开的空文件夹:树只收目录和笔记文件,而附件目录里全是图片,于是
+/// 用户看到一个"空"目录,而附件面板同时又说里面有二十张图。
+fn is_tree_skip_dir(name: &str) -> bool {
+    is_scan_skip_dir(name) || name.eq_ignore_ascii_case(super::attachments::ATTACHMENT_DIR)
 }
 
 /// 是否是随手记认的笔记文件。
@@ -355,7 +365,7 @@ fn scan_dir(
             .unwrap_or(0);
 
         if meta.is_dir() {
-            if is_skip_dir(&name) {
+            if is_tree_skip_dir(&name) {
                 continue;
             }
             *budget -= 1;

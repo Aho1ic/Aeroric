@@ -46,6 +46,7 @@ export {
   parseTableSource,
 } from "./table";
 export type { ParsedTable, WysiwygTableAction } from "./table";
+export { attachmentContext, type AttachmentContext } from "./attachmentFacet";
 
 /** 挂进 CodeMirror 的 extension 数组即可启用 WYSIWYG。 */
 export const wysiwygMarkdown = [wysiwygField, wysiwygMousedown];

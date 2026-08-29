@@ -20,7 +20,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import type { ThemeVariant } from "../../types";
-import { wysiwygMarkdown } from "./wysiwyg";
+import { attachmentContext, wysiwygMarkdown, type AttachmentContext } from "./wysiwyg";
 
 /** 面板里的格式化命令需要的最小能力集,等价于 textarea 的选区 API。 */
 export type NoteEditorHandle = {
@@ -35,6 +35,14 @@ export type NoteEditorHandle = {
   selectedText(): string;
   /** 用 `text` 替换 [from, to),并把光标/选区放到指定位置。 */
   replaceRange(from: number, to: number, text: string, cursor?: "select" | "after"): void;
+  /**
+   * 用 `text` 替换**当前**选区,光标落在插入内容之后。
+   *
+   * 和 `replaceRange` 的区别是不接偏移。异步插入(存附件要等写盘)必须用这个:
+   * 那期间用户可能继续打字,拿着出发时算的偏移去替换会插错位置甚至吃掉刚输入的
+   * 字,而选区是 CodeMirror 自己跟着后续编辑一起映射的。
+   */
+  replaceSelection(text: string): void;
   /** 把选区设为 [from, to) 并滚动到可见。 */
   setSelection(from: number, to: number): void;
   /** 滚动到某个文档偏移所在的行。 */
@@ -45,6 +53,13 @@ export type NoteEditorHandle = {
   restoreScrollRatio(ratio: number): void;
   /** 真实的滚动元素(`.cm-scroller`)。分屏同步滚动要直接监听它。 */
   scrollElement(): HTMLElement | null;
+  /**
+   * 视口坐标 → 文档偏移。点不在编辑器上时返回 null。
+   *
+   * 系统文件管理器拖入用它:那个事件是**整个窗口**的,不判落点的话把文件拖到
+   * 笔记列表上也会往正文里插图。
+   */
+  posAtClientPoint(x: number, y: number): number | null;
 };
 
 export type NoteSourceEditorProps = {
@@ -72,7 +87,30 @@ export type NoteSourceEditorProps = {
    * 面板那个 effect 跑的时候新 view 还不存在,恢复会静默失败。
    */
   initialScrollRatio?: number;
+  /**
+   * 图片链接的解析上下文。笔记里的图是 `attachments/x.png` 这样的相对路径,
+   * widget 单看 markdown 源码不知道它相对谁。
+   */
+  attachments?: AttachmentContext;
+  /**
+   * 粘贴 / 拖入了文件。`at` 是插入点的文档偏移(粘贴时是当前选区起点)。
+   *
+   * 返回 true 表示这次事件已经被接手,编辑器会阻止默认行为 —— 否则浏览器会把
+   * 图片的文件名当纯文本插进去。
+   */
+  onDropFiles?: (files: File[], at: number) => boolean;
 };
+
+/**
+ * 从剪贴板 / 拖放数据里挑出图片文件。
+ *
+ * 只认 `image/*`:粘贴一段带格式的文本时 `dataTransfer` 里也有 `Files`(某些应用
+ * 会塞一份 HTML 的快照),不过滤的话复制粘贴文字会莫名多出一张图。
+ */
+function imageFilesFrom(data: DataTransfer | null): File[] {
+  if (!data || data.files.length === 0) return [];
+  return Array.from(data.files).filter((file) => file.type.startsWith("image/"));
+}
 
 /**
  * 围栏代码块的语言支持。
@@ -185,6 +223,8 @@ export function NoteSourceEditor({
   editorRef,
   wysiwyg = false,
   initialScrollRatio,
+  attachments,
+  onDropFiles,
 }: NoteSourceEditorProps) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   /** 初始滚动只应用一次:之后用户自己的滚动不该被 prop 覆盖。 */
@@ -205,8 +245,28 @@ export function NoteSourceEditor({
       }),
       // WYSIWYG 装饰。放在最后:它的 StateField 要能看到前面 extension 的效果。
       ...(wysiwyg ? wysiwygMarkdown : []),
+      ...(attachments ? [attachmentContext.of(attachments)] : []),
+      // 粘贴 / 拖入图片。走 CodeMirror 的 domEventHandlers 而不是在外层 div 上挂
+      // React 的 onPaste:CodeMirror 的 contentDOM 是它自己管的,外层拿到的
+      // paste 事件里 clipboardData 已经被它处理过了。
+      EditorView.domEventHandlers({
+        paste: (event, editor) => {
+          const files = imageFilesFrom(event.clipboardData);
+          if (files.length === 0) return false;
+          return onDropFiles?.(files, editor.state.selection.main.from) ?? false;
+        },
+        drop: (event, editor) => {
+          const files = imageFilesFrom(event.dataTransfer);
+          if (files.length === 0) return false;
+          // 落点按鼠标位置算,不是当前光标 —— 用户拖到哪就插到哪。
+          const at =
+            editor.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+            editor.state.selection.main.from;
+          return onDropFiles?.(files, at) ?? false;
+        },
+      }),
     ],
-    [ariaLabel, onSelectionChange, wysiwyg],
+    [ariaLabel, attachments, onDropFiles, onSelectionChange, wysiwyg],
   );
 
   const view = () => cmRef.current?.view ?? null;
@@ -242,6 +302,12 @@ export function NoteSourceEditor({
         });
         editor.focus();
       },
+      replaceSelection: (text) => {
+        const editor = view();
+        if (!editor) return;
+        editor.dispatch(editor.state.replaceSelection(text), { scrollIntoView: true });
+        editor.focus();
+      },
       setSelection: (from, to) => {
         const editor = view();
         if (!editor) return;
@@ -273,6 +339,15 @@ export function NoteSourceEditor({
         scroller.scrollTop = ratio * Math.max(0, max);
       },
       scrollElement: () => view()?.scrollDOM ?? null,
+      posAtClientPoint: (x, y) => {
+        const editor = view();
+        if (!editor) return null;
+        const rect = editor.scrollDOM.getBoundingClientRect();
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null;
+        // `precise: false` 让它给最近的位置而不是 null —— 落在最后一行下方的空白
+        // 处也该有个落点(文末),不然拖到编辑器下半部分会没反应。
+        return editor.posAtCoords({ x, y }, false);
+      },
     }),
     [],
   );

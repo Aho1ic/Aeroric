@@ -50,6 +50,28 @@ export class NotebookVaultHarness {
   /** 让下一次保存直接失败(磁盘满、权限、IPC 断)。保存失败态是「关 tab 要确认」
    *  的唯一入口,没有它那条分支进不去。冲突**不**走这里 —— 冲突是正常分支。 */
   failNextSave = false;
+  /** 存下来的附件,旧的在前。 */
+  attachments: {
+    path: string;
+    name: string;
+    relativePath: string;
+    size: number;
+    modifiedMs: number;
+    kind: string;
+  }[] = [];
+  /** 被读过字节的附件路径。图片解析层"只读一次"靠它验。 */
+  attachmentReads: string[] = [];
+  /** 让接下来几次附件保存失败。多张图里只有一张失败时的降级路径要用。 */
+  private failingAttachmentSaves = 0;
+  /** 让附件列表失败。分区的错误态只能从这里进。 */
+  failAttachmentList = false;
+  /** 让读附件字节失败(文件正被写、权限变了)。图片的坏图标记只能从这里进。 */
+  failAttachmentReads = false;
+
+  /** 让接下来 `count` 次附件保存抛错。 */
+  failAttachmentSaves(count = 1): void {
+    this.failingAttachmentSaves = count;
+  }
   /**
    * 版本历史快照,按路径分组,新的在前。
    *
@@ -406,6 +428,53 @@ export class NotebookVaultHarness {
         };
       }
 
+      case "notebook_attachment_save": {
+        const note = String(args.note);
+        if (!this.files.has(note)) throw new Error(`no such file: ${note}`);
+        if (this.failingAttachmentSaves > 0) {
+          this.failingAttachmentSaves -= 1;
+          throw new Error("saving the attachment failed");
+        }
+        const mime = String(args.mime);
+        const given = args.fileName == null ? null : String(args.fileName);
+        // 和 Rust 侧同一套命名:笔记名 + 毫秒戳 + 扩展名。扩展名优先取文件名。
+        const ext =
+          given?.includes(".") === true
+            ? given.split(".").pop()!.toLowerCase()
+            : (mime.split("/")[1]?.replace("+xml", "") ?? "bin");
+        const stem = note.slice(VAULT.length + 1).replace(/\.md$/, "");
+        const name = `${stem}-${(this.clock += 10)}.${ext}`;
+        return this.storeAttachment(note, name, given ?? name, String(args.dataBase64).length);
+      }
+
+      case "notebook_attachment_save_from_path": {
+        const note = String(args.note);
+        if (!this.files.has(note)) throw new Error(`no such file: ${note}`);
+        if (this.failingAttachmentSaves > 0) {
+          this.failingAttachmentSaves -= 1;
+          throw new Error("saving the attachment failed");
+        }
+        const src = String(args.src);
+        const base = src.split(/[\\/]/).pop() ?? "file";
+        const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "bin";
+        const stem = note.slice(VAULT.length + 1).replace(/\.md$/, "");
+        return this.storeAttachment(note, `${stem}-${(this.clock += 10)}.${ext}`, base, 32);
+      }
+
+      case "notebook_attachment_list":
+        if (this.failAttachmentList) throw new Error("listing attachments failed");
+        // 新的在前,和后端一致。
+        return [...this.attachments].reverse();
+
+      case "notebook_attachment_read": {
+        const path = String(args.path);
+        if (this.failAttachmentReads) throw new Error("reading the attachment failed");
+        const found = this.attachments.find((item) => item.path === path);
+        if (!found) throw new Error(`no such attachment: ${path}`);
+        this.attachmentReads.push(path);
+        return new Uint8Array([1, 2, 3]).buffer;
+      }
+
       case "notebook_migrate_legacy": {
         // 面板只关心「迁移成功了」,详细的迁移语义由 Rust 侧测试覆盖。
         this.migratedRaw = String(args.rawJson);
@@ -422,6 +491,41 @@ export class NotebookVaultHarness {
         throw new Error(`unexpected notebook command: ${command}`);
     }
   };
+
+  /**
+   * 存一个附件并算出插进正文的 markdown。
+   *
+   * 链接相对**笔记所在目录**,和 Rust 侧 `finish` 一致 —— 子目录里的笔记要爬回
+   * vault 根。写错这一条的话面板测试会对着一条断链断言成功。
+   */
+  private storeAttachment(note: string, name: string, alt: string, size: number) {
+    const noteDir = note.slice(0, note.lastIndexOf("/"));
+    const depth = noteDir.slice(VAULT.length).split("/").filter(Boolean).length;
+    const relativePath = `attachments/${name}`;
+    const link = `${"../".repeat(depth)}${relativePath}`;
+    const kind = /\.(png|jpe?g|gif|webp|bmp|avif|ico|tiff?|heic)$/i.test(name)
+      ? "image"
+      : /\.svg$/i.test(name)
+        ? "svg"
+        : "pdf";
+    const path = `${VAULT}/${relativePath}`;
+    const stem = alt.replace(/\.[^.]+$/, "").replace(/[[\]]/g, "-");
+    this.attachments.push({
+      path,
+      name,
+      relativePath,
+      size,
+      modifiedMs: this.clock,
+      kind,
+    });
+    return {
+      path,
+      name,
+      link,
+      markdown: kind === "pdf" ? `[${name}](${link})` : `![${stem}](${link})`,
+      size,
+    };
+  }
 
   /** 记一条快照。新的在前,和后端 `list` 的顺序一致。 */
   private pushSnapshot(path: string, content: string): void {

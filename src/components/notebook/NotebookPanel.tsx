@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { useI18n } from "../../i18n";
 import { confirm } from "../../lib/appDialog";
+import { AttachmentSection } from "./AttachmentSection";
+import { attachmentMarkdown, linkFromNote } from "./attachmentUrls";
 import { NoteList } from "./NoteList";
 import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
@@ -49,6 +51,8 @@ import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
 import { NoteStatusBar } from "./NoteStatusBar";
 import { NoteTabStrip, type NoteTabItem } from "./NoteTabStrip";
+import { useAttachmentImages } from "./useAttachmentImages";
+import { useNoteAttachmentDrop } from "./useNoteAttachmentDrop";
 import { useNoteLayoutTier } from "./useNoteLayoutTier";
 import { reorderSection } from "./noteSections";
 import { invalidateMermaidTheme, renderNoteVisualsLazy } from "./noteVisuals";
@@ -141,6 +145,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
   const [listMenu, setListMenu] = useState<NoteListContextMenuState | null>(null);
+  /** 每存一个附件 +1。附件分区靠它知道该重扫了(它可能是折叠的,那时不扫)。 */
+  const [attachmentToken, setAttachmentToken] = useState(0);
   /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
    *  一上来就占掉 190px 会挤坏紧凑态的手感。 */
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -187,6 +193,27 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     () => renderNoteMarkdown(activeNote?.body ?? "").html,
     [activeNote?.body],
   );
+  /* 相对路径的图片解析。返回的上下文交给 CodeMirror 的图片 widget;阅读 / 分屏态
+     的预览由 hook 自己扫 DOM 换 src。renderKey 带上 mode:阅读 ⇄ 分屏切换时 HTML
+     不变但预览容器换了节点,不重扫新容器里的图就是空的。 */
+  const attachmentImages = useAttachmentImages(
+    activeNote?.id ?? "",
+    previewRef,
+    `${mode}:${markdownHtml}`,
+  );
+  /* 粘贴 / 拖入图片 → 存成附件 → 在光标处插入 markdown。
+     插入走 replaceSelection 而不是记下偏移:存附件要等写盘,那期间用户可能继续
+     打字,拿出发时的偏移去替换会插错位置。 */
+  const attachmentDrop = useNoteAttachmentDrop({
+    notePath: activeNote?.id ?? "",
+    setInsertPoint: (at) => sourceEditorRef.current?.setSelection(at, at),
+    insert: (markdown) => sourceEditorRef.current?.replaceSelection(markdown),
+    posAtClientPoint: (x, y) => sourceEditorRef.current?.posAtClientPoint(x, y) ?? null,
+    onSaved: () => setAttachmentToken((value) => value + 1),
+    onError: setError,
+    noNoteMessage: t("notebook.attachmentNoNote"),
+    tooManyMessage: t("notebook.attachmentTooMany"),
+  });
   // 大纲 / 字数 / 阅读时长。只在阅读态用得上,但算一次很便宜(纯字符串扫描),
   // 放在这里省得再加一层条件。
   const noteStats = useMemo(() => analyzeNote(activeNote?.body ?? ""), [activeNote?.body]);
@@ -1024,6 +1051,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       value={activeNote.body}
       themeVariant={themeVariant}
       wysiwyg={mode === "wysiwyg"}
+      attachments={attachmentImages}
+      onDropFiles={attachmentDrop.handleFiles}
       initialScrollRatio={
         pendingScrollRestoreRef.current?.noteId === activeNote.id
           ? pendingScrollRestoreRef.current.ratio
@@ -1109,6 +1138,37 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           draggedNoteId={drag.draggedNoteId}
           dragOverNoteId={drag.dragOverNoteId}
           suppressNextClickRef={drag.suppressNextClickRef}
+          attachmentSection={
+            <AttachmentSection
+              vault={vault}
+              refreshToken={attachmentToken}
+              /* 没有打开的笔记就没有"插到哪"可言,插入按钮整个不出现。 */
+              onInsert={
+                activeNote
+                  ? (attachment) => {
+                      const link = linkFromNote(
+                        vault ?? "",
+                        activeNote.id,
+                        attachment.relativePath,
+                      );
+                      sourceEditorRef.current?.replaceSelection(
+                        attachmentMarkdown(attachment.name, attachment.kind, link),
+                      );
+                    }
+                  : undefined
+              }
+              onReveal={(attachment) => {
+                if (!vault) {
+                  setError(t("notebook.vaultUnavailable"));
+                  return;
+                }
+                void revealNoteInFileManager(attachment.path, vault).catch((error: unknown) =>
+                  setError(errorText(error)),
+                );
+              }}
+              t={t}
+            />
+          }
           t={t}
         />
       </div>

@@ -282,3 +282,67 @@ export type RichtextConversionReport = {
 export function convertRichtextNotes(vault: string): Promise<RichtextConversionReport> {
   return invoke<RichtextConversionReport>("notebook_convert_richtext", { vault });
 }
+
+/** vault 里的一个附件。`relativePath` 相对 vault 根,用来告诉用户它在哪。 */
+export type Attachment = {
+  path: string;
+  name: string;
+  relativePath: string;
+  size: number;
+  modifiedMs: number;
+  /** image / svg / pdf / video / audio / word / sheet / slides / archive */
+  kind: string;
+};
+
+/** 刚存下来的附件。`markdown` 是可以直接插进正文的那一段。 */
+export type SavedAttachment = {
+  path: string;
+  name: string;
+  /** 相对**笔记所在目录**的链接,子目录里的笔记会带 `../`。 */
+  link: string;
+  markdown: string;
+  size: number;
+};
+
+/**
+ * 把一段字节存成附件(粘贴走这条)。
+ *
+ * `bytes` 是 base64。剪贴板里的图本来就在内存里,没有磁盘路径可给,只能编码穿过
+ * IPC;从磁盘拖入的走 `saveAttachmentFromPath`,那条不编码。
+ */
+export function saveAttachment(
+  note: string,
+  dataBase64: string,
+  mime: string,
+  fileName?: string,
+): Promise<SavedAttachment> {
+  return invoke<SavedAttachment>("notebook_attachment_save", {
+    note,
+    dataBase64,
+    mime,
+    fileName: fileName ?? null,
+  });
+}
+
+/** 把磁盘上的一个文件复制进附件目录(从文件管理器拖入走这条)。 */
+export function saveAttachmentFromPath(note: string, src: string): Promise<SavedAttachment> {
+  return invoke<SavedAttachment>("notebook_attachment_save_from_path", { note, src });
+}
+
+/** 列出 vault 里的附件,新的在前。 */
+export function listAttachments(vault: string, max?: number): Promise<Attachment[]> {
+  return invoke<Attachment[]>("notebook_attachment_list", { vault, max: max ?? null });
+}
+
+/**
+ * 读一个附件的原始字节。
+ *
+ * 前端拿它做 blob URL。不走 asset 协议是因为那要给 WebView 开一整棵目录的读权限
+ * 并放宽 CSP;这条路上读取仍然过后端那道 vault allowlist。
+ *
+ * 后端返回的是 `ipc::Response`(原始 body),所以这里拿到的是 ArrayBuffer,而不是
+ * 一个几百万元素的数字数组。
+ */
+export function readAttachment(path: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("notebook_attachment_read", { path });
+}

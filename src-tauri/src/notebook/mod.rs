@@ -18,6 +18,7 @@
 //! 命令一律 `notebook_` 前缀。为了不让 `lib.rs` 的 `generate_handler!` 继续
 //! 膨胀,这里用 [`notebook_commands!`] 宏聚合,`lib.rs` 只出现一行。
 
+pub mod attachments;
 pub mod fs_ops;
 pub mod html2md;
 pub mod migrate;
@@ -316,6 +317,81 @@ pub async fn notebook_rename_note(
     to: String,
 ) -> Result<(), String> {
     fs_ops::rename_note(&state, &from, &to)
+}
+
+// ── 附件 ───────────────────────────────────────────────────────────────────
+
+/// 存一份剪贴板 / 网页拖来的附件。`dataBase64` 允许带 `data:...;base64,` 前缀。
+#[tauri::command]
+pub async fn notebook_attachment_save(
+    state: State<'_, NotebookState>,
+    note: String,
+    mime: String,
+    data_base64: String,
+    file_name: Option<String>,
+) -> Result<attachments::SavedAttachment, String> {
+    use base64::Engine;
+    let resolved_note = state.resolve_in_vaults(&note, false)?;
+    let vault = state.owning_vault(&resolved_note)?;
+    // data URL 前缀在前端剥不干净的情况太多(有的浏览器给 `;charset=`),
+    // 这里统一按最后一个逗号切。
+    let payload = data_base64
+        .rsplit_once(',')
+        .map(|(_, data)| data)
+        .unwrap_or(&data_base64);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|e| format!("The attachment is not valid base64: {e}"))?;
+    blocking(move || {
+        attachments::save_bytes(&vault, &resolved_note, file_name.as_deref(), &mime, &bytes)
+    })
+    .await
+}
+
+/// 把磁盘上的文件复制进附件目录(从文件管理器拖入)。
+///
+/// `src` 不过 `resolve_in_vaults` —— 它是 vault **外**的路径,那道闸门会拒掉。
+/// 这里的安全边界在写入侧:目标目录由 `owning_vault` 算出来,源只被读。
+#[tauri::command]
+pub async fn notebook_attachment_save_from_path(
+    state: State<'_, NotebookState>,
+    note: String,
+    src: String,
+) -> Result<attachments::SavedAttachment, String> {
+    let resolved_note = state.resolve_in_vaults(&note, false)?;
+    let vault = state.owning_vault(&resolved_note)?;
+    let src = std::path::PathBuf::from(src);
+    blocking(move || attachments::save_from_path(&vault, &resolved_note, &src)).await
+}
+
+/// 列出 vault 里的附件,新的在前。
+#[tauri::command]
+pub async fn notebook_attachment_list(
+    state: State<'_, NotebookState>,
+    vault: String,
+    max: Option<usize>,
+) -> Result<Vec<attachments::Attachment>, String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    let max = max.unwrap_or(attachments::DEFAULT_LIST_LIMIT);
+    blocking(move || attachments::list(&root, max)).await
+}
+
+/// 读一个附件的原始字节。前端拿它做 blob URL 显示图片。
+///
+/// 走 `resolve_in_vaults`:附件读取和笔记读写共用同一道 allowlist,不因为
+/// "只是读一张图"就放宽到任意路径。
+///
+/// 返回 `ipc::Response` 而不是 `Vec<u8>`:后者会被序列化成 JSON 数字数组,一张
+/// 5MB 的图变成十几 MB 的文本,而且前端还要再逐个元素转回字节。`Response` 走的
+/// 是原始 body,前端直接拿到 ArrayBuffer。
+#[tauri::command]
+pub async fn notebook_attachment_read(
+    state: State<'_, NotebookState>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let resolved = state.resolve_in_vaults(&path, false)?;
+    let bytes = blocking(move || attachments::read(&resolved)).await?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 // ── 版本历史 ───────────────────────────────────────────────────────────────

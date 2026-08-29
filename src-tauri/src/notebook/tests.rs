@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::attachments;
 use super::fs_ops::{self, SaveOutcome};
 use super::migrate::{self, slugify};
 use super::snapshots;
@@ -1770,6 +1771,475 @@ fn convert_richtext_drops_frontmatter_block_when_only_editor_remains() {
     // 清掉 editor 后 frontmatter 空了,不该留一个空的 `---\n---`。
     assert!(!text.starts_with("---"), "empty frontmatter kept: {text}");
     assert!(text.contains("body"));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+// ── 附件 ───────────────────────────────────────────────────────────────────
+
+fn attachment_dir(vault: &Path) -> PathBuf {
+    attachments::dir(vault)
+}
+
+fn attachment_names(vault: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(attachment_dir(vault))
+        .map(|read| {
+            read.flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn saving_an_attachment_lands_in_the_attachment_dir_and_returns_markdown() {
+    let vault = temp_vault("attach-save");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, Some("shot.png"), "image/png", b"\x89PNG\r\n")
+            .expect("save");
+
+    // 链接必须相对**笔记所在目录**,这条笔记在 vault 根下,所以没有 `../`。
+    assert_eq!(saved.link, format!("attachments/{}", saved.name));
+    assert!(
+        saved.markdown.starts_with("!["),
+        "not an image: {}",
+        saved.markdown
+    );
+    assert!(saved.markdown.ends_with(&format!("({})", saved.link)));
+    assert_eq!(attachment_names(&vault), vec![saved.name.clone()]);
+    assert_eq!(
+        std::fs::read(&saved.path).expect("read back"),
+        b"\x89PNG\r\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn attachment_links_climb_out_of_nested_note_directories() {
+    let vault = temp_vault("attach-nested");
+    let folder = vault.join("a").join("b");
+    std::fs::create_dir_all(&folder).expect("mkdir");
+    let note = folder.join("Deep.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"png").expect("save");
+
+    // 附件是平铺在 vault 根下的,子目录里的笔记必须爬回去。写成
+    // `attachments/x.png` 的话在别的 markdown 工具里就是一条断链。
+    assert_eq!(saved.link, format!("../../attachments/{}", saved.name));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn same_millisecond_attachments_do_not_overwrite_each_other() {
+    let vault = temp_vault("attach-race");
+    let dir = attachment_dir(&vault);
+
+    // 时间戳写死,不然两次保存之间隔着一次 `sync_all`,现实里几乎永远落在不同
+    // 毫秒 —— 撞名这条路径就永远走不到,而它正是"先 exists 再写"会丢图的地方。
+    let first = attachments::write_claimed(&dir, "note", "png", 1_700_000_000_000, b"first")
+        .expect("first");
+    let second = attachments::write_claimed(&dir, "note", "png", 1_700_000_000_000, b"second")
+        .expect("second");
+
+    assert_ne!(first, second, "the second write reused the first name");
+    assert_eq!(std::fs::read(&first).expect("read a"), b"first");
+    assert_eq!(std::fs::read(&second).expect("read b"), b"second");
+    assert_eq!(attachment_names(&vault).len(), 2);
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn attachment_names_stay_under_the_filesystem_byte_limit() {
+    let vault = temp_vault("attach-long");
+    // 多数文件系统的单段名上限是 255 **字节**,一个 CJK 字符占 3 字节。不截断的
+    // 话这条笔记的附件名就是 ENAMETOOLONG,保存直接失败。
+    let long_stem = "安".repeat(200);
+    let note = vault.join(format!("{long_stem}.md"));
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"png").expect("save");
+
+    assert!(
+        saved.name.len() < 255,
+        "{} bytes: {}",
+        saved.name.len(),
+        saved.name
+    );
+    assert!(Path::new(&saved.path).exists());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn svg_attachments_render_as_images() {
+    let vault = temp_vault("attach-svg");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, None, "image/svg+xml", b"<svg/>").expect("save");
+
+    // SVG 是图片。走成普通链接的话拖一个图标进笔记,页面上只有一行蓝字。
+    assert!(saved.name.ends_with(".svg"), "unexpected: {}", saved.name);
+    assert!(
+        saved.markdown.starts_with("!["),
+        "svg not an image: {}",
+        saved.markdown
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn listing_does_not_follow_symlinks_out_of_the_vault() {
+    let vault = temp_vault("attach-list-symlink");
+    let outside = temp_vault("attach-list-symlink-outside");
+    std::fs::write(outside.join("secret.png"), b"x").expect("seed");
+    std::fs::create_dir_all(attachment_dir(&vault)).expect("mkdir");
+    std::fs::write(attachment_dir(&vault).join("real.png"), b"x").expect("seed");
+
+    #[cfg(unix)]
+    {
+        // 跟随链接有两个后果:vault 外的文件被当成"vault 里的附件"列出来,以及
+        // 一条指回父目录的链接把扫描拖进无限循环。
+        std::os::unix::fs::symlink(&outside, vault.join("linked")).expect("symlink dir");
+        std::os::unix::fs::symlink(outside.join("secret.png"), vault.join("linked.png"))
+            .expect("symlink file");
+
+        let names: Vec<String> = attachments::list(&vault, 50)
+            .expect("list")
+            .into_iter()
+            .map(|item| item.name)
+            .collect();
+        assert_eq!(names, vec!["real.png"], "symlink was followed");
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn non_image_attachments_become_plain_links() {
+    let vault = temp_vault("attach-pdf");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, Some("paper.pdf"), "application/pdf", b"%PDF")
+            .expect("save");
+
+    // `![](x.pdf)` 只会渲染成一个坏掉的图片框,PDF 要走普通链接。
+    assert!(
+        !saved.markdown.starts_with("!"),
+        "pdf as image: {}",
+        saved.markdown
+    );
+    assert!(saved.markdown.starts_with(&format!("[{}]", saved.name)));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn clipboard_attachments_take_their_extension_from_the_mime_type() {
+    let vault = temp_vault("attach-mime");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    // 剪贴板里的图没有文件名,只有 mime。认不出扩展名的话文件会叫 `.bin`,
+    // 于是附件面板不认它、系统也不知道拿什么打开。
+    let saved = attachments::save_bytes(&vault, &note, None, "image/webp", b"RIFF").expect("save");
+
+    assert!(
+        saved.name.ends_with(".webp"),
+        "unexpected name: {}",
+        saved.name
+    );
+    assert_eq!(attachments::kind_of(&saved.name), Some("image"));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn attachment_names_keep_cjk_and_never_carry_path_separators() {
+    let vault = temp_vault("attach-name");
+    // 笔记名里带斜杠、空格和标点 —— 附件名是从它派生的,洗不干净就等于让笔记名
+    // 决定附件写到哪去。
+    let note = vault.join("安全 报告 v2.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved = attachments::save_bytes(&vault, &note, Some("图 1.png"), "image/png", b"png")
+        .expect("save");
+
+    // CJK 留着:中文笔记名占多数,洗成 `----` 等于附件名全都认不出来。
+    assert!(
+        saved.name.starts_with("安全-报告-v2-"),
+        "stem lost: {}",
+        saved.name
+    );
+    assert!(!saved.name.contains('/') && !saved.name.contains('\\') && !saved.name.contains(' '));
+    // 附件必须真的落在附件目录里,而不是被名字带到别处。
+    assert_eq!(
+        Path::new(&saved.path).parent(),
+        Some(attachment_dir(&vault).as_path())
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn attachment_names_never_come_out_empty() {
+    let vault = temp_vault("attach-name-empty");
+    // 纯标点的笔记名洗完什么都不剩。返回空串的话文件会叫 `-1730000000000.png`,
+    // 更糟的是 `.png` —— 一个隐藏文件。
+    let note = vault.join("!!!.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved =
+        attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"png").expect("save");
+
+    assert!(
+        saved.name.starts_with("attachment-"),
+        "unexpected: {}",
+        saved.name
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn image_alt_text_stays_inside_the_markdown_link() {
+    let vault = temp_vault("attach-alt");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved = attachments::save_bytes(&vault, &note, Some("a]b[c.png"), "image/png", b"png")
+        .expect("save");
+
+    // `]` 会提前闭合 alt,于是 `![a]b[c](…)` 在页面上是一段字面文本加一条指向
+    // 别处的链接。alt 是从**用户给的文件名**来的,所以这是外部输入。
+    assert_eq!(saved.markdown, format!("![a-b-c]({})", saved.link));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn image_alt_text_does_not_leak_the_timestamp() {
+    let vault = temp_vault("attach-alt-stamp");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let saved = attachments::save_bytes(&vault, &note, Some("logo.png"), "image/png", b"png")
+        .expect("save");
+
+    // 最终文件名带毫秒时间戳。拿它当 alt 的话,图渲染不出来时页面上显示的是
+    // 一串数字,用户看不出那本来是什么。
+    assert_eq!(saved.markdown, format!("![logo]({})", saved.link));
+    assert!(
+        saved.name.contains('-'),
+        "stamp missing from name: {}",
+        saved.name
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn saving_refuses_a_note_outside_the_vault() {
+    let vault = temp_vault("attach-outside");
+    let outside = temp_vault("attach-outside-other");
+    let note = outside.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    let error = attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"png")
+        .expect_err("must refuse");
+    assert!(error.contains("outside the vault"), "unexpected: {error}");
+    // 附件目录都不该被建出来。
+    assert!(!attachment_dir(&vault).exists());
+
+    std::fs::remove_dir_all(&vault).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn copying_an_attachment_from_disk_refuses_symlinks() {
+    let vault = temp_vault("attach-symlink");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+    let secret = temp_vault("attach-symlink-target").join("secret.png");
+    std::fs::create_dir_all(secret.parent().expect("parent")).ok();
+    std::fs::write(&secret, b"secret").expect("seed secret");
+    let link = vault.parent().expect("parent").join("link-to-secret.png");
+    std::fs::remove_file(&link).ok();
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&secret, &link).expect("symlink");
+        // 拖进来的可能是一条 symlink。跟随它就等于允许把任意位置的文件复制进
+        // vault,而用户看到的只是一个图片名。
+        let error =
+            attachments::save_from_path(&vault, &note, &link).expect_err("must refuse symlink");
+        assert!(error.contains("symbolic link"), "unexpected: {error}");
+        assert!(!attachment_dir(&vault).exists());
+    }
+
+    std::fs::remove_file(&link).ok();
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn copying_an_attachment_from_disk_keeps_its_extension() {
+    let vault = temp_vault("attach-from-disk");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+    let source = temp_vault("attach-from-disk-src").join("original.jpg");
+    std::fs::create_dir_all(source.parent().expect("parent")).ok();
+    std::fs::write(&source, b"jpeg-bytes").expect("seed src");
+
+    let saved = attachments::save_from_path(&vault, &note, &source).expect("save");
+
+    assert!(saved.name.ends_with(".jpg"), "unexpected: {}", saved.name);
+    assert_eq!(std::fs::read(&saved.path).expect("read"), b"jpeg-bytes");
+    // 复制,不是移动:源文件是用户自己的,不能因为拖了一下就消失。
+    assert!(source.exists(), "source file was moved away");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn listing_finds_attachments_next_to_notes_and_puts_the_newest_first() {
+    let vault = temp_vault("attach-list");
+    std::fs::create_dir_all(vault.join("assets")).expect("mkdir");
+    // 用户从别处导入的笔记会把图片放在笔记旁边。只列 `attachments/` 里的那些
+    // 等于对导入的内容视而不见。
+    std::fs::write(vault.join("assets/old.png"), b"old").expect("seed old");
+    std::fs::create_dir_all(attachment_dir(&vault)).expect("mkdir attach");
+    std::fs::write(attachment_dir(&vault).join("new.png"), b"new").expect("seed new");
+    // markdown 和认不出扩展名的文件都不是附件。
+    std::fs::write(vault.join("Note.md"), "body\n").expect("seed note");
+    std::fs::write(vault.join(".DS_Store"), b"junk").expect("seed junk");
+
+    let listed = attachments::list(&vault, 50).expect("list");
+
+    let names: Vec<&str> = listed.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names.len(), 2, "unexpected list: {names:?}");
+    assert!(names.contains(&"old.png") && names.contains(&"new.png"));
+    assert!(listed.iter().all(|item| item.kind == "image"));
+    // 相对路径要带上子目录,UI 靠它告诉用户"这个附件在哪"。
+    let old = listed
+        .iter()
+        .find(|item| item.name == "old.png")
+        .expect("old");
+    assert_eq!(old.relative_path, "assets/old.png");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn listing_skips_the_private_directory_and_build_output() {
+    let vault = temp_vault("attach-skip");
+    for dir in [".notebook/trash", "node_modules/pkg", "target/debug"] {
+        std::fs::create_dir_all(vault.join(dir)).expect("mkdir");
+        std::fs::write(vault.join(dir).join("hidden.png"), b"x").expect("seed");
+    }
+    std::fs::create_dir_all(attachment_dir(&vault)).expect("mkdir");
+    std::fs::write(attachment_dir(&vault).join("real.png"), b"x").expect("seed");
+
+    let listed = attachments::list(&vault, 50).expect("list");
+
+    // 回收站里躺着的图不是"vault 里的附件" —— 列出来会让用户以为自己还引用着
+    // 它。node_modules / target 里的更是扫都不该扫。
+    let names: Vec<&str> = listed.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names, vec!["real.png"]);
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn the_attachment_dir_does_not_show_up_as_an_empty_folder_in_the_tree() {
+    let vault = temp_vault("attach-tree");
+    let state = registered_state(&vault);
+    std::fs::create_dir_all(attachment_dir(&vault)).expect("mkdir");
+    std::fs::write(attachment_dir(&vault).join("x.png"), b"png").expect("seed");
+    std::fs::write(vault.join("Note.md"), "body\n").expect("seed note");
+
+    let tree = fs_ops::read_tree(&state, &vault.to_string_lossy()).expect("tree");
+
+    // 树只收目录和笔记文件,附件目录里全是图片 —— 留着它用户就看到一个永远
+    // 展不开的空文件夹,而附件面板同时说里面有图。
+    assert!(
+        tree.iter()
+            .all(|entry| entry.name != attachments::ATTACHMENT_DIR),
+        "attachment dir leaked into the tree: {:?}",
+        tree.iter().map(|entry| &entry.name).collect::<Vec<_>>()
+    );
+    assert!(tree.iter().any(|entry| entry.name == "Note.md"));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn reading_an_attachment_refuses_a_directory() {
+    let vault = temp_vault("attach-read-dir");
+    std::fs::create_dir_all(attachment_dir(&vault)).expect("mkdir");
+
+    let error = attachments::read(&attachment_dir(&vault)).expect_err("must refuse");
+    assert!(error.contains("is a directory"), "unexpected: {error}");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn reading_an_attachment_returns_the_exact_bytes() {
+    let vault = temp_vault("attach-read");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+    let saved = attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"\x00\x01\x02")
+        .expect("save");
+
+    // 前端要拿这些字节做 blob URL。少一个字节图就废了,所以是逐字节相等。
+    assert_eq!(
+        attachments::read(Path::new(&saved.path)).expect("read"),
+        b"\x00\x01\x02"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn attachments_reject_empty_and_oversized_payloads() {
+    let vault = temp_vault("attach-limits");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "body\n").expect("seed");
+
+    // 空字节:粘贴路径上拿到空剪贴板时会走到这里。放过去的话笔记里多一条指向
+    // 0 字节文件的死链接,而用户以为图片存下来了。
+    let empty = attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", b"")
+        .expect_err("must refuse empty");
+    assert!(empty.contains("empty"), "unexpected: {empty}");
+
+    // 超限:上限存在的意义是别让一个 vault 因为误拖了一个视频而变成几个 GB。
+    let huge = vec![0u8; 25 * 1024 * 1024 + 1];
+    let too_big = attachments::save_bytes(&vault, &note, Some("x.png"), "image/png", &huge)
+        .expect_err("must refuse oversized");
+    assert!(too_big.contains("too large"), "unexpected: {too_big}");
+
+    // 两条都不该在附件目录里留下半个文件。
+    assert!(
+        attachment_names(&vault).is_empty(),
+        "{:?}",
+        attachment_names(&vault)
+    );
 
     std::fs::remove_dir_all(&vault).ok();
 }

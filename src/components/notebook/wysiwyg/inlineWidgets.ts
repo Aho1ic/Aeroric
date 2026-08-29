@@ -22,7 +22,16 @@ import {
   setImageMarkdownWidth,
   type ImageParts,
 } from "../markdownImages";
+import { attachmentContext } from "./attachmentFacet";
 import { openEditPopover } from "./editPopover";
+
+/**
+ * 已经被 CodeMirror 弃用的图片宿主节点。
+ *
+ * 异步 resolve 落地时要判 widget 还在不在。用 WeakSet 而不是在 widget 实例上存
+ * 标志:同一个 widget 实例可以被复用到多个 DOM 上,而"退役"是 DOM 的属性。
+ */
+const retiredImageHosts = new WeakSet<HTMLElement>();
 
 export class ListMarkerWidget extends WidgetType {
   constructor(
@@ -115,7 +124,6 @@ export class ImageWidget extends WidgetType {
     if (this.parts.title) wrap.dataset.title = this.parts.title;
     if (this.sourceLength > 0) wrap.dataset.sourceLength = String(this.sourceLength);
     const img = document.createElement("img");
-    img.src = this.parts.url;
     img.alt = this.parts.alt;
     if (this.parts.title) img.title = this.parts.title;
     applyImageElementSizing(img, this.parts.title);
@@ -126,6 +134,25 @@ export class ImageWidget extends WidgetType {
       wrap.title = `图片加载失败：${this.parts.url}`;
     });
     wrap.appendChild(img);
+    // src 是异步定下来的:vault 里的相对路径要先读成 blob URL。**不能**先把相对
+    // 路径塞进 src 顶一下 —— WebView 的 base 是 `tauri://localhost`,那次加载注定
+    // 失败,而失败会立刻打上 error 类,于是解析成功后图还是显示成坏的。
+    const context = view.state.facet(attachmentContext);
+    void context
+      .resolve(this.parts.url, context.noteDir)
+      .then((resolved) => {
+        // widget 可能已经被换掉了(文档改一个字就重建)。用 destroy 登记的退役表
+        // 而不是 `wrap.isConnected`:后者问的是"节点在文档里吗",而这里要问的是
+        // "CodeMirror 还认这个节点吗" —— 两者在重建瞬间会给出不同答案,而写进一个
+        // 已经被丢弃的节点是纯粹的浪费(以及一次不会被回收的 blob 引用)。
+        if (retiredImageHosts.has(wrap)) return;
+        img.src = resolved;
+      })
+      .catch(() => {
+        if (retiredImageHosts.has(wrap)) return;
+        wrap.classList.add("cm-md-img-error");
+        wrap.title = `图片加载失败：${this.parts.url}`;
+      });
 
     const edit = document.createElement("button");
     edit.type = "button";
@@ -146,6 +173,9 @@ export class ImageWidget extends WidgetType {
     });
     wrap.addEventListener("click", open);
     return wrap;
+  }
+  destroy(dom: HTMLElement) {
+    retiredImageHosts.add(dom);
   }
   ignoreEvent() {
     return true;
