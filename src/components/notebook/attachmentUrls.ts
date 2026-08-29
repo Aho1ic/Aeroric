@@ -133,6 +133,28 @@ export function attachmentMarkdown(name: string, kind: string, link: string): st
   return kind === "image" || kind === "svg" ? `![${alt}](${link})` : `[${alt}](${link})`;
 }
 
+/**
+ * vault 内文件的绝对路径 → 相对 vault 根的路径,用来给人看。
+ *
+ * vault 根往往埋在 `~/Library/Application Support/...` 底下,完整路径在一个 400px
+ * 宽的面板里占三行还是看不出笔记在哪个子目录。算不出来(不在这个 vault 下、或者
+ * 还没有 vault)就返回 null,由调用方退回完整路径 —— 编一个相对路径出来会指错地方。
+ */
+export function vaultRelativePath(vault: string | null, path: string): string | null {
+  if (!vault) return null;
+  // 结尾的分隔符要先去掉:vault 是 `/a/b/` 而路径是 `/a/b/n.md` 时,不去掉会切出
+  // 一个开头带分隔符的残段。
+  const root = vault.replace(/[\\/]+$/, "");
+  if (!path.startsWith(root)) return null;
+  const rest = path.slice(root.length);
+  // 前缀相同不等于在里面:vault 是 `/notes` 而路径是 `/notes-old/a.md` 时,
+  // `startsWith` 会放行,切出来的 `-old/a.md` 是一条指向别处的假路径。剩下的部分
+  // 必须以分隔符开头,或者干脆为空(路径正好就是 vault 自己)。
+  if (rest && !/^[\\/]/.test(rest)) return null;
+  // 路径正好就是 vault 自己时是空串,而空串显示出来是一片空白。
+  return rest.replace(/^[\\/]+/, "") || null;
+}
+
 /** 笔记文件路径 → 它所在的目录。 */
 export function noteDirOf(notePath: string): string {
   const index = Math.max(notePath.lastIndexOf("/"), notePath.lastIndexOf("\\"));

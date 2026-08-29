@@ -32,9 +32,15 @@ function hash64(text: string): string {
 
 export class NotebookVaultHarness {
   private files = new Map<string, HarnessFile>();
-  /** 单调递增的假时钟。真实 mtime 精度在某些文件系统上只到秒,测试里不能靠
-   *  Date.now() —— 同一个 tick 内的两次写会拿到同样的 mtime。 */
-  private clock = 1_000;
+  /**
+   * 单调递增的假时钟。真实 mtime 精度在某些文件系统上只到秒,测试里不能靠
+   * Date.now() —— 同一个 tick 内的两次写会拿到同样的 mtime。
+   *
+   * 基准取一个真实的 epoch 毫秒(2026-01-01)而不是 0 附近:属性面板会把 mtime
+   * 格式化出来给人看,从 1000 起算的话面板上是一个 1970-01-01,而那正是这个面板
+   * 用来表示"时间戳没读到"的样子。
+   */
+  private clock = 1_767_225_600_000;
   /** 迁移过的原始 JSON,供断言检查备份行为。 */
   migratedRaw: string | null = null;
   /** 手工排序(文件名列表),对应 vault 里的 `.notebook/order.json`。 */
@@ -67,6 +73,8 @@ export class NotebookVaultHarness {
   failAttachmentList = false;
   /** 让读附件字节失败(文件正被写、权限变了)。图片的坏图标记只能从这里进。 */
   failAttachmentReads = false;
+  /** 让读文件元数据失败。属性面板的错误态只能从这里进。 */
+  failNoteStat = false;
 
   /** 让接下来 `count` 次附件保存抛错。 */
   failAttachmentSaves(count = 1): void {
@@ -177,6 +185,21 @@ export class NotebookVaultHarness {
 
       case "notebook_close_note":
         return undefined;
+
+      case "notebook_note_stat": {
+        const path = String(args.path);
+        if (this.failNoteStat) throw new Error("reading file info failed");
+        const file = this.files.get(path);
+        if (!file) throw new Error(`no such file: ${path}`);
+        return {
+          // 字节数按 UTF-8 算,和真实后端的 `meta.len()` 一致 —— 用 `length` 的话
+          // 一篇中文笔记会报成三分之一大。
+          size: new TextEncoder().encode(file.content).length,
+          modifiedMs: file.mtimeMs,
+          // 假时钟没有"创建时间"的概念。给 null 正好覆盖"文件系统不记它"那条路径。
+          createdMs: null,
+        };
+      }
 
       // 通用 fs 命令,不是 notebook_* 的。列表右键菜单的「在系统文件夹中打开」
       // 借了它,所以这里也要认。

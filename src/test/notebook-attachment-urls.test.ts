@@ -11,6 +11,7 @@ import {
   linkFromNote,
   needsVaultResolve,
   noteDirOf,
+  vaultRelativePath,
 } from "../components/notebook/attachmentUrls";
 
 describe("needsVaultResolve", () => {
@@ -134,5 +135,49 @@ describe("attachmentMarkdown", () => {
     expect(attachmentMarkdown("a]b[c.png", "image", "attachments/x.png")).toBe(
       "![a-b-c.png](attachments/x.png)",
     );
+  });
+});
+
+describe("vaultRelativePath", () => {
+  it("切掉 vault 前缀,留下给人看的那一段", () => {
+    expect(vaultRelativePath("/vault", "/vault/notes/a.md")).toBe("notes/a.md");
+    expect(vaultRelativePath("/vault", "/vault/a.md")).toBe("a.md");
+  });
+
+  it("vault 结尾带分隔符时不留下开头的斜杠", () => {
+    // 不去掉的话切出来是 `/notes/a.md`,显示成一条看着像绝对路径的假路径。
+    expect(vaultRelativePath("/vault/", "/vault/notes/a.md")).toBe("notes/a.md");
+    expect(vaultRelativePath("/vault///", "/vault/notes/a.md")).toBe("notes/a.md");
+    expect(vaultRelativePath("C:\\vault\\", "C:\\vault\\notes\\a.md")).toBe("notes\\a.md");
+  });
+
+  it("路径里重复的分隔符也剥干净", () => {
+    // vault 拼接处多一个斜杠(`${vault}/${name}` 撞上结尾已有分隔符)在真实
+    // 路径里很常见,只剥一个的话剩下的那个会漏到显示上。
+    expect(vaultRelativePath("/vault", "/vault//notes/a.md")).toBe("notes/a.md");
+    expect(vaultRelativePath("/vault", "/vault///a.md")).toBe("a.md");
+  });
+
+  it("没有 vault 就没有相对路径", () => {
+    expect(vaultRelativePath(null, "/vault/notes/a.md")).toBeNull();
+  });
+
+  it("笔记不在这个 vault 下面时返回 null,而不是编一个", () => {
+    // 编出来的相对路径会指到另一个目录去,比直接显示完整路径糟得多。
+    expect(vaultRelativePath("/vault", "/other/notes/a.md")).toBeNull();
+    expect(vaultRelativePath("/vault", "/va/notes/a.md")).toBeNull();
+  });
+
+  it("同名前缀的隔壁目录不算在 vault 里", () => {
+    // `/vault-old/a.md` 通得过 startsWith,但切出来的 `-old/a.md` 指向别处。
+    expect(vaultRelativePath("/vault", "/vault-old/a.md")).toBeNull();
+    expect(vaultRelativePath("/vault/", "/vaults/a.md")).toBeNull();
+    expect(vaultRelativePath("C:\\vault", "C:\\vault2\\a.md")).toBeNull();
+  });
+
+  it("路径正好就是 vault 自己时返回 null,而不是空串", () => {
+    // 空串在面板上是一片空白,看着像加载失败。
+    expect(vaultRelativePath("/vault", "/vault")).toBeNull();
+    expect(vaultRelativePath("/vault", "/vault/")).toBeNull();
   });
 });

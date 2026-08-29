@@ -2000,6 +2000,299 @@ describe("NotebookPanel", () => {
       expect(screen.getByTestId("note-history-diff").textContent).not.toContain("other body");
     });
 
+    it("属性:报磁盘上的大小,并把右键的那条切成当前笔记", async () => {
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nother body\n');
+      // 正文是 8 个 UTF-8 字节的中文 + frontmatter。大小必须按字节算 ——
+      // 按字符算的话中文笔记会报成三分之一大。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n中文正文\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Other" });
+      await screen.findByRole("button", { name: "Target" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Other" }));
+      await screen.findByDisplayValue("Other");
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      expect(sheet).toHaveTextContent("Target");
+      // 大小来自磁盘,不是内存里那份笔记(它连字节数都没有)。
+      await waitFor(() => expect(sheet).toHaveTextContent(/\d+ B/));
+      // 字数走编辑器里的当前文本,所以必须已经切到 Target —— 停在 Other 上的话
+      // 这里报的是 "other body" 的字数。
+      expect(screen.getByDisplayValue("Target")).toBeInTheDocument();
+      expect(sheet).not.toHaveTextContent("Other");
+    });
+
+    it("属性:位置显示相对 vault 的路径,完整路径进 title", async () => {
+      const notePath = harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      // vault 根往往埋在 `~/Library/Application Support/…` 底下,完整路径在一个
+      // 400px 宽的面板里占三行还是看不出笔记在哪个子目录。
+      //
+      // 断言必须是「显示的正是相对路径」而不是「里面含有 Target.md」—— 完整路径
+      // `/vault/Target.md` 也含有它,那条断言在退回完整路径时照样成立。
+      const location = sheet.querySelector(`[title="${notePath}"]`);
+      expect(location).not.toBeNull();
+      expect(location?.textContent).toBe("Target.md");
+      // 完整路径只进 title(悬停可看),不占版面。
+      expect(sheet.textContent).not.toContain(notePath);
+    });
+
+    it("属性:未保存的编辑算进字数,并说明口径", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\none\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+      fireEvent.click(screen.getByRole("button", { name: "Target" }));
+      await screen.findByDisplayValue("Target");
+      // 走 EditorView 而不是 user.type:后者会先点一下 contentDOM,而那次点击在
+      // jsdom 里会走进 CodeMirror 的 posAtCoords —— 没有真实布局,它读 rect 时炸。
+      setEditorValue("one two three");
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      // 三个词是编辑器里的当前文本,磁盘上那份还是一个词 —— 报 1 说明字数走的是
+      // 已保存的内容,报 0 说明这条线根本没接上。
+      const words = sheet.querySelector('[data-testid="note-properties-words"]');
+      expect(words?.textContent).toBe("3");
+      // 磁盘那一组和内容那一组口径不同(一个是文件,一个是编辑器里的文本)。
+      // 不说清楚的话用户会以为哪个数错了。
+      expect(sheet).toHaveTextContent("including unsaved edits");
+    });
+
+    it("属性:读不到文件信息时报错而不是显示 0 字节", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      harness.failNoteStat = true;
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      // 显示 0 B 会被读成"一条空笔记",而真实情况是根本没读到。
+      expect(await screen.findByRole("alert")).toHaveTextContent("reading file info failed");
+      expect(screen.getByRole("dialog", { name: "Note properties" })).not.toHaveTextContent("0 B");
+    });
+
+    it("属性:Esc 关掉面板,不冒泡去关整个视图", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      // 面板外面套一层 Esc 监听,模拟宿主视图身上那个「Esc 关掉整个笔记视图」。
+      // 只断言编辑器还在是不够的:这个测试渲染里本来就没有外层监听,那条断言
+      // 无论拦不拦都成立。
+      const outerEsc = vi.fn();
+      render(
+        <I18nProvider>
+          <div
+            onKeyDown={(event) => {
+              if (event.key === "Escape") outerEsc();
+            }}
+          >
+            <NotebookPanel />
+          </div>
+        </I18nProvider>,
+      );
+      await screen.findByRole("button", { name: "Target" });
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+
+      fireEvent.keyDown(sheet, { key: "Escape" });
+
+      // 不拦的话外层监听会一起收到,一次 Esc 关掉两层。
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Note properties" })).toBeNull(),
+      );
+      expect(outerEsc).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Quick note content" })).toBeInTheDocument();
+    });
+
+    it("属性:目标笔记被删掉后面板自己收起来,恢复也不把它带回来", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await openListMenu("Doomed");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(sheet).toHaveTextContent(/\d+ B/));
+
+      await openListMenu("Doomed");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Trash" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Note properties" })).toBeNull(),
+      );
+
+      // 从回收站恢复:文件回到**同一个路径**,于是那条 `notes.find(id)` 又能找到
+      // 它。状态没清的话面板会自己弹回来,顶着删除前的大小和修改时间 —— 而那份
+      // 数字来自一次已经作废的 stat。
+      fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+      await screen.findByRole("dialog", { name: "Trash" });
+      fireEvent.click(screen.getByRole("button", { name: "Restore Doomed.md" }));
+      await screen.findByRole("button", { name: "Doomed" });
+
+      expect(screen.queryByRole("dialog", { name: "Note properties" })).toBeNull();
+    });
+
+    it("属性:慢的那次响应回来时不盖掉已经换看的另一条", async () => {
+      // Slow 的正文长,Quick 的短 —— 两条的字节数必须能分辨,否则「盖没盖」看不出来。
+      harness.seed("Slow.md", `---\ntitle: "Slow"\n---\n\n${"x".repeat(400)}\n`);
+      harness.seed("Quick.md", '---\ntitle: "Quick"\n---\n\nshort\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Slow" });
+      await screen.findByRole("button", { name: "Quick" });
+
+      // 只悬停 Slow 那一次 stat,Quick 的放行。
+      const gate: { release: (() => void) | null } = { release: null };
+      const originalHandle = harness.handle;
+      harness.handle = (command, args) => {
+        if (command === "notebook_note_stat" && String(args?.path).endsWith("Slow.md")) {
+          return new Promise((resolve) => {
+            gate.release = () => resolve(originalHandle(command, args));
+          });
+        }
+        return originalHandle(command, args);
+      };
+
+      await openListMenu("Slow");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(gate.release).not.toBeNull());
+      expect(sheet).toHaveTextContent("Reading file info");
+
+      // Slow 还在飞的时候换看 Quick 的属性。
+      await openListMenu("Quick");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await waitFor(() =>
+        expect(screen.getByRole("dialog", { name: "Note properties" })).toHaveTextContent(
+          "Quick.md",
+        ),
+      );
+      const quickSize = screen
+        .getByRole("dialog", { name: "Note properties" })
+        .textContent?.match(/(\d+) B/)?.[1];
+      expect(quickSize).toBeDefined();
+
+      // 现在把 Slow 那次放回来。没有 noteId 守卫的话它会把 400+ 字节写进
+      // Quick 的面板,标题是 Quick 而大小是 Slow 的。
+      await act(async () => {
+        gate.release?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const after = screen.getByRole("dialog", { name: "Note properties" });
+      expect(after).toHaveTextContent("Quick.md");
+      expect(after).toHaveTextContent(`${quickSize} B`);
+      expect(after).not.toHaveTextContent("Reading file info");
+    });
+
+    it("属性:慢的那次报错回来时不弄脏已经换看的另一条", async () => {
+      harness.seed("Slow.md", '---\ntitle: "Slow"\n---\n\nbody\n');
+      harness.seed("Quick.md", '---\ntitle: "Quick"\n---\n\nshort\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Slow" });
+      await screen.findByRole("button", { name: "Quick" });
+
+      // Slow 那次悬停住并最终失败,Quick 那次正常返回。
+      const gate: { fail: (() => void) | null } = { fail: null };
+      const originalHandle = harness.handle;
+      harness.handle = (command, args) => {
+        if (command === "notebook_note_stat" && String(args?.path).endsWith("Slow.md")) {
+          return new Promise((_resolve, reject) => {
+            gate.fail = () => reject(new Error("slow stat blew up"));
+          });
+        }
+        return originalHandle(command, args);
+      };
+
+      await openListMenu("Slow");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(gate.fail).not.toBeNull());
+
+      await openListMenu("Quick");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await waitFor(() =>
+        expect(screen.getByRole("dialog", { name: "Note properties" })).toHaveTextContent(
+          "Quick.md",
+        ),
+      );
+
+      await act(async () => {
+        gate.fail?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // 错误分支也要认 noteId:不认的话 Quick 的面板会挂上 Slow 的错误,大小那一行
+      // 被一条红字顶掉。
+      const after = screen.getByRole("dialog", { name: "Note properties" });
+      expect(after).not.toHaveTextContent("slow stat blew up");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(after).toHaveTextContent(/\d+ B/);
+    });
+
+    it("属性:文件系统不记创建时间时那一行整行不显示", async () => {
+      // harness 的假时钟没有创建时间,`createdMs` 恒为 null —— 正好是 Linux 上
+      // 部分文件系统的真实情形。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(sheet).toHaveTextContent(/\d+ B/));
+      // 修改时间有,创建时间没有 —— 显示 1970-01-01 比留白糟得多。
+      expect(sheet).toHaveTextContent("Modified");
+      expect(sheet).not.toHaveTextContent("Created");
+      expect(sheet).not.toHaveTextContent("1970");
+    });
+
+    it("属性:面板关掉之后飞回来的响应不把它顶开", async () => {
+      harness.seed("Slow.md", '---\ntitle: "Slow"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Slow" });
+
+      const gate: { release: (() => void) | null } = { release: null };
+      const originalHandle = harness.handle;
+      harness.handle = (command, args) => {
+        if (command === "notebook_note_stat") {
+          return new Promise((resolve) => {
+            gate.release = () => resolve(originalHandle(command, args));
+          });
+        }
+        return originalHandle(command, args);
+      };
+
+      await openListMenu("Slow");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(gate.release).not.toBeNull());
+
+      fireEvent.keyDown(sheet, { key: "Escape" });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Note properties" })).toBeNull(),
+      );
+
+      // `current` 已经是 null,守卫必须认出来 —— 直接 `{ ...current, stat }` 会
+      // 凭空造出一份状态,面板自己弹回来。
+      await act(async () => {
+        gate.release?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("dialog", { name: "Note properties" })).toBeNull();
+    });
+
     it("菜单和编辑区那个互斥", async () => {
       const user = userEvent.setup();
       renderNotebook();

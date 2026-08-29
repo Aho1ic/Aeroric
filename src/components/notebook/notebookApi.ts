@@ -346,3 +346,20 @@ export function listAttachments(vault: string, max?: number): Promise<Attachment
 export function readAttachment(path: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("notebook_attachment_read", { path });
 }
+
+/** 一条笔记在磁盘上的元数据。`createdMs` 为 null 表示文件系统不记创建时间。 */
+export type NoteStat = {
+  size: number;
+  modifiedMs: number;
+  createdMs: number | null;
+};
+
+/**
+ * 读一条笔记的磁盘元数据。
+ *
+ * 面板里那份笔记对象的 `updatedAt` 是**打开时**的时间戳,而属性面板要回答的是
+ * "这个文件现在多大、什么时候改的"。所以直接看盘,不用内存里那份。
+ */
+export function statNote(path: string): Promise<NoteStat> {
+  return invoke<NoteStat>("notebook_note_stat", { path });
+}

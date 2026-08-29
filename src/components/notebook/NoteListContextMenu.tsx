@@ -9,7 +9,7 @@
  */
 
 import type { LucideIcon } from "lucide-react";
-import { Copy, FolderOpen, History, Pencil, Trash2 } from "lucide-react";
+import { Copy, FolderOpen, History, Info, Pencil, Trash2 } from "lucide-react";
 import { zLayers } from "../../styles/zLayers";
 
 export type NoteListContextMenuState = {
@@ -19,7 +19,13 @@ export type NoteListContextMenuState = {
   noteId: string;
 };
 
-export type NoteListContextMenuAction = "rename" | "history" | "reveal" | "copyPath" | "trash";
+export type NoteListContextMenuAction =
+  | "rename"
+  | "history"
+  | "properties"
+  | "reveal"
+  | "copyPath"
+  | "trash";
 
 export type NoteListContextMenuProps = {
   state: NoteListContextMenuState;
@@ -31,6 +37,7 @@ export function NoteListContextMenu({ state, onAction, t }: NoteListContextMenuP
   const items: [NoteListContextMenuAction, string, LucideIcon, boolean][] = [
     ["rename", t("notebook.renameMemo"), Pencil, false],
     ["history", t("notebook.historyOpen"), History, false],
+    ["properties", t("notebook.propertiesOpen"), Info, false],
     ["reveal", t("file.openInSystemFolder"), FolderOpen, false],
     ["copyPath", t("file.copyFullPath"), Copy, false],
     // 进 vault 自己的回收站,能原位恢复 —— 所以不弹二次确认,但配色上仍标成危险操作。

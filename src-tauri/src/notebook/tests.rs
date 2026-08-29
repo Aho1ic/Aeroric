@@ -2243,3 +2243,73 @@ fn attachments_reject_empty_and_oversized_payloads() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+#[test]
+fn note_stat_reports_the_size_and_mtime_on_disk() {
+    let vault = temp_vault("stat-basic");
+    let note = vault.join("Note.md");
+    std::fs::write(&note, "hello\n").expect("seed");
+
+    let stat = super::stat_note(&note).expect("stat");
+
+    assert_eq!(stat.size, 6);
+    // 属性面板会把它格式化成日期。0 会显示成 1970,那比留空更容易被当成真的。
+    assert!(stat.modified_ms > 1_600_000_000_000, "{}", stat.modified_ms);
+    // 创建时间要么真的取不到(部分 Linux 文件系统不记),要么是个真实时间戳。
+    // 取不到时报 `Some(0)` 会在面板上变成一行 1970-01-01,而面板正是靠 None
+    // 来决定整行不显示的。
+    match stat.created_ms {
+        None => {}
+        Some(created) => assert!(created > 1_600_000_000_000, "{created}"),
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn note_stat_follows_the_file_not_the_link() {
+    let vault = temp_vault("stat-symlink");
+    let real = vault.join("Real.md");
+    std::fs::write(&real, "0123456789").expect("seed");
+    let link = vault.join("Link.md");
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let stat = super::stat_note(&link).expect("stat");
+        // 跟进软链的话这里会是 10 —— 面板报的就成了别处那个文件的大小。
+        assert_ne!(stat.size, 10);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = link;
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn note_stat_refuses_a_directory() {
+    let vault = temp_vault("stat-dir");
+    let dir = vault.join("folder");
+    std::fs::create_dir_all(&dir).expect("seed");
+
+    // 目录的 len() 是个和内容无关的数字(不同文件系统上从 0 到几 KB 不等),
+    // 报出来只会让人以为笔记有那么大。
+    let error = super::stat_note(&dir).expect_err("must refuse");
+    assert!(error.contains("is a directory"), "unexpected: {error}");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn note_stat_reports_a_missing_file_instead_of_zeroes() {
+    let vault = temp_vault("stat-missing");
+    std::fs::create_dir_all(&vault).expect("seed");
+
+    // 报 0 字节的话面板会显示成"一条空笔记",而真实情况是文件已经不在了。
+    let error = super::stat_note(&vault.join("Gone.md")).expect_err("must fail");
+    assert!(error.contains("Cannot read"), "unexpected: {error}");
+
+    std::fs::remove_dir_all(&vault).ok();
+}

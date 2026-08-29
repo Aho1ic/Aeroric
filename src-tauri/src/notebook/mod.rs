@@ -394,6 +394,55 @@ pub async fn notebook_attachment_read(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// 一条笔记在磁盘上的元数据。属性面板用。
+///
+/// 面板里那份 `NotebookNote` 不带这些:它的 `updatedAt` 是**打开时**的时间戳,而
+/// 属性面板要回答的是"这个文件现在多大、什么时候改的"。缓冲区里还没保存的编辑
+/// 不该改变这两个数,所以这里直接看盘。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteStat {
+    pub size: u64,
+    pub modified_ms: i64,
+    /// 创建时间。取不到就是 None —— 有些 Linux 文件系统不记它,报一个假的
+    /// 时间比留空更糟。
+    pub created_ms: Option<i64>,
+}
+
+/// 看一个文件的元数据。命令体单独提出来是为了能不经 Tauri `State` 直接测。
+pub(crate) fn stat_note(path: &std::path::Path) -> Result<NoteStat, String> {
+    // `symlink_metadata` 而不是 `metadata`:笔记树不跟进软链,属性面板也不该跟 ——
+    // 否则它报的是链接指向的那个文件的大小,而用户看的是这一条笔记。
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    if meta.is_dir() {
+        return Err(format!("{} is a directory", path.display()));
+    }
+    Ok(NoteStat {
+        size: meta.len(),
+        modified_ms: system_time_ms(meta.modified().ok()).unwrap_or(0),
+        created_ms: system_time_ms(meta.created().ok()),
+    })
+}
+
+/// 读一条笔记的磁盘元数据。
+#[tauri::command]
+pub async fn notebook_note_stat(
+    state: State<'_, NotebookState>,
+    path: String,
+) -> Result<NoteStat, String> {
+    let resolved = state.resolve_in_vaults(&path, false)?;
+    blocking(move || stat_note(&resolved)).await
+}
+
+/// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。
+fn system_time_ms(time: Option<std::time::SystemTime>) -> Option<i64> {
+    time?
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
 // ── 版本历史 ───────────────────────────────────────────────────────────────
 
 /// 列出一条笔记的快照,新的在前。

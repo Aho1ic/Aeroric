@@ -3,7 +3,7 @@ import type React from "react";
 import { useI18n } from "../../i18n";
 import { confirm } from "../../lib/appDialog";
 import { AttachmentSection } from "./AttachmentSection";
-import { attachmentMarkdown, linkFromNote } from "./attachmentUrls";
+import { attachmentMarkdown, linkFromNote, vaultRelativePath } from "./attachmentUrls";
 import { NoteList } from "./NoteList";
 import { NoteFindBar } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
@@ -40,9 +40,15 @@ import {
   restoreNoteSnapshot,
   restoreTrashItem,
   revealNoteInFileManager,
+  statNote,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
+import {
+  NotePropertiesSheet,
+  freshPropertiesState,
+  type NotePropertiesState,
+} from "./NotePropertiesSheet";
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
@@ -158,6 +164,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [historyNoteId, setHistoryNoteId] = useState<string | null>(null);
   /** 回收站面板。`null` = 没开。和历史面板互斥(两个都是铺满面板的 overlay)。 */
   const [trash, setTrash] = useState<NoteTrashState | null>(null);
+  /** 属性面板。`null` = 没开。和上面两个一样是铺满面板的 overlay。 */
+  const [properties, setProperties] = useState<NotePropertiesState | null>(null);
   /**
    * 编辑器的代数。回滚时 +1,把 CodeMirror 整个重建。
    *
@@ -189,6 +197,9 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
    *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
   const historyNote = historyNoteId
     ? (notes.find((note) => note.id === historyNoteId) ?? null)
+    : null;
+  const propertiesNote = properties
+    ? (notes.find((note) => note.id === properties.noteId) ?? null)
     : null;
   const markdownHtml = useMemo(
     () => renderNoteMarkdown(activeNote?.body ?? "").html,
@@ -557,6 +568,32 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     updateActiveNote({ body: nextBody });
   };
 
+  /**
+   * 打开属性面板,并去读磁盘元数据。
+   *
+   * 大小和修改时间只能来自磁盘 —— 内存里那份笔记的 `updatedAt` 是**打开时**的
+   * 时间戳,而且它不带字节数。
+   */
+  const openProperties = (noteId: string) => {
+    setProperties(freshPropertiesState(noteId));
+    void (async () => {
+      try {
+        const stat = await statNote(noteId);
+        setProperties((current) =>
+          // 请求飞行途中用户可能已经关掉面板或换看另一条笔记的属性。回来的不是
+          // 当前那条就丢掉,否则慢的响应会盖掉快的,数字和标题对不上。
+          current?.noteId === noteId ? { ...current, stat, loading: false } : current,
+        );
+      } catch (error) {
+        setProperties((current) =>
+          current?.noteId === noteId
+            ? { ...current, loading: false, error: errorText(error) }
+            : current,
+        );
+      }
+    })();
+  };
+
   /** 打开版本历史,并把快照列表拉回来。 */
   const openHistory = (noteId: string) => {
     setHistoryNoteId(noteId);
@@ -774,6 +811,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     setHistory(null);
     setHistoryNoteId(null);
   }, [notes, historyNoteId]);
+
+  // 属性面板同理:目标笔记删掉之后不清状态,同路径的新笔记会顶着上一条的大小和
+  // 修改时间显示出来。
+  useEffect(() => {
+    if (!properties) return;
+    if (notes.some((note) => note.id === properties.noteId)) return;
+    setProperties(null);
+  }, [notes, properties]);
 
   /**
    * 面板自己的快捷键作用域。
@@ -1021,6 +1066,14 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
       // 用户会看到 A 的快照和 B 的正文并排。
       setActiveId(noteId);
       openHistory(noteId);
+      return;
+    }
+    if (action === "properties") {
+      // 顺手切到这条笔记,和历史面板一致:属性里的字数 / 标题数算的是**编辑器里的
+      // 当前文本**(包含未保存的编辑),不切的话会拿 A 的正文去报 B 的属性 ——
+      // 而列表里的笔记正文往往还没读入,那个数会是 0。
+      setActiveId(noteId);
+      openProperties(noteId);
       return;
     }
     if (action === "trash") {
@@ -1337,6 +1390,24 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           onPurge={purgeFromTrash}
           onPurgeAll={purgeAllFromTrash}
           onClose={() => setTrash(null)}
+          t={t}
+        />
+      )}
+      {/* 属性面板也铺在两列外面。 */}
+      {properties && propertiesNote && (
+        <NotePropertiesSheet
+          noteTitle={propertiesNote.title || t("notebook.untitled")}
+          notePath={propertiesNote.id}
+          relativePath={vaultRelativePath(vault, propertiesNote.id)}
+          stat={properties.stat}
+          loading={properties.loading}
+          error={properties.error}
+          // 统计走 `noteStats`(= 编辑器里的当前文本):打开属性时已经切到了这条
+          // 笔记,所以这两者说的是同一篇。
+          words={noteStats.words}
+          headings={noteStats.outline.length}
+          readingMinutes={noteStats.readingMinutes}
+          onClose={() => setProperties(null)}
           t={t}
         />
       )}
