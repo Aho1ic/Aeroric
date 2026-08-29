@@ -46,6 +46,7 @@ import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTras
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
+import { enhanceMarkdownImages } from "./markdownImages";
 import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
@@ -287,6 +288,17 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (!host) return;
     const handle = renderNoteVisualsLazy(host);
     return () => handle.disconnect();
+  }, [markdownHtml, mode]);
+
+  // `![a](x.png "width=320")` 里的宽度标注。
+  //
+  // 编辑态的 widget 自己调 applyImageElementSizing,阅读态没人调 —— 于是同一张图
+  // 在编辑时是 320px,切到阅读就撑满整行。这一步补上那半边。
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    enhanceMarkdownImages(host);
   }, [markdownHtml, mode]);
 
   // 分屏同步滚动。两侧注册进总线,由它做比例对齐和防回声。

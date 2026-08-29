@@ -229,6 +229,27 @@ describe("随手记的附件", () => {
     }
   });
 
+  it("阅读态也认 title 里的宽度标注", async () => {
+    const user = userEvent.setup();
+    renderNotebook();
+    await createNote(user);
+    const view = editorView();
+    act(() => {
+      view.dispatch({
+        changes: { from: 0, insert: '![a](https://example.com/a.png "width=320")\n' },
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "Read" }));
+
+    // 编辑态的 widget 自己会按宽度缩放,阅读态没人做这件事 —— 于是同一张图切一下
+    // 视图就从 320px 变成撑满整行。
+    await waitFor(() => {
+      const img = document.querySelector<HTMLImageElement>(".notebook-markdown-preview img");
+      expect(img?.style.width).toBe("320px");
+    });
+  });
+
   it("拖入图片插到落点而不是原来的光标处", async () => {
     const user = userEvent.setup();
     renderNotebook();
