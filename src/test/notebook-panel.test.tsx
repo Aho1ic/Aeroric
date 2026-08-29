@@ -2311,4 +2311,212 @@ describe("NotebookPanel", () => {
       expect(screen.queryByRole("menu", { name: "Text" })).not.toBeInTheDocument();
     });
   });
+
+  describe("wikilink", () => {
+    /** 阅读态里那些被增强过的 wikilink。 */
+    function wikiLinks(): HTMLElement[] {
+      return Array.from(document.querySelectorAll<HTMLElement>("a.notebook-wikilink"));
+    }
+
+    /** 在列表里右键某条笔记,拿到它的菜单。 */
+    async function openNoteRowMenu(name: string) {
+      const row = screen.getByRole("button", { name }).closest("[data-notebook-note-row]");
+      if (!row) throw new Error(`no row for ${name}`);
+      fireEvent.contextMenu(row);
+      return screen.getByRole("menu", { name: "Quick note actions" });
+    }
+
+    /** 切到阅读态并等 HTML 挂上。 */
+    async function readMode() {
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+    }
+
+    it("阅读态把 [[标题]] 变成可点的链接,点它跳到那条笔记", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n目标正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]] 一节\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      const link = wikiLinks()[0]!;
+      expect(link.textContent).toBe("Target");
+      expect(link.title).toBe("Open Target");
+
+      fireEvent.click(link);
+
+      // 跳过去之后标题框换成目标笔记 —— 这条链路要真的经过懒加载正文那一步。
+      await screen.findByDisplayValue("Target");
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")?.textContent).toContain(
+          "目标正文",
+        ),
+      );
+    });
+
+    it("按 frontmatter 标题也能解析 —— 文件名与标题不一致时", async () => {
+      // 这是 Aeroric 与 Markio 的实质差异:文件名在新建时定死,标题后来改了。
+      // 只认文件名 stem 的话,用户写新标题会解析不到自己那篇笔记。
+      harness.seed("cao-gao.md", '---\ntitle: "周报"\n---\n\n本周内容\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[周报]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      fireEvent.click(wikiLinks()[0]!);
+      await screen.findByDisplayValue("周报");
+    });
+
+    it("目标不存在时是死链,点它不跳也不报错", async () => {
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[还没写]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      const link = wikiLinks()[0]!;
+      expect(link.classList.contains("notebook-wikilink-missing")).toBe(true);
+      expect(link.title).toBe("No note named 还没写");
+
+      fireEvent.click(link);
+      // 还停在原地,并且没有弹错误条 —— 死链是常态(先写链接后写笔记),不是故障。
+      expect(screen.getByDisplayValue("Origin")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("目标笔记被删掉后,活链当场变成死链", async () => {
+      /* 这一条钉的是增强 effect 的依赖:它必须跟着链接索引跑,不能只跟
+         `markdownHtml`。
+
+         删掉别人那条笔记时,当前笔记的正文一个字都没变、视图也没切 ——
+         `markdownHtml` 和 `mode` 都是原值。只按它们当依赖的话,这条链接会一直
+         停在"可点、打开 Doomed"的状态,点下去跳到一条已经不存在的笔记。 */
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\n目标\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Doomed]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      expect(wikiLinks()[0]?.classList.contains("notebook-wikilink-missing")).toBe(false);
+
+      // 从列表右键删掉目标。当前笔记不是它,所以选中项不变、视图也不变。
+      await openNoteRowMenu("Doomed");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Trash" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Doomed" })).toBeNull());
+
+      // 仍停在 Origin 的阅读态。
+      expect(screen.getByDisplayValue("Origin")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(wikiLinks()[0]?.classList.contains("notebook-wikilink-missing")).toBe(true),
+      );
+      expect(wikiLinks()[0]?.title).toBe("No note named Doomed");
+    });
+
+    it("改了目标的标题之后,按新标题写的链接能解析到", async () => {
+      // 文件名是 `cao-gao.md` 且不会随标题变,所以这条链接只能靠标题索引命中。
+      harness.seed("cao-gao.md", '---\ntitle: "旧标题"\n---\n\n内容\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[周报]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+      await waitFor(() =>
+        expect(wikiLinks()[0]?.classList.contains("notebook-wikilink-missing")).toBe(true),
+      );
+
+      /* 在列表里把那条笔记改名成「周报」(双击进入行内重命名)。
+         行上显示的是文件名 stem 而不是 `旧标题` —— 列表只读目录项,没读入的笔记
+         拿不到 frontmatter 里的标题。链接解析补得上这一课(靠全库索引),列表
+         本身没有,那是另一件事。 */
+      fireEvent.dblClick(screen.getByRole("button", { name: "cao-gao" }));
+      const input = await screen.findByRole("textbox", { name: "Rename quick note" });
+      fireEvent.change(input, { target: { value: "周报" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByRole("button", { name: "周报" });
+
+      // 回到 Origin 的阅读态,链接应当已经活了。
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+      await waitFor(() =>
+        expect(wikiLinks()[0]?.classList.contains("notebook-wikilink-missing")).toBe(false),
+      );
+      expect(wikiLinks()[0]?.title).toBe("Open 周报");
+    });
+
+    it("代码块里的 [[...]] 不变成链接", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nx\n');
+      harness.seed(
+        "Origin.md",
+        '---\ntitle: "Origin"\n---\n\n```\n[[Target]]\n```\n\n行内 `[[Target]]` 也不算\n',
+      );
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      // 代码示例里的双方括号是内容。走 DOM 增强而不是源码正则替换,全部理由就在这。
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")?.textContent).toContain(
+          "[[Target]]",
+        ),
+      );
+      expect(wikiLinks()).toHaveLength(0);
+    });
+
+    it("带 #小节 的链接跳过去之后滚到那个标题", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n# 开头\n\n## 第二节\n\n内容\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target#第二节]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      const scrolled: string[] = [];
+      // jsdom 没有布局,scrollIntoView 是个空实现 —— 用 spy 记下"滚到了哪个标题"。
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (this: Element) {
+        scrolled.push(this.textContent ?? "");
+      };
+      try {
+        fireEvent.click(wikiLinks()[0]!);
+        await screen.findByDisplayValue("Target");
+        // 跳转后正文要先渲染出来,滚动才发生在下一帧。
+        await waitFor(() => expect(scrolled).toContain("第二节"));
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    it("别名显示别名,跳转仍按目标", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nx\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target|换个说法]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+      expect(wikiLinks()[0]!.textContent).toBe("换个说法");
+      fireEvent.click(wikiLinks()[0]!);
+      await screen.findByDisplayValue("Target");
+    });
+  });
 });

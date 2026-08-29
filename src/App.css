@@ -2295,6 +2295,23 @@ html:not(.dark) .session-prose pre code {
 .md-preview a:hover {
   color: var(--accent-hover);
 }
+/* `[[wikilink]]`。不带下划线、用虚线底边区分于普通外链 —— 点它是在库内跳转,
+   不会离开应用。 */
+.md-preview a.notebook-wikilink {
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+  cursor: pointer;
+}
+.md-preview a.notebook-wikilink:hover {
+  border-bottom-style: solid;
+}
+/* 死链:目标笔记还不存在。刻意保持可点的样子(Obsidian 里点死链就是新建),
+   但用警示色说明它现在指不到任何地方。 */
+.md-preview a.notebook-wikilink.notebook-wikilink-missing {
+  color: var(--warning);
+  border-bottom-color: var(--warning);
+  border-bottom-style: dotted;
+}
 .md-preview img {
   max-width: 100%;
   border-radius: 6px;

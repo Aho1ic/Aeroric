@@ -15,8 +15,9 @@
 //! <project>/.aeroric/notes/     项目级 vault(默认不开启)
 //! ```
 //!
-//! 命令一律 `notebook_` 前缀。为了不让 `lib.rs` 的 `generate_handler!` 继续
-//! 膨胀,这里用 [`notebook_commands!`] 宏聚合,`lib.rs` 只出现一行。
+//! 命令一律 `notebook_` 前缀,并且必须逐个列进 `lib.rs` 的 `generate_handler!`
+//! —— 那个宏用自己的语法解析参数列表,聚合宏在那个位置展不开(见文件末尾的注)。
+//! 漏注册由 `command_registration_tests` 守卫。
 
 pub mod attachments;
 pub mod fs_ops;
@@ -25,6 +26,7 @@ pub mod migrate;
 pub mod snapshots;
 pub mod state;
 pub mod trash;
+pub mod vault_index;
 
 #[cfg(test)]
 mod tests;
@@ -433,6 +435,20 @@ pub async fn notebook_note_stat(
 ) -> Result<NoteStat, String> {
     let resolved = state.resolve_in_vaults(&path, false)?;
     blocking(move || stat_note(&resolved)).await
+}
+
+/// 扫全库,给出每条笔记的**真实标题**(frontmatter 优先)。
+///
+/// 前端的 `listNotes` 只读目录项,给未读入的笔记填的是文件名 stem。可是
+/// `[[链接]]` 写的是标题,而标题存在 frontmatter 里 —— 不扫一遍文件头,指向
+/// "还没打开过的笔记"的链接就全是死链。这条命令补的正是那份缺口。
+#[tauri::command]
+pub async fn notebook_vault_index(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<vault_index::VaultIndexEntry>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || vault_index::scan_vault_titles(&resolved)).await
 }
 
 /// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。

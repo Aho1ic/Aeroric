@@ -10,6 +10,8 @@
  * - 标题存 frontmatter,文件名只在新建时定一次
  */
 
+import { deriveTitle } from "../components/notebook/noteFrontmatter";
+
 export type HarnessSig = { mtimeMs: number; hash: string };
 
 type HarnessFile = {
@@ -200,6 +202,18 @@ export class NotebookVaultHarness {
           createdMs: null,
         };
       }
+
+      case "notebook_vault_index":
+        // 真后端只读文件头 8KB 再取标题;这里内容都在内存里,直接整篇交给
+        // `deriveTitle` —— 用的是**前端同一个函数**,而 Rust 侧的 `derive_title`
+        // 刻意复刻它的优先级。两边算出不同标题会让「列表里叫 A、链接解析成 B」。
+        return [...this.files.keys()]
+          .filter((path) => path.endsWith(".md"))
+          .sort()
+          .map((path) => ({
+            path,
+            title: deriveTitle(this.files.get(path)?.content ?? "", path),
+          }));
 
       // 通用 fs 命令,不是 notebook_* 的。列表右键菜单的「在系统文件夹中打开」
       // 借了它,所以这里也要认。

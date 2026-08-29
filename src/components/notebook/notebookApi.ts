@@ -363,3 +363,20 @@ export type NoteStat = {
 export function statNote(path: string): Promise<NoteStat> {
   return invoke<NoteStat>("notebook_note_stat", { path });
 }
+
+/** 索引里一篇笔记的路径与真实标题。`path` 与笔记列表里的 `id` 是同一个值。 */
+export type VaultIndexEntry = {
+  path: string;
+  title: string;
+};
+
+/**
+ * 扫全库,拿每篇笔记的**真实标题**。
+ *
+ * `listNotes` 只读目录项,给未读入的笔记填的是文件名 stem。而 `[[链接]]` 写的是
+ * 标题、标题存在 frontmatter 里 —— 少了这份索引,指向"还没打开过的笔记"的链接
+ * 全是死链,而「先写链接、之后才点开那篇笔记」恰恰是双链最常见的用法。
+ */
+export function vaultIndex(vault: string): Promise<VaultIndexEntry[]> {
+  return invoke<VaultIndexEntry[]>("notebook_vault_index", { vault });
+}

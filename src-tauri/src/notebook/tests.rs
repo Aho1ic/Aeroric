@@ -2313,3 +2313,191 @@ fn note_stat_reports_a_missing_file_instead_of_zeroes() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+// ── vault_index ────────────────────────────────────────────────────────────
+
+/// 索引里某条路径对应的标题。
+fn indexed_title(entries: &[super::vault_index::VaultIndexEntry], name: &str) -> Option<String> {
+    entries
+        .iter()
+        .find(|entry| entry.path.ends_with(name))
+        .map(|entry| entry.title.clone())
+}
+
+#[test]
+fn vault_index_prefers_the_frontmatter_title_over_the_file_name() {
+    let vault = temp_vault("index-front");
+    // 这正是索引存在的理由:文件名是新建时的 slug,标题后来改过。少了这一档,
+    // `[[周报]]` 在目标笔记被打开过之前解析不到。
+    std::fs::write(
+        vault.join("cao-gao.md"),
+        "---\ntitle: 周报\ntags: []\n---\n\n# 别的标题\n",
+    )
+    .expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    assert_eq!(
+        indexed_title(&entries, "cao-gao.md").as_deref(),
+        Some("周报")
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_falls_back_to_the_first_heading_then_the_stem() {
+    let vault = temp_vault("index-fallback");
+    std::fs::write(vault.join("a.md"), "# 第一个标题\n\n正文\n").expect("seed");
+    std::fs::write(vault.join("b.md"), "没有标题的正文\n").expect("seed");
+    // `#hashtag` 不是标题(缺空格),`####### ` 也不是(七个 #)。两者都该回落到文件名。
+    std::fs::write(vault.join("c.md"), "#hashtag\n####### 太多井号\n").expect("seed");
+    // frontmatter 里空的 title 不算给了标题。
+    std::fs::write(vault.join("d.md"), "---\ntitle:\n---\n\n# 正文标题\n").expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    assert_eq!(
+        indexed_title(&entries, "a.md").as_deref(),
+        Some("第一个标题")
+    );
+    assert_eq!(indexed_title(&entries, "b.md").as_deref(), Some("b"));
+    assert_eq!(indexed_title(&entries, "c.md").as_deref(), Some("c"));
+    assert_eq!(indexed_title(&entries, "d.md").as_deref(), Some("正文标题"));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_unquotes_frontmatter_scalars() {
+    let vault = temp_vault("index-quotes");
+    // 带 `:` 的标题必须加引号才是合法 YAML,所以这条路径是常态而非边角。
+    std::fs::write(
+        vault.join("a.md"),
+        "---\ntitle: \"Q1: 计划\"\n---\n\n正文\n",
+    )
+    .expect("seed");
+    std::fs::write(
+        vault.join("b.md"),
+        "---\ntitle: 'it''s here'\n---\n\n正文\n",
+    )
+    .expect("seed");
+    std::fs::write(
+        vault.join("c.md"),
+        "---\ntitle: \"a \\\"b\\\"\"\n---\n\n正文\n",
+    )
+    .expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    assert_eq!(indexed_title(&entries, "a.md").as_deref(), Some("Q1: 计划"));
+    assert_eq!(
+        indexed_title(&entries, "b.md").as_deref(),
+        Some("it's here")
+    );
+    assert_eq!(indexed_title(&entries, "c.md").as_deref(), Some("a \"b\""));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_ignores_an_unterminated_frontmatter_block() {
+    let vault = temp_vault("index-unterminated");
+    // 开了 `---` 却没闭合的是正文里的一条分隔线。把它当 frontmatter 会让
+    // 「title:」这行字面量变成标题,而前端 `splitNote` 不这么认 —— 两边算出
+    // 不同的标题就会出现「列表里叫 A、链接解析成 B」。
+    std::fs::write(vault.join("a.md"), "---\ntitle: 假的\n\n# 真标题\n").expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    assert_eq!(indexed_title(&entries, "a.md").as_deref(), Some("真标题"));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_reads_titles_from_nested_folders_and_skips_private_dirs() {
+    let vault = temp_vault("index-nested");
+    std::fs::create_dir_all(vault.join("sub/deeper")).expect("mkdir");
+    std::fs::create_dir_all(vault.join(".notebook/history")).expect("mkdir");
+    std::fs::create_dir_all(vault.join("node_modules")).expect("mkdir");
+    std::fs::write(vault.join("sub/deeper/n.md"), "# 深处\n").expect("seed");
+    std::fs::write(vault.join(".notebook/history/old.md"), "# 快照\n").expect("seed");
+    std::fs::write(vault.join("node_modules/dep.md"), "# 依赖\n").expect("seed");
+    std::fs::write(vault.join("plain.txt"), "# 不是笔记\n").expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
+    // 历史快照和依赖目录里的 .md 出现在索引里会让 `[[快照]]` 指到一个用户在树里
+    // 根本看不到的文件。
+    assert_eq!(titles, vec!["深处"], "unexpected index: {titles:?}");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_sorts_by_path_so_ambiguous_links_are_stable() {
+    let vault = temp_vault("index-order");
+    std::fs::create_dir_all(vault.join("a")).expect("mkdir");
+    std::fs::create_dir_all(vault.join("b")).expect("mkdir");
+    // 两篇同名笔记。前端遇到歧义取第一篇 —— 如果索引顺序跟着文件系统的遍历顺序
+    // 走,同一次点击今天进 a/、明天进 b/。
+    std::fs::write(vault.join("b/dup.md"), "---\ntitle: 重名\n---\n").expect("seed");
+    std::fs::write(vault.join("a/dup.md"), "---\ntitle: 重名\n---\n").expect("seed");
+    std::fs::write(vault.join("m.md"), "# 中间\n").expect("seed");
+
+    let paths: Vec<String> = super::vault_index::scan_vault_titles(&vault)
+        .expect("scan")
+        .into_iter()
+        .map(|e| e.path)
+        .collect();
+    let mut sorted = paths.clone();
+    sorted.sort();
+    assert_eq!(paths, sorted, "index order is not stable");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_index_does_not_follow_symlinks() {
+    let vault = temp_vault("index-symlink");
+    let outside = temp_vault("index-symlink-outside");
+    std::fs::write(outside.join("secret.md"), "# 库外\n").expect("seed");
+    std::fs::write(vault.join("real.md"), "# 库内\n").expect("seed");
+
+    #[cfg(unix)]
+    {
+        // 跟随链接会把 vault 外的文件放进索引,于是 `[[库外]]` 能解析到一条
+        // allowlist 拒绝打开的路径 —— 点开就是一个报错。
+        std::os::unix::fs::symlink(&outside, vault.join("linked")).expect("symlink dir");
+        std::os::unix::fs::symlink(outside.join("secret.md"), vault.join("linked.md"))
+            .expect("symlink file");
+
+        let titles: Vec<String> = super::vault_index::scan_vault_titles(&vault)
+            .expect("scan")
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(titles, vec!["库内"], "symlink was followed");
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn vault_index_finds_a_title_field_that_is_not_on_the_first_line() {
+    let vault = temp_vault("index-late-title");
+    // 第三方工具(Obsidian 插件等)写的 frontmatter 里 title 可能排在很后面。
+    // 只读第一行的实现会把这些笔记全判成"没有标题"。
+    let mut front = String::from("---\n");
+    for i in 0..40 {
+        front.push_str(&format!("field{i}: value{i}\n"));
+    }
+    front.push_str("title: 靠后的标题\n---\n\n正文\n");
+    std::fs::write(vault.join("a.md"), front).expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("scan");
+    assert_eq!(
+        indexed_title(&entries, "a.md").as_deref(),
+        Some("靠后的标题")
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}

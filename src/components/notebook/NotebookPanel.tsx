@@ -41,6 +41,7 @@ import {
   restoreTrashItem,
   revealNoteInFileManager,
   statNote,
+  vaultIndex,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
@@ -53,6 +54,8 @@ import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
+import { buildLinkIndex, linkTitleOf } from "./noteLinks";
+import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
 import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
@@ -152,6 +155,12 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const [backgroundColor, setBackgroundColor] = useState("#fef08a");
   const [contextMenu, setContextMenu] = useState<NoteContextMenuState | null>(null);
   const [listMenu, setListMenu] = useState<NoteListContextMenuState | null>(null);
+  /** 全库标题索引:路径 → frontmatter 里的真实标题。`[[链接]]` 的解析要用它。
+   *
+   * 笔记列表只读目录项,未读入的笔记 `title` 是文件名 stem。而标题存在
+   * frontmatter 里、文件名只在新建时定一次 —— 少了这份索引,指向"还没打开过的
+   * 笔记"的链接全是死链,而先写链接、之后才点开那篇笔记正是双链最常见的用法。 */
+  const [indexedTitles, setIndexedTitles] = useState<Map<string, string>>(() => new Map());
   /** 每存一个附件 +1。附件分区靠它知道该重扫了(它可能是折叠的,那时不扫)。 */
   const [attachmentToken, setAttachmentToken] = useState(0);
   /** 大纲是否展开。默认收起 —— 面板在项目视图里常常只有 400px 宽,
@@ -204,6 +213,23 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   const markdownHtml = useMemo(
     () => renderNoteMarkdown(activeNote?.body ?? "").html,
     [activeNote?.body],
+  );
+  /* `[[wikilink]]` 的解析索引。
+   *
+   * 依赖只取 id 与 title 拼出来的串,不是 `notes` 本身:自动保存每次都会换掉
+   * notes 里那条笔记的对象(正文变了),而正文变化不影响链接**能解析到谁** ——
+   * 用 notes 当依赖的话每敲一个字都要重建全库索引。 */
+  const linkIndexKey = notes.map((note) => `${note.id}\u0000${note.title}`).join("\u0001");
+  const linkIndex = useMemo(
+    () =>
+      buildLinkIndex(
+        notes.map((note) => {
+          const linkable = { path: note.id, title: note.title };
+          return { path: note.id, title: linkTitleOf(linkable, indexedTitles) };
+        }),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 见上:刻意按 id+title 而不是 notes
+    [linkIndexKey, indexedTitles],
   );
   /* 相对路径的图片解析。返回的上下文交给 CodeMirror 的图片 widget;阅读 / 分屏态
      的预览由 hook 自己扫 DOM 换 src。renderKey 带上 mode:阅读 ⇄ 分屏切换时 HTML
@@ -289,6 +315,33 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* 全库标题索引。只在 vault 就绪时扫一次。
+   *
+   * 一次就够,因为唯一需要它的是"列表里有、但正文还没读进来"的笔记 —— 而这些
+   * 全部来自挂载时那次 `listNotes`。之后每条进列表的笔记都是读全的(新建拿到的
+   * 是完整笔记,回收站恢复会 `loadNoteByPath`),内存里的标题本来就是真的,
+   * `linkTitleOf` 会优先用它。
+   *
+   * 跟着 `notes` 重扫反而是纯损失:自动保存每敲一个字都换掉笔记对象,那会变成
+   * 每个字扫一遍全库。 */
+  useEffect(() => {
+    if (!vault) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const entries = await vaultIndex(vault);
+        if (cancelled) return;
+        setIndexedTitles(new Map(entries.map((entry) => [entry.path, entry.title])));
+      } catch {
+        /* 索引扫不动不该影响面板:笔记照样能读能写,只是按标题写的链接暂时解析
+           不到(退化成只认文件名)。这不值得占用那条错误提示条。 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [vault]);
+
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
   // `markdownHtml` 变了就重挂:dangerouslySetInnerHTML 会整块换掉 DOM,旧的
@@ -311,6 +364,44 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (!host) return;
     enhanceMarkdownImages(host);
   }, [markdownHtml, mode]);
+
+  /* `[[wikilink]]` → 可点的链接。
+   *
+   * 依赖里带 `linkIndex`:新建 / 删除 / 改标题之后,原来的死链要变活(或反过来)。
+   * 那时候 `markdownHtml` 一个字都没变,只按 HTML 重跑的话链接会一直停在旧状态。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    enhanceWikiLinks(host, linkIndex, {
+      open: (title) => t("notebook.wikiLinkOpen", { title }),
+      missing: (target) => t("notebook.wikiLinkMissing", { target }),
+      ambiguous: (title) => t("notebook.wikiLinkAmbiguous", { title }),
+    });
+  }, [markdownHtml, mode, linkIndex, t]);
+
+  /* 点 wikilink 跳笔记。
+   *
+   * 挂原生监听而不是给 NoteContentArea 加一个 onClick prop:那个组件是纯展示的,
+   * 为 wikilink 一家开个洞不划算。链接节点由 enhanceWikiLinks 塞进 DOM,不在
+   * React 树里,但事件照样冒泡到这个容器上。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    const onClick = (event: MouseEvent) => {
+      if (!isWikiLinkClick(event)) return;
+      // 死链也要拦:它是个 `<a>`,不拦会走默认行为(在这个 webview 里是跳到
+      // 一个空 fragment,顺带把滚动位置打到顶部)。
+      event.preventDefault();
+      const hit = wikiLinkTargetFromEvent(event);
+      if (!hit) return;
+      setActiveId(hit.path);
+      if (hit.heading) scrollToWikiHeading(hit.heading);
+    };
+    host.addEventListener("click", onClick);
+    return () => host.removeEventListener("click", onClick);
+  }, [markdownHtml, mode, setActiveId]);
 
   // 分屏同步滚动。两侧注册进总线,由它做比例对齐和防回声。
   useEffect(() => {
@@ -499,6 +590,27 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     if (next === mode) return;
     captureCurrentScroll();
     setMode(next);
+  };
+
+  /**
+   * 按 `#小节` 滚到目标笔记里的对应标题。
+   *
+   * 跳笔记之后正文还要过一次异步读取 + 渲染,所以不能同步找节点。用
+   * requestAnimationFrame 等一帧:阅读态的 HTML 是 `dangerouslySetInnerHTML`
+   * 挂上去的,React 提交完那一帧节点就在了。
+   */
+  const scrollToWikiHeading = (heading: string) => {
+    requestAnimationFrame(() => {
+      const host = previewRef.current;
+      if (!host) return;
+      // 匹配文本而不是 slug:用户写 `[[笔记#小节标题]]` 时写的是标题原文,
+      // 而 slug 是我们自己算出来的(去标点、转小写),两者不一定一致。
+      const needle = heading.trim().toLowerCase();
+      const found = Array.from(host.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")).find(
+        (node) => (node.textContent ?? "").trim().toLowerCase() === needle,
+      );
+      found?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   /**
