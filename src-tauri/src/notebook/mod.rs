@@ -10,6 +10,8 @@
 //!   *.md
 //!   .notebook/                  vault 私有数据,不入 Git
 //!     legacy-backup-*.json      迁移前的原始 localStorage 快照
+//!     history/                  版本历史快照(每文件 30 条)
+//!     trash/                    软删的笔记 + 清单
 //! <project>/.aeroric/notes/     项目级 vault(默认不开启)
 //! ```
 //!
@@ -21,6 +23,7 @@ pub mod html2md;
 pub mod migrate;
 pub mod snapshots;
 pub mod state;
+pub mod trash;
 
 #[cfg(test)]
 mod tests;
@@ -222,17 +225,88 @@ pub async fn notebook_create_folder(
     fs_ops::create_folder(&state, &path)
 }
 
-/// 删除笔记。走系统回收站(Aeroric 已有 `trash` crate),不是 unlink ——
-/// 随手记的删除必须可恢复。P3 会在此之上再加 vault 内的软删层。
+/// 删除笔记 / 文件夹。软删到 `<vault>/.notebook/trash/`,不是 unlink,也不是
+/// 直接进系统回收站。
+///
+/// 为什么不用系统回收站:它记不住"这条原来在 vault 的哪个子目录",恢复一个
+/// `untitled.md` 时用户根本不知道该往哪放;跨到系统回收站还可能是跨设备复制,
+/// 大 vault 上会卡住 IPC。系统回收站是**彻底删除**的落点,见
+/// [`notebook_trash_purge`]。
 #[tauri::command]
 pub async fn notebook_delete_note(
     state: State<'_, NotebookState>,
     path: String,
-) -> Result<(), String> {
+) -> Result<trash::TrashItem, String> {
     let resolved = state.resolve_in_vaults(&path, false)?;
-    state.record_close(&resolved)?;
-    blocking(move || trash::delete(&resolved).map_err(|e| format!("Cannot move to trash: {e}")))
-        .await
+    let vault = state.owning_vault(&resolved)?;
+    let target = resolved.clone();
+    let item = blocking(move || trash::trash(&vault, &target)).await?;
+    // 指纹在软删**成功之后**才清:失败的话文件还在原位,提前清掉会让下一次
+    // 保存拿不到基线而被当成冲突。目录要连带清子树里的每个文件。
+    if item.is_dir {
+        state.record_close_subtree(&resolved)?;
+    } else {
+        state.record_close(&resolved)?;
+    }
+    Ok(item)
+}
+
+// ── 回收站 ─────────────────────────────────────────────────────────────────
+
+/// 列出 vault 回收站,新删的在前。
+#[tauri::command]
+pub async fn notebook_trash_list(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<trash::TrashItem>, String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    blocking(move || trash::list(&root)).await
+}
+
+/// 把一条恢复回原路径。原路径已被占用时报 `ALREADY_EXISTS:<path>`。
+#[tauri::command]
+pub async fn notebook_trash_restore(
+    state: State<'_, NotebookState>,
+    vault: String,
+    id: String,
+) -> Result<trash::RestoredItem, String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    blocking(move || trash::restore(&root, &id)).await
+}
+
+/// 彻底删除一条:载荷进系统回收站,清单和历史快照删掉。
+#[tauri::command]
+pub async fn notebook_trash_purge(
+    state: State<'_, NotebookState>,
+    vault: String,
+    id: String,
+) -> Result<(), String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    blocking(move || trash::purge(&root, &id)).await
+}
+
+/// 清空回收站,返回清掉的条数。每条都走单条彻底删除的那套路径。
+#[tauri::command]
+pub async fn notebook_trash_purge_all(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<u32, String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    blocking(move || trash::purge_all(&root)).await
+}
+
+/// 把前端传来的 vault 路径校验并归一到 vault 根。
+///
+/// 两步都要:`resolve_in_vaults` 过 allowlist 并 canonicalize(前端传的可能带
+/// symlink 或 `..`),`owning_vault` 再把它收敛到**注册时的那个根** —— 否则传一个
+/// vault 内的子目录进来,回收站就会开在那个子目录下面,而 `list` 又永远去根下面
+/// 找,删掉的笔记从此消失。
+fn resolve_vault_root(
+    state: &State<'_, NotebookState>,
+    vault: &str,
+) -> Result<std::path::PathBuf, String> {
+    let resolved = state.resolve_in_vaults(vault, false)?;
+    state.owning_vault(&resolved)
 }
 
 #[tauri::command]

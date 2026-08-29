@@ -1583,6 +1583,327 @@ describe("NotebookPanel", () => {
     });
   });
 
+  describe("回收站", () => {
+    /** 打开回收站,等它把列表拉回来。 */
+    async function openTrash() {
+      fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+      return screen.findByRole("dialog", { name: "Trash" });
+    }
+
+    /** 回收站里的条目行。按 testid 找 —— 时间文案跟着假时钟走,不能当锚点。 */
+    function trashRows(): HTMLElement[] {
+      return screen.getAllByTestId("note-trash-row");
+    }
+
+    /** 删掉当前那条笔记(标题栏的删除按钮)。 */
+    async function deleteActiveNote() {
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    }
+
+    /** 注册一个把所有确认都答"是"的对话框 host,返回收到的请求列表。 */
+    function acceptDialogs(): { requests: string[]; unregister: () => void } {
+      const requests: string[] = [];
+      const unregister = registerAppDialogHandler(async (request) => {
+        requests.push(request.kind);
+        return true;
+      });
+      return { requests, unregister };
+    }
+
+    it("删掉的笔记进回收站,恢复后回到列表并且正文还在", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nprecious\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+
+      await openTrash();
+      expect(await screen.findByText("Doomed.md")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Restore Doomed.md" }));
+
+      // 回到列表 —— 恢复不只是把文件搬回磁盘,面板也要重新认得它,否则用户还得
+      // 重开一次面板才看得到自己刚恢复的笔记。
+      await screen.findByRole("button", { name: "Doomed" });
+      expect(harness.read("/vault/Doomed.md")).toContain("precious");
+      expect(harness.trashedNames()).toEqual([]);
+    });
+
+    it("恢复一条不会丢掉别处未落盘的编辑", async () => {
+      harness.seed("Keeper.md", '---\ntitle: "Keeper"\n---\n\nold body\n');
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbye\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Keeper" });
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      // 先删掉 Doomed(它此刻不是当前笔记,走列表右键菜单)。
+      const row = screen
+        .getByRole("button", { name: "Doomed" })
+        .closest("[data-notebook-note-row]");
+      if (!row) throw new Error("no row for Doomed");
+      fireEvent.contextMenu(row);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Trash" }));
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+
+      // 在 Keeper 里敲字但不等防抖落盘。
+      setEditorValue("unsaved edit");
+
+      await openTrash();
+      fireEvent.click(await screen.findByRole("button", { name: "Restore Doomed.md" }));
+      await waitFor(() => expect(harness.trashedNames()).toEqual([]));
+      fireEvent.click(screen.getByRole("button", { name: "Close trash" }));
+
+      // 恢复只把那一条加回列表,不重扫整个 vault。重扫会用磁盘上的旧正文覆盖掉
+      // 内存里还没落盘的编辑 —— 用户刚打的字就没了。
+      await waitFor(() => expect(editorValue()).toBe("unsaved edit"));
+    });
+
+    it("彻底删除要确认,取消就什么都不做", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbye\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+      await openTrash();
+      await screen.findByText("Doomed.md");
+
+      const requests: string[] = [];
+      const unregister = registerAppDialogHandler(async (request) => {
+        requests.push(request.kind);
+        return false;
+      });
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Delete Doomed.md permanently" }));
+        await waitFor(() => expect(requests).toEqual(["confirm"]));
+
+        // 取消后那条还在:彻底删除会连历史一起清掉,是这个面板里唯一不可逆的
+        // 操作,点错一次就没了。
+        expect(harness.trashedNames()).toEqual(["Doomed.md"]);
+        expect(screen.getByText("Doomed.md")).toBeInTheDocument();
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+
+    it("确认后彻底删除,那条从回收站消失", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbye\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+      await openTrash();
+      await screen.findByText("Doomed.md");
+
+      const { unregister } = acceptDialogs();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Delete Doomed.md permanently" }));
+
+        await waitFor(() => expect(harness.trashedNames()).toEqual([]));
+        expect(await screen.findByText("Nothing in the trash")).toBeInTheDocument();
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+
+    it("清空回收站要确认,确认后一条不剩", async () => {
+      harness.seed("One.md", '---\ntitle: "One"\n---\n\na\n');
+      harness.seed("Two.md", '---\ntitle: "Two"\n---\n\nb\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "One" });
+      for (const name of ["One", "Two"]) {
+        fireEvent.click(screen.getByRole("button", { name }));
+        await deleteActiveNote();
+      }
+      await waitFor(() => expect(harness.trashedNames()).toHaveLength(2));
+      await openTrash();
+      await waitFor(() => expect(trashRows()).toHaveLength(2));
+
+      const { requests, unregister } = acceptDialogs();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Empty trash" }));
+        await waitFor(() => expect(requests).toEqual(["confirm"]));
+
+        await waitFor(() => expect(harness.trashedNames()).toEqual([]));
+        expect(await screen.findByText("Nothing in the trash")).toBeInTheDocument();
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+
+    it("清空回收站取消后一条都不清", async () => {
+      harness.seed("One.md", '---\ntitle: "One"\n---\n\na\n');
+      harness.seed("Two.md", '---\ntitle: "Two"\n---\n\nb\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "One" });
+      for (const name of ["One", "Two"]) {
+        fireEvent.click(screen.getByRole("button", { name }));
+        await deleteActiveNote();
+      }
+      await waitFor(() => expect(harness.trashedNames()).toHaveLength(2));
+      await openTrash();
+      await waitFor(() => expect(trashRows()).toHaveLength(2));
+
+      const requests: string[] = [];
+      const unregister = registerAppDialogHandler(async (request) => {
+        requests.push(request.kind);
+        return false;
+      });
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Empty trash" }));
+        await waitFor(() => expect(requests).toEqual(["confirm"]));
+
+        // 清空是整个面板里破坏力最大的一下 —— 一次点掉所有还能捞回来的笔记,
+        // 连历史一起。取消必须真的什么都不做。
+        expect(harness.trashedNames()).toHaveLength(2);
+        expect(trashRows()).toHaveLength(2);
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+
+    it("清空失败又拉不回列表时,报的是清空那条错误", async () => {
+      harness.seed("One.md", '---\ntitle: "One"\n---\n\na\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "One" });
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["One.md"]));
+      await openTrash();
+      await waitFor(() => expect(trashRows()).toHaveLength(1));
+
+      // 清空失败,紧接着那次用来纠正清单的重新拉取也失败。
+      harness.failTrashCalls(2);
+      const { unregister } = acceptDialogs();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Empty trash" }));
+
+        // 显示的必须是"清空失败",不是"列表拉不回来"。后者是补救动作的副作用,
+        // 拿它盖掉原因会让用户以为回收站只是读不出来,而实际上已经清掉了一部分。
+        await screen.findByText(/emptying the trash failed/);
+        expect(screen.queryByText(/trash is unavailable/)).not.toBeInTheDocument();
+      } finally {
+        unregister();
+        resetAppDialogHandlerForTests();
+      }
+    });
+
+    it("恢复失败时把错误显示出来,那条留在回收站里", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbye\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+      await openTrash();
+      await screen.findByText("Doomed.md");
+
+      harness.failTrashCalls();
+      fireEvent.click(screen.getByRole("button", { name: "Restore Doomed.md" }));
+
+      // 静默失败最糟:用户以为恢复了,回列表却找不到那条笔记。
+      await screen.findByText(/restore failed/);
+      expect(harness.trashedNames()).toEqual(["Doomed.md"]);
+    });
+
+    it("列表拉不回来时把错误显示出来,而不是显示成空回收站", async () => {
+      harness.seed("Doomed.md", '---\ntitle: "Doomed"\n---\n\nbye\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Doomed" });
+      await deleteActiveNote();
+      await waitFor(() => expect(harness.trashedNames()).toEqual(["Doomed.md"]));
+
+      harness.failTrashCalls();
+      await openTrash();
+
+      // 显示成空的话用户会以为自己删掉的笔记真的没了。
+      await screen.findByText(/trash is unavailable/);
+      expect(screen.queryByText("Nothing in the trash")).not.toBeInTheDocument();
+    });
+
+    it("打开回收站会关掉版本历史", async () => {
+      const notePath = harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      harness.seedSnapshot(notePath, '---\ntitle: "Notes"\n---\n\nold\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      fireEvent.click(screen.getByRole("button", { name: "Version history" }));
+      await screen.findByRole("dialog", { name: /Version history/ });
+
+      await openTrash();
+
+      // 两个都是铺满面板的 overlay。叠着的话下面那个还在接键盘事件(一次 Esc
+      // 关掉两个),而用户只看得见上面那个。
+      expect(screen.queryByRole("dialog", { name: /Version history/ })).not.toBeInTheDocument();
+    });
+
+    it("Esc 关回收站,不往外传", async () => {
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+      const dialog = await openTrash();
+
+      const outer = vi.fn();
+      window.addEventListener("keydown", outer);
+      try {
+        fireEvent.keyDown(dialog, { key: "Escape", bubbles: true });
+
+        expect(screen.queryByRole("dialog", { name: "Trash" })).not.toBeInTheDocument();
+        // 面板外面还有 window 级的 Esc 监听(会去关整个视图)。不拦住的话一次
+        // Esc 会同时关掉回收站和它背后的视图。
+        expect(outer).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keydown", outer);
+      }
+    });
+
+    it("面板铺在两列外面,贴着随手记面板而不是整个窗口", async () => {
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      const dialog = await openTrash();
+
+      const panel = screen.getByRole("region", { name: "Quick Notes" });
+      expect(dialog.parentElement).toBe(panel);
+      expect(panel.style.position).toBe("relative");
+      expect(dialog.style.position).toBe("absolute");
+    });
+
+    it("空回收站给一句说明,而不是一片空白", async () => {
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Notes" });
+
+      await openTrash();
+
+      expect(await screen.findByText("Nothing in the trash")).toBeInTheDocument();
+    });
+
+    it("回收站按删除时间倒序,新删的在最上面", async () => {
+      harness.seed("First.md", '---\ntitle: "First"\n---\n\na\n');
+      harness.seed("Second.md", '---\ntitle: "Second"\n---\n\nb\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "First" });
+      for (const name of ["First", "Second"]) {
+        fireEvent.click(screen.getByRole("button", { name }));
+        await deleteActiveNote();
+      }
+      await waitFor(() => expect(harness.trashedNames()).toHaveLength(2));
+
+      await openTrash();
+      await waitFor(() => expect(trashRows()).toHaveLength(2));
+
+      // 找回刚删掉的东西是回收站最常见的用途,倒序让它落在第一行。
+      expect(trashRows().map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Second.md"),
+        expect.stringContaining("First.md"),
+      ]);
+    });
+  });
+
   describe("笔记列表右键菜单", () => {
     /** 在指定笔记那一行上右键,返回打开的菜单。 */
     async function openListMenu(name: string) {

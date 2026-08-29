@@ -33,7 +33,7 @@ export function NoteListContextMenu({ state, onAction, t }: NoteListContextMenuP
     ["history", t("notebook.historyOpen"), History, false],
     ["reveal", t("file.openInSystemFolder"), FolderOpen, false],
     ["copyPath", t("file.copyFullPath"), Copy, false],
-    // 进系统回收站,可恢复 —— 所以不弹二次确认,但配色上仍标成危险操作。
+    // 进 vault 自己的回收站,能原位恢复 —— 所以不弹二次确认,但配色上仍标成危险操作。
     ["trash", t("notebook.moveToTrash"), Trash2, true],
   ];
   return (

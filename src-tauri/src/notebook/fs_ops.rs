@@ -88,9 +88,29 @@ pub fn is_note_file(path: &Path) -> bool {
     )
 }
 
+/// 编译期确认 `dir` 落在 vault 私有目录**里面**。
+///
+/// 私有子目录的相对路径只能写字面量(`concat!` 吃不进 const item),所以它们和
+/// [`VAULT_PRIVATE_DIR`] 之间没有语法上的联系。分家的后果不是编译报错,是历史
+/// 快照和回收站跑到树扫描看得见的地方去 —— 用户会在笔记列表里看到自己删掉的
+/// 文件和历史。
+pub const fn assert_inside_private_dir(dir: &str) {
+    let dir = dir.as_bytes();
+    let private = VAULT_PRIVATE_DIR.as_bytes();
+    assert!(dir.len() > private.len());
+    let mut index = 0;
+    while index < private.len() {
+        assert!(dir[index] == private[index]);
+        index += 1;
+    }
+    assert!(dir[private.len()] == b'/');
+}
+
 /// Windows 上 rename/remove 会被杀软和搜索索引器短暂占用,重试几次就过去了。
 /// 非 Windows 只试一次。
-fn with_fs_retry<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(super) fn with_fs_retry<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
     let attempts = if cfg!(windows) { 8 } else { 1 };
     let mut last_error = None;
     for attempt in 0..attempts {

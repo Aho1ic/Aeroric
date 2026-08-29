@@ -149,9 +149,50 @@ export function createFolder(path: string): Promise<void> {
   return invoke<void>("notebook_create_folder", { path });
 }
 
-/** 删除笔记。走系统回收站,可恢复。 */
-export function deleteNote(path: string): Promise<void> {
-  return invoke<void>("notebook_delete_note", { path });
+/** 回收站里的一条。`id` 是删除时刻的毫秒时间戳(同毫秒带 `-N` 后缀)。 */
+export type TrashItem = {
+  /** 恢复 / 彻底删除只认它。前端不回传路径 —— 那个入口就没法被拿去动 vault 外的东西。 */
+  id: string;
+  /** 删除前的文件名。 */
+  name: string;
+  /** 删除前相对 vault 根的路径。UI 用它告诉用户"这条原来在哪"。 */
+  relativePath: string;
+  deletedAtMs: number;
+  size: number;
+  isDir: boolean;
+};
+
+export type RestoredItem = {
+  path: string;
+  isDir: boolean;
+};
+
+/** 删除笔记。软删到 `<vault>/.notebook/trash/`,可从回收站恢复。
+ *
+ * 不进系统回收站:那里记不住"这条原来在 vault 的哪个子目录",恢复一个
+ * `untitled.md` 时用户根本不知道该往哪放。系统回收站是「彻底删除」的落点。 */
+export function deleteNote(path: string): Promise<TrashItem> {
+  return invoke<TrashItem>("notebook_delete_note", { path });
+}
+
+/** 列出 vault 回收站,新删的在前。 */
+export function listTrash(vault: string): Promise<TrashItem[]> {
+  return invoke<TrashItem[]>("notebook_trash_list", { vault });
+}
+
+/** 恢复回原路径。原路径已被占用时抛 `ALREADY_EXISTS:<path>`。 */
+export function restoreTrashItem(vault: string, id: string): Promise<RestoredItem> {
+  return invoke<RestoredItem>("notebook_trash_restore", { vault, id });
+}
+
+/** 彻底删除一条:载荷进系统回收站,清单和历史快照删掉。 */
+export function purgeTrashItem(vault: string, id: string): Promise<void> {
+  return invoke<void>("notebook_trash_purge", { vault, id });
+}
+
+/** 清空回收站,返回清掉的条数。 */
+export function purgeAllTrash(vault: string): Promise<number> {
+  return invoke<number>("notebook_trash_purge_all", { vault });
 }
 
 export function renameNote(from: string, to: string): Promise<void> {

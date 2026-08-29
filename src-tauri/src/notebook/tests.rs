@@ -9,6 +9,7 @@ use super::fs_ops::{self, SaveOutcome};
 use super::migrate::{self, slugify};
 use super::snapshots;
 use super::state::{resolve_within, FileSig, NotebookState};
+use super::trash;
 
 /// 每个测试一个独立临时目录。用 pid + 纳秒 + 计数器命名,并行跑也不会撞。
 fn temp_vault(label: &str) -> PathBuf {
@@ -511,7 +512,7 @@ fn throttle_measures_from_the_newest_snapshot() {
 
     fs_ops::create_note(&state, &path, "v1\n").expect("create");
     let mut sig = fs_ops::read_note(&state, &path).expect("open").sig;
-    let mut save = |content: &str, sig: FileSig| match fs_ops::save_note(
+    let save = |content: &str, sig: FileSig| match fs_ops::save_note(
         &state,
         &path,
         content,
@@ -732,6 +733,462 @@ fn nested_vault_notes_snapshot_into_their_own_vault() {
     );
 
     std::fs::remove_dir_all(&outer).ok();
+}
+
+// ── 回收站(软删)───────────────────────────────────────────────────────────
+
+fn trash_dir(vault: &Path) -> PathBuf {
+    vault.join(".notebook").join("trash")
+}
+
+/// 回收站里的载荷文件名(不含清单),排序后返回。
+fn trash_payloads(vault: &Path) -> Vec<String> {
+    let dir = trash_dir(vault);
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read trash")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.ends_with(".meta.json"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn trashed_note_leaves_its_original_path_but_stays_recoverable() {
+    let vault = temp_vault("trash-roundtrip");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "Doomed.md");
+    fs_ops::create_note(&state, &path, "keep me\n").expect("create");
+
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+
+    assert!(!Path::new(&path).exists(), "note still at its old path");
+    assert_eq!(item.name, "Doomed.md");
+    assert_eq!(item.relative_path, "Doomed.md");
+    assert!(!item.is_dir);
+
+    let listed = trash::list(&vault).expect("list");
+    assert_eq!(listed, vec![item.clone()]);
+
+    let restored = trash::restore(&vault, &item.id).expect("restore");
+
+    assert_eq!(restored.path, path);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read restored"),
+        "keep me\n"
+    );
+    // 恢复完清单和载荷都要走干净,否则回收站里会留一条永远恢复不了的幽灵。
+    assert!(trash::list(&vault).expect("list after").is_empty());
+    assert!(trash_payloads(&vault).is_empty());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn trashed_folder_restores_with_everything_inside_it() {
+    let vault = temp_vault("trash-folder");
+    let state = registered_state(&vault);
+    let folder = vault.join("Journal");
+    std::fs::create_dir_all(folder.join("2026")).expect("mkdir");
+    fs_ops::create_note(&state, &note_path(&folder, "index.md"), "top\n").expect("create top");
+    fs_ops::create_note(
+        &state,
+        &note_path(&folder.join("2026"), "aug.md"),
+        "nested\n",
+    )
+    .expect("create nested");
+
+    let item = trash::trash(&vault, &folder).expect("trash folder");
+    assert!(item.is_dir);
+    assert!(!folder.exists(), "folder still in the vault");
+
+    trash::restore(&vault, &item.id).expect("restore folder");
+
+    // 验收项:目录软删可完整恢复。整棵搬回来 —— 包括嵌套那一层。
+    assert_eq!(
+        std::fs::read_to_string(folder.join("index.md")).expect("read top"),
+        "top\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("2026").join("aug.md")).expect("read nested"),
+        "nested\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn same_millisecond_deletes_of_the_same_name_do_not_overwrite_each_other() {
+    let vault = temp_vault("trash-samems");
+    let state = registered_state(&vault);
+    let left = vault.join("a");
+    let right = vault.join("b");
+    std::fs::create_dir_all(&left).expect("mkdir a");
+    std::fs::create_dir_all(&right).expect("mkdir b");
+    fs_ops::create_note(&state, &note_path(&left, "note.md"), "left\n").expect("create left");
+    fs_ops::create_note(&state, &note_path(&right, "note.md"), "right\n").expect("create right");
+
+    // 验收项:同毫秒同名删除不互相覆盖。时间戳写死,否则这条守卫只在机器够慢
+    // 的时候才真的被验到。
+    let first = trash::trash_at(&vault, &left.join("note.md"), 1_700_000_000_000).expect("trash a");
+    let second =
+        trash::trash_at(&vault, &right.join("note.md"), 1_700_000_000_000).expect("trash b");
+
+    assert_ne!(first.id, second.id, "same millisecond reused one id");
+    assert_eq!(first.deleted_at_ms, second.deleted_at_ms);
+    assert_eq!(trash::list(&vault).expect("list").len(), 2);
+
+    trash::restore(&vault, &first.id).expect("restore a");
+    trash::restore(&vault, &second.id).expect("restore b");
+
+    // 两条内容都还在 —— 覆盖发生的话这里会读到同一份。
+    assert_eq!(
+        std::fs::read_to_string(left.join("note.md")).expect("read a"),
+        "left\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(right.join("note.md")).expect("read b"),
+        "right\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn restore_refuses_when_the_original_path_is_taken_again() {
+    let vault = temp_vault("trash-occupied");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "old\n").expect("create");
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+    fs_ops::create_note(&state, &path, "new\n").expect("recreate");
+
+    let error = trash::restore(&vault, &item.id).expect_err("must refuse");
+
+    // 用和新建 / 改名一样的前缀,前端能复用同一套「换个名字」的处理。
+    assert!(error.starts_with("ALREADY_EXISTS:"), "unexpected: {error}");
+    // 拒绝之后那条还必须留在回收站里 —— 报个错就把它顺手清掉等于直接吃掉数据。
+    assert_eq!(trash::list(&vault).expect("list").len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "new\n",
+        "the occupying note was overwritten"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn restore_recreates_a_parent_folder_that_was_deleted_too() {
+    let vault = temp_vault("trash-parent");
+    let state = registered_state(&vault);
+    let folder = vault.join("Archive");
+    std::fs::create_dir_all(&folder).expect("mkdir");
+    let path = note_path(&folder, "note.md");
+    fs_ops::create_note(&state, &path, "body\n").expect("create");
+
+    let note_item = trash::trash(&vault, Path::new(&path)).expect("trash note");
+    // 再把空了的父目录也删掉。恢复笔记时它已经不在了。
+    trash::trash(&vault, &folder).expect("trash folder");
+
+    trash::restore(&vault, &note_item.id).expect("restore note");
+
+    // 父目录补出来而不是报错:否则用户必须先猜出"要手工建一个 Archive 文件夹"
+    // 才能恢复自己的笔记。
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "body\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn purge_sends_the_payload_out_of_the_vault_and_drops_its_history() {
+    let vault = temp_vault("trash-purge");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+    assert_eq!(
+        snapshots::list(&state, &path)
+            .expect("list snapshots")
+            .len(),
+        1,
+        "the fixture needs a snapshot to prove it gets dropped"
+    );
+
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+    trash::purge(&vault, &item.id).expect("purge");
+
+    assert!(trash::list(&vault).expect("list").is_empty());
+    assert!(trash_payloads(&vault).is_empty(), "payload stayed in vault");
+
+    // 历史按**相对路径**归档,不跟着文件走。不清的话同路径的新笔记一出生就继承
+    // 上一条的历史 —— 用户会在一份空白笔记里看到别人的旧内容。
+    fs_ops::create_note(&state, &path, "fresh\n").expect("recreate");
+    assert!(
+        snapshots::list(&state, &path)
+            .expect("list after purge")
+            .is_empty(),
+        "the purged note's history was inherited by a new note at the same path"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn purging_a_folder_drops_the_history_of_the_notes_inside_it() {
+    let vault = temp_vault("trash-purge-folder");
+    let state = registered_state(&vault);
+    let folder = vault.join("Archive");
+    std::fs::create_dir_all(folder.join("deep")).expect("mkdir");
+    let shallow = note_path(&folder, "one.md");
+    let deep = note_path(&folder.join("deep"), "two.md");
+    for path in [&shallow, &deep] {
+        fs_ops::create_note(&state, path, "v1\n").expect("create");
+        let opened = fs_ops::read_note(&state, path).expect("open");
+        fs_ops::save_note(&state, path, "v2\n", Some(opened.sig), false).expect("save");
+    }
+
+    let item = trash::trash(&vault, &folder).expect("trash folder");
+    trash::purge(&vault, &item.id).expect("purge folder");
+
+    // 目录自己没有历史,里面每条笔记才有。逐条清 —— 只清目录路径的话嵌套那层
+    // 的历史会永远留在私有目录里。
+    std::fs::create_dir_all(folder.join("deep")).expect("remkdir");
+    for path in [&shallow, &deep] {
+        fs_ops::create_note(&state, path, "fresh\n").expect("recreate");
+        assert!(
+            snapshots::list(&state, path).expect("list").is_empty(),
+            "history survived the purge for {path}"
+        );
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn trashing_a_note_keeps_its_history_so_restore_brings_it_back() {
+    let vault = temp_vault("trash-keeps-history");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "v1\n").expect("create");
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    fs_ops::save_note(&state, &path, "v2\n", Some(opened.sig), false).expect("save");
+
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+    trash::restore(&vault, &item.id).expect("restore");
+
+    // 软删不是彻底删除,历史必须原样在。恢复回来的笔记还能继续往回滚 —— 否则
+    // 「误删再恢复」会静默吃掉这条笔记的全部版本。
+    assert_eq!(
+        snapshots::list(&state, &path).expect("list").len(),
+        1,
+        "soft delete dropped the note's history"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn purge_all_empties_the_trash_including_payloads_without_a_manifest() {
+    let vault = temp_vault("trash-purge-all");
+    let state = registered_state(&vault);
+    for name in ["a.md", "b.md"] {
+        let path = note_path(&vault, name);
+        fs_ops::create_note(&state, &path, "body\n").expect("create");
+        trash::trash(&vault, Path::new(&path)).expect("trash");
+    }
+    // 崩在"清单写完、载荷还没搬"之后留下的孤儿载荷。清空必须连它一起收走,
+    // 否则回收站显示为空而磁盘上还躺着文件。
+    std::fs::write(trash_dir(&vault).join("999.bin"), "orphan\n").expect("seed orphan");
+
+    let purged = trash::purge_all(&vault).expect("purge all");
+
+    assert_eq!(purged, 2, "count must be the manifests actually purged");
+    assert!(trash::list(&vault).expect("list").is_empty());
+    assert!(
+        trash_payloads(&vault).is_empty(),
+        "leftovers: {:?}",
+        trash_payloads(&vault)
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn list_hides_entries_whose_payload_is_gone_and_puts_the_newest_first() {
+    let vault = temp_vault("trash-list");
+    let state = registered_state(&vault);
+    let mut ids = Vec::new();
+    for (name, at) in [("old.md", 1_000), ("new.md", 2_000)] {
+        let path = note_path(&vault, name);
+        fs_ops::create_note(&state, &path, "body\n").expect("create");
+        ids.push(
+            trash::trash_at(&vault, Path::new(&path), at)
+                .expect("trash")
+                .id,
+        );
+    }
+
+    let listed = trash::list(&vault).expect("list");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["new.md", "old.md"],
+        "newest deletion must come first"
+    );
+
+    // 载荷被外部删掉(用户自己去 Finder 里清了)的条目不该列出来:点恢复什么都
+    // 不会发生,而用户以为自己的笔记还在回收站里。
+    std::fs::remove_file(trash_dir(&vault).join(format!("{}.bin", ids[1]))).expect("drop payload");
+
+    let listed = trash::list(&vault).expect("list again");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "old.md");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn trash_refuses_the_vault_root_and_its_private_directory() {
+    let vault = temp_vault("trash-guards");
+    let private = vault.join(".notebook").join("history");
+    std::fs::create_dir_all(&private).expect("mkdir private");
+
+    // 根目录:搬走它等于把整个 vault 塞进它自己的子目录。
+    let error = trash::trash(&vault, &vault).expect_err("root must be refused");
+    assert!(error.contains("vault root"), "unexpected: {error}");
+
+    // 私有目录:回收站和历史都住在这儿。允许软删就意味着"删除回收站"会把回收站
+    // 搬进回收站,而恢复又落回私有目录 —— 一个没有出口的循环。
+    let error = trash::trash(&vault, &private).expect_err("private dir must be refused");
+    assert!(error.contains("private directory"), "unexpected: {error}");
+    assert!(private.is_dir(), "private directory was moved anyway");
+
+    // vault 外的路径:这个函数直接动用户的文件,不能假设调用方一定先过了
+    // `resolve_in_vaults`。
+    let outside = temp_vault("trash-outside");
+    let victim = outside.join("victim.md");
+    std::fs::write(&victim, "not yours\n").expect("seed");
+    let error = trash::trash(&vault, &victim).expect_err("outside must be refused");
+    assert!(error.contains("outside the vault"), "unexpected: {error}");
+    assert!(victim.exists(), "a file outside the vault was moved");
+
+    std::fs::remove_dir_all(&vault).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn restore_refuses_a_manifest_that_points_out_of_the_vault() {
+    // vault 故意多套一层:这条测试要断言"`..` 指向的地方没有被写出文件",而
+    // `temp_vault` 的父目录是**全机器共享**的临时目录。直接断言在那上面的话,任何
+    // 来源的同名残留(比如某次真的越界写成功了的运行)都会永久毒住这条测试,而且
+    // 并行跑的别的测试清理临时目录时又可能顺手把它扫掉 —— 于是同一个断言时红时绿。
+    let outside = temp_vault("trash-traversal");
+    let vault = outside.join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "body\n").expect("create");
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+
+    // 清单是磁盘上的 JSON:用户手改过、别的工具写过都有可能。它决定写入位置,
+    // 所以必须当成不可信输入 —— `vault.join("../…")` 会一路爬出 vault。
+    let manifest = trash_dir(&vault).join(format!("{}.meta.json", item.id));
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(&manifest, text.replace("\"note.md\"", "\"../escaped.md\"")).expect("tamper");
+
+    let error = trash::restore(&vault, &item.id).expect_err("must refuse");
+
+    assert!(
+        error.contains("unsafe original path"),
+        "unexpected: {error}"
+    );
+    assert!(
+        !outside.join("escaped.md").exists(),
+        "a file was written outside the vault"
+    );
+
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn restore_refuses_a_manifest_aimed_at_the_private_directory() {
+    let vault = temp_vault("trash-private-target");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "note.md");
+    fs_ops::create_note(&state, &path, "body\n").expect("create");
+    let item = trash::trash(&vault, Path::new(&path)).expect("trash");
+
+    let manifest = trash_dir(&vault).join(format!("{}.meta.json", item.id));
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        text.replace("\"note.md\"", "\".notebook/trash/hijack.md\""),
+    )
+    .expect("tamper");
+
+    let error = trash::restore(&vault, &item.id).expect_err("must refuse");
+
+    // 往私有目录里塞用户文件轻则被树扫描忽略(笔记再也看不见),重则覆盖掉回收站
+    // 自己的清单。
+    assert!(error.contains("private directory"), "unexpected: {error}");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn trash_ids_from_the_frontend_cannot_escape_the_trash_directory() {
+    let vault = temp_vault("trash-id-guard");
+
+    // ID 会原样回传。不校验的话它就是个任意路径读写入口。
+    for id in ["../../etc/passwd", "..", "note.md", ""] {
+        let error = trash::restore(&vault, id).expect_err("restore must refuse");
+        assert!(error.contains("Invalid trash entry id"), "{id}: {error}");
+        let error = trash::purge(&vault, id).expect_err("purge must refuse");
+        assert!(error.contains("Invalid trash entry id"), "{id}: {error}");
+    }
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn trashing_a_folder_forgets_the_baselines_of_the_notes_inside_it() {
+    let vault = temp_vault("trash-baselines");
+    let state = registered_state(&vault);
+    let folder = vault.join("Archive");
+    std::fs::create_dir_all(&folder).expect("mkdir");
+    let path = note_path(&folder, "note.md");
+    fs_ops::create_note(&state, &path, "body\n").expect("create");
+    fs_ops::read_note(&state, &path).expect("open");
+    assert!(
+        state.last_sig(Path::new(&path)).is_some(),
+        "fixture needs a baseline"
+    );
+
+    let resolved = state
+        .resolve_in_vaults(&folder.to_string_lossy(), false)
+        .expect("resolve");
+    trash::trash(&vault, &resolved).expect("trash folder");
+    state
+        .record_close_subtree(&resolved)
+        .expect("forget subtree");
+
+    // 只清目录自己的指纹不够:里面的笔记可能正开着 tab。指纹留着的话这个路径
+    // 将来被复用时会拿一份属于**已经不在这里的文件**的基线去比对,而那次比对
+    // 会说"磁盘没变" —— 于是静默覆盖掉别人的内容。
+    assert!(
+        state.last_sig(Path::new(&path)).is_none(),
+        "the baseline of a note inside the trashed folder survived"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
 }
 
 // ── 迁移 ───────────────────────────────────────────────────────────────────

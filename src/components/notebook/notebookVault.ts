@@ -111,6 +111,25 @@ function stemOf(name: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+/**
+ * 只知道路径时读入一条笔记。
+ *
+ * 给"这条笔记刚从别处冒出来"的场景用(目前是从回收站恢复)。调用方手上只有路径,
+ * 而 `loadNote` 要一整个 `VaultNote` —— 让调用方自己拼一个占位对象的话,那些字段
+ * 会紧接着被 `loadNote` 覆盖掉,读代码的人得先确认一遍哪些是真的、哪些是凑数的。
+ */
+export async function loadNoteByPath(path: string): Promise<VaultNote> {
+  return loadNote({
+    path,
+    title: stemOf(baseName(path)),
+    body: "",
+    frontmatter: { title: null, extra: [] },
+    sig: null,
+    modifiedMs: Date.now(),
+    loaded: false,
+  });
+}
+
 /** 读入某条笔记的正文,返回补全后的笔记。 */
 export async function loadNote(note: VaultNote): Promise<VaultNote> {
   const opened = await openNote(note.path);
@@ -178,7 +197,7 @@ export async function createNote(vault: string, title: string): Promise<VaultNot
   };
 }
 
-/** 删除(进系统回收站,可恢复)。 */
+/** 删除(软删到 vault 回收站,可恢复)。 */
 export async function removeNote(note: VaultNote): Promise<void> {
   await deleteNote(note.path);
 }

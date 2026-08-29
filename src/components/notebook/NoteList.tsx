@@ -8,7 +8,7 @@
  */
 
 import type React from "react";
-import { FileText, GripVertical, Plus } from "lucide-react";
+import { FileText, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { NotebookNote } from "./notebookStore";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
 
@@ -27,6 +27,9 @@ export type NoteListProps = {
   onStartRename: (note: NotebookNote) => void;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  /** 打开回收站。放在列表头而不是标题栏:回收站属于整个 vault,不属于某条笔记
+   *  —— 挂在标题栏上会让人以为它列的是"这条笔记的历史版本"。 */
+  onOpenTrash: () => void;
   /** 行上右键。菜单本身由面板渲染(它持有 vault 和后端调用)。 */
   onNoteContextMenu: (event: React.MouseEvent<HTMLDivElement>, noteId: string) => void;
   /** 拖拽命中检测需要每行的 DOM。 */
@@ -55,6 +58,7 @@ export function NoteList({
   onStartRename,
   onSelect,
   onCreate,
+  onOpenTrash,
   onNoteContextMenu,
   setNoteItemRef,
   onPointerDown,
@@ -89,6 +93,21 @@ export function NoteList({
         <FileText size={14} />
         <strong style={{ fontSize: 12, flex: 1 }}>{t("notebook.title")}</strong>
         <div style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            type="button"
+            aria-label={t("notebook.trashOpen")}
+            title={t("notebook.trashOpen")}
+            onClick={onOpenTrash}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              padding: 3,
+            }}
+          >
+            <Trash2 size={14} />
+          </button>
           <button
             type="button"
             aria-label={t("notebook.newMemo")}

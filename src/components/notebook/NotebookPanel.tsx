@@ -31,11 +31,16 @@ import {
   convertRichtextNotes,
   ensureDefaultVault,
   listNoteSnapshots,
+  listTrash,
+  purgeAllTrash,
+  purgeTrashItem,
   readNoteSnapshot,
   restoreNoteSnapshot,
+  restoreTrashItem,
   revealNoteInFileManager,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
+import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
@@ -57,6 +62,7 @@ import {
   createNote as createVaultNote,
   listNotes,
   loadNote,
+  loadNoteByPath,
   noteFileContent,
   persistOrder,
   removeNote,
@@ -143,6 +149,8 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
   /** 历史面板针对的笔记。不跟着 `activeNote` 走 —— 面板开着的时候不能让别处
    *  换掉当前笔记就把 diff 悄悄换成另一条笔记的。 */
   const [historyNoteId, setHistoryNoteId] = useState<string | null>(null);
+  /** 回收站面板。`null` = 没开。和历史面板互斥(两个都是铺满面板的 overlay)。 */
+  const [trash, setTrash] = useState<NoteTrashState | null>(null);
   /**
    * 编辑器的代数。回滚时 +1,把 CodeMirror 整个重建。
    *
@@ -605,6 +613,117 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
     setHistoryNoteId(null);
   };
 
+  /** 打开回收站并拉列表。 */
+  const openTrash = () => {
+    if (!vault) return;
+    // 历史面板一起关掉:两个都是铺满面板的 overlay,叠在一起的话下面那个还在
+    // 接键盘事件(Esc 会一次关掉两个),而用户只看得见上面那个。
+    closeHistory();
+    setTrash(freshTrashState());
+    void (async () => {
+      try {
+        const items = await listTrash(vault);
+        setTrash((current) => (current ? { ...current, items, loading: false } : current));
+      } catch (error) {
+        setTrash((current) =>
+          current ? { ...current, loading: false, error: errorText(error) } : current,
+        );
+      }
+    })();
+  };
+
+  /** 恢复一条。成功后把它加回列表 —— 不重扫整个 vault,那会丢掉未落盘的编辑。 */
+  const restoreFromTrash = (id: string) => {
+    if (!vault) return;
+    setTrash((current) => (current ? { ...current, busyId: id, error: null } : current));
+    void (async () => {
+      try {
+        const restored = await restoreTrashItem(vault, id);
+        setTrash((current) =>
+          current
+            ? { ...current, items: current.items.filter((item) => item.id !== id), busyId: null }
+            : current,
+        );
+        // 目录恢复不往列表里加:笔记列表只放笔记,目录里的那些笔记要重扫才拿得到
+        // 路径和内容。这里只处理单条笔记 —— 目录恢复后用户重开面板就能看到。
+        if (restored.isDir) return;
+        const note = await loadNoteByPath(restored.path);
+        setNotes((current) =>
+          // 同路径已经在列表里就不重复加:恢复期间用户可能已经新建了同名笔记
+          // (后端会拒),或者这条其实没真的离开过列表。
+          current.some((existing) => existing.id === note.path)
+            ? current
+            : [toPanelNote(note), ...current],
+        );
+      } catch (error) {
+        setTrash((current) =>
+          current ? { ...current, busyId: null, error: errorText(error) } : current,
+        );
+      }
+    })();
+  };
+
+  /** 彻底删除一条。载荷进系统回收站,历史快照一起清 —— 所以要确认。 */
+  const purgeFromTrash = (id: string) => {
+    if (!vault) return;
+    const target = trash?.items.find((item) => item.id === id);
+    if (!target) return;
+    void (async () => {
+      const ok = await confirm(t("notebook.trashPurgeMessage", { name: target.name }), {
+        title: t("notebook.trashPurgeTitle"),
+        kind: "warning",
+        okLabel: t("notebook.trashPurgeConfirm"),
+        cancelLabel: t("notebook.trashPurgeCancel"),
+      });
+      if (!ok) return;
+      setTrash((current) => (current ? { ...current, busyId: id, error: null } : current));
+      try {
+        await purgeTrashItem(vault, id);
+        setTrash((current) =>
+          current
+            ? { ...current, items: current.items.filter((item) => item.id !== id), busyId: null }
+            : current,
+        );
+      } catch (error) {
+        setTrash((current) =>
+          current ? { ...current, busyId: null, error: errorText(error) } : current,
+        );
+      }
+    })();
+  };
+
+  const purgeAllFromTrash = () => {
+    if (!vault) return;
+    const count = trash?.items.length ?? 0;
+    if (count === 0) return;
+    void (async () => {
+      const ok = await confirm(t("notebook.trashPurgeAllMessage", { count: String(count) }), {
+        title: t("notebook.trashPurgeAllTitle"),
+        kind: "warning",
+        okLabel: t("notebook.trashPurgeAllConfirm"),
+        cancelLabel: t("notebook.trashPurgeCancel"),
+      });
+      if (!ok) return;
+      setTrash((current) => (current ? { ...current, purgingAll: true, error: null } : current));
+      try {
+        await purgeAllTrash(vault);
+        setTrash((current) => (current ? { ...current, items: [], purgingAll: false } : current));
+      } catch (error) {
+        // 清空是逐条走的,失败时可能已经清掉一部分。重新拉列表而不是原样留着 ——
+        // 否则用户看到的是一份已经不准的清单。
+        setTrash((current) =>
+          current ? { ...current, purgingAll: false, error: errorText(error) } : current,
+        );
+        try {
+          const items = await listTrash(vault);
+          setTrash((current) => (current ? { ...current, items } : current));
+        } catch {
+          // 连列表都拉不回来时保留上面那条错误,别用第二个错误盖掉它。
+        }
+      }
+    })();
+  };
+
   // 目标笔记没了就把历史状态一起清掉。
   //
   // 光靠 `historyNote` 为 null 只是让面板不渲染,状态还挂着 —— 而文件名会被回收
@@ -975,6 +1094,7 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           onStartRename={startRenameNote}
           onSelect={setActiveId}
           onCreate={addNote}
+          onOpenTrash={openTrash}
           onNoteContextMenu={(event, noteId) => {
             event.preventDefault();
             // 编辑区的菜单同时开着就没意义了,互斥。
@@ -1129,6 +1249,22 @@ function NotebookPanelContent({ width = "100%", themeVariant = "light" }: Notebo
           onSelect={(entryId) => historyNoteId && loadSnapshot(historyNoteId, entryId)}
           onRestore={restoreSnapshot}
           onClose={closeHistory}
+          t={t}
+        />
+      )}
+      {/* 回收站同样铺在两列外面。和历史面板互斥(`openTrash` 会先关掉历史),
+          所以这里不必再判一次谁在上面。 */}
+      {trash && (
+        <NoteTrashSheet
+          items={trash.items}
+          loading={trash.loading}
+          busyId={trash.busyId}
+          purgingAll={trash.purgingAll}
+          error={trash.error}
+          onRestore={restoreFromTrash}
+          onPurge={purgeFromTrash}
+          onPurgeAll={purgeAllFromTrash}
+          onClose={() => setTrash(null)}
           t={t}
         />
       )}

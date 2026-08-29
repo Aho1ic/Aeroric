@@ -113,6 +113,17 @@ impl NotebookState {
         Ok(())
     }
 
+    /// 连带清掉 `path` 之下所有文件的指纹。目录被移走(删除 / 移入回收站)时用。
+    ///
+    /// 只清 `path` 自己不够:目录里的笔记可能正开着 tab,指纹留在表里就会在
+    /// 这个路径将来被复用时当成基线 —— 那是一份属于**已经不在这里的文件**的
+    /// 基线,拿它比对会让保存以为"磁盘没变"而覆盖掉别人的内容。
+    pub fn record_close_subtree(&self, path: &Path) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+        inner.opened.retain(|file, _| !file.starts_with(path));
+        Ok(())
+    }
+
     pub fn last_sig(&self, path: &Path) -> Option<FileSig> {
         let inner = self.inner.lock().ok()?;
         inner.opened.get(path).cloned()

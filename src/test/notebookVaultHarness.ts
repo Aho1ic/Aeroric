@@ -70,6 +70,36 @@ export class NotebookVaultHarness {
    * 顺序完成,那条分支进不去 —— 于是守卫在测试里等于不存在。
    */
   private heldSnapshotReads: (() => void)[] | null = null;
+  /**
+   * 软删的笔记,按回收站 id 存 —— 对应 vault 的 `.notebook/trash/`。
+   *
+   * 删除**不是**从这个 map 里消失就完了:笔记先离开 `files` 进这里,恢复时再回去。
+   * 让删除直接丢掉内容的话「恢复」在测试里就永远拿不到正文,回收站那一整套行为
+   * 也就无从验证。
+   */
+  private trashed = new Map<
+    string,
+    { name: string; relativePath: string; deletedAtMs: number; content: string }
+  >();
+  /**
+   * 还要让接下来几次回收站调用失败。用来验回收站面板的错误态。
+   *
+   * 是计数而不是布尔:面板在「清空失败」之后会自己再拉一次列表来纠正清单,那条
+   * 补救路径本身也可能失败。只能注入一次失败的话,这两级降级里的第二级就没法验。
+   */
+  private failingTrashCalls = 0;
+
+  /** 让接下来 `count` 次回收站调用抛错。 */
+  failTrashCalls(count = 1): void {
+    this.failingTrashCalls = count;
+  }
+
+  /** 这一次回收站调用该不该失败。为真时顺带把额度扣掉。 */
+  private shouldFailTrashCall(): boolean {
+    if (this.failingTrashCalls <= 0) return false;
+    this.failingTrashCalls -= 1;
+    return true;
+  }
 
   /** 直接往 vault 里放一个文件,模拟「磁盘上已经有笔记」。 */
   seed(fileName: string, content: string): string {
@@ -246,9 +276,88 @@ export class NotebookVaultHarness {
         return { path, sig: this.sigOf(path) };
       }
 
+      // 删除是**软删**:笔记搬进回收站,不是消失。和 Rust 侧同语义。
       case "notebook_delete_note": {
-        this.files.delete(String(args.path));
+        const path = String(args.path);
+        const file = this.files.get(path);
+        if (!file) throw new Error(`no such file: ${path}`);
+        this.files.delete(path);
+        const deletedAtMs = (this.clock += 10);
+        const relativePath = path.slice(VAULT.length + 1);
+        const name = relativePath.split("/").pop() ?? relativePath;
+        this.trashed.set(String(deletedAtMs), {
+          name,
+          relativePath,
+          deletedAtMs,
+          content: file.content,
+        });
+        return {
+          id: String(deletedAtMs),
+          name,
+          relativePath,
+          deletedAtMs,
+          size: file.content.length,
+          isDir: false,
+        };
+      }
+
+      case "notebook_trash_list": {
+        if (this.shouldFailTrashCall()) {
+          throw new Error("trash is unavailable");
+        }
+        return (
+          [...this.trashed.entries()]
+            .map(([id, item]) => ({
+              id,
+              name: item.name,
+              relativePath: item.relativePath,
+              deletedAtMs: item.deletedAtMs,
+              size: item.content.length,
+              isDir: false,
+            }))
+            // 新删的在前,和后端一致。
+            .sort((left, right) => right.deletedAtMs - left.deletedAtMs)
+        );
+      }
+
+      case "notebook_trash_restore": {
+        if (this.shouldFailTrashCall()) {
+          throw new Error("restore failed");
+        }
+        const id = String(args.id);
+        const item = this.trashed.get(id);
+        if (!item) throw new Error(`no such trash item: ${id}`);
+        const path = `${VAULT}/${item.relativePath}`;
+        // 原路径被占用时报 ALREADY_EXISTS，和新建 / 改名同一个前缀。
+        if (this.files.has(path)) throw new Error(`ALREADY_EXISTS:${path}`);
+        this.files.set(path, { content: item.content, mtimeMs: (this.clock += 10) });
+        this.trashed.delete(id);
+        return { path, isDir: false };
+      }
+
+      case "notebook_trash_purge": {
+        if (this.shouldFailTrashCall()) {
+          throw new Error("purge failed");
+        }
+        const id = String(args.id);
+        const item = this.trashed.get(id);
+        if (!item) throw new Error(`no such trash item: ${id}`);
+        this.trashed.delete(id);
+        // 和 Rust 侧一致:彻底删除把这条的历史快照一起清掉。
+        this.snapshots.delete(`${VAULT}/${item.relativePath}`);
         return undefined;
+      }
+
+      case "notebook_trash_purge_all": {
+        if (this.shouldFailTrashCall()) {
+          throw new Error("emptying the trash failed");
+        }
+        const count = this.trashed.size;
+        for (const item of this.trashed.values()) {
+          this.snapshots.delete(`${VAULT}/${item.relativePath}`);
+        }
+        this.trashed.clear();
+        return count;
       }
 
       case "notebook_rename_to_title": {
@@ -335,6 +444,13 @@ export class NotebookVaultHarness {
   /** 快照内容,新的在前。 */
   snapshotContents(path: string): string[] {
     return (this.snapshots.get(path) ?? []).map((snapshot) => snapshot.content);
+  }
+
+  /** 回收站里的文件名,新删的在前。 */
+  trashedNames(): string[] {
+    return [...this.trashed.values()]
+      .sort((left, right) => right.deletedAtMs - left.deletedAtMs)
+      .map((item) => item.name);
   }
 
   /** 从现在起,读快照都停住不返回。 */

@@ -86,6 +86,27 @@ pub(crate) fn force_snapshot_in(
     record_snapshot_for_file(unthrottled, root, file, None)
 }
 
+/// 丢掉某个文件的全部快照。
+///
+/// 只在"彻底删除"路径上用。`file` 可以已经不存在了 —— 快照目录名是相对路径的
+/// hex,算它不需要读盘。
+///
+/// 为什么必须有这一步:快照按**相对路径**归档,不跟着文件走。彻底删除只清掉
+/// 文件本身的话,历史会留在 `.notebook/history/` 里 —— 用户以为内容已经没了,
+/// 而且同名新笔记一出生就会继承上一条的历史。
+pub(crate) fn discard_history_in(
+    layout: HistoryLayout,
+    root: &Path,
+    file: &Path,
+) -> Result<(), String> {
+    let relative_path = relative_file_path(root, file)?;
+    let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
+    if !history_dir.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(&history_dir).map_err(|e| e.to_string())
+}
+
 pub(crate) fn list_entries(
     project_path: &str,
     file_path: &str,

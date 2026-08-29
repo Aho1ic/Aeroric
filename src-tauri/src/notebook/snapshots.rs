@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::local_history::{self, HistoryLayout, LocalHistoryEntry, LocalHistorySnapshot};
 
-use super::fs_ops::{self, VAULT_PRIVATE_DIR};
+use super::fs_ops;
 use super::state::{signature_for_bytes, FileSig, NotebookState};
 
 /// 每个笔记保留的快照数。
@@ -40,22 +40,8 @@ pub(crate) const NOTE_LAYOUT: HistoryLayout = HistoryLayout {
     min_interval_ms: MIN_SNAPSHOT_INTERVAL_MS,
 };
 
-/// 编译期确认快照目录还在 vault 私有目录**里面**。
-///
-/// `NOTE_HISTORY_DIR` 只能写字面量(`concat!` 吃不进 const),所以它和
-/// `VAULT_PRIVATE_DIR` 之间没有语法上的联系。分家的后果不是编译报错,是快照
-/// 目录跑到树扫描看得见的地方去 —— 用户会在笔记列表里看到自己的历史。
-const _: () = {
-    let dir = NOTE_HISTORY_DIR.as_bytes();
-    let private = VAULT_PRIVATE_DIR.as_bytes();
-    assert!(dir.len() > private.len());
-    let mut index = 0;
-    while index < private.len() {
-        assert!(dir[index] == private[index]);
-        index += 1;
-    }
-    assert!(dir[private.len()] == b'/');
-};
+/// 编译期确认快照目录还在 vault 私有目录**里面**。回收站那边也有一条同样的。
+const _: () = fs_ops::assert_inside_private_dir(NOTE_HISTORY_DIR);
 
 /// 保存前记一条快照。
 ///
@@ -71,6 +57,15 @@ pub fn record_before_save(vault: &Path, file: &Path, next_content: &str) {
             );
         }
     }
+}
+
+/// 丢掉某条笔记的全部快照。
+///
+/// 只在"彻底删除"路径上用,所以 `file` 允许已经不存在 —— 参数是它**曾经**在的
+/// 位置(快照按相对路径归档,算目录名不需要读盘)。不清的话历史会留在
+/// `.notebook/history/` 里,而同路径的新笔记一出生就继承上一条的历史。
+pub fn discard(vault: &Path, file: &Path) -> Result<(), String> {
+    local_history::discard_history_in(NOTE_LAYOUT, vault, file)
 }
 
 pub fn list(state: &NotebookState, path: &str) -> Result<Vec<LocalHistoryEntry>, String> {
