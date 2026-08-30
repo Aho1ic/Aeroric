@@ -2858,6 +2858,8 @@ export const en: Record<string, string> = {
   "notebook.embedMissingHeading": "No heading named {heading} in that note",
   "notebook.embedTooDeep": "Embed of {target} is nested too deeply or refers back to itself",
   "notebook.embedFailed": "Could not embed {target}: {message}",
+  "notebook.hoverPreviewLoading": "Loading preview…",
+  "notebook.hoverPreviewFailed": "Could not load a preview",
   "notebook.fieldsOpen": "Frontmatter fields",
   "notebook.fieldsTitle": "Frontmatter fields",
   "notebook.fieldsClose": "Close fields",

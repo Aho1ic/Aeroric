@@ -155,6 +155,28 @@ function assignHeadingIds(html: string): string {
 }
 
 /**
+ * 剥掉一段 HTML 里所有 heading 的 id。
+ *
+ * 给"把别人的笔记渲染进当前页面"的场景用(嵌入、悬浮预览)。`renderNoteMarkdown`
+ * 每次调用都新建一份 slug registry,所以同一个标题文本在宿主和被嵌入的内容里会算出
+ * **同一个** id;而大纲跳转用 `querySelector` 取文档序第一个,撞上之后点宿主的大纲会
+ * 跳进嵌入块里。
+ *
+ * 和 `assignHeadingIds` 放在一起:它们是同一件事的两面,分家之后很容易出现"这边补了
+ * 那边忘了剥"。
+ */
+export function stripHeadingIds(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const heading of Array.from(
+    template.content.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"),
+  )) {
+    heading.removeAttribute("id");
+  }
+  return template.innerHTML;
+}
+
+/**
  * 渲染一篇笔记的 Markdown。
  *
  * 产出的 HTML 里数学与 Mermaid 都是**未渲染的占位元素**,调用方拿到之后要接

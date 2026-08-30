@@ -32,7 +32,7 @@ import type { WikiLinkLabels } from "./enhanceWikiLinks";
 import { resolveLink, type VaultLinkIndex } from "./noteLinks";
 import { splitNote } from "./noteFrontmatter";
 import { analyzeNote } from "./noteOutline";
-import { renderNoteMarkdown } from "./noteRender";
+import { renderNoteMarkdown, stripHeadingIds } from "./noteRender";
 import { sectionSpans } from "./noteSections";
 
 /**
@@ -131,23 +131,6 @@ export function extractHeadingSection(source: string, heading: string): string |
 /** 从路径取文件名(带扩展名)。头部显示用 —— 没有更好的名字时的兜底。 */
 function fileNameOf(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
-}
-
-/**
- * 剥掉一段 HTML 里所有 heading 的 id。见模块注释第 4 条。
- *
- * 在字符串上做而不是渲染后再遍历 DOM:少一次 querySelectorAll,而且这样
- * `body.innerHTML = html` 那一刻 DOM 里就没有重复 id,不存在中间态。
- */
-function stripHeadingIds(html: string): string {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  for (const heading of Array.from(
-    template.content.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"),
-  )) {
-    heading.removeAttribute("id");
-  }
-  return template.innerHTML;
 }
 
 /** 把占位摆成"失败"态:保留原始语法那行字,挂死链样式,状态记成 error。 */

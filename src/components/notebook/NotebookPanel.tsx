@@ -72,8 +72,9 @@ import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
-import { buildLinkIndex, linkTitleOf } from "./noteLinks";
+import { buildLinkIndex, linkTitleOf, normalizeLinkTarget } from "./noteLinks";
 import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
+import { attachWikiLinkHover } from "./hoverPreview";
 import { enhanceNoteEmbeds } from "./noteEmbed";
 import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
@@ -510,6 +511,26 @@ function NotebookPanelContent({
     });
     return () => handle.disconnect();
   }, [markdownHtml, mode, linkIndex, t, activeNote?.id]);
+
+  /* wikilink 悬浮预览。
+   *
+   * 依赖里带 `linkIndex`:它同时供标题查表用,而"目标改了标题"要反映到卡片头部上。
+   * 卡片挂在 body 上,所以 disconnect 是必须的 —— 不摘会在切模式之后留一张浮在界面上。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    const handle = attachWikiLinkHover(host, {
+      // 只读取数,和嵌入同一条路径(见 peekNote 的注释)。
+      read: async (path) => (await peekNote(path)).content,
+      titleOf: (path) => linkIndex.byPath.get(normalizeLinkTarget(path))?.title,
+      labels: {
+        loading: () => t("notebook.hoverPreviewLoading"),
+        failed: () => t("notebook.hoverPreviewFailed"),
+      },
+    });
+    return () => handle.disconnect();
+  }, [markdownHtml, mode, linkIndex, t]);
 
   /* 点 wikilink 跳笔记。
    *

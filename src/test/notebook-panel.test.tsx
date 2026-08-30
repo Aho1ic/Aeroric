@@ -2812,6 +2812,138 @@ describe("NotebookPanel", () => {
     });
   });
 
+  describe("wikilink 悬浮预览", () => {
+    /** 切到阅读态并等 HTML 挂上。 */
+    async function readMode() {
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+    }
+
+    /** 打开某篇笔记的阅读态。 */
+    async function openInReadMode(title: string) {
+      renderNotebook();
+      await screen.findByRole("button", { name: title });
+      fireEvent.click(screen.getByRole("button", { name: title }));
+      await screen.findByDisplayValue(title);
+      await readMode();
+    }
+
+    function hoverCard(): HTMLElement | null {
+      return document.querySelector<HTMLElement>(".notebook-hover-card");
+    }
+
+    /** 悬到第一条 wikilink 上并等过出卡延迟。 */
+    async function hoverFirstLink() {
+      const link = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>(
+          ".notebook-markdown-preview a.notebook-wikilink[data-wiki-path]",
+        );
+        if (!found) throw new Error("no resolved wikilink yet");
+        return found;
+      });
+      fireEvent.mouseOver(link);
+      return link;
+    }
+
+    it("停在链接上弹出目标笔记的开头", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被预览的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]]\n');
+      await openInReadMode("Origin");
+      await hoverFirstLink();
+
+      await waitFor(() => expect(hoverCard()?.style.display).toBe("block"));
+      expect(hoverCard()?.querySelector(".notebook-hover-head")?.textContent).toBe("Target");
+      await waitFor(() =>
+        expect(hoverCard()?.querySelector(".notebook-hover-body")?.textContent).toContain(
+          "被预览的正文",
+        ),
+      );
+      // frontmatter 不该出现在预览里。
+      expect(hoverCard()?.textContent).not.toContain("title:");
+    });
+
+    it("预览取数走只读命令,不会把目标笔记登记成打开", async () => {
+      /* 和嵌入同一条约束:`notebook_open_note` 会在后端登记指纹。悬浮只是看一眼,
+         登记之后某次没带基线的保存会拿这一刻的指纹当基线,把盲写放过去。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被预览的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]]\n');
+      await openInReadMode("Origin");
+      await hoverFirstLink();
+
+      await waitFor(() => expect(harness.callCount("notebook_peek_note")).toBe(1));
+      // Origin 自己是被 open 打开的(1 次);Target 只被 peek 过。
+      expect(harness.callCount("notebook_open_note")).toBe(1);
+    });
+
+    it("取数失败时卡片里说明加载不出来,不弹错误条", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被预览的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]]\n');
+      await openInReadMode("Origin");
+      harness.failPeek = true;
+      await hoverFirstLink();
+
+      await waitFor(() =>
+        expect(hoverCard()?.querySelector(".notebook-hover-body")?.textContent).toBe(
+          "Could not load a preview",
+        ),
+      );
+      // 看一眼失败是小事,不该占用整个面板的错误条。
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("死链不弹卡", async () => {
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[还没写]]\n');
+      await openInReadMode("Origin");
+
+      const link = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>(
+          ".notebook-markdown-preview a.notebook-wikilink",
+        );
+        if (!found) throw new Error("no wikilink yet");
+        return found;
+      });
+      expect(link.dataset.wikiPath).toBeUndefined();
+      fireEvent.mouseOver(link);
+
+      // 等过出卡延迟(380ms)才有意义 —— 提前查等于什么都没查。
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(hoverCard()).toBeNull();
+      expect(harness.callCount("notebook_peek_note")).toBe(0);
+    });
+
+    it("嵌入块的头部不弹卡", async () => {
+      // 那块内容就在头部下面摊开着,再弹一张卡挡住它没有意义。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target]]\n');
+      await openInReadMode("Origin");
+      await waitFor(() =>
+        expect(document.querySelector<HTMLElement>(".notebook-embed")?.dataset.embedState).toBe(
+          "filled",
+        ),
+      );
+
+      const head = document.querySelector<HTMLElement>(".notebook-embed-head")!;
+      expect(head.dataset.wikiPath).toBeTruthy();
+      fireEvent.mouseOver(head);
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(hoverCard()).toBeNull();
+    });
+
+    it("离开阅读态之后卡片不留在界面上", async () => {
+      // 卡片挂在 document.body 上,不摘会浮在编辑区上面。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被预览的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]]\n');
+      await openInReadMode("Origin");
+      await hoverFirstLink();
+      await waitFor(() => expect(hoverCard()?.style.display).toBe("block"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+      await waitFor(() => expect(hoverCard()).toBeNull());
+    });
+  });
+
   describe("全屏 ⇄ 半屏", () => {
     /** 宿主态由外面拿着,这里模拟 ProjectPage 那一侧。 */
     function renderWithHost(initial = false) {

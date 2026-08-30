@@ -2757,6 +2757,8 @@ export const zh: Record<string, string> = {
   "notebook.embedMissingHeading": "那篇笔记里没有标题 {heading}",
   "notebook.embedTooDeep": "{target} 的嵌入层级过深或指回了自己",
   "notebook.embedFailed": "无法嵌入 {target}:{message}",
+  "notebook.hoverPreviewLoading": "正在载入预览…",
+  "notebook.hoverPreviewFailed": "无法载入预览",
   "notebook.fieldsOpen": "frontmatter 字段",
   "notebook.fieldsTitle": "frontmatter 字段",
   "notebook.fieldsClose": "关闭字段浏览器",

@@ -2312,6 +2312,41 @@ html:not(.dark) .session-prose pre code {
   border-bottom-color: var(--warning);
   border-bottom-style: dotted;
 }
+/* wikilink 悬浮预览卡。挂在 body 上(预览区有 overflow,放里面会被裁掉半张),
+   所以选择器不带 `.md-preview` 前缀。 */
+.notebook-hover-card {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: none;
+  max-width: 420px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.notebook-hover-head {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-dim);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+/* 卡片里的内容比正文小一号:它是摘要,不该看着像另一篇正文。 */
+.notebook-hover-body {
+  font-size: 12.5px;
+}
+.notebook-hover-body > :first-child {
+  margin-top: 0;
+}
+.notebook-hover-body > :last-child {
+  margin-bottom: 0;
+}
 /* `![[note]]` 嵌入。左侧竖线 + 缩进,让"这段不是本篇写的"一眼看得出来。
 
    用 `span` 而不是 `div`(见 enhanceWikiLinks 里造占位那段的注释:嵌入可以出现在
