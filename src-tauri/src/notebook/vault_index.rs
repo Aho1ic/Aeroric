@@ -125,7 +125,11 @@ fn derive_title(source: &str, path: &Path) -> String {
 ///
 /// 与前端 `splitNote` 对齐:开了 `---` 却没闭合的不算 frontmatter(那是正文里
 /// 的一条分隔线)。
-fn split_frontmatter(source: &str) -> (&str, &str) {
+///
+/// 字段浏览器(`fields.rs`)复用这一份而不是自己再拆一次:两处对边界给出不同答案
+/// 时,同一篇笔记会在字段浏览器里有 `title`、在笔记列表里显示文件名 —— 用户看到的
+/// 是两个视图互相矛盾。
+pub(crate) fn split_frontmatter(source: &str) -> (&str, &str) {
     let Some(rest) = source.strip_prefix("---\n") else {
         return ("", source);
     };
@@ -146,21 +150,25 @@ fn read_title_field(front: &str) -> Option<String> {
         let Some(value) = line.strip_prefix("title:") else {
             continue;
         };
-        let trimmed = value.trim();
-        // 双引号标量:还原 `formatScalar` 的转义。
-        if let Some(inner) = trimmed.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-            return Some(inner.replace("\\\"", "\"").replace("\\\\", "\\"));
-        }
-        // 单引号标量:YAML 里 '' 表示一个单引号。
-        if let Some(inner) = trimmed
-            .strip_prefix('\'')
-            .and_then(|v| v.strip_suffix('\''))
-        {
-            return Some(inner.replace("''", "'"));
-        }
-        return Some(trimmed.to_string());
+        return Some(unquote_scalar(value.trim()));
     }
     None
+}
+
+/// 还原 frontmatter 标量的引号与转义。不带引号的原样返回。
+///
+/// 和 `split_frontmatter` 一样给 `fields.rs` 共用:字段浏览器里的值必须和标题栏里
+/// 那个标题长得一样,否则同一个 `title` 在两处显示成两个东西。
+pub(crate) fn unquote_scalar(value: &str) -> String {
+    // 双引号标量:还原 `formatScalar` 的转义。
+    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        return inner.replace("\\\"", "\"").replace("\\\\", "\\");
+    }
+    // 单引号标量:YAML 里 '' 表示一个单引号。
+    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        return inner.replace("''", "'");
+    }
+    value.to_string()
 }
 
 /// 正文里第一个 ATX 标题的文本。

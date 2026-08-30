@@ -2734,6 +2734,134 @@ fn vault_tags_walks_subdirectories_and_sorts_by_path() {
     std::fs::remove_dir_all(&vault).ok();
 }
 
+// ── 全库 frontmatter 字段 ───────────────────────────────────────────────────
+
+/// 扫出来的字段,按文件名后缀找那一篇,摊成 (key, values)。
+fn scanned_fields(
+    sources: &[super::fields::NoteFieldSource],
+    name: &str,
+) -> Option<Vec<(String, Vec<String>)>> {
+    sources
+        .iter()
+        .find(|source| source.path.ends_with(name))
+        .map(|source| {
+            source
+                .fields
+                .iter()
+                .map(|field| (field.key.clone(), field.values.clone()))
+                .collect()
+        })
+}
+
+#[test]
+fn vault_fields_reports_frontmatter_keys_and_values() {
+    let vault = temp_vault("fields-basic");
+    std::fs::write(
+        vault.join("a.md"),
+        "---\ntitle: 周报\nstatus: done\ntags: [x, y]\n---\n\n正文里 status: 这不算\n",
+    )
+    .expect("seed");
+
+    let sources = super::fields::scan_vault_fields(&vault).expect("scan");
+    assert_eq!(
+        scanned_fields(&sources, "a.md"),
+        Some(vec![
+            ("title".to_string(), vec!["周报".to_string()]),
+            ("status".to_string(), vec!["done".to_string()]),
+            ("tags".to_string(), vec!["x".to_string(), "y".to_string()]),
+        ])
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_fields_omits_notes_without_frontmatter() {
+    let vault = temp_vault("fields-empty");
+    std::fs::write(vault.join("bare.md"), "# 只有标题\n\n正文\n").expect("seed");
+    std::fs::write(vault.join("has.md"), "---\nk: v\n---\n").expect("seed");
+
+    let sources = super::fields::scan_vault_fields(&vault).expect("scan");
+    assert_eq!(scanned_fields(&sources, "bare.md"), None);
+    assert!(scanned_fields(&sources, "has.md").is_some());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_fields_skips_private_dirs_and_non_notes() {
+    let vault = temp_vault("fields-skip");
+    let private = vault.join(".notebook");
+    std::fs::create_dir_all(private.join("trash")).expect("mkdir");
+    // 回收站里的笔记已经删了。让它给字段计数会让"2 篇有 status"里有一篇点不开。
+    std::fs::write(private.join("trash/gone.md"), "---\nstatus: done\n---\n").expect("seed");
+    std::fs::write(vault.join("notes.txt"), "---\nstatus: done\n---\n").expect("seed");
+    std::fs::write(vault.join("real.md"), "---\nstatus: done\n---\n").expect("seed");
+
+    let sources = super::fields::scan_vault_fields(&vault).expect("scan");
+    assert_eq!(scanned_fields(&sources, "gone.md"), None);
+    assert_eq!(scanned_fields(&sources, "notes.txt"), None);
+    assert!(scanned_fields(&sources, "real.md").is_some());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_fields_walks_subdirectories_and_sorts_by_path() {
+    let vault = temp_vault("fields-sub");
+    std::fs::create_dir_all(vault.join("sub")).expect("mkdir");
+    std::fs::write(vault.join("sub/deep.md"), "---\nk: v\n---\n").expect("seed");
+    std::fs::write(vault.join("aaa.md"), "---\nk: v\n---\n").expect("seed");
+
+    let sources = super::fields::scan_vault_fields(&vault).expect("scan");
+    let paths: Vec<&str> = sources.iter().map(|s| s.path.as_str()).collect();
+    assert_eq!(paths.len(), 2);
+    // 排序保证两次扫描顺序一致,否则字段详情里那串笔记的排列会漂移。
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_eq!(paths, sorted);
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn vault_fields_agrees_with_the_title_index_about_frontmatter() {
+    // 同一篇笔记:字段浏览器读到的 `title` 必须和笔记列表显示的标题是同一个值。
+    // 两处各自解析 frontmatter 时,这一条就是会分岔的地方 —— 未闭合的 `---` 在一处
+    // 算 frontmatter、在另一处算正文分隔线,于是列表显示文件名而浏览器显示 title。
+    let vault = temp_vault("fields-agree");
+    std::fs::write(
+        vault.join("quoted.md"),
+        "---\ntitle: \"带 \\\"引号\\\" 的\"\n---\n",
+    )
+    .expect("seed");
+    std::fs::write(vault.join("unclosed.md"), "---\ntitle: 假的\n没有闭合\n").expect("seed");
+
+    let entries = super::vault_index::scan_vault_titles(&vault).expect("index");
+    let title_of = |name: &str| {
+        entries
+            .iter()
+            .find(|entry| entry.path.ends_with(name))
+            .map(|entry| entry.title.clone())
+            .expect("entry")
+    };
+    let fields = super::fields::scan_vault_fields(&vault).expect("scan");
+
+    assert_eq!(title_of("quoted.md"), "带 \"引号\" 的");
+    assert_eq!(
+        scanned_fields(&fields, "quoted.md"),
+        Some(vec![(
+            "title".to_string(),
+            vec!["带 \"引号\" 的".to_string()]
+        )])
+    );
+    // 未闭合:标题退回文件名 stem,字段浏览器也必须一个 key 都不给。
+    assert_eq!(title_of("unclosed.md"), "unclosed");
+    assert_eq!(scanned_fields(&fields, "unclosed.md"), None);
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
 // ── 跨文件 tag 重命名 ───────────────────────────────────────────────────────
 
 use super::tag_rename::{self, TagSkipReason};

@@ -66,6 +66,72 @@ function harnessTagHits(content: string): { raw: string; line: number; preview: 
   return hits;
 }
 
+/* frontmatter 字段的解析。和 `harnessTagHits` 同一个性质:真词法器只在 Rust 里
+   (`fields.rs`),前端只做聚合,所以这里写一个够用的复刻 —— 顶层 `key: value`、
+   行内 `[a, b]`、缩进的 `- item`,不摊平嵌套映射。
+
+   真正的等价性由 `fields.rs` 自己那 17 条用例守;这里只需要让面板测试拿到像样的
+   输入。刻意**不**去掉值里的行内 `#`:Rust 侧留着它,harness 砍掉的话面板测试会
+   验出一个真后端不存在的行为。 */
+function harnessFields(content: string): { key: string; values: string[] }[] {
+  if (!content.startsWith("---\n")) return [];
+  const lines = content.split("\n");
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  // 未闭合的 `---` 不算 frontmatter,和 Rust 侧一致。
+  if (end < 1) return [];
+  const order: string[] = [];
+  const map = new Map<string, string[]>();
+  let current: string | null = null;
+  const unquote = (value: string): string => {
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      return value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+    if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
+      return value.slice(1, -1).replace(/''/g, "'");
+    }
+    return value;
+  };
+  const push = (key: string, value: string): void => {
+    const values = map.get(key);
+    if (!values || !value || values.includes(value)) return;
+    values.push(value);
+  };
+  for (let index = 1; index < end; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    const indented = /^[ \t]/.test(line);
+    const trimmed = line.trim();
+    if (indented || trimmed.startsWith("- ") || trimmed === "-") {
+      if (trimmed.startsWith("-") && current) {
+        const item = trimmed.slice(1).trim();
+        if (item) push(current, unquote(item));
+      }
+      continue;
+    }
+    if (trimmed.startsWith("#")) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon < 0) continue;
+    const key = trimmed.slice(0, colon).trim();
+    if (!key || key.startsWith("-") || key.startsWith("#") || /\s/.test(key)) continue;
+    if (!map.has(key)) {
+      order.push(key);
+      map.set(key, []);
+    }
+    const value = trimmed.slice(colon + 1).trim();
+    const inline = value.startsWith("[") && value.endsWith("]");
+    if (inline) {
+      for (const item of value.slice(1, -1).split(",")) {
+        const text = item.trim();
+        if (text) push(key, unquote(text));
+      }
+    } else if (value) {
+      push(key, unquote(value));
+    }
+    current = key;
+  }
+  return order.map((key) => ({ key, values: map.get(key) ?? [] }));
+}
+
 export class NotebookVaultHarness {
   private files = new Map<string, HarnessFile>();
   /**
@@ -121,6 +187,10 @@ export class NotebookVaultHarness {
   failTagScan = false;
   /** 全库标签扫描被调用了几次。验"只在标签那一档可见时扫"用。 */
   tagScanCalls = 0;
+  /** 让全库字段扫描失败,用来验字段浏览器的错误态。 */
+  failFieldScan = false;
+  /** 全库字段扫描被调用了几次。验"只在 sheet 开着时扫"用。 */
+  fieldScanCalls = 0;
   /**
    * 挂起中的 `notebook_vault_tags`,按调用顺序排。`holdTagScans()` 之后每次扫描都
    * 停在这里,要测试手工放行。
@@ -349,6 +419,18 @@ export class NotebookVaultHarness {
         return new Promise((resolve) => {
           held.push(() => resolve(sources));
         });
+      }
+
+      case "notebook_vault_fields": {
+        this.fieldScanCalls += 1;
+        if (this.failFieldScan) throw new Error("scanning fields failed");
+        const sources: { path: string; fields: { key: string; values: string[] }[] }[] = [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          const fields = harnessFields(this.files.get(path)?.content ?? "");
+          // 没有字段的笔记不进结果,和 Rust 侧一致。
+          if (fields.length) sources.push({ path, fields });
+        }
+        return sources;
       }
 
       case "notebook_rename_tag": {

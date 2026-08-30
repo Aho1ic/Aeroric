@@ -10,6 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { NoteLinkSource } from "./noteBacklinks";
+import type { NoteFieldSource } from "./noteFields";
 import type { NoteTagSource } from "./noteTags";
 
 /** 文件指纹。`hash` 是字符串:u64 超出 JS 安全整数范围,走 number 会丢精度。 */
@@ -403,6 +404,17 @@ export function vaultLinks(vault: string): Promise<NoteLinkSource[]> {
  */
 export function vaultTags(vault: string): Promise<NoteTagSource[]> {
   return invoke<NoteTagSource[]>("notebook_vault_tags", { vault });
+}
+
+/**
+ * 扫全库的 frontmatter 字段,给字段浏览器用。
+ *
+ * 只做词法提取:聚合(折 key 大小写、数篇数、按值分组)在 `noteFields.ts`。
+ * frontmatter 的边界与标题索引共用同一份解析(Rust 侧 `split_frontmatter`),否则
+ * 同一篇笔记会在字段浏览器里有 `title`、在笔记列表里显示文件名。
+ */
+export function vaultFields(vault: string): Promise<NoteFieldSource[]> {
+  return invoke<NoteFieldSource[]>("notebook_vault_fields", { vault });
 }
 
 /** 一篇被改过的笔记,`count` 是这篇里改掉的处数。 */

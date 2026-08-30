@@ -3541,4 +3541,253 @@ describe("NotebookPanel", () => {
       });
     });
   });
+
+  describe("frontmatter 字段浏览器", () => {
+    /** 打开字段浏览器,等它把扫描结果拉回来。 */
+    async function openFields() {
+      fireEvent.click(await screen.findByRole("button", { name: "Frontmatter fields" }));
+      return screen.findByRole("dialog", { name: "Frontmatter fields" });
+    }
+
+    /** 左列里的 key 行(带篇数的那些按钮)。 */
+    function keyRows(): string[] {
+      const sheet = screen.getByRole("dialog", { name: "Frontmatter fields" });
+      return [...sheet.querySelectorAll("button[aria-pressed]")].map(
+        (button) => button.textContent ?? "",
+      );
+    }
+
+    /** 右列里的取值行。 */
+    function valueRows(): string[] {
+      return [
+        ...screen.getByTestId("note-fields-values").querySelectorAll("button[aria-expanded]"),
+      ].map((button) => button.textContent ?? "");
+    }
+
+    it("列出全库的 key,带篇数,按篇数降序", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n\n正文\n');
+      harness.seed("b.md", '---\ntitle: "B"\nstatus: todo\n---\n\n正文\n');
+      renderNotebook();
+      await openFields();
+
+      // `title` 和 `status` 各两篇,同数按 key 字典序 —— 两个数不一样才看得出有没有
+      // 把篇数和取值数搞混。
+      await waitFor(() => expect(keyRows()).toEqual(["status2", "title2"]));
+    });
+
+    it("选一个 key 才显示取值,取值带命中篇数", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      harness.seed("b.md", '---\ntitle: "B"\nstatus: done\n---\n');
+      harness.seed("c.md", '---\ntitle: "C"\nstatus: todo\n---\n');
+      renderNotebook();
+      const sheet = await openFields();
+
+      // 没选之前右列是提示,不是空白 —— 空白看起来像扫完了确实没有。
+      expect(sheet).toHaveTextContent("Pick a field to see its values");
+      expect(valueRows()).toEqual([]);
+
+      fireEvent.click(await screen.findByRole("button", { name: /^status/ }));
+
+      // `done` 两篇在前,`todo` 一篇在后。
+      await waitFor(() => expect(valueRows()).toEqual(["done2 notes", "todo1 notes"]));
+      expect(sheet).toHaveTextContent("Values of status");
+    });
+
+    it("点开一个取值列出命中的笔记,再点收起", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\nstatus: done\n---\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\nstatus: done\n---\n');
+      renderNotebook();
+      await openFields();
+      fireEvent.click(await screen.findByRole("button", { name: /^status/ }));
+
+      const row = await screen.findByRole("button", { name: /^done/ });
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(row);
+
+      // 显示的是 frontmatter 里的真标题,不是文件名 —— 改过标题的笔记显示文件名会
+      // 让人以为跳错了地方。
+      const values = screen.getByTestId("note-fields-values");
+      await waitFor(() => expect(values).toHaveTextContent("Alpha"));
+      expect(values).toHaveTextContent("Beta");
+      expect(screen.getByRole("button", { name: /^done/ }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /^done/ }));
+      await waitFor(() => expect(values).not.toHaveTextContent("Beta"));
+    });
+
+    it("点一篇笔记跳过去并把 sheet 收掉", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\nstatus: done\n---\n\nalpha 正文\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\nstatus: done\n---\n\nbeta 正文\n');
+      renderNotebook();
+      /* 等编辑器把第一条读进来,并且断言它现在**不是**目标那条 —— 少了这一句的话
+         "跳过去了"和"本来就在那条上"长得一模一样。等笔记列表那个按钮不行:未读入
+         的行显示文件名 stem,不是 frontmatter 里的标题。 */
+      const editor = await screen.findByRole("textbox", { name: "Quick note content" });
+      // 最后 seed 的那条是当前笔记,所以要跳的是另一条。
+      await waitFor(() => expect(editor).toHaveTextContent("beta 正文"));
+
+      await openFields();
+      fireEvent.click(await screen.findByRole("button", { name: /^status/ }));
+      fireEvent.click(await screen.findByRole("button", { name: /^done/ }));
+
+      const values = screen.getByTestId("note-fields-values");
+      await waitFor(() => expect(values).toHaveTextContent("Alpha"));
+      fireEvent.click(
+        [...values.querySelectorAll("button")].find(
+          (button) => button.textContent === "Alpha",
+        ) as HTMLElement,
+      );
+
+      // sheet 铺满面板,留着的话点了笔记什么都看不见。
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull(),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note content" })).toHaveTextContent(
+          "alpha 正文",
+        ),
+      );
+    });
+
+    it("换 key 时收起已展开的取值", async () => {
+      // 两个 key 都有 `done` 这个取值。不收起的话换过去会显示成已展开,而那不是
+      // 用户点开的。
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\nphase: done\n---\n');
+      renderNotebook();
+      await openFields();
+      fireEvent.click(await screen.findByRole("button", { name: /^status/ }));
+      fireEvent.click(await screen.findByRole("button", { name: /^done/ }));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^done/ }).getAttribute("aria-expanded")).toBe(
+          "true",
+        ),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /^phase/ }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^done/ }).getAttribute("aria-expanded")).toBe(
+          "false",
+        ),
+      );
+    });
+
+    it("有 key 没值的笔记单独一行,点开能看见是哪几篇", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\nstatus:\n---\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\nstatus: done\n---\n');
+      renderNotebook();
+      await openFields();
+      fireEvent.click(await screen.findByRole("button", { name: /^status/ }));
+
+      // "没有值"是单独一行,不是一个空串取值。
+      await waitFor(() => expect(valueRows()).toEqual(["done1 notes", "(no value)1 notes"]));
+      fireEvent.click(screen.getByRole("button", { name: /no value/ }));
+      await waitFor(() =>
+        expect(screen.getByTestId("note-fields-values")).toHaveTextContent("Alpha"),
+      );
+    });
+
+    it("筛选按 key 匹配,大小写无关", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nStatus: done\nowner: 我\n---\n');
+      renderNotebook();
+      await openFields();
+      await waitFor(() => expect(keyRows()).toHaveLength(3));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter fields" }), {
+        target: { value: "STAT" },
+      });
+
+      await waitFor(() => expect(keyRows()).toEqual(["Status1"]));
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter fields" }), {
+        target: { value: "zzz" },
+      });
+      await waitFor(() =>
+        expect(screen.getByRole("dialog", { name: "Frontmatter fields" })).toHaveTextContent(
+          "No field matches that",
+        ),
+      );
+    });
+
+    it("扫描失败就地报错,不显示成空库", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      harness.failFieldScan = true;
+      renderNotebook();
+      const sheet = await openFields();
+
+      await waitFor(() => expect(sheet).toHaveTextContent("scanning fields failed"));
+      // "没有字段"和"扫不动"是两回事 —— 报成空库会让人以为库里真的没有 frontmatter。
+      expect(sheet).not.toHaveTextContent("No frontmatter fields in this vault yet");
+    });
+
+    it("没有 frontmatter 的库显示空态", async () => {
+      harness.seed("a.md", "# 只有标题\n\n正文\n");
+      renderNotebook();
+      const sheet = await openFields();
+
+      await waitFor(() =>
+        expect(sheet).toHaveTextContent("No frontmatter fields in this vault yet"),
+      );
+    });
+
+    it("只在 sheet 开着时扫全库", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "A" });
+
+      // 扫描要读每个文件的全文,是面板里最贵的一次 IO。没打开就不该扫。
+      expect(harness.fieldScanCalls).toBe(0);
+      await openFields();
+      await waitFor(() => expect(harness.fieldScanCalls).toBe(1));
+    });
+
+    it("打开时把焦点挪进来", async () => {
+      /* 不挪的话焦点还在编辑器上,那个 onKeyDown 收不到 Esc —— 事件在编辑器那棵子树
+         里冒泡,根本不经过 sheet 这个 div。下面那条 Esc 用例测不出这件事:
+         `fireEvent.keyDown(sheet)` 是直接派发到元素上的,不看焦点在哪。 */
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      renderNotebook();
+      await openFields();
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close fields" })),
+      );
+    });
+
+    it("Esc 关掉 sheet", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      renderNotebook();
+      const sheet = await openFields();
+
+      fireEvent.keyDown(sheet, { key: "Escape" });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull(),
+      );
+    });
+
+    it("铺在面板内部而不是整个窗口", async () => {
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      renderNotebook();
+      const sheet = await openFields();
+
+      const panel = screen.getByRole("region", { name: "Quick Notes" });
+      expect(sheet.parentElement).toBe(panel);
+      expect(sheet.style.position).toBe("absolute");
+    });
+
+    it("打开回收站会把字段浏览器收掉", async () => {
+      // 四个 overlay 同 z-index,字段浏览器在 JSX 里排在回收站后面 —— 不收掉的话
+      // 用户点"回收站"看见的还是字段浏览器。
+      harness.seed("a.md", '---\ntitle: "A"\nstatus: done\n---\n');
+      renderNotebook();
+      await openFields();
+
+      fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+      await screen.findByRole("dialog", { name: "Trash" });
+      expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull();
+    });
+  });
 });

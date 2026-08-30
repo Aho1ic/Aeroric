@@ -20,6 +20,7 @@
 //! 漏注册由 `command_registration_tests` 守卫。
 
 pub mod attachments;
+pub mod fields;
 pub mod fs_ops;
 pub mod html2md;
 pub mod links;
@@ -507,6 +508,19 @@ pub async fn notebook_vault_tags(
 ) -> Result<Vec<tags::NoteTagSource>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || tags::scan_vault_tags(&resolved)).await
+}
+
+/// 扫全库的 frontmatter 字段,每篇一条(key + 该篇里的值)。
+///
+/// 和 `notebook_vault_tags` 同一个分工:聚合(全库有哪些 key、某个值命中哪几篇)在
+/// 前端做。frontmatter 的边界与标题索引共用一份解析,见 `fields.rs` 的模块注释。
+#[tauri::command]
+pub async fn notebook_vault_fields(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<fields::NoteFieldSource>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || fields::scan_vault_fields(&resolved)).await
 }
 
 /// 跨文件把 `#old` 改成 `#new`,返回 changed / skipped / failed 的完整报告。

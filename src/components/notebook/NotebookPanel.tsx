@@ -46,6 +46,7 @@ import {
   type TagRenameReport,
   vaultIndex,
   vaultLinks,
+  vaultFields,
   vaultTags,
   writeNoteIcons,
 } from "./notebookApi";
@@ -54,6 +55,8 @@ import { NoteIconPicker, type NoteIconPickerState } from "./NoteIconPicker";
 import { noteIconOf, withNoteIcon, type NoteIconName } from "./noteIcons";
 import { bodyOffsetOfFileLine, collectBacklinks, countBacklinks } from "./noteBacklinks";
 import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
+import { collectFields } from "./noteFields";
+import { NoteFieldsSheet } from "./NoteFieldsSheet";
 import { collectTags, countTagRefs, filterTags, tagsInNote } from "./noteTags";
 import { NoteTagsPanel } from "./NoteTagsPanel";
 import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
@@ -220,6 +223,8 @@ function NotebookPanelContent({
   const [trash, setTrash] = useState<NoteTrashState | null>(null);
   /** 属性面板。`null` = 没开。和上面两个一样是铺满面板的 overlay。 */
   const [properties, setProperties] = useState<NotePropertiesState | null>(null);
+  /** 字段浏览器。同样是铺满面板的 overlay,和上面三个互斥。 */
+  const [fieldsOpen, setFieldsOpen] = useState(false);
   /**
    * 编辑器的代数。回滚时 +1,把 CodeMirror 整个重建。
    *
@@ -424,6 +429,10 @@ function NotebookPanelContent({
     errorText,
   );
   const tagScan = useVaultScan(vault, outlineOpen && sideTab === "tags", vaultTags, errorText);
+  /* 字段浏览器的取数。`enabled` 是"sheet 开着"而不是某一档可见 —— 它不在侧栏里
+     (三档已经占满那 190px,见 `NoteFieldsSheet` 的模块注释)。关掉不清结果,和
+     侧栏两档一致:再打开时不该又等一遍。 */
+  const fieldScan = useVaultScan(vault, fieldsOpen, vaultFields, errorText);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -737,6 +746,17 @@ function NotebookPanelContent({
     [indexedTitles, tagScan.data],
   );
   const tagRefCount = countTagRefs(tagEntries);
+
+  /* 全库 frontmatter 字段。标题口径和标签档共用同一条 —— 两处不一致的话同一篇笔记
+     在字段浏览器里显示文件名、在标签档里显示真标题。 */
+  const fieldEntries = useMemo(
+    () =>
+      collectFields(
+        fieldScan.data,
+        (path) => indexedTitles.get(path) ?? path.replace(/^.*[/\\]/, "").replace(/\.md$/i, ""),
+      ),
+    [fieldScan.data, indexedTitles],
+  );
   const visibleTags = useMemo(() => filterTags(tagEntries, tagQuery), [tagEntries, tagQuery]);
 
   /* 反链行号 → 编辑器正文里的偏移。
@@ -866,6 +886,10 @@ function NotebookPanelContent({
    * 时间戳,而且它不带字节数。
    */
   const openProperties = (noteId: string) => {
+    // 字段浏览器一起关掉。这一个不是为了绘制顺序(属性面板在 JSX 里排在它后面,
+    // 会盖住它),而是别让两个 aria-modal 的 dialog 同时挂在树上 —— 屏幕阅读器会
+    // 同时报两个,而底下那个还留着自己的选中状态。
+    setFieldsOpen(false);
     setProperties(freshPropertiesState(noteId));
     void (async () => {
       try {
@@ -913,6 +937,9 @@ function NotebookPanelContent({
 
   /** 打开版本历史,并把快照列表拉回来。 */
   const openHistory = (noteId: string) => {
+    // 字段浏览器在 JSX 里排在历史面板后面,不关掉的话它会继续盖在上面 —— 用户点
+    // "历史"却看见字段浏览器。
+    setFieldsOpen(false);
     setHistoryNoteId(noteId);
     setHistory(freshHistoryState());
     void (async () => {
@@ -1006,12 +1033,25 @@ function NotebookPanelContent({
     setHistoryNoteId(null);
   };
 
+  /** 打开字段浏览器。数据由 `fieldScan` 按 `fieldsOpen` 自己去取。 */
+  const openFields = () => {
+    if (!vault) return;
+    // 另外三个 overlay 一起关掉:属性面板排在字段浏览器后面(会盖住它),历史和
+    // 回收站排在前面(会留在底下继续接键盘事件)。
+    closeHistory();
+    setTrash(null);
+    setProperties(null);
+    setFieldsOpen(true);
+  };
+
   /** 打开回收站并拉列表。 */
   const openTrash = () => {
     if (!vault) return;
     // 历史面板一起关掉:两个都是铺满面板的 overlay,叠在一起的话下面那个还在
     // 接键盘事件(Esc 会一次关掉两个),而用户只看得见上面那个。
     closeHistory();
+    // 理由同 `openHistory`:字段浏览器排在回收站后面,会盖住它。
+    setFieldsOpen(false);
     setTrash(freshTrashState());
     void (async () => {
       try {
@@ -1538,6 +1578,7 @@ function NotebookPanelContent({
           onSelect={setActiveId}
           onCreate={addNote}
           onOpenTrash={openTrash}
+          onOpenFields={openFields}
           onNoteContextMenu={(event, noteId) => {
             event.preventDefault();
             // 编辑区的菜单同时开着就没意义了,互斥。
@@ -1875,6 +1916,23 @@ function NotebookPanelContent({
           onPurge={purgeFromTrash}
           onPurgeAll={purgeAllFromTrash}
           onClose={() => setTrash(null)}
+          t={t}
+        />
+      )}
+      {/* 字段浏览器也铺在两列外面。四个 overlay 同 z-index,互斥靠各自的 open
+          函数保证(见 `openFields`)—— 光靠 JSX 顺序只能决定谁盖住谁。 */}
+      {fieldsOpen && (
+        <NoteFieldsSheet
+          entries={fieldEntries}
+          loading={fieldScan.loading}
+          error={fieldScan.error}
+          onOpenNote={(path) => {
+            setActiveId(path);
+            // 跳过去就把 sheet 收掉:它铺满面板,留着的话用户点了一篇笔记却什么都
+            // 没看见。
+            setFieldsOpen(false);
+          }}
+          onClose={() => setFieldsOpen(false)}
           t={t}
         />
       )}
