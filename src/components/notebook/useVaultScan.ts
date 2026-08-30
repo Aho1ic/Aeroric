@@ -10,9 +10,13 @@
  *
  * 抽成 hook 而不是在面板里写两遍:这三条里任何一条在两档之间漂移,表现都是"其中
  * 一档偶尔看起来是空的",而这种偏差没人会往取数逻辑上想。
+ *
+ * 第三条对**未链接提及**那一档不成立:它的扫描参数里就有当前笔记的名字,换笔记之后
+ * 上一次的结果讲的是另一篇。那一档靠 `resetKey` 声明这件事,见它的文档注释 ——
+ * 与其复制一份"几乎一样但有一处不同"的取数,不如把那一处差异写成参数。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type VaultScan<T> = {
   data: T[];
@@ -31,19 +35,33 @@ export type VaultScan<T> = {
  *
  * `scan` 由调用方用 `useCallback` 稳住(或者是模块级函数):它进依赖,每次渲染换
  * 一个新函数会变成扫描不停。
+ *
+ * `resetKey` 变了就把已有结果**清空**(而不只是重扫)。给"结果只对某个上下文成立"的
+ * 那种扫描用 —— 未链接提及的扫描参数里有当前笔记的名字,换笔记之后旧结果讲的是另一
+ * 篇,留着它会在新笔记的标题下面显示上一篇的提及,那比空列表糟得多。不传就是全库
+ * 视图的语义(反链 / 标签 / 字段 / 任务),行为和以前一字不差。
  */
 export function useVaultScan<T>(
   vault: string | null,
   enabled: boolean,
   scan: (vault: string) => Promise<T[]>,
   errorText: (error: unknown) => string,
+  resetKey?: string | null,
 ): VaultScan<T> {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState(0);
+  const lastKey = useRef(resetKey);
 
   useEffect(() => {
+    /* 清空要在**发请求之前**做,而且不受 `enabled` 影响:这一档关着的时候换了笔记,
+       下次打开时不该先看到上一篇的结果闪一下。 */
+    if (lastKey.current !== resetKey) {
+      lastKey.current = resetKey;
+      setData([]);
+      setError(null);
+    }
     if (!vault || !enabled) return;
     let cancelled = false;
     setLoading(true);
@@ -63,7 +81,7 @@ export function useVaultScan<T>(
     return () => {
       cancelled = true;
     };
-  }, [enabled, errorText, scan, token, vault]);
+  }, [enabled, errorText, resetKey, scan, token, vault]);
 
   const refresh = useCallback(() => setToken((current) => current + 1), []);
   return { data, loading, error, refresh };

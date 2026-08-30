@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { useI18n } from "../../i18n";
 import { confirm } from "../../lib/appDialog";
@@ -37,6 +37,7 @@ import {
   purgeAllTrash,
   purgeTrashItem,
   readNoteSnapshot,
+  linkVaultMentions,
   restoreNoteSnapshot,
   restoreTrashItem,
   revealNoteInFileManager,
@@ -48,6 +49,7 @@ import {
   vaultIndex,
   vaultLinks,
   vaultFields,
+  vaultMentions,
   vaultTags,
   vaultTasks,
   writeNoteIcons,
@@ -83,6 +85,17 @@ import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
 import { buildLinkIndex, linkTitleOf, normalizeLinkTarget } from "./noteLinks";
+import {
+  collectMentions,
+  confidentTargets,
+  countConfident,
+  countMentions,
+  mentionNamesOf,
+  targetOf,
+  type MentionLinkReport,
+  type MentionSource,
+} from "./noteMentions";
+import { NoteMentionsPanel } from "./NoteMentionsPanel";
 import { enhanceTaskCheckboxes, taskToggleFromEvent } from "./enhanceTaskCheckboxes";
 import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
 import { attachWikiLinkHover } from "./hoverPreview";
@@ -466,6 +479,42 @@ function NotebookPanelContent({
   const fieldScan = useVaultScan(vault, fieldsOpen, vaultFields, errorText);
   /* 任务收集箱的取数。理由同字段浏览器 —— 它也是 sheet,不占侧栏那一列。 */
   const taskScan = useVaultScan(vault, taskInboxOpen, vaultTasks, errorText);
+
+  /* 未链接提及的取数。和上面几档有两处不同,都来自"它的结果只对当前这一篇成立":
+     - `scan` 是闭在当前笔记名字上的闭包,所以换笔记 / 改标题会自然重扫。
+     - 传 `resetKey`,让换笔记时**清空**而不只是重扫 —— 否则新笔记的标题下面会先显示
+       上一篇的提及,而那些条目点下去会改错地方的正文。 */
+  const mentionNames = useMemo(
+    () =>
+      activeNote
+        ? mentionNamesOf({ path: activeNote.id, title: activeNote.title }, indexedTitles)
+        : [],
+    [activeNote, indexedTitles],
+  );
+  const mentionNamesKey = mentionNames.join("\u0000");
+  const scanMentions = useCallback(
+    (target: string): Promise<MentionSource[]> =>
+      activeNote && mentionNames.length
+        ? vaultMentions(target, activeNote.id, mentionNames)
+        : Promise.resolve([]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按名字的内容而不是数组身份,免得每次渲染都重扫
+    [activeNote?.id, mentionNamesKey],
+  );
+  const mentionScan = useVaultScan(
+    vault,
+    outlineOpen && sideTab === "backlinks",
+    scanMentions,
+    errorText,
+    activeNote?.id ?? null,
+  );
+  /* 正在写盘。批量链接会改很多篇别人的笔记,期间不能再点(重复提交会让第二次的每一处
+     都报 `alreadyLinked`),也不该重扫(扫到的是改了一半的状态)。 */
+  const [mentionLinking, setMentionLinking] = useState(false);
+  /* 上一次链接的结果。留在界面上而不是弹一下就没 —— 它是"改了几处、跳过几处、几篇没成"
+     的那张账,而这次操作动的是用户看不见的那些文件。 */
+  const [mentionReport, setMentionReport] = useState<MentionLinkReport | null>(null);
+  /* 整次请求失败(vault 读不动、路径越界)。单篇失败在 report.failed 里,不走这里。 */
+  const [mentionLinkError, setMentionLinkError] = useState<string | null>(null);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -901,6 +950,19 @@ function NotebookPanelContent({
   );
   const backlinkCount = countBacklinks(backlinkGroups);
 
+  /* 未链接的提及。标题口径和标签档、字段浏览器、任务收集箱共用同一条 —— 几处不一致的话
+     同一篇笔记在一个视图里显示文件名、在另一个里显示真标题。 */
+  const mentionGroups = useMemo(
+    () =>
+      collectMentions(
+        mentionScan.data,
+        (path) => indexedTitles.get(path) ?? path.replace(/^.*[/\\]/, "").replace(/\.md$/i, ""),
+      ),
+    [indexedTitles, mentionScan.data],
+  );
+  const mentionCount = countMentions(mentionGroups);
+  const mentionConfidentCount = countConfident(mentionGroups);
+
   /* 全库标签。和反链不同,标签不按当前笔记筛 —— 标签档是"全库有哪些标签",
      那正是它和大纲、反链的分工:另外两档都只讲当前这一篇。
 
@@ -1028,6 +1090,48 @@ function NotebookPanelContent({
       setTagRenameError(errorText(error));
     } finally {
       setTagRenameRunning(false);
+    }
+  };
+
+  /**
+   * 把若干处提及包成 `[[..]]`。
+   *
+   * 这是随手记里唯一一处**批量改别人文件**的操作,所以三件收尾都不能省:
+   *
+   * - **重扫提及**:改过的那几处已经是链接了,留在列表里点第二次只会报 `alreadyLinked`。
+   * - **重扫链接**:刚写进去的是真链接,反链档和图谱读的是同一份 `linkScan`。
+   * - **让改过的、已读入内存的笔记重新读盘**:它们在内存里的正文还是旧的。不重读的话
+   *   用户切到那个 tab 看到的是没有链接的旧正文,而下一次自动保存会拿旧基线去比 ——
+   *   后端会报冲突(不会静默覆盖,见 `save_note`),但用户看到的是一次莫名的冲突提示。
+   *   正在保存 / 待保存的跳过:那些有用户还没落盘的编辑,清掉 `loaded` 会把它们丢掉。
+   */
+  const linkMentions = async (targets: ReturnType<typeof confidentTargets>) => {
+    if (!vault || !targets.length || mentionLinking) return;
+    setMentionLinking(true);
+    setMentionReport(null);
+    setMentionLinkError(null);
+    try {
+      const report = await linkVaultMentions(vault, targets);
+      setMentionReport(report);
+      const rewritten = new Set(report.changed.map((change) => change.path));
+      if (rewritten.size) {
+        setNotes((current) =>
+          current.map((note) => {
+            if (!rewritten.has(note.id) || !note.loaded) return note;
+            const state = saveStates[note.id];
+            if (state === "pending" || state === "saving") return note;
+            /* `sig` 一起清掉:留着旧指纹会让下一次保存拿它当基线,而那个基线已经
+               不是盘上的了。清掉之后按需读入那一路会重新登记。 */
+            return { ...note, loaded: false, body: "", sig: null };
+          }),
+        );
+      }
+      mentionScan.refresh();
+      linkScan.refresh();
+    } catch (error) {
+      setMentionLinkError(errorText(error));
+    } finally {
+      setMentionLinking(false);
     }
   };
 
@@ -2087,15 +2191,45 @@ function NotebookPanelContent({
                       t={t}
                     />
                   ) : sideTab === "backlinks" ? (
-                    <NoteBacklinksPanel
-                      groups={backlinkGroups}
-                      count={backlinkCount}
-                      loading={linkScan.loading}
-                      error={linkScan.error}
-                      onJump={jumpToBacklink}
-                      onRefresh={linkScan.refresh}
-                      t={t}
-                    />
+                    /* 已链接在上、未链接在下:两者是同一个问题的两面("谁在说我"),
+                       而"已经链好的"是既成事实、"还没链的"是待办 —— 待办放在下面,
+                       翻到底就是可以动手的那一段。
+                       两块各自可滚(各有 `overflow: auto`),所以提及很多时不会把反链
+                       整个顶出视口。 */
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      <NoteBacklinksPanel
+                        groups={backlinkGroups}
+                        count={backlinkCount}
+                        loading={linkScan.loading}
+                        error={linkScan.error}
+                        onJump={jumpToBacklink}
+                        onRefresh={linkScan.refresh}
+                        t={t}
+                      />
+                      <NoteMentionsPanel
+                        groups={mentionGroups}
+                        count={mentionCount}
+                        confidentCount={mentionConfidentCount}
+                        loading={mentionScan.loading}
+                        linking={mentionLinking}
+                        /* 扫描失败和整次链接失败共用这一条:两者都是"这一档现在给不出
+                           结果",而分两条错误条会在同一个 190px 里堆两块红。 */
+                        error={mentionScan.error ?? mentionLinkError}
+                        report={mentionReport}
+                        onJump={jumpToBacklink}
+                        onLink={(path, hit) => void linkMentions([targetOf(path, hit)])}
+                        onLinkAll={() => void linkMentions(confidentTargets(mentionGroups))}
+                        onRefresh={mentionScan.refresh}
+                        t={t}
+                      />
+                    </div>
                   ) : (
                     <NoteTagsPanel
                       entries={visibleTags}

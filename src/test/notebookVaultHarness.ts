@@ -98,6 +98,134 @@ function harnessTasks(content: string): { line: number; checked: boolean; text: 
   return out;
 }
 
+/** harness 里的一处未链接提及。字段和 Rust 侧 `MentionHit` 一致。 */
+type HarnessMention = {
+  needle: string;
+  text: string;
+  line: number;
+  start: number;
+  end: number;
+  preview: string;
+  confidence: "confident" | "ambiguous";
+};
+
+/* 未链接提及的扫描。和 `harnessTagHits` 同一个性质:真词法器在 Rust
+   (`mentions.rs`),所以这里写一个够用的复刻 —— 跳 frontmatter / 围栏 / 行内代码 /
+   已有 `[[链接]]` / ATX 标题,ASCII 词边界拦掉子串,中日韩邻字判 ambiguous。
+
+   偏移按**字节**算,和 Rust 侧一个坐标系:面板测试要验的正是"传下去的区间"和"报告里
+   的处数",而处数只有在偏移口径一致时才对得上。真正的等价性由 `mentions.rs` 自己那
+   30 条用例守。 */
+function harnessMentions(content: string, names: readonly string[]): HarnessMention[] {
+  const lines = content.split("\n");
+  let startLine = 0;
+  if (lines[0]?.trim() === "---") {
+    const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (end > 0) startLine = end + 1;
+  }
+  const out: HarnessMention[] = [];
+  let fenced = false;
+  // 每行的起始字节偏移(含行尾的 `\n`),和 Rust 侧 `line_spans` 一致。
+  let base = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index];
+    const line = raw.replace(/\r$/, "");
+    const lineBase = base;
+    base += byteLength(raw) + 1;
+    if (index < startLine) continue;
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    // ATX 标题整行跳过,和 Rust 侧一致。
+    if (/^\s*#{1,6}(\s|$)/.test(line)) continue;
+    /* 不算提及的区间整段抹成空格:行内代码、已有 wikilink、markdown 链接、裸 URL。
+       抹成等长空格而不是删掉,这样后面的偏移不用再换算。 */
+    const bare = line
+      .replace(/`[^`]*`/g, (span) => " ".repeat(span.length))
+      .replace(/!?\[\[[^\]\n]*\]\]/g, (span) => " ".repeat(span.length))
+      .replace(/!?\[[^\]\n]*\]\([^)\n]*\)/g, (span) => " ".repeat(span.length))
+      .replace(/https?:\/\/\S+/g, (span) => " ".repeat(span.length));
+    const taken: [number, number][] = [];
+    for (const name of names) {
+      if (!name) continue;
+      const lower = bare.toLowerCase();
+      const needle = name.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const at = lower.indexOf(needle, from);
+        if (at < 0) break;
+        const to = at + needle.length;
+        from = to;
+        const before = at > 0 ? line[at - 1] : "";
+        const after = to < line.length ? line[to] : "";
+        const edge = (outer: string, inner: string): "clean" | "ambiguous" | "blocked" => {
+          if (!outer || !/[\p{L}\p{N}_]/u.test(outer)) return "clean";
+          const cjk = /[぀-ヿ㐀-䶿一-鿿가-힯]/;
+          return cjk.test(outer) || cjk.test(inner) ? "ambiguous" : "blocked";
+        };
+        const left = edge(before, line[at] ?? "");
+        const right = edge(after, line[to - 1] ?? "");
+        if (left === "blocked" || right === "blocked") continue;
+        // 同一处被两个候选命中只留一条,和 Rust 侧一致。
+        if (taken.some(([kept, keptEnd]) => at < keptEnd && to > kept)) continue;
+        taken.push([at, to]);
+        out.push({
+          needle: name,
+          text: line.slice(at, to),
+          line: index + 1,
+          start: lineBase + byteLength(line.slice(0, at)),
+          end: lineBase + byteLength(line.slice(0, to)),
+          preview: line.trim(),
+          confidence: left === "clean" && right === "clean" ? "confident" : "ambiguous",
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => a.line - b.line || a.start - b.start);
+}
+
+/** UTF-8 字节长度。Rust 侧的偏移是字节,JS 的字符串下标是 UTF-16 code unit。 */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** 按**字节**区间切一段出来。对不上(切在字符中间)返回 null。 */
+function sliceByBytes(content: string, start: number, end: number): string | null {
+  const bytes = new TextEncoder().encode(content);
+  if (start >= end || end > bytes.length) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(start, end));
+  } catch {
+    return null;
+  }
+}
+
+/** 按**字节**区间替换。 */
+function replaceByBytes(content: string, start: number, end: number, insert: string): string {
+  const bytes = new TextEncoder().encode(content);
+  const decode = (slice: Uint8Array) => new TextDecoder().decode(slice);
+  return decode(bytes.slice(0, start)) + insert + decode(bytes.slice(end));
+}
+
+/** 这个字节区间是不是落在某条已有 wikilink 里。 */
+function harnessAlreadyLinked(content: string, start: number, end: number): boolean {
+  const bytes = new TextEncoder().encode(content);
+  const before = new TextDecoder().decode(bytes.slice(0, start));
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const after = new TextDecoder().decode(bytes.slice(end));
+  const lineEnd = after.indexOf("\n");
+  const line = before.slice(lineStart) + (lineEnd < 0 ? after : after.slice(0, lineEnd));
+  const from = before.length - lineStart;
+  const to = from + (sliceByBytes(content, start, end)?.length ?? 0);
+  for (const match of line.matchAll(/!?\[\[[^\]\n]*\]\]/g)) {
+    const at = match.index ?? 0;
+    if (from < at + match[0].length && to > at) return true;
+  }
+  return false;
+}
+
 /* frontmatter 字段的解析。和 `harnessTagHits` 同一个性质:真词法器只在 Rust 里
    (`fields.rs`),前端只做聚合,所以这里写一个够用的复刻 —— 顶层 `key: value`、
    行内 `[a, b]`、缩进的 `- item`,不摊平嵌套映射。
@@ -252,6 +380,18 @@ export class NotebookVaultHarness {
    * 触发,而报告里那一段(哪些没成功)恰恰是最该有人看的一段。
    */
   tagRenameFailures: { path: string; message: string }[] = [];
+  /** 全库提及扫描被调用了几次。验"只在反链档可见时扫""换笔记会重扫"用。 */
+  mentionScanCalls = 0;
+  /** 每次提及扫描传下去的候选名字。验"标题和 stem 都在里面"用。 */
+  mentionScanNames: string[][] = [];
+  /** 让全库提及扫描失败,用来验这一档的错误态。 */
+  failMentionScan = false;
+  /** 每次「链接提及」的入参。验"只提交用户看见过的那几处"用。 */
+  mentionLinkCalls: { path: string; start: number; end: number; text: string }[][] = [];
+  /** 让整次链接失败(不是单篇失败),用来验就地错误态。 */
+  failMentionLink = false;
+  /** 预置的「单篇失败」列表,原样回到报告的 `failed` 里。理由同 `tagRenameFailures`。 */
+  mentionLinkFailures: { path: string; message: string }[] = [];
 
   /** 当前的图标表。断言"真的写进去了"用。 */
   iconTable(): Record<string, string> {
@@ -499,6 +639,72 @@ export class NotebookVaultHarness {
           if (tasks.length) sources.push({ path, tasks });
         }
         return sources;
+      }
+
+      case "notebook_vault_mentions": {
+        this.mentionScanCalls += 1;
+        this.mentionScanNames.push([...(args.names as string[])]);
+        if (this.failMentionScan) throw new Error("scanning mentions failed");
+        const self = String(args.note);
+        const names = (args.names as string[]) ?? [];
+        const sources: { path: string; mentions: HarnessMention[] }[] = [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          // 自己整篇跳过,和 Rust 侧一致。
+          if (path === self) continue;
+          const mentions = harnessMentions(this.files.get(path)?.content ?? "", names);
+          if (mentions.length) sources.push({ path, mentions });
+        }
+        return sources;
+      }
+
+      case "notebook_link_mentions": {
+        const targets = args.targets as {
+          path: string;
+          start: number;
+          end: number;
+          text: string;
+        }[];
+        this.mentionLinkCalls.push(targets.map((target) => ({ ...target })));
+        if (this.failMentionLink) throw new Error("linking mentions failed");
+        /* 复刻 Rust 侧的三个桶,包括**从后往前改**那一条 —— 面板测试要验的正是"报告
+           里的处数"和"改完会重扫",而处数只有在偏移没被前一次插入顶偏时才对得上。 */
+        const changed: { path: string; count: number }[] = [];
+        const skipped: { path: string; start: number; reason: string }[] = [];
+        const byPath = new Map<string, typeof targets>();
+        for (const target of targets) {
+          const list = byPath.get(target.path) ?? [];
+          list.push(target);
+          byPath.set(target.path, list);
+        }
+        for (const path of [...byPath.keys()].sort()) {
+          let content = this.files.get(path)?.content ?? "";
+          const ordered = [...(byPath.get(path) ?? [])].sort((a, b) => b.start - a.start);
+          let count = 0;
+          for (const target of ordered) {
+            const slice = sliceByBytes(content, target.start, target.end);
+            if (slice !== target.text) {
+              skipped.push({ path, start: target.start, reason: "vanished" });
+              continue;
+            }
+            if (harnessAlreadyLinked(content, target.start, target.end)) {
+              skipped.push({ path, start: target.start, reason: "alreadyLinked" });
+              continue;
+            }
+            content = replaceByBytes(content, target.start, target.end, `[[${target.text}]]`);
+            count += 1;
+          }
+          if (count) {
+            this.files.set(path, { content, mtimeMs: (this.clock += 10) });
+            changed.push({ path, count });
+          }
+        }
+        return {
+          changed,
+          skipped,
+          failed: [...this.mentionLinkFailures],
+          // 处数由后端算,前端拿现成的 —— 和 Rust 侧同一个理由,见 `mentions.rs`。
+          linked: changed.reduce((sum, entry) => sum + entry.count, 0),
+        };
       }
 
       case "notebook_rename_tag": {

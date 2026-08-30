@@ -113,9 +113,18 @@ fn scan_links(content: &str, remaining: usize) -> Vec<NoteLinkRef> {
     out
 }
 
-struct LineHit {
-    raw: String,
-    embed: bool,
+pub(crate) struct LineHit {
+    pub raw: String,
+    pub embed: bool,
+    /// 这条链接在**行内**的字节区间,含 `[[` 与 `]]`,也含 `![[` 那个 `!`。
+    ///
+    /// 反链索引只要 `raw`/`embed`。区间在这里是给未链接提及用的:那一档要回答
+    /// 「这处字样是不是已经在链接里了」,而这个问题的答案必须来自**定义链接的那个
+    /// 词法器**。自己再写一遍"找 `[[` 和 `]]`"就会和这里的回溯行为分叉 —— 表现是
+    /// `[[[[计划]]` 这种畸形写法里,提及列表说"未链接"、渲染出来却是一条链接,点
+    /// 一键链接之后变成 `[[[[[[计划]]]]`。
+    pub start: usize,
+    pub end: usize,
 }
 
 /// 前端那条正则的 body 上限(UTF-16 code unit)。
@@ -130,7 +139,7 @@ const MAX_BODY_UNITS: usize = 200;
 ///
 /// 这是前端 `/\[\[([^\]\n]{1,200})\]\]/g` 的等价实现,包括它的回溯行为:body 里
 /// 不许出现 `]`,所以遇到单个 `]` 就整个匹配失败、从下一个位置重试。
-fn scan_line(line: &str) -> Vec<LineHit> {
+pub(crate) fn scan_line(line: &str) -> Vec<LineHit> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let mut cursor = 0usize;
@@ -155,13 +164,19 @@ fn scan_line(line: &str) -> Vec<LineHit> {
             cursor = open + 1;
             continue;
         }
+        // `![[...]]` 是嵌入。看 `[[` 前一个字节即可 —— `!` 是 ASCII,不会
+        // 落在多字节字符中间。
+        let embed = open > 0 && bytes[open - 1] == b'!';
+        let end = body_start + bracket + 2;
         out.push(LineHit {
             raw: body.to_string(),
-            // `![[...]]` 是嵌入。看 `[[` 前一个字节即可 —— `!` 是 ASCII,不会
-            // 落在多字节字符中间。
-            embed: open > 0 && bytes[open - 1] == b'!',
+            embed,
+            // 嵌入的 `!` 算进区间:提及那一档要判"这处字样在链接里吗",而 `![[计划]]`
+            // 的 `!` 也是这条链接的一部分。
+            start: if embed { open - 1 } else { open },
+            end,
         });
-        cursor = body_start + bracket + 2;
+        cursor = end;
     }
     out
 }

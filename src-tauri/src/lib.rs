@@ -944,6 +944,8 @@ pub fn run() {
             notebook::notebook_vault_tags,
             notebook::notebook_vault_fields,
             notebook::notebook_vault_tasks,
+            notebook::notebook_vault_mentions,
+            notebook::notebook_link_mentions,
             notebook::notebook_rename_tag,
             notebook::notebook_list_snapshots,
             notebook::notebook_read_snapshot,

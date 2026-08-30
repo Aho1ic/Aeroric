@@ -11,6 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { NoteLinkSource } from "./noteBacklinks";
 import type { NoteFieldSource } from "./noteFields";
+import type { MentionLinkReport, MentionSource, MentionTarget } from "./noteMentions";
 import type { NoteTagSource } from "./noteTags";
 import type { NoteTaskSource } from "./noteTaskInbox";
 
@@ -441,6 +442,40 @@ export function vaultFields(vault: string): Promise<NoteFieldSource[]> {
  */
 export function vaultTasks(vault: string): Promise<NoteTaskSource[]> {
   return invoke<NoteTaskSource[]>("notebook_vault_tasks", { vault });
+}
+
+/**
+ * 扫全库的**未链接提及**:写了 `names` 里任一名字、却没写成 `[[链接]]` 的地方。
+ *
+ * `names` 由前端算(`mentionNamesOf`)—— 一篇笔记的可链接名字有哪些是 `noteLinks.ts`
+ * 的解析规则,在 Rust 里再判一次会得到两套会各自漂移的"名字"。
+ *
+ * `note` 自己整篇跳过。frontmatter、围栏、行内代码、已有链接、markdown 链接、裸 URL、
+ * ATX 标题都不算,每一处带可信度(中日韩邻字判 `ambiguous`),见 `mentions.rs`。
+ */
+export function vaultMentions(
+  vault: string,
+  note: string,
+  names: string[],
+): Promise<MentionSource[]> {
+  return invoke<MentionSource[]>("notebook_vault_mentions", { vault, note, names });
+}
+
+/**
+ * 把指定的那几处提及包成 `[[..]]`。
+ *
+ * `targets` 是**用户在列表里看见过的**那几处(路径 + 字节区间 + 当时的原文)。不传
+ * 名字让后端自己再全库包一遍 —— 扫描和点击之间新写的段落会被静默包上链接,而列表就
+ * 不再是这次操作的完整清单。
+ *
+ * 每一处在后端重读后逐个校验:位置上不是那段文字了报 `vanished`,已经在一对 `[[]]`
+ * 里了报 `alreadyLinked`。单篇写失败(冲突)进 `failed`,不中断其余的处理。
+ */
+export function linkVaultMentions(
+  vault: string,
+  targets: MentionTarget[],
+): Promise<MentionLinkReport> {
+  return invoke<MentionLinkReport>("notebook_link_mentions", { vault, targets });
 }
 
 /** 一篇被改过的笔记,`count` 是这篇里改掉的处数。 */

@@ -29,7 +29,8 @@
 use std::path::Path;
 
 use super::vault_walk::{
-    fence_marker, frontmatter_lines, line_spans, preview_line, walk_notes, WalkNext,
+    fence_marker, frontmatter_lines, inline_code_spans, line_spans, preview_line, walk_notes,
+    WalkNext,
 };
 
 /// 单篇笔记记多少个标签。超出的丢掉:一篇里 1000 个标签已经不是人写出来的。
@@ -151,7 +152,7 @@ pub(crate) fn tag_hits(content: &str) -> Vec<TagHit<'_>> {
             fence = Some((ch, len));
             continue;
         }
-        let spans = code_spans(line);
+        let spans = inline_code_spans(line);
         for (offset, raw, end) in line_tags(line) {
             if spans
                 .iter()
@@ -169,52 +170,6 @@ pub(crate) fn tag_hits(content: &str) -> Vec<TagHit<'_>> {
         }
     }
     out
-}
-
-/// 一行里的行内代码区间(字节),含两侧的反引号。
-///
-/// 闭合的反引号数量必须和开启的一样多(CommonMark 规则),这样 `` `a` `` 里的单个
-/// 反引号不会提前收尾。没闭合的反引号是字面量,后面的内容照常算标签。
-fn code_spans(line: &str) -> Vec<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut spans = Vec::new();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] != b'`' {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < bytes.len() && bytes[i] == b'`' {
-            i += 1;
-        }
-        let ticks = i - start;
-        let mut j = i;
-        let mut closed = None;
-        while j < bytes.len() {
-            if bytes[j] != b'`' {
-                j += 1;
-                continue;
-            }
-            let run_start = j;
-            while j < bytes.len() && bytes[j] == b'`' {
-                j += 1;
-            }
-            if j - run_start == ticks {
-                closed = Some(j);
-                break;
-            }
-        }
-        match closed {
-            Some(end) => {
-                spans.push((start, end));
-                i = end;
-            }
-            // 没闭合:这串反引号是字面量,不构成代码区间。
-            None => break,
-        }
-    }
-    spans
 }
 
 /// 一行里的标签。返回 (`#` 的行内偏移, 标签文本, 末尾之后的行内偏移)。

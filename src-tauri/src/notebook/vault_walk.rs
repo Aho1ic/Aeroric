@@ -150,6 +150,57 @@ pub(crate) fn fence_marker(line: &str) -> Option<(char, usize)> {
     }
 }
 
+/// 一行里的行内代码区间(字节),含两侧的反引号。
+///
+/// 闭合的反引号数量必须和开启的一样多(CommonMark 规则),这样 `` `a` `` 里的单个
+/// 反引号不会提前收尾。没闭合的反引号是字面量,后面的内容照常算标签 / 提及。
+///
+/// 和 `fence_marker` 同一个理由要共用:标签档说"`` `#fff` `` 是颜色值不是标签",
+/// 未链接提及那一档也必须说"`` `计划` `` 里的字样不是提及"。两处各写一份的表现是
+/// 「同一行在标签云里干净、在提及列表里却冒出一条」,而这种不一致看起来像其中一档
+/// 扫错了行。
+pub(crate) fn inline_code_spans(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] == b'`' {
+            i += 1;
+        }
+        let ticks = i - start;
+        let mut j = i;
+        let mut closed = None;
+        while j < bytes.len() {
+            if bytes[j] != b'`' {
+                j += 1;
+                continue;
+            }
+            let run_start = j;
+            while j < bytes.len() && bytes[j] == b'`' {
+                j += 1;
+            }
+            if j - run_start == ticks {
+                closed = Some(j);
+                break;
+            }
+        }
+        match closed {
+            Some(end) => {
+                spans.push((start, end));
+                i = end;
+            }
+            // 没闭合:这串反引号是字面量,不构成代码区间。
+            None => break,
+        }
+    }
+    spans
+}
+
 /// 预览截断长度(按字符,不是字节)。
 const PREVIEW_CHARS: usize = 160;
 

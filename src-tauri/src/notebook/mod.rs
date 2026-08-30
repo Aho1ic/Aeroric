@@ -24,6 +24,7 @@ pub mod fields;
 pub mod fs_ops;
 pub mod html2md;
 pub mod links;
+pub mod mentions;
 pub mod migrate;
 pub mod snapshots;
 pub mod state;
@@ -549,6 +550,44 @@ pub async fn notebook_vault_tasks(
 ) -> Result<Vec<tasks::NoteTaskSource>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || tasks::scan_vault_tasks(&resolved)).await
+}
+
+/// 扫全库的**未链接提及**:写了 `names` 里任一名字、却没写成 `[[链接]]` 的地方。
+///
+/// `names` 由前端给 —— 一篇笔记的可链接名字有哪些(frontmatter 标题、文件名 stem、
+/// 以后的别名)是 `noteLinks.ts` 的解析规则,那份有测试。在 Rust 里再判一次会得到两套
+/// 会各自漂移的"名字",而漂移的表现是"提及列表里有它、点了却包出一条死链"。
+///
+/// `note` 自己整篇跳过。每一处带可信度:中日韩邻字判 `ambiguous`,批量链接不动它们,
+/// 见 `mentions.rs` 的模块注释。
+#[tauri::command]
+pub async fn notebook_vault_mentions(
+    state: State<'_, NotebookState>,
+    vault: String,
+    note: String,
+    names: Vec<String>,
+) -> Result<Vec<mentions::MentionSource>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    let note_path = state.resolve_in_vaults(&note, false)?;
+    blocking(move || mentions::scan_vault_mentions(&resolved, &note_path, &names)).await
+}
+
+/// 把指定的那几处提及包成 `[[..]]`,返回 changed / skipped / failed 的完整报告。
+///
+/// `targets` 是**用户在列表里看见过的**那几处(路径 + 字节区间 + 当时的原文)。不传
+/// needle 让后端自己再全库包一遍 —— 扫描和点击之间新写的段落会被静默包上链接,而列表
+/// 就不再是这次操作的完整清单。每一处在重读后逐个校验,对不上的报成 `vanished`。
+///
+/// 和 `notebook_rename_tag` 一样在当前线程上跑:要用 `&state`,而 `State<'_, _>`
+/// 不是 `'static`。
+#[tauri::command]
+pub async fn notebook_link_mentions(
+    state: State<'_, NotebookState>,
+    vault: String,
+    targets: Vec<mentions::MentionTarget>,
+) -> Result<mentions::MentionLinkReport, String> {
+    let resolved = resolve_vault_root(&state, &vault)?;
+    mentions::link_mentions(&state, &resolved, &targets)
 }
 
 /// 跨文件把 `#old` 改成 `#new`,返回 changed / skipped / failed 的完整报告。

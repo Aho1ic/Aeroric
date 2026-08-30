@@ -3571,10 +3571,13 @@ describe("NotebookPanel", () => {
       return screen.findByRole("complementary", { name: "Backlinks" });
     }
 
-    /** 反链列表里的跳转按钮的可及名。 */
+    /* 反链列表里的跳转按钮的可及名。
+       限定在反链那个 aside 里找:「未链接的提及」和反链同一档(在它下面),而那些行的
+       可及名也是 `{title}, line {line}` —— 全局按名字筛会把两档混在一起,而混起来之后
+       这个断言就不再说明"反链里有几条"。 */
     function backlinkNames(): string[] {
-      return screen
-        .getAllByRole("button")
+      const panel = screen.getByRole("complementary", { name: "Backlinks" });
+      return [...panel.querySelectorAll("button[aria-label]")]
         .map((button) => button.getAttribute("aria-label") ?? "")
         .filter((name) => /line \d+$/.test(name));
     }
@@ -5127,6 +5130,333 @@ describe("NotebookPanel", () => {
       await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
       // sheet 本身不受影响:关菜单不等于关收集箱。
       expect(screen.getByRole("dialog", { name: "Task inbox" })).toBeInTheDocument();
+    });
+  });
+
+  describe("未链接的提及", () => {
+    /** 打开侧栏、切到反链档(提及在它下面),等提及那一块出现。 */
+    async function openMentions() {
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      fireEvent.click(await screen.findByRole("button", { name: /^Backlinks/ }));
+      return screen.findByRole("region", { name: "Unlinked mentions" });
+    }
+
+    /** 提及列表里那些行的可及名。 */
+    function mentionRows(): string[] {
+      const list = screen.queryByTestId("note-mentions-list");
+      if (!list) return [];
+      return [...list.querySelectorAll("button[aria-label]")]
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((name) => !name.startsWith("Link "));
+    }
+
+    /** 「包成链接」那些按钮的可及名。 */
+    function linkButtons(): string[] {
+      const list = screen.queryByTestId("note-mentions-list");
+      if (!list) return [];
+      return [...list.querySelectorAll("button[aria-label]")]
+        .map((button) => button.getAttribute("aria-label") ?? "")
+        .filter((name) => name.startsWith("Link "));
+    }
+
+    it("列出提到了这一篇却没链接的地方,行号按整篇源码数", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await screen.findByDisplayValue("Plan");
+
+      await openMentions();
+      // frontmatter 那三行也算进行号,和反链同一个坐标系。
+      await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 5"]));
+      expect(screen.getByText("1 unlinked in 1 notes")).toBeInTheDocument();
+    });
+
+    it("已经写成链接的那一处不算提及", async () => {
+      // 这一条和下一条一起钉住"按区间判、不按整篇判"。
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 [[Plan]] 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+
+      await waitFor(() => expect(harness.callCount("notebook_vault_mentions")).toBe(1));
+      expect(screen.getByText("No unlinked mentions of this note.")).toBeInTheDocument();
+    });
+
+    it("同一篇里链了一处、另有一处没链时,没链的那一处仍然列出来", async () => {
+      /* 这正是 Markio 那份的缺陷:它按整篇 grep `[[stem` 排除,于是这一行一条都
+         报不出来 —— 用户以为已经链全了。 */
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n先看 [[Plan]],再看 Plan 附录\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+
+      await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 5"]));
+    });
+
+    it("frontmatter、围栏、行内代码、标题里的字样都不算", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed(
+        "Notes.md",
+        [
+          "---",
+          'title: "Notes"',
+          "summary: Plan", // frontmatter
+          "---",
+          "",
+          "## Plan", // ATX 标题
+          "```",
+          "let Plan = 1;", // 围栏
+          "```",
+          "`Plan` 是变量", // 行内代码
+          "[Plan](./x.md)", // markdown 链接
+          "https://x.com/Plan", // 裸 URL
+          "真正提到 Plan 了", // 只有这一处
+          "",
+        ].join("\n"),
+      );
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+
+      await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 13"]));
+    });
+
+    it("按文件名 stem 写的字样也算(不只是 frontmatter 标题)", async () => {
+      /* 两个名字都要扫:`resolveLink` 两个都认。只给标题的话按文件名写的那些字样
+         一处都扫不出来;只给 stem 就是 Markio 的行为。 */
+      harness.seed("cao-gao.md", '---\ntitle: "Weekly"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 cao-gao 也见 Weekly\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "cao-gao" }));
+      await screen.findByDisplayValue("Weekly");
+      await openMentions();
+
+      await waitFor(() => expect(mentionRows()).toHaveLength(2));
+      expect(harness.mentionScanNames.at(-1)).toEqual(["Weekly", "cao-gao"]);
+    });
+
+    it("自己那一篇不算(正文里写自己的标题很常见)", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n# Plan\n\n这篇讲 Plan 本身\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+
+      await waitFor(() => expect(harness.callCount("notebook_vault_mentions")).toBe(1));
+      expect(screen.getByText("No unlinked mentions of this note.")).toBeInTheDocument();
+    });
+
+    it("中日韩邻字的那一处标成待确认,不进「全部链接」", async () => {
+      /* 这是与 Markio 的实质差异:它会把「原计划表」直接改成「原[[计划]]表」。
+         「计划」两侧干净的那一处是 confident,贴着汉字的那一处是 ambiguous ——
+         按钮上的数只数前者。 */
+      harness.seed("jihua.md", '---\ntitle: "计划"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n原计划表在这\n\n见 计划 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "jihua" }));
+      await screen.findByDisplayValue("计划");
+      await openMentions();
+
+      await waitFor(() => expect(mentionRows()).toHaveLength(2));
+      // 待确认那一条在可及名里就说明白了 —— 颜色和图标对屏读用户不存在。
+      expect(mentionRows()).toEqual([
+        "Notes, line 5 (needs a look)",
+        "Notes, line 7",
+      ]);
+      expect(screen.getByRole("button", { name: "Link 1 clear mentions" })).toBeInTheDocument();
+    });
+
+    it("「全部链接」只动明确的那些,报的是处数", async () => {
+      harness.seed("jihua.md", '---\ntitle: "计划"\n---\n\nbody\n');
+      harness.seed("A.md", '---\ntitle: "A"\n---\n\n见 计划 一节\n\n又见 计划 一次\n');
+      harness.seed("B.md", '---\ntitle: "B"\n---\n\n原计划表\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "jihua" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toHaveLength(3));
+
+      fireEvent.click(screen.getByRole("button", { name: "Link 2 clear mentions" }));
+
+      /* 报的是**处数**,不是文件数。Markio 那份把文件数说成处数,于是"已链接 12 处"
+         实际改了 12 个文件里各一处、剩下几十处还在。 */
+      expect(await screen.findByText(/Linked 2 mentions in 1 notes\./)).toBeInTheDocument();
+      // A 里两处都包上了 —— 一个文件里的每一处都要动,不是只动第一处。
+      expect(harness.read("/vault/A.md")).toContain("见 [[计划]] 一节");
+      expect(harness.read("/vault/A.md")).toContain("又见 [[计划]] 一次");
+      // B 那一处是待确认的,批量不碰。
+      expect(harness.read("/vault/B.md")).toContain("原计划表");
+      expect(harness.read("/vault/B.md")).not.toContain("[[");
+    });
+
+    it("链接之后重扫,那几处不再出现在列表里", async () => {
+      // 闭环:改完就不该再数出来,否则点第二次只会报 alreadyLinked。
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Link 1 clear mentions" }));
+
+      await waitFor(() => expect(mentionRows()).toHaveLength(0));
+      expect(screen.getByText("No unlinked mentions of this note.")).toBeInTheDocument();
+      // 而反链跟着重扫 —— 刚写进去的是一条真链接。
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Backlinks (1)" })).toBeInTheDocument(),
+      );
+    });
+
+    it("逐条链接时只提交那一处", async () => {
+      // ambiguous 的不能批量,但逐条点得动 —— 分级是给批量用的,不是禁令。
+      harness.seed("jihua.md", '---\ntitle: "计划"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n原计划表\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "jihua" }));
+      await openMentions();
+      await waitFor(() => expect(linkButtons()).toEqual(['Link "计划" on line 5']));
+      // 全是待确认时不摆「全部链接」—— 点了什么都不会变的按钮更糟。
+      expect(screen.queryByRole("button", { name: /^Link \d+ clear mentions$/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: 'Link "计划" on line 5' }));
+
+      await waitFor(() => expect(harness.read("/vault/Notes.md")).toContain("原[[计划]]表"));
+      expect(harness.mentionLinkCalls).toHaveLength(1);
+      expect(harness.mentionLinkCalls[0]).toHaveLength(1);
+    });
+
+    it("大小写不同的那一处包完保留正文的写法", async () => {
+      /* 链接解析本身大小写不敏感,所以 `PLAN` 包成 `[[PLAN]]` 照样指向《Plan》。
+         改用户的用词是没必要的越界 —— 而这条同时钉住"校验用的是原文不是候选名":
+         传候选名的话后端会把它报成 vanished,这里就什么都不会改。 */
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 PLAN 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(linkButtons()).toEqual(['Link "PLAN" on line 5']));
+
+      fireEvent.click(screen.getByRole("button", { name: 'Link "PLAN" on line 5' }));
+
+      await waitFor(() => expect(harness.read("/vault/Notes.md")).toContain("见 [[PLAN]] 一节"));
+      expect(harness.mentionLinkCalls[0]?.[0]?.text).toBe("PLAN");
+    });
+
+    it("换到另一篇笔记时清空,不显示上一篇的提及", async () => {
+      /* 和反链不同:提及的扫描参数里有当前笔记的名字,留着旧结果会在新笔记的标题
+         下面显示上一篇的提及,而那些条目点下去会改错地方的正文。 */
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Other.md", '---\ntitle: "Other"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Other" }));
+
+      await waitFor(() => expect(mentionRows()).toHaveLength(0));
+      // 而且真的重扫了(名字换了,结果只对当前这一篇成立)。
+      await waitFor(() => expect(harness.callCount("notebook_vault_mentions")).toBe(2));
+      expect(harness.mentionScanNames.at(-1)).toEqual(["Other"]);
+    });
+
+    it("没打开反链档时不扫", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Plan" });
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(harness.callCount("notebook_vault_mentions")).toBe(0);
+    });
+
+    it("扫描失败时就地报错,不清掉面板", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.failMentionScan = true;
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/scanning mentions failed/);
+      // 笔记本身照常可读写 —— 提及是只读视图,失败不该影响主编辑区。
+      expect(screen.getByDisplayValue("Plan")).toBeInTheDocument();
+    });
+
+    it("整次链接失败时就地报错", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      harness.failMentionLink = true;
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Link 1 clear mentions" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/linking mentions failed/);
+      // 没写盘。
+      expect(harness.read("/vault/Notes.md")).toContain("见 Plan 一节");
+    });
+
+    it("报告里带上跳过和失败的那几条", async () => {
+      /* 单篇失败在真后端是权限 / 冲突这类外部条件。报告里那一段(哪些没成)恰恰是
+         最该有人看的一段 —— 这次操作动的是用户看不见的那些文件。 */
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      harness.mentionLinkFailures = [{ path: "/vault/Other.md", message: "conflict" }];
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Link 1 clear mentions" }));
+
+      /* 限定在提及那一档里找:状态栏的保存指示器也是 `role="status"`,全局找会拿到
+         那个"Saved"。 */
+      const panel = screen.getByRole("region", { name: "Unlinked mentions" });
+      const status = await waitFor(() => {
+        const found = panel.querySelector('[role="status"]');
+        if (!found) throw new Error("report not shown yet");
+        return found;
+      });
+      expect(status).toHaveTextContent(/Linked 1 mentions in 1 notes\./);
+      expect(status).toHaveTextContent(/Failed in 1 notes/);
+    });
+
+    it("点提及那一行跳到来源笔记的那一行", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n第一行\n见 Plan 一节\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 6"]));
+
+      fireEvent.click(screen.getByRole("button", { name: "Notes, line 6" }));
+
+      await screen.findByDisplayValue("Notes");
+      /* 文件第 6 行 = 正文第 2 行。正文是 `第一行\n见 Plan 一节\n`,所以行首偏移是 4
+         —— 两个坐标系换算对了才落在这里。 */
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("手工重扫", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\nbody\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await openMentions();
+      await waitFor(() => expect(harness.callCount("notebook_vault_mentions")).toBe(1));
+
+      // 外部编辑改了别人的笔记时,只能靠重扫发现。
+      harness.seed("Notes.md", '---\ntitle: "Notes"\n---\n\n见 Plan 一节\n');
+      fireEvent.click(screen.getByRole("button", { name: "Rescan the vault for mentions" }));
+
+      await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 5"]));
     });
   });
 });
