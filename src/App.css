@@ -2295,6 +2295,18 @@ html:not(.dark) .session-prose pre code {
 .md-preview a:hover {
   color: var(--accent-hover);
 }
+/* 任务列表。`list-style: none` 去掉圆点 —— 复选框已经是行首标记了,两个叠着看很挤。 */
+.md-preview li.notebook-task-item {
+  list-style: none;
+  margin-left: -1.2em;
+}
+/* 解禁了的复选框(带源码行号,点它会改正文)。没解禁的保持 `disabled` 的默认样子,
+   那个"点不动"的观感正好说明它现在是只读的(嵌入、悬浮预览里的任务就是这样)。 */
+.md-preview input.notebook-task-checkbox {
+  cursor: pointer;
+  margin-right: 0.4em;
+  accent-color: var(--accent);
+}
 /* `[[wikilink]]`。不带下划线、用虚线底边区分于普通外链 —— 点它是在库内跳转,
    不会离开应用。 */
 .md-preview a.notebook-wikilink {

@@ -2812,6 +2812,321 @@ describe("NotebookPanel", () => {
     });
   });
 
+  describe("阅读态勾选任务", () => {
+    /** 阅读态里那些可点的任务复选框(解禁过的)。 */
+    function liveBoxes(): HTMLInputElement[] {
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>(
+          ".notebook-markdown-preview li.notebook-task-item input.notebook-task-checkbox",
+        ),
+      );
+    }
+
+    /** 阅读态里所有复选框,含没解禁的。 */
+    function allBoxes(): HTMLInputElement[] {
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>(
+          '.notebook-markdown-preview input[type="checkbox"]',
+        ),
+      );
+    }
+
+    async function readMode() {
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+    }
+
+    async function openInReadMode(title: string) {
+      renderNotebook();
+      await screen.findByRole("button", { name: title });
+      fireEvent.click(screen.getByRole("button", { name: title }));
+      await screen.findByDisplayValue(title);
+      await readMode();
+    }
+
+    it("阅读态的复选框是可点的,点一下把源码那一行勾上", async () => {
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n- [ ] 二\n');
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(2));
+      fireEvent.click(liveBoxes()[0]!);
+
+      // 正文改了 → 重渲染 → 第一个框变成已勾。
+      await waitFor(() => expect(liveBoxes()[0]?.checked).toBe(true));
+      expect(liveBoxes()[1]?.checked).toBe(false);
+      // 切回源码态看真正落到正文里的字符。
+      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+      await waitFor(() => expect(harness.read(planPath)).toContain("- [x] 一"));
+      expect(harness.read(planPath)).toContain("- [ ] 二");
+    });
+
+    it("再点一下取消勾选", async () => {
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [x] 已经勾了\n');
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      expect(liveBoxes()[0]?.checked).toBe(true);
+      fireEvent.click(liveBoxes()[0]!);
+
+      await waitFor(() => expect(liveBoxes()[0]?.checked).toBe(false));
+      await waitFor(() => expect(harness.read(planPath)).toContain("- [ ] 已经勾了"));
+    });
+
+    it("点第二条只改第二行", async () => {
+      const planPath = harness.seed(
+        "Plan.md",
+        '---\ntitle: "Plan"\n---\n\n- [ ] 一\n- [ ] 二\n- [ ] 三\n',
+      );
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(3));
+      fireEvent.click(liveBoxes()[1]!);
+
+      await waitFor(() => expect(liveBoxes()[1]?.checked).toBe(true));
+      const saved = await waitFor(() => {
+        const body = harness.read(planPath) ?? "";
+        if (!body.includes("- [x]")) throw new Error("not saved yet");
+        return body;
+      });
+      expect(saved).toContain("- [ ] 一\n- [x] 二\n- [ ] 三");
+    });
+
+    /* 围栏里的 `- [ ]` 不产复选框,所以真任务前面没有"幻影"占位。按顺序数复选框的
+       实现会在这里把行号算少几行,勾到围栏那一行去(而那一行改了也不会显示成勾上)。 */
+    it("围栏里的假任务不参与计数,真任务勾对行", async () => {
+      const planPath = harness.seed(
+        "Plan.md",
+        '---\ntitle: "Plan"\n---\n\n```md\n- [ ] 文档示例\n```\n\n- [ ] 真任务\n',
+      );
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      fireEvent.click(liveBoxes()[0]!);
+
+      await waitFor(() => expect(liveBoxes()[0]?.checked).toBe(true));
+      const saved = await waitFor(() => {
+        const body = harness.read(planPath) ?? "";
+        if (!body.includes("- [x]")) throw new Error("not saved yet");
+        return body;
+      });
+      expect(saved).toContain("- [x] 真任务");
+      // 围栏里那一行必须原样不动。
+      expect(saved).toContain("```md\n- [ ] 文档示例\n```");
+    });
+
+    /* 多行 `$$` 会在渲染前被压成一行哨兵。行号如果在那之后才算,公式后面每个任务
+       都会往前偏几行 —— 偏到公式内部去,正文被改坏而复选框看着像没反应。 */
+    it("公式之后的任务勾的是正确那一行", async () => {
+      const planPath = harness.seed(
+        "Plan.md",
+        '---\ntitle: "Plan"\n---\n\n$$\na = 1\nb = 2\nc = 3\n$$\n\n- [ ] 公式后面\n',
+      );
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      fireEvent.click(liveBoxes()[0]!);
+
+      await waitFor(() => expect(liveBoxes()[0]?.checked).toBe(true));
+      const saved = await waitFor(() => {
+        const body = harness.read(planPath) ?? "";
+        if (!body.includes("- [x]")) throw new Error("not saved yet");
+        return body;
+      });
+      expect(saved).toContain("- [x] 公式后面");
+      // 公式一个字都不能动。
+      expect(saved).toContain("$$\na = 1\nb = 2\nc = 3\n$$");
+    });
+
+    it("嵌套任务:点内层只改内层那一行", async () => {
+      const planPath = harness.seed(
+        "Plan.md",
+        '---\ntitle: "Plan"\n---\n\n- [ ] 外层\n  - [ ] 内层\n',
+      );
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(2));
+      fireEvent.click(liveBoxes()[1]!);
+
+      await waitFor(() => expect(liveBoxes()[1]?.checked).toBe(true));
+      expect(liveBoxes()[0]?.checked).toBe(false);
+      const saved = await waitFor(() => {
+        const body = harness.read(planPath) ?? "";
+        if (!body.includes("- [x]")) throw new Error("not saved yet");
+        return body;
+      });
+      expect(saved).toContain("- [ ] 外层\n  - [x] 内层");
+    });
+
+    it("嵌进来的别人的任务不可点 —— 行号对不上当前正文", async () => {
+      const otherPath = harness.seed("Other.md", '---\ntitle: "Other"\n---\n\n- [ ] 别人的任务\n');
+      const planPath = harness.seed(
+        "Plan.md",
+        '---\ntitle: "Plan"\n---\n\n- [ ] 我的任务\n\n![[Other]]\n',
+      );
+      await openInReadMode("Plan");
+
+      // 等嵌入填好:那之后 DOM 里有两个复选框,但只有一个是解禁的。
+      await waitFor(() => expect(allBoxes()).toHaveLength(2));
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      expect(liveBoxes()[0]?.getAttribute("aria-label")).toBe("Toggle task: 我的任务");
+
+      const embedded = allBoxes().find((box) => !box.classList.contains("notebook-task-checkbox"));
+      expect(embedded?.disabled).toBe(true);
+      fireEvent.click(embedded!);
+      // 点它不该改任何一篇笔记。
+      expect(harness.read(otherPath)).toContain("- [ ] 别人的任务");
+      expect(harness.read(planPath)).toContain("- [ ] 我的任务");
+    });
+
+    it("点任务里的 wikilink 是跳转,不是勾选", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n目标正文\n');
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 看 [[Target]]\n');
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      const link = document.querySelector<HTMLElement>(
+        ".notebook-markdown-preview a.notebook-wikilink",
+      );
+      fireEvent.click(link!);
+
+      await screen.findByDisplayValue("Target");
+      // 原来那篇的任务没被勾上。
+      expect(harness.read(planPath)).toContain("- [ ] 看 [[Target]]");
+    });
+
+    it("复选框带无障碍名,文案跟着任务文本走", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 写周报\n- [x] 交周报\n');
+      await openInReadMode("Plan");
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(2));
+      expect(liveBoxes().map((box) => box.getAttribute("aria-label"))).toEqual([
+        "Toggle task: 写周报",
+        "Toggle task: 交周报",
+      ]);
+    });
+
+    it("源码态不解禁复选框(那边没有预览容器)", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Plan" });
+      fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+      await screen.findByDisplayValue("Plan");
+
+      expect(liveBoxes()).toHaveLength(0);
+    });
+
+    /* 乐观锁挡下的那一次点击。
+     *
+     * 复选框上的状态快照来自一次渲染,而正文可能已经被自动保存回填、外部编辑或另一次
+     * 点击改过。这里把快照改成与源码不符(等价于"渲染之后正文变了"),点下去必须整个
+     * 放弃:不写正文、不落盘,复选框也不能停在已勾的样子 —— 停在那儿会让用户以为勾上了。 */
+    /* 乐观锁挡下的那一次点击。
+     *
+     * 复选框上的状态快照来自一次渲染,而正文可能已经被自动保存回填、外部编辑或另一次
+     * 点击改过。这里把快照改成与源码不符(等价于"渲染之后正文变了"),点下去必须整个
+     * 放弃:不写正文、也不落盘。 */
+    it("状态快照与正文不符时,这一次点击整个作废", async () => {
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n');
+      await openInReadMode("Plan");
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      const savesBefore = harness.callCount("notebook_save_note");
+
+      const li = document.querySelector<HTMLElement>(
+        ".notebook-markdown-preview li.notebook-task-item",
+      );
+      li!.setAttribute("data-task-checked", "1");
+      fireEvent.click(liveBoxes()[0]!);
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(harness.read(planPath)).toContain("- [ ] 一");
+      expect(harness.callCount("notebook_save_note")).toBe(savesBefore);
+      // 复选框也不能停在已勾的样子 —— 停在那儿会让用户以为勾上了。
+      expect(liveBoxes()[0]?.checked).toBe(false);
+    });
+
+    /* 重渲染会把预览里的子节点整批换掉(`dangerouslySetInnerHTML` 的属性值每次渲染都是
+       新对象,React 会重写一遍 innerHTML,哪怕 HTML 字符串没变),解禁随之丢失。解禁只
+       按 `markdownHtml` 当依赖的话,这种重渲染之后复选框就永久点不动了。
+       这里用"被乐观锁挡下的一次点击"制造一次正文没变的重渲染。 */
+    it("正文没变的重渲染之后,复选框仍然可点", async () => {
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n');
+      await openInReadMode("Plan");
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+
+      // 第一次点击被挡下,但它照样触发了一次重渲染。
+      document
+        .querySelector<HTMLElement>(".notebook-markdown-preview li.notebook-task-item")!
+        .setAttribute("data-task-checked", "1");
+      fireEvent.click(liveBoxes()[0]!);
+
+      // 解禁必须已经补回来了,否则下面这一次点击落不到。
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      expect(liveBoxes()[0]?.disabled).toBe(false);
+      fireEvent.click(liveBoxes()[0]!);
+
+      await waitFor(() => expect(harness.read(planPath)).toContain("- [x] 一"));
+    });
+
+    /* 渲染之后正文又变了的那一种情况。
+     *
+     * 点击处理的依赖里没有正文(有的话每敲一个字都要重挂监听),所以它闭包里的那份正文
+     * 是绑定那一刻的快照。分屏态一边打字一边点复选框就正好命中:如果按快照算出整份新
+     * 正文再整块写回,刚敲的字会被抹掉 —— 不是勾错行,是丢别的编辑。所以要在
+     * `setNotes` 的 updater 里现读最新正文。 */
+    it("分屏态改过正文之后再勾选,不会抹掉刚敲的字", async () => {
+      const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n\n尾巴\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Plan" });
+      fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+      await screen.findByDisplayValue("Plan");
+      fireEvent.click(screen.getByRole("button", { name: "Split" }));
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+
+      setEditorValue("- [ ] 一\n\n尾巴 新增的一段\n");
+      // 等预览跟上,确认这次改动已经进了状态。
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")?.textContent).toContain(
+          "新增的一段",
+        ),
+      );
+
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      fireEvent.click(liveBoxes()[0]!);
+
+      const saved = await waitFor(() => {
+        const body = harness.read(planPath) ?? "";
+        if (!body.includes("- [x]")) throw new Error("not saved yet");
+        return body;
+      });
+      expect(saved).toContain("- [x] 一");
+      expect(saved).toContain("新增的一段");
+    });
+
+    /* 两篇正文完全相同的笔记渲染出同一个 HTML 字符串。effect 只按 HTML 重挂的话,
+       切过去时闭包里还是上一篇的 id —— 点一下会改没显示的那篇。 */
+    it("切到正文相同的另一篇后,勾选改的是当前这篇", async () => {
+      const pathA = harness.seed("A.md", '---\ntitle: "A"\n---\n\n- [ ] 同样的正文\n');
+      const pathB = harness.seed("B.md", '---\ntitle: "B"\n---\n\n- [ ] 同样的正文\n');
+      await openInReadMode("A");
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "B" }));
+      await screen.findByDisplayValue("B");
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      fireEvent.click(liveBoxes()[0]!);
+
+      await waitFor(() => expect(harness.read(pathB)).toContain("- [x] 同样的正文"));
+      // A 必须一个字都没动 —— 磁盘上没动,内存里的那份也没动。
+      expect(harness.read(pathA)).toContain("- [ ] 同样的正文");
+      fireEvent.click(screen.getByRole("button", { name: "A" }));
+      await screen.findByDisplayValue("A");
+      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      expect(liveBoxes()[0]?.checked).toBe(false);
+    });
+  });
+
   describe("wikilink 悬浮预览", () => {
     /** 切到阅读态并等 HTML 挂上。 */
     async function readMode() {

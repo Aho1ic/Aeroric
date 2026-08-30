@@ -75,10 +75,12 @@ import type { ThemeVariant } from "../../types";
 import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
 import { buildLinkIndex, linkTitleOf, normalizeLinkTarget } from "./noteLinks";
+import { enhanceTaskCheckboxes, taskToggleFromEvent } from "./enhanceTaskCheckboxes";
 import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
 import { attachWikiLinkHover } from "./hoverPreview";
 import { enhanceNoteEmbeds } from "./noteEmbed";
 import { renderNoteMarkdown } from "./noteRender";
+import { toggleTaskLine } from "./noteTasks";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
 import { NoteStatusBar } from "./NoteStatusBar";
@@ -272,8 +274,10 @@ function NotebookPanelContent({
   const propertiesNote = properties
     ? (notes.find((note) => note.id === properties.noteId) ?? null)
     : null;
+  /* `taskLines: true` 只给当前笔记这一次渲染开:它让任务项带上源码行号,阅读态的复选框
+     才可点。嵌入与悬浮预览渲染的是别的笔记,那边保持默认关(行号对不上当前正文)。 */
   const markdownHtml = useMemo(
-    () => renderNoteMarkdown(activeNote?.body ?? "").html,
+    () => renderNoteMarkdown(activeNote?.body ?? "", { taskLines: true }).html,
     [activeNote?.body],
   );
   /* `[[wikilink]]` 的解析索引。
@@ -567,6 +571,56 @@ function NotebookPanelContent({
     return () => host.removeEventListener("click", onClick);
   }, [markdownHtml, mode, setActiveId]);
 
+  /* 阅读态勾选任务:点击处理。
+   *
+   * 事件委托到预览容器上,而不是给每个复选框各挂一个:容器节点在重渲染里是稳定的,
+   * 子节点会被整批换掉(见下面那个 effect 的说明),委托到容器就不受影响。
+   *
+   * 依赖里的 `activeNote?.id` 不能省,也**不能**靠 `markdownHtml` 代替:两篇正文完全相同
+   * 的笔记渲染出的 HTML 是同一个字符串,切过去时这个 effect 不会重挂,闭包里还是上一篇的
+   * id —— 点一下就把没显示的那篇改了(行号也对得上,乐观锁察觉不到),而当前这篇看着像
+   * 没反应。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    const onClick = (event: MouseEvent) => {
+      const hit = taskToggleFromEvent(event);
+      if (!hit) return;
+      /* 拦掉默认行为:原生复选框会先把自己的 `checked` 翻过来,而正文改没改要等
+         `toggleTaskLine` 说话(乐观锁不符时它拒绝写)。勾选状态的唯一来源是正文,
+         不该由控件自己先改一版。 */
+      event.preventDefault();
+      toggleTaskAtLine(hit.line, hit.expectChecked);
+    };
+    host.addEventListener("click", onClick);
+    return () => host.removeEventListener("click", onClick);
+    /* toggleTaskAtLine 刻意不进依赖:它每次渲染都是新函数,进依赖就变成每渲染一次重挂
+       一次监听。旧闭包也不会写错 —— 它唯一在意的响应式值是笔记 id(已在依赖里),正文
+       则是在 `setNotes` 的 updater 里现读的。 */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, activeNote?.id]);
+
+  /* 阅读态勾选任务:解禁复选框。
+   *
+   * **故意不写依赖数组** —— 每次提交后都要重跑一遍。原因是
+   * `dangerouslySetInnerHTML={{ __html: markdownHtml }}` 的属性值是每次渲染新建的对象,
+   * React 会在每次重渲染时重新写一遍 innerHTML(即使 HTML 字符串一个字都没变),预览里的
+   * 子节点被整批换成崭新的一份 —— 解禁、类名、aria-label 全丢,复选框又变回 `disabled`。
+   * 只按 `markdownHtml` 当依赖的话,这种重渲染之后 effect 不会重跑,复选框就永久点不动了
+   * (随手打开大纲、侧栏,或者一次自动保存回填状态,都会触发)。
+   *
+   * 嵌入进来的内容不受影响:那些渲染时没开 `taskLines`,天然不带行号,
+   * `enhanceTaskCheckboxes` 会跳过 —— 嵌入的是别人的笔记,不解禁正是想要的结果。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    enhanceTaskCheckboxes(host, {
+      toggle: (text) => t("notebook.taskToggle", { text }),
+    });
+  });
+
   // 分屏同步滚动。两侧注册进总线,由它做比例对齐和防回声。
   useEffect(() => {
     if (mode !== "split") return;
@@ -729,6 +783,34 @@ function NotebookPanelContent({
       ),
     );
     scheduleSave(activeNote.id);
+  };
+
+  /**
+   * 阅读态勾选:翻转 `line` 那一行的 `- [ ]`。
+   *
+   * 在 `setNotes` 的 updater 里算而不是拿 `activeNote.body` 算 —— 那是渲染那一刻的快照。
+   * 复选框上的行号来自一次渲染,而正文可能已经被自动保存回填、外部编辑或另一次快速点击
+   * 改过;按快照算出整份新正文再整块写回,会把那些改动一起抹掉(不是勾错行,是**丢别的
+   * 编辑**,乐观锁挡不住这个)。updater 拿到的 `current` 是最新的。
+   *
+   * `expectChecked` 传给 `toggleTaskLine` 当乐观锁:那一行现在不是这个状态,就整个放弃。
+   */
+  const toggleTaskAtLine = (line: number, expectChecked: boolean) => {
+    if (!activeNote) return;
+    const noteId = activeNote.id;
+    const updatedAt = Date.now();
+    let changed = false;
+    setNotes((current) =>
+      current.map((note) => {
+        if (note.id !== noteId) return note;
+        const next = toggleTaskLine(note.body, line, expectChecked);
+        if (next === null) return note;
+        changed = true;
+        return { ...note, body: next, updatedAt };
+      }),
+    );
+    // 没改成就不要落盘:一次无效点击不该刷新 updatedAt、也不该产一条历史版本。
+    if (changed) scheduleSave(noteId);
   };
 
   const captureCurrentScroll = () => {

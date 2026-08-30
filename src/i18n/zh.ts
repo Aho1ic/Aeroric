@@ -2751,6 +2751,7 @@ export const zh: Record<string, string> = {
   "notebook.propertiesMentionsValue": "{notes} 篇里的 {links} 条",
   "notebook.propertiesNoMentions": "没有笔记引用这篇",
   "notebook.propertiesVaultHint": "按磁盘上的文件扫描,未保存的编辑不算在内。",
+  "notebook.taskToggle": "勾选任务:{text}",
   "notebook.wikiLinkOpen": "打开 {title}",
   "notebook.wikiLinkMissing": "没有名为 {target} 的笔记",
   "notebook.wikiLinkAmbiguous": "有多篇同名笔记,这里打开 {title}",

@@ -19,11 +19,31 @@ import markedAlert from "marked-alert";
 import markedFootnote from "marked-footnote";
 import { detectMathRanges } from "./mathRanges";
 import { createSlugRegistry, slugifyHeading } from "./noteSlug";
+import { noteTasks, type NoteTask } from "./noteTasks";
 
 /** 渲染结果。`html` 已过 DOMPurify,可直接挂 DOM。 */
 export type RenderedNote = {
   html: string;
 };
+
+export type RenderOptions = {
+  /**
+   * 给任务项带上源码行号(`data-task-line`),让阅读态的复选框可点。
+   *
+   * 默认关:嵌入(`![[..]]`)和悬浮预览渲染的是**别的**笔记,那些行号对不上当前正在
+   * 编辑的正文,带出去就是往错的文件里写。只有当前笔记那一次渲染该开。
+   */
+  taskLines?: boolean;
+};
+
+/* 任务项节点上的类名与 dataset 键。由这里导出而不是各处写字面量:节点是这个模块造的,
+   选择器散在别处会各自漂移(改了 renderer 而选择器还在找旧名字,表现是复选框静默不可点)。 */
+/** 任务项 `<li>` 的类名。 */
+export const TASK_ITEM_CLASS = "notebook-task-item";
+/** 源码行号(1 起)。**只有带这个属性的任务项可点** —— 没有它说明行号没对上。 */
+export const TASK_LINE_ATTR = "data-task-line";
+/** 渲染那一刻的勾选状态(`1`/`0`)。写回时当乐观锁用。 */
+export const TASK_CHECKED_ATTR = "data-task-checked";
 
 /** 数学占位:正文放原始 TeX,渲染器就地替换成 KaTeX 输出。 */
 const MATH_PLACEHOLDER_CLASS = "notebook-math";
@@ -85,11 +105,21 @@ function restoreMath(html: string, formulas: { tex: string; display: boolean }[]
   });
 }
 
-function createMarked(): Marked {
+/**
+ * 建一个 marked 实例。
+ *
+ * `taskLines` 是这次渲染里任务项的行号表(按文档顺序),由 `noteTasks` 在**原始源码**上
+ * 算出来。渲染器按顺序取用,于是每个任务 `<li>` 都带着自己那一行的行号 —— 阅读态勾选
+ * 就不用靠"DOM 里第 N 个复选框"去猜源码第 N 行。给空数组就不带行号(嵌入、悬浮预览:
+ * 那些内容属于**别的**笔记,行号对不上当前编辑的正文,带上去只会勾错文件)。
+ */
+function createMarked(taskLines: readonly NoteTask[] = []): Marked {
   const instance = new Marked({
     gfm: true,
     breaks: false,
   });
+  /** 走到第几个任务项了。渲染器按文档顺序调用,和 `taskLines` 的顺序同源。 */
+  let taskCursor = 0;
 
   // GitHub 风格提示块(`> [!NOTE]`)。
   instance.use(markedAlert());
@@ -111,15 +141,26 @@ function createMarked(): Marked {
         const langAttr = lang ? ` data-language="${escapeHtml(lang)}"` : "";
         return `<pre${langAttr}><code${cls}>${escapeHtml(token.text)}</code></pre>\n`;
       },
-      // 任务列表:只加个类名便于上样式。
+      // 任务列表:加类名便于上样式,并把源码行号带出去。
       //
       // **不要**自己生成 `<input type=checkbox>` —— marked 的 GFM 已经在
       // `parser.parse(token.tokens)` 里产了一个,再加一个就是两个复选框。
-      // 勾选交互留给编辑器,这里靠 marked 输出的 `disabled` 保持只读。
       listitem(token: Tokens.ListItem) {
+        if (!token.task) return `<li>${this.parser.parse(token.tokens)}</li>\n`;
+        /* 先占住自己这一格,**再**解析子内容。
+           `parser.parse(token.tokens)` 会递归到嵌套列表里,那些更深的任务项也会走这个
+           renderer;先解析子内容的话,它们会抢在外层之前取走游标 —— 于是外层拿到的是
+           嵌套项的行号。`noteTasks` 是先序遍历(先自己再子级),这里必须一致。 */
+        const mapped = taskLines[taskCursor];
+        taskCursor += 1;
         const inner = this.parser.parse(token.tokens);
-        if (!token.task) return `<li>${inner}</li>\n`;
-        return `<li class="notebook-task-item">${inner}</li>\n`;
+        /* 勾选状态对不上就不带行号。这是"两侧真的同源吗"的自检:`taskLines` 走在原始
+           源码上,而这里走的是抽掉数学之后的文本 —— 万一某天有输入让两边的任务项数量
+           或顺序不一致,退化成只读复选框(和以前一样)远好过按错位的行号写文件。 */
+        if (!mapped || mapped.checked !== (token.checked === true)) {
+          return `<li class="${TASK_ITEM_CLASS}">${inner}</li>\n`;
+        }
+        return `<li class="${TASK_ITEM_CLASS}" ${TASK_LINE_ATTR}="${mapped.line}" ${TASK_CHECKED_ATTR}="${mapped.checked ? "1" : "0"}">${inner}</li>\n`;
       },
     },
   });
@@ -130,7 +171,16 @@ function createMarked(): Marked {
 /** DOMPurify 白名单:KaTeX 输出 MathML,默认配置会把它整个剥掉。 */
 const SANITIZE_CONFIG = {
   USE_PROFILES: { html: true, mathMl: true, svg: true },
-  ADD_ATTR: ["data-mermaid", "data-language", "data-rendered", "checked", "disabled"],
+  ADD_ATTR: [
+    "data-mermaid",
+    "data-language",
+    "data-rendered",
+    "checked",
+    "disabled",
+    // 任务项的源码行号与勾选快照,阅读态勾选用。
+    TASK_LINE_ATTR,
+    TASK_CHECKED_ATTR,
+  ],
   // 提示块靠 class 上样式。
   ADD_TAGS: ["section", "figure", "figcaption"],
 };
@@ -182,11 +232,14 @@ export function stripHeadingIds(html: string): string {
  * 产出的 HTML 里数学与 Mermaid 都是**未渲染的占位元素**,调用方拿到之后要接
  * `renderNoteVisualsLazy()`(见 noteVisuals.ts)才能看到公式和图。
  */
-export function renderNoteMarkdown(source: string): RenderedNote {
+export function renderNoteMarkdown(source: string, options: RenderOptions = {}): RenderedNote {
+  /* 0) 任务项的行号。**在抽数学之前**算:`extractMath` 会把多行的 `$$` 块压成一行
+        哨兵,之后每一行的行号都往前挪。 */
+  const taskLines = options.taskLines ? noteTasks(source ?? "") : [];
   // 1) 先抽走数学 —— marked 会破坏 TeX 里的 `_` `*` `\`。
   const { text, formulas } = extractMath(source ?? "");
   // 2) 每次新建实例:插件持有状态,复用会让相邻两次渲染互相影响。
-  const html = createMarked().parse(text, { async: false }) as string;
+  const html = createMarked(taskLines).parse(text, { async: false }) as string;
   // 3) 换回数学占位
   const withMath = restoreMath(html, formulas);
   // 4) 清洗 → 补锚点 id(顺序不能反,见 assignHeadingIds 的注释)

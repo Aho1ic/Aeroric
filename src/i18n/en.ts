@@ -2852,6 +2852,7 @@ export const en: Record<string, string> = {
   "notebook.propertiesMentionsValue": "{links} links from {notes} notes",
   "notebook.propertiesNoMentions": "No notes link here",
   "notebook.propertiesVaultHint": "Scanned from files on disk, so unsaved edits are not counted.",
+  "notebook.taskToggle": "Toggle task: {text}",
   "notebook.wikiLinkOpen": "Open {title}",
   "notebook.wikiLinkMissing": "No note named {target}",
   "notebook.wikiLinkAmbiguous": "Several notes share this name — opens {title}",
