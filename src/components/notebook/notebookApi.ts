@@ -405,6 +405,38 @@ export function vaultTags(vault: string): Promise<NoteTagSource[]> {
   return invoke<NoteTagSource[]>("notebook_vault_tags", { vault });
 }
 
+/** 一篇被改过的笔记,`count` 是这篇里改掉的处数。 */
+export type TagRenameChange = { path: string; count: number };
+
+/** 跳过一篇的理由。文案键是 `notebook.tagSkip.<reason>`。 */
+export type TagSkipReason = "notATag" | "vanished" | "tooManyFiles";
+
+export type TagRenameSkip = { path: string; reason: TagSkipReason };
+
+export type TagRenameFailure = { path: string; message: string };
+
+/** 一次跨文件重命名的完整报告。 */
+export type TagRenameReport = {
+  changed: TagRenameChange[];
+  skipped: TagRenameSkip[];
+  failed: TagRenameFailure[];
+};
+
+/**
+ * 跨文件把 `#old` 改成 `#new`。
+ *
+ * `old` 传归一化 key(大小写不敏感,和面板里那一行的聚合口径一致),`new` 是要写进
+ * 文件的字面文本。
+ *
+ * 改写在后端按扫描器给的**字节区间**做,不是再跑一条正则 —— 面板上数得出来的处数
+ * 一定改得动,而代码块 / frontmatter / `##heading` 里的字样一定不动。整次失败(新名字
+ * 非法、vault 读不动)抛错;单篇失败进报告的 `failed`,不中断其余的处理。
+ */
+export function renameVaultTag(vault: string, old: string, next: string): Promise<TagRenameReport> {
+  // Rust 侧参数名是 `new` —— 那是 TS 的保留字,所以这里的形参叫 `next`。
+  return invoke<TagRenameReport>("notebook_rename_tag", { vault, old, new: next });
+}
+
 /** 索引里一篇笔记的路径与真实标题。`path` 与笔记列表里的 `id` 是同一个值。 */
 export type VaultIndexEntry = {
   path: string;

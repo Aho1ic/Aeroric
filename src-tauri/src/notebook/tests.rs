@@ -2733,3 +2733,308 @@ fn vault_tags_walks_subdirectories_and_sorts_by_path() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+// ── 跨文件 tag 重命名 ───────────────────────────────────────────────────────
+
+use super::tag_rename::{self, TagSkipReason};
+
+/// 报告里某一类的路径(取文件名部分),已排序。
+fn changed_names(report: &tag_rename::TagRenameReport) -> Vec<(String, usize)> {
+    report
+        .changed
+        .iter()
+        .map(|c| (file_name_of(&c.path), c.count))
+        .collect()
+}
+
+fn skipped_names(report: &tag_rename::TagRenameReport) -> Vec<(String, TagSkipReason)> {
+    report
+        .skipped
+        .iter()
+        .map(|s| (file_name_of(&s.path), s.reason))
+        .collect()
+}
+
+fn file_name_of(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[test]
+fn rename_tag_rewrites_every_hit_and_reports_counts() {
+    let vault = temp_vault("tag-rename");
+    let state = registered_state(&vault);
+    std::fs::write(vault.join("a.md"), "#work 一处\n又一处 #work\n").expect("seed");
+    std::fs::write(vault.join("b.md"), "#work 单独一处\n").expect("seed");
+    std::fs::write(vault.join("c.md"), "没有那个标签\n").expect("seed");
+
+    let report = tag_rename::rename_vault_tag(&state, &vault, "work", "job").expect("rename");
+
+    assert_eq!(
+        changed_names(&report),
+        vec![("a.md".to_string(), 2), ("b.md".to_string(), 1)]
+    );
+    // 根本不含这个标签的笔记不进报告 —— 全库大部分笔记都是这样,列出来等于没列。
+    assert!(report.skipped.is_empty());
+    assert!(report.failed.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(vault.join("a.md")).expect("read"),
+        "#job 一处\n又一处 #job\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_reports_why_a_note_with_the_text_was_skipped() {
+    /* "这篇里明明有 #work,怎么没改"是重命名之后最常见的疑问,而答案只有扫描器知道。
+    只给路径不给理由的报告没法回答它。 */
+    let vault = temp_vault("tag-rename-skip");
+    let state = registered_state(&vault);
+    std::fs::write(vault.join("code.md"), "```sh\n#work 在代码里\n```\n").expect("seed");
+    std::fs::write(vault.join("head.md"), "##work 是标题\n").expect("seed");
+    std::fs::write(vault.join("real.md"), "#work 真的\n").expect("seed");
+
+    let report = tag_rename::rename_vault_tag(&state, &vault, "work", "job").expect("rename");
+
+    assert_eq!(changed_names(&report), vec![("real.md".to_string(), 1)]);
+    assert_eq!(
+        skipped_names(&report),
+        vec![
+            ("code.md".to_string(), TagSkipReason::NotATag),
+            ("head.md".to_string(), TagSkipReason::NotATag),
+        ]
+    );
+    // 代码块里的内容一个字节都没动。
+    assert_eq!(
+        std::fs::read_to_string(vault.join("code.md")).expect("read"),
+        "```sh\n#work 在代码里\n```\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_leaves_a_version_snapshot_per_note() {
+    // 每篇单独能撤回。走 `save_note` 就是为了白拿这一套,而不是自己写文件。
+    let vault = temp_vault("tag-rename-history");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "a.md");
+    fs_ops::create_note(&state, &path, "#work 原文\n").expect("create");
+
+    tag_rename::rename_vault_tag(&state, &vault, "work", "job").expect("rename");
+
+    let entries = snapshots::list(&state, &path).expect("list");
+    assert_eq!(entries.len(), 1);
+    let snapshot = snapshots::read(&state, &path, &entries[0].id).expect("read");
+    assert_eq!(snapshot.content, "#work 原文\n");
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_refuses_to_clobber_a_note_that_changed_after_the_read() {
+    /* 重命名里唯一会**静默**丢数据的一步:重读之后、写回之前有别的编辑挤进来。这里
+    直接测那个接缝,因为经 `rename_vault_tag` 走的话没法可靠地把外部写插进那个窗口。
+
+    基线取自真实的 `read_note`,然后模拟外部编辑器改同一篇。sleep 是必须的:
+    `save_note` 要 hash 和 mtime **都**变了才算冲突,而 mtime 精度在某些文件系统上
+    只到毫秒 —— 同一毫秒内写两次,冲突检测看不见。 */
+    let vault = temp_vault("tag-rename-clobber");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "a.md");
+    fs_ops::create_note(&state, &path, "#work 原文\n").expect("create");
+
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(vault.join("a.md"), "别人写的一整段\n").expect("external write");
+
+    let error = tag_rename::write_rewritten(&state, &path, "#job 原文\n", opened.sig)
+        .expect_err("a note edited after the read must not be overwritten");
+    assert!(
+        error.contains("changed on disk"),
+        "the failure must say why, not just fail: {error}"
+    );
+    // 关键断言:别人的内容还在。丢了这一条,上面那句 Err 只是"报了个错"而已。
+    assert_eq!(
+        std::fs::read_to_string(vault.join("a.md")).expect("read"),
+        "别人写的一整段\n"
+    );
+    // 冲突不写盘,所以也不该留快照 —— 快照记的是"被覆盖掉的版本",这里没有被覆盖的。
+    assert!(snapshots::list(&state, &path).expect("list").is_empty());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_compares_against_its_own_read_not_the_latest_writer() {
+    /* 上一条测试用 `std::fs::write` 造外部编辑,那种写法不碰进程内的 `opened` 表。于是
+    把 `Some(baseline)` 换成 `None` 它也照样绿:`save_note` 会退回 `last_sig`,而那
+    张表里存的正好还是我们读到的那个指纹,两者恰好一致。
+
+    这一条把它们分开。别人是**经 `save_note`** 写的(另一个 tab / 快速捕获流程都走
+    这条路),所以表里的指纹被更新成了比我们的基线更新的那一个。此时:
+    - 用我们自己读到的基线比 → 对不上 → 冲突 → 不写盘。
+    - 用表里的最新指纹比 → 和磁盘一致 → 判定"没冲突" → 把别人刚写的内容盖掉。
+
+    后者没有任何报错。测这一条就是为了让"基线必须是我们自己读到的那个"这件事有人守着。 */
+    let vault = temp_vault("tag-rename-stale-table");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "a.md");
+    fs_ops::create_note(&state, &path, "#work 原文\n").expect("create");
+
+    let opened = fs_ops::read_note(&state, &path).expect("open");
+    // mtime 要真的往前走,否则 hash 和 mtime "都变了"这个条件凑不齐。
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // 另一个写者:基线是当时的磁盘状态,所以它这一次保存是合法的,并把表刷成了新指纹。
+    let theirs = fs_ops::save_note(
+        &state,
+        &path,
+        "别人写的一整段\n",
+        Some(opened.sig.clone()),
+        false,
+    )
+    .expect("their save");
+    assert!(
+        matches!(theirs, SaveOutcome::Saved { .. }),
+        "the other writer's own save must succeed; otherwise this test proves nothing"
+    );
+
+    let error = tag_rename::write_rewritten(&state, &path, "#job 原文\n", opened.sig)
+        .expect_err("a baseline older than the last writer must not pass the guard");
+    assert!(error.contains("changed on disk"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(vault.join("a.md")).expect("read"),
+        "别人写的一整段\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+#[cfg(unix)]
+fn rename_tag_collects_every_failure_instead_of_stopping_at_the_first() {
+    /* Markio 遇到第一个失败就 return,剩下的文件既没改也没进报告 —— 用户拿到的是
+    "改了 4 个,第 5 个失败",后面还有几个、有没有别的问题要再点一次才知道,而那时
+    前 4 个已经改过,报告的含义又变了。
+
+    造两个失败而不是一个:一个的话"收全部"和"停在第一个"给出同样的报告。失败源用
+    "父目录不可写" —— 原子写要在目录里建临时文件,建不了就失败,而读还是好的。
+    chmod 只有 unix 有,Windows 上目录只读并不阻止建文件。 */
+    use std::os::unix::fs::PermissionsExt;
+
+    let vault = temp_vault("tag-rename-failures");
+    let state = registered_state(&vault);
+    let locked = vault.join("locked");
+    std::fs::create_dir_all(&locked).expect("mkdir");
+    std::fs::write(locked.join("a.md"), "#work 一处\n").expect("seed");
+    std::fs::write(locked.join("c.md"), "#work 一处\n").expect("seed");
+    std::fs::write(vault.join("b.md"), "#work 一处\n").expect("seed");
+
+    let mut perms = std::fs::metadata(&locked).expect("meta").permissions();
+    perms.set_mode(0o555); // r-x:能读能列,不能建文件
+    std::fs::set_permissions(&locked, perms).expect("chmod");
+
+    let report = tag_rename::rename_vault_tag(&state, &vault, "work", "job").expect("rename");
+
+    // 可写的那篇照常改完 —— 失败没有中断后面的处理。
+    assert_eq!(changed_names(&report), vec![("b.md".to_string(), 1)]);
+    // **两个**失败都在:停在第一个的实现这里只会有一个。
+    let failed: Vec<String> = report
+        .failed
+        .iter()
+        .map(|f| file_name_of(&f.path))
+        .collect();
+    assert_eq!(failed, vec!["a.md".to_string(), "c.md".to_string()]);
+    // 每条失败都带原因,不是只给路径。
+    assert!(report.failed.iter().all(|f| !f.message.is_empty()));
+    // 失败的那两篇一个字节都没动。
+    assert_eq!(
+        std::fs::read_to_string(locked.join("a.md")).expect("read"),
+        "#work 一处\n"
+    );
+
+    let mut perms = std::fs::metadata(&locked).expect("meta").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&locked, perms).ok();
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_matches_case_insensitively_across_notes() {
+    // 面板把 `#Work` 和 `#work` 聚成一行,重命名必须跟着那个口径,否则改完还剩一半。
+    let vault = temp_vault("tag-rename-case");
+    let state = registered_state(&vault);
+    std::fs::write(vault.join("a.md"), "#Work 大写\n").expect("seed");
+    std::fs::write(vault.join("b.md"), "#work 小写\n").expect("seed");
+
+    let report = tag_rename::rename_vault_tag(&state, &vault, "WORK", "Job").expect("rename");
+
+    assert_eq!(
+        changed_names(&report),
+        vec![("a.md".to_string(), 1), ("b.md".to_string(), 1)]
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("a.md")).expect("read"),
+        "#Job 大写\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_rejects_a_new_name_the_scanner_would_lose() {
+    /* 写进去一个自己都扫不出来的标签,下一次打开面板它就消失了,而文件已经改完。
+    所以校验必须在动手之前。 */
+    let vault = temp_vault("tag-rename-invalid");
+    let state = registered_state(&vault);
+    std::fs::write(vault.join("a.md"), "#work 一处\n").expect("seed");
+
+    for bad in ["", "  ", "#", "a b", "42", "work/"] {
+        assert!(
+            tag_rename::rename_vault_tag(&state, &vault, "work", bad).is_err(),
+            "{bad:?} 应该被拒"
+        );
+    }
+    // 一个字节都没动。
+    assert_eq!(
+        std::fs::read_to_string(vault.join("a.md")).expect("read"),
+        "#work 一处\n"
+    );
+    // 旧名字为空也拒 —— 那会匹配上每一个标签。
+    assert!(tag_rename::rename_vault_tag(&state, &vault, "  #  ", "job").is_err());
+    // 改成自己是空操作,拒掉:否则每篇都会留一条内容相同的版本快照。
+    assert!(tag_rename::rename_vault_tag(&state, &vault, "work", "work").is_err());
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn rename_tag_skips_private_dirs_and_non_notes() {
+    // 遍历规则和标签扫描共用 `vault_walk`:回收站里的笔记已经删了,不该被改。
+    let vault = temp_vault("tag-rename-walk");
+    let state = registered_state(&vault);
+    let private = vault.join(".notebook");
+    std::fs::create_dir_all(private.join("trash")).expect("mkdir");
+    std::fs::write(private.join("trash/gone.md"), "#work\n").expect("seed");
+    std::fs::write(vault.join("notes.txt"), "#work\n").expect("seed");
+    std::fs::create_dir_all(vault.join("sub")).expect("mkdir");
+    std::fs::write(vault.join("sub/deep.md"), "#work\n").expect("seed");
+
+    let report = tag_rename::rename_vault_tag(&state, &vault, "work", "job").expect("rename");
+
+    assert_eq!(changed_names(&report), vec![("deep.md".to_string(), 1)]);
+    assert_eq!(
+        std::fs::read_to_string(private.join("trash/gone.md")).expect("read"),
+        "#work\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("notes.txt")).expect("read"),
+        "#work\n"
+    );
+
+    std::fs::remove_dir_all(&vault).ok();
+}

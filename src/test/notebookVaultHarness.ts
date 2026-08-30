@@ -121,6 +121,17 @@ export class NotebookVaultHarness {
   failTagScan = false;
   /** 全库标签扫描被调用了几次。验"只在标签那一档可见时扫"用。 */
   tagScanCalls = 0;
+  /** 每次跨文件重命名的入参。验"传下去的是归一化 key 而不是显示名"用。 */
+  tagRenameCalls: { old: string; next: string }[] = [];
+  /** 让整次重命名失败(不是单篇失败),用来验小窗里的错误态。 */
+  failTagRename = false;
+  /**
+   * 预置的「单篇失败」列表,原样回到报告的 `failed` 里。
+   *
+   * 为什么要能造:单篇失败在真后端是权限 / 冲突这类外部条件,harness 里没法自然
+   * 触发,而报告里那一段(哪些没成功)恰恰是最该有人看的一段。
+   */
+  tagRenameFailures: { path: string; message: string }[] = [];
 
   /** 当前的图标表。断言"真的写进去了"用。 */
   iconTable(): Record<string, string> {
@@ -324,6 +335,48 @@ export class NotebookVaultHarness {
           if (tags.length) sources.push({ path, tags });
         }
         return sources;
+      }
+
+      case "notebook_rename_tag": {
+        this.tagRenameCalls.push({ old: String(args.old), next: String(args.new) });
+        if (this.failTagRename) throw new Error("renaming the tag failed");
+        /* 复刻 Rust 侧的三个桶。改写只认 `harnessTagHits` 认出来的那些行 —— 和真后端
+           "索引与重命名共用一个词法器"是同一个性质,所以代码块 / frontmatter /
+           `##heading` 里的字样在这里也一样不会被改。 */
+        const oldKey = String(args.old)
+          .trim()
+          .replace(/^#+/, "")
+          .replace(/[/-]+$/, "")
+          .toLowerCase();
+        const nextTag = String(args.new).trim().replace(/^#+/, "");
+        const changed: { path: string; count: number }[] = [];
+        const skipped: { path: string; reason: string }[] = [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          const content = this.files.get(path)?.content ?? "";
+          const hits = harnessTagHits(content).filter(
+            (hit) => hit.raw.toLowerCase() === oldKey && hit.raw !== nextTag,
+          );
+          if (!hits.length) {
+            // 有字样却没有一处算标签 —— 和 Rust 侧一样报出理由。
+            if (content.toLowerCase().includes(`#${oldKey}`)) {
+              skipped.push({ path, reason: "notATag" });
+            }
+            continue;
+          }
+          /* 按行改:harness 的词法器只给行号,不给字节区间。够用 —— 面板测试要验的是
+             "报告怎么显示"和"改完会重扫",逐字节的正确性由 `tag_rename.rs` 自己守。 */
+          const lines = content.split("\n");
+          const touched = new Set(hits.map((hit) => hit.line));
+          for (const line of touched) {
+            lines[line - 1] = lines[line - 1].replace(
+              new RegExp(`#${oldKey}(?![\\w\\u4e00-\\u9fff/-])`, "gi"),
+              `#${nextTag}`,
+            );
+          }
+          this.files.set(path, { content: lines.join("\n"), mtimeMs: (this.clock += 10) });
+          changed.push({ path, count: hits.length });
+        }
+        return { changed, skipped, failed: [...this.tagRenameFailures] };
       }
 
       // 通用 fs 命令,不是 notebook_* 的。列表右键菜单的「在系统文件夹中打开」

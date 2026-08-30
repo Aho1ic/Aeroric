@@ -26,6 +26,7 @@ pub mod links;
 pub mod migrate;
 pub mod snapshots;
 pub mod state;
+pub mod tag_rename;
 pub mod tags;
 pub mod trash;
 pub mod vault_index;
@@ -506,6 +507,26 @@ pub async fn notebook_vault_tags(
 ) -> Result<Vec<tags::NoteTagSource>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || tags::scan_vault_tags(&resolved)).await
+}
+
+/// 跨文件把 `#old` 改成 `#new`,返回 changed / skipped / failed 的完整报告。
+///
+/// `old` 按归一化 key 匹配(大小写不敏感,和面板里那一行的聚合口径一致),`new` 是要
+/// 写进文件的字面文本。改写按扫描器给的字节区间做 —— 数得出来的一定改得动,见
+/// `tag_rename.rs` 的模块注释。
+///
+/// 和 `notebook_save_note` 一样在当前线程上跑而不进阻塞池:要用 `&state`,而
+/// `State<'_, _>` 不是 `'static`。批量写盘确实更重,但每篇都走既有的冲突检测和版本
+/// 快照那一路,改成后台任务得先把那套东西也搬过去。
+#[tauri::command]
+pub async fn notebook_rename_tag(
+    state: State<'_, NotebookState>,
+    vault: String,
+    old: String,
+    new: String,
+) -> Result<tag_rename::TagRenameReport, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    tag_rename::rename_vault_tag(&state, &resolved, &old, &new)
 }
 
 /// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。

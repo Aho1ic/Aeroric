@@ -3267,5 +3267,182 @@ describe("NotebookPanel", () => {
       expect(screen.queryByRole("complementary", { name: "Outline" })).toBeNull();
       expect(screen.queryByRole("complementary", { name: "Backlinks" })).toBeNull();
     });
+
+    describe("跨文件重命名", () => {
+      /** 打开某个标签那一行的重命名小窗。 */
+      async function openRename(tag: string) {
+        fireEvent.click(await screen.findByRole("button", { name: `Rename #${tag} everywhere` }));
+        return screen.findByRole("dialog", { name: `Rename #${tag}` });
+      }
+
+      /** 小窗里输入新名字并执行。 */
+      function submitRename(dialog: HTMLElement, next: string) {
+        fireEvent.change(screen.getByRole("textbox", { name: "New tag name" }), {
+          target: { value: next },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+        return dialog;
+      }
+
+      it("改完把全库的引用一起换掉,并报出改了几处几篇", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n又一处 #work\n');
+        harness.seed("b.md", '---\ntitle: "B"\n---\n\n#work 单独一处\n');
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        await waitFor(() => expect(dialog).toHaveTextContent("Renamed 3 uses in 2 notes."));
+        // 报告不是唯一的凭据 —— 文件真的改了才算改。
+        expect(harness.read("/vault/a.md")).toContain("#job 一处");
+        expect(harness.read("/vault/a.md")).toContain("又一处 #job");
+        expect(harness.read("/vault/b.md")).toContain("#job 单独一处");
+      });
+
+      it("传给后端的是归一化 key,不是显示用的写法", async () => {
+        /* 面板上显示的是第一次见到的写法(`#Work`),而匹配按小写 key 做。传显示名
+           下去的话,后端拿到 `Work` 再归一化一次结果一样 —— 但一旦哪天两边的归一化
+           规则不同步,差别就落在"改了几处"上,而那时已经写完盘了。 */
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#Work 大写\n');
+        harness.seed("b.md", '---\ntitle: "B"\n---\n\n#work 小写\n');
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("Work");
+
+        submitRename(dialog, "job");
+
+        await waitFor(() => expect(harness.tagRenameCalls).toHaveLength(1));
+        expect(harness.tagRenameCalls[0]).toEqual({ old: "work", next: "job" });
+      });
+
+      it("改完重扫,旧名字不再出现在清单里", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        renderNotebook();
+        await openTags();
+        const before = harness.tagScanCalls;
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        // 不重扫的话清单上还留着 `#work` 那一行,点它会展开一堆跳不到的引用。
+        await waitFor(() => expect(tagNames()).toEqual(["#job, 1 uses in 1 notes"]));
+        expect(harness.tagScanCalls).toBeGreaterThan(before);
+      });
+
+      it("执行完不关窗 —— 报告就是这次操作的结果", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        await waitFor(() => expect(dialog).toHaveTextContent("Renamed 1 uses in 1 notes."));
+        // 窗还在,而且按钮从「重命名」变成「完成」。
+        expect(screen.getByRole("dialog", { name: "Rename #work" })).toBe(dialog);
+        expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      });
+
+      it("跳过的篇数和理由都报出来", async () => {
+        /* "这篇里明明有 #work,怎么没改"是重命名之后最常见的疑问。只报路径不报理由
+           的话没人答得上来 —— 答案(在代码块里)只有扫描器知道。 */
+        harness.seed("code.md", '---\ntitle: "Code"\n---\n\n```sh\n#work 在代码里\n```\n');
+        harness.seed("real.md", '---\ntitle: "Real"\n---\n\n#work 真的\n');
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        await waitFor(() => expect(dialog).toHaveTextContent("Skipped 1 notes"));
+        expect(dialog).toHaveTextContent("Not a tag here (code block, frontmatter, or heading)");
+        // 代码块一个字节都没动。
+        expect(harness.read("/vault/code.md")).toContain("#work 在代码里");
+      });
+
+      it("单篇失败进报告,不当成整次失败", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        harness.tagRenameFailures = [{ path: "/vault/locked.md", message: "permission denied" }];
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        // 两段同时在场:成功的那些照样报出来,失败的单独一段。
+        await waitFor(() => expect(dialog).toHaveTextContent("Failed in 1 notes"));
+        expect(dialog).toHaveTextContent("Renamed 1 uses in 1 notes.");
+        expect(dialog).toHaveTextContent("permission denied");
+      });
+
+      it("整次失败就地报错,文件一个都没动", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        harness.failTagRename = true;
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        submitRename(dialog, "job");
+
+        await waitFor(() => expect(dialog).toHaveTextContent("renaming the tag failed"));
+        expect(harness.read("/vault/a.md")).toContain("#work 一处");
+        // 失败之后还能再试 —— 按钮不该卡在「正在重命名…」。
+        expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+      });
+
+      it("名字没改时不能提交", async () => {
+        // 空操作也会给每篇留一条版本快照,把 30 条的保留窗口冲掉。
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        renderNotebook();
+        await openTags();
+        await openRename("work");
+
+        // 初值就是旧名字,开窗即不可提交。
+        expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+        fireEvent.change(screen.getByRole("textbox", { name: "New tag name" }), {
+          target: { value: "  " },
+        });
+        expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+        fireEvent.change(screen.getByRole("textbox", { name: "New tag name" }), {
+          target: { value: "job" },
+        });
+        expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled();
+        expect(harness.tagRenameCalls).toHaveLength(0);
+      });
+
+      it("开另一个标签的窗时不带着上一次的报告", async () => {
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n#home 家里\n');
+        renderNotebook();
+        await openTags();
+        const first = await openRename("work");
+        submitRename(first, "job");
+        await waitFor(() => expect(first).toHaveTextContent("Renamed 1 uses in 1 notes."));
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+        const second = await openRename("home");
+
+        // 留着上一次的报告会让它看起来像这一次的结果。
+        expect(second).not.toHaveTextContent("Renamed 1 uses in 1 notes.");
+        expect(second).toHaveTextContent("Renames 1 uses of #home across your notes.");
+      });
+
+      it("Esc 关窗", async () => {
+        /* 只验"关掉"。原本这里还有一句"侧栏不受影响",但那句是空的:面板自己没有
+           Esc 处理,宿主那个 window 监听要按修饰键才进,所以侧栏无论如何都还在 ——
+           去掉小窗里的 stopPropagation 它照样绿。留一句永远为真的断言比没有更糟,
+           它看着像有人在守着那件事。 */
+        harness.seed("a.md", '---\ntitle: "A"\n---\n\n#work 一处\n');
+        renderNotebook();
+        await openTags();
+        const dialog = await openRename("work");
+
+        fireEvent.keyDown(dialog, { key: "Escape" });
+
+        await waitFor(() =>
+          expect(screen.queryByRole("dialog", { name: "Rename #work" })).toBeNull(),
+        );
+      });
+    });
   });
 });

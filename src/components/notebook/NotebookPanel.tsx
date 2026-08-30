@@ -41,7 +41,9 @@ import {
   restoreTrashItem,
   revealNoteInFileManager,
   readNoteIcons,
+  renameVaultTag,
   statNote,
+  type TagRenameReport,
   vaultIndex,
   vaultLinks,
   vaultTags,
@@ -54,6 +56,7 @@ import { bodyOffsetOfFileLine, collectBacklinks, countBacklinks } from "./noteBa
 import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
 import { collectTags, countTagRefs, filterTags } from "./noteTags";
 import { NoteTagsPanel } from "./NoteTagsPanel";
+import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
 import { useVaultScan } from "./useVaultScan";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import {
@@ -196,6 +199,12 @@ function NotebookPanelContent({
    *  用户切出去往往正是为了照着正文找该筛什么。 */
   const [tagQuery, setTagQuery] = useState("");
   const [openTag, setOpenTag] = useState<string | null>(null);
+  /** 跨文件重命名的小窗。`null` = 没开。报告和执行状态跟着它一起放在这一层:
+   *  执行期间用户可能切档/滚动,状态挂在行上会随重渲染丢掉。 */
+  const [tagRename, setTagRename] = useState<TagRenameDialogState | null>(null);
+  const [tagRenameReport, setTagRenameReport] = useState<TagRenameReport | null>(null);
+  const [tagRenameRunning, setTagRenameRunning] = useState(false);
+  const [tagRenameError, setTagRenameError] = useState<string | null>(null);
   /** 反链跳转的落点:换到那篇笔记之后光标要落到第几行(按**文件**数的行号)。
    *  用 state 而不是 ref —— 落点要在渲染时算成 prop 交给编辑器(见下面
    *  `backlinkCursorOffset` 的注释)。 */
@@ -771,6 +780,34 @@ function NotebookPanelContent({
   const jumpToBacklink = (path: string, line: number) => {
     setPendingBacklink({ noteId: path, line });
     setActiveId(path);
+  };
+
+  /**
+   * 执行跨文件重命名。
+   *
+   * 结束后**不关窗**:报告(改了几处、跳过哪些、哪些失败)就是这个操作的结果,关掉
+   * 等于把它扔了。用户看完自己按「完成」。
+   *
+   * 完了要重扫:标签清单现在是过期的 —— 旧名字那一行还在,而它已经不存在了。点它
+   * 会展开一堆跳不到的引用。
+   */
+  const submitTagRename = async (target: TagRenameDialogState, next: string) => {
+    if (!vault) return;
+    setTagRenameRunning(true);
+    setTagRenameError(null);
+    try {
+      const report = await renameVaultTag(vault, target.key, next);
+      setTagRenameReport(report);
+      /* 展开的那一条按旧 key 记的,重扫之后这个 key 可能已经没了 —— 收起来,
+         而不是留一个指向不存在标签的展开态。 */
+      setOpenTag(null);
+      tagScan.refresh();
+      // 反链清单不受影响(标签不是 wikilink),不用跟着重扫。
+    } catch (error) {
+      setTagRenameError(errorText(error));
+    } finally {
+      setTagRenameRunning(false);
+    }
   };
 
   /** 拖动大纲重排章节。整段(含子标题与正文)一起移动。 */
@@ -1722,6 +1759,18 @@ function NotebookPanelContent({
                       onToggle={(key) => setOpenTag((current) => (current === key ? null : key))}
                       /* 跳转和反链共用一条路 —— 两边给的都是"某篇的某一行"。 */
                       onJump={jumpToBacklink}
+                      onRename={(entry, anchor) => {
+                        // 开新窗时清掉上一次的报告,否则会看着像这一次的结果。
+                        setTagRenameReport(null);
+                        setTagRenameError(null);
+                        setTagRename({
+                          x: anchor.x,
+                          y: anchor.y,
+                          key: entry.key,
+                          label: entry.label,
+                          count: entry.count,
+                        });
+                      }}
                       onRefresh={tagScan.refresh}
                       t={t}
                     />
@@ -1752,6 +1801,19 @@ function NotebookPanelContent({
           current={noteIconOf(noteIcons, vault ?? "", iconPicker.noteId)}
           onPick={(icon) => pickNoteIcon(iconPicker.noteId, icon)}
           onClose={() => setIconPicker(null)}
+          t={t}
+        />
+      )}
+      {/* 和上面几个浮层一样放在两列**外面**:侧栏那一列是 overflow:auto,放进去会被
+          裁掉半个窗。 */}
+      {tagRename && (
+        <TagRenameDialog
+          state={tagRename}
+          report={tagRenameReport}
+          running={tagRenameRunning}
+          error={tagRenameError}
+          onSubmit={(next) => void submitTagRename(tagRename, next)}
+          onClose={() => setTagRename(null)}
           t={t}
         />
       )}

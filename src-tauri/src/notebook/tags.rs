@@ -330,6 +330,47 @@ fn normalize_tag(body: &str) -> Option<&str> {
     Some(kept)
 }
 
+/// 聚合与匹配用的 key:去掉前导 `#`、两端空白、末尾的 `/`-`,折小写。
+///
+/// 必须和前端 `noteTags.ts` 的 `normalizeTag` 逐条一致 —— 面板按前端那份聚合出"这一行
+/// 有 3 处",重命名按这份匹配。两边漂移的表现就是那个数字对不上,而这正是本模块要
+/// 根除的那一类缺陷。两边各有一份是因为聚合在前端、改写在后端,共用一份得来回过 IPC。
+pub(crate) fn normalize_key(tag: &str) -> String {
+    tag.trim()
+        .trim_start_matches('#')
+        .trim_end_matches(['/', '-'])
+        .to_lowercase()
+}
+
+/// 校验一个用户输入的新标签名,返回**要写进文件的字面文本**(不含 `#`)。
+///
+/// 校验的口径就是 `tag_hits` 自己:把 `#候选` 喂进扫描器,扫出来的那一个必须原样等于
+/// 候选。这样"能不能写"和"写完扫不扫得出来"是同一个问题的两面 —— 换成手写一串
+/// `is_tag_char` 判断的话,任何一处和扫描器不一致都会写出一个自己都找不到的标签,而
+/// 那时文件已经改完了。
+pub(crate) fn validate_tag(input: &str) -> Result<String, String> {
+    let candidate = input.trim().trim_start_matches('#').trim();
+    if candidate.is_empty() {
+        return Err("The new tag is empty".to_string());
+    }
+    if candidate.chars().count() > MAX_TAG_CHARS {
+        return Err(format!(
+            "The new tag is too long (limit {MAX_TAG_CHARS} characters)"
+        ));
+    }
+    let probe = format!("#{candidate}");
+    match tag_hits(&probe).as_slice() {
+        [hit] if hit.raw == candidate && hit.start == 0 && hit.end == probe.len() => {
+            Ok(candidate.to_string())
+        }
+        // 扫不出来或者扫出来的和输入不一样:含空格、含 `#`、纯数字、末尾是 `/`-`……
+        // 逐种情形分别报错只会让文案和扫描器各自漂移,这里报同一句。
+        _ => Err(format!(
+            "\"{candidate}\" is not a valid tag: use letters, digits, `_`, `-` or `/`"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +463,52 @@ mod tests {
         assert_eq!(scan_tags(&content, MAX_TOTAL_TAGS).len(), MAX_TAGS_PER_FILE);
         // 全库剩余额度更小时按它截。
         assert_eq!(scan_tags(&content, 7).len(), 7);
+    }
+
+    #[test]
+    fn normalize_key_matches_the_frontend_rules() {
+        // 与 `noteTags.ts` 的 `normalizeTag` 逐条对着写:前端聚合出的处数和这里匹配
+        // 到的处数必须是同一个数。
+        assert_eq!(normalize_key("#Work"), "work");
+        assert_eq!(normalize_key("  #work  "), "work");
+        assert_eq!(normalize_key("work"), "work");
+        assert_eq!(normalize_key("#project/"), "project");
+        assert_eq!(normalize_key("#project-"), "project");
+        assert_eq!(normalize_key("#a/b/"), "a/b");
+        assert_eq!(normalize_key("#Project/Sub"), "project/sub");
+        assert_eq!(normalize_key("##work"), "work");
+        assert_eq!(normalize_key("#"), "");
+        assert_eq!(normalize_key("   "), "");
+    }
+
+    #[test]
+    fn validate_tag_accepts_what_the_scanner_finds() {
+        assert_eq!(validate_tag("work").unwrap(), "work");
+        // 前导 `#` 和两端空白是用户在输入框里最容易多打的,收下并摘掉。
+        assert_eq!(validate_tag("  #work/deep  ").unwrap(), "work/deep");
+        assert_eq!(validate_tag("周报").unwrap(), "周报");
+        assert_eq!(validate_tag("a_b-c").unwrap(), "a_b-c");
+    }
+
+    #[test]
+    fn validate_tag_rejects_what_the_scanner_would_lose() {
+        /* 每一条都是"写进去之后自己扫不出来"的情形:文件已经改完,而面板里那个标签
+        不存在。校验口径就是扫描器本身,所以这份清单不会和它漂移。 */
+        assert!(validate_tag("").is_err());
+        assert!(validate_tag("#").is_err());
+        assert!(validate_tag("   ").is_err());
+        // 空格会让扫描器只认前半截。
+        assert!(validate_tag("a b").is_err());
+        // 纯数字被当成条目编号。
+        assert!(validate_tag("42").is_err());
+        // 末尾的 `/` 会被摘掉 —— 写进去的和输入的不是一个东西。
+        assert!(validate_tag("work/").is_err());
+        // 中间的 `#` 会截断。
+        assert!(validate_tag("a#b").is_err());
+        // 标点不是标签字符。
+        assert!(validate_tag("a,b").is_err());
+        assert!(validate_tag(&"x".repeat(MAX_TAG_CHARS + 1)).is_err());
+        // 正好到上限收下。
+        assert!(validate_tag(&"x".repeat(MAX_TAG_CHARS)).is_ok());
     }
 }
