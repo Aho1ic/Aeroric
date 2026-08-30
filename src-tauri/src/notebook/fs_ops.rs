@@ -191,6 +191,25 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 }
 
 pub fn read_note(state: &NotebookState, path: &str) -> Result<OpenedNote, String> {
+    let (resolved, opened) = read_note_content(state, path)?;
+    state.record_open(&resolved, opened.sig.clone())?;
+    Ok(opened)
+}
+
+/// 只读地取一篇笔记的内容,**不**碰进程内的 `opened` 指纹表。
+///
+/// 给嵌入(`![[note]]`)这类"看一眼别人的笔记"用。走 `read_note` 会把只读的笔记
+/// 记成"编辑器里打开着":后面某次 `save_note(expected: None)` 会拿这个指纹当基线,
+/// 而它来自嵌入渲染的那一刻,不是任何人手里的基线。配 `close_note` 更糟 —— 被嵌入
+/// 的那篇很可能同时开在另一个 tab 里,嵌入侧的那次关闭会把那个 tab 的基线清掉,
+/// 于是它下一次保存退回宽松模式静默覆盖。
+///
+/// 尺寸 / 目录 / 路径归属的判断和 `read_note` 共用这一份,不抄第二遍:两处对"多大
+/// 算太大"给出不同答案时,同一篇笔记会打得开却嵌不进来(或反过来)。
+pub fn read_note_content(
+    state: &NotebookState,
+    path: &str,
+) -> Result<(std::path::PathBuf, OpenedNote), String> {
     let resolved = state.resolve_in_vaults(path, false)?;
     let meta = std::fs::metadata(&resolved)
         .map_err(|e| format!("Cannot read {}: {e}", resolved.display()))?;
@@ -206,8 +225,7 @@ pub fn read_note(state: &NotebookState, path: &str) -> Result<OpenedNote, String
     let content = std::fs::read_to_string(&resolved)
         .map_err(|e| format!("Cannot read {}: {e}", resolved.display()))?;
     let sig = signature_for(&resolved).map_err(|e| e.to_string())?;
-    state.record_open(&resolved, sig.clone())?;
-    Ok(OpenedNote { content, sig })
+    Ok((resolved, OpenedNote { content, sig }))
 }
 
 /// 保存。`expected` 是前端持有的基线指纹。

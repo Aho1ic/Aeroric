@@ -41,6 +41,7 @@ import {
   restoreTrashItem,
   revealNoteInFileManager,
   readNoteIcons,
+  peekNote,
   renameVaultTag,
   statNote,
   type TagRenameReport,
@@ -73,6 +74,7 @@ import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
 import { buildLinkIndex, linkTitleOf } from "./noteLinks";
 import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
+import { enhanceNoteEmbeds } from "./noteEmbed";
 import { renderNoteMarkdown } from "./noteRender";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
@@ -471,6 +473,43 @@ function NotebookPanelContent({
       ambiguous: (title) => t("notebook.wikiLinkAmbiguous", { title }),
     });
   }, [markdownHtml, mode, linkIndex, t]);
+
+  /* `![[note]]` → 嵌进来的笔记内容。
+   *
+   * **必须声明在上面那个 effect 之后**:占位是 `enhanceWikiLinks` 造的,React 按声明
+   * 顺序跑 effect,反过来的话第一帧一个占位都找不到。
+   *
+   * `activeNote?.id` 进依赖是因为它同时是环路检测的第 0 层祖先 —— 切笔记之后宿主
+   * 换了,拿旧路径当祖先会把"新宿主嵌入旧宿主"错判成自嵌。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    const hostPath = activeNote?.id;
+    if (!hostPath) return;
+    const handle = enhanceNoteEmbeds(host, {
+      hostPath,
+      // 只读取数:`openNote` 会登记指纹,而嵌入不是"打开"(见 peekNote 的注释)。
+      read: async (path) => (await peekNote(path)).content,
+      index: linkIndex,
+      labels: {
+        open: (title) => t("notebook.wikiLinkOpen", { title }),
+        missing: (target) => t("notebook.wikiLinkMissing", { target }),
+        ambiguous: (title) => t("notebook.wikiLinkAmbiguous", { title }),
+        missingHeading: (heading) => t("notebook.embedMissingHeading", { heading }),
+        tooDeep: (target) => t("notebook.embedTooDeep", { target }),
+        failed: (target, message) => t("notebook.embedFailed", { target, message }),
+      },
+      /* 嵌入内容是这个 effect 之后才进 DOM 的,上面那两个 effect(懒渲染、图片尺寸)
+         扫的是当时的 DOM,扫不到它。所以在这里给每块填好的内容补一次。 */
+      onFilled: (body) => {
+        enhanceMarkdownImages(body);
+        const visuals = renderNoteVisualsLazy(body);
+        return () => visuals.disconnect();
+      },
+    });
+    return () => handle.disconnect();
+  }, [markdownHtml, mode, linkIndex, t, activeNote?.id]);
 
   /* 点 wikilink 跳笔记。
    *

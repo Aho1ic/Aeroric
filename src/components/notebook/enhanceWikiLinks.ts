@@ -14,6 +14,8 @@ import { parseWikiLinkBody, resolveLink, type VaultLinkIndex } from "./noteLinks
 export const WIKI_LINK_CLASS = "notebook-wikilink";
 /** 解析不到目标时额外挂的类名,用来上"死链"样式。 */
 export const WIKI_LINK_MISSING_CLASS = "notebook-wikilink-missing";
+/** `![[...]]` 的占位容器。取数与填充在 `noteEmbed.ts`,这一层只造壳。 */
+export const WIKI_EMBED_CLASS = "notebook-embed";
 
 /**
  * 不进去替换的容器。
@@ -22,9 +24,14 @@ export const WIKI_LINK_MISSING_CLASS = "notebook-wikilink-missing";
  * - `a`:已经是链接了,套一层会产出嵌套 `<a>`(HTML 非法,点击行为也不确定)。
  * - `.notebook-math`/`.katex`:数学占位块里放的是原始 TeX,动它会让公式渲染失败。
  * - `.notebook-mermaid`:同理,里面是图的源码。
+ * - **还没填好**的嵌入占位:它的 textContent 是原始的 `![[body]]`(优雅降级用),
+ *   再跑一遍这个函数会把那段文字变成链接,于是占位就永远填不上了 —— 填充逻辑找的
+ *   是文本内容而不是 dataset。填好之后这条选择器不再命中(`data-embed-state` 变成
+ *   `filled`),嵌入内容里的 `[[link]]` 才能照常被增强。
  */
 const SKIP_SELECTOR =
-  "pre,code,a,button,textarea,script,style,.notebook-math,.katex,.notebook-mermaid";
+  "pre,code,a,button,textarea,script,style,.notebook-math,.katex,.notebook-mermaid," +
+  `.${WIKI_EMBED_CLASS}:not([data-embed-state="filled"])`;
 
 const WIKI_LINK_RE = /\[\[([^\]\n]{1,200})\]\]/g;
 
@@ -57,6 +64,31 @@ function applyState(
   link.title = hit.ambiguous ? labels.ambiguous(hit.note.title) : labels.open(hit.note.title);
 }
 
+/**
+ * 给一个嵌入占位挂上"指向哪 / 是不是死链"。
+ *
+ * 和 `applyState` 分开写而不是共用:嵌入占位的可见文字是原始语法(`![[x]]`),
+ * 解析成功时**不能**把它换成标题 —— 那段文字是填充失败时的降级显示,提前换掉
+ * 会让"加载中"看起来像"已经填好了"。
+ */
+function applyEmbedState(
+  el: HTMLElement,
+  index: VaultLinkIndex,
+  target: string,
+  labels: WikiLinkLabels,
+): void {
+  const hit = resolveLink(index, target);
+  if (!hit) {
+    el.classList.add(WIKI_LINK_MISSING_CLASS);
+    el.title = labels.missing(target);
+    delete el.dataset.embedPath;
+    return;
+  }
+  el.classList.remove(WIKI_LINK_MISSING_CLASS);
+  el.dataset.embedPath = hit.note.path;
+  el.title = hit.ambiguous ? labels.ambiguous(hit.note.title) : labels.open(hit.note.title);
+}
+
 /** 文案由调用方注入 —— 这个模块不该 import i18n(测试里也就不用套 Provider)。 */
 export type WikiLinkLabels = {
   open: (title: string) => string;
@@ -79,6 +111,14 @@ export function enhanceWikiLinks(
   // 先刷新已有链接的解析状态(新建了目标笔记之后,原来的死链要变活)。
   for (const link of Array.from(host.querySelectorAll<HTMLElement>(`a.${WIKI_LINK_CLASS}`))) {
     applyState(link, index, link.dataset.wikiTarget ?? "", labels);
+  }
+  /* 嵌入占位同理,但**只刷没填好的**:已经填好的那些,内部有一整棵渲染出来的
+     DOM(还含它自己的头部链接),重算解析状态只会把 title 覆盖成宿主口径的文案,
+     而它的内容早就不来自这一次解析了。 */
+  for (const embed of Array.from(
+    host.querySelectorAll<HTMLElement>(`.${WIKI_EMBED_CLASS}:not([data-embed-state="filled"])`),
+  )) {
+    applyEmbedState(embed, index, embed.dataset.embedTarget ?? "", labels);
   }
 
   const doc = host.ownerDocument;
@@ -110,8 +150,32 @@ export function enhanceWikiLinks(
       // 拆不出目标(`[[]]`、`[[|x]]`)的原样留着 —— 它不是链接,是用户写的文本。
       if (!parts) continue;
 
-      if (match.index > cursor) {
-        fragment.append(doc.createTextNode(text.slice(cursor, match.index)));
+      /* `![[...]]` 是嵌入。那个 `!` 在正则之外,要从前导文本里摘掉,否则渲染出来
+         会是一个孤零零的叹号加一块嵌入内容。
+
+         `match.index > cursor` 这个判断不能拿来代替 `> 0`:`cursor` 在同一个文本
+         节点里连着两条嵌入时等于前一条的结尾,而 `!` 的位置只和 `match.index` 有关。 */
+      const isEmbed = match.index > 0 && text[match.index - 1] === "!";
+      const precedingEnd = isEmbed ? match.index - 1 : match.index;
+      if (precedingEnd > cursor) {
+        fragment.append(doc.createTextNode(text.slice(cursor, precedingEnd)));
+      }
+
+      if (isEmbed) {
+        // 用 `span` 而不是 `div`:嵌入语法可以出现在段落中间,而 `<div>` 在 `<p>`
+        // 里是非法嵌套,浏览器会把段落截断。块级排版靠 CSS。
+        const embed = doc.createElement("span");
+        embed.className = WIKI_EMBED_CLASS;
+        embed.dataset.embedTarget = parts.target;
+        embed.dataset.embedRaw = raw;
+        if (parts.heading) embed.dataset.embedHeading = parts.heading;
+        // 填充前显示原始语法:取数是异步的,这段时间里用户看到的是他自己写的字,
+        // 而不是一块空白。填充失败时也就天然留在这个状态。
+        embed.textContent = `![[${raw}]]`;
+        applyEmbedState(embed, index, parts.target, labels);
+        fragment.append(embed);
+        cursor = match.index + match[0].length;
+        continue;
       }
 
       const link = doc.createElement("a");

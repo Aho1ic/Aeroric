@@ -2620,6 +2620,198 @@ describe("NotebookPanel", () => {
       await screen.findByDisplayValue("Target");
     });
   });
+
+  describe("![[嵌入]]", () => {
+    /** 阅读态里的嵌入占位。 */
+    function embedBlocks(): HTMLElement[] {
+      return Array.from(document.querySelectorAll<HTMLElement>(".notebook-embed"));
+    }
+
+    /** 切到阅读态并等 HTML 挂上。 */
+    async function readMode() {
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+    }
+
+    /** 打开某篇笔记的阅读态。 */
+    async function openInReadMode(title: string) {
+      renderNotebook();
+      await screen.findByRole("button", { name: title });
+      fireEvent.click(screen.getByRole("button", { name: title }));
+      await screen.findByDisplayValue(title);
+      await readMode();
+    }
+
+    it("把目标笔记的内容嵌进来,头部是它的标题", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n看这段:![[Target]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()).toHaveLength(1));
+      const embed = embedBlocks()[0]!;
+      await waitFor(() => expect(embed.dataset.embedState).toBe("filled"));
+      expect(embed.querySelector(".notebook-embed-head")?.textContent).toBe("Target");
+      expect(embed.querySelector(".notebook-embed-body")?.textContent).toContain("被嵌的正文");
+      // frontmatter 不该跟着嵌进来。
+      expect(embed.textContent).not.toContain("title:");
+    });
+
+    it("嵌入取数走只读命令,不会把目标笔记登记成打开", async () => {
+      /* 关键约束:`notebook_open_note` 会在后端登记指纹,而嵌入是只读的。用它的话
+         后面某次没带基线的保存会拿"嵌入渲染那一刻的指纹"当基线,把盲写放过去。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(harness.callCount("notebook_peek_note")).toBeGreaterThan(0));
+      // Origin 自己是被 open 打开的(1 次);Target 只被 peek 过。
+      expect(harness.callCount("notebook_open_note")).toBe(1);
+    });
+
+    it("带 #小节 时只嵌那一段", async () => {
+      harness.seed(
+        "Target.md",
+        '---\ntitle: "Target"\n---\n\n# 甲节\n\n甲的内容\n\n# 乙节\n\n乙的内容\n',
+      );
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target#乙节]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      const body = embedBlocks()[0]!.querySelector(".notebook-embed-body")!;
+      expect(body.textContent).toContain("乙的内容");
+      expect(body.textContent).not.toContain("甲的内容");
+      expect(embedBlocks()[0]!.querySelector(".notebook-embed-head")?.textContent).toBe(
+        "Target › 乙节",
+      );
+    });
+
+    it("目标不存在时留下原始语法,不弹错误条", async () => {
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[还没写]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()).toHaveLength(1));
+      const embed = embedBlocks()[0]!;
+      expect(embed.textContent).toBe("![[还没写]]");
+      expect(embed.classList.contains("notebook-wikilink-missing")).toBe(true);
+      expect(embed.title).toBe("No note named 还没写");
+      // 先写嵌入后写笔记是常态,不是故障。
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("取数失败时留下原始语法并说明原因,不影响其余正文", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n前面一句\n\n![[Target]]\n');
+      harness.failPeek = true;
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("error"));
+      const embed = embedBlocks()[0]!;
+      expect(embed.textContent).toBe("![[Target]]");
+      expect(embed.title).toBe("Could not embed Target: reading the note failed");
+      // 宿主自己的正文照常渲染 —— 一块嵌入失败不该把整页拖垮。
+      expect(document.querySelector(".notebook-markdown-preview")?.textContent).toContain(
+        "前面一句",
+      );
+    });
+
+    it("点嵌入块的头部跳到那篇笔记", async () => {
+      // 头部按 enhanceWikiLinks 的约定挂类名和 data-wiki-path,所以面板那个点击
+      // 监听不用改一行就能用。这一条钉的正是那个约定。
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      const head = embedBlocks()[0]!.querySelector<HTMLElement>(".notebook-embed-head")!;
+      fireEvent.click(head);
+      await screen.findByDisplayValue("Target");
+    });
+
+    it("嵌入内容里的 [[链接]] 也能点着跳", async () => {
+      harness.seed("Third.md", '---\ntitle: "Third"\n---\n\n第三篇\n');
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n再看 [[Third]]\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      const inner = embedBlocks()[0]!.querySelector<HTMLElement>(
+        ".notebook-embed-body a.notebook-wikilink",
+      );
+      expect(inner?.textContent).toBe("Third");
+      fireEvent.click(inner!);
+      await screen.findByDisplayValue("Third");
+    });
+
+    it("自己嵌自己当场被拦,不套三层", async () => {
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Origin]]\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("error"));
+      expect(embedBlocks()).toHaveLength(1);
+      expect(embedBlocks()[0]!.title).toBe(
+        "Embed of Origin is nested too deeply or refers back to itself",
+      );
+    });
+
+    it("嵌入内容的标题不带 id,大纲跳转仍落在宿主的标题上", async () => {
+      /* renderNoteMarkdown 每次新建 slug registry,宿主和嵌入会算出同一个 id;
+         而大纲跳转用 querySelector 取文档序第一个。嵌入块排在宿主标题之前时,
+         点大纲会跳进嵌入里。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n# 同名标题\n\n嵌入的内容\n');
+      harness.seed(
+        "Origin.md",
+        '---\ntitle: "Origin"\n---\n\n![[Target]]\n\n# 同名标题\n\n宿主的内容\n',
+      );
+      await openInReadMode("Origin");
+
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      const preview = document.querySelector(".notebook-markdown-preview")!;
+      const withId = Array.from(preview.querySelectorAll("h1[id]"));
+      // 只有宿主那个带 id,而且它就是宿主自己的标题。
+      expect(withId).toHaveLength(1);
+      expect(withId[0]!.closest(".notebook-embed")).toBeNull();
+    });
+
+    it("目标笔记出现之后,原来嵌不进来的那块会补上", async () => {
+      /* 钉的是"失败的占位要跟着索引变化重试"。做法和 wikilink 那边同一条路径:
+         新建笔记 → linkIndex 变 → effect 重跑。 */
+      harness.seed("hou-xie.md", '---\ntitle: "旧的"\n---\n\n现在有内容了\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[后写的]]\n');
+      await openInReadMode("Origin");
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("error"));
+
+      // 在列表里把另一篇改名成嵌入指的那个名字(双击进入行内重命名)。
+      fireEvent.dblClick(screen.getByRole("button", { name: "hou-xie" }));
+      const input = await screen.findByRole("textbox", { name: "Rename quick note" });
+      fireEvent.change(input, { target: { value: "后写的" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByRole("button", { name: "后写的" });
+
+      // 回到 Origin 的阅读态。
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      expect(embedBlocks()[0]!.textContent).toContain("现在有内容了");
+    });
+
+    it("代码块里的 ![[..]] 不嵌任何东西", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n```\n![[Target]]\n```\n');
+      await openInReadMode("Origin");
+
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")?.textContent).toContain(
+          "![[Target]]",
+        ),
+      );
+      expect(embedBlocks()).toHaveLength(0);
+      expect(harness.callCount("notebook_peek_note")).toBe(0);
+    });
+  });
+
   describe("全屏 ⇄ 半屏", () => {
     /** 宿主态由外面拿着,这里模拟 ProjectPage 那一侧。 */
     function renderWithHost(initial = false) {

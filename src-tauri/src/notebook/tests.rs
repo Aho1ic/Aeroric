@@ -246,6 +246,57 @@ fn save_without_baseline_reports_conflict_for_existing_file() {
 }
 
 #[test]
+fn peeking_a_note_does_not_register_it_as_open() {
+    let vault = temp_vault("peek");
+    let state = registered_state(&vault);
+    let path = note_path(&vault, "target.md");
+    std::fs::write(vault.join("target.md"), "on disk\n").expect("seed");
+
+    let (resolved, opened) = fs_ops::read_note_content(&state, &path).expect("peek");
+    assert_eq!(opened.content, "on disk\n");
+    assert_eq!(resolved, vault.join("target.md"));
+
+    // 关键断言:嵌入读过之后,一次没带基线的保存**仍然**该报冲突。若 peek 也登记
+    // 指纹,这里会拿"嵌入渲染那一刻的指纹"当基线,把盲写放过去。
+    let outcome = fs_ops::save_note(&state, &path, "blind write\n", None, false).expect("save");
+    assert!(matches!(outcome, SaveOutcome::Conflict { .. }));
+    assert_eq!(
+        std::fs::read_to_string(vault.join("target.md")).expect("read"),
+        "on disk\n"
+    );
+
+    // 对照:同一条路径走 read_note 就会登记基线,盲写被放过。两条断言合起来
+    // 才说明差别来自 record_open,而不是来自别的什么。
+    fs_ops::read_note(&state, &path).expect("open");
+    let outcome = fs_ops::save_note(&state, &path, "blind write\n", None, false).expect("save");
+    assert!(matches!(outcome, SaveOutcome::Saved { .. }));
+
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
+fn peek_and_open_agree_on_what_they_refuse() {
+    let vault = temp_vault("peekguards");
+    let state = registered_state(&vault);
+
+    // 目录:两处都得拒,否则同一个路径"打不开却嵌得进来"。
+    std::fs::create_dir_all(vault.join("folder")).expect("mkdir");
+    let dir_path = note_path(&vault, "folder");
+    assert!(fs_ops::read_note(&state, &dir_path).is_err());
+    assert!(fs_ops::read_note_content(&state, &dir_path).is_err());
+
+    // vault 外:同上。
+    let outside = temp_vault("peekoutside");
+    std::fs::write(outside.join("stray.md"), "x\n").expect("seed");
+    let stray = outside.join("stray.md").to_string_lossy().to_string();
+    assert!(fs_ops::read_note(&state, &stray).is_err());
+    assert!(fs_ops::read_note_content(&state, &stray).is_err());
+
+    std::fs::remove_dir_all(&outside).ok();
+    std::fs::remove_dir_all(&vault).ok();
+}
+
+#[test]
 fn save_creates_new_file_without_baseline() {
     let vault = temp_vault("newfile");
     let state = registered_state(&vault);

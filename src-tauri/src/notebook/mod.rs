@@ -161,6 +161,19 @@ pub async fn notebook_open_note(
     fs_ops::read_note(&state, &path)
 }
 
+/// 只读地取一篇笔记的内容。给嵌入(`![[note]]`)用。
+///
+/// 和 `notebook_open_note` 的区别只有一条:**不**登记指纹表。区别的理由见
+/// `fs_ops::read_note_content` 的文档注释 —— 简单说,嵌入不是"打开",把它记成打开
+/// 会让别人的保存拿一个没人持有的基线去比。
+#[tauri::command]
+pub async fn notebook_peek_note(
+    state: State<'_, NotebookState>,
+    path: String,
+) -> Result<fs_ops::OpenedNote, String> {
+    fs_ops::read_note_content(&state, &path).map(|(_, opened)| opened)
+}
+
 #[tauri::command]
 pub async fn notebook_close_note(
     state: State<'_, NotebookState>,

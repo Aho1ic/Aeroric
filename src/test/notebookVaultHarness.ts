@@ -189,6 +189,9 @@ export class NotebookVaultHarness {
   tagScanCalls = 0;
   /** 让全库字段扫描失败,用来验字段浏览器的错误态。 */
   failFieldScan = false;
+
+  /** 让嵌入取数失败,验"填不进来时留下原始语法 + 提示"。 */
+  failPeek = false;
   /** 全库字段扫描被调用了几次。验"只在 sheet 开着时扫"用。 */
   fieldScanCalls = 0;
   /**
@@ -332,6 +335,17 @@ export class NotebookVaultHarness {
 
       case "notebook_open_note": {
         const path = String(args.path);
+        const file = this.files.get(path);
+        if (!file) throw new Error(`no such file: ${path}`);
+        return { content: file.content, sig: this.sigOf(path) };
+      }
+
+      /* 只读取数。和 `notebook_open_note` 的返回一模一样 —— 差别全在后端的指纹表上
+         (真后端不 record_open),而 harness 根本没有那张表:它的冲突判定按调用方
+         传的 `expected` 走,没传就报冲突,正好等价于"没有登记过基线"。 */
+      case "notebook_peek_note": {
+        const path = String(args.path);
+        if (this.failPeek) throw new Error("reading the note failed");
         const file = this.files.get(path);
         if (!file) throw new Error(`no such file: ${path}`);
         return { content: file.content, sig: this.sigOf(path) };

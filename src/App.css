@@ -2312,6 +2312,45 @@ html:not(.dark) .session-prose pre code {
   border-bottom-color: var(--warning);
   border-bottom-style: dotted;
 }
+/* `![[note]]` 嵌入。左侧竖线 + 缩进,让"这段不是本篇写的"一眼看得出来。
+
+   用 `span` 而不是 `div`(见 enhanceWikiLinks 里造占位那段的注释:嵌入可以出现在
+   段落中间,`<div>` 在 `<p>` 里是非法嵌套),所以块级排版靠 display 自己声明。 */
+.md-preview .notebook-embed {
+  display: block;
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border-medium);
+}
+/* 还没填好 / 填失败时显示的是原始语法 `![[x]]`。等宽 + 弱化,看着像"待填"而不像
+   正文的一部分。 */
+.md-preview .notebook-embed:not([data-embed-state="filled"]) {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.md-preview .notebook-embed.notebook-wikilink-missing {
+  border-left-color: var(--warning);
+  color: var(--warning);
+}
+/* 头部:嵌的是哪一篇。比正文小一号 —— 它是出处标注,不该抢内容的视觉重量。 */
+.md-preview a.notebook-embed-head {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.md-preview .notebook-embed-body {
+  display: block;
+}
+/* 嵌入内容的首尾外边距去掉:目标笔记的第一个段落/标题自带 margin-top,叠在
+   嵌入块的 padding 上会多出一截空白。 */
+.md-preview .notebook-embed-body > :first-child {
+  margin-top: 0;
+}
+.md-preview .notebook-embed-body > :last-child {
+  margin-bottom: 0;
+}
 .md-preview img {
   max-width: 100%;
   border-radius: 6px;

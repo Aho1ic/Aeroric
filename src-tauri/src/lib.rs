@@ -921,6 +921,7 @@ pub fn run() {
             notebook::notebook_read_icons,
             notebook::notebook_write_icons,
             notebook::notebook_open_note,
+            notebook::notebook_peek_note,
             notebook::notebook_close_note,
             notebook::notebook_save_note,
             notebook::notebook_create_note,

@@ -106,6 +106,18 @@ export function openNote(path: string): Promise<OpenedNote> {
   return invoke<OpenedNote>("notebook_open_note", { path });
 }
 
+/**
+ * 只读地取一篇笔记的内容。给嵌入(`![[note]]`)用。
+ *
+ * **不要**用 `openNote` 做这件事:它会把这篇笔记登记成"编辑器里打开着",于是某次
+ * 没带基线的保存会拿"嵌入渲染那一刻的指纹"当基线,把盲写放过去。配 `closeNote`
+ * 更糟 —— 被嵌入的那篇可能同时开在另一个 tab 里,嵌入侧那次关闭会清掉那个 tab 的
+ * 基线,它下一次保存就退回宽松模式静默覆盖。
+ */
+export function peekNote(path: string): Promise<OpenedNote> {
+  return invoke<OpenedNote>("notebook_peek_note", { path });
+}
+
 /** 释放该文件的进程内指纹。关闭 tab 时调用。 */
 export function closeNote(path: string): Promise<void> {
   return invoke<void>("notebook_close_note", { path });
