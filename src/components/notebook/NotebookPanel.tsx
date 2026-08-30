@@ -5,7 +5,7 @@ import { confirm } from "../../lib/appDialog";
 import { AttachmentSection } from "./AttachmentSection";
 import { attachmentMarkdown, linkFromNote, vaultRelativePath } from "./attachmentUrls";
 import { NoteList } from "./NoteList";
-import { NoteFindBar } from "./NoteFindBar";
+import { NoteFindBar, type NoteFindFlags } from "./NoteFindBar";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
@@ -104,6 +104,7 @@ import { enhanceNoteQueries } from "./enhanceNoteQueries";
 import { renderNoteMarkdown } from "./noteRender";
 import { toggleTaskLine } from "./noteTasks";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
+import { findNoteTextMatches, replaceNoteMatches, type NoteFindMatch } from "./noteFindText";
 import { appendCardToColumn, type KanbanColumn } from "./noteKanban";
 import { NoteKanbanView } from "./NoteKanbanView";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
@@ -129,26 +130,6 @@ import {
   persistOrder,
   removeNote,
 } from "./notebookVault";
-
-type TextMatch = {
-  start: number;
-  end: number;
-};
-
-export function findNotebookTextMatches(text: string, query: string): TextMatch[] {
-  const needle = query.toLocaleLowerCase();
-  if (!needle) return [];
-  const haystack = text.toLocaleLowerCase();
-  const matches: TextMatch[] = [];
-  let offset = 0;
-  while (offset <= haystack.length - needle.length) {
-    const start = haystack.indexOf(needle, offset);
-    if (start < 0) break;
-    matches.push({ start, end: start + needle.length });
-    offset = start + Math.max(1, needle.length);
-  }
-  return matches;
-}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -293,6 +274,13 @@ function NotebookPanelContent({
   const [searchQuery, setSearchQuery] = useState("");
   const [replacementText, setReplacementText] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  /* 三个开关跨笔记保留:一次查找往往要在好几篇里查同一个正则,每切一篇就把开关
+     复位会很难用。关掉查找栏也不复位,理由相同。 */
+  const [findFlags, setFindFlags] = useState<NoteFindFlags>({
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false,
+  });
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   /** 历史面板针对的那条笔记。**不**回落到 activeNote:回落的话这条笔记被删掉后
    *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
@@ -359,10 +347,11 @@ function NotebookPanelContent({
       .trim()
       .toLowerCase() === "kanban";
   const searchableText = activeNote?.body ?? "";
-  const searchMatches = useMemo(
-    () => findNotebookTextMatches(searchableText, searchQuery),
-    [searchQuery, searchableText],
+  const searchResult = useMemo(
+    () => findNoteTextMatches(searchableText, searchQuery, findFlags),
+    [findFlags, searchQuery, searchableText],
   );
+  const searchMatches = searchResult.matches;
   const canUseToolbar = mode === "edit" && Boolean(activeNote);
   const { scheduleSave, cancelSave, flushSave, settleSave, saveStates } = useNoteAutosave({
     notes,
@@ -1247,22 +1236,46 @@ function NotebookPanelContent({
     );
   };
 
+  /**
+   * 替换给定的那几处命中。
+   *
+   * 和 `toggleTaskAtLine` / `appendKanbanCard` 同一套讲究:在 updater 里按**最新**的
+   * `note.body` 算,而不是渲染快照。命中偏移是在快照上算出来的,落笔时正文可能已被
+   * 自动保存回填、外部改动或看板写入挪动过 —— `replaceNoteMatches` 用命中处原文当
+   * 乐观锁,对不上就整体放弃,而不是照着旧偏移写到错位置上去。
+   */
+  const applyNotebookReplacement = (targets: readonly NoteFindMatch[]) => {
+    if (!activeNote || targets.length === 0) return;
+    const noteId = activeNote.id;
+    const updatedAt = Date.now();
+    let changed = false;
+    let stale = false;
+    setNotes((current) =>
+      current.map((note) => {
+        if (note.id !== noteId) return note;
+        const next = replaceNoteMatches(note.body, targets, replacementText, findFlags.regex);
+        if (next === null) {
+          stale = true;
+          return note;
+        }
+        if (next === note.body) return note;
+        changed = true;
+        return { ...note, body: next, updatedAt };
+      }),
+    );
+    // 放弃了要说出来:否则用户点了「全部替换」而什么都没变,只会以为按钮坏了。
+    if (stale) setError(t("notebook.replaceStale"));
+    if (changed) scheduleSave(noteId);
+  };
+
   const replaceCurrentNotebookMatch = () => {
-    if (!activeNote || searchMatches.length === 0) return;
     const match = searchMatches[Math.min(activeMatchIndex, searchMatches.length - 1)];
     if (!match) return;
-    updateActiveNote({
-      body: `${activeNote.body.slice(0, match.start)}${replacementText}${activeNote.body.slice(match.end)}`,
-    });
+    applyNotebookReplacement([match]);
   };
 
   const replaceAllNotebookMatches = () => {
-    if (!activeNote || searchMatches.length === 0) return;
-    let nextBody = activeNote.body;
-    for (const match of [...searchMatches].reverse()) {
-      nextBody = `${nextBody.slice(0, match.start)}${replacementText}${nextBody.slice(match.end)}`;
-    }
-    updateActiveNote({ body: nextBody });
+    applyNotebookReplacement(searchMatches);
   };
 
   /**
@@ -2145,6 +2158,14 @@ function NotebookPanelContent({
                 onReplacementChange={setReplacementText}
                 matchCount={searchMatches.length}
                 activeMatchIndex={activeMatchIndex}
+                flags={findFlags}
+                onFlagsChange={(next) => {
+                  setFindFlags(next);
+                  setActiveMatchIndex(0);
+                }}
+                error={searchResult.error}
+                capped={searchResult.capped}
+                wholeWordIgnored={searchResult.wholeWordIgnored}
                 onMove={moveNotebookMatch}
                 onReplaceOne={replaceCurrentNotebookMatch}
                 onReplaceAll={replaceAllNotebookMatches}

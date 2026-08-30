@@ -1,13 +1,20 @@
 /* 随手记的查找 / 替换栏(⌘F / ⌘H)。
  *
- * 从 NotebookPanel 抽出来,JSX 逐字未改。
- *
  * 命中定位由面板负责 —— 它持有 CodeMirror 的 handle,能把选区设到命中处并滚动
- * 到可见。这个组件只管输入与导航按钮。
+ * 到可见。这个组件只管输入、三个开关与导航按钮。
+ *
+ * 状态一栏里要报四件事,而不是只报一个数字:命中数、正则报错、命中被截断、整词在
+ * 中日韩上没生效。后三件如果不说,用户看到的都是「0 个 / 若干个」,而原因完全不同。
  */
 
 import { ChevronDown, ChevronUp, Replace, Search, X } from "lucide-react";
 import type React from "react";
+
+export type NoteFindFlags = {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+};
 
 export type NoteFindBarProps = {
   /** 替换行是否展开。⌘F 只开查找,⌘H 连替换一起开。 */
@@ -20,6 +27,14 @@ export type NoteFindBarProps = {
   /** 命中总数与当前序号(0-based)。 */
   matchCount: number;
   activeMatchIndex: number;
+  flags: NoteFindFlags;
+  onFlagsChange: (next: NoteFindFlags) => void;
+  /** 正则不合法时的报错原文。非空时状态栏显示它,而不是「无匹配项」。 */
+  error?: string | null;
+  /** 命中数触顶被截断。 */
+  capped?: boolean;
+  /** 整词有命中因为紧贴中日韩文字而放弃了边界要求。 */
+  wholeWordIgnored?: boolean;
   onMove: (direction: 1 | -1) => void;
   onReplaceOne: () => void;
   onReplaceAll: () => void;
@@ -28,6 +43,12 @@ export type NoteFindBarProps = {
   inputRef: React.RefObject<HTMLInputElement | null>;
   t: (key: string) => string;
 };
+
+const TOGGLE_KEYS: { key: keyof NoteFindFlags; label: string; i18n: string }[] = [
+  { key: "caseSensitive", label: "Aa", i18n: "notebook.findCaseSensitive" },
+  { key: "wholeWord", label: "ab|", i18n: "notebook.findWholeWord" },
+  { key: "regex", label: ".*", i18n: "notebook.findRegex" },
+];
 
 export function NoteFindBar({
   replaceOpen,
@@ -38,6 +59,11 @@ export function NoteFindBar({
   onReplacementChange,
   matchCount,
   activeMatchIndex,
+  flags,
+  onFlagsChange,
+  error,
+  capped,
+  wholeWordIgnored,
   onMove,
   onReplaceOne,
   onReplaceAll,
@@ -45,6 +71,11 @@ export function NoteFindBar({
   inputRef,
   t,
 }: NoteFindBarProps) {
+  const status = error
+    ? t("notebook.findInvalidRegex")
+    : matchCount > 0
+      ? `${Math.min(activeMatchIndex + 1, matchCount)}/${matchCount}${capped ? "+" : ""}`
+      : t("notebook.noMatches");
   return (
     <div
       role="search"
@@ -80,7 +111,8 @@ export function NoteFindBar({
         style={{
           width: 180,
           height: 26,
-          border: "1px solid var(--border-medium)",
+          /* 正则不合法时把边框染红:状态栏那行字在最右边,而眼睛在输入框上。 */
+          border: `1px solid ${error ? "var(--danger)" : "var(--border-medium)"}`,
           borderRadius: 6,
           background: "var(--bg-input)",
           color: "var(--text-primary)",
@@ -89,6 +121,35 @@ export function NoteFindBar({
           outline: "none",
         }}
       />
+      {TOGGLE_KEYS.map((toggle) => {
+        const on = flags[toggle.key];
+        return (
+          <button
+            key={toggle.key}
+            type="button"
+            aria-label={t(toggle.i18n)}
+            title={t(toggle.i18n)}
+            /* 开关得让读屏报出「按下 / 未按下」。光靠背景色变化,只用键盘和读屏的人
+               根本不知道大小写敏感现在是开还是关。 */
+            aria-pressed={on}
+            onClick={() => onFlagsChange({ ...flags, [toggle.key]: !on })}
+            style={{
+              height: 24,
+              minWidth: 26,
+              border: `1px solid ${on ? "var(--accent)" : "var(--border-medium)"}`,
+              borderRadius: 5,
+              background: on ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "transparent",
+              color: on ? "var(--accent)" : "var(--text-muted)",
+              padding: "0 5px",
+              cursor: "pointer",
+              fontSize: 11,
+              fontFamily: "var(--font-mono, monospace)",
+            }}
+          >
+            {toggle.label}
+          </button>
+        );
+      })}
       {replaceOpen && (
         <>
           <Replace size={13} color="var(--text-muted)" />
@@ -120,11 +181,23 @@ export function NoteFindBar({
           />
         </>
       )}
-      <span aria-live="polite" style={{ minWidth: 54, fontSize: 11, color: "var(--text-muted)" }}>
-        {matchCount > 0
-          ? `${Math.min(activeMatchIndex + 1, matchCount)}/${matchCount}`
-          : t("notebook.noMatches")}
+      <span
+        aria-live="polite"
+        title={error ?? undefined}
+        style={{
+          minWidth: 54,
+          fontSize: 11,
+          color: error ? "var(--danger)" : "var(--text-muted)",
+        }}
+      >
+        {status}
       </span>
+      {wholeWordIgnored && !error && (
+        /* 中日韩没有词边界,整词在这一侧卡不住。说清楚比悄悄放行或悄悄返回 0 都好。 */
+        <span style={{ fontSize: 11, color: "var(--warning)" }} title={t("notebook.findCjkHint")}>
+          {t("notebook.findCjkBadge")}
+        </span>
+      )}
       <button
         type="button"
         aria-label={t("notebook.previousMatch")}

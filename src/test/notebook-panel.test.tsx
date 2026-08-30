@@ -5702,4 +5702,148 @@ describe("NotebookPanel", () => {
       expect(screen.getByText("This board has no columns yet.")).toBeTruthy();
     });
   });
+
+  describe("查找栏的大小写 / 整词 / 正则", () => {
+    /**
+     * 正文从磁盘种进去,而**不是**用 `setEditorValue` 打进编辑器。
+     *
+     * `@uiw/react-codemirror` 有个「打字闸」:凡是编辑器自己产生的文档变更,都会开一个
+     * 200 拍的倒计时,闸没到期之前外部传进来的 `value` 只入队、不落到文档上
+     * (`useCodeMirror.js` 的 `typingLatch` / `pendingUpdate`)。那 200 拍走的是
+     * `setInterval(…, 1)` —— 真实浏览器里 200ms 就过去了,用户敲完字再去点「全部替换」
+     * 早就过期了;但 jsdom 在整份测试文件的负载下 1ms 定时器会被饿到几秒一拍,于是替换
+     * 明明已经写进 state,编辑器里还是旧文本,断言就超时了。
+     *
+     * 单跑这一组时闸走得快,所以这类用例会「单独跑过、整文件跑挂」。种到磁盘上就压根
+     * 不产生编辑器侧的变更,闸不会开。
+     */
+    async function openFind(body: string) {
+      // 标题别叫「Find」—— 会和查找框的可及名字撞在一起,按名字取元素时很难看。
+      harness.seed("Doc.md", `---\ntitle: "Doc"\n---\n\n${body}`);
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Doc" }));
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      await waitFor(() => expect(editorValue()).toBe(body));
+      fireEvent.keyDown(content, { key: "h", metaKey: true });
+      return { content };
+    }
+
+    function typeQuery(value: string) {
+      fireEvent.change(screen.getByRole("textbox", { name: "Find" }), { target: { value } });
+    }
+
+    function setReplacement(value: string) {
+      fireEvent.change(screen.getByRole("textbox", { name: "Replace" }), { target: { value } });
+    }
+
+    function status(): string {
+      // 状态栏是那个 aria-live 的 span,固定在上下按钮左边。
+      const live = document.querySelector('[aria-live="polite"]');
+      return live?.textContent ?? "";
+    }
+
+    it("区分大小写开关会改命中数", async () => {
+      await openFind("Alpha alpha ALPHA");
+      typeQuery("alpha");
+      await waitFor(() => expect(status()).toBe("1/3"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Match case" }));
+      await waitFor(() => expect(status()).toBe("1/1"));
+    });
+
+    it("正则模式下替换能引用捕获组", async () => {
+      await openFind("2024-01-02 和 2025-03-04");
+      fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+      typeQuery("(\\d{4})-(\\d{2})-(\\d{2})");
+      await waitFor(() => expect(status()).toBe("1/2"));
+
+      setReplacement("$3/$2/$1");
+      fireEvent.click(screen.getByRole("button", { name: "Replace all" }));
+
+      await waitFor(() => expect(editorValue()).toBe("02/01/2024 和 04/03/2025"));
+    });
+
+    it("普通模式下 $ 是字面量,不当捕获组用", async () => {
+      await openFind("price here");
+      typeQuery("price");
+      await waitFor(() => expect(status()).toBe("1/1"));
+
+      // `$&` 是唯一在普通模式下能验出「$ 没被当成引用」的记号 —— `$1` 在普通模式下
+      // 一律越界,展开与不展开的结果相同。
+      setReplacement("$1.50 / $&");
+      fireEvent.click(screen.getByRole("button", { name: "Replace all" }));
+
+      await waitFor(() => expect(editorValue()).toBe("$1.50 / $& here"));
+    });
+
+    it("半截正则报错而不是崩,也不显示无匹配", async () => {
+      await openFind("abc");
+      fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+      typeQuery("(");
+
+      await waitFor(() => expect(screen.getByText("Invalid regex")).toBeInTheDocument());
+      expect(screen.queryByText("No matches")).not.toBeInTheDocument();
+    });
+
+    it("整词过滤掉词内命中", async () => {
+      await openFind("cat scatter cat");
+      typeQuery("cat");
+      await waitFor(() => expect(status()).toBe("1/3"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Match whole word" }));
+      await waitFor(() => expect(status()).toBe("1/2"));
+    });
+
+    it("切开关回到第一处命中", async () => {
+      // 命中数不变的开关才验得出这条:数一变,那个「序号夹到上界」的 effect 会顺手
+      // 把序号带回合法范围,于是复位有没有做都看不出来。
+      await openFind("cat cat cat");
+      typeQuery("cat");
+      await waitFor(() => expect(status()).toBe("1/3"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+      await waitFor(() => expect(status()).toBe("3/3"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Match whole word" }));
+      // 三处都是整词,总数不变;序号该回到第一处。
+      await waitFor(() => expect(status()).toBe("1/3"));
+    });
+
+    it("整词在中文上给出放宽提示,而不是 0 命中", async () => {
+      await openFind("本周计划表");
+      typeQuery("计划");
+      fireEvent.click(screen.getByRole("button", { name: "Match whole word" }));
+
+      await waitFor(() => expect(status()).toBe("1/1"));
+      expect(screen.getByText("Whole word relaxed")).toBeInTheDocument();
+    });
+
+    it("大小写折叠改长度时替换不串位", async () => {
+      // 旧实现在小写化后的串上取偏移,这里会写成 "İstanbul 的 cDOG"。
+      await openFind("İstanbul 的 cat");
+      typeQuery("cat");
+      await waitFor(() => expect(status()).toBe("1/1"));
+
+      setReplacement("dog");
+      fireEvent.click(screen.getByRole("button", { name: "Replace all" }));
+
+      await waitFor(() => expect(editorValue()).toBe("İstanbul 的 dog"));
+    });
+
+    it("单处替换只动当前那一处", async () => {
+      await openFind("cat cat cat");
+      typeQuery("cat");
+      await waitFor(() => expect(status()).toBe("1/3"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+      await waitFor(() => expect(status()).toBe("2/3"));
+
+      setReplacement("dog");
+      // `name` 是全等匹配,所以这里不会连上「Replace all」。
+      fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+
+      await waitFor(() => expect(editorValue()).toBe("cat dog cat"));
+    });
+  });
 });
