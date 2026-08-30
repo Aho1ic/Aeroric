@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -5563,6 +5563,143 @@ describe("NotebookPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "Rescan the vault for mentions" }));
 
       await waitFor(() => expect(mentionRows()).toEqual(["Notes, line 5"]));
+    });
+  });
+
+  describe("看板视图(frontmatter view: kanban)", () => {
+    const BOARD = [
+      "---",
+      'title: "Plan"',
+      "view: kanban",
+      "---",
+      "",
+      "## 待办",
+      "- [ ] 写周报",
+      "- [ ] 修 bug",
+      "",
+      "## 完成",
+      "- [x] 开周会",
+      "",
+    ].join("\n");
+
+    async function openBoard(title = "Plan") {
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: title }));
+      await screen.findByDisplayValue(title);
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      return waitFor(() => {
+        const board = document.querySelector(".notebook-kanban");
+        if (!board) throw new Error("board not rendered yet");
+        return board;
+      });
+    }
+
+    /** 看板上的复选框,按 DOM 顺序。 */
+    function cards(): HTMLInputElement[] {
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>('.notebook-kanban input[type="checkbox"]'),
+      );
+    }
+
+    /* 列必须在**板内**找。面板根节点本身是 `<section aria-label="Quick Notes">`,
+       也是一个 region,而且在文档序里排在最前 —— `screen.getAllByRole("region")[0]`
+       拿到的是整个面板。 */
+    function boardColumns(): HTMLElement[] {
+      const board = document.querySelector(".notebook-kanban-board");
+      if (!board) throw new Error("board not rendered");
+      return Array.from(board.querySelectorAll<HTMLElement>(".notebook-kanban-col"));
+    }
+
+    it("阅读态渲染看板而不是 Markdown 预览", async () => {
+      harness.seed("Plan.md", BOARD);
+      await openBoard();
+
+      expect(document.querySelector(".notebook-markdown-preview")).toBeNull();
+      expect(screen.getByRole("heading", { name: "待办" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "完成" })).toBeTruthy();
+      expect(screen.getByText("1 of 3 done · 33%")).toBeTruthy();
+    });
+
+    it("没写 view 的笔记照旧走 Markdown 预览", async () => {
+      harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n## 待办\n- [ ] 写周报\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Plan" }));
+      await screen.findByDisplayValue("Plan");
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+      expect(document.querySelector(".notebook-kanban")).toBeNull();
+    });
+
+    it("view 的值大小写不敏感", async () => {
+      harness.seed("Plan.md", BOARD.replace("view: kanban", "View: Kanban"));
+      await openBoard();
+      expect(screen.getByRole("heading", { name: "待办" })).toBeTruthy();
+    });
+
+    it("勾一张卡片,源码那一行真的被勾上", async () => {
+      const planPath = harness.seed("Plan.md", BOARD);
+      await openBoard();
+
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      fireEvent.click(cards()[0]!);
+
+      await waitFor(() => expect(cards()[0]?.checked).toBe(true));
+      await waitFor(() => expect(harness.read(planPath)).toContain("- [x] 写周报"));
+      // 没动别人那两行。
+      expect(harness.read(planPath)).toContain("- [ ] 修 bug");
+      expect(harness.read(planPath)).toContain("- [x] 开周会");
+    });
+
+    it("勾第二张只改第二行", async () => {
+      const planPath = harness.seed("Plan.md", BOARD);
+      await openBoard();
+
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      fireEvent.click(cards()[1]!);
+
+      await waitFor(() => expect(harness.read(planPath)).toContain("- [x] 修 bug"));
+      expect(harness.read(planPath)).toContain("- [ ] 写周报");
+    });
+
+    it("在某列添加任务,写到那一列末尾", async () => {
+      const planPath = harness.seed("Plan.md", BOARD);
+      await openBoard();
+
+      fireEvent.click(within(boardColumns()[0]!).getByRole("button", { name: "+ Add task" }));
+      const input = screen.getByRole("textbox", { name: "New task in 待办" });
+      fireEvent.change(input, { target: { value: "新任务 #work" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        const saved = harness.read(planPath) ?? "";
+        if (!saved.includes("新任务")) throw new Error("not saved yet");
+        // 插在「修 bug」之后、「## 完成」之前 —— 不是文末。
+        expect(saved).toContain("- [ ] 修 bug\n- [ ] 新任务 #work\n\n## 完成");
+      });
+      // 写回之后看板重画,新卡片在第一列。
+      await waitFor(() => expect(cards()).toHaveLength(4));
+      expect(within(boardColumns()[0]!).getByText("新任务")).toBeTruthy();
+    });
+
+    it("切回源码态能看到原文,看板不霸占其他视图", async () => {
+      harness.seed("Plan.md", BOARD);
+      await openBoard();
+
+      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+      await waitFor(() => expect(editorValue()).toContain("## 待办"));
+      expect(document.querySelector(".notebook-kanban")).toBeNull();
+    });
+
+    it("没有列时给出写法说明", async () => {
+      harness.seed(
+        "Plan.md",
+        ["---", 'title: "Plan"', "view: kanban", "---", "", "就是一段正文", ""].join("\n"),
+      );
+      await openBoard();
+      expect(screen.getByText("This board has no columns yet.")).toBeTruthy();
     });
   });
 });

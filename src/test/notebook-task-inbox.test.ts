@@ -152,7 +152,46 @@ describe("parseTaskMarks", () => {
 
   it("没有任何标记时原文照旧", () => {
     const parsed = parseTaskMarks("写周报");
-    expect(parsed).toEqual({ text: "写周报", tags: [], due: undefined, priority: undefined });
+    expect(parsed).toEqual({
+      text: "写周报",
+      tags: [],
+      due: undefined,
+      priority: undefined,
+      progress: undefined,
+    });
+  });
+
+  it("认 `{30%}` 完成度并摘掉它", () => {
+    const parsed = parseTaskMarks("写周报 {30%}");
+    expect(parsed.progress).toBe(30);
+    expect(parsed.text).toBe("写周报");
+  });
+
+  it("完成度超过 100 夹到 100", () => {
+    expect(parseTaskMarks("交稿 {999%}").progress).toBe(100);
+  });
+
+  it("`{0%}` 是写了 0,不是没写", () => {
+    expect(parseTaskMarks("交稿 {0%}").progress).toBe(0);
+    expect(parseTaskMarks("交稿").progress).toBeUndefined();
+  });
+
+  it("完成度要求词边界,不吃 `width:{50%}` 这种", () => {
+    // Markio 那条是裸的 \{(\d{1,3})%\},会把它当完成度**并从文本里抹掉**。
+    const parsed = parseTaskMarks("改 CSS width:{50%} 那一行");
+    expect(parsed.progress).toBeUndefined();
+    expect(parsed.text).toBe("改 CSS width:{50%} 那一行");
+  });
+
+  it("四种标记一起出现时都能摘干净", () => {
+    const parsed = parseTaskMarks("交稿 #写作 !high @2026-09-01 {30%}");
+    expect(parsed).toEqual({
+      text: "交稿",
+      tags: ["写作"],
+      due: "2026-09-01",
+      priority: "high",
+      progress: 30,
+    });
   });
 });
 

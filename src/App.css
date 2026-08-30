@@ -2469,6 +2469,216 @@ html:not(.dark) .session-prose pre code {
   padding-top: 0;
 }
 
+/* ── Notebook kanban ───────────────────────────────────────────── */
+/* `view: kanban` 的笔记在阅读态渲染成看板。颜色一律走主题 token —— Markio 那份是
+   一张按标签名写死的 hex 表(design / work / meeting…十个英文词),中文标签全部落到
+   兜底灰,而且三套主题下都是同一个颜色。 */
+.notebook-kanban {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+/* 空看板:仍带 `.notebook-kanban`,所以这里要把上面那条 flex 布局收回来。 */
+.notebook-kanban-empty-state {
+  display: block;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.notebook-kanban-empty-state .hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.notebook-kanban-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.notebook-kanban-bar .count {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.notebook-kanban-bar .track {
+  /* 进度条占剩下的宽度,但给个上限:铺满一块 2000px 宽的屏没有可读性收益。 */
+  flex: 1;
+  max-width: 200px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+.notebook-kanban-bar .fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.notebook-kanban-bar .unplaced {
+  color: var(--warning);
+}
+/* 横向滚动的板面。列定宽 + 不收缩,超出就整块横滚 —— 用 flex 均分的话列数多了每列
+   会窄到放不下一行文字。 */
+.notebook-kanban-board {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.notebook-kanban-col {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 236px;
+  max-height: 100%;
+  min-height: 0;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.notebook-kanban-col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-dim);
+}
+.notebook-kanban-col-head h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  /* 长列名截断而不是换行:列头高度不一致会让所有列的第一张卡片错开。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-kanban-col-head .n {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: var(--bg-card);
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.notebook-kanban-col-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding: 8px;
+  overflow-y: auto;
+}
+.notebook-kanban-card {
+  padding: 7px 9px;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 12.5px;
+}
+.notebook-kanban-card .row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.notebook-kanban-card input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+  cursor: pointer;
+}
+.notebook-kanban-card .text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+/* 做完的卡片压暗但不隐藏:它是"这一列干到哪儿了"的证据。 */
+.notebook-kanban-card.done {
+  opacity: 0.55;
+}
+.notebook-kanban-card.done .text {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.notebook-kanban-card .prio {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+}
+.notebook-kanban-card .prio.high {
+  background: var(--danger);
+}
+.notebook-kanban-card .prio.med {
+  background: var(--warning);
+}
+.notebook-kanban-card .prio.low {
+  background: var(--success);
+}
+.notebook-kanban-card .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 5px 0 0 20px;
+  font-size: 11px;
+}
+.notebook-kanban-card .tag {
+  padding: 0 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-subtle));
+  color: var(--accent);
+}
+.notebook-kanban-card .due {
+  color: var(--text-muted);
+}
+.notebook-kanban-card .progress {
+  height: 3px;
+  margin: 6px 0 0 20px;
+  border-radius: 2px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+.notebook-kanban-card .progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.notebook-kanban-add {
+  padding: 5px 8px;
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+}
+.notebook-kanban-add:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-medium));
+  color: var(--text-secondary);
+}
+.notebook-kanban-draft {
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
 /* ── Notebook rich text ────────────────────────────────────────── */
 .notebook-rich-text {
   color: var(--text-primary);

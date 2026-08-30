@@ -22,6 +22,13 @@ export type NoteContentAreaProps = {
   splitPreviewRef: React.RefObject<HTMLDivElement | null>;
   /** 承载渲染结果的容器。公式和 Mermaid 的懒渲染挂在它上面。 */
   previewRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * 阅读态改渲染这个节点,不渲染 Markdown 预览(看板视图用)。
+   *
+   * 只影响阅读态。源码 / 分屏 / 所见即所得三档照旧 —— 那是用户回到排版和原文的去处,
+   * 不能被 frontmatter 里的一行字夺走。
+   */
+  readOverride?: React.ReactNode;
 };
 
 export function NoteContentArea({
@@ -31,6 +38,7 @@ export function NoteContentArea({
   readContentRef,
   splitPreviewRef,
   previewRef,
+  readOverride,
 }: NoteContentAreaProps) {
   /* `{ __html }` 这个对象必须**跨渲染保持同一个**,不能每次现写字面量。
    *
@@ -83,6 +91,17 @@ export function NoteContentArea({
             />
           </div>
         )}
+      </div>
+    );
+  }
+  /* 阅读态被接管(看板)。滚动容器仍然是 `readContentRef` 那一层,padding 交给里面的
+     视图自己 —— 看板要横向铺满,外面留一圈内边距会让最后一列贴不到边。
+     `previewRef` 这一趟**不挂**:阅读态的各个 DOM 增强(公式、Mermaid、wikilink、嵌入、
+     复选框)都先取 `previewRef.current`,拿不到就直接返回,不会对着看板乱改。 */
+  if (readOverride) {
+    return (
+      <div ref={readContentRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {readOverride}
       </div>
     );
   }

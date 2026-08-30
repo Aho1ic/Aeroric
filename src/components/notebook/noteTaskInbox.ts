@@ -54,6 +54,8 @@ export type TaskMarks = {
   /** 截止日期,`YYYY-MM-DD`。 */
   due?: string;
   priority?: TaskPriority;
+  /** 完成度 0-100(`{30%}`)。没写就是 undefined —— 0 是"写了 0%"。 */
+  progress?: number;
 };
 
 /** 收集箱里的一条任务。 */
@@ -99,6 +101,7 @@ const EMOJI_PRIORITY: ReadonlyArray<[string, TaskPriority]> = [
  * - `#tag` → 标签
  * - `📅 YYYY-MM-DD` / `@YYYY-MM-DD` / 末尾 `(YYYY-MM-DD)` / 首尾的裸 `YYYY-MM-DD` → 截止
  * - `!high` / `!med` / `!low`、`🔴` / `🟡` / `🟢` → 优先级(emoji 优先)
+ * - `{30%}` → 完成度
  *
  * 取到的标记都从文本里**摘掉**:留着的话同一个信息会显示两遍(一遍在日期徽标上,
  * 一遍在任务文本里)。
@@ -152,7 +155,17 @@ export function parseTaskMarks(raw: string): TaskMarks {
     break;
   }
 
-  return { text: text.replace(/\s+/g, " ").trim(), tags, due, priority };
+  let progress: number | undefined;
+  /* 前后都要求边界。Markio 那条是裸的 `\{(\d{1,3})%\}`,于是 CSS/模板里的
+     `width:{50%}` 也会被当成完成度**并从文本里抹掉** —— 任务文本少了一截,而用户
+     看不出少的是什么。完成度是**标记**,和标签、截止日期一样写在词边界上。 */
+  const progressMatch = /(^|\s)\{(\d{1,3})%\}(?=$|\s)/.exec(text);
+  if (progressMatch) {
+    progress = Math.min(100, Number(progressMatch[2]));
+    text = text.replace(progressMatch[0], progressMatch[1]!);
+  }
+
+  return { text: text.replace(/\s+/g, " ").trim(), tags, due, priority, progress };
 }
 
 /**

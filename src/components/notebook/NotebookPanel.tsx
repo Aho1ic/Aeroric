@@ -25,7 +25,7 @@ import {
   type NoteListContextMenuState,
 } from "./NoteListContextMenu";
 import { normalizeEnglishPunctuation } from "./notePunctuation";
-import { deriveTitle, splitNote } from "./noteFrontmatter";
+import { deriveTitle, frontmatterValue, splitNote } from "./noteFrontmatter";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { NotebookStoreProvider, useNotebookStore } from "./NotebookContext";
 import { createNotebookStore, type NotebookNote } from "./notebookStore";
@@ -104,6 +104,8 @@ import { enhanceNoteQueries } from "./enhanceNoteQueries";
 import { renderNoteMarkdown } from "./noteRender";
 import { toggleTaskLine } from "./noteTasks";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
+import { appendCardToColumn, type KanbanColumn } from "./noteKanban";
+import { NoteKanbanView } from "./NoteKanbanView";
 import { NoteOutlinePanel } from "./NoteOutlinePanel";
 import { NoteStatusBar } from "./NoteStatusBar";
 import { NoteTabStrip, type NoteTabItem } from "./NoteTabStrip";
@@ -347,6 +349,15 @@ function NotebookPanelContent({
   // 大纲 / 字数 / 阅读时长。只在阅读态用得上,但算一次很便宜(纯字符串扫描),
   // 放在这里省得再加一层条件。
   const noteStats = useMemo(() => analyzeNote(activeNote?.body ?? ""), [activeNote?.body]);
+  /* frontmatter 写了 `view: kanban` 的笔记,阅读态渲染看板而不是 Markdown 预览。
+   *
+   * 为什么是 frontmatter 而不是第五个视图档:看板是**这一篇**的属性(一篇周计划永远该
+   * 按看板打开),而视图档是面板的全局状态 —— 那样切到下一篇普通笔记还停在看板上。
+   * 想看排版就切源码 / 分屏 / 所见即所得,那三档不受影响。 */
+  const kanbanView =
+    (frontmatterValue(activeNote?.frontmatter ?? { title: null, extra: [] }, "view") ?? "")
+      .trim()
+      .toLowerCase() === "kanban";
   const searchableText = activeNote?.body ?? "";
   const searchMatches = useMemo(
     () => findNotebookTextMatches(searchableText, searchQuery),
@@ -921,6 +932,29 @@ function NotebookPanelContent({
       }),
     );
     // 没改成就不要落盘:一次无效点击不该刷新 updatedAt、也不该产一条历史版本。
+    if (changed) scheduleSave(noteId);
+  };
+
+  /**
+   * 看板上往某列末尾加一条任务。
+   *
+   * 和 `toggleTaskAtLine` 同一套讲究:在 updater 里按**最新**的 `note.body` 算(不是渲染
+   * 快照),`appendCardToColumn` 自己用列头原文当乐观锁,对不上就整个放弃。
+   */
+  const appendKanbanCard = (column: KanbanColumn, text: string) => {
+    if (!activeNote) return;
+    const noteId = activeNote.id;
+    const updatedAt = Date.now();
+    let changed = false;
+    setNotes((current) =>
+      current.map((note) => {
+        if (note.id !== noteId) return note;
+        const next = appendCardToColumn(note.body, column, text);
+        if (next === null) return note;
+        changed = true;
+        return { ...note, body: next, updatedAt };
+      }),
+    );
     if (changed) scheduleSave(noteId);
   };
 
@@ -2160,6 +2194,16 @@ function NotebookPanelContent({
                 readContentRef={readContentRef}
                 splitPreviewRef={splitPreviewRef}
                 previewRef={previewRef}
+                readOverride={
+                  kanbanView ? (
+                    <NoteKanbanView
+                      body={activeNote.body}
+                      onToggleLine={toggleTaskAtLine}
+                      onAppend={appendKanbanCard}
+                      t={t}
+                    />
+                  ) : undefined
+                }
               />
               {outlineOpen && (
                 /* 大纲和反链共用这一列。边框和底色提到这一层 —— 两个子面板各自

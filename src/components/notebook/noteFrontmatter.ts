@@ -87,6 +87,27 @@ export function splitNote(source: string): SplitNote {
 }
 
 /**
+ * 从 frontmatter 里读一个字段的值,没有就返回 null。
+ *
+ * key 折大小写(`View:` 和 `view:` 是同一个字段),和字段浏览器 / 标签同一个口径;
+ * **值不折** —— 值是内容而不是标识符,见 `noteFields.ts` 的模块注释。
+ *
+ * 解析用的是 `splitNote` 里那条同样的 `^key\s*:\s*(.*)$`,不另写一条:两条正则对
+ * "带引号的值"、"key 里能有什么字符"判定不一致的话,同一个字段在一处认得出、在另一
+ * 处认不出。
+ */
+export function frontmatterValue(frontmatter: NoteFrontmatter, key: string): string | null {
+  const want = key.toLowerCase();
+  if (want === "title") return frontmatter.title;
+  for (const line of frontmatter.extra) {
+    const match = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line);
+    if (!match || match[1]!.toLowerCase() !== want) continue;
+    return parseScalar(match[2] ?? "");
+  }
+  return null;
+}
+
+/**
  * 把 frontmatter + 正文重新拼成文件内容。
  *
  * `title` 为空时不写 `title:` 字段 —— 一个空标题不值得往文件里塞一行噪声。

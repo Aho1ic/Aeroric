@@ -380,6 +380,9 @@ export function NoteTaskInboxSheet({
                       {item.tags.map((tag) => (
                         <span key={tag}>#{tag}</span>
                       ))}
+                      {/* 完成度。`parseTaskMarks` 把 `{30%}` 从文本里摘掉了,这里不显示
+                          的话那个数字就凭空消失了 —— 摘掉标记的前提是它在别处露出来。 */}
+                      {typeof item.progress === "number" ? <span>{item.progress}%</span> : null}
                     </span>
                   </span>
                 </button>
