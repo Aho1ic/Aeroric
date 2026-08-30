@@ -6,6 +6,14 @@ import { AttachmentSection } from "./AttachmentSection";
 import { attachmentMarkdown, linkFromNote, vaultRelativePath } from "./attachmentUrls";
 import { NoteList } from "./NoteList";
 import { NoteFindBar, type NoteFindFlags } from "./NoteFindBar";
+import { NoteSearchSheet } from "./NoteSearchSheet";
+import {
+  NOTE_SEARCH_LIMIT,
+  noteSearchOptions,
+  resolveHitNoteId,
+  type NoteSearchFlags,
+  type NoteSearchHit,
+} from "./noteGlobalSearch";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
@@ -44,6 +52,7 @@ import {
   readNoteIcons,
   peekNote,
   renameVaultTag,
+  searchNotesText,
   statNote,
   type TagRenameReport,
   vaultIndex,
@@ -281,6 +290,22 @@ function NotebookPanelContent({
     wholeWord: false,
     regex: false,
   });
+  /** 全库搜索(⌘⇧F)。和查找栏各自一套 query/flags —— 一个查当前这篇,一个查全库。 */
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalFlags, setGlobalFlags] = useState<NoteSearchFlags>({
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false,
+  });
+  const [globalHits, setGlobalHits] = useState<NoteSearchHit[]>([]);
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [globalSearched, setGlobalSearched] = useState(false);
+  const globalInputRef = useRef<HTMLInputElement | null>(null);
+  /* 只认最后一次发起的搜索。用户改条件重搜时,前一次的 promise 可能后回来
+     ——不带序号就会把旧结果盖在新结果上,而列表看不出这一点。 */
+  const globalRunRef = useRef(0);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   /** 历史面板针对的那条笔记。**不**回落到 activeNote:回落的话这条笔记被删掉后
    *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
@@ -873,6 +898,12 @@ function NotebookPanelContent({
   }, [replaceOpen, searchOpen]);
 
   useEffect(() => {
+    if (!globalSearchOpen) return;
+    globalInputRef.current?.focus();
+    globalInputRef.current?.select();
+  }, [globalSearchOpen]);
+
+  useEffect(() => {
     setActiveMatchIndex((current) =>
       searchMatches.length === 0 ? 0 : Math.min(current, searchMatches.length - 1),
     );
@@ -1227,6 +1258,79 @@ function NotebookPanelContent({
     setSearchOpen(false);
     setReplaceOpen(false);
     sourceEditorRef.current?.focus();
+  };
+
+  /**
+   * 打开全库搜索。不要求先有 activeNote —— 空库/没选中笔记时正是最需要它的时候。
+   * 但要有 vault,不然没有可搜的根。
+   */
+  const openGlobalSearch = () => {
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    // 当前这篇的查找栏一起收掉:两个都开着的话 Escape 该关谁没有直觉答案。
+    setSearchOpen(false);
+    setReplaceOpen(false);
+    setGlobalSearchOpen(true);
+  };
+
+  const closeGlobalSearch = () => {
+    setGlobalSearchOpen(false);
+    /* 结果留着不清:关掉再开常常是"我刚才搜的那批还想再点一条"。改条件会重搜,
+       所以留着的结果不会变成过期数据被误当成新搜的。 */
+    sourceEditorRef.current?.focus();
+  };
+
+  const runGlobalSearch = () => {
+    const query = globalQuery.trim();
+    if (!vault || !query) {
+      // 空查询不发请求,但要把上一批结果清掉 —— 留着会像是"清空了还搜得到"。
+      setGlobalHits([]);
+      setGlobalError(null);
+      setGlobalSearched(false);
+      return;
+    }
+    const run = globalRunRef.current + 1;
+    globalRunRef.current = run;
+    setGlobalLoading(true);
+    setGlobalError(null);
+    void searchNotesText(vault, query, noteSearchOptions(globalFlags))
+      .then((matches) => {
+        if (globalRunRef.current !== run) return;
+        setGlobalHits(matches);
+        setGlobalSearched(true);
+      })
+      .catch((error: unknown) => {
+        if (globalRunRef.current !== run) return;
+        // 后端的错要原样给出来:正则不合法时它带着位置信息,比我们自己编一句有用。
+        setGlobalError(errorText(error));
+        /* 上一批结果要清掉:报错时列表还留着旧命中的话,状态行说"出错了"而下面列着
+           三条结果,用户没法判断哪个是真的。这里**不**动 `searched` —— 状态行里
+           error 优先于"没有结果",而下一次搜索无论成败都会重设它。 */
+        setGlobalHits([]);
+      })
+      .finally(() => {
+        if (globalRunRef.current !== run) return;
+        setGlobalLoading(false);
+      });
+  };
+
+  /** 点一条命中:关面板,再走反链那条跳转路径(它按文件行号换算正文偏移)。 */
+  const openGlobalSearchHit = (hit: NoteSearchHit) => {
+    const noteId = resolveHitNoteId(
+      hit.path,
+      notes.map((note) => note.id),
+      vault ?? "",
+    );
+    if (!noteId) {
+      /* 对不上就明说。静默 return 是最坏的选择:用户点了没反应,只会以为面板坏了,
+         而真实原因(文件刚被移走/删掉,或列表还没刷新)他无从得知。 */
+      setGlobalError(t("notebook.globalSearchUnresolved"));
+      return;
+    }
+    setGlobalSearchOpen(false);
+    jumpToBacklink(noteId, hit.line);
   };
 
   const moveNotebookMatch = (direction: 1 | -1) => {
@@ -1670,6 +1774,14 @@ function NotebookPanelContent({
   const handleNotebookShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLocaleLowerCase();
+
+    // ⌘⇧F 要排在 ⌘F 前面:后者不看 shiftKey,先判就把全库搜索吞了。
+    if (key === "f" && event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      openGlobalSearch();
+      return;
+    }
 
     if (key === "f" || key === "h") {
       event.preventDefault();
@@ -2527,6 +2639,26 @@ function NotebookPanelContent({
         />
       )}
       {taskMenu && <NoteTaskContextMenu state={taskMenu} onAction={runTaskMenuAction} t={t} />}
+      {/* 全库搜索排在所有 sheet 之后 —— 它是当前动作的焦点,别的 overlay 开着时
+          ⌘⇧F 仍然应该盖到最上面来。它自己是 absolute inset:0,所以必须在两列外面。 */}
+      {globalSearchOpen && (
+        <NoteSearchSheet
+          query={globalQuery}
+          onQueryChange={setGlobalQuery}
+          flags={globalFlags}
+          onFlagsChange={setGlobalFlags}
+          hits={globalHits}
+          loading={globalLoading}
+          error={globalError}
+          capped={globalHits.length >= NOTE_SEARCH_LIMIT}
+          searched={globalSearched}
+          onSubmit={runGlobalSearch}
+          onOpen={openGlobalSearchHit}
+          onClose={closeGlobalSearch}
+          inputRef={globalInputRef}
+          t={t}
+        />
+      )}
     </section>
   );
 }

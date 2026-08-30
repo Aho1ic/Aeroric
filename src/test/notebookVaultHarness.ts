@@ -343,6 +343,20 @@ export class NotebookVaultHarness {
   failIconWrite: "read" | "write" | null = null;
   /** 让全库链接扫描失败,用来验反链面板的错误态。 */
   failLinkScan = false;
+  /** 让全文搜索失败(模拟后端报正则错),用来验全库搜索的错误态。 */
+  failTextSearch = false;
+  /**
+   * 挂起中的 `search_text`,按调用顺序排。
+   *
+   * 和 `heldTagScans` 同一个理由:全库搜索里"回来的不是最后一次发起的就丢掉"这条
+   * 守卫,只在两次搜索**乱序**返回时才看得出来。默认 harness 同步返回,两次请求
+   * 永远按发起顺序完成 —— 那条分支进不去,守卫在测试里等于不存在。
+   */
+  private heldTextSearches: (() => void)[] | null = null;
+  /* 让全文搜索多回一条指向不存在文件的命中。
+     模拟真实的两种情形:文件在"搜完"和"点开"之间被外部移走/删掉,或者路径两头
+     canonicalize 得不一样而尾段也对不上。前端必须明说,不能静默不动。 */
+  searchGhostHit = false;
   /** 全库链接扫描被调用了几次。验"反链档和图谱共用同一次扫描"用。 */
   linkScanCalls = 0;
   /** 让全库标签扫描失败,用来验标签面板的错误态。 */
@@ -1058,6 +1072,81 @@ export class NotebookVaultHarness {
         };
       }
 
+      /* Aeroric 通用的全文搜索命令(不是随手记专属)。随手记的全库搜索接的就是它。
+       *
+       * 这里刻意**按字节**算 `column`,和 Rust 侧一致(ripgrep 的 `submatch.start + 1`
+       * 与回落路径的 `str::find` 给的都是行内字节偏移)。如果这里图省事回 JS 下标,
+       * 那么前端「字节列 → 下标」的换算就永远测不出来 —— 中文笔记里高亮会整体偏移,
+       * 而测试全绿。 */
+      case "search_text": {
+        /* 失败也要能挂住:直接 throw 的话,「搜索报错」永远同步发生在挂起之前,于是
+           「一次失败的旧搜索能不能把新搜索的错误/loading 盖掉」就没法编排。 */
+        const failSearch = this.failTextSearch;
+        const query = String(args.query);
+        const options = (args.options ?? {}) as Record<string, unknown>;
+        const caseSensitive = options.caseSensitive === true;
+        const useRegex = options.regex === true;
+        const wholeWord = options.wholeWord === true;
+        const limit = typeof options.limit === "number" ? options.limit : 500;
+        const encoder = new TextEncoder();
+        let pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (wholeWord) pattern = `\\b${pattern}\\b`;
+        const hits: {
+          path: string;
+          name: string;
+          line: number;
+          column: number;
+          lineText: string;
+          matchText: string;
+        }[] = [];
+        // 要报错就不扫了:`failTextSearch` 常配着半个正则用,`new RegExp` 会先炸。
+        const paths = failSearch
+          ? []
+          : [...this.files.keys()].filter((name) => name.endsWith(".md")).sort();
+        for (const path of paths) {
+          const content = this.files.get(path)?.content ?? "";
+          content.split("\n").forEach((lineText, index) => {
+            const re = new RegExp(pattern, caseSensitive ? "gu" : "giu");
+            let match: RegExpExecArray | null;
+            while ((match = re.exec(lineText)) !== null) {
+              if (match[0] === "") {
+                re.lastIndex += 1;
+                continue;
+              }
+              if (hits.length >= limit) return;
+              hits.push({
+                path,
+                name: path.slice(path.lastIndexOf("/") + 1),
+                line: index + 1,
+                column: encoder.encode(lineText.slice(0, match.index)).length + 1,
+                lineText,
+                matchText: match[0],
+              });
+            }
+          });
+        }
+        if (!failSearch && this.searchGhostHit && hits.length < limit) {
+          hits.push({
+            path: "/elsewhere/Ghost.md",
+            name: "Ghost.md",
+            line: 5,
+            column: 1,
+            lineText: `${query} 在这`,
+            matchText: query,
+          });
+        }
+        const searchError = failSearch ? new Error("regex parse error: unclosed group") : undefined;
+        const heldSearch = this.heldTextSearches;
+        if (!heldSearch) {
+          if (searchError) throw searchError;
+          return hits;
+        }
+        // 挂住:`invoke` 的 mock 会 await 这个 promise,于是这次搜索要等测试放行。
+        return new Promise((resolve, reject) => {
+          heldSearch.push(() => (searchError ? reject(searchError) : resolve(hits)));
+        });
+      }
+
       default:
         throw new Error(`unexpected notebook command: ${command}`);
     }
@@ -1144,6 +1233,26 @@ export class NotebookVaultHarness {
     if (!held) throw new Error("tag scans are not held");
     const release = held[index];
     if (!release) throw new Error(`no held tag scan at ${index}`);
+    held[index] = () => {};
+    release();
+  }
+
+  /** 从现在起,全文搜索都停住不返回。 */
+  holdTextSearches(): void {
+    this.heldTextSearches = [];
+  }
+
+  /** 挂起的全文搜索有几个。 */
+  heldTextSearchCount(): number {
+    return this.heldTextSearches?.length ?? 0;
+  }
+
+  /** 放行第 `index` 个挂起的全文搜索(0 是最早发起的那个)。 */
+  releaseTextSearch(index: number): void {
+    const held = this.heldTextSearches;
+    if (!held) throw new Error("text searches are not held");
+    const release = held[index];
+    if (!release) throw new Error(`no held text search at ${index}`);
     held[index] = () => {};
     release();
   }

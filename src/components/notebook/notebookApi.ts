@@ -11,6 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { NoteLinkSource } from "./noteBacklinks";
 import type { NoteFieldSource } from "./noteFields";
+import type { NoteSearchRequestOptions } from "./noteGlobalSearch";
 import type { MentionLinkReport, MentionSource, MentionTarget } from "./noteMentions";
 import type { NoteTagSource } from "./noteTags";
 import type { NoteTaskSource } from "./noteTaskInbox";
@@ -525,4 +526,29 @@ export type VaultIndexEntry = {
  */
 export function vaultIndex(vault: string): Promise<VaultIndexEntry[]> {
   return invoke<VaultIndexEntry[]>("notebook_vault_index", { vault });
+}
+
+/** 后端 `search_text` 返回的一条命中。`column` 是 1 基**字节**偏移,见 noteGlobalSearch.ts。 */
+export type TextSearchMatch = {
+  path: string;
+  name: string;
+  line: number;
+  column: number;
+  lineText: string;
+  matchText: string;
+};
+
+/**
+ * 全库全文搜索。走 Aeroric 通用的 `search_text`(ripgrep,缺了则回落到 Rust 扫盘),
+ * 不是随手记专属命令 —— 笔记库就是一个普通目录,没必要再养一套 grep。
+ *
+ * 注意 `projectPath` 会被后端 canonicalize,返回的 `path` 可能和前端持有的笔记
+ * id 不字面相等(macOS 上 `/tmp` → `/private/tmp`),所以命中要过 `resolveHitNoteId`。
+ */
+export function searchNotesText(
+  vault: string,
+  query: string,
+  options: NoteSearchRequestOptions,
+): Promise<TextSearchMatch[]> {
+  return invoke<TextSearchMatch[]>("search_text", { projectPath: vault, query, options });
 }

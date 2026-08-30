@@ -2741,6 +2741,17 @@ export const en: Record<string, string> = {
   "notebook.findCjkHint":
     "CJK text has no word boundaries; sides touching Han or Kana are not filtered by whole word",
   "notebook.replaceStale": "The note changed, so the replacement was cancelled. Search again.",
+  "notebook.globalSearch": "Search all notes",
+  "notebook.globalSearchPlaceholder": "Search every note, press Enter to run",
+  "notebook.globalSearchHint":
+    "Type a query and press Enter to search every Markdown file in the vault",
+  "notebook.globalSearchRunning": "Searching…",
+  "notebook.globalSearchEmpty": "No matching notes",
+  "notebook.globalSearchSummary": "{hits} matches across {files} notes",
+  "notebook.globalSearchCapped": "Limit reached, results truncated",
+  "notebook.globalSearchHit": "{name} line {line}: {text}",
+  "notebook.globalSearchUnresolved":
+    "That hit's file is not in the current note list — it may have just been moved or deleted.",
   "notebook.loading": "Loading quick notes…",
   "notebook.vaultUnavailable": "The quick notes folder is unavailable, so nothing can be created",
   "notebook.conflictTitle": "Changed outside Aeroric",

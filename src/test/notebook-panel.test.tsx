@@ -5846,4 +5846,361 @@ describe("NotebookPanel", () => {
       await waitFor(() => expect(editorValue()).toBe("cat dog cat"));
     });
   });
+
+  describe("全库搜索", () => {
+    /** ⌘⇧F 从编辑器里唤出全库搜索。返回那个输入框。 */
+    async function openGlobalSearch() {
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "F", shiftKey: true, metaKey: true });
+      return screen.getByRole("textbox", { name: "Search all notes" });
+    }
+
+    function submit(input: HTMLElement, query: string) {
+      fireEvent.change(input, { target: { value: query } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+
+    /* 限定在对话框里取状态行:查找栏也有一个 aria-live,虽然两者互斥,但按文档
+       顺序取第一个会在将来加了别的 live 区域时静默指到别处去。 */
+    function status(): string {
+      const dialog = screen.getByRole("dialog", { name: "Search all notes" });
+      return dialog.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    }
+
+    /* 分组也要限定在对话框里数:面板根节点自己就是个 `region`(`aria-label="Quick
+       Notes"`),在全局数会永远多出来一个。 */
+    function hitGroupLabels(): (string | null)[] {
+      const dialog = screen.getByRole("dialog", { name: "Search all notes" });
+      return within(dialog)
+        .queryAllByRole("region")
+        .map((group) => group.getAttribute("aria-label"));
+    }
+
+    it("⌘⇧F 开全库搜索,而不是当前这篇的查找栏", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+
+      fireEvent.keyDown(content, { key: "F", shiftKey: true, metaKey: true });
+
+      expect(screen.getByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: "Find" })).not.toBeInTheDocument();
+    });
+
+    it("查找栏开着时按 ⌘⇧F 会把它收掉", async () => {
+      /* 上一条从"查找栏本来就没开"出发,验不出这次收拢 —— 要先真的开着。两个查找框
+         同时在场时 Escape 该关谁没有直觉答案,而它们的输入框长得几乎一样。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "f", metaKey: true });
+      expect(screen.getByRole("textbox", { name: "Find" })).toBeInTheDocument();
+
+      fireEvent.keyDown(content, { key: "F", shiftKey: true, metaKey: true });
+
+      expect(screen.getByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: "Find" })).not.toBeInTheDocument();
+    });
+
+    it("⌘F 仍然只开当前这篇的查找栏", async () => {
+      // ⇧ 那一支排在前面,不带 ⇧ 的路径不能被它吃掉。
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+
+      fireEvent.keyDown(content, { key: "f", metaKey: true });
+
+      expect(screen.getByRole("textbox", { name: "Find" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Search all notes" })).not.toBeInTheDocument();
+    });
+
+    it("搜到的命中按文件分组列出来", async () => {
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\ncat sat\n还有 cat\n');
+      harness.seed("Beta.md", '---\ntitle: "Beta"\n---\n\nno match here\n');
+      harness.seed("Gamma.md", '---\ntitle: "Gamma"\n---\n\none cat\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "cat");
+
+      // 3 处命中(Alpha 两处 + Gamma 一处),分布在 2 篇里。Beta 不该出现。
+      await waitFor(() => expect(status()).toContain("3 matches across 2 notes"));
+      expect(hitGroupLabels()).toEqual(["Alpha.md", "Gamma.md"]);
+    });
+
+    it("点一条命中跳到那篇笔记的那一行", async () => {
+      /* 这是这一项的验收点:「全文搜索命中可定位到行」。行号是**文件行号**
+         (frontmatter 算在内),而光标要落在**正文**坐标系里 —— 两者差几行取决于
+         frontmatter 有多长,所以这条同时钉住那次换算。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      harness.seed("Hit.md", '---\ntitle: "Hit"\n---\n\n第一行\n有 needle 在这\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Hit");
+      const input = await openGlobalSearch();
+
+      submit(input, "needle");
+      fireEvent.click(await screen.findByRole("button", { name: /Hit\.md line 6/ }));
+
+      expect(await screen.findByDisplayValue("Hit")).toBeInTheDocument();
+      // 面板收掉:它铺满整个面板,留着的话用户点了一条却什么都看不见。
+      expect(screen.queryByRole("dialog", { name: "Search all notes" })).not.toBeInTheDocument();
+      /* 文件第 6 行是 `有 needle 在这`;正文(拆掉 frontmatter)是
+         `第一行\n有 needle 在这\n`,那一行的行首在 4。 */
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("跳到一篇还没读入的笔记也落在那一行", async () => {
+      /* 和反链那条同样的理由:列表只读目录项,除当前这篇之外都还没读入,正文比
+         编辑器晚到。只在挂载那一刻读一次 prop 的写法会静默把光标留在开头。
+         src 先种、Doc 后种,于是 Doc 是挂载时的当前笔记。 */
+      harness.seed("src.md", '---\ntitle: "Source"\n---\n\n第一行\n有 needle 在这\n');
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Doc");
+      const input = await openGlobalSearch();
+
+      submit(input, "needle");
+      fireEvent.click(await screen.findByRole("button", { name: /src\.md line 6/ }));
+
+      expect(await screen.findByDisplayValue("Source")).toBeInTheDocument();
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(4));
+    });
+
+    it("中文在命中前面时高亮不串位", async () => {
+      /* 后端给的 `column` 是**字节**偏移。`标题 ` 是 3 汉字 + 空格 = 10 字节,
+         所以 `abc` 的列是 11;直接拿它当 JS 下标会切在「题」上,高亮整体左移。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\n标题 abc def\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "abc");
+
+      await waitFor(() => expect(document.querySelector("mark")?.textContent).toBe("abc"));
+    });
+
+    it("正则开关传到后端", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\n2024-01-02\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      // 纯文本模式下 `\d{4}` 一处都不该命中(它会被转义成字面量)。
+      submit(input, "\\d{4}");
+      await waitFor(() => expect(status()).toContain("No matching notes"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+    });
+
+    it("区分大小写开关传到后端", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nAlpha alpha\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "alpha");
+      await waitFor(() => expect(status()).toContain("2 matches across 1 notes"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Match case" }));
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+    });
+
+    it("后端报错时原样显示,不显示成「没有结果」", async () => {
+      /* 半个正则写到一半就回车是常态。这时候说「没有结果」是在骗人 —— 用户会以为
+         库里真的没有,而实际是模式不合法。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      harness.failTextSearch = true;
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "(unclosed");
+
+      await waitFor(() => expect(status()).toContain("regex parse error"));
+      expect(status()).not.toContain("No matching notes");
+    });
+
+    it("报错时把上一批结果清掉", async () => {
+      /* 「搜到 3 条 → 改成半个正则 → 报错」是真实顺序。旧命中留在列表里的话,状态行
+         说出错、下面却列着三条结果,用户没法判断哪个当真。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\ncat sat\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "cat");
+      await waitFor(() => expect(hitGroupLabels()).toEqual(["Doc.md"]));
+
+      harness.failTextSearch = true;
+      submit(input, "(unclosed");
+
+      await waitFor(() => expect(status()).toContain("regex parse error"));
+      expect(hitGroupLabels()).toHaveLength(0);
+    });
+
+    it("空查询不发请求,并清掉上一批结果", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\ncat sat\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "cat");
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+
+      // 清空再回车:留着上一批结果会像「已经清空了还搜得到」。
+      submit(input, "   ");
+      await waitFor(() => expect(status()).toContain("press Enter to search"));
+      expect(hitGroupLabels()).toHaveLength(0);
+    });
+
+    it("先发的搜索后回来时不会盖掉后发的结果", async () => {
+      /* 改了条件立刻重搜是常态,而两次搜索的耗时取决于命中多少 —— 前一次(范围更宽)
+         很可能后回来。不认序号的话它会把新结果盖掉,而列表上看不出任何异常:用户
+         搜的是 `needle`,看到的却是 `e` 的那一批。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nneedle here\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      harness.holdTextSearches();
+      submit(input, "e");
+      submit(input, "needle");
+      await waitFor(() => expect(harness.heldTextSearchCount()).toBe(2));
+
+      // 故意反序放行:后发的先回,先发的后回。
+      harness.releaseTextSearch(1);
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+
+      /* 放行后要用 `act` 把 promise 和随之而来的 state 更新都冲干净再断言。
+         `waitFor` 的第一次检查是同步跑的,会在旧值上就通过 —— 那样这条测试对
+         「旧结果盖掉新结果」是瞎的。 */
+      await act(async () => {
+        harness.releaseTextSearch(0);
+      });
+
+      // `e` 那一批命中远多于 1 处,盖上来的话摘要会立刻变。
+      expect(status()).toContain("1 matches across 1 notes");
+    });
+
+    it("先发的搜索失败时不会给后发的成功结果扣上报错", async () => {
+      /* 半个正则搜完立刻补全再搜是常见手速。那次失败要是后回来,状态行会在一片
+         正常结果上面挂一条 regex parse error —— 用户会以为新的这次也炸了。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nneedle here\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      harness.holdTextSearches();
+      harness.failTextSearch = true;
+      submit(input, "(unclosed");
+      harness.failTextSearch = false;
+      submit(input, "needle");
+      await waitFor(() => expect(harness.heldTextSearchCount()).toBe(2));
+
+      harness.releaseTextSearch(1);
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+      await act(async () => {
+        harness.releaseTextSearch(0);
+      });
+
+      expect(status()).not.toContain("regex parse error");
+      expect(status()).toContain("1 matches across 1 notes");
+    });
+
+    it("先发的搜索回来时不会把后发那次的进行中状态抹掉", async () => {
+      /* loading 也归序号管。旧的那次结束时顺手把 loading 关掉,状态行就会在新搜索
+         还在路上时说"没有匹配的笔记" —— 一条尚未返回的搜索被显示成搜完了。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nneedle here\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      harness.holdTextSearches();
+      submit(input, "needle");
+      submit(input, "here");
+      await waitFor(() => expect(harness.heldTextSearchCount()).toBe(2));
+
+      // 只放行先发的那次,后发的还挂着。
+      await act(async () => {
+        harness.releaseTextSearch(0);
+      });
+
+      expect(status()).toContain("Searching");
+      expect(status()).not.toContain("No matching notes");
+    });
+
+    it("命中触顶时摘要标出结果被截断", async () => {
+      /* 上限是 500。触顶时必须说出来 —— 用户看到 500 条会以为那就是全部,而
+         「改个更精确的词再搜」这个决定完全取决于知不知道结果被截了。 */
+      const lines = Array.from({ length: 600 }, () => "needle").join("\n");
+      harness.seed("Doc.md", `---\ntitle: "Doc"\n---\n\n${lines}\n`);
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "needle");
+
+      await waitFor(() => expect(status()).toContain("500 matches"));
+      expect(status()).toContain("Limit reached");
+    });
+
+    it("没触顶就不提截断", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nneedle\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "needle");
+
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+      expect(status()).not.toContain("Limit reached");
+    });
+
+    it("Escape 关掉面板", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(screen.queryByRole("dialog", { name: "Search all notes" })).not.toBeInTheDocument();
+    });
+
+    it("重开面板时上一批结果还在", async () => {
+      // 关掉再开常常是"刚搜的那批还想再点一条"。
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\ncat sat\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "cat");
+      await waitFor(() => expect(status()).toContain("1 matches across 1 notes"));
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      fireEvent.keyDown(content, { key: "F", shiftKey: true, metaKey: true });
+      expect(status()).toContain("1 matches across 1 notes");
+    });
+
+    it("命中所在文件不在列表里时明说,而不是静默不动", async () => {
+      /* 后端会 canonicalize 根目录,而列表是另一条路给的路径。真的对不上时(文件刚被
+         移走/删掉)必须说出来 —— 静默 return 会让用户以为面板坏了。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      harness.searchGhostHit = true;
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      const input = await openGlobalSearch();
+
+      submit(input, "needle");
+      fireEvent.click(await screen.findByRole("button", { name: /Ghost\.md line 5/ }));
+
+      await waitFor(() => expect(status()).toContain("not in the current note list"));
+      // 面板留着:没跳成功就关掉面板等于把用户手里的结果一起收走。
+      expect(screen.getByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+    });
+  });
 });
