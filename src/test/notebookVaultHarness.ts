@@ -121,6 +121,15 @@ export class NotebookVaultHarness {
   failTagScan = false;
   /** 全库标签扫描被调用了几次。验"只在标签那一档可见时扫"用。 */
   tagScanCalls = 0;
+  /**
+   * 挂起中的 `notebook_vault_tags`,按调用顺序排。`holdTagScans()` 之后每次扫描都
+   * 停在这里,要测试手工放行。
+   *
+   * 和 `heldSnapshotReads` 同一个理由:属性面板"回来的不是当前那条就丢掉"这条守卫
+   * 只在两次扫描**乱序**返回时才看得出来。默认 harness 同步返回,两次请求永远按
+   * 发起顺序完成 —— 那条分支进不去,守卫在测试里等于不存在。
+   */
+  private heldTagScans: (() => void)[] | null = null;
   /** 每次跨文件重命名的入参。验"传下去的是归一化 key 而不是显示名"用。 */
   tagRenameCalls: { old: string; next: string }[] = [];
   /** 让整次重命名失败(不是单篇失败),用来验小窗里的错误态。 */
@@ -334,7 +343,12 @@ export class NotebookVaultHarness {
           // 没有标签的笔记不进结果,和 Rust 侧一致。
           if (tags.length) sources.push({ path, tags });
         }
-        return sources;
+        const held = this.heldTagScans;
+        if (!held) return sources;
+        // 挂住:`invoke` 的 mock 会 await 这个 promise,于是这次扫描要等测试放行。
+        return new Promise((resolve) => {
+          held.push(() => resolve(sources));
+        });
       }
 
       case "notebook_rename_tag": {
@@ -756,6 +770,26 @@ export class NotebookVaultHarness {
     return [...this.trashed.values()]
       .sort((left, right) => right.deletedAtMs - left.deletedAtMs)
       .map((item) => item.name);
+  }
+
+  /** 从现在起,全库标签扫描都停住不返回。 */
+  holdTagScans(): void {
+    this.heldTagScans = [];
+  }
+
+  /** 挂起的标签扫描有几个。 */
+  heldTagScanCount(): number {
+    return this.heldTagScans?.length ?? 0;
+  }
+
+  /** 放行第 `index` 个挂起的标签扫描(0 是最早发起的那个)。 */
+  releaseTagScan(index: number): void {
+    const held = this.heldTagScans;
+    if (!held) throw new Error("tag scans are not held");
+    const release = held[index];
+    if (!release) throw new Error(`no held tag scan at ${index}`);
+    held[index] = () => {};
+    release();
   }
 
   /** 从现在起,读快照都停住不返回。 */

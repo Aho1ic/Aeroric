@@ -15,6 +15,7 @@ import {
   countTagRefs,
   filterTags,
   normalizeTag,
+  tagsInNote,
   type NoteTagSource,
   type TagEntry,
 } from "../components/notebook/noteTags";
@@ -186,5 +187,59 @@ describe("countTagRefs", () => {
 
   it("空清单是 0", () => {
     expect(countTagRefs([] as TagEntry[])).toBe(0);
+  });
+});
+
+describe("tagsInNote", () => {
+  it("只数这一篇,别的笔记的标签不算", () => {
+    const sources = [
+      source("/v/a.md", ref("work", 1), ref("home", 2)),
+      source("/v/b.md", ref("work", 1), ref("other", 2)),
+    ];
+    expect(tagsInNote(sources, "/v/a.md")).toEqual([
+      { key: "home", label: "home", count: 1 },
+      { key: "work", label: "work", count: 1 },
+    ]);
+  });
+
+  it("同一篇里的大小写折成一条,处数相加", () => {
+    /* 口径必须和标签档一致:那边 `#Work`+`#work` 是一条两处,这里要是分成两条,
+       用户会看到属性面板说两个标签、标签档说一个。 */
+    const sources = [source("/v/a.md", ref("Work", 1), ref("work", 2), ref("WORK", 3))];
+    expect(tagsInNote(sources, "/v/a.md")).toEqual([{ key: "work", label: "Work", count: 3 }]);
+  });
+
+  it("按处数降序,同数按 key 字典序", () => {
+    const sources = [
+      source("/v/a.md", ref("zebra", 1), ref("apple", 2), ref("many", 3), ref("many", 4)),
+    ];
+    expect(tagsInNote(sources, "/v/a.md").map((tag) => tag.key)).toEqual([
+      "many",
+      "apple",
+      "zebra",
+    ]);
+  });
+
+  it("这篇没有标签就是空数组", () => {
+    // 扫描结果里根本不含没有标签的笔记,所以「找不到这条路径」是常态而不是异常。
+    const sources = [source("/v/b.md", ref("work", 1))];
+    expect(tagsInNote(sources, "/v/a.md")).toEqual([]);
+  });
+
+  it("同名不同目录的两篇不会互相串味", () => {
+    // 按文件名(而不是整条路径)比会把子目录里同名的那篇的标签算进来。
+    const sources = [source("/v/a.md", ref("work", 1)), source("/v/notes/a.md", ref("home", 1))];
+    expect(tagsInNote(sources, "/v/notes/a.md")).toEqual([
+      { key: "home", label: "home", count: 1 },
+    ]);
+    expect(tagsInNote(sources, "/v/a.md")).toEqual([{ key: "work", label: "work", count: 1 }]);
+  });
+
+  it("路径是整条比,不是后缀比", () => {
+    /* 上一条杀不掉"用 endsWith 比"这种写法(`/v/a.md` 并不以 `/v/notes/a.md` 结尾)。
+       这一条专门造出后缀成立的形状:查 `/v/a.md` 时,`/deep/v/a.md` 正好以它结尾。
+       路径来自 vault 根拼接,嵌套 vault 或同名子树都能真的凑出这种形状。 */
+    const sources = [source("/deep/v/a.md", ref("work", 1))];
+    expect(tagsInNote(sources, "/v/a.md")).toEqual([]);
   });
 });

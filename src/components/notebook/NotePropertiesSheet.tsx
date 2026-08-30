@@ -17,6 +17,7 @@ import { useEffect, useRef, type CSSProperties } from "react";
 import { X } from "lucide-react";
 
 import type { NoteStat } from "./notebookApi";
+import type { NoteTagCount } from "./noteTags";
 
 /**
  * 属性面板的状态。
@@ -29,11 +30,37 @@ export type NotePropertiesState = {
   stat: NoteStat | null;
   loading: boolean;
   error: string | null;
+  /**
+   * 全库那一组:这篇的标签、引用了这篇的笔记数与链接条数。
+   *
+   * 和 `stat` 分开加载、分开报错:两者来自不同的命令,而全库扫描比 `stat` 慢得多。
+   * 合成一个 loading 会让"文件多大"跟着全库扫描一起等。
+   */
+  vault: NoteVaultFacts | null;
+  vaultLoading: boolean;
+  vaultError: string | null;
+};
+
+/** 属性面板里"全库"那一组的内容。 */
+export type NoteVaultFacts = {
+  tags: NoteTagCount[];
+  /** 有多少篇笔记引用了这篇。 */
+  mentionNotes: number;
+  /** 这些笔记里一共有多少条指向这篇的链接(同一篇可以引用多次)。 */
+  mentionLinks: number;
 };
 
 /** 初始状态。`useState` 的初值不能共享同一个对象引用,所以是构造器不是常量。 */
 export function freshPropertiesState(noteId: string): NotePropertiesState {
-  return { noteId, stat: null, loading: true, error: null };
+  return {
+    noteId,
+    stat: null,
+    loading: true,
+    error: null,
+    vault: null,
+    vaultLoading: true,
+    vaultError: null,
+  };
 }
 
 export type NotePropertiesSheetProps = {
@@ -49,6 +76,10 @@ export type NotePropertiesSheetProps = {
   words: number;
   headings: number;
   readingMinutes: number;
+  /** 全库那一组。`null` + `vaultLoading` 表示还在扫。 */
+  vault: NoteVaultFacts | null;
+  vaultLoading: boolean;
+  vaultError: string | null;
   onClose: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
 };
@@ -135,6 +166,9 @@ export function NotePropertiesSheet({
   words,
   headings,
   readingMinutes,
+  vault,
+  vaultLoading,
+  vaultError,
   onClose,
   t,
 }: NotePropertiesSheetProps) {
@@ -260,6 +294,61 @@ export function NotePropertiesSheet({
           <span style={keyStyle}>·</span>
           <span style={valueStyle}>{t("notebook.propertiesContentHint")}</span>
         </div>
+
+        {/* 全库那一组。P3 做属性面板时刻意留空的就是这两行:那时候标签索引和链接
+            索引都还不存在,显示一组永远为空的 tags 比不显示更让人困惑。 */}
+        <div style={sectionStyle}>{t("notebook.propertiesVault")}</div>
+        {vaultError ? (
+          <div style={{ ...rowStyle, color: "var(--warning)" }}>
+            <span style={keyStyle}>·</span>
+            <span style={valueStyle} role="alert">
+              {vaultError}
+            </span>
+          </div>
+        ) : vaultLoading ? (
+          <div style={rowStyle}>
+            <span style={keyStyle}>·</span>
+            <span style={{ ...valueStyle, color: "var(--text-hint)" }}>
+              {t("notebook.propertiesVaultLoading")}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div style={rowStyle}>
+              <span style={keyStyle}>{t("notebook.propertiesTags")}</span>
+              <span style={valueStyle} data-testid="note-properties-tags">
+                {vault?.tags.length
+                  ? /* 处数只在 >1 时写出来:大部分标签在一篇里只出现一次,给每条都
+                       缀个 "×1" 是纯噪声。 */
+                    vault.tags
+                      .map((tag) =>
+                        tag.count > 1 ? `#${tag.label} ×${tag.count}` : `#${tag.label}`,
+                      )
+                      .join("  ")
+                  : t("notebook.propertiesNoTags")}
+              </span>
+            </div>
+            <div style={rowStyle}>
+              <span style={keyStyle}>{t("notebook.propertiesMentions")}</span>
+              <span style={valueStyle} data-testid="note-properties-mentions">
+                {vault?.mentionNotes
+                  ? /* 两个数都给:"3 篇里的 5 条"和"3 篇里的 3 条"是不同的情况,而
+                       只报一个数的话没法区分。 */
+                    t("notebook.propertiesMentionsValue", {
+                      notes: String(vault.mentionNotes),
+                      links: String(vault.mentionLinks),
+                    })
+                  : t("notebook.propertiesNoMentions")}
+              </span>
+            </div>
+            {/* 这一组读的是**磁盘上**的文件(全库扫描),所以还没保存的编辑不算 ——
+                和上面内容那一组的口径正好相反,不说清会以为标签漏了。 */}
+            <div style={{ ...rowStyle, paddingTop: 6, color: "var(--text-hint)" }}>
+              <span style={keyStyle}>·</span>
+              <span style={valueStyle}>{t("notebook.propertiesVaultHint")}</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

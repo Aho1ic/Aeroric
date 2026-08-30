@@ -54,7 +54,7 @@ import { NoteIconPicker, type NoteIconPickerState } from "./NoteIconPicker";
 import { noteIconOf, withNoteIcon, type NoteIconName } from "./noteIcons";
 import { bodyOffsetOfFileLine, collectBacklinks, countBacklinks } from "./noteBacklinks";
 import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
-import { collectTags, countTagRefs, filterTags } from "./noteTags";
+import { collectTags, countTagRefs, filterTags, tagsInNote } from "./noteTags";
 import { NoteTagsPanel } from "./NoteTagsPanel";
 import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
 import { useVaultScan } from "./useVaultScan";
@@ -879,6 +879,32 @@ function NotebookPanelContent({
         setProperties((current) =>
           current?.noteId === noteId
             ? { ...current, loading: false, error: errorText(error) }
+            : current,
+        );
+      }
+    })();
+    /* 全库那一组单独一条链:两个扫描都比 `stat` 慢,串在一起会让"文件多大"跟着
+       全库扫描一起等。侧栏那两档的结果不能拿来用 —— 它们只在对应档可见时才扫,
+       而属性面板不要求侧栏开着,多数时候那两份是空的。 */
+    if (!vault) return;
+    void (async () => {
+      try {
+        const [tagSources, linkSources] = await Promise.all([vaultTags(vault), vaultLinks(vault)]);
+        /* 反链那两个数走和侧栏完全同一条路(`collectBacklinks`),不另写一份计数:
+           属性面板说"3 篇"而反链档列出 4 篇的话,没人知道该信哪个。 */
+        const groups = collectBacklinks(linkSources, linkIndex, noteId);
+        const facts = {
+          tags: tagsInNote(tagSources, noteId),
+          mentionNotes: groups.length,
+          mentionLinks: countBacklinks(groups),
+        };
+        setProperties((current) =>
+          current?.noteId === noteId ? { ...current, vault: facts, vaultLoading: false } : current,
+        );
+      } catch (error) {
+        setProperties((current) =>
+          current?.noteId === noteId
+            ? { ...current, vaultLoading: false, vaultError: errorText(error) }
             : current,
         );
       }
@@ -1866,6 +1892,9 @@ function NotebookPanelContent({
           words={noteStats.words}
           headings={noteStats.outline.length}
           readingMinutes={noteStats.readingMinutes}
+          vault={properties.vault}
+          vaultLoading={properties.vaultLoading}
+          vaultError={properties.vaultError}
           onClose={() => setProperties(null)}
           t={t}
         />

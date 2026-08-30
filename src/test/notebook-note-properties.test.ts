@@ -53,11 +53,15 @@ describe("formatNoteTime", () => {
 describe("freshPropertiesState", () => {
   it("开局是加载中,没有数据也没有错误", () => {
     // 初值给 loading:false 的话面板会先闪一帧「0 B」再跳成真实大小。
+    // 全库那一组同理,而且它单独一个 loading —— 两组的加载快慢差一个数量级。
     expect(freshPropertiesState("/vault/a.md")).toEqual({
       noteId: "/vault/a.md",
       stat: null,
       loading: true,
       error: null,
+      vault: null,
+      vaultLoading: true,
+      vaultError: null,
     });
   });
 });

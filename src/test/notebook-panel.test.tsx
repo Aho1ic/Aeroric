@@ -2074,6 +2074,102 @@ describe("NotebookPanel", () => {
       expect(sheet).toHaveTextContent("including unsaved edits");
     });
 
+    it("属性:全库那一组报这篇的标签和被引用数", async () => {
+      /* P3 做属性面板时这两行是刻意留空的 —— 那时候标签索引和链接索引都不存在。
+         现在两个都有了,这一条守着它们真的接上了。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n#work 一处\n#work 又一处\n#home\n');
+      /* 两条链接刻意分在两行:`collectBacklinks` 同一行只留一条(同一行重复两遍
+         没有增量信息),写在一行的话这里就成了 2 条,分不出"篇数"和"条数"。 */
+      harness.seed("One.md", '---\ntitle: "One"\n---\n\n见 [[Target]]\n又见 [[Target#节]]\n');
+      harness.seed("Two.md", '---\ntitle: "Two"\n---\n\n也提到 [[Target]]\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      const tags = () => sheet.querySelector('[data-testid="note-properties-tags"]')?.textContent;
+      /* `#work` 两处所以带 ×2,`#home` 一处不带 —— 给每条都缀 ×1 是纯噪声。
+         按空白归一后再比:分隔用几个空格是排版,断言写死"两个空格"的话调一下间距
+         就要改测试,而那种失败不指向任何真问题。 */
+      await waitFor(() => expect(tags()?.replace(/\s+/g, " ").trim()).toBe("#work ×2 #home"));
+      // 两篇引用、三条链接(One 里有两条):只报一个数就分不出这两种情况。
+      const mentions = sheet.querySelector('[data-testid="note-properties-mentions"]');
+      expect(mentions?.textContent).toBe("3 links from 2 notes");
+      // 这一组读磁盘,和上面内容那一组口径相反,必须说清。
+      expect(sheet).toHaveTextContent("unsaved edits are not counted");
+    });
+
+    it("属性:没有标签也没有被引用时是两句话,不是 0", async () => {
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n光秃秃的正文\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(sheet).toHaveTextContent("No inline tags"));
+      expect(sheet).toHaveTextContent("No notes link here");
+    });
+
+    it("属性:全库扫描失败只弄脏那一组,文件信息照样显示", async () => {
+      /* 两组分开加载、分开报错就是为了这个:全库扫描比 stat 慢得多也更容易失败
+         (权限、超大文件),让它把"文件多大"一起拖下水是没道理的。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n#work\n');
+      harness.failTagScan = true;
+      renderNotebook();
+      await screen.findByRole("button", { name: "Target" });
+
+      await openListMenu("Target");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(sheet).toHaveTextContent("scanning tags failed"));
+      // 磁盘那一组不受影响。
+      expect(sheet).toHaveTextContent(/\d+ B/);
+      expect(sheet).not.toHaveTextContent("Scanning the vault…");
+    });
+
+    it("属性:全库那一组慢的响应回来时不盖掉已经换看的另一条", async () => {
+      /* 和 stat 那一路同一个陷阱,但这一路更容易撞上 —— 全库扫描慢得多,用户在它
+         飞行途中换看另一条笔记的属性是很自然的操作。
+
+         必须**手工挂住**扫描:默认 harness 同步返回,两次请求永远按发起顺序完成,
+         "回来的不是当前那条就丢掉"那条分支根本进不去。第一版这条测试没挂,于是
+         去掉那个 noteId 守卫它照样绿 —— 一条守着空气的测试。 */
+      harness.seed("Slow.md", '---\ntitle: "Slow"\n---\n\n#slow\n');
+      harness.seed("Quick.md", '---\ntitle: "Quick"\n---\n\n#quick\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Slow" });
+      await screen.findByRole("button", { name: "Quick" });
+
+      harness.holdTagScans();
+
+      await openListMenu("Slow");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await screen.findByRole("dialog", { name: "Note properties" });
+      await waitFor(() => expect(harness.heldTagScanCount()).toBe(1));
+
+      // Slow 那次还挂着,就换看 Quick。
+      await openListMenu("Quick");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await waitFor(() => expect(harness.heldTagScanCount()).toBe(2));
+
+      // 先放行 Quick(后发起的),再放行 Slow —— 乱序返回。
+      harness.releaseTagScan(1);
+      const sheet = await screen.findByRole("dialog", { name: "Note properties" });
+      const tags = () => sheet.querySelector('[data-testid="note-properties-tags"]')?.textContent;
+      await waitFor(() => expect(tags()).toContain("#quick"));
+
+      harness.releaseTagScan(0);
+      // Slow 那次回来了,但它不是当前看的那条 —— 不能把 Quick 的那一组换掉。
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(tags()).toContain("#quick");
+      expect(tags()).not.toContain("#slow");
+    });
+
     it("属性:读不到文件信息时报错而不是显示 0 字节", async () => {
       harness.seed("Target.md", '---\ntitle: "Target"\n---\n\nbody\n');
       harness.failNoteStat = true;

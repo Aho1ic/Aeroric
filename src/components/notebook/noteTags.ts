@@ -108,3 +108,39 @@ export function filterTags(entries: readonly TagEntry[], query: string): TagEntr
 export function countTagRefs(entries: readonly TagEntry[]): number {
   return entries.reduce((sum, entry) => sum + entry.count, 0);
 }
+
+/** 一篇笔记里的一个标签。属性面板用 —— 那里不需要 refs(引用就在眼前这篇里)。 */
+export type NoteTagCount = {
+  key: string;
+  label: string;
+  count: number;
+};
+
+/**
+ * 单篇笔记里出现的标签,按处数降序、同数按 key 字典序。
+ *
+ * 为什么不复用 `collectTags` 再挑出这一篇:那个函数的 `refs` 带来源标题,要传
+ * `titleOf`,而这里每一条来源都是同一篇笔记 —— 把标题查一遍再丢掉。更要紧的是
+ * `notes` 字段在单篇语境下恒等于 1,留着它等于留一个永远不变的数给人读。
+ *
+ * 归一化口径和标签档完全一致(`normalizeTag`):同一篇里 `#Work` 和 `#work` 折成
+ * 一条,处数是 2。两边不一致的话,属性面板说"1 处"而标签档说"2 处",而它们数的是
+ * 同一篇同一个标签。
+ */
+export function tagsInNote(sources: readonly NoteTagSource[], path: string): NoteTagCount[] {
+  const map = new Map<string, NoteTagCount>();
+  for (const source of sources) {
+    if (source.path !== path) continue;
+    for (const tag of source.tags) {
+      const key = normalizeTag(tag.raw);
+      if (!key) continue;
+      const entry = map.get(key);
+      if (entry) {
+        entry.count += 1;
+      } else {
+        map.set(key, { key, label: tag.raw, count: 1 });
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
