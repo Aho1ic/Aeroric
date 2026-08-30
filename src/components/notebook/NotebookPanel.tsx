@@ -58,6 +58,8 @@ import { bodyOffsetOfFileLine, collectBacklinks, countBacklinks } from "./noteBa
 import { NoteBacklinksPanel } from "./NoteBacklinksPanel";
 import { collectFields } from "./noteFields";
 import { NoteFieldsSheet } from "./NoteFieldsSheet";
+import { buildNoteGraph, type NoteGraph } from "./noteGraph";
+import { DEPTH_ALL, NoteGraphSheet } from "./NoteGraphSheet";
 import { collectTags, countTagRefs, filterTags, tagsInNote } from "./noteTags";
 import { NoteTagsPanel } from "./NoteTagsPanel";
 import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
@@ -125,6 +127,9 @@ export function findNotebookTextMatches(text: string, query: string): TextMatch[
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** 图谱关着时给出的空图。定成常量而不是每次新建对象:它进 memo 的返回值。 */
+const EMPTY_GRAPH: NoteGraph = { nodes: [], edges: [], deadLinks: 0, orphans: 0, hidden: 0 };
 
 export type NotebookPanelProps = {
   width?: number | string;
@@ -228,6 +233,10 @@ function NotebookPanelContent({
   const [properties, setProperties] = useState<NotePropertiesState | null>(null);
   /** 字段浏览器。同样是铺满面板的 overlay,和上面三个互斥。 */
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  /** 引用图谱。同样是铺满面板的 overlay,和上面四个互斥。 */
+  const [graphOpen, setGraphOpen] = useState(false);
+  /** 图谱画几跳以内。`DEPTH_ALL` = 不限,画整库。 */
+  const [graphDepth, setGraphDepth] = useState<number>(2);
   /**
    * 编辑器的代数。回滚时 +1,把 CodeMirror 整个重建。
    *
@@ -425,9 +434,12 @@ function NotebookPanelContent({
      取数的三条规则(只在可见时扫、报错留住旧结果、换笔记不重扫)在 `useVaultScan`
      里,两档共用同一份:任何一条在两档之间漂移,表现都是"其中一档偶尔看起来是
      空的",而那种偏差没人会往取数逻辑上想。 */
+  /* 反链档和图谱共用这一次扫描:两者要的是同一份数据(全库的链接),分开扫会让
+     "反链里有这条、图里没有"变成可能,而那种偏差没人会往取数上想。所以 `enabled`
+     是"反链档可见 **或** 图谱开着"。 */
   const linkScan = useVaultScan(
     vault,
-    outlineOpen && sideTab === "backlinks",
+    (outlineOpen && sideTab === "backlinks") || graphOpen,
     vaultLinks,
     errorText,
   );
@@ -817,6 +829,27 @@ function NotebookPanelContent({
       ),
     [fieldScan.data, indexedTitles],
   );
+  /* 引用图谱。和反链读同一份 `linkScan.data`、同一份 `linkIndex` —— 见 `noteGraph`
+     的模块注释。只在开着时折:整库 BFS + 布局不该在没人看的时候每次重扫都跑一遍。 */
+  const noteGraph = useMemo(
+    () =>
+      graphOpen
+        ? buildNoteGraph(
+            linkScan.data,
+            linkIndex,
+            /* 「整个库」不是"跳数很大",而是**没有焦点**:模型层只要有焦点,连不到它的
+               笔记就一律算在范围外(那是"焦点这一团"的语义,不管跳数给多大)。而那些
+               互不相连的孤岛恰恰是切到「整个库」想看的东西 —— 所以这里连 focusPath
+               一起去掉,让它走"整库图"那条路(全部 depth 为 null,一律排最外环)。
+               当前这篇仍然会高亮:那走的是 sheet 的 `focusPath` prop,和这里无关。 */
+            graphDepth === DEPTH_ALL
+              ? {}
+              : { focusPath: activeNote?.id ?? null, maxDepth: graphDepth },
+          )
+        : EMPTY_GRAPH,
+    [graphOpen, linkScan.data, linkIndex, activeNote?.id, graphDepth],
+  );
+
   const visibleTags = useMemo(() => filterTags(tagEntries, tagQuery), [tagEntries, tagQuery]);
 
   /* 反链行号 → 编辑器正文里的偏移。
@@ -950,6 +983,8 @@ function NotebookPanelContent({
     // 会盖住它),而是别让两个 aria-modal 的 dialog 同时挂在树上 —— 屏幕阅读器会
     // 同时报两个,而底下那个还留着自己的选中状态。
     setFieldsOpen(false);
+    // 图谱排在属性面板后面,会盖住它。
+    setGraphOpen(false);
     setProperties(freshPropertiesState(noteId));
     void (async () => {
       try {
@@ -998,8 +1033,9 @@ function NotebookPanelContent({
   /** 打开版本历史,并把快照列表拉回来。 */
   const openHistory = (noteId: string) => {
     // 字段浏览器在 JSX 里排在历史面板后面,不关掉的话它会继续盖在上面 —— 用户点
-    // "历史"却看见字段浏览器。
+    // "历史"却看见字段浏览器。图谱同理,它排得更后面。
     setFieldsOpen(false);
+    setGraphOpen(false);
     setHistoryNoteId(noteId);
     setHistory(freshHistoryState());
     void (async () => {
@@ -1096,12 +1132,25 @@ function NotebookPanelContent({
   /** 打开字段浏览器。数据由 `fieldScan` 按 `fieldsOpen` 自己去取。 */
   const openFields = () => {
     if (!vault) return;
-    // 另外三个 overlay 一起关掉:属性面板排在字段浏览器后面(会盖住它),历史和
-    // 回收站排在前面(会留在底下继续接键盘事件)。
+    // 另外四个 overlay 一起关掉:属性面板和图谱排在字段浏览器后面(会盖住它),
+    // 历史和回收站排在前面(会留在底下继续接键盘事件)。
     closeHistory();
     setTrash(null);
     setProperties(null);
+    setGraphOpen(false);
     setFieldsOpen(true);
+  };
+
+  /** 打开引用图谱。数据由 `linkScan` 按 `graphOpen` 自己去取(和反链共用那一次)。 */
+  const openGraph = () => {
+    if (!vault) return;
+    // 另外四个 overlay 一起关掉。图谱在 JSX 里排最后,所以这里关的都是"会留在底下
+    // 继续接键盘事件"的那一类 —— 理由同 `openFields`。
+    closeHistory();
+    setTrash(null);
+    setProperties(null);
+    setFieldsOpen(false);
+    setGraphOpen(true);
   };
 
   /** 打开回收站并拉列表。 */
@@ -1110,8 +1159,9 @@ function NotebookPanelContent({
     // 历史面板一起关掉:两个都是铺满面板的 overlay,叠在一起的话下面那个还在
     // 接键盘事件(Esc 会一次关掉两个),而用户只看得见上面那个。
     closeHistory();
-    // 理由同 `openHistory`:字段浏览器排在回收站后面,会盖住它。
+    // 理由同 `openHistory`:字段浏览器和图谱排在回收站后面,会盖住它。
     setFieldsOpen(false);
+    setGraphOpen(false);
     setTrash(freshTrashState());
     void (async () => {
       try {
@@ -1639,6 +1689,7 @@ function NotebookPanelContent({
           onCreate={addNote}
           onOpenTrash={openTrash}
           onOpenFields={openFields}
+          onOpenGraph={openGraph}
           onNoteContextMenu={(event, noteId) => {
             event.preventDefault();
             // 编辑区的菜单同时开着就没意义了,互斥。
@@ -2014,6 +2065,26 @@ function NotebookPanelContent({
           vaultLoading={properties.vaultLoading}
           vaultError={properties.vaultError}
           onClose={() => setProperties(null)}
+          t={t}
+        />
+      )}
+      {/* 引用图谱也铺在两列外面,排在最后(= 盖住其它四个)。互斥仍靠各自的 open
+          函数保证,见 `openGraph`。 */}
+      {graphOpen && (
+        <NoteGraphSheet
+          graph={noteGraph}
+          focusPath={activeNote?.id ?? null}
+          loading={linkScan.loading}
+          error={linkScan.error}
+          depth={graphDepth}
+          onDepthChange={setGraphDepth}
+          onOpenNote={(path) => {
+            setActiveId(path);
+            // 跳过去就收掉,理由同字段浏览器:它铺满面板。
+            setGraphOpen(false);
+          }}
+          onRefresh={linkScan.refresh}
+          onClose={() => setGraphOpen(false)}
           t={t}
         />
       )}

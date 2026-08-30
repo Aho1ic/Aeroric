@@ -4114,4 +4114,254 @@ describe("NotebookPanel", () => {
       expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull();
     });
   });
+
+  describe("引用图谱", () => {
+    /** 打开图谱,等它把扫描结果拉回来。 */
+    async function openGraph() {
+      fireEvent.click(await screen.findByRole("button", { name: "Link graph" }));
+      return screen.findByRole("dialog", { name: "Link graph" });
+    }
+
+    /** 图上的节点,按 `data-graph-node` 上的路径取。 */
+    function graphNodes(): string[] {
+      const sheet = screen.getByRole("dialog", { name: "Link graph" });
+      return [...sheet.querySelectorAll("[data-graph-node]")].map(
+        (node) => node.getAttribute("data-graph-node") ?? "",
+      );
+    }
+
+    /** 图上的边,`from|to`。 */
+    function graphEdges(): string[] {
+      const sheet = screen.getByRole("dialog", { name: "Link graph" });
+      return [...sheet.querySelectorAll("[data-graph-edge]")].map(
+        (edge) => edge.getAttribute("data-graph-edge") ?? "",
+      );
+    }
+
+    it("把全库链接画成节点和边", async () => {
+      const alpha = harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      const beta = harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      renderNotebook();
+      await openGraph();
+
+      // 两个点一条边,方向是 a → b。
+      await waitFor(() => expect(graphNodes()).toHaveLength(2));
+      expect(graphEdges()).toEqual([`${alpha}|${beta}`]);
+    });
+
+    it("只在开着时扫全库", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Beta" });
+
+      // 扫描要读每个文件的全文,是面板里最贵的一次 IO。没打开就不该扫。
+      expect(harness.linkScanCalls).toBe(0);
+      await openGraph();
+      await waitFor(() => expect(harness.linkScanCalls).toBe(1));
+    });
+
+    it("反链档已经开着时打开图谱,不再多扫一次", async () => {
+      /* 两个视图要的是同一份数据(全库链接)。各自一次 `useVaultScan` 的话,同一份
+         库会被读两遍全文,而且"反链里有这条、图里没有"就成了可能 —— 那种偏差没人
+         会往取数上想。所以它们共用一次扫描,`enabled` 是"反链档可见 **或** 图谱
+         开着":在反链档开着的前提下打开图谱,`enabled` 一直是 true,effect 不重跑。 */
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Show outline" }));
+      fireEvent.click(await screen.findByRole("button", { name: /^Backlinks/ }));
+      await screen.findByRole("complementary", { name: "Backlinks" });
+      await waitFor(() => expect(harness.linkScanCalls).toBe(1));
+
+      await openGraph();
+
+      // 图上已经有数据了(= 用的就是反链那一次的结果),而扫描没有第二次。
+      await waitFor(() => expect(graphNodes()).toHaveLength(2));
+      expect(harness.linkScanCalls).toBe(1);
+    });
+
+    it("点一个节点跳过去并把 sheet 收掉", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\nalpha 正文 [[Beta]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\nbeta 正文 [[Alpha]]\n');
+      renderNotebook();
+      const editor = await screen.findByRole("textbox", { name: "Quick note content" });
+      // 先钉住"现在不在目标那条上",否则"跳过去了"和"本来就在"长得一样。
+      await waitFor(() => expect(editor).toHaveTextContent("beta 正文"));
+
+      await openGraph();
+      fireEvent.click(await screen.findByRole("button", { name: "Open Alpha" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull());
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note content" })).toHaveTextContent(
+          "alpha 正文",
+        ),
+      );
+    });
+
+    it("当前这篇是圆心", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      const beta = harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n看 [[Alpha]]\n');
+      renderNotebook();
+      const sheet = await openGraph();
+
+      // 最后 seed 的那条是当前笔记。
+      await waitFor(() => expect(sheet.querySelectorAll("[data-graph-focus]")).toHaveLength(1));
+      expect(sheet.querySelector("[data-graph-focus]")?.getAttribute("data-graph-node")).toBe(beta);
+    });
+
+    it("报出孤立笔记和失效链接的条数", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]] 和 [[不存在的]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      harness.seed("c.md", '---\ntitle: "Gamma"\n---\n\n谁都不连\n');
+      renderNotebook();
+      const sheet = await openGraph();
+
+      await waitFor(() => expect(sheet).toHaveTextContent("1 unlinked"));
+      // 死链是图谱最该暴露的东西之一,不藏起来。
+      expect(sheet).toHaveTextContent("1 broken");
+      // 孤立的那篇不画进图里(只报数),所以图上还是两个点。
+      expect(graphNodes()).toHaveLength(2);
+    });
+
+    it("换跳数会重折图", async () => {
+      // a → b → c,焦点在 a 上:1 跳只看得见 b,2 跳才看得见 c。
+      harness.seed("c.md", '---\ntitle: "Gamma"\n---\n\n正文\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n看 [[Gamma]]\n');
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      const sheet = await openGraph();
+      await waitFor(() => expect(graphNodes()).toHaveLength(3));
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Depth" }), { target: { value: "1" } });
+
+      await waitFor(() => expect(graphNodes()).toHaveLength(2));
+      // 裁掉的那篇要报出来,否则用户以为库里就这么点东西。
+      expect(sheet).toHaveTextContent("1 out of range");
+    });
+
+    it("扫描失败就地报错,不显示成空库", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      harness.failLinkScan = true;
+      renderNotebook();
+      const sheet = await openGraph();
+
+      await waitFor(() => expect(sheet).toHaveTextContent("scanning links failed"));
+      expect(sheet).not.toHaveTextContent("No links between notes yet");
+    });
+
+    it("没有链接的库显示空态", async () => {
+      harness.seed("a.md", "# 只有标题\n\n正文\n");
+      renderNotebook();
+      const sheet = await openGraph();
+
+      // 先写笔记后建链接是常态,这不是故障。
+      await waitFor(() => expect(sheet).toHaveTextContent("No links between notes yet"));
+    });
+
+    it("打开时把焦点挪进来,Esc 关掉", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      renderNotebook();
+      const sheet = await openGraph();
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close graph" })),
+      );
+      fireEvent.keyDown(sheet, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull());
+    });
+
+    it("铺在面板内部而不是整个窗口", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      const sheet = await openGraph();
+
+      const panel = screen.getByRole("region", { name: "Quick Notes" });
+      expect(sheet.parentElement).toBe(panel);
+      expect(sheet.style.position).toBe("absolute");
+    });
+
+    it("打开图谱会把字段浏览器收掉,反过来也一样", async () => {
+      // 五个 overlay 同 z-index,图谱在 JSX 里排最后 —— 不互斥的话底下那个还在接
+      // 键盘事件,而用户只看得见上面那个。
+      harness.seed("a.md", '---\ntitle: "Alpha"\nstatus: done\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      fireEvent.click(await screen.findByRole("button", { name: "Frontmatter fields" }));
+      await screen.findByRole("dialog", { name: "Frontmatter fields" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Link graph" }));
+
+      await screen.findByRole("dialog", { name: "Link graph" });
+      expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Frontmatter fields" }));
+      await screen.findByRole("dialog", { name: "Frontmatter fields" });
+      expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull();
+    });
+
+    it("打开回收站会把图谱收掉", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      await openGraph();
+
+      fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+
+      await screen.findByRole("dialog", { name: "Trash" });
+      expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull();
+    });
+
+    it("打开属性面板会把图谱收掉", async () => {
+      /* 理由和另外几个一样:图谱在 JSX 里排最后。这一条走右键菜单,是唯一一条不从
+         头部按钮进的路径 —— 少了它,`openProperties` 里那一句删掉也没人发现。 */
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      await openGraph();
+
+      const row = screen.getByRole("button", { name: "Alpha" }).closest("[data-notebook-note-row]");
+      if (!row) throw new Error("no row for Alpha");
+      fireEvent.contextMenu(row);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+
+      await screen.findByRole("dialog", { name: "Note properties" });
+      expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull();
+    });
+
+    it("打开版本历史会把图谱收掉", async () => {
+      // 图谱在 JSX 里排在历史后面 —— 不收掉的话用户点"历史"看见的还是图谱。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      renderNotebook();
+      await openGraph();
+
+      fireEvent.click(screen.getByRole("button", { name: "Version history" }));
+
+      await screen.findByRole("dialog", { name: /Version history/ });
+      expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull();
+    });
+
+    it("「整个库」会把连不到当前这篇的笔记也画进来", async () => {
+      /* 跳数模式下 `depth` 为 null 的节点是"连不到焦点的",要被裁掉;「整个库」必须
+         走另一条路(不传 maxDepth),否则它和最大跳数没区别 —— 而那一对孤岛正是
+         用户切到「整个库」想看的东西。 */
+      harness.seed("x.md", '---\ntitle: "Xi"\n---\n\n看 [[Upsilon]]\n');
+      harness.seed("y.md", '---\ntitle: "Upsilon"\n---\n\n正文\n');
+      // 当前笔记(最后 seed 的这条)和上面那对互不相连。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n看 [[Beta]]\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n正文\n');
+      renderNotebook();
+      const sheet = await openGraph();
+
+      // 3 跳以内只看得见 a↔b 这一对,x/y 那一对报进"范围外"。
+      await waitFor(() => expect(graphNodes()).toHaveLength(2));
+      expect(sheet).toHaveTextContent("2 out of range");
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Depth" }), {
+        target: { value: "99" },
+      });
+
+      await waitFor(() => expect(graphNodes()).toHaveLength(4));
+      expect(sheet).not.toHaveTextContent("out of range");
+    });
+  });
 });

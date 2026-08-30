@@ -183,6 +183,8 @@ export class NotebookVaultHarness {
   failIconWrite: "read" | "write" | null = null;
   /** 让全库链接扫描失败,用来验反链面板的错误态。 */
   failLinkScan = false;
+  /** 全库链接扫描被调用了几次。验"反链档和图谱共用同一次扫描"用。 */
+  linkScanCalls = 0;
   /** 让全库标签扫描失败,用来验标签面板的错误态。 */
   failTagScan = false;
   /** 全库标签扫描被调用了几次。验"只在标签那一档可见时扫"用。 */
@@ -394,6 +396,7 @@ export class NotebookVaultHarness {
           }));
 
       case "notebook_vault_links": {
+        this.linkScanCalls += 1;
         if (this.failLinkScan) throw new Error("scanning links failed");
         /* 真后端在 Rust 里手写了一个和前端正则等价的词法扫描(为了逐行拿行号、
            不把整个 vault 的正文搬进 JS)。这里内容都在内存里,直接用前端的

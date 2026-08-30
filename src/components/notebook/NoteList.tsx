@@ -8,7 +8,7 @@
  */
 
 import type React from "react";
-import { Braces, FileText, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Braces, FileText, GripVertical, Plus, Share2, Trash2 } from "lucide-react";
 import { noteIconComponent } from "./NoteIconPicker";
 import type { NoteIconName } from "./noteIcons";
 import type { NotebookNote } from "./notebookStore";
@@ -33,6 +33,7 @@ export type NoteListProps = {
    *  —— 挂在标题栏上会让人以为它列的是"这条笔记的历史版本"。 */
   onOpenTrash: () => void;
   onOpenFields: () => void;
+  onOpenGraph: () => void;
   /** 行上右键。菜单本身由面板渲染(它持有 vault 和后端调用)。 */
   onNoteContextMenu: (event: React.MouseEvent<HTMLDivElement>, noteId: string) => void;
   /** 拖拽命中检测需要每行的 DOM。 */
@@ -67,6 +68,7 @@ export function NoteList({
   onCreate,
   onOpenTrash,
   onOpenFields,
+  onOpenGraph,
   onNoteContextMenu,
   setNoteItemRef,
   onPointerDown,
@@ -103,6 +105,21 @@ export function NoteList({
         <FileText size={14} />
         <strong style={{ fontSize: 12, flex: 1 }}>{t("notebook.title")}</strong>
         <div style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            type="button"
+            aria-label={t("notebook.graphOpen")}
+            title={t("notebook.graphOpen")}
+            onClick={onOpenGraph}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              padding: 3,
+            }}
+          >
+            <Share2 size={14} />
+          </button>
           <button
             type="button"
             aria-label={t("notebook.fieldsOpen")}
