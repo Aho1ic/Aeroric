@@ -28,6 +28,7 @@ import {
   touchNoteRecent,
 } from "./noteRecents";
 import { NoteTriggerMenu, completionRow, slashRow, type TriggerRow } from "./NoteTriggerMenu";
+import { NoteBubbleMenu, type BubbleAction, type BubbleAnchor } from "./NoteBubbleMenu";
 import { buildCompletions, COMPLETION_LIMIT, rankCandidates } from "./noteCompletions";
 import { resolveSlashInsert, SLASH_ITEMS } from "./noteSlashItems";
 import type { TriggerKind } from "./noteTriggers";
@@ -343,6 +344,8 @@ function NotebookPanelContent({
    */
   const [trigger, setTrigger] = useState<TriggerState | null>(null);
   const [triggerSelected, setTriggerSelected] = useState(0);
+  /** 选区浮动气泡的锚点矩形(视口坐标)。null = 不显示。 */
+  const [bubble, setBubble] = useState<BubbleAnchor | null>(null);
   /**
    * 用户是否用过 `#` 补全。用过就把全库标签扫描打开,之后一直开着。
    *
@@ -2348,6 +2351,50 @@ function NotebookPanelContent({
     onBodyChange: (body) => updateActiveNote({ body }),
   });
 
+  /* ---- 选区浮动气泡 ---- */
+
+  /**
+   * 一次选区动作结束后重算气泡位置。null = 不显示。
+   *
+   * 挂 `onSelectionSettled`(松开鼠标 / 抬起按键)而不是 `onSelectionChange`:后者
+   * 在拖选途中每移动一格都报,气泡会跟着一路跳,而用户此刻还在选,气泡只挡视线。
+   */
+  const refreshBubble = useCallback(() => {
+    const editor = sourceEditorRef.current;
+    if (!editor) return;
+    setBubble(editor.selectionRect());
+  }, []);
+
+  /* 选区一变就先收起(不等动作结束)。不收的话开着气泡再点一下别处,气泡会停在
+     上一段选区的位置上,而那段已经不是选区了 —— 点它就是对空选区执行命令。 */
+  const handleSelectionChange = useCallback(() => {
+    if (!sourceEditorRef.current?.hasSelection()) setBubble(null);
+  }, []);
+
+  /* 换笔记 / 换视图(源码 ↔ 阅读 ↔ 所见即所得)时收起。同触发菜单那条:坐标是上一个
+     视图里的,留着就是一个浮在错位置、点了会对空选区执行命令的条。 */
+  useEffect(() => {
+    setBubble(null);
+  }, [activeNote?.id, mode]);
+
+  /** 气泡上的一次点击。文本变换全部复用 `format`,不新写一套。 */
+  const runBubbleAction = (action: BubbleAction) => {
+    if (action === "bold") format.applyWrap("**", "**");
+    if (action === "italic") format.applyWrap("*", "*");
+    if (action === "underline") format.applyWrap("<u>", "</u>");
+    if (action === "strike") format.applyWrap("~~", "~~");
+    if (action === "highlight") format.applyWrap("<mark>", "</mark>");
+    if (action === "inlineCode") format.applyWrap("`", "`");
+    if (action === "link") format.applyWrap("[", "](url)");
+    if (action === "quote") format.applyQuote();
+    if (action === "bullet") format.applyList(false);
+    if (action === "codeBlock") format.applyCodeBlock();
+    /* 命令执行完收起。`applyWrap` 之后选区仍在(`placeCursor: "select"` 选中的是
+       连标记一起的整段),位置已经变了 —— 留着气泡就得重算一次,而用户点完一个格式
+       通常是要继续打字,不是要再点第二个。 */
+    setBubble(null);
+  };
+
   /**
    * 剪切 / 复制 / 粘贴。
    *
@@ -2502,6 +2549,8 @@ function NotebookPanelContent({
       onDropFiles={attachmentDrop.handleFiles}
       onTriggerChange={handleTriggerChange}
       onTriggerKey={handleTriggerKey}
+      onSelectionChange={handleSelectionChange}
+      onSelectionSettled={refreshBubble}
       initialScrollRatio={
         pendingScrollRestoreRef.current?.noteId === activeNote.id
           ? pendingScrollRestoreRef.current.ratio
@@ -3092,6 +3141,19 @@ function NotebookPanelContent({
           onPick={commitTriggerRow}
           onDismiss={closeTriggerMenu}
           anchor={trigger.coords}
+          t={t}
+        />
+      )}
+      {/* 选区浮动气泡。
+          和触发菜单不用在这里互斥:触发菜单只在空选区下弹,气泡只在非空选区下画,
+          两者由选区自己分开(有回归测试守着)。再加一道 `!trigger` 就是第二道闸门,
+          谁都不是决定性的。
+          命令面板要挡:它靠 `Cmd+K` 打开,不动选区,气泡不会自己收。 */}
+      {bubble && !paletteOpen && (
+        <NoteBubbleMenu
+          anchor={bubble}
+          onAction={runBubbleAction}
+          onDismiss={() => setBubble(null)}
           t={t}
         />
       )}

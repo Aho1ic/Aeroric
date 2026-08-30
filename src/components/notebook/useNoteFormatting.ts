@@ -20,8 +20,16 @@ export type NoteFormattingOptions = {
 export type NoteFormatting = {
   /** 行内包裹。加粗 / 斜体 / 下划线 / 删除线 / 高亮都是它。 */
   applyWrap: (before: string, after: string) => void;
-  /** 行首前缀。标题用它(`# ` / `## ` …)。 */
+  /** 行首前缀。标题用它(`# ` / `## ` …),会先去掉已有的井号。 */
   applyLinePrefix: (prefix: string) => void;
+  /**
+   * 逐行加引用标记。
+   *
+   * 不复用 `applyLinePrefix`:那个会先剥掉 `#{1,6}`(在"改标题层级"的语境下是对的
+   * —— H1 换 H2 不该变成 `## # 标题`),而引用一个标题时把井号剥掉就是把标题降级成
+   * 了正文,`> # 标题` 才是原意。
+   */
+  applyQuote: () => void;
   applyList: (ordered: boolean) => void;
   /** 退回正文:去掉列表标记和标题井号。 */
   applyBodyText: () => void;
@@ -72,6 +80,12 @@ export function useNoteFormatting({
     applyLinePrefix: (prefix) => {
       replaceSelection((selected) =>
         transformLines(selected, (line) => `${prefix}${line.replace(/^#{1,6}\s+/, "")}`),
+      );
+    },
+    applyQuote: () => {
+      // 已经是引用的行不再叠一层 `> ` —— 点两下变 `> > ` 不是任何人想要的。
+      replaceSelection((selected) =>
+        transformLines(selected, (line) => (/^\s*>\s/.test(line) ? line : `> ${line}`)),
       );
     },
     applyList: (ordered) => {

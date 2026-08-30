@@ -56,6 +56,14 @@ export type NoteEditorHandle = {
   /** 真实的滚动元素(`.cm-scroller`)。分屏同步滚动要直接监听它。 */
   scrollElement(): HTMLElement | null;
   /**
+   * 当前选区的视口矩形。无选区、或选区被滚出可视区时给 null。
+   *
+   * 取的是**选区两端**的坐标而不是 `getBoundingClientRect`:后者在跨行选区上给的是
+   * 整块外接矩形,气泡会停在中间几行的正中,离用户手上那一端很远。这里让气泡贴在
+   * 选区的第一行上方 —— 那是拖选的起点,视线也在那儿。
+   */
+  selectionRect(): { left: number; right: number; top: number; bottom: number } | null;
+  /**
    * 视口坐标 → 文档偏移。点不在编辑器上时返回 null。
    *
    * 系统文件管理器拖入用它:那个事件是**整个窗口**的,不判落点的话把文件拖到
@@ -67,8 +75,17 @@ export type NoteEditorHandle = {
 export type NoteSourceEditorProps = {
   value: string;
   onChange: (value: string) => void;
-  /** 选区变化时通知面板刷新工具栏的可用状态。 */
+  /** 选区变化时通知面板刷新工具栏的可用状态。拖选途中会连续触发。 */
   onSelectionChange?: () => void;
+  /**
+   * 一次选区**动作结束**(松开鼠标 / 抬起按键)。浮动气泡挂这个,不挂
+   * `onSelectionChange`。
+   *
+   * 两者的差别就是拖选途中:`onSelectionChange` 每移动一格都报,气泡挂上去会在
+   * 拖动过程中一路跟着跳(每一帧重算位置),而用户此刻还在选,气泡只是挡视线。
+   * 这个只在动作结束时报一次。
+   */
+  onSelectionSettled?: () => void;
   onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
   themeVariant: ThemeVariant;
   ariaLabel: string;
@@ -261,6 +278,7 @@ export function NoteSourceEditor({
   value,
   onChange,
   onSelectionChange,
+  onSelectionSettled,
   onContextMenu,
   themeVariant,
   ariaLabel,
@@ -274,15 +292,19 @@ export function NoteSourceEditor({
   onTriggerKey,
 }: NoteSourceEditorProps) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
-  /* 触发相关的两个回调走 ref。它们每次渲染都是新函数(依赖菜单状态),进 `extensions`
-     的 memo 依赖会让整个 extension 数组每次输入都重建 —— 那会重置 WYSIWYG 的
-     StateField 和撤销栈。 */
+  /* 这三个回调走 ref。它们每次渲染都是新函数(依赖菜单状态 / 选区状态),进
+     `extensions` 的 memo 依赖会让整个 extension 数组每次输入或每次选区变化都重建
+     —— 那会重置 WYSIWYG 的 StateField 和撤销栈。
+     `onSelectionChange` 原来直接进依赖数组:那时面板没传它,所以没暴露出来;浮动气泡
+     一接上就必然是个不稳定函数(它要读选区状态),不改的话每拖一次选区都重建一次。 */
+  const onSelectionChangeRef = useRef(onSelectionChange);
   const onTriggerChangeRef = useRef(onTriggerChange);
   const onTriggerKeyRef = useRef(onTriggerKey);
   useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange;
     onTriggerChangeRef.current = onTriggerChange;
     onTriggerKeyRef.current = onTriggerKey;
-  }, [onTriggerChange, onTriggerKey]);
+  }, [onSelectionChange, onTriggerChange, onTriggerKey]);
   /** 初始滚动只应用一次:之后用户自己的滚动不该被 prop 覆盖。 */
   const scrollApplied = useRef(false);
   /**
@@ -306,9 +328,9 @@ export function NoteSourceEditor({
       // aria-label 走 facet 而不是挂载后用 effect 设:effect 跑的时候
       // ReactCodeMirror 的 view 还没建好,标签会丢。facet 在建 view 时就生效。
       EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
-      // 选区变化要通知面板:工具栏按钮的启用状态依赖"有没有选中文本"。
+      // 选区变化要通知面板:工具栏按钮的启用状态、浮动气泡都依赖"有没有选中文本"。
       EditorView.updateListener.of((update) => {
-        if (update.selectionSet) onSelectionChange?.();
+        if (update.selectionSet) onSelectionChangeRef.current?.();
         if (!update.docChanged && !update.selectionSet) return;
         const report = onTriggerChangeRef.current;
         if (!report) return;
@@ -368,7 +390,8 @@ export function NoteSourceEditor({
         },
       }),
     ],
-    [ariaLabel, attachments, onDropFiles, onSelectionChange, wysiwyg],
+    // `onSelectionChange` 不在这里 —— 它走 ref(见上面),进依赖会让选区一变就重建。
+    [ariaLabel, attachments, onDropFiles, wysiwyg],
   );
 
   const view = () => cmRef.current?.view ?? null;
@@ -441,6 +464,27 @@ export function NoteSourceEditor({
         scroller.scrollTop = ratio * Math.max(0, max);
       },
       scrollElement: () => view()?.scrollDOM ?? null,
+      selectionRect: () => {
+        const editor = view();
+        if (!editor) return null;
+        const range = editor.state.selection.main;
+        if (range.empty) return null;
+        const from = editor.coordsAtPos(range.from);
+        const to = editor.coordsAtPos(range.to);
+        // 两端都拿不到 = 整段选区都在可视区外。这时没有位置可言,交给调用方决定。
+        if (!from && !to) return null;
+        const head = from ?? to!;
+        const tail = to ?? from!;
+        /* 同一行时左右取两端,跨行时横向取两端所在行的并集 —— 气泡水平居中在这个
+           区间上。纵向只用第一行:气泡挂在选区顶边上方。 */
+        const sameLine = Math.abs(head.top - tail.top) < 1;
+        return {
+          left: sameLine ? Math.min(head.left, tail.left) : head.left,
+          right: sameLine ? Math.max(head.right ?? head.left, tail.right ?? tail.left) : head.right,
+          top: head.top,
+          bottom: head.bottom,
+        };
+      },
       posAtClientPoint: (x, y) => {
         const editor = view();
         if (!editor) return null;
@@ -494,8 +538,12 @@ export function NoteSourceEditor({
     <div
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
       onContextMenu={onContextMenu}
-      onMouseUp={onSelectionChange}
-      onKeyUp={onSelectionChange}
+      // 这两个只报"动作结束"。`onSelectionChange` 由上面 updateListener 的
+      // `update.selectionSet` 独家负责 —— 选区状态在 EditorState 里,任何一次变化都会走
+      // 事务,而 mouseUp / keyUp 在那之后才到。两处都报的话每次抬手会连报两次,且没有
+      // 哪一处是决定性的。
+      onMouseUp={onSelectionSettled}
+      onKeyUp={onSelectionSettled}
     >
       <ReactCodeMirror
         ref={cmRef}
