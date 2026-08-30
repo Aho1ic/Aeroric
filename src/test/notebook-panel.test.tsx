@@ -2495,6 +2495,38 @@ describe("NotebookPanel", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
+    it("正文没变的重渲染之后,链接还在(不退回字面 [[..]])", async () => {
+      /* `dangerouslySetInnerHTML={{ __html: markdownHtml }}` 的属性值如果每次渲染都是
+         新对象,React 会重写一遍 innerHTML —— 哪怕 HTML 字符串一个字都没变。预览里的
+         子节点被整批换新,增强出来的 `<a>` 全丢,链接退回字面 `[[Target]]`。而增强
+         effect 按 `[markdownHtml, mode, linkIndex, t]` 当依赖,这四个都没变,不会重跑,
+         于是链接**永久**失效。
+
+         触发这种重渲染的都是日常操作:开一下大纲、切一下侧栏档、一次自动保存回填
+         保存状态。这里用开大纲来制造。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n目标正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n见 [[Target]] 一节\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Origin" });
+      fireEvent.click(screen.getByRole("button", { name: "Origin" }));
+      await screen.findByDisplayValue("Origin");
+      await readMode();
+      await waitFor(() => expect(wikiLinks()).toHaveLength(1));
+
+      // 正文没变、视图没变、笔记没变 —— 只是多了一个侧栏。
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await screen.findByRole("complementary", { name: "Outline" });
+
+      expect(wikiLinks()).toHaveLength(1);
+      // 退化的表现是字面量重新出现在正文里。
+      expect(document.querySelector(".notebook-markdown-preview")?.textContent).not.toContain(
+        "[[Target]]",
+      );
+      // 而且点了还得能跳 —— 节点在但事件约定丢了也算坏。
+      fireEvent.click(wikiLinks()[0]!);
+      await screen.findByDisplayValue("Target");
+    });
+
     it("目标笔记被删掉后,活链当场变成死链", async () => {
       /* 这一条钉的是增强 effect 的依赖:它必须跟着链接索引跑,不能只跟
          `markdownHtml`。
@@ -2810,6 +2842,25 @@ describe("NotebookPanel", () => {
       expect(embedBlocks()).toHaveLength(0);
       expect(harness.callCount("notebook_peek_note")).toBe(0);
     });
+
+    it("正文没变的重渲染之后,已填好的嵌入不会退回占位", async () => {
+      /* 和 wikilink 那条同一个根因(见 `NoteContentArea` 里 `html` 的注释):React 重写
+         innerHTML 会把嵌入进来的正文整批扔掉,而 `enhanceNoteEmbeds` 的依赖没变不会重跑。
+         嵌入比 wikilink 更疼:它退化后是一片空占位,而重新填充要再过一次 IPC。 */
+      harness.seed("Target.md", '---\ntitle: "Target"\n---\n\n被嵌的正文\n');
+      harness.seed("Origin.md", '---\ntitle: "Origin"\n---\n\n![[Target]]\n');
+      await openInReadMode("Origin");
+      await waitFor(() => expect(embedBlocks()[0]?.dataset.embedState).toBe("filled"));
+      const peeks = harness.callCount("notebook_peek_note");
+
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await screen.findByRole("complementary", { name: "Outline" });
+
+      expect(embedBlocks()[0]?.dataset.embedState).toBe("filled");
+      expect(embedBlocks()[0]!.textContent).toContain("被嵌的正文");
+      // 也不该为了补回来再取一次数。
+      expect(harness.callCount("notebook_peek_note")).toBe(peeks);
+    });
   });
 
   describe("阅读态勾选任务", () => {
@@ -3022,11 +3073,6 @@ describe("NotebookPanel", () => {
      * 复选框上的状态快照来自一次渲染,而正文可能已经被自动保存回填、外部编辑或另一次
      * 点击改过。这里把快照改成与源码不符(等价于"渲染之后正文变了"),点下去必须整个
      * 放弃:不写正文、不落盘,复选框也不能停在已勾的样子 —— 停在那儿会让用户以为勾上了。 */
-    /* 乐观锁挡下的那一次点击。
-     *
-     * 复选框上的状态快照来自一次渲染,而正文可能已经被自动保存回填、外部编辑或另一次
-     * 点击改过。这里把快照改成与源码不符(等价于"渲染之后正文变了"),点下去必须整个
-     * 放弃:不写正文、也不落盘。 */
     it("状态快照与正文不符时,这一次点击整个作废", async () => {
       const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n');
       await openInReadMode("Plan");
@@ -3046,23 +3092,26 @@ describe("NotebookPanel", () => {
       expect(liveBoxes()[0]?.checked).toBe(false);
     });
 
-    /* 重渲染会把预览里的子节点整批换掉(`dangerouslySetInnerHTML` 的属性值每次渲染都是
-       新对象,React 会重写一遍 innerHTML,哪怕 HTML 字符串没变),解禁随之丢失。解禁只
-       按 `markdownHtml` 当依赖的话,这种重渲染之后复选框就永久点不动了。
-       这里用"被乐观锁挡下的一次点击"制造一次正文没变的重渲染。 */
+    /* 正文没变的重渲染不能让复选框失效。
+     *
+     * 触发的是日常操作(开大纲、切侧栏档、自动保存回填状态),那时候 `markdownHtml`、
+     * `mode`、笔记 id 全是原值。这里用开大纲来制造。
+     *
+     * 曾经的坏法:`dangerouslySetInnerHTML` 的属性值每次渲染都是新对象,React 会照样
+     * 重写一遍 innerHTML,预览里的子节点整批换新、解禁全丢,而解禁 effect 的依赖没变
+     * 不会重跑 —— 复选框永久点不动。现在那个对象 memo 掉了(见 `NoteContentArea`),
+     * DOM 保持原样。两道保险都在:即便将来 React 的比较语义变了,解禁 effect 也故意
+     * 不带依赖数组、每次提交后重跑。 */
     it("正文没变的重渲染之后,复选框仍然可点", async () => {
       const planPath = harness.seed("Plan.md", '---\ntitle: "Plan"\n---\n\n- [ ] 一\n');
       await openInReadMode("Plan");
       await waitFor(() => expect(liveBoxes()).toHaveLength(1));
 
-      // 第一次点击被挡下,但它照样触发了一次重渲染。
-      document
-        .querySelector<HTMLElement>(".notebook-markdown-preview li.notebook-task-item")!
-        .setAttribute("data-task-checked", "1");
-      fireEvent.click(liveBoxes()[0]!);
+      fireEvent.click(screen.getByRole("button", { name: "Show outline" }));
+      await screen.findByRole("complementary", { name: "Outline" });
 
-      // 解禁必须已经补回来了,否则下面这一次点击落不到。
-      await waitFor(() => expect(liveBoxes()).toHaveLength(1));
+      // 解禁必须还在,否则下面这一次点击落不到。
+      expect(liveBoxes()).toHaveLength(1);
       expect(liveBoxes()[0]?.disabled).toBe(false);
       fireEvent.click(liveBoxes()[0]!);
 

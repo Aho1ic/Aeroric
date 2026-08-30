@@ -7,6 +7,7 @@
  */
 
 import type React from "react";
+import { useMemo } from "react";
 import type { NoteViewMode } from "./NoteTitleBar";
 
 export type NoteContentAreaProps = {
@@ -31,6 +32,20 @@ export function NoteContentArea({
   splitPreviewRef,
   previewRef,
 }: NoteContentAreaProps) {
+  /* `{ __html }` 这个对象必须**跨渲染保持同一个**,不能每次现写字面量。
+   *
+   * React 对 `dangerouslySetInnerHTML` 的比较是按属性值的**身份**做的:新对象就重写一遍
+   * innerHTML,即使里面的字符串一个字都没变。而重写会把预览里的子节点整批换新 ——
+   * 所有 DOM 增强(wikilink 的 `<a>`、嵌入占位、相对路径图片的 src、KaTeX 与 Mermaid 的
+   * `data-rendered`、任务复选框的解禁)当场全丢。
+   *
+   * 而这些增强的 effect 依赖里都带着 `markdownHtml`,这种重渲染下它没变,effect 不重跑,
+   * 于是增强**不会自己回来**:wikilink 直接退回字面 `[[Target]]`,公式和图退回源码。
+   * 触发它的都是日常操作 —— 开一下大纲、切一下侧栏档、一次自动保存回填保存状态。
+   *
+   * memo 掉之后 React 跳过重写,DOM 保持原样,增强也就不需要重做了。 */
+  const html = useMemo(() => ({ __html: markdownHtml }), [markdownHtml]);
+
   if (mode === "edit" || mode === "wysiwyg" || mode === "split") {
     // 编辑态和分屏态用**同一套容器结构**,只改列数和预览列的存在性。
     //
@@ -64,7 +79,7 @@ export function NoteContentArea({
             <div
               ref={previewRef}
               className="md-preview notebook-markdown-preview"
-              dangerouslySetInnerHTML={{ __html: markdownHtml }}
+              dangerouslySetInnerHTML={html}
             />
           </div>
         )}
@@ -78,7 +93,7 @@ export function NoteContentArea({
       <div
         ref={previewRef}
         className="md-preview notebook-markdown-preview"
-        dangerouslySetInnerHTML={{ __html: markdownHtml }}
+        dangerouslySetInnerHTML={html}
       />
     </div>
   );
