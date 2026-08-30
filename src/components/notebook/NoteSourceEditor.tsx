@@ -16,10 +16,12 @@ import ReactCodeMirror, {
 } from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { LanguageDescription } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorState, Prec, type Extension } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import type { ThemeVariant } from "../../types";
+import { detectTrigger, type TriggerKind } from "./noteTriggers";
 import { attachmentContext, wysiwygMarkdown, type AttachmentContext } from "./wysiwyg";
 
 /** 面板里的格式化命令需要的最小能力集,等价于 textarea 的选区 API。 */
@@ -110,7 +112,38 @@ export type NoteSourceEditorProps = {
    * 图片的文件名当纯文本插进去。
    */
   onDropFiles?: (files: File[], at: number) => boolean;
+  /**
+   * 光标前的触发序列变了(`/` `[[` `#` `@` `:`),或者不再有触发序列(传 null)。
+   *
+   * `coords` 是光标的**视口**坐标(`left` / `bottom`),菜单挂在它下面。
+   *
+   * 检测由编辑器做而不是面板:面板手里的 `body` 是受控值,而 CodeMirror 的文档在
+   * 一次输入里先变、`onChange` 后到 —— 拿 `body` 算触发会永远慢一个字符,表现是
+   * 打 `#` 不弹、打第二个字符才弹出上一次的候选。
+   */
+  onTriggerChange?: (state: TriggerState | null) => void;
+  /**
+   * 菜单开着时接管方向键 / 回车 / Tab / Esc。返回 true = 已处理,编辑器不再让
+   * CodeMirror 的默认绑定看到这个键。
+   *
+   * 走 `Prec.highest` 的 keymap:`basicSetup` 里的 `defaultKeymap` 已经把 ArrowDown
+   * 绑成"下移一行"、Enter 绑成"插入换行",不提权的话菜单永远抢不到。
+   */
+  onTriggerKey?: (key: TriggerKeyName) => boolean;
 };
+
+/** `onTriggerChange` 报上来的一次触发态。 */
+export type TriggerState = {
+  kind: TriggerKind;
+  /** 触发符第一个字符的文档偏移。提交时的替换起点。 */
+  start: number;
+  query: string;
+  /** 光标的视口坐标。 */
+  coords: { x: number; y: number };
+};
+
+/** 菜单要接管的键。 */
+export type TriggerKeyName = "ArrowUp" | "ArrowDown" | "Enter" | "Tab" | "Escape";
 
 /**
  * 从剪贴板 / 拖放数据里挑出图片文件。
@@ -237,8 +270,19 @@ export function NoteSourceEditor({
   initialCursorOffset,
   attachments,
   onDropFiles,
+  onTriggerChange,
+  onTriggerKey,
 }: NoteSourceEditorProps) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
+  /* 触发相关的两个回调走 ref。它们每次渲染都是新函数(依赖菜单状态),进 `extensions`
+     的 memo 依赖会让整个 extension 数组每次输入都重建 —— 那会重置 WYSIWYG 的
+     StateField 和撤销栈。 */
+  const onTriggerChangeRef = useRef(onTriggerChange);
+  const onTriggerKeyRef = useRef(onTriggerKey);
+  useEffect(() => {
+    onTriggerChangeRef.current = onTriggerChange;
+    onTriggerKeyRef.current = onTriggerKey;
+  }, [onTriggerChange, onTriggerKey]);
   /** 初始滚动只应用一次:之后用户自己的滚动不该被 prop 覆盖。 */
   const scrollApplied = useRef(false);
   /**
@@ -265,7 +309,42 @@ export function NoteSourceEditor({
       // 选区变化要通知面板:工具栏按钮的启用状态依赖"有没有选中文本"。
       EditorView.updateListener.of((update) => {
         if (update.selectionSet) onSelectionChange?.();
+        if (!update.docChanged && !update.selectionSet) return;
+        const report = onTriggerChangeRef.current;
+        if (!report) return;
+        const range = update.state.selection.main;
+        // 有选区时不弹:那是在选中一段,不是在打字。
+        if (!range.empty) {
+          report(null);
+          return;
+        }
+        const found = detectTrigger(update.state.doc.toString(), range.head);
+        if (!found) {
+          report(null);
+          return;
+        }
+        /* 光标被滚出可视区时 `coordsAtPos` 给 null。这时**不能**据此关掉菜单 ——
+           触发序列还在、用户还在打字,关掉就是"补全偶尔莫名消失"。退回编辑器自己的
+           矩形,菜单贴在编辑器左上角,位置不理想但功能完整。
+           (jsdom 没有排版引擎,那里 `coordsAtPos` 恒为 null —— 如果这里直接关,整套
+           菜单在测试里就永远不出现,所有交互都没法验。) */
+        const rect = update.view.coordsAtPos(range.head);
+        const box = update.view.contentDOM.getBoundingClientRect();
+        report({
+          ...found,
+          coords: rect ? { x: rect.left, y: rect.bottom } : { x: box.left, y: box.top },
+        });
       }),
+      /* 菜单开着时抢方向键 / 回车 / Tab / Esc。`Prec.highest` 是必须的:
+         `basicSetup` 的 `defaultKeymap` 已经绑了这些键,同优先级下它在前面就赢了。 */
+      Prec.highest(
+        keymap.of(
+          (["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"] as const).map((key) => ({
+            key,
+            run: () => onTriggerKeyRef.current?.(key) ?? false,
+          })),
+        ),
+      ),
       // WYSIWYG 装饰。放在最后:它的 StateField 要能看到前面 extension 的效果。
       ...(wysiwyg ? wysiwygMarkdown : []),
       ...(attachments ? [attachmentContext.of(attachments)] : []),

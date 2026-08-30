@@ -162,6 +162,23 @@ describe("buildCompletions", () => {
     });
   });
 
+  describe("图标位", () => {
+    it("标签和提及不给 glyph —— label 自己带着 # / @", () => {
+      /* 给了的话菜单里会画成 `#` `#work` 两个井号。标题栏的徽标已经说明这是哪种菜单。 */
+      const tags = buildCompletions(source({ kind: "tag", vaultTags: ["work"] }));
+      expect(tags[0]!.glyph).toBeUndefined();
+      const mentions = buildCompletions(source({ kind: "mention", body: "@ann" }));
+      expect(mentions[0]!.glyph).toBeUndefined();
+    });
+
+    it("emoji 和 [[ 照旧给 —— 那两种的图标不和 label 重复", () => {
+      expect(buildCompletions(source({ kind: "emoji", query: "fire" }))[0]!.glyph).toBe("🔥");
+      expect(
+        buildCompletions(source({ notes: [{ id: "/v/a.md", title: "A" }], query: "a" }))[0]!.glyph,
+      ).toBe("📄");
+    });
+  });
+
   describe(": emoji", () => {
     it("空查询给前若干条", () => {
       const items = buildCompletions(source({ kind: "emoji" }));

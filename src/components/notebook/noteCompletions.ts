@@ -17,7 +17,7 @@
  * —— 那个名字此刻确实还不存在于任何地方。
  */
 
-import { scoreFuzzyMatch } from "./noteCommands";
+import { scoreFuzzyMatch, type MatchSpan } from "./noteCommands";
 import { normalizeTag } from "./noteTags";
 import type { TriggerKind } from "./noteTriggers";
 
@@ -34,7 +34,7 @@ export type CompletionItem = {
   /** 提交时**替换掉触发序列**的文本。含末尾空格的由这里自己带。 */
   insert: string;
   /** 命中区间(码点下标,左闭右开),画高亮用。 */
-  spans: { from: number; to: number }[];
+  spans: MatchSpan[];
 };
 
 /** 一次候选计算的输入。 */
@@ -162,19 +162,20 @@ function poolFor(source: CompletionSource): Omit<CompletionItem, "spans">[] {
       source.vaultTags.map((tag) => normalizeTag(tag) || tag),
       tokensInBody(source.body, "#"),
     );
+    /* 不给 glyph:`label` 自己带着 `#`,再往图标位放一个就是 `#` `#work` 两个井号。
+       标题栏的徽标已经说明这是标签菜单了。emoji 和 `[[` 那两种的图标不重复,所以留着。 */
     return merged.map((tag) => ({
       id: `tag:${tag.toLowerCase()}`,
       label: `#${tag}`,
-      glyph: "#",
       insert: `#${tag} `,
     }));
   }
 
   if (source.kind === "mention") {
+    // 同标签:`label` 已经带了 `@`。
     return tokensInBody(source.body, "@").map((token) => ({
       id: `mention:${token.toLowerCase()}`,
       label: `@${token}`,
-      glyph: "@",
       insert: `@${token} `,
     }));
   }
@@ -191,36 +192,49 @@ function poolFor(source: CompletionSource): Omit<CompletionItem, "spans">[] {
 }
 
 /**
+ * 按查询给一批候选打分排序,截到 `limit` 条。
+ *
+ * 四种补全和 `/` 插入菜单共用这一份 —— 两份的话同一个查询在 `/` 里排第一、在 `[[`
+ * 里排第五,而这种不一致没人会往"有两套排序"上想。
+ *
+ * 空查询走"按原序给前 `limit` 条"那条路(调用方自己判,这里只管非空)。
+ */
+export function rankCandidates<T extends { label: string; detail?: string }>(
+  candidates: readonly T[],
+  query: string,
+  limit: number,
+): { item: T; spans: MatchSpan[] }[] {
+  const scored: { item: T; score: number; spans: MatchSpan[] }[] = [];
+  for (const item of candidates) {
+    /* 只拿 label 和 detail 里分高的那一个的命中区间。两个都画的话,`detail` 命中时
+       会在 `label` 上画出一段位置对不上的高亮(命中区间是按另一个字符串算的)。 */
+    const onLabel = scoreFuzzyMatch(query, item.label);
+    const onDetail = item.detail ? scoreFuzzyMatch(query, item.detail) : null;
+    if (!onLabel && !onDetail) continue;
+    // label 命中优先:那是用户眼睛真正在看的那一行,detail 只是消歧用。
+    const best = onLabel ?? onDetail!;
+    scored.push({ item, score: best.score, spans: onLabel ? onLabel.spans : [] });
+  }
+  /* 同分保持传入原序 —— 这里**不**额外写一个下标比较器:`scored` 是按输入顺序 push
+     的,而 `Array.prototype.sort` 自 ES2019 起规定是稳定排序,同分项的相对顺序本就不
+     会变。加一个只是把同一件事写两遍,而且去掉它任何测试都发现不了。 */
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map(({ item, spans }) => ({ item, spans }));
+}
+
+/**
  * 算出一次菜单要显示的候选。
  *
  * 空查询:按池子原序给前 `COMPLETION_LIMIT` 条(标签是"全库的在前",笔记是路径序,
- * emoji 是表序)。非空:按 `scoreFuzzyMatch` 降序,同分按原序 —— 稳定排序保证同一个
- * 查询两次得到同一个第一条。
+ * emoji 是表序)。非空:交给 `rankCandidates`。
  */
 export function buildCompletions(source: CompletionSource): CompletionItem[] {
   const pool = poolFor(source);
   if (source.query === "") {
     return pool.slice(0, COMPLETION_LIMIT).map((item) => ({ ...item, spans: [] }));
   }
-
-  const scored: {
-    item: Omit<CompletionItem, "spans">;
-    score: number;
-    spans: CompletionItem["spans"];
-  }[] = [];
-  for (const item of pool) {
-    /* 只拿 label 和 detail 里分高的那一个的命中区间。两个都画的话,`detail` 命中时
-       会在 `label` 上画出一段位置对不上的高亮(命中区间是按另一个字符串算的)。 */
-    const onLabel = scoreFuzzyMatch(source.query, item.label);
-    const onDetail = item.detail ? scoreFuzzyMatch(source.query, item.detail) : null;
-    if (!onLabel && !onDetail) continue;
-    // label 命中优先:那是用户眼睛真正在看的那一行,detail 只是消歧用。
-    const best = onLabel ?? onDetail!;
-    scored.push({ item, score: best.score, spans: onLabel ? onLabel.spans : [] });
-  }
-  /* 同分保持池子原序 —— 这里**不**额外写一个下标比较器:`scored` 是按 pool 顺序 push
-     的,而 `Array.prototype.sort` 自 ES2019 起规定是稳定排序,同分项的相对顺序本就不
-     会变。加一个只是把同一件事写两遍,而且去掉它任何测试都发现不了。 */
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, COMPLETION_LIMIT).map(({ item, spans }) => ({ ...item, spans }));
+  return rankCandidates(pool, source.query, COMPLETION_LIMIT).map(({ item, spans }) => ({
+    ...item,
+    spans,
+  }));
 }

@@ -27,6 +27,10 @@ import {
   saveNoteRecents,
   touchNoteRecent,
 } from "./noteRecents";
+import { NoteTriggerMenu, completionRow, slashRow, type TriggerRow } from "./NoteTriggerMenu";
+import { buildCompletions, COMPLETION_LIMIT, rankCandidates } from "./noteCompletions";
+import { resolveSlashInsert, SLASH_ITEMS } from "./noteSlashItems";
+import type { TriggerKind } from "./noteTriggers";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
@@ -104,7 +108,12 @@ import {
 } from "./NotePropertiesSheet";
 import { runLegacyMigration } from "./migrateLegacyNotes";
 import type { ThemeVariant } from "../../types";
-import { NoteSourceEditor, type NoteEditorHandle } from "./NoteSourceEditor";
+import {
+  NoteSourceEditor,
+  type NoteEditorHandle,
+  type TriggerKeyName,
+  type TriggerState,
+} from "./NoteSourceEditor";
 import { enhanceMarkdownImages } from "./markdownImages";
 import { buildLinkIndex, linkTitleOf, normalizeLinkTarget } from "./noteLinks";
 import {
@@ -326,6 +335,21 @@ function NotebookPanelContent({
   const paletteInputRef = useRef<HTMLInputElement | null>(null);
   /** 最近打开过的笔记(vault 相对路径,最近在前)。命令面板空查询时列它。 */
   const [recentKeys, setRecentKeys] = useState<string[]>([]);
+  /**
+   * 编辑器内的触发式菜单(`/` `[[` `#` `@` `:`)。null = 没开。
+   *
+   * 状态由编辑器报上来(它手里的文档比受控的 `body` 早一步,见 `onTriggerChange`
+   * 的注释),这里只存着画菜单。
+   */
+  const [trigger, setTrigger] = useState<TriggerState | null>(null);
+  const [triggerSelected, setTriggerSelected] = useState(0);
+  /**
+   * 用户是否用过 `#` 补全。用过就把全库标签扫描打开,之后一直开着。
+   *
+   * 不无条件扫:那是整个面板最贵的一次 IO(读每篇笔记的全文),而绝大多数会话里
+   * 用户根本不打 `#`。也不"打开菜单时扫、关掉就停":那样每打一个 `#` 都要重扫一遍。
+   */
+  const [tagCompletionUsed, setTagCompletionUsed] = useState(false);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   /** 历史面板针对的那条笔记。**不**回落到 activeNote:回落的话这条笔记被删掉后
    *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
@@ -542,7 +566,14 @@ function NotebookPanelContent({
     vaultLinks,
     errorText,
   );
-  const tagScan = useVaultScan(vault, outlineOpen && sideTab === "tags", vaultTags, errorText);
+  /* 标签档可见 **或** 用过 `#` 补全时扫。两个消费者共用一次扫描,而不是各扫一遍
+     —— 同一份数据扫两次会让标签云和补全列出的标签在刷新时机上错开。 */
+  const tagScan = useVaultScan(
+    vault,
+    (outlineOpen && sideTab === "tags") || tagCompletionUsed,
+    vaultTags,
+    errorText,
+  );
   /* 字段浏览器的取数。`enabled` 是"sheet 开着"而不是某一档可见 —— 它不在侧栏里
      (三档已经占满那 190px,见 `NoteFieldsSheet` 的模块注释)。关掉不清结果,和
      侧栏两档一致:再打开时不该又等一遍。 */
@@ -2115,6 +2146,138 @@ function NotebookPanelContent({
     entry.command.run();
   };
 
+  /* ---- 编辑器内的触发式菜单 ---- */
+
+  /**
+   * 补全的候选来源。显示和提交必须共用这一份 —— 两边各算一次的话,只要有一处的
+   * 输入不同(比如一边过滤了当前笔记、另一边没有),提交时按 id 就找不到那一行,
+   * 表现是"选中了却没插进去"。
+   */
+  const completionSource = useCallback(
+    (kind: Exclude<TriggerKind, "slash">, query: string) => ({
+      kind,
+      query,
+      /* 不把当前这篇列出来:自链没有意义,而它的标题恰恰是用户此刻脑子里的那个词,
+         模糊匹配下往往排第一,把真正想链的那篇挤下去。段内跳转用 `[[#标题]]`,
+         不需要先写自己的篇名。 */
+      notes: notes
+        .filter((note) => note.id !== activeNote?.id)
+        .map((note) => ({ id: note.id, title: note.title || t("notebook.untitled") })),
+      // 扫描没跑过 / 还在跑时是空数组,补全就只靠正文里现写的那些 —— 那条路不依赖 IO。
+      vaultTags: tagScan.data.flatMap((source) => source.tags.map((ref) => ref.raw)),
+      body: activeNote?.body ?? "",
+    }),
+    [notes, activeNote?.id, activeNote?.body, tagScan.data, t],
+  );
+
+  /** 菜单要显示的行。触发种类决定候选从哪来,排序两条路共用 `rankCandidates`。 */
+  const triggerRows: TriggerRow[] = useMemo(() => {
+    if (!trigger) return [];
+    if (trigger.kind === "slash") {
+      const candidates = SLASH_ITEMS.map((item) => slashRow(item, t));
+      if (trigger.query === "") return candidates;
+      return rankCandidates(candidates, trigger.query, COMPLETION_LIMIT).map(({ item, spans }) => ({
+        ...item,
+        spans,
+      }));
+    }
+    return buildCompletions(completionSource(trigger.kind, trigger.query)).map(completionRow);
+  }, [trigger, completionSource, t]);
+
+  /* 候选变少时把选中项拉回范围内。同命令面板那条:留在原下标上会指向不存在的行。 */
+  useEffect(() => {
+    setTriggerSelected((current) => moveSelection(current, 0, triggerRows.length));
+  }, [triggerRows.length]);
+
+  /** 收起菜单。查询留在正文里不动 —— 用户打的字不该因为关个菜单就消失。 */
+  const closeTriggerMenu = useCallback(() => setTrigger(null), []);
+
+  /* 换笔记就收起菜单。
+     `trigger.start` 是**上一篇**里的文档偏移,换篇之后它指向的位置已经没有意义 ——
+     新的那篇更短时甚至越界。编辑器不会替我们收:换篇走的是 value prop,
+     `setState`(CodeMirror 内部重置文档)不带 `selectionSet`,那次 update 里
+     `docChanged` 为真但光标已经在 0,`detectTrigger` 返回 null 前提是它跑得到 ——
+     实测菜单会原样留在屏幕上。所以这一条挂在 id 上主动收。 */
+  useEffect(() => {
+    setTrigger(null);
+  }, [activeNote?.id]);
+
+  /** 编辑器报上来一次触发态。 */
+  const handleTriggerChange = useCallback((next: TriggerState | null) => {
+    setTrigger(next);
+    // 换了一次触发就从第一条开始选。同一次触发里打字缩短列表由上面那个 effect 夹。
+    setTriggerSelected(0);
+    if (next?.kind === "tag") setTagCompletionUsed(true);
+  }, []);
+
+  /**
+   * 提交选中的那一行:把 `[start, cursor)` 换成候选文本。
+   *
+   * 替换区间以编辑器**当前**的光标为终点,不用 `trigger.query.length` 反推 —— 反推
+   * 要求「触发符 + 查询」的长度始终等于那段距离,而任何一次不成立都会吃掉前面的正文。
+   */
+  const commitTriggerRow = (index: number) => {
+    const row = triggerRows[index];
+    const editor = sourceEditorRef.current;
+    if (!trigger || !row || !editor) return;
+    const cursor = editor.selectionEnd();
+    /* 光标跑到触发符前面去了:这次提交没有意义,`replaceRange(start, cursor)` 的
+       区间是反的。
+       这一条杀不掉(变异掉它测试全绿),留着是因为它防的是**偏移过期**这一类,而那
+       一类确实发生过 —— 换笔记时 `start` 会指向上一篇的位置。真正的闸门是上面那个
+       挂在 `activeNote?.id` 上的 effect(有回归测试守着),这里只是最后一道:
+       任何新的"文档在菜单开着时被换掉"的路径都会先撞到它,而不是写坏正文。 */
+    if (cursor < trigger.start) {
+      closeTriggerMenu();
+      return;
+    }
+    if (trigger.kind === "slash") {
+      const item = SLASH_ITEMS.find((candidate) => candidate.id === row.id);
+      if (!item) return;
+      const { text, cursor: offset } = resolveSlashInsert(item);
+      closeTriggerMenu();
+      editor.replaceRange(trigger.start, cursor, text, "after");
+      // 落点在插入文本中间的(代码块、`[[]]`)要再挪一次 —— `replaceRange` 只会放到末尾。
+      if (offset !== text.length)
+        editor.setSelection(trigger.start + offset, trigger.start + offset);
+      return;
+    }
+    const item = buildCompletions(completionSource(trigger.kind, trigger.query)).find(
+      (candidate) => candidate.id === row.id,
+    );
+    if (!item) return;
+    closeTriggerMenu();
+    editor.replaceRange(trigger.start, cursor, item.insert, "after");
+  };
+
+  /**
+   * 菜单开着时接管方向键 / 回车 / Tab / Esc。返回 false 就让 CodeMirror 照常处理。
+   *
+   * Tab 也接:补全菜单里 Tab 选中是通行习惯(编辑器、shell 都是),而正文里的 Tab
+   * 在菜单开着时插一个缩进几乎肯定不是用户想要的。
+   *
+   * 不用 `useCallback` 包:编辑器把它存进 ref、每次按键重新读(见 `onTriggerKey`
+   * 的注释),所以引用稳不稳定对那边没有意义 —— 包一层反而要把 `commitTriggerRow`
+   * 也一起稳住,而它依赖正文、笔记列表和标签扫描,稳不住。
+   */
+  const handleTriggerKey = (key: TriggerKeyName): boolean => {
+    if (!trigger) return false;
+    if (key === "Escape") {
+      closeTriggerMenu();
+      return true;
+    }
+    if (key === "ArrowDown" || key === "ArrowUp") {
+      setTriggerSelected((current) =>
+        moveSelection(current, key === "ArrowDown" ? 1 : -1, triggerRows.length),
+      );
+      return true;
+    }
+    // 没有候选时回车该照常换行,而不是被菜单吃掉。
+    if (triggerRows.length === 0) return false;
+    commitTriggerRow(triggerSelected);
+    return true;
+  };
+
   /**
    * 关掉一个 tab。**不删笔记** —— 它还在列表里,点一下就回来。
    *
@@ -2337,6 +2500,8 @@ function NotebookPanelContent({
       wysiwyg={mode === "wysiwyg"}
       attachments={attachmentImages}
       onDropFiles={attachmentDrop.handleFiles}
+      onTriggerChange={handleTriggerChange}
+      onTriggerKey={handleTriggerKey}
       initialScrollRatio={
         pendingScrollRestoreRef.current?.noteId === activeNote.id
           ? pendingScrollRestoreRef.current.ratio
@@ -2911,6 +3076,22 @@ function NotebookPanelContent({
           onRun={runPaletteEntry}
           onClose={closePalette}
           inputRef={paletteInputRef}
+          t={t}
+        />
+      )}
+      {/* 触发式菜单。`position: fixed` + 跟着光标坐标走,所以它不参与上面那串
+          overlay 的层叠顺序;但命令面板开着时要收起 —— 那时焦点已经不在编辑器上,
+          留着一个跟着旧光标位置的菜单只会挡视线。 */}
+      {trigger && !paletteOpen && (
+        <NoteTriggerMenu
+          kind={trigger.kind}
+          query={trigger.query}
+          rows={triggerRows}
+          selected={triggerSelected}
+          onSelectedChange={setTriggerSelected}
+          onPick={commitTriggerRow}
+          onDismiss={closeTriggerMenu}
+          anchor={trigger.coords}
           t={t}
         />
       )}

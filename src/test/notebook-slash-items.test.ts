@@ -44,54 +44,43 @@ describe("SLASH_ITEMS", () => {
 });
 
 describe("resolveSlashInsert", () => {
-  it("行首插块级项不加换行", () => {
-    expect(resolveSlashInsert(byId("h1"), "")).toEqual({ text: "# ", cursor: 2 });
-  });
-
-  it("行内有字时块级项前置换行", () => {
-    // `abc# 标题` 渲染出来还是那一行文字,而用户以为自己插了个标题。
-    expect(resolveSlashInsert(byId("h1"), "abc ")).toEqual({ text: "\n# ", cursor: 3 });
-  });
-
-  it("只有空白的行不算有字", () => {
-    expect(resolveSlashInsert(byId("h1"), "  ")).toEqual({ text: "# ", cursor: 2 });
-  });
-
-  it("行内项不受影响 —— 链接本来就该贴在文字后面", () => {
-    expect(resolveSlashInsert(byId("link"), "见 ")).toEqual({ text: "[]()", cursor: 1 });
+  it("原样给出插入文本,不补前置换行", () => {
+    /* 不补换行是刻意的:`detectTrigger` 只在行首或列表 / 引用标记之后返回 slash,
+       插入点前面不会有正文 —— 补了反而把 `- /quote` 写成 `- \n> `。 */
+    expect(resolveSlashInsert(byId("h1"))).toEqual({ text: "# ", cursor: 2 });
   });
 
   it("代码块光标落在围栏中间", () => {
-    const { text, cursor } = resolveSlashInsert(byId("code"), "");
+    const { text, cursor } = resolveSlashInsert(byId("code"));
     expect(text).toBe("```\n\n```\n");
     // 插完就能直接贴代码,不用再手动上移一行。
     expect(text.slice(0, cursor)).toBe("```\n");
   });
 
-  it("前置换行时光标偏移跟着挪", () => {
-    const { text, cursor } = resolveSlashInsert(byId("code"), "abc");
-    expect(text).toBe("\n```\n\n```\n");
-    expect(text.slice(0, cursor)).toBe("\n```\n");
-  });
-
   it("双链光标落在方括号中间 —— 顺带把 [[ 补全带起来", () => {
-    const { text, cursor } = resolveSlashInsert(byId("wiki"), "");
+    const { text, cursor } = resolveSlashInsert(byId("wiki"));
     expect(text.slice(0, cursor)).toBe("[[");
     expect(text.slice(cursor)).toBe("]]");
   });
 
   it("嵌入的光标也在方括号里,而不是在 ! 后面", () => {
-    const { text, cursor } = resolveSlashInsert(byId("embed"), "");
+    const { text, cursor } = resolveSlashInsert(byId("embed"));
     expect(text.slice(0, cursor)).toBe("![[");
   });
 
   it("数学块光标落在 $$ 中间", () => {
-    const { text, cursor } = resolveSlashInsert(byId("math"), "");
+    const { text, cursor } = resolveSlashInsert(byId("math"));
     expect(text.slice(0, cursor)).toBe("$$\n");
   });
 
+  it("链接光标落在方括号里", () => {
+    const { text, cursor } = resolveSlashInsert(byId("link"));
+    expect(text).toBe("[]()");
+    expect(cursor).toBe(1);
+  });
+
   it("没给 cursorOffset 的落在末尾", () => {
-    const { text, cursor } = resolveSlashInsert(byId("table"), "");
+    const { text, cursor } = resolveSlashInsert(byId("table"));
     expect(cursor).toBe(text.length);
   });
 });

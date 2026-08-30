@@ -29,13 +29,6 @@ export type SlashItem = {
    * 有它才能做到"插完就能接着打字":代码块要落在围栏中间,链接要落在方括号里。
    */
   cursorOffset?: number;
-  /**
-   * 这条是否需要独占一行。true 时插入前会先补一个换行(当前行非空的话)。
-   *
-   * 块级语法(标题、列表、围栏、表格)贴在半行文字后面是不成立的 markdown ——
-   * `abc# 标题` 渲染出来还是那一行文字,而用户以为自己插了个标题。
-   */
-  block?: boolean;
 };
 
 export const SLASH_ITEMS: SlashItem[] = [
@@ -45,7 +38,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashH1",
     hintKey: "notebook.slashH1Hint",
     text: "# ",
-    block: true,
   },
   {
     id: "h2",
@@ -53,7 +45,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashH2",
     hintKey: "notebook.slashH2Hint",
     text: "## ",
-    block: true,
   },
   {
     id: "h3",
@@ -61,7 +52,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashH3",
     hintKey: "notebook.slashH3Hint",
     text: "### ",
-    block: true,
   },
   {
     id: "todo",
@@ -69,7 +59,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashTodo",
     hintKey: "notebook.slashTodoHint",
     text: "- [ ] ",
-    block: true,
   },
   {
     id: "bullet",
@@ -77,7 +66,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashBullet",
     hintKey: "notebook.slashBulletHint",
     text: "- ",
-    block: true,
   },
   {
     id: "ordered",
@@ -85,7 +73,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashOrdered",
     hintKey: "notebook.slashOrderedHint",
     text: "1. ",
-    block: true,
   },
   {
     id: "quote",
@@ -93,7 +80,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashQuote",
     hintKey: "notebook.slashQuoteHint",
     text: "> ",
-    block: true,
   },
   {
     id: "code",
@@ -103,7 +89,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     text: "```\n\n```\n",
     // 落在围栏中间那一行,而不是文本末尾 —— 插完就能直接贴代码。
     cursorOffset: 4,
-    block: true,
   },
   {
     id: "table",
@@ -111,7 +96,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashTable",
     hintKey: "notebook.slashTableHint",
     text: "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n",
-    block: true,
   },
   {
     id: "hr",
@@ -119,7 +103,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashHr",
     hintKey: "notebook.slashHrHint",
     text: "---\n",
-    block: true,
   },
   {
     id: "link",
@@ -162,7 +145,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     hintKey: "notebook.slashMathHint",
     text: "$$\n\n$$\n",
     cursorOffset: 3,
-    block: true,
   },
   {
     id: "mermaid",
@@ -170,7 +152,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     labelKey: "notebook.slashMermaid",
     hintKey: "notebook.slashMermaidHint",
     text: "```mermaid\ngraph TD\n  A[Start] --> B[End]\n```\n",
-    block: true,
   },
   {
     id: "query",
@@ -179,7 +160,6 @@ export const SLASH_ITEMS: SlashItem[] = [
     hintKey: "notebook.slashQueryHint",
     // `notebook-query` 块:Aeroric 独有,按 frontmatter 字段查全库。
     text: "```notebook-query\nkey: status\nvalue: \n```\n",
-    block: true,
   },
   {
     id: "footnote",
@@ -200,16 +180,11 @@ export const SLASH_ITEMS: SlashItem[] = [
 /**
  * 算出一条插入项真正要写入的文本与光标落点。
  *
- * `lineBefore` 是插入点所在行、插入点之前的那一段(不含触发符 —— 触发符会被替换
- * 掉)。块级项在它非空时前置一个换行,否则 `abc# 标题` 那种既不是标题也不是正文。
+ * 这里**不**为块级项补前置换行。Markio 那边补,是因为它的 `/` 在行中间也触发;
+ * 而 `detectTrigger` 只在行首或列表 / 引用标记之后返回 slash,插入点前面除了标记
+ * 和缩进不会有别的东西 —— 换行没有用处,反倒会把 `- /quote` 写成 `- \n> `,
+ * 也就是把列表项拆坏。
  */
-export function resolveSlashInsert(
-  item: SlashItem,
-  lineBefore: string,
-): { text: string; cursor: number } {
-  const needsBreak = item.block === true && lineBefore.trim() !== "";
-  const prefix = needsBreak ? "\n" : "";
-  const text = `${prefix}${item.text}`;
-  const cursor = prefix.length + (item.cursorOffset ?? item.text.length);
-  return { text, cursor };
+export function resolveSlashInsert(item: SlashItem): { text: string; cursor: number } {
+  return { text: item.text, cursor: item.cursorOffset ?? item.text.length };
 }
