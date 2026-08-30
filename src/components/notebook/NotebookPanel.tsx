@@ -14,6 +14,19 @@ import {
   type NoteSearchFlags,
   type NoteSearchHit,
 } from "./noteGlobalSearch";
+import { NoteCommandPalette } from "./NoteCommandPalette";
+import {
+  buildPaletteEntries,
+  moveSelection,
+  type NoteCommand,
+  type PaletteEntry,
+} from "./noteCommands";
+import {
+  loadNoteRecents,
+  resolveNoteRecents,
+  saveNoteRecents,
+  touchNoteRecent,
+} from "./noteRecents";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteTitleBar, type NoteViewMode } from "./NoteTitleBar";
 import { NoteContentArea } from "./NoteContentArea";
@@ -306,6 +319,13 @@ function NotebookPanelContent({
   /* 只认最后一次发起的搜索。用户改条件重搜时,前一次的 promise 可能后回来
      ——不带序号就会把旧结果盖在新结果上,而列表看不出这一点。 */
   const globalRunRef = useRef(0);
+  /** 命令面板(⌘K)。候选全在内存里,所以边打边过滤,不需要回车确认。 */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteSelected, setPaletteSelected] = useState(0);
+  const paletteInputRef = useRef<HTMLInputElement | null>(null);
+  /** 最近打开过的笔记(vault 相对路径,最近在前)。命令面板空查询时列它。 */
+  const [recentKeys, setRecentKeys] = useState<string[]>([]);
   const activeNote = notes.find((note) => note.id === activeId) ?? notes[0] ?? null;
   /** 历史面板针对的那条笔记。**不**回落到 activeNote:回落的话这条笔记被删掉后
    *  面板会悄悄换成显示另一条笔记的 diff,而「回滚」按钮打在那条上。 */
@@ -479,6 +499,30 @@ function NotebookPanelContent({
       cancelled = true;
     };
   }, [vault]);
+
+  /* 换 vault 就换一份 recents。不清的话上一个库的相对路径会留在内存里,而它们在
+     新库里可能**恰好也存在**(`Index.md` 这种名字很常见)—— 那样命令面板会把
+     没打开过的笔记列成"最近打开",用户无从判断这份名单是哪来的。 */
+  useEffect(() => {
+    setRecentKeys(vault ? loadNoteRecents(vault) : []);
+  }, [vault]);
+
+  /* 记下"刚打开哪一篇"。挂在 activeNote?.id 上而不是逐个包 setActiveId ——
+     切换笔记的入口有十来处(列表点选、双链跳转、搜索命中、删除后落到邻居…),
+     漏一个就是一条静默不记账的路径。 */
+  useEffect(() => {
+    const noteId = activeNote?.id;
+    if (!vault || !noteId) return;
+    setRecentKeys((current) => {
+      const next = touchNoteRecent(vault, noteId, current);
+      // 顺序没变就不写盘:这个 effect 每次重渲染都跑,而绝大多数时候当前笔记没换。
+      if (next.length === current.length && next.every((key, index) => key === current[index])) {
+        return current;
+      }
+      saveNoteRecents(vault, next);
+      return next;
+    });
+  }, [vault, activeNote?.id]);
 
   /* 全库扫描:反链和标签各一次,都只在自己那一档**可见**时扫。它们读每个文件的
      全文,是整个面板里最贵的一次 IO,而绝大多数时候用户根本没打开侧栏。
@@ -902,6 +946,11 @@ function NotebookPanelContent({
     globalInputRef.current?.focus();
     globalInputRef.current?.select();
   }, [globalSearchOpen]);
+
+  useEffect(() => {
+    if (!paletteOpen) return;
+    paletteInputRef.current?.focus();
+  }, [paletteOpen]);
 
   useEffect(() => {
     setActiveMatchIndex((current) =>
@@ -1626,6 +1675,25 @@ function NotebookPanelContent({
     );
   };
 
+  /** 关命令面板。清查询 —— 下次 ⌘K 是一次新的检索,留着上次的词等于要先删一遍。 */
+  const closePalette = () => {
+    setPaletteOpen(false);
+    setPaletteQuery("");
+    setPaletteSelected(0);
+  };
+
+  /** 打开命令面板。不要求先有 activeNote:里面有「新建笔记」,空库时正需要。 */
+  const openPalette = () => {
+    /* 其余铺满面板的 overlay 一起收掉。命令面板 z-index 最高(31),不收的话下面
+       那些还在接键盘事件 —— Escape 会一次关掉两层,而用户只看得见最上面这层。 */
+    setSearchOpen(false);
+    setReplaceOpen(false);
+    setGlobalSearchOpen(false);
+    setPaletteQuery("");
+    setPaletteSelected(0);
+    setPaletteOpen(true);
+  };
+
   /** 打开回收站并拉列表。 */
   const openTrash = () => {
     if (!vault) return;
@@ -1769,11 +1837,20 @@ function NotebookPanelContent({
    * 不拦住的话一次按键会触发两件事。
    *
    * 只拦真正有对应行为的键。没有行为却拦下来更糟:用户会以为快捷键坏了,而实际上
-   * 是被我们吞掉的。所以 ⌘K 不在这里 —— 随手记还没有插入链接那类功能给它接。
+   * 是被我们吞掉的。
    */
   const handleNotebookShortcut = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLocaleLowerCase();
+
+    if (key === "k") {
+      event.preventDefault();
+      event.stopPropagation();
+      // 已经开着时再按一次关掉:⌘K 是个开关,而不是"再开一个"。
+      if (paletteOpen) closePalette();
+      else openPalette();
+      return;
+    }
 
     // ⌘⇧F 要排在 ⌘F 前面:后者不看 shiftKey,先判就把全库搜索吞了。
     if (key === "f" && event.shiftKey) {
@@ -1873,6 +1950,169 @@ function NotebookPanelContent({
         );
       }
     })();
+  };
+
+  /* 命令面板的命令表。
+   *
+   * 每条只是把面板已有的处理函数包一层 —— 命令面板不是新功能的入口,而是现有入口的
+   * 第二条路(键盘那条)。所以这里刻意不做任何 UI 里没有的事:一条命令能做而按钮
+   * 做不到的话,那条路就没有可发现性,只有背下来的人用得上。
+   *
+   * `disabled` 的那几条仍然列出来。藏掉「删除这篇」会让用户以为命令面板缺了这一项,
+   * 而灰着显示同时回答了"有这个功能"和"现在为什么不能用"。 */
+  const paletteCommands: NoteCommand[] = [
+    {
+      id: "note.new",
+      label: t("notebook.newMemo"),
+      group: "notebook.commandGroupNote",
+      keywords: ["new", "create", "add", "新建", "xinjian"],
+      run: addNote,
+    },
+    {
+      id: "note.delete",
+      label: t("common.delete"),
+      group: "notebook.commandGroupNote",
+      keywords: ["delete", "remove", "trash", "删除", "shanchu"],
+      disabled: !activeNote,
+      run: () => {
+        if (activeNote) deleteNoteById(activeNote.id);
+      },
+    },
+    {
+      id: "view.edit",
+      label: t("notebook.source"),
+      group: "notebook.commandGroupView",
+      keywords: ["source", "markdown", "源码"],
+      run: () => switchMode("edit"),
+    },
+    {
+      id: "view.wysiwyg",
+      label: t("notebook.wysiwyg"),
+      group: "notebook.commandGroupView",
+      keywords: ["wysiwyg", "live", "所见即所得"],
+      run: () => switchMode("wysiwyg"),
+    },
+    {
+      id: "view.split",
+      label: t("notebook.split"),
+      group: "notebook.commandGroupView",
+      keywords: ["split", "side", "分屏"],
+      run: () => switchMode("split"),
+    },
+    {
+      id: "view.read",
+      label: t("notebook.read"),
+      group: "notebook.commandGroupView",
+      keywords: ["read", "preview", "阅读", "预览"],
+      run: () => switchMode("read"),
+    },
+    {
+      id: "view.outline",
+      label: t("notebook.showOutline"),
+      group: "notebook.commandGroupView",
+      keywords: ["outline", "toc", "大纲", "sidebar"],
+      run: () => setOutlineOpen((current) => !current),
+    },
+    {
+      id: "search.find",
+      label: t("notebook.find"),
+      group: "notebook.commandGroupSearch",
+      keywords: ["find", "search", "查找"],
+      hint: "⌘F",
+      disabled: !activeNote,
+      run: () => openNotebookSearch(false),
+    },
+    {
+      id: "search.replace",
+      label: t("notebook.replace"),
+      group: "notebook.commandGroupSearch",
+      keywords: ["replace", "替换"],
+      hint: "⌘H",
+      disabled: !activeNote,
+      run: () => openNotebookSearch(true),
+    },
+    {
+      id: "search.global",
+      label: t("notebook.globalSearch"),
+      group: "notebook.commandGroupSearch",
+      keywords: ["grep", "vault", "全库", "全文"],
+      hint: "⌘⇧F",
+      run: openGlobalSearch,
+    },
+    {
+      id: "sheet.fields",
+      label: t("notebook.fieldsOpen"),
+      group: "notebook.commandGroupLibrary",
+      keywords: ["frontmatter", "properties", "字段", "属性"],
+      run: openFields,
+    },
+    {
+      id: "sheet.graph",
+      label: t("notebook.graphOpen"),
+      group: "notebook.commandGroupLibrary",
+      keywords: ["graph", "links", "图谱", "双链"],
+      run: openGraph,
+    },
+    {
+      id: "sheet.tasks",
+      label: t("notebook.taskInboxOpen"),
+      group: "notebook.commandGroupLibrary",
+      keywords: ["task", "todo", "任务", "收集箱"],
+      run: openTaskInbox,
+    },
+    {
+      id: "sheet.history",
+      label: t("notebook.historyOpen"),
+      group: "notebook.commandGroupLibrary",
+      keywords: ["history", "version", "历史", "版本"],
+      disabled: !activeNote,
+      run: () => {
+        if (activeNote) openHistory(activeNote.id);
+      },
+    },
+    {
+      id: "sheet.trash",
+      label: t("notebook.trashOpen"),
+      group: "notebook.commandGroupLibrary",
+      keywords: ["trash", "deleted", "回收站"],
+      run: openTrash,
+    },
+  ];
+
+  const paletteEntries = buildPaletteEntries({
+    query: paletteQuery,
+    commands: paletteCommands,
+    notes: notes.map((note) => ({
+      id: note.id,
+      title: note.title || t("notebook.untitled"),
+      fileName: note.id.slice(note.id.lastIndexOf("/") + 1),
+    })),
+    recentNoteIds: resolveNoteRecents(
+      vault ?? "",
+      recentKeys,
+      notes.map((note) => note.id),
+    ),
+  });
+
+  /* 候选变少时把选中项拉回范围内。用户打字过滤会让列表缩短,选中项留在原下标上就
+     指向不存在的行 —— 那时按回车什么都不会发生,而高亮条已经从视野里消失了。 */
+  useEffect(() => {
+    setPaletteSelected((current) => moveSelection(current, 0, paletteEntries.length));
+  }, [paletteEntries.length]);
+
+  /** 执行面板里选中的那一条。命令走它自己的 run,笔记则是切过去。 */
+  const runPaletteEntry = (entry: PaletteEntry) => {
+    if (entry.kind === "note") {
+      closePalette();
+      setActiveId(entry.noteId);
+      return;
+    }
+    // 灰着的那条点了不该有反应,但也不关面板 —— 关掉会让人以为它执行了。
+    if (entry.command.disabled) return;
+    /* 先关再执行。反过来的话,`run` 里那些开 overlay 的命令(比如全库搜索)刚把自己
+       打开,紧接着就被命令面板的关闭逻辑连带盖掉 —— 表现是点了一下什么都没发生。 */
+    closePalette();
+    entry.command.run();
   };
 
   /**
@@ -2656,6 +2896,21 @@ function NotebookPanelContent({
           onOpen={openGlobalSearchHit}
           onClose={closeGlobalSearch}
           inputRef={globalInputRef}
+          t={t}
+        />
+      )}
+      {/* 命令面板排在所有 overlay 最后、z-index 最高:它是从任何状态下都能唤出的
+          那一层,被别的 sheet 盖住就等于在那些状态下不可用。 */}
+      {paletteOpen && (
+        <NoteCommandPalette
+          query={paletteQuery}
+          onQueryChange={setPaletteQuery}
+          entries={paletteEntries}
+          selected={paletteSelected}
+          onSelectedChange={setPaletteSelected}
+          onRun={runPaletteEntry}
+          onClose={closePalette}
+          inputRef={paletteInputRef}
           t={t}
         />
       )}

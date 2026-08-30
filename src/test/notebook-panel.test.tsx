@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NotebookPanel } from "../components/notebook/NotebookPanel";
 import { EditorView } from "@uiw/react-codemirror";
-import { NotebookVaultHarness } from "./notebookVaultHarness";
+import { HARNESS_VAULT, NotebookVaultHarness } from "./notebookVaultHarness";
 import { registerAppDialogHandler, resetAppDialogHandlerForTests } from "../lib/appDialog";
 import { triggerResize } from "./resizeObserverStub";
 
@@ -1276,13 +1276,13 @@ describe("NotebookPanel", () => {
         });
         expect(escaped).toEqual([]);
 
-        // 对照:没接的键照常放过去,不然用户会以为快捷键坏了。⌘K 现在就是这一类
-        // —— 随手记还没有插入链接那种功能给它接。
+        /* 对照:没接的键照常放过去,不然用户会以为快捷键坏了。这里用 ⌘J ——
+           ⌘K 原来担任这个对照,但它现在开命令面板了,已经不属于"没接的键"。 */
         fireEvent.keyDown(screen.getByRole("region", { name: "Quick Notes" }), {
-          key: "k",
+          key: "j",
           metaKey: true,
         });
-        expect(escaped).toEqual(["k"]);
+        expect(escaped).toEqual(["j"]);
       } finally {
         window.removeEventListener("keydown", spy);
       }
@@ -6201,6 +6201,211 @@ describe("NotebookPanel", () => {
       await waitFor(() => expect(status()).toContain("not in the current note list"));
       // 面板留着:没跳成功就关掉面板等于把用户手里的结果一起收走。
       expect(screen.getByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+    });
+  });
+
+  describe("命令面板", () => {
+    /** ⌘K 从编辑器里唤出命令面板。返回那个输入框。 */
+    async function openPalette() {
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+      return screen.getByRole("combobox", { name: "Command palette" });
+    }
+
+    function optionLabels(): string[] {
+      const list = screen.getByRole("listbox", { name: "Command palette" });
+      return within(list)
+        .getAllByRole("option")
+        .map((option) => option.textContent ?? "");
+    }
+
+    it("⌘K 开命令面板", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await openPalette();
+
+      expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    });
+
+    it("再按一次 ⌘K 关掉", async () => {
+      // ⌘K 是开关。不接的话第二次按会落到 WebView 或面板外的监听上。
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    });
+
+    it("空查询时列出命令", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await openPalette();
+
+      expect(optionLabels().some((label) => label.includes("Link graph"))).toBe(true);
+    });
+
+    it("打字过滤掉不相关的命令", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const input = await openPalette();
+
+      fireEvent.change(input, { target: { value: "graph" } });
+
+      expect(optionLabels().some((label) => label.includes("Link graph"))).toBe(true);
+      expect(optionLabels().some((label) => label.includes("Trash"))).toBe(false);
+    });
+
+    it("回车执行选中的命令", async () => {
+      /* 验收点:命令面板真的能开出别的面板来。这条走「⌘K → 打字 → 回车」整条路,
+         而不是直接调处理函数。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const input = await openPalette();
+
+      fireEvent.change(input, { target: { value: "graph" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: "Link graph" })).toBeInTheDocument();
+    });
+
+    it("执行命令时先关面板,后开那个 overlay", async () => {
+      /* 顺序反了的话,`run` 里开的 overlay 会被命令面板的关闭逻辑连带盖掉 ——
+         表现是点了一下什么都没发生。这条盯的就是那个顺序。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const input = await openPalette();
+
+      fireEvent.change(input, { target: { value: "Search all" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(await screen.findByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+    });
+
+    it("笔记也在候选里,回车跳过去", async () => {
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\na\n');
+      harness.seed("Beta.md", '---\ntitle: "Beta"\n---\n\nb\n');
+      renderNotebook();
+      const input = await openPalette();
+
+      fireEvent.change(input, { target: { value: "Beta" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Beta"),
+      );
+    });
+
+    it("没有笔记时也能开,并且能新建", async () => {
+      // 空库正是最需要它的时候 —— 那时面板上几乎没有别的入口。
+      renderNotebook();
+      // 「空库」这句话在笔记列表和正文区各有一处,用 findAllByText 避开歧义。
+      await screen.findAllByText("No quick notes yet");
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "New quick note" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toBeInTheDocument(),
+      );
+    });
+
+    it("没有笔记时「删除」这条灰着", async () => {
+      renderNotebook();
+      // 「空库」这句话在笔记列表和正文区各有一处,用 findAllByText 避开歧义。
+      await screen.findAllByText("No quick notes yet");
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "Delete" } });
+
+      const list = screen.getByRole("listbox", { name: "Command palette" });
+      const option = within(list).getAllByRole("option")[0];
+      expect(option).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("灰着的那条回车不执行,也不关面板", async () => {
+      // 关掉会让人以为它执行了,而它什么都没做。
+      renderNotebook();
+      // 「空库」这句话在笔记列表和正文区各有一处,用 findAllByText 避开歧义。
+      await screen.findAllByText("No quick notes yet");
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "Delete" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    });
+
+    it("Escape 关掉,并且清掉查询", async () => {
+      /* 清查询:下次 ⌘K 是一次新的检索,留着上次的词等于要先删一遍 —— 而那个词
+         看起来还像是当前的过滤条件。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const input = await openPalette();
+      fireEvent.change(input, { target: { value: "graph" } });
+
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+
+      const reopened = await openPalette();
+      expect(reopened).toHaveValue("");
+    });
+
+    it("⌘K 会把全库搜索收掉", async () => {
+      /* 命令面板 z-index 最高,不收的话下面那层还在接键盘事件 —— Escape 会一次
+         关掉两层,而用户只看得见最上面这层。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "F", shiftKey: true, metaKey: true });
+      expect(screen.getByRole("dialog", { name: "Search all notes" })).toBeInTheDocument();
+
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+
+      expect(screen.queryByRole("dialog", { name: "Search all notes" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    });
+
+    it("打开过的笔记进「最近」,空查询时列在命令后面", async () => {
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\na\n');
+      harness.seed("Beta.md", '---\ntitle: "Beta"\n---\n\nb\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      // 切到 Beta,它就该进最近名单。
+      // 精确名字:标签页和列表行都叫 Beta,`/Beta/` 会同时命中两个。
+      fireEvent.click(screen.getAllByRole("button", { name: "Beta" })[0] as HTMLElement);
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Beta"),
+      );
+
+      const content = screen.getByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+
+      expect(optionLabels().some((label) => label.includes("Beta"))).toBe(true);
+    });
+
+    it("最近名单按 vault 相对路径落盘", async () => {
+      /* 存绝对路径的话,vault 换个位置整份名单会静默失效。这条盯的是键的形状 ——
+         它是 localStorage 里的数据,改坏了没有任何报错。 */
+      harness.seed("Alpha.md", '---\ntitle: "Alpha"\n---\n\na\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await waitFor(() => {
+        const raw = localStorage.getItem(`aeroric:notebookRecents:${HARNESS_VAULT}`);
+        expect(raw).not.toBeNull();
+        expect(JSON.parse(raw ?? "[]")).toContain("Alpha.md");
+      });
     });
   });
 });
