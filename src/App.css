@@ -2422,6 +2422,53 @@ html:not(.dark) .session-prose pre code {
   background: var(--bg-subtle);
 }
 
+/* ```notebook-query 渲染出的结果块。表格本身沿用上面 `.md-preview table` 那套,
+   这里只管外框和表头那一条说明。 */
+.md-preview .notebook-query {
+  margin: 14px 0;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.md-preview .notebook-query-head {
+  padding: 6px 12px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-medium);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+/* 表格贴着外框:外框已经有圆角和边框了,再留外边距会露出一圈底色。 */
+.md-preview .notebook-query table {
+  margin: 0;
+  border: 0;
+}
+.md-preview .notebook-query th:first-child,
+.md-preview .notebook-query td:first-child {
+  border-left: 0;
+}
+.md-preview .notebook-query th:last-child,
+.md-preview .notebook-query td:last-child {
+  border-right: 0;
+}
+.md-preview .notebook-query tr:last-child td {
+  border-bottom: 0;
+}
+.md-preview .notebook-query-empty {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+/* 语法错误。用警示色而不是报错红:查询写错了是随手就能改的事,不是故障。 */
+.md-preview .notebook-query-error {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--warning);
+}
+.md-preview .notebook-query-error + .notebook-query-error {
+  padding-top: 0;
+}
+
 /* ── Notebook rich text ────────────────────────────────────────── */
 .notebook-rich-text {
   color: var(--text-primary);

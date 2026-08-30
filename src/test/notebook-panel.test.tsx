@@ -2863,6 +2863,115 @@ describe("NotebookPanel", () => {
     });
   });
 
+  describe("```notebook-query 查询块", () => {
+    /** 阅读态里渲染出的查询块。 */
+    function queryBlocks(): HTMLElement[] {
+      return Array.from(document.querySelectorAll<HTMLElement>(".notebook-query"));
+    }
+
+    async function openInReadMode(title: string) {
+      renderNotebook();
+      await screen.findByRole("button", { name: title });
+      fireEvent.click(screen.getByRole("button", { name: title }));
+      await screen.findByDisplayValue(title);
+      fireEvent.click(screen.getByRole("button", { name: "Read" }));
+      await waitFor(() =>
+        expect(document.querySelector(".notebook-markdown-preview")).not.toBeNull(),
+      );
+    }
+
+    /** 一篇带查询块的宿主笔记 + 三篇有 status 字段的笔记。 */
+    function seedVault(query: string) {
+      harness.seed(
+        "Host.md",
+        `---\ntitle: "Host"\n---\n\n\`\`\`notebook-query\n${query}\n\`\`\`\n`,
+      );
+      harness.seed("A.md", '---\ntitle: "Alpha"\nstatus: active\n---\n\n甲\n');
+      harness.seed("B.md", '---\ntitle: "Beta"\nstatus: active\n---\n\n乙\n');
+      harness.seed("C.md", '---\ntitle: "Gamma"\nstatus: done\n---\n\n丙\n');
+    }
+
+    it("把围栏换成结果表,标题取的是 frontmatter 里那个", async () => {
+      seedVault("key: status\nvalue: active");
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      const block = queryBlocks()[0]!;
+      expect(block.querySelector(".notebook-query-head")?.textContent).toBe(
+        "Query · status = active · 2 notes",
+      );
+      const names = Array.from(block.querySelectorAll("tbody tr td:first-child")).map(
+        (td) => td.textContent,
+      );
+      expect(names).toEqual(["Alpha", "Beta"]);
+      // 围栏源码不该还留在页面上。
+      expect(document.querySelector('pre[data-language="notebook-query"]')).toBeNull();
+    });
+
+    it("点结果里的笔记名跳过去", async () => {
+      seedVault("key: status\nvalue: active");
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      const link = queryBlocks()[0]!.querySelector<HTMLAnchorElement>("tbody a")!;
+      expect(link.title).toBe("Open Alpha");
+      fireEvent.click(link);
+      // 跳过去之后编辑器里是 Alpha。
+      await screen.findByDisplayValue("Alpha");
+    });
+
+    it("limit 截断时表头把总数说出来", async () => {
+      seedVault("key: status\nlimit: 1");
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      expect(queryBlocks()[0]!.querySelector(".notebook-query-head")?.textContent).toBe(
+        "Query · status · showing 1 of 3",
+      );
+    });
+
+    it("写错的指令当场报出来,而且不去扫全库", async () => {
+      seedVault("keys: status");
+      const before = harness.fieldScanCalls;
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      const lines = Array.from(queryBlocks()[0]!.querySelectorAll(".notebook-query-error")).map(
+        (el) => el.textContent,
+      );
+      expect(lines).toEqual([
+        "Unknown directive `keys`. Only key, value, sort and limit are understood.",
+        "Missing a field name — write at least `key: <field>`.",
+      ]);
+      expect(harness.fieldScanCalls).toBe(before);
+    });
+
+    it("扫描失败时把失败说出来", async () => {
+      seedVault("key: status");
+      harness.failFieldScan = true;
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      expect(queryBlocks()[0]!.textContent).toContain("Query failed: scanning fields failed");
+    });
+
+    it("一条都没匹配上时显示空提示", async () => {
+      seedVault("key: nope");
+      await openInReadMode("Host");
+
+      await waitFor(() => expect(queryBlocks()).toHaveLength(1));
+      expect(queryBlocks()[0]!.querySelector(".notebook-query-empty")).not.toBeNull();
+      expect(queryBlocks()[0]!.querySelector("table")).toBeNull();
+    });
+
+    it("没有查询块的笔记不会去扫全库字段", async () => {
+      harness.seed("Plain.md", '---\ntitle: "Plain"\n---\n\n普通正文\n');
+      const before = harness.fieldScanCalls;
+      await openInReadMode("Plain");
+      expect(harness.fieldScanCalls).toBe(before);
+    });
+  });
+
   describe("阅读态勾选任务", () => {
     /** 阅读态里那些可点的任务复选框(解禁过的)。 */
     function liveBoxes(): HTMLInputElement[] {
@@ -5261,10 +5370,7 @@ describe("NotebookPanel", () => {
 
       await waitFor(() => expect(mentionRows()).toHaveLength(2));
       // 待确认那一条在可及名里就说明白了 —— 颜色和图标对屏读用户不存在。
-      expect(mentionRows()).toEqual([
-        "Notes, line 5 (needs a look)",
-        "Notes, line 7",
-      ]);
+      expect(mentionRows()).toEqual(["Notes, line 5 (needs a look)", "Notes, line 7"]);
       expect(screen.getByRole("button", { name: "Link 1 clear mentions" })).toBeInTheDocument();
     });
 

@@ -100,6 +100,7 @@ import { enhanceTaskCheckboxes, taskToggleFromEvent } from "./enhanceTaskCheckbo
 import { enhanceWikiLinks, isWikiLinkClick, wikiLinkTargetFromEvent } from "./enhanceWikiLinks";
 import { attachWikiLinkHover } from "./hoverPreview";
 import { enhanceNoteEmbeds } from "./noteEmbed";
+import { enhanceNoteQueries } from "./enhanceNoteQueries";
 import { renderNoteMarkdown } from "./noteRender";
 import { toggleTaskLine } from "./noteTasks";
 import { analyzeNote, type OutlineItem } from "./noteOutline";
@@ -610,6 +611,52 @@ function NotebookPanelContent({
     });
     return () => handle.disconnect();
   }, [markdownHtml, mode, linkIndex, t]);
+
+  /* ```notebook-query 围栏 → 按 frontmatter 字段查全库的结果表。
+   *
+   * 声明在嵌入之后:嵌入进来的内容里也可能有查询块,先跑的话那些扫不到。表格里的笔记名
+   * 是按 wikilink 的约定造的,所以下面那个点击监听不用改就能跳过去。
+   *
+   * 依赖里带 `linkIndex`:标题从它来(那份合并过内存标题和扫盘标题),改了标题要跟着变。 */
+  useEffect(() => {
+    if (mode !== "read" && mode !== "split") return;
+    const host = previewRef.current;
+    if (!host) return;
+    const handle = enhanceNoteQueries(host, {
+      vault,
+      scan: vaultFields,
+      titleOf: (path) => linkIndex.byPath.get(normalizeLinkTarget(path))?.title || path,
+      labels: {
+        head: ({ key, value, shown, total }) =>
+          `${
+            value === undefined
+              ? t("notebook.queryHeadKey", { key })
+              : t("notebook.queryHeadKeyValue", { key, value })
+          } · ${
+            shown === total
+              ? t("notebook.queryCount", { count: total })
+              : t("notebook.queryCountLimited", { shown, total })
+          }`,
+        empty: () => t("notebook.queryEmpty"),
+        noteColumn: () => t("notebook.queryNoteColumn"),
+        open: (title) => t("notebook.wikiLinkOpen", { title }),
+        failed: (message) => t("notebook.queryFailed", { message }),
+        problem: (problem) => {
+          switch (problem.code) {
+            case "missingKey":
+              return t("notebook.queryProblemMissingKey");
+            case "unknownDirective":
+              return t("notebook.queryProblemUnknownDirective", { name: problem.name });
+            case "badSort":
+              return t("notebook.queryProblemBadSort", { value: problem.value });
+            case "badLimit":
+              return t("notebook.queryProblemBadLimit", { value: problem.value });
+          }
+        },
+      },
+    });
+    return () => handle.disconnect();
+  }, [markdownHtml, mode, vault, linkIndex, t]);
 
   /* 点 wikilink 跳笔记。
    *
