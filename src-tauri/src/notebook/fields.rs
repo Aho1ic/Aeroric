@@ -178,7 +178,7 @@ fn push_value(values: &mut Vec<String>, value: String) {
         return;
     }
     let value = truncate_chars(&value, MAX_VALUE_CHARS);
-    if values.iter().any(|existing| *existing == value) {
+    if values.contains(&value) {
         return;
     }
     values.push(value);
