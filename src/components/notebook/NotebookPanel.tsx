@@ -49,6 +49,7 @@ import {
   vaultLinks,
   vaultFields,
   vaultTags,
+  vaultTasks,
   writeNoteIcons,
 } from "./notebookApi";
 import { NoteHistorySheet, freshHistoryState, type NoteHistoryState } from "./NoteHistorySheet";
@@ -62,6 +63,13 @@ import { buildNoteGraph, type NoteGraph } from "./noteGraph";
 import { DEPTH_ALL, NoteGraphSheet } from "./NoteGraphSheet";
 import { collectTags, countTagRefs, filterTags, tagsInNote } from "./noteTags";
 import { NoteTagsPanel } from "./NoteTagsPanel";
+import { collectInboxTasks } from "./noteTaskInbox";
+import { NoteTaskInboxSheet } from "./NoteTaskInboxSheet";
+import {
+  NoteTaskContextMenu,
+  type NoteTaskContextMenuAction,
+  type NoteTaskContextMenuState,
+} from "./NoteTaskContextMenu";
 import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
 import { useVaultScan } from "./useVaultScan";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
@@ -237,6 +245,10 @@ function NotebookPanelContent({
   const [fieldsOpen, setFieldsOpen] = useState(false);
   /** 引用图谱。同样是铺满面板的 overlay,和上面四个互斥。 */
   const [graphOpen, setGraphOpen] = useState(false);
+  /** 任务收集箱。同样是铺满面板的 overlay,和上面五个互斥。 */
+  const [taskInboxOpen, setTaskInboxOpen] = useState(false);
+  /** 收集箱里某条任务的右键菜单。`null` = 没开。 */
+  const [taskMenu, setTaskMenu] = useState<NoteTaskContextMenuState | null>(null);
   /** 图谱画几跳以内。`DEPTH_ALL` = 不限,画整库。 */
   const [graphDepth, setGraphDepth] = useState<number>(2);
   /**
@@ -452,6 +464,8 @@ function NotebookPanelContent({
      (三档已经占满那 190px,见 `NoteFieldsSheet` 的模块注释)。关掉不清结果,和
      侧栏两档一致:再打开时不该又等一遍。 */
   const fieldScan = useVaultScan(vault, fieldsOpen, vaultFields, errorText);
+  /* 任务收集箱的取数。理由同字段浏览器 —— 它也是 sheet,不占侧栏那一列。 */
+  const taskScan = useVaultScan(vault, taskInboxOpen, vaultTasks, errorText);
 
   // 阅读态的公式与 Mermaid 图:视口优先懒渲染。
   //
@@ -726,6 +740,7 @@ function NotebookPanelContent({
       if (target instanceof Element && target.closest("[data-notebook-context-menu]")) return;
       setContextMenu(null);
       setListMenu(null);
+      setTaskMenu(null);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -911,6 +926,17 @@ function NotebookPanelContent({
       ),
     [fieldScan.data, indexedTitles],
   );
+  /* 全库任务。标题口径和标签档、字段浏览器共用同一条 —— 三处不一致的话同一篇笔记
+     在一个视图里显示文件名、在另一个里显示真标题。 */
+  const inboxTasks = useMemo(
+    () =>
+      collectInboxTasks(
+        taskScan.data,
+        (path) => indexedTitles.get(path) ?? path.replace(/^.*[/\\]/, "").replace(/\.md$/i, ""),
+      ),
+    [indexedTitles, taskScan.data],
+  );
+
   /* 引用图谱。和反链读同一份 `linkScan.data`、同一份 `linkIndex` —— 见 `noteGraph`
      的模块注释。只在开着时折:整库 BFS + 布局不该在没人看的时候每次重扫都跑一遍。 */
   const noteGraph = useMemo(
@@ -1065,8 +1091,9 @@ function NotebookPanelContent({
     // 会盖住它),而是别让两个 aria-modal 的 dialog 同时挂在树上 —— 屏幕阅读器会
     // 同时报两个,而底下那个还留着自己的选中状态。
     setFieldsOpen(false);
-    // 图谱排在属性面板后面,会盖住它。
+    // 图谱和收集箱排在属性面板后面,会盖住它。
     setGraphOpen(false);
+    setTaskInboxOpen(false);
     setProperties(freshPropertiesState(noteId));
     void (async () => {
       try {
@@ -1115,9 +1142,10 @@ function NotebookPanelContent({
   /** 打开版本历史,并把快照列表拉回来。 */
   const openHistory = (noteId: string) => {
     // 字段浏览器在 JSX 里排在历史面板后面,不关掉的话它会继续盖在上面 —— 用户点
-    // "历史"却看见字段浏览器。图谱同理,它排得更后面。
+    // "历史"却看见字段浏览器。图谱和收集箱同理,它们排得更后面。
     setFieldsOpen(false);
     setGraphOpen(false);
+    setTaskInboxOpen(false);
     setHistoryNoteId(noteId);
     setHistory(freshHistoryState());
     void (async () => {
@@ -1220,19 +1248,80 @@ function NotebookPanelContent({
     setTrash(null);
     setProperties(null);
     setGraphOpen(false);
+    setTaskInboxOpen(false);
     setFieldsOpen(true);
   };
 
   /** 打开引用图谱。数据由 `linkScan` 按 `graphOpen` 自己去取(和反链共用那一次)。 */
   const openGraph = () => {
     if (!vault) return;
-    // 另外四个 overlay 一起关掉。图谱在 JSX 里排最后,所以这里关的都是"会留在底下
-    // 继续接键盘事件"的那一类 —— 理由同 `openFields`。
+    // 另外几个 overlay 一起关掉。图谱在 JSX 里排在收集箱前面,所以这里关的既有"会
+    // 留在底下继续接键盘事件"的、也有"会盖住它"的 —— 理由同 `openFields`。
     closeHistory();
     setTrash(null);
     setProperties(null);
     setFieldsOpen(false);
+    setTaskInboxOpen(false);
     setGraphOpen(true);
+  };
+
+  /** 打开任务收集箱。数据由 `taskScan` 按 `taskInboxOpen` 自己去取。 */
+  const openTaskInbox = () => {
+    if (!vault) return;
+    // 其余 overlay 一起关掉。收集箱在 JSX 里排最后,所以这里关的都是"会留在底下继续
+    // 接键盘事件"的那一类 —— 理由同 `openFields`。
+    closeHistory();
+    setTrash(null);
+    setProperties(null);
+    setFieldsOpen(false);
+    setGraphOpen(false);
+    setTaskInboxOpen(true);
+  };
+
+  /**
+   * 点收集箱里的一条任务:关掉 sheet,再跳到那一行。
+   *
+   * 必须先关:sheet 铺满整个面板,不关的话光标落在编辑器里而用户还盯着收集箱 ——
+   * 看起来像点了没反应。字段浏览器那里点笔记不关是另一回事,那一档常常要连着点好几篇
+   * 来比较,而这里点一条任务的意思就是"我现在要去改它"。
+   */
+  const jumpToInboxTask = (path: string, line: number) => {
+    setTaskInboxOpen(false);
+    setTaskMenu(null);
+    jumpToBacklink(path, line);
+  };
+
+  /** 收集箱右键菜单的四项操作。 */
+  const runTaskMenuAction = (action: NoteTaskContextMenuAction) => {
+    const target = taskMenu?.task;
+    setTaskMenu(null);
+    if (!target) return;
+    if (action === "open") {
+      jumpToInboxTask(target.path, target.line);
+      return;
+    }
+    if (action === "copyText") {
+      /* 复制**原文**而不是显示文本:`#标签` 和 `@截止` 通常正是用户想带走的那部分。 */
+      void navigator.clipboard
+        ?.writeText(target.raw)
+        .catch((error: unknown) => setError(t("file.copyPathFailed", { error: errorText(error) })));
+      return;
+    }
+    if (action === "copyPath") {
+      // 带行号,和 Markio 一致 —— 粘到别处能直接定位。
+      void navigator.clipboard
+        ?.writeText(`${target.path}:${target.line}`)
+        .catch((error: unknown) => setError(t("file.copyPathFailed", { error: errorText(error) })));
+      return;
+    }
+    // reveal:vault 当作 allowlist 根传下去,理由同笔记列表那个菜单。
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    void revealNoteInFileManager(target.path, vault).catch((error: unknown) =>
+      setError(errorText(error)),
+    );
   };
 
   /** 打开回收站并拉列表。 */
@@ -1241,9 +1330,10 @@ function NotebookPanelContent({
     // 历史面板一起关掉:两个都是铺满面板的 overlay,叠在一起的话下面那个还在
     // 接键盘事件(Esc 会一次关掉两个),而用户只看得见上面那个。
     closeHistory();
-    // 理由同 `openHistory`:字段浏览器和图谱排在回收站后面,会盖住它。
+    // 理由同 `openHistory`:字段浏览器、图谱和收集箱排在回收站后面,会盖住它。
     setFieldsOpen(false);
     setGraphOpen(false);
+    setTaskInboxOpen(false);
     setTrash(freshTrashState());
     void (async () => {
       try {
@@ -1772,6 +1862,7 @@ function NotebookPanelContent({
           onOpenTrash={openTrash}
           onOpenFields={openFields}
           onOpenGraph={openGraph}
+          onOpenTaskInbox={openTaskInbox}
           onNoteContextMenu={(event, noteId) => {
             event.preventDefault();
             // 编辑区的菜单同时开着就没意义了,互斥。
@@ -2170,6 +2261,26 @@ function NotebookPanelContent({
           t={t}
         />
       )}
+
+      {/* 任务收集箱排在全部 overlay 的最后 —— 互斥仍然由 `openTaskInbox` 那几个
+          setter 保证(见 `openFields`),JSX 顺序只决定谁盖住谁。 */}
+      {taskInboxOpen && (
+        <NoteTaskInboxSheet
+          tasks={inboxTasks}
+          loading={taskScan.loading}
+          error={taskScan.error}
+          onJump={jumpToInboxTask}
+          onRefresh={taskScan.refresh}
+          onClose={() => {
+            setTaskInboxOpen(false);
+            // 菜单是 fixed 定位的,sheet 关掉后它会孤零零留在屏幕上。
+            setTaskMenu(null);
+          }}
+          onContextMenu={(task, anchor) => setTaskMenu({ x: anchor.x, y: anchor.y, task })}
+          t={t}
+        />
+      )}
+      {taskMenu && <NoteTaskContextMenu state={taskMenu} onAction={runTaskMenuAction} t={t} />}
     </section>
   );
 }

@@ -8,7 +8,7 @@
  */
 
 import type React from "react";
-import { Braces, FileText, GripVertical, Plus, Share2, Trash2 } from "lucide-react";
+import { Braces, CheckSquare, FileText, GripVertical, Plus, Share2, Trash2 } from "lucide-react";
 import { noteIconComponent } from "./NoteIconPicker";
 import type { NoteIconName } from "./noteIcons";
 import type { NotebookNote } from "./notebookStore";
@@ -34,6 +34,7 @@ export type NoteListProps = {
   onOpenTrash: () => void;
   onOpenFields: () => void;
   onOpenGraph: () => void;
+  onOpenTaskInbox: () => void;
   /** 行上右键。菜单本身由面板渲染(它持有 vault 和后端调用)。 */
   onNoteContextMenu: (event: React.MouseEvent<HTMLDivElement>, noteId: string) => void;
   /** 拖拽命中检测需要每行的 DOM。 */
@@ -69,6 +70,7 @@ export function NoteList({
   onOpenTrash,
   onOpenFields,
   onOpenGraph,
+  onOpenTaskInbox,
   onNoteContextMenu,
   setNoteItemRef,
   onPointerDown,
@@ -119,6 +121,21 @@ export function NoteList({
             }}
           >
             <Share2 size={14} />
+          </button>
+          <button
+            type="button"
+            aria-label={t("notebook.taskInboxOpen")}
+            title={t("notebook.taskInboxOpen")}
+            onClick={onOpenTaskInbox}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              padding: 3,
+            }}
+          >
+            <CheckSquare size={14} />
           </button>
           <button
             type="button"

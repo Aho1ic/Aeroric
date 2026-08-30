@@ -66,6 +66,38 @@ function harnessTagHits(content: string): { raw: string; line: number; preview: 
   return hits;
 }
 
+/* `- [ ]` 任务行的扫描。和 `harnessTagHits` 同一个性质:真词法器在 Rust
+   (`tasks.rs`),前端只做标记解析与分组,所以这里写一个够用的复刻 —— 跳 frontmatter
+   与围栏、认有序列表与 blockquote 前缀、空壳 `- [ ]` 不算。
+
+   真正的等价性由 `tasks.rs` 自己那 15 条用例守;这里只需要让面板测试拿到像样的输入。 */
+function harnessTasks(content: string): { line: number; checked: boolean; text: string }[] {
+  const lines = content.split("\n");
+  const out: { line: number; checked: boolean; text: string }[] = [];
+  let start = 0;
+  // 未闭合的 `---` 不算 frontmatter,和 Rust 侧一致。
+  if (lines[0]?.trim() === "---") {
+    const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (end > 0) start = end + 1;
+  }
+  let fenced = false;
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\r$/, "");
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const match = /^(?:\s*>)*\s*(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\]\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const text = match[2].trim();
+    // 空壳 `- [ ]` 不算任务,和 Rust 侧、marked 一致。
+    if (!text) continue;
+    out.push({ line: index + 1, checked: match[1].toLowerCase() === "x", text });
+  }
+  return out;
+}
+
 /* frontmatter 字段的解析。和 `harnessTagHits` 同一个性质:真词法器只在 Rust 里
    (`fields.rs`),前端只做聚合,所以这里写一个够用的复刻 —— 顶层 `key: value`、
    行内 `[a, b]`、缩进的 `- item`,不摊平嵌套映射。
@@ -196,6 +228,10 @@ export class NotebookVaultHarness {
   failPeek = false;
   /** 全库字段扫描被调用了几次。验"只在 sheet 开着时扫"用。 */
   fieldScanCalls = 0;
+  /** 让全库任务扫描失败,用来验收集箱的错误态。 */
+  failTaskScan = false;
+  /** 全库任务扫描被调用了几次。验"只在收集箱开着时扫"用。 */
+  taskScanCalls = 0;
   /**
    * 挂起中的 `notebook_vault_tags`,按调用顺序排。`holdTagScans()` 之后每次扫描都
    * 停在这里,要测试手工放行。
@@ -446,6 +482,21 @@ export class NotebookVaultHarness {
           const fields = harnessFields(this.files.get(path)?.content ?? "");
           // 没有字段的笔记不进结果,和 Rust 侧一致。
           if (fields.length) sources.push({ path, fields });
+        }
+        return sources;
+      }
+
+      case "notebook_vault_tasks": {
+        this.taskScanCalls += 1;
+        if (this.failTaskScan) throw new Error("scanning tasks failed");
+        const sources: {
+          path: string;
+          tasks: { line: number; checked: boolean; text: string }[];
+        }[] = [];
+        for (const path of [...this.files.keys()].filter((name) => name.endsWith(".md")).sort()) {
+          const tasks = harnessTasks(this.files.get(path)?.content ?? "");
+          // 没有任务的笔记不进结果,和 Rust 侧一致。
+          if (tasks.length) sources.push({ path, tasks });
         }
         return sources;
       }

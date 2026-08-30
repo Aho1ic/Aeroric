@@ -28,7 +28,9 @@
 
 use std::path::Path;
 
-use super::vault_walk::{preview_line, walk_notes, WalkNext};
+use super::vault_walk::{
+    fence_marker, frontmatter_lines, line_spans, preview_line, walk_notes, WalkNext,
+};
 
 /// 单篇笔记记多少个标签。超出的丢掉:一篇里 1000 个标签已经不是人写出来的。
 const MAX_TAGS_PER_FILE: usize = 1_000;
@@ -167,48 +169,6 @@ pub(crate) fn tag_hits(content: &str) -> Vec<TagHit<'_>> {
         }
     }
     out
-}
-
-/// frontmatter 占掉的行数(0 = 没有 frontmatter)。
-///
-/// 未闭合的 `---` **不算** frontmatter:那多半是一条分隔线。这与 `noteOutline.ts` 的
-/// 既有判定一致 —— 两边不一致的话同一篇笔记的"哪里算正文"会随功能而变。
-fn frontmatter_lines(lines: &[(usize, &str)]) -> usize {
-    if lines.first().map(|(_, line)| line.trim()) != Some("---") {
-        return 0;
-    }
-    lines
-        .iter()
-        .skip(1)
-        .position(|(_, line)| line.trim() == "---")
-        // position 是相对 skip(1) 的下标:+2 才是"闭合行之后"的行数。
-        .map(|at| at + 2)
-        .unwrap_or(0)
-}
-
-/// 逐行切分,给出每行的起始字节偏移和内容(行尾的 `\r` 摘掉但**算进偏移**)。
-fn line_spans(content: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut cursor = 0usize;
-    content.split('\n').map(move |raw| {
-        let base = cursor;
-        cursor += raw.len() + 1; // +1 是那个 `\n`
-        (base, raw.strip_suffix('\r').unwrap_or(raw))
-    })
-}
-
-/// 这一行是不是围栏标记。返回 (字符, 连续个数)。
-fn fence_marker(line: &str) -> Option<(char, usize)> {
-    let trimmed = line.trim_start();
-    let first = trimmed.chars().next()?;
-    if first != '`' && first != '~' {
-        return None;
-    }
-    let count = trimmed.chars().take_while(|c| *c == first).count();
-    if count >= 3 {
-        Some((first, count))
-    } else {
-        None
-    }
 }
 
 /// 一行里的行内代码区间(字节),含两侧的反引号。

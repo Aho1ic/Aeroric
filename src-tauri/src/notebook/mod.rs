@@ -29,6 +29,7 @@ pub mod snapshots;
 pub mod state;
 pub mod tag_rename;
 pub mod tags;
+pub mod tasks;
 pub mod trash;
 pub mod vault_index;
 mod vault_walk;
@@ -534,6 +535,20 @@ pub async fn notebook_vault_fields(
 ) -> Result<Vec<fields::NoteFieldSource>, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || fields::scan_vault_fields(&resolved)).await
+}
+
+/// 扫全库的 `- [ ]` 任务,每篇一条(行号 + 完成态 + 任务原文)。
+///
+/// 和 `notebook_vault_tags` 同一个分工:结构化解析(#标签、@截止、!优先级)与分组在
+/// 前端做。行号按整个 `.md` 文件数,和标签 / 反链同一个坐标系 —— 它**不是**勾选写回
+/// 用的那个坐标系,见 `tasks.rs` 的模块注释。
+#[tauri::command]
+pub async fn notebook_vault_tasks(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<tasks::NoteTaskSource>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || tasks::scan_vault_tasks(&resolved)).await
 }
 
 /// 跨文件把 `#old` 改成 `#new`,返回 changed / skipped / failed 的完整报告。

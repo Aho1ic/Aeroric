@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { NoteLinkSource } from "./noteBacklinks";
 import type { NoteFieldSource } from "./noteFields";
 import type { NoteTagSource } from "./noteTags";
+import type { NoteTaskSource } from "./noteTaskInbox";
 
 /** 文件指纹。`hash` 是字符串:u64 超出 JS 安全整数范围,走 number 会丢精度。 */
 export type NoteSig = {
@@ -427,6 +428,19 @@ export function vaultTags(vault: string): Promise<NoteTagSource[]> {
  */
 export function vaultFields(vault: string): Promise<NoteFieldSource[]> {
   return invoke<NoteFieldSource[]>("notebook_vault_fields", { vault });
+}
+
+/**
+ * 扫全库的 `- [ ]` 任务行,给任务收集箱用。
+ *
+ * 只做行的识别:标记解析(`#标签`、`@截止`、`!优先级`)与分组在 `noteTaskInbox.ts`。
+ *
+ * 行号按整个 `.md` 文件数(和标签 / 反链同一个坐标系,好共用跳转),**不是**
+ * `noteTasks.ts` 那个按正文数的坐标系 —— 那一份是给勾选写回用的,两个不能混,见
+ * `tasks.rs` 的模块注释。
+ */
+export function vaultTasks(vault: string): Promise<NoteTaskSource[]> {
+  return invoke<NoteTaskSource[]>("notebook_vault_tasks", { vault });
 }
 
 /** 一篇被改过的笔记,`count` 是这篇里改掉的处数。 */

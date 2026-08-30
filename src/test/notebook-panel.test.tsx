@@ -4679,4 +4679,405 @@ describe("NotebookPanel", () => {
       expect(sheet).not.toHaveTextContent("out of range");
     });
   });
+
+  describe("任务收集箱", () => {
+    /** 打开收集箱,等它把扫描结果拉回来。 */
+    async function openInbox() {
+      fireEvent.click(await screen.findByRole("button", { name: "Task inbox" }));
+      return screen.findByRole("dialog", { name: "Task inbox" });
+    }
+
+    /** 清单里的任务行(可及名带来源和行号的那些按钮)。 */
+    function taskRows(): string[] {
+      return [
+        ...screen.getByTestId("note-task-inbox-list").querySelectorAll("button[aria-label]"),
+      ].map((button) => button.getAttribute("aria-label") ?? "");
+    }
+
+    /** 分组标题行的文本(不含任务行)。 */
+    function groupLabels(): string[] {
+      const list = screen.getByTestId("note-task-inbox-list");
+      return [...list.children].map((group) => group.firstElementChild?.textContent ?? "");
+    }
+
+    it("列出全库的任务,带来源标题和行号", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] file a task\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n- [ ] file b task\n');
+      renderNotebook();
+      await openInbox();
+
+      /* 行号按整篇 .md 数(frontmatter 那 3 行也算),和标签 / 反链同一个坐标系。
+         组内按 compareTasks 排:两条都是未完成、无优先级、无截止,于是落到文本序。 */
+      await waitFor(() =>
+        expect(taskRows()).toEqual([
+          "file a task — in Alpha line 5",
+          "file b task — in Beta line 5",
+        ]),
+      );
+    });
+
+    it("没打开时一次都不扫", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await screen.findByRole("button", { name: "Task inbox" });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // 扫描要读每个文件的全文,是整个面板里最贵的一次 IO。
+      expect(harness.taskScanCalls).toBe(0);
+
+      await openInbox();
+      await waitFor(() => expect(harness.taskScanCalls).toBe(1));
+    });
+
+    it("重新打开时留着上一次的结果,不闪一下加载中", async () => {
+      /* 关掉不清 data(`useVaultScan` 的第二条规则):重开时旧结果先在,后台再重扫。
+         清空的话每次切档都要先看一眼"正在扫描",而绝大多数情况下结果没变。 */
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Close inbox" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull());
+
+      const sheet = await openInbox();
+      expect(taskRows()).toHaveLength(1);
+      expect(sheet).not.toHaveTextContent("Scanning tasks");
+      // 重开仍然会在后台重扫一遍 —— 关着的这段时间里别人可能改过 vault。
+      await waitFor(() => expect(harness.taskScanCalls).toBe(2));
+    });
+
+    it("默认藏掉已完成的,开开关就都出来", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] 没做\n- [x] 做完了\n');
+      renderNotebook();
+      await openInbox();
+
+      await waitFor(() => expect(taskRows()).toEqual(["没做 — in Alpha line 5"]));
+      // 计数说的是待办条数,不含已完成的。
+      expect(screen.getByRole("dialog", { name: "Task inbox" })).toHaveTextContent("1 open");
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Include done" }));
+
+      await waitFor(() => expect(taskRows()).toHaveLength(2));
+      // 未完成仍排在前面。
+      expect(taskRows()[0]).toBe("没做 — in Alpha line 5");
+    });
+
+    it("围栏和 frontmatter 里的 `- [ ]` 不算任务", async () => {
+      harness.seed(
+        "a.md",
+        '---\ntitle: "Alpha"\nchecklist:\n  - [ ] YAML 列表项\n---\n\n- [ ] 真的\n\n```md\n- [ ] 教程里的\n```\n',
+      );
+      renderNotebook();
+      await openInbox();
+
+      await waitFor(() => expect(taskRows()).toEqual(["真的 — in Alpha line 7"]));
+    });
+
+    it("解析 #标签 / @截止 / !优先级 并显示成徽标", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] 交稿 #写作 @2026-09-01 !high\n');
+      renderNotebook();
+      const sheet = await openInbox();
+
+      // 可及名里是摘掉标记之后的文本 —— 标记本身在徽标上。
+      await waitFor(() => expect(taskRows()).toEqual(["交稿 — in Alpha line 5"]));
+      expect(sheet).toHaveTextContent("2026-09-01");
+      expect(sheet).toHaveTextContent("#写作");
+    });
+
+    it("按时间分组,过期的排在最前", async () => {
+      /* 日期钉死而不是相对今天算:2000 年那条永远过期,2099 年那条永远在「以后」,
+         用例不会随时间失效,也不受运行机器时区影响。 */
+      harness.seed(
+        "a.md",
+        '---\ntitle: "Alpha"\n---\n\n- [ ] later one @2099-01-01\n- [ ] overdue one @2000-01-01\n- [ ] no date one\n',
+      );
+      renderNotebook();
+      await openInbox();
+
+      /* 组序是固定的桶序,不是"哪个先出现"。过期在最前:它是唯一一类需要用户马上
+         做决定的。空桶不出现(这里没有 today / tomorrow / this week)。 */
+      await waitFor(() => expect(groupLabels()).toEqual(["Overdue1", "Later1", "No date1"]));
+    });
+
+    it("能换成按优先级和按笔记分组", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] urgent !high\n- [ ] plain one\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n- [ ] elsewhere\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(3));
+
+      fireEvent.click(screen.getByRole("button", { name: "Priority" }));
+      await waitFor(() => expect(groupLabels()).toEqual(["High1", "No priority2"]));
+
+      fireEvent.click(screen.getByRole("button", { name: "Note" }));
+      // 组名是笔记标题,组间按标题字典序。
+      await waitFor(() => expect(groupLabels()).toEqual(["Alpha2", "Beta1"]));
+    });
+
+    it("按笔记分组时行里不再重复来源标题", async () => {
+      // 组标题已经写着笔记名,行里再写一遍是噪声 —— 而这一列的宽度是任务文本要用的。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      /* 任务行本身的可见文本(不含组标题)。从清单里取而不是从整个 sheet 里取:
+         头部那两个图标按钮也带 aria-label。 */
+      const rowText = () =>
+        screen
+          .getByTestId("note-task-inbox-list")
+          .querySelector("button[aria-label]")
+          ?.textContent?.trim() ?? "";
+
+      // 按时间分组时行里带来源:组标题讲的是时间,不讲在哪。
+      expect(rowText()).toBe("a taskAlpha");
+
+      fireEvent.click(screen.getByRole("button", { name: "Note" }));
+      await waitFor(() => expect(groupLabels()).toEqual(["Alpha1"]));
+      expect(rowText()).toBe("a task");
+      // 来源没有消失,只是挪到了组标题上 —— 可及名里仍然带着它。
+      expect(taskRows()).toEqual(["a task — in Alpha line 5"]);
+    });
+
+    it("筛选匹配任务文本、标签和笔记标题", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] 写周报 #汇报\n');
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n- [ ] 交报销\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(2));
+
+      const filter = screen.getByRole("textbox", { name: "Filter tasks" });
+      fireEvent.change(filter, { target: { value: "汇报" } });
+      await waitFor(() => expect(taskRows()).toEqual(["写周报 — in Alpha line 5"]));
+
+      fireEvent.change(filter, { target: { value: "Beta" } });
+      await waitFor(() => expect(taskRows()).toEqual(["交报销 — in Beta line 5"]));
+
+      // 筛没了显示"没有匹配",不是"库里还没有任务" —— 后者会让人以为扫描出错。
+      fireEvent.change(filter, { target: { value: "根本没有" } });
+      await waitFor(() =>
+        expect(screen.getByRole("dialog", { name: "Task inbox" })).toHaveTextContent(
+          "No matching tasks.",
+        ),
+      );
+    });
+
+    it("点一条任务:收掉 sheet,换到那篇,光标落到那一行", async () => {
+      /* b 先种、a 后种:列表按 mtime 倒序,Alpha 成为挂载时的当前笔记,于是 Beta 的
+         正文从头到尾没被读入过 —— 这才是最常见的情形(跨笔记跳)。 */
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n第一段\n\n- [ ] jump here\n');
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n正文\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Alpha");
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "jump here — in Beta line 7" }));
+
+      // sheet 铺满面板,不收掉的话光标落在编辑器里而用户还盯着收集箱。
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull());
+      expect(await screen.findByDisplayValue("Beta")).toBeInTheDocument();
+
+      /* 光标落在那一行的行首。偏移按**编辑器里的正文**算,不是按文件:文件第 7 行是
+         `- [ ] jump here`,而正文(拆掉 frontmatter 之后)是 `第一段\n\n- [ ] jump here\n`,
+         那一行的行首在 5(`第一段` 3 字 + 两个换行)。两个坐标系差几行取决于
+         frontmatter 有多长 —— 直接把文件行号喂给编辑器会落在空行上。 */
+      await waitFor(() => expect(editorView().state.selection.main.head).toBe(5));
+    });
+
+    it("扫描失败就地显示错误,不占面板那条错误条", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      harness.failTaskScan = true;
+      renderNotebook();
+      const sheet = await openInbox();
+
+      await waitFor(() => expect(sheet).toHaveTextContent("scanning tasks failed"));
+      // 只读视图,扫描失败不影响读写笔记,所以不占面板那条错误条。
+      expect(sheet).not.toHaveTextContent("No - [ ] tasks in this vault yet.");
+    });
+
+    it("刷新会重扫,并带回新增的任务", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] first one\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      // 外部编辑改了别人的笔记 —— 全库扫描的结果只能靠重扫更新。
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n- [ ] second one\n');
+      fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+
+      await waitFor(() => expect(taskRows()).toHaveLength(2));
+    });
+
+    it("库里没有任务时说的是「还没有」,不是「没有匹配」", async () => {
+      // 两句话指向不同的下一步:一句是"去写任务",一句是"把筛选词删掉"。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n只是正文\n');
+      renderNotebook();
+      const sheet = await openInbox();
+
+      await waitFor(() => expect(sheet).toHaveTextContent("No - [ ] tasks in this vault yet."));
+    });
+
+    it("Esc 关掉收集箱", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      const sheet = await openInbox();
+
+      fireEvent.keyDown(sheet, { key: "Escape" });
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull());
+    });
+
+    it("铺在面板内部而不是整个窗口", async () => {
+      // 随手记面板可以只占项目视图的一半,盖住整个窗口会遮掉用户正在参照的另一半。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      const sheet = await openInbox();
+
+      expect(sheet.parentElement).toBe(screen.getByRole("region", { name: "Quick Notes" }));
+      expect(sheet.style.position).toBe("absolute");
+    });
+
+    it("和字段浏览器、图谱互斥", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\nstatus: done\n---\n\n- [ ] a task\n看 [[Beta]]\n');
+      renderNotebook();
+      await openInbox();
+
+      fireEvent.click(screen.getByRole("button", { name: "Frontmatter fields" }));
+      await screen.findByRole("dialog", { name: "Frontmatter fields" });
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+
+      await openInbox();
+      expect(screen.queryByRole("dialog", { name: "Frontmatter fields" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Link graph" }));
+      await screen.findByRole("dialog", { name: "Link graph" });
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+
+      await openInbox();
+      expect(screen.queryByRole("dialog", { name: "Link graph" })).toBeNull();
+    });
+
+    it("打开回收站 / 历史 / 属性会把收集箱收掉", async () => {
+      /* 收集箱在 JSX 里排最后,z-index 上它盖在这三个之上 —— 不主动收掉的话用户点了
+         「回收站」只会看见收集箱没反应。互斥靠 openTrash 那几个 setter,不靠 JSX 顺序。 */
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+
+      await openInbox();
+      fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+      await screen.findByRole("dialog", { name: "Trash" });
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+
+      await openInbox();
+      fireEvent.click(screen.getByRole("button", { name: "Version history" }));
+      await screen.findByRole("dialog", { name: /Version history/ });
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+
+      await openInbox();
+      const row = screen.getByRole("button", { name: "Alpha" }).closest("[data-notebook-note-row]");
+      if (!row) throw new Error("no row for Alpha");
+      fireEvent.contextMenu(row);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }));
+      await screen.findByRole("dialog", { name: "Note properties" });
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+    });
+
+    it("右键复制任务文本,复制的是带标记的原文", async () => {
+      const user = userEvent.setup();
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] 交稿 #写作 @2026-09-01\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^交稿/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Copy task text" }));
+
+      /* 复制原文而不是显示文本:`#标签` 和 `@截止` 通常正是用户想带走的那部分。
+         而显示文本("交稿")是这两者都摘掉之后的结果。 */
+      await waitFor(async () =>
+        expect(await navigator.clipboard.readText()).toBe("交稿 #写作 @2026-09-01"),
+      );
+    });
+
+    it("右键复制源路径,带行号", async () => {
+      const user = userEvent.setup();
+      const path = harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] 写周报\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^写周报/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Copy source path" }));
+
+      await waitFor(async () => expect(await navigator.clipboard.readText()).toBe(`${path}:5`));
+    });
+
+    it("右键「打开源文件」和点行一样,并收掉菜单和 sheet", async () => {
+      harness.seed("b.md", '---\ntitle: "Beta"\n---\n\n- [ ] jump here\n');
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n正文\n');
+      renderNotebook();
+      await screen.findByDisplayValue("Alpha");
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^jump here/ }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open source file" }));
+
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(screen.queryByRole("dialog", { name: "Task inbox" })).toBeNull();
+      expect(await screen.findByDisplayValue("Beta")).toBeInTheDocument();
+    });
+
+    it("右键「在系统文件夹中打开」传的 allowlist 根是 vault", async () => {
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^a task/ }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open in System Folder" }));
+
+      // 后端拿这个根做 validate_path_within。传成任务自己的路径等于没校验。
+      await waitFor(() => expect(harness.revealCalls).toHaveLength(1));
+      expect(harness.revealCalls[0]).toEqual({ path: "/vault/a.md", projectPath: "/vault" });
+    });
+
+    it("关掉 sheet 时右键菜单跟着消失", async () => {
+      /* 菜单是 fixed 定位的,不跟着收的话它会孤零零留在屏幕上 —— 而它作用的那条
+         任务已经看不见了。 */
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^a task/ }));
+      await screen.findByRole("menu", { name: "Task actions" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Close inbox" }));
+
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    });
+
+    it("点面板空白处关掉右键菜单", async () => {
+      // 复用面板那个 outside-click 监听 —— 靠 data-notebook-context-menu 属性认出自己。
+      harness.seed("a.md", '---\ntitle: "Alpha"\n---\n\n- [ ] a task\n');
+      renderNotebook();
+      await openInbox();
+      await waitFor(() => expect(taskRows()).toHaveLength(1));
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^a task/ }));
+      await screen.findByRole("menu", { name: "Task actions" });
+
+      fireEvent.mouseDown(document.body);
+
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      // sheet 本身不受影响:关菜单不等于关收集箱。
+      expect(screen.getByRole("dialog", { name: "Task inbox" })).toBeInTheDocument();
+    });
+  });
 });
