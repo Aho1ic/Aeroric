@@ -6730,4 +6730,278 @@ describe("NotebookPanel", () => {
       });
     });
   });
+
+  describe("日记与模板", () => {
+    /** 从命令面板跑一条命令。整条路都走:⌘K → 打字 → 回车。 */
+    async function runCommand(query: string) {
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+      fireEvent.change(input, { target: { value: query } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+
+    function pad2(value: number): string {
+      return String(value).padStart(2, "0");
+    }
+
+    /** 今天的日记路径。测试跟着系统时钟走 —— 面板用的是 `new Date()`。 */
+    function todayPath(offsetDays = 0): string {
+      const now = new Date();
+      const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays);
+      return `${HARNESS_VAULT}/Daily/${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+        date.getDate(),
+      )}.md`;
+    }
+
+    it("「今天的日记」建到 Daily/YYYY-MM-DD.md", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Today's daily note");
+
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+      const content = harness.read(todayPath()) ?? "";
+      // 标题存 frontmatter,文件名是日期 —— 两者一致,`[[2026-08-28]]` 才指得到。
+      expect(content).toContain(`title: "${todayPath().slice(-13, -3)}"`);
+      expect(content).toContain("## To do");
+    });
+
+    it("日记建完就是当前笔记", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Today's daily note");
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue(
+          todayPath().slice(-13, -3),
+        ),
+      );
+      expect(editorValue()).toContain("## To do");
+    });
+
+    it("再开一次今天的日记不会建第二个文件", async () => {
+      /* 后端分配文件名那条路会去重(`2026-08-28-2.md`),日记必须每天恒定一个文件。
+         这条钉的就是「路径由前端定 + ALREADY_EXISTS 当正常分支」。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+      await runCommand("Today's daily note");
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+
+      await runCommand("Today's daily note");
+      // 第二次没有新文件要等,给它一拍让可能的 IPC 落地。
+      await waitFor(() =>
+        expect(harness.paths().filter((path) => path.includes("/Daily/"))).toHaveLength(1),
+      );
+    });
+
+    it("磁盘上已经有今天的日记时读磁盘那份,不拿模板盖掉", async () => {
+      /* 用户在别处(同步盘 / 另一个窗口)写过今天的日记,内容不能被模板覆盖。
+         `openOrCreateNoteAt` 在 ALREADY_EXISTS 时走 loadNoteByPath —— 这条盯的是
+         那个分支。
+
+         文件必须在**挂载之后**才出现在磁盘上:挂载前 seed 的话初次扫盘就把它收进
+         列表了,于是 `openDailyNote` 走的是「已经在列表里,只切过去」那条早退,
+         ALREADY_EXISTS 这条分支一次都不会执行 —— 测试会因为另一个原因通过。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      harness.externalWrite(todayPath(), "# 手写的\n\n昨天写的内容\n");
+
+      await runCommand("Today's daily note");
+
+      await waitFor(() => expect(editorValue()).toContain("昨天写的内容"));
+      expect(editorValue()).not.toContain("## To do");
+      expect(harness.read(todayPath())).toBe("# 手写的\n\n昨天写的内容\n");
+    });
+
+    it("连点两次也只在列表里出现一条", async () => {
+      /* 第一次的 IPC 还没回来时列表还是空的,第二次也过得了「已经在列表里」那道
+         早退 —— 两条都会走到入列那一步。没有去重的话列表里会出现两行同一篇日记,
+         而它们指向同一个文件。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Today's daily note");
+      await runCommand("Today's daily note");
+
+      const name = todayPath().slice(-13, -3);
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+      await waitFor(() => {
+        const region = screen.getByRole("region", { name: "Quick Notes" });
+        expect(within(region).getAllByRole("button", { name })).toHaveLength(1);
+      });
+    });
+
+    it("日记已经在列表里时只切过去,一趟 IPC 都不发", async () => {
+      /* 内容安全**不是**这条早退提供的:去掉它之后建会撞名、转去读磁盘,而入列那步
+         的去重又会把读回来的内容丢掉,所以用户打的字照样在。早退真正省下的是那趟
+         白跑的 IPC(一次 create + 一次 open),所以这条钉的是调用次数。
+
+         内容那一面另有测试守着(下一条),两者不是同一件事。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+      await runCommand("Today's daily note");
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+      await waitFor(() => expect(editorValue()).toContain("## To do"));
+      const creates = harness.callCount("notebook_create_note");
+      const opens = harness.callCount("notebook_open_note");
+
+      await runCommand("Today's daily note");
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument(),
+      );
+
+      expect(harness.callCount("notebook_create_note")).toBe(creates);
+      expect(harness.callCount("notebook_open_note")).toBe(opens);
+    });
+
+    it("再开一次不会把未落盘的编辑冲掉", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+      await runCommand("Today's daily note");
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+      await waitFor(() => expect(editorValue()).toContain("## To do"));
+      setEditorValue("还没落盘的字\n");
+
+      await runCommand("Today's daily note");
+
+      // 内容被磁盘上那份换掉的话,这里会变回模板正文。
+      await waitFor(() => expect(editorValue()).toBe("还没落盘的字\n"));
+    });
+
+    it("「前一天」从今天退一天", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Previous daily note");
+
+      await waitFor(() => expect(harness.read(todayPath(-1))).toBeDefined());
+    });
+
+    it("「后一天」从今天进一天", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Next daily note");
+
+      await waitFor(() => expect(harness.read(todayPath(1))).toBeDefined());
+    });
+
+    it("在日记上按「前一天」以它为基准,能连着翻", async () => {
+      /* 以「今天」为基准的话,连按两次会一直停在昨天。这条按两次,断言落到前天。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Previous daily note");
+      await waitFor(() => expect(harness.read(todayPath(-1))).toBeDefined());
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue(
+          todayPath(-1).slice(-13, -3),
+        ),
+      );
+
+      await runCommand("Previous daily note");
+
+      await waitFor(() => expect(harness.read(todayPath(-2))).toBeDefined());
+    });
+
+    it("当前不是日记时「前一天」从今天算", async () => {
+      // 名字长得像日期但不在 Daily/ 下的那种,不该被当成基准。
+      harness.seed("2020-01-01.md", '---\ntitle: "2020-01-01"\n---\n\nnope\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      await runCommand("Previous daily note");
+
+      await waitFor(() => expect(harness.read(todayPath(-1))).toBeDefined());
+    });
+
+    it("模板命令建出带正文的笔记", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Meeting notes");
+
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note content" })).toBeInTheDocument(),
+      );
+      await waitFor(() => expect(editorValue()).toContain("## Action items"));
+      // 文件名由后端从标题分配,所以这里只断言磁盘上确实多了一个含模板正文的文件。
+      await waitFor(() =>
+        expect(harness.paths().some((path) => harness.read(path)?.includes("## Agenda"))).toBe(
+          true,
+        ),
+      );
+    });
+
+    it("同一个模板用两次得到两个文件", async () => {
+      // 一天可以有好几场会。模板走后端分配文件名那条路,撞名自动加序号。
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Meeting notes");
+      await waitFor(() => expect(harness.paths()).toHaveLength(1));
+      await runCommand("Meeting notes");
+
+      await waitFor(() => expect(harness.paths()).toHaveLength(2));
+    });
+
+    it("模板正文里的日期占位符被展开", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Meeting notes");
+
+      await waitFor(() => expect(editorValue()).toContain(todayPath().slice(-13, -3)));
+      expect(editorValue()).not.toMatch(/\{\w+\}/);
+    });
+
+    it("模板能按说明里的词搜到", async () => {
+      /* 一行说明进了 keywords:记不住模板叫什么、只记得里面有什么的人也搜得到。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "three key results" } });
+
+      const list = screen.getByRole("listbox", { name: "Command palette" });
+      expect(
+        within(list)
+          .getAllByRole("option")
+          .some((option) => (option.textContent ?? "").includes("Quarterly OKR")),
+      ).toBe(true);
+    });
+
+    it("模板与日记归在「模板」分组下", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "Weekly report" } });
+
+      const list = screen.getByRole("listbox", { name: "Command palette" });
+      expect(within(list).getAllByRole("option")[0]?.textContent ?? "").toContain("Templates");
+    });
+
+    it("新建的日记出现在笔记列表里", async () => {
+      /* 日记在子目录下,而列表是平铺的 —— `flattenTree` 会把目录丢掉但保留里面的
+         笔记。落在 Daily/ 下之后在面板里看不见的话,这个功能就只是往磁盘写文件。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("Today's daily note");
+
+      const name = todayPath().slice(-13, -3);
+      await waitFor(() => {
+        const list = screen.getByRole("region", { name: "Quick Notes" });
+        expect(within(list).getAllByRole("button", { name }).length).toBeGreaterThan(0);
+      });
+    });
+  });
 });

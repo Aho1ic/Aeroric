@@ -919,6 +919,21 @@ export class NotebookVaultHarness {
         return { path, sig: this.sigOf(path) };
       }
 
+      /* 按调用方给的路径新建。和上面那条的区别是**不去重**:撞名时报错而不是
+         换个名字,前端靠 `ALREADY_EXISTS:` 前缀把它当成「已经有了」。日记就靠
+         这个语义每天恒定落到同一个文件上。
+
+         错误抛的是字符串而不是 Error —— `isAlreadyExistsError` 只认字符串
+         (Tauri 的 invoke 拒绝时给的就是后端那个 String),抛 Error 的话前端
+         那条判断会整个失效,而测试却看不出来。 */
+      case "notebook_create_note": {
+        const path = String(args.path);
+        const content = String(args.content ?? "");
+        if (this.files.has(path)) throw `ALREADY_EXISTS:${path}`;
+        this.files.set(path, { content, mtimeMs: (this.clock += 10) });
+        return this.sigOf(path);
+      }
+
       // 删除是**软删**:笔记搬进回收站,不是消失。和 Rust 侧同语义。
       case "notebook_delete_note": {
         const path = String(args.path);

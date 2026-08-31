@@ -12,8 +12,10 @@
  */
 
 import {
+  createNote as createNoteAtPath,
   createNoteInVault,
   deleteNote,
+  isAlreadyExistsError,
   openNote,
   readOrder,
   readTree,
@@ -195,6 +197,70 @@ export async function createNote(vault: string, title: string): Promise<VaultNot
     modifiedMs: created.sig.mtimeMs,
     loaded: true,
   };
+}
+
+/**
+ * 按模板新建笔记。文件名仍由后端按标题分配 —— 和「新建随手记」是同一条路,
+ * 只是正文不是空的。
+ *
+ * 撞名交给后端去重(`{date} 会议` 一天可以有好几场),所以这里不做 already-exists
+ * 处理 —— 那是日记那条路才需要的(见 `openOrCreateNoteAt`)。
+ */
+export async function createNoteFromTemplate(
+  vault: string,
+  title: string,
+  body: string,
+): Promise<VaultNote> {
+  const trimmed = title.trim();
+  const frontmatter: NoteFrontmatter = { title: trimmed || null, extra: [] };
+  const created = await createNoteInVault(
+    vault,
+    trimmed || "untitled",
+    joinNote(frontmatter, body),
+  );
+  return {
+    path: created.path,
+    title: trimmed,
+    body,
+    frontmatter,
+    sig: created.sig,
+    modifiedMs: created.sig.mtimeMs,
+    loaded: true,
+  };
+}
+
+/**
+ * 打开指定路径的笔记,不存在就按给定内容建出来。日记用这条。
+ *
+ * 和 `createNoteFromTemplate` 的区别在于**路径是调用方定的**:日记的落点必须是
+ * `Daily/YYYY-MM-DD.md`,每天恒定一个文件。走后端分配文件名那条路的话,第二次
+ * 打开今天的日记会拿到 `2026-08-28-2.md`。
+ *
+ * 所以 `ALREADY_EXISTS` 在这里是**正常分支**,不是错误:它就是「今天的日记已经
+ * 有了」。此时读磁盘上那份,而不是拿模板内容覆盖 —— 那会吃掉用户今天写的东西。
+ */
+export async function openOrCreateNoteAt(
+  path: string,
+  title: string,
+  body: string,
+): Promise<VaultNote> {
+  const trimmed = title.trim();
+  const frontmatter: NoteFrontmatter = { title: trimmed || null, extra: [] };
+  try {
+    const sig = await createNoteAtPath(path, joinNote(frontmatter, body));
+    return {
+      path,
+      title: trimmed,
+      body,
+      frontmatter,
+      sig,
+      modifiedMs: sig.mtimeMs,
+      loaded: true,
+    };
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error;
+    return loadNoteByPath(path);
+  }
 }
 
 /** 删除(软删到 vault 回收站,可恢复)。 */

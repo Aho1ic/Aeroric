@@ -165,13 +165,18 @@ import {
 } from "./splitScrollSync";
 import {
   createNote as createVaultNote,
+  createNoteFromTemplate,
   listNotes,
   loadNote,
   loadNoteByPath,
   noteFileContent,
+  openOrCreateNoteAt,
   persistOrder,
   removeNote,
+  type VaultNote,
 } from "./notebookVault";
+import { dailyNotePath, dailyStepFrom } from "./noteDaily";
+import { buildTemplate, DAILY_TEMPLATE, NOTE_TEMPLATES, type NoteTemplate } from "./noteTemplates";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -2106,6 +2111,64 @@ function NotebookPanelContent({
     })();
   };
 
+  /** 把一条笔记放进列表并切过去。已经在列表里的(日记开第二次)就只切,不重复加。 */
+  const adoptNote = (note: VaultNote) => {
+    const panelNote = toPanelNote(note);
+    setNotes((current) =>
+      current.some((existing) => existing.id === panelNote.id) ? current : [panelNote, ...current],
+    );
+    setActiveId(panelNote.id);
+  };
+
+  /** 按模板新建。文件名由后端从标题分配,所以同一个模板可以反复用。 */
+  const addNoteFromTemplate = (template: NoteTemplate) => {
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    const { title, body } = buildTemplate(template, new Date(), t);
+    void (async () => {
+      try {
+        adoptNote(await createNoteFromTemplate(vault, title, body));
+      } catch (error) {
+        setError(errorText(error));
+      }
+    })();
+  };
+
+  /**
+   * 打开某一天的日记,没有就按模板建出来。
+   *
+   * 落点固定为 `<vault>/Daily/YYYY-MM-DD.md`。已经存在时读磁盘上那份 —— 不是拿
+   * 模板覆盖,那会吃掉用户今天已经写的东西(见 `openOrCreateNoteAt`)。
+   */
+  const openDailyNote = (date: Date) => {
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    const path = dailyNotePath(vault, date);
+    /* 已经在列表里就直接切过去,连 IPC 都不发。重新读一遍会把内存里那份未落盘的
+       工作副本换成磁盘上的旧内容 —— 用户刚在日记里打的字就没了。 */
+    if (notes.some((note) => note.id === path)) {
+      setActiveId(path);
+      return;
+    }
+    const { title, body } = buildTemplate(DAILY_TEMPLATE, date, t);
+    void (async () => {
+      try {
+        adoptNote(await openOrCreateNoteAt(path, title, body));
+      } catch (error) {
+        setError(errorText(error));
+      }
+    })();
+  };
+
+  /** 前一天 / 后一天。当前打开的是日记就以它为基准,这样能连着翻。 */
+  const stepDailyNote = (delta: number) => {
+    openDailyNote(dailyStepFrom(activeNote?.id ?? null, new Date(), delta));
+  };
+
   /* 删除任意一条笔记。标题栏的删除按钮删当前这条,列表右键菜单删被点中的那条
      —— 两者只差「目标是谁」,所以都走这里。 */
   const deleteNoteById = (noteId: string) => {
@@ -2259,6 +2322,39 @@ function NotebookPanelContent({
       keywords: ["trash", "deleted", "回收站"],
       run: openTrash,
     },
+    {
+      id: "daily.today",
+      label: t("notebook.dailyToday"),
+      group: "notebook.commandGroupTemplate",
+      keywords: ["daily", "today", "journal", "日记", "今天", "riji"],
+      run: () => openDailyNote(new Date()),
+    },
+    {
+      id: "daily.previous",
+      label: t("notebook.dailyPrevious"),
+      group: "notebook.commandGroupTemplate",
+      keywords: ["daily", "yesterday", "prev", "日记", "前一天", "昨天"],
+      run: () => stepDailyNote(-1),
+    },
+    {
+      id: "daily.next",
+      label: t("notebook.dailyNext"),
+      group: "notebook.commandGroupTemplate",
+      keywords: ["daily", "tomorrow", "next", "日记", "后一天", "明天"],
+      run: () => stepDailyNote(1),
+    },
+    /* 模板逐条列成命令,而不是「新建(选模板)」再开一层选择器:命令面板本身就是
+       个带搜索的列表,再套一个只是把同样的过滤做两遍。 */
+    ...NOTE_TEMPLATES.map((template) => ({
+      id: `template.${template.id}`,
+      label: t(template.titleKey),
+      group: "notebook.commandGroupTemplate",
+      /* 一行说明进 keywords 而不是 `hint`:`hint` 是快捷键位(10px 等宽,画在分组名
+         右边),塞一句话进去会把标题挤没。放在这里的效果是「记不住模板叫什么、
+         只记得里面有什么」的人也搜得到 —— 搜「进展」能命中周报。 */
+      keywords: [...template.keywords, t(template.subKey)],
+      run: () => addNoteFromTemplate(template),
+    })),
   ];
 
   const paletteEntries = buildPaletteEntries({
