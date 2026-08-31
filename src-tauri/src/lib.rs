@@ -956,6 +956,14 @@ pub fn run() {
             notebook::notebook_export_write_file,
             notebook::notebook_html_to_markdown,
             notebook::notebook_list_user_templates,
+            notebook::rag::commands::notebook_rag_probe,
+            notebook::rag::commands::notebook_rag_stats,
+            notebook::rag::commands::notebook_rag_index,
+            notebook::rag::commands::notebook_rag_cancel,
+            notebook::rag::commands::notebook_rag_clear,
+            notebook::rag::commands::notebook_rag_search,
+            notebook::rag::commands::notebook_rag_context,
+            notebook::rag::commands::notebook_rag_neighbors,
         ])
         .build(tauri::generate_context!());
 

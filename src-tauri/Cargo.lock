@@ -60,6 +60,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.10.9",
  "smb2",
+ "sqlite-vec",
  "tar",
  "tauri",
  "tauri-build",
@@ -7975,6 +7976,15 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "sqlparser"

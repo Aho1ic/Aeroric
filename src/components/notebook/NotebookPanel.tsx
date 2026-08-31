@@ -113,6 +113,9 @@ import {
 } from "./NoteTaskContextMenu";
 import { TagRenameDialog, type TagRenameDialogState } from "./TagRenameDialog";
 import { useVaultScan } from "./useVaultScan";
+import { NoteAiSheet } from "./NoteAiSheet";
+import { DEFAULT_RAG_CONFIG, fileLineOfBodyScalar, type RagHit } from "./noteRag";
+import { useNoteRag } from "./useNoteRag";
 import { NoteTrashSheet, freshTrashState, type NoteTrashState } from "./NoteTrashSheet";
 import {
   NotePropertiesSheet,
@@ -355,6 +358,11 @@ function NotebookPanelContent({
   const [exportError, setExportError] = useState<string | null>(null);
   /** 整库导出的取消句柄。跑完 / 取消后置回 null。 */
   const exportAbortRef = useRef<AbortController | null>(null);
+
+  /* 语义检索面板。索引状态、进度、命中、上下文都在 `useNoteRag` 里 —— 这里只留开关。
+     embedding 配置目前用默认值(本机 Ollama);配置界面在设置里,见 P7 的说明。 */
+  const [aiOpen, setAiOpen] = useState(false);
+  const rag = useNoteRag(vault, aiOpen, DEFAULT_RAG_CONFIG);
 
   const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
   /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
@@ -1887,6 +1895,49 @@ function NotebookPanelContent({
     setTaskInboxOpen(true);
   };
 
+  /** 打开语义检索。索引状态由 `useNoteRag` 按 `aiOpen` 自己去读。 */
+  const openAi = () => {
+    if (!vault) return;
+    // 其余 overlay 一起关掉 —— 理由同 `openFields`。
+    closeHistory();
+    setTrash(null);
+    setProperties(null);
+    setFieldsOpen(false);
+    setGraphOpen(false);
+    setTaskInboxOpen(false);
+    setAiOpen(true);
+  };
+
+  /**
+   * 点一条命中:关掉 sheet,跳到那一块在原文里的位置。
+   *
+   * 两次坐标换算都躲不掉:命中给的是**正文**里的**标量**偏移,而跳转要的是按整个
+   * `.md` 文件数的行号。`fileLineOfBodyScalar` 一并做掉,理由见它的注释。
+   *
+   * 笔记还没读进来时 `body` 是空串,那时算出来的行号一律是 1。这是可接受的:
+   * `jumpToBacklink` 只是记下"要落在哪",而正文到位后由 `backlinkCursorOffset`
+   * 重算 —— 那一路走的是文件行号,已经是对的坐标系了。
+   */
+  const openAiHit = (hit: RagHit) => {
+    const noteId = resolveHitNoteId(
+      hit.path,
+      notes.map((note) => note.id),
+      vault ?? "",
+    );
+    if (!noteId) {
+      // 对不上就明说。静默 return 会让用户以为面板坏了 —— 理由同 `openGlobalSearchHit`。
+      rag.refreshStats();
+      setError(t("notebook.aiUnresolved"));
+      return;
+    }
+    const note = notes.find((item) => item.id === noteId);
+    const line = note
+      ? fileLineOfBodyScalar(noteFileContent(toVaultNote(note)), note.body, hit.charStart)
+      : 1;
+    setAiOpen(false);
+    jumpToBacklink(noteId, line);
+  };
+
   /**
    * 点收集箱里的一条任务:关掉 sheet,再跳到那一行。
    *
@@ -2558,6 +2609,13 @@ function NotebookPanelContent({
       group: "notebook.commandGroupLibrary",
       keywords: ["task", "todo", "任务", "收集箱"],
       run: openTaskInbox,
+    },
+    {
+      id: "sheet.ai",
+      label: t("notebook.aiOpen"),
+      group: "notebook.commandGroupSearch",
+      keywords: ["ai", "rag", "semantic", "embedding", "语义", "检索", "向量", "yuyi"],
+      run: openAi,
     },
     {
       id: "sheet.history",
@@ -3686,6 +3744,38 @@ function NotebookPanelContent({
         />
       )}
       {taskMenu && <NoteTaskContextMenu state={taskMenu} onAction={runTaskMenuAction} t={t} />}
+      {/* 语义检索。排在收集箱之后、全库搜索之前:它和收集箱互斥(上面 `openAi` 里
+          关掉了),而 ⌘⇧F 仍然该能盖到它上面来。 */}
+      {aiOpen && (
+        <NoteAiSheet
+          stats={rag.stats}
+          progress={rag.progress}
+          query={rag.query}
+          onQueryChange={rag.setQuery}
+          hits={rag.hits}
+          searched={rag.searched}
+          searching={rag.searching}
+          degraded={rag.degraded}
+          vectorsMissing={rag.vectorsMissing}
+          context={rag.context}
+          contextBusy={rag.contextBusy}
+          copied={rag.copied}
+          error={rag.error}
+          onSearch={rag.search}
+          /* 当前笔记传编辑器里的内容而不是让后端读盘:用户问的往往正是刚写下还没
+             保存的那几行。没有打开的笔记时传 null(检索仍然有意义)。 */
+          onBuildContext={() =>
+            rag.buildContext(activeNote ? { path: activeNote.id, body: activeNote.body } : null)
+          }
+          onCopyContext={rag.copyContext}
+          onIndex={rag.index}
+          onCancelIndex={rag.cancel}
+          onClearIndex={rag.clear}
+          onOpenHit={openAiHit}
+          onClose={() => setAiOpen(false)}
+          t={t}
+        />
+      )}
       {/* 全库搜索排在所有 sheet 之后 —— 它是当前动作的焦点,别的 overlay 开着时
           ⌘⇧F 仍然应该盖到最上面来。它自己是 absolute inset:0,所以必须在两列外面。 */}
       {globalSearchOpen && (

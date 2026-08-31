@@ -69,6 +69,10 @@ url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# 随手记 RAG 的向量索引。用 `bundled` 而非 Markio 的 `bundled-full`:libsqlite3-sys
+# 0.30 的 build.rs 无条件加 `-DSQLITE_ENABLE_FTS5` 与 `-DSQLITE_ENABLE_LOAD_EXTENSION=1`,
+# `sqlite3_auto_extension` 也在无条件绑定里,`modern-full` 那二十个 feature 一个都用不上。
+sqlite-vec = "0.1"
 # 对象存储 / 网盘 / WebDAV 统一访问层。只启用实际用到的 service,
 # 其余 50+ service(hdfs、rocksdb 等)会引入原生工具链依赖,不启用。
 opendal = { version = "0.58.1", features = [

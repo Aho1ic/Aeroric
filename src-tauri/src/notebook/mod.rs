@@ -27,6 +27,7 @@ pub mod html2md;
 pub mod links;
 pub mod mentions;
 pub mod migrate;
+pub mod rag;
 pub mod snapshots;
 pub mod state;
 pub mod tag_rename;
