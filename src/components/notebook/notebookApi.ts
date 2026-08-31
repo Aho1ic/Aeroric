@@ -15,6 +15,12 @@ import type { NoteSearchRequestOptions } from "./noteGlobalSearch";
 import type { MentionLinkReport, MentionSource, MentionTarget } from "./noteMentions";
 import type { NoteTagSource } from "./noteTags";
 import type { NoteTaskSource } from "./noteTaskInbox";
+import type {
+  VaultReplaceOptions,
+  VaultReplacePreview,
+  VaultReplaceSummary,
+  VaultTextReplacement,
+} from "./noteVaultReplace";
 
 /** 文件指纹。`hash` 是字符串:u64 超出 JS 安全整数范围,走 number 会丢精度。 */
 export type NoteSig = {
@@ -551,4 +557,42 @@ export function searchNotesText(
   options: NoteSearchRequestOptions,
 ): Promise<TextSearchMatch[]> {
   return invoke<TextSearchMatch[]>("search_text", { projectPath: vault, query, options });
+}
+
+/**
+ * 全库替换的**预览**。只读,不写任何文件。
+ *
+ * `options.excludeGlob` 必须带上 vault 私有目录 —— 后端遍历只跳 `.git` / `node_modules` /
+ * `dist` / `target`,回收站和历史快照里的 `.md` 会被一起扫进来。口径统一在
+ * `vaultReplaceOptions()` 里,不要在调用处自己拼选项。
+ */
+export function previewVaultReplace(
+  vault: string,
+  query: string,
+  replacement: string,
+  options: VaultReplaceOptions,
+): Promise<VaultReplacePreview> {
+  return invoke<VaultReplacePreview>("replace_text_preview", {
+    projectPath: vault,
+    query,
+    replacement,
+    options,
+  });
+}
+
+/**
+ * 落笔。后端按文件分组、倒序应用,并用 `matchText` 当乐观锁 —— 预览之后文件被改过的
+ * 那几处会被跳过并计入 `replacementsSkipped`,而不是照旧偏移写坏。
+ *
+ * **提交的每一条都必须来自预览**:这条路径上没有 glob 闸门(后端只校验路径在根内),
+ * 「不碰私有目录」全靠预览那一步,所以列表一律由 `buildReplacements()` 从预览构造。
+ */
+export function applyVaultReplacements(
+  vault: string,
+  replacements: readonly VaultTextReplacement[],
+): Promise<VaultReplaceSummary> {
+  return invoke<VaultReplaceSummary>("apply_text_replacements", {
+    projectPath: vault,
+    replacements,
+  });
 }

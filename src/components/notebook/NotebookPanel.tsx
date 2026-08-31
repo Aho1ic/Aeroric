@@ -7,6 +7,7 @@ import { attachmentMarkdown, linkFromNote, vaultRelativePath } from "./attachmen
 import { NoteList } from "./NoteList";
 import { NoteFindBar, type NoteFindFlags } from "./NoteFindBar";
 import { NoteSearchSheet } from "./NoteSearchSheet";
+import { NoteVaultReplaceBar } from "./NoteVaultReplaceBar";
 import {
   NOTE_SEARCH_LIMIT,
   noteSearchOptions,
@@ -29,6 +30,13 @@ import {
 } from "./noteRecents";
 import { NoteTriggerMenu, completionRow, slashRow, type TriggerRow } from "./NoteTriggerMenu";
 import { NoteBubbleMenu, type BubbleAction, type BubbleAnchor } from "./NoteBubbleMenu";
+import {
+  buildReplacements,
+  resolvePreviewNoteIds,
+  vaultReplaceOptions,
+  type VaultReplacePreview,
+  type VaultReplaceSummary,
+} from "./noteVaultReplace";
 import { buildCompletions, COMPLETION_LIMIT, rankCandidates } from "./noteCompletions";
 import { resolveSlashInsert, SLASH_ITEMS } from "./noteSlashItems";
 import type { TriggerKind } from "./noteTriggers";
@@ -69,6 +77,8 @@ import {
   revealNoteInFileManager,
   readNoteIcons,
   peekNote,
+  previewVaultReplace,
+  applyVaultReplacements,
   renameVaultTag,
   searchNotesText,
   statNote,
@@ -329,6 +339,17 @@ function NotebookPanelContent({
   /* 只认最后一次发起的搜索。用户改条件重搜时,前一次的 promise 可能后回来
      ——不带序号就会把旧结果盖在新结果上,而列表看不出这一点。 */
   const globalRunRef = useRef(0);
+  /** 全库替换。空串是合法的替换目标(= 删掉命中),所以不能用空串当"没填"。 */
+  const [replaceQuery, setReplaceQuery] = useState("");
+  /** 预览结果。null = 还没预览过。全库替换必须先预览再落笔,不给"直接全替换"的入口。 */
+  const [replacePreview, setReplacePreview] = useState<VaultReplacePreview | null>(null);
+  /** 用户取消勾选的文件(预览给的路径口径)。 */
+  const [replaceExcluded, setReplaceExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [replaceBusy, setReplaceBusy] = useState(false);
+  /** 上一次落笔的结果。用来显示"改了 N 处 / 跳过 M 处"。 */
+  const [replaceSummary, setReplaceSummary] = useState<VaultReplaceSummary | null>(null);
+  /* 同 `globalRunRef`:预览也会被连点,慢的那次回来不能盖掉快的。 */
+  const replaceRunRef = useRef(0);
   /** 命令面板(⌘K)。候选全在内存里,所以边打边过滤,不需要回车确认。 */
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -1363,6 +1384,133 @@ function NotebookPanelContent({
     /* 结果留着不清:关掉再开常常是"我刚才搜的那批还想再点一条"。改条件会重搜,
        所以留着的结果不会变成过期数据被误当成新搜的。 */
     sourceEditorRef.current?.focus();
+  };
+
+  /**
+   * 全库替换的预览。
+   *
+   * 先把**所有**挂起 / 在飞的保存等落完,再让后端读盘 —— 后端算出的偏移和乐观锁比对的
+   * 都是磁盘上的内容,内存里改了没落盘时两边不是同一份正文,预览会按旧文本给出偏移。
+   * 这和回滚前必须 `settleSave` 是同一个道理。
+   */
+  const runReplacePreview = () => {
+    const query = globalQuery.trim();
+    if (!vault || !query) {
+      setReplacePreview(null);
+      setReplaceSummary(null);
+      return;
+    }
+    const run = replaceRunRef.current + 1;
+    replaceRunRef.current = run;
+    setReplaceBusy(true);
+    setGlobalError(null);
+    setReplaceSummary(null);
+    void (async () => {
+      try {
+        await Promise.all(notes.map((note) => settleSave(note.id)));
+        const preview = await previewVaultReplace(
+          vault,
+          query,
+          replaceQuery,
+          vaultReplaceOptions(globalFlags, NOTE_SEARCH_LIMIT),
+        );
+        if (replaceRunRef.current !== run) return;
+        setReplacePreview(preview);
+        // 重新预览就清掉上一次的勾选:文件集合可能已经变了,留着会按旧路径排除。
+        setReplaceExcluded(new Set());
+      } catch (error) {
+        if (replaceRunRef.current !== run) return;
+        setGlobalError(errorText(error));
+        setReplacePreview(null);
+      } finally {
+        if (replaceRunRef.current === run) setReplaceBusy(false);
+      }
+    })();
+  };
+
+  /**
+   * 落笔,然后把改过的笔记从磁盘重读回内存。
+   *
+   * 重读是必须的:替换是后端直接改文件,内存里那份还是替换前的正文。不重读的话下一次
+   * 自动保存会把旧正文整篇写回去,替换静默消失 —— 而且替换可能命中 frontmatter(标题
+   * 就在里面),所以要走 `splitNote` 重新拆一遍,不能只把 `body` 换掉。
+   */
+  const applyVaultReplace = () => {
+    const preview = replacePreview;
+    if (!vault || !preview) return;
+    const replacements = buildReplacements(preview, replaceExcluded);
+    if (replacements.length === 0) return;
+    const touched = [...new Set(replacements.map((entry) => entry.path))];
+    setReplaceBusy(true);
+    setGlobalError(null);
+    void (async () => {
+      try {
+        // 落笔前再等一次:预览之后用户可能又编辑过(面板盖住编辑器,但命令面板等入口
+        // 仍能改内容),那些改动必须先落盘,否则乐观锁比的还是旧文本。
+        await Promise.all(notes.map((note) => settleSave(note.id)));
+        const summary = await applyVaultReplacements(vault, replacements);
+        const noteIds = resolvePreviewNoteIds(
+          preview,
+          notes.map((note) => note.id),
+          vault,
+        );
+        const reloaded = await Promise.all(
+          touched.map(async (path) => {
+            const noteId = noteIds.get(path);
+            if (!noteId) return null;
+            try {
+              const opened = await peekNote(noteId);
+              return { noteId, opened };
+            } catch {
+              /* 单篇读失败不该让整次替换看起来失败 —— 文件已经改好了。跳过它,那条
+                 笔记的内存副本仍是旧的,而它的 `sig` 也旧,下次保存会被乐观锁挡下。 */
+              return null;
+            }
+          }),
+        );
+        setNotes((current) =>
+          current.map((note) => {
+            const hit = reloaded.find((entry) => entry?.noteId === note.id);
+            if (!hit) return note;
+            const { frontmatter, body } = splitNote(hit.opened.content);
+            return {
+              ...note,
+              title: deriveTitle(hit.opened.content, note.id),
+              body,
+              frontmatter,
+              sig: hit.opened.sig,
+              updatedAt: hit.opened.sig.mtimeMs,
+            };
+          }),
+        );
+        /* 当前这篇的正文被换掉了,编辑器必须重建:受控 value 变了但 CodeMirror 里
+           可能有挂起的更新闭包,它捕获的是替换前的 value(见 `editorEpoch` 的注释)。 */
+        if (activeNote && touched.some((path) => noteIds.get(path) === activeNote.id)) {
+          setEditorEpoch((epoch) => epoch + 1);
+        }
+        setReplaceSummary(summary);
+        // 预览已经过期(偏移全变了)。清掉,逼用户重新预览再改第二轮。
+        setReplacePreview(null);
+        setReplaceExcluded(new Set());
+        // 命中列表也过期了:那批 lineText 是替换前的。
+        setGlobalHits([]);
+        setGlobalSearched(false);
+      } catch (error) {
+        setGlobalError(errorText(error));
+      } finally {
+        setReplaceBusy(false);
+      }
+    })();
+  };
+
+  /** 勾掉/勾回预览里的一个文件。落笔时被勾掉的文件一条都不提交。 */
+  const toggleReplaceFile = (path: string) => {
+    setReplaceExcluded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   };
 
   const runGlobalSearch = () => {
@@ -3110,6 +3258,21 @@ function NotebookPanelContent({
           onOpen={openGlobalSearchHit}
           onClose={closeGlobalSearch}
           inputRef={globalInputRef}
+          replace={
+            <NoteVaultReplaceBar
+              value={replaceQuery}
+              onValueChange={setReplaceQuery}
+              preview={replacePreview}
+              excluded={replaceExcluded}
+              onToggleFile={toggleReplaceFile}
+              busy={replaceBusy}
+              summary={replaceSummary}
+              canPreview={globalQuery.trim().length > 0}
+              onPreview={runReplacePreview}
+              onApply={applyVaultReplace}
+              t={t}
+            />
+          }
           t={t}
         />
       )}

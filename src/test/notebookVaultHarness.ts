@@ -292,6 +292,42 @@ function harnessFields(content: string): { key: string; values: string[] }[] {
   return order.map((key) => ({ key, values: map.get(key) ?? [] }));
 }
 
+/* glob → 正则,照抄 `search.rs` 的 `glob_to_regex` / `glob_matches`。
+ *
+ * 两条容易写错、而写错了测试就失去意义的规则:
+ * - **模式里有没有斜杠决定比什么。** 没有斜杠比**文件名**(`*.md` 要能匹配子目录里的
+ *   笔记),有斜杠比**相对 vault 的路径**(`.notebook/**` 要能挡住整棵私有子树)。
+ * - 单个 `*` 在路径模式下不跨目录(`[^/]*`),`**` 跨(`.*`)。
+ */
+function harnessGlobMatches(pattern: string, relativePath: string): boolean {
+  const pathMode = pattern.includes("/");
+  const target = pathMode ? relativePath : relativePath.slice(relativePath.lastIndexOf("/") + 1);
+  let regex = "^";
+  let index = 0;
+  while (index < pattern.length) {
+    const char = pattern[index];
+    if (char === "*" && pattern[index + 1] === "*") {
+      index += 2;
+      if (pattern[index] === "/") {
+        index += 1;
+        regex += "(?:.*/)?";
+      } else {
+        regex += ".*";
+      }
+    } else if (char === "*") {
+      regex += pathMode ? "[^/]*" : ".*";
+      index += 1;
+    } else if (char === "?") {
+      regex += pathMode ? "[^/]" : ".";
+      index += 1;
+    } else {
+      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      index += 1;
+    }
+  }
+  return new RegExp(`${regex}$`).test(target);
+}
+
 export class NotebookVaultHarness {
   private files = new Map<string, HarnessFile>();
   /**
@@ -1145,6 +1181,152 @@ export class NotebookVaultHarness {
         return new Promise((resolve, reject) => {
           heldSearch.push(() => (searchError ? reject(searchError) : resolve(hits)));
         });
+      }
+
+      /* 全库替换的预览。语义刻意贴住 `search.rs` 的 `replace_text_preview_for_root`:
+         偏移是**整个文件的字节**偏移(不是行列、不是 JS 下标),include / exclude 两个
+         glob 都要生效,触顶报 truncated。
+
+         偏移口径是这一段最要紧的地方 —— 前端把预览给的 start/end 原样回传给落笔那步,
+         harness 若按 UTF-16 下标算,中文笔记上就会和真实后端分道扬镳,而面板测试照样
+         全绿(两边用的是同一套错口径)。所以这里一律走 TextEncoder。 */
+      case "replace_text_preview": {
+        const query = String(args.query).trim();
+        const replacement = String(args.replacement ?? "");
+        const options = (args.options ?? {}) as Record<string, unknown>;
+        if (!query) {
+          return { query, replacement, files: [], totalMatches: 0, truncated: false };
+        }
+        const caseSensitive = options.caseSensitive === true;
+        const useRegex = options.regex === true;
+        const wholeWord = options.wholeWord === true;
+        const limit = typeof options.limit === "number" ? options.limit : 500;
+        const includeGlob = typeof options.includeGlob === "string" ? options.includeGlob : "";
+        const excludeGlob = typeof options.excludeGlob === "string" ? options.excludeGlob : "";
+        let pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (wholeWord) pattern = `\\b${pattern}\\b`;
+        const encoder = new TextEncoder();
+        const files: {
+          path: string;
+          name: string;
+          matches: Record<string, unknown>[];
+        }[] = [];
+        let totalMatches = 0;
+        let truncated = false;
+        for (const path of [...this.files.keys()].sort()) {
+          if (totalMatches >= limit) {
+            truncated = true;
+            break;
+          }
+          const relative = path.startsWith(`${VAULT}/`) ? path.slice(VAULT.length + 1) : path;
+          if (includeGlob && !harnessGlobMatches(includeGlob, relative)) continue;
+          if (excludeGlob && harnessGlobMatches(excludeGlob, relative)) continue;
+          const content = this.files.get(path)?.content ?? "";
+          const matches: Record<string, unknown>[] = [];
+          // 按字节记录到行首的偏移,和 Rust 侧一样把换行也算进去。
+          let lineStart = 0;
+          const lines = content.split("\n");
+          for (let index = 0; index < lines.length; index += 1) {
+            const lineText = lines[index];
+            const re = new RegExp(pattern, caseSensitive ? "gu" : "giu");
+            let found: RegExpExecArray | null;
+            while ((found = re.exec(lineText)) !== null) {
+              if (found[0] === "") {
+                re.lastIndex += 1;
+                continue;
+              }
+              if (totalMatches >= limit) {
+                truncated = true;
+                break;
+              }
+              const before = encoder.encode(lineText.slice(0, found.index)).length;
+              const matchBytes = encoder.encode(found[0]).length;
+              matches.push({
+                path,
+                name: path.slice(path.lastIndexOf("/") + 1),
+                line: index + 1,
+                column: before + 1,
+                lineText,
+                matchText: found[0],
+                // 正则的捕获组由后端展开,harness 也要展开,不然 `$1` 会原样写进文件。
+                replacementText: useRegex
+                  ? found[0].replace(new RegExp(pattern, caseSensitive ? "u" : "iu"), replacement)
+                  : replacement,
+                start: lineStart + before,
+                end: lineStart + before + matchBytes,
+              });
+              totalMatches += 1;
+            }
+            if (truncated) break;
+            lineStart += encoder.encode(lineText).length + 1;
+          }
+          if (matches.length > 0) {
+            files.push({ path, name: path.slice(path.lastIndexOf("/") + 1), matches });
+          }
+        }
+        return { query, replacement, files, totalMatches, truncated };
+      }
+
+      /* 落笔。三条关键语义照抄 Rust:按 start **倒序**逐文件写(正序会让后面的偏移
+         失效)、用命中处原文当乐观锁(对不上就跳过、计入 skipped,而不是照旧偏移写坏)、
+         一条都没落成的文件不算 filesChanged。
+
+         `apply_text_replacements` 自己**不看 glob** —— 它只校验路径在根内。harness 也
+         不看,不然「不碰私有目录靠的是提交内容都来自预览」这条就会被 harness 兜住,
+         真实后端上却是敞开的。 */
+      case "apply_text_replacements": {
+        const entries = (args.replacements ?? []) as {
+          path: string;
+          start: number;
+          end: number;
+          matchText: string;
+          replacementText: string;
+        }[];
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+        const grouped = new Map<string, typeof entries>();
+        let skipped = 0;
+        for (const entry of entries) {
+          if (!this.files.has(entry.path)) {
+            skipped += 1;
+            continue;
+          }
+          const list = grouped.get(entry.path);
+          if (list) list.push(entry);
+          else grouped.set(entry.path, [entry]);
+        }
+        let filesChanged = 0;
+        let applied = 0;
+        for (const [path, list] of [...grouped.entries()].sort()) {
+          const file = this.files.get(path);
+          if (!file) continue;
+          let bytes = encoder.encode(file.content);
+          let appliedInFile = 0;
+          for (const entry of [...list].sort((left, right) => right.start - left.start)) {
+            if (entry.start > entry.end || entry.end > bytes.length) {
+              skipped += 1;
+              continue;
+            }
+            const current = decoder.decode(bytes.slice(entry.start, entry.end));
+            if (current !== entry.matchText) {
+              skipped += 1;
+              continue;
+            }
+            const inserted = encoder.encode(entry.replacementText);
+            const next = new Uint8Array(bytes.length - (entry.end - entry.start) + inserted.length);
+            next.set(bytes.slice(0, entry.start), 0);
+            next.set(inserted, entry.start);
+            next.set(bytes.slice(entry.end), entry.start + inserted.length);
+            bytes = next;
+            applied += 1;
+            appliedInFile += 1;
+          }
+          if (appliedInFile > 0) {
+            this.files.set(path, { content: decoder.decode(bytes), mtimeMs: (this.clock += 10) });
+            filesChanged += 1;
+          }
+        }
+        return { filesChanged, replacementsApplied: applied, replacementsSkipped: skipped };
       }
 
       default:

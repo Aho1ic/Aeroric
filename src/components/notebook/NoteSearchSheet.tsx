@@ -34,6 +34,10 @@ export type NoteSearchSheetProps = {
   onOpen: (hit: NoteSearchHit) => void;
   onClose: () => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  /* 全库替换条。做成插槽而不是一堆 replace* prop:替换要预览、要按文件勾选、要等
+     保存落盘,那些状态全在面板里,搬进这里只会让这个组件同时管两件事。
+     排在命中列表**之后** —— 上面是"搜到了什么",下面是"要把它们改成什么"。 */
+  replace?: React.ReactNode;
   t: (key: string, vars?: Record<string, string | number>) => string;
 };
 
@@ -57,6 +61,7 @@ export function NoteSearchSheet({
   onOpen,
   onClose,
   inputRef,
+  replace,
   t,
 }: NoteSearchSheetProps) {
   const groups = groupSearchHits(hits);
@@ -258,6 +263,7 @@ export function NoteSearchSheet({
           </section>
         ))}
       </div>
+      {replace}
     </div>
   );
 }

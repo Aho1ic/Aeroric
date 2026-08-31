@@ -1761,6 +1761,65 @@ mod tests {
     }
 
     #[test]
+    fn replace_preview_exclude_glob_fences_off_a_dot_directory() {
+        // 随手记的全库替换要靠 `excludeGlob` 把 vault 私有目录挡在外面:回收站
+        // (`.notebook/trash/`)和历史快照(`.notebook/history/`)里放的也是 `.md`,
+        // 而 `is_ignored_dir` 只跳 `.git` / `node_modules` / `dist` / `target` ——
+        // 不挡的话「全库替换」会把已删除的笔记和历史版本一起改写。
+        //
+        // 这一条守的是排除模式真的能命中子目录里的文件:`glob_to_regex` 把末尾的两个
+        // 星号译成 `.*`,整体两头锚定。
+        //
+        // 注意这段用行注释而不是块注释 —— 模式里带斜杠加星号,写进块注释会被 Rust
+        // 当成嵌套注释的开头,把后面几十行一起吃掉。
+        let root = make_test_project("preview-exclude-dot-dir");
+        let live = root.join("note.md");
+        let trashed = root.join(".notebook/trash/gone.md");
+        fs::create_dir_all(trashed.parent().unwrap()).unwrap();
+        fs::write(&live, "old\n").unwrap();
+        fs::write(&trashed, "old\n").unwrap();
+        let options = TextSearchOptions {
+            case_sensitive: Some(true),
+            regex: Some(false),
+            whole_word: Some(false),
+            include_glob: Some("*.md".to_string()),
+            exclude_glob: Some(".notebook/**".to_string()),
+            limit: Some(20),
+        };
+
+        let preview = replace_text_preview_for_root(&root, "old", "new", &options).unwrap();
+
+        assert_eq!(preview.total_matches, 1);
+        assert_eq!(preview.files.len(), 1);
+        assert_eq!(preview.files[0].path, live.to_string_lossy());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replace_preview_without_exclude_glob_reaches_into_dot_directory() {
+        // 上一条的对照:不给 `excludeGlob` 时,私有目录**确实**会被走进去。
+        // 这是前端必须传 exclude 的理由,写成测试免得日后有人以为后端自己会跳。
+        let root = make_test_project("preview-no-exclude");
+        let trashed = root.join(".notebook/trash/gone.md");
+        fs::create_dir_all(trashed.parent().unwrap()).unwrap();
+        fs::write(&trashed, "old\n").unwrap();
+        let options = TextSearchOptions {
+            case_sensitive: Some(true),
+            regex: Some(false),
+            whole_word: Some(false),
+            include_glob: Some("*.md".to_string()),
+            exclude_glob: None,
+            limit: Some(20),
+        };
+
+        let preview = replace_text_preview_for_root(&root, "old", "new", &options).unwrap();
+
+        assert_eq!(preview.total_matches, 1);
+        assert_eq!(preview.files[0].path, trashed.to_string_lossy());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn apply_text_replacements_rejects_paths_outside_project_root() {
         let root = make_test_project("apply-root");
         let outside = make_test_project("outside").join("outside.txt");
