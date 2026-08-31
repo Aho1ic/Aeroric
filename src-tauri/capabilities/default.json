@@ -12,6 +12,7 @@
     "opener:allow-open-url",
     "opener:allow-default-urls",
     "dialog:default",
-    "clipboard-manager:allow-read-text"
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

@@ -189,6 +189,21 @@ export function listUserTemplates(vault: string): Promise<UserTemplate[]> {
   return invoke<UserTemplate[]>("notebook_list_user_templates", { vault });
 }
 
+/**
+ * 把一份导出内容写到用户在保存对话框里选的路径。
+ *
+ * 后端不把这个路径当成用户意图的证明 —— 写入位置会被限制在笔记库和桌面 / 文档 /
+ * 下载目录内。选到别处会报错而不是静默写别的地方。
+ */
+export function exportWriteFile(path: string, content: string): Promise<void> {
+  return invoke<void>("notebook_export_write_file", { path, content });
+}
+
+/** 写整库静态站点里的一页。`relPath` 是站内相对路径,不允许 `..`。 */
+export function exportSiteWrite(outDir: string, relPath: string, content: string): Promise<void> {
+  return invoke<void>("notebook_export_site_write", { outDir, relPath, content });
+}
+
 /** 回收站里的一条。`id` 是删除时刻的毫秒时间戳(同毫秒带 `-N` 后缀)。 */
 export type TrashItem = {
   /** 恢复 / 彻底删除只认它。前端不回传路径 —— 那个入口就没法被拿去动 vault 外的东西。 */

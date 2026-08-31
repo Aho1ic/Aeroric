@@ -20,6 +20,7 @@
 //! 漏注册由 `command_registration_tests` 守卫。
 
 pub mod attachments;
+pub mod export;
 pub mod fields;
 pub mod fs_ops;
 pub mod html2md;
@@ -701,6 +702,34 @@ pub async fn notebook_list_user_templates(
 ) -> Result<Vec<user_templates::UserTemplate>, String> {
     let root = resolve_vault_root(&state, &vault)?;
     blocking(move || Ok(user_templates::list_user_templates(&root))).await
+}
+
+// ── 导出 ───────────────────────────────────────────────────────────────────
+
+/// 写一个单文档导出(HTML / Markdown)到用户在保存对话框里选的路径。
+///
+/// 路径来自前端,所以**不能**当成用户意图的证明:白名单在 `export.rs` 那边把写入
+/// 位置限死在笔记库和桌面 / 文档 / 下载目录内。
+#[tauri::command]
+pub async fn notebook_export_write_file(
+    state: State<'_, NotebookState>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let roots = export::export_roots(state.registered_vaults()?);
+    blocking(move || export::write_export(&path, &content, &roots)).await
+}
+
+/// 写整库静态站点里的一页。`relPath` 是仓库结构算出来的站内相对路径。
+#[tauri::command]
+pub async fn notebook_export_site_write(
+    state: State<'_, NotebookState>,
+    out_dir: String,
+    rel_path: String,
+    content: String,
+) -> Result<(), String> {
+    let roots = export::export_roots(state.registered_vaults()?);
+    blocking(move || export::write_site_page(&out_dir, &rel_path, &content, &roots)).await
 }
 
 /// 把 HTML 转成 Markdown。迁移之外,预览/粘贴富文本也会用到。

@@ -952,6 +952,8 @@ pub fn run() {
             notebook::notebook_restore_snapshot,
             notebook::notebook_migrate_legacy,
             notebook::notebook_convert_richtext,
+            notebook::notebook_export_site_write,
+            notebook::notebook_export_write_file,
             notebook::notebook_html_to_markdown,
             notebook::notebook_list_user_templates,
         ])

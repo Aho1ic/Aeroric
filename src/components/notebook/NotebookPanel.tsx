@@ -187,6 +187,16 @@ import {
   captureTimeLabel,
   type CaptureTarget,
 } from "./noteCapture";
+import { NoteExportSheet } from "./NoteExportSheet";
+import { defaultExportDeps, pickExportDir } from "./noteExport";
+import { defaultSiteExportDeps, type SiteExportProgress } from "./noteSiteExportRun";
+import {
+  runSingleExport,
+  runSiteExportAction,
+  vaultSiteTitle,
+  type ExportAction,
+  type ExportRunOutcome,
+} from "./noteExportRun";
 import { buildTemplate, DAILY_TEMPLATE, NOTE_TEMPLATES, type NoteTemplate } from "./noteTemplates";
 import {
   expandUserTemplate,
@@ -229,7 +239,7 @@ function NotebookPanelContent({
   fullScreen = false,
   onFullScreenChange,
 }: NotebookPanelProps) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   /** CodeMirror 源码编辑器的命令句柄。替代原来直接操作 textarea 的做法。 */
   const sourceEditorRef = useRef<NoteEditorHandle | null>(null);
   const readContentRef = useRef<HTMLDivElement | null>(null);
@@ -335,6 +345,16 @@ function NotebookPanelContent({
   const [captureOpen, setCaptureOpen] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+
+  /* 导出面板。结果文案和错误也留在窗里(理由同快速捕获):导出跑完窗不关,而「已导出到
+     哪」正是用户接下来要用的信息,放到面板顶部那条全局错误里会和别的报错混在一起。 */
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportBusy, setExportBusy] = useState<ExportAction | null>(null);
+  const [exportProgress, setExportProgress] = useState<SiteExportProgress | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  /** 整库导出的取消句柄。跑完 / 取消后置回 null。 */
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
   /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
@@ -2321,6 +2341,88 @@ function NotebookPanelContent({
     setCaptureOpen(true);
   };
 
+  /**
+   * 拼出要导出的那篇笔记。
+   *
+   * 正文优先取内存里的 —— 那才是用户眼下看到的内容,含还没落盘的编辑。没读入过的
+   * 笔记(列表只拿元数据)才回落到读盘,而不是当成"没有可导出的笔记":用户从列表里
+   * 点一条就导出,笔记很可能还没被读进来。
+   */
+  const buildExportSource = async () => {
+    if (!activeNote) return null;
+    const body = activeNote.loaded ? activeNote.body : (await peekNote(activeNote.id)).content;
+    return {
+      path: activeNote.id,
+      title: activeNote.title || t("notebook.untitled"),
+      body,
+    };
+  };
+
+  /** 跑一条导出动作。面板的 state 全在这里收口。 */
+  const runExport = (action: ExportAction) => {
+    // 已经在跑就忽略:后端在读盘和写盘,并发两条只会互相拖慢。
+    if (exportBusy) return;
+    setExportNotice(null);
+    setExportError(null);
+    setExportBusy(action);
+    void (async () => {
+      let outcome: ExportRunOutcome;
+      try {
+        outcome = action === "site" ? await runSiteExportFlow() : await runSingleExportFlow(action);
+      } finally {
+        // finally 而不是每条分支末尾:抛出来的时候按钮也必须解禁,否则面板永久卡住。
+        setExportBusy(null);
+        setExportProgress(null);
+        exportAbortRef.current = null;
+      }
+      setExportNotice(outcome.notice);
+      setExportError(outcome.error);
+    })();
+  };
+
+  const runSingleExportFlow = async (action: ExportAction) => {
+    let source: Awaited<ReturnType<typeof buildExportSource>>;
+    try {
+      source = await buildExportSource();
+    } catch (error) {
+      // 读盘失败要当导出失败报,不能退化成"没有可导出的笔记" —— 后者会让用户以为
+      // 是没选中笔记,而真正的原因(权限、文件被删)就丢了。
+      return { notice: null, error: t("notebook.exportFailed", { message: errorText(error) }) };
+    }
+    return runSingleExport(action, source, defaultExportDeps(language), t);
+  };
+
+  const runSiteExportFlow = async () => {
+    if (!vault) return { notice: null, error: t("notebook.exportNoNote") };
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    return runSiteExportAction(
+      {
+        vault,
+        // 站点标题用 vault 目录名:它就是用户给这个库起的名字。
+        siteTitle: vaultSiteTitle(vault),
+        notes: notes.map((note) => ({
+          path: note.id,
+          title: note.title || t("notebook.untitled"),
+        })),
+        pickDir: () => pickExportDir(t("notebook.exportSitePickDir")),
+        deps: defaultSiteExportDeps(
+          (count) => t("notebook.exportSitePageCount", { count: String(count) }),
+          t("notebook.exportSiteEmbedPrefix"),
+        ),
+      },
+      t,
+      setExportProgress,
+      controller.signal,
+    );
+  };
+
+  const openExport = () => {
+    setExportNotice(null);
+    setExportError(null);
+    setExportOpen(true);
+  };
+
   /* 删除任意一条笔记。标题栏的删除按钮删当前这条,列表右键菜单删被点中的那条
      —— 两者只差「目标是谁」,所以都走这里。 */
   const deleteNoteById = (noteId: string) => {
@@ -2481,6 +2583,83 @@ function NotebookPanelContent({
       keywords: ["capture", "quick", "inbox", "捕获", "速记", "buhuo"],
       hint: "⌘⇧K",
       run: openCapture,
+    },
+    /* 六条导出各自成命令,而不是只给一条「打开导出面板」:命令面板本身带搜索,搜
+       「pdf」应该直接命中,不该再让用户在另一个列表里找一遍(理由同下面的模板)。
+       面板照样开着 —— 它是进度和结果文案的落点。 */
+    {
+      id: "export.pdf",
+      label: t("notebook.exportAsPdf"),
+      group: "notebook.commandGroupExport",
+      keywords: ["pdf", "print", "打印", "导出"],
+      disabled: !activeNote,
+      run: () => {
+        openExport();
+        runExport("pdf");
+      },
+    },
+    {
+      id: "export.html",
+      label: t("notebook.exportAsHtml"),
+      group: "notebook.commandGroupExport",
+      keywords: ["html", "single file", "单文件", "离线", "导出"],
+      disabled: !activeNote,
+      run: () => {
+        openExport();
+        runExport("html");
+      },
+    },
+    {
+      id: "export.markdown",
+      label: t("notebook.exportAsMarkdown"),
+      group: "notebook.commandGroupExport",
+      keywords: ["markdown", "md", "导出", "原文"],
+      disabled: !activeNote,
+      run: () => {
+        openExport();
+        runExport("markdown");
+      },
+    },
+    {
+      id: "export.copyHtml",
+      label: t("notebook.exportCopyHtml"),
+      group: "notebook.commandGroupExport",
+      keywords: ["copy", "html", "rich text", "复制", "富文本", "排版"],
+      disabled: !activeNote,
+      run: () => {
+        openExport();
+        runExport("copyHtml");
+      },
+    },
+    {
+      id: "export.copyMarkdown",
+      label: t("notebook.exportCopyMarkdown"),
+      group: "notebook.commandGroupExport",
+      keywords: ["copy", "markdown", "复制", "原文"],
+      disabled: !activeNote,
+      run: () => {
+        openExport();
+        runExport("copyMarkdown");
+      },
+    },
+    {
+      id: "export.site",
+      label: t("notebook.exportSite"),
+      group: "notebook.commandGroupExport",
+      keywords: ["site", "static", "html", "站点", "整库", "全库"],
+      run: () => {
+        openExport();
+        runExport("site");
+      },
+    },
+    {
+      id: "sheet.export",
+      /* 不复用 `exportTitle`("导出"):那也是分组名,列表里会出现「导出 › 导出」
+         这种读不出信息的一行。 */
+      label: t("notebook.exportOpen"),
+      group: "notebook.commandGroupExport",
+      keywords: ["export", "share", "导出", "分享", "daochu"],
+      run: openExport,
     },
     {
       id: "daily.today",
@@ -3554,6 +3733,21 @@ function NotebookPanelContent({
           error={captureError}
           onSubmit={submitCapture}
           onClose={() => setCaptureOpen(false)}
+          t={t}
+        />
+      )}
+      {/* 导出窗。和快速捕获一样是从命令面板唤出的小窗,不参与上面那串铺满型 overlay
+          的互斥 —— 整库导出可能要跑一阵,这期间不该把别的面板都关掉。 */}
+      {exportOpen && (
+        <NoteExportSheet
+          hasNote={activeNote !== null}
+          busy={exportBusy}
+          progress={exportProgress}
+          notice={exportNotice}
+          error={exportError}
+          onRun={runExport}
+          onCancelSite={() => exportAbortRef.current?.abort()}
+          onClose={() => setExportOpen(false)}
           t={t}
         />
       )}

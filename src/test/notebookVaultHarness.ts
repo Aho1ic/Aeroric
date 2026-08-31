@@ -361,6 +361,12 @@ export class NotebookVaultHarness {
    *  调,而快速捕获这类「读→改→写」是一个不间断的 async 函数)。真实环境里那条缝
    *  由外部编辑器和同步盘填上,所以这条分支是真的能走到的,不是防御性代码。 */
   conflictNextSave = false;
+  /** 导出落盘的单文件产物,按顺序。 */
+  exportWrites: { path: string; content: string }[] = [];
+  /** 整库导出写出去的页面,按顺序。首页(`index.html`)也在里面。 */
+  exportSiteWrites: { outDir: string; relPath: string; content: string }[] = [];
+  /** 让导出落盘失败(目录不可写、磁盘满)。 */
+  failExportWrite = false;
   /** 存下来的附件,旧的在前。 */
   attachments: {
     path: string;
@@ -1135,6 +1141,25 @@ export class NotebookVaultHarness {
         if (!found) throw new Error(`no such attachment: ${path}`);
         this.attachmentReads.push(path);
         return new Uint8Array([1, 2, 3]).buffer;
+      }
+
+      /* 导出落盘。真后端有一整套 allowlist(见 `notebook/export.rs`),harness 只记
+         「写了什么到哪」—— 面板级要验的是「导出真的走到了落盘」和产物内容,闸门本身
+         由 Rust 侧那 16 条测试盖。 */
+      case "notebook_export_write_file": {
+        if (this.failExportWrite) throw new Error("writing the export failed");
+        this.exportWrites.push({ path: String(args.path), content: String(args.content) });
+        return undefined;
+      }
+
+      case "notebook_export_site_write": {
+        if (this.failExportWrite) throw new Error("writing the export failed");
+        this.exportSiteWrites.push({
+          outDir: String(args.outDir),
+          relPath: String(args.relPath),
+          content: String(args.content),
+        });
+        return undefined;
       }
 
       case "notebook_migrate_legacy": {
