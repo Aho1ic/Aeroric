@@ -16,6 +16,10 @@ import {
   type NoteSearchFlags,
   type NoteSearchHit,
 } from "./noteGlobalSearch";
+/* 只共用 overlay 的样式。这个 sheet 的 header(padding 与 --bg-sidebar 背景)、
+   关闭按钮(24×24、--text-muted)都和其余六个不同,而且它挂载后聚焦的是搜索框
+   而不是关闭按钮 —— 所以不用 useNoteSheetDismiss。 */
+import { noteSheetOverlayStyle } from "./noteSheetChrome";
 
 export type NoteSearchSheetProps = {
   query: string;
@@ -75,14 +79,7 @@ export function NoteSearchSheet({
         event.preventDefault();
         onClose();
       }}
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 30,
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg-panel)",
-      }}
+      style={noteSheetOverlayStyle}
     >
       <div
         style={{

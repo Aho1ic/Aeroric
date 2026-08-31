@@ -17,8 +17,15 @@
  * 模块注释。
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { CheckSquare, RefreshCw, X } from "lucide-react";
+
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 
 import {
   countOpenTasks,
@@ -42,35 +49,7 @@ export type NoteTaskInboxSheetProps = {
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg-panel)",
-};
-
-const headerStyle: CSSProperties = {
-  minHeight: 32,
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "0 8px",
-  borderBottom: "1px solid var(--border-dim)",
-  color: "var(--text-muted)",
-  fontSize: 11.5,
-};
-
-const iconButtonStyle: CSSProperties = {
-  display: "flex",
-  padding: 3,
-  border: "none",
-  borderRadius: 4,
-  background: "transparent",
-  color: "var(--text-hint)",
-  cursor: "pointer",
-};
+const headerStyle = noteSheetHeaderStyle(6);
 
 const hintStyle: CSSProperties = {
   padding: 10,
@@ -119,15 +98,10 @@ export function NoteTaskInboxSheet({
   onContextMenu,
   t,
 }: NoteTaskInboxSheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(t("notebook.taskInboxTitle"), onClose);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<TaskGroupMode>("time");
   const [showDone, setShowDone] = useState(false);
-
-  // 打开时把焦点挪进来,理由同字段浏览器:不挪的话下面那个 onKeyDown 收不到 Esc。
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
 
   /* 今天算一次,分组和徽标共用。每条任务各算一次的话,跨过午夜的那一瞬间清单里会
      同时存在两个"今天"。 */
@@ -137,19 +111,7 @@ export function NoteTaskInboxSheet({
   const openCount = countOpenTasks(tasks);
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.taskInboxTitle")}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        // 不往上冒,和字段浏览器 / 图谱一致。
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetOverlayStyle} {...overlayProps}>
       <div style={headerStyle}>
         <CheckSquare size={12} aria-hidden />
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -165,7 +127,7 @@ export function NoteTaskInboxSheet({
           onClick={onRefresh}
           disabled={loading}
           style={{
-            ...iconButtonStyle,
+            ...noteSheetIconButtonStyle,
             marginLeft: "auto",
             cursor: loading ? "progress" : "pointer",
             opacity: loading ? 0.45 : 1,
@@ -178,7 +140,7 @@ export function NoteTaskInboxSheet({
           type="button"
           aria-label={t("notebook.taskInboxClose")}
           onClick={onClose}
-          style={iconButtonStyle}
+          style={noteSheetIconButtonStyle}
         >
           <X size={13} aria-hidden />
         </button>

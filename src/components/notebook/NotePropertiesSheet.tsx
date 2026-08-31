@@ -13,10 +13,16 @@
  * 铺在面板内部而不是整个窗口,和版本历史 / 回收站一致。
  */
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import { X } from "lucide-react";
 
 import type { NoteStat } from "./notebookApi";
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 import type { NoteTagCount } from "./noteTags";
 
 /**
@@ -84,25 +90,7 @@ export type NotePropertiesSheetProps = {
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg-panel)",
-};
-
-const headerStyle: CSSProperties = {
-  minHeight: 32,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 8px",
-  borderBottom: "1px solid var(--border-dim)",
-  color: "var(--text-muted)",
-  fontSize: 11.5,
-};
+const headerStyle = noteSheetHeaderStyle(8);
 
 const sectionStyle: CSSProperties = {
   padding: "8px 10px 2px",
@@ -172,30 +160,13 @@ export function NotePropertiesSheet({
   onClose,
   t,
 }: NotePropertiesSheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-
-  // 打开时把焦点挪进来:不挪的话 Esc 会被编辑器的按键处理先吃掉。
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(t("notebook.propertiesTitle"), onClose);
 
   const modified = formatNoteTime(stat?.modifiedMs ?? null);
   const created = formatNoteTime(stat?.createdMs ?? null);
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.propertiesTitle")}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        // 拦住:面板外面还有 window 级的 Esc 监听(会去关整个视图)。
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetOverlayStyle} {...overlayProps}>
       <div style={headerStyle}>
         <span>{t("notebook.propertiesTitle")}</span>
         <button
@@ -203,16 +174,7 @@ export function NotePropertiesSheet({
           type="button"
           aria-label={t("notebook.propertiesClose")}
           onClick={onClose}
-          style={{
-            marginLeft: "auto",
-            display: "flex",
-            padding: 3,
-            border: "none",
-            borderRadius: 4,
-            background: "transparent",
-            color: "var(--text-hint)",
-            cursor: "pointer",
-          }}
+          style={{ ...noteSheetIconButtonStyle, marginLeft: "auto" }}
         >
           <X size={13} aria-hidden />
         </button>

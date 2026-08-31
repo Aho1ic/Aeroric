@@ -8,8 +8,15 @@
  * 只占项目视图的一半,盖住整个窗口会把用户正在参照的另一半也遮掉。
  */
 
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { RotateCcw, X } from "lucide-react";
+
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetSplitOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 
 import { changedLineCount, collapseContext, diffLines, type DiffLine } from "./lineDiff";
 import type { NoteSnapshot, NoteSnapshotEntry } from "./notebookApi";
@@ -37,14 +44,6 @@ export type NoteHistorySheetProps = {
   onRestore: () => void;
   onClose: () => void;
   t: (key: string, vars?: Record<string, string>) => string;
-};
-
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  background: "var(--bg-panel)",
 };
 
 const listStyle: CSSProperties = {
@@ -113,13 +112,10 @@ export function NoteHistorySheet({
   onClose,
   t,
 }: NoteHistorySheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-
-  // 打开时把焦点挪进来。不挪的话焦点还在编辑器上,Esc 会被编辑器的按键处理先
-  // 吃掉,而 Tab 会从面板背后的元素开始走。
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(
+    t("notebook.historyTitle", { name: noteTitle }),
+    onClose,
+  );
 
   const diff = useMemo(
     () => (snapshotContent === null ? [] : diffLines(snapshotContent, currentContent)),
@@ -129,19 +125,7 @@ export function NoteHistorySheet({
   const changed = changedLineCount(diff);
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.historyTitle", { name: noteTitle })}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        // 拦住:面板外面还有 window 级的 Esc 监听(会去关整个视图)。
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetSplitOverlayStyle} {...overlayProps}>
       <div style={listStyle}>
         {loading ? (
           <div style={hintStyle}>{t("notebook.historyLoading")}</div>
@@ -175,18 +159,7 @@ export function NoteHistorySheet({
         )}
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div
-          style={{
-            minHeight: 32,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "0 8px",
-            borderBottom: "1px solid var(--border-dim)",
-            color: "var(--text-muted)",
-            fontSize: 11.5,
-          }}
-        >
+        <div style={noteSheetHeaderStyle(8)}>
           <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
             {snapshotLoading
               ? t("notebook.historyLoading")
@@ -224,15 +197,7 @@ export function NoteHistorySheet({
             type="button"
             aria-label={t("notebook.historyClose")}
             onClick={onClose}
-            style={{
-              display: "flex",
-              padding: 3,
-              border: "none",
-              borderRadius: 4,
-              background: "transparent",
-              color: "var(--text-hint)",
-              cursor: "pointer",
-            }}
+            style={noteSheetIconButtonStyle}
           >
             <X size={13} aria-hidden />
           </button>

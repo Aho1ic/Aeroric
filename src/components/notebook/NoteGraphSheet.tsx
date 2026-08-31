@@ -16,10 +16,16 @@
  * 的另一半也遮掉。
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Share2, X } from "lucide-react";
 
 import { layoutNoteGraph, type NoteGraph } from "./noteGraph";
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 
 export type NoteGraphSheetProps = {
   graph: NoteGraph;
@@ -41,25 +47,7 @@ export const DEPTH_CHOICES = [1, 2, 3] as const;
 /** 「不限」用一个大到不可能达到的值,而不是 undefined:选择器的值域统一成数字。 */
 export const DEPTH_ALL = 99;
 
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg-panel)",
-};
-
-const headerStyle: CSSProperties = {
-  minHeight: 32,
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "0 8px",
-  borderBottom: "1px solid var(--border-dim)",
-  color: "var(--text-muted)",
-  fontSize: 11.5,
-};
+const headerStyle = noteSheetHeaderStyle(6);
 
 const metaStyle: CSSProperties = {
   display: "flex",
@@ -85,16 +73,6 @@ const hintStyle: CSSProperties = {
   fontSize: 11.5,
 };
 
-const iconButtonStyle: CSSProperties = {
-  display: "flex",
-  padding: 3,
-  border: "none",
-  borderRadius: 4,
-  background: "transparent",
-  color: "var(--text-hint)",
-  cursor: "pointer",
-};
-
 const selectStyle: CSSProperties = {
   height: 20,
   border: "1px solid var(--border)",
@@ -116,15 +94,8 @@ export function NoteGraphSheet({
   onClose,
   t,
 }: NoteGraphSheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(t("notebook.graphTitle"), onClose);
   const [hover, setHover] = useState<string | null>(null);
-
-  /* 打开时把焦点挪进来。不挪的话焦点还在编辑器上,下面那个 onKeyDown 收不到 Esc
-     (事件在编辑器那棵子树里冒泡,不经过这个 div),Tab 也会从 sheet 背后开始走。
-     历史 / 回收站 / 字段浏览器同样处理。 */
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
 
   const { placements, extent } = useMemo(() => layoutNoteGraph(graph.nodes), [graph.nodes]);
 
@@ -154,19 +125,7 @@ export function NoteGraphSheet({
   const view = extent * 2;
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.graphTitle")}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        // 不往上冒,和另外三个 sheet 一致(理由见 NoteFieldsSheet 里那段)。
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetOverlayStyle} {...overlayProps}>
       <div style={headerStyle}>
         <Share2 size={13} aria-hidden />
         <span>{t("notebook.graphTitle")}</span>
@@ -189,7 +148,7 @@ export function NoteGraphSheet({
         <button
           type="button"
           onClick={onRefresh}
-          style={{ ...iconButtonStyle, marginLeft: "auto", padding: "2px 6px" }}
+          style={{ ...noteSheetIconButtonStyle, marginLeft: "auto", padding: "2px 6px" }}
         >
           {t("notebook.graphRefresh")}
         </button>
@@ -198,7 +157,7 @@ export function NoteGraphSheet({
           type="button"
           aria-label={t("notebook.graphClose")}
           onClick={onClose}
-          style={iconButtonStyle}
+          style={noteSheetIconButtonStyle}
         >
           <X size={13} aria-hidden />
         </button>

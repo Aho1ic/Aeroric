@@ -10,10 +10,16 @@
  * 随手记面板可以只占项目视图的一半,盖住整个窗口会把用户正在参照的另一半也遮掉。
  */
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import { RotateCcw, Trash2, X } from "lucide-react";
 
 import type { TrashItem } from "./notebookApi";
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 
 export type NoteTrashSheetProps = {
   items: TrashItem[];
@@ -30,40 +36,13 @@ export type NoteTrashSheetProps = {
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg-panel)",
-};
-
-const headerStyle: CSSProperties = {
-  minHeight: 32,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 8px",
-  borderBottom: "1px solid var(--border-dim)",
-  color: "var(--text-muted)",
-  fontSize: 11.5,
-};
+const headerStyle = noteSheetHeaderStyle(8);
 
 const hintStyle: CSSProperties = {
   margin: "auto",
   padding: 10,
   color: "var(--text-hint)",
   fontSize: 11.5,
-};
-
-const actionStyle: CSSProperties = {
-  display: "flex",
-  padding: 3,
-  border: "none",
-  borderRadius: 4,
-  background: "transparent",
-  cursor: "pointer",
 };
 
 function formatWhen(deletedAtMs: number, t: NoteTrashSheetProps["t"]): string {
@@ -89,28 +68,10 @@ export function NoteTrashSheet({
   onClose,
   t,
 }: NoteTrashSheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-
-  // 打开时把焦点挪进来:不挪的话 Esc 会被编辑器的按键处理先吃掉,而 Tab 会从
-  // 面板背后的元素开始走。
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(t("notebook.trashTitle"), onClose);
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.trashTitle")}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        // 拦住:面板外面还有 window 级的 Esc 监听(会去关整个视图)。
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetOverlayStyle} {...overlayProps}>
       <div style={headerStyle}>
         <span>{t("notebook.trashTitle")}</span>
         <button
@@ -136,7 +97,7 @@ export function NoteTrashSheet({
           type="button"
           aria-label={t("notebook.trashClose")}
           onClick={onClose}
-          style={{ ...actionStyle, color: "var(--text-hint)" }}
+          style={{ ...noteSheetIconButtonStyle, color: "var(--text-hint)" }}
         >
           <X size={13} aria-hidden />
         </button>
@@ -192,7 +153,11 @@ export function NoteTrashSheet({
                 aria-label={t("notebook.trashRestore", { name: item.name })}
                 disabled={busyId === item.id}
                 onClick={() => onRestore(item.id)}
-                style={{ ...actionStyle, color: "var(--text-secondary)", flexShrink: 0 }}
+                style={{
+                  ...noteSheetIconButtonStyle,
+                  color: "var(--text-secondary)",
+                  flexShrink: 0,
+                }}
               >
                 <RotateCcw size={12} aria-hidden />
               </button>
@@ -201,7 +166,11 @@ export function NoteTrashSheet({
                 aria-label={t("notebook.trashPurge", { name: item.name })}
                 disabled={busyId === item.id}
                 onClick={() => onPurge(item.id)}
-                style={{ ...actionStyle, color: "var(--danger, #f85149)", flexShrink: 0 }}
+                style={{
+                  ...noteSheetIconButtonStyle,
+                  color: "var(--danger, #f85149)",
+                  flexShrink: 0,
+                }}
               >
                 <Trash2 size={12} aria-hidden />
               </button>

@@ -10,10 +10,16 @@
  * 随手记面板可以只占项目视图的一半,盖住整个窗口会把用户正在参照的另一半也遮掉。
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Braces, X } from "lucide-react";
 
 import { filterFields, type FieldEntry, type FieldNoteHit } from "./noteFields";
+import {
+  noteSheetHeaderStyle,
+  noteSheetIconButtonStyle,
+  noteSheetSplitOverlayStyle,
+  useNoteSheetDismiss,
+} from "./noteSheetChrome";
 
 export type NoteFieldsSheetProps = {
   entries: FieldEntry[];
@@ -26,14 +32,6 @@ export type NoteFieldsSheetProps = {
 
 /** 展开中的那一行。`kind: "empty"` 是"有 key 没值"那一行 —— 见 `emptyNotes`。 */
 type OpenRow = { kind: "value"; value: string } | { kind: "empty" };
-
-const overlayStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 30,
-  display: "flex",
-  background: "var(--bg-panel)",
-};
 
 const keyListStyle: CSSProperties = {
   width: 190,
@@ -61,16 +59,7 @@ const filterStyle: CSSProperties = {
   fontSize: 11.5,
 };
 
-const headerStyle: CSSProperties = {
-  minHeight: 32,
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "0 8px",
-  borderBottom: "1px solid var(--border-dim)",
-  color: "var(--text-muted)",
-  fontSize: 11.5,
-};
+const headerStyle = noteSheetHeaderStyle(6);
 
 const rowStyle: CSSProperties = {
   width: "100%",
@@ -115,17 +104,10 @@ export function NoteFieldsSheet({
   onClose,
   t,
 }: NoteFieldsSheetProps) {
-  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const { closeRef, overlayProps } = useNoteSheetDismiss(t("notebook.fieldsTitle"), onClose);
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [openRow, setOpenRow] = useState<OpenRow | null>(null);
-
-  // 打开时把焦点挪进来。不挪的话焦点还在编辑器上,下面那个 onKeyDown 根本收不到
-  // Esc(事件在编辑器那棵子树里冒泡,不经过这个 div),而 Tab 会从 sheet 背后的
-  // 元素开始走。历史 / 回收站同样处理。
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
 
   const shown = useMemo(() => filterFields(entries, query), [entries, query]);
   const selected = useMemo(
@@ -134,23 +116,7 @@ export function NoteFieldsSheet({
   );
 
   return (
-    <div
-      style={overlayStyle}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("notebook.fieldsTitle")}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        /* 不往上冒。历史 / 回收站那两个 sheet 也这么写。**目前**没有可碰撞的对象:
-           面板自己没有 Esc 处理,宿主那个 window 监听要按住修饰键才进,所以去掉
-           这一句测试照样绿(验过)。留着是因为它是"浮层拦掉自己的 Esc"的正确写法,
-           而给面板加一层 Esc 是随时会发生的改动 —— 那时候少了它就变成一次按键关
-           两层。测不出来,所以在这里写清。 */
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-      }}
-    >
+    <div style={noteSheetSplitOverlayStyle} {...overlayProps}>
       <div style={keyListStyle}>
         <input
           value={query}
@@ -214,16 +180,7 @@ export function NoteFieldsSheet({
             type="button"
             aria-label={t("notebook.fieldsClose")}
             onClick={onClose}
-            style={{
-              marginLeft: "auto",
-              display: "flex",
-              padding: 3,
-              border: "none",
-              borderRadius: 4,
-              background: "transparent",
-              color: "var(--text-hint)",
-              cursor: "pointer",
-            }}
+            style={{ ...noteSheetIconButtonStyle, marginLeft: "auto" }}
           >
             <X size={13} aria-hidden />
           </button>
