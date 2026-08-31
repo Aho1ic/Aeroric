@@ -354,6 +354,13 @@ export class NotebookVaultHarness {
   /** 让下一次保存直接失败(磁盘满、权限、IPC 断)。保存失败态是「关 tab 要确认」
    *  的唯一入口,没有它那条分支进不去。冲突**不**走这里 —— 冲突是正常分支。 */
   failNextSave = false;
+  /** 让下一次保存报冲突。
+   *
+   *  为什么要这个开关:冲突是「读出基线之后、写回之前磁盘又变了」,而 harness 里
+   *  读和写之间没有任何缝隙可以插入外部写(`externalWrite` 只能在两次 await 之间
+   *  调,而快速捕获这类「读→改→写」是一个不间断的 async 函数)。真实环境里那条缝
+   *  由外部编辑器和同步盘填上,所以这条分支是真的能走到的,不是防御性代码。 */
+  conflictNextSave = false;
   /** 存下来的附件,旧的在前。 */
   attachments: {
     path: string;
@@ -826,6 +833,11 @@ export class NotebookVaultHarness {
         const expected = args.expected as HarnessSig | null;
         const force = Boolean(args.force);
         const existing = this.files.get(path);
+
+        if (this.conflictNextSave && existing && !force) {
+          this.conflictNextSave = false;
+          return { status: "conflict", disk: this.sigOf(path) };
+        }
 
         if (existing && !force) {
           const disk = this.sigOf(path);

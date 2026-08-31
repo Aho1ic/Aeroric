@@ -7004,4 +7004,279 @@ describe("NotebookPanel", () => {
       });
     });
   });
+
+  describe("快速捕获", () => {
+    function pad2(value: number): string {
+      return String(value).padStart(2, "0");
+    }
+
+    function todayPath(): string {
+      const now = new Date();
+      return `${HARNESS_VAULT}/Daily/${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(
+        now.getDate(),
+      )}.md`;
+    }
+
+    const INBOX = `${HARNESS_VAULT}/Inbox.md`;
+
+    /** ⌘⇧K 唤出捕获窗,返回那个 textarea。 */
+    function openCapture(): HTMLTextAreaElement {
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "K", shiftKey: true, metaKey: true });
+      return screen.getByRole("textbox", { name: "What to capture" }) as HTMLTextAreaElement;
+    }
+
+    /** 打字并提交。 */
+    function capture(text: string, target?: "Inbox") {
+      const area = openCapture();
+      if (target) fireEvent.click(screen.getByRole("radio", { name: target }));
+      fireEvent.change(area, { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Capture" }));
+    }
+
+    it("⌘⇧K 开捕获窗", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      openCapture();
+
+      expect(screen.getByRole("dialog", { name: "Quick capture" })).toBeInTheDocument();
+    });
+
+    it("⌘⇧K 不会顺带开命令面板", async () => {
+      /* ⌘K 的判断不看 shiftKey,排在 ⌘⇧K 前面的话它会把捕获整个吞掉。这条钉的是
+         那个顺序。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      openCapture();
+
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    });
+
+    it("捕获到今天的日记,没有就按模板建出来", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      capture("记得回邮件");
+
+      await waitFor(() => expect(harness.read(todayPath())).toBeDefined());
+      const content = harness.read(todayPath()) ?? "";
+      expect(content).toContain("## To do");
+      expect(content).toMatch(/## \d{2}:\d{2}\n\n记得回邮件\n$/);
+    });
+
+    it("捕获到收集箱,落在单个 Inbox.md 上", async () => {
+      /* 收集箱刻意不是一篇篇新笔记:捕获多半是一句话,一句话一篇会让笔记列表在
+         一周内变得没法用。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      capture("一个想法", "Inbox");
+
+      await waitFor(() => expect(harness.read(INBOX)).toBeDefined());
+      expect(harness.read(INBOX) ?? "").toMatch(/## \d{2}:\d{2}\n\n一个想法\n$/);
+      expect(harness.read(todayPath())).toBeUndefined();
+    });
+
+    it("第二次捕获追加在后面,不覆盖第一次", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      capture("第一条", "Inbox");
+      await waitFor(() => expect(harness.read(INBOX) ?? "").toContain("第一条"));
+      capture("第二条", "Inbox");
+
+      await waitFor(() => expect(harness.read(INBOX) ?? "").toContain("第二条"));
+      const content = harness.read(INBOX) ?? "";
+      expect(content).toContain("第一条");
+      expect(content.indexOf("第一条")).toBeLessThan(content.indexOf("第二条"));
+    });
+
+    it("捕获不切走当前笔记", async () => {
+      /* 捕获的意义就是不打断手上的事。切走会把编辑器的滚动位置和用户的注意力
+         一起带到另一篇上。 */
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      capture("一个想法", "Inbox");
+
+      await waitFor(() => expect(harness.read(INBOX)).toBeDefined());
+      expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue("Doc");
+      expect(editorValue()).toContain("body");
+    });
+
+    it("成功后窗自己关掉", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+
+      capture("一个想法", "Inbox");
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Quick capture" })).not.toBeInTheDocument(),
+      );
+    });
+
+    it("先把目标笔记未落盘的编辑落下去,再追加", async () => {
+      /* 追加读的是磁盘。不先落盘的话追加会接在旧正文后面,而这次保存又会把用户刚打的
+         字整篇覆盖掉 —— 捕获成功了,当前编辑没了。 */
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      // 切到 Inbox 并改内容,先不等它落盘。
+      fireEvent.click(screen.getAllByRole("button", { name: "Inbox" })[0] as HTMLElement);
+      await waitFor(() => expect(editorValue()).toContain("旧正文"));
+      setEditorValue("刚打的字\n");
+
+      capture("捕获的一句", "Inbox");
+
+      await waitFor(() => expect(harness.read(INBOX) ?? "").toContain("捕获的一句"));
+      expect(harness.read(INBOX) ?? "").toContain("刚打的字");
+      expect(harness.read(INBOX) ?? "").not.toContain("旧正文");
+    });
+
+    it("捕获到当前打开的这篇时,编辑器跟着更新", async () => {
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.click(screen.getAllByRole("button", { name: "Inbox" })[0] as HTMLElement);
+      await waitFor(() => expect(editorValue()).toContain("旧正文"));
+
+      capture("捕获的一句", "Inbox");
+
+      await waitFor(() => expect(editorValue()).toContain("捕获的一句"));
+    });
+
+    it("捕获之后接着打的字不会被抹掉", async () => {
+      /* CodeMirror 有个 200ms 的输入闩:局部改动后的 200ms 内,外部传进来的 value 会
+         被存成一个挂起的更新,而那个闭包捕获的是**当时**的 value。闩过期时它会把用户
+         之后打的字盖掉。追加完 bump `editorEpoch` 重建编辑器就是为了扔掉它。
+
+         只断言「编辑器内容变了」抓不到这件事:闩没上膛时受控 value 自己就生效了。 */
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.click(screen.getAllByRole("button", { name: "Inbox" })[0] as HTMLElement);
+      await waitFor(() => expect(editorValue()).toContain("旧正文"));
+      // 上膛:局部改动。追加在末尾,所以捕获仍然读到「旧正文 + 这句」。
+      setEditorValue("旧正文\n又加了一句\n");
+
+      capture("捕获的一句", "Inbox");
+      /* 不能拿「编辑器内容出现了那句」当等待条件:默认 50ms 一轮的轮询,轮到的时候
+         距离上膛往往已经超过 200ms,闩自己过期、挂起的更新在我们打字**之前**就平静
+         生效了 —— 于是有没有重建编辑器在 DOM 上没区别。改成等窗关闭(它和 bump 在
+         同一个 await 续体里,批到同一次渲染),1ms 一轮,真实时间还远没走到 200ms。 */
+      await waitFor(
+        () => expect(screen.queryByRole("dialog", { name: "Quick capture" })).toBeNull(),
+        {
+          interval: 1,
+        },
+      );
+      expect(editorValue()).toContain("捕获的一句");
+
+      setEditorValue("重建之后打的字\n");
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      });
+
+      expect(editorValue()).toBe("重建之后打的字\n");
+    });
+
+    it("保存失败时窗不关,文字还在", async () => {
+      /* 捕获的那句话只存在窗里的 textarea 上,关掉就没了。所以失败必须留在窗里报,
+         而不是走面板那条错误提示。 */
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      harness.failNextSave = true;
+
+      capture("会失败的一句", "Inbox");
+
+      /* 必须在**窗里**找那条 alert:笔记列表的错误横幅也是 role="alert",不限定范围的
+         `getByRole("alert")` 在「错误跑去面板上报了」时同样只找到一个,于是断言通过而
+         窗里其实什么都没显示。 */
+      const dialog = await screen.findByRole("dialog", { name: "Quick capture" });
+      await waitFor(() => expect(within(dialog).getByRole("alert")).toBeInTheDocument());
+      // 反过来:面板那边不该同时也报一遍。
+      const list = screen.getByRole("region", { name: "Quick Notes" });
+      expect(
+        within(list)
+          .queryAllByRole("alert")
+          .filter((node) => !dialog.contains(node)),
+      ).toHaveLength(0);
+      expect(screen.getByRole("textbox", { name: "What to capture" })).toHaveValue("会失败的一句");
+      expect(harness.read(INBOX)).toBe("旧正文\n");
+    });
+
+    it("冲突时不覆盖,提示重来", async () => {
+      /* 读出基线之后、写回之前磁盘又变了(外部编辑器 / 同步盘)。这时候强写会把别人
+         的改动吃掉,所以报错让用户重新捕获一次 —— 那句话还在窗里。 */
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      harness.conflictNextSave = true;
+
+      capture("会撞上的一句", "Inbox");
+
+      const dialog = await screen.findByRole("dialog", { name: "Quick capture" });
+      await waitFor(() =>
+        expect(within(dialog).getByRole("alert")).toHaveTextContent("changed on disk"),
+      );
+      expect(harness.read(INBOX)).toBe("旧正文\n");
+      expect(screen.getByRole("textbox", { name: "What to capture" })).toHaveValue("会撞上的一句");
+    });
+
+    it("命令面板里也能唤出捕获", async () => {
+      harness.seed("Doc.md", '---\ntitle: "Doc"\n---\n\nbody\n');
+      renderNotebook();
+      const content = await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.keyDown(content, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+
+      fireEvent.change(input, { target: { value: "Quick capture" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(await screen.findByRole("dialog", { name: "Quick capture" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    });
+
+    it("捕获出来的笔记出现在列表里", async () => {
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      capture("一个想法", "Inbox");
+
+      await waitFor(() => {
+        const region = screen.getByRole("region", { name: "Quick Notes" });
+        expect(within(region).getAllByRole("button", { name: "Inbox" }).length).toBeGreaterThan(0);
+      });
+    });
+
+    it("捕获之后那篇笔记的基线是新的,自动保存不会把捕获写回去", async () => {
+      /* 不把结果写回内存的话,下一次自动保存会拿改之前的正文整篇覆盖 —— 捕获静默消失
+         (和全库替换那边同一个坑)。这条改一次标题触发保存,然后看捕获还在不在。 */
+      harness.seed("Inbox.md", "旧正文\n");
+      renderNotebook();
+      await screen.findByRole("textbox", { name: "Quick note content" });
+      fireEvent.click(screen.getAllByRole("button", { name: "Inbox" })[0] as HTMLElement);
+      await waitFor(() => expect(editorValue()).toContain("旧正文"));
+
+      capture("捕获的一句", "Inbox");
+      await waitFor(() => expect(harness.read(INBOX) ?? "").toContain("捕获的一句"));
+
+      // 改标题会 scheduleSave 整篇。写回去的必须是含捕获的那份。
+      fireEvent.change(screen.getByRole("textbox", { name: "Quick note name" }), {
+        target: { value: "收集箱" },
+      });
+      await waitFor(() => expect(harness.read(INBOX) ?? "").toContain("收集箱"));
+      expect(harness.read(INBOX) ?? "").toContain("捕获的一句");
+    });
+  });
 });

@@ -311,6 +311,12 @@ function NotebookPanelContent({
    */
   const [editorEpoch, setEditorEpoch] = useState(0);
 
+  /* 快速捕获的窗。`error` 留在窗里而不是走面板那条错误提示:失败时窗不关,而用户
+     打的那句话只存在窗里的 textarea 上 —— 报错和内容必须在同一个地方。 */
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+
   const { ref: panelRef, tier } = useNoteLayoutTier<HTMLElement>();
   /** 紧凑档默认收起笔记列表,把整宽让给正文。用户点开关能拉回来。 */
   const [listOpen, setListOpen] = useState(false);
@@ -2030,6 +2036,14 @@ function NotebookPanelContent({
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLocaleLowerCase();
 
+    // ⌘⇧K 要排在 ⌘K 前面:后者不看 shiftKey,先判就把快速捕获吞了。
+    if (key === "k" && event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      openCapture();
+      return;
+    }
+
     if (key === "k") {
       event.preventDefault();
       event.stopPropagation();
@@ -2167,6 +2181,74 @@ function NotebookPanelContent({
   /** 前一天 / 后一天。当前打开的是日记就以它为基准,这样能连着翻。 */
   const stepDailyNote = (delta: number) => {
     openDailyNote(dailyStepFrom(activeNote?.id ?? null, new Date(), delta));
+  };
+
+  /**
+   * 快速捕获:把一句话追加到今天的日记或收集箱。
+   *
+   * 不切当前笔记 —— 捕获的意义就是不打断手上的事,所以这里刻意不调 `adoptNote`
+   * (它会 `setActiveId`)。
+   *
+   * 四步都不能省:
+   * 1. `settleSave` 目标笔记。它可能正开着且有未落盘的编辑,而第 2 步读的是磁盘 ——
+   *    不先落盘的话追加会接在旧正文后面,用户刚打的字被这次捕获覆盖掉。
+   * 2. `openOrCreateNoteAt` 拿到磁盘上那份 + 它的 sig。不存在就建(日记用模板,
+   *    收集箱是空壳)。
+   * 3. 追加后**自己写盘**,而不是塞进内存等自动保存:自动保存读的是 `notesRef`,
+   *    它在 render 之后才更新,`setNotes` 紧接着 `flushSave` 会写出改之前的正文。
+   *    而捕获这件事用户按完就走,不该依赖下一次 render。
+   * 4. 结果写回内存。不写回的话下一次自动保存会把改之前的正文整篇写回去,捕获静默
+   *    消失(和全库替换那边同一个坑);当前这篇还要 bump `editorEpoch`,否则
+   *    CodeMirror 里那个捕获了旧 value 的挂起闭包会把追加抹掉。
+   */
+  const submitCapture = (target: CaptureTarget, text: string) => {
+    if (!vault) {
+      setCaptureError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    const captured = text.trim();
+    if (captured.length === 0) return;
+    const now = new Date();
+    const path = capturePath(vault, target, now);
+    setCaptureBusy(true);
+    setCaptureError(null);
+    void (async () => {
+      try {
+        await settleSave(path);
+        const seed =
+          target === "today"
+            ? buildTemplate(DAILY_TEMPLATE, now, t)
+            : { title: t("notebook.captureInboxTitle"), body: "" };
+        const note = await openOrCreateNoteAt(path, seed.title, seed.body);
+        const next = {
+          ...note,
+          body: appendCapture(note.body, captured, captureTimeLabel(now)),
+        };
+        const result = await persistNote(next);
+        if (result.status === "conflict") {
+          // 第 1、2 步之间磁盘又变了(外部编辑器 / 同步盘)。不覆盖,让用户重来。
+          setCaptureError(t("notebook.captureConflict"));
+          return;
+        }
+        const saved = toPanelNote(result.note);
+        setNotes((current) =>
+          current.some((existing) => existing.id === saved.id)
+            ? current.map((existing) => (existing.id === saved.id ? saved : existing))
+            : [saved, ...current],
+        );
+        if (activeNote?.id === saved.id) setEditorEpoch((epoch) => epoch + 1);
+        setCaptureOpen(false);
+      } catch (error) {
+        setCaptureError(errorText(error));
+      } finally {
+        setCaptureBusy(false);
+      }
+    })();
+  };
+
+  const openCapture = () => {
+    setCaptureError(null);
+    setCaptureOpen(true);
   };
 
   /* 删除任意一条笔记。标题栏的删除按钮删当前这条,列表右键菜单删被点中的那条
@@ -2321,6 +2403,14 @@ function NotebookPanelContent({
       group: "notebook.commandGroupLibrary",
       keywords: ["trash", "deleted", "回收站"],
       run: openTrash,
+    },
+    {
+      id: "note.capture",
+      label: t("notebook.captureTitle"),
+      group: "notebook.commandGroupNote",
+      keywords: ["capture", "quick", "inbox", "捕获", "速记", "buhuo"],
+      hint: "⌘⇧K",
+      run: openCapture,
     },
     {
       id: "daily.today",
@@ -3369,6 +3459,21 @@ function NotebookPanelContent({
               t={t}
             />
           }
+          t={t}
+        />
+      )}
+      {/* 快速捕获排在命令面板前面:它是从命令面板里唤出来的,面板关掉之后这个窗
+          才出现,两者不会同时在场。 */}
+      {captureOpen && vault && (
+        <NoteQuickCapture
+          paths={{
+            today: captureRelativePath("today", new Date()),
+            inbox: captureRelativePath("inbox", new Date()),
+          }}
+          busy={captureBusy}
+          error={captureError}
+          onSubmit={submitCapture}
+          onClose={() => setCaptureOpen(false)}
           t={t}
         />
       )}
