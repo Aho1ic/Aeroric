@@ -384,6 +384,13 @@ export class NotebookVaultHarness {
   private icons: Record<string, string> = {};
   /** 让图标的读或写失败。乐观更新的回滚路径只能从这里进。 */
   failIconWrite: "read" | "write" | null = null;
+  /**
+   * 自定义模板(`.notebook/templates/*.md` 解析后的结果)。默认空表 —— 绝大多数
+   * vault 没有那个目录,那是正常状态。
+   */
+  userTemplates: { id: string; title: string; name: string; body: string }[] = [];
+  /** 让读自定义模板失败。「读不到就只剩内置模板」这条路只能从这里进。 */
+  failUserTemplates = false;
   /** 让全库链接扫描失败,用来验反链面板的错误态。 */
   failLinkScan = false;
   /** 让全文搜索失败(模拟后端报正则错),用来验全库搜索的错误态。 */
@@ -603,6 +610,13 @@ export class NotebookVaultHarness {
           createdMs: null,
         };
       }
+
+      case "notebook_list_user_templates":
+        if (this.failUserTemplates) throw new Error("reading templates failed");
+        /* 真后端扫 `.notebook/templates/*.md` 并解析 frontmatter。那份解析有 Rust 侧的
+           单元测试,这里给一张内存表 —— 面板要验的是「列出来的模板能不能建出笔记」,
+           而不是 frontmatter 怎么拆。 */
+        return this.userTemplates.map((template) => ({ ...template }));
 
       case "notebook_read_icons":
         if (this.failIconWrite === "read") throw new Error("reading icons failed");

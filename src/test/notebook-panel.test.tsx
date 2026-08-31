@@ -7279,4 +7279,96 @@ describe("NotebookPanel", () => {
       expect(harness.read(INBOX) ?? "").toContain("捕获的一句");
     });
   });
+
+  describe("自定义模板", () => {
+    /** 从命令面板跑一条命令。 */
+    async function runCommand(query: string) {
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      fireEvent.keyDown(region, { key: "k", metaKey: true });
+      const input = screen.getByRole("combobox", { name: "Command palette" });
+      fireEvent.change(input, { target: { value: query } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+
+    /** 命令面板里当前列出来的候选文本。可以连着调 —— 已经开着就只换查询词。 */
+    async function paletteLabels(query: string): Promise<string[]> {
+      /* 只在还没开的时候按 ⌘K:那个键是**开关**,对着开着的面板再按一次是关掉,
+         于是第二次调用会在一个不存在的输入框上等到超时。 */
+      if (screen.queryByRole("combobox", { name: "Command palette" }) === null) {
+        const region = screen.getByRole("region", { name: "Quick Notes" });
+        fireEvent.keyDown(region, { key: "k", metaKey: true });
+      }
+      const input = await screen.findByRole("combobox", { name: "Command palette" });
+      fireEvent.change(input, { target: { value: query } });
+      // `queryAll`:一个命中不到的查询是合法输入(下面那条就靠它),`getAll` 会直接抛。
+      return screen.queryAllByRole("option").map((node) => node.textContent ?? "");
+    }
+
+    it("磁盘上的模板出现在命令面板里", async () => {
+      harness.userTemplates = [
+        { id: "duty", title: "值班记录", name: "{{date}} 值班", body: "# {{title}}\n\n## 事件\n" },
+      ];
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      expect((await paletteLabels("值班")).join("\n")).toContain("值班记录");
+    });
+
+    it("按自定义模板新建:标题展开日期,正文的 title 用最终标题", async () => {
+      harness.userTemplates = [
+        { id: "duty", title: "值班记录", name: "{{date}} 值班", body: "# {{title}}\n\n## 事件\n" },
+      ];
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      await runCommand("值班记录");
+
+      const now = new Date();
+      const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+        now.getDate(),
+      ).padStart(2, "0")}`;
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Quick note name" })).toHaveValue(
+          `${stamp} 值班`,
+        ),
+      );
+      /* `# {{title}}` 是模板最常见的首行,它必须和笔记标题一致 —— 留着占位符或者
+         填成空的话,用户看到的是一篇标题栏有名字、正文第一行是 `#` 的笔记。 */
+      expect(editorValue()).toContain(`# ${stamp} 值班`);
+      expect(editorValue()).not.toContain("{{title}}");
+    });
+
+    it("文件名 stem 也能搜到", async () => {
+      // 用户记得的可能是文件叫什么,而不是 frontmatter 里写的显示名。
+      harness.userTemplates = [{ id: "duty-log", title: "值班记录", name: "值班", body: "body\n" }];
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      expect((await paletteLabels("duty-log")).join("\n")).toContain("值班记录");
+    });
+
+    it("读模板失败时只是少几条命令,不弹错误提示", async () => {
+      /* 那条提示条是用来说「你的笔记出事了」的。模板读不到最坏只是命令面板里少几条,
+         占用它会让用户以为笔记库坏了。 */
+      harness.failUserTemplates = true;
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      // 内置模板还在,说明面板本身是好的。
+      expect((await paletteLabels("Weekly")).join("\n")).toContain("Weekly");
+      const region = screen.getByRole("region", { name: "Quick Notes" });
+      expect(within(region).queryByRole("alert")).toBeNull();
+    });
+
+    it("没有模板目录时不凭空多出模板命令", async () => {
+      /* 绝大多数 vault 没有 `.notebook/templates/`,那是正常状态 —— 空表要真的是空表,
+         而不是回落到一份内置的示例清单。 */
+      renderNotebook();
+      await screen.findAllByText("No quick notes yet");
+
+      expect(await paletteLabels("值班")).toEqual([]);
+      // 内置模板照旧在,证明这条不是因为面板整个空了才通过。
+      expect((await paletteLabels("Weekly")).join("\n")).toContain("Weekly");
+    });
+  });
 });

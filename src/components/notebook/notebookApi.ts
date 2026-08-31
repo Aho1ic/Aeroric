@@ -173,6 +173,22 @@ export function createFolder(path: string): Promise<void> {
   return invoke<void>("notebook_create_folder", { path });
 }
 
+/** `<vault>/.notebook/templates/*.md` 里的一个模板。字段都是**字面文本**,不是 i18n 键。 */
+export type UserTemplate = {
+  /** 文件名 stem。 */
+  id: string;
+  title: string;
+  /** 默认笔记标题,可含 `{{date}}` / `{{time}}` / `{{title}}`。 */
+  name: string;
+  /** 模板正文(原样,占位符未展开)。 */
+  body: string;
+};
+
+/** 列自定义模板。目录不存在时后端返回空表,不是错误。 */
+export function listUserTemplates(vault: string): Promise<UserTemplate[]> {
+  return invoke<UserTemplate[]>("notebook_list_user_templates", { vault });
+}
+
 /** 回收站里的一条。`id` 是删除时刻的毫秒时间戳(同毫秒带 `-N` 后缀)。 */
 export type TrashItem = {
   /** 恢复 / 彻底删除只认它。前端不回传路径 —— 那个入口就没法被拿去动 vault 外的东西。 */

@@ -68,6 +68,8 @@ import {
   ensureDefaultVault,
   listNoteSnapshots,
   listTrash,
+  listUserTemplates,
+  type UserTemplate,
   purgeAllTrash,
   purgeTrashItem,
   readNoteSnapshot,
@@ -171,12 +173,27 @@ import {
   loadNoteByPath,
   noteFileContent,
   openOrCreateNoteAt,
+  persistNote,
   persistOrder,
   removeNote,
   type VaultNote,
 } from "./notebookVault";
 import { dailyNotePath, dailyStepFrom } from "./noteDaily";
+import { NoteQuickCapture } from "./NoteQuickCapture";
+import {
+  appendCapture,
+  capturePath,
+  captureRelativePath,
+  captureTimeLabel,
+  type CaptureTarget,
+} from "./noteCapture";
 import { buildTemplate, DAILY_TEMPLATE, NOTE_TEMPLATES, type NoteTemplate } from "./noteTemplates";
+import {
+  expandUserTemplate,
+  fillTitle,
+  userTemplateKeywords,
+  type UserTemplateEntry,
+} from "./noteUserTemplates";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -246,6 +263,8 @@ function NotebookPanelContent({
   const [iconPicker, setIconPicker] = useState<NoteIconPickerState | null>(null);
   /** 自定义图标表(vault 相对路径 → 图标名),来自 `.notebook/icons.json`。 */
   const [noteIcons, setNoteIcons] = useState<Record<string, string>>({});
+  /** 自定义模板,来自 `.notebook/templates/*.md`。没有那个目录时是空表。 */
+  const [userTemplates, setUserTemplates] = useState<readonly UserTemplate[]>([]);
   /** 全库标题索引:路径 → frontmatter 里的真实标题。`[[链接]]` 的解析要用它。
    *
    * 笔记列表只读目录项,未读入的笔记 `title` 是文件名 stem。而标题存在
@@ -554,6 +573,32 @@ function NotebookPanelContent({
       }
     })();
 
+    return () => {
+      cancelled = true;
+    };
+  }, [vault]);
+
+  /* 自定义模板(`<vault>/.notebook/templates/*.md`)。和图标表一样在 vault 就绪时读一次。
+     不跟着面板每次打开重读:模板是用户偶尔手工放进去的文件,而这一趟是 readdir + 逐个
+     读文件 —— 挂在 vault 上已经覆盖「换库」这个唯一会变的维度。用户新加了模板文件时
+     重开一次应用(或换一次库)就能刷到,这个代价比每次开面板都扫一遍目录小。 */
+  useEffect(() => {
+    if (!vault) {
+      setUserTemplates([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listUserTemplates(vault);
+        if (cancelled) return;
+        setUserTemplates(list);
+      } catch {
+        /* 读不到就只剩内置模板。不占错误提示条:那条是用来说「你的笔记出事了」的,
+           而这里最坏的结果是命令面板里少几条自定义命令。 */
+        if (!cancelled) setUserTemplates([]);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -2151,6 +2196,31 @@ function NotebookPanelContent({
   };
 
   /**
+   * 按用户自定义模板新建。
+   *
+   * 和内置模板走同一条路(后端按标题分配文件名),区别只在正文哪来:这里是磁盘上那个
+   * `.md` 文件的字面内容,`{{date}}` / `{{time}}` 已经在 `expandUserTemplate` 里展开过。
+   *
+   * `{{title}}` 留到这一步才替换,而且用的是**最终标题** —— 也就是 `name` 展开后的
+   * 那个串。正文里写 `# {{title}}` 是最常见的模板首行,它必须和笔记标题一致。
+   */
+  const addNoteFromUserTemplate = (entry: UserTemplateEntry) => {
+    if (!vault) {
+      setError(t("notebook.vaultUnavailable"));
+      return;
+    }
+    void (async () => {
+      try {
+        adoptNote(
+          await createNoteFromTemplate(vault, entry.name, fillTitle(entry.body, entry.name)),
+        );
+      } catch (error) {
+        setError(errorText(error));
+      }
+    })();
+  };
+
+  /**
    * 打开某一天的日记,没有就按模板建出来。
    *
    * 落点固定为 `<vault>/Daily/YYYY-MM-DD.md`。已经存在时读磁盘上那份 —— 不是拿
@@ -2444,6 +2514,16 @@ function NotebookPanelContent({
          只记得里面有什么」的人也搜得到 —— 搜「进展」能命中周报。 */
       keywords: [...template.keywords, t(template.subKey)],
       run: () => addNoteFromTemplate(template),
+    })),
+    /* 自定义模板排在内置的后面,同一个分组里。单独开一个分组的话「我自己那个会议纪要」
+       和内置的会议纪要会分列两处,而用户要的只是「按会议纪要新建」。
+       日期在**点下去那一刻**展开,不是在读到模板的时候 —— 面板可能开着过夜。 */
+    ...userTemplates.map((template) => ({
+      id: `template.user:${template.id}`,
+      label: template.title,
+      group: "notebook.commandGroupTemplate",
+      keywords: userTemplateKeywords(template),
+      run: () => addNoteFromUserTemplate(expandUserTemplate(template, new Date())),
     })),
   ];
 

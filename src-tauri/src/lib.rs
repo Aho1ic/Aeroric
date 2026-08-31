@@ -953,6 +953,7 @@ pub fn run() {
             notebook::notebook_migrate_legacy,
             notebook::notebook_convert_richtext,
             notebook::notebook_html_to_markdown,
+            notebook::notebook_list_user_templates,
         ])
         .build(tauri::generate_context!());
 

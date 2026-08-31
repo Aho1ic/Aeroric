@@ -32,6 +32,7 @@ pub mod tag_rename;
 pub mod tags;
 pub mod tasks;
 pub mod trash;
+pub mod user_templates;
 pub mod vault_index;
 mod vault_walk;
 
@@ -685,6 +686,21 @@ pub async fn notebook_convert_richtext(
 ) -> Result<migrate::RichtextConversionReport, String> {
     let resolved = state.resolve_in_vaults(&vault, false)?;
     blocking(move || migrate::convert_richtext_notes(&resolved)).await
+}
+
+// ── 自定义模板 ─────────────────────────────────────────────────────────────
+
+/// 列出 `<vault>/.notebook/templates/*.md`。目录不存在时是空表,不是错误。
+///
+/// 占位符不在后端替换 —— 日期要按 webview 的本地时区算,见 `user_templates` 的
+/// 模块注释。
+#[tauri::command]
+pub async fn notebook_list_user_templates(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<user_templates::UserTemplate>, String> {
+    let root = resolve_vault_root(&state, &vault)?;
+    blocking(move || Ok(user_templates::list_user_templates(&root))).await
 }
 
 /// 把 HTML 转成 Markdown。迁移之外,预览/粘贴富文本也会用到。
