@@ -29,16 +29,18 @@
 //! 两个库分开,但 hash 复用 `state::hash64`:`rag/index.rs` 已经在用它,同步再起
 //! 第三套只会让三处基线互相对不上。
 
-// 这一层目前只有测试在调:`engine::run` 需要一个 `RemoteFs` 实现才能接到命令上,而那是
-// P8c(云盘传输层)的事。所以 63 处 dead_code 说的是「还没有非测试调用方」,不是「没测
-// 试覆盖」—— 每个导出项都被单测走过,关键守卫还逐个过了变异测试。
+// 这一层目前只有测试在调。`remote` 已经把 `StorageBackend` 接成了 `RemoteFs`,所以
+// `engine::run` 现在拿得到真实传输;缺的是命令层 —— 一个 `#[tauri::command]` 把
+// `StorageConnection` 解成后端再驱动一轮。所以这 84 处 dead_code 说的是「还没有非测试
+// 调用方」,不是「没测试覆盖」:每个导出项都被单测走过,关键守卫还逐个过了变异测试。
 //
-// 范围刻意收到这四个子模块上,不放 crate 级:一条常驻的 allow 会把将来别处真正的
-// dead_code 一起吞掉。**P8c 把传输层接上、命令层落地之后删掉这行**,那时候还剩的
-// 就是真的没人用了。
+// 范围刻意收到这六个子模块上,不放 crate 级:一条常驻的 allow 会把将来别处真正的
+// dead_code 一起吞掉。**命令层落地之后删掉这行**,那时候还剩的就是真的没人用了。
 #![allow(dead_code)]
 
 pub mod diff;
 pub mod engine;
+pub mod manifest;
+pub mod remote;
 pub mod scan;
 pub mod store;

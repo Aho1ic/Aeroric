@@ -40,6 +40,16 @@ pub trait RemoteFs {
     /// 写入并返回落盘后的内容 hash。
     fn put(&mut self, path: &str, bytes: &[u8], hash: &str) -> Result<(), String>;
     fn delete(&mut self, path: &str) -> Result<(), String>;
+    /// 一轮结束时把远端侧的记账落盘(sidecar manifest)。
+    ///
+    /// 分成独立一步而不是每次 `put` 都写:整份清单每轮写一次就够,逐文件写的话两万个
+    /// 文件要把清单来回写两万遍。这样做安全的前提是 **manifest 不充当存在性依据**
+    /// —— 见 `manifest` 的模块文档。丢一次 commit 的代价只是下一轮多算几个 hash。
+    ///
+    /// 默认空实现:内存假实现和不需要记账的传输不必关心。
+    fn commit(&mut self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 本地文件系统的破坏性操作。抽出来是为了让「删除走回收站」这一点可测。
@@ -151,6 +161,17 @@ pub fn run(
     // 删了(基线和 tombstone 互斥,见 store 的两个写入口)。变异测试证实了这一点 ——
     // 去掉那段之后 `a_double_deletion_clears_the_baseline` 依然过。留着只会让人以为
     // 防复活这件事有两道闸门,真出问题时两边都不敢改。
+
+    // 远端记账落盘。放在推进 seq **之前**:commit 失败说明远端那份清单没写上,这一轮
+    // 就不算完整。失败不算数据问题(清单可重建),但不能让 seq 说这一轮圆满了。
+    if let Err(error) = remote.commit() {
+        outcomes.push(ActionOutcome {
+            path: String::new(),
+            reason: "manifest_commit",
+            status: OutcomeStatus::Failed { error },
+        });
+        all_settled = false;
+    }
 
     // seq 只在全部落定时推进:有挂起或失败还推进的话,对端会以为我们这边已经是完整的
     // 一轮,而实际上有文件没同步上。
@@ -1052,6 +1073,54 @@ mod tests {
         // 失败的那条不该留下基线 —— 留了的话下一轮以为已经传上去了。
         let conn = store::open(&vault).expect("conn");
         assert!(store::baselines(&conn, "r1").expect("bases").is_empty());
+    }
+
+    #[test]
+    fn a_failed_manifest_commit_keeps_the_round_incomplete() {
+        // 清单没写上不是数据问题(它可重建),但 seq 不能说这一轮圆满了 —— 对端会据此
+        // 以为我们这边已经是完整的一份。
+        struct NoCommit(FakeRemote);
+        impl RemoteFs for NoCommit {
+            fn list(&self) -> Result<Vec<RemoteEntry>, String> {
+                self.0.list()
+            }
+            fn get(&self, path: &str) -> Result<Vec<u8>, String> {
+                self.0.get(path)
+            }
+            fn put(&mut self, path: &str, bytes: &[u8], hash: &str) -> Result<(), String> {
+                self.0.put(path, bytes, hash)
+            }
+            fn delete(&mut self, path: &str) -> Result<(), String> {
+                self.0.delete(path)
+            }
+            fn commit(&mut self) -> Result<(), String> {
+                Err("manifest write failed".to_string())
+            }
+        }
+
+        let vault = bound("commit-fail");
+        write_note(&vault, "a.md", b"body");
+        let mut remote = NoCommit(FakeRemote::default());
+        let mut local = FakeLocal::default();
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+        // 文件本身传上去了,基线也记了 —— 那些都成功了。
+        assert_eq!(outcome(&report, "a.md").status, OutcomeStatus::Done);
+        assert!(remote.0.put.contains(&"a.md".to_string()));
+        // 但这一轮不算完整。
+        assert!(report.seq.is_none(), "commit 失败时 seq 不该推进");
+        assert!(matches!(
+            outcome(&report, "").status,
+            OutcomeStatus::Failed { .. }
+        ));
+        assert_eq!(outcome(&report, "").reason, "manifest_commit");
     }
 
     #[test]
