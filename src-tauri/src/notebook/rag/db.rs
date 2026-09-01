@@ -232,6 +232,10 @@ fn create_tables(conn: &Connection, dim: usize) -> Result<(), String> {
              id          INTEGER PRIMARY KEY,
              path        TEXT NOT NULL UNIQUE,
              title       TEXT NOT NULL DEFAULT '',
+             -- 死列。索引的新鲜度判定一律比 hash,不比 mtime(挂钟在同步场景下不可信,
+             -- 见 notebook/sync)。写入侧已经不再显式给它赋值,靠这里的 DEFAULT 0。
+             -- 不 DROP 是因为要走 schema 迁移,而 index.db 随时可重建、收益纯属整洁;
+             -- 真正需要 mtime 的地方是 sync.db 的 local_mtime_ms。
              mtime_ms    INTEGER NOT NULL DEFAULT 0,
              hash        TEXT NOT NULL DEFAULT '',
              status      TEXT NOT NULL DEFAULT 'pending',

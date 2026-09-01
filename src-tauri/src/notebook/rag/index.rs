@@ -416,7 +416,8 @@ pub(super) fn title_of(content: &str, path: &str) -> String {
 
 fn insert_doc(conn: &Connection, path: &str, title: &str, hash: &str) -> Result<i64, String> {
     conn.execute(
-        "INSERT INTO docs(path, title, hash, status, mtime_ms) VALUES (?1, ?2, ?3, ?4, 0)",
+        // 不写 mtime_ms:它是死列,新鲜度一律比 hash。显式写个 0 只会让人以为它有用。
+        "INSERT INTO docs(path, title, hash, status) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![path, title, hash, DocStatus::Pending.as_str()],
     )
     .map_err(|e| format!("Cannot insert notebook index doc: {e}"))?;

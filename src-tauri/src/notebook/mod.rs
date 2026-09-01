@@ -30,6 +30,7 @@ pub mod migrate;
 pub mod rag;
 pub mod snapshots;
 pub mod state;
+pub mod sync;
 pub mod tag_rename;
 pub mod tags;
 pub mod tasks;
