@@ -6,7 +6,8 @@ use std::time::Duration;
 mod transport;
 
 use transport::{
-    git_command_error, run_git, run_git_check, run_git_with_timeout, validate_project_path,
+    git_command_error, run_git, run_git_check, run_git_network, run_git_with_timeout,
+    validate_project_path,
 };
 
 pub(crate) const MAX_STASH_DIFF_CHARS: usize = 200_000;
@@ -33,6 +34,95 @@ fn validate_git_relative_path(relative_path: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// 允许 `git clone` / `git remote add` 接收的 URL 形态。
+///
+/// ## 为什么必须校验:以 `-` 开头的 URL 是一条实测成立的 RCE
+///
+/// `git clone <url> <dir>` 里的 `<url>` 只是一个位置参数,git 照常把以 `-` 开头的东西
+/// 当选项解析。本机 git 2.50 上实测:
+///
+/// ```text
+/// git clone "--upload-pack=touch /tmp/marker;git-upload-pack" src.git out
+/// → /tmp/marker 被创建
+/// ```
+///
+/// 所以这不是理论风险。`--` 挡不住它:`--upload-pack` 出现在 `--` **之前**才生效,而我们
+/// 拦的正是那个位置上的值。唯一可靠的做法是先看第一个字符。
+///
+/// ## 传输白名单
+///
+/// `ext::` 这类传输助手会**执行任意命令**(`ext::sh -c ...`)。git 2.50 默认已经拦住
+/// (`protocol.ext.allow` 默认 `never`,实测报「传输 'ext' 不允许」),但那是 git 的默认值,
+/// 不是我们的保证 —— 用户的 `~/.gitconfig` 里一句 `protocol.ext.allow=always` 就能把它打开,
+/// 旧版 git 也未必是这个默认。白名单是我们自己这一侧的、不依赖外部配置的保证。
+fn validate_git_url(url: &str) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Repository URL must not be empty".to_string());
+    }
+    // 选项注入。见上面的实测。
+    if trimmed.starts_with('-') {
+        return Err("Repository URL must not start with '-'".to_string());
+    }
+    // NUL 会截断传给子进程的 C 字符串;换行会让 URL 在写进 config 时多出一行。
+    if trimmed.contains('\0') || trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err("Repository URL contains control characters".to_string());
+    }
+
+    // `scheme::` 形式的传输助手一律拒绝(`ext::`、`transport-helper::`……)。注意判断顺序:
+    // 先看 `://`,因为 `https://a::b` 里的 `::` 出现在路径部分,那是合法的。
+    let scheme_end = trimmed.find("://");
+    let helper_sep = trimmed.find("::");
+    if let Some(helper) = helper_sep {
+        if scheme_end.is_none_or(|scheme| helper < scheme) {
+            return Err(format!(
+                "Unsupported repository transport: {}",
+                &trimmed[..helper]
+            ));
+        }
+    }
+
+    // 剩下的形态:`scheme://…`、`user@host:path`(scp 式 ssh)、以及本地路径。
+    // 本地路径放行 —— 用户拿一个本地裸库当远端是正当用法,而 clone 到本地也不比
+    // 「用文件管理器复制一个目录」更危险。
+    Ok(())
+}
+
+/// clone 的目标目录。`validate_project_path` 在这里用不了 —— 它要求路径**已存在**,而
+/// clone 的目标按定义还不存在。
+///
+/// 判据:父目录得在(不替用户凭空造一层),目标本身要么不存在,要么是个空目录。
+/// 允许空目录是因为用户很可能先用文件管理器建好了那个文件夹 —— git 自己也允许。
+/// 非空目录一律拒:clone 到一个有东西的目录上,轻则失败,重则把用户的文件和一个陌生
+/// 仓库混在一起,而那种状态很难看出来、更难还原。
+fn validate_clone_target(target: &str) -> Result<(), String> {
+    let path = Path::new(target);
+    if !path.is_absolute() {
+        return Err("Target path must be absolute".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Target path has no parent directory".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Parent directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    match std::fs::read_dir(path) {
+        // 存在且能列 —— 必须是空的。
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err("Target directory is not empty".to_string());
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        // 存在但不是目录(普通文件),或者没权限列。两种都不能往下走。
+        Err(error) => Err(format!("Cannot use target directory: {error}")),
+    }
 }
 
 fn unique_git_file_paths(file_paths: Vec<String>) -> Result<Vec<String>, String> {
@@ -1569,7 +1659,8 @@ pub async fn git_push(project_path: String, branch: Option<String>) -> Result<St
             args.push("origin".to_string());
             args.push(b.clone());
         }
-        let output = run_git(&project_path, &args)?;
+        validate_project_path(&project_path)?;
+        let output = run_git_network(&project_path, &args)?;
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -1587,7 +1678,8 @@ pub async fn git_push(project_path: String, branch: Option<String>) -> Result<St
 #[tauri::command]
 pub async fn git_pull(project_path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let output = run_git(&project_path, &["pull"])?;
+        validate_project_path(&project_path)?;
+        let output = run_git_network(&project_path, &["pull"])?;
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -1600,6 +1692,126 @@ pub async fn git_pull(project_path: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 在一个已存在的目录里建仓库。
+///
+/// 幂等:已经是仓库了就直接返回,不报错也不重新 init。上层(随手记的 vault 绑定)会在
+/// 每次进入 git 同步模式时调一次,报错会让一个正常的重复调用看起来像故障。
+///
+/// `--initial-branch` 显式给出而不是靠 git 的默认值:那个默认值取决于用户的
+/// `init.defaultBranch`,不给的话两台机器可能一台 `main` 一台 `master`,推送时就成了
+/// 两条无关的分支。
+#[tauri::command]
+pub async fn git_init(project_path: String, initial_branch: Option<String>) -> Result<(), String> {
+    if let Some(branch) = initial_branch.as_deref().filter(|value| !value.is_empty()) {
+        validate_git_revision(branch)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        validate_project_path(&project_path)?;
+        if git_dir(&project_path).is_ok() {
+            return Ok(());
+        }
+        let branch = initial_branch
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "main".to_string());
+        run_git_check(
+            &project_path,
+            &["init", &format!("--initial-branch={branch}")],
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// clone 到一个空的/不存在的目录。
+///
+/// git 在**父目录**里执行,目标作为参数传 —— 目标自己还不存在,不能当 cwd。
+///
+/// `--` 放在 URL 前面:URL 是外部输入,而 `--` 之后 git 不再把参数当选项。
+/// 注意这**不能替代** [`validate_git_url`] 的第一个字符检查:`--upload-pack=` 这类选项
+/// 是在 `--` 之前被解析的,而攻击者控制的正是 URL 那个位置的值。两道都要。
+#[tauri::command]
+pub async fn git_clone(
+    url: String,
+    target_path: String,
+    branch: Option<String>,
+) -> Result<String, String> {
+    validate_git_url(&url)?;
+    validate_clone_target(&target_path)?;
+    if let Some(branch) = branch.as_deref().filter(|value| !value.is_empty()) {
+        validate_git_revision(branch)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = Path::new(&target_path);
+        let parent = target
+            .parent()
+            .ok_or_else(|| "Target path has no parent directory".to_string())?
+            .to_string_lossy()
+            .to_string();
+
+        let mut args: Vec<String> = vec!["clone".to_string()];
+        if let Some(branch) = branch.filter(|value| !value.is_empty()) {
+            args.push("--branch".to_string());
+            args.push(branch);
+        }
+        args.push("--".to_string());
+        args.push(url.trim().to_string());
+        args.push(target_path.clone());
+
+        let output = run_git_network(&parent, &args)?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() {
+            return Err(combined.trim().to_string());
+        }
+        Ok(combined.trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 取远端最新状态但**不动工作区**。
+///
+/// 同步流程里先 fetch 再判断要不要 pull:fetch 不改工作区也不产生冲突,所以可以放心
+/// 定时跑;拿到 ahead/behind 之后才决定是否合并。
+#[tauri::command]
+pub async fn git_fetch(project_path: String, prune: Option<bool>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_project_path(&project_path)?;
+        let mut args: Vec<&str> = vec!["fetch", "--all"];
+        if prune.unwrap_or(false) {
+            args.push("--prune");
+        }
+        let output = run_git_network(&project_path, &args)?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() {
+            return Err(combined.trim().to_string());
+        }
+        Ok(combined.trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 这个目录是不是 git 仓库(工作区)。返回 `.git` 的位置。
+///
+/// `run_git` 只校验「是绝对路径且是目录」,不校验是仓库。对已有 37 条命令来说那没问题
+/// —— 不是仓库时 git 自己会报错。但同步编排要**先分支**(不是仓库就 init 或 clone),
+/// 所以需要一个不靠错误消息判断的问法。
+pub(crate) fn git_dir(project_path: &str) -> Result<String, String> {
+    let output = run_git(project_path, &["rev-parse", "--git-dir"])?;
+    if !output.status.success() {
+        return Err(git_command_error(&output, "Not a git repository"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -2218,16 +2430,16 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_blame_file, git_branch_graph, git_commit_detail, git_conflict_files,
-        git_conflict_preview, git_has_head, git_log, git_resolve_conflict, git_show_diff,
-        git_stash_diff, git_stash_list, git_stash_push, git_worktree_root,
-        is_protected_project_relative_path, list_untracked_files, parse_blame_porcelain,
-        parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
-        parse_porcelain_z_status, parse_stash_list, path_to_string,
+        git_blame_file, git_branch_graph, git_clone, git_commit_detail, git_conflict_files,
+        git_conflict_preview, git_dir, git_fetch, git_has_head, git_init, git_log,
+        git_resolve_conflict, git_show_diff, git_stash_diff, git_stash_list, git_stash_push,
+        git_worktree_root, is_protected_project_relative_path, list_untracked_files,
+        parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
+        parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list, path_to_string,
         resolve_conflict_markers_keep_both, run_git, run_git_check,
-        untracked_files_under_directory, validate_git_revision, validate_project_path,
-        validate_stash_ref, GitBlameLine, GitBranchGraphCommit, GitConflictFile,
-        GitConflictResolution, GitFileChange, GitStashEntry,
+        untracked_files_under_directory, validate_clone_target, validate_git_revision,
+        validate_git_url, validate_project_path, validate_stash_ref, GitBlameLine,
+        GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
     };
     use std::{fs, path::PathBuf, process::Command};
 
@@ -2728,5 +2940,206 @@ mod tests {
         assert!(git_log(repo_path, 50, None, Some("injected".to_string()))
             .await
             .is_ok());
+    }
+
+    #[test]
+    fn a_repository_url_starting_with_a_dash_is_refused() {
+        // 这一条防的是实测成立的 RCE:git clone 把以 `-` 开头的位置参数当选项解析,
+        // `--upload-pack=<cmd>` 于是变成任意命令执行(本机 git 2.50 上验证过)。
+        for payload in [
+            "--upload-pack=touch /tmp/pwned",
+            "-c protocol.ext.allow=always",
+            "--config=core.pager=sh",
+            "-",
+        ] {
+            assert!(
+                validate_git_url(payload).is_err(),
+                "{payload} 必须被拒绝 —— 它会被 git 当成选项"
+            );
+        }
+    }
+
+    #[test]
+    fn a_transport_helper_url_is_refused() {
+        // `ext::` 会执行任意命令。git 2.50 的默认值已经拦住,但那是 git 的默认值而不是
+        // 我们的保证:用户 gitconfig 里一句 protocol.ext.allow=always 就能打开。
+        assert!(validate_git_url("ext::sh -c whoami").is_err());
+        assert!(validate_git_url("weird-helper::payload").is_err());
+    }
+
+    #[test]
+    fn ordinary_repository_urls_are_accepted() {
+        for url in [
+            "https://github.com/owner/repo.git",
+            "http://example.test/repo.git",
+            "ssh://git@example.test:2222/owner/repo.git",
+            "git@github.com:owner/repo.git",
+            "/Users/someone/local/bare.git",
+            "file:///Users/someone/local/bare.git",
+        ] {
+            assert!(validate_git_url(url).is_ok(), "{url} 应该放行");
+        }
+    }
+
+    #[test]
+    fn a_double_colon_inside_a_url_path_is_not_mistaken_for_a_helper() {
+        // 判断顺序要紧:`://` 之后出现的 `::` 是路径的一部分,不是传输助手。
+        // 弄反的话合法的 URL 会被拒,而用户看不出为什么。
+        assert!(validate_git_url("https://example.test/weird::name.git").is_ok());
+        assert!(validate_git_url("ssh://host/a::b").is_ok());
+    }
+
+    #[test]
+    fn a_url_with_control_characters_is_refused() {
+        assert!(validate_git_url("https://example.test/\nfetch = evil").is_err());
+        assert!(validate_git_url("https://example.test/repo\0.git").is_err());
+        assert!(validate_git_url("   ").is_err());
+    }
+
+    #[test]
+    fn a_clone_target_must_be_absolute_with_an_existing_parent() {
+        assert!(validate_clone_target("relative/path").is_err());
+        assert!(validate_clone_target("/definitely/not/here/at/all/target").is_err());
+    }
+
+    #[test]
+    fn a_clone_target_may_be_missing_or_empty_but_not_occupied() {
+        let repo = TempRepo::new();
+        let base = repo.path.canonicalize().unwrap();
+
+        let missing = base.join("fresh");
+        assert!(validate_clone_target(&path_to_string(&missing).unwrap()).is_ok());
+
+        let empty = base.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(validate_clone_target(&path_to_string(&empty).unwrap()).is_ok());
+
+        // 非空目录一律拒:clone 到有东西的目录上会把用户的文件和一个陌生仓库混在一起,
+        // 那种状态很难看出来、更难还原。
+        let occupied = base.join("occupied");
+        fs::create_dir_all(&occupied).unwrap();
+        fs::write(occupied.join("mine.txt"), "important").unwrap();
+        assert_eq!(
+            validate_clone_target(&path_to_string(&occupied).unwrap()).unwrap_err(),
+            "Target directory is not empty"
+        );
+
+        let as_file = base.join("a-file");
+        fs::write(&as_file, "not a dir").unwrap();
+        assert!(validate_clone_target(&path_to_string(&as_file).unwrap()).is_err());
+    }
+
+    #[tokio::test]
+    async fn git_init_creates_a_repository_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("aeroric-git-init-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = path_to_string(&dir.canonicalize().unwrap()).unwrap();
+
+        git_init(path.clone(), None).await.expect("init");
+        assert!(dir.join(".git").exists());
+        // 分支名显式给出,不靠用户的 init.defaultBranch —— 否则两台机器可能一台 main
+        // 一台 master,推送时成了两条无关的分支。
+        let head = fs::read_to_string(dir.join(".git").join("HEAD")).unwrap();
+        assert!(head.contains("refs/heads/main"), "HEAD = {head}");
+
+        // 再调一次不该报错:上层每次进入 git 同步模式都会调,报错会让正常的重复调用
+        // 看起来像故障。
+        git_init(path, None).await.expect("second init is a no-op");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn git_init_refuses_an_option_like_branch_name() {
+        let dir = std::env::temp_dir().join(format!("aeroric-git-init-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = path_to_string(&dir.canonicalize().unwrap()).unwrap();
+
+        assert!(git_init(path, Some("--bare".to_string())).await.is_err());
+        assert!(!dir.join(".git").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn git_clone_copies_a_local_repository() {
+        let source = TempRepo::new();
+        source.configure_identity();
+        source.commit_file("note.md", "hello", "first");
+
+        let target =
+            std::env::temp_dir().join(format!("aeroric-git-clone-{}", uuid::Uuid::new_v4()));
+        let target_path = path_to_string(&target).unwrap();
+
+        git_clone(source.path_string(), target_path.clone(), None)
+            .await
+            .expect("clone");
+        assert_eq!(fs::read_to_string(target.join("note.md")).unwrap(), "hello");
+
+        let _ = fs::remove_dir_all(&target);
+    }
+
+    #[tokio::test]
+    async fn git_clone_refuses_an_option_like_url_without_running_git() {
+        // 端到端地钉住那条 RCE:`--upload-pack=` 会执行命令,所以它必须在 git 被调起
+        // **之前**就被拒。
+        let sentinel =
+            std::env::temp_dir().join(format!("aeroric-clone-rce-{}", uuid::Uuid::new_v4()));
+        let target =
+            std::env::temp_dir().join(format!("aeroric-git-clone-{}", uuid::Uuid::new_v4()));
+
+        let error = git_clone(
+            format!("--upload-pack=touch {};git-upload-pack", sentinel.display()),
+            path_to_string(&target).unwrap(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("must not start with"), "error = {error}");
+        assert!(!sentinel.exists(), "选项注入执行了命令");
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn git_fetch_brings_in_a_new_remote_commit() {
+        let source = TempRepo::new();
+        source.configure_identity();
+        source.commit_file("note.md", "one", "first");
+
+        let target =
+            std::env::temp_dir().join(format!("aeroric-git-fetch-{}", uuid::Uuid::new_v4()));
+        let target_path = path_to_string(&target).unwrap();
+        git_clone(source.path_string(), target_path.clone(), None)
+            .await
+            .expect("clone");
+
+        source.commit_file("note.md", "two", "second");
+        git_fetch(target_path.clone(), None).await.expect("fetch");
+
+        // fetch 只动 remote-tracking ref,**不动工作区** —— 所以工作区还是旧内容。
+        // 这一点是同步编排敢定时跑 fetch 的前提:它不产生冲突。
+        assert_eq!(fs::read_to_string(target.join("note.md")).unwrap(), "one");
+        let output = run_git(&target_path, &["rev-list", "--count", "HEAD..origin/HEAD"]).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "1",
+            "fetch 之后应该看到落后一个提交"
+        );
+
+        let _ = fs::remove_dir_all(&target);
+    }
+
+    #[test]
+    fn git_dir_distinguishes_a_repository_from_a_plain_directory() {
+        // 同步编排要先分支(不是仓库就 init/clone),所以需要一个不靠错误消息判断的问法。
+        let repo = TempRepo::new();
+        assert!(git_dir(&repo.path_string()).is_ok());
+
+        let plain =
+            std::env::temp_dir().join(format!("aeroric-git-plain-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&plain).unwrap();
+        assert!(git_dir(&path_to_string(&plain.canonicalize().unwrap()).unwrap()).is_err());
+        let _ = fs::remove_dir_all(&plain);
     }
 }

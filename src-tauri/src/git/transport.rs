@@ -40,6 +40,50 @@ pub(super) fn run_git<S: AsRef<std::ffi::OsStr>>(
         .map_err(|error| error.to_string())
 }
 
+/// 让走网络的 git 子进程**失败而不是挂住**。
+///
+/// GUI 里没有可交互的 stdin。一个要凭据的远端会让 git 停在「Username for ...」上等一个
+/// 永远不会来的回车 —— 对用户来说这不是提示,是同步永久卡住,而且看不出卡在哪。定时
+/// 触发的后台同步尤其糟:每一轮都留一个挂住的进程。
+///
+/// 两条都要:`GIT_TERMINAL_PROMPT=0` 管 HTTP(S),`ssh -oBatchMode=yes` 管 SSH
+/// (口令、以及首次连接的 host key 确认)。少任何一条都还剩一条挂住的路。
+///
+/// **只在用户没有自己设过的时候才设** `GIT_SSH_COMMAND`:有人靠它指定专用私钥或跳板机,
+/// 覆盖掉会把「能同步」变成「不能同步」。这里要的是补一个默认值,不是抢走配置权。
+fn configure_git_network_env<F>(existing: &[(String, String)], mut set: F)
+where
+    F: FnMut(&str, &str),
+{
+    set("GIT_TERMINAL_PROMPT", "0");
+    if !existing.iter().any(|(key, _)| key == "GIT_SSH_COMMAND") {
+        set("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    }
+}
+
+/// `run_git` 的网络版:同样同步执行,但不会因为等凭据而挂住。
+///
+/// `cwd` 允许是 clone 的**父目录**,所以这里不走 `validate_project_path`(它要求路径
+/// 已存在且是目录 —— 对父目录成立,但语义上这一层校验由调用方按自己的场景做,
+/// `git_clone` 用 `validate_clone_target`,其余用 `validate_project_path`)。
+pub(super) fn run_git_network<S: AsRef<std::ffi::OsStr>>(
+    cwd: &str,
+    args: &[S],
+) -> Result<Output, String> {
+    let env = crate::app_settings::get_login_shell_env();
+    let mut command = std::process::Command::new("git");
+    crate::subprocess::configure_background_command(&mut command);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .envs(env.iter().cloned())
+        .stdin(Stdio::null());
+    configure_git_network_env(env, |key, value| {
+        command.env(key, value);
+    });
+    command.output().map_err(|error| error.to_string())
+}
+
 async fn read_pipe_to_end<R: AsyncRead + Unpin>(
     mut pipe: R,
     stream_name: &str,
