@@ -28,10 +28,6 @@
 //! 因果关系判;真判不出来(两边各自都比共同祖先新)就是**并发**,那是一档独立状态,
 //! 要交给用户,不能随便挑一个。
 
-// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
-// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension};
@@ -39,7 +35,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::notebook::fs_ops::private_dir;
 
 /// schema 版本。加表 / 加列都要 +1 并在 [`migrate`] 里补迁移。
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const META_SCHEMA_VERSION: &str = "schema_version";
 const META_DEVICE_ID: &str = "device_id";
@@ -61,6 +57,13 @@ pub struct RemoteTarget {
     pub kind: String,
     /// 远端根(云盘路径 / s3 prefix / git remote)。
     pub root: String,
+    /// 云盘目标用哪条 `StorageConnection`(见 `storage_conn.rs`)。git 目标为空串。
+    ///
+    /// 存 id 而不是把连接配置抄一份进来:凭据只该有一处,抄一份就多一处要跟着改密码、
+    /// 多一处会泄露。代价是连接被删掉后这里会指向空,同步那时报「找不到连接」——
+    /// 那是对的,比拿着一份过期凭据反复重试好。
+    #[serde(default)]
+    pub connection_id: String,
     /// 上次同步成功的时间。**只用于显示**,不参与任何判定。
     pub last_sync_at: i64,
     /// 本设备在这个目标上的逻辑序号,每轮成功同步 +1。
@@ -162,9 +165,14 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     }
     if existing == 0 {
         create_tables(conn)?;
-        write_meta(conn, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
-    } else {
+    } else if existing < SCHEMA_VERSION {
         migrate(conn, existing)?;
+    }
+    // 版本号在两条路之后统一回写。迁移那条路原先漏了这一步,后果是库永远停在旧版本号上,
+    // 于是每次 open 都把同一批 ALTER 再跑一遍 —— 而 `ADD COLUMN` 不是幂等的,第二次直接
+    // 报「duplicate column name」,库从此打不开。
+    if existing != SCHEMA_VERSION {
+        write_meta(conn, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
     }
     ensure_device_id(conn)?;
     Ok(())
@@ -173,11 +181,12 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 fn create_tables(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS remote (
-             id           TEXT PRIMARY KEY,
-             kind         TEXT NOT NULL,
-             root         TEXT NOT NULL,
-             last_sync_at INTEGER NOT NULL DEFAULT 0,
-             seq          INTEGER NOT NULL DEFAULT 0
+             id            TEXT PRIMARY KEY,
+             kind          TEXT NOT NULL,
+             root          TEXT NOT NULL,
+             connection_id TEXT NOT NULL DEFAULT '',
+             last_sync_at  INTEGER NOT NULL DEFAULT 0,
+             seq           INTEGER NOT NULL DEFAULT 0
          );
 
          CREATE TABLE IF NOT EXISTS baseline (
@@ -204,9 +213,18 @@ fn create_tables(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn migrate(_conn: &Connection, _from: i64) -> Result<(), String> {
-    // 目前只有 v1。加列时在这里按 `from` 逐版补,别用 `CREATE TABLE IF NOT EXISTS`
-    // 顶替 —— 那对已存在的表不加列,而缺列要到运行时查询才报错。
+fn migrate(conn: &Connection, from: i64) -> Result<(), String> {
+    // 按 `from` 逐版补,别用 `CREATE TABLE IF NOT EXISTS` 顶替 —— 那对已存在的表不加列,
+    // 而缺列要到运行时查询才报错。
+    if from < 2 {
+        // v2:`remote.connection_id`。云盘目标要记住它用哪条存储连接,否则同步时无从知道
+        // 该拿哪套凭据去连。空串表示「不需要连接」(git 目标的 root 自己就是 remote 名)。
+        conn.execute(
+            "ALTER TABLE remote ADD COLUMN connection_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| format!("Cannot add remote.connection_id: {e}"))?;
+    }
     Ok(())
 }
 
@@ -269,14 +287,23 @@ fn write_meta(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
 
 /// 登记(或更新)一个远端目标。`seq` 与 `last_sync_at` 不动 —— 它们由同步流程推进,
 /// 重新登记一次配置不该把进度清零。
-pub fn upsert_remote(conn: &Connection, id: &str, kind: &str, root: &str) -> Result<(), String> {
+pub fn upsert_remote(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    root: &str,
+    connection_id: &str,
+) -> Result<(), String> {
     if id.is_empty() {
         return Err("Remote id must not be empty".to_string());
     }
     conn.execute(
-        "INSERT INTO remote (id, kind, root) VALUES (?1, ?2, ?3)
-         ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, root = excluded.root",
-        [id, kind, root],
+        "INSERT INTO remote (id, kind, root, connection_id) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+             kind = excluded.kind,
+             root = excluded.root,
+             connection_id = excluded.connection_id",
+        [id, kind, root, connection_id],
     )
     .map_err(|e| format!("Cannot save notebook sync remote: {e}"))?;
     Ok(())
@@ -284,15 +311,16 @@ pub fn upsert_remote(conn: &Connection, id: &str, kind: &str, root: &str) -> Res
 
 pub fn get_remote(conn: &Connection, id: &str) -> Result<Option<RemoteTarget>, String> {
     conn.query_row(
-        "SELECT id, kind, root, last_sync_at, seq FROM remote WHERE id = ?1",
+        "SELECT id, kind, root, connection_id, last_sync_at, seq FROM remote WHERE id = ?1",
         [id],
         |row| {
             Ok(RemoteTarget {
                 id: row.get(0)?,
                 kind: row.get(1)?,
                 root: row.get(2)?,
-                last_sync_at: row.get(3)?,
-                seq: row.get(4)?,
+                connection_id: row.get(3)?,
+                last_sync_at: row.get(4)?,
+                seq: row.get(5)?,
             })
         },
     )
@@ -302,7 +330,7 @@ pub fn get_remote(conn: &Connection, id: &str) -> Result<Option<RemoteTarget>, S
 
 pub fn list_remotes(conn: &Connection) -> Result<Vec<RemoteTarget>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, kind, root, last_sync_at, seq FROM remote ORDER BY id")
+        .prepare("SELECT id, kind, root, connection_id, last_sync_at, seq FROM remote ORDER BY id")
         .map_err(|e| format!("Cannot list notebook sync remotes: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
@@ -310,8 +338,9 @@ pub fn list_remotes(conn: &Connection) -> Result<Vec<RemoteTarget>, String> {
                 id: row.get(0)?,
                 kind: row.get(1)?,
                 root: row.get(2)?,
-                last_sync_at: row.get(3)?,
-                seq: row.get(4)?,
+                connection_id: row.get(3)?,
+                last_sync_at: row.get(4)?,
+                seq: row.get(5)?,
             })
         })
         .map_err(|e| format!("Cannot list notebook sync remotes: {e}"))?;
@@ -529,7 +558,7 @@ mod tests {
     fn opened(tag: &str) -> (PathBuf, Connection) {
         let vault = temp_vault(tag);
         let conn = open(&vault).expect("open");
-        upsert_remote(&conn, "r1", "cloud", "notes/").expect("remote");
+        upsert_remote(&conn, "r1", "cloud", "notes/", "c1").expect("remote");
         (vault, conn)
     }
 
@@ -587,7 +616,7 @@ mod tests {
         let (_vault, conn) = opened("reregister");
         let seq = bump_seq(&conn, "r1", NOW).expect("bump");
         assert_eq!(seq, 1);
-        upsert_remote(&conn, "r1", "cloud", "notes2/").expect("re-register");
+        upsert_remote(&conn, "r1", "cloud", "notes2/", "c1").expect("re-register");
         let remote = get_remote(&conn, "r1").expect("get").expect("present");
         assert_eq!(remote.root, "notes2/");
         assert_eq!(remote.seq, 1, "重新登记不该把 seq 清零");
@@ -615,7 +644,7 @@ mod tests {
         // 一个 vault 可以同时挂多个远端。串了的话 A 远端的同步会拿 B 的基线做判断,
         // 表现是「刚同步完 A,B 那边突然要全量重传」。
         let (_vault, conn) = opened("scoped");
-        upsert_remote(&conn, "r2", "git", "origin").expect("remote2");
+        upsert_remote(&conn, "r2", "git", "origin", "").expect("remote2");
         set_baseline(&conn, "r1", &base("a.md", "111", "222")).expect("set r1");
         set_baseline(&conn, "r2", &base("a.md", "333", "444")).expect("set r2");
         assert_eq!(baselines(&conn, "r1").expect("r1")[0].local_hash, "111");
@@ -670,7 +699,7 @@ mod tests {
         let vault = temp_vault("tomb-persist");
         {
             let conn = open(&vault).expect("open");
-            upsert_remote(&conn, "r1", "cloud", "notes/").expect("remote");
+            upsert_remote(&conn, "r1", "cloud", "notes/", "c1").expect("remote");
             add_tombstone(
                 &conn,
                 "r1",
@@ -776,7 +805,7 @@ mod tests {
     fn an_empty_remote_id_is_refused() {
         // 空 id 会和「没指定远端」混在一起,而那时候所有基线会挤在同一个键下。
         let (_vault, conn) = opened("empty-id");
-        assert!(upsert_remote(&conn, "", "cloud", "notes/").is_err());
+        assert!(upsert_remote(&conn, "", "cloud", "notes/", "c1").is_err());
     }
 
     #[test]
@@ -809,5 +838,71 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("read journal");
         assert_eq!(journal.to_lowercase(), "wal");
+    }
+
+    /// 造一个 v1 形状的库:没有 `connection_id` 列,版本号写 1。
+    fn seed_v1(vault: &Path) {
+        std::fs::create_dir_all(private_dir(vault)).expect("mkdir");
+        let conn = Connection::open(db_path(vault)).expect("open raw");
+        conn.execute_batch(
+            "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE remote (
+                 id           TEXT PRIMARY KEY,
+                 kind         TEXT NOT NULL,
+                 root         TEXT NOT NULL,
+                 last_sync_at INTEGER NOT NULL DEFAULT 0,
+                 seq          INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE baseline (
+                 remote_id      TEXT NOT NULL REFERENCES remote(id) ON DELETE CASCADE,
+                 path           TEXT NOT NULL,
+                 local_hash     TEXT NOT NULL,
+                 local_mtime_ms INTEGER NOT NULL DEFAULT 0,
+                 remote_hash    TEXT NOT NULL,
+                 remote_device  TEXT NOT NULL DEFAULT '',
+                 remote_seq     INTEGER NOT NULL DEFAULT 0,
+                 synced_at      INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (remote_id, path)
+             );
+             CREATE TABLE tombstone (
+                 remote_id   TEXT NOT NULL REFERENCES remote(id) ON DELETE CASCADE,
+                 path        TEXT NOT NULL,
+                 deleted_at  INTEGER NOT NULL,
+                 remote_hash TEXT NOT NULL DEFAULT '',
+                 PRIMARY KEY (remote_id, path)
+             );
+             INSERT INTO schema_meta (key, value) VALUES ('schema_version', '1');
+             INSERT INTO remote (id, kind, root, seq) VALUES ('r1', 'cloud', 'notes/', 5);",
+        )
+        .expect("seed v1");
+    }
+
+    #[test]
+    fn a_v1_db_gains_the_connection_column_without_losing_progress() {
+        let vault = temp_vault("migrate-v1");
+        seed_v1(&vault);
+
+        let conn = open(&vault).expect("migrate");
+        let target = get_remote(&conn, "r1").expect("read").expect("present");
+        // 迁移不能把进度清零 —— seq 退回去会让对端以为我们的改动是旧的。
+        assert_eq!(target.seq, 5);
+        assert_eq!(target.connection_id, "", "老行没有连接,应为空串而不是报错");
+    }
+
+    #[test]
+    fn migrating_writes_the_new_version_back() {
+        let vault = temp_vault("migrate-twice");
+        seed_v1(&vault);
+        {
+            let conn = open(&vault).expect("first open");
+            assert_eq!(
+                read_meta(&conn, META_SCHEMA_VERSION).expect("meta"),
+                Some(SCHEMA_VERSION.to_string())
+            );
+        }
+        // 不回写版本号的话第二次 open 会把同一批 ALTER 再跑一遍,而 `ADD COLUMN` 不幂等 ——
+        // 报 duplicate column name,库从此打不开。
+        let conn = open(&vault).expect("second open must still work");
+        assert!(get_remote(&conn, "r1").expect("read").is_some());
     }
 }

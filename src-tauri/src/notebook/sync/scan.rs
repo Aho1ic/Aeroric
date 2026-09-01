@@ -23,10 +23,6 @@
 //! FNV 是内存带宽级的;为这点时间换一类「改了但同步不认」的 bug 不值得。这条是
 //! 刻意的选择。
 
-// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
-// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use crate::notebook::fs_ops::is_scan_skip_dir;
@@ -193,6 +189,29 @@ pub fn signature_at(vault: &Path, rel_path: &str) -> Result<Option<FileSig>, Str
         return Ok(None);
     }
     Ok(signature_of(vault, &path))
+}
+
+/// 这条相对路径在同步范围之外吗?
+///
+/// 本地扫描靠 [`is_scan_skip_dir`] 在**走目录**时跳过;远端只有一串路径字符串,没有目录
+/// 可跳。两侧必须是同一条口径,否则会出现下面这个:
+///
+/// ```text
+/// 本地扫描  跳过 .notebook/  →  快照里没有它 → 没有基线
+/// 远端列表  照收 .notebook/  →  diff 看到「远端有、本地没有、无基线」→ 判成新文件
+/// 执行      下载 .notebook/sync.db  →  覆盖正在用的同步库
+/// ```
+///
+/// 触发它**不需要恶意远端**:用户拿网盘客户端把整个 vault 传上去一次就够了,而那是很自然
+/// 的操作。同一条路还能覆盖回收站清单(丢掉软删的退路)和 `.git/`(如果这个 vault 同时开
+/// 着 git 同步,等于用云端的旧副本砸掉本地仓库)。
+///
+/// 所以范围判定收在这一个函数里,远端列举、下载写入两处都问它。
+pub fn is_out_of_scope(rel_path: &str) -> bool {
+    // 不额外判空段:`is_scan_skip_dir("")` 恒为 false(`SKIP_DIRS` 里没有空串),加一句
+    // `!part.is_empty()` 改不了任何结果,只会让读者以为空段在这里有特殊含义。空段本身由
+    // `resolve_rel` 拒掉。
+    rel_path.split('/').any(is_scan_skip_dir)
 }
 
 /// 相对路径拼回绝对路径,并确认它没跑出 vault。
@@ -411,5 +430,45 @@ mod tests {
         let table = by_path(scan_vault(&vault).expect("scan"));
         assert_eq!(table.len(), 2);
         assert_eq!(table["b/c.md"].hash, hash64(b"c").to_string());
+    }
+
+    #[test]
+    fn out_of_scope_matches_what_the_walk_skips() {
+        // 这条谓词存在的意义就是「和 scan_vault 走目录时的口径一致」,所以拿真扫描当基准:
+        // 凡是扫描收进来的,它必须说在范围内;凡是扫描跳掉的,它必须说在范围外。
+        let vault = temp_vault();
+        write(&vault, "a.md", b"a");
+        write(&vault, "sub/b.md", b"b");
+        write(&vault, "attachments/c.png", b"c");
+        write(&vault, ".notebook/sync.db", b"db");
+        write(&vault, ".git/HEAD", b"ref");
+        write(&vault, "node_modules/pkg/i.js", b"x");
+        write(&vault, "sub/.git/config", b"cfg");
+
+        let scanned = by_path(scan_vault(&vault).expect("scan"));
+        for rel in scanned.keys() {
+            assert!(!is_out_of_scope(rel), "扫描收了 {rel},谓词却说范围外");
+        }
+        for rel in [
+            ".notebook/sync.db",
+            ".git/HEAD",
+            "node_modules/pkg/i.js",
+            "sub/.git/config",
+        ] {
+            assert!(!scanned.contains_key(rel), "前提错了:扫描不该收 {rel}");
+            assert!(is_out_of_scope(rel), "扫描跳了 {rel},谓词却说范围内");
+        }
+        // 附件必须在范围内 —— 它只在**笔记树**里被跳掉,同步一定要带上。
+        assert!(scanned.contains_key("attachments/c.png"));
+        assert!(!is_out_of_scope("attachments/c.png"));
+    }
+
+    #[test]
+    fn out_of_scope_is_not_a_prefix_test() {
+        // 名字相似的目录是用户的正当数据。按字符串前缀判会把它们一起吞掉。
+        assert!(!is_out_of_scope(".notebook-backup/a.md"));
+        assert!(!is_out_of_scope("gitnotes/a.md"));
+        assert!(!is_out_of_scope("my.git.notes/a.md"));
+        assert!(!is_out_of_scope("a.md"));
     }
 }

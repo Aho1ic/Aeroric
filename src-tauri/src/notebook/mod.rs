@@ -761,6 +761,129 @@ pub async fn notebook_git_sync(
     .await
 }
 
+// ── 云盘同步 ───────────────────────────────────────────────────────────────
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 云盘那条路只接 `cloud` 目标。
+///
+/// 抽成函数是为了能测:命令本身要 Tauri `State`,在单测里构造不出来,而这条判断放在命令体内
+/// 就等于没有测试守着。git 目标混进来的话会一路走到 `find_connection("")` 才失败,用户看到
+/// 的是「找不到存储连接」—— 而真正的问题是他点错了同步方式。
+pub(crate) fn require_cloud_target(remote_id: &str, kind: &str) -> Result<(), String> {
+    if kind == "cloud" {
+        return Ok(());
+    }
+    Err(format!(
+        "Remote {remote_id} is a {kind} target; use the matching sync command"
+    ))
+}
+
+/// 把一个 vault 绑到一条存储连接上的某个远端目录。
+///
+/// `remote_id` 由前端给且要稳定 —— 基线和 tombstone 都挂在它下面,换 id 等于冷启动。
+#[tauri::command]
+pub async fn notebook_sync_bind(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+    connection_id: String,
+    root: String,
+) -> Result<(), String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        // 绑定时就验一次连接存在。等到同步那一轮才报「找不到连接」的话,用户看到的是一次
+        // 失败的同步,而问题其实在配置那一步。
+        crate::storage_conn::find_connection(&connection_id)?;
+        let conn = sync::store::open(&resolved)?;
+        sync::store::upsert_remote(&conn, &remote_id, "cloud", &root, &connection_id)
+    })
+    .await
+}
+
+/// 解绑。连带清掉基线与 tombstone(`ON DELETE CASCADE`),下次重新绑定是冷启动。
+#[tauri::command]
+pub async fn notebook_sync_unbind(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+) -> Result<(), String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        let conn = sync::store::open(&resolved)?;
+        sync::store::remove_remote(&conn, &remote_id)
+    })
+    .await
+}
+
+/// 这个 vault 上挂着的远端目标。库不存在就返回空 —— 用户还没配过同步,不该因为点开面板
+/// 在 vault 里多一个空库。
+#[tauri::command]
+pub async fn notebook_sync_remotes(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<Vec<sync::store::RemoteTarget>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || match sync::store::open_existing(&resolved)? {
+        Some(conn) => sync::store::list_remotes(&conn),
+        None => Ok(Vec::new()),
+    })
+    .await
+}
+
+/// 跑一轮云盘同步。
+///
+/// 这条命令是 P8c 那层传输和 P8d 那台引擎之间缺的最后一块:把 `remote_id` 解成一条
+/// `StorageConnection`,建出后端,包成 `StorageRemote`,再驱动 `engine::run`。
+///
+/// 传给 `StorageRemote` 的 seq 是 `target.seq + 1` 而不是 `target.seq`:这一轮写出去的
+/// 文件属于**这一轮**,而 `bump_seq` 要等全部落定之后才推进。失败的话下一轮会拿同一个号
+/// 再写一遍,那是对的 —— 那一轮本来就没算完成。
+#[tauri::command]
+pub async fn notebook_sync_run(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+    strategy: Option<sync::diff::ConflictStrategy>,
+) -> Result<sync::engine::SyncReport, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    let strategy = strategy.unwrap_or(sync::diff::ConflictStrategy::Ask);
+    blocking(move || {
+        let (device, target) = {
+            let conn = sync::store::open(&resolved)?;
+            let target = sync::store::get_remote(&conn, &remote_id)?
+                .ok_or_else(|| format!("Unknown notebook sync remote: {remote_id}"))?;
+            (sync::store::device_id(&conn)?, target)
+        };
+        // git 目标走 `notebook_git_sync`,不是这条路。两者的失败模式和用户确认都不一样,
+        // 混在一个命令里只会让「同步失败」这句话失去意义。
+        require_cloud_target(&remote_id, &target.kind)?;
+        let connection = crate::storage_conn::find_connection(&target.connection_id)?;
+        let backend = crate::storage_backend::build_backend(&connection)?;
+        let mut remote = sync::remote::StorageRemote::open(
+            backend.as_ref(),
+            &target.root,
+            &device,
+            target.seq + 1,
+        );
+        let mut local = sync::local::VaultLocalFs;
+        sync::engine::run(
+            &resolved,
+            &remote_id,
+            strategy,
+            epoch_ms(),
+            &mut remote,
+            &mut local,
+        )
+    })
+    .await
+}
+
 // 注:命令必须逐个列在 `lib.rs` 的 `generate_handler!` 里,不能用宏聚合。
 // `generate_handler!` 用自己的语法解析参数列表,宏调用无法在那个位置展开
 // (试过 `notebook_commands!()`,报 `expected \`,\``)。守卫测试

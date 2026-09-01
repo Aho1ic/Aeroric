@@ -7,6 +7,7 @@
 //! store  持久化的「上次同步成功时的样子」+ tombstone(每个远端目标一份)
 //! diff   三方决策表:本地 × 远端 × 基线 → 动作清单(纯算法,不碰 IO)
 //! engine 执行一轮:扫描 → 落 tombstone → diff → 逐条执行(带就地复验)→ 收尾
+//! local  引擎的本地一侧出口:软删走回收站、写入过范围与 symlink 两道守卫
 //! ```
 //!
 //! ## 引擎在 Rust 而不在前端(与 Markio 的架构分歧)
@@ -29,20 +30,18 @@
 //! 两个库分开,但 hash 复用 `state::hash64`:`rag/index.rs` 已经在用它,同步再起
 //! 第三套只会让三处基线互相对不上。
 
-// 云盘那条链(`scan` / `store` / `diff` / `engine` / `manifest` / `remote`)目前只有测试在
-// 调:`remote` 已经把 `StorageBackend` 接成了 `RemoteFs`,所以 `engine::run` 拿得到真实
-// 传输,缺的是命令层 —— 一个 `#[tauri::command]` 把 `StorageConnection` 解成后端再驱动
-// 一轮。那 84 处 dead_code 说的是「还没有非测试调用方」,不是「没测试覆盖」:每个导出项
-// 都被单测走过,关键守卫还逐个过了变异测试。
+// 这一层曾经有六个 `#![allow(dead_code)]`(那时候 84 处「还没有非测试调用方」),现在**一条
+// 都没有了** —— 云盘的命令层(`notebook_sync_bind` / `unbind` / `remotes` / `run`)接上之后
+// 每个导出项都有了真实调用方。摘掉它们的过程还顺带查出一处真的没人调:`prune_tombstones`。
+// 那不是「暂时没接」,是 tombstone 表会无界增长(`live_tombstones` 只在读时按 TTL 过滤,
+// 从不删行),现在接到了 `engine::run` 的开头。
 //
-// `#![allow(dead_code)]` 因此**逐模块**写在那六个文件里,不写在这里:`git` 已经由
-// `notebook_git_sync` 接上、零 dead_code,把它一起盖在一条 mod 级 allow 底下就会吞掉它
-// 将来真正的死代码 —— 而那正是当初把范围收到 `sync/` 的理由。每个文件各自的 allow 在它
-// 有了命令层之后删掉。
+// 别再往这里加 mod 级 allow。要加就加在具体文件上并写清条件,否则它会吞掉将来真正的死代码。
 
 pub mod diff;
 pub mod engine;
 pub mod git;
+pub mod local;
 pub mod manifest;
 pub mod remote;
 pub mod scan;

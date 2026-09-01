@@ -150,6 +150,14 @@ pub(super) fn with_fs_retry<T>(
 /// fsync 不能省:没有它,rename 可能先落盘而数据还在 page cache 里,断电后
 /// 得到一个大小正确但内容是零的文件。
 pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+    atomic_write_bytes(path, content.as_bytes())
+}
+
+/// [`atomic_write`] 的字节版。
+///
+/// 同步下载走这条:附件是二进制,而且远端字节**不该**在这一层被解成 UTF-8 —— 那会
+/// 让一张图片按「不是合法文本」被拒,而它本来就不是文本。
+pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
@@ -173,7 +181,7 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let write_result = (|| -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(content.as_bytes())?;
+        file.write_all(content)?;
         file.sync_all()?;
         Ok(())
     })();

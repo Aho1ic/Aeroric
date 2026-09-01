@@ -22,10 +22,6 @@
 //! 回 `../../etc/passwd`,而我们会拿它去 `get`/`put`。本地侧 `scan::resolve_rel` 已经这么
 //! 做了,远端侧不能少。
 
-// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
-// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use super::diff::RemoteEntry;
@@ -33,7 +29,7 @@ use super::engine::RemoteFs;
 use super::manifest::{
     self, Manifest, ManifestEntry, MANIFEST_DIR, MANIFEST_NAME, MANIFEST_TMP_NAME,
 };
-use super::scan::{MAX_DEPTH, MAX_FILES, MAX_HASH_BYTES, OVERSIZE_PREFIX};
+use super::scan::{self, MAX_DEPTH, MAX_FILES, MAX_HASH_BYTES, OVERSIZE_PREFIX};
 use crate::notebook::state::hash64;
 use crate::storage_backend::StorageBackend;
 
@@ -165,6 +161,13 @@ impl<'a> StorageRemote<'a> {
                     continue;
                 };
                 if manifest::is_manifest_path(&rel) {
+                    continue;
+                }
+                // 本地扫描跳掉的目录,远端也不能收 —— 否则会被判成「本地没有的新文件」下载
+                // 回来,而其中包括 `.notebook/sync.db` 这种正在用的库。见 `scan::is_out_of_scope`。
+                // 放在 `is_dir` 分支之前:目录本身就不下潜,远端一个 `.git/` 可能是上万个
+                // object,白跑一趟还会挤掉真笔记的 `MAX_FILES` 配额。
+                if scan::is_out_of_scope(&rel) {
                     continue;
                 }
                 if entry.is_dir {
@@ -670,6 +673,53 @@ mod tests {
         let listed = remote.list().expect("list");
 
         // 清单每轮都在变。跟着同步的话每轮都有一个假冲突。
+        assert_eq!(
+            listed.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["a.md"]
+        );
+    }
+
+    #[test]
+    fn the_vault_private_directory_is_never_offered_for_download() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/a.md", b"alpha");
+        // 用户拿网盘客户端把整个 vault 传上去一次,远端就会有这些。本地扫描永远看不见它们
+        // (`is_scan_skip_dir` 跳掉了),于是它们没有基线 —— 而「远端有 + 本地没有 + 无基线」
+        // 正好是 diff 判「新文件,下载」的条件。收下它们等于用云端的旧副本覆盖正在用的同步
+        // 库和回收站清单。
+        backend.put_file("/notes/.notebook/sync.db", b"stale db");
+        backend.put_file("/notes/.notebook/trash/entries.json", b"[]");
+        backend.put_file("/notes/.git/HEAD", b"ref: refs/heads/main");
+        backend.put_file("/notes/node_modules/pkg/index.js", b"x");
+        backend.put_file("/notes/sub/.git/config", b"[core]");
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let listed = remote.list().expect("list");
+
+        assert_eq!(
+            listed.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["a.md"]
+        );
+    }
+
+    #[test]
+    fn a_skipped_remote_directory_is_not_descended_into() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/a.md", b"alpha");
+        backend.put_file("/notes/.git/objects/ab/cdef", b"blob");
+        // 远端的 `.git/` 可能是上万个 object。列它一遍是白付的网络往返,而且会挤掉真笔记的
+        // MAX_FILES 配额 —— 所以过滤要在下潜之前。
+        backend
+            .inner
+            .lock()
+            .expect("lock")
+            .fail_read_dir
+            .insert("/notes/.git".to_string());
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        // 那个目录若被下潜就会撞上 fail_read_dir 而整轮失败(`list_files` 刻意不吞错),
+        // 所以这里的 `expect` 本身就是「没有下潜」的断言。
+        let listed = remote.list().expect("must not descend");
         assert_eq!(
             listed.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
             vec!["a.md"]

@@ -3217,3 +3217,22 @@ fn rename_tag_skips_private_dirs_and_non_notes() {
 
     std::fs::remove_dir_all(&vault).ok();
 }
+
+#[test]
+fn only_cloud_targets_go_through_the_cloud_sync_command() {
+    use super::require_cloud_target;
+
+    assert!(require_cloud_target("r1", "cloud").is_ok());
+
+    // git 目标有自己的编排(`sync/git.rs`:commit → fetch → pull → push),走云盘那条会拿
+    // 空的 connection_id 去查连接,最后报「找不到存储连接」—— 那句话指向的是配置,而真正
+    // 的问题是同步方式点错了。所以要在这里就拒,并且说清是哪一种目标。
+    let error = require_cloud_target("r2", "git").expect_err("must refuse");
+    assert!(error.contains("git"), "错误要说清它是什么目标: {error}");
+    assert!(error.contains("r2"), "错误要带上是哪个远端: {error}");
+
+    assert!(require_cloud_target("r3", "p2p").is_err());
+    assert!(require_cloud_target("r4", "").is_err());
+    // 大小写不放过:`Cloud` 不是我们写进库的那个值,放过它等于接受一个来路不明的 kind。
+    assert!(require_cloud_target("r5", "Cloud").is_err());
+}

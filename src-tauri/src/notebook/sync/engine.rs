@@ -25,10 +25,6 @@
 //! 等远端删除成功之后再写的话,崩在中间就什么都没留下,下一轮把远端还在的那份当新文件
 //! 拉回来 —— 删除复活。顺序是刻意的:宁可留下一条「删除意图」也不能留下空白。
 
-// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
-// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use super::diff::{self, Action, ConflictStrategy, DiffOpts, PlannedAction, RemoteEntry, SyncPlan};
@@ -113,6 +109,17 @@ pub fn run(
     if store::get_remote(&conn, remote_id)?.is_none() {
         return Err(format!("Unknown notebook sync remote: {remote_id}"));
     }
+
+    // 过期的 tombstone 在这里真删掉,不是只在读时过滤。
+    //
+    // 放在一轮的最前面有两个理由:这里本来就要按 TTL 判一次「哪些还算数」,先删后读是同一
+    // 件事的两半;而且此时还没动任何文件,DELETE 失败就直接返回,代价只是这一轮没开始。
+    // 放到收尾去做的话,一次失败会把整份 SyncReport 连带丢掉 —— 那时候文件都已经搬完了,
+    // 用户却看不到发生了什么。
+    //
+    // 这一句是**全库**的(DELETE 不带 remote_id):过期判定只看时间,和挂了几个远端无关,
+    // 而挂多个远端时每轮都只清自己那份会让别的远端的旧记录一直留着。
+    store::prune_tombstones(&conn, now_ms)?;
 
     let scanned = scan::scan_vault(vault)?;
     let baselines = store::baselines(&conn, remote_id)?;
@@ -583,7 +590,7 @@ mod tests {
     fn bound(tag: &str) -> PathBuf {
         let vault = temp_vault(tag);
         let conn = store::open(&vault).expect("open");
-        store::upsert_remote(&conn, "r1", "cloud", "notes/").expect("bind");
+        store::upsert_remote(&conn, "r1", "cloud", "notes/", "c1").expect("bind");
         vault
     }
 
@@ -1215,6 +1222,58 @@ mod tests {
             store::baselines(&conn, "r1").expect("bases").is_empty(),
             "双删之后基线要清掉"
         );
+    }
+
+    #[test]
+    fn a_round_prunes_expired_tombstones() {
+        // 没有这一步的话 tombstone 表只增不减:`live_tombstones` 只在读时按 TTL 过滤,
+        // 从不删行。一个用了几年的 vault 会攒下一张全是死记录的表。
+        let vault = bound("prune");
+        let conn = store::open(&vault).expect("conn");
+        store::add_tombstone(
+            &conn,
+            "r1",
+            &store::Tombstone {
+                path: "old.md".to_string(),
+                deleted_at: NOW - store::TOMBSTONE_TTL_MS - 1,
+                remote_hash: "h".to_string(),
+            },
+        )
+        .expect("old tombstone");
+        store::add_tombstone(
+            &conn,
+            "r1",
+            &store::Tombstone {
+                path: "fresh.md".to_string(),
+                deleted_at: NOW - 1000,
+                remote_hash: "h".to_string(),
+            },
+        )
+        .expect("fresh tombstone");
+        drop(conn);
+
+        let mut remote = FakeRemote::default();
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        let conn = store::open(&vault).expect("conn");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM tombstone", [], |row| row.get(0))
+            .expect("count");
+        // 数真实行数,不是数 `live_tombstones` 的返回值 —— 后者对过期记录本来就返回空,
+        // 拿它断言的话这个测试在「压根没删」时也会过。
+        assert_eq!(rows, 1, "过期那条要真的从表里消失");
+        let live = store::live_tombstones(&conn, "r1", NOW).expect("live");
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].path, "fresh.md", "没过期的不能被一起清掉");
     }
 
     #[test]
