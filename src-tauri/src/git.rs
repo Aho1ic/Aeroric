@@ -1801,6 +1801,26 @@ pub async fn git_fetch(project_path: String, prune: Option<bool>) -> Result<Stri
     .map_err(|e| e.to_string())?
 }
 
+/// 给 crate 内其它模块(随手记的 git 同步编排)用的执行器。
+///
+/// `transport` 里那两个是 `pub(super)`,只在 `git` 模块内可见。这里开两个薄封装而不是把
+/// 可见性放宽:调用方拿到的仍然只是「跑一条 git」,`validate_project_path` 这类语义校验
+/// 留在各自的 command 里,不会被顺手绕过。
+pub(crate) fn run_git_for<S: AsRef<std::ffi::OsStr>>(
+    project_path: &str,
+    args: &[S],
+) -> Result<Output, String> {
+    run_git(project_path, args)
+}
+
+/// 同上,但走网络的那一版(不会因为等凭据而挂住)。
+pub(crate) fn run_git_network_for<S: AsRef<std::ffi::OsStr>>(
+    project_path: &str,
+    args: &[S],
+) -> Result<Output, String> {
+    run_git_network(project_path, args)
+}
+
 /// 这个目录是不是 git 仓库(工作区)。返回 `.git` 的位置。
 ///
 /// `run_git` 只校验「是绝对路径且是目录」,不校验是仓库。对已有 37 条命令来说那没问题

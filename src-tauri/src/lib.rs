@@ -958,6 +958,7 @@ pub fn run() {
             notebook::notebook_export_site_write,
             notebook::notebook_export_write_file,
             notebook::notebook_html_to_markdown,
+            notebook::notebook_git_sync,
             notebook::notebook_list_user_templates,
             notebook::rag::commands::notebook_rag_probe,
             notebook::rag::commands::notebook_rag_stats,

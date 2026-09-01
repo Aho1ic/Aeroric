@@ -23,6 +23,10 @@
 //! FNV 是内存带宽级的;为这点时间换一类「改了但同步不认」的 bug 不值得。这条是
 //! 刻意的选择。
 
+// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
+// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use crate::notebook::fs_ops::is_scan_skip_dir;

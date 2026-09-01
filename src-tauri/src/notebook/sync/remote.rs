@@ -22,6 +22,10 @@
 //! 回 `../../etc/passwd`,而我们会拿它去 `get`/`put`。本地侧 `scan::resolve_rel` 已经这么
 //! 做了,远端侧不能少。
 
+// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
+// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use super::diff::RemoteEntry;

@@ -25,6 +25,10 @@
 //! 等远端删除成功之后再写的话,崩在中间就什么都没留下,下一轮把远端还在的那份当新文件
 //! 拉回来 —— 删除复活。顺序是刻意的:宁可留下一条「删除意图」也不能留下空白。
 
+// 这个模块还没有非测试调用方 —— 云盘同步的命令层未落地。下面这行说的是「还没有人
+// 调」,不是「没测试覆盖」:每个导出项都被单测走过。命令层接上之后删掉它。
+#![allow(dead_code)]
+
 use std::path::Path;
 
 use super::diff::{self, Action, ConflictStrategy, DiffOpts, PlannedAction, RemoteEntry, SyncPlan};

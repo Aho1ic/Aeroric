@@ -740,6 +740,27 @@ pub async fn notebook_html_to_markdown(html: String) -> Result<String, String> {
     blocking(move || Ok(html2md::html_to_markdown(&html, false))).await
 }
 
+/// 走一轮 git 同步。
+///
+/// `vault` 必须已经是 git 工作区 —— `git_init` / `git_clone` 属于绑定阶段,由前端在用户
+/// 明确操作时调,不混进这一轮。理由是那两个动作各有自己的失败模式和用户确认(clone 会写
+/// 一整个目录),放进定时任务里等于让一次网络抖动触发一次仓库创建。
+///
+/// 提交信息由后端生成而不是前端传:它会进入所有设备的 git 历史,格式漂了以后没法回收,
+/// 而且前端传字符串就多一条要校验的外部输入。
+#[tauri::command]
+pub async fn notebook_git_sync(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<sync::git::GitSyncReport, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        sync::git::run(&resolved, &format!("notebook: sync {stamp}"))
+    })
+    .await
+}
+
 // 注:命令必须逐个列在 `lib.rs` 的 `generate_handler!` 里,不能用宏聚合。
 // `generate_handler!` 用自己的语法解析参数列表,宏调用无法在那个位置展开
 // (试过 `notebook_commands!()`,报 `expected \`,\``)。守卫测试
