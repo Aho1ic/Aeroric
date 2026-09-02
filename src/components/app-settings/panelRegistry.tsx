@@ -8,6 +8,7 @@ import {
   Monitor,
   MonitorUp,
   Network,
+  NotebookPen,
   PackageOpen,
   Plug,
   Route,
@@ -130,6 +131,11 @@ const remotePanel = lazyPanel(() =>
 const mcpPanel = lazyPanel(() =>
   import("./McpPanel").then(({ McpPanel }) => ({ default: McpPanel })),
 );
+const notebookEmbeddingPanel = lazyPanel(() =>
+  import("./NotebookEmbeddingPanel").then(({ NotebookEmbeddingPanel }) => ({
+    default: NotebookEmbeddingPanel,
+  })),
+);
 const wslPanel = lazyPanel(() =>
   import("./WslPanel").then(({ WslPanel }) => ({ default: WslPanel })),
 );
@@ -228,6 +234,13 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     section: "application",
     icon: Plug,
     ...mcpPanel,
+  },
+  {
+    key: "notebook-embedding",
+    labelKey: "appSettings.notebookEmbedding",
+    section: "application",
+    icon: NotebookPen,
+    ...notebookEmbeddingPanel,
   },
   {
     key: "wsl",

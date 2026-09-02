@@ -37,6 +37,7 @@ export interface AppSettings {
   dsh_reasoning_efforts?: Record<string, string>;
   proxy_settings?: ProxySettings;
   local_router_settings?: LocalRouterSettings;
+  notebook_embedding_settings?: NotebookEmbeddingSettings;
   agent_proxy_enabled?: Record<string, boolean>;
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
@@ -224,6 +225,18 @@ export interface ProxySettings {
   no_proxy: string;
   username?: string;
   password?: string;
+}
+
+/**
+ * 随手记 RAG 的 embedding provider 配置。字段名是 snake_case,与 Rust 的
+ * `AppSettings`(整体 snake_case)一致 —— **不是** `EmbedConfig` 那份 camelCase。
+ *
+ * 这里没有 key:key 走 OS 钥匙串,前端只见 `notebook_embedding_key_status/set/clear`。
+ */
+export interface NotebookEmbeddingSettings {
+  provider: "ollama" | "openAi";
+  base_url: string;
+  model: string;
 }
 
 export type ProxyTestReason =
