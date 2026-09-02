@@ -338,6 +338,101 @@ export function convertRichtextNotes(vault: string): Promise<RichtextConversionR
   return invoke<RichtextConversionReport>("notebook_convert_richtext", { vault });
 }
 
+/* ── 从第三方笔记应用导入(P9) ────────────────────────────────────────────
+ *
+ * 这几个类型和 `src-tauri/src/notebook/import/report.rs` 一一对应。后端那份是
+ * **两层**:`status` 说「落地了没有」(互斥三档),`issues` 说「丢了什么」(可多条)。
+ * 不要把它们压平成一个四选一的 union —— 一篇笔记可以「导入成功了,但里面那张图没跟
+ * 过来」,压平之后必然瞒掉其中一半。
+ *
+ * enum 走 serde 的 `tag = "kind"` + camelCase,所以判别字段是 `kind`。
+ */
+
+/** 跳过的理由。和后端 `SkipReason` 对齐 —— 按理由分组统计,不是自由文本。 */
+export type ImportSkipReason =
+  | { kind: "alreadyImported" }
+  | { kind: "unsupported"; extension: string }
+  | { kind: "tooLarge"; bytes: number }
+  | { kind: "limitReached"; limit: string }
+  | { kind: "unreadable"; detail: string }
+  | { kind: "symlink" };
+
+/** 一条记录落地了没有。互斥三档。 */
+export type ImportItemStatus =
+  | { kind: "imported" }
+  | { kind: "skipped"; reason: ImportSkipReason }
+  | { kind: "failed"; detail: string };
+
+/** 这一条丢了什么。和 `status` 正交 —— `imported` 的条目也可以带 issue。 */
+export type ImportItemIssue =
+  | { kind: "resourceLost"; target: string; detail: string }
+  | { kind: "degraded"; detail: string };
+
+export type ImportItem = {
+  /** **源端**标识(zip 内路径 / 相对路径 / 笔记标题),用来回源端对账。 */
+  source: string;
+  /** 落点的 vault 相对路径。跳过 / 失败时是 null —— 那时没有落点。 */
+  dest: string | null;
+  status: ImportItemStatus;
+  /** 后端在空数组时不序列化这个字段,所以这里可能是 undefined。 */
+  issues?: ImportItemIssue[];
+};
+
+/**
+ * 一次导入的完整报告。
+ *
+ * **计数不封顶,明细封顶。** `items.length` 可能小于 `imported + skipped + failed`,
+ * 差额在 `truncated` 里。四个计数是在截断之前累加的,所以规模永远是真的 —— UI 要按
+ * 计数显示规模,不能拿 `items.length` 当总数。
+ */
+export type ImportReport = {
+  provider: string;
+  /** 落点目录的 vault 相对路径。 */
+  dest: string;
+  imported: number;
+  skipped: number;
+  failed: number;
+  /** **带**资源丢失的条目数。跨状态计数,不和上面三个构成划分,别加在一起。 */
+  resourceLost: number;
+  /** **带**格式降级的条目数。同上。 */
+  degraded: number;
+  items: ImportItem[];
+  /** 明细被截掉了多少条。0 = 上面那份是全部。 */
+  truncated: number;
+  /** 报告落盘成的那篇笔记。写不进去时是 null,且**不算导入失败**。 */
+  reportPath: string | null;
+};
+
+export function importObsidian(vault: string, sourcePath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_obsidian", { vault, sourcePath });
+}
+
+export function importLogseq(vault: string, sourcePath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_logseq", { vault, sourcePath });
+}
+
+export function importNotion(vault: string, zipPath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_notion", { vault, zipPath });
+}
+
+export function importBear(vault: string, zipPath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_bear", { vault, zipPath });
+}
+
+/** Roam 收的是 **zip**(Markdown 导出和 JSON 导出都打在 zip 里),不是裸 `.json`。 */
+export function importRoam(vault: string, zipPath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_roam", { vault, zipPath });
+}
+
+export function importEvernote(vault: string, enexPath: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_evernote", { vault, enexPath });
+}
+
+/** Apple Notes / 备忘录。**没有源路径** —— 走 osascript 问 Notes.app。macOS 专属。 */
+export function importAppleNotes(vault: string): Promise<ImportReport> {
+  return invoke<ImportReport>("notebook_import_apple_notes", { vault });
+}
+
 /** vault 里的一个附件。`relativePath` 相对 vault 根,用来告诉用户它在哪。 */
 export type Attachment = {
   path: string;

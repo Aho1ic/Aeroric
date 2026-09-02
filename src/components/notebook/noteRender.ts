@@ -17,6 +17,7 @@ import DOMPurify from "dompurify";
 import { Marked, type Tokens } from "marked";
 import markedAlert from "marked-alert";
 import markedFootnote from "marked-footnote";
+import { escapeHtml } from "../../syntaxHighlight";
 import { detectMathRanges } from "./mathRanges";
 import { createSlugRegistry, slugifyHeading } from "./noteSlug";
 import { noteTasks, type NoteTask } from "./noteTasks";
@@ -49,15 +50,6 @@ export const TASK_CHECKED_ATTR = "data-task-checked";
 const MATH_PLACEHOLDER_CLASS = "notebook-math";
 /** Mermaid 占位:源码进 `data-mermaid`(URI 编码),避免 HTML 转义反复折腾。 */
 const MERMAID_PLACEHOLDER_CLASS = "notebook-mermaid";
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 /**
  * 把数学公式换成占位标记,返回替换后的源码和公式表。
