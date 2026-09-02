@@ -18,6 +18,7 @@ mod clock;
 mod command_registration_tests;
 mod conda;
 mod config;
+mod custom_themes;
 mod dap;
 mod database;
 mod diagnostics;
@@ -971,6 +972,11 @@ pub fn run() {
             notebook::notebook_import_roam,
             notebook::notebook_import_evernote,
             notebook::notebook_import_apple_notes,
+            custom_themes::theme_custom_list,
+            custom_themes::theme_custom_import,
+            custom_themes::theme_custom_read,
+            custom_themes::theme_custom_delete,
+            custom_themes::theme_custom_dir,
             notebook::notebook_export_site_write,
             notebook::notebook_export_write_file,
             notebook::notebook_html_to_markdown,

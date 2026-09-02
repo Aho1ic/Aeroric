@@ -1,8 +1,10 @@
 import type React from "react";
-import { Check, Monitor } from "lucide-react";
+import { Check, FolderOpen, Monitor, Trash2, Upload } from "lucide-react";
 import type { ThemeMode } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { useCustomThemes } from "../../hooks/useCustomThemes";
+import { APP_PLATFORM } from "../../platform";
 
 interface ThemePanelProps {
   themeMode: ThemeMode;
@@ -10,8 +12,31 @@ interface ThemePanelProps {
   onThemeModeChange: (mode: ThemeMode) => void;
 }
 
+/** 应急停用快捷键的展示文案。判定在 `customThemes.ts` 的 `isCustomThemePanicKey`。 */
+const PANIC_KEYS = APP_PLATFORM === "macos" ? "⌘ + ⌥ + ⇧ + T" : "Ctrl + Alt + Shift + T";
+
 export function ThemePanel({ themeMode, systemPrefersDark, onThemeModeChange }: ThemePanelProps) {
   const { t } = useI18n();
+  const custom = useCustomThemes();
+
+  async function handleCustomImport() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      directory: false,
+      multiple: false,
+      title: t("theme.customDialogTitle"),
+      filters: [{ name: "CSS", extensions: ["css"] }],
+    });
+    // multiple: false 下返回单个路径,但类型里仍带着数组分支。
+    if (typeof picked !== "string") return;
+    await custom.importFrom(picked);
+  }
+
+  async function handleOpenCustomDir() {
+    const dir = await custom.openDir();
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(dir);
+  }
   type ManualMode = Extract<ThemeMode, "dark" | "light" | "eyecare">;
   const manualThemeModes: ManualMode[] = ["dark", "light", "eyecare"];
   const currentModeLabel = systemPrefersDark ? t("theme.dark") : t("theme.light");
@@ -448,6 +473,190 @@ export function ThemePanel({ themeMode, systemPrefersDark, onThemeModeChange }: 
             previewAccent: "#5a4a30",
           })}
         </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>
+          {t("theme.customTitle")}
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+          {t("theme.customHint")}
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-hint)", lineHeight: 1.6 }}>
+          {t("theme.customScopeNote")}
+        </div>
+        {/* 快捷键提示紧跟在导入按钮旁边:界面被自定义 CSS 藏掉之后,用户得先知道
+            怎么出来。藏在文档里的逃生路等于没有。 */}
+        <div style={{ fontSize: 11.5, color: "var(--text-hint)", lineHeight: 1.6 }}>
+          {t("theme.customPanicHint", { keys: PANIC_KEYS })}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => void handleCustomImport()}
+            disabled={custom.busy}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--border-medium)",
+              background: "var(--bg-card)",
+              color: "var(--text-primary)",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: custom.busy ? "default" : "pointer",
+              opacity: custom.busy ? 0.6 : 1,
+            }}
+          >
+            <Upload size={13} />
+            {custom.busy ? t("theme.customImporting") : t("theme.customImport")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleOpenCustomDir()}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--border-dim)",
+              background: "transparent",
+              color: "var(--text-secondary)",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            <FolderOpen size={13} />
+            {t("theme.customOpenDir")}
+          </button>
+          {custom.activeId !== null && (
+            <button
+              type="button"
+              onClick={() => void custom.apply(null)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border-dim)",
+                background: "transparent",
+                color: "var(--text-secondary)",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {t("theme.customClear")}
+            </button>
+          )}
+        </div>
+
+        {custom.error !== null && (
+          <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.6 }}>
+            {custom.error}
+          </div>
+        )}
+
+        {custom.themes.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: "var(--text-hint)" }}>{t("theme.customEmpty")}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {custom.themes.map((theme) => {
+              const applied = theme.id === custom.activeId;
+              return (
+                <div
+                  key={theme.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${applied ? "var(--control-active-fg)" : "var(--border-dim)"}`,
+                    background: applied ? "var(--control-active-bg)" : "var(--bg-subtle)",
+                  }}
+                >
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                    <span
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {theme.name}
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--text-hint)" }}>
+                      {t("theme.customSize", {
+                        kb: String(Math.max(1, Math.round(theme.size / 1024))),
+                      })}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {applied ? (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          color: "var(--accent)",
+                        }}
+                      >
+                        <Check size={13} />
+                        {t("theme.customApplied")}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void custom.apply(theme.id)}
+                        disabled={custom.busy}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          border: "1px solid var(--border-medium)",
+                          background: "var(--bg-card)",
+                          color: "var(--text-primary)",
+                          fontSize: 11.5,
+                          cursor: custom.busy ? "default" : "pointer",
+                          opacity: custom.busy ? 0.6 : 1,
+                        }}
+                      >
+                        {t("theme.customApply")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void custom.remove(theme.id)}
+                      disabled={custom.busy}
+                      aria-label={t("theme.customDeleteAria", { name: theme.name })}
+                      title={t("theme.customDelete")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        padding: 5,
+                        borderRadius: 6,
+                        border: "1px solid var(--border-dim)",
+                        background: "transparent",
+                        color: "var(--text-secondary)",
+                        cursor: custom.busy ? "default" : "pointer",
+                        opacity: custom.busy ? 0.6 : 1,
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
