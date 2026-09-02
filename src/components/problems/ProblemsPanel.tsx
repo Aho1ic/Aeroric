@@ -14,6 +14,7 @@ import {
   groupDiagnosticsByFile,
   type DiagnosticProfileId,
 } from "./diagnosticsState";
+import { fileNameFromPath } from "../../lib/filePath";
 
 export function ProblemsPanel({
   projectPath,
@@ -166,7 +167,7 @@ export function ProblemsPanel({
           <div style={emptyStyle}>{t("problems.none")}</div>
         ) : (
           groups.map((group) => {
-            const fileName = group.file.split(/[\\/]/).pop() ?? group.file;
+            const fileName = fileNameFromPath(group.file);
             return (
               <div key={group.file} style={{ marginBottom: 10 }}>
                 <div title={group.file} style={fileHeaderStyle}>

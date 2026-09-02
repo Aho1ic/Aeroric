@@ -6,6 +6,7 @@ import {
   type LspRemoteContext,
 } from "../../hooks/languageServerState";
 import type { OpenFileSelection } from "../../hooks/projectPanelsState";
+import { fileNameFromPath } from "../../lib/filePath";
 
 export type LspReferenceLocation = {
   uri: string;
@@ -47,7 +48,7 @@ export async function findLspReferences(
 export function lspReferenceToOpenTarget(location: LspReferenceLocation): LspReferenceOpenTarget {
   return {
     path: location.path,
-    name: location.path.split(/[\\/]/).pop() ?? location.path,
+    name: fileNameFromPath(location.path),
     selection: {
       line: location.range.start.line + 1,
       column: location.range.start.character + 1,
