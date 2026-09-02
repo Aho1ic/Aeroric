@@ -76,7 +76,18 @@ export function AgentCardItem({
 
   return (
     <div className="agent-card-item" style={containerStyle}>
-      <div style={{ ...summaryBaseStyle, padding: summaryPadding }} onClick={onClick}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={t("appSettings.openAgentSettings", { agent: option.label })}
+        style={{ ...summaryBaseStyle, padding: summaryPadding }}
+        onClick={onClick}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          onClick?.();
+        }}
+      >
         <img
           src={logo}
           alt=""

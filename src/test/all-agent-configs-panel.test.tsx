@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AllAgentConfigsPanel } from "../components/app-settings/AllAgentConfigsPanel";
 import { APP_SETTINGS_CHANGED_EVENT } from "../components/app-settings/types";
+import { AgentVersionsProvider } from "../hooks/useAgentVersions";
 import { I18nProvider } from "../i18n";
 
 const { invokeMock, openMock, saveMock } = vi.hoisted(() => ({
@@ -78,6 +79,17 @@ describe("AllAgentConfigsPanel", () => {
     openMock.mockReset();
     saveMock.mockReset();
   });
+
+  /** 打开 agent 详情弹窗的用例要额外带 AgentVersionsProvider:AgentPathSection 取升级状态。 */
+  function renderWithVersions() {
+    return render(
+      <I18nProvider>
+        <AgentVersionsProvider>
+          <AllAgentConfigsPanel themeVariant="light" />
+        </AgentVersionsProvider>
+      </I18nProvider>,
+    );
+  }
 
   it("exports and imports all Agent configs without a history option", async () => {
     const user = userEvent.setup();
@@ -167,6 +179,33 @@ describe("AllAgentConfigsPanel", () => {
     expect(screen.getByText("Custom DSH")).toBeInTheDocument();
     expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
     expect(screen.queryByText("Custom Claude")).not.toBeInTheDocument();
+  });
+
+  it("opens an agent's settings from the keyboard", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockResolvedValue([]);
+
+    renderWithVersions();
+
+    // 卡片行原先是裸 div+onClick,键盘用户完全够不到 agent 设置。
+    const row = screen.getByRole("button", { name: "Open settings for Claude Code" });
+    row.focus();
+    expect(row).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Agent Settings" })).toBeInTheDocument();
+  });
+
+  it("activates an agent row with Space as well as Enter", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockResolvedValue([]);
+
+    renderWithVersions();
+
+    screen.getByRole("button", { name: "Open settings for Claude Code" }).focus();
+    await user.keyboard(" ");
+
+    expect(await screen.findByRole("dialog", { name: "Agent Settings" })).toBeInTheDocument();
   });
 
   it("renders three animated provider tabs with two adjacent separators", async () => {
