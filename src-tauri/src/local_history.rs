@@ -1,8 +1,9 @@
+use crate::clock::now_ms_u64;
+use crate::path_guard::validate_project_root;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const HISTORY_DIR: &str = ".aeroric/local-history";
 const SNAPSHOT_EXTENSION: &str = "txt";
@@ -271,7 +272,7 @@ fn within_min_interval(layout: HistoryLayout, history_dir: &Path) -> bool {
     let Some(latest) = latest_entry_timestamp_ms(history_dir) else {
         return false;
     };
-    now_ms().saturating_sub(latest) < layout.min_interval_ms
+    now_ms_u64().saturating_sub(latest) < layout.min_interval_ms
 }
 
 fn latest_entry_timestamp_ms(history_dir: &Path) -> Option<u64> {
@@ -297,7 +298,7 @@ fn create_snapshot(
     let relative_path = relative_file_path(root, file)?;
     let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
     fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
-    let base_id = now_ms().to_string();
+    let base_id = now_ms_u64().to_string();
 
     for suffix in 0..1000 {
         let id = if suffix == 0 {
@@ -323,7 +324,7 @@ fn create_snapshot(
             id,
             file_path: file.to_string_lossy().into_owned(),
             relative_path,
-            created_at_ms: entry_id_timestamp_ms(&base_id).unwrap_or_else(now_ms),
+            created_at_ms: entry_id_timestamp_ms(&base_id).unwrap_or_else(now_ms_u64),
             size,
         };
         prune_history_dir(&history_dir, layout.max_entries)?;
@@ -355,20 +356,6 @@ fn entry_for_id(
         created_at_ms,
         size: metadata.len(),
     })
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 fn validate_file_path(root: &Path, file_path: &str) -> Result<PathBuf, String> {
@@ -455,13 +442,6 @@ fn prune_history_dir(history_dir: &Path, max_entries: usize) -> Result<(), Strin
         fs::remove_file(path).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

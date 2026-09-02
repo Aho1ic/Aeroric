@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use reqwest::header::{ACCEPT, USER_AGENT};
@@ -11,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tar::Archive;
 use uuid::Uuid;
 
+use crate::clock::now_ms_i64;
 use crate::storage::{aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projects, Project};
 
 /// 未配置技能库时使用的默认目录名（位于 `~/.aeroric/` 下）。
@@ -416,13 +416,6 @@ fn marketplace_cache_path() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("marketplace_cache.json"))
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn agent_skills_dir(project_path: &Path, agent: &str) -> PathBuf {
     let sub = match agent {
         "codex" => ".codex/skills",
@@ -509,7 +502,7 @@ fn load_hub_config_or_default() -> SkillHubConfig {
     let next = SkillHubConfig {
         hub_project_id: config.hub_project_id.clone(),
         hub_path: Some(dir.to_string_lossy().into_owned()),
-        created_at: config.created_at.or_else(|| Some(now_ms())),
+        created_at: config.created_at.or_else(|| Some(now_ms_i64())),
     };
     // 持久化失败不影响本次返回值：前端仍能用默认目录，下次启动会再试。
     let _ = save_hub_config_internal(&next);
@@ -570,7 +563,7 @@ fn save_marketplace_cache_page(key: &str, page: &MarketplacePage) -> Result<(), 
     cache.entries.retain(|entry| entry.key != key);
     cache.entries.push(MarketplaceCacheEntry {
         key: key.to_string(),
-        fetched_at: now_ms(),
+        fetched_at: now_ms_i64(),
         page: page.clone(),
     });
     cache
@@ -584,7 +577,9 @@ fn save_marketplace_cache_page(key: &str, page: &MarketplacePage) -> Result<(), 
 fn cached_marketplace_page(key: &str, allow_expired: bool) -> Option<MarketplacePage> {
     let cache = load_marketplace_cache_internal();
     let entry = cache.entries.into_iter().find(|entry| entry.key == key)?;
-    if !allow_expired && now_ms().saturating_sub(entry.fetched_at) > MARKETPLACE_CACHE_MAX_AGE_MS {
+    if !allow_expired
+        && now_ms_i64().saturating_sub(entry.fetched_at) > MARKETPLACE_CACHE_MAX_AGE_MS
+    {
         return None;
     }
     Some(entry.page)
@@ -1126,7 +1121,7 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
         let config = SkillHubConfig {
             hub_project_id: None,
             hub_path: Some(hub_path_str),
-            created_at: Some(now_ms()),
+            created_at: Some(now_ms_i64()),
         };
         save_hub_config_internal(&config)?;
 
@@ -1623,7 +1618,7 @@ fn upsert_installation(
     if file.version == 0 {
         file.version = 1;
     }
-    let now = now_ms();
+    let now = now_ms_i64();
     let mut existing_idx: Option<usize> = None;
     for (i, ins) in file.installations.iter().enumerate() {
         if ins.skill_name == skill_name && ins.project_id == project_id && ins.agent == agent {
@@ -2716,7 +2711,7 @@ fn install_extracted_marketplace_skill(
         skill_name: skill.name.clone(),
         version: skill.latest_version.clone(),
         git_ref: skill.latest_ref.clone(),
-        installed_at: now_ms(),
+        installed_at: now_ms_i64(),
         target_path: destination.to_string_lossy().into_owned(),
     };
     records.version = 1;

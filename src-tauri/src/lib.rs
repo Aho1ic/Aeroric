@@ -12,6 +12,7 @@ mod agent_tools;
 mod agent_usage;
 mod analytics;
 mod app_settings;
+mod clock;
 /// 只在测试构建里编译:守卫 command 定义集合与 `generate_handler!` 注册集合一致。
 #[cfg(test)]
 mod command_registration_tests;

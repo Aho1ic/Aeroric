@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::agent_tools::{AgentInstallErrorCode, AgentInstallResult, AgentInstallStage};
 use crate::app_settings::AgentUpgradeResult;
+use crate::clock::now_ms_u64;
 
 /// 带完整快照的操作变更事件。install 进度事件仍然照发,不破坏既有监听方。
 pub const AGENT_OPERATION_EVENT: &str = "agent-operation-changed";
@@ -78,13 +79,6 @@ fn registry() -> &'static Mutex<Registry> {
             cancellations: HashMap::new(),
         })
     })
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_millis() as u64)
-        .unwrap_or_default()
 }
 
 /// 已登记的全部快照(当前 + 最近一次)。前端挂载时用它对账。
@@ -169,7 +163,7 @@ fn begin(agent: &str, requested_agent: &str, kind: AgentOperationKind) -> BeginO
         progress: 0,
         message: String::new(),
         error_code: None,
-        started_at_ms: now_ms(),
+        started_at_ms: now_ms_u64(),
         finished_at_ms: None,
         install_result: None,
         upgrade_result: None,
@@ -241,7 +235,7 @@ fn apply_finish(
         snapshot.message = message;
     }
     snapshot.error_code = error_code;
-    snapshot.finished_at_ms = Some(now_ms());
+    snapshot.finished_at_ms = Some(now_ms_u64());
     snapshot.install_result = install_result;
     snapshot.upgrade_result = upgrade_result;
 }
@@ -493,7 +487,7 @@ mod tests {
             let mut guard = registry().lock();
             let stored = guard.operations.get_mut(&agent).expect("snapshot exists");
             stored.state = AgentOperationState::Succeeded;
-            stored.finished_at_ms = Some(now_ms());
+            stored.finished_at_ms = Some(now_ms_u64());
         }
         let stored = snapshot_for(&agent).expect("the finished snapshot is retained");
         assert_eq!(stored.operation_id, snapshot.operation_id);

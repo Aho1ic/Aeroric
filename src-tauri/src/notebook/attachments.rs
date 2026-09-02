@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::fs_ops;
+use crate::clock::now_ms_u64;
 
 /// 附件目录(相对 vault 根)。
 pub const ATTACHMENT_DIR: &str = "attachments";
@@ -87,13 +88,6 @@ pub fn kind_of(name: &str) -> Option<&'static str> {
 /// 附件目录的绝对路径。
 pub fn dir(vault: &Path) -> PathBuf {
     vault.join(ATTACHMENT_DIR)
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// 把任意串洗成安全的文件名主干。
@@ -295,7 +289,7 @@ pub fn save_bytes(
             .unwrap_or("note"),
     );
     let ext = extension_for(mime, file_name);
-    let path = write_claimed(&dir(vault), &stem, &ext, now_ms(), bytes)?;
+    let path = write_claimed(&dir(vault), &stem, &ext, now_ms_u64(), bytes)?;
     // alt 优先用来源文件名的主干,剪贴板里的图没有文件名,退回笔记名。
     let alt_source = file_name
         .and_then(|name| Path::new(name).file_stem())

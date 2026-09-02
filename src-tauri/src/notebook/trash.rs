@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 use super::fs_ops::{self, VAULT_PRIVATE_DIR};
 use super::snapshots;
+use crate::clock::now_ms_u64;
 
 /// 相对 vault 根的回收站目录。
 const TRASH_DIR: &str = ".notebook/trash";
@@ -79,13 +80,6 @@ struct TrashManifest {
 /// 回收站目录的绝对路径。
 pub fn trash_dir(vault: &Path) -> PathBuf {
     vault.join(TRASH_DIR)
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// ID 只能是数字和连字符。前端拿到的 ID 会原样回传,不校验的话
@@ -293,7 +287,7 @@ fn trash_inner(vault: &Path, target: &Path, at_ms: Option<u64>) -> Result<TrashI
     let manifest = TrashManifest {
         relative_path,
         name,
-        deleted_at_ms: at_ms.unwrap_or_else(now_ms),
+        deleted_at_ms: at_ms.unwrap_or_else(now_ms_u64),
         size: if is_dir {
             dir_size(target, 0)
         } else {
