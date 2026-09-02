@@ -54,6 +54,7 @@ mod session;
 mod session_dsh;
 mod sftp;
 mod skills;
+mod sse;
 mod ssh;
 mod ssh_hostkey;
 mod ssh_proxy;
