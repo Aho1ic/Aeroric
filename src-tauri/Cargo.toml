@@ -51,6 +51,16 @@ zstd = "0.13"
 tar = "0.4"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+# 随手记导入 Evernote `.enex`(良构 XML)。锁文件里本来就有 0.41(opendal 的
+# S3/OSS/COS/WebDAV、calamine、plist 共 11 个反向依赖),按同一版本加成直接依赖:
+# 不新增编译时间、不新增供应链面。锁文件只多一行(aeroric 自己的依赖表里加一项),
+# 没有新的 package 条目。
+quick-xml = "0.41"
+# ENEX 的 `<en-media hash>` 是附件内容的 MD5,要照它把正文引用和 `<resource>` 对上。
+# 按顺序猜不行:同一张图在一篇笔记里嵌两次时只有一个 `<resource>` 而有两个引用,顺序
+# 匹配会给第二个配上**别人的**附件 —— 静默配错比报「丢了」糟。md-5 0.11 锁文件里
+# 本来就有(mongodb、opendal 的 S3/upyun、smb2 等 6 个反向依赖),同版本加成直接依赖。
+md-5 = "0.11"
 uuid = { version = "1", features = ["v4"] }
 tungstenite = "0.24"
 # 手机远程连接(remote 模块):异步 WS 服务端 + 帧收发 + CSPRNG token
@@ -73,6 +83,17 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 # 0.30 的 build.rs 无条件加 `-DSQLITE_ENABLE_FTS5` 与 `-DSQLITE_ENABLE_LOAD_EXTENSION=1`,
 # `sqlite3_auto_extension` 也在无条件绑定里,`modern-full` 那二十个 feature 一个都用不上。
 sqlite-vec = "0.1"
+# OS 钥匙串。只服务一个用途:随手记 RAG 的 embedding key(计划 §3.3 —— 图床与剪藏
+# 那两个理由核对后都不成立)。三个 native 后端各自直连 OS:macOS Security.framework、
+# Windows Credential Manager、Linux 内核 keyutils。
+# 刻意不启 `sync-secret-service`:它要 libdbus-1-dev 才编得过,而两个 workflow 的
+# Linux 依赖清单里都没有那一项。代价写在 `secrets.rs` 的模块注释里(Linux 上 key
+# 存在会话 keyring,重启后要重填)。
+keyring = { version = "3", features = [
+  "apple-native",
+  "windows-native",
+  "linux-native",
+] }
 # 对象存储 / 网盘 / WebDAV 统一访问层。只启用实际用到的 service,
 # 其余 50+ service(hdfs、rocksdb 等)会引入原生工具链依赖,不启用。
 opendal = { version = "0.58.1", features = [
