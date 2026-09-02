@@ -1,0 +1,22 @@
+diff --git a/index.js b/index.js
+index d45e67d91d38c91d05e68e8b338e4bc2de591dcc..c4c450aa986e381b6c5954c71f6fff332f30f77b 100644
+--- a/index.js
++++ b/index.js
+@@ -1,6 +1,16 @@
+ 'use strict';
+ const strictUriEncode = require('strict-uri-encode');
+-const decodeComponent = require('decode-uri-component');
++// decode-uri-component 从 0.4.0 起是 ESM-only(package.json 里 `type: module`,
++// 没有 CJS 入口)。本文件是 CJS,`require()` 一个 ESM 包拿到的是 namespace 对象
++// 而不是函数,直接调用会 `TypeError: decodeComponent is not a function`。
++// 而带 DoS 修复(GHSA-vcc3-ghjq-m6fr)的版本只有 >=0.5.0,唯一的 CJS 版本 0.2.2
++// 恰好就是有漏洞的那个 —— 所以这里必须手动解包 default。
++// 两种形态都兜住:CJS(module.exports 即函数)与 ESM(函数在 .default 上)。
++const decodeUriComponentModule = require('decode-uri-component');
++const decodeComponent =
++	typeof decodeUriComponentModule === 'function'
++		? decodeUriComponentModule
++		: decodeUriComponentModule.default;
+ const splitOnFirst = require('split-on-first');
+ const filterObject = require('filter-obj');
+ 

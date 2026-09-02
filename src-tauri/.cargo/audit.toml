@@ -36,4 +36,14 @@ ignore = [
     # quick-xml: upstream calamine/plist dependency chains do not yet allow >=0.41.0
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # rkyv 0.7.46 越界读:cargo-audit 扫的是 Cargo.lock,而 rkyv 只是
+    # rust_decimal 一个**未激活**可选 feature 的 lock 残留条目 —— 它不参与编译。
+    # 判据(2026-09-02 实测):
+    #   cargo tree -i rkyv            → "nothing to print"(任何 target 下都无依赖者)
+    #   ls target/debug/deps | grep    → rkyv 0 个产物,对照 rust_decimal 61 个
+    #   cargo build 计划               → 不含 rkyv
+    # dbx-core 只要 rust_decimal 的 ["serde", "db-postgres"],两者都不拉 rkyv。
+    # 若将来 dbx-core 开启 rust_decimal 的 rkyv feature,必须删掉这条重新评估:
+    # 上游已提供 `rkyv-0_8`(指向已修复的 rkyv 0.8),届时用它而不是继续 ignore。
+    "RUSTSEC-2026-0235",
 ]
