@@ -5,6 +5,11 @@ import type { Extension } from "@codemirror/state";
 import type { DbEndpoint, DiagnosticSeverity, GitBlameLine } from "../../types";
 import type { RemoteProjectTarget } from "../../types";
 import { inlineBlameText, inlineBlameTitle } from "../git-advanced/gitAdvancedState";
+import {
+  hasMarkdownExtension,
+  hasPreviewableImageExtension,
+  hasSqliteDatabaseExtension,
+} from "../../lib/fileExtensions";
 
 export type RemoteFileContext = RemoteProjectTarget;
 
@@ -35,27 +40,17 @@ export type EditorContextMenuState = {
   y: number;
 };
 
+// 后缀表在 lib/fileExtensions.ts,与 file-explorer 的图标表共用同一份。
 export function isMarkdownFile(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  return ext === "md" || ext === "mdx" || ext === "markdown";
+  return hasMarkdownExtension(fileName);
 }
 
 export function isPreviewableImageFile(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  return (
-    ext === "png" ||
-    ext === "jpg" ||
-    ext === "jpeg" ||
-    ext === "gif" ||
-    ext === "webp" ||
-    ext === "bmp" ||
-    ext === "svg"
-  );
+  return hasPreviewableImageExtension(fileName);
 }
 
 export function isSqliteDatabaseFile(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  return ext === "db" || ext === "sqlite" || ext === "sqlite3";
+  return hasSqliteDatabaseExtension(fileName);
 }
 
 export async function loadLanguageExtension(fileName: string): Promise<Extension> {

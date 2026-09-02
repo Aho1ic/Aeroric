@@ -1,4 +1,10 @@
 import type { FsEntry } from "./types";
+import {
+  PREVIEWABLE_IMAGE_EXTENSIONS,
+  SQLITE_DATABASE_EXTENSIONS,
+  fileExtensionOf,
+  hasSqliteDatabaseExtension,
+} from "../../lib/fileExtensions";
 
 export type FileSortField = "name" | "modified";
 export type FileSortDirection = "asc" | "desc";
@@ -26,18 +32,17 @@ export type FileIconKind =
   | "text"
   | "file";
 
-export function fileExtension(name: string, ext?: string | null): string {
-  return (ext ?? name.split(".").pop() ?? "").toLowerCase();
-}
+/** 保留这个名字:file-explorer 内部到处在用。实现已挪到 lib/fileExtensions.ts。 */
+export const fileExtension = fileExtensionOf;
 
 export function fileIconKind(entry: Pick<FsEntry, "name" | "extension" | "is_dir">): FileIconKind {
   if (entry.is_dir) return "folder";
   const ext = fileExtension(entry.name, entry.extension);
-  if (["db", "sqlite", "sqlite3"].includes(ext)) return "database";
+  if (SQLITE_DATABASE_EXTENSIONS.includes(ext)) return "database";
   if (["pt", "pth", "onnx"].includes(ext)) return "model";
   if (["mp4", "mov", "mkv", "avi", "webm"].includes(ext)) return "video";
   if (["whl"].includes(ext)) return "package";
-  if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext)) return "image";
+  if (PREVIEWABLE_IMAGE_EXTENSIONS.includes(ext)) return "image";
   if (["md", "mdx"].includes(ext)) return "markdown";
   if (["json", "jsonc"].includes(ext)) return "json";
   if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar"].includes(ext)) return "archive";
@@ -73,7 +78,7 @@ export function fileIconKind(entry: Pick<FsEntry, "name" | "extension" | "is_dir
 }
 
 export function isSqliteDatabaseFileName(name: string, ext?: string | null): boolean {
-  return ["db", "sqlite", "sqlite3"].includes(fileExtension(name, ext));
+  return hasSqliteDatabaseExtension(name, ext);
 }
 
 export function isSqliteDatabaseFile(
