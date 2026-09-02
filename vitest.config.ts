@@ -25,11 +25,16 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/test/**", "src/vite-env.d.ts", "src/styles.ts"],
+      // 全局门槛按**实测值往下留 ~1 个点**的余量,起棘轮作用:
+      // 2026-08-31 实测 74.42 / 69.28 / 71.73 / 77.28(311 文件 4326 测试全绿,
+      // 排掉 notebook-panel.test.tsx)。留余量是因为个别用例带真实时钟分支,
+      // 卡死在实测值会让门槛偶发翻红;1 个点足够挡住成片的回归。
+      // 覆盖率再上一台阶时同步抬这四个数,不要让它长期低于实测值。
       thresholds: {
-        statements: 60,
-        branches: 55,
-        functions: 60,
-        lines: 60,
+        statements: 73,
+        branches: 68,
+        functions: 70,
+        lines: 76,
         "src/appRemoteEvents.ts": {
           statements: 100,
           branches: 100,
