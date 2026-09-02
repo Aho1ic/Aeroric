@@ -181,7 +181,12 @@ mod tests {
     fn writes_inside_an_allowed_root() {
         let root = temp_root("ok");
         let dest = root.join("note.html");
-        write_export(dest.to_str().unwrap(), "<h1>hi</h1>", &[root.clone()]).unwrap();
+        write_export(
+            dest.to_str().unwrap(),
+            "<h1>hi</h1>",
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "<h1>hi</h1>");
     }
 
@@ -189,7 +194,7 @@ mod tests {
     fn creates_missing_parent_directories() {
         let root = temp_root("mkdir");
         let dest = root.join("out").join("deep").join("note.html");
-        write_export(dest.to_str().unwrap(), "x", &[root.clone()]).unwrap();
+        write_export(dest.to_str().unwrap(), "x", std::slice::from_ref(&root)).unwrap();
         assert!(dest.exists());
     }
 
@@ -222,7 +227,8 @@ mod tests {
     #[test]
     fn rejects_a_directory_as_the_target() {
         let root = temp_root("isdir");
-        let err = write_export(root.to_str().unwrap(), "x", &[root.clone()]).unwrap_err();
+        let err =
+            write_export(root.to_str().unwrap(), "x", std::slice::from_ref(&root)).unwrap_err();
         assert!(err.contains("文件夹"), "{err}");
     }
 
@@ -269,7 +275,7 @@ mod tests {
             out.to_str().unwrap(),
             "sub/dir/note.html",
             "<p>page</p>",
-            &[root.clone()],
+            std::slice::from_ref(&root),
         )
         .unwrap();
         assert_eq!(
@@ -286,7 +292,7 @@ mod tests {
             out.to_str().unwrap(),
             "../escaped.html",
             "x",
-            &[root.clone()],
+            std::slice::from_ref(&root),
         )
         .unwrap_err();
         assert!(err.contains("非法的导出相对路径"), "{err}");
