@@ -23,6 +23,7 @@ import type {
   DbxGridHeaderContextMenuState,
   TableExportFormat,
 } from "./databaseGridState";
+import { fileNameFromPath } from "../../lib/filePath";
 
 export const PAGE_SIZE = 100;
 export const MONGO_SIDEBAR_DOCUMENT_PREVIEW_LIMIT = 20;
@@ -751,7 +752,7 @@ export function ensureDuckDbFileExtension(path: string): string {
 }
 
 export function duckDbAttachedDatabaseNameFromPath(path: string): string {
-  const fileName = path.split(/[\\/]/).pop() ?? path;
+  const fileName = fileNameFromPath(path);
   const withoutExtension = fileName.replace(/\.(duckdb|db)$/i, "");
   const normalized = withoutExtension
     .trim()
