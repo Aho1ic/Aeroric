@@ -19,6 +19,8 @@ import * as Select from "@radix-ui/react-select";
 import type { AgentType, PermissionMode } from "../../types";
 import { agentDisplayLabel, agentFamily, isCodexLikeAgent, type AgentOption } from "../../agents";
 import { useAgentOptions } from "../../hooks/useAgentOptions";
+import { useAgentUsageStats } from "../../hooks/useAgentUsage";
+import { rankAgentOptionsByUsage, type AgentUsageStats } from "../../lib/agentUsageRanking";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
@@ -209,15 +211,29 @@ export function composeAgentMenuColumnViewportStyle(): CSSProperties {
   };
 }
 
-export function groupAgentOptions(options: AgentOption[]): {
+/**
+ * 分三族之后各自按使用频次重排(近 7 天 → 历史总数 → 最后使用时间 → 原序)。
+ *
+ * `usageStats` 省略或为空时结果与原来逐字一致 —— 排序退化成「内置在前 + 档案声明序」。
+ * 三列各自判断「是否整列近 7 天全为 0」,所以某一族冷了不会被另一族的热度带着换主键。
+ */
+export function groupAgentOptions(
+  options: AgentOption[],
+  usageStats?: Record<string, AgentUsageStats>,
+): {
   claude: AgentOption[];
   codex: AgentOption[];
   dsh: AgentOption[];
 } {
+  const byFamily = (family: AgentOption["family"]) =>
+    rankAgentOptionsByUsage(
+      options.filter((option) => option.family === family),
+      usageStats,
+    );
   return {
-    claude: options.filter((option) => option.family === "claude"),
-    codex: options.filter((option) => option.family === "codex"),
-    dsh: options.filter((option) => option.family === "dsh"),
+    claude: byFamily("claude"),
+    codex: byFamily("codex"),
+    dsh: byFamily("dsh"),
   };
 }
 
@@ -323,6 +339,9 @@ export function AgentPermSelector({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
+  // 常驻订阅:使用频次一变(本窗口记账、别处广播、或跨过本地零点让 7 天窗口滑动)
+  // 就重排,不等菜单打开才算。
+  const agentUsageStats = useAgentUsageStats();
   const [internalOpenMenu, setInternalOpenMenu] = useState<ComposeMenu>(null);
   const openMenu = controlledOpenMenu ?? internalOpenMenu;
   const setOpenMenu = (menu: ComposeMenu) => {
@@ -341,7 +360,7 @@ export function AgentPermSelector({
   const controlButtonStyle = compact ? s.toolbarBtnIconOnly : s.toolbarBtn;
   const saveAsTodoDisabled = hasAttachments || !!saveAsTodoDisabledReason;
   const saveAsTodoTitle = hasAttachments ? t("newTask.imagesMustSend") : saveAsTodoDisabledReason;
-  const groupedAgents = groupAgentOptions(agentOptions);
+  const groupedAgents = groupAgentOptions(agentOptions, agentUsageStats);
   const dshPresets = useMemo(() => {
     const builtInIds = new Set<string>(DSH_PRESETS.map(([value]) => value));
     return [

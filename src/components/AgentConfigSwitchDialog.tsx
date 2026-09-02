@@ -18,6 +18,8 @@ import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
 import deepseekLogo from "../assets/deepseek.svg";
 import { useAgentOptions } from "../hooks/useAgentOptions";
+import { useAgentUsageStats } from "../hooks/useAgentUsage";
+import { rankAgentOptionsByUsage } from "../lib/agentUsageRanking";
 import { getCachedAgentModels, refreshAgentModels } from "../hooks/agentModelCache";
 import { useI18n } from "../i18n";
 import {
@@ -59,6 +61,7 @@ export function AgentConfigSwitchDialog({
 }) {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
+  const agentUsageStats = useAgentUsageStats();
   const currentAgent = task.agent;
   const [agent, setAgent] = useState<AgentType>(currentAgent);
   const [models, setModels] = useState<string[]>([]);
@@ -76,17 +79,28 @@ export function AgentConfigSwitchDialog({
     () => agentOptions.find((option) => option.value === agent),
     [agent, agentOptions],
   );
+  // 与首页那个选择器同一套顺序:近 7 天次数 → 历史总数 → 最后使用时间 → 原序。
+  // 分族判定保留原文的「family 缺省时按 codexLike 推导」兼容分支。
   const groupedOptions = useMemo(
     () => ({
-      claude: agentOptions.filter(
-        (option) => option.family === "claude" || (!option.family && !option.codexLike),
+      claude: rankAgentOptionsByUsage(
+        agentOptions.filter(
+          (option) => option.family === "claude" || (!option.family && !option.codexLike),
+        ),
+        agentUsageStats,
       ),
-      codex: agentOptions.filter(
-        (option) => option.family === "codex" || (!option.family && option.codexLike),
+      codex: rankAgentOptionsByUsage(
+        agentOptions.filter(
+          (option) => option.family === "codex" || (!option.family && option.codexLike),
+        ),
+        agentUsageStats,
       ),
-      dsh: agentOptions.filter((option) => option.family === "dsh"),
+      dsh: rankAgentOptionsByUsage(
+        agentOptions.filter((option) => option.family === "dsh"),
+        agentUsageStats,
+      ),
     }),
-    [agentOptions],
+    [agentOptions, agentUsageStats],
   );
   const family = selectedOption?.family ?? agentFamily(agent, agentOptions);
   const codexLike = selectedOption?.family

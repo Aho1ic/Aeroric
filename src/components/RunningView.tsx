@@ -20,6 +20,7 @@ import { DshTrajectoryOverlay } from "./DshTrajectoryOverlay";
 import { useToast } from "./Toast";
 import { shortenPath, getUsageColor } from "../utils";
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
+import { recordAgentConfigUsage } from "../hooks/useAgentUsage";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { agentDisplayLabel, type AgentOption } from "../agents";
@@ -1187,7 +1188,11 @@ export function RunningView({
         onClose={() => setSwitchConfigOpen(false)}
         onSubmit={async (values) => {
           const applied = await onSwitchConfig?.(values);
-          if (applied !== false) setSwitchConfigOpen(false);
+          if (applied !== false) {
+            // 只在真的切过去之后才记账,被拒绝的切换不算一次使用。
+            void recordAgentConfigUsage(values.agent);
+            setSwitchConfigOpen(false);
+          }
           return applied;
         }}
       />

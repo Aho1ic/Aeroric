@@ -9,6 +9,7 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod agent_ops;
 mod agent_tools;
+mod agent_usage;
 mod analytics;
 mod app_settings;
 /// 只在测试构建里编译:守卫 command 定义集合与 `generate_handler!` 注册集合一致。
@@ -642,6 +643,8 @@ pub fn run() {
             wsl_git::wsl_git_resolve_conflict,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
+            agent_usage::record_agent_config_usage,
+            agent_usage::load_agent_usage_snapshot,
             app_settings::update_proxy_settings,
             app_settings::test_proxy_connection,
             app_settings::update_agent_path_settings,

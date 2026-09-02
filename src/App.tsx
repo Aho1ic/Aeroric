@@ -57,6 +57,7 @@ import {
 } from "./agents";
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
+import { recordAgentConfigUsage } from "./hooks/useAgentUsage";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
@@ -1409,6 +1410,9 @@ function App() {
         showToast(t("newTask.webuiMustStart"), "warning");
         return null;
       }
+      // local / worktree / webui 三条路各计一次:记在这里,前面那几个校验失败的
+      // 早返回都不算「用过这个配置」。存为待办也算 —— 那同样是一次配置选择。
+      void recordAgentConfigUsage(agent);
       try {
         await launchDshWebUi(agent);
       } catch (error) {
@@ -1416,6 +1420,8 @@ function App() {
       }
       return null;
     }
+
+    void recordAgentConfigUsage(agent);
 
     // 1) 立即把任务推到 state 让 view 切到 RunningView。worktree 字段先留空，
     //    避免 await create_task_worktree 期间用户停留在 NewTaskView，让人误以为没反应。
