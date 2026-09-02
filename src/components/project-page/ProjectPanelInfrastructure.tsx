@@ -229,8 +229,11 @@ export function projectPanelFeedbackLabel(panel: ProjectPanel, t: (key: string) 
       return t("database.title");
     case "docker":
       return t("docker.title");
+    // panel 叫 "notes",但文案目录里这一项一直是 notebook.title("随手记")。
+    // 不要按 panel 名去取 notes.title —— 目录里没有那个 key,
+    // t() 会静默回退成显示 key 本身。
     case "notes":
-      return t("notes.title");
+      return t("notebook.title");
     case "skills":
       return t("skills.installedSkills");
   }

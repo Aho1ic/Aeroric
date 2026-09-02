@@ -152,11 +152,6 @@ export function projectNotebookPanelStyle({
   };
 }
 
-export function shouldShowAgentTaskTabs({ taskCount }: { taskCount: number }): boolean {
-  void taskCount;
-  return false;
-}
-
 export interface ProjectFeatureAvailability {
   filesDisabled: boolean;
   gitChangesDisabled: boolean;
@@ -384,6 +379,24 @@ export function shellCenterLayerStyle(visible: boolean): React.CSSProperties {
     minWidth: 0,
     minHeight: 0,
     alignItems: "stretch",
+  };
+}
+
+/**
+ * 远端终端(SSH / WSL)在中央工作区的覆盖层样式。
+ *
+ * **和上面 `shellCenterLayerStyle` 刻意不同,不要合并**:本地 shell 是 `zIndex: 3`,
+ * 远端是 `4` —— WSL / SSH 项目下本地 shell 那块也可能挂着(条件里只排除了 ssh),
+ * 靠这一级差把远端压在上面。本地那份还多带 `minWidth` / `minHeight` / `alignItems`。
+ *
+ * 抽出来的原因是 SSH 和 WSL 两块的包裹 div 原先**逐字节相同**,各写了一遍这个对象。
+ */
+export function remoteTerminalLayerStyle(visible: boolean): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    display: visible ? "flex" : "none",
+    zIndex: visible ? 4 : 0,
   };
 }
 

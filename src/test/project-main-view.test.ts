@@ -7,7 +7,6 @@ import {
   projectResponsiveLayout,
   effectiveAuxiliaryLayout,
   resolveAuxiliaryWorkspace,
-  shouldShowAgentTaskTabs,
   projectSshRightPanelWidth,
   shellCenterContentStyle,
   shellCenterLayerStyle,
@@ -398,12 +397,6 @@ describe("project main view mode", () => {
       width: "100%",
       display: "flex",
     });
-  });
-
-  it("keeps agent task tabs hidden because conversations live in the project task list", () => {
-    expect(shouldShowAgentTaskTabs({ taskCount: 0 })).toBe(false);
-    expect(shouldShowAgentTaskTabs({ taskCount: 1 })).toBe(false);
-    expect(shouldShowAgentTaskTabs({ taskCount: 4 })).toBe(false);
   });
 });
 

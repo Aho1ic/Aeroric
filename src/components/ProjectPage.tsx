@@ -18,21 +18,16 @@ import type {
   TextSearchMatch,
   DiagnosticItem,
   TestFailure,
-  TestCoverageSummary,
-  TestRunResult,
-  DebugSessionSnapshot,
-  DebugBreakpoint,
-  RunProcessSnapshot,
 } from "../types";
 import { resolveProjectLocation } from "../types";
+import { useEditorRunDebugState } from "../hooks/useEditorRunDebugState";
+import { useLocalShellSession } from "../hooks/useLocalShellSession";
 import { START_DSH_CREATOR_DRAFT_EVENT } from "./app-settings/types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import type { LaunchMode } from "./new-task/LaunchModeSelector";
 import { RunningView } from "./RunningView";
 import type { AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
-import { FileExplorer } from "./FileExplorer";
 import { CommandPalette, type CommandPaletteCommand } from "./command-palette/CommandPalette";
-import { extractRunPreviewCandidates } from "./preview/portPanelState";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
@@ -40,16 +35,11 @@ import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalMana
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
-import {
-  deriveShellTerminalFontSize,
-  SHELL_TERMINAL_MAX_SESSIONS,
-  ShellTerminalPanel,
-  type ShellTerminalPanelHandle,
-  type ShellSession,
-} from "./ShellTerminalPanel";
-import { Columns2, FileText, Maximize2, Plus, Terminal as TerminalIcon, X } from "lucide-react";
-import { SshTerminalPanel, type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
-import { WslTerminalPanel, type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
+import { deriveShellTerminalFontSize, SHELL_TERMINAL_MAX_SESSIONS } from "./ShellTerminalPanel";
+// lucide 图标已全部跟着子组件搬走:`Columns2` / `Maximize2` 归 `AuxiliaryLayoutToggle`,
+// `FileText` / `Plus` / `Terminal` / `X` 归 `ProjectWorkspaceTabs`。
+import { type SshTerminalPanelHandle } from "./ssh/SshTerminalPanel";
+import { type WslTerminalPanelHandle } from "./wsl/WslTerminalPanel";
 import type { SftpEndpoint } from "./sftp/sftpTypes";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels, type EditorGroupId, type RightPanel } from "../hooks/useProjectPanels";
@@ -61,10 +51,7 @@ import {
   projectNotebookPanelStyle,
   projectResponsiveLayout,
   resolveAuxiliaryWorkspace,
-  shellCenterContentStyle,
-  shellCenterLayerStyle,
   shouldForceCollapseRail,
-  shouldShowAgentTaskTabs,
   shouldShowRemoteSshTerminalLayer,
   shouldShowRemoteSshTerminal,
   shouldShowRunningTaskInCenter,
@@ -89,14 +76,27 @@ import { projectVisibilityStyle } from "./project-page/visibility";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
-import { agentDisplayLabel } from "../agents";
+import { fileNameFromPath } from "../lib/filePath";
+import { AuxiliaryLayoutToggle } from "./project-page/AuxiliaryLayoutToggle";
+import { ProjectRightPanel } from "./project-page/ProjectRightPanel";
+import { ProjectTerminals } from "./project-page/ProjectTerminals";
+import { ProjectWorkspaceTabs } from "./project-page/ProjectWorkspaceTabs";
+import {
+  AUXILIARY_LAYOUT_STORAGE_PREFIX,
+  readAuxiliaryLayouts,
+  type AuxiliaryLayouts,
+} from "./project-page/auxiliaryLayout";
+import { mergeLspDiagnostics, type LspDiagnosticsEvent } from "./project-page/lspDiagnostics";
+// 本文件原来自带一个 `escapeDraftHtml`,和这个 `escapeHtml` 逐字节相同(只差 `export`)。
+// `syntaxHighlight.ts` 顶层只有一条会被擦除的 type import,shiki 全走动态 import,
+// 所以引它不会把高亮器拖进本模块 —— `notebook/noteRender.ts` 等两处也是这么引的。
+import { escapeHtml } from "../syntaxHighlight";
 import { hasTaskSessionPath, resolveTaskSessionOwner } from "../taskSession";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { usePlatformRuntimeInfo } from "../hooks/usePlatformRuntimeInfo";
 import { useDshLiveSessions } from "../hooks/useDshLiveSessions";
 import { DshLiveBars, DshTerminalHeaderActions } from "./DshLiveBars";
 import { useI18n } from "../i18n";
-import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { formatTerminalTabLabel } from "./terminalTabLabel";
 import {
   getIdeToolTitleWithDisabledReason,
@@ -108,120 +108,26 @@ import {
 import {
   CenterSuspenseFallback,
   DatabaseView,
-  DebugPanel,
-  DockSuspenseFallback,
   DockerServiceView,
   FileSearchDialog,
   FileViewer,
-  GitAdvancedPanel,
-  GitChanges,
   GitDiffViewer,
-  GitHistory,
   IdePanelShell,
   NotebookPanel,
-  ProblemsPanel,
-  ProjectSkillsPanel,
   type ProjectPanel,
   projectPanelFeedbackLabel,
   preloadCommonProjectPanels,
   preloadProjectPanel,
-  RunConfigurationsPanel,
-  SearchPanel,
   SftpPanel,
   SftpPreview,
   SshWorkspace,
-  TestExplorerPanel,
-  WebPreviewPanel,
 } from "./project-page/ProjectPanelInfrastructure";
-import {
-  debugBreakpointFileForProject,
-  toggleLineDebugBreakpoint,
-} from "./debug/debugBreakpointState";
 import { debugConfigDraftForFile, type DebugConfigDraft } from "./debug/debugState";
-import type { EditorTestRunTarget } from "./file-viewer/testRunGutter";
 import { runConfigDraftForFile, type RunConfigDraft } from "./run/runConfigState";
-import { buildVitestDebugConfig } from "./tests/testDebugState";
-import { inferTestProfileForFile, type TestRunPanelRequest } from "./tests/testExplorerState";
+import { inferTestProfileForFile } from "./tests/testExplorerState";
 import s from "../styles";
 
 const PROJECT_ACTION_LOG_STORAGE_PREFIX = "aeroric:project-action-log:";
-const AUXILIARY_LAYOUT_STORAGE_PREFIX = "aeroric:auxiliary-layout:";
-
-type AuxiliaryLayouts = Record<AuxiliaryWorkspaceType, AuxiliaryWorkspaceLayout>;
-
-function readAuxiliaryLayouts(projectId: string): AuxiliaryLayouts {
-  const defaults: AuxiliaryLayouts = { ssh: "split", file: "split", terminal: "split" };
-  if (typeof window === "undefined") return defaults;
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(`${AUXILIARY_LAYOUT_STORAGE_PREFIX}${projectId}`) ?? "{}",
-    ) as Partial<AuxiliaryLayouts>;
-    return {
-      ssh: parsed.ssh === "full" ? "full" : "split",
-      file: parsed.file === "full" ? "full" : "split",
-      terminal: parsed.terminal === "full" ? "full" : "split",
-    };
-  } catch {
-    return defaults;
-  }
-}
-
-function escapeDraftHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
-}
-
-function AuxiliaryLayoutToggle({
-  layout,
-  onChange,
-}: {
-  layout: AuxiliaryWorkspaceLayout;
-  onChange: (layout: AuxiliaryWorkspaceLayout) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <button
-      type="button"
-      className="ssh-workspace-icon-btn auxiliary-layout-toggle"
-      aria-label={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
-      title={layout === "full" ? t("ssh.splitView") : t("ssh.fullView")}
-      onClick={() => onChange(layout === "full" ? "split" : "full")}
-    >
-      {layout === "full" ? <Columns2 size={15} /> : <Maximize2 size={15} />}
-    </button>
-  );
-}
-
-type LspDiagnosticsEvent = {
-  projectPath: string;
-  filePath: string;
-  diagnostics: DiagnosticItem[];
-};
-
-function mergeLspDiagnostics(
-  current: DiagnosticItem[],
-  filePath: string,
-  diagnostics: DiagnosticItem[],
-): DiagnosticItem[] {
-  return [
-    ...current.filter(
-      (diagnostic) => diagnostic.file !== filePath || !diagnostic.source.startsWith("lsp:"),
-    ),
-    ...diagnostics,
-  ];
-}
 
 export function ProjectPage({
   project,
@@ -417,10 +323,18 @@ export function ProjectPage({
   } = useProjectPanels();
 
   const [showShellTerminal, setShowShellTerminal] = useState(false);
-  const [shellTerminalMounted, setShellTerminalMounted] = useState(false);
-  const [shellSessions, setShellSessions] = useState<ShellSession[]>([]);
-  const [activeShellId, setActiveShellId] = useState<string | null>(null);
   const [showRemoteProjectTerminal, setShowRemoteProjectTerminal] = useState(true);
+  const {
+    shellRef,
+    shellTerminalMounted,
+    shellSessions,
+    activeShellId,
+    mountShell,
+    handleShellReady,
+    handleShellSessionsChange,
+    resetShellSession,
+    sendOrQueueLocalCommand,
+  } = useLocalShellSession();
   const [auxiliaryLayouts, setAuxiliaryLayouts] = useState<AuxiliaryLayouts>(() =>
     readAuxiliaryLayouts(project.id),
   );
@@ -456,23 +370,9 @@ export function ProjectPage({
   const [sftpConnectionId, setSftpConnectionId] = useState<string | null>(null);
   const [databaseMounted, setDatabaseMounted] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
-  const [launchedDebugSession, setLaunchedDebugSession] = useState<DebugSessionSnapshot | null>(
-    null,
-  );
-  const [launchedRunProcess, setLaunchedRunProcess] = useState<RunProcessSnapshot | null>(null);
-  const [editorDebugBreakpoints, setEditorDebugBreakpoints] = useState<DebugBreakpoint[]>([]);
+  /* run / debug / test 那一簇状态归 `useEditorRunDebugState`,见下面的 hook 调用。
+     诊断留在这里:它来自 LSP 推送,跟 run/debug 不是一簇。 */
   const [editorDiagnostics, setEditorDiagnostics] = useState<DiagnosticItem[]>([]);
-  const [editorCoverage, setEditorCoverage] = useState<TestCoverageSummary | null>(null);
-  const [testRunRequest, setTestRunRequest] = useState<TestRunPanelRequest | null>(null);
-  const [runDraftRequest, setRunDraftRequest] = useState<{
-    id: number;
-    draft: RunConfigDraft;
-  } | null>(null);
-  const [debugDraftRequest, setDebugDraftRequest] = useState<{
-    id: number;
-    draft: DebugConfigDraft;
-  } | null>(null);
-  const [editorTestDebugError, setEditorTestDebugError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackState | null>(null);
   const [, setActionLog] = useState<ProjectActionResult[]>([]);
   const [responsiveLayout, setResponsiveLayout] = useState({
@@ -493,17 +393,10 @@ export function ProjectPage({
   } | null>(null);
   const [databaseFilePath, setDatabaseFilePath] = useState<string | null>(null);
   const projectBodyRef = useRef<HTMLDivElement>(null);
-  const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const remoteSshRef = useRef<SshTerminalPanelHandle>(null);
   const wslTerminalRef = useRef<WslTerminalPanelHandle>(null);
-  const shellReadyRef = useRef(false);
   const remoteSshReadyRef = useRef(false);
-  const pendingCmdRef = useRef<string | null>(null);
   const pendingRemoteSshCmdRef = useRef<string | null>(null);
-  const previewOpenedForRunRef = useRef<string | null>(null);
-  const testRunRequestIdRef = useRef(0);
-  const runDraftRequestIdRef = useRef(0);
-  const debugDraftRequestIdRef = useRef(0);
   const actionFeedbackIdRef = useRef(0);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
@@ -578,7 +471,6 @@ export function ProjectPage({
 
   useEffect(() => {
     setEditorDiagnostics([]);
-    setEditorCoverage(null);
   }, [project.path]);
 
   const projectTasks = useMemo(
@@ -589,13 +481,6 @@ export function ProjectPage({
   useEffect(() => {
     setShowRemoteProjectTerminal(true);
   }, [project.id]);
-  useEffect(() => {
-    setLaunchedDebugSession(null);
-    setLaunchedRunProcess(null);
-    previewOpenedForRunRef.current = null;
-    setEditorDebugBreakpoints([]);
-  }, [project.path]);
-
   const remoteConnection = useMemo(
     () =>
       projectLocation.kind === "ssh"
@@ -686,6 +571,36 @@ export function ProjectPage({
       : projectLocation.kind === "wsl"
         ? projectLocation.linuxPath
         : project.path;
+
+  /* 用 useCallback 包一层而不是直接把 setter 传下去:它进了 hook 里几个 handler
+     的依赖数组,identity 必须稳定。 */
+  const hideShellTerminal = useCallback(() => setShowShellTerminal(false), []);
+  const {
+    launchedDebugSession,
+    launchedRunProcess,
+    editorDebugBreakpoints,
+    editorCoverage,
+    testRunRequest,
+    runDraftRequest,
+    debugDraftRequest,
+    editorTestDebugError,
+    handleRunDebugStarted,
+    handleRunProcessChanged,
+    handleToggleEditorDebugBreakpoint,
+    handleRunEditorTestTarget,
+    handleTestRunResult,
+    handleDebugEditorTestTarget,
+    requestTestRun,
+    requestRunDraft,
+    requestDebugDraft,
+  } = useEditorRunDebugState({
+    projectPath: project.path,
+    fileRootPath,
+    remoteFileContext,
+    openRightPanel,
+    hideShellTerminal,
+  });
+
   const {
     filesDisabled,
     gitChangesDisabled,
@@ -830,7 +745,15 @@ export function ProjectPage({
   const remoteProjectPathKey = projectLocation.kind === "ssh" ? projectLocation.remotePath : "";
   const wslProjectPathKey = projectLocation.kind === "wsl" ? projectLocation.linuxPath : "";
 
-  const handleSearchFileSelect = useCallback(
+  // 「跳到某个文件的某一行」是七个入口的共同动作:搜索结果、全文匹配、诊断、测试失败、
+  // 调试栈帧、跳转定义、Git 高级视图。七处原先各写一遍同样的四步(收起两个终端 → 选中文件
+  // → 亮起 files 面板),其中四处**逐字节相同**,另三处只是先把各自的载荷拆成
+  // (path, name, selection)。这里收敛成一个基底 + 三个薄适配器。
+  //
+  // 合并后四个同款入口共用一个函数标识。原先它们的依赖数组也完全相同
+  // (`[handleFileSelect, openRightPanel]`),所以标识变化的时机一模一样 —— 对
+  // `React.memo` 的子组件只会更稳,不会更频繁。
+  const openFileAtLocation = useCallback(
     (path: string, name: string, selection?: { line: number; column?: number }) => {
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
@@ -842,70 +765,29 @@ export function ProjectPage({
 
   const handleTextSearchMatchOpen = useCallback(
     (match: TextSearchMatch) => {
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(match.path, match.name, { line: match.line, column: match.column });
-      openRightPanel("files");
+      openFileAtLocation(match.path, match.name, { line: match.line, column: match.column });
     },
-    [handleFileSelect, openRightPanel],
+    [openFileAtLocation],
   );
 
   const handleDiagnosticOpen = useCallback(
     (diagnostic: DiagnosticItem) => {
-      const name = diagnostic.file.split(/[\\/]/).pop() ?? diagnostic.file;
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(diagnostic.file, name, {
+      openFileAtLocation(diagnostic.file, fileNameFromPath(diagnostic.file), {
         line: diagnostic.line,
         column: diagnostic.column,
       });
-      openRightPanel("files");
     },
-    [handleFileSelect, openRightPanel],
+    [openFileAtLocation],
   );
 
   const handleTestFailureOpen = useCallback(
     (failure: TestFailure) => {
-      const name = failure.file.split(/[\\/]/).pop() ?? failure.file;
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(failure.file, name, {
+      openFileAtLocation(failure.file, fileNameFromPath(failure.file), {
         line: failure.line,
         column: failure.column,
       });
-      openRightPanel("files");
     },
-    [handleFileSelect, openRightPanel],
-  );
-
-  const handleDebugLocationOpen = useCallback(
-    (path: string, name: string, selection?: { line: number; column?: number }) => {
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(path, name, selection);
-      openRightPanel("files");
-    },
-    [handleFileSelect, openRightPanel],
-  );
-
-  const handleDefinitionOpen = useCallback(
-    (path: string, name: string, selection?: { line: number; column?: number }) => {
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(path, name, selection);
-      openRightPanel("files");
-    },
-    [handleFileSelect, openRightPanel],
-  );
-
-  const handleGitAdvancedFileOpen = useCallback(
-    (path: string, name: string, selection?: { line: number; column?: number }) => {
-      setShowShellTerminal(false);
-      setShowRemoteProjectTerminal(false);
-      handleFileSelect(path, name, selection);
-      openRightPanel("files");
-    },
-    [handleFileSelect, openRightPanel],
+    [openFileAtLocation],
   );
 
   const openCommandPalette = useCallback((initialInput: string) => {
@@ -964,15 +846,10 @@ export function ProjectPage({
         }
         return;
       }
-      setShellTerminalMounted(true);
       setShowShellTerminal(true);
-      if (shellReadyRef.current && shellRef.current) {
-        shellRef.current.sendCommand(cmd);
-        return;
-      }
-      pendingCmdRef.current = cmd;
+      sendOrQueueLocalCommand(cmd);
     },
-    [projectLocation.kind],
+    [projectLocation.kind, sendOrQueueLocalCommand],
   );
 
   const handleRunMakeTarget = useCallback(
@@ -981,12 +858,6 @@ export function ProjectPage({
     },
     [sendOrQueueShellCommand],
   );
-
-  const flushPendingShellCommand = useCallback(() => {
-    if (!pendingCmdRef.current || !shellRef.current) return;
-    shellRef.current.sendCommand(pendingCmdRef.current);
-    pendingCmdRef.current = null;
-  }, []);
 
   const flushPendingRemoteSshCommand = useCallback(() => {
     if (!pendingRemoteSshCmdRef.current || !remoteSshRef.current) return;
@@ -1013,11 +884,6 @@ export function ProjectPage({
       sendOrQueueShellCommand,
     ],
   );
-
-  const handleShellReady = useCallback(() => {
-    shellReadyRef.current = true;
-    flushPendingShellCommand();
-  }, [flushPendingShellCommand]);
 
   const handleRemoteSshReady = useCallback(() => {
     remoteSshReadyRef.current = true;
@@ -1060,7 +926,7 @@ export function ProjectPage({
     (prompt: string) => {
       const existing = newTaskDraftRef.current;
       newTaskDraftRef.current = {
-        promptHtml: escapeDraftHtml(prompt),
+        promptHtml: escapeHtml(prompt),
         agent: existing?.agent ?? "claude",
         permMode: existing?.permMode ?? "full_access",
         planMode: existing?.planMode ?? false,
@@ -1177,9 +1043,7 @@ export function ProjectPage({
       setShowRemoteProjectTerminal(false);
 
       if (panel === "tests" && activeFilePath) {
-        testRunRequestIdRef.current += 1;
-        setTestRunRequest({
-          id: testRunRequestIdRef.current,
+        requestTestRun({
           profile: inferTestProfileForFile(activeFilePath),
           target: {
             filePath: activeFilePath,
@@ -1190,20 +1054,13 @@ export function ProjectPage({
       }
 
       if (panel === "run") {
-        const requestId = runDraftRequestIdRef.current + 1;
-        runDraftRequestIdRef.current = requestId;
-        void activeRunConfigDraft().then((draft) => {
-          if (draft && runDraftRequestIdRef.current === requestId) {
-            setRunDraftRequest({ id: requestId, draft });
-          }
-        });
+        requestRunDraft(activeRunConfigDraft);
       }
 
       if (panel === "debug") {
         const draft = activeDebugConfigDraft();
         if (draft) {
-          debugDraftRequestIdRef.current += 1;
-          setDebugDraftRequest({ id: debugDraftRequestIdRef.current, draft });
+          requestDebugDraft(draft);
         }
       }
 
@@ -1214,6 +1071,9 @@ export function ProjectPage({
       activeFilePath,
       activeRunConfigDraft,
       openRightPanel,
+      requestDebugDraft,
+      requestRunDraft,
+      requestTestRun,
       showActionFeedback,
       t,
     ],
@@ -1272,9 +1132,9 @@ export function ProjectPage({
       setShowRemoteProjectTerminal(true);
       return;
     }
-    setShellTerminalMounted(true);
+    mountShell();
     setShowShellTerminal(true);
-  }, [closeRightPanel, projectLocation.kind, remoteConnection, showActionFeedback, t]);
+  }, [closeRightPanel, mountShell, projectLocation.kind, remoteConnection, showActionFeedback, t]);
 
   const handleToggleTerminal = useCallback(() => {
     const terminalOpen =
@@ -1305,11 +1165,12 @@ export function ProjectPage({
       return;
     }
     closeRightPanel();
-    setShellTerminalMounted(true);
+    mountShell();
     setShowShellTerminal(true);
   }, [
     closeRightPanel,
     hasEditorGroups,
+    mountShell,
     openRightPanel,
     projectLocation.kind,
     remoteConnection,
@@ -1346,96 +1207,6 @@ export function ProjectPage({
       openRightPanel("database");
     },
     [clearFileAndDiff, openRightPanel],
-  );
-
-  const handleRunDebugStarted = useCallback(
-    (snapshot: DebugSessionSnapshot) => {
-      setShowShellTerminal(false);
-      setLaunchedDebugSession(snapshot);
-      openRightPanel("debug");
-    },
-    [openRightPanel],
-  );
-
-  const handleRunProcessChanged = useCallback(
-    (snapshot: RunProcessSnapshot) => {
-      setLaunchedRunProcess(snapshot);
-      if (
-        snapshot.status === "running" &&
-        previewOpenedForRunRef.current !== snapshot.runId &&
-        extractRunPreviewCandidates(snapshot).length > 0
-      ) {
-        previewOpenedForRunRef.current = snapshot.runId;
-        setShowShellTerminal(false);
-        openRightPanel("preview");
-      }
-    },
-    [openRightPanel],
-  );
-
-  const handleToggleEditorDebugBreakpoint = useCallback(
-    (filePath: string, line: number) => {
-      setEditorDebugBreakpoints((prev) =>
-        toggleLineDebugBreakpoint(prev, {
-          file: debugBreakpointFileForProject(project.path, filePath),
-          line,
-          column: 1,
-        }),
-      );
-    },
-    [project.path],
-  );
-
-  const handleRunEditorTestTarget = useCallback(
-    (target: EditorTestRunTarget) => {
-      testRunRequestIdRef.current += 1;
-      setEditorTestDebugError(null);
-      setShowShellTerminal(false);
-      setTestRunRequest({
-        id: testRunRequestIdRef.current,
-        profile: "vitest",
-        target: {
-          filePath: target.filePath,
-          testName: target.testName,
-        },
-        coverage: false,
-      });
-      openRightPanel("tests");
-    },
-    [openRightPanel],
-  );
-
-  const handleTestRunResult = useCallback((result: TestRunResult) => {
-    setEditorCoverage(result.coverage ?? null);
-  }, []);
-
-  const handleDebugEditorTestTarget = useCallback(
-    async (target: EditorTestRunTarget) => {
-      setEditorTestDebugError(null);
-      setShowShellTerminal(false);
-      try {
-        const commandArgs = remoteFileContext
-          ? {
-              connection: remoteFileContext.connection,
-              remoteProjectPath: remoteFileContext.projectPath,
-              projectPath: fileRootPath,
-              config: buildVitestDebugConfig(fileRootPath, target),
-            }
-          : {
-              projectPath: project.path,
-              config: buildVitestDebugConfig(project.path, target),
-            };
-        const snapshot = await invoke<DebugSessionSnapshot>(
-          remoteFileContext ? "remote_start_debug_config" : "start_debug_config",
-          commandArgs,
-        );
-        handleRunDebugStarted(snapshot);
-      } catch (err) {
-        setEditorTestDebugError(String(err));
-        openRightPanel("debug");
-      }
-    },
-    [fileRootPath, handleRunDebugStarted, openRightPanel, project.path, remoteFileContext],
   );
 
   const ideToolAvailability = useMemo<IdeToolAvailability>(
@@ -1688,7 +1459,6 @@ export function ProjectPage({
   }, [projectRailWidth, rightPanelWidth, visibleRightPanel]);
 
   const effectiveRightPanelWidth = rightPanelWidth;
-  const showAgentTabs = shouldShowAgentTaskTabs({ taskCount: projectTasks.length });
   const workspaceFileTabs = useMemo(
     () =>
       editorGroups.flatMap((group) =>
@@ -1736,14 +1506,6 @@ export function ProjectPage({
     isNotesMode,
   });
 
-  const handleShellSessionsChange = useCallback(
-    (sessions: ShellSession[], nextActiveShellId: string | null) => {
-      setShellSessions(sessions);
-      setActiveShellId(nextActiveShellId);
-    },
-    [],
-  );
-
   const handleWorkspaceFileTabSelect = useCallback(
     (groupId: EditorGroupId, path: string) => {
       setShowShellTerminal(false);
@@ -1763,11 +1525,11 @@ export function ProjectPage({
         setShowRemoteProjectTerminal(true);
         return;
       }
-      setShellTerminalMounted(true);
+      mountShell();
       setShowShellTerminal(true);
       shellRef.current?.activateShell(terminalId);
     },
-    [closeRightPanel, projectLocation.kind],
+    [closeRightPanel, mountShell, projectLocation.kind, shellRef],
   );
 
   const handleWorkspaceTerminalTabClose = useCallback(
@@ -1775,7 +1537,7 @@ export function ProjectPage({
       if (projectLocation.kind !== "local") return;
       shellRef.current?.closeShell(terminalId);
     },
-    [projectLocation.kind],
+    [projectLocation.kind, shellRef],
   );
   const activeWorkspaceTerminal = workspaceTerminalTabs.find(
     (terminal) => workspaceTerminalVisible && (terminal.remote || terminal.id === activeShellId),
@@ -1845,304 +1607,24 @@ export function ProjectPage({
         {/* 「显示任务」开关归 ProjectRail 的折叠竖条所有:浮在中间区域上方会压住
             RunningView 头部的状态图标 / 任务名,以及 SSH 工作区的头部。 */}
         {showWorkspaceTabs && (
-          <AnimatedSelectionTrack
-            value={activeWorkspaceTabValue}
-            ariaLabel="Workspace tabs"
-            role="tablist"
-            variant="underline"
-            className="terminal-session-tabs"
-            dataTestId="workspace-tabs"
-            style={{
-              minHeight: 34,
-              height: 34,
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              padding: "4px 8px",
-              borderBottom: "1px solid var(--border-dim)",
-              background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
-              overflowX: "auto",
-            }}
-          >
-            {workspaceFileTabs.length > 0 && (
-              <button
-                type="button"
-                aria-label={t("file.closeAllTabs")}
-                title={t("file.closeAllTabs")}
-                onClick={handleCloseAllEditorFileTabs}
-                style={{
-                  width: 24,
-                  height: 24,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: 0,
-                  border: "1px solid var(--border-dim)",
-                  borderRadius: 6,
-                  background: "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                <X size={12} />
-              </button>
-            )}
-            {workspaceFileTabs.map((tab) => {
-              const selected =
-                !workspaceTerminalVisible &&
-                tab.groupId === activeEditorGroupId &&
-                tab.path === activeFilePath;
-              return (
-                <div
-                  key={`file:${tab.groupId}:${tab.path}`}
-                  data-animated-selection-item
-                  data-selection-value={`file:${tab.groupId}:${tab.path}`}
-                  style={{
-                    height: 24,
-                    maxWidth: 220,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    border: "1px solid var(--border-dim)",
-                    borderRadius: 6,
-                    background: "transparent",
-                    flexShrink: 0,
-                  }}
-                >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    tabIndex={selected ? 0 : -1}
-                    title={tab.path}
-                    onClick={() => handleWorkspaceFileTabSelect(tab.groupId, tab.path)}
-                    style={{
-                      minWidth: 0,
-                      height: "100%",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "0 7px 0 8px",
-                      border: "none",
-                      background: "transparent",
-                      color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: selected ? 650 : 560,
-                    }}
-                  >
-                    <FileText size={12} />
-                    <span
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {tab.name}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t("file.closeTab", { name: tab.name })}
-                    title={t("file.closeTab", { name: tab.name })}
-                    onClick={() => handleFileTabClose(tab.path, tab.groupId)}
-                    style={{
-                      width: 20,
-                      height: 20,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0,
-                      border: "none",
-                      background: "transparent",
-                      color: "var(--text-hint)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <X size={11} />
-                  </button>
-                </div>
-              );
-            })}
-            {workspaceTerminalTabs.map((terminal) => {
-              const selected =
-                workspaceTerminalVisible && (terminal.remote || terminal.id === activeShellId);
-              return (
-                <div
-                  key={`terminal:${terminal.id}`}
-                  className="terminal-session-tab"
-                  data-animated-selection-item
-                  data-selection-value={`terminal:${terminal.id}`}
-                  data-selected={selected ? "true" : "false"}
-                  style={{
-                    height: 24,
-                    maxWidth: 150,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    border: "1px solid var(--border-dim)",
-                    borderRadius: 6,
-                    background: "transparent",
-                    flexShrink: 0,
-                  }}
-                >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    tabIndex={selected ? 0 : -1}
-                    title={terminal.title}
-                    onClick={() => handleWorkspaceTerminalTabSelect(terminal.id)}
-                    style={{
-                      minWidth: 0,
-                      flex: 1,
-                      height: "100%",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "0 7px 0 8px",
-                      border: "none",
-                      background: "transparent",
-                      overflow: "hidden",
-                      whiteSpace: "nowrap",
-                      color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: selected ? 650 : 560,
-                    }}
-                  >
-                    <span className="terminal-session-tab__cursor" aria-hidden="true" />
-                    <TerminalIcon size={12} />
-                    <span className="terminal-session-tab__label">{terminal.label}</span>
-                  </button>
-                  {!terminal.remote && (
-                    <button
-                      type="button"
-                      aria-label={t("terminal.closeShell", { title: terminal.title })}
-                      title={t("terminal.closeShell", { title: terminal.title })}
-                      onClick={() => handleWorkspaceTerminalTabClose(terminal.id)}
-                      style={{
-                        width: 20,
-                        height: 20,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 0,
-                        border: "none",
-                        background: "transparent",
-                        color: "var(--text-hint)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <X size={11} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-            {projectLocation.kind === "local" && shellSessions.length > 0 && (
-              <button
-                type="button"
-                aria-label={t("terminal.newTerminal")}
-                title={
-                  shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS
-                    ? t("terminal.limitReached")
-                    : t("terminal.newTerminal")
-                }
-                disabled={shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS}
-                onClick={() => shellRef.current?.addShell()}
-                style={{
-                  width: 24,
-                  height: 24,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: 0,
-                  border: "1px solid var(--border-dim)",
-                  borderRadius: 6,
-                  background: "transparent",
-                  color: "var(--text-secondary)",
-                  cursor:
-                    shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS ? "not-allowed" : "pointer",
-                  flexShrink: 0,
-                }}
-              >
-                <Plus size={12} />
-              </button>
-            )}
-          </AnimatedSelectionTrack>
-        )}
-        {showAgentTabs && (
-          <AnimatedSelectionTrack
-            value={isNewTask ? "__new__" : (selectedTaskId ?? "")}
-            ariaLabel="Agent terminal tabs"
-            role="tablist"
-            variant="underline"
-            style={{
-              height: 34,
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "4px 8px",
-              borderBottom: "1px solid var(--border-dim)",
-              background: "color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar))",
-              overflowX: "auto",
-            }}
-          >
-            {projectTasks.map((task) => {
-              const selected = task.id === selectedTaskId && !isNewTask;
-              const title =
-                (task.name ?? task.prompt).trim() ||
-                `${agentDisplayLabel(task.agent, agentOptions)} Terminal`;
-              return (
-                <button
-                  key={task.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  tabIndex={selected ? 0 : -1}
-                  data-animated-selection-item
-                  data-selection-value={task.id}
-                  title={title}
-                  onClick={() => handleSelectTask(project.id, task.id)}
-                  style={{
-                    height: 24,
-                    maxWidth: 240,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "0 9px",
-                    border: "1px solid var(--border-dim)",
-                    borderRadius: 6,
-                    background: "transparent",
-                    color: selected ? "var(--control-active-fg)" : "var(--text-muted)",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                    fontSize: 11,
-                    fontWeight: selected ? 650 : 560,
-                  }}
-                >
-                  <span>{agentDisplayLabel(task.agent, agentOptions)}</span>
-                  <span
-                    style={{
-                      minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {title}
-                  </span>
-                  <span style={{ color: selected ? "inherit" : "var(--text-hint)" }}>
-                    {task.status}
-                  </span>
-                </button>
-              );
-            })}
-          </AnimatedSelectionTrack>
+          <ProjectWorkspaceTabs
+            fileTabs={workspaceFileTabs}
+            terminalTabs={workspaceTerminalTabs}
+            terminalVisible={workspaceTerminalVisible}
+            activeTabValue={activeWorkspaceTabValue}
+            activeEditorGroupId={activeEditorGroupId}
+            activeFilePath={activeFilePath}
+            activeShellId={activeShellId}
+            canAddTerminal={projectLocation.kind === "local" && shellSessions.length > 0}
+            addTerminalDisabled={shellSessions.length >= SHELL_TERMINAL_MAX_SESSIONS}
+            t={t}
+            onCloseAllFileTabs={handleCloseAllEditorFileTabs}
+            onFileTabSelect={handleWorkspaceFileTabSelect}
+            onFileTabClose={handleFileTabClose}
+            onTerminalTabSelect={handleWorkspaceTerminalTabSelect}
+            onTerminalTabClose={handleWorkspaceTerminalTabClose}
+            onAddTerminal={() => shellRef.current?.addShell()}
+          />
         )}
         <div
           style={{
@@ -2606,7 +2088,7 @@ export function ProjectPage({
                                 onToggleDebugBreakpoint={
                                   debugDisabled ? undefined : handleToggleEditorDebugBreakpoint
                                 }
-                                onOpenDefinition={handleDefinitionOpen}
+                                onOpenDefinition={openFileAtLocation}
                                 onFocusGroup={() => handleEditorGroupFocus(group.id)}
                                 showTabStrip={false}
                                 onSplitRight={
@@ -2638,101 +2120,43 @@ export function ProjectPage({
                 </ErrorBoundary>
               </div>
 
-              {shellTerminalMounted && projectLocation.kind !== "ssh" && !terminalDisabled && (
-                <div style={shellCenterLayerStyle(shellVisibleInCenter)}>
-                  <div style={shellCenterContentStyle()}>
-                    <ErrorBoundary label="终端">
-                      <ShellTerminalPanel
-                        ref={shellRef}
-                        projectPath={project.path}
-                        projectId={project.id}
-                        isActive={
-                          visible &&
-                          primaryWorkspaceVisible &&
-                          shellVisibleInCenter &&
-                          showShellTerminal
-                        }
-                        visible={shellVisibleInCenter && showShellTerminal}
-                        onMinimize={() => {
-                          setShowShellTerminal(false);
-                          if (hasEditorGroups) openRightPanel("files");
-                        }}
-                        onClose={() => {
-                          setShowShellTerminal(false);
-                          setShellTerminalMounted(false);
-                          setShellSessions([]);
-                          setActiveShellId(null);
-                          shellReadyRef.current = false;
-                          pendingCmdRef.current = null;
-                          if (hasEditorGroups) openRightPanel("files");
-                        }}
-                        themeVariant={themeVariant}
-                        terminalFontSize={shellTerminalFontSize}
-                        monoFontFamily={monoFontFamily}
-                        onReady={handleShellReady}
-                        showSessionTabs={false}
-                        onSessionsChange={handleShellSessionsChange}
-                        shellLabel={platformRuntime.shellLabel}
-                        height="100%"
-                      />
-                    </ErrorBoundary>
-                  </div>
-                </div>
-              )}
-
-              {showRemoteSshTerminal && remoteConnection && (
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: remoteSshMainVisible ? "flex" : "none",
-                    zIndex: remoteSshMainVisible ? 4 : 0,
-                  }}
-                >
-                  <ErrorBoundary label="SSH">
-                    <SshTerminalPanel
-                      ref={remoteSshRef}
-                      connections={sshConnections}
-                      onConnectionsChange={onSshConnectionsChange}
-                      onDeleteConnection={onDeleteSshConnection}
-                      active={visible && primaryWorkspaceVisible && remoteSshMainVisible}
-                      width="100%"
-                      themeVariant={themeVariant}
-                      terminalFontSize={terminalFontSize}
-                      monoFontFamily={monoFontFamily}
-                      initialConnectionId={remoteConnection.id}
-                      autoConnect
-                      hideConnectionList
-                      onReady={handleRemoteSshReady}
-                    />
-                  </ErrorBoundary>
-                </div>
-              )}
-
-              {projectLocation.kind === "wsl" && (
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: remoteSshMainVisible ? "flex" : "none",
-                    zIndex: remoteSshMainVisible ? 4 : 0,
-                  }}
-                >
-                  <ErrorBoundary label="WSL">
-                    <WslTerminalPanel
-                      ref={wslTerminalRef}
-                      projectId={project.id}
-                      distribution={projectLocation.distribution}
-                      linuxProjectPath={projectLocation.linuxPath}
-                      active={visible && primaryWorkspaceVisible && remoteSshMainVisible}
-                      themeVariant={themeVariant}
-                      terminalFontSize={terminalFontSize}
-                      monoFontFamily={monoFontFamily}
-                      onReady={handleWslReady}
-                    />
-                  </ErrorBoundary>
-                </div>
-              )}
+              <ProjectTerminals
+                project={project}
+                projectLocation={projectLocation}
+                visible={visible}
+                primaryWorkspaceVisible={primaryWorkspaceVisible}
+                terminalDisabled={terminalDisabled}
+                shellTerminalMounted={shellTerminalMounted}
+                shellVisibleInCenter={shellVisibleInCenter}
+                showShellTerminal={showShellTerminal}
+                remoteSshMainVisible={remoteSshMainVisible}
+                showRemoteSshTerminal={showRemoteSshTerminal}
+                remoteConnection={remoteConnection}
+                sshConnections={sshConnections}
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                shellTerminalFontSize={shellTerminalFontSize}
+                monoFontFamily={monoFontFamily}
+                shellLabel={platformRuntime.shellLabel}
+                shellRef={shellRef}
+                remoteSshRef={remoteSshRef}
+                wslTerminalRef={wslTerminalRef}
+                onShellMinimize={() => {
+                  setShowShellTerminal(false);
+                  if (hasEditorGroups) openRightPanel("files");
+                }}
+                onShellClose={() => {
+                  setShowShellTerminal(false);
+                  resetShellSession();
+                  if (hasEditorGroups) openRightPanel("files");
+                }}
+                onShellReady={handleShellReady}
+                onShellSessionsChange={handleShellSessionsChange}
+                onRemoteSshReady={handleRemoteSshReady}
+                onWslReady={handleWslReady}
+                onSshConnectionsChange={onSshConnectionsChange}
+                onDeleteSshConnection={onDeleteSshConnection}
+              />
 
               {filePreviewTarget && (
                 <div
@@ -2791,247 +2215,46 @@ export function ProjectPage({
         </div>
       </div>
 
-      {visibleRightPanel && (
-        <div
-          style={{
-            position: "relative",
-            display: visibleRightPanel ? "flex" : "none",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            onMouseDown={handleRightResizeStart}
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: 5,
-              cursor: "col-resize",
-              zIndex: 10,
-            }}
-          />
-          <Suspense
-            fallback={
-              <DockSuspenseFallback width={effectiveRightPanelWidth} label={t("common.loading")} />
-            }
-          >
-            {visibleRightPanel === "files" && (
-              <ErrorBoundary
-                label="文件浏览器"
-                onError={(error) => showActionFailure("files", t("toolbar.fileExplorer"), error)}
-              >
-                <FileExplorer
-                  projectPath={fileRootPath}
-                  projectName={project.name}
-                  onFileSelect={handleFileSelectWithShellMinimize}
-                  active={visible}
-                  width={effectiveRightPanelWidth}
-                  remote={supportedFileContext}
-                  themeVariant={themeVariant}
-                  onPreviewRequest={setFilePreviewTarget}
-                  onOpenDatabaseFile={handleOpenDatabaseFile}
-                />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "git-changes" && (
-              <ErrorBoundary
-                label="Git 变更"
-                onError={(error) =>
-                  showActionFailure("git-changes", t("toolbar.gitChanges"), error)
-                }
-              >
-                <GitChanges
-                  projectPath={gitContextPath}
-                  currentTaskCreatedAt={currentTaskCreatedAt}
-                  onFileSelect={handleDiffFileSelectWithCollapse}
-                  width={effectiveRightPanelWidth}
-                  remote={supportedFileContext}
-                />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "git-history" && (
-              <ErrorBoundary
-                label="Git 历史"
-                onError={(error) =>
-                  showActionFailure("git-history", t("toolbar.gitHistory"), error)
-                }
-              >
-                <GitHistory
-                  projectPath={gitContextPath}
-                  onCommitSelect={handleCommitSelectWithCollapse}
-                  onFileClick={handleCommitFileClickWithCollapse}
-                  width={effectiveRightPanelWidth}
-                  remote={supportedFileContext}
-                />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "git-advanced" && (
-              <ErrorBoundary
-                label="Git Advanced"
-                onError={(error) =>
-                  showActionFailure("git-advanced", t("gitAdvanced.title"), error)
-                }
-              >
-                <GitAdvancedPanel
-                  projectPath={gitContextPath}
-                  activeFilePath={activeFilePath}
-                  width={effectiveRightPanelWidth}
-                  onOpenFile={handleGitAdvancedFileOpen}
-                  remote={supportedFileContext}
-                />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "search" && (
-              <ErrorBoundary
-                label="搜索"
-                onError={(error) => showActionFailure("search", t("toolbar.search"), error)}
-              >
-                <SearchPanel
-                  projectPath={fileRootPath}
-                  width={effectiveRightPanelWidth}
-                  onOpenMatch={handleTextSearchMatchOpen}
-                  remote={remoteFileContext}
-                />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "skills" && (
-              <ErrorBoundary
-                label="Skills"
-                onError={(error) => showActionFailure("skills", t("skills.installedSkills"), error)}
-              >
-                <ProjectSkillsPanel projectPath={fileRootPath} width={effectiveRightPanelWidth} />
-              </ErrorBoundary>
-            )}
-            {visibleRightPanel === "problems" && (
-              <>
-                {renderTopRightIdePanelShell(
-                  "problems",
-                  <ErrorBoundary
-                    label="Problems"
-                    onError={(error) => showActionFailure("problems", t("problems.title"), error)}
-                  >
-                    <ProblemsPanel
-                      projectPath={project.path}
-                      width={effectiveRightPanelWidth}
-                      onOpenDiagnostic={handleDiagnosticOpen}
-                      onCreateAgentTask={handleCreateProblemsAgentTask}
-                      onDiagnosticsChange={remoteFileContext ? undefined : setEditorDiagnostics}
-                      remote={remoteFileContext}
-                    />
-                  </ErrorBoundary>,
-                )}
-              </>
-            )}
-            {visibleRightPanel === "tests" && (
-              <>
-                {renderTopRightIdePanelShell(
-                  "tests",
-                  <ErrorBoundary
-                    label="Tests"
-                    onError={(error) => showActionFailure("tests", t("tests.title"), error)}
-                  >
-                    <TestExplorerPanel
-                      projectPath={project.path}
-                      width={effectiveRightPanelWidth}
-                      onOpenFailure={handleTestFailureOpen}
-                      onCreateAgentTask={handleCreateProblemsAgentTask}
-                      onTestRunResult={handleTestRunResult}
-                      runRequest={testRunRequest}
-                      remote={remoteFileContext}
-                    />
-                  </ErrorBoundary>,
-                )}
-              </>
-            )}
-            {visibleRightPanel === "run" && (
-              <>
-                {renderTopRightIdePanelShell(
-                  "run",
-                  <ErrorBoundary
-                    label="Run"
-                    onError={(error) => showActionFailure("run", t("run.title"), error)}
-                  >
-                    <RunConfigurationsPanel
-                      projectPath={fileRootPath}
-                      width={effectiveRightPanelWidth}
-                      editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
-                      onDebugStarted={handleRunDebugStarted}
-                      onRunProcessChanged={handleRunProcessChanged}
-                      draftRequest={runDraftRequest}
-                      remote={remoteFileContext}
-                    />
-                  </ErrorBoundary>,
-                )}
-              </>
-            )}
-            {visibleRightPanel === "preview" && (
-              <>
-                {renderTopRightIdePanelShell(
-                  "preview",
-                  <ErrorBoundary
-                    label="Preview"
-                    onError={(error) => showActionFailure("preview", t("preview.title"), error)}
-                  >
-                    <WebPreviewPanel
-                      projectPath={fileRootPath}
-                      width={effectiveRightPanelWidth}
-                      runProcessTarget={launchedRunProcess}
-                      remote={remoteFileContext}
-                    />
-                  </ErrorBoundary>,
-                )}
-              </>
-            )}
-            {visibleRightPanel === "debug" && (
-              <>
-                {renderTopRightIdePanelShell(
-                  "debug",
-                  <ErrorBoundary
-                    label="Debug"
-                    onError={(error) => showActionFailure("debug", t("debug.title"), error)}
-                  >
-                    <DebugPanel
-                      projectPath={fileRootPath}
-                      width={effectiveRightPanelWidth}
-                      onOpenLocation={handleDebugLocationOpen}
-                      launchedSession={launchedDebugSession}
-                      editorBreakpoints={remoteFileContext ? [] : editorDebugBreakpoints}
-                      externalError={editorTestDebugError}
-                      draftRequest={debugDraftRequest}
-                      remote={remoteFileContext}
-                    />
-                  </ErrorBoundary>,
-                )}
-              </>
-            )}
-            <div
-              style={{
-                display: rightPanel === "ssh" ? "flex" : "none",
-                width: effectiveRightPanelWidth,
-                minHeight: 0,
-              }}
-            >
-              <ErrorBoundary
-                label="SSH"
-                onError={(error) => showActionFailure("ssh", t("ssh.title"), error)}
-              >
-                <SshTerminalPanel
-                  connections={sshConnections}
-                  onConnectionsChange={onSshConnectionsChange}
-                  onDeleteConnection={onDeleteSshConnection}
-                  active={visible && rightPanel === "ssh"}
-                  width={effectiveRightPanelWidth}
-                  themeVariant={themeVariant}
-                  terminalFontSize={terminalFontSize}
-                  monoFontFamily={monoFontFamily}
-                  onConnectSftp={handleOpenSftpConnection}
-                />
-              </ErrorBoundary>
-            </div>
-          </Suspense>
-        </div>
-      )}
+      <ProjectRightPanel
+        visibleRightPanel={visibleRightPanel}
+        effectiveRightPanelWidth={effectiveRightPanelWidth}
+        gitContextPath={gitContextPath}
+        fileRootPath={fileRootPath}
+        projectPath={project.path}
+        projectName={project.name}
+        currentTaskCreatedAt={currentTaskCreatedAt}
+        visible={visible}
+        activeFilePath={activeFilePath}
+        themeVariant={themeVariant}
+        supportedFileContext={supportedFileContext}
+        remoteFileContext={remoteFileContext}
+        editorDebugBreakpoints={editorDebugBreakpoints}
+        launchedRunProcess={launchedRunProcess}
+        launchedDebugSession={launchedDebugSession}
+        editorTestDebugError={editorTestDebugError}
+        testRunRequest={testRunRequest}
+        runDraftRequest={runDraftRequest}
+        debugDraftRequest={debugDraftRequest}
+        t={t}
+        showActionFailure={showActionFailure}
+        handleRightResizeStart={handleRightResizeStart}
+        renderTopRightIdePanelShell={renderTopRightIdePanelShell}
+        handleFileSelectWithShellMinimize={handleFileSelectWithShellMinimize}
+        handleDiffFileSelectWithCollapse={handleDiffFileSelectWithCollapse}
+        handleCommitSelectWithCollapse={handleCommitSelectWithCollapse}
+        handleCommitFileClickWithCollapse={handleCommitFileClickWithCollapse}
+        openFileAtLocation={openFileAtLocation}
+        handleTextSearchMatchOpen={handleTextSearchMatchOpen}
+        setFilePreviewTarget={setFilePreviewTarget}
+        handleOpenDatabaseFile={handleOpenDatabaseFile}
+        handleDiagnosticOpen={handleDiagnosticOpen}
+        handleCreateProblemsAgentTask={handleCreateProblemsAgentTask}
+        setEditorDiagnostics={setEditorDiagnostics}
+        handleTestFailureOpen={handleTestFailureOpen}
+        handleTestRunResult={handleTestRunResult}
+        handleRunDebugStarted={handleRunDebugStarted}
+        handleRunProcessChanged={handleRunProcessChanged}
+      />
 
       <RightToolbar
         activePanel={rightPanel}
@@ -3066,7 +2289,7 @@ export function ProjectPage({
         <Suspense fallback={null}>
           <FileSearchDialog
             projectPath={project.path}
-            onFileSelect={handleSearchFileSelect}
+            onFileSelect={openFileAtLocation}
             onClose={() => setShowFileSearch(false)}
           />
         </Suspense>
@@ -3078,7 +2301,7 @@ export function ProjectPage({
           activeFilePath={activeFilePath}
           initialInput={commandPaletteInitialInput}
           commands={commandPaletteCommands}
-          onOpenFile={handleSearchFileSelect}
+          onOpenFile={openFileAtLocation}
           onClose={() => setCommandPaletteInitialInput(null)}
           remote={remoteFileContext}
         />
