@@ -24,6 +24,7 @@ pub mod export;
 pub mod fields;
 pub mod fs_ops;
 pub mod html2md;
+pub mod import;
 pub mod links;
 pub mod mentions;
 pub mod migrate;
@@ -43,6 +44,7 @@ mod vault_walk;
 mod tests;
 
 use state::{FileSig, NotebookState};
+use std::path::Path;
 use tauri::State;
 
 /// 把命令跑到阻塞线程池上。所有文件 IO 都走这里,免得堵住 webview 的 IPC。
@@ -706,6 +708,87 @@ pub async fn notebook_list_user_templates(
     blocking(move || Ok(user_templates::list_user_templates(&root))).await
 }
 
+// ── 导入 ───────────────────────────────────────────────────────────────────
+
+/// 从 Obsidian vault 目录导入笔记。
+#[tauri::command]
+pub async fn notebook_import_obsidian(
+    state: State<'_, NotebookState>,
+    vault: String,
+    source_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::obsidian::import(&vault_root, Path::new(&source_path))).await
+}
+
+/// 从 Logseq graph 目录导入笔记。
+#[tauri::command]
+pub async fn notebook_import_logseq(
+    state: State<'_, NotebookState>,
+    vault: String,
+    source_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::logseq::import(&vault_root, Path::new(&source_path))).await
+}
+
+/// 从 Notion zip 导入笔记。
+#[tauri::command]
+pub async fn notebook_import_notion(
+    state: State<'_, NotebookState>,
+    vault: String,
+    zip_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::notion::import(&vault_root, Path::new(&zip_path))).await
+}
+
+/// 从 Bear zip 导入笔记。
+#[tauri::command]
+pub async fn notebook_import_bear(
+    state: State<'_, NotebookState>,
+    vault: String,
+    zip_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::bear::import(&vault_root, Path::new(&zip_path))).await
+}
+
+/// 从 Roam Research zip 导入笔记。
+///
+/// 收的是 **zip**,不是裸 `.json` —— Roam 两种导出(Markdown / JSON)都打在 zip 里,
+/// 而 `roam::import` 是在归档内按扩展名分路的。前端选文件时同理只放 zip。
+#[tauri::command]
+pub async fn notebook_import_roam(
+    state: State<'_, NotebookState>,
+    vault: String,
+    zip_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::roam::import(&vault_root, Path::new(&zip_path))).await
+}
+
+/// 从 Evernote ENEX 文件导入笔记。
+#[tauri::command]
+pub async fn notebook_import_evernote(
+    state: State<'_, NotebookState>,
+    vault: String,
+    enex_path: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::evernote::import(&vault_root, Path::new(&enex_path))).await
+}
+
+/// 从 Apple Notes / 备忘录导入笔记。macOS 专属,其他平台返回错误。
+#[tauri::command]
+pub async fn notebook_import_apple_notes(
+    state: State<'_, NotebookState>,
+    vault: String,
+) -> Result<import::ImportReport, String> {
+    let vault_root = resolve_vault_root(&state, &vault)?;
+    blocking(move || import::apple_notes::import(&vault_root)).await
+}
+
 // ── 导出 ───────────────────────────────────────────────────────────────────
 
 /// 写一个单文档导出(HTML / Markdown)到用户在保存对话框里选的路径。
@@ -882,6 +965,112 @@ pub async fn notebook_sync_run(
         )
     })
     .await
+}
+
+/// 开 / 关一个远端的自动同步。
+///
+/// 关掉时把攒着的改动和退避计数一起丢掉:留着的话重新打开时会按一个很旧的 `first_ms`
+/// 立刻触发一轮,而用户刚拨开开关的预期是「从现在开始」,不是「把三天前那次编辑补上」。
+/// 那次编辑本来也会被下一轮扫描发现,不会丢。
+#[tauri::command]
+pub async fn notebook_sync_set_auto(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        let conn = sync::store::open(&resolved)?;
+        sync::store::set_auto_sync(&conn, &remote_id, enabled)?;
+        if !enabled {
+            sync::daemon::forget_pending(&resolved, &remote_id);
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// 对一个冲突路径做决定,或撤回之前的决定(`resolution` 传 `null`)。
+///
+/// `local_hash` / `remote_hash` 要传**冲突里那两个字段的原值**(`SyncReport` 的
+/// `Action::Conflict` 上带着)。它们是防覆盖的闸门:决定和内容对不上号时下一轮会作废这条
+/// 决定重新问,而不是拿旧决定去覆盖用户没见过的内容。理由见 `sync::store` 的模块文档。
+///
+/// 决定**不立即执行**。它只是入库,由下一轮同步(手动或自动)拿去用 —— 这样自动同步开着
+/// 的时候用户点完就不用再管,而关着的时候他还能先把几个冲突一起决定完再跑一轮。
+#[tauri::command]
+pub async fn notebook_sync_resolve(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+    path: String,
+    resolution: Option<sync::diff::Resolution>,
+    local_hash: Option<String>,
+    remote_hash: Option<String>,
+) -> Result<(), String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        let conn = sync::store::open(&resolved)?;
+        let Some(resolution) = resolution else {
+            sync::store::clear_resolution(&conn, &remote_id, &path)?;
+            return Ok(());
+        };
+        // fork 目标在这里就挡一道。写入侧的 `resolve_checked` 也会拦(范围 / 穿越 /
+        // symlink 三道),但那要等到下一轮才报,而那时候用户已经离开这个面板了 ——
+        // 「点了没反应,一分钟后某处冒出个错」比当场报错难懂得多。
+        if let sync::diff::Resolution::Fork { fork_path } = &resolution {
+            if fork_path.is_empty() {
+                return Err("Fork path cannot be empty".to_string());
+            }
+            if sync::scan::is_out_of_scope(fork_path) {
+                return Err(format!(
+                    "Path is outside the notebook sync scope: {fork_path}"
+                ));
+            }
+        }
+        let decided = sync::store::StoredResolution {
+            path,
+            resolution,
+            local_hash: local_hash.unwrap_or_default(),
+            remote_hash: remote_hash.unwrap_or_default(),
+            decided_at: epoch_ms(),
+        };
+        sync::store::set_resolution(&conn, &remote_id, &decided)
+    })
+    .await
+}
+
+/// 这个远端上还存着的决定。
+///
+/// 面板重开之后要能看到「这几条已经决定过、等下一轮执行」。不给这条的话那个状态只存在于
+/// 上一次 `SyncReport` 里,一刷新就没了,用户会以为自己的选择丢了从而再选一遍。
+#[tauri::command]
+pub async fn notebook_sync_resolutions(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_id: String,
+) -> Result<Vec<sync::store::StoredResolution>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    blocking(move || {
+        let conn = sync::store::open(&resolved)?;
+        sync::store::resolutions(&conn, &remote_id)
+    })
+    .await
+}
+
+/// 这个 vault 下各远端的调度状态(是否在退避、还有多久跑下一轮)。
+///
+/// 只读进程内那份状态,不碰数据库 —— 状态栏会高频调它,每次开库是白开销。目标列表由
+/// `notebook_sync_remotes` 单独给,两者在前端合并。
+#[tauri::command]
+pub async fn notebook_sync_status(
+    state: State<'_, NotebookState>,
+    vault: String,
+    remote_ids: Vec<String>,
+) -> Result<Vec<sync::daemon::RemoteStatus>, String> {
+    let resolved = state.resolve_in_vaults(&vault, false)?;
+    Ok(sync::daemon::status_for(&resolved, &remote_ids))
 }
 
 // 注:命令必须逐个列在 `lib.rs` 的 `generate_handler!` 里,不能用宏聚合。
