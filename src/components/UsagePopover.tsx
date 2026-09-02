@@ -27,8 +27,8 @@ function UsageMetricRow({ label, window }: { label: string; window: UsageWindow 
 
   return (
     <div style={s.usageMetricRow}>
-      <span style={s.usageMetricLabel}>{label}</span>
-      <span style={{ ...s.usageMetricValue, color, whiteSpace: "nowrap" as const }}>
+      <span style={s.usagePopoverMetricLabel}>{label}</span>
+      <span style={{ ...s.usagePopoverMetricValue, color, whiteSpace: "nowrap" as const }}>
         {window.remainingPercent}
         {t("usage.left")}
       </span>
@@ -140,7 +140,7 @@ export function UsagePopover({
           ) : error ? (
             <div style={s.usageStatusText}>{t("usage.failed", { error })}</div>
           ) : snapshot ? (
-            <div style={s.usageSourceList}>
+            <div style={s.usagePopoverSourceList}>
               <SourceCard<ClaudeUsageData>
                 title="Claude Code"
                 source={snapshot.claude}
