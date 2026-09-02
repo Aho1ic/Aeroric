@@ -25,7 +25,12 @@ export function SkillConflictDialog({ conflict, onChoose, onClose }: Props) {
 
   return (
     <div style={s.skillConflictOverlay} onClick={handleOverlayClick}>
-      <div style={s.skillConflictBox}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("skill.conflict.title")}
+        style={s.skillConflictBox}
+      >
         <div style={s.skillConflictHeader}>
           <AlertTriangle size={18} strokeWidth={2} color="var(--warning)" />
           <span>{t("skill.conflict.title")}</span>

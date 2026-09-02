@@ -102,7 +102,12 @@ export function SkillInstallDialog({
   return (
     <>
       <div style={s.skillInstallOverlay} onClick={handleOverlayClick}>
-        <div style={s.skillInstallDialogBox}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("skill.install.title", { name: skill.displayName || skill.name })}
+          style={s.skillInstallDialogBox}
+        >
           <div style={s.skillInstallDialogHeader}>
             <div style={s.skillInstallDialogTitle}>
               {t("skill.install.title", { name: skill.displayName || skill.name })}
