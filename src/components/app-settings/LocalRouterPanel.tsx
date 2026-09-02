@@ -49,6 +49,7 @@ import s from "../../styles";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { Button } from "../ui/Button";
 import { writeClipboardText } from "../file-explorer/clipboard";
+import { settingsForm } from "../../styles/panelChrome";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   DEFAULT_LOCAL_ROUTER_SETTINGS,
@@ -71,14 +72,6 @@ const ROUTER_AGENTS: readonly LocalRouterAgent[] = ["claude", "codex"];
 const MIN_ACCESS_TOKEN_LENGTH = 32;
 
 type Translate = ReturnType<typeof useI18n>["t"];
-
-const labelStyle: CSSProperties = {
-  display: "block",
-  marginBottom: 5,
-  color: "var(--text-secondary)",
-  fontSize: 12,
-  fontWeight: 600,
-};
 
 const hintStyle: CSSProperties = {
   marginTop: 4,
@@ -429,7 +422,7 @@ function NumberField({
     !Number.isInteger(value) || (!(allowZero && value === 0) && (value < min || value > max));
   return (
     <div style={{ minWidth: 0 }}>
-      <label htmlFor={id} style={labelStyle}>
+      <label htmlFor={id} style={settingsForm.label}>
         {label}
       </label>
       <input
@@ -1980,7 +1973,7 @@ export function LocalRouterPanel() {
           </SectionHeading>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 116px", gap: 10 }}>
             <div>
-              <label htmlFor="local-router-host" style={labelStyle}>
+              <label htmlFor="local-router-host" style={settingsForm.label}>
                 {t("appSettings.localRouter.host")}
               </label>
               <input
@@ -2002,7 +1995,7 @@ export function LocalRouterPanel() {
               />
             </div>
             <div>
-              <label htmlFor="local-router-port" style={labelStyle}>
+              <label htmlFor="local-router-port" style={settingsForm.label}>
                 {t("appSettings.localRouter.port")}
               </label>
               <input
@@ -2056,7 +2049,7 @@ export function LocalRouterPanel() {
                 <span>{t("appSettings.localRouter.nonLoopbackWarning")}</span>
               </div>
               <div>
-                <label htmlFor="local-router-access-token" style={labelStyle}>
+                <label htmlFor="local-router-access-token" style={settingsForm.label}>
                   {t("appSettings.localRouter.accessToken")}
                 </label>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

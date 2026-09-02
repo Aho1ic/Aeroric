@@ -40,6 +40,7 @@ import {
   type RunConfigDraft,
 } from "./runConfigState";
 import { mergeDebugConfigBreakpoints } from "../debug/debugBreakpointState";
+import { panelChrome, runDebugForm } from "../../styles/panelChrome";
 
 const emptyDocument: RunConfigDocument = { version: 1, configs: [] };
 
@@ -328,12 +329,12 @@ export function RunConfigurationsPanel({
 
   return (
     <div style={rootStyle(width)}>
-      <div style={headerStyle}>
+      <div style={panelChrome.header}>
         <ListVideo size={14} />
         <span>{t("run.title")}</span>
       </div>
 
-      <div style={toolbarStyle}>
+      <div style={runDebugForm.toolbar}>
         <button
           type="button"
           style={iconTextButtonStyle(false)}
@@ -362,11 +363,11 @@ export function RunConfigurationsPanel({
       </div>
 
       <div style={contentStyle}>
-        <div style={listStyle}>
+        <div style={runDebugForm.list}>
           {loading ? (
-            <div style={emptyStyle}>{t("common.loading")}</div>
+            <div style={runDebugForm.empty}>{t("common.loading")}</div>
           ) : document.configs.length === 0 ? (
-            <div style={emptyStyle}>{t("run.empty")}</div>
+            <div style={runDebugForm.empty}>{t("run.empty")}</div>
           ) : (
             document.configs.map((config) => (
               <button
@@ -384,23 +385,23 @@ export function RunConfigurationsPanel({
         </div>
 
         <div style={formStyle}>
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("run.name")}
             <input
               value={draft.name}
               onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-              style={inputStyle}
+              style={runDebugForm.input}
             />
           </label>
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("run.id")}
             <input
               value={draft.id}
               onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))}
-              style={inputStyle}
+              style={runDebugForm.input}
             />
           </label>
-          <div style={labelStyle}>
+          <div style={runDebugForm.label}>
             {t("run.type")}
             <div style={typeSelectorStyle} role="group" aria-label={t("run.type")}>
               <button
@@ -422,18 +423,18 @@ export function RunConfigurationsPanel({
             </div>
           </div>
           {draft.type === "shell" ? (
-            <label style={labelStyle}>
+            <label style={runDebugForm.label}>
               {t("run.command")}
               <input
                 value={draft.command}
                 onChange={(event) => setDraft((prev) => ({ ...prev, command: event.target.value }))}
                 placeholder="pnpm dev"
-                style={inputStyle}
+                style={runDebugForm.input}
               />
             </label>
           ) : (
             <>
-              <div style={labelStyle}>
+              <div style={runDebugForm.label}>
                 {t("debug.runtime")}
                 <div style={typeSelectorStyle} role="group" aria-label={t("debug.runtime")}>
                   <button
@@ -452,7 +453,7 @@ export function RunConfigurationsPanel({
                   </button>
                 </div>
               </div>
-              <label style={labelStyle}>
+              <label style={runDebugForm.label}>
                 {t("run.program")}
                 <input
                   value={draft.program}
@@ -460,10 +461,10 @@ export function RunConfigurationsPanel({
                     setDraft((prev) => ({ ...prev, program: event.target.value }))
                   }
                   placeholder={draft.debugRuntime === "python" ? "src/main.py" : "src/index.js"}
-                  style={inputStyle}
+                  style={runDebugForm.input}
                 />
               </label>
-              <label style={labelStyle}>
+              <label style={runDebugForm.label}>
                 {t("run.args")}
                 <textarea
                   value={draft.argsText}
@@ -475,7 +476,7 @@ export function RunConfigurationsPanel({
                   style={textareaStyle}
                 />
               </label>
-              <label style={labelStyle}>
+              <label style={runDebugForm.label}>
                 {t("run.breakpoints")}
                 <textarea
                   value={draft.breakpointsText}
@@ -489,16 +490,16 @@ export function RunConfigurationsPanel({
               </label>
             </>
           )}
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("run.cwd")}
             <input
               value={draft.cwd}
               onChange={(event) => setDraft((prev) => ({ ...prev, cwd: event.target.value }))}
               placeholder="."
-              style={inputStyle}
+              style={runDebugForm.input}
             />
           </label>
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("run.env")}
             <textarea
               value={draft.envText}
@@ -530,10 +531,10 @@ export function RunConfigurationsPanel({
           <RotateCcw size={13} />
           {t("run.rerun")}
         </button>
-        <span style={statusStyle}>{statusLabel}</span>
+        <span style={runDebugForm.status}>{statusLabel}</span>
       </div>
 
-      {error && <div style={errorStyle}>{t("run.failed", { error })}</div>}
+      {error && <div style={panelChrome.errorBar}>{t("run.failed", { error })}</div>}
 
       <div style={outputHeaderStyle}>{t("run.output")}</div>
       <pre style={outputStyle}>{outputText}</pre>
@@ -552,38 +553,12 @@ function rootStyle(width: number): React.CSSProperties {
   };
 }
 
-const headerStyle: React.CSSProperties = {
-  height: 38,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 10px",
-  borderBottom: "1px solid var(--border-dim)",
-  fontSize: 12,
-  fontWeight: 650,
-};
-
-const toolbarStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 6,
-  padding: 10,
-  borderBottom: "1px solid var(--border-dim)",
-};
-
 const contentStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "minmax(90px, 0.45fr) minmax(210px, 1fr)",
   flex: "1 1 auto",
   minHeight: 0,
   overflow: "hidden",
-};
-
-const listStyle: React.CSSProperties = {
-  minHeight: 0,
-  overflowY: "auto",
-  padding: 8,
-  borderBottom: "1px solid var(--border-dim)",
 };
 
 const formStyle: React.CSSProperties = {
@@ -595,46 +570,19 @@ const formStyle: React.CSSProperties = {
   padding: 10,
 };
 
-const labelStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  color: "var(--text-muted)",
-  fontSize: 11,
-  fontWeight: 650,
-};
-
 const typeSelectorStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 6,
 };
 
-const inputStyle: React.CSSProperties = {
-  height: 26,
-  minWidth: 0,
-  border: "1px solid var(--border-dim)",
-  borderRadius: 6,
-  background: "var(--bg-card)",
-  color: "var(--text-primary)",
-  fontSize: 11,
-  padding: "0 7px",
-};
-
 const textareaStyle: React.CSSProperties = {
-  ...inputStyle,
+  ...runDebugForm.input,
   height: "auto",
   minHeight: 62,
   padding: 7,
   resize: "vertical",
   fontFamily: "var(--font-mono)",
-};
-
-const emptyStyle: React.CSSProperties = {
-  padding: "18px 8px",
-  color: "var(--text-muted)",
-  textAlign: "center",
-  fontSize: 12,
 };
 
 function configButtonStyle(active: boolean): React.CSSProperties {
@@ -717,25 +665,6 @@ const runBarStyle: React.CSSProperties = {
   gap: 6,
   padding: "8px 10px",
   borderTop: "1px solid var(--border-dim)",
-  borderBottom: "1px solid var(--border-dim)",
-};
-
-const statusStyle: React.CSSProperties = {
-  marginLeft: "auto",
-  minWidth: 0,
-  maxWidth: "100%",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  color: "var(--text-muted)",
-  fontSize: 11,
-  fontWeight: 650,
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "7px 10px",
-  color: "var(--danger)",
-  fontSize: 11,
   borderBottom: "1px solid var(--border-dim)",
 };
 

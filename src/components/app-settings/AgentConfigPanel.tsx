@@ -34,19 +34,12 @@ import {
 import { ModelSelectionList } from "./ModelSelectionList";
 import { normalizeModelList, sameModel } from "../../modelOptions";
 import { refreshLocalRouterRuntime } from "./shared";
+import { agentForm } from "../../styles/panelChrome";
 
 type FileState =
   | { status: "loading" }
   | { status: "unconfigured" }
   | { status: "loaded"; content: string };
-
-const labelStyle: CSSProperties = {
-  display: "block",
-  fontSize: 12,
-  fontWeight: 650,
-  color: "var(--text-secondary)",
-  marginBottom: 6,
-};
 
 const nameInputStyle: CSSProperties = {
   width: "100%",
@@ -616,7 +609,7 @@ export function AgentConfigPanel({
       >
         {deletable && (
           <div style={{ marginBottom: 16 }}>
-            <label style={labelStyle} htmlFor={agentNameInputId}>
+            <label style={agentForm.label} htmlFor={agentNameInputId}>
               {t("appSettings.agentName")}
             </label>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>

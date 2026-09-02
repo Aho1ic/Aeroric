@@ -50,6 +50,7 @@ import {
   type DebugConfigDraft,
 } from "./debugState";
 import { mergeDebugConfigBreakpoints } from "./debugBreakpointState";
+import { panelChrome, runDebugForm } from "../../styles/panelChrome";
 
 const emptyDocument: DebugConfigDocument = { version: 1, configs: [] };
 
@@ -847,12 +848,12 @@ function DebugPanelContent({
 
   return (
     <div style={rootStyle(width)}>
-      <div style={headerStyle}>
+      <div style={panelChrome.header}>
         <Bug size={14} />
         <span>{t("debug.title")}</span>
       </div>
 
-      <ButtonGroup style={toolbarStyle} aria-label={t("debug.title")}>
+      <ButtonGroup style={runDebugForm.toolbar} aria-label={t("debug.title")}>
         <Button
           variant="ghost"
           size="sm"
@@ -884,11 +885,11 @@ function DebugPanelContent({
       </ButtonGroup>
 
       <div style={contentStyle}>
-        <div style={listStyle}>
+        <div style={runDebugForm.list}>
           {loading ? (
-            <div style={emptyStyle}>{t("common.loading")}</div>
+            <div style={runDebugForm.empty}>{t("common.loading")}</div>
           ) : document.configs.length === 0 ? (
-            <div style={emptyStyle}>{t("debug.empty")}</div>
+            <div style={runDebugForm.empty}>{t("debug.empty")}</div>
           ) : (
             document.configs.map((config) => {
               const summary = debugConfigSummary(config);
@@ -909,15 +910,15 @@ function DebugPanelContent({
         </div>
 
         <div style={formStyle}>
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("debug.name")}
             <input
               value={draft.name}
               onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-              style={inputStyle}
+              style={runDebugForm.input}
             />
           </label>
-          <div style={labelStyle}>
+          <div style={runDebugForm.label}>
             {t("debug.runtime")}
             <AnimatedSelectionGroup
               value={draft.runtime}
@@ -945,7 +946,7 @@ function DebugPanelContent({
               }
             />
           </div>
-          <div style={labelStyle}>
+          <div style={runDebugForm.label}>
             {t("debug.request")}
             <AnimatedSelectionGroup
               value={draft.request}
@@ -961,18 +962,18 @@ function DebugPanelContent({
             />
           </div>
           {draft.request === "launch" ? (
-            <label style={labelStyle}>
+            <label style={runDebugForm.label}>
               {t("debug.program")}
               <input
                 value={draft.program}
                 onChange={(event) => setDraft((prev) => ({ ...prev, program: event.target.value }))}
                 placeholder={draft.runtime === "python" ? "src/main.py" : "src/index.js"}
-                style={inputStyle}
+                style={runDebugForm.input}
               />
             </label>
           ) : (
             <>
-              <label style={labelStyle}>
+              <label style={runDebugForm.label}>
                 {t("debug.attachHost")}
                 <input
                   value={draft.attachHost}
@@ -980,10 +981,10 @@ function DebugPanelContent({
                     setDraft((prev) => ({ ...prev, attachHost: event.target.value }))
                   }
                   placeholder="127.0.0.1"
-                  style={inputStyle}
+                  style={runDebugForm.input}
                 />
               </label>
-              <label style={labelStyle}>
+              <label style={runDebugForm.label}>
                 {t("debug.attachPort")}
                 <input
                   value={draft.attachPort}
@@ -992,22 +993,22 @@ function DebugPanelContent({
                   }
                   inputMode="numeric"
                   placeholder="9229"
-                  style={inputStyle}
+                  style={runDebugForm.input}
                 />
               </label>
             </>
           )}
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("debug.cwd")}
             <input
               value={draft.cwd}
               onChange={(event) => setDraft((prev) => ({ ...prev, cwd: event.target.value }))}
               placeholder="."
-              style={inputStyle}
+              style={runDebugForm.input}
             />
           </label>
           {draft.request === "launch" ? (
-            <label style={labelStyle}>
+            <label style={runDebugForm.label}>
               {t("debug.args")}
               <textarea
                 value={draft.argsText}
@@ -1020,7 +1021,7 @@ function DebugPanelContent({
               />
             </label>
           ) : null}
-          <div style={labelStyle}>
+          <div style={runDebugForm.label}>
             {t("debug.breakpoints")}
             <div style={breakpointEditorStyle}>
               {visualBreakpoints.length ? (
@@ -1043,7 +1044,7 @@ function DebugPanelContent({
                             if (!file || file === breakpoint.file) return;
                             updateBreakpointAt(index, (item) => ({ ...item, file }));
                           }}
-                          style={inputStyle}
+                          style={runDebugForm.input}
                         />
                         <input
                           aria-label={t("debug.breakpointLine")}
@@ -1056,7 +1057,7 @@ function DebugPanelContent({
                             }
                             updateBreakpointAt(index, (item) => ({ ...item, line }));
                           }}
-                          style={inputStyle}
+                          style={runDebugForm.input}
                         />
                         <input
                           aria-label={t("debug.breakpointColumn")}
@@ -1073,7 +1074,7 @@ function DebugPanelContent({
                             }
                             updateBreakpointAt(index, (item) => ({ ...item, column }));
                           }}
-                          style={inputStyle}
+                          style={runDebugForm.input}
                         />
                         <Button
                           variant="ghost"
@@ -1108,7 +1109,7 @@ function DebugPanelContent({
                               withBreakpointExpression(item, expression),
                             );
                           }}
-                          style={inputStyle}
+                          style={runDebugForm.input}
                         />
                       </div>
                     </div>
@@ -1126,7 +1127,7 @@ function DebugPanelContent({
                       setNewBreakpoint((prev) => ({ ...prev, file: event.target.value }))
                     }
                     placeholder={draft.runtime === "python" ? "src/main.py" : "src/index.js"}
-                    style={inputStyle}
+                    style={runDebugForm.input}
                   />
                   <input
                     aria-label={t("debug.newBreakpointLine")}
@@ -1135,7 +1136,7 @@ function DebugPanelContent({
                     onChange={(event) =>
                       setNewBreakpoint((prev) => ({ ...prev, line: event.target.value }))
                     }
-                    style={inputStyle}
+                    style={runDebugForm.input}
                   />
                   <input
                     aria-label={t("debug.newBreakpointColumn")}
@@ -1144,7 +1145,7 @@ function DebugPanelContent({
                     onChange={(event) =>
                       setNewBreakpoint((prev) => ({ ...prev, column: event.target.value }))
                     }
-                    style={inputStyle}
+                    style={runDebugForm.input}
                   />
                   <Button
                     variant="outline"
@@ -1175,13 +1176,13 @@ function DebugPanelContent({
                     onChange={(event) =>
                       setNewBreakpoint((prev) => ({ ...prev, expression: event.target.value }))
                     }
-                    style={inputStyle}
+                    style={runDebugForm.input}
                   />
                 </div>
               </div>
             </div>
           </div>
-          <label style={labelStyle}>
+          <label style={runDebugForm.label}>
             {t("debug.rawBreakpoints")}
             <textarea
               value={draft.breakpointsText}
@@ -1194,7 +1195,7 @@ function DebugPanelContent({
             />
           </label>
           {draft.request === "launch" ? (
-            <label style={labelStyle}>
+            <label style={runDebugForm.label}>
               {t("debug.env")}
               <textarea
                 value={draft.envText}
@@ -1284,11 +1285,13 @@ function DebugPanelContent({
           <Square size={13} />
           {t("debug.stop")}
         </Button>
-        <span style={statusStyle}>{statusLabel}</span>
+        <span style={runDebugForm.status}>{statusLabel}</span>
       </ButtonGroup>
 
       {(error || externalError) && (
-        <div style={errorStyle}>{t("debug.failed", { error: error ?? externalError ?? "" })}</div>
+        <div style={panelChrome.errorBar}>
+          {t("debug.failed", { error: error ?? externalError ?? "" })}
+        </div>
       )}
 
       <div style={sessionsSectionStyle}>
@@ -1344,7 +1347,7 @@ function DebugPanelContent({
               );
             })
           ) : (
-            <div style={emptyStyle}>{t("debug.noStack")}</div>
+            <div style={runDebugForm.empty}>{t("debug.noStack")}</div>
           )}
         </div>
       </div>
@@ -1363,7 +1366,7 @@ function DebugPanelContent({
             }}
             placeholder={t("debug.watchPlaceholder")}
             aria-label={t("debug.watchPlaceholder")}
-            style={inputStyle}
+            style={runDebugForm.input}
           />
           <Button
             variant="outline"
@@ -1430,7 +1433,7 @@ function DebugPanelContent({
               </div>
             ))
           ) : (
-            <div style={emptyStyle}>{t("debug.noVariables")}</div>
+            <div style={runDebugForm.empty}>{t("debug.noVariables")}</div>
           )}
         </div>
       </div>
@@ -1504,38 +1507,12 @@ function rootStyle(width: number): React.CSSProperties {
   };
 }
 
-const headerStyle: React.CSSProperties = {
-  height: 38,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 10px",
-  borderBottom: "1px solid var(--border-dim)",
-  fontSize: 12,
-  fontWeight: 650,
-};
-
-const toolbarStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 6,
-  padding: 10,
-  borderBottom: "1px solid var(--border-dim)",
-};
-
 const contentStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "minmax(90px, 0.38fr) minmax(210px, 1fr)",
   flex: "1 1 auto",
   minHeight: 0,
   overflow: "hidden",
-};
-
-const listStyle: React.CSSProperties = {
-  minHeight: 0,
-  overflowY: "auto",
-  padding: 8,
-  borderBottom: "1px solid var(--border-dim)",
 };
 
 const formStyle: React.CSSProperties = {
@@ -1545,15 +1522,6 @@ const formStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: 8,
   padding: 10,
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  color: "var(--text-muted)",
-  fontSize: 11,
-  fontWeight: 650,
 };
 
 const runtimeSelectorStyle: React.CSSProperties = {
@@ -1602,31 +1570,13 @@ const breakpointModeSelectorStyle: React.CSSProperties = {
   gap: 4,
 };
 
-const inputStyle: React.CSSProperties = {
-  height: 26,
-  minWidth: 0,
-  border: "1px solid var(--border-dim)",
-  borderRadius: 6,
-  background: "var(--bg-card)",
-  color: "var(--text-primary)",
-  fontSize: 11,
-  padding: "0 7px",
-};
-
 const textareaStyle: React.CSSProperties = {
-  ...inputStyle,
+  ...runDebugForm.input,
   height: "auto",
   minHeight: 58,
   padding: 7,
   resize: "vertical",
   fontFamily: "var(--font-mono)",
-};
-
-const emptyStyle: React.CSSProperties = {
-  padding: "18px 8px",
-  color: "var(--text-muted)",
-  textAlign: "center",
-  fontSize: 12,
 };
 
 function configButtonStyle(active: boolean): React.CSSProperties {
@@ -1673,25 +1623,6 @@ const runBarStyle: React.CSSProperties = {
   gap: 6,
   padding: "8px 10px",
   borderTop: "1px solid var(--border-dim)",
-  borderBottom: "1px solid var(--border-dim)",
-};
-
-const statusStyle: React.CSSProperties = {
-  marginLeft: "auto",
-  minWidth: 0,
-  maxWidth: "100%",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  color: "var(--text-muted)",
-  fontSize: 11,
-  fontWeight: 650,
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "7px 10px",
-  color: "var(--danger)",
-  fontSize: 11,
   borderBottom: "1px solid var(--border-dim)",
 };
 

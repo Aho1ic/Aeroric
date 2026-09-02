@@ -6,39 +6,13 @@ import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
 import { Button } from "../ui/Button";
 import { APP_SETTINGS_CHANGED_EVENT, type McpSettings, type McpServer } from "./types";
-
-const labelStyle: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-  marginBottom: 5,
-  display: "block",
-};
-
-const inputStyle: CSSProperties = {
-  width: "100%",
-  padding: "7px 10px",
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  color: "var(--text-primary)",
-  fontSize: 12.5,
-  fontFamily: "var(--font-mono)",
-  outline: "none",
-  boxSizing: "border-box",
-};
+import { settingsForm } from "../../styles/panelChrome";
 
 const textareaStyle: CSSProperties = {
-  ...inputStyle,
+  ...settingsForm.input,
   minHeight: 80,
   resize: "vertical",
   fontFamily: "var(--font-mono)",
-};
-
-const hintStyle: CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-hint)",
-  marginTop: 3,
 };
 
 type McpTestResult =
@@ -196,16 +170,15 @@ export function McpPanel() {
       return;
     }
 
-    if (dialogMode === "add" && settings.servers[trimmedName]) {
-      setDialogError(t("appSettings.mcpServerNameRequired"));
+    // 重名是"已存在",不是"没填" —— 之前两处都复用了 mcpServerNameRequired,
+    // 用户看到的是"服务器名称不能为空",与实际情况不符。
+    const collidesWithAnother =
+      dialogMode === "add"
+        ? Boolean(settings.servers[trimmedName])
+        : Boolean(editingName && trimmedName !== editingName && settings.servers[trimmedName]);
+    if (collidesWithAnother) {
+      setDialogError(t("appSettings.mcpServerNameDuplicate", { name: trimmedName }));
       return;
-    }
-
-    if (dialogMode === "edit" && editingName && trimmedName !== editingName) {
-      if (settings.servers[trimmedName]) {
-        setDialogError(t("appSettings.mcpServerNameRequired"));
-        return;
-      }
     }
 
     const newServer: McpServer = {
@@ -286,7 +259,7 @@ export function McpPanel() {
               {t("appSettings.mcpEnabled")}
             </span>
           </label>
-          <div style={hintStyle}>{t("appSettings.mcpEnabledHint")}</div>
+          <div style={settingsForm.hint}>{t("appSettings.mcpEnabledHint")}</div>
         </div>
 
         <div>
@@ -298,7 +271,7 @@ export function McpPanel() {
               marginBottom: 8,
             }}
           >
-            <label style={labelStyle}>{t("appSettings.mcpServers")}</label>
+            <label style={settingsForm.label}>{t("appSettings.mcpServers")}</label>
             <Button
               variant="outline"
               size="xs"
@@ -508,12 +481,12 @@ export function McpPanel() {
               )}
 
               <div>
-                <label style={labelStyle} htmlFor="mcp-server-name">
+                <label style={settingsForm.label} htmlFor="mcp-server-name">
                   {t("appSettings.mcpServerName")}
                 </label>
                 <input
                   id="mcp-server-name"
-                  style={inputStyle}
+                  style={settingsForm.input}
                   value={dialogData.name}
                   onChange={(e) => setDialogData({ ...dialogData, name: e.target.value })}
                   placeholder="filesystem"
@@ -523,12 +496,12 @@ export function McpPanel() {
               </div>
 
               <div>
-                <label style={labelStyle} htmlFor="mcp-server-command">
+                <label style={settingsForm.label} htmlFor="mcp-server-command">
                   {t("appSettings.mcpServerCommand")}
                 </label>
                 <input
                   id="mcp-server-command"
-                  style={inputStyle}
+                  style={settingsForm.input}
                   value={dialogData.command}
                   onChange={(e) => setDialogData({ ...dialogData, command: e.target.value })}
                   placeholder="npx"
@@ -537,7 +510,7 @@ export function McpPanel() {
               </div>
 
               <div>
-                <label style={labelStyle} htmlFor="mcp-server-args">
+                <label style={settingsForm.label} htmlFor="mcp-server-args">
                   {t("appSettings.mcpServerArgs")}
                 </label>
                 <textarea
@@ -548,11 +521,11 @@ export function McpPanel() {
                   placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/path/to/directory"
                   spellCheck={false}
                 />
-                <div style={hintStyle}>{t("appSettings.mcpServerArgsHint")}</div>
+                <div style={settingsForm.hint}>{t("appSettings.mcpServerArgsHint")}</div>
               </div>
 
               <div>
-                <label style={labelStyle} htmlFor="mcp-server-env">
+                <label style={settingsForm.label} htmlFor="mcp-server-env">
                   {t("appSettings.mcpServerEnv")}
                 </label>
                 <textarea
@@ -563,7 +536,7 @@ export function McpPanel() {
                   placeholder="API_KEY=your_key_here&#10;DEBUG=true"
                   spellCheck={false}
                 />
-                <div style={hintStyle}>{t("appSettings.mcpServerEnvHint")}</div>
+                <div style={settingsForm.hint}>{t("appSettings.mcpServerEnvHint")}</div>
               </div>
 
               <div>

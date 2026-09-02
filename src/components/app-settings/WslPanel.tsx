@@ -12,19 +12,9 @@ import type {
 import { useI18n } from "../../i18n";
 import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 import s from "../../styles";
+import { wslForm } from "../../styles/panelChrome";
 
 const SENSITIVE_ENV = /(TOKEN|SECRET|PASSWORD|COOKIE|AUTH|KEY)/i;
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "8px 10px",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  background: "var(--bg-input)",
-  color: "var(--text-primary)",
-  fontFamily: "var(--font-ui)",
-  outline: "none",
-};
 
 function emptyDistributionSettings() {
   return { agentPaths: {}, agentConfigPaths: {} };
@@ -304,7 +294,7 @@ export function WslPanel() {
                   defaultDistribution: event.target.value || undefined,
                 }))
               }
-              style={inputStyle}
+              style={wslForm.input}
             >
               <option value="">{t("wsl.useSystemDefault")}</option>
               {distributions.map((distribution) => (
@@ -342,7 +332,7 @@ export function WslPanel() {
               value={selectedSettings.shellOverride ?? ""}
               onChange={(event) => patchSelectedSettings({ shellOverride: event.target.value })}
               placeholder={probe?.shell}
-              style={inputStyle}
+              style={wslForm.input}
             />
           </label>
           {["claude", "codex"].map((agent) => (
@@ -361,7 +351,7 @@ export function WslPanel() {
                 placeholder={
                   agent === "claude" ? probe?.claudePath || "claude" : probe?.codexPath || "codex"
                 }
-                style={inputStyle}
+                style={wslForm.input}
               />
               <input
                 aria-label={`${agent} config path`}
@@ -379,7 +369,7 @@ export function WslPanel() {
                     ? `${probe?.home ?? "$HOME"}/.claude/settings.json`
                     : `${probe?.home ?? "$HOME"}/.codex/config.toml`
                 }
-                style={inputStyle}
+                style={wslForm.input}
               />
               <textarea
                 aria-label={`${agent} config`}
@@ -388,7 +378,7 @@ export function WslPanel() {
                   setAgentConfigs((current) => ({ ...current, [agent]: event.target.value }))
                 }
                 style={{
-                  ...inputStyle,
+                  ...wslForm.input,
                   minHeight: 110,
                   fontFamily: "var(--font-mono)",
                   resize: "vertical",
@@ -403,7 +393,7 @@ export function WslPanel() {
                 value={globalConfig}
                 onChange={(event) => setGlobalConfig(event.target.value)}
                 style={{
-                  ...inputStyle,
+                  ...wslForm.input,
                   minHeight: 150,
                   fontFamily: "var(--font-mono)",
                   resize: "vertical",
@@ -416,7 +406,7 @@ export function WslPanel() {
                 value={wslConf}
                 onChange={(event) => setWslConf(event.target.value)}
                 style={{
-                  ...inputStyle,
+                  ...wslForm.input,
                   minHeight: 150,
                   fontFamily: "var(--font-mono)",
                   resize: "vertical",

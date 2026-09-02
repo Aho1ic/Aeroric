@@ -36,6 +36,7 @@ import { ModelSelectionList } from "./ModelSelectionList";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { DSH_REASONING_EFFORTS, normalizeModelList, sameModel } from "../../modelOptions";
 import { refreshLocalRouterRuntime } from "./shared";
+import { agentForm } from "../../styles/panelChrome";
 
 type FileState =
   | { status: "loading" }
@@ -44,14 +45,6 @@ type FileState =
 
 type DetailTab = "basic" | "config-file";
 type AgentReasoningEffort = ModelReasoningEffort | "off";
-
-const labelStyle: CSSProperties = {
-  display: "block",
-  fontSize: 12,
-  fontWeight: 650,
-  color: "var(--text-secondary)",
-  marginBottom: 6,
-};
 
 const nameInputStyle: CSSProperties = {
   width: "100%",
@@ -828,7 +821,7 @@ export function AgentDetailModal({
                     {/* Agent name */}
                     {deletable && (
                       <div style={{ marginBottom: 16 }}>
-                        <label style={labelStyle}>{t("appSettings.agentName")}</label>
+                        <label style={agentForm.label}>{t("appSettings.agentName")}</label>
                         <input
                           style={nameInputStyle}
                           value={agentName}
@@ -845,7 +838,7 @@ export function AgentDetailModal({
 
                     {/* Base URL */}
                     <div style={{ marginBottom: 12 }}>
-                      <label style={labelStyle}>{t("appSettings.agentBaseUrl")}</label>
+                      <label style={agentForm.label}>{t("appSettings.agentBaseUrl")}</label>
                       <input
                         style={nameInputStyle}
                         value={baseUrl}
@@ -857,7 +850,7 @@ export function AgentDetailModal({
 
                     {/* API Key */}
                     <div style={{ marginBottom: 16 }}>
-                      <label style={labelStyle}>{t("appSettings.agentApiKey")}</label>
+                      <label style={agentForm.label}>{t("appSettings.agentApiKey")}</label>
                       <div style={{ position: "relative" }}>
                         <input
                           style={{ ...nameInputStyle, paddingRight: 32 }}

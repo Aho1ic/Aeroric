@@ -21,6 +21,7 @@ import type {
 } from "../../types";
 import { targetProjectArgs } from "../../projectTarget";
 import { branchGraphSummary, projectRelativeGitPath, stashDisplayTitle } from "./gitAdvancedState";
+import { panelChrome } from "../../styles/panelChrome";
 
 export function GitAdvancedPanel({
   projectPath,
@@ -296,12 +297,12 @@ export function GitAdvancedPanel({
 
   return (
     <div style={rootStyle(width)}>
-      <div style={headerStyle}>
+      <div style={panelChrome.header}>
         <GitBranch size={14} />
         <span>{t("gitAdvanced.title")}</span>
         <button
           type="button"
-          style={iconButtonStyle}
+          style={panelChrome.headerIconButton}
           onClick={() => {
             void refreshBranchGraph();
             void refreshStashes();
@@ -313,7 +314,7 @@ export function GitAdvancedPanel({
         </button>
       </div>
 
-      {error && <div style={errorStyle}>{error}</div>}
+      {error && <div style={panelChrome.errorBar}>{error}</div>}
 
       <section style={sectionStyle}>
         <div style={sectionHeaderStyle}>
@@ -615,17 +616,6 @@ function rootStyle(width: number): React.CSSProperties {
   };
 }
 
-const headerStyle: React.CSSProperties = {
-  height: 38,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 10px",
-  borderBottom: "1px solid var(--border-dim)",
-  fontSize: 12,
-  fontWeight: 650,
-};
-
 const sectionStyle: React.CSSProperties = {
   minHeight: 0,
   display: "flex",
@@ -670,20 +660,6 @@ const wideInputStyle: React.CSSProperties = {
   boxSizing: "border-box",
 };
 
-const iconButtonStyle: React.CSSProperties = {
-  marginLeft: "auto",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 24,
-  height: 24,
-  border: "none",
-  borderRadius: 5,
-  background: "transparent",
-  color: "var(--text-muted)",
-  cursor: "pointer",
-};
-
 const smallButtonStyle: React.CSSProperties = {
   height: 24,
   display: "inline-flex",
@@ -710,13 +686,6 @@ const primaryButtonStyle: React.CSSProperties = {
 const dangerButtonStyle: React.CSSProperties = {
   ...smallButtonStyle,
   color: "var(--danger)",
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "7px 10px",
-  color: "var(--danger)",
-  fontSize: 11,
-  borderBottom: "1px solid var(--border-dim)",
 };
 
 const emptyStyle: React.CSSProperties = {

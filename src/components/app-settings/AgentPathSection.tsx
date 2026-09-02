@@ -21,6 +21,7 @@ import { agentDisplayLabel, isBuiltInAgent, type CustomAgentProfile } from "../.
 import type { BuiltInAgentType } from "../../types";
 import { Button } from "../ui/Button";
 import { useAgentVersions } from "../../hooks/useAgentVersions";
+import { settingsForm } from "../../styles/panelChrome";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
@@ -79,37 +80,10 @@ function getAgentProxyEnabled(settings: AppSettings, agentKey: AgentKey): boolea
   return settings.agent_proxy_enabled?.[agentKey] === true;
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "7px 10px",
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  color: "var(--text-primary)",
-  fontSize: 12.5,
-  fontFamily: "var(--font-mono)",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-  marginBottom: 5,
-  display: "block",
-};
-
 const fieldStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 5,
-};
-
-const hintStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-hint)",
-  marginTop: 3,
 };
 
 export interface AgentPathSectionHandle {
@@ -479,11 +453,11 @@ export const AgentPathSection = forwardRef<
 
       {!hideInstallation && (
         <div style={fieldStyle}>
-          <label style={labelStyle}>{pathLabel}</label>
+          <label style={settingsForm.label}>{pathLabel}</label>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
               style={{
-                ...inputStyle,
+                ...settingsForm.input,
                 flex: 1,
                 opacity: loading ? 0.65 : 1,
                 cursor: loading ? "wait" : "text",
@@ -518,16 +492,16 @@ export const AgentPathSection = forwardRef<
               />
             )}
           </div>
-          <span style={hintStyle}>{pathHint}</span>
+          <span style={settingsForm.hint}>{pathHint}</span>
         </div>
       )}
 
       {!hideInstallation && configPathField && (
         <div style={fieldStyle}>
-          <label style={labelStyle}>{t("appSettings.configFilePath")}</label>
+          <label style={settingsForm.label}>{t("appSettings.configFilePath")}</label>
           <input
             style={{
-              ...inputStyle,
+              ...settingsForm.input,
               opacity: loading ? 0.65 : 1,
               cursor: loading ? "wait" : "text",
             }}
@@ -540,7 +514,7 @@ export const AgentPathSection = forwardRef<
             disabled={loading}
             spellCheck={false}
           />
-          <span style={hintStyle}>{t("appSettings.configFilePathHint")}</span>
+          <span style={settingsForm.hint}>{t("appSettings.configFilePathHint")}</span>
         </div>
       )}
 
@@ -574,15 +548,15 @@ export const AgentPathSection = forwardRef<
 
       {!hideInstallation && (
         <div style={fieldStyle}>
-          <label style={labelStyle}>{t("appSettings.installedVersions")}</label>
+          <label style={settingsForm.label}>{t("appSettings.installedVersions")}</label>
           <input
-            style={inputStyle}
+            style={settingsForm.input}
             value={versionValue}
             readOnly
             placeholder={t("common.notDetected")}
             spellCheck={false}
           />
-          <span style={hintStyle}>{t("appSettings.versionsHint")}</span>
+          <span style={settingsForm.hint}>{t("appSettings.versionsHint")}</span>
         </div>
       )}
 

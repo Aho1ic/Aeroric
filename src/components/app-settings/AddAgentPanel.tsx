@@ -35,6 +35,7 @@ import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { refreshLocalRouterRuntime } from "./shared";
 import deepseekLogo from "../../assets/deepseek.svg";
 import type { ProtocolFamily } from "../../types";
+import { agentForm } from "../../styles/panelChrome";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -52,14 +53,6 @@ const inputStyle: React.CSSProperties = {
 const monoInputStyle: React.CSSProperties = {
   ...inputStyle,
   fontFamily: "var(--font-mono)",
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: 12,
-  fontWeight: 650,
-  color: "var(--text-secondary)",
-  marginBottom: 6,
 };
 
 const fieldGridStyle: React.CSSProperties = {
@@ -576,7 +569,7 @@ export function AddAgentPanel({
   }) {
     return (
       <div className="add-agent-field">
-        <label style={labelStyle} htmlFor={inputId}>
+        <label style={agentForm.label} htmlFor={inputId}>
           {t("appSettings.agentApiKey")}
         </label>
         <div style={{ position: "relative" }}>
@@ -658,7 +651,7 @@ export function AddAgentPanel({
     return (
       <>
         <div className="add-agent-field">
-          <label style={labelStyle} htmlFor={inputId}>
+          <label style={agentForm.label} htmlFor={inputId}>
             {t("appSettings.agentModel")}
           </label>
           <div className="add-agent-model-row" style={{ display: "flex", gap: 8, minWidth: 0 }}>
@@ -742,7 +735,7 @@ export function AddAgentPanel({
                 gap: 8,
               }}
             >
-              <label style={{ ...labelStyle, marginBottom: 0 }}>
+              <label style={{ ...agentForm.label, marginBottom: 0 }}>
                 {t("appSettings.availableModels")}
               </label>
               <div style={{ display: "flex", gap: 6 }}>
@@ -908,7 +901,7 @@ export function AddAgentPanel({
       )}
 
       <div>
-        <label style={labelStyle}>{t("appSettings.agentRuntime")}</label>
+        <label style={agentForm.label}>{t("appSettings.agentRuntime")}</label>
         <AnimatedSelectionGroup
           value={kind}
           onChange={(nextKind) => handleKindChange(nextKind as AgentSetupKind)}
@@ -1097,7 +1090,7 @@ export function AddAgentPanel({
 
               {dshProviderMode === "catalog" && (
                 <div className="add-agent-field">
-                  <label style={labelStyle} htmlFor="dsh-provider-preset">
+                  <label style={agentForm.label} htmlFor="dsh-provider-preset">
                     {t("appSettings.provider")}
                   </label>
                   <select
@@ -1121,7 +1114,10 @@ export function AddAgentPanel({
                       </option>
                     ))}
                   </select>
-                  <label style={{ ...labelStyle, marginTop: 12 }} htmlFor="dsh-catalog-base-url">
+                  <label
+                    style={{ ...agentForm.label, marginTop: 12 }}
+                    htmlFor="dsh-catalog-base-url"
+                  >
                     {t("appSettings.agentBaseUrl")}
                   </label>
                   <div style={{ position: "relative" }}>
@@ -1153,7 +1149,7 @@ export function AddAgentPanel({
                 <>
                   <div className="add-agent-field-grid">
                     <div className="add-agent-field">
-                      <label style={labelStyle} htmlFor={nameInputId}>
+                      <label style={agentForm.label} htmlFor={nameInputId}>
                         {t("appSettings.dshProviderName")}
                       </label>
                       <input
@@ -1166,7 +1162,7 @@ export function AddAgentPanel({
                       />
                     </div>
                     <div className="add-agent-field">
-                      <label style={labelStyle} htmlFor="dsh-custom-provider-id">
+                      <label style={agentForm.label} htmlFor="dsh-custom-provider-id">
                         {t("appSettings.dshProviderId")}
                       </label>
                       <input
@@ -1180,7 +1176,7 @@ export function AddAgentPanel({
                     </div>
                   </div>
                   <div className="add-agent-field">
-                    <label style={labelStyle} htmlFor={baseUrlInputId}>
+                    <label style={agentForm.label} htmlFor={baseUrlInputId}>
                       {t("appSettings.agentBaseUrl")}
                     </label>
                     <div style={{ position: "relative" }}>
@@ -1207,7 +1203,7 @@ export function AddAgentPanel({
                     </div>
                   </div>
                   <div className="add-agent-field">
-                    <label style={labelStyle} htmlFor="dsh-api-protocol">
+                    <label style={agentForm.label} htmlFor="dsh-api-protocol">
                       {t("appSettings.dshApiProtocol")}
                     </label>
                     <select
@@ -1307,7 +1303,7 @@ export function AddAgentPanel({
       ) : (
         <>
           <div className="add-agent-field">
-            <label style={labelStyle} htmlFor={nameInputId}>
+            <label style={agentForm.label} htmlFor={nameInputId}>
               {t("appSettings.agentName")}
             </label>
             <input
@@ -1327,7 +1323,7 @@ export function AddAgentPanel({
 
           <div className="add-agent-field-grid" style={fieldGridStyle}>
             <div className="add-agent-field">
-              <label style={labelStyle} htmlFor={baseUrlInputId}>
+              <label style={agentForm.label} htmlFor={baseUrlInputId}>
                 {t("appSettings.agentBaseUrl")}
               </label>
               <div style={{ position: "relative" }}>

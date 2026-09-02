@@ -12,6 +12,7 @@ import {
 import type { ListeningPort, RunProcessSnapshot, SshConnection } from "../../types";
 import { writeClipboardText } from "../file-explorer/clipboard";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
+import { panelChrome } from "../../styles/panelChrome";
 import {
   effectivePortFilterMode,
   findRunPreviewPort,
@@ -326,12 +327,12 @@ export function WebPreviewPanel({
 
   return (
     <div style={rootStyle(width)}>
-      <div style={headerStyle}>
+      <div style={panelChrome.header}>
         <Globe size={14} />
         <span>{t("preview.title")}</span>
         <button
           type="button"
-          style={iconButtonStyle}
+          style={panelChrome.headerIconButton}
           onClick={() => void refresh()}
           title={t("common.refresh")}
         >
@@ -339,7 +340,7 @@ export function WebPreviewPanel({
         </button>
       </div>
 
-      {error && <div style={errorStyle}>{error}</div>}
+      {error && <div style={panelChrome.errorBar}>{error}</div>}
 
       <div style={filterBarStyle}>
         <AnimatedSelectionGroup
@@ -454,38 +455,6 @@ function rootStyle(width: number): React.CSSProperties {
     overflow: "hidden",
   };
 }
-
-const headerStyle: React.CSSProperties = {
-  height: 38,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 10px",
-  borderBottom: "1px solid var(--border-dim)",
-  fontSize: 12,
-  fontWeight: 650,
-};
-
-const iconButtonStyle: React.CSSProperties = {
-  marginLeft: "auto",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 24,
-  height: 24,
-  border: "none",
-  borderRadius: 5,
-  background: "transparent",
-  color: "var(--text-muted)",
-  cursor: "pointer",
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "7px 10px",
-  color: "var(--danger)",
-  fontSize: 11,
-  borderBottom: "1px solid var(--border-dim)",
-};
 
 const filterBarStyle: React.CSSProperties = {
   height: 36,

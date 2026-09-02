@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, TriangleAlert } from "lucide-react";
 import { useI18n } from "../../i18n";
@@ -12,33 +11,7 @@ import {
   type ProxyTestResult,
 } from "./types";
 import { Button } from "../ui/Button";
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "7px 10px",
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  color: "var(--text-primary)",
-  fontSize: 12.5,
-  fontFamily: "var(--font-mono)",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-  marginBottom: 5,
-  display: "block",
-};
-
-const hintStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "var(--text-hint)",
-  marginTop: 3,
-};
+import { settingsForm } from "../../styles/panelChrome";
 
 const emptyProxySettings: ProxySettings = { url: "", no_proxy: "", username: "", password: "" };
 
@@ -206,13 +179,13 @@ export function ProxyPanel() {
         )}
 
         <div>
-          <label style={labelStyle} htmlFor="app-proxy-url">
+          <label style={settingsForm.label} htmlFor="app-proxy-url">
             {t("appSettings.agentProxyUrl")}
           </label>
           <input
             id="app-proxy-url"
             style={{
-              ...inputStyle,
+              ...settingsForm.input,
               opacity: loading ? 0.65 : 1,
               cursor: loading ? "wait" : "text",
             }}
@@ -222,17 +195,17 @@ export function ProxyPanel() {
             disabled={loading}
             spellCheck={false}
           />
-          <div style={hintStyle}>{t("appSettings.agentProxyUrlHint")}</div>
+          <div style={settingsForm.hint}>{t("appSettings.agentProxyUrlHint")}</div>
         </div>
 
         <div>
-          <label style={labelStyle} htmlFor="app-proxy-no-proxy">
+          <label style={settingsForm.label} htmlFor="app-proxy-no-proxy">
             {t("appSettings.agentProxyNoProxy")}
           </label>
           <input
             id="app-proxy-no-proxy"
             style={{
-              ...inputStyle,
+              ...settingsForm.input,
               opacity: loading ? 0.65 : 1,
               cursor: loading ? "wait" : "text",
             }}
@@ -242,17 +215,17 @@ export function ProxyPanel() {
             disabled={loading}
             spellCheck={false}
           />
-          <div style={hintStyle}>{t("appSettings.agentProxyNoProxyHint")}</div>
+          <div style={settingsForm.hint}>{t("appSettings.agentProxyNoProxyHint")}</div>
         </div>
 
         <div>
-          <label style={labelStyle} htmlFor="app-proxy-username">
+          <label style={settingsForm.label} htmlFor="app-proxy-username">
             {t("appSettings.proxyUsername")}
           </label>
           <input
             id="app-proxy-username"
             style={{
-              ...inputStyle,
+              ...settingsForm.input,
               opacity: loading ? 0.65 : 1,
               cursor: loading ? "wait" : "text",
             }}
@@ -263,18 +236,18 @@ export function ProxyPanel() {
             autoComplete="off"
             spellCheck={false}
           />
-          <div style={hintStyle}>{t("appSettings.proxyCredentialHint")}</div>
+          <div style={settingsForm.hint}>{t("appSettings.proxyCredentialHint")}</div>
         </div>
 
         <div>
-          <label style={labelStyle} htmlFor="app-proxy-password">
+          <label style={settingsForm.label} htmlFor="app-proxy-password">
             {t("appSettings.proxyPassword")}
           </label>
           <input
             id="app-proxy-password"
             type="password"
             style={{
-              ...inputStyle,
+              ...settingsForm.input,
               opacity: loading ? 0.65 : 1,
               cursor: loading ? "wait" : "text",
             }}

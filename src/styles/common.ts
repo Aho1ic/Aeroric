@@ -56,7 +56,8 @@ export const common = {
     fontWeight: 700,
     color: "var(--text-primary)",
   },
-  usageSourceList: {
+  // 同上:名字避开 styles/usage.ts 的 grid 版,popover 里装的是 SourceCard 竖列。
+  usagePopoverSourceList: {
     display: "flex",
     flexDirection: "column",
     gap: 9,
@@ -91,13 +92,17 @@ export const common = {
     alignItems: "center",
     gap: 6,
   },
-  usageMetricLabel: {
+  // Popover 专属:label 与 value 在 usageMetricRow 里左右并排(flex + alignItems:center),
+  // 所以 label 要 flex:1 把 value 顶到右侧,且 value 不能有 marginTop。
+  // 不要改回 usageMetricLabel/usageMetricValue —— 那两个名字被 styles/usage.ts
+  // 的卡片版(grid + marginTop:11)占用,styles/index.ts 的 spread 顺序会让本文件被覆盖。
+  usagePopoverMetricLabel: {
     flex: 1,
     fontSize: 11,
     fontWeight: 500,
     color: "var(--text-secondary)",
   },
-  usageMetricValue: {
+  usagePopoverMetricValue: {
     fontSize: 11,
     fontWeight: 700,
     whiteSpace: "nowrap" as const,

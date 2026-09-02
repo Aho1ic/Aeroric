@@ -5,18 +5,7 @@ import type { WslDistribution, WslDistributionProbe, WslSettings } from "../../t
 import { useI18n } from "../../i18n";
 import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 import s from "../../styles";
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "8px 10px",
-  border: "1px solid var(--border-medium)",
-  borderRadius: 7,
-  background: "var(--bg-input)",
-  color: "var(--text-primary)",
-  fontFamily: "var(--font-ui)",
-  outline: "none",
-};
+import { wslForm } from "../../styles/panelChrome";
 
 export interface WslProjectInput {
   name: string;
@@ -210,7 +199,7 @@ export function WslProjectDialog({
               value={linuxPath}
               onChange={(event) => setLinuxPath(event.target.value)}
               placeholder={probe?.home ?? "/home/user/project"}
-              style={inputStyle}
+              style={wslForm.input}
             />
             <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
               {probe ? `${probe.user} · ${probe.shell} · HOME ${probe.home}` : t("wsl.pathHint")}

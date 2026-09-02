@@ -11,6 +11,7 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../i18n";
+import { panelChrome } from "../../styles/panelChrome";
 import {
   formatInvokeError,
   invokeWithTimeout,
@@ -32,6 +33,7 @@ import {
   type TestProfileId,
   type TestRunPanelRequest,
 } from "./testExplorerState";
+import { fileNameFromPath } from "../../lib/filePath";
 
 export function TestExplorerPanel({
   projectPath,
@@ -171,7 +173,7 @@ export function TestExplorerPanel({
 
   return (
     <div style={rootStyle(width)}>
-      <div style={headerStyle}>
+      <div style={panelChrome.header}>
         <FlaskConical size={14} />
         <span>{t("tests.title")}</span>
       </div>
@@ -284,7 +286,7 @@ export function TestExplorerPanel({
           </div>
         ) : (
           failureGroups.map((group) => {
-            const fileName = group.file.split(/[\\/]/).pop() ?? group.file;
+            const fileName = fileNameFromPath(group.file);
             return (
               <div key={group.file} style={{ marginBottom: 10 }}>
                 <div title={group.file} style={fileHeaderStyle}>
@@ -337,17 +339,6 @@ function rootStyle(width: number): React.CSSProperties {
     background: "var(--bg-panel)",
   };
 }
-
-const headerStyle: React.CSSProperties = {
-  height: 38,
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "0 10px",
-  borderBottom: "1px solid var(--border-dim)",
-  fontSize: 12,
-  fontWeight: 650,
-};
 
 const toolbarStyle: React.CSSProperties = {
   display: "flex",
