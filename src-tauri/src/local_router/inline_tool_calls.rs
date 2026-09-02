@@ -18,6 +18,7 @@
 //! `string="true"` 表示取值就是原始字符串；`string="false"` 表示取值是 JSON 字面量
 //! (`false` / `20000` / `[]`)，解析失败时退回成字符串，宁可多带一个引号也不要丢参数。
 
+use crate::sse::find_sse_delimiter;
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
@@ -361,22 +362,6 @@ impl InlineToolCallStream {
             items.push(item);
         }
         items
-    }
-}
-
-fn find_sse_delimiter(bytes: &[u8]) -> Option<(usize, usize)> {
-    let lf = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| (index, 2));
-    let crlf = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, 4));
-    match (lf, crlf) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
     }
 }
 

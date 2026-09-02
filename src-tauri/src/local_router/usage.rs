@@ -1,4 +1,5 @@
 use super::{RouterAgent, RouterError};
+use crate::sse::find_sse_delimiter;
 use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use rusqlite::{params, Connection};
@@ -538,22 +539,6 @@ fn drain_sse_events(
     if pending.len() > MAX_CAPTURE_BYTES {
         pending.clear();
         *discarding_oversized_event = true;
-    }
-}
-
-fn find_sse_delimiter(bytes: &[u8]) -> Option<(usize, usize)> {
-    let lf = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| (index, 2));
-    let crlf = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, 4));
-    match (lf, crlf) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
     }
 }
 

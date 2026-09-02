@@ -10,7 +10,16 @@ use super::{
     RouterAgent, RouterAgentPolicy, RouterRequestRecord, RouterRuntimeConfig, RuntimeMetrics,
     UpstreamTarget, HEALTH_PATH, ROUTER_TOKEN_HEADER, ROUTE_AGENT_HEADER,
 };
+use crate::sse::find_sse_delimiter;
 use axum::body::{to_bytes, Body, Bytes};
+
+// 三段实现搬进了子模块。它们都以 `use super::*;` 开头,直接拿这里的
+// import 和私有类型;父模块反过来用 `use` 把它们的项拉回本作用域,
+// 于是原有调用点一处都不用改。
+mod guard;
+mod routing;
+mod semantic;
+
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
@@ -22,6 +31,12 @@ use axum::routing::{any, get};
 use axum::{Json, Router};
 use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
+use guard::{
+    filter_request_headers, filter_response_headers, request_is_authorized, request_is_cross_site,
+    strip_router_credentials,
+};
+use routing::{build_upstream_url, select_route, SelectedRoute};
+use semantic::{inspect_stream_start, semantic_error_from_bytes, SemanticStreamObserver};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -405,317 +420,6 @@ async fn proxy_request(State(context): State<ServerContext>, request: Request) -
 async fn mark_active_target(context: &ServerContext, agent: RouterAgent, target_id: &str) {
     let mut config = context.config.write().await;
     config.upstreams.agent_mut(agent).policy.active_target = target_id.to_string();
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SelectedRoute {
-    agent: RouterAgent,
-    forward_path: String,
-    target_id: Option<String>,
-}
-
-impl SelectedRoute {
-    fn bridges_responses_to_chat(&self, target: &UpstreamTarget) -> bool {
-        if self.agent != RouterAgent::Codex || !target.enable_chat_completions_proxy() {
-            return false;
-        }
-        matches!(
-            self.forward_path.trim_end_matches('/'),
-            "/responses" | "/v1/responses"
-        )
-    }
-
-    fn semantic_protocol(&self, target: &UpstreamTarget) -> Option<SemanticProtocol> {
-        if self.agent == RouterAgent::Claude && self.forward_path.starts_with("/v1/messages") {
-            return Some(SemanticProtocol::Anthropic);
-        }
-        if self.agent != RouterAgent::Codex {
-            return None;
-        }
-        if self.bridges_responses_to_chat(target) || self.forward_path.contains("/chat/completions")
-        {
-            Some(SemanticProtocol::ChatCompletions)
-        } else if self.forward_path.contains("/responses") {
-            Some(SemanticProtocol::Responses)
-        } else {
-            None
-        }
-    }
-}
-
-fn select_route(uri: &Uri, headers: &HeaderMap) -> Result<SelectedRoute, &'static str> {
-    let marker = match headers.get(ROUTE_AGENT_HEADER) {
-        Some(value) => {
-            let value = value
-                .to_str()
-                .map_err(|_| "invalid local router agent marker")?;
-            Some(match value.trim().to_ascii_lowercase().as_str() {
-                "claude" => RouterAgent::Claude,
-                "codex" => RouterAgent::Codex,
-                _ => return Err("invalid local router agent marker"),
-            })
-        }
-        None => None,
-    };
-
-    let path = uri.path();
-    let prefixed = strip_agent_prefix(path, "/claude", RouterAgent::Claude)
-        .or_else(|| strip_agent_prefix(path, "/codex", RouterAgent::Codex));
-    let (agent, forward_path, target_id) = if let Some((agent, path, target_id)) = prefixed {
-        if marker.is_some_and(|marker| marker != agent) {
-            return Err("local router path and agent marker disagree");
-        }
-        (agent, path, target_id)
-    } else if path.starts_with("/v1/messages") {
-        (RouterAgent::Claude, path.to_string(), None)
-    } else if path.starts_with("/v1/responses")
-        || path.starts_with("/responses")
-        || path.starts_with("/v1/chat/completions")
-        || path.starts_with("/chat/completions")
-        || path.starts_with("/v1/models")
-        || path == "/models"
-    {
-        (RouterAgent::Codex, path.to_string(), None)
-    } else if let Some(agent) = marker {
-        (agent, path.to_string(), None)
-    } else {
-        return Err("unknown local router endpoint");
-    };
-
-    let forward_path = if agent == RouterAgent::Codex {
-        normalize_codex_path(&forward_path)
-    } else {
-        forward_path
-    };
-    Ok(SelectedRoute {
-        agent,
-        forward_path,
-        target_id,
-    })
-}
-
-fn strip_agent_prefix(
-    path: &str,
-    prefix: &str,
-    agent: RouterAgent,
-) -> Option<(RouterAgent, String, Option<String>)> {
-    let suffix = path.strip_prefix(prefix)?;
-    if !suffix.is_empty() && !suffix.starts_with('/') {
-        return None;
-    }
-    let suffix = suffix.strip_prefix('/').unwrap_or(suffix);
-    let (target_id, forward_path) = suffix
-        .strip_prefix("targets/")
-        .and_then(|target| target.split_once('/'))
-        .map(|(target_id, path)| {
-            (
-                (!target_id.is_empty()).then(|| target_id.to_string()),
-                format!("/{path}"),
-            )
-        })
-        .unwrap_or_else(|| {
-            (
-                None,
-                if suffix.is_empty() {
-                    "/".to_string()
-                } else {
-                    format!("/{suffix}")
-                },
-            )
-        });
-    Some((agent, forward_path, target_id))
-}
-
-fn normalize_codex_path(path: &str) -> String {
-    path.strip_prefix("/v1/v1/")
-        .map(|suffix| format!("/v1/{suffix}"))
-        .unwrap_or_else(|| path.to_string())
-}
-
-fn build_upstream_url(
-    target: &UpstreamTarget,
-    request_path: &str,
-    query: Option<&str>,
-) -> Result<Url, &'static str> {
-    let mut url = target.base_url().clone();
-    let base_segments = url
-        .path()
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let mut request_segments = request_path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if target
-        .base_url()
-        .host_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case("chatgpt.com"))
-        && target
-            .base_url()
-            .path()
-            .trim_end_matches('/')
-            .ends_with("/backend-api/codex")
-        && request_segments.first() == Some(&"v1")
-    {
-        request_segments.remove(0);
-    }
-
-    let maximum_overlap = base_segments.len().min(request_segments.len());
-    let overlap = (0..=maximum_overlap)
-        .rev()
-        .find(|count| {
-            base_segments[base_segments.len().saturating_sub(*count)..]
-                == request_segments[..*count]
-        })
-        .unwrap_or(0);
-    let mut combined = base_segments;
-    combined.extend_from_slice(&request_segments[overlap..]);
-    let joined_path = if combined.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", combined.join("/"))
-    };
-    url.set_path(&joined_path);
-    url.set_query(query);
-    Ok(url)
-}
-
-fn filter_request_headers(headers: HeaderMap) -> HeaderMap {
-    let mut filtered = filter_hop_by_hop(headers);
-    filtered.remove(HOST);
-    filtered.remove(CONTENT_LENGTH);
-    filtered.remove(ROUTE_AGENT_HEADER);
-    filtered.remove(ROUTER_TOKEN_HEADER);
-    filtered
-}
-
-fn request_is_authorized(config: &RouterRuntimeConfig, headers: &HeaderMap) -> bool {
-    let Ok(listen_addr) = super::validate_listen_address(&config.listen_address, config.port)
-    else {
-        return false;
-    };
-    if listen_addr.ip().is_loopback() {
-        return true;
-    }
-
-    router_credentials(headers)
-        .iter()
-        .any(|credential| constant_time_secret_eq(credential, &config.access_token))
-}
-
-/// 判断请求是否来自浏览器的跨站上下文。
-///
-/// 绑定回环地址时 `request_is_authorized` 会放行不带 token 的请求 —— 本机的 agent CLI
-/// 需要这个（它们并不知道 router token），但这同时意味着任意网页里的
-/// `fetch("http://127.0.0.1:<port>/v1/messages")` 都能借用户的额度和上游凭据。
-/// CLI 客户端不会带 `Origin` / `Sec-Fetch-Site`，而浏览器一定会带，据此把两者分开。
-fn request_is_cross_site(headers: &HeaderMap) -> bool {
-    // Fetch Metadata 由浏览器强制写入，页面脚本无法伪造。
-    if let Some(site) = trimmed_header(headers, SEC_FETCH_SITE_HEADER) {
-        if site.eq_ignore_ascii_case("cross-site") {
-            return true;
-        }
-    }
-    // 没有 Fetch Metadata 的旧浏览器仍会为跨源请求带上 Origin。无法解析的取值
-    // （典型是 sandbox iframe / file:// 页面的 `null`）按不可信处理。
-    match trimmed_header(headers, ORIGIN.as_str()) {
-        Some(origin) => !origin_is_loopback(origin),
-        None => false,
-    }
-}
-
-fn trimmed_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn origin_is_loopback(origin: &str) -> bool {
-    let Ok(url) = Url::parse(origin) else {
-        return false;
-    };
-    match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        // 只认 `localhost` 本身；`evil.localhost` 之类的子域不算本机来源。
-        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        None => false,
-    }
-}
-
-fn router_credentials(headers: &HeaderMap) -> Vec<&str> {
-    let mut credentials = Vec::with_capacity(3);
-    for header in [ROUTER_TOKEN_HEADER, "x-api-key"] {
-        if let Some(value) = headers.get(header).and_then(|value| value.to_str().ok()) {
-            credentials.push(value.trim());
-        }
-    }
-    if let Some(value) = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().strip_prefix("Bearer "))
-    {
-        credentials.push(value.trim());
-    }
-    credentials
-}
-
-fn constant_time_secret_eq(provided: &str, expected: &str) -> bool {
-    if expected.is_empty() {
-        return false;
-    }
-    let provided = Sha256::digest(provided.as_bytes());
-    let expected = Sha256::digest(expected.as_bytes());
-    provided
-        .iter()
-        .zip(expected.iter())
-        .fold(0_u8, |difference, (left, right)| {
-            difference | (left ^ right)
-        })
-        == 0
-}
-
-fn strip_router_credentials(headers: &mut HeaderMap, access_token: &str) {
-    headers.remove(ROUTER_TOKEN_HEADER);
-    for header in [AUTHORIZATION.as_str(), "x-api-key"] {
-        let is_router_token = headers
-            .get(header)
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).trim())
-            .is_some_and(|value| constant_time_secret_eq(value, access_token));
-        if is_router_token {
-            headers.remove(header);
-        }
-    }
-}
-
-fn filter_response_headers(headers: HeaderMap) -> HeaderMap {
-    filter_hop_by_hop(headers)
-}
-
-fn filter_hop_by_hop(mut headers: HeaderMap) -> HeaderMap {
-    let connection_headers = headers
-        .get_all(CONNECTION)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter_map(|value| HeaderName::from_bytes(value.as_bytes()).ok())
-        .collect::<Vec<_>>();
-    for header in HOP_BY_HOP_HEADERS {
-        headers.remove(*header);
-    }
-    for header in connection_headers {
-        headers.remove(header);
-    }
-    headers
 }
 
 #[derive(Default)]
@@ -1380,242 +1084,6 @@ async fn prime_streaming_body(
     }
 }
 
-fn inspect_stream_start(
-    protocol: SemanticProtocol,
-    buffered: &[u8],
-    end_of_stream: bool,
-) -> StreamStartInspection {
-    let trimmed = buffered
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .map(|start| &buffered[start..])
-        .unwrap_or_default();
-    if matches!(trimmed.first(), Some(b'{') | Some(b'[')) {
-        if let Ok(value) = serde_json::from_slice::<Value>(trimmed) {
-            return semantic_error_from_value(protocol, &value)
-                .map(StreamStartInspection::Failed)
-                .unwrap_or(StreamStartInspection::Safe);
-        }
-    }
-
-    let normalized = String::from_utf8_lossy(buffered).replace("\r\n", "\n");
-    let blocks = normalized.split("\n\n").collect::<Vec<_>>();
-    let complete_blocks = if end_of_stream {
-        blocks.len()
-    } else {
-        blocks.len().saturating_sub(1)
-    };
-    for block in blocks.into_iter().take(complete_blocks) {
-        match inspect_sse_block(protocol, block) {
-            StreamStartInspection::Pending => {}
-            result => return result,
-        }
-    }
-    StreamStartInspection::Pending
-}
-
-fn inspect_sse_block(protocol: SemanticProtocol, block: &str) -> StreamStartInspection {
-    let mut named_event = None;
-    let mut data_lines = Vec::new();
-    for line in block.lines() {
-        if let Some(event) = line.strip_prefix("event:") {
-            named_event = Some(event.trim());
-        } else if let Some(data) = line.strip_prefix("data:") {
-            data_lines.push(data.trim_start());
-        }
-    }
-    if data_lines.is_empty() {
-        return StreamStartInspection::Pending;
-    }
-    let data = data_lines.join("\n");
-    if data.trim() == "[DONE]" {
-        return StreamStartInspection::Safe;
-    }
-    let Ok(value) = serde_json::from_str::<Value>(&data) else {
-        return StreamStartInspection::Pending;
-    };
-    if let Some(summary) = semantic_error_from_value(protocol, &value) {
-        return StreamStartInspection::Failed(summary);
-    }
-    let event = named_event
-        .filter(|event| !event.is_empty())
-        .or_else(|| value.get("type").and_then(Value::as_str))
-        .unwrap_or_default();
-    if event == "error" || event == "response.failed" {
-        return StreamStartInspection::Failed(format!(
-            "{} upstream emitted {event} before output",
-            semantic_protocol_name(protocol)
-        ));
-    }
-
-    match protocol {
-        SemanticProtocol::Anthropic => match event {
-            "message_start" | "content_block_start" | "ping" | "" => StreamStartInspection::Pending,
-            _ => StreamStartInspection::Safe,
-        },
-        SemanticProtocol::Responses => match event {
-            "response.created"
-            | "response.in_progress"
-            | "response.queued"
-            | "response.output_item.added"
-            | "response.content_part.added"
-            | "response.reasoning_summary_part.added"
-            | "" => StreamStartInspection::Pending,
-            _ => StreamStartInspection::Safe,
-        },
-        SemanticProtocol::ChatCompletions => {
-            if chat_chunk_has_output(&value) {
-                StreamStartInspection::Safe
-            } else {
-                StreamStartInspection::Pending
-            }
-        }
-    }
-}
-
-fn chat_chunk_has_output(value: &Value) -> bool {
-    if value.get("usage").is_some_and(|usage| !usage.is_null()) {
-        return true;
-    }
-    value
-        .get("choices")
-        .and_then(Value::as_array)
-        .is_some_and(|choices| {
-            choices.iter().any(|choice| {
-                if choice
-                    .get("finish_reason")
-                    .is_some_and(|reason| !reason.is_null())
-                {
-                    return true;
-                }
-                let Some(delta) = choice.get("delta") else {
-                    return false;
-                };
-                delta
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .is_some_and(|content| !content.is_empty())
-                    || [
-                        "tool_calls",
-                        "function_call",
-                        "reasoning",
-                        "reasoning_content",
-                    ]
-                    .into_iter()
-                    .any(|key| delta.get(key).is_some_and(|part| !part.is_null()))
-            })
-        })
-}
-
-fn semantic_error_from_bytes(protocol: SemanticProtocol, body: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    semantic_error_from_value(protocol, &value)
-}
-
-fn semantic_error_from_value(protocol: SemanticProtocol, value: &Value) -> Option<String> {
-    let payload = if protocol == SemanticProtocol::Responses {
-        value.get("response").unwrap_or(value)
-    } else {
-        value
-    };
-    let status = payload.get("status").and_then(Value::as_str);
-    let error = payload.get("error").filter(|error| !error.is_null());
-    let explicit_error = payload.get("type").and_then(Value::as_str) == Some("error");
-    let failed = match protocol {
-        SemanticProtocol::Responses => {
-            matches!(status, Some("failed" | "cancelled")) || error.is_some()
-        }
-        SemanticProtocol::Anthropic | SemanticProtocol::ChatCompletions => {
-            explicit_error || error.is_some()
-        }
-    };
-    if !failed {
-        return None;
-    }
-
-    let detail = error.unwrap_or(payload);
-    let kind = detail
-        .get("type")
-        .and_then(Value::as_str)
-        .or_else(|| detail.get("code").and_then(Value::as_str))
-        .or(status)
-        .unwrap_or("upstream_error");
-    let message = detail
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| detail.as_str())
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or("upstream reported a semantic failure");
-    Some(format!(
-        "{} upstream {kind}: {message}",
-        semantic_protocol_name(protocol)
-    ))
-}
-
-fn semantic_protocol_name(protocol: SemanticProtocol) -> &'static str {
-    match protocol {
-        SemanticProtocol::Anthropic => "Anthropic",
-        SemanticProtocol::Responses => "Responses",
-        SemanticProtocol::ChatCompletions => "Chat Completions",
-    }
-}
-
-struct SemanticStreamObserver {
-    protocol: SemanticProtocol,
-    pending: Vec<u8>,
-}
-
-impl SemanticStreamObserver {
-    fn new(protocol: SemanticProtocol) -> Self {
-        Self {
-            protocol,
-            pending: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, chunk: &[u8]) -> Option<String> {
-        self.pending.extend_from_slice(chunk);
-        while let Some((index, delimiter_len)) = find_sse_delimiter(&self.pending) {
-            let block = self
-                .pending
-                .drain(..index + delimiter_len)
-                .collect::<Vec<_>>();
-            if let StreamStartInspection::Failed(summary) =
-                inspect_sse_block(self.protocol, &String::from_utf8_lossy(&block[..index]))
-            {
-                return Some(summary);
-            }
-        }
-        if self.pending.len() > MAX_STREAM_PRIME_BYTES {
-            self.pending.clear();
-        }
-        None
-    }
-
-    fn finish(&mut self) -> Option<String> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        let block = std::mem::take(&mut self.pending);
-        match inspect_sse_block(self.protocol, &String::from_utf8_lossy(&block)) {
-            StreamStartInspection::Failed(summary) => Some(summary),
-            StreamStartInspection::Pending | StreamStartInspection::Safe => None,
-        }
-    }
-}
-
-fn find_sse_delimiter(bytes: &[u8]) -> Option<(usize, usize)> {
-    for index in 0..bytes.len() {
-        if bytes.get(index..index + 2) == Some(b"\n\n") {
-            return Some((index, 2));
-        }
-        if bytes.get(index..index + 4) == Some(b"\r\n\r\n") {
-            return Some((index, 4));
-        }
-    }
-    None
-}
-
 async fn read_response_body_limited(
     response: reqwest::Response,
 ) -> Result<Bytes, TransportFailure> {
@@ -2051,6 +1519,16 @@ impl ProxyBodyState {
 
 impl Drop for ProxyBodyState {
     fn drop(&mut self) {
+        // 这道 `finalized` 守卫在当前代码里是**第二道**:`finalize_success` /
+        // `finalize_failure` 都无条件 `self.stream_completion.take()`,所以正常收尾之后
+        // 下面那句 `let Some(..) = take() else { return }` 已经能拦住重复收尾。
+        // 变异测试实测:单独去掉这一句,6 条压测用例全绿。
+        //
+        // **刻意保留。** 重复收尾的后果是同一个请求被记两次账(失败率虚高)并对熔断器
+        // 重复投票;而这个标志同时被 `streaming_response` 的 unfold 循环读
+        // (`state.upstream_finished && !state.finalized`),那处是承重的。
+        // 让"已收尾"这件事在**每一条**出口自己成立,比依赖"另一处恰好把 Option 取空了"
+        // 要稳 —— 谁再跑变异测试看到它存活,是这个原因,不是缺测试。
         if self.finalized {
             return;
         }
@@ -2418,199 +1896,6 @@ mod tests {
     }
 
     #[test]
-    fn semantic_failure_detection_does_not_reject_incomplete_responses() {
-        let failed = json!({
-            "status": "failed",
-            "error": {"type": "server_error", "message": "busy"},
-            "output": []
-        });
-        assert!(
-            semantic_error_from_value(SemanticProtocol::Responses, &failed)
-                .is_some_and(|summary| summary.contains("busy"))
-        );
-
-        let incomplete = json!({
-            "status": "incomplete",
-            "incomplete_details": {"reason": "max_output_tokens"},
-            "output": []
-        });
-        assert_eq!(
-            semantic_error_from_value(SemanticProtocol::Responses, &incomplete),
-            None
-        );
-    }
-
-    #[test]
-    fn stream_priming_waits_through_lifecycle_events_and_catches_failure() {
-        let lifecycle = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Responses, lifecycle, false),
-            StreamStartInspection::Pending
-        ));
-
-        let structural = b"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Responses, structural, false),
-            StreamStartInspection::Pending
-        ));
-
-        let failed = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"overloaded\"}}}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Responses, failed, false),
-            StreamStartInspection::Failed(summary) if summary.contains("overloaded")
-        ));
-
-        let output = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Responses, output, false),
-            StreamStartInspection::Safe
-        ));
-    }
-
-    #[test]
-    fn anthropic_stream_priming_waits_for_content_after_block_start() {
-        let structural = b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Anthropic, structural, false),
-            StreamStartInspection::Pending
-        ));
-
-        let output = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::Anthropic, output, false),
-            StreamStartInspection::Safe
-        ));
-    }
-
-    #[test]
-    fn chat_stream_role_only_chunk_is_not_committed_as_output() {
-        let role = b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::ChatCompletions, role, false),
-            StreamStartInspection::Pending
-        ));
-        let content =
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n";
-        assert!(matches!(
-            inspect_stream_start(SemanticProtocol::ChatCompletions, content, false),
-            StreamStartInspection::Safe
-        ));
-    }
-
-    #[test]
-    fn semantic_stream_observer_detects_failure_after_output() {
-        let mut observer = SemanticStreamObserver::new(SemanticProtocol::Responses);
-        assert_eq!(
-            observer.push(
-                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
-            ),
-            None
-        );
-        assert_eq!(
-            observer.push(
-                b"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"late failure\"}}}\n"
-            ),
-            None
-        );
-        assert!(observer
-            .push(b"\n")
-            .is_some_and(|summary| summary.contains("late failure")));
-    }
-
-    #[test]
-    fn agent_prefixes_and_compatibility_paths_are_distinct() {
-        let request = Request::builder()
-            .uri("/claude/v1/messages")
-            .body(Body::empty())
-            .unwrap();
-        let route = select_route(request.uri(), request.headers()).unwrap();
-        assert_eq!(route.agent, RouterAgent::Claude);
-        assert_eq!(route.forward_path, "/v1/messages");
-
-        let request = Request::builder()
-            .uri("/codex/v1/responses")
-            .body(Body::empty())
-            .unwrap();
-        let route = select_route(request.uri(), request.headers()).unwrap();
-        assert_eq!(route.agent, RouterAgent::Codex);
-        assert_eq!(route.forward_path, "/v1/responses");
-        assert_eq!(route.target_id, None);
-
-        let request = Request::builder()
-            .uri("/codex/targets/codex-team/v1/responses")
-            .body(Body::empty())
-            .unwrap();
-        let route = select_route(request.uri(), request.headers()).unwrap();
-        assert_eq!(route.agent, RouterAgent::Codex);
-        assert_eq!(route.forward_path, "/v1/responses");
-        assert_eq!(route.target_id.as_deref(), Some("codex-team"));
-
-        let request = Request::builder()
-            .uri("/claude/targets/claude-team/v1/messages")
-            .body(Body::empty())
-            .unwrap();
-        let route = select_route(request.uri(), request.headers()).unwrap();
-        assert_eq!(route.agent, RouterAgent::Claude);
-        assert_eq!(route.forward_path, "/v1/messages");
-        assert_eq!(route.target_id.as_deref(), Some("claude-team"));
-
-        let request = Request::builder()
-            .uri("/v1/responses")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            select_route(request.uri(), request.headers())
-                .unwrap()
-                .agent,
-            RouterAgent::Codex
-        );
-    }
-
-    #[test]
-    fn upstream_join_avoids_duplicate_version_segments() {
-        let target = UpstreamTarget::new("https://example.com/api/v1").unwrap();
-        let url = build_upstream_url(&target, "/v1/responses", Some("trace=1")).unwrap();
-        assert_eq!(url.as_str(), "https://example.com/api/v1/responses?trace=1");
-
-        let target = UpstreamTarget::new("https://example.com").unwrap();
-        let url = build_upstream_url(&target, "/v1/messages", None).unwrap();
-        assert_eq!(url.as_str(), "https://example.com/v1/messages");
-    }
-
-    #[test]
-    fn chatgpt_codex_upstream_drops_the_openai_v1_segment() {
-        let target = UpstreamTarget::new("https://chatgpt.com/backend-api/codex").unwrap();
-        let url = build_upstream_url(&target, "/v1/responses/compact", None).unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://chatgpt.com/backend-api/codex/responses/compact"
-        );
-    }
-
-    #[test]
-    fn request_filter_preserves_auth_and_removes_transport_and_internal_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
-        headers.insert("x-api-key", HeaderValue::from_static("secret"));
-        headers.insert(CONNECTION, HeaderValue::from_static("keep-alive, x-remove"));
-        headers.insert("x-remove", HeaderValue::from_static("private"));
-        headers.insert(ROUTE_AGENT_HEADER, HeaderValue::from_static("codex"));
-        headers.insert(
-            ROUTER_TOKEN_HEADER,
-            HeaderValue::from_static("router-secret"),
-        );
-        headers.insert(HOST, HeaderValue::from_static("127.0.0.1"));
-        let filtered = filter_request_headers(headers);
-        assert_eq!(filtered["authorization"], "Bearer secret");
-        assert_eq!(filtered["x-api-key"], "secret");
-        assert!(!filtered.contains_key(CONNECTION));
-        assert!(!filtered.contains_key("x-remove"));
-        assert!(!filtered.contains_key(ROUTE_AGENT_HEADER));
-        assert!(!filtered.contains_key(ROUTER_TOKEN_HEADER));
-        assert!(!filtered.contains_key(HOST));
-    }
-
-    #[test]
     fn non_loopback_requests_require_the_dedicated_router_token() {
         let target = UpstreamTarget::with_details(
             "codex",
@@ -2659,79 +1944,6 @@ mod tests {
             HeaderValue::from_static("Bearer wrong-secret"),
         );
         assert!(!request_is_authorized(&config, &wrong_token));
-    }
-
-    #[test]
-    fn loopback_requests_remain_compatible_without_credentials() {
-        let config =
-            RouterRuntimeConfig::new("127.0.0.1", 43123, false, RouterUpstreams::default());
-        assert!(request_is_authorized(&config, &HeaderMap::new()));
-    }
-
-    #[test]
-    fn agent_cli_requests_are_not_treated_as_cross_site() {
-        // CLI 客户端既不带 Origin 也不带 Fetch Metadata。
-        assert!(!request_is_cross_site(&HeaderMap::new()));
-
-        let mut direct = HeaderMap::new();
-        direct.insert("sec-fetch-site", HeaderValue::from_static("none"));
-        assert!(!request_is_cross_site(&direct));
-    }
-
-    #[test]
-    fn browser_cross_site_requests_are_rejected() {
-        let mut fetch_metadata = HeaderMap::new();
-        fetch_metadata.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
-        assert!(request_is_cross_site(&fetch_metadata));
-
-        // 旧浏览器没有 Fetch Metadata，但跨源请求一定带 Origin。
-        let mut remote_origin = HeaderMap::new();
-        remote_origin.insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
-        assert!(request_is_cross_site(&remote_origin));
-
-        // 不透明来源（sandbox iframe / file:// 页面）同样不可信。
-        let mut opaque_origin = HeaderMap::new();
-        opaque_origin.insert(ORIGIN, HeaderValue::from_static("null"));
-        assert!(request_is_cross_site(&opaque_origin));
-
-        // `localhost` 的子域会解析到回环地址，但并不是本机来源。
-        let mut lookalike = HeaderMap::new();
-        lookalike.insert(ORIGIN, HeaderValue::from_static("http://evil.localhost"));
-        assert!(request_is_cross_site(&lookalike));
-    }
-
-    #[test]
-    fn local_web_clients_are_allowed() {
-        for origin in [
-            "http://localhost:1420",
-            "http://127.0.0.1:43123",
-            "http://[::1]:43123",
-        ] {
-            let mut headers = HeaderMap::new();
-            headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
-            headers.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
-            assert!(
-                !request_is_cross_site(&headers),
-                "expected {origin} to be allowed"
-            );
-        }
-    }
-
-    #[test]
-    fn router_access_credentials_are_not_forwarded_upstream() {
-        let access_token = "aeroric-0123456789abcdef0123456789abcdef";
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            ROUTER_TOKEN_HEADER,
-            HeaderValue::from_static("must-not-forward"),
-        );
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer aeroric-0123456789abcdef0123456789abcdef"),
-        );
-        strip_router_credentials(&mut headers, access_token);
-        assert!(!headers.contains_key(ROUTER_TOKEN_HEADER));
-        assert!(!headers.contains_key(AUTHORIZATION));
     }
 
     #[derive(Clone, Debug, Default)]
@@ -3628,5 +2840,701 @@ mod tests {
         let body = zstd::encode_all(json.as_slice(), 3).unwrap();
         let summary = build_error_summary("zstd", &body);
         assert!(summary.contains("compressed zstd failure"));
+    }
+
+    /// 并发压力测试:**真起 loopback 服务、真发 HTTP 请求**,断言的是账目守恒。
+    ///
+    /// 上面那批用例都是单请求走通一条路径。这里补的是"多请求同时在飞"时的性质:
+    /// `RequestCompletion` 是个 RAII 记账守卫(`new()` 里 `begin_request`,
+    /// `complete()` / `Drop` 收尾),`ProxyBodyState` 又叠了第二层(流式响应的
+    /// `Drop` 里补 `release_neutral`)。这两层守卫**每条退出路径都必须恰好收尾一次** ——
+    /// 漏一次,健康面板的在途数就永久飘高;多一次,失败率被虚增。
+    /// 单请求测不出来,因为收工时 `active == 0` 与"压根没记账"是同一个值
+    /// (踩过一次,见 mod.rs 的 `metrics_stress_tests`)。
+    ///
+    /// 嵌在 `tests` 里面而不是并列,是为了直接吃现成的 `runtime_with_target` /
+    /// `failover_upstreams` / `start_mock_upstream` / `temp_database_path`,
+    /// 不必把它们的可见性放宽 —— 那会改到既有测试代码。
+    mod stress_tests {
+        use super::*;
+        use crate::local_router::RouterStatus;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        /// 轮询等账目稳定下来。
+        ///
+        /// **不能用固定 sleep。** 两条 `Drop` 路径都是 `runtime.spawn(...)` 出去的,
+        /// 收尾发生在客户端拿到响应**之后**的某个不确定时刻;写死 sleep 要么在负载高时
+        /// flake,要么为了保险睡很久拖慢整轮。这里改成"在途归零就停",超时才报错。
+        async fn wait_until_settled(
+            router: &LocalRouterState,
+            expected_total: u64,
+        ) -> RouterStatus {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let status = router.status().await;
+                if status.active_requests == 0 && status.total_requests >= expected_total {
+                    return status;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "账目 10 秒内没有稳定:active={} total={}(期望 total≥{expected_total})",
+                        status.active_requests, status.total_requests
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+
+        /// 轮询等落库行数到位。
+        ///
+        /// **计数器稳定 ≠ 请求行已落库。** `finalize_request` 先 `finish_client_abort()`
+        /// 再 `usage_store.insert(...).await`(server.rs:1717 与 1770),两者之间隔着一次
+        /// await。所以在 `Drop` 那条 spawn 出去的路径上,`active_requests` 归零时
+        /// insert 可能还在飞 —— 实测 6 个断开请求只读到 3 行。凡是要断言落库内容的
+        /// 用例都得单独等这一步,别拿 `wait_until_settled` 的结论当落库完成。
+        async fn wait_for_rows(
+            router: &LocalRouterState,
+            expected: usize,
+        ) -> Vec<RouterRequestRecord> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let rows = router.recent_requests(expected * 2).await.unwrap();
+                if rows.len() >= expected {
+                    return rows;
+                }
+                if Instant::now() >= deadline {
+                    panic!("10 秒内只落了 {} 行,期望 {expected} 行", rows.len());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn concurrent_real_requests_keep_the_metrics_ledger_balanced() {
+            const REQUESTS: usize = 64;
+            let served = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&served);
+            let upstream = Router::new().fallback(any(move || {
+                let counter = Arc::clone(&counter);
+                async move {
+                    counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    Json(json!({
+                        "id": "resp_concurrent",
+                        "model": "gpt-5.6",
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                        "output": []
+                    }))
+                }
+            }));
+            let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let target = UpstreamTarget::with_details(
+                "codex",
+                "Codex",
+                format!("http://{upstream_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap();
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    runtime_with_target(
+                        RouterAgent::Codex,
+                        target,
+                        RouterAgentPolicy {
+                            active_target: "codex".to_string(),
+                            ..RouterAgentPolicy::default()
+                        },
+                    ),
+                ))
+                .await
+                .unwrap();
+
+            let client = reqwest::Client::new();
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            let mut handles = Vec::with_capacity(REQUESTS);
+            for _ in 0..REQUESTS {
+                let client = client.clone();
+                let url = url.clone();
+                handles.push(tokio::spawn(async move {
+                    client
+                        .post(url)
+                        .json(&json!({"model": "gpt-5.6", "input": "hi"}))
+                        .send()
+                        .await
+                        .map(|response| response.status())
+                }));
+            }
+            for handle in handles {
+                let status = handle.await.unwrap().unwrap();
+                assert_eq!(status, StatusCode::OK);
+            }
+
+            assert_eq!(
+                served.load(AtomicOrdering::SeqCst),
+                REQUESTS,
+                "每个请求都必须真打到上游一次"
+            );
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(status.active_requests, 0, "在途数必须归零");
+            assert_eq!(status.total_requests, REQUESTS as u64);
+            assert_eq!(
+                status.successful_requests, REQUESTS as u64,
+                "64 个 200 必须全部计成功"
+            );
+            assert_eq!(status.failed_requests, 0);
+            assert_eq!(status.last_error, None, "全成功的一轮不该留下任何错误横幅");
+
+            // 落库那侧也要守恒:request_id 是每个 RequestCompletion 各自的 uuid,
+            // 并发下少一行就说明有一次收尾被丢了。
+            let recent = router.recent_requests(REQUESTS * 2).await.unwrap();
+            assert_eq!(recent.len(), REQUESTS, "落库行数必须等于请求数");
+            let mut ids: Vec<&str> = recent.iter().map(|row| row.request_id.as_str()).collect();
+            ids.sort_unstable();
+            let issued = ids.len();
+            ids.dedup();
+            assert_eq!(ids.len(), issued, "request_id 不能重复");
+            assert!(recent.iter().all(|row| row.success));
+
+            router.stop().await.unwrap();
+            upstream_task.abort();
+            let _ = upstream_task.await;
+            remove_database(&database_path);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn in_flight_requests_are_visible_and_do_not_block_the_health_probe() {
+            // 拿栅栏把 8 个请求**停在上游处理器里**(已记账、未收尾),此刻:
+            //   1. `active_requests` 必须等于 8 —— 只在收工后断言 0 是空断言,
+            //      因为 0 也是"从没记账过"的值;
+            //   2. `/health` 必须**立刻**答 200 —— 代理路径若在某处握着全局锁,
+            //      健康探针会跟着卡住,而前端正是靠它判断服务活着。
+            const REQUESTS: usize = 8;
+            // +1 是主测试自己那一份。
+            let gate = Arc::new(tokio::sync::Barrier::new(REQUESTS + 1));
+            let upstream_gate = Arc::clone(&gate);
+            let upstream = Router::new().fallback(any(move || {
+                let gate = Arc::clone(&upstream_gate);
+                async move {
+                    gate.wait().await;
+                    Json(json!({"id": "resp_gated", "model": "gpt-5.6", "output": []}))
+                }
+            }));
+            let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let target = UpstreamTarget::with_details(
+                "codex",
+                "Codex",
+                format!("http://{upstream_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap();
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    runtime_with_target(
+                        RouterAgent::Codex,
+                        target,
+                        RouterAgentPolicy {
+                            active_target: "codex".to_string(),
+                            ..RouterAgentPolicy::default()
+                        },
+                    ),
+                ))
+                .await
+                .unwrap();
+
+            let client = reqwest::Client::new();
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            let mut handles = Vec::with_capacity(REQUESTS);
+            for _ in 0..REQUESTS {
+                let client = client.clone();
+                let url = url.clone();
+                handles.push(tokio::spawn(async move {
+                    client
+                        .post(url)
+                        .json(&json!({"model": "gpt-5.6", "input": "hi"}))
+                        .send()
+                        .await
+                        .map(|response| response.status())
+                }));
+            }
+
+            // 等到 8 个请求都记了账。轮询而不是 sleep,理由同 `wait_until_settled`。
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let status = router.status().await;
+                if status.active_requests == REQUESTS as u64 {
+                    assert_eq!(
+                        status.successful_requests + status.failed_requests,
+                        0,
+                        "还没收尾就不该有成功或失败计数"
+                    );
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "10 秒内在途数没到 {REQUESTS},实际 {}",
+                    status.active_requests
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+
+            // 8 个请求全部卡在上游期间,健康探针必须秒回。
+            let health = tokio::time::timeout(
+                Duration::from_secs(2),
+                client.get(format!("{}{HEALTH_PATH}", info.base_url)).send(),
+            )
+            .await
+            .expect("在途请求把 /health 卡住了 —— 代理路径上有全局锁")
+            .unwrap();
+            assert_eq!(health.status(), StatusCode::OK);
+            assert_eq!(health.json::<Value>().await.unwrap()["status"], "healthy");
+
+            gate.wait().await;
+            for handle in handles {
+                assert_eq!(handle.await.unwrap().unwrap(), StatusCode::OK);
+            }
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(status.successful_requests, REQUESTS as u64);
+            assert_eq!(status.failed_requests, 0);
+
+            router.stop().await.unwrap();
+            upstream_task.abort();
+            let _ = upstream_task.await;
+            remove_database(&database_path);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn concurrent_failovers_do_not_lose_or_double_count_attempts() {
+            // 第一顺位**永远** 503(可重试),第二顺位健康。32 路并发下:
+            // 全部 200、成功计数正好 32、失败计数 0(转移成功不算请求失败)。
+            let dead_hits = Arc::new(AtomicUsize::new(0));
+            let dead_counter = Arc::clone(&dead_hits);
+            let dead = Router::new().fallback(any(move || {
+                let counter = Arc::clone(&dead_counter);
+                async move {
+                    counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error": {"message": "down"}})),
+                    )
+                }
+            }));
+            let (dead_address, dead_task) = start_mock_upstream(dead).await;
+
+            let alive_hits = Arc::new(AtomicUsize::new(0));
+            let alive_counter = Arc::clone(&alive_hits);
+            let alive = Router::new().fallback(any(move || {
+                let counter = Arc::clone(&alive_counter);
+                async move {
+                    counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    Json(json!({"id": "resp_failover", "model": "gpt-5.6", "output": []}))
+                }
+            }));
+            let (alive_address, alive_task) = start_mock_upstream(alive).await;
+
+            let targets = vec![
+                UpstreamTarget::with_details(
+                    "dead",
+                    "Dead",
+                    format!("http://{dead_address}/v1"),
+                    "",
+                    Vec::new(),
+                    false,
+                    false,
+                )
+                .unwrap(),
+                UpstreamTarget::with_details(
+                    "alive",
+                    "Alive",
+                    format!("http://{alive_address}/v1"),
+                    "",
+                    Vec::new(),
+                    false,
+                    false,
+                )
+                .unwrap(),
+            ];
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    failover_upstreams(RouterAgent::Codex, targets, &["dead", "alive"]),
+                ))
+                .await
+                .unwrap();
+
+            const REQUESTS: usize = 32;
+            let client = reqwest::Client::new();
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            let mut handles = Vec::with_capacity(REQUESTS);
+            for _ in 0..REQUESTS {
+                let client = client.clone();
+                let url = url.clone();
+                handles.push(tokio::spawn(async move {
+                    client
+                        .post(url)
+                        .json(&json!({"model": "gpt-5.6", "input": "hi"}))
+                        .send()
+                        .await
+                        .map(|response| response.status())
+                }));
+            }
+            for handle in handles {
+                assert_eq!(
+                    handle.await.unwrap().unwrap(),
+                    StatusCode::OK,
+                    "第一顺位挂了也必须转移成功"
+                );
+            }
+
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(status.total_requests, REQUESTS as u64);
+            assert_eq!(
+                status.successful_requests, REQUESTS as u64,
+                "转移后成功的请求必须全部计成功"
+            );
+            assert_eq!(
+                status.failed_requests, 0,
+                "**转移成功不是请求失败** —— 计成失败会让失败率虚高,用户以为路由坏了"
+            );
+
+            let alive_served = alive_hits.load(AtomicOrdering::SeqCst);
+            let dead_served = dead_hits.load(AtomicOrdering::SeqCst);
+            assert_eq!(alive_served, REQUESTS, "每个请求最终都要落到健康那个");
+            // 熔断器会在死目标失败够次数后拦下后续尝试,所以打到它的次数只能保证
+            // "至少一次、不超过请求数" —— 不写死具体值,免得改了阈值就假红。
+            assert!(
+                (1..=REQUESTS).contains(&dead_served),
+                "打到死目标的次数应在 1..={REQUESTS},实际 {dead_served}"
+            );
+
+            let recent = router.recent_requests(REQUESTS * 2).await.unwrap();
+            assert_eq!(recent.len(), REQUESTS);
+            assert!(recent.iter().all(|row| row.success));
+            assert!(
+                recent
+                    .iter()
+                    .all(|row| row.target_id.as_deref() == Some("alive")),
+                "落库的目标必须是最终服务的那个,不是最初选中的"
+            );
+
+            router.stop().await.unwrap();
+            dead_task.abort();
+            alive_task.abort();
+            let _ = dead_task.await;
+            let _ = alive_task.await;
+            remove_database(&database_path);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn concurrent_upstream_failures_are_all_accounted_for() {
+            // 只有一个目标且它一直 500(不可重试的对面故障)。32 路并发下
+            // 失败计数必须**正好** 32:少了就是有失败丢在竞态里,而"最近错误"
+            // 横幅会显示成偶发,排查时会被带偏。
+            const REQUESTS: usize = 32;
+            let upstream = Router::new().fallback(any(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": {"message": "upstream exploded"}})),
+                )
+            }));
+            let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let target = UpstreamTarget::with_details(
+                "only",
+                "Only",
+                format!("http://{upstream_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap();
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    runtime_with_target(
+                        RouterAgent::Codex,
+                        target,
+                        RouterAgentPolicy {
+                            active_target: "only".to_string(),
+                            ..RouterAgentPolicy::default()
+                        },
+                    ),
+                ))
+                .await
+                .unwrap();
+
+            let client = reqwest::Client::new();
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            let mut handles = Vec::with_capacity(REQUESTS);
+            for _ in 0..REQUESTS {
+                let client = client.clone();
+                let url = url.clone();
+                handles.push(tokio::spawn(async move {
+                    client
+                        .post(url)
+                        .json(&json!({"model": "gpt-5.6", "input": "hi"}))
+                        .send()
+                        .await
+                        .map(|response| response.status())
+                }));
+            }
+            for handle in handles {
+                assert_eq!(
+                    handle.await.unwrap().unwrap(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "上游的状态码必须原样透出,不能被本地改写"
+                );
+            }
+
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(status.active_requests, 0);
+            assert_eq!(status.total_requests, REQUESTS as u64);
+            assert_eq!(status.successful_requests, 0);
+            assert_eq!(
+                status.failed_requests, REQUESTS as u64,
+                "32 个失败一个都不能丢"
+            );
+            let last_error = status.last_error.expect("真实故障必须留下错误横幅");
+            assert_eq!(last_error.agent, Some(RouterAgent::Codex));
+            assert!(
+                last_error.message.contains("upstream exploded"),
+                "错误横幅要带上游给的原因,实际 {:?}",
+                last_error.message
+            );
+
+            let recent = router.recent_requests(REQUESTS * 2).await.unwrap();
+            assert_eq!(recent.len(), REQUESTS);
+            assert!(recent.iter().all(|row| !row.success));
+            assert!(recent.iter().all(|row| row.status_code == 500));
+
+            router.stop().await.unwrap();
+            upstream_task.abort();
+            let _ = upstream_task.await;
+            remove_database(&database_path);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn clients_walking_away_mid_stream_do_not_pollute_the_failure_rate() {
+            // **这一条钉的是 `CLIENT_ABORT_SUMMARIES` 那段注释描述的语义**:
+            // 用户按 Esc 打断、关掉任务,走的是 `ProxyBodyState::drop` /
+            // `RequestCompletion::drop`,属于正常操作而非路由故障 ——
+            // 计进失败率或错误横幅,用户每打断一次就看到一条红色报错。
+            //
+            // 造法:上游发一个 SSE 分片后**持续慢速发**,客户端只读到响应头就把
+            // Response 丢掉(连接关闭),于是 body 那侧走 Drop。
+            // 持续发而不是挂住,是为了让 hyper 在写入时立刻发现对端已关,
+            // 而不是把 body future 停在那里等到超时 —— 后者会让这条用例变慢且飘。
+            const REQUESTS: usize = 6;
+            let upstream = Router::new().fallback(any(|| async {
+                let chunks = stream::unfold(0_usize, |index| async move {
+                    if index > 0 {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    let chunk = Bytes::from(format!(
+                        "event: message_delta\ndata: {{\"type\":\"message_delta\",\"seq\":{index}}}\n\n"
+                    ));
+                    Some((Ok::<Bytes, Infallible>(chunk), index + 1))
+                });
+                let mut response = Response::new(Body::from_stream(chunks));
+                response
+                    .headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+                response
+            }));
+            let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let target = UpstreamTarget::with_details(
+                "claude",
+                "Claude",
+                format!("http://{upstream_address}"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap();
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    runtime_with_target(
+                        RouterAgent::Claude,
+                        target,
+                        RouterAgentPolicy {
+                            active_target: "claude".to_string(),
+                            ..RouterAgentPolicy::default()
+                        },
+                    ),
+                ))
+                .await
+                .unwrap();
+
+            let url = format!("{}/claude/v1/messages", info.base_url);
+            for _ in 0..REQUESTS {
+                // 每次用独立 client:连接池复用会让"丢掉 Response"变成把连接还池,
+                // 对端未必立刻感知关闭。独立 client 出作用域即关连接。
+                let client = reqwest::Client::new();
+                let response = client
+                    .post(&url)
+                    .json(&json!({"model": "claude-sonnet-4-5", "stream": true}))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                drop(response);
+                drop(client);
+            }
+
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(status.active_requests, 0, "断开也必须回收在途计数");
+            assert_eq!(status.total_requests, REQUESTS as u64);
+            assert_eq!(
+                status.failed_requests, 0,
+                "**客户端断开不算失败** —— 否则用户每次打断都拉高失败率"
+            );
+            assert_eq!(status.successful_requests, 0, "断开也不算成功,它两边都不站");
+            assert_eq!(
+                status.last_error, None,
+                "**断开不能写错误横幅** —— 这是 CLIENT_ABORT_SUMMARIES 存在的全部理由"
+            );
+
+            // 请求行仍要落库(方便在历史里排查),但标成不成功且带断开原因。
+            let recent = wait_for_rows(&router, REQUESTS).await;
+            assert_eq!(recent.len(), REQUESTS, "断开的请求同样要留下历史");
+            assert!(recent.iter().all(|row| !row.success));
+            for row in &recent {
+                let summary = row.error_summary.as_deref().unwrap_or_default();
+                // **必须钉到具体那一条,不能只断言"是名单里的某一条"。**
+                // 流式响应的记账守卫是套着的:`RequestCompletion` 装在
+                // `ProxyBodyState.stream_completion` 里。把 `ProxyBodyState::drop`
+                // 打哑之后,里面那个 `RequestCompletion` 随之自然析构,于是它自己的
+                // `Drop` 接手、写下另一条文案("...was cancelled") —— 计数照样平,
+                // 松断言照样绿。实测:变异掉 `ProxyBodyState::drop` 时这条用例存活。
+                // 差别在于那条路径**不会**调 `release_neutral`,半开令牌就漏了。
+                assert_eq!(
+                    summary, CLIENT_ABORT_SUMMARIES[0],
+                    "流式断开必须由 ProxyBodyState::drop 收尾(它才会归还半开令牌),实际 {summary:?}"
+                );
+            }
+
+            router.stop().await.unwrap();
+            upstream_task.abort();
+            let _ = upstream_task.await;
+            remove_database(&database_path);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        async fn a_request_cancelled_before_the_upstream_answers_still_balances_the_ledger() {
+            // 上一条走的是**流式** body 那层守卫(`ProxyBodyState::drop`)。
+            // 这一条走**外层**那个:客户端在上游还没回话时就走了,整个 handler future
+            // 被 axum 丢掉,`complete()` 压根没机会跑 —— 收尾只能靠
+            // `RequestCompletion::drop`。它是 `active_requests` 唯一的兜底:
+            // 少了它,每一次"用户还没等到回话就切走"都会把在途数永久加一,
+            // 健康面板上攒出一堆永不消失的在途请求。
+            const REQUESTS: usize = 4;
+            let upstream = Router::new().fallback(any(|| async {
+                // 比客户端的等待时间长得多:确保断开发生在上游回话之前。
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Json(json!({"id": "never-delivered"}))
+            }));
+            let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+
+            let database_path = temp_database_path();
+            let router = Arc::new(LocalRouterState::with_database_path(database_path.clone()));
+            let target = UpstreamTarget::with_details(
+                "codex",
+                "Codex",
+                format!("http://{upstream_address}/v1"),
+                "",
+                Vec::new(),
+                false,
+                false,
+            )
+            .unwrap();
+            let info = router
+                .start(RouterRuntimeConfig::new(
+                    "127.0.0.1",
+                    unused_port(),
+                    true,
+                    runtime_with_target(
+                        RouterAgent::Codex,
+                        target,
+                        RouterAgentPolicy {
+                            active_target: "codex".to_string(),
+                            ..RouterAgentPolicy::default()
+                        },
+                    ),
+                ))
+                .await
+                .unwrap();
+
+            let url = format!("{}/codex/v1/responses", info.base_url);
+            for _ in 0..REQUESTS {
+                let client = reqwest::Client::new();
+                // 给一个够短的超时,让 reqwest 自己放弃并关连接。
+                let outcome = client
+                    .post(&url)
+                    .timeout(Duration::from_millis(300))
+                    .json(&json!({"model": "gpt-5.6", "input": "hi"}))
+                    .send()
+                    .await;
+                assert!(outcome.is_err(), "上游挂着 30 秒,客户端只能超时");
+                drop(client);
+            }
+
+            let status = wait_until_settled(&router, REQUESTS as u64).await;
+            assert_eq!(
+                status.active_requests, 0,
+                "**取消也必须回收在途** —— 这是 RequestCompletion::drop 唯一的职责"
+            );
+            assert_eq!(status.total_requests, REQUESTS as u64);
+            assert_eq!(status.failed_requests, 0, "取消不算失败");
+            assert_eq!(status.successful_requests, 0, "取消也不算成功");
+            assert_eq!(status.last_error, None, "取消不写错误横幅");
+
+            let recent = wait_for_rows(&router, REQUESTS).await;
+            for row in &recent {
+                let summary = row.error_summary.as_deref().unwrap_or_default();
+                // 同样钉到具体那一条:这条路径只可能由外层守卫写下。
+                assert_eq!(
+                    summary, CLIENT_ABORT_SUMMARIES[1],
+                    "上游回话前取消必须由 RequestCompletion::drop 收尾,实际 {summary:?}"
+                );
+                assert!(!row.success);
+            }
+
+            router.stop().await.unwrap();
+            upstream_task.abort();
+            let _ = upstream_task.await;
+            remove_database(&database_path);
+        }
     }
 }

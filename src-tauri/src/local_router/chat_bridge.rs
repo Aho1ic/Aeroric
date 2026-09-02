@@ -1,3 +1,4 @@
+use crate::sse::find_sse_delimiter;
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -950,22 +951,6 @@ fn response_base(
 fn emit_event(event: &str, payload: Value, output: &mut Vec<Bytes>) {
     let payload = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     output.push(Bytes::from(format!("event: {event}\ndata: {payload}\n\n")));
-}
-
-fn find_sse_delimiter(bytes: &[u8]) -> Option<(usize, usize)> {
-    let lf = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| (index, 2));
-    let crlf = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, 4));
-    match (lf, crlf) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]

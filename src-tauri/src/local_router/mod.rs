@@ -614,6 +614,21 @@ impl RuntimeMetrics {
     fn clear_error(&self) {
         *self.last_error.write() = None;
     }
+
+    /// 四个计数器的快照。
+    ///
+    /// 只给 `metrics_stress_tests` 用。生产侧读这些值走 `LocalRouterState::status()`
+    /// (要一个跑着的 server 才能构造),压测只想验计数器本身的守恒性,不该为此
+    /// 起一整个服务。返回顺序:active / total / successful / failed。
+    #[cfg(test)]
+    pub(crate) fn counters(&self) -> (u64, u64, u64, u64) {
+        (
+            self.active_requests.load(Ordering::Relaxed),
+            self.total_requests.load(Ordering::Relaxed),
+            self.successful_requests.load(Ordering::Relaxed),
+            self.failed_requests.load(Ordering::Relaxed),
+        )
+    }
 }
 
 struct RunningServer {
@@ -1253,5 +1268,291 @@ mod tests {
         assert_eq!(info.base_url, "http://[::1]:43123");
         assert_eq!(info.claude_base_url, "http://[::1]:43123/claude");
         assert_eq!(info.codex_base_url, "http://[::1]:43123/codex/v1");
+    }
+}
+
+/// `RuntimeMetrics` 与监听代号的并发压力测试。
+///
+/// 这两块原先**一条测试都没有**(全仓库搜 `RuntimeMetrics` / `begin_request` 只有实现
+/// 自己那几行)。它们都是进程级共享可变状态,而且失效方式都是"数字慢慢飘、界面一直显示
+/// 错的东西",不会崩,所以只能靠断言守。
+#[cfg(test)]
+mod metrics_stress_tests {
+    use super::*;
+
+    /// 每个用例自己一份,不共享 —— 计数器守恒断言必须独占才有意义。
+    fn metrics() -> Arc<RuntimeMetrics> {
+        Arc::new(RuntimeMetrics::default())
+    }
+
+    #[test]
+    fn concurrent_begin_and_finish_conserve_every_counter() {
+        // 高并发下最容易出的是"丢一次加法":用 Relaxed 原子做独立计数是对的,
+        // 但只要哪条路径忘了配对,`active_requests` 就会永久飘高,
+        // 健康面板上会一直挂着几个不存在的在途请求。
+        let metrics = metrics();
+        let threads = 16;
+        let per_thread = 500;
+
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let metrics = Arc::clone(&metrics);
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        metrics.begin_request();
+                        // 三分之一成功、三分之一失败、三分之一客户端断开,
+                        // 覆盖全部三条收尾路径。
+                        match (t + i) % 3 {
+                            0 => metrics.finish_request(true),
+                            1 => metrics.finish_request(false),
+                            _ => metrics.finish_client_abort(),
+                        }
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("worker panicked");
+        }
+
+        let (active, total, successful, failed) = metrics.counters();
+        let expected_total = (threads * per_thread) as u64;
+        assert_eq!(active, 0, "所有请求都收尾了,在途数必须归零,实际 {active}");
+        assert_eq!(total, expected_total, "begin_request 一次都不能丢");
+        // 断开既不算成功也不算失败(mod.rs:596 的注释就是这个约定),
+        // 所以 successful + failed 严格小于 total,差额正好是断开数。
+        let aborted = expected_total - successful - failed;
+        assert!(aborted > 0, "本用例应当产生断开请求,否则第三条路径没被覆盖");
+        assert_eq!(
+            successful + failed + aborted,
+            expected_total,
+            "三条收尾路径之和必须等于 total"
+        );
+    }
+
+    #[test]
+    fn in_flight_requests_are_visible_while_they_are_still_running() {
+        // **必须在请求"还没收尾"的时候读一次 active_requests。**
+        // 上面那条守恒用例只在全部收尾后断言 `active == 0`,而 0 是这个计数器
+        // 从未被累加时的同一个值 —— 变异测试实测:把 `begin_request` 里
+        // `active_requests.fetch_add` 整行删掉,那条用例照样全绿(在途数恒为 0,
+        // 收尾时 saturating_sub 又夹在 0)。后果是健康面板的"在途请求"永远显示 0,
+        // 排查卡住的请求时完全没有信号。
+        let metrics = metrics();
+        let threads = 8;
+        // 让 8 个线程都 begin 之后停在栅栏上,主线程此刻观测;
+        // 观测完再放它们去收尾。
+        let entered = Arc::new(std::sync::Barrier::new(threads + 1));
+        let observed = Arc::new(std::sync::Barrier::new(threads + 1));
+
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let metrics = Arc::clone(&metrics);
+                let entered = Arc::clone(&entered);
+                let observed = Arc::clone(&observed);
+                std::thread::spawn(move || {
+                    metrics.begin_request();
+                    entered.wait();
+                    observed.wait();
+                    metrics.finish_request(true);
+                })
+            })
+            .collect();
+
+        entered.wait();
+        let (active_mid_flight, total_mid_flight, successful, failed) = metrics.counters();
+        assert_eq!(
+            active_mid_flight, threads as u64,
+            "8 个请求都在途时,在途数必须是 8"
+        );
+        assert_eq!(total_mid_flight, threads as u64);
+        assert_eq!(
+            (successful, failed),
+            (0, 0),
+            "还没收尾就不该有成功或失败计数"
+        );
+        observed.wait();
+
+        for handle in handles {
+            handle.join().expect("worker panicked");
+        }
+        assert_eq!(metrics.counters().0, 0, "收尾后归零");
+    }
+
+    #[test]
+    fn a_client_abort_is_counted_as_neither_success_nor_failure() {
+        // 单独钉这条语义:用户打断任务是正常操作。算进失败率会让健康面板和
+        // "最近错误"横幅长期显示成故障 —— 这正是 mod.rs:596 那段注释要防的。
+        let metrics = metrics();
+        for _ in 0..50 {
+            metrics.begin_request();
+            metrics.finish_client_abort();
+        }
+
+        let (active, total, successful, failed) = metrics.counters();
+        assert_eq!(active, 0);
+        assert_eq!(total, 50);
+        assert_eq!(successful, 0, "断开不该计成功");
+        assert_eq!(
+            failed, 0,
+            "断开不该计失败 —— 否则失败率会被用户的正常打断污染"
+        );
+    }
+
+    #[test]
+    fn active_requests_never_underflows_when_finish_outnumbers_begin() {
+        // `finish_request` 用 saturating_sub。多余的收尾必须夹在 0,
+        // 不能回绕成 u64::MAX —— 那会让面板显示 1844 亿个在途请求。
+        let metrics = metrics();
+        metrics.begin_request();
+        for _ in 0..10 {
+            metrics.finish_request(true);
+        }
+
+        let (active, _, successful, _) = metrics.counters();
+        assert_eq!(active, 0, "不能下溢回绕");
+        // 同时如实记录:多余的收尾**会**被计成功。saturating_sub 掩盖了配对错误,
+        // 所以这里的 10 是"实现当前行为",不是"应该如此"。谁要修配对问题,
+        // 得先让调用方不重复收尾,而不是改这个夹取。
+        assert_eq!(successful, 10);
+    }
+
+    #[test]
+    fn concurrent_error_writes_leave_a_consistent_last_error() {
+        // `last_error` 是 RwLock<Option<..>>,并发写只要求"最后留下的是某一次完整的写",
+        // 不能出现字段撕裂(agent 来自 A、message 来自 B)。
+        let metrics = metrics();
+        let threads = 12;
+
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let metrics = Arc::clone(&metrics);
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        // agent 和 message 一一对应,撕裂就能被下面的断言抓到。
+                        let agent = if t % 2 == 0 {
+                            RouterAgent::Claude
+                        } else {
+                            RouterAgent::Codex
+                        };
+                        metrics.set_error(Some(agent), format!("agent-{t}"));
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("worker panicked");
+        }
+
+        let last = metrics.last_error.read().clone().expect("应当留下错误");
+        let index: usize = last
+            .message
+            .strip_prefix("agent-")
+            .and_then(|s| s.parse().ok())
+            .expect("message 应为 agent-<n>");
+        let expected = if index.is_multiple_of(2) {
+            RouterAgent::Claude
+        } else {
+            RouterAgent::Codex
+        };
+        assert_eq!(
+            last.agent,
+            Some(expected),
+            "agent 与 message 必须来自同一次写入(撕裂了就是这条挂)"
+        );
+    }
+
+    // ── 监听代号 ────────────────────────────────────────────────────────────
+
+    /// `LISTENING` 是进程级 static,下面几条必须串行跑,否则彼此覆盖。
+    /// 用独立的锁而不是 `#[serial]`(仓库没引那个 crate)。
+    ///
+    /// 这把锁只挡得住本模块内部。另一头 `app_settings` 那批用例会经
+    /// `get_agent_launch_spec_from_settings` → `is_listening_on` 读同一个 static,
+    /// 期望"没有服务在跑"。所以下面统一用 43991+ 这段端口:它既不是默认端口
+    /// `DEFAULT_LOCAL_ROUTER_PORT`(15721),也不在那批用例写的 80 / 19090-19092 里,
+    /// `is_listening_on` 对它们仍然如实返回 false。**新增用例请继续用这段端口。**
+    static LISTENING_TEST_LOCK: ParkingRwLock<()> = ParkingRwLock::new(());
+
+    #[test]
+    fn a_restart_on_the_same_port_does_not_clear_the_new_generation() {
+        // **这一条钉的是 mod.rs:632 那段注释描述的真实 bug。**
+        // restart 会先在同一端口绑好新 listener 再停旧的,如果 `clear_listening`
+        // 只按端口撤销,就会把新服务的标记一起清掉 —— 于是服务明明在跑,
+        // `is_listening_on` 却返回 false,Agent 被回落成直连上游。
+        let _guard = LISTENING_TEST_LOCK.write();
+        let port = 43991;
+
+        let old = next_listening_generation();
+        set_listening(old, port);
+        assert!(is_listening_on(port));
+
+        // 新一代在同端口上线(重叠窗口),随后旧一代才收尾。
+        let new = next_listening_generation();
+        set_listening(new, port);
+        clear_listening(old);
+
+        assert!(
+            is_listening_on(port),
+            "旧一代收尾不能撤掉新一代的标记 —— 否则 Agent 会被指回上游直连"
+        );
+
+        clear_listening(new);
+        assert!(!is_listening_on(port), "新一代自己收尾后才该归零");
+    }
+
+    #[test]
+    fn generations_are_strictly_increasing_under_concurrency() {
+        // 代号靠 fetch_add 产生,并发下必须两两不同 —— 撞号会让一次 clear
+        // 撤掉另一代的标记,又回到上面那个 bug。
+        let threads = 16;
+        let per_thread = 200;
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    (0..per_thread)
+                        .map(|_| next_listening_generation())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all: Vec<u64> = handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("worker panicked"))
+            .collect();
+        let issued = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), issued, "并发取号不能撞号");
+    }
+
+    #[test]
+    fn is_listening_on_only_answers_for_the_recorded_port() {
+        let _guard = LISTENING_TEST_LOCK.write();
+        let generation = next_listening_generation();
+        set_listening(generation, 43992);
+
+        assert!(is_listening_on(43992));
+        assert!(
+            !is_listening_on(43993),
+            "别的端口必须为 false —— 宁可让 Agent 直连上游,也不要指向没人接的端口"
+        );
+
+        clear_listening(generation);
+    }
+
+    #[test]
+    fn clearing_an_unknown_generation_is_a_no_op() {
+        // 停一个早已被顶替的服务不能影响当前标记。
+        let _guard = LISTENING_TEST_LOCK.write();
+        let current = next_listening_generation();
+        set_listening(current, 43994);
+
+        clear_listening(current.wrapping_sub(1));
+        assert!(is_listening_on(43994), "撤销不认识的代号应当无事发生");
+
+        clear_listening(current);
+        assert!(!is_listening_on(43994));
     }
 }
