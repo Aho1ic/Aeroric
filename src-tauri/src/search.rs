@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::path_guard::validate_project_root;
 use crate::ssh::SshConnection;
 
 const MAX_TEXT_SEARCH_RESULTS: usize = 500;
@@ -143,20 +144,6 @@ struct RgSubmatch {
     #[serde(rename = "match")]
     matched: RgText,
     start: usize,
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 fn normalize_remote_root(remote_project_path: &str) -> Result<String, String> {

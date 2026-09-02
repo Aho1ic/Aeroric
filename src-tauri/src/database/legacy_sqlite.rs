@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use uuid::Uuid;
 
+use crate::path_guard::remote_path_has_relative_components;
 use crate::ssh::SshConnection;
 
 const MAX_PAGE_SIZE: i64 = 500;
@@ -259,11 +260,6 @@ fn validate_local_db_path(path: &str, project_root: Option<&str>) -> Result<Path
         return Ok(canonical);
     }
     Ok(path)
-}
-
-fn remote_path_has_relative_components(path: &str) -> bool {
-    path.split('/')
-        .any(|component| component == "." || component == "..")
 }
 
 fn validate_remote_db_path(path: &str, project_root: Option<&str>) -> Result<String, String> {

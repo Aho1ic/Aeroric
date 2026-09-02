@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::State;
 use uuid::Uuid;
 
+use crate::path_guard::validate_project_root;
 use crate::ssh::SshConnection;
 
 const RUN_CONFIG_VERSION: u32 = 1;
@@ -172,20 +173,6 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 fn run_configs_path(root: &Path) -> PathBuf {

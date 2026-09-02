@@ -494,6 +494,22 @@ pub(crate) fn validate_git_revision(revision: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 把 git 子进程的原始输出截到 `limit` 字节再转成字符串。
+///
+/// `wsl_git` 与 `remote_git` 原先各存一份逐字节相同的拷贝。
+///
+/// 截断按**字节**而不是字符,所以 `limit` 可能落在一个多字节字符中间;
+/// `from_utf8_lossy` 会把那半个字符变成 U+FFFD 而不是 panic。diff 预览容许
+/// 末尾出现一个替换字符,换成按字符边界截会让 `limit` 的含义(内存上限)失真。
+pub(crate) fn trim_output(output: Vec<u8>, limit: usize) -> String {
+    String::from_utf8_lossy(if output.len() > limit {
+        &output[..limit]
+    } else {
+        &output
+    })
+    .into_owned()
+}
+
 pub(crate) fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
     let Some(index) = stash_ref
         .strip_prefix("stash@{")

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::path_guard::{normalize_remote_project_path, validate_project_root};
 use crate::ssh::SshConnection;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -103,44 +104,12 @@ pub struct TestDiscoveryResult {
     pub profiles: Vec<TestProfile>,
 }
 
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
-}
-
 fn join_test_path(root: &Path, file: &str) -> String {
     let path = Path::new(file);
     if path.is_absolute() {
         path.to_string_lossy().into_owned()
     } else {
         root.join(path).to_string_lossy().into_owned()
-    }
-}
-
-fn normalize_remote_project_path(remote_project_path: &str) -> Result<String, String> {
-    let trimmed = remote_project_path.trim();
-    if !trimmed.starts_with('/') {
-        return Err("Remote project path must be absolute".to_string());
-    }
-    if trimmed
-        .split('/')
-        .any(|component| component == "." || component == "..")
-    {
-        return Err("Remote project path cannot contain . or .. components".to_string());
-    }
-    if trimmed == "/" {
-        Ok("/".to_string())
-    } else {
-        Ok(trimmed.trim_end_matches('/').to_string())
     }
 }
 

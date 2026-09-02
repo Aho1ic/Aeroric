@@ -1,3 +1,4 @@
+use crate::path_guard::validate_project_root;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,20 +14,6 @@ pub struct FormatterCommand {
 pub struct FormatFileResult {
     pub file_path: String,
     pub command: String,
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 fn validate_file_path(project_root: &Path, file_path: &str) -> Result<PathBuf, String> {

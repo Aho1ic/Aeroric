@@ -6,6 +6,7 @@ use std::process::Stdio;
 use base64::Engine;
 use serde::Serialize;
 
+use crate::path_guard::remote_path_has_relative_components;
 use crate::ssh::SshConnection;
 
 const MAX_REMOTE_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -189,11 +190,6 @@ fn normalize_remote_path(path: &str) -> String {
     } else {
         trimmed.trim_end_matches('/').to_string()
     }
-}
-
-fn remote_path_has_relative_components(path: &str) -> bool {
-    path.split('/')
-        .any(|component| component == "." || component == "..")
 }
 
 fn ensure_remote_path_allowed(

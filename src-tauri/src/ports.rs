@@ -8,6 +8,7 @@ use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use crate::path_guard::{remote_path_has_relative_components, validate_project_root};
 use crate::ssh::SshConnection;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,25 +29,6 @@ pub struct ListeningPort {
     pub process_name: String,
     pub url: String,
     pub project_context: PortProjectContext,
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
-}
-
-fn remote_path_has_relative_components(path: &str) -> bool {
-    path.split('/')
-        .any(|component| component == "." || component == "..")
 }
 
 fn normalize_remote_preview_root(remote_project_path: &str) -> Result<String, String> {

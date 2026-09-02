@@ -169,7 +169,7 @@ fn normalize_needles(input: &[String]) -> Vec<String> {
     for raw in input {
         let needle = raw.trim();
         let chars = needle.chars().count();
-        if chars < MIN_NEEDLE_CHARS || chars > MAX_NEEDLE_CHARS {
+        if !(MIN_NEEDLE_CHARS..=MAX_NEEDLE_CHARS).contains(&chars) {
             continue;
         }
         // 含 `[` / `]` 的名字包不出合法链接(`[[a]b]]` 的 body 不许含 `]`),扫出来也

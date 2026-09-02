@@ -1,3 +1,4 @@
+use crate::git::trim_output;
 use std::{
     collections::HashSet,
     io::Write,
@@ -116,15 +117,6 @@ fn run_wsl_git(
         return Err(output_error(&output, "WSL git command failed"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn trim_output(output: Vec<u8>, limit: usize) -> String {
-    String::from_utf8_lossy(if output.len() > limit {
-        &output[..limit]
-    } else {
-        &output
-    })
-    .into_owned()
 }
 
 fn str_args(args: &[&str]) -> Vec<String> {

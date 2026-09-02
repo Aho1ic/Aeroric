@@ -38,6 +38,7 @@ mod mcp;
 mod node_runtime;
 mod notebook;
 mod notification;
+mod path_guard;
 mod permissions;
 mod platform;
 mod ports;

@@ -4,29 +4,13 @@ use std::{
     process::{Output, Stdio},
 };
 
+use crate::git::trim_output;
+use crate::path_guard::normalize_remote_project_path;
 use crate::ssh::SshConnection;
 
 const WORKTREE_DIFF_LIMIT: usize = 200 * 1024;
 const COMMIT_DIFF_LIMIT: usize = 500 * 1024;
 const REMOTE_CONFLICT_FILE_LIMIT: usize = 2 * 1024 * 1024;
-
-fn normalize_remote_project_path(remote_project_path: &str) -> Result<String, String> {
-    let trimmed = remote_project_path.trim();
-    if !trimmed.starts_with('/') {
-        return Err("Remote project path must be absolute".to_string());
-    }
-    if trimmed
-        .split('/')
-        .any(|component| component == "." || component == "..")
-    {
-        return Err("Remote project path cannot contain . or .. components".to_string());
-    }
-    if trimmed == "/" {
-        Ok("/".to_string())
-    } else {
-        Ok(trimmed.trim_end_matches('/').to_string())
-    }
-}
 
 fn validate_remote_git_relative_path(file_path: &str) -> Result<(), String> {
     if file_path.is_empty() {
@@ -124,15 +108,6 @@ fn run_remote_git(
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn trim_output(output: Vec<u8>, limit: usize) -> String {
-    String::from_utf8_lossy(if output.len() > limit {
-        &output[..limit]
-    } else {
-        &output
-    })
-    .into_owned()
 }
 
 fn str_args(args: &[&str]) -> Vec<String> {

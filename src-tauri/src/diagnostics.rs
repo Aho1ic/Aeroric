@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
+use crate::path_guard::{normalize_remote_project_path, validate_project_root};
 use crate::ssh::SshConnection;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -48,20 +49,6 @@ struct EslintMessage {
     message: String,
     line: Option<usize>,
     column: Option<usize>,
-}
-
-fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 fn join_diagnostic_path(root: &Path, file: &str) -> String {
@@ -202,24 +189,6 @@ fn diagnostic_profile_command(root: &Path, profile: &str) -> Result<(String, Vec
             ],
         )),
         _ => javascript_profile_command(root, "tsc", &["--noEmit"]),
-    }
-}
-
-fn normalize_remote_project_path(remote_project_path: &str) -> Result<String, String> {
-    let trimmed = remote_project_path.trim();
-    if !trimmed.starts_with('/') {
-        return Err("Remote project path must be absolute".to_string());
-    }
-    if trimmed
-        .split('/')
-        .any(|component| component == "." || component == "..")
-    {
-        return Err("Remote project path cannot contain . or .. components".to_string());
-    }
-    if trimmed == "/" {
-        Ok("/".to_string())
-    } else {
-        Ok(trimmed.trim_end_matches('/').to_string())
     }
 }
 
@@ -535,6 +504,7 @@ pub async fn remote_run_diagnostics(
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_test_dir(name: &str) -> PathBuf {

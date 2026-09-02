@@ -1,3 +1,4 @@
+use crate::path_guard::validate_project_root;
 use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -110,20 +111,6 @@ fn validate_path_within(
     }
 
     Ok(canonical_parent.join(file_name))
-}
-
-fn validate_project_root(project_path: &str) -> Result<std::path::PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {}", e))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
 }
 
 /// Enumerate project files when Git is unavailable (a common case for a
