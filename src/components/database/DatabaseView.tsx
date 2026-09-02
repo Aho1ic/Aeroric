@@ -252,18 +252,6 @@ function DatabaseViewContent({
     dbxColumnsByTable,
     dbxDatabases,
   });
-  // 「表属性」面板:tab / 搜索 / DDL 状态都在 useTableInfoPanel 里,
-  // 四份列表仍由这里从 dbxObjects 与 dbxColumnsByTable 派生后传进去。
-  const tableInfo = useTableInfoPanel({
-    connection: activeDbxConnection,
-    database: activeDbxDatabase,
-    object: selectedDbxInfoObject,
-    objectKey: selectedDbxInfoObjectKey,
-    columns: selectedDbxInfoColumns,
-    indexes: selectedDbxInfoIndexes,
-    foreignKeys: selectedDbxInfoForeignKeys,
-    triggers: selectedDbxInfoTriggers,
-  });
   // 喂给 useDbxDataGrid 的那几个派生输入(表头 / 原始行 / rowid 列 / 当前表列元数据)
   // 连同「能不能跑 SQL」都在 useDbxGridInputs 里。
   const { activeSqlCapable, rawTableRows, tableColumns, showRowIdColumn, activeDbxGridColumns } =
@@ -326,9 +314,10 @@ function DatabaseViewContent({
     setDbxConnections,
   });
 
-  // dbx 的五支加载器(列 / 库 / 模式 / 连接 / 对象数据页)都在 useDbxDataLoaders 里。
+  // dbx 的加载器(列 / 表元数据原地刷新 / 库 / 模式 / 连接 / 对象数据页)都在 useDbxDataLoaders 里。
   const {
     loadDbxColumnsForTables,
+    reloadDbxObjectMetadata,
     loadDbxDatabase,
     loadDbxSchema,
     loadDbxConnection,
@@ -364,6 +353,21 @@ function DatabaseViewContent({
     setDbxColumnsByTable,
     loadRedisSidebarDatabases,
     loadMongoSidebarDatabases,
+  });
+
+  // 「表属性」面板:tab / 搜索 / DDL 状态都在 useTableInfoPanel 里,
+  // 四份列表仍由这里从 dbxObjects 与 dbxColumnsByTable 派生后传进去。
+  // 位置在加载器之后:头部的刷新要拿 `reloadDbxObjectMetadata` 才能把新元数据落回上面那两份状态。
+  const tableInfo = useTableInfoPanel({
+    connection: activeDbxConnection,
+    database: activeDbxDatabase,
+    object: selectedDbxInfoObject,
+    objectKey: selectedDbxInfoObjectKey,
+    columns: selectedDbxInfoColumns,
+    indexes: selectedDbxInfoIndexes,
+    foreignKeys: selectedDbxInfoForeignKeys,
+    triggers: selectedDbxInfoTriggers,
+    reloadMetadata: reloadDbxObjectMetadata,
   });
 
   // 「打开某个工作区面板」那一批动作(驱动 / 查询 / 历史 / SQL 文件 / 高级工具 / 用户管理 /
@@ -464,12 +468,17 @@ function DatabaseViewContent({
     activeConnectionId,
     activeDbxConnection,
     activeDbxConnectionId,
+    activeDbxDatabase,
+    activeDbxObject,
     activeEndpoint,
     projectRoot,
+    workspaceMode,
     legacyLoadSequenceRef,
     dbxLoadSequenceRef,
     inspect,
     loadDbxConnection,
+    loadDbxDatabase,
+    loadDbxObject,
     setLoading,
     setError,
     setPage,
@@ -486,6 +495,7 @@ function DatabaseViewContent({
     setActiveObject,
     setDbxDatabases,
     setDbxObjects,
+    setDbxColumnsByTable,
   });
 
   // 「选择要显示的数据库」对话框:状态、派生值与动作都在 useVisibleDatabasesDialog 里。

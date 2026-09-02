@@ -788,6 +788,27 @@ export function dbxObjectKey(object: DbxObjectInfo) {
   return object.schema ? `${object.schema}.${object.name}` : object.name;
 }
 
+/**
+ * 从「按 `dbxObjectKey` 建键」的缓存里,丢掉属于某个模式的条目,别的模式原样留下。
+ *
+ * 给 `loadDbxSchema` 用:它只重列本模式的对象,列缓存也只该丢本模式的键 —— 整份清掉会把
+ * 同库其他模式已经拉好的列一起带走(树上那些列节点只读缓存、没人会替它们重拉)。
+ *
+ * 比的是 `模式.` 这个带点的前缀,不是裸模式名:少了那个点,模式 `pub` 会把 `public.users`
+ * 一起误伤。无模式的键(`dbxObjectKey` 对 `schema` 为空时只返回表名)不含点,自然不会命中。
+ */
+export function omitDbxCacheEntriesForSchema<T>(
+  cache: Record<string, T>,
+  schemaName: string,
+): Record<string, T> {
+  const prefix = `${schemaName}.`;
+  const next: Record<string, T> = {};
+  for (const [key, value] of Object.entries(cache)) {
+    if (!key.startsWith(prefix)) next[key] = value;
+  }
+  return next;
+}
+
 export function dbxCreateTableDraft(schema: string | null): string {
   const prefix = schema ? `${schema}.` : "";
   return `CREATE TABLE ${prefix}table_name (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);`;

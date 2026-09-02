@@ -7,7 +7,8 @@
  * 那几份 useState / store 里的原始状态算出来,不碰加载器,也不改任何状态。
  *
  * 调用位置必须仍在 `useTableInfoPanel` 之前:那支 hook 要吃这里的
- * `selectedDbxInfoObject` / `...Key` / `...Columns` / 三份子列表。
+ * `selectedDbxInfoObject` / `...Key` / `...Columns` / 三份子列表。(`useTableInfoPanel` 本身后来
+ * 挪到了 `useDbxDataLoaders` 之后 —— 它还要吃那支 `reloadDbxObjectMetadata`。)
  *
  * `useMemo` 与普通 `const` 的分布逐字保留 —— 原文里返回数组或对象的那几支包了 memo
  * (下游 hook 与组件按引用比较),返回字符串或布尔的那几支没包。改动这个分布会改变

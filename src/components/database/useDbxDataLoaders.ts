@@ -1,5 +1,6 @@
 /**
- * dbx 那五支加载器:拉一批表的列、拉一个库、拉一个模式、连上一条连接、拉一个对象的数据页。
+ * dbx 那五支加载器:拉一批表的列、拉一个库、拉一个模式、连上一条连接、拉一个对象的数据页;
+ * 外加一支后补的 `reloadDbxObjectMetadata`(见它自己的注释,故意不走下面这条请求号)。
  *
  * 从 `DatabaseView.tsx` 抽出。这五支是 dbx 侧最核心的一层 —— 侧边树的每一次展开、右键菜单里
  * 每一个「刷新」、网格的每一次翻页排序筛选,最后都落到它们身上,所以外面几乎每个 hook 都要
@@ -49,6 +50,7 @@ import {
   isDbxViewObject,
   isSqlDbxConnection,
   listAllDbxObjects,
+  omitDbxCacheEntriesForSchema,
   type DbWorkspaceMode,
 } from "./databaseViewModel";
 import type { RequestSequence } from "./requestSequence";
@@ -96,6 +98,12 @@ export interface DbxDataLoaders {
     objects: DbxObjectInfo[],
     connection?: AeroricDbConnectionConfig | null,
     database?: string | null,
+  ) => Promise<void>;
+  reloadDbxObjectMetadata: (
+    object: DbxObjectInfo,
+    connection: AeroricDbConnectionConfig,
+    database: string | null,
+    shouldApply?: () => boolean,
   ) => Promise<void>;
   loadDbxDatabase: (
     connection: AeroricDbConnectionConfig,
@@ -174,6 +182,9 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
         setActiveDbxSchema(null);
         setDbxSchemas(schemas.length > 0 ? schemas : deriveDbxSchemas(objects));
         setDbxObjects(objects);
+        // 同 `loadDbxConnection`:键里没有库名,换库同样会撞。这支的每个调用点都是「切库」
+        // 或「改完 DDL 重列一遍」,想要列的那一处是在它返回之后自己再拉,清掉不会踩到谁。
+        setDbxColumnsByTable({});
         setActiveDbxObject(null);
         setActiveObject(null);
         setQueryResult(null);
@@ -191,6 +202,7 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
       setActiveDbxObject,
       setActiveDbxSchema,
       setActiveObject,
+      setDbxColumnsByTable,
       setDbxObjects,
       setDbxSchemas,
       setError,
@@ -217,6 +229,9 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
           const currentWithoutSchema = current.filter((object) => object.schema !== schemaName);
           return [...currentWithoutSchema, ...objects];
         });
+        // 这支是按模式合并的(上面那行只换掉本模式的对象),所以列缓存也只丢本模式的键 ——
+        // 整份清掉会把同库其他模式已经展开好的列一起带走。
+        setDbxColumnsByTable((current) => omitDbxCacheEntriesForSchema(current, schemaName));
         setActiveDbxObject(null);
         setActiveObject(null);
         setQueryResult(null);
@@ -234,6 +249,7 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
       setActiveDbxObject,
       setActiveDbxSchema,
       setActiveObject,
+      setDbxColumnsByTable,
       setDbxObjects,
       setDbxSchemas,
       setError,
@@ -262,6 +278,10 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
       setDbxDatabases([]);
       setDbxSchemas([]);
       setDbxObjects([]);
+      // 列缓存的键是 `模式.表名`(见 `dbxObjectKey`),不含连接与库 —— 两条连接里同名的
+      // `public.users` 会撞到同一个键上。上面那几份状态都清了,这一份也必须清,否则换连接后
+      // 属性页 / 侧边栏搜索会拿上一条连接的列元数据来显示(它们只读缓存、不会自己重拉)。
+      setDbxColumnsByTable({});
 
       if (["redis", "mongodb"].includes(connection.dbType)) {
         setActiveDbxDatabase(null);
@@ -331,6 +351,7 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
       setActiveMongoDocumentId,
       setActiveMongoWorkspaceDatabase,
       setActiveObject,
+      setDbxColumnsByTable,
       setDbxDatabases,
       setDbxObjects,
       setDbxSchemas,
@@ -521,8 +542,47 @@ export function useDbxDataLoaders(deps: DbxDataLoadersDeps): DbxDataLoaders {
     [activeDbxConnection, activeDbxDatabase, setDbxColumnsByTable],
   );
 
+  /**
+   * 「表属性」面板的原地刷新:重新拉一张表的列,并把它所在模式的对象列表(索引 / 外键 / 触发器
+   * 都在里面)换成服务端的最新一份。
+   *
+   * 与上面五支的三点不同,都是有意的:
+   * - **不领 `dbxLoadSequenceRef` 的号**。那条号是「当前在看什么」的唯一真相,领了就会把正在飞的
+   *   网格请求判成过期。这里只刷元数据、不动 `activeDbxObject` 与结果集,防串台交给调用方传进来的
+   *   `shouldApply`(面板自己那条号 + 表标识)。
+   * - **不 `setLoading`**。那是全局遮罩,属性页的刷新用面板上的按钮态表示就够了。
+   * - **对象列表按模式合并**,与 `loadDbxSchema` 同一手法:只换掉这张表所在模式的那批,别的模式
+   *   已经展开过的内容保留。
+   */
+  const reloadDbxObjectMetadata = useCallback(
+    async (
+      object: DbxObjectInfo,
+      connection: AeroricDbConnectionConfig,
+      database: string | null,
+      shouldApply: () => boolean = () => true,
+    ) => {
+      if (!isSqlDbxConnection(connection)) return;
+      const schema = object.schema ?? null;
+      const [columns, objects] = await Promise.all([
+        databaseApi
+          .dbxGetColumns(connection.id, object.name, database, schema)
+          .catch(() => [] as DbxColumnInfo[]),
+        listAllDbxObjects(connection.id, database, schema).catch(() => null),
+      ]);
+      if (!shouldApply()) return;
+      setDbxColumnsByTable((current) => ({ ...current, [dbxObjectKey(object)]: columns }));
+      if (!objects) return;
+      setDbxObjects((current) => [
+        ...current.filter((item) => (item.schema ?? null) !== schema),
+        ...objects,
+      ]);
+    },
+    [setDbxColumnsByTable, setDbxObjects],
+  );
+
   return {
     loadDbxColumnsForTables,
+    reloadDbxObjectMetadata,
     loadDbxDatabase,
     loadDbxSchema,
     loadDbxConnection,

@@ -47,10 +47,20 @@ export function TableInfoPanel({
             aria-label="Search table info"
           />
         </span>
+        <DbxButton
+          variant="outline"
+          size="sm"
+          icon={RefreshCcw}
+          disabled={state.metadataRefreshing}
+          onClick={() => void state.refreshMetadata()}
+        >
+          {t("common.refresh")}
+        </DbxButton>
         <DbxButton variant="outline" size="sm" icon={FileCode} onClick={onViewDdl}>
           {t("database.viewDdl")}
         </DbxButton>
       </div>
+      {state.metadataError && <div style={s.databaseError}>{state.metadataError}</div>}
       <AnimatedSelectionGroup
         value={state.activeTab}
         onChange={state.setActiveTab}
