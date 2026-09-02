@@ -20,21 +20,38 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type EmbedProvider = "ollama" | "openAi";
 
-/** 与 Rust 的 `EmbedConfig` 对齐(serde camelCase)。 */
+/**
+ * 与 Rust 的 `EmbedConfig` 对齐(serde camelCase),但**不含 key**。
+ *
+ * key 只存在 OS 钥匙串里,后端在真要发请求前自己补(`notebook::rag::commands::resolve_key`)。
+ * 前端从来不持有明文,于是也不可能在日志、错误提示或 devtools 的 IPC 面板里漏出去。
+ * Rust 那一侧的 `api_key` 是 `#[serde(default)]`,少这一项不会解析失败。
+ */
 export type RagEmbedConfig = {
   provider: EmbedProvider;
   /** 形如 `http://127.0.0.1:11434` 或 `https://api.openai.com/v1`。末尾斜杠由后端归一。 */
   baseUrl: string;
   model: string;
-  /** OpenAI 兼容一路的 key。Ollama 留空。 */
-  apiKey: string;
 };
 
+/**
+ * 设置页「测试连接」用的形状:带上刚敲进去、**还没保存**的那个 key。
+ *
+ * 只有这一条路会送 key。后端只在 key 为空时才去钥匙串补,所以这一份会被原样使用 ——
+ * 也就是说用户测的是屏幕上那个 key,而不是上一次保存的那个。
+ */
+export type RagEmbedProbeConfig = RagEmbedConfig & { apiKey: string };
+
+/**
+ * 设置页还没读回来时用的配置。
+ *
+ * 与 `app_settings::NotebookEmbeddingSettings` 的 Rust 默认值一致 —— 两边不一致的话
+ * 「面板刚打开的那一瞬间」和「读回来之后」会连到不同的服务。
+ */
 export const DEFAULT_RAG_CONFIG: RagEmbedConfig = {
   provider: "ollama",
   baseUrl: "http://127.0.0.1:11434",
   model: "nomic-embed-text",
-  apiKey: "",
 };
 
 export type RagIndexPhase = "scanning" | "chunking" | "embedding" | "done" | "failed" | "cancelled";
@@ -169,9 +186,29 @@ export function fileLineOfBodyScalar(fileContent: string, body: string, scalar: 
   return line;
 }
 
-/** 探一次 embedding 服务:通不通、维度多少。 */
-export async function probeRagEmbed(config: RagEmbedConfig): Promise<number> {
+/**
+ * 探一次 embedding 服务:通不通、维度多少。
+ *
+ * 设置页传 [`RagEmbedProbeConfig`](带屏幕上那个 key),其余调用方传不含 key 的那一份、
+ * 让后端从钥匙串补。
+ */
+export async function probeRagEmbed(config: RagEmbedConfig | RagEmbedProbeConfig): Promise<number> {
   return invoke<number>("notebook_rag_probe", { config });
+}
+
+/** embedding key 设过没有。**不会**回明文 —— 后端只答有/没有。 */
+export async function notebookEmbeddingKeyStatus(): Promise<boolean> {
+  return invoke<boolean>("notebook_embedding_key_status");
+}
+
+/** 写 embedding key 到 OS 钥匙串。空串等于清除。 */
+export async function setNotebookEmbeddingKey(key: string): Promise<void> {
+  return invoke<void>("notebook_embedding_key_set", { key });
+}
+
+/** 从钥匙串里删掉 embedding key。没设过也算成功。 */
+export async function clearNotebookEmbeddingKey(): Promise<void> {
+  return invoke<void>("notebook_embedding_key_clear");
 }
 
 export async function ragIndexStats(vault: string): Promise<RagIndexStats> {

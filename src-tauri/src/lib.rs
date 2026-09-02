@@ -50,6 +50,7 @@ mod remote_fs;
 mod remote_git;
 mod run_config;
 mod search;
+mod secrets;
 mod session;
 mod session_dsh;
 mod sftp;
@@ -650,6 +651,7 @@ pub fn run() {
             agent_usage::record_agent_config_usage,
             agent_usage::load_agent_usage_snapshot,
             app_settings::update_proxy_settings,
+            app_settings::update_notebook_embedding_settings,
             app_settings::test_proxy_connection,
             app_settings::update_agent_path_settings,
             app_settings::update_builtin_agent_access,
@@ -990,6 +992,9 @@ pub fn run() {
             notebook::rag::commands::notebook_rag_search,
             notebook::rag::commands::notebook_rag_context,
             notebook::rag::commands::notebook_rag_neighbors,
+            notebook::rag::commands::notebook_embedding_key_status,
+            notebook::rag::commands::notebook_embedding_key_set,
+            notebook::rag::commands::notebook_embedding_key_clear,
         ])
         .build(tauri::generate_context!());
 

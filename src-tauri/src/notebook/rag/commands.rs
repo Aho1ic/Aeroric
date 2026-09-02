@@ -234,12 +234,85 @@ pub struct ContextBundle {
     pub vectors_missing: bool,
 }
 
+/// embedding key 在钥匙串里的账户名。
+///
+/// 带 `notebook:` 前缀是因为这是应用**共享**的一个钥匙串服务(`crate::secrets::SERVICE`
+/// 就是 app identifier),将来第二个秘密不该和它撞名。
+const EMBEDDING_KEY_ACCOUNT: &str = "notebook:embedding:key";
+
+/// 把 key 存进 OS 钥匙串。空串等于清除(见 [`crate::secrets`] 的不变量 3)。
+///
+/// `spawn_blocking`:钥匙串是同步 API,macOS 上还可能弹一个授权框 —— 那期间不该占着
+/// async worker。
+#[tauri::command]
+pub async fn notebook_embedding_key_set(key: String) -> Result<(), String> {
+    // 去首尾空白。从网页复制 key 常常带一个换行,而带空白的 Authorization 头换来的是
+    // 401 —— 用户看着一个「填对了」的输入框查不出原因。
+    let key = key.trim().to_string();
+    tokio::task::spawn_blocking(move || crate::secrets::set(EMBEDDING_KEY_ACCOUNT, &key))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// 设过没有。**不回明文**,见 [`crate::secrets`] 的不变量 1。
+#[tauri::command]
+pub async fn notebook_embedding_key_status() -> Result<bool, String> {
+    tokio::task::spawn_blocking(|| crate::secrets::has(EMBEDDING_KEY_ACCOUNT))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn notebook_embedding_key_clear() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| crate::secrets::delete(EMBEDDING_KEY_ACCOUNT))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// 该不该去钥匙串补 key,以及补完之后的配置。
+///
+/// 抽成纯函数(钥匙串那一步是传进来的闭包)是因为真的读写测不了 —— 见
+/// [`crate::secrets`] 模块注释的末一节。两个提前返回都是必要的:
+///
+/// - **Ollama 不查。** 它不要 key,而 macOS 上一次查询可能弹授权框 —— 为了一个本机
+///   模型弹钥匙串授权毫无道理。
+/// - **已经带了 key 就不动。** 设置页的「测试连接」送的正是刚敲进去、**还没保存**的那
+///   个 key;覆盖掉会让用户测的是旧 key,于是「测试通过」和「保存后不工作」同时成立。
+fn with_stored_key(
+    mut config: EmbedConfig,
+    stored: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<EmbedConfig, String> {
+    if config.provider == embed::EmbedProvider::Ollama {
+        return Ok(config);
+    }
+    if !config.api_key.trim().is_empty() {
+        return Ok(config);
+    }
+    if let Some(key) = stored()? {
+        config.api_key = key;
+    }
+    Ok(config)
+}
+
+/// [`with_stored_key`] 接上真的钥匙串。
+///
+/// 钥匙串读失败在这里**不**咽下去:剩下三条路(建索引、检索、装配上下文)前端从来不知道
+/// key,咽下去等于拿一个空 key 去请求,用户看到的是 401 而不是「钥匙串读不出来」。
+async fn resolve_key(config: EmbedConfig) -> Result<EmbedConfig, String> {
+    tokio::task::spawn_blocking(move || {
+        with_stored_key(config, || crate::secrets::get(EMBEDDING_KEY_ACCOUNT))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// 探一次 embedding 服务:通不通、维度多少。
 ///
 /// 设置页的「测试连接」用它。建索引前先探一次也有意义 —— provider 没开着的话
 /// 不该白起一轮会整批失败的索引。
 #[tauri::command]
 pub async fn notebook_rag_probe(config: EmbedConfig) -> Result<usize, String> {
+    let config = resolve_key(config).await?;
     embed::probe_dimension(&config)
         .await
         .map_err(|e| e.message().to_string())
@@ -274,6 +347,9 @@ pub async fn notebook_rag_index(
     // 先占住这个 vault 再做别的:反过来的话探测维度那几百毫秒里第二次点击会溜
     // 进来,于是两个任务并发写同一个库。
     let guard = JobGuard::begin(&resolved)?;
+    // 补 key 排在占位**之后**,同一个理由:钥匙串读在 macOS 上可能弹一个授权框,那
+    // 期间的第二次点击必须撞在 JobGuard 上。
+    let config = resolve_key(config).await?;
     let cancel = guard.cancel.clone();
     let scope = scope.unwrap_or_default();
     let vault_label = resolved.to_string_lossy().to_string();
@@ -351,6 +427,7 @@ pub async fn notebook_rag_search(
         });
     };
     let options = options.unwrap_or_default().into_options();
+    let config = resolve_key(config).await?;
     on_own_thread(
         move || async move { search::search(&resolved, dim, &config, &query, &options).await },
     )
@@ -397,6 +474,9 @@ pub async fn notebook_rag_context(
         Some(dim) => {
             let options = search_options.unwrap_or_default().into_options();
             let vault_path = resolved.clone();
+            // 补 key 放在这个分支里而不是函数开头:没建过索引时下面根本不发 embedding
+            // 请求,那就不该去碰钥匙串。
+            let config = resolve_key(config).await?;
             on_own_thread(move || async move {
                 search::search(&vault_path, dim, &config, &query, &options).await
             })
@@ -711,5 +791,71 @@ mod tests {
         .await
         .expect("query");
         assert_eq!(count, 0);
+    }
+
+    fn openai_config(api_key: &str) -> EmbedConfig {
+        EmbedConfig {
+            provider: embed::EmbedProvider::OpenAi,
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "text-embedding-3-small".to_string(),
+            api_key: api_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_empty_key_is_filled_from_the_keychain() {
+        // 建索引 / 检索 / 装配上下文三条路前端从来不知道 key(明文不出后端),不补的话
+        // 它们拿着空 Authorization 头去请求,回来一个 401。
+        let config = with_stored_key(openai_config(""), || Ok(Some("sk-stored".to_string())))
+            .expect("resolve");
+        assert_eq!(config.api_key, "sk-stored");
+    }
+
+    #[test]
+    fn a_typed_key_survives() {
+        // 设置页的「测试连接」送的是刚敲进去、还没保存的那个 key。覆盖掉的话用户测的
+        // 是旧 key —— 「测试通过」与「保存后不工作」会同时成立。
+        let config = with_stored_key(openai_config("sk-typed"), || {
+            panic!("已经带了 key 就不该去碰钥匙串")
+        })
+        .expect("resolve");
+        assert_eq!(config.api_key, "sk-typed");
+    }
+
+    #[test]
+    fn ollama_never_touches_the_keychain() {
+        // 它不要 key,而 macOS 上一次查询可能弹授权框。
+        let config = EmbedConfig {
+            provider: embed::EmbedProvider::Ollama,
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "nomic-embed-text".to_string(),
+            api_key: String::new(),
+        };
+        let resolved = with_stored_key(config, || panic!("Ollama 不该查钥匙串")).expect("resolve");
+        assert!(resolved.api_key.is_empty());
+    }
+
+    #[test]
+    fn a_key_that_was_never_set_leaves_the_config_alone() {
+        // 「没设过」不是错误(`secrets::get` 回 `Ok(None)`)。这里报错会让一个没配 key
+        // 的 OpenAI 兼容端点(有些自建的不校验)直接用不了。
+        let config = with_stored_key(openai_config(""), || Ok(None)).expect("resolve");
+        assert!(config.api_key.is_empty());
+    }
+
+    #[test]
+    fn a_keychain_failure_is_reported_not_swallowed() {
+        // 咽下去的话用户看到的是 provider 的 401,而真正的原因是钥匙串没解锁。
+        let error = with_stored_key(openai_config(""), || Err("locked".to_string()))
+            .expect_err("钥匙串失败要往上报");
+        assert_eq!(error, "locked");
+    }
+
+    #[test]
+    fn a_whitespace_only_key_counts_as_empty() {
+        // 输入框里剩一个换行(从网页复制 key 的常见残留)不该算「用户填了 key」。
+        let config = with_stored_key(openai_config("  \n"), || Ok(Some("sk-stored".to_string())))
+            .expect("resolve");
+        assert_eq!(config.api_key, "sk-stored");
     }
 }

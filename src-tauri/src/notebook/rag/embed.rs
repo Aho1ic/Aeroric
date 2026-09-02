@@ -38,9 +38,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// 重试次数(总尝试次数 = 这个数)。
 const MAX_ATTEMPTS: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// 哪一路 provider。
+///
+/// `Default` 是给 `app_settings::NotebookEmbeddingSettings` 的 `#[serde(default)]` 用的:
+/// 老配置文件里没有这个字段时得落到本机 Ollama —— 那也是设置页出现之前前端硬编码的那个
+/// 默认值,于是升级不改变任何人的既有行为。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EmbedProvider {
+    #[default]
     Ollama,
     OpenAi,
 }

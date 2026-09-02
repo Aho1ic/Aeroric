@@ -14,15 +14,46 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod agent_env;
 mod agent_scripts;
 mod config_bundles;
+mod launch_spec;
+mod model_detect;
 mod models;
+mod normalize;
+mod proxy_test;
 mod versions;
 
+// launch_spec 里的路径解析:父文件自己只用这两个,其余 14 个符号那边自用。
+use launch_spec::{get_agent_launch_spec_from_settings, normalize_agent_configured_path};
+// `use super::*` 拿不到兄弟模块的 pub(crate) 项,所以要在这里转一手。
+// 调用点只有 agent_scripts 的测试(那个文件 L2010 起的 `#[cfg(test)]` 块),
+// 不加门控在非测试构建里就是个 unused import。
+#[cfg(test)]
+pub(crate) use launch_spec::ensure_user_agent_script_executable;
+
+use agent_env::*;
 use agent_scripts::*;
 use config_bundles::*;
+use model_detect::*;
 use models::*;
+use normalize::*;
 use versions::*;
+
+// `proxy_test` 里有个 tauri 命令(`test_proxy_connection`),`lib.rs` 的
+// generate_handler! 里写的是 `app_settings::test_proxy_connection`。这里**必须用
+// glob** `pub use`:`#[tauri::command]` 除了函数还会生成两个隐藏宏
+// (`__cmd__<名字>` / `__tauri_command_name_<名字>`),按名字 re-export 带不走它们,
+// generate_handler! 会报 "macro import ... is private"。
+pub use proxy_test::*;
+
+// 下面三个搬进子模块前分别是 `pub` / `pub(crate)`。glob import 只把名字拉进本作用域,
+// 不替父模块对外转发可见性,所以要显式 re-export 一手,而且**必须原样保留可见性等级**。
+// 调用点写的都是 `app_settings::<名字>`(`custom_agent_home` 有 6 个模块在用),
+// 这样一处都不用改。
+pub(crate) use agent_env::configured_agent_path;
+pub use normalize::custom_agent_home;
+pub(crate) use normalize::normalize_local_router_settings_for_update;
 
 fn default_send_shortcut() -> String {
     "mod_enter".to_string()
@@ -434,6 +465,44 @@ impl Default for LocalRouterSettings {
     }
 }
 
+/// 随手记 RAG 的 embedding provider 配置。
+///
+/// 复用 `notebook::rag::embed::EmbedProvider` 而不是在这里另起一个同形状的枚举:两个枚举
+/// 早晚会跑偏,而 `embed.rs` 那一侧的取值决定了真的会去调哪个 endpoint。方向上
+/// `notebook::rag::embed` 本来就在读 `app_settings`(取代理配置),反过来引用一个类型不构成
+/// 新的耦合。
+///
+/// **key 刻意不在这里。** 整个结构体会原样写进 `settings.json`(明文),而 embedding key 走
+/// OS 钥匙串(`crate::secrets`)。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NotebookEmbeddingSettings {
+    #[serde(default)]
+    pub provider: crate::notebook::rag::embed::EmbedProvider,
+    #[serde(default = "default_notebook_embedding_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_notebook_embedding_model")]
+    pub model: String,
+}
+
+/// 本机 Ollama 的默认地址。与设置页出现之前前端硬编码的那个值一致,于是升级不改变行为。
+fn default_notebook_embedding_base_url() -> String {
+    "http://127.0.0.1:11434".to_string()
+}
+
+fn default_notebook_embedding_model() -> String {
+    "nomic-embed-text".to_string()
+}
+
+impl Default for NotebookEmbeddingSettings {
+    fn default() -> Self {
+        Self {
+            provider: crate::notebook::rag::embed::EmbedProvider::default(),
+            base_url: default_notebook_embedding_base_url(),
+            model: default_notebook_embedding_model(),
+        }
+    }
+}
+
 fn default_custom_agent_codex_like() -> bool {
     true
 }
@@ -471,6 +540,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub local_router_settings: LocalRouterSettings,
     #[serde(default)]
+    pub notebook_embedding_settings: NotebookEmbeddingSettings,
+    #[serde(default)]
     pub agent_proxy_enabled: HashMap<String, bool>,
     #[serde(default, skip_serializing)]
     pub agent_proxy_overrides: HashMap<String, LegacyAgentProxyConfig>,
@@ -504,6 +575,7 @@ impl Default for AppSettings {
             dsh_reasoning_efforts: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             local_router_settings: LocalRouterSettings::default(),
+            notebook_embedding_settings: NotebookEmbeddingSettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
@@ -687,634 +759,6 @@ pub(crate) fn custom_agent_home_dir_name(agent: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn default_claude_gpt55_path() -> String {
-    crate::platform::home_dir()
-        .map(|home| home.join(".claude").join("start-gpt55.sh"))
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "~/.claude/start-gpt55.sh".to_string())
-}
-
-fn sanitize_custom_agent_id(value: &str) -> String {
-    let mut out = String::new();
-    let mut last_was_sep = false;
-    for ch in value.trim().to_ascii_lowercase().chars() {
-        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-');
-        if keep {
-            out.push(ch);
-            last_was_sep = false;
-        } else if !last_was_sep {
-            out.push('_');
-            last_was_sep = true;
-        }
-    }
-    let trimmed = out
-        .trim_matches(|c| matches!(c, '.' | '_' | '-'))
-        .to_string();
-    match trimmed.as_str() {
-        "" => String::new(),
-        "claude" | "claude_gpt55" | "codex" => format!("local_{}", trimmed),
-        _ => trimmed,
-    }
-}
-
-/// 自定义 Agent 的隔离 home:`~/.aeroric/agent-homes/{id}`。
-///
-/// 与生成的启动脚本里的 `AGENT_HOME="${AERORIC_AGENT_HOME:-$HOME/.aeroric/agent-homes/{id}}"`
-/// 必须保持一致——codex-like 脚本会把它 export 成 CODEX_HOME,MCP profile 要写进同一目录
-/// 才能被 `-p` 读到。id 先过 `sanitize_custom_agent_id`,拒绝路径穿越。
-pub fn custom_agent_home(id: &str) -> Result<PathBuf, String> {
-    let normalized = sanitize_custom_agent_id(id);
-    if normalized.is_empty() {
-        return Err(format!("Invalid custom Agent id: {id}"));
-    }
-    let root = aeroric_dir()?.join("agent-homes");
-    let home = root.join(&normalized);
-    // 双重保险:normalized 已排除分隔符,这里再确认没有逃出隔离目录。
-    if home.parent() != Some(root.as_path()) {
-        return Err(
-            "Refusing to resolve an Agent home outside the isolation directory".to_string(),
-        );
-    }
-    Ok(home)
-}
-
-fn normalize_config_lang(value: String) -> String {
-    match value.as_str() {
-        "json" | "toml" | "yaml" | "shellscript" => value,
-        _ => default_custom_agent_config_lang(),
-    }
-}
-
-fn normalize_custom_agent_profile(profile: CustomAgentProfile) -> Option<CustomAgentProfile> {
-    let id = sanitize_custom_agent_id(&profile.id);
-    let label = profile.label.trim().to_string();
-    let path = profile.path.trim().to_string();
-    if id.is_empty() || label.is_empty() || path.is_empty() {
-        return None;
-    }
-    let family = AgentFamily::parse(profile.family.trim())
-        .unwrap_or_else(|| AgentFamily::from_codex_like(profile.codex_like));
-    Some(CustomAgentProfile {
-        id,
-        label,
-        path: normalize_agent_configured_path(&profile.id, &path),
-        codex_like: profile.codex_like,
-        family: AgentFamily::parse(profile.family.trim())
-            .map(|family| family.as_str().to_string())
-            .unwrap_or_default(),
-        config_lang: normalize_config_lang(profile.config_lang),
-        base_url: normalize_base_url(&profile.base_url),
-        api_key: profile.api_key.trim().to_string(),
-        models: normalize_model_list(profile.models),
-        bridge_python_path: profile.bridge_python_path.trim().to_string(),
-        enable_1m_context: family == AgentFamily::Claude && profile.enable_1m_context,
-        enable_chat_completions_proxy: family == AgentFamily::Codex
-            && profile.enable_chat_completions_proxy,
-        username: String::new(),
-        password: String::new(),
-    })
-}
-
-fn normalize_custom_agents(profiles: Vec<CustomAgentProfile>) -> Vec<CustomAgentProfile> {
-    let mut normalized = Vec::new();
-    for profile in profiles {
-        let Some(profile) = normalize_custom_agent_profile(profile) else {
-            continue;
-        };
-        if normalized
-            .iter()
-            .any(|existing: &CustomAgentProfile| existing.id == profile.id)
-        {
-            continue;
-        }
-        normalized.push(profile);
-    }
-    normalized
-}
-
-fn normalize_config_path(path: String) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let home_relative = trimmed
-        .strip_prefix("~/")
-        .or_else(|| trimmed.strip_prefix("~\\"));
-    if let Some(stripped) = home_relative {
-        if let Some(home) = crate::platform::home_dir() {
-            return home.join(stripped).to_string_lossy().into_owned();
-        }
-    }
-    #[cfg(windows)]
-    {
-        expand_windows_env_vars(trimmed)
-    }
-    #[cfg(not(windows))]
-    trimmed.to_string()
-}
-
-#[cfg(windows)]
-fn expand_windows_env_vars(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut remaining = value;
-    while let Some(start) = remaining.find('%') {
-        output.push_str(&remaining[..start]);
-        let after_start = &remaining[start + 1..];
-        let Some(end) = after_start.find('%') else {
-            output.push_str(&remaining[start..]);
-            return output;
-        };
-        let name = &after_start[..end];
-        if name.is_empty() {
-            output.push_str("%%");
-        } else if let Some(expanded) = std::env::var_os(name) {
-            output.push_str(&expanded.to_string_lossy());
-        } else {
-            output.push('%');
-            output.push_str(name);
-            output.push('%');
-        }
-        remaining = &after_start[end + 1..];
-    }
-    output.push_str(remaining);
-    output
-}
-
-fn normalize_agent_label_key(value: &str) -> String {
-    let mut out = String::new();
-    let mut last_was_sep = false;
-    for ch in value.trim().to_ascii_lowercase().chars() {
-        let keep = ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-');
-        if keep {
-            out.push(ch);
-            last_was_sep = false;
-        } else if !last_was_sep {
-            out.push('_');
-            last_was_sep = true;
-        }
-    }
-    out.trim_matches(|c| matches!(c, '.' | '_' | '-'))
-        .to_string()
-}
-
-fn normalize_agent_label_overrides(overrides: HashMap<String, String>) -> HashMap<String, String> {
-    overrides
-        .into_iter()
-        .filter_map(|(agent, label)| {
-            let key = normalize_agent_label_key(&agent);
-            let label = label.trim().to_string();
-            if key.is_empty() || label.is_empty() {
-                None
-            } else {
-                Some((key, label))
-            }
-        })
-        .collect()
-}
-
-fn normalize_builtin_agent_credentials(
-    credentials: HashMap<String, BuiltInAgentCredentials>,
-) -> HashMap<String, BuiltInAgentCredentials> {
-    credentials
-        .into_iter()
-        .filter_map(|(agent, credentials)| {
-            builtin_agent_details(&agent)?;
-            let normalized = BuiltInAgentCredentials {
-                base_url: normalize_base_url(&credentials.base_url),
-                api_key: credentials.api_key.trim().to_string(),
-                models: normalize_model_list(credentials.models),
-                enable_1m_context: credentials.enable_1m_context,
-            };
-            (!normalized.base_url.is_empty()
-                || !normalized.api_key.is_empty()
-                || !normalized.models.is_empty())
-            .then_some((agent, normalized))
-        })
-        .collect()
-}
-
-fn normalize_dsh_reasoning_efforts(efforts: HashMap<String, String>) -> HashMap<String, String> {
-    efforts
-        .into_iter()
-        .filter_map(|(agent, effort)| {
-            let agent = normalize_agent_label_key(&agent);
-            let effort = effort.trim().to_ascii_lowercase();
-            (!agent.is_empty() && matches!(effort.as_str(), "off" | "high" | "max"))
-                .then_some((agent, effort))
-        })
-        .collect()
-}
-
-fn normalize_proxy_url(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if trimmed.contains("://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{}", trimmed)
-    }
-}
-
-fn normalize_no_proxy(value: &str) -> String {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
-    ProxySettings {
-        url: normalize_proxy_url(&settings.url),
-        no_proxy: normalize_no_proxy(&settings.no_proxy),
-        username: settings.username.trim().to_string(),
-        password: settings.password.trim().to_string(),
-    }
-}
-
-fn normalize_local_router_settings(settings: LocalRouterSettings) -> LocalRouterSettings {
-    let listen_host = match settings.listen_host.trim() {
-        value if value.eq_ignore_ascii_case("localhost") => "127.0.0.1".to_string(),
-        value if value.starts_with('[') && value.ends_with(']') => value
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .map(|address| address.to_string())
-            .unwrap_or_else(|_| DEFAULT_LOCAL_ROUTER_HOST.to_string()),
-        value => value
-            .parse::<IpAddr>()
-            .map(|address| address.to_string())
-            .unwrap_or_else(|_| DEFAULT_LOCAL_ROUTER_HOST.to_string()),
-    };
-    LocalRouterSettings {
-        listen_host,
-        listen_port: if settings.listen_port >= 1024 {
-            settings.listen_port
-        } else {
-            DEFAULT_LOCAL_ROUTER_PORT
-        },
-        access_token: if settings.access_token.trim().is_empty() {
-            format!("aeroric-{}", uuid::Uuid::new_v4().simple())
-        } else {
-            settings.access_token.trim().to_string()
-        },
-        claude: normalize_local_router_agent_settings(settings.claude),
-        codex: normalize_local_router_agent_settings(settings.codex),
-        ..settings
-    }
-}
-
-pub(crate) fn normalize_local_router_settings_for_update(
-    settings: LocalRouterSettings,
-) -> LocalRouterSettings {
-    normalize_local_router_settings(settings)
-}
-
-fn normalize_local_router_agent_settings(
-    settings: LocalRouterAgentSettings,
-) -> LocalRouterAgentSettings {
-    let mut seen = HashSet::new();
-    let failover_queue = settings
-        .failover_queue
-        .into_iter()
-        .map(|target| target.trim().to_string())
-        .filter(|target| !target.is_empty() && seen.insert(target.clone()))
-        .collect();
-    LocalRouterAgentSettings {
-        max_retries: settings.max_retries.min(10),
-        streaming_first_byte_timeout: settings.streaming_first_byte_timeout.clamp(1, 120),
-        streaming_idle_timeout: if settings.streaming_idle_timeout == 0 {
-            0
-        } else {
-            settings.streaming_idle_timeout.clamp(60, 600)
-        },
-        non_streaming_timeout: settings.non_streaming_timeout.clamp(60, 1200),
-        circuit_failure_threshold: settings.circuit_failure_threshold.clamp(1, 20),
-        circuit_success_threshold: settings.circuit_success_threshold.clamp(1, 10),
-        circuit_timeout_seconds: settings.circuit_timeout_seconds.min(300),
-        circuit_error_rate_percent: settings.circuit_error_rate_percent.min(100),
-        circuit_min_requests: settings.circuit_min_requests.clamp(5, 100),
-        active_target: settings.active_target.trim().to_string(),
-        failover_queue,
-        ..settings
-    }
-}
-
-fn normalize_agent_proxy_enabled(overrides: HashMap<String, bool>) -> HashMap<String, bool> {
-    overrides
-        .into_iter()
-        .filter_map(|(agent, enabled)| {
-            let key = normalize_agent_label_key(&agent);
-            (!key.is_empty() && enabled).then_some((key, true))
-        })
-        .collect()
-}
-
-fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
-    let mut proxy = if !settings.proxy_settings.url.trim().is_empty()
-        || !settings.proxy_settings.no_proxy.trim().is_empty()
-        || !settings.proxy_settings.username.trim().is_empty()
-        || !settings.proxy_settings.password.trim().is_empty()
-    {
-        normalize_proxy_settings(settings.proxy_settings.clone())
-    } else {
-        settings
-            .agent_proxy_overrides
-            .values()
-            .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
-            .map(|config| {
-                normalize_proxy_settings(ProxySettings {
-                    url: config.url.clone(),
-                    no_proxy: config.no_proxy.clone(),
-                    username: String::new(),
-                    password: String::new(),
-                })
-            })
-            .unwrap_or_default()
-    };
-
-    if proxy.username.is_empty() && proxy.password.is_empty() {
-        if let Some(profile) = settings.custom_agents.iter().find(|profile| {
-            !profile.username.trim().is_empty() || !profile.password.trim().is_empty()
-        }) {
-            proxy.username = profile.username.trim().to_string();
-            proxy.password = profile.password.trim().to_string();
-        }
-    }
-
-    proxy
-}
-
-fn migrate_agent_proxy_enabled(settings: &AppSettings) -> HashMap<String, bool> {
-    let mut enabled = normalize_agent_proxy_enabled(settings.agent_proxy_enabled.clone());
-    for (agent, config) in &settings.agent_proxy_overrides {
-        let key = normalize_agent_label_key(agent);
-        if !key.is_empty() && config.enabled {
-            enabled.insert(key, true);
-        }
-    }
-    enabled
-}
-
-fn append_agent_proxy_env(
-    settings: &AppSettings,
-    agent: &str,
-    extra_env: &mut Vec<(String, String)>,
-) {
-    let key = normalize_agent_label_key(agent);
-    if !settings
-        .agent_proxy_enabled
-        .get(&key)
-        .copied()
-        .unwrap_or(false)
-    {
-        return;
-    }
-    let proxy = normalize_proxy_settings(settings.proxy_settings.clone());
-    if proxy.url.trim().is_empty() {
-        return;
-    }
-    for key in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ] {
-        extra_env.push((key.to_string(), proxy.url.clone()));
-    }
-    if !proxy.no_proxy.is_empty() {
-        extra_env.push(("NO_PROXY".to_string(), proxy.no_proxy.clone()));
-        extra_env.push(("no_proxy".to_string(), proxy.no_proxy));
-    }
-}
-
-fn append_agent_credential_env(
-    settings: &AppSettings,
-    agent: &str,
-    extra_env: &mut Vec<(String, String)>,
-) {
-    let key = normalize_agent_label_key(agent);
-    if !settings
-        .agent_proxy_enabled
-        .get(&key)
-        .copied()
-        .unwrap_or(false)
-    {
-        return;
-    }
-
-    let proxy = normalize_proxy_settings(settings.proxy_settings.clone());
-    if proxy.url.trim().is_empty() {
-        return;
-    }
-
-    let username = proxy.username.trim();
-    if !username.is_empty() {
-        extra_env.push(("AERORIC_AGENT_USERNAME".to_string(), username.to_string()));
-    }
-
-    let password = proxy.password.trim();
-    if !password.is_empty() {
-        extra_env.push(("AERORIC_AGENT_PASSWORD".to_string(), password.to_string()));
-    }
-}
-
-fn append_builtin_agent_api_env(
-    settings: &AppSettings,
-    agent: &str,
-    extra_env: &mut Vec<(String, String)>,
-) {
-    let Some(credentials) = settings.builtin_agent_credentials.get(agent) else {
-        return;
-    };
-    // dsh:身份即 API key(无 OAuth)。key 走环境变量注入——dsh 的凭据层
-    // "inherited environment" 优先于 .credentials.yaml,每次启动读取最新值,
-    // 换 key 无需重启。自定义 base_url 走 settings.yaml 的 provider 配置
-    // (llm-pi-ai),不在这里注入。
-    if configured_agent_family(settings, agent) == AgentFamily::Dsh {
-        if !credentials.api_key.is_empty() {
-            extra_env.push(("DEEPSEEK_API_KEY".to_string(), credentials.api_key.clone()));
-        }
-        return;
-    }
-    if !credentials.base_url.is_empty() {
-        if matches!(agent, "codex" | "claude_gpt55") {
-            extra_env.push(("OPENAI_BASE_URL".to_string(), credentials.base_url.clone()));
-        } else {
-            extra_env.push((
-                "ANTHROPIC_BASE_URL".to_string(),
-                credentials.base_url.clone(),
-            ));
-        }
-    }
-    if !credentials.api_key.is_empty() {
-        if matches!(agent, "codex" | "claude_gpt55") {
-            for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] {
-                extra_env.push((key.to_string(), credentials.api_key.clone()));
-            }
-        } else {
-            extra_env.push((
-                "ANTHROPIC_AUTH_TOKEN".to_string(),
-                credentials.api_key.clone(),
-            ));
-            extra_env.push(("ANTHROPIC_API_KEY".to_string(), credentials.api_key.clone()));
-        }
-    }
-    if !matches!(agent, "codex" | "claude_gpt55") {
-        if let Some(model) = credentials.models.first() {
-            let model = if credentials.enable_1m_context && !model.ends_with("[1m]") {
-                format!("{model}[1m]")
-            } else {
-                model.clone()
-            };
-            for key in [
-                "ANTHROPIC_MODEL",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            ] {
-                extra_env.push((key.to_string(), model.clone()));
-            }
-        }
-    }
-}
-
-fn append_local_router_env(
-    settings: &AppSettings,
-    agent: &str,
-    router_listening: bool,
-    extra_env: &mut Vec<(String, String)>,
-) {
-    let router = &settings.local_router_settings;
-    if agent == "claude_gpt55"
-        && settings
-            .builtin_agent_credentials
-            .get(agent)
-            .is_none_or(|credentials| credentials.base_url.trim().is_empty())
-    {
-        // Without a configured GPT-5.5 upstream the launcher script is the
-        // source of truth. Pinning it to the built-in Codex target would make
-        // the selected configuration look active while using Codex instead.
-        return;
-    }
-    let codex_like = match agent {
-        "claude" => false,
-        "codex" | "claude_gpt55" => true,
-        other => match settings
-            .custom_agents
-            .iter()
-            .find(|profile| profile.id == other)
-        {
-            // Profiles without an upstream URL rely on their own launcher
-            // configuration and cannot be pinned to a router target.
-            Some(profile) if !profile.base_url.trim().is_empty() => profile.codex_like,
-            None => return,
-            Some(_) => return,
-        },
-    };
-    let (enabled, base_url_key, route_prefix) = if codex_like {
-        (router.codex_enabled, "OPENAI_BASE_URL", "codex/v1")
-    } else {
-        (router.claude_enabled, "ANTHROPIC_BASE_URL", "claude")
-    };
-    // `router_listening` 为假说明服务没真的在监听(开关刚打开还没起、端口被占、绑定失败、
-    // 正在停服)。把 Agent 指向一个没人接的端口只会得到
-    // `error sending request for url (http://127.0.0.1:18080/...)`，
-    // 不如直接让它按自己的配置直连上游。
-    if !router.enabled || !enabled || !router_listening {
-        return;
-    }
-
-    let connect_host = match router.listen_host.as_str() {
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        host => host,
-    };
-    let url_host = if connect_host.contains(':') {
-        format!("[{connect_host}]")
-    } else {
-        connect_host.to_string()
-    };
-    let target_id = agent;
-    let route_prefix = route_prefix
-        .split_once('/')
-        .map(|(family, suffix)| format!("{family}/targets/{target_id}/{suffix}"))
-        .unwrap_or_else(|| format!("{route_prefix}/targets/{target_id}"));
-    extra_env.push((
-        base_url_key.to_string(),
-        format!("http://{url_host}:{}/{route_prefix}", router.listen_port),
-    ));
-
-    let listen_is_loopback = router
-        .listen_host
-        .parse::<IpAddr>()
-        .map(|address| address.is_loopback())
-        .unwrap_or_else(|_| router.listen_host.eq_ignore_ascii_case("localhost"));
-    if !listen_is_loopback && !router.access_token.is_empty() {
-        let credential_keys: &[&str] = if codex_like {
-            &["OPENAI_API_KEY", "CODEX_API_KEY"]
-        } else {
-            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
-        };
-        for key in credential_keys {
-            extra_env.push(((*key).to_string(), router.access_token.clone()));
-        }
-    }
-
-    let mut no_proxy = extra_env
-        .iter()
-        .rev()
-        .find(|(key, _)| key.eq_ignore_ascii_case("NO_PROXY"))
-        .map(|(_, value)| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for bypass in ["127.0.0.1", "localhost", "::1", connect_host] {
-        if !no_proxy.iter().any(|item| item == bypass) {
-            no_proxy.push(bypass.to_string());
-        }
-    }
-    let no_proxy = no_proxy.join(",");
-    extra_env.push(("NO_PROXY".to_string(), no_proxy.clone()));
-    extra_env.push(("no_proxy".to_string(), no_proxy));
-}
-
-fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
-    if let Some(profile) = settings
-        .custom_agents
-        .iter()
-        .find(|profile| profile.id == agent)
-    {
-        return profile.path.clone();
-    }
-    match agent {
-        "claude_gpt55" => {
-            if settings.claude_gpt55_path.is_empty() {
-                default_claude_gpt55_path()
-            } else {
-                settings.claude_gpt55_path.clone()
-            }
-        }
-        "codex" => settings.codex_path.clone(),
-        "dsh" => settings.dsh_path.clone(),
-        _ => settings.claude_path.clone(),
-    }
-}
-
-pub(crate) fn configured_agent_path(settings: &AppSettings, agent: &str) -> String {
-    get_agent_configured_path(settings, agent)
-}
-
 fn clear_cached_versions() {
     *CACHED_CLAUDE_VERSION
         .get_or_init(|| Mutex::new(None))
@@ -1387,415 +831,6 @@ fn detect_path(binary: &str) -> String {
     crate::platform::detect_path(binary)
 }
 
-fn resolve_input_path(path: &str, binary: &str) -> String {
-    let normalized = normalize_config_path(path.to_string());
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
-        let detected = detect_path(binary);
-        return if detected.is_empty() {
-            binary.to_string()
-        } else {
-            detected
-        };
-    }
-
-    let detected = detect_path(trimmed);
-    if detected.is_empty() {
-        trimmed.to_string()
-    } else {
-        detected
-    }
-}
-
-fn normalize_agent_configured_path(agent: &str, path: &str) -> String {
-    let resolved = resolve_input_path(path, agent);
-    // Preserve a DSH source checkout in settings. The launch spec converts it
-    // to `pnpm --dir <checkout> dsh` at execution time; storing only `pnpm`
-    // here would lose the checkout path and make subsequent launches fall
-    // back to the global command.
-    if dsh_source_root(&resolved).is_some() {
-        return resolved;
-    }
-    #[cfg(windows)]
-    if crate::platform::agent_script_command(Path::new(&resolved)).is_some() {
-        return resolved;
-    }
-    resolve_agent_launch_spec_from_path(agent, &resolved).program
-}
-
-fn dsh_source_root(path: &str) -> Option<PathBuf> {
-    let candidate = Path::new(path);
-    if !candidate.is_dir()
-        || !candidate.join("package.json").is_file()
-        || !candidate.join("apps").join("cli").is_dir()
-    {
-        return None;
-    }
-    Some(candidate.to_path_buf())
-}
-
-#[cfg(not(windows))]
-fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
-    let program = resolve_input_path(path, agent);
-    // This function is also called while `SETTINGS_LOCK` is held during
-    // settings normalization. Do not call `agent_family(agent)` here: that
-    // helper reloads settings and would recursively acquire the same lock.
-    let is_dsh_path = agent == "dsh"
-        || inferred_agent_family(&program) == Some(AgentFamily::Dsh)
-        || dsh_source_root(&program).is_some();
-    if is_dsh_path {
-        if let Some(root) = dsh_source_root(&program) {
-            return AgentLaunchSpec {
-                program: "pnpm".to_string(),
-                args: vec![
-                    "--dir".to_string(),
-                    root.to_string_lossy().into_owned(),
-                    "dsh".to_string(),
-                ],
-                working_dir: Some(root),
-                family: AgentFamily::Dsh,
-                ..Default::default()
-            };
-        }
-    }
-    if Path::new(&program).is_absolute() {
-        let _ = ensure_user_agent_script_executable(Path::new(&program));
-    }
-    AgentLaunchSpec {
-        program,
-        ..Default::default()
-    }
-}
-
-#[cfg(not(windows))]
-pub(crate) fn ensure_user_agent_script_executable(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.to_string()),
-    };
-    if !metadata.is_file() {
-        return Ok(());
-    }
-    let mode = metadata.permissions().mode();
-    // Scripts we generate under ~/.aeroric/agents read an owner-only provider
-    // API-key sidecar at runtime, so force owner-only 0o700 for the wrapper as
-    // well. For an arbitrary user-provided
-    // program path we only add the execute bit and leave its other bits alone,
-    // so we never silently tighten permissions on the user's own binaries.
-    let is_managed_agent_script = agent_scripts_dir()
-        .ok()
-        .and_then(|dir| dir.canonicalize().ok())
-        .zip(path.canonicalize().ok())
-        .map(|(dir, resolved)| resolved.starts_with(&dir))
-        .unwrap_or(false);
-    let target_mode = if is_managed_agent_script {
-        0o700
-    } else {
-        mode | 0o100
-    };
-    if mode == target_mode {
-        return Ok(());
-    }
-    fs::set_permissions(path, fs::Permissions::from_mode(target_mode))
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(windows)]
-fn path_file_name_eq(path: &Path, expected: &str) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
-}
-
-#[cfg(windows)]
-fn find_scoped_package_root(path: &Path, scope: &str, package: &str) -> Option<PathBuf> {
-    let mut current = if path.is_dir() {
-        Some(path)
-    } else {
-        path.parent()
-    };
-    while let Some(dir) = current {
-        let parent = dir.parent()?;
-        if path_file_name_eq(dir, package) && path_file_name_eq(parent, scope) {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
-}
-
-#[cfg(windows)]
-fn npm_package_root_from_shim(path: &Path, scope: &str, package: &str) -> Option<PathBuf> {
-    let shim_dir = path.parent()?;
-    let candidate = shim_dir.join("node_modules").join(scope).join(package);
-    candidate.is_dir().then_some(candidate)
-}
-
-#[cfg(windows)]
-fn candidate_from_ancestors(
-    path: &Path,
-    scope: &str,
-    package: &str,
-    relative: &[&str],
-) -> Option<PathBuf> {
-    let package_root = find_scoped_package_root(path, scope, package)
-        .or_else(|| npm_package_root_from_shim(path, scope, package))?;
-    let mut candidate = package_root;
-    for segment in relative {
-        candidate.push(segment);
-    }
-    candidate.is_file().then_some(candidate)
-}
-
-#[cfg(windows)]
-fn codex_vendor_artifact_from_vendor_root(
-    vendor_root: &Path,
-) -> Option<(PathBuf, Option<PathBuf>)> {
-    if !vendor_root.is_dir() {
-        return None;
-    }
-
-    let mut arch_roots = fs::read_dir(vendor_root)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_dir())
-        .collect::<Vec<_>>();
-    arch_roots.sort();
-
-    for arch_root in arch_roots {
-        let exe = arch_root.join("codex").join("codex.exe");
-        if exe.is_file() {
-            let path_dir = arch_root.join("path");
-            return Some((exe, path_dir.is_dir().then_some(path_dir)));
-        }
-    }
-
-    None
-}
-
-#[cfg(windows)]
-fn resolve_codex_vendor_artifact(path: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
-    if path_file_name_eq(path, "codex.exe")
-        && path
-            .parent()
-            .is_some_and(|parent| path_file_name_eq(parent, "codex"))
-    {
-        let arch_root = path.parent()?.parent()?;
-        let path_dir = arch_root.join("path");
-        return Some((path.to_path_buf(), path_dir.is_dir().then_some(path_dir)));
-    }
-
-    if let Some(package_root) = find_scoped_package_root(path, "@openai", "codex")
-        .or_else(|| npm_package_root_from_shim(path, "@openai", "codex"))
-    {
-        if let Some(found) = codex_vendor_artifact_from_vendor_root(&package_root.join("vendor")) {
-            return Some(found);
-        }
-
-        let openai_dir = package_root.join("node_modules").join("@openai");
-        if openai_dir.is_dir() {
-            let mut package_dirs = fs::read_dir(&openai_dir)
-                .ok()?
-                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|candidate| {
-                    candidate.is_dir()
-                        && candidate
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.starts_with("codex-win32-"))
-                })
-                .collect::<Vec<_>>();
-            package_dirs.sort();
-
-            for package_dir in package_dirs {
-                if let Some(found) =
-                    codex_vendor_artifact_from_vendor_root(&package_dir.join("vendor"))
-                {
-                    return Some(found);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-#[cfg(windows)]
-fn prepend_to_path(entries: &[PathBuf]) -> Option<String> {
-    let prefixes = entries
-        .iter()
-        .filter(|path| path.is_dir())
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    if prefixes.is_empty() {
-        return None;
-    }
-
-    let existing = get_login_shell_path();
-    let mut combined = prefixes.join(";");
-    if !existing.is_empty() {
-        combined.push(';');
-        combined.push_str(existing);
-    }
-    Some(combined)
-}
-
-#[cfg(windows)]
-fn windows_script_launch(path: &Path) -> Option<AgentLaunchSpec> {
-    crate::platform::agent_script_command(path).map(|command| AgentLaunchSpec {
-        program: command.program,
-        args: command.args,
-        ..Default::default()
-    })
-}
-
-#[cfg(windows)]
-fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSpec {
-    let resolved = resolve_input_path(path, agent);
-    let resolved_path = Path::new(&resolved);
-
-    // Keep path resolution lock-free; this function is reached from settings
-    // normalization while `SETTINGS_LOCK` is already held.
-    let is_dsh_path = agent == "dsh"
-        || inferred_agent_family(&resolved) == Some(AgentFamily::Dsh)
-        || dsh_source_root(&resolved).is_some();
-    if is_dsh_path {
-        if let Some(root) = dsh_source_root(&resolved) {
-            // 用裸名而不是硬编码 `pnpm.cmd`:corepack / Scoop 装出来的可能是
-            // `pnpm.ps1` 或 `pnpm.bat`,写死 `.cmd` 在那些机器上直接找不到。
-            // `detect_path` 会按 PATHEXT 依次尝试后缀。
-            return AgentLaunchSpec {
-                program: "pnpm".to_string(),
-                args: vec![
-                    "--dir".to_string(),
-                    root.to_string_lossy().into_owned(),
-                    "dsh".to_string(),
-                ],
-                working_dir: Some(root),
-                family: AgentFamily::Dsh,
-                ..Default::default()
-            };
-        }
-    }
-
-    match agent {
-        "claude" => {
-            if let Some(exe) = candidate_from_ancestors(
-                resolved_path,
-                "@anthropic-ai",
-                "claude-code",
-                &["bin", "claude.exe"],
-            ) {
-                AgentLaunchSpec {
-                    program: exe.to_string_lossy().into_owned(),
-                    ..Default::default()
-                }
-            } else if let Some(spec) = windows_script_launch(resolved_path) {
-                spec
-            } else {
-                AgentLaunchSpec {
-                    program: resolved,
-                    ..Default::default()
-                }
-            }
-        }
-        "codex" => {
-            if let Some((program, path_dir)) = resolve_codex_vendor_artifact(resolved_path) {
-                let mut extra_env = Vec::new();
-                if let Some(path_value) = prepend_to_path(&path_dir.into_iter().collect::<Vec<_>>())
-                {
-                    extra_env.push(("PATH".to_string(), path_value));
-                }
-                extra_env.push(("CODEX_MANAGED_BY_NPM".to_string(), "1".to_string()));
-                AgentLaunchSpec {
-                    program: program.to_string_lossy().into_owned(),
-                    extra_env,
-                    ..Default::default()
-                }
-            } else if let Some(spec) = windows_script_launch(resolved_path) {
-                spec
-            } else {
-                AgentLaunchSpec {
-                    program: resolved,
-                    ..Default::default()
-                }
-            }
-        }
-        _ => windows_script_launch(resolved_path).unwrap_or_else(|| AgentLaunchSpec {
-            program: resolved,
-            ..Default::default()
-        }),
-    }
-}
-
-fn inferred_agent_codex_like(program: &str) -> Option<bool> {
-    let file_name = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_ascii_lowercase);
-    match file_name.as_deref() {
-        Some("codex" | "codex.exe" | "codex.cmd" | "codex.js") => return Some(true),
-        Some("claude" | "claude.exe" | "claude.cmd") => return Some(false),
-        _ => {}
-    }
-
-    if fs::metadata(program).ok()?.len() > 256 * 1024 {
-        return None;
-    }
-    let content = fs::read_to_string(program).ok()?;
-    if content.contains("export CODEX_HOME=")
-        && content.contains("model_catalog_json = \"model-catalog.json\"")
-    {
-        return Some(true);
-    }
-    if content.contains("export CLAUDE_CONFIG_DIR=")
-        && content.contains("CLAUDE_CODE_SESSION_ENV_DIR")
-    {
-        return Some(false);
-    }
-    None
-}
-
-fn inferred_agent_family(program: &str) -> Option<AgentFamily> {
-    let file_name = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_ascii_lowercase);
-    if matches!(
-        file_name.as_deref(),
-        Some("dsh" | "dsh.exe" | "dsh.cmd" | "dsh.js" | "dsh.ps1")
-    ) {
-        return Some(AgentFamily::Dsh);
-    }
-    inferred_agent_codex_like(program).map(AgentFamily::from_codex_like)
-}
-
-fn build_agent_launch_spec(
-    settings: &AppSettings,
-    agent: &str,
-    router_listening: bool,
-) -> AgentLaunchSpec {
-    let configured_path = get_agent_configured_path(settings, agent);
-    let mut spec = resolve_agent_launch_spec_from_path(agent, &configured_path);
-    spec.family = inferred_agent_family(&configured_path)
-        .unwrap_or_else(|| configured_agent_family(settings, agent));
-    spec.codex_like = spec.family.is_codex_like();
-    append_agent_credential_env(settings, agent, &mut spec.extra_env);
-    append_builtin_agent_api_env(settings, agent, &mut spec.extra_env);
-    append_agent_proxy_env(settings, agent, &mut spec.extra_env);
-    append_local_router_env(settings, agent, router_listening, &mut spec.extra_env);
-    spec
-}
-
-fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
-    let router_listening =
-        crate::local_router::is_listening_on(settings.local_router_settings.listen_port);
-    build_agent_launch_spec(settings, agent, router_listening)
-}
-
 pub(crate) fn get_agent_launch_spec_from(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
     get_agent_launch_spec_from_settings(settings, agent)
 }
@@ -1843,6 +878,9 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         dsh_reasoning_efforts: normalize_dsh_reasoning_efforts(settings.dsh_reasoning_efforts),
         proxy_settings,
         local_router_settings: normalize_local_router_settings(settings.local_router_settings),
+        notebook_embedding_settings: normalize_notebook_embedding_settings(
+            settings.notebook_embedding_settings,
+        ),
         agent_proxy_enabled,
         agent_proxy_overrides: HashMap::new(),
         custom_agents: normalize_custom_agents(settings.custom_agents),
@@ -1922,6 +960,7 @@ fn load_settings_unlocked() -> AppSettings {
             dsh_reasoning_efforts: HashMap::new(),
             proxy_settings: ProxySettings::default(),
             local_router_settings: LocalRouterSettings::default(),
+            notebook_embedding_settings: NotebookEmbeddingSettings::default(),
             agent_proxy_enabled: HashMap::new(),
             agent_proxy_overrides: HashMap::new(),
             custom_agents: Vec::new(),
@@ -2150,134 +1189,20 @@ pub async fn update_proxy_settings(proxy_settings: ProxySettings) -> Result<AppS
     .map_err(|error| error.to_string())?
 }
 
-/// 代理连通性测试目标。用固定的轻量端点,避免调用方指定 URL 把本命令
-/// 变成任意请求的转发器(远程配对设备也能触发 RPC)。
-const PROXY_TEST_URL: &str = "https://www.gstatic.com/generate_204";
-const PROXY_TEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// 代理测试结果。用户可见文案由前端按 `reason` 走 i18n,
-/// `detail` 仅承载底层错误原文用于排查。
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProxyTestResult {
-    pub success: bool,
-    /// 稳定的机器可读原因码:ok / empty_url / invalid_url / client_build_failed
-    /// / timeout / connect_failed / proxy_auth_required / http_error / request_failed
-    pub reason: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status_code: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-}
-
-impl ProxyTestResult {
-    fn failure(reason: &str, detail: Option<String>) -> Self {
-        Self {
-            success: false,
-            reason: reason.to_string(),
-            detail,
-            status_code: None,
-            latency_ms: None,
-        }
-    }
-}
-
-fn build_proxy_test_client(settings: &ProxySettings) -> Result<reqwest::Client, ProxyTestResult> {
-    // 复用保存设置时的归一化规则,测试的目标与实际生效的代理保持一致
-    // (例如 "127.0.0.1:7890" 会补全为 "http://127.0.0.1:7890")。
-    let proxy_url = normalize_proxy_url(&settings.url);
-    if proxy_url.is_empty() {
-        return Err(ProxyTestResult::failure("empty_url", None));
-    }
-
-    let mut proxy = reqwest::Proxy::all(&proxy_url)
-        .map_err(|error| ProxyTestResult::failure("invalid_url", Some(error.to_string())))?;
-    let username = settings.username.trim();
-    if !username.is_empty() {
-        proxy = proxy.basic_auth(username, settings.password.trim());
-    }
-    // 故意不套用 no_proxy:固定测试目标是远端公网地址,绕过规则只会
-    // 让请求不经代理直连,从而把失败的代理误报成可用。
-
-    reqwest::Client::builder()
-        .proxy(proxy)
-        .timeout(PROXY_TEST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| ProxyTestResult::failure("client_build_failed", Some(error.to_string())))
-}
-
-/// https 目标经 HTTP 代理时走 CONNECT 隧道,代理返回的 407 会变成隧道建立失败
-/// (hyper-util 的 `TunnelError::ProxyAuthRequired`),而不是一个 407 响应。
-/// 该错误类型未公开导出,只能沿 source 链匹配文案区分“需要认证”与“连不上”。
-fn error_chain_needs_proxy_authentication(error: &(dyn std::error::Error + 'static)) -> bool {
-    let mut current = Some(error);
-    while let Some(source) = current {
-        let message = source.to_string().to_ascii_lowercase();
-        if message.contains("proxy authorization required")
-            || message.contains("proxy authentication required")
-        {
-            return true;
-        }
-        current = source.source();
-    }
-    false
-}
-
-async fn run_proxy_connection_test(settings: &ProxySettings, test_url: &str) -> ProxyTestResult {
-    let client = match build_proxy_test_client(settings) {
-        Ok(client) => client,
-        Err(result) => return result,
-    };
-
-    let started = std::time::Instant::now();
-    let response = match client.get(test_url).send().await {
-        Ok(response) => response,
-        Err(error) => {
-            // 认证判定必须早于 is_connect():隧道认证失败同时也算连接失败。
-            let reason = if error_chain_needs_proxy_authentication(&error) {
-                "proxy_auth_required"
-            } else if error.is_timeout() {
-                "timeout"
-            } else if error.is_connect() {
-                "connect_failed"
-            } else {
-                "request_failed"
-            };
-            return ProxyTestResult::failure(reason, Some(error.to_string()));
-        }
-    };
-
-    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let status = response.status();
-    // 明文 HTTP 目标不走隧道,代理的 407 是一个正常响应,在这里判定。
-    if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
-        return ProxyTestResult {
-            success: false,
-            reason: "proxy_auth_required".to_string(),
-            detail: None,
-            status_code: Some(status.as_u16()),
-            latency_ms: Some(latency_ms),
-        };
-    }
-    // 重定向已禁用,3xx 说明请求已穿过代理到达目标,同样算连通。
-    let success = status.is_success() || status.is_redirection();
-    ProxyTestResult {
-        success,
-        reason: if success { "ok" } else { "http_error" }.to_string(),
-        detail: None,
-        status_code: Some(status.as_u16()),
-        latency_ms: Some(latency_ms),
-    }
-}
-
+/// 随手记 embedding provider 的配置。**不含 key** —— key 走
+/// `notebook_embedding_key_set`(OS 钥匙串)。
 #[tauri::command]
-pub async fn test_proxy_connection(
-    proxy_settings: ProxySettings,
-) -> Result<ProxyTestResult, String> {
-    Ok(run_proxy_connection_test(&proxy_settings, PROXY_TEST_URL).await)
+pub async fn update_notebook_embedding_settings(
+    notebook_embedding_settings: NotebookEmbeddingSettings,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            settings.notebook_embedding_settings = notebook_embedding_settings;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2852,242 +1777,6 @@ pub(crate) async fn detect_agent_models_for_remote(
 ) -> Result<AgentModels, String> {
     detect_agent_models_with_policy(kind, base_url, api_key, ModelDetectionPolicy::PairedDevice)
         .await
-}
-
-/// 探测客户端最多尝试几个上游地址。
-///
-/// 每次尝试都要重跑整条候选链,而共享 deadline 是固定的;3 个足以跨过「几个地址里
-/// 坏一个」的常见情形,再多只是把预算耗在同一个不可用的上游上。
-const MODEL_DETECT_MAX_ADDRESS_ATTEMPTS: usize = 3;
-
-/// 探测客户端是否要套应用内代理。
-///
-/// 仅 [`ModelDetectionPolicy::LocalUser`] 走代理。`PairedDevice` 保持直连是刻意的:
-/// 那条路径靠 `resolve_to_addrs` 把域名钉死在「已过滤掉私网」的地址上,以防配对手机
-/// 拿桌面端当跳板探内网;而代理会自己解析域名,钉死随之失效,闸门就形同虚设。
-///
-/// 调用方还用它决定「是否做地址故障转移」:走代理时目标地址由代理决定,
-/// 本机解析出的地址在那条路径上根本用不到(`resolve_to_addrs` 只影响直连)。
-fn detect_proxy_applies(settings: &ProxySettings, policy: ModelDetectionPolicy) -> bool {
-    matches!(policy, ModelDetectionPolicy::LocalUser)
-        && !normalize_proxy_url(&settings.url).is_empty()
-}
-
-/// 给探测客户端套上应用内代理设置。
-///
-/// 形状与 `agent_tools.rs::http_client()` 一致(`Proxy::all` + `basic_auth` + `NoProxy`),
-/// 差别只在 `no_proxy` 会额外追加 loopback / 私网 —— 详见 [`detect_no_proxy_rules`]。
-fn apply_detect_proxy(
-    builder: reqwest::ClientBuilder,
-    settings: &ProxySettings,
-    policy: ModelDetectionPolicy,
-) -> Result<reqwest::ClientBuilder, String> {
-    if !detect_proxy_applies(settings, policy) {
-        return Ok(builder);
-    }
-    let mut proxy = reqwest::Proxy::all(normalize_proxy_url(&settings.url))
-        .map_err(|error| format!("Invalid proxy configuration: {error}"))?;
-    let username = settings.username.trim();
-    if !username.is_empty() {
-        proxy = proxy.basic_auth(username, settings.password.trim());
-    }
-    proxy = proxy.no_proxy(reqwest::NoProxy::from_string(&detect_no_proxy_rules(
-        &settings.no_proxy,
-    )));
-    Ok(builder.proxy(proxy))
-}
-
-/// 在用户的 `no_proxy` 之外追加 loopback 与私网网段。
-///
-/// 本机 base URL(Ollama、应用自带的 local_router)被推去代理后会从「能用」变成
-/// 「连不上」—— 代理通常不会把请求转回发起方的 loopback。用户没有理由为了让
-/// 模型探测工作而手写这些例外,所以在这里兜住。
-fn detect_no_proxy_rules(user_rules: &str) -> String {
-    const LOCAL_RULES: &[&str] = &[
-        "127.0.0.1",
-        "::1",
-        "localhost",
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-    ];
-    let mut rules: Vec<&str> = user_rules
-        .split(',')
-        .map(str::trim)
-        .filter(|rule| !rule.is_empty())
-        .collect();
-    for rule in LOCAL_RULES {
-        if !rules
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(rule))
-        {
-            rules.push(rule);
-        }
-    }
-    rules.join(",")
-}
-
-/// 构造一个探测客户端。`pinned` 非空时把 host 钉在这些地址上(地址故障转移用)。
-fn build_detect_client(
-    base_url: &url::Url,
-    proxy_settings: &ProxySettings,
-    policy: ModelDetectionPolicy,
-    pinned: &[SocketAddr],
-) -> Result<reqwest::Client, String> {
-    let builder = reqwest::Client::builder()
-        // 候选端点串行探测,总预算在 models.rs 内按 deadline 控制,
-        // 这里不再设客户端级总超时,避免第一个慢候选耗尽后续机会。
-        .redirect(reqwest::redirect::Policy::none())
-        // 黑洞地址(TCP 通、TLS 不返回)要在这里被判死,而不是拖到请求超时。
-        .connect_timeout(MODEL_DETECT_CONNECT_TIMEOUT);
-    let mut builder = apply_detect_proxy(builder, proxy_settings, policy)?;
-    if !pinned.is_empty() {
-        let host = base_url
-            .host_str()
-            .ok_or_else(|| "Base URL must include a host".to_string())?;
-        // 候选端点与 base URL 同源(仅替换 path),因此固定解析对全部候选生效。
-        builder = builder.resolve_to_addrs(host, pinned);
-    }
-    builder.build().map_err(|error| error.to_string())
-}
-
-async fn detect_agent_models_with_policy(
-    kind: AgentSetupKind,
-    base_url: String,
-    api_key: String,
-    policy: ModelDetectionPolicy,
-) -> Result<AgentModels, String> {
-    let api_key = api_key.trim().to_string();
-    if api_key.is_empty() {
-        return Err("API key is required".to_string());
-    }
-    let base_url = validate_model_base_url(&base_url, policy)?;
-
-    let resolved_addresses = if matches!(policy, ModelDetectionPolicy::PairedDevice) {
-        Some(resolve_remote_model_addresses(&base_url).await?)
-    } else {
-        None
-    };
-    // 有锁 + 文件 IO,不能在 async 里直接阻塞(与 `list_agent_models` 一致)。
-    let proxy_settings = tokio::task::spawn_blocking(|| load_settings_internal().proxy_settings)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let pinned = resolved_addresses.clone().unwrap_or_default();
-
-    // 地址故障转移只在「直连 + 本机用户」时有意义:代理路径的目标地址由代理决定,
-    // PairedDevice 路径已经把全部允许的地址一次性钉好了。
-    let failover_addresses =
-        if detect_proxy_applies(&proxy_settings, policy) || resolved_addresses.is_some() {
-            Vec::new()
-        } else {
-            resolve_local_model_addresses(&base_url).await
-        };
-
-    detect_models_over_http(
-        &kind,
-        &base_url,
-        &api_key,
-        policy,
-        &proxy_settings,
-        &pinned,
-        &failover_addresses,
-    )
-    .await
-}
-
-/// 模型探测的网络部分:客户端构造 + 候选探测 + 地址故障转移 + 公开目录兜底。
-///
-/// 与 [`detect_agent_models_with_policy`] 分开是为了让测试能注入 `proxy_settings` 与
-/// 地址列表,而不必读写真实的 `~/.aeroric/settings.json`。
-async fn detect_models_over_http(
-    kind: &AgentSetupKind,
-    base_url: &url::Url,
-    api_key: &str,
-    policy: ModelDetectionPolicy,
-    proxy_settings: &ProxySettings,
-    pinned: &[SocketAddr],
-    failover_addresses: &[SocketAddr],
-) -> Result<AgentModels, String> {
-    let candidates = model_endpoint_candidates(base_url);
-
-    // 每次尝试钉住的地址。
-    //
-    // 有 `failover_addresses` 时**每一轮都钉一个具体地址**,而不是先来一轮不钉的:
-    // 不钉的那轮由 hyper 自己挑地址,失败后我们无从得知它挑了谁,只能从头再试一遍
-    // 同一批地址 —— 首地址正是黑洞时,那 4s 建连超时会白付两次。
-    let attempts: Vec<&[SocketAddr]> = if failover_addresses.len() > 1 {
-        failover_addresses
-            .iter()
-            .take(MODEL_DETECT_MAX_ADDRESS_ATTEMPTS)
-            .map(std::slice::from_ref)
-            .collect()
-    } else {
-        vec![pinned]
-    };
-
-    // 全部尝试共享同一个 deadline,总等待不随重试次数线性放大。
-    let deadline = std::time::Instant::now() + MODEL_DETECT_TOTAL_BUDGET;
-    let mut detect = build_detect_client(base_url, proxy_settings, policy, attempts[0])?;
-    let mut failures = DetectionFailures::default();
-    let mut detected = Err("Model detection failed: no endpoint candidates".to_string());
-
-    for (index, addresses) in attempts.iter().enumerate() {
-        if index > 0 {
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
-            detect = build_detect_client(base_url, proxy_settings, policy, addresses)?;
-        }
-        let mut attempt_failures = DetectionFailures::default();
-        detected = fetch_agent_model_json_from_candidates(
-            &detect,
-            &candidates,
-            kind,
-            api_key,
-            &mut attempt_failures,
-            deadline,
-        )
-        .await;
-        // 这一轮的结论覆盖上一轮:它才是最终要报给用户的原因。
-        failures = attempt_failures;
-        // 拿到响应(成功或上游明确拒绝)就停 —— 换地址只对传输层失败有意义。
-        // 某个 A 记录接受 TCP 却让 TLS 卡死时,hyper 不会自己换地址,只能由这里驱动。
-        if detected.is_ok() || !failures.transport || failures.auth {
-            break;
-        }
-    }
-
-    let models = match detected {
-        Ok((value, _endpoint)) => parse_model_ids(value),
-        Err(error) => {
-            // 只有在「所有候选都是端点不存在」时才退到公开目录:出现过上游拒绝就必须
-            // 把错误报出去,否则会把 API Key 无效伪装成一份不可用的模型列表。
-            // 传输层失败同理不该兜底 —— 网络都没通,公开目录也拿不到可信结果。
-            if failures.auth || failures.transport {
-                return Err(error);
-            }
-            let public = fetch_public_model_catalog(
-                &detect,
-                &public_model_catalog_candidates(base_url),
-                kind,
-            )
-            .await;
-            match public {
-                Some(models) if !models.is_empty() => models,
-                _ => return Err(error),
-            }
-        }
-    };
-
-    // 复用最终成功的那个客户端:否则余额查询会重新解析域名,可能又踩到黑洞地址。
-    let balance = fetch_agent_balance(&detect, base_url.as_str(), api_key).await;
-    Ok(AgentModels {
-        models,
-        balance,
-        reasoning_effort: None,
-        reasoning_speed: None,
-    })
 }
 
 #[tauri::command]
@@ -4135,6 +2824,9 @@ pub async fn get_system_fonts() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    // 这几个测试验的是「设置 -> 启动环境」的端到端行为,所以留在父文件,
+    // 只把 launch_spec 里的入口 import 进来。
+    use super::launch_spec::build_agent_launch_spec;
     use super::*;
 
     #[test]
@@ -4242,22 +2934,6 @@ mod tests {
     }
 
     #[test]
-    fn dsh_source_directory_resolves_to_package_manager_launch() {
-        let root =
-            std::env::temp_dir().join(format!("aeroric-dsh-source-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(root.join("apps").join("cli")).unwrap();
-        std::fs::write(root.join("package.json"), "{}\n").unwrap();
-
-        let launch = resolve_agent_launch_spec_from_path("dsh", &root.to_string_lossy());
-        assert_eq!(launch.working_dir, Some(root.clone()));
-        assert_eq!(launch.args.last().map(String::as_str), Some("dsh"));
-        // 两个平台都用裸名:Windows 侧交给 PATHEXT 去匹配 .cmd/.ps1/.bat,
-        // 写死 `pnpm.cmd` 会在 corepack / Scoop 装的 pnpm 上找不到。
-        assert_eq!(launch.program, "pnpm");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn normalizing_dsh_path_does_not_reenter_settings_lock() {
         let root =
             std::env::temp_dir().join(format!("aeroric-dsh-normalize-{}", uuid::Uuid::new_v4()));
@@ -4362,6 +3038,63 @@ mod tests {
         assert_eq!(
             normalized.access_token,
             "aeroric-0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn a_cleared_notebook_embedding_field_falls_back_to_the_default() {
+        // 空 base URL 会让 `embed::endpoint_for` 回一条 Config 错误,而用户看着的是自己
+        // 刚清空的输入框 —— 报错和现象对不上。
+        let normalized = normalize_settings(AppSettings {
+            notebook_embedding_settings: NotebookEmbeddingSettings {
+                provider: crate::notebook::rag::embed::EmbedProvider::OpenAi,
+                base_url: "   ".to_string(),
+                model: String::new(),
+            },
+            ..AppSettings::default()
+        });
+        let defaults = NotebookEmbeddingSettings::default();
+        assert_eq!(
+            normalized.notebook_embedding_settings.base_url,
+            defaults.base_url
+        );
+        assert_eq!(normalized.notebook_embedding_settings.model, defaults.model);
+        // provider 不因为别的字段被洗掉而回退。
+        assert_eq!(
+            normalized.notebook_embedding_settings.provider,
+            crate::notebook::rag::embed::EmbedProvider::OpenAi
+        );
+    }
+
+    #[test]
+    fn notebook_embedding_settings_are_trimmed_not_validated() {
+        // 粘贴进来的地址常带首尾空白,而 URL 形状的校验归 `embed::endpoint_for`(它还要
+        // 处理重复 `/v1` 与末尾斜杠)—— 两处各写一遍只会互相跑偏。
+        let normalized = normalize_notebook_embedding_settings(NotebookEmbeddingSettings {
+            provider: crate::notebook::rag::embed::EmbedProvider::OpenAi,
+            base_url: "  https://api.openai.com/v1/  ".to_string(),
+            model: " text-embedding-3-small\n".to_string(),
+        });
+        assert_eq!(normalized.base_url, "https://api.openai.com/v1/");
+        assert_eq!(normalized.model, "text-embedding-3-small");
+    }
+
+    #[test]
+    fn missing_notebook_embedding_settings_default_to_local_ollama() {
+        // 老配置文件里没有这一段。落到本机 Ollama —— 那也是设置页出现之前前端硬编码的
+        // 那个默认值,于是升级不改变任何人的既有行为。
+        let settings: AppSettings = serde_json::from_str("{}").expect("parse");
+        assert_eq!(
+            settings.notebook_embedding_settings,
+            NotebookEmbeddingSettings::default()
+        );
+        assert_eq!(
+            settings.notebook_embedding_settings.base_url,
+            "http://127.0.0.1:11434"
+        );
+        assert_eq!(
+            settings.notebook_embedding_settings.provider,
+            crate::notebook::rag::embed::EmbedProvider::Ollama
         );
     }
 
@@ -4636,12 +3369,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_empty_agent_path_to_binary_name_when_path_detection_fails() {
-        let resolved = resolve_input_path("", "__aeroric_missing_agent_binary__");
-        assert_eq!(resolved, "__aeroric_missing_agent_binary__");
-    }
-
-    #[test]
     fn recognizes_previous_claude_wrapper_versions_for_safe_refresh() {
         assert!(is_aeroric_generated_agent_wrapper(
             "# AERORIC_CLAUDE_WRAPPER_VERSION=2\n& 'claude' @args"
@@ -4655,38 +3382,6 @@ mod tests {
         assert!(!is_aeroric_generated_agent_wrapper(
             "# My Claude wrapper\n& 'claude' @args"
         ));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_shell_agent_uses_an_interpreter_without_rewriting_configured_path() {
-        let path = r"C:\Users\test\.aeroric\agents\mimo.sh";
-        let launch = resolve_agent_launch_spec_from_path("mimo", path);
-
-        assert_ne!(launch.program, path);
-        assert!(launch.args.iter().any(|arg| arg.contains(path)));
-        assert_eq!(normalize_agent_configured_path("mimo", path), path);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_powershell_agent_is_never_passed_directly_to_create_process() {
-        let path = r"C:\Users\Test User\.aeroric\agents\mimo.ps1";
-        let launch = resolve_agent_launch_spec_from_path("mimo", path);
-
-        assert_ne!(launch.program, path);
-        assert!(launch
-            .program
-            .rsplit(['/', '\\'])
-            .next()
-            .is_some_and(|name| {
-                name.eq_ignore_ascii_case("pwsh.exe")
-                    || name.eq_ignore_ascii_case("pwsh")
-                    || name.eq_ignore_ascii_case("powershell.exe")
-                    || name.eq_ignore_ascii_case("powershell")
-            }));
-        assert!(launch.args.windows(2).any(|args| args == ["-File", path]));
-        assert_eq!(normalize_agent_configured_path("mimo", path), path);
     }
 
     #[test]
@@ -4727,38 +3422,6 @@ mod tests {
         assert!(
             !get_agent_launch_spec_from_settings(&codex_pointing_to_claude, "codex").codex_like
         );
-    }
-
-    #[test]
-    fn launch_spec_recognizes_aeroric_generated_wrapper_families() {
-        let codex_path =
-            std::env::temp_dir().join(format!("aeroric-codex-wrapper-{}.sh", uuid::Uuid::new_v4()));
-        let claude_path = std::env::temp_dir().join(format!(
-            "aeroric-claude-wrapper-{}.sh",
-            uuid::Uuid::new_v4()
-        ));
-        fs::write(
-            &codex_path,
-            "#!/bin/sh\nexport CODEX_HOME=/tmp/codex\nmodel_catalog_json = \"model-catalog.json\"\n",
-        )
-        .unwrap();
-        fs::write(
-            &claude_path,
-            "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=/tmp/claude\nexport CLAUDE_CODE_SESSION_ENV_DIR=/tmp/sessions\n",
-        )
-        .unwrap();
-
-        assert_eq!(
-            inferred_agent_codex_like(codex_path.to_string_lossy().as_ref()),
-            Some(true)
-        );
-        assert_eq!(
-            inferred_agent_codex_like(claude_path.to_string_lossy().as_ref()),
-            Some(false)
-        );
-
-        let _ = fs::remove_file(codex_path);
-        let _ = fs::remove_file(claude_path);
     }
 
     #[test]
@@ -4967,195 +3630,5 @@ mod tests {
         );
         assert_eq!(normalized.agent_proxy_enabled.get("joverna"), Some(&true));
         assert!(normalized.agent_proxy_overrides.is_empty());
-    }
-
-    #[tokio::test]
-    async fn proxy_test_rejects_empty_and_invalid_proxy_urls() {
-        let empty = test_proxy_connection(ProxySettings::default())
-            .await
-            .unwrap();
-        assert!(!empty.success);
-        assert_eq!(empty.reason, "empty_url");
-        assert_eq!(empty.status_code, None);
-
-        let invalid = test_proxy_connection(ProxySettings {
-            url: "http://".to_string(),
-            ..ProxySettings::default()
-        })
-        .await
-        .unwrap();
-        assert!(!invalid.success);
-        assert_eq!(invalid.reason, "invalid_url");
-    }
-
-    /// 明文 http 目标经代理时用绝对形式请求行,代理的响应即最终响应,
-    /// 因此可以用一个假代理确定性地覆盖 407 与连通两条分支。
-    const PROXY_TEST_HTTP_TARGET: &str = "http://proxy-test.invalid/generate_204";
-
-    fn spawn_fake_proxy(
-        responses: Vec<&'static [u8]>,
-    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let proxy_url = format!("http://{}", listener.local_addr().unwrap());
-        let handle = std::thread::spawn(move || {
-            let mut requests = Vec::new();
-            for response in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0_u8; 2048];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let count = stream.read(&mut chunk).unwrap();
-                    if count == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&chunk[..count]);
-                }
-                requests.push(String::from_utf8_lossy(&request).to_string());
-                stream.write_all(response).unwrap();
-                let _ = stream.flush();
-            }
-            requests
-        });
-        (proxy_url, handle)
-    }
-
-    #[tokio::test]
-    async fn proxy_test_reports_proxy_auth_required_and_success_via_proxy() {
-        let (proxy_url, server) = spawn_fake_proxy(vec![
-            b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"test\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        ]);
-
-        let auth_required = run_proxy_connection_test(
-            &ProxySettings {
-                url: proxy_url.clone(),
-                username: "user".to_string(),
-                password: "secret".to_string(),
-                ..ProxySettings::default()
-            },
-            PROXY_TEST_HTTP_TARGET,
-        )
-        .await;
-        assert!(!auth_required.success);
-        assert_eq!(auth_required.reason, "proxy_auth_required");
-        assert_eq!(auth_required.status_code, Some(407));
-
-        let connected = run_proxy_connection_test(
-            &ProxySettings {
-                url: proxy_url,
-                ..ProxySettings::default()
-            },
-            PROXY_TEST_HTTP_TARGET,
-        )
-        .await;
-        assert!(connected.success);
-        assert_eq!(connected.reason, "ok");
-        assert_eq!(connected.status_code, Some(204));
-        assert!(connected.latency_ms.is_some());
-
-        let requests = server.join().unwrap();
-        // 凭据必须发给代理,且请求确实经过了代理(绝对形式请求行)。
-        assert!(requests[0]
-            .to_ascii_lowercase()
-            .contains("proxy-authorization: basic"));
-        assert!(requests[0].starts_with(&format!("GET {PROXY_TEST_HTTP_TARGET}")));
-        assert!(!requests[1]
-            .to_ascii_lowercase()
-            .contains("proxy-authorization:"));
-    }
-
-    #[tokio::test]
-    async fn proxy_test_treats_target_errors_as_failure() {
-        let (proxy_url, server) = spawn_fake_proxy(vec![
-            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        ]);
-
-        let result = run_proxy_connection_test(
-            &ProxySettings {
-                url: proxy_url,
-                ..ProxySettings::default()
-            },
-            PROXY_TEST_HTTP_TARGET,
-        )
-        .await;
-
-        assert!(!result.success);
-        assert_eq!(result.reason, "http_error");
-        assert_eq!(result.status_code, Some(502));
-        server.join().unwrap();
-    }
-
-    #[tokio::test]
-    async fn proxy_test_ignores_no_proxy_so_dead_proxies_are_not_reported_healthy() {
-        // no_proxy 覆盖测试目标时若被套用,请求会绕过代理直连,
-        // 已关闭的代理会被误判为可用。这里的目标服务器是活的、代理是死的:
-        // 只要结果不是 ok,就说明请求没有绕过代理。
-        let (target_url, target) = spawn_fake_proxy(vec![
-            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        ]);
-        let target_host = target_url.trim_start_matches("http://").to_string();
-
-        let dead_listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let dead_proxy = format!("http://{}", dead_listener.local_addr().unwrap());
-        drop(dead_listener);
-
-        let result = run_proxy_connection_test(
-            &ProxySettings {
-                url: dead_proxy,
-                no_proxy: format!("127.0.0.1,{target_host}"),
-                ..ProxySettings::default()
-            },
-            &target_url,
-        )
-        .await;
-
-        assert!(!result.success);
-        assert_ne!(result.reason, "ok");
-        drop(target);
-    }
-
-    #[test]
-    fn classifies_connect_tunnel_auth_failure_as_proxy_auth_required() {
-        // https 目标的 407 来自 CONNECT 隧道失败,错误类型未公开导出,
-        // 这里用等价的 source 链锁定文案匹配逻辑。
-        #[derive(Debug)]
-        struct Inner;
-        impl std::fmt::Display for Inner {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("tunnel error: proxy authorization required")
-            }
-        }
-        impl std::error::Error for Inner {}
-
-        #[derive(Debug)]
-        struct Outer(Inner);
-        impl std::fmt::Display for Outer {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("error trying to connect")
-            }
-        }
-        impl std::error::Error for Outer {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(&self.0)
-            }
-        }
-
-        #[derive(Debug)]
-        struct Refused;
-        impl std::fmt::Display for Refused {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("tcp connect error: connection refused")
-            }
-        }
-        impl std::error::Error for Refused {}
-
-        assert!(error_chain_needs_proxy_authentication(&Outer(Inner)));
-        assert!(!error_chain_needs_proxy_authentication(&Refused));
     }
 }
