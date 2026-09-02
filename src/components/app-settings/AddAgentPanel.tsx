@@ -19,7 +19,6 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import {
   APP_SETTINGS_CHANGED_EVENT,
-  formatAgentBalance,
   type AgentBalance,
   type AgentModels,
   type AgentSetupDraft,
@@ -27,6 +26,7 @@ import {
   type AppSettings,
   type DshApiProtocol,
 } from "./types";
+import { AgentBalanceMeter } from "./AgentBalanceMeter";
 import { Button } from "../ui/Button";
 import { BridgePythonField } from "./BridgePythonField";
 import { ModelSelectionList } from "./ModelSelectionList";
@@ -227,7 +227,7 @@ export function AddAgentPanel({
 }: {
   onSaved: (agentId: string, family: ProtocolFamily) => void;
 }) {
-  const { language, t } = useI18n();
+  const { t } = useI18n();
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<AgentSetupKind>("codex");
   const [baseUrl, setBaseUrl] = useState("");
@@ -723,26 +723,10 @@ export function AddAgentPanel({
               : t("appSettings.agentModelHint")}
           </div>
           {balance && (
-            <div
-              role="status"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                minHeight: 24,
-                marginTop: 7,
-                padding: "0 8px",
-                border: "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--success)",
-                background: "color-mix(in srgb, var(--success) 8%, transparent)",
-                fontSize: 11.5,
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {t("appSettings.keyBalanceAvailable", {
-                amount: formatAgentBalance(balance, language),
-              })}
-            </div>
+            <AgentBalanceMeter
+              balance={balance}
+              style={{ marginTop: 7, alignSelf: "flex-start" }}
+            />
           )}
         </div>
 

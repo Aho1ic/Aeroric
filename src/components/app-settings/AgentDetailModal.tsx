@@ -9,12 +9,12 @@ import { BridgePythonField } from "./BridgePythonField";
 import { AgentPathSection, type AgentPathSectionHandle } from "./AgentPathSection";
 import {
   APP_SETTINGS_CHANGED_EVENT,
-  formatAgentBalance,
   type AgentKey,
   type AgentBalance,
   type AgentModels,
   type AppSettings,
 } from "./types";
+import { AgentBalanceMeter } from "./AgentBalanceMeter";
 import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
@@ -98,7 +98,7 @@ export function AgentDetailModal({
   const effortSupported = agentSupportsReasoningEffort(option.value, [option]);
   const isBuiltIn = isBuiltInAgent(option.value);
 
-  const { language, t } = useI18n();
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<DetailTab>("basic");
 
   const [resolvedFilePath, setResolvedFilePath] = useState(option.configFile);
@@ -960,29 +960,6 @@ export function AgentDetailModal({
                                 ? t("appSettings.detectingModels")
                                 : t("appSettings.detectModels")}
                             </Button>
-                            {detectedBalance && (
-                              <span
-                                role="status"
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  minHeight: 30,
-                                  padding: "0 8px",
-                                  border:
-                                    "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
-                                  borderRadius: "var(--radius-sm)",
-                                  color: "var(--success)",
-                                  background: "color-mix(in srgb, var(--success) 8%, transparent)",
-                                  fontSize: 11.5,
-                                  fontVariantNumeric: "tabular-nums",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {t("appSettings.keyBalanceAvailable", {
-                                  amount: formatAgentBalance(detectedBalance, language),
-                                })}
-                              </span>
-                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -1001,6 +978,15 @@ export function AgentDetailModal({
                             </Button>
                           </div>
                         </div>
+
+                        {/* 额度自成一行:它有两行(数字 + 进度条),塞回上面那个
+                            space-between 的表头会把整排按钮撑高。 */}
+                        {detectedBalance && (
+                          <AgentBalanceMeter
+                            balance={detectedBalance}
+                            style={{ marginBottom: 8, alignSelf: "flex-start" }}
+                          />
+                        )}
 
                         <ModelSelectionList
                           models={detectedModels}

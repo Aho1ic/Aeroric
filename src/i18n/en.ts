@@ -578,7 +578,10 @@ export const en: Record<string, string> = {
   "appSettings.clearModels": "Clear",
   "appSettings.detectModels": "Fetch Available Models",
   "appSettings.detectingModels": "Fetching...",
-  "appSettings.keyBalanceAvailable": "Used / Total: {amount}",
+  "appSettings.keyBalanceLabel": "Used / Total",
+  "appSettings.keyBalancePercentUsed": "{percent}% used",
+  /** 精确值的 tooltip;界面上显示的是紧凑记数(`$5.11M`),准数只在这里给全。 */
+  "appSettings.keyBalanceExact": "Used / Total: {amount}",
   "appSettings.detectedModelsCount": "{count} models available",
   "appSettings.selectedModelsCount": "{selected} of {count} models selected",
   "appSettings.reasoningEffort": "Reasoning effort",

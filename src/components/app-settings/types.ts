@@ -442,6 +442,57 @@ export function formatAgentBalance(balance: AgentBalance, language: "en" | "zh")
   return `${formatter.format(balance.used)} / ${total}`;
 }
 
+/** 超过这个量级就换紧凑记数(`$5.1M` / `US$511万`),否则一行摆不下还难读。 */
+const COMPACT_BALANCE_THRESHOLD = 1_000_000;
+
+/**
+ * 额度用于展示的短形式。
+ *
+ * 与 [`formatAgentBalance`] 的分工:那支是**精确**值,进 `title` 与 `aria-valuetext`,
+ * 一位小数都不省;这支只管在胶囊里显示得下、看得清。金额小于百万时两者一致,
+ * 所以常见的个人 key 看不出区别。
+ *
+ * 紧凑记数交给 `Intl` 而不是自己除 1e6:各语言的量级词不一样(英文 `5.1M`、
+ * 中文 `511万`),手写会得到「US$5.11M」这种中文界面里读不通的东西。
+ */
+export function formatAgentBalanceDisplay(
+  balance: AgentBalance,
+  language: "en" | "zh",
+): { used: string; total: string } {
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  const scale = Math.max(balance.used, balance.total ?? 0);
+  const compact = scale >= COMPACT_BALANCE_THRESHOLD;
+  const formatter = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    ...(compact
+      ? { notation: "compact" as const, maximumFractionDigits: 2 }
+      : { maximumFractionDigits: 2 }),
+  });
+  return {
+    used: formatter.format(balance.used),
+    total:
+      balance.total === null
+        ? language === "zh"
+          ? "无限制"
+          : "Unlimited"
+        : formatter.format(balance.total),
+  };
+}
+
+/**
+ * 已用占总额的百分比;没有上限、上限为 0 或数值不可用时返回 `null`(调用方据此不画条)。
+ *
+ * 不截到 100:超额是真实状态,`105.2%` 该照实说出来。要截的是**条的宽度**,那是
+ * 渲染的事,不是这里的事。
+ */
+export function agentBalanceUsedPercent(balance: AgentBalance): number | null {
+  const { used, total } = balance;
+  if (total === null || !Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(used) || used < 0) return null;
+  return (used / total) * 100;
+}
+
 export type AgentKey = AgentType;
 
 export type NavSection = "application" | "agents" | "about";

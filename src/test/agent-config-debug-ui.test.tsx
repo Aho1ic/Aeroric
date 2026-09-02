@@ -575,7 +575,12 @@ describe("Agent config and debug panel UI", () => {
     expect(screen.getByLabelText("gpt-5.6")).toBeChecked();
     await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
     await screen.findByLabelText("gpt-5.6-terra");
-    expect(screen.getByRole("status")).toHaveTextContent("Used / Total: $57.25 / $100.00");
+    // 额度现在是「标签 + 金额 + 进度条 + 百分比」的胶囊(AgentBalanceMeter),
+    // 不再是一行扁平文本;精确值退到 title 上,详见 agent-balance-meter.test.tsx。
+    const balancePill = screen.getByRole("status");
+    expect(balancePill).toHaveTextContent("$57.25 / $100.00");
+    expect(balancePill).toHaveTextContent("57.3% used");
+    expect(balancePill.title).toBe("Used / Total: $57.25 / $100.00");
     const modelTitle = screen.getByText("Model");
     const modelTitleRow = modelTitle.parentElement;
     const modelCopy = modelTitleRow?.parentElement;
@@ -808,7 +813,11 @@ describe("Agent config and debug panel UI", () => {
     await user.click(screen.getByRole("button", { name: /Fetch Available Models/i }));
 
     await screen.findByText("0 of 4 models selected");
-    expect(screen.getByRole("status")).toHaveTextContent("Used / Total: $57.25 / $100.00");
+    const balancePill = screen.getByRole("status");
+    expect(balancePill).toHaveTextContent("$57.25 / $100.00");
+    expect(balancePill).toHaveTextContent("57.3% used");
+    // 有上限就该有条:这处是「新增 agent」面板,与设置面板走同一个组件。
+    expect(within(balancePill).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "57.25");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     const modelSearch = screen.getByRole("searchbox", { name: "Search models" });
     expect(modelSearch).toHaveStyle({ borderRadius: "999px" });

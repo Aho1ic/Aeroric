@@ -6,9 +6,9 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
 import { AgentPathSection } from "./AgentPathSection";
+import { AgentBalanceMeter } from "./AgentBalanceMeter";
 import {
   APP_SETTINGS_CHANGED_EVENT,
-  formatAgentBalance,
   type AgentKey,
   type AgentBalance,
   type AgentModels,
@@ -88,7 +88,7 @@ export function AgentConfigPanel({
   onDeleted?: () => void;
   onImported?: (agentId: string) => void;
 }) {
-  const { language, t } = useI18n();
+  const { t } = useI18n();
   const [resolvedFilePath, setResolvedFilePath] = useState(filePath);
   const [fileState, setFileState] = useState<FileState>({ status: "loading" });
   const [original, setOriginal] = useState("");
@@ -743,28 +743,10 @@ export function AgentConfigPanel({
                   )}
                 </div>
                 {detectedBalance && (
-                  <span
-                    role="status"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      minHeight: 24,
-                      marginTop: 4,
-                      padding: "0 8px",
-                      border:
-                        "1px solid color-mix(in srgb, var(--success) 30%, var(--border-medium))",
-                      borderRadius: "var(--radius-sm)",
-                      color: "var(--success)",
-                      background: "color-mix(in srgb, var(--success) 8%, transparent)",
-                      fontSize: 11.5,
-                      fontVariantNumeric: "tabular-nums",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {t("appSettings.keyBalanceAvailable", {
-                      amount: formatAgentBalance(detectedBalance, language),
-                    })}
-                  </span>
+                  <AgentBalanceMeter
+                    balance={detectedBalance}
+                    style={{ marginTop: 4, alignSelf: "flex-start" }}
+                  />
                 )}
                 {detectedModels.length === 0 && (
                   <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
