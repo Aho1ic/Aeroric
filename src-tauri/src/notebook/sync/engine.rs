@@ -136,13 +136,20 @@ pub fn run(
     let baselines = store::baselines(&conn, remote_id)?;
     let live = store::live_tombstones(&conn, remote_id, now_ms)?;
 
+    // 用户在面板上逐条做过的决定。读在 `plan` 之前 —— 它是决策表的第四路输入,优先于
+    // vault 级 `strategy`。
+    let decided = store::resolutions(&conn, remote_id)?;
+
     let remote_entries = remote.list()?;
     let plan = diff::plan(
         &scanned,
         &remote_entries,
         &baselines,
         &live,
-        DiffOpts { strategy },
+        DiffOpts {
+            strategy,
+            decided: &decided,
+        },
     );
 
     let snapshot = scan::by_path(scanned);
@@ -339,20 +346,16 @@ fn execute(
                 Err(error) => failed(error),
             }
         }
-        Action::Conflict { resolution } => match resolution {
-            None => settle(OutcomeStatus::Pending {
-                detail: "awaiting_user",
-            }),
-            Some(diff::Resolution::KeepLocal) => {
-                let upload = PlannedAction {
-                    path: planned.path.clone(),
-                    action: Action::Upload,
-                    reason: planned.reason,
-                };
-                execute(
+        Action::Conflict { resolution, .. } => {
+            let outcome = match resolution {
+                None => settle(OutcomeStatus::Pending {
+                    detail: "awaiting_user",
+                }),
+                Some(chosen) => apply_resolution(
+                    chosen,
                     vault,
                     remote_id,
-                    &upload,
+                    planned,
                     snapshot,
                     baselines,
                     remote_entries,
@@ -360,79 +363,141 @@ fn execute(
                     conn,
                     remote,
                     local,
-                )
-            }
-            Some(diff::Resolution::KeepRemote) => {
-                // 「远端删了 / 本地改了」这类冲突里远端其实不存在。采用远端 = 接受删除,
-                // 不能去下载一个不存在的文件 —— 那会 404 每轮重试,永不收敛。
-                let action = if remote_entries.iter().any(|e| e.path == planned.path) {
-                    Action::Download
-                } else {
-                    Action::DeleteLocal
-                };
-                let next = PlannedAction {
-                    path: planned.path.clone(),
-                    action,
-                    reason: planned.reason,
-                };
-                execute(
-                    vault,
-                    remote_id,
-                    &next,
-                    snapshot,
-                    baselines,
-                    remote_entries,
-                    now_ms,
-                    conn,
-                    remote,
-                    local,
-                )
-            }
-            Some(diff::Resolution::Fork { fork_path }) => {
-                // 远端那份另存一份,本地这份照常上传。两边都留,谁都不丢。
-                let bytes = match remote.get(path) {
-                    Ok(bytes) => bytes,
-                    Err(error) => return failed(error),
-                };
-                if let Err(error) = local.write(vault, fork_path, &bytes) {
+                ),
+            };
+            // 决定用掉就得清掉。只靠 hash 校验拦不住「改一版又撤销回去」—— 那时两侧 hash
+            // 恰好回到当初那一对,一条早已执行过的决定会静默地再生效一次。
+            //
+            // 只在 `Done` 时清:挂起或失败意味着这一条还没落定,下一轮要拿同一个决定再试,
+            // 清掉的话用户得重新选一遍。清失败当成动作失败上报 —— 此刻文件已经搬完了,但
+            // 一条留着的决定会在将来某轮突然生效,那种「几天后自己动了一下」比重做一次
+            // 幂等的上传难查得多。
+            if matches!(outcome.status, OutcomeStatus::Done) {
+                if let Err(error) = store::clear_resolution(conn, remote_id, path) {
                     return failed(error);
                 }
-                let hash = crate::notebook::state::hash64(&bytes).to_string();
-                if let Err(error) = remote.put(fork_path, &bytes, &hash) {
-                    return failed(error);
-                }
-                let fork_base = Baseline {
-                    path: fork_path.clone(),
-                    local_hash: hash.clone(),
-                    local_mtime_ms: now_ms,
-                    remote_hash: hash,
-                    remote_device: store::device_id(conn).unwrap_or_default(),
-                    remote_seq: 0,
-                    synced_at: now_ms,
-                };
-                // fork 出来的那份立刻记基线,否则下一轮把它当全新本地文件再传一次。
-                if let Err(error) = store::set_baseline(conn, remote_id, &fork_base) {
-                    return failed(error);
-                }
-                let upload = PlannedAction {
-                    path: planned.path.clone(),
-                    action: Action::Upload,
-                    reason: planned.reason,
-                };
-                execute(
-                    vault,
-                    remote_id,
-                    &upload,
-                    snapshot,
-                    baselines,
-                    remote_entries,
-                    now_ms,
-                    conn,
-                    remote,
-                    local,
-                )
             }
-        },
+            outcome
+        }
+    }
+}
+
+/// 把一条已经定下来的 resolution 落成实际动作。
+///
+/// 抽出来是因为「执行」和「执行完要清掉决定」是两件事,混在一个 match 里的话每个分支都得
+/// 自己记得清一次,而漏掉的那个分支的症状是「几天后文件自己动了一下」。
+#[allow(clippy::too_many_arguments)]
+fn apply_resolution(
+    chosen: &diff::Resolution,
+    vault: &Path,
+    remote_id: &str,
+    planned: &PlannedAction,
+    snapshot: &std::collections::BTreeMap<String, FileSig>,
+    baselines: &[Baseline],
+    remote_entries: &[RemoteEntry],
+    now_ms: i64,
+    conn: &rusqlite::Connection,
+    remote: &mut dyn RemoteFs,
+    local: &mut dyn LocalFs,
+) -> ActionOutcome {
+    let path = planned.path.as_str();
+    let settle = |status: OutcomeStatus| ActionOutcome {
+        path: path.to_string(),
+        reason: planned.reason,
+        status,
+    };
+    let failed = |error: String| settle(OutcomeStatus::Failed { error });
+
+    match chosen {
+        diff::Resolution::KeepLocal => {
+            let upload = PlannedAction {
+                path: planned.path.clone(),
+                action: Action::Upload,
+                reason: planned.reason,
+            };
+            execute(
+                vault,
+                remote_id,
+                &upload,
+                snapshot,
+                baselines,
+                remote_entries,
+                now_ms,
+                conn,
+                remote,
+                local,
+            )
+        }
+        diff::Resolution::KeepRemote => {
+            // 「远端删了 / 本地改了」这类冲突里远端其实不存在。采用远端 = 接受删除,
+            // 不能去下载一个不存在的文件 —— 那会 404 每轮重试,永不收敛。
+            let action = if remote_entries.iter().any(|e| e.path == planned.path) {
+                Action::Download
+            } else {
+                Action::DeleteLocal
+            };
+            let next = PlannedAction {
+                path: planned.path.clone(),
+                action,
+                reason: planned.reason,
+            };
+            execute(
+                vault,
+                remote_id,
+                &next,
+                snapshot,
+                baselines,
+                remote_entries,
+                now_ms,
+                conn,
+                remote,
+                local,
+            )
+        }
+        diff::Resolution::Fork { fork_path } => {
+            // 远端那份另存一份,本地这份照常上传。两边都留,谁都不丢。
+            let bytes = match remote.get(path) {
+                Ok(bytes) => bytes,
+                Err(error) => return failed(error),
+            };
+            if let Err(error) = local.write(vault, fork_path, &bytes) {
+                return failed(error);
+            }
+            let hash = crate::notebook::state::hash64(&bytes).to_string();
+            if let Err(error) = remote.put(fork_path, &bytes, &hash) {
+                return failed(error);
+            }
+            let fork_base = Baseline {
+                path: fork_path.clone(),
+                local_hash: hash.clone(),
+                local_mtime_ms: now_ms,
+                remote_hash: hash,
+                remote_device: store::device_id(conn).unwrap_or_default(),
+                remote_seq: 0,
+                synced_at: now_ms,
+            };
+            // fork 出来的那份立刻记基线,否则下一轮把它当全新本地文件再传一次。
+            if let Err(error) = store::set_baseline(conn, remote_id, &fork_base) {
+                return failed(error);
+            }
+            let upload = PlannedAction {
+                path: planned.path.clone(),
+                action: Action::Upload,
+                reason: planned.reason,
+            };
+            execute(
+                vault,
+                remote_id,
+                &upload,
+                snapshot,
+                baselines,
+                remote_entries,
+                now_ms,
+                conn,
+                remote,
+                local,
+            )
+        }
     }
 }
 
@@ -975,6 +1040,250 @@ mod tests {
         );
         assert!(remote.put.is_empty(), "挂起的冲突不该动远端");
         assert_eq!(std::fs::read(vault.join("a.md")).expect("read"), b"mine");
+    }
+
+    /// 从上一轮报告里取某条冲突的两侧 hash —— 前端提交决定时要回传的正是这两个值。
+    fn conflict_hashes(report: &SyncReport, path: &str) -> (String, String) {
+        let planned = report
+            .plan
+            .actions
+            .iter()
+            .find(|a| a.path == path)
+            .unwrap_or_else(|| panic!("没有 {path} 的动作"));
+        match &planned.action {
+            Action::Conflict {
+                local_hash,
+                remote_hash,
+                ..
+            } => (local_hash.clone(), remote_hash.clone()),
+            other => panic!("{path} 不是冲突:{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_decision_made_between_rounds_is_carried_out_on_the_next_one() {
+        // 这是冲突面板的整条路:第一轮挂起 → 用户选 → 第二轮执行。
+        let vault = bound("decide-apply");
+        write_note(&vault, "a.md", b"mine");
+        let mut remote = FakeRemote::with(&[("a.md", b"theirs")]);
+        let mut local = FakeLocal::default();
+        let first = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("first");
+        assert_eq!(
+            outcome(&first, "a.md").status,
+            OutcomeStatus::Pending {
+                detail: "awaiting_user"
+            }
+        );
+
+        let (local_hash, remote_hash) = conflict_hashes(&first, "a.md");
+        {
+            let conn = store::open(&vault).expect("open");
+            store::set_resolution(
+                &conn,
+                "r1",
+                &store::StoredResolution {
+                    path: "a.md".to_string(),
+                    resolution: diff::Resolution::KeepLocal,
+                    local_hash,
+                    remote_hash,
+                    decided_at: NOW + 500,
+                },
+            )
+            .expect("decide");
+        }
+
+        let second = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("second");
+        assert_eq!(outcome(&second, "a.md").status, OutcomeStatus::Done);
+        assert_eq!(
+            remote.files.get("a.md").map(|(bytes, ..)| bytes.as_slice()),
+            Some(&b"mine"[..])
+        );
+        assert!(second.seq.is_some(), "定完了这一轮就该算完整");
+    }
+
+    #[test]
+    fn a_carried_out_decision_is_retired() {
+        // 不清的话它会一直躺在库里。只靠 hash 校验拦不住「改一版又撤销回去」—— 那时两侧
+        // hash 恰好回到当初那一对,这条早就用过的决定会静默地再生效一次。
+        let vault = bound("decide-retire");
+        write_note(&vault, "a.md", b"mine");
+        let mut remote = FakeRemote::with(&[("a.md", b"theirs")]);
+        let mut local = FakeLocal::default();
+        let first = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("first");
+        let (local_hash, remote_hash) = conflict_hashes(&first, "a.md");
+        {
+            let conn = store::open(&vault).expect("open");
+            store::set_resolution(
+                &conn,
+                "r1",
+                &store::StoredResolution {
+                    path: "a.md".to_string(),
+                    resolution: diff::Resolution::KeepLocal,
+                    local_hash,
+                    remote_hash,
+                    decided_at: NOW + 500,
+                },
+            )
+            .expect("decide");
+        }
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("apply");
+
+        let conn = store::open(&vault).expect("open");
+        assert!(
+            store::resolutions(&conn, "r1").expect("read").is_empty(),
+            "执行完的决定必须清掉"
+        );
+    }
+
+    #[test]
+    fn a_decision_that_could_not_be_carried_out_is_kept_for_the_next_round() {
+        // 上传失败时清掉决定的话,用户得重新选一遍 —— 而他上次的选择并没有错,是网断了。
+        let vault = bound("decide-keep-on-failure");
+        write_note(&vault, "a.md", b"mine");
+        let mut remote = FakeRemote::with(&[("a.md", b"theirs")]);
+        let mut local = FakeLocal::default();
+        let first = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("first");
+        let (local_hash, remote_hash) = conflict_hashes(&first, "a.md");
+        {
+            let conn = store::open(&vault).expect("open");
+            store::set_resolution(
+                &conn,
+                "r1",
+                &store::StoredResolution {
+                    path: "a.md".to_string(),
+                    resolution: diff::Resolution::KeepLocal,
+                    local_hash,
+                    remote_hash,
+                    decided_at: NOW + 500,
+                },
+            )
+            .expect("decide");
+        }
+
+        remote.fail_put = true;
+        let second = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("second");
+        assert!(
+            matches!(
+                outcome(&second, "a.md").status,
+                OutcomeStatus::Failed { .. }
+            ),
+            "{:?}",
+            outcome(&second, "a.md").status
+        );
+
+        let conn = store::open(&vault).expect("open");
+        assert_eq!(
+            store::resolutions(&conn, "r1").expect("read").len(),
+            1,
+            "没执行成功的决定要留着下一轮再试"
+        );
+    }
+
+    #[test]
+    fn a_stale_decision_does_not_overwrite_content_the_user_never_saw() {
+        // 用户看着两份内容点了「保留本地」,之后本地又被改了。旧决定若仍生效,传上去的是
+        // 他做决定时**还不存在**的那份内容。这里两侧都算「他没见过」,所以要退回挂起。
+        let vault = bound("decide-stale");
+        write_note(&vault, "a.md", b"mine");
+        let mut remote = FakeRemote::with(&[("a.md", b"theirs")]);
+        let mut local = FakeLocal::default();
+        let first = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("first");
+        let (local_hash, remote_hash) = conflict_hashes(&first, "a.md");
+        {
+            let conn = store::open(&vault).expect("open");
+            store::set_resolution(
+                &conn,
+                "r1",
+                &store::StoredResolution {
+                    path: "a.md".to_string(),
+                    resolution: diff::Resolution::KeepLocal,
+                    local_hash,
+                    remote_hash,
+                    decided_at: NOW + 500,
+                },
+            )
+            .expect("decide");
+        }
+
+        write_note(&vault, "a.md", b"mine-but-longer");
+        let second = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("second");
+        assert_eq!(
+            outcome(&second, "a.md").status,
+            OutcomeStatus::Pending {
+                detail: "awaiting_user"
+            },
+            "本地又变了,旧决定不该还算数"
+        );
+        assert!(remote.put.is_empty(), "作废的决定不该动远端");
+        assert_eq!(
+            remote.files.get("a.md").map(|(bytes, ..)| bytes.as_slice()),
+            Some(&b"theirs"[..]),
+            "远端内容不该被覆盖"
+        );
     }
 
     #[test]

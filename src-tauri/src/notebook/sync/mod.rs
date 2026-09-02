@@ -38,6 +38,7 @@
 //
 // 别再往这里加 mod 级 allow。要加就加在具体文件上并写清条件,否则它会吞掉将来真正的死代码。
 
+pub mod daemon;
 pub mod diff;
 pub mod engine;
 pub mod git;
@@ -45,4 +46,5 @@ pub mod local;
 pub mod manifest;
 pub mod remote;
 pub mod scan;
+pub mod schedule;
 pub mod store;

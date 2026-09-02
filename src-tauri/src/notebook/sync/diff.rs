@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 
 use super::scan::FileSig;
-use super::store::{Baseline, Tombstone};
+use super::store::{Baseline, StoredResolution, Tombstone};
 
 /// 远端清单里的一条。来自远端 sidecar manifest,不是 provider 的 list 元数据。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,6 +79,33 @@ pub enum Resolution {
     },
 }
 
+impl Resolution {
+    /// 拆成两个可以直接进库的列。
+    ///
+    /// kind 用和 serde tag 一样的 camelCase 串:库里那一列和前端线上那个字段从此是同一
+    /// 套取值,排查时不用在两种拼法之间换算。
+    pub fn parts(&self) -> (&'static str, &str) {
+        match self {
+            Resolution::KeepLocal => ("keepLocal", ""),
+            Resolution::KeepRemote => ("keepRemote", ""),
+            Resolution::Fork { fork_path } => ("fork", fork_path.as_str()),
+        }
+    }
+
+    /// 从库里那两列拼回来。
+    ///
+    /// 认不出的 kind 落回 `KeepLocal` —— 那是唯一不丢内容的一侧。库里出现意料外的值只
+    /// 可能来自降级运行或手改,那时候「什么都不删」比「猜一个」安全。`fork` 但 `fork_path`
+    /// 是空的同样落回去:拿空路径去写文件会写到 vault 根上。
+    pub fn from_parts(kind: &str, fork_path: String) -> Self {
+        match kind {
+            "keepRemote" => Resolution::KeepRemote,
+            "fork" if !fork_path.is_empty() => Resolution::Fork { fork_path },
+            _ => Resolution::KeepLocal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Action {
@@ -91,6 +118,14 @@ pub enum Action {
     Conflict {
         /// `None` 表示等用户选(`ask` 策略下)。
         resolution: Option<Resolution>,
+        /// 本轮看到的本地 hash。空串 = 本地没有这个文件。
+        ///
+        /// 平铺在这里而不是让前端另外查一次:算 diff 的时候它本来就在手上,而前端提交
+        /// 决定时必须带上**它看到的是哪两份** —— 否则决定和内容对不上号,那道防覆盖的
+        /// 闸门就没有输入。
+        local_hash: String,
+        /// 本轮看到的远端 hash。空串 = 远端没有这个文件。
+        remote_hash: String,
     },
 }
 
@@ -127,8 +162,13 @@ pub struct SyncPlan {
 
 /// diff 的三路输入之外的参数。
 #[derive(Debug, Clone, Copy)]
-pub struct DiffOpts {
+pub struct DiffOpts<'a> {
     pub strategy: ConflictStrategy,
+    /// 用户对具体路径做过的决定。空切片 = 一条都没有(纯按策略走)。
+    ///
+    /// 放在 opts 里而不是给 `plan` 加第五个参数:它和 `strategy` 是同一件事的两档粒度,
+    /// 摆在一起才看得出「逐路径的优先」这个关系。
+    pub decided: &'a [StoredResolution],
 }
 
 /// 算出这一轮该做什么。
@@ -141,7 +181,7 @@ pub fn plan(
     remote: &[RemoteEntry],
     baseline: &[Baseline],
     tombstones: &[Tombstone],
-    opts: DiffOpts,
+    opts: DiffOpts<'_>,
 ) -> SyncPlan {
     let local_map: BTreeMap<&str, &FileSig> = local.iter().map(|f| (f.path.as_str(), f)).collect();
     let remote_map: BTreeMap<&str, &RemoteEntry> =
@@ -176,9 +216,10 @@ pub fn plan(
                     ));
                 } else {
                     // 本地改过 → 「删」和「改」撞上了,不可排序。
+                    // 远端此刻不存在,所以远端那侧记空串。
                     actions.push(one(
                         path,
-                        conflict(opts.strategy),
+                        conflict(opts, path, &local_file.hash, ""),
                         "remote_deleted_local_modified",
                     ));
                 }
@@ -191,7 +232,7 @@ pub fn plan(
                 } else {
                     actions.push(one(
                         path,
-                        conflict(opts.strategy),
+                        conflict(opts, path, &local_file.hash, &remote_entry.hash),
                         "both_present_no_baseline",
                     ));
                 }
@@ -203,9 +244,11 @@ pub fn plan(
                     (false, false) => {}
                     (true, false) => actions.push(one(path, Action::Upload, "local_modified")),
                     (false, true) => actions.push(one(path, Action::Download, "remote_modified")),
-                    (true, true) => {
-                        actions.push(one(path, conflict(opts.strategy), "both_modified"))
-                    }
+                    (true, true) => actions.push(one(
+                        path,
+                        conflict(opts, path, &local_file.hash, &remote_entry.hash),
+                        "both_modified",
+                    )),
                 }
             }
         }
@@ -230,9 +273,10 @@ pub fn plan(
                 } else {
                     // 别的设备在我们删掉之后又改了它 —— 那是一次「删 vs 改」的并发,
                     // 不能默默把对方的编辑删掉。
+                    // 本地此刻不存在(被删了),所以本地那侧记空串。
                     actions.push(one(
                         path,
-                        conflict(opts.strategy),
+                        conflict(opts, path, "", &remote_entry.hash),
                         "local_tombstone_remote_modified",
                     ));
                 }
@@ -271,16 +315,42 @@ fn remote_changed(remote: &RemoteEntry, base: &Baseline) -> bool {
     remote.hash != base.remote_hash
 }
 
-/// 按策略把「并发」落成具体动作。
+/// 把「并发」落成具体动作:先看用户有没有对这个路径做过决定,没有才按策略。
 ///
-/// `Ask` 留 `None`:执行层看到 `None` 就把这一条挂起交给用户,不动文件。
-fn conflict(strategy: ConflictStrategy) -> Action {
-    let resolution = match strategy {
-        ConflictStrategy::Ask => None,
-        ConflictStrategy::Local => Some(Resolution::KeepLocal),
-        ConflictStrategy::Remote => Some(Resolution::KeepRemote),
-    };
-    Action::Conflict { resolution }
+/// 逐路径的决定优先于 vault 级策略。反过来的话策略一旦不是 `Ask`,用户在面板上一条条
+/// 做的选择就全被顶掉了。
+///
+/// `Ask` 且没有决定时留 `None`:执行层看到 `None` 就把这一条挂起交给用户,不动文件。
+fn conflict(opts: DiffOpts<'_>, path: &str, local_hash: &str, remote_hash: &str) -> Action {
+    let resolution =
+        decided_for(opts.decided, path, local_hash, remote_hash).or(match opts.strategy {
+            ConflictStrategy::Ask => None,
+            ConflictStrategy::Local => Some(Resolution::KeepLocal),
+            ConflictStrategy::Remote => Some(Resolution::KeepRemote),
+        });
+    Action::Conflict {
+        resolution,
+        local_hash: local_hash.to_string(),
+        remote_hash: remote_hash.to_string(),
+    }
+}
+
+/// 存着的决定还算不算数。
+///
+/// **两侧都得对得上。** 决定是针对用户当时看到的那两份内容做的;任何一侧在那之后又变了,
+/// 就意味着他没见过现在这一份。此时执行原决定会静默覆盖掉他从没看到的内容 —— 这正是
+/// 「交给用户」想避免的那件事。对不上就返回 `None`,让它退回策略(`Ask` 下就是再问一次)。
+fn decided_for(
+    decided: &[StoredResolution],
+    path: &str,
+    local_hash: &str,
+    remote_hash: &str,
+) -> Option<Resolution> {
+    decided
+        .iter()
+        .find(|d| d.path == path)
+        .filter(|d| d.local_hash == local_hash && d.remote_hash == remote_hash)
+        .map(|d| d.resolution.clone())
 }
 
 fn one(path: &str, action: Action, reason: &'static str) -> PlannedAction {
@@ -388,9 +458,29 @@ mod tests {
         }
     }
 
-    fn ask() -> DiffOpts {
+    fn ask() -> DiffOpts<'static> {
         DiffOpts {
             strategy: ConflictStrategy::Ask,
+            decided: &[],
+        }
+    }
+
+    /// 带一批逐路径决定的 opts。策略仍是 `Ask` —— 这样通过的断言只能是决定起了作用。
+    fn with_decided(decided: &[StoredResolution]) -> DiffOpts<'_> {
+        DiffOpts {
+            strategy: ConflictStrategy::Ask,
+            decided,
+        }
+    }
+
+    /// 一条决定。`local` / `remote` 是做决定时看到的两侧 hash。
+    fn decision(path: &str, resolution: Resolution, local: &str, remote: &str) -> StoredResolution {
+        StoredResolution {
+            path: path.to_string(),
+            resolution,
+            local_hash: local.to_string(),
+            remote_hash: remote.to_string(),
+            decided_at: 1_760_000_000_000,
         }
     }
 
@@ -466,7 +556,14 @@ mod tests {
             &[],
             ask(),
         ));
-        assert_eq!(got.action, Action::Conflict { resolution: None });
+        assert_eq!(
+            got.action,
+            Action::Conflict {
+                resolution: None,
+                local_hash: "1-new".to_string(),
+                remote_hash: "2-new".to_string(),
+            }
+        );
         assert_eq!(got.reason, "both_modified");
     }
 
@@ -630,6 +727,7 @@ mod tests {
     fn the_local_strategy_resolves_every_conflict_toward_local() {
         let opts = DiffOpts {
             strategy: ConflictStrategy::Local,
+            decided: &[],
         };
         let got = only(plan(
             &[local("a.md", "1-new")],
@@ -641,7 +739,9 @@ mod tests {
         assert_eq!(
             got.action,
             Action::Conflict {
-                resolution: Some(Resolution::KeepLocal)
+                resolution: Some(Resolution::KeepLocal),
+                local_hash: "1-new".to_string(),
+                remote_hash: "2-new".to_string(),
             }
         );
     }
@@ -650,6 +750,7 @@ mod tests {
     fn the_remote_strategy_resolves_every_conflict_toward_remote() {
         let opts = DiffOpts {
             strategy: ConflictStrategy::Remote,
+            decided: &[],
         };
         let got = only(plan(
             &[local("a.md", "1-new")],
@@ -661,7 +762,9 @@ mod tests {
         assert_eq!(
             got.action,
             Action::Conflict {
-                resolution: Some(Resolution::KeepRemote)
+                resolution: Some(Resolution::KeepRemote),
+                local_hash: "1-new".to_string(),
+                remote_hash: "2-new".to_string(),
             }
         );
     }
@@ -672,6 +775,7 @@ mod tests {
         // local/remote 策略下依然挂起等用户。这里逐条过。
         let opts = DiffOpts {
             strategy: ConflictStrategy::Local,
+            decided: &[],
         };
         let cases: Vec<(&str, SyncPlan)> = vec![
             (
@@ -718,14 +822,317 @@ mod tests {
         for (reason, got) in cases {
             let action = only(got);
             assert_eq!(action.reason, reason);
-            assert_eq!(
-                action.action,
-                Action::Conflict {
-                    resolution: Some(Resolution::KeepLocal)
-                },
-                "{reason} 这条冲突没走策略映射"
+            // 四条路径的两侧 hash 各不相同(有一条本地那侧还是空的),所以这里只断言
+            // resolution。hash 的正确性由 `every_conflict_carries_the_two_hashes_it_saw` 管。
+            assert!(
+                matches!(
+                    action.action,
+                    Action::Conflict {
+                        resolution: Some(Resolution::KeepLocal),
+                        ..
+                    }
+                ),
+                "{reason} 这条冲突没走策略映射:{:?}",
+                action.action
             );
         }
+    }
+
+    // ---- 逐路径决定 ----
+
+    #[test]
+    fn every_conflict_carries_the_two_hashes_it_saw() {
+        // 前端提交决定时要回传这两个值。任何一条冲突漏填(或填反),那条路径上的防覆盖
+        // 闸门就没有输入 —— 症状是「这个文件的决定总是不生效」,而另外三条好使。
+        let cases: [(&str, SyncPlan, &str, &str); 4] = [
+            (
+                "both_modified",
+                plan(
+                    &[local("a.md", "L")],
+                    &[remote("a.md", "R")],
+                    &[baseline("a.md", "1", "2")],
+                    &[],
+                    ask(),
+                ),
+                "L",
+                "R",
+            ),
+            (
+                // 远端没了 → 远端那侧是空串,不是某个占位 hash。
+                "remote_deleted_local_modified",
+                plan(
+                    &[local("a.md", "L")],
+                    &[],
+                    &[baseline("a.md", "1", "2")],
+                    &[],
+                    ask(),
+                ),
+                "L",
+                "",
+            ),
+            (
+                "both_present_no_baseline",
+                plan(
+                    &[local("a.md", "L")],
+                    &[remote("a.md", "R")],
+                    &[],
+                    &[],
+                    ask(),
+                ),
+                "L",
+                "R",
+            ),
+            (
+                // 本地删了 → 本地那侧是空串。
+                "local_tombstone_remote_modified",
+                plan(
+                    &[],
+                    &[remote("a.md", "R")],
+                    &[],
+                    &[tomb("a.md", "2")],
+                    ask(),
+                ),
+                "",
+                "R",
+            ),
+        ];
+        for (reason, got, want_local, want_remote) in cases {
+            let action = only(got);
+            assert_eq!(action.reason, reason);
+            let Action::Conflict {
+                local_hash,
+                remote_hash,
+                ..
+            } = &action.action
+            else {
+                panic!("{reason} 不是冲突:{:?}", action.action);
+            };
+            assert_eq!(local_hash, want_local, "{reason} 的本地 hash");
+            assert_eq!(remote_hash, want_remote, "{reason} 的远端 hash");
+        }
+    }
+
+    #[test]
+    fn a_stored_decision_resolves_the_conflict() {
+        let decided = [decision("a.md", Resolution::KeepRemote, "L", "R")];
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: Some(Resolution::KeepRemote),
+                    ..
+                }
+            ),
+            "{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_stored_decision_outranks_the_vault_strategy() {
+        // 反过来的话,策略一旦不是 `Ask`,用户在面板上一条条做的选择就全被顶掉了 ——
+        // 而他做那些选择的前提正是「这几个我要分别处理」。
+        let decided = [decision("a.md", Resolution::KeepRemote, "L", "R")];
+        let opts = DiffOpts {
+            strategy: ConflictStrategy::Local,
+            decided: &decided,
+        };
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            opts,
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: Some(Resolution::KeepRemote),
+                    ..
+                }
+            ),
+            "{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_decision_only_applies_to_its_own_path() {
+        let decided = [decision("other.md", Resolution::KeepRemote, "L", "R")];
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: None,
+                    ..
+                }
+            ),
+            "{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_decision_is_void_once_the_local_side_moves_on() {
+        // 用户看着两份内容点了「采用远端」,然后又在本地写了几行。直接执行会把他刚写的
+        // 那几行覆盖掉 —— 而他做决定时还不知道自己会写它们。
+        let decided = [decision("a.md", Resolution::KeepRemote, "L", "R")];
+        let got = only(plan(
+            &[local("a.md", "L-again")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: None,
+                    ..
+                }
+            ),
+            "本地又变了,旧决定不该还算数:{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_decision_is_void_once_the_remote_side_moves_on() {
+        // 同一件事的另一半:他点了「保留本地」,期间另一台设备又改了远端。执行原决定会
+        // 覆盖掉一份他从没见过的内容。
+        let decided = [decision("a.md", Resolution::KeepLocal, "L", "R")];
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R-again")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: None,
+                    ..
+                }
+            ),
+            "远端又变了,旧决定不该还算数:{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_void_decision_falls_back_to_the_strategy_not_to_pending() {
+        // 作废之后要退回策略,不是硬性挂起。策略是 `Remote` 的用户已经表达过「这个 vault
+        // 一律采用远端」,一条过期的决定不该把他拽回逐条确认。
+        let decided = [decision("a.md", Resolution::KeepLocal, "L", "R")];
+        let opts = DiffOpts {
+            strategy: ConflictStrategy::Remote,
+            decided: &decided,
+        };
+        let got = only(plan(
+            &[local("a.md", "L-again")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            opts,
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: Some(Resolution::KeepRemote),
+                    ..
+                }
+            ),
+            "{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_decision_on_a_one_sided_conflict_matches_the_empty_hash() {
+        // 「远端删了 / 本地改了」这类冲突里远端那侧是空串。决定也记空串,两边才对得上。
+        // 拿某个占位值(比如 "0")去填的话,这类冲突的决定永远作废 —— 而它恰好是最需要
+        // 用户拍板的一类。
+        let decided = [decision("a.md", Resolution::KeepLocal, "L", "")];
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        assert!(
+            matches!(
+                got.action,
+                Action::Conflict {
+                    resolution: Some(Resolution::KeepLocal),
+                    ..
+                }
+            ),
+            "{:?}",
+            got.action
+        );
+    }
+
+    #[test]
+    fn a_fork_decision_survives_the_round_trip_into_the_plan() {
+        let decided = [decision(
+            "a.md",
+            Resolution::Fork {
+                fork_path: "a.conflict.md".to_string(),
+            },
+            "L",
+            "R",
+        )];
+        let got = only(plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        ));
+        let Action::Conflict {
+            resolution: Some(Resolution::Fork { fork_path }),
+            ..
+        } = &got.action
+        else {
+            panic!("{:?}", got.action);
+        };
+        assert_eq!(fork_path, "a.conflict.md");
+    }
+
+    #[test]
+    fn a_resolved_conflict_still_counts_as_a_conflict_in_the_summary() {
+        // 汇总里的 `conflict` 数是「这一轮有几个并发」,不是「有几个还没定」。混淆的话
+        // 状态栏在决定之后会显示 0 冲突,而文件还没搬 —— 用户以为已经完事了。
+        let decided = [decision("a.md", Resolution::KeepLocal, "L", "R")];
+        let got = plan(
+            &[local("a.md", "L")],
+            &[remote("a.md", "R")],
+            &[baseline("a.md", "1", "2")],
+            &[],
+            with_decided(&decided),
+        );
+        assert_eq!(got.summary.conflict, 1);
+        assert_eq!(got.summary.upload, 0, "决定不该在计划阶段就变成上传");
     }
 
     #[test]

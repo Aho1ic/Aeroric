@@ -7,6 +7,7 @@
 //!            是用来替掉挂钟的,见下。
 //! baseline   上次同步成功时,某个路径在本地和远端各是什么样。三方 diff 的第三路输入。
 //! tombstone  本地删过什么。**这是本设计相对 Markio 修掉的缺口。**
+//! resolution 用户对某个冲突路径做过的决定,连同他做决定时看到的两侧 hash。
 //! ```
 //!
 //! 本地当前的扫描结果不进库(每轮重算,见 [`super::scan`])。
@@ -27,15 +28,27 @@
 //! 静默挑错边。这里给每台设备一个稳定 id 和一个单调 seq,顺序按 `(device, seq)` 的
 //! 因果关系判;真判不出来(两边各自都比共同祖先新)就是**并发**,那是一档独立状态,
 //! 要交给用户,不能随便挑一个。
+//!
+//! ## resolution 为什么要记两侧 hash
+//!
+//! 「交给用户」得有个存决定的地方,否则冲突面板上唯一能用的手段是改 vault 级策略重跑
+//! 一轮 —— 那会把同一轮**其它**冲突文件的一侧一并丢掉。所以决定必须是逐路径的。
+//!
+//! 而决定是**针对他当时看到的那两份内容**做的。存下来之后到真正执行之间,任何一侧都
+//! 可能又变了:用户看着远端那份点了「保留本地」,期间另一台设备又改了远端 —— 直接执行
+//! 就把他从没见过的那份内容覆盖掉了。所以决定连同两侧 hash 一起存,应用前两边都得对得
+//! 上;对不上就作废、重新问。空串表示那一侧当时不存在(「远端删了 / 本地改了」这类
+//! 冲突),真 hash 是 u64 十进制,永远非空,不会撞上。
 
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::diff::Resolution;
 use crate::notebook::fs_ops::private_dir;
 
 /// schema 版本。加表 / 加列都要 +1 并在 [`migrate`] 里补迁移。
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 
 const META_SCHEMA_VERSION: &str = "schema_version";
 const META_DEVICE_ID: &str = "device_id";
@@ -68,6 +81,13 @@ pub struct RemoteTarget {
     pub last_sync_at: i64,
     /// 本设备在这个目标上的逻辑序号,每轮成功同步 +1。
     pub seq: i64,
+    /// 自动同步开着没有。**默认关**。
+    ///
+    /// 绑定一个远端只是「配好了」,不等于「同意后台一直往外传」。默认开的话,用户在
+    /// 设置里填完连接就有一个后台线程开始扫库、连网、上传,而他可能只是想先看看
+    /// 能不能连上。手动那条命令(`notebook_sync_run`)不看这个字段。
+    #[serde(default)]
+    pub auto_sync: bool,
 }
 
 /// 某个路径上次同步成功时的样子。
@@ -100,6 +120,21 @@ pub struct Tombstone {
     /// 删除时基线里记的远端 hash。用来判「远端有没有在删之后被改过」——
     /// 改过说明别的设备又编辑了,那就不该把删除传播过去。
     pub remote_hash: String,
+}
+
+/// 用户对一个冲突路径做过的决定,连同他做决定时看到的两侧 hash。
+///
+/// 为什么带 hash、以及为什么空串是「那一侧当时不存在」,见模块文档。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredResolution {
+    pub path: String,
+    pub resolution: Resolution,
+    /// 决定时本地那份的 hash。空串 = 当时本地没有这个文件。
+    pub local_hash: String,
+    /// 决定时远端那份的 hash。空串 = 当时远端没有这个文件。
+    pub remote_hash: String,
+    pub decided_at: i64,
 }
 
 /// 库的路径。
@@ -186,7 +221,8 @@ fn create_tables(conn: &Connection) -> Result<(), String> {
              root          TEXT NOT NULL,
              connection_id TEXT NOT NULL DEFAULT '',
              last_sync_at  INTEGER NOT NULL DEFAULT 0,
-             seq           INTEGER NOT NULL DEFAULT 0
+             seq           INTEGER NOT NULL DEFAULT 0,
+             auto_sync     INTEGER NOT NULL DEFAULT 0
          );
 
          CREATE TABLE IF NOT EXISTS baseline (
@@ -210,6 +246,26 @@ fn create_tables(conn: &Connection) -> Result<(), String> {
          );",
     )
     .map_err(|e| format!("Cannot create notebook sync tables: {e}"))?;
+    create_resolution_table(conn)?;
+    Ok(())
+}
+
+/// v4 的表。单独一个函数是为了让 [`create_tables`] 和 [`migrate`] 用**同一份** DDL ——
+/// 抄成两份的话,新建的库和迁移上来的库会慢慢长歪,而那种差异只在其中一条路上才暴露。
+fn create_resolution_table(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS resolution (
+             remote_id   TEXT NOT NULL REFERENCES remote(id) ON DELETE CASCADE,
+             path        TEXT NOT NULL,
+             kind        TEXT NOT NULL,
+             fork_path   TEXT NOT NULL DEFAULT '',
+             local_hash  TEXT NOT NULL DEFAULT '',
+             remote_hash TEXT NOT NULL DEFAULT '',
+             decided_at  INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY (remote_id, path)
+         );",
+    )
+    .map_err(|e| format!("Cannot create notebook sync resolution table: {e}"))?;
     Ok(())
 }
 
@@ -224,6 +280,20 @@ fn migrate(conn: &Connection, from: i64) -> Result<(), String> {
             [],
         )
         .map_err(|e| format!("Cannot add remote.connection_id: {e}"))?;
+    }
+    if from < 3 {
+        // v3:`remote.auto_sync`。**默认 0** —— 已经绑好的远端在升级之后不该突然开始
+        // 后台联网上传,那是用户没同意过的行为变更。
+        conn.execute(
+            "ALTER TABLE remote ADD COLUMN auto_sync INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|e| format!("Cannot add remote.auto_sync: {e}"))?;
+    }
+    if from < 4 {
+        // v4:`resolution` 表。新表用 `CREATE TABLE IF NOT EXISTS` 是对的 —— 上面那条
+        // 「别用它顶替」说的是加**列**的场合。
+        create_resolution_table(conn)?;
     }
     Ok(())
 }
@@ -287,6 +357,10 @@ fn write_meta(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
 
 /// 登记(或更新)一个远端目标。`seq` 与 `last_sync_at` 不动 —— 它们由同步流程推进,
 /// 重新登记一次配置不该把进度清零。
+///
+/// `auto_sync` 同样不动,而且是**故意不列进 `DO UPDATE SET`**:改一下远端根路径就把
+/// 自动同步悄悄关掉,用户不会收到任何提示,只会发现「同步不动了」。开关只由
+/// [`set_auto_sync`] 改。
 pub fn upsert_remote(
     conn: &Connection,
     id: &str,
@@ -309,20 +383,42 @@ pub fn upsert_remote(
     Ok(())
 }
 
+/// 开 / 关一个目标的自动同步。
+///
+/// 不存在的 id 报错而不是静默成功:前端调这条命令的路径都是「用户点了那个开关」,
+/// 静默成功会让开关看起来打开了而后台什么都不做。
+pub fn set_auto_sync(conn: &Connection, id: &str, enabled: bool) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE remote SET auto_sync = ?2 WHERE id = ?1",
+            rusqlite::params![id, enabled as i64],
+        )
+        .map_err(|e| format!("Cannot update notebook sync auto flag: {e}"))?;
+    if changed == 0 {
+        return Err(format!("Unknown notebook sync remote: {id}"));
+    }
+    Ok(())
+}
+
+fn read_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteTarget> {
+    Ok(RemoteTarget {
+        id: row.get(0)?,
+        kind: row.get(1)?,
+        root: row.get(2)?,
+        connection_id: row.get(3)?,
+        last_sync_at: row.get(4)?,
+        seq: row.get(5)?,
+        auto_sync: row.get::<_, i64>(6)? != 0,
+    })
+}
+
+const TARGET_COLUMNS: &str = "id, kind, root, connection_id, last_sync_at, seq, auto_sync";
+
 pub fn get_remote(conn: &Connection, id: &str) -> Result<Option<RemoteTarget>, String> {
     conn.query_row(
-        "SELECT id, kind, root, connection_id, last_sync_at, seq FROM remote WHERE id = ?1",
+        &format!("SELECT {TARGET_COLUMNS} FROM remote WHERE id = ?1"),
         [id],
-        |row| {
-            Ok(RemoteTarget {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                root: row.get(2)?,
-                connection_id: row.get(3)?,
-                last_sync_at: row.get(4)?,
-                seq: row.get(5)?,
-            })
-        },
+        read_target,
     )
     .optional()
     .map_err(|e| format!("Cannot read notebook sync remote: {e}"))
@@ -330,19 +426,10 @@ pub fn get_remote(conn: &Connection, id: &str) -> Result<Option<RemoteTarget>, S
 
 pub fn list_remotes(conn: &Connection) -> Result<Vec<RemoteTarget>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, kind, root, connection_id, last_sync_at, seq FROM remote ORDER BY id")
+        .prepare(&format!("SELECT {TARGET_COLUMNS} FROM remote ORDER BY id"))
         .map_err(|e| format!("Cannot list notebook sync remotes: {e}"))?;
     let rows = stmt
-        .query_map([], |row| {
-            Ok(RemoteTarget {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                root: row.get(2)?,
-                connection_id: row.get(3)?,
-                last_sync_at: row.get(4)?,
-                seq: row.get(5)?,
-            })
-        })
+        .query_map([], read_target)
         .map_err(|e| format!("Cannot list notebook sync remotes: {e}"))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Cannot list notebook sync remotes: {e}"))
@@ -520,6 +607,91 @@ pub fn prune_tombstones(conn: &Connection, now_ms: i64) -> Result<usize, String>
     let cutoff = now_ms.saturating_sub(TOMBSTONE_TTL_MS);
     conn.execute("DELETE FROM tombstone WHERE deleted_at <= ?1", [cutoff])
         .map_err(|e| format!("Cannot prune notebook sync tombstones: {e}"))
+}
+
+/// 记下用户对某个冲突路径的决定。同路径重复决定就覆盖。
+///
+/// 不校验「此刻这个路径真的有冲突」:决定和执行之间隔着一整轮,那个校验在这里做完到用
+/// 的时候也已经过期了。真正的闸门是两侧 hash —— 见模块文档。
+pub fn set_resolution(
+    conn: &Connection,
+    remote_id: &str,
+    decided: &StoredResolution,
+) -> Result<(), String> {
+    let (kind, fork_path) = decided.resolution.parts();
+    conn.execute(
+        "INSERT INTO resolution
+             (remote_id, path, kind, fork_path, local_hash, remote_hash, decided_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(remote_id, path) DO UPDATE SET
+             kind = excluded.kind,
+             fork_path = excluded.fork_path,
+             local_hash = excluded.local_hash,
+             remote_hash = excluded.remote_hash,
+             decided_at = excluded.decided_at",
+        rusqlite::params![
+            remote_id,
+            decided.path,
+            kind,
+            fork_path,
+            decided.local_hash,
+            decided.remote_hash,
+            decided.decided_at,
+        ],
+    )
+    .map_err(|e| {
+        // 外键指不到远端时 sqlite 只说「FOREIGN KEY constraint failed」,那句话对调用方
+        // 没有信息。换成和 `set_auto_sync` 同一句,前端两条路的错误处理才能统一。
+        if matches!(
+            e.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ConstraintViolation)
+        ) {
+            format!("Unknown notebook sync remote: {remote_id}")
+        } else {
+            format!("Cannot save notebook sync resolution: {e}")
+        }
+    })?;
+    Ok(())
+}
+
+/// 这个远端上所有存着的决定。
+pub fn resolutions(conn: &Connection, remote_id: &str) -> Result<Vec<StoredResolution>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT path, kind, fork_path, local_hash, remote_hash, decided_at
+             FROM resolution WHERE remote_id = ?1 ORDER BY path",
+        )
+        .map_err(|e| format!("Cannot read notebook sync resolutions: {e}"))?;
+    let rows = stmt
+        .query_map([remote_id], |row| {
+            let kind: String = row.get(1)?;
+            let fork_path: String = row.get(2)?;
+            Ok(StoredResolution {
+                path: row.get(0)?,
+                // 认不出的 kind 落回 `KeepLocal`:那是唯一不丢内容的一侧。库里出现意料外
+                // 的值只可能来自降级运行或手改,而那时候「什么都不删」比「猜一个」安全。
+                resolution: Resolution::from_parts(&kind, fork_path),
+                local_hash: row.get(3)?,
+                remote_hash: row.get(4)?,
+                decided_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| format!("Cannot read notebook sync resolutions: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Cannot read notebook sync resolutions: {e}"))
+}
+
+/// 丢掉一条决定。用在两处:决定已经执行完(见 `engine`),以及用户自己撤回。
+///
+/// **执行完必须清。** 只靠 hash 校验拦不住「用户改了一版又撤销回去」—— 那时候两侧 hash
+/// 恰好回到当初那一对,一条早就用过的决定会静默地再生效一次。
+pub fn clear_resolution(conn: &Connection, remote_id: &str, path: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM resolution WHERE remote_id = ?1 AND path = ?2",
+        rusqlite::params![remote_id, path],
+    )
+    .map_err(|e| format!("Cannot clear notebook sync resolution: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -904,5 +1076,319 @@ mod tests {
         // 报 duplicate column name,库从此打不开。
         let conn = open(&vault).expect("second open must still work");
         assert!(get_remote(&conn, "r1").expect("read").is_some());
+    }
+
+    // ---- v3:auto_sync ----
+
+    #[test]
+    fn auto_sync_is_off_when_a_remote_is_first_bound() {
+        let vault = temp_vault("auto-default");
+        let conn = open(&vault).expect("open");
+        upsert_remote(&conn, "r1", "cloud", "notes/", "conn-1").expect("upsert");
+
+        let target = get_remote(&conn, "r1").expect("read").expect("some");
+        // 绑定只是「配好了」,不等于「同意后台一直往外传」。用户可能只是想先试试能不能连上。
+        assert!(!target.auto_sync, "新绑的远端必须是关着的");
+    }
+
+    #[test]
+    fn an_upgraded_database_does_not_start_syncing_by_itself() {
+        let vault = temp_vault("auto-migrate");
+        seed_v1(&vault);
+        let conn = open(&vault).expect("open");
+
+        let target = get_remote(&conn, "r1").expect("read").expect("some");
+        // 升级一次应用就让已绑好的远端开始后台联网上传,是用户没同意过的行为变更。
+        assert!(!target.auto_sync, "迁移上来的老行必须是关着的");
+        assert_eq!(target.seq, 5, "迁移不该动进度");
+    }
+
+    #[test]
+    fn set_auto_sync_toggles_it_both_ways() {
+        let vault = temp_vault("auto-toggle");
+        let conn = open(&vault).expect("open");
+        upsert_remote(&conn, "r1", "cloud", "notes/", "conn-1").expect("upsert");
+
+        set_auto_sync(&conn, "r1", true).expect("enable");
+        assert!(
+            get_remote(&conn, "r1")
+                .expect("read")
+                .expect("some")
+                .auto_sync
+        );
+
+        set_auto_sync(&conn, "r1", false).expect("disable");
+        assert!(
+            !get_remote(&conn, "r1")
+                .expect("read")
+                .expect("some")
+                .auto_sync
+        );
+    }
+
+    #[test]
+    fn set_auto_sync_on_an_unknown_remote_is_an_error() {
+        let vault = temp_vault("auto-unknown");
+        let conn = open(&vault).expect("open");
+
+        // 静默成功会让前端那个开关看起来打开了,而后台什么都不做。
+        assert!(set_auto_sync(&conn, "nope", true).is_err());
+    }
+
+    #[test]
+    fn rebinding_a_remote_does_not_silently_turn_auto_sync_off() {
+        let vault = temp_vault("auto-rebind");
+        let conn = open(&vault).expect("open");
+        upsert_remote(&conn, "r1", "cloud", "notes/", "conn-1").expect("upsert");
+        set_auto_sync(&conn, "r1", true).expect("enable");
+
+        // 用户改了一下远端根路径。
+        upsert_remote(&conn, "r1", "cloud", "notes2/", "conn-1").expect("re-upsert");
+
+        let target = get_remote(&conn, "r1").expect("read").expect("some");
+        assert_eq!(target.root, "notes2/", "配置该更新");
+        assert!(
+            target.auto_sync,
+            "改个路径不该把自动同步关掉 —— 用户收不到任何提示,只会发现同步不动了"
+        );
+    }
+
+    #[test]
+    fn list_remotes_reports_the_auto_flag() {
+        let vault = temp_vault("auto-list");
+        let conn = open(&vault).expect("open");
+        upsert_remote(&conn, "r1", "cloud", "a/", "conn-1").expect("upsert");
+        upsert_remote(&conn, "r2", "cloud", "b/", "conn-1").expect("upsert");
+        set_auto_sync(&conn, "r2", true).expect("enable");
+
+        let listed = list_remotes(&conn).expect("list");
+        assert_eq!(listed.len(), 2);
+        assert!(!listed[0].auto_sync);
+        assert!(listed[1].auto_sync);
+    }
+
+    // ---- v4:resolution ----
+
+    fn decision(path: &str, resolution: Resolution, local: &str, remote: &str) -> StoredResolution {
+        StoredResolution {
+            path: path.to_string(),
+            resolution,
+            local_hash: local.to_string(),
+            remote_hash: remote.to_string(),
+            decided_at: NOW,
+        }
+    }
+
+    #[test]
+    fn a_resolution_round_trips() {
+        let (_vault, conn) = opened("res-rt");
+        let want = decision("a.md", Resolution::KeepRemote, "1", "2");
+        set_resolution(&conn, "r1", &want).expect("set");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got, vec![want]);
+    }
+
+    #[test]
+    fn a_fork_resolution_keeps_its_path() {
+        // fork 的负载是唯一一个带数据的取值。丢掉 `fork_path` 的话下一轮会拿空路径去写,
+        // 而空相对路径解出来就是 vault 根。
+        let (_vault, conn) = opened("res-fork");
+        let want = decision(
+            "a.md",
+            Resolution::Fork {
+                fork_path: "a.conflict.md".to_string(),
+            },
+            "1",
+            "2",
+        );
+        set_resolution(&conn, "r1", &want).expect("set");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got, vec![want]);
+    }
+
+    #[test]
+    fn deciding_twice_on_one_path_keeps_the_later_decision() {
+        // 用户改主意是常态。留两行的话下一轮取到哪一条取决于 ORDER BY,而两条决定的
+        // 效果正好相反。
+        let (_vault, conn) = opened("res-twice");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("first");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepRemote, "1", "2"),
+        )
+        .expect("second");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].resolution, Resolution::KeepRemote);
+    }
+
+    #[test]
+    fn resolutions_are_scoped_to_one_remote() {
+        // 挂两个远端时,对其中一个做的决定不该影响另一个 —— 两边的远端内容不一样,
+        // 「保留远端」指的不是同一份东西。
+        let vault = temp_vault("res-scope");
+        let conn = open(&vault).expect("open");
+        upsert_remote(&conn, "r1", "cloud", "a/", "c1").expect("r1");
+        upsert_remote(&conn, "r2", "cloud", "b/", "c1").expect("r2");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("set");
+
+        assert_eq!(resolutions(&conn, "r1").expect("r1").len(), 1);
+        assert!(resolutions(&conn, "r2").expect("r2").is_empty());
+    }
+
+    #[test]
+    fn clearing_a_resolution_removes_only_that_path() {
+        let (_vault, conn) = opened("res-clear");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("a");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("b.md", Resolution::KeepLocal, "3", "4"),
+        )
+        .expect("b");
+        clear_resolution(&conn, "r1", "a.md").expect("clear");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].path, "b.md");
+    }
+
+    #[test]
+    fn clearing_a_resolution_that_is_not_there_is_not_an_error() {
+        // 引擎在每条落定的冲突后面都清一次,而策略驱动的冲突从来没有入过库。那种情形
+        // 报错会让一次成功的同步被记成失败。
+        let (_vault, conn) = opened("res-clear-missing");
+        clear_resolution(&conn, "r1", "never.md").expect("clear");
+    }
+
+    #[test]
+    fn a_resolution_on_an_unknown_remote_is_a_readable_error() {
+        // 外键原话是「FOREIGN KEY constraint failed」,那句话到了前端没有信息。
+        let (_vault, conn) = opened("res-unknown");
+        let error = set_resolution(
+            &conn,
+            "nope",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect_err("must fail");
+        assert!(error.contains("Unknown notebook sync remote"), "{error}");
+    }
+
+    #[test]
+    fn removing_a_remote_takes_its_resolutions_with_it() {
+        // 不级联的话,重新绑同一个 id 会把上一次留下的决定捡回来用。
+        let (_vault, conn) = opened("res-cascade");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("set");
+        remove_remote(&conn, "r1").expect("remove");
+        upsert_remote(&conn, "r1", "cloud", "notes/", "c1").expect("rebind");
+
+        assert!(resolutions(&conn, "r1").expect("read").is_empty());
+    }
+
+    #[test]
+    fn an_upgraded_database_gets_the_resolution_table() {
+        // 老库升上来。迁移那条路和新建那条路用的是同一份 DDL,但只有真跑一遍才知道
+        // `migrate` 里那个分支接上了 —— 漏掉它的症状是「新装的机器好使,升级的机器一
+        // 决定就报 no such table」。
+        //
+        // 从 v1 起(而不是 v3):这样整条迁移链都过一遍,顺便钉住「加了 v4 之后 v1 依然
+        // 能升上来」。
+        let vault = temp_vault("res-migrate");
+        seed_v1(&vault);
+
+        let conn = open(&vault).expect("migrate");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("set after migrate");
+        assert_eq!(resolutions(&conn, "r1").expect("read").len(), 1);
+    }
+
+    #[test]
+    fn an_unrecognised_kind_falls_back_to_keeping_local() {
+        // 降级运行或手改库都可能留下认不出的值。那时候「什么都不删」是唯一安全的落点 ——
+        // 落到 keepRemote 会拿远端覆盖本地,而我们连用户想要什么都不知道。
+        let (_vault, conn) = opened("res-bogus");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("set");
+        conn.execute("UPDATE resolution SET kind = 'whatever'", [])
+            .expect("corrupt");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got[0].resolution, Resolution::KeepLocal);
+    }
+
+    #[test]
+    fn a_fork_without_a_path_falls_back_to_keeping_local() {
+        // 空 `fork_path` 解出来是 vault 根,写下去会拿远端内容盖掉一个目录项。
+        let (_vault, conn) = opened("res-fork-empty");
+        set_resolution(
+            &conn,
+            "r1",
+            &decision("a.md", Resolution::KeepLocal, "1", "2"),
+        )
+        .expect("set");
+        conn.execute("UPDATE resolution SET kind = 'fork', fork_path = ''", [])
+            .expect("corrupt");
+
+        let got = resolutions(&conn, "r1").expect("read");
+        assert_eq!(got[0].resolution, Resolution::KeepLocal);
+    }
+
+    #[test]
+    fn the_stored_kind_matches_the_serde_tag() {
+        // 库里那一列和前端线上那个字段是同一套取值。分叉之后排查时要在两种拼法之间换算,
+        // 而那种换算表没人会去维护。
+        let (_vault, conn) = opened("res-kind");
+        for resolution in [
+            Resolution::KeepLocal,
+            Resolution::KeepRemote,
+            Resolution::Fork {
+                fork_path: "f.md".to_string(),
+            },
+        ] {
+            let (kind, _) = resolution.parts();
+            let json = serde_json::to_value(&resolution).expect("serialize");
+            assert_eq!(json["kind"].as_str(), Some(kind), "{resolution:?}");
+
+            set_resolution(&conn, "r1", &decision("a.md", resolution.clone(), "1", "2"))
+                .expect("set");
+            let stored: String = conn
+                .query_row("SELECT kind FROM resolution WHERE path = 'a.md'", [], |r| {
+                    r.get(0)
+                })
+                .expect("read kind");
+            assert_eq!(stored, kind, "{resolution:?}");
+        }
     }
 }

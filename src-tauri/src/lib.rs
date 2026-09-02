@@ -292,6 +292,7 @@ pub fn run() {
             // 启动 hook 事件文件 watcher
             crate::event_watcher::start(app.handle().clone());
             crate::usage_index::start(app.handle().clone());
+            crate::notebook::sync::daemon::start(app.handle().clone());
             crate::local_router_commands::init(app.handle());
             // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
             crate::remote::init(app.handle().clone());
@@ -976,6 +977,10 @@ pub fn run() {
             notebook::notebook_sync_unbind,
             notebook::notebook_sync_remotes,
             notebook::notebook_sync_run,
+            notebook::notebook_sync_set_auto,
+            notebook::notebook_sync_status,
+            notebook::notebook_sync_resolve,
+            notebook::notebook_sync_resolutions,
             notebook::notebook_list_user_templates,
             notebook::rag::commands::notebook_rag_probe,
             notebook::rag::commands::notebook_rag_stats,

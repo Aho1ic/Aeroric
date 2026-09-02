@@ -10,7 +10,13 @@
  * 2. **笔记在 vault 里的相对路径** —— 让用户知道自己在改哪个 .md 文件。
  *
  * 字数 / 阅读时长 / 「Markdown」标签不在这里,它们已经在标题栏上了。
+ *
+ * P8e 补了第三项:**云盘同步状态**(上面那段说它"不存在"是当时的事实,现在有了)。它以
+ * `sync` 这个插槽的形式传进来,而不是让状态栏自己去取 —— 这一格里有轮询、有事件监听、有
+ * 逐条决定,塞进来会把一个纯展示组件变成一个带 IO 的组件,两边都不好测。
  */
+
+import type { ReactNode } from "react";
 
 import type { NoteSaveState } from "./useNoteAutosave";
 
@@ -20,6 +26,8 @@ export type NoteStatusBarProps = {
   /** vault 根目录的绝对路径。null = 还没初始化完。 */
   vault: string | null;
   saveState: NoteSaveState;
+  /** 云盘同步那一段。`null` = 这个库没配同步,整段不占位。 */
+  sync?: ReactNode;
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
@@ -58,7 +66,7 @@ export function vaultRelativePath(notePath: string, vault: string | null): strin
   return note.slice(root.length + 1);
 }
 
-export function NoteStatusBar({ notePath, vault, saveState, t }: NoteStatusBarProps) {
+export function NoteStatusBar({ notePath, vault, saveState, sync, t }: NoteStatusBarProps) {
   const relative = vaultRelativePath(notePath, vault);
   const label = t(STATE_KEY[saveState]);
   const color = STATE_COLOR[saveState];
@@ -105,6 +113,9 @@ export function NoteStatusBar({ notePath, vault, saveState, t }: NoteStatusBarPr
         {"‎"}
         {relative}
       </span>
+      {/* 同步靠右。`marginLeft: auto` 挂在这里而不是给路径那段加 `flex: 1` —— 后者会改掉
+          路径在没有同步时的收缩行为。 */}
+      {sync ? <span style={{ marginLeft: "auto", flexShrink: 0 }}>{sync}</span> : null}
     </div>
   );
 }
