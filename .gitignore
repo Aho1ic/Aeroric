@@ -43,6 +43,10 @@ docs/
 docs/*
 !docs/images/
 !docs/images/*
+# 应用内文案与源码注释直接指向这份部署/安全指南（src/i18n/{en,zh}.ts 的
+# remote-access 说明、remote-relay/src/main.rs），所以它必须随仓库分发 ——
+# 否则照提示找文档的用户和克隆仓库的人都会撞空。新增被引用的文档时一并放行。
+!docs/remote-public-access.md
 Trellis/
 trellis/
 .trellis/

@@ -149,7 +149,7 @@ async fn host_control(mut ws: Ws, registry: Arc<Registry>, config: RelayConfig) 
             return;
         }
     };
-    if token.as_deref() != Some(config.token.as_str()) {
+    if !config.token_matches(token.as_deref()) {
         let _ = ws
             .send(control_text(&RelayToHost::Error {
                 message: "invalid relay token".to_string(),
@@ -413,6 +413,23 @@ mod tests {
             require_relay_token(Some(" secret ".to_string())).unwrap(),
             "secret"
         );
+    }
+
+    #[test]
+    fn token_matches_accepts_only_the_exact_token() {
+        let config = test_config();
+        assert!(config.token_matches(Some("s3cret")));
+        assert!(!config.token_matches(Some("s3crey")));
+        assert!(!config.token_matches(None));
+        // 前缀和超长串都不能过 —— 这两条是逐字节短路比较最容易放过的形状。
+        assert!(!config.token_matches(Some("s3cre")));
+        assert!(!config.token_matches(Some("s3cretX")));
+        // 空串不能当成有效凭据(空 token 本身已被 require_relay_token 挡在启动前)。
+        assert!(!config.token_matches(Some("")));
+        assert!(!RelayConfig {
+            token: String::new()
+        }
+        .token_matches(Some("")));
     }
 
     #[tokio::test]

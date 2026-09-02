@@ -8,20 +8,24 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::clock::now_ms_i64;
 use crate::storage::{aeroric_dir, atomic_write_private, ensure_private_dir};
 
 const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
 /// 同时存活的 invite 上限,防止无限累积。
 const MAX_PENDING_INVITES: usize = 8;
 /// 触发退避前允许的连续失败次数。
-const THROTTLE_FREE_FAILURES: u32 = 3;
+///
+/// `pub(crate)` 是给 `auth_stress_tests` 用的:那边要断言「凭据错误文案出现的次数
+/// 不超过免费额度」,把 3 硬编码在测试里的话,改了这个常量测试会假绿。
+pub(crate) const THROTTLE_FREE_FAILURES: u32 = 3;
 const THROTTLE_MAX_DELAY: Duration = Duration::from_secs(300);
 
 // ── Token 基础设施 ───────────────────────────────────────────────────────────
@@ -57,13 +61,6 @@ fn constant_time_hash_eq(left: &str, right: &str) -> bool {
         .zip(right.iter())
         .fold(0_u8, |difference, (l, r)| difference | (l ^ r))
         == 0
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 // ── 设备注册表 ───────────────────────────────────────────────────────────────
@@ -223,6 +220,16 @@ impl AuthStore {
         self.invite_failure = error;
     }
 
+    /// 限流表当前的条目数。
+    ///
+    /// 只给 `auth_stress_tests` 用:那边要证明「大量不同 IP 的失败不会让这张表
+    /// 无上限增长」。表本身必须保持私有(否则测试能直接构造状态,断言就变成
+    /// 自说自话),所以这里只暴露一个计数。
+    #[cfg(test)]
+    pub(crate) fn throttle_len(&self) -> usize {
+        self.throttle.len()
+    }
+
     /// 生成一次性 invite,返回明文 token(嵌入 QR)。
     pub fn create_invite(&mut self) -> Result<String, String> {
         #[cfg(test)]
@@ -314,8 +321,8 @@ impl AuthStore {
                 .take(64)
                 .collect(),
             token_hash: hash_token(&device_token),
-            created_at: now_ms(),
-            last_seen_at: now_ms(),
+            created_at: now_ms_i64(),
+            last_seen_at: now_ms_i64(),
         };
         let expires_at = invite.expires_at;
         invite.reserved_by = Some(pairing_id.clone());
@@ -403,7 +410,7 @@ impl AuthStore {
     ) -> Result<AuthOutcome, String> {
         if let Some(token) = device_token {
             let hash = hash_token(token);
-            let now = now_ms();
+            let now = now_ms_i64();
             if let Some(entry) = self
                 .devices
                 .iter_mut()
@@ -439,8 +446,8 @@ impl AuthStore {
                     .take(64)
                     .collect(),
                 token_hash: hash_token(&device_token),
-                created_at: now_ms(),
-                last_seen_at: now_ms(),
+                created_at: now_ms_i64(),
+                last_seen_at: now_ms_i64(),
             };
             let (device_id, device_name) = (entry.id.clone(), entry.name.clone());
             let mut next = self.devices.clone();

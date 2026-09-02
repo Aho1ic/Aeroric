@@ -28,6 +28,8 @@ mod terminal_streams;
 pub(crate) use session_push::publish_session_appended;
 
 #[cfg(test)]
+mod auth_stress_tests;
+#[cfg(test)]
 mod lan_roundtrip_tests;
 
 use std::collections::HashSet;
