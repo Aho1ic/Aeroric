@@ -123,12 +123,13 @@ export function useDbxGridContextMenuActions(
     ) => {
       if (!activeDbxConnection || !activeDbxObject || !queryResult) return;
       if (!dbxGridColumnSortable(queryResult, columnIndex)) return;
+      const dbType = activeDbxConnection.dbType;
       const nextOrderBy =
         action === "sortAscending"
-          ? dbxOrderByForColumn(column, "ASC")
+          ? dbxOrderByForColumn(column, "ASC", dbType)
           : action === "sortDescending"
-            ? dbxOrderByForColumn(column, "DESC")
-            : dbxOrderByForColumn(column, null);
+            ? dbxOrderByForColumn(column, "DESC", dbType)
+            : dbxOrderByForColumn(column, null, dbType);
       setDbxGridOrderByInput(nextOrderBy);
       await loadDbxObject(
         activeDbxObject,

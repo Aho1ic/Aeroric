@@ -1,5 +1,5 @@
 import type { DataGridContextFilterMode, DbRow } from "../../types";
-import { quoteSqlName, valueToText } from "../../lib/databaseUtils";
+import { quoteSqlIdentifierForDbType, valueToText } from "../../lib/databaseUtils";
 
 export type DatabaseRow = DbRow;
 
@@ -78,17 +78,48 @@ export type DbxPendingCellEdits = Record<string, DbxPendingCellEdit>;
 
 export type VisibleGridColumn = { column: string; index: number };
 
-export function nextDbxOrderByForColumn(currentOrderBy: string, column: string): string {
-  const asc = `${quoteSqlName(column)} ASC`;
-  const desc = `${quoteSqlName(column)} DESC`;
+/**
+ * 表头点一下的下一档排序:无 → ASC → DESC → 无。
+ *
+ * `dbType` 决定标识符引号。MySQL 下用双引号会让 `ORDER BY "id"` 变成按常量排序
+ * (不报错、顺序不变),所以这里必须按方言引 —— 详见 `quoteSqlIdentifierForDbType`。
+ */
+export function nextDbxOrderByForColumn(
+  currentOrderBy: string,
+  column: string,
+  dbType?: string | null,
+): string {
+  const quoted = quoteSqlIdentifierForDbType(column, dbType);
+  const asc = `${quoted} ASC`;
+  const desc = `${quoted} DESC`;
   const normalized = currentOrderBy.trim().toLowerCase();
   if (normalized === asc.toLowerCase()) return desc;
   if (normalized === desc.toLowerCase()) return "";
   return asc;
 }
 
-export function dbxOrderByForColumn(column: string, direction: "ASC" | "DESC" | null): string {
-  return direction ? `${quoteSqlName(column)} ${direction}` : "";
+export function dbxOrderByForColumn(
+  column: string,
+  direction: "ASC" | "DESC" | null,
+  dbType?: string | null,
+): string {
+  return direction ? `${quoteSqlIdentifierForDbType(column, dbType)} ${direction}` : "";
+}
+
+/**
+ * 当前 ORDER BY 片段是否正是「这一列的这个方向」。图标状态靠它判断,
+ * 因此必须和上面两支写入函数用同一套引号规则。
+ */
+export function dbxOrderByMatchesColumn(
+  orderByInput: string,
+  column: string,
+  direction: "ASC" | "DESC",
+  dbType?: string | null,
+): boolean {
+  return (
+    orderByInput.trim().toLowerCase() ===
+    dbxOrderByForColumn(column, direction, dbType).toLowerCase()
+  );
 }
 
 export function dbxFilterModeForCellAction(

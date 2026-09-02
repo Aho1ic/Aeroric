@@ -5,6 +5,7 @@ import {
   dbxFilterModeForCellAction,
   dbxGridContextRowIndexes,
   dbxOrderByForColumn,
+  dbxOrderByMatchesColumn,
   dbxPendingCellEditsToDirtyRows,
   filterDbxGridColumnOptions,
   filterDbxGridRows,
@@ -32,6 +33,41 @@ describe("databaseGridState", () => {
     expect(nextDbxOrderByForColumn('"created at" desc', "created at")).toBe("");
     expect(dbxOrderByForColumn("created at", "DESC")).toBe('"created at" DESC');
     expect(dbxOrderByForColumn("created at", null)).toBe("");
+  });
+
+  /**
+   * MySQL 默认不认双引号标识符 —— `ORDER BY "id"` 是按字符串常量排序,能跑、不报错、
+   * 顺序不变。表头排序点了没反应就是这个原因,所以引号必须按方言走。
+   */
+  it("quotes the sort column per dialect", () => {
+    expect(nextDbxOrderByForColumn("", "created at", "mysql")).toBe("`created at` ASC");
+    expect(nextDbxOrderByForColumn("`created at` ASC", "created at", "mysql")).toBe(
+      "`created at` DESC",
+    );
+    expect(nextDbxOrderByForColumn("`created at` desc", "created at", "mysql")).toBe("");
+    expect(dbxOrderByForColumn("created at", "ASC", "sqlserver")).toBe("[created at] ASC");
+    expect(dbxOrderByForColumn("created at", "ASC", "postgres")).toBe('"created at" ASC');
+    expect(dbxOrderByForColumn("created at", "ASC", "clickhouse")).toBe("`created at` ASC");
+  });
+
+  it("escapes the dialect quote character inside the column name", () => {
+    expect(dbxOrderByForColumn("we`ird", "ASC", "mysql")).toBe("`we``ird` ASC");
+    expect(dbxOrderByForColumn("we]ird", "ASC", "sqlserver")).toBe("[we]]ird] ASC");
+    expect(dbxOrderByForColumn('we"ird', "ASC", "postgres")).toBe('"we""ird" ASC');
+  });
+
+  /**
+   * 图标读的是这支。它和写入函数必须同引号规则,否则 MySQL 下排序生效了而箭头
+   * 一直显示「未排序」。
+   */
+  it("matches the current sort direction using the same dialect quoting", () => {
+    expect(dbxOrderByMatchesColumn("`id` ASC", "id", "ASC", "mysql")).toBe(true);
+    expect(dbxOrderByMatchesColumn("`id` asc", "id", "ASC", "mysql")).toBe(true);
+    expect(dbxOrderByMatchesColumn("`id` ASC", "id", "DESC", "mysql")).toBe(false);
+    // 方言错配就认不出来 —— 正是修复前的表现。
+    expect(dbxOrderByMatchesColumn('"id" ASC', "id", "ASC", "mysql")).toBe(false);
+    expect(dbxOrderByMatchesColumn('"id" ASC', "id", "ASC", "postgres")).toBe(true);
+    expect(dbxOrderByMatchesColumn("", "id", "ASC", "mysql")).toBe(false);
   });
 
   it("maps context filter actions and combines conditions", () => {

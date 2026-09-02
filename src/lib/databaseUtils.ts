@@ -85,6 +85,68 @@ export function quoteSqlName(name: string): string {
 }
 
 /**
+ * 用反引号引标识符的方言。取自 dbx-core `sql_dialect/identifiers.rs` 的
+ * `quote_table_identifier`——那边这一组共用 backtick 分支。
+ *
+ * 为什么这份表只能抄一遍而不能去问后端:dbx-core 的 `connection_identifier_quote` 是
+ * 异步且按连接实例走的,没有对应的 tauri command;而 `table_select.rs` 的
+ * `uses_connection_identifier_quote` 只覆盖 Kingbase / Jdbc / Spanner / Informix /
+ * Gaussdb / OpenGauss / Postgres,MySQL 这类照样回落到上面那张静态表。
+ * 已逐项核对与静态表一致。
+ *
+ * 已知边界(当前不可达):dbx-core 对 Kingbase 优先用连接自报的引号,所以 MySQL 兼容
+ * 模式下的 Kingbase 会与本表不符。前端没有 kingbase 这个 dbType,走不到。
+ */
+const BACKTICK_QUOTE_DB_TYPES = new Set([
+  "mysql",
+  "mariadb",
+  "clickhouse",
+  "doris",
+  "starrocks",
+  "goldendb",
+  "manticoresearch",
+  "hive",
+  "kyuubi",
+  "impala",
+  "spark",
+  "databricks",
+  "databend",
+  "tdengine",
+  "access",
+  "bigquery",
+  "spanner",
+  "questdb",
+  "neo4j",
+]);
+
+/**
+ * 按方言引一个标识符。
+ *
+ * 为什么不能一律用 `quoteSqlName` 的双引号:MySQL 默认没开 `ANSI_QUOTES`,`"id"` 是
+ * **字符串常量**而不是列名。`ORDER BY "id" ASC` 因此让每行的排序键都是同一个常量 ——
+ * SQL 能跑、不报错、顺序原样不动。表头排序点了没反应就是这么来的。
+ *
+ * 只用于前端需要自行拼 SQL 片段的地方(目前只有 ORDER BY)。WHERE 条件走后端的
+ * `dbx_build_data_grid_context_filter_condition`,那条路本来就是方言感知的。
+ *
+ * 注意:**写入排序片段和回读它(判断当前升/降序)必须用同一支函数**,否则图标状态会
+ * 与真实排序脱节。
+ */
+export function quoteSqlIdentifierForDbType(
+  name: string,
+  dbType: string | null | undefined,
+): string {
+  const normalized = dbType?.trim().toLowerCase() ?? "";
+  if (BACKTICK_QUOTE_DB_TYPES.has(normalized)) {
+    return `\`${name.replace(/`/g, "``")}\``;
+  }
+  if (normalized === "sqlserver") {
+    return `[${name.replace(/]/g, "]]")}]`;
+  }
+  return quoteSqlName(name);
+}
+
+/**
  * Convert a value to a SQL literal
  */
 export function sqlLiteral(value: unknown): string {

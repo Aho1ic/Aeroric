@@ -8,17 +8,16 @@ import {
 import { ArrowDown, ArrowUp, ArrowUpDown, Funnel } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import type { AeroricDbConnectionConfig, DbObject, DbQueryResult } from "../../types";
-import {
-  dbxGridColumnSortable,
-  dbxGridColumnType,
-  quoteSqlName,
-  valueToText,
-} from "../../lib/databaseUtils";
+import { dbxGridColumnSortable, dbxGridColumnType, valueToText } from "../../lib/databaseUtils";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
 import { DBX_GRID_DEFAULT_COLUMN_WIDTH, type DbxDataGridController } from "./useDbxDataGrid";
-import type { DatabaseRow, DbxGridContextMenuState } from "./databaseGridState";
+import {
+  dbxOrderByMatchesColumn,
+  type DatabaseRow,
+  type DbxGridContextMenuState,
+} from "./databaseGridState";
 
 type Props = {
   variant: "table" | "query";
@@ -470,11 +469,21 @@ export function DataGridView({
                         >
                           {columnHeaderContent}
                           <span style={s.databaseGridHeaderSortIcon}>
-                            {dbxGridOrderByInput.toLowerCase() ===
-                            `${quoteSqlName(column)} asc`.toLowerCase() ? (
+                            {/* 回读必须与写入(nextDbxOrderByForColumn)用同一套方言引号,
+                                否则 MySQL 下图标会一直停在「未排序」那一档。 */}
+                            {dbxOrderByMatchesColumn(
+                              dbxGridOrderByInput,
+                              column,
+                              "ASC",
+                              activeDbxConnection?.dbType,
+                            ) ? (
                               <ArrowUp size={14} aria-label={t("database.sortAscending")} />
-                            ) : dbxGridOrderByInput.toLowerCase() ===
-                              `${quoteSqlName(column)} desc`.toLowerCase() ? (
+                            ) : dbxOrderByMatchesColumn(
+                                dbxGridOrderByInput,
+                                column,
+                                "DESC",
+                                activeDbxConnection?.dbType,
+                              ) ? (
                               <ArrowDown size={14} aria-label={t("database.sortDescending")} />
                             ) : (
                               <ArrowUpDown

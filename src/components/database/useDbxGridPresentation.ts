@@ -126,7 +126,11 @@ export function useDbxGridPresentation(deps: DbxGridPresentationDeps): DbxGridPr
       if (!activeDbxConnection || !activeDbxObject || !queryResult) return;
       const columnIndex = queryResult.columns.indexOf(column);
       if (!dbxGridColumnSortable(queryResult, columnIndex)) return;
-      const nextOrderBy = nextDbxOrderByForColumn(dbxGridOrderByInput, column);
+      const nextOrderBy = nextDbxOrderByForColumn(
+        dbxGridOrderByInput,
+        column,
+        activeDbxConnection.dbType,
+      );
       setDbxGridOrderByInput(nextOrderBy);
       await loadDbxObject(
         activeDbxObject,
