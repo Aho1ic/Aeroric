@@ -21,6 +21,7 @@ import {
   Video,
 } from "lucide-react";
 import { listAttachments, type Attachment } from "./notebookApi";
+import { formatBytesRounded } from "../../utils/format";
 
 /** 后端 `kind_of` 的取值 → 图标。认不出的类型退回通用文件图标。 */
 const KIND_ICONS: Record<string, typeof FileIcon> = {
@@ -36,12 +37,6 @@ const KIND_ICONS: Record<string, typeof FileIcon> = {
 };
 
 /** 人类可读的大小。附件面板里主要用来看"这张图是不是太大了"。 */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export type AttachmentSectionProps = {
   /** 当前 vault。还没准备好时为 null / 空串 —— 这时候整个分区不渲染。 */
   vault: string | null;
@@ -206,7 +201,7 @@ export function AttachmentSection({
                   <button
                     type="button"
                     aria-label={t("notebook.attachmentReveal", { name: item.name })}
-                    title={`${item.relativePath}\n${formatSize(item.size)}`}
+                    title={`${item.relativePath}\n${formatBytesRounded(item.size)}`}
                     onClick={() => onReveal(item)}
                     style={{
                       flex: 1,

@@ -47,6 +47,7 @@ import {
   transferSftpPaths,
 } from "./sftpOperations";
 import { SftpPreview } from "./SftpPreview";
+import { formatBytes } from "../../utils/format";
 import {
   defaultSftpPathForEndpoint,
   DEFAULT_SFTP_SORT_PREFERENCE,
@@ -256,13 +257,6 @@ function EntryIcon({ entry }: { entry: SftpEntry }) {
       {kind === "file" && <File {...iconProps} />}
     </span>
   );
-}
-
-function formatSize(size?: number | null): string {
-  if (size == null) return "--";
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 const SFTP_COLUMN_WIDTHS: Record<ColumnType, string> = {
@@ -1560,7 +1554,7 @@ export function SftpPanel({
                       if (column === "size") {
                         return (
                           <span key="size" className="sftp-row-size">
-                            {entry.isDir ? "--" : formatSize(entry.size)}
+                            {entry.isDir ? "--" : formatBytes(entry.size)}
                           </span>
                         );
                       }

@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { X } from "lucide-react";
 import type { LocalHistoryEntry, LocalHistorySnapshot } from "../../types";
 import { useI18n } from "../../i18n";
+import { formatBytes } from "../../utils/format";
 
 const messageStyle: CSSProperties = {
   padding: "7px 8px",
@@ -98,12 +99,6 @@ const textStyle: CSSProperties = {
 
 function formatDate(createdAtMs: number): string {
   return new Date(createdAtMs).toLocaleString();
-}
-
-function formatSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function changedLineCount(snapshotContent: string, currentContent: string): number {
@@ -226,7 +221,7 @@ export function LocalHistoryDialog({
                       {formatDate(entry.createdAtMs)}
                     </span>
                     <span style={{ color: "var(--text-hint)", fontSize: 11 }}>
-                      {formatSize(entry.size)}
+                      {formatBytes(entry.size)}
                     </span>
                   </button>
                 );
