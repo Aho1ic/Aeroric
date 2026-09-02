@@ -10,6 +10,18 @@ use serde::{Deserialize, Serialize};
 static PROJECTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const MAX_TERMINAL_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 
+/// 压实前允许文件长到上限之上多少。
+///
+/// 为什么必须有余量:压实是 O(文件) 的（读末尾 + 原子重写整份）。若一到上限就压实,
+/// 之后**每一个** PTY 片段（读缓冲 32 KB,活跃 TUI 每秒几十个）都要读 8 MB、
+/// 转换 8 MB、重写 8 MB —— 实测三个 reader 线程各约 40% CPU 耗在这里,同时每次
+/// 瞬时分配约 24 MB,RSS 随碎片台阶式上涨。留出余量后代价摊薄成"每写满 slack
+/// 一次 O(文件)",接近 O(1)。
+///
+/// 4 MB:文件上界变成 12 MB（磁盘代价可接受）,而压实频率降到原来的约 1/128
+/// （按 32 KB 片段算）。读侧本来只取末 MAX_TERMINAL_HISTORY_BYTES,读语义不变。
+const TERMINAL_HISTORY_COMPACT_SLACK_BYTES: usize = 4 * 1024 * 1024;
+
 // ── Data types (mirror TypeScript interfaces) ────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -366,7 +378,12 @@ pub(crate) fn append_task_terminal_history(task_id: &str, data: &str) -> Result<
     }
     ensure_terminal_history_dir()?;
     let path = terminal_history_path(task_id)?;
-    append_terminal_history_file(&path, data, MAX_TERMINAL_HISTORY_BYTES)
+    append_terminal_history_file(
+        &path,
+        data,
+        MAX_TERMINAL_HISTORY_BYTES,
+        TERMINAL_HISTORY_COMPACT_SLACK_BYTES,
+    )
 }
 
 pub(crate) fn truncate_task_terminal_history(task_id: &str) -> Result<(), String> {
@@ -394,15 +411,19 @@ pub(crate) fn read_task_terminal_history_tail(
     read_terminal_history_tail_from_path(&path, max_bytes)
 }
 
-fn read_terminal_history_tail_from_path(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<(u64, String), String> {
+/// 读末 `max_bytes` 字节,起点掐掉被切断的 UTF-8 续字节。返回 (文件总长, 尾部字节)。
+///
+/// 压实路径只需要字节:中间产物不必是合法 String,省掉一次全量 `from_utf8_lossy`
+/// 与随之而来的整份拷贝。要文本的调用方自己转。
+///
+/// 这里**不**碰权限位。读不改变权限,而 `set_permissions` 是一次 syscall —— 挂在
+/// 每个 PTY 片段的路径上时它会跟着放大（采样里 `__chmod` 有 36 次）。收紧权限
+/// 属于写路径的责任,见 `append_terminal_history_file` / `atomic_write_private`。
+fn read_terminal_history_tail_bytes(path: &Path, max_bytes: u64) -> Result<(u64, Vec<u8>), String> {
     use std::io::{Read as _, Seek, SeekFrom};
     if !path.exists() {
-        return Ok((0, String::new()));
+        return Ok((0, Vec::new()));
     }
-    ensure_private_file_permissions(path)?;
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let total = file.metadata().map_err(|e| e.to_string())?.len();
     let start = total.saturating_sub(max_bytes);
@@ -416,8 +437,18 @@ fn read_terminal_history_tail_from_path(
         .take(4)
         .take_while(|b| (**b & 0b1100_0000) == 0b1000_0000)
         .count();
-    let text = String::from_utf8_lossy(&bytes[skip..]).into_owned();
-    Ok((total, text))
+    if skip > 0 {
+        bytes.drain(..skip);
+    }
+    Ok((total, bytes))
+}
+
+fn read_terminal_history_tail_from_path(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<(u64, String), String> {
+    let (total, bytes) = read_terminal_history_tail_bytes(path, max_bytes)?;
+    Ok((total, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 #[tauri::command]
@@ -457,7 +488,22 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
     fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    finish_atomic_rename(&tmp, path)
+}
+
+/// 收尾 rename,失败时把临时文件删掉再回错。
+///
+/// 不删的话每次失败都在目标目录里留一份全量副本:终端历史目录里已经攒下 8 MB
+/// 级别的 `.log.<pid>-<ns>.tmp`（其中一份来自早已退出的进程）。这些残留没有任何
+/// 消费者,只会让目录体积随失败次数单调增长。
+fn finish_atomic_rename(tmp: &Path, path: &Path) -> Result<(), String> {
+    match fs::rename(tmp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(tmp);
+            Err(error.to_string())
+        }
+    }
 }
 
 fn utf8_tail(content: &str, max_bytes: usize) -> &str {
@@ -471,11 +517,36 @@ fn utf8_tail(content: &str, max_bytes: usize) -> &str {
     &content[start..]
 }
 
-fn append_terminal_history_file(path: &Path, data: &str, max_bytes: usize) -> Result<(), String> {
-    let existing_len = fs::metadata(path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    if existing_len.saturating_add(data.len() as u64) <= max_bytes as u64 {
+/// `utf8_tail` 的字节版:取末 `max_bytes` 字节并把起点推到 UTF-8 字符边界。
+///
+/// 只推起点、不做校验:传进来的两段（文件尾部 + 新片段）各自已在字符边界上,
+/// 拼接后仍然是边界对齐的,这里唯一的职责是二次裁剪后不要切在字符中间。
+fn utf8_tail_bytes(bytes: &[u8], max_bytes: usize) -> &[u8] {
+    if bytes.len() <= max_bytes {
+        return bytes;
+    }
+    let mut start = bytes.len() - max_bytes;
+    while start < bytes.len() && (bytes[start] & 0b1100_0000) == 0b1000_0000 {
+        start += 1;
+    }
+    &bytes[start..]
+}
+
+/// 追加终端历史,并把文件保持在 `max_bytes + slack_bytes` 以内。
+///
+/// 超出时压实回 `max_bytes`（不是回到 `max_bytes + slack_bytes`）—— 压实后要留出
+/// 整个 slack 窗口供后续纯 append 消费,这才是摊薄成立的前提。slack 的取值理由见
+/// `TERMINAL_HISTORY_COMPACT_SLACK_BYTES`。
+fn append_terminal_history_file(
+    path: &Path,
+    data: &str,
+    max_bytes: usize,
+    slack_bytes: usize,
+) -> Result<(), String> {
+    let metadata = fs::metadata(path).ok();
+    let existing_len = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let high_water = (max_bytes as u64).saturating_add(slack_bytes as u64);
+    if existing_len.saturating_add(data.len() as u64) <= high_water {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
         #[cfg(not(windows))]
@@ -484,17 +555,34 @@ fn append_terminal_history_file(path: &Path, data: &str, max_bytes: usize) -> Re
             options.mode(0o600);
         }
         let mut file = options.open(path).map_err(|e| e.to_string())?;
-        ensure_private_file_permissions(path)?;
+        // 新建的文件由 open 的 mode 就位;只有"已存在且权限不对"才需要那次 syscall。
+        // 老版本留下的 0644 历史文件因此仍会被收紧一次,而稳态下的每片段追加不再付这个钱。
+        if needs_permission_tightening(metadata.as_ref()) {
+            ensure_private_file_permissions(path)?;
+        }
         return file.write_all(data.as_bytes()).map_err(|e| e.to_string());
     }
 
     let incoming = utf8_tail(data, max_bytes);
     let retained_bytes = max_bytes.saturating_sub(incoming.len());
-    let (_, existing_tail) = read_terminal_history_tail_from_path(path, retained_bytes as u64)?;
-    let mut compacted = String::with_capacity(existing_tail.len() + incoming.len());
-    compacted.push_str(&existing_tail);
-    compacted.push_str(incoming);
-    atomic_write_private(path, utf8_tail(&compacted, max_bytes))
+    let (_, mut compacted) = read_terminal_history_tail_bytes(path, retained_bytes as u64)?;
+    compacted.extend_from_slice(incoming.as_bytes());
+    atomic_write_private_bytes(path, utf8_tail_bytes(&compacted, max_bytes))
+}
+
+/// 已存在的文件是否还需要收紧权限。缺 metadata（文件不存在）时交给 open 的 mode。
+fn needs_permission_tightening(metadata: Option<&fs::Metadata>) -> bool {
+    match metadata {
+        None => false,
+        #[cfg(not(windows))]
+        Some(metadata) => {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o777 != 0o600
+        }
+        // Windows 没有 mode 位,ACL 状态读不出来,保持原行为每次收紧。
+        #[cfg(windows)]
+        Some(_) => true,
+    }
 }
 
 /// 原子写入,但把结果文件限制为仅所有者可读写 (0o600)。
@@ -504,6 +592,12 @@ fn append_terminal_history_file(path: &Path, data: &str, max_bytes: usize) -> Re
 /// Windows 没有 mode 位,对应动作是把 DACL 收紧成"只有当前用户"。同样在 rename
 /// **之前**做,目标路径上不会出现一瞬间的宽松权限。
 pub fn atomic_write_private(path: &Path, content: &str) -> Result<(), String> {
+    atomic_write_private_bytes(path, content.as_bytes())
+}
+
+/// `atomic_write_private` 的字节版。终端历史压实用它,避免为了调用一个只会把
+/// `&str` 再转回字节的接口而先构造一份全量 String。
+pub fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
     let uid = format!(
         "{}-{}",
         std::process::id(),
@@ -524,8 +618,12 @@ pub fn atomic_write_private(path: &Path, content: &str) -> Result<(), String> {
             options.mode(0o600);
         }
         let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| e.to_string())?;
+        // 写失败也要清掉半份临时文件,否则失败一次就留一份垃圾。
+        if let Err(error) = file.write_all(content) {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
     }
 
     // On existing targets rename inherits the tmp file's 0o600; set it again
@@ -543,7 +641,7 @@ pub fn atomic_write_private(path: &Path, content: &str) -> Result<(), String> {
         warn_once_on_acl_failure(&tmp, windows_acl::restrict_to_current_user(&tmp, false));
     }
 
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    finish_atomic_rename(&tmp, path)
 }
 
 pub fn ensure_private_file_permissions(path: &Path) -> Result<(), String> {
@@ -809,8 +907,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 唯一的临时目录名。Windows 测试与上面的 Unix 测试并行跑,共用名字会互删。
-    #[cfg(windows)]
+    /// 唯一的临时目录名。同名目录会被并行跑的测试互删,所以每个用例各取一个。
     fn unique_temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "aeroric-{label}-{}-{}",
@@ -883,12 +980,95 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("task.log");
 
-        append_terminal_history_file(&path, "012345", 10).unwrap();
-        append_terminal_history_file(&path, "你好世界", 10).unwrap();
+        // slack=0 是原来的语义:一到上限就压实。
+        append_terminal_history_file(&path, "012345", 10, 0).unwrap();
+        append_terminal_history_file(&path, "你好世界", 10, 0).unwrap();
 
         let history = fs::read_to_string(&path).unwrap();
         assert!(history.len() <= 10);
         assert_eq!(history, "5好世界");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 稳态下的追加不能触发压实。
+    ///
+    /// 这是 CPU 修复的核心断言:压实是 O(文件),挂在每个 PTY 片段上就是三个 reader
+    /// 线程各 40% CPU。用 mtime 之外的可观测量来判定"有没有重写整份"——文件长度
+    /// 一旦超过 max_bytes 还在增长,就说明走的是纯 append 而不是压实回 max_bytes。
+    #[test]
+    fn terminal_history_appends_within_slack_without_rewriting() {
+        let dir = unique_temp_dir("terminal-history-slack");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.log");
+
+        // max=8, slack=8 → 高水位 16。逐次 4 字节写到 16 为止都该是纯 append。
+        for _ in 0..4 {
+            append_terminal_history_file(&path, "abcd", 8, 8).unwrap();
+        }
+        assert_eq!(fs::metadata(&path).unwrap().len(), 16);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "abcdabcdabcdabcd");
+
+        // 第 5 次会越过高水位 → 压实回 max_bytes(8),而不是回到高水位。
+        append_terminal_history_file(&path, "abcd", 8, 8).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), 8);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "abcdabcd");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 无论压实发生在哪一次,文件始终是完整输出流的一个**连续后缀**,且长度有界。
+    ///
+    /// 延后压实改变的只是"什么时候丢前面",不该引入空洞、乱序或半个字符。用多字节
+    /// 字符是刻意的:max_bytes 不是 3 的倍数,压实时必须把起点推到字符边界,
+    /// 否则读回来就是替换字符。
+    #[test]
+    fn terminal_history_is_always_a_bounded_suffix_of_the_stream() {
+        let dir = unique_temp_dir("terminal-history-suffix");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.log");
+
+        const MAX: usize = 64;
+        const SLACK: usize = 32;
+        let mut stream = String::new();
+        for index in 0..40 {
+            let chunk = format!("{}行", index % 10);
+            append_terminal_history_file(&path, &chunk, MAX, SLACK).unwrap();
+            stream.push_str(&chunk);
+
+            let on_disk = fs::read_to_string(&path).expect("history stays valid UTF-8");
+            assert!(
+                on_disk.len() <= MAX + SLACK,
+                "len {} exceeds high water at step {index}",
+                on_disk.len()
+            );
+            assert!(
+                stream.ends_with(&on_disk),
+                "on-disk history must be a suffix of the stream at step {index}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 老版本留下的 0644 历史文件,第一次追加时仍要被收紧。
+    ///
+    /// 追加路径为了省掉每片段一次 syscall 改成了"按需收紧",这条守住那个"按需"
+    /// 没有把已存在的宽松文件漏掉。
+    #[cfg(not(windows))]
+    #[test]
+    fn terminal_history_tightens_a_preexisting_loose_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = unique_temp_dir("terminal-history-mode");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.log");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        append_terminal_history_file(&path, "new", 1024, 1024).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "oldnew");
         let _ = fs::remove_dir_all(&dir);
     }
 

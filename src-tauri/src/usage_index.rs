@@ -13,7 +13,14 @@ use crate::analytics::{self, UsageAgent, UsageRequest};
 
 const INDEX_EVENT: &str = "usage-statistics-updated";
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
-const FALLBACK_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+/// 漏事件的兜底重扫间隔。正常路径走 FSEvents,不依赖这个值。
+///
+/// 原来是 5 s。每次扫描要遍历 usage 根下上千个 jsonl 并逐个 canonicalize + stat
+/// （本机实测 1404 个文件、约 1.8 s 墙钟）,5 s 一轮意味着这个线程基本没停过。
+/// 兜底不需要这么勤。
+const FALLBACK_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+/// 同一个来源被重解析的最小间隔,见 `should_reparse`。
+const REPARSE_THROTTLE: Duration = Duration::from_secs(30);
 const MAX_DECOMPRESSED_USAGE_LOG_BYTES: usize = 512 * 1024 * 1024;
 const MAX_USAGE_LOG_LINE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -96,17 +103,31 @@ fn source_state(path: &Path) -> Option<SourceState> {
     })
 }
 
-fn load_source_states(connection: &Connection) -> Result<HashMap<String, SourceState>, String> {
+/// 库里记着的一条来源:内容指纹 + 上次入库时刻。
+///
+/// `indexed_at` 是节流用的:活跃会话的 jsonl 每条消息都在追加,指纹每次都不同,
+/// 而重解析是整文件（当前最大的会话文件 85 MB,实测读+解析约 1.2 s）。没有节流
+/// 时它会被反复整份重解析,把一个核吃满。
+#[derive(Clone, Copy, Debug)]
+struct IndexedSource {
+    state: SourceState,
+    indexed_at: i64,
+}
+
+fn load_source_states(connection: &Connection) -> Result<HashMap<String, IndexedSource>, String> {
     let mut statement = connection
-        .prepare("SELECT path, modified_ns, size FROM usage_sources")
+        .prepare("SELECT path, modified_ns, size, indexed_at FROM usage_sources")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                SourceState {
-                    modified_ns: row.get(1)?,
-                    size: row.get(2)?,
+                IndexedSource {
+                    state: SourceState {
+                        modified_ns: row.get(1)?,
+                        size: row.get(2)?,
+                    },
+                    indexed_at: row.get(3)?,
                 },
             ))
         })
@@ -309,7 +330,41 @@ fn remove_sources(connection: &mut Connection, paths: &[String]) -> Result<(), S
     transaction.commit().map_err(|error| error.to_string())
 }
 
+/// 这一轮要不要重解析这个来源。
+///
+/// 三档:
+/// - 库里没有 → 必须解析。
+/// - 指纹没变 → 内容没动,跳过。
+/// - 指纹变了 → 只有距上次入库超过 `REPARSE_THROTTLE` 才解析。
+///
+/// 为什么"变了也可能跳过":统计口径是「按天累计的 token」,晚几十秒入库对读数没有
+/// 可见影响;而活跃会话每条消息都在追加,不节流就是每 500 ms 重解析一次整个文件。
+/// 跳过不会丢数据 —— run_loop 的兜底扫描会再来,届时节流窗口已过。
+///
+/// `force = true` 时无条件解析,给显式刷新命令用（用户点了"刷新"就该立刻看到）。
+fn should_reparse(
+    indexed: Option<&IndexedSource>,
+    current: SourceState,
+    now: i64,
+    force: bool,
+) -> bool {
+    let Some(previous) = indexed else {
+        return true;
+    };
+    if previous.state == current {
+        return false;
+    }
+    if force {
+        return true;
+    }
+    now.saturating_sub(previous.indexed_at) >= REPARSE_THROTTLE.as_millis() as i64
+}
+
 pub(crate) fn refresh_index() -> Result<bool, String> {
+    refresh_index_inner(false)
+}
+
+fn refresh_index_inner(force: bool) -> Result<bool, String> {
     let mut connection = open_database()?;
     let indexed = load_source_states(&connection)?;
     let mut files = HashSet::new();
@@ -317,6 +372,7 @@ pub(crate) fn refresh_index() -> Result<bool, String> {
         analytics::collect_jsonl_files(&root, &mut files);
     }
 
+    let now = unix_millis();
     let mut changed = false;
     let mut seen = HashSet::new();
     for path in files {
@@ -325,7 +381,7 @@ pub(crate) fn refresh_index() -> Result<bool, String> {
         let Some(state) = source_state(&path) else {
             continue;
         };
-        if indexed.get(&canonical) == Some(&state) {
+        if !should_reparse(indexed.get(&canonical), state, now, force) {
             continue;
         }
         let Some(requests) = parse_source(&path) else {
@@ -465,7 +521,8 @@ pub(crate) fn start(app: AppHandle) {
 
 #[tauri::command]
 pub(crate) async fn refresh_usage_statistics_index(app: AppHandle) -> Result<bool, String> {
-    let changed = tokio::task::spawn_blocking(refresh_index)
+    // 显式刷新绕过节流:用户点了刷新就该立刻看到最新数字。
+    let changed = tokio::task::spawn_blocking(|| refresh_index_inner(true))
         .await
         .map_err(|error| format!("refresh_usage_statistics_index join error: {error}"))??;
     if changed {
@@ -478,6 +535,78 @@ pub(crate) async fn refresh_usage_statistics_index(app: AppHandle) -> Result<boo
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    fn indexed(size: i64, indexed_at: i64) -> IndexedSource {
+        IndexedSource {
+            state: SourceState {
+                modified_ns: size * 1000,
+                size,
+            },
+            indexed_at,
+        }
+    }
+
+    #[test]
+    fn a_new_source_is_always_parsed() {
+        let state = SourceState {
+            modified_ns: 1,
+            size: 10,
+        };
+        assert!(should_reparse(None, state, 0, false));
+    }
+
+    #[test]
+    fn an_unchanged_source_is_never_reparsed() {
+        let previous = indexed(10, 0);
+        // 指纹相同 → 跳过,连 force 也不必解析(内容确实没动)。
+        assert!(!should_reparse(
+            Some(&previous),
+            previous.state,
+            10_000_000,
+            false
+        ));
+        assert!(!should_reparse(
+            Some(&previous),
+            previous.state,
+            10_000_000,
+            true
+        ));
+    }
+
+    /// 活跃会话每条消息都在追加。节流窗口内的变化要压住,否则就是反复整文件重解析。
+    #[test]
+    fn a_growing_source_is_throttled_then_reparsed() {
+        let previous = indexed(10, 1_000);
+        let grown = SourceState {
+            modified_ns: 99_000,
+            size: 20,
+        };
+        let window = REPARSE_THROTTLE.as_millis() as i64;
+
+        assert!(!should_reparse(
+            Some(&previous),
+            grown,
+            1_000 + window - 1,
+            false
+        ));
+        assert!(should_reparse(
+            Some(&previous),
+            grown,
+            1_000 + window,
+            false
+        ));
+    }
+
+    /// 显式刷新不受节流影响。
+    #[test]
+    fn force_bypasses_the_throttle_for_changed_sources() {
+        let previous = indexed(10, 1_000);
+        let grown = SourceState {
+            modified_ns: 99_000,
+            size: 20,
+        };
+        assert!(should_reparse(Some(&previous), grown, 1_001, true));
+    }
 
     #[test]
     fn source_state_changes_when_file_grows() {
