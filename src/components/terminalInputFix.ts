@@ -36,7 +36,7 @@ function isTerminalTextareaInternalFocusReset(textarea: HTMLTextAreaElement): bo
 
 // 诊断开关：置为 true 会在 webview 控制台输出 IME 事件流（需 release 包启用
 // tauri "devtools" feature 才能在 app 内打开开发者工具）。排查 IME 问题时开启，
-// 正式使用置为 false 以避免控制台噪声。详见 docs/terminal-ime-switch-fix.md。
+// 正式使用置为 false 以避免控制台噪声。
 const IME_DEBUG = false;
 function imeDbg(label: string, extra: Record<string, unknown> = {}): void {
   // Only emit when explicitly enabled AND running a Vite dev build — never ship

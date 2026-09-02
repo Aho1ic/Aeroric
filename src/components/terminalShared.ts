@@ -1416,6 +1416,62 @@ export function loadWebglAddon(term: Terminal): void {
   }
 }
 
+interface TerminalWithRenderDimensions {
+  _core?: {
+    _renderService?: {
+      dimensions?: { css?: { cell?: { width?: number; height?: number } } };
+    };
+  };
+}
+
+/**
+ * 按 FitAddon 的算式重算 cols，但不扣它替 overview ruler 预留的那 14px。
+ *
+ * `addon-fit` 0.11.0 的预留算式是
+ * `scrollback === 0 ? 0 : (options.overviewRuler?.width || 14)`。
+ * 我们从不启用 overview ruler，但 scrollback 恒为 1000/5000，于是这 14px 每次都被扣掉；
+ * 而 `|| 14` 会把 `width: 0` 也当成假值，所以改选项救不了，只能自己算列数。
+ *
+ * 有意逐字对齐上游的取整与 padding 口径（父元素的 computed width 减 xterm 元素自身的
+ * 左右 padding，再按 css.cell.width 向下取整），只去掉那一项预留 —— 换算式会让列数
+ * 与 FitAddon 在别处的判断不一致，那种偏差比多两列更难查。
+ *
+ * 14px 在 12px 等宽字体下约合 2 列。实测：这台机器上终端总宽 229 列，diff 底色止于
+ * 222 列 —— 那 7 列的缺口是 Claude Code 自己的 inset（它按"总宽减固定 inset"排版
+ * diff 块），拿回这 2 列只能缓解，消不掉。
+ *
+ * 拿不到内部尺寸（renderer 还没建好、或上游改了结构）时返回 null，由调用方退回 FitAddon。
+ */
+function proposeColsWithoutRulerReserve(term: Terminal, cellWidth: number): number | null {
+  const element = term.element;
+  const parent = element?.parentElement;
+  if (!element || !parent || !Number.isFinite(cellWidth) || cellWidth <= 0) return null;
+
+  const parentStyle = window.getComputedStyle(parent);
+  const elementStyle = window.getComputedStyle(element);
+  const parentWidth = Math.max(0, parseInt(parentStyle.getPropertyValue("width")));
+  const paddingLeft = parseInt(elementStyle.getPropertyValue("padding-left"));
+  const paddingRight = parseInt(elementStyle.getPropertyValue("padding-right"));
+  if (
+    !Number.isFinite(parentWidth) ||
+    !Number.isFinite(paddingLeft) ||
+    !Number.isFinite(paddingRight)
+  )
+    return null;
+
+  const available = parentWidth - (paddingLeft + paddingRight);
+  if (!Number.isFinite(available) || available <= 0) return null;
+  return Math.max(2, Math.floor(available / cellWidth));
+}
+
+/** xterm 内部记录的单元格宽度（px）。拿不到时返回 null。 */
+function terminalCellWidth(term: Terminal): number | null {
+  const cell = (term as unknown as TerminalWithRenderDimensions)._core?._renderService?.dimensions
+    ?.css?.cell;
+  const width = cell?.width;
+  return typeof width === "number" && Number.isFinite(width) && width > 0 ? width : null;
+}
+
 /**
  * 安全地执行 fitAddon.fit() 并返回 { cols, rows }，失败/容器不可见时返回 null。
  *
@@ -1444,7 +1500,28 @@ export function safeFit(
     const dims = fitAddon.proposeDimensions();
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return null;
     if (dims.cols < 2 || dims.rows < 2) return null;
+
+    // 先让 FitAddon 落地它的 cols/rows 与 renderer clear，再把被 overview ruler 预留
+    // 吃掉的列补回来。顺序反过来的话 fit() 会覆盖列数。
+    //
+    // 这样一次 fit 里 xterm 会 reflow 两遍（先 FitAddon 的窄值，再我们的宽值）。
+    // 合成一次是可行的——`fit()` 只比 resize 多调一个私有的 `_renderService.clear()`——
+    // 但没这么做：两次 resize 都在同一个任务里同步跑完，期间容器挂着
+    // data-terminal-resizing(visibility:hidden)，用户只看到一次过渡；PTY 那边取的是
+    // 下面的返回值，只会收到最终列数，所以 TUI 也看不到中间的窄值。代价就只剩
+    // 多一趟 scrollback 重排（5000 行约十几 ms，且每 120ms 合并窗口才发生一次），
+    // 拿它换"再多依赖一个私有 API + 失去 FitAddon 兜底"不值。
     fitAddon.fit();
+
+    const cellWidth = terminalCellWidth(term);
+    if (cellWidth !== null) {
+      const reclaimed = proposeColsWithoutRulerReserve(term, cellWidth);
+      // 只在"确实更宽"时才动。等宽是常态（预留不足一格时算下来一样），
+      // 更窄则说明我们的算式与 FitAddon 有出入，那种情况以 FitAddon 为准。
+      if (reclaimed !== null && reclaimed > term.cols) {
+        term.resize(reclaimed, term.rows);
+      }
+    }
     return { cols: term.cols, rows: term.rows };
   } catch {
     return null;
@@ -1494,11 +1571,27 @@ export function createTerminalFitScheduler(
 
   return {
     schedule: (entries) => {
-      if (!isActive()) return;
+      // 非激活期间的尺寸一律不记账,而是把记录清空。
+      //
+      // 记了会漏 fit:面板在隐藏期间尺寸变过(display:none 下 contentRect 归零)、
+      // 之后又回到上次记录过的尺寸时,下面那道"尺寸没变就跳过"会把它判成无事发生 ——
+      // 可 xterm 在这期间可能已被别的路径(激活时的 useLayoutEffect)改成了别的列数,
+      // 于是终端停在旧列宽上不再回正。清空则保证重新可见后的第一次回调必定走到 fit。
+      if (!isActive()) {
+        lastSize = null;
+        return;
+      }
       const rect = entries?.[0]?.contentRect;
       if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
-        if (lastSize?.width === rect.width && lastSize?.height === rect.height) return;
-        lastSize = { width: rect.width, height: rect.height };
+        // 0 尺寸不是一个"稳定状态",同样不记账:它只说明容器此刻在 display:none 子树里,
+        // 而 safeFit 到点也会因为 rect 为 0 而放弃。记下它就等于把上面那个漏洞
+        // 换个入口再造一遍。
+        if (rect.width === 0 || rect.height === 0) {
+          lastSize = null;
+        } else {
+          if (lastSize?.width === rect.width && lastSize?.height === rect.height) return;
+          lastSize = { width: rect.width, height: rect.height };
+        }
       }
       // 标记先挂上并一直保持到 fit 落地,拖动全程都不暴露中间画面。
       container.setAttribute("data-terminal-resizing", "true");
@@ -1506,6 +1599,7 @@ export function createTerminalFitScheduler(
       timer = setTimeout(() => {
         timer = null;
         if (!isActive()) {
+          lastSize = null;
           container.removeAttribute("data-terminal-resizing");
           return;
         }
@@ -1514,6 +1608,7 @@ export function createTerminalFitScheduler(
     },
     dispose: () => {
       clearTimer();
+      lastSize = null;
       container.removeAttribute("data-terminal-resizing");
     },
   };

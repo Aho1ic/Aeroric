@@ -103,4 +103,71 @@ describe("terminal resize coalescing", () => {
     // 回归护栏:settle 窗口必须明显大于一帧,否则合并不掉拖动
     expect(TERMINAL_RESIZE_SETTLE_MS).toBeGreaterThan(16);
   });
+
+  /**
+   * 关掉左右分屏后终端要回到全宽。
+   *
+   * 这条盯的是"尺寸没变就跳过"那道去重与非激活早退的先后顺序:去重的记录若在隐藏
+   * 期间照记,那么"隐藏 → 尺寸变过 → 重新可见且回到隐藏前的尺寸"这条路上,
+   * 调度器会判定无事发生并跳过 fit,而 xterm 可能已被激活时的 fit 改成了别的列数,
+   * 于是排版停在被挤压的状态。清空记录是唯一能让重新可见后必定重新 fit 的做法。
+   */
+  it("refits after a hidden resize returns to the pre-hidden size", () => {
+    const fit = vi.fn();
+    let active = true;
+    const scheduler = createTerminalFitScheduler(container, fit, () => active);
+
+    // 全宽,正常 fit 一次
+    scheduler.schedule(entryFor(1600, 600));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    expect(fit).toHaveBeenCalledTimes(1);
+
+    // 面板隐藏(display:none → contentRect 归零),期间的报告不该被记账
+    active = false;
+    scheduler.schedule(entryFor(0, 0));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    expect(fit).toHaveBeenCalledTimes(1);
+
+    // 重新可见,尺寸与隐藏前相同 —— 仍然必须重新 fit
+    active = true;
+    scheduler.schedule(entryFor(1600, 600));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    expect(fit).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * 分屏的完整往返:全宽 → 半宽 → 全宽,三段都要各自 fit 一次。
+   */
+  it("fits on both directions of a split toggle", () => {
+    const fit = vi.fn();
+    const scheduler = createTerminalFitScheduler(container, fit, () => true);
+
+    for (const width of [1600, 800, 1600]) {
+      scheduler.schedule(entryFor(width, 600));
+      vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    }
+    expect(fit).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * 0 尺寸不是稳定状态:它只说明容器此刻在 display:none 子树里,safeFit 到点也会
+   * 因为 rect 为 0 而放弃。记下它等于把上面那个漏洞换个入口再造一遍 —— 哪怕
+   * isActive 一直是 true(面板本身没切,是祖先节点被隐藏的情形)。
+   */
+  it("does not remember a zero size even while active", () => {
+    const fit = vi.fn();
+    const scheduler = createTerminalFitScheduler(container, fit, () => true);
+
+    scheduler.schedule(entryFor(1600, 600));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    expect(fit).toHaveBeenCalledTimes(1);
+
+    scheduler.schedule(entryFor(0, 0));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    const afterZero = fit.mock.calls.length;
+
+    scheduler.schedule(entryFor(1600, 600));
+    vi.advanceTimersByTime(TERMINAL_RESIZE_SETTLE_MS);
+    expect(fit.mock.calls.length).toBeGreaterThan(afterZero);
+  });
 });
