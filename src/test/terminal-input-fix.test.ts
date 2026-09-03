@@ -1161,6 +1161,8 @@ describe("terminal input fixes", () => {
     const selectionPaused: boolean[] = [];
     const term = {
       textarea,
+      // 没开鼠标上报 —— 拖动形成的是 xterm 本地选区,写入照旧要压住。
+      modes: { mouseTrackingMode: "none" },
       hasSelection: () => false,
       clearSelection: vi.fn(),
       onSelectionChange: () => ({ dispose: vi.fn() }),
@@ -1189,6 +1191,69 @@ describe("terminal input fixes", () => {
     disposeGuard();
     inputDisposable.dispose();
     container.remove();
+  });
+
+  it("keeps writing during a drag the agent owns so its selection renders live", async () => {
+    // 开了鼠标上报时拖动是转发给 agent 的,选区由 agent 自己画。这时候压住输出,
+    // 它画的选区就一路憋到松手才刷出来 —— 用户看到的是"松手才出现选择区域"。
+    vi.resetModules();
+    vi.doMock("../platform", () => ({
+      APP_PLATFORM: "macos",
+      ENABLE_USAGE_INSIGHTS: true,
+      IS_MAC_WEBKIT: true,
+      IS_OTHER_WEBKIT: false,
+      detectAppPlatform: () => "macos",
+      isAppleWebKit: () => true,
+    }));
+    const { attachMacWebKitTerminalGuard } = await import("../components/terminalShared");
+
+    const drag = (mouseTrackingMode: string, modifiers: MouseEventInit = {}) => {
+      const container = document.createElement("div");
+      const terminalElement = document.createElement("div");
+      terminalElement.className = "xterm";
+      const textarea = document.createElement("textarea");
+      terminalElement.appendChild(textarea);
+      container.appendChild(terminalElement);
+      document.body.appendChild(container);
+
+      const selectionPaused: boolean[] = [];
+      const dispose = attachMacWebKitTerminalGuard({
+        term: {
+          textarea,
+          modes: { mouseTrackingMode },
+          hasSelection: () => false,
+          clearSelection: vi.fn(),
+          onSelectionChange: () => ({ dispose: vi.fn() }),
+        } as never,
+        container,
+        writer: { setSelectionPaused: (paused) => selectionPaused.push(paused) },
+      });
+
+      container.dispatchEvent(
+        new MouseEvent("pointerdown", { button: 0, bubbles: true, ...modifiers }),
+      );
+      const duringDrag = [...selectionPaused];
+      document.dispatchEvent(new MouseEvent("pointerup", { button: 0, bubbles: true }));
+      dispose();
+      container.remove();
+      return { duringDrag, textareaDisabled: textarea.disabled };
+    };
+
+    // agent 拿走了拖动 → 一个字节都不许压。
+    expect(drag("vt200").duringDrag).toEqual([]);
+    expect(drag("drag").duringDrag).toEqual([]);
+    expect(drag("any").duringDrag).toEqual([]);
+
+    // 没开上报,或 ⌥Option 强制本地选区 → 仍旧要压,否则 WebKit 的
+    // characterIndexForPoint 风暴会把主线程打满。
+    expect(drag("none").duringDrag).toEqual([true]);
+    // x10 的 events 只有 DOWN,SelectionService 照常工作,算本地选区。
+    expect(drag("x10").duringDrag).toEqual([true]);
+    expect(drag("vt200", { altKey: true }).duringDrag).toEqual([true]);
+
+    // textarea 那道 disabled 保护跟选区无关,两条路径都不能丢。
+    expect(drag("vt200").textareaDisabled).toBe(false);
+    expect(drag("none").textareaDisabled).toBe(false);
   });
 
   it("does not suppress a new Chinese preedit as stale post-composition replay", async () => {
