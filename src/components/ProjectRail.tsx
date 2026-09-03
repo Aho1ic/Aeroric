@@ -699,7 +699,6 @@ export function ProjectRail({
     }
   };
 
-
   useEffect(() => {
     setExpandedProjectIds((prev) => {
       if (prev.has(activeProjectId)) return prev;

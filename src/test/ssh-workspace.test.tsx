@@ -124,8 +124,21 @@ function cardsIn(group: string) {
     .filter((text) => text.length > 0);
 }
 
+/**
+ * 卡片视图里那张卡的名字。
+ *
+ * 连接名现在同时出现在卡片和标签条上,裸 `getByText` 会撞出"找到多个"。按排除法认
+ * 卡片(不在 `.ssh-tab-strip` 里的那个)而不是按卡片自己的选择器:卡片走内联样式,
+ * 没有稳定 class 可依。
+ */
+function cardNameNode(name: string): HTMLElement {
+  const nodes = screen.getAllByText(name);
+  const inCard = nodes.find((node) => node.closest(".ssh-tab-strip") === null);
+  return (inCard ?? nodes[0]) as HTMLElement;
+}
+
 function cardButton(name: string) {
-  return screen.getByText(name).closest("button") as HTMLButtonElement;
+  return cardNameNode(name).closest("button") as HTMLButtonElement;
 }
 
 beforeEach(() => {
@@ -234,14 +247,25 @@ describe("卡片 / 终端的切换", () => {
     expect(terminal()).toBeInTheDocument();
   });
 
-  it("头部的「显示连接」把终端换回卡片,但不丢选中项", () => {
+  /**
+   * 头部那个按钮现在是真开关:显示卡片 ↔ 还原终端。
+   *
+   * 终端不再随切换卸载 —— 标签常挂,只是 `active` 转 false。卸载会 kill 后端 shell,
+   * 回来就是一条空会话,而用户预期是"接着刚才那条"。所以这里断言的是「还在、但不活跃」,
+   * 不是「不在了」。
+   */
+  it("头部按钮在卡片与终端之间来回切,终端不卸载", () => {
     renderWorkspace();
     fireEvent.click(cardButton("Box One"));
-    expect(terminal()).toBeInTheDocument();
+    expect(terminal()).toHaveAttribute("data-active", "true");
+
     fireEvent.click(screen.getByTitle("Show SSH connections"));
-    expect(terminal()).not.toBeInTheDocument();
-    // 选中项还在:卡片仍是选中样式,再点一次同一张就能回终端
-    fireEvent.click(cardButton("Box One"));
+    expect(terminal()).toBeInTheDocument();
+    expect(terminal()).toHaveAttribute("data-active", "false");
+
+    // 再点一次回到终端 —— 这就是原先缺的那条回路
+    fireEvent.click(screen.getByTitle("Back to terminal"));
+    expect(terminal()).toHaveAttribute("data-active", "true");
     expect(terminal()).toHaveAttribute("data-initial", "c1");
   });
 
@@ -261,6 +285,98 @@ describe("卡片 / 终端的切换", () => {
     expect(terminal()).toHaveAttribute("data-active", "true");
     rerender({ active: false });
     expect(terminal()).toHaveAttribute("data-active", "false");
+  });
+});
+
+describe("多标签", () => {
+  function tabLabels(): string[] {
+    return Array.from(document.querySelectorAll(".ssh-tab-text")).map(
+      (node) => node.textContent ?? "",
+    );
+  }
+
+  it("开两条不同连接得到两个标签,都常挂", () => {
+    renderWorkspace({ connections: [conn(), conn({ id: "c2", name: "Box Two" })] });
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("Show SSH connections"));
+    fireEvent.click(cardButton("Box Two"));
+
+    expect(tabLabels()).toEqual(["Box One", "Box Two"]);
+    // 两个终端都在 DOM 里,只有一个活跃 —— 切标签不断连的前提
+    const panels = screen.getAllByTestId("terminal-panel");
+    expect(panels).toHaveLength(2);
+    expect(panels.filter((panel) => panel.getAttribute("data-active") === "true")).toHaveLength(1);
+  });
+
+  // 已确认的取舍:点卡片是聚焦,不是再连一条。
+  it("再点已开着的连接只聚焦,不新建标签", () => {
+    renderWorkspace({ connections: [conn(), conn({ id: "c2", name: "Box Two" })] });
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("Show SSH connections"));
+    fireEvent.click(cardButton("Box Two"));
+    fireEvent.click(screen.getByTitle("Show SSH connections"));
+    fireEvent.click(cardButton("Box One"));
+
+    expect(tabLabels()).toEqual(["Box One", "Box Two"]);
+    expect(screen.getAllByTestId("terminal-panel")).toHaveLength(2);
+  });
+
+  it("头部 + 才在同主机开第二个会话,标题带序号", () => {
+    renderWorkspace();
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("New session on this host"));
+
+    expect(tabLabels()).toEqual(["Box One", "Box One (2)"]);
+    expect(screen.getAllByTestId("terminal-panel")).toHaveLength(2);
+  });
+
+  it("关标签把那个终端卸载掉(连带 kill 后端 shell)", () => {
+    renderWorkspace();
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("New session on this host"));
+    expect(screen.getAllByTestId("terminal-panel")).toHaveLength(2);
+
+    fireEvent.click(screen.getByTitle("Close Box One (2)"));
+    expect(screen.getAllByTestId("terminal-panel")).toHaveLength(1);
+    expect(tabLabels()).toEqual(["Box One"]);
+  });
+
+  it("关掉最后一个标签回到卡片视图", () => {
+    renderWorkspace();
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("Close Box One"));
+
+    expect(screen.queryByTestId("terminal-panel")).not.toBeInTheDocument();
+    expect(groupTitles().length).toBeGreaterThan(0);
+  });
+
+  it("点标签切过去,并从卡片视图退出来", () => {
+    renderWorkspace({ connections: [conn(), conn({ id: "c2", name: "Box Two" })] });
+    fireEvent.click(cardButton("Box One"));
+    fireEvent.click(screen.getByTitle("Show SSH connections"));
+    fireEvent.click(cardButton("Box Two"));
+    fireEvent.click(screen.getByTitle("Show SSH connections"));
+
+    const boxOneTab = screen.getByTitle("Box One");
+    fireEvent.click(boxOneTab);
+    const active = screen
+      .getAllByTestId("terminal-panel")
+      .filter((panel) => panel.getAttribute("data-active") === "true");
+    expect(active).toHaveLength(1);
+    expect(active[0]).toHaveAttribute("data-initial", "c1");
+  });
+
+  // 名单是外部 prop,右侧栏和手机端同步都能改它。标签留着会指向一条不存在的连接。
+  it("连接在别处被删掉时清掉它的标签", () => {
+    const { rerender } = renderWorkspace({
+      connections: [conn(), conn({ id: "c2", name: "Box Two" })],
+    });
+    fireEvent.click(cardButton("Box Two"));
+    expect(screen.getByTestId("terminal-panel")).toHaveAttribute("data-initial", "c2");
+
+    rerender({ connections: [conn()] });
+    expect(screen.queryByTestId("terminal-panel")).not.toBeInTheDocument();
+    expect(tabLabels()).toEqual([]);
   });
 });
 
@@ -363,7 +479,7 @@ describe("删除连接", () => {
     const onDeleteConnection = vi.fn();
     const { onConnectionsChange } = renderWorkspace({ onDeleteConnection });
     onConnectionsChange.mockClear();
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     fireEvent.click(screen.getByText(/Delete/i));
     expect(onDeleteConnection).toHaveBeenCalledWith("c1");
     expect(onConnectionsChange).not.toHaveBeenCalled();
@@ -374,7 +490,7 @@ describe("删除连接", () => {
       connections: [conn(), conn({ id: "c2", name: "Box Two" })],
     });
     onConnectionsChange.mockClear();
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     fireEvent.click(screen.getByText(/Delete/i));
     const next = onConnectionsChange.mock.calls.at(-1)![0] as SshConnection[];
     expect(next.map((c) => c.id)).toEqual(["c2"]);
@@ -394,7 +510,7 @@ describe("删除连接", () => {
     fireEvent.click(cardButton("Box One"));
     expect(screen.getByTestId("terminal-panel")).toBeInTheDocument();
     fireEvent.click(screen.getByTitle("Show SSH connections"));
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     fireEvent.click(screen.getByText(/Delete/i));
     expect(screen.queryByTestId("terminal-panel")).not.toBeInTheDocument();
   });
@@ -439,7 +555,7 @@ describe("父组件真的回写时", () => {
     fireEvent.click(cardButton("Box One"));
     expect(screen.getByTestId("terminal-panel")).toHaveAttribute("data-initial", "c1");
     fireEvent.click(screen.getByTitle("Show SSH connections"));
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     fireEvent.click(screen.getByText(/Delete/i));
     expect(screen.queryByTestId("terminal-panel")).not.toBeInTheDocument();
     // 剩下的那条还在,点它能进终端
@@ -449,7 +565,7 @@ describe("父组件真的回写时", () => {
 
   it("删掉最后一条后停在空状态", () => {
     renderHost([conn()]);
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     fireEvent.click(screen.getByText(/Delete/i));
     expect(screen.getByText(/No SSH connections/i)).toBeInTheDocument();
   });
@@ -463,7 +579,7 @@ describe("右键菜单", () => {
 
   it("卡片右键出连接菜单,选 ssh 进终端", () => {
     renderWorkspace();
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     openConnectSubmenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "SSH" }));
     expect(screen.getByTestId("terminal-panel")).toHaveAttribute("data-initial", "c1");
@@ -471,7 +587,7 @@ describe("右键菜单", () => {
 
   it("选 sftp 走 onOpenSftp,不进终端", () => {
     const { onOpenSftp } = renderWorkspace();
-    fireEvent.contextMenu(screen.getByText("Box One"));
+    fireEvent.contextMenu(cardNameNode("Box One"));
     openConnectSubmenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "SFTP" }));
     expect(onOpenSftp).toHaveBeenCalledTimes(1);

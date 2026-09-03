@@ -7,8 +7,11 @@ import { NotificationsProvider } from "./hooks/useNotifications";
 import { AgentVersionsProvider } from "./hooks/useAgentVersions";
 import { I18nProvider, staticT } from "./i18n";
 import { scheduleMarketplacePreload } from "./components/skill-hub/marketplaceData";
+import { installResourceCensusProbe } from "./lib/resourceCensus";
 
 scheduleMarketplacePreload();
+// dev-only:往 window 挂 __aeroricCensus(),用来在控制台读存活资源快照。
+installResourceCensusProbe();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

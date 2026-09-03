@@ -45,6 +45,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { useProjectPanels, type EditorGroupId, type RightPanel } from "../hooks/useProjectPanels";
 import {
   AUXILIARY_SPLIT_GRID_TEMPLATE,
+  centerLayerVisibility,
   centerWorkspaceMode,
   effectiveAuxiliaryLayout,
   projectFeatureAvailability,
@@ -369,6 +370,11 @@ export function ProjectPage({
   const [sftpMounted, setSftpMounted] = useState(false);
   const [sftpConnectionId, setSftpConnectionId] = useState<string | null>(null);
   const [databaseMounted, setDatabaseMounted] = useState(false);
+  // 随手记与 Docker 也改成常挂:原先它们是条件渲染,一切走就整棵树卸载 —— 随手记的
+  // 未保存草稿、已加载的 vault 索引、Docker 拉到的服务列表全丢,回来要从头再来一遍。
+  // 与 sftp / database 同一手法,可见性交给 `centerLayers` 统一算。
+  const [notesMounted, setNotesMounted] = useState(false);
+  const [dockerMounted, setDockerMounted] = useState(false);
   const [commandPaletteInitialInput, setCommandPaletteInitialInput] = useState<string | null>(null);
   /* run / debug / test 那一簇状态归 `useEditorRunDebugState`,见下面的 hook 调用。
      诊断留在这里:它来自 LSP 推送,跟 run/debug 不是一簇。 */
@@ -640,6 +646,9 @@ export function ProjectPage({
   const isDockerMode = centerMode === "docker";
   const isDatabaseMode = centerMode === "database";
   const isNotesMode = centerMode === "notes";
+  // 五层覆盖层的可见性一次算完。不在 JSX 里各写 `&&`:那些层都是 absolute inset:0,
+  // 两层同时可见只会静默相互遮盖,而分散的条件必然漂。
+  const centerLayers = centerLayerVisibility(centerMode);
   const primaryWorkspaceVisible = !isSshMode || sshLayout === "split";
   const hasEditorGroups = editorGroups.length > 0;
   const shellVisibleInCenter = shouldShowShellInCenter({
@@ -978,6 +987,12 @@ export function ProjectPage({
       if (panel === "database") {
         setDatabaseMounted(true);
       }
+      if (panel === "notes") {
+        setNotesMounted(true);
+      }
+      if (panel === "docker") {
+        setDockerMounted(true);
+      }
       const label = projectPanelFeedbackLabel(panel, t);
       const panelActive = panel === "ssh" ? isSshMode : rightPanel === panel;
       showActionFeedback(
@@ -1014,13 +1029,12 @@ export function ProjectPage({
       }
       setShowShellTerminal(false);
       setShowRemoteProjectTerminal(false);
-      if (panel === "notes") {
-        clearFileAndDiff();
-      }
+      // 原先开随手记会 `clearFileAndDiff()` 清掉编辑器与 diff。那是"随手记会盖住中央区,
+      // 底下那些留着也看不见"时代的收尾动作;现在随手记是常挂的覆盖层,关掉就该看见原样
+      // 的编辑器 —— 顺手清掉等于用户切一次面板就丢一批打开的文件。
       handleTogglePanel(panel);
     },
     [
-      clearFileAndDiff,
       closeRightPanel,
       handleTogglePanel,
       isSshMode,
@@ -1938,7 +1952,7 @@ export function ProjectPage({
                         localDefaultPath={
                           projectLocation.kind === "local" ? project.path : sftpLocalDefaultPath
                         }
-                        active={visible && primaryWorkspaceVisible && isSftpMode}
+                        active={visible && primaryWorkspaceVisible && centerLayers.sftp}
                         width="100%"
                         themeVariant={themeVariant}
                         currentSshConnectionId={
@@ -1952,9 +1966,9 @@ export function ProjectPage({
                     )}
                     {databaseMounted && (
                       <div
-                        aria-hidden={!isDatabaseMode}
+                        aria-hidden={!centerLayers.database}
                         style={{
-                          display: isDatabaseMode ? "flex" : "none",
+                          display: centerLayers.database ? "flex" : "none",
                           flex: "1 1 auto",
                           width: "100%",
                           minWidth: 0,
@@ -1974,9 +1988,17 @@ export function ProjectPage({
                         />
                       </div>
                     )}
-                    {!isSftpMode &&
-                      !isDatabaseMode &&
-                      (isDockerMode ? (
+                    {dockerMounted && (
+                      <div
+                        aria-hidden={!centerLayers.docker}
+                        style={{
+                          display: centerLayers.docker ? "flex" : "none",
+                          flex: "1 1 auto",
+                          width: "100%",
+                          minWidth: 0,
+                          minHeight: 0,
+                        }}
+                      >
                         <DockerServiceView
                           remote={projectLocation.kind === "ssh" ? remoteConnection : undefined}
                           sourceLabel={
@@ -1985,20 +2007,30 @@ export function ProjectPage({
                               : project.path
                           }
                         />
-                      ) : isNotesMode ? (
-                        <div
-                          style={projectNotebookPanelStyle({ containerWidth: projectBodyWidth })}
-                        >
-                          <ErrorBoundary label="随手记">
-                            <NotebookPanel
-                              width="100%"
-                              themeVariant={themeVariant}
-                              fullScreen={notesFullScreen}
-                              onFullScreenChange={setNotesFullScreen}
-                            />
-                          </ErrorBoundary>
-                        </div>
-                      ) : openDiff ? (
+                      </div>
+                    )}
+                    {notesMounted && (
+                      <div
+                        aria-hidden={!centerLayers.notes}
+                        style={{
+                          ...projectNotebookPanelStyle({ containerWidth: projectBodyWidth }),
+                          // 这一层是 absolute inset:0。常挂之后必须用 display 压住,
+                          // 否则它会盖在编辑器/任务视图上面,而底下那层完全不知道。
+                          display: centerLayers.notes ? "flex" : "none",
+                        }}
+                      >
+                        <ErrorBoundary label="随手记">
+                          <NotebookPanel
+                            width="100%"
+                            themeVariant={themeVariant}
+                            fullScreen={notesFullScreen}
+                            onFullScreenChange={setNotesFullScreen}
+                          />
+                        </ErrorBoundary>
+                      </div>
+                    )}
+                    {centerLayers.primary &&
+                      (openDiff ? (
                         openDiff.kind === "file" ? (
                           <GitDiffViewer
                             projectPath={gitContextPath}

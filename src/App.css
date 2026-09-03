@@ -4591,11 +4591,124 @@ html.dark .agent-detail-modal {
   background: var(--bg-hover);
 }
 
-.ssh-workspace-card-scroll {
+/*
+  卡片视图与各标签的终端层共用这一块空间,靠 display 切换。
+  必须是定位上下文:终端层是 absolute inset:0,没有它会逃到 .ssh-workspace 上去。
+*/
+.ssh-workspace-body {
+  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
+}
+
+.ssh-workspace-card-scroll {
+  position: absolute;
+  inset: 0;
   overflow: auto;
   padding: 14px;
+}
+
+/* 非活动标签由内联 display:none 压住,这里只管布满可用空间。 */
+.ssh-workspace-terminal-layer {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ssh-tab-strip {
+  min-height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-dim);
+  background: color-mix(in srgb, var(--bg-root) 72%, var(--bg-sidebar));
+  overflow-x: auto;
+}
+
+.ssh-tab {
+  height: 22px;
+  min-width: 0;
+  min-height: 22px;
+  max-width: 168px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 3px 0 0;
+  border: 1px solid var(--border-dim);
+  border-radius: 999px;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.ssh-tab-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 4px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.ssh-tab[data-selected="true"] .ssh-tab-label {
+  color: var(--text-primary);
+}
+
+.ssh-tab-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ssh-tab-close {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-hint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ssh-tab-add {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-dim);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ssh-tab-add:disabled {
+  background: transparent;
+  color: var(--text-hint);
+  cursor: not-allowed;
+}
+
+.ssh-tab-count {
+  flex-shrink: 0;
+  color: var(--text-hint);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .sftp-preview-content {

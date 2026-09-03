@@ -1395,7 +1395,9 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("docker-view")).toBeInTheDocument();
 
     await user.click(screen.getByTitle("Terminal"));
-    expect(screen.queryByTestId("docker-view")).not.toBeInTheDocument();
+    // Docker 与 SSH 一样常挂了(切走不卸载,保住拉到的服务列表),所以断言"看不见"
+    // 而不是"不在了" —— 上面 ssh-workspace 那两行本来就是这个口径。
+    expect(screen.getByTestId("docker-view")).not.toBeVisible();
     expect(screen.getByTestId("shell-terminal")).toBeInTheDocument();
 
     await user.click(screen.getByTitle("SSH"));
@@ -1403,6 +1405,53 @@ describe("ProjectPage right toolbar", () => {
     expect(screen.getByTestId("ssh-workspace")).toBeInTheDocument();
 
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "split");
+  });
+
+  /**
+   * 隐藏不等于关闭。
+   *
+   * 这些面板都常挂 + `display` 切换,来回切必须还是同一个 React 实例 —— 卸载会丢掉
+   * 随手记的草稿、Docker 拉到的列表。这里用「节点身份不变」来锁:重新挂载会换一个
+   * DOM 节点,`toBe` 就会失败。
+   */
+  it("面板隐藏后再显示是同一个实例,不重新挂载", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Quick Notes"));
+    // 面板是 lazy 的,首次要等 Suspense 落地
+    const notesFirst = await screen.findByTestId("notes-panel");
+    expect(notesFirst).toBeVisible();
+
+    // 点别的部位:随手记立刻隐藏,但仍在 DOM 里
+    await user.click(screen.getByTitle("Docker"));
+    expect(screen.getByTestId("notes-panel")).not.toBeVisible();
+    expect(await screen.findByTestId("docker-view")).toBeVisible();
+
+    // 切回来:还是刚才那个节点
+    await user.click(screen.getByTitle("Quick Notes"));
+    expect(screen.getByTestId("notes-panel")).toBe(notesFirst);
+    expect(screen.getByTestId("notes-panel")).toBeVisible();
+    expect(screen.getByTestId("docker-view")).not.toBeVisible();
+  });
+
+  it("SSH 分屏的栅格与两侧尺寸", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <ProjectPage {...projectPagePropsWithWorkspace()} />
+      </I18nProvider>,
+    );
+
+    await user.click(screen.getByTitle("Terminal"));
+    await user.click(screen.getByTitle("SSH"));
+
     expect(screen.getByTestId("project-center-stack")).toHaveStyle({
       gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr)",
     });

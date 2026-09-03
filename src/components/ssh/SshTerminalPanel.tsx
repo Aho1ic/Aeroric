@@ -329,6 +329,12 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       if (initTimeoutId !== null) window.clearTimeout(initTimeoutId);
       runtime.dispose();
       runtimeRef.current = null;
+      // 前端 dispose 只收 xterm,后端那条 ssh 还活着。这个 cleanup 在两种情况下跑:
+      // 面板内换连接(activeSession 变)、组件卸载。两条路原先都不 kill,于是每切一次
+      // 就在后端遗弃一个 ssh 进程 —— 长跑下来堆成一片,多标签会把它放大到标签数倍。
+      // kill_ssh_shell 是幂等的(句柄不在表里也照样 remove_pty_handles 后返回 Ok),
+      // 所以和 handleDisconnect / handleDeleteConnection 里的显式 kill 重复调用无害。
+      invoke("kill_ssh_shell", { shellId: session.shellId }).catch(console.error);
     };
   }, [activeSession]);
 
