@@ -339,6 +339,21 @@ describe("孤儿 shell 的回收", () => {
     return { ...api, shellId: (call[1] as { shellId: string }).shellId };
   }
 
+  /**
+   * 旧 shell 被杀了,且被杀的只有它。
+   *
+   * 不断言调用次数:换会话时有两条路径都会 kill 同一个 shellId —— 显式的那次,和
+   * effect cleanup 里补的那次(见 SshTerminalPanel 的 cleanup 注释)。后端幂等,重复
+   * 调用无害。要守的是「杀对了人」,不是「只杀了一次」。
+   */
+  function expectKilledOnly(shellId: string) {
+    const kills = callsOf("kill_ssh_shell");
+    expect(kills.length).toBeGreaterThan(0);
+    for (const kill of kills) {
+      expect(kill[1]).toMatchObject({ shellId });
+    }
+  }
+
   it("已连接时再连:先杀旧 shell 再开新的", async () => {
     const { shellId } = await connectFirst();
     invoke.mockClear();
@@ -346,9 +361,7 @@ describe("孤儿 shell 的回收", () => {
     // 已连接时头部按钮是 Disconnect,所以走列表右键菜单那条路径再连一次
     fireEvent.click(screen.getByText("menu-ssh-c1"));
     await runInitTimer();
-    const kills = callsOf("kill_ssh_shell");
-    expect(kills).toHaveLength(1);
-    expect(kills[0][1]).toMatchObject({ shellId });
+    expectKilledOnly(shellId);
     // 新 shellId 必须与旧的不同,否则后端会认成同一个会话
     const opened = callsOf("open_ssh_shell");
     expect(opened).toHaveLength(1);
@@ -359,9 +372,7 @@ describe("孤儿 shell 的回收", () => {
     const { shellId } = await connectFirst();
     invoke.mockClear();
     fireEvent.click(disconnectButton());
-    const kills = callsOf("kill_ssh_shell");
-    expect(kills).toHaveLength(1);
-    expect(kills[0][1]).toMatchObject({ shellId });
+    expectKilledOnly(shellId);
     expect(connectButton()).toBeInTheDocument();
   });
 
@@ -369,9 +380,7 @@ describe("孤儿 shell 的回收", () => {
     const { shellId } = await connectFirst();
     invoke.mockClear();
     fireEvent.click(screen.getByText("delete-c1"));
-    const kills = callsOf("kill_ssh_shell");
-    expect(kills).toHaveLength(1);
-    expect(kills[0][1]).toMatchObject({ shellId });
+    expectKilledOnly(shellId);
   });
 
   it("删掉没在连接的那条:不碰现有 shell", async () => {
@@ -390,6 +399,19 @@ describe("孤儿 shell 的回收", () => {
     expect(runtime.dispose).not.toHaveBeenCalled();
     unmount();
     expect(runtime.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 卸载必须连后端的 ssh 一起收。
+   *
+   * 原先 cleanup 只 dispose 前端 runtime,后端那条 ssh 就地变孤儿 —— 面板内换连接、
+   * 组件卸载两条路都漏。多标签会把它放大到标签数倍,所以这条锁死。
+   */
+  it("卸载时杀掉后端 shell(否则每切一次漏一条 ssh)", async () => {
+    const { unmount, shellId } = await connectFirst();
+    invoke.mockClear();
+    unmount();
+    expectKilledOnly(shellId);
   });
 
   it("50ms 内就卸载:根本不开 shell", async () => {

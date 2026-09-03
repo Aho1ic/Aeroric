@@ -14,6 +14,12 @@
 | [Agent 终端的滚轮语义与鼠标上报](./references/terminal-wheel-scroll.md) | 为什么 alt screen 里滚轮会顶掉输入框草稿、鼠标上报的两个禁用来源（含 launchd 污染这个坑）、滚轮兜底为何只装 agent 终端，以及"上报开/关"各自的代价 | `xterm`, `wheel`, `alt-screen`, `mouse-reporting`, `claude-code`, `env-inheritance` |
 
 
+### 性能与资源
+
+| 文档 | 描述 | 标签 |
+|------|------|------|
+| [长跑内存增长的采样口径与静态结论](./references/long-run-memory-profiling.md) | 存活计数 + RSS 双路采样怎么对照判读、已修的四处结构性泄漏(SSH 会话、WebGL 配额、prose 缓存字节上界、面板常驻),以及为何 scrollback / 轮询间隔等参数在拿到实测曲线前不动 | `performance`, `memory`, `leak`, `profiling`, `webgl`, `ssh`, `cache` |
+
 ### 安全与凭据
 
 | 文档 | 描述 | 标签 |

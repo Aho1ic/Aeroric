@@ -46,11 +46,16 @@ function fakeTerminal(
       replayed.push(event as WheelEvent);
     });
   }
+  // 正常缓冲区走本地滚动:记下每次 scrollLines 的行数,断言行程 1:1。
+  const scrolled: number[] = [];
   const term = {
     element,
     rows,
     modes: { mouseTrackingMode },
     buffer: { active: { type: bufferType } },
+    scrollLines: vi.fn((lines: number) => {
+      scrolled.push(lines);
+    }),
     attachCustomWheelEventHandler: vi.fn((handler: (event: WheelEvent) => boolean) => {
       handlers.push(handler);
     }),
@@ -72,6 +77,7 @@ function fakeTerminal(
     term,
     handler: handlers[0],
     replayed,
+    scrolled,
     element,
     dispose: wheelScroll.dispose,
     isReplayingWheel: wheelScroll.isReplayingWheel,
@@ -84,10 +90,9 @@ function fakeTerminal(
 }
 
 /**
- * 上报按帧分摊,所以断言前要把排期的帧跑完。
+ * 超出突发额度的长尾按帧补发,所以断言总行程前要把排期的帧跑完。
  *
- * 每帧最多 4 条(`MAX_WHEEL_REPORTS_PER_FRAME`),因此这里循环推进直到再没有新上报,
- * 用"上一轮的条数"判断是否已经排空,而不是猜需要几帧。
+ * 循环推进直到再没有新上报,用"上一轮的条数"判断是否已经排空,而不是猜需要几帧。
  */
 async function flushWheelFrames(replayed: WheelEvent[], maxFrames = 64): Promise<void> {
   let previous = -1;
@@ -142,11 +147,41 @@ describe("attachTerminalWheelScroll", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
   });
 
-  it("leaves the normal buffer to xterm's own scrollback scrolling", () => {
-    const { handler } = fakeTerminal("normal", "none");
+  it("scrolls the normal buffer itself so travel stays 1:1", () => {
+    // 交回 xterm 就会吃到 consumeWheelEvent 对 |deltaY| < 50 的 0.3 倍"触控板阻尼",
+    // 那正好反着我们要的行程一致 —— 轻滑变成"滑了半屏只动两行"。
+    const { handler, scrolled } = fakeTerminal("normal", "none", { cellHeight: 16 });
+    const { event, preventDefault } = wheel(-120);
+    expect(handler(event)).toBe(false);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    // 120 / 16 = 7 行,向上。
+    expect(scrolled).toEqual([-7]);
+  });
+
+  it("keeps sub-line trackpad travel instead of dropping it on the normal buffer", () => {
+    const { handler, scrolled } = fakeTerminal("normal", "none", { cellHeight: 16 });
+    // 一次 4px 不足一行:不能当 0 丢掉(丢了就是"滑了没反应"),攒到第四次凑满一行。
+    for (let index = 0; index < 3; index += 1) {
+      expect(handler(wheel(4).event)).toBe(false);
+    }
+    expect(scrolled).toEqual([]);
+    expect(handler(wheel(4).event)).toBe(false);
+    expect(scrolled).toEqual([1]);
+  });
+
+  it("hands an unmeasurable normal-buffer wheel back to xterm instead of eating it", () => {
+    // 量不到行高时 wheelLinesForEvent 返回 0,和"余量没攒满一行"撞成同一个值。
+    // 分不开就会把事件吞掉,症状是滚轮彻底没反应 —— 打了折的滚动也比不动好。
+    const { handler, scrolled } = fakeTerminal("normal", "none", { cellHeight: 0 });
     const { event, preventDefault } = wheel(-120);
     expect(handler(event)).toBe(true);
     expect(preventDefault).not.toHaveBeenCalled();
+    expect(scrolled).toEqual([]);
+
+    // LINE / PAGE 不需要行高,照旧自己滚。
+    const page = fakeTerminal("normal", "none", { cellHeight: 0, rows: 20 });
+    expect(page.handler(wheel(1, { deltaMode: WheelEvent.DOM_DELTA_PAGE }).event)).toBe(false);
+    expect(page.scrolled).toEqual([20]);
   });
 
   it("reports one wheel event per line of travel to apps that asked for it", async () => {
@@ -238,51 +273,67 @@ describe("attachTerminalWheelScroll", () => {
     expect(replayed).toHaveLength(30);
   });
 
-  it("paces reports across frames instead of flooding the pty in one tick", async () => {
-    // 这是"不流畅"的直接成因:原来一次手势把全部行数同步灌进 pty,agent 只能逐条重绘、
-    // 逐屏回吐,前端收到一长串已经过时的中间态。分帧后每帧只发少量,画面每帧都在动。
-    const { handler, replayed } = fakeTerminal("alternate", "vt200", { cellHeight: 16 });
-    handler(wheel(160).event); // 160 / 16 = 10 行
-    // 同步返回后一条都还没发出去 —— 全部推到了后续帧。
-    expect(replayed).toHaveLength(0);
+  it("sends a normal notch synchronously so it lands on the same tick as the gesture", async () => {
+    // 这是"跟手"的核心断言。之前一条都不当场发、全推到后续帧,一个普通档位要四帧四次
+    // 重绘才走完,叠起来就是用户报的"较大延迟"。把配额换回 4 条/帧跑这条必须红。
+    const { handler, replayed } = fakeTerminal("alternate", "vt200", {
+      rows: 24,
+      cellHeight: 16,
+    });
+    handler(wheel(160).event); // 160 / 16 = 10 行,一屏(24)以内
+    // 同步返回时就已经全部发出,不需要等任何一帧。
+    expect(replayed).toHaveLength(10);
 
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const afterFirstFrame = replayed.length;
-    expect(afterFirstFrame).toBeGreaterThan(0);
-    expect(afterFirstFrame).toBeLessThanOrEqual(4);
-
-    // 剩下的在后续帧补齐,总行程仍是 1:1。
+    // 后续帧不会再补发 —— 队列是空的,总行程仍是 1:1。
     await flushWheelFrames(replayed);
     expect(replayed).toHaveLength(10);
+  });
+
+  it("queues only the part of a fling that exceeds one screen", async () => {
+    const { handler, replayed } = fakeTerminal("alternate", "vt200", {
+      rows: 10,
+      cellHeight: 16,
+    });
+    // 400 / 16 = 25 行,远超一屏(10)。突发发满一屏,余下 15 行进队列。
+    handler(wheel(400).event);
+    expect(replayed).toHaveLength(10);
+
+    await flushWheelFrames(replayed);
+    expect(replayed).toHaveLength(25);
   });
 
   it("abandons the queued backlog when the wheel reverses mid-drain", async () => {
     // 分帧后余量会跨帧存活,于是多了一种反向:上一段还没发完,用户已经往回滚了。
     // 此时补完旧方向只会让画面先往回跳一段再跟手,所以直接丢掉。
     const { handler, replayed } = fakeTerminal("alternate", "vt200", {
-      rows: 40,
+      rows: 10,
       cellHeight: 16,
     });
-    handler(wheel(480).event); // 30 行,一帧发不完
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    // 480 / 16 = 30 行:突发发掉一屏(10),余下 20 行留在队列里。
+    handler(wheel(480).event);
     const beforeReversal = replayed.length;
-    expect(beforeReversal).toBeLessThan(30);
+    expect(beforeReversal).toBe(10);
 
     handler(wheel(-32).event); // 反向 2 行
     await flushWheelFrames(replayed);
-    // 只补了反向的 2 条,原方向剩下的 20+ 行没有继续发。
+    // 只补了反向的 2 条,原方向排队的 20 行被丢掉,画面不会先往回跳一段再跟手。
     expect(replayed).toHaveLength(beforeReversal + 2);
     expect(replayed.slice(beforeReversal).every((event) => event.deltaY === -1)).toBe(true);
   });
 
   it("stops pending frames once disposed so a torn-down terminal is never touched", async () => {
     const { handler, replayed, dispose } = fakeTerminal("alternate", "vt200", {
+      rows: 10,
       cellHeight: 16,
     });
-    handler(wheel(160).event);
+    // 要让队列里真的有东西才验得到:一屏以内会当场发完,不留待发帧。
+    handler(wheel(480).event); // 30 行 → 突发 10,排队 20
+    const burst = replayed.length;
+    expect(burst).toBe(10);
     dispose();
     await flushWheelFrames(replayed);
-    expect(replayed).toHaveLength(0);
+    // 排队的 20 行一条都没再发出去。
+    expect(replayed).toHaveLength(burst);
   });
 
   it("honours line and page wheel modes without needing a measured row height", async () => {
@@ -311,76 +362,69 @@ describe("attachTerminalWheelScroll", () => {
     expect(preventDefault).not.toHaveBeenCalled();
   });
 
-  it("waits for the agent's repaint before sending the next batch", async () => {
-    // 卡顿的主因是开环:不管 agent 画完没有都按帧灌上报,于是我们跑在 agent 前面,
-    // 画面变成"憋一下、跳一段"。闭环后一次重绘对应一批上报。
+  it("waits for the agent's repaint before draining the queued tail", async () => {
+    // 长尾仍然闭环:不管 agent 画完没有就按帧灌,我们会跑在它前面,画面变成
+    // "憋一下、跳一段"。突发那一屏不受这条约束 —— 它是同步发的。
     const { handler, replayed, repaint } = fakeTerminal("alternate", "vt200", {
+      rows: 16,
       cellHeight: 16,
       repaintSignal: true,
     });
-    handler(wheel(160).event); // 10 行
+    // 800/16 = 50 行,但单个事件被 MAX_WHEEL_LINES_PER_EVENT_SCREENS 截到 3 屏 = 48 行。
+    handler(wheel(800).event); // 48 行 → 突发 16,排队 32
+    const burst = replayed.length;
+    expect(burst).toBe(16);
 
-    await nextFrame();
-    const firstBatch = replayed.length;
-    expect(firstBatch).toBeGreaterThan(0);
-    expect(firstBatch).toBeLessThan(10);
-
-    // 没有重绘信号:后续帧一条都不发,而不是继续加深管道深度。
+    // 突发之后就在等重绘:后续帧一条都不补,而不是继续加深管道深度。
     await nextFrame();
     await nextFrame();
-    expect(replayed).toHaveLength(firstBatch);
+    expect(replayed).toHaveLength(burst);
 
     // agent 画完了 → 放行下一批。
     repaint();
     await nextFrame();
-    expect(replayed.length).toBeGreaterThan(firstBatch);
+    expect(replayed.length).toBeGreaterThan(burst);
   });
 
   it("advances without a repaint once the grace period lapses", async () => {
     // agent 滚到顶/底时一个字节都不回吐,只等信号会把队列锁死 —— 症状是"滚到顶再往回
     // 滚要卡一下"。超时兜底必须能自己推进。
     const { handler, replayed } = fakeTerminal("alternate", "vt200", {
+      rows: 16,
       cellHeight: 16,
       repaintSignal: true,
     });
-    handler(wheel(160).event);
-    await nextFrame();
-    const firstBatch = replayed.length;
+    handler(wheel(800).event); // 48 行 → 突发 16,排队 32
+    const burst = replayed.length;
+    expect(burst).toBe(16);
 
+    // 一次 repaint 都不给,只等宽限期过去。
     await new Promise<void>((resolve) => {
       globalThis.setTimeout(resolve, WHEEL_REPAINT_GRACE_MS + 40);
     });
-    expect(replayed.length).toBeGreaterThan(firstBatch);
+    expect(replayed.length).toBeGreaterThan(burst);
   });
 
-  it("eases out instead of stepping at a fixed rate", async () => {
-    // 固定 4 行/帧是匀速直线,台阶感就是"卡"。按剩余量取商后尾部自然收窄到 1 行/帧。
+  it("drains a fling in few large batches rather than dribbling it out", async () => {
+    // 旧行为是 ceil(剩余/3) 夹进 1..4,一次甩动要十几帧、十几次 agent 重绘才走完。
+    // 一次 write 带多条上报,agent 是一次 read、一次重绘 —— 拆细既加延迟又加重绘。
     const { handler, replayed } = fakeTerminal("alternate", "vt200", {
-      rows: 40,
+      rows: 16,
       cellHeight: 16,
     });
-    handler(wheel(480).event); // 30 行
+    handler(wheel(800).event); // 48 行 → 突发 16,排队 32
 
     const batches: number[] = [];
-    let previous = 0;
-    for (let frame = 0; frame < 32 && replayed.length < 30; frame += 1) {
+    let previous = replayed.length;
+    for (let frame = 0; frame < 32 && replayed.length < 48; frame += 1) {
       await nextFrame();
       batches.push(replayed.length - previous);
       previous = replayed.length;
     }
 
-    expect(replayed).toHaveLength(30);
-    // 单调不增:任何一帧都不该比上一帧更快,否则就不是减速。
-    for (let index = 1; index < batches.length; index += 1) {
-      expect(batches[index]).toBeLessThanOrEqual(batches[index - 1]);
-    }
-    // 关键断言:必须是一段**渐进**的减速尾巴,不是"匀速跑完 + 最后一帧凑数"。
-    // 固定 4 行/帧的旧行为收敛成 [4,…,4,2],末三帧首项就是 4,过不了这条。
-    expect(batches.length).toBeGreaterThan(Math.ceil(30 / 4));
-    for (const batch of batches.slice(-3)) {
-      expect(batch).toBeLessThanOrEqual(2);
-    }
-    expect(batches[0]).toBe(4);
+    expect(replayed).toHaveLength(48);
+    // 32 行的长尾在 16 行/帧下两帧收完。旧的 1..4 配额要 ≥8 帧,过不了这条。
+    expect(batches.filter((batch) => batch > 0).length).toBeLessThanOrEqual(2);
   });
 
   it("flags its own replayed events so they do not count as user input", async () => {
@@ -426,11 +470,11 @@ describe("initTerminal", () => {
     }
   });
 
-  // 本地 scrollback 滚动（shell 面板、agent 终端不在 alt screen 时）是唯一能做到
-  // 真正连续位移的路径:开了鼠标上报的 alt screen 由 agent 重绘,这个选项管不到。
-  it("smooth-scrolls the local viewport so shell panels feel like a browser", () => {
+  // 不插值。补间让位移看着连续,但画面必然滞后手指一个插值周期,100ms 时用户直接
+  // 报"滑动有较大延迟"。行程已经是 1:1,立刻到位才跟手。
+  it("does not interpolate local viewport scrolling, so it stays glued to the wheel", () => {
     const { term } = initTerminal("dark", 5000, 12, "monospace");
     expect(term.options.smoothScrollDuration).toBe(TERMINAL_SMOOTH_SCROLL_MS);
-    expect(TERMINAL_SMOOTH_SCROLL_MS).toBeGreaterThan(0);
+    expect(TERMINAL_SMOOTH_SCROLL_MS).toBe(0);
   });
 });

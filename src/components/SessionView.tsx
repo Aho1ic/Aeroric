@@ -21,6 +21,7 @@ import {
   linkDshProducedMentions,
 } from "../dshDeliverables";
 import { useDshProducedFiles } from "../hooks/useDshProducedFiles";
+import { registerProseCacheProbe } from "../lib/resourceCensus";
 import type { ProtocolFamily } from "../types";
 
 /** Matches the opener a resolved produced-file reference was rendered as. */
@@ -478,9 +479,48 @@ function CopyButton({ text }: { text: string }) {
  * gives FIFO eviction, and re-reading a live entry refreshes its position.
  */
 const PROSE_HTML_CACHE_LIMIT = 3000;
+/**
+ * 字符数上界。
+ *
+ * 只限条数不等于限内存:单条消息可以是一段几十 KB 的日志或代码块,3000 条那样的条目
+ * 能把这个 Map 涨到几十 MB,而它是模块级的 —— 关掉会话也不释放。长跑内存曲线里这类
+ * 缓存的特征就是「只涨不落」。
+ *
+ * 8M 字符按 UTF-16 约 16MB。取这个量级是因为它足够大到让翻页仍然免费(常规会话的全部
+ * 消息远小于此),又不至于自己变成内存问题。key 与 value 都计入:key 里含全文,和
+ * value 同一量级,只算一边会低估一半。
+ */
+const PROSE_HTML_CACHE_MAX_CHARS = 8_000_000;
 const proseHtmlCache = new Map<string, string>();
+let proseHtmlCacheChars = 0;
 
-function renderProseHtml(
+/** 仅供测试:模块级缓存在断言之间需要复位。 */
+export function resetProseHtmlCache(): void {
+  proseHtmlCache.clear();
+  proseHtmlCacheChars = 0;
+}
+
+export function proseHtmlCacheStats(): { entries: number; chars: number } {
+  return { entries: proseHtmlCache.size, chars: proseHtmlCacheChars };
+}
+
+// 缓存本身的统计充当普查探针,不另记一份。
+registerProseCacheProbe(
+  () => proseHtmlCache.size,
+  () => proseHtmlCacheChars,
+);
+
+function evictOldestProseEntry(): boolean {
+  const oldest = proseHtmlCache.keys().next();
+  if (oldest.done) return false;
+  const value = proseHtmlCache.get(oldest.value);
+  proseHtmlCache.delete(oldest.value);
+  proseHtmlCacheChars -= oldest.value.length + (value?.length ?? 0);
+  return true;
+}
+
+/** @internal 仅供测试 prose cache 淘汰逻辑用,不是公开 API。 */
+export function renderProseHtml(
   text: string,
   mentionPaths: readonly string[],
   label: (path: string) => string,
@@ -496,9 +536,17 @@ function renderProseHtml(
   }
   const html = linkDshProducedMentions(renderSessionMarkdown(text), mentionPaths, label);
   proseHtmlCache.set(key, html);
-  if (proseHtmlCache.size > PROSE_HTML_CACHE_LIMIT) {
-    const oldest = proseHtmlCache.keys().next();
-    if (!oldest.done) proseHtmlCache.delete(oldest.value);
+  proseHtmlCacheChars += key.length + html.length;
+  // 两个上界都要满足。条数挡住"大量小消息",字符数挡住"少量大消息"—— 只有前者时后者
+  // 能悄悄涨到几十 MB。
+  while (
+    (proseHtmlCache.size > PROSE_HTML_CACHE_LIMIT ||
+      proseHtmlCacheChars > PROSE_HTML_CACHE_MAX_CHARS) &&
+    proseHtmlCache.size > 1 &&
+    evictOldestProseEntry()
+  ) {
+    /* 逐条淘汰到两个上界都满足。留最后一条:刚插进来的那条本身可能就超上界,连它一起
+       淘汰会让本次结果不在缓存里,下次重算 —— 白付一次渲染。 */
   }
   return html;
 }

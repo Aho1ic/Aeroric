@@ -38,17 +38,31 @@
 
 行程 1:1 之后剩下的症状是"卡顿感"——不是速度不够，而是**帧间距不均**。成因是那版 pacer 是开环的：固定每帧发 4 条上报，完全不管 agent 画完没有。一次全屏 TUI 重绘通常超过一帧，于是我们持续跑在 agent 前面，上报堆在 pty 里，画面以"憋一下、跳一段"的方式回来。
 
-`term.onWriteParsed` 是这里的闭环信号：每帧最多触发一次、在解析完成后。发一批就等它，超过 `WHEEL_REPAINT_GRACE_MS`（70ms）无条件推进。**超时兜底不能省**：agent 滚到顶/底时一个字节都不回吐，只等信号会把队列锁死，症状是"滚到顶之后再往回滚要卡一下"。
+`term.onWriteParsed` 是这里的闭环信号：每帧最多触发一次、在解析完成后。发一批就等它，超过 `WHEEL_REPAINT_GRACE_MS`（50ms，约三帧）无条件推进。**超时兜底不能省**：agent 滚到顶/底时一个字节都不回吐，只等信号会把队列锁死，症状是"滚到顶之后再往回滚要卡一下"。宽限期也**不能定得比一帧还短**，否则每帧都走超时推进，闭环退化成开环。
 
-第二层是缓动：每帧条数改成 `ceil(剩余 / 3)` 再夹进 `1..4`，尾部自然收窄到 1 行/帧。固定 4 行/帧是匀速直线，每帧跳约 64px 然后停住，台阶感本身就读作"顿"。
+第二处是**上报不能算用户输入**。上报走 `term.onData` → `sendInput` → `writer.pauseForUserInput()`：48ms 输出挂起 + 两次 `refreshTerminalCursorLine`。滚动期间每帧好几条，等于反复把 agent 的重绘往后推。`resumeOnAnyOutput` 会在下一次输出时撤销挂起所以很少真停死，但那些光标行重绘和写队列的 hold/cancel 抖动是白付的。判据用 `isReplayingWheel()`——合成事件是同步 dispatch 的，`onData` 就发生在 `beginReplay`/`endReplay` 之间，这个标志天然精确，比正则匹配 `\x1b[<…M` 稳得多。
 
-第三处是**上报不能算用户输入**。上报走 `term.onData` → `sendInput` → `writer.pauseForUserInput()`：48ms 输出挂起 + 两次 `refreshTerminalCursorLine`。滚动期间每帧好几条，等于反复把 agent 的重绘往后推。`resumeOnAnyOutput` 会在下一次输出时撤销挂起所以很少真停死，但那些光标行重绘和写队列的 hold/cancel 抖动是白付的。判据用 `isReplayingWheel()`——合成事件是同步 dispatch 的，`onData` 就发生在 `beginReplay`/`endReplay` 之间，这个标志天然精确，比正则匹配 `\x1b[<…M` 稳得多。
+## 闭环反而把跟手感吃掉了：改成"突发 + 闭环长尾"
 
-写测试时注意：**"最后一帧比第一帧小"证明不了减速**，固定速率跑完最后也会剩个零头。要断言的是渐进的尾巴（末三帧都 ≤ 2 且总帧数多于 `ceil(总行数 / 每帧上限)`）。改完拿"把预算换回固定值"跑一遍，测试必须真的红。
+2026-08-23 的症状是"滚轮有明显延迟"。上一节那套 pacer 把**每一条**上报都排进 rAF 并等重绘，于是最快的一次响应也要等一帧 + 一次 agent 重绘；缓动那层更进一步——`ceil(剩余/3)` 夹进 `1..4` 意味着一次普通滚动（约 3 行）要三帧才走完，一次甩动要十几帧、十几次 agent 重绘。用户感知到的不是"匀速"，是"手停了画面还在爬"。
 
-## 能做到真平滑的只有本地滚动
+现在的策略是**第一屏同步发、超出部分才排队**：
 
-`smoothScrollDuration`（`initTerminal`，100ms）只作用于 xterm 亲自滚 viewport 的场景：shell / SSH / WSL 面板，以及 agent 终端**不在 alt screen** 的时候。开了鼠标上报的 alt screen 由 agent 重绘，这个选项完全管不到——那条路径最细的单位就是一行，不存在亚像素。要让 agent 终端真的浏览器式平滑，只能关掉鼠标上报并自己维护本地 scrollback 视图，代价见文末那张表。
+- `WHEEL_BURST_SCREENS`（1 屏）的额度在 `enqueue` 里当场发掉，不排 rAF、不等重绘信号。手感的全部来源就是这一步：普通滚动整个落在突发额度内，和事件同一个 tick 就进了 pty。
+- 只有超出突发额度的部分（惯性甩动）才进队列，按帧发、等 `onWriteParsed`。长尾本就落后于手，闭环在这儿仍然有用——它是防洪，不是手感。
+- 突发额度只在队列空着时给。队列里还有货说明我们已经跑在 agent 前面了，再突发就是加深管道深度。
+- 每帧配额从 4 提到 `MAX_WHEEL_REPORTS_PER_FRAME`（16）。反直觉但是对的：**一次 write 带多条上报，agent 是一次 read、一次重绘**；拆细既加延迟又加重绘次数。旧配额在两个轴上都更差。
+- 缓动整层删掉了。它是为"匀速台阶感"设计的，而现在普通滚动根本不进队列，缓动只剩下"让甩动的尾巴变慢"这一个效果——那正是延迟感的来源。
+
+写测试时注意：算行数要把两道上限一起算进去，否则期望值凭空多出一截。`MAX_WHEEL_LINES_PER_EVENT_SCREENS`（3 屏）截单个事件，`MAX_PENDING_WHEEL_SCREENS`（3 屏）截队列存量——`rows: 10` 时 `deltaY: 800` / 16px 行高不是 50 行而是 30 行。断言"突发是同步的"要在 `handler()` 返回后**立刻**数，一旦先 `await nextFrame()` 就分不清同步发出和排队发出。断言"等重绘"时别让等待横跨宽限期（现在只有 50ms，两个 rAF 就够超时）。改完拿"把 `WHEEL_BURST_SCREENS` 归零、每帧配额换回 4"跑一遍，测试必须真的红。
+
+## 正常缓冲区自己滚，不要交回 xterm
+
+不在 alt screen 时（agent 空闲、`git log` 之外的普通输出）滚轮走的是本地 viewport，这条路径也不能交回 xterm：`consumeWheelEvent` 会对 `|deltaY| < 50` 的事件乘 `0.3` 当"疑似触控板"阻尼，行程直接缩到三分之一，而这一节要的恰恰是 1:1。所以正常缓冲区用同一套 `wheelLinesForEvent`（含亚行余量累计）算行数，再 `term.scrollLines()`。
+
+一个容易吞掉滚轮的陷阱：`wheelLinesForEvent` 返回 `0` 有两种含义——「余量还没攒满一行」（该吃掉事件）和「量不到行高」（该交回 xterm）。不加区分就会在还没渲染 / rect 为 0 时让滚轮**彻底没反应**。所以先单独判 `measureCellHeight() === null`，且只对 PIXEL 事件判——LINE / PAGE 根本不需要行高。
+
+`smoothScrollDuration` 同时从 100ms 调成了 **0**。它用 rAF 插值 viewport，定义上就让画面滞后于手指一个插值周期——"跟手"和"插值平滑"是互斥的，这里选跟手。它只作用于 xterm 亲自滚 viewport 的场景；开了鼠标上报的 alt screen 由 agent 重绘，那条路径最细的单位就是一行，这个选项完全管不到。要让 agent 终端真的浏览器式平滑，只能关掉鼠标上报并自己维护本地 scrollback 视图，代价见文末那张表。
 
 ## 滚轮兜底只装 agent 终端
 
@@ -58,11 +72,25 @@
 
 扫最新 transcript（`~/.aeroric/terminal-history/*.log`）里的 DECSET 参数，**只数 `h`（开启）不要数 `l`**：agent 退出时会无条件复位 `1000/1002/1003/1006`，即使全程没开过。混数 `h` 和 `l` 会得出"24 个会话开了鼠标"的错误结论，实际是 0 个。`?1049h` = alt screen，`?1002h`/`?1006h` = 鼠标上报真的开了。
 
+## 上报开着时，压住输出等于把 agent 画的选区憋到松手
+
+macOS WKWebView 那道选区守卫（`attachMacWebKitTerminalGuard`，见文件头注释）在 pointerdown 时会 `setSelectionPaused(true)` 暂停写入，避免拖动期间的重绘和 `characterIndexForPoint` 风暴打架。问题是它原来**无条件**暂停。
+
+上报开着时拖动是转发给 agent 的，选区由 agent 自己画、通过输出回来——把输出压住，那些帧就一路憋到 pointerup 才刷出来，症状正是"松手之后才出现选择区域"。所以暂停之前要先判断这次按下形成的是谁的选区。
+
+判据必须和 xterm 自己那道门一致（`CoreBrowserTerminal.bindMouse`：`!areMouseEventsActive || shouldForceSelection(ev)`），判错一边就会压错对象；`dragMakesLocalSelection` 就是这道门的镜像：
+
+- `areMouseEventsActive` 等价于 `mouseTrackingMode ∈ {vt200, drag, any}`。**`x10` 不算**——它的 events 只有 DOWN，`SelectionService` 照常工作，是本地选区。
+- `shouldForceSelection` 在 macOS 上是 `altKey`（配合 `initTerminal` 已开的 `macOptionClickForcesSelection`），其余平台是 `shiftKey`。所以 ⌥Option 拖动仍然要压。
+- 读不到 `modes` 时按本地选区处理。这是修复前的行为，压错方向最坏只是拖动期间画面不动；反过来猜错会把本地选区抖成一团。
+
+`textarea.disabled` 那层保护跟选区归属无关，两条路径都要保留。
+
 ## 权衡
 
 | 鼠标上报 | 滚轮 | 框选 |
 | --- | --- | --- |
-| 开 | agent 自己逐行滚，手感最好 | 拖动被转发给 agent，原生选区要按 ⌥Option（macOS，`initTerminal` 已开 `macOptionClickForcesSelection`）或 Shift（Win/Linux） |
+| 开 | agent 自己逐行滚，手感最好 | 拖动被转发给 agent，选区由 agent 画（**不能压住输出**，见上节）；原生选区要按 ⌥Option（macOS，`initTerminal` 已开 `macOptionClickForcesSelection`）或 Shift（Win/Linux） |
 | 关 | 需要前端把滚轮翻译成 PageUp/PageDown 才能翻看（页粒度） | 拖动即选，无需修饰键 |
 
 `d18976871` 选了"保框选"，2026-08-22 改成"保滚动"。要改回去就是在 `build_claude_cmd` 重新设 `CLAUDE_CODE_DISABLE_MOUSE=1` + 在兜底里发 `ESC[5~` / `ESC[6~`。

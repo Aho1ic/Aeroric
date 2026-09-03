@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Check, Columns2, Copy, Edit3, Maximize2, Plus, Server } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Check, Columns2, Copy, Edit3, Maximize2, Plus, Server, Trash2 } from "lucide-react";
 import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -9,6 +9,15 @@ import { SshTerminalPanel } from "./SshTerminalPanel";
 import { useCopyFeedback } from "./useCopyFeedback";
 import { SshGroupContextMenu } from "./SshGroupContextMenu";
 import { useSshGroups } from "./useSshGroups";
+import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
+import {
+  SSH_TERMINAL_MAX_SESSIONS,
+  closeSshTab,
+  openSshTab,
+  pruneSshTabsForConnection,
+  toggleSshCardsView,
+  type SshTab,
+} from "./sshTabs";
 import type { AuxiliaryWorkspaceLayout } from "../project-page/viewMode";
 
 export type SshWorkspaceLayout = AuxiliaryWorkspaceLayout;
@@ -218,14 +227,16 @@ function SshCardPicker({
 function SshWorkspaceHeader({
   layout,
   showingCards,
+  canReturnToTerminal,
   onToggleLayout,
-  onShowCards,
+  onToggleCards,
   onNewConnection,
 }: {
   layout: SshWorkspaceLayout;
   showingCards: boolean;
+  canReturnToTerminal: boolean;
   onToggleLayout: () => void;
-  onShowCards: () => void;
+  onToggleCards: () => void;
   onNewConnection: () => void;
 }) {
   const { t } = useI18n();
@@ -247,8 +258,13 @@ function SshWorkspaceHeader({
         <button
           type="button"
           className={`ssh-workspace-icon-btn${showingCards ? " active" : ""}`}
-          title={t("ssh.showConnections")}
-          onClick={onShowCards}
+          // 同一个按钮两态:开着卡片且有终端可回时说「还原终端」,否则说「显示连接」。
+          // 没有标签时它只是个已按下的状态指示,不该承诺一个回不去的动作。
+          title={
+            showingCards && canReturnToTerminal ? t("ssh.backToTerminal") : t("ssh.showConnections")
+          }
+          aria-pressed={showingCards}
+          onClick={onToggleCards}
         >
           <Server size={15} />
         </button>
@@ -262,6 +278,84 @@ function SshWorkspaceHeader({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * 标签条。只在有标签时出现 —— 一条空轨道会让卡片视图凭空矮一截。
+ *
+ * `+` 是「同主机再开一个会话」的唯一入口:点卡片走聚焦语义,不新建。
+ */
+function SshTabStrip({
+  tabs,
+  activeTabId,
+  atLimit,
+  onSelect,
+  onClose,
+  onDuplicate,
+}: {
+  tabs: readonly SshTab[];
+  activeTabId: string | null;
+  atLimit: boolean;
+  onSelect: (tabId: string) => void;
+  onClose: (tabId: string) => void;
+  onDuplicate: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <AnimatedSelectionTrack
+      value={activeTabId ?? ""}
+      ariaLabel={t("ssh.title")}
+      role="tablist"
+      className="ssh-tab-strip"
+    >
+      {tabs.map((tab) => {
+        const selected = tab.id === activeTabId;
+        return (
+          <div
+            key={tab.id}
+            className="ssh-tab"
+            data-animated-selection-item
+            data-selection-value={tab.id}
+            data-selected={selected ? "true" : "false"}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              className="ssh-tab-label"
+              title={tab.title}
+              onClick={() => onSelect(tab.id)}
+            >
+              <Server size={11} />
+              <span className="ssh-tab-text">{tab.title}</span>
+            </button>
+            <button
+              type="button"
+              className="ssh-tab-close"
+              aria-label={t("ssh.closeTab", { title: tab.title })}
+              title={t("ssh.closeTab", { title: tab.title })}
+              onClick={() => onClose(tab.id)}
+            >
+              <Trash2 size={9.5} />
+            </button>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        className="ssh-tab-add"
+        disabled={atLimit}
+        title={atLimit ? t("terminal.limitReached") : t("ssh.newSession")}
+        aria-label={atLimit ? t("terminal.limitReached") : t("ssh.newSession")}
+        onClick={onDuplicate}
+      >
+        <Plus size={12} />
+      </button>
+      <span className="ssh-tab-count">
+        {tabs.length}/{SSH_TERMINAL_MAX_SESSIONS}
+      </span>
+    </AnimatedSelectionTrack>
   );
 }
 
@@ -289,10 +383,13 @@ export function SshWorkspace({
   layout: SshWorkspaceLayout;
   onLayoutChange: (layout: SshWorkspaceLayout) => void;
 }) {
-  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const { t } = useI18n();
+  const [tabs, setTabs] = useState<SshTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showCards, setShowCards] = useState(true);
   const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [limitNotice, setLimitNotice] = useState(false);
   // 与右侧栏 SSH 列表同源(store 订阅):那里建的空分组在这里也要看得到、删得掉。
   const {
     groups,
@@ -300,10 +397,64 @@ export function SshWorkspace({
     deleteGroup: deleteGroupName,
     renameGroup,
   } = useSshGroups(connections, onConnectionsChange);
-  const selectedConnection = selectedConnectionId
-    ? connections.find((connection) => connection.id === selectedConnectionId)
-    : null;
-  const rightShowsCards = showCards || !selectedConnection;
+  const hasOpenTabs = tabs.length > 0;
+  // 没有标签时终端侧无内容可显示,只能回落到卡片。
+  const rightShowsCards = showCards || !hasOpenTabs;
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+
+  const openConnection = useCallback((connection: SshConnection, forceNew = false) => {
+    setTabs((prev) => {
+      const result = openSshTab({ tabs: prev, connection, forceNew, now: Date.now() });
+      setActiveTabId(result.activeTabId);
+      setLimitNotice(result.limitReached);
+      return result.tabs;
+    });
+    // 到顶时留在卡片视图:那儿才有「限制已达」的提示可看。
+    setShowCards(false);
+  }, []);
+
+  /**
+   * 连接从名单里消失了(在别处删的、或远端同步下来的),清掉指向它的标签。
+   *
+   * 不能只靠 `deleteConnection` —— 那条路只覆盖"在这个工作区里删"。名单是外部 prop,
+   * 右侧栏、手机端同步都能改它,标签留着就会指向一条不存在的连接:自动重连拿不到
+   * connection,标签变成一个永远连不上的空终端。
+   */
+  useEffect(() => {
+    const live = new Set(connections.map((connection) => connection.id));
+    const orphan = tabs.find((tab) => !live.has(tab.connectionId));
+    if (!orphan) return;
+    setTabs((prev) => {
+      let next = prev;
+      let nextActive = activeTabId;
+      for (const tab of prev) {
+        if (live.has(tab.connectionId)) continue;
+        const result = pruneSshTabsForConnection({
+          tabs: next,
+          activeTabId: nextActive,
+          connectionId: tab.connectionId,
+        });
+        next = result.tabs;
+        nextActive = result.activeTabId;
+      }
+      setActiveTabId(nextActive);
+      if (next.length === 0) setShowCards(true);
+      return next;
+    });
+  }, [activeTabId, connections, tabs]);
+
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      setTabs((prev) => {
+        const result = closeSshTab({ tabs: prev, activeTabId, tabId });
+        setActiveTabId(result.activeTabId);
+        if (result.tabs.length === 0) setShowCards(true);
+        return result.tabs;
+      });
+      setLimitNotice(false);
+    },
+    [activeTabId],
+  );
 
   const saveConnection = (connection: SshConnection) => {
     const exists = connections.some((item) => item.id === connection.id);
@@ -313,10 +464,10 @@ export function SshWorkspace({
     onConnectionsChange(next);
     // 对话框里手输的新分组也要进名单,否则移走最后一条连接它就消失了。
     createGroup(connection.group ?? "");
-    setSelectedConnectionId(connection.id);
-    setShowCards(false);
     setEditingConnection(null);
     setDialogOpen(false);
+    // 编辑已存在的连接只是改配置,不该顺手把它连起来 —— 新建才自动开会话。
+    if (!exists) openConnection(connection);
   };
 
   const deleteConnection = (connectionId: string) => {
@@ -326,10 +477,13 @@ export function SshWorkspace({
     } else {
       onConnectionsChange(next);
     }
-    if (selectedConnectionId === connectionId) {
-      setSelectedConnectionId(next[0]?.id ?? null);
-      setShowCards(true);
-    }
+    // 同一台主机可能开着多个标签,全部清掉。SshTerminalPanel 卸载时会 kill 后端 shell。
+    setTabs((prev) => {
+      const result = pruneSshTabsForConnection({ tabs: prev, activeTabId, connectionId });
+      setActiveTabId(result.activeTabId);
+      if (result.tabs.length === 0) setShowCards(true);
+      return result.tabs;
+    });
   };
 
   const renderChooserOrTerminal = () => (
@@ -337,25 +491,49 @@ export function SshWorkspace({
       <SshWorkspaceHeader
         layout={layout}
         showingCards={rightShowsCards}
+        canReturnToTerminal={hasOpenTabs}
         onToggleLayout={() => onLayoutChange(layout === "full" ? "split" : "full")}
-        onShowCards={() => setShowCards(true)}
+        onToggleCards={() =>
+          setShowCards(toggleSshCardsView({ showingCards: rightShowsCards, hasOpenTabs }))
+        }
         onNewConnection={() => {
           setEditingConnection(null);
           setDialogOpen(true);
         }}
       />
-      {rightShowsCards ? (
-        <div className="ssh-workspace-card-scroll">
+      {hasOpenTabs && (
+        <SshTabStrip
+          tabs={tabs}
+          activeTabId={rightShowsCards ? null : activeTabId}
+          atLimit={tabs.length >= SSH_TERMINAL_MAX_SESSIONS}
+          onSelect={(tabId) => {
+            setActiveTabId(tabId);
+            // 点标签就是要看那个终端,顺手从卡片视图退出来。
+            setShowCards(false);
+          }}
+          onClose={handleCloseTab}
+          onDuplicate={() => {
+            const connection = activeTab
+              ? connections.find((item) => item.id === activeTab.connectionId)
+              : null;
+            if (connection) openConnection(connection, true);
+          }}
+        />
+      )}
+      {limitNotice && <div style={s.sshErrorBanner}>{t("terminal.limitReached")}</div>}
+      <div className="ssh-workspace-body">
+        <div
+          className="ssh-workspace-card-scroll"
+          aria-hidden={!rightShowsCards}
+          style={{ display: rightShowsCards ? "block" : "none" }}
+        >
           <SshCardPicker
             connections={connections}
-            selectedId={selectedConnectionId}
+            selectedId={activeTab?.connectionId ?? null}
             namedGroups={groups}
             onRenameGroup={renameGroup}
             onDeleteGroup={deleteGroupName}
-            onOpen={(connection) => {
-              setSelectedConnectionId(connection.id);
-              setShowCards(false);
-            }}
+            onOpen={(connection) => openConnection(connection)}
             onEdit={(connection) => {
               setEditingConnection(connection);
               setDialogOpen(true);
@@ -365,28 +543,42 @@ export function SshWorkspace({
                 onOpenSftp?.(connection);
                 return;
               }
-              setSelectedConnectionId(connection.id);
-              setShowCards(false);
+              openConnection(connection);
             }}
             onDelete={(connection) => deleteConnection(connection.id)}
           />
         </div>
-      ) : (
-        <SshTerminalPanel
-          key={selectedConnection!.id}
-          connections={connections}
-          onConnectionsChange={onConnectionsChange}
-          onDeleteConnection={onDeleteConnection}
-          active={active}
-          width="100%"
-          themeVariant={themeVariant}
-          terminalFontSize={terminalFontSize}
-          monoFontFamily={monoFontFamily}
-          initialConnectionId={selectedConnection!.id}
-          autoConnect
-          hideConnectionList
-        />
-      )}
+        {/*
+          每个标签的终端都常挂,非活动的用 display:none 压住 —— 与 ShellTerminalInstance
+          同一手法。切标签不能卸载:卸载会 kill 后端 shell(见 SshTerminalPanel 的 cleanup),
+          回来就是一个空终端,而用户预期是"接着刚才那条会话"。
+        */}
+        {tabs.map((tab) => {
+          const visible = !rightShowsCards && tab.id === activeTabId;
+          return (
+            <div
+              key={tab.id}
+              className="ssh-workspace-terminal-layer"
+              aria-hidden={!visible}
+              style={{ display: visible ? "flex" : "none" }}
+            >
+              <SshTerminalPanel
+                connections={connections}
+                onConnectionsChange={onConnectionsChange}
+                onDeleteConnection={onDeleteConnection}
+                active={active && visible}
+                width="100%"
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                monoFontFamily={monoFontFamily}
+                initialConnectionId={tab.connectionId}
+                autoConnect
+                hideConnectionList
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 

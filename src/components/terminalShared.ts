@@ -2,12 +2,17 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { IS_MAC_WEBKIT } from "../platform";
+import { APP_PLATFORM, IS_MAC_WEBKIT } from "../platform";
 import {
   applyTerminalTextareaInputAttributes,
   beginTerminalTextareaInternalFocusReset,
   endTerminalTextareaInternalFocusReset,
 } from "./terminalInputFix";
+import {
+  countTerminalCreated,
+  countTerminalDisposed,
+  registerWebglContextProbe,
+} from "../lib/resourceCensus";
 import type { ThemeVariant } from "../types";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
@@ -117,12 +122,13 @@ export const TERMINAL_WRITE_CHUNK_SIZE = 16 * 1024;
 export const TERMINAL_FRAME_WRITE_BUDGET = 32 * 1024;
 export const TERMINAL_USER_INPUT_PAUSE_MS = 48;
 /**
- * 本地 viewport 滚动的插值时长。
+ * 本地 viewport 滚动的插值时长。0 = 不插值,滚多少当帧就到位。
  *
- * 100ms 左右是"看得出是连续位移、又不会觉得画面追不上手"的区间；再长滚动会显得拖沓，
- * 再短就退化回逐行跳。只影响 xterm 自己滚 scrollback 的场景，见 `initTerminal`。
+ * 曾经是 100ms。插值让位移看起来连续,但画面必然滞后手指一个插值周期,实测就是"滑动
+ * 有延迟"。行程已经由 `wheelLinesForEvent` 做到 1:1,立刻到位才跟手 —— 浏览器给人
+ * "平滑"的印象来自触控板本身的高事件频率,不是来自补间。
  */
-export const TERMINAL_SMOOTH_SCROLL_MS = 100;
+export const TERMINAL_SMOOTH_SCROLL_MS = 0;
 const ANSI_FG_RESET = "\x1b[39m";
 const TERMINAL_HIGHLIGHT_PATTERN =
   /\b(error|exception|traceback|failed|fail|warning|warn|success|passed|pass|running|done)\b|\b\d+(?:\.\d+)?(?:%|ms|s|MB|GB|KB)?\b/gi;
@@ -402,6 +408,33 @@ function setMacWebKitTextareaAttrs(term: Terminal): void {
   applyTerminalTextareaInputAttributes(term);
 }
 
+// 只有这三种协议会真的把鼠标事件上报给程序（CoreMouseService 的 DEFAULT_PROTOCOLS）。
+// x10 不算：它的 events 只有 DOWN，滚轮被 restrict 拒掉，拖动也不影响本地选区。
+const APP_MOUSE_REPORTING_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "any"]);
+
+/**
+ * 这次按下会形成 **xterm 本地选区** 吗?还是会被转发给程序?
+ *
+ * 判据照抄 xterm 自己那道门(`CoreBrowserTerminal.bindMouse`:
+ * `!areMouseEventsActive || shouldForceSelection(ev)`),两边必须一致 —— 我们要据此
+ * 决定「拖动期间要不要压住输出」,判错一边就会压错对象。
+ *
+ * `x10` 不算开着上报:它的 events 只有 DOWN,`SelectionService` 照常工作。
+ * 强制选区的修饰键沿用平台约定:macOS 是 ⌥Option(配合 `macOptionClickForcesSelection`),
+ * 其余平台是 Shift。
+ *
+ * 读不到 `modes` 时按「本地选区」处理:这是修复前的行为,压住输出最坏只是拖动期间画面
+ * 不动;反过来猜错会把本地选区抖成一团。
+ */
+export function dragMakesLocalSelection(
+  term: Partial<Pick<Terminal, "modes">>,
+  event: Pick<PointerEvent, "altKey" | "shiftKey">,
+): boolean {
+  const tracking = term.modes?.mouseTrackingMode;
+  if (tracking === undefined || !APP_MOUSE_REPORTING_MODES.has(tracking)) return true;
+  return APP_PLATFORM === "macos" ? event.altKey : event.shiftKey;
+}
+
 // macOS WKWebView 在 xterm 选区拖动期间会被 NSTextInputClient 持续查询
 // characterIndexForPoint，触发 LocalFrame::rangeForPoint → ICU 簇分析，
 // 主线程被打满。
@@ -483,7 +516,11 @@ export function attachMacWebKitTerminalGuard({
   const handlePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
     pointerSelecting = true;
-    writer?.setSelectionPaused(true);
+    // 只有本地选区才暂停写入。开了鼠标上报的 agent 终端里拖动是转发给 agent 的,
+    // 选区由 agent 自己画 —— 这时候压住输出就等于把它画的选区一路憋到松手才显示,
+    // 症状正是「拖的时候没有选区,松手才一次性出现」。本地选区仍要压:新输出会
+    // 滚动 viewport,把选区拖偏或抹掉。
+    if (dragMakesLocalSelection(term, e)) writer?.setSelectionPaused(true);
     syncSelectionGuard();
   };
 
@@ -1027,10 +1064,6 @@ export function createSmartWriter(
 
 // ── Wheel policy ─────────────────────────────────────────────────────────────
 
-// 只有这三种协议会真的向程序上报滚轮（CoreMouseService 的 DEFAULT_PROTOCOLS）。
-// x10 不算：它的 events 只有 DOWN，restrict 直接拒掉 WHEEL。
-const APP_WHEEL_MOUSE_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "any"]);
-
 /**
  * 一次 DOM 滚轮事件最多放大成几行上报，按屏数算。
  *
@@ -1040,16 +1073,26 @@ const APP_WHEEL_MOUSE_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "an
 const MAX_WHEEL_LINES_PER_EVENT_SCREENS = 3;
 
 /**
- * 每帧最多向程序发几条滚轮上报。
+ * 一次手势可以**当场同步**发出多少行上报,按屏数算。
  *
- * 为什么要限：一条上报就是 agent 的一次整屏重绘。原来一次手势把全部行数**同步**灌进
- * pty（实测一个普通档位 7 条、一次惯性甩动 72 条），agent 只能逐条重绘、逐屏回吐,
- * 前端拿到的是一长串已经过时的中间态 —— 症状就是"手停了画面还在追"。
+ * 这是「跟手」的关键。之前所有上报都要先等一帧 rAF、再按 4 条/帧配额挤出去,每批之间
+ * 还要等 agent 重绘 —— 一个普通档位(约 7 行)要四批、四次重绘才走完,叠加起来就是用户
+ * 报的「较大延迟」。
  *
- * 改成按帧分摊后，每帧只发这么多条，agent 的回吐与我们的发送交错进行，画面每帧都在动。
- * 4 条 × 60fps = 240 行/秒，比任何真实手势都快，同时把管道深度压到 agent 追得上的量级。
+ * 更要紧的是那个配额把事情做反了:一次 write 里多带几条上报,agent 是**一次 read 读完、
+ * 一次重绘**;拆成四批反而逼它重绘四次。所以分批既加延迟又加重绘,两头都亏。
+ *
+ * 现在改成:一屏以内当场发完,不排帧、不等信号 —— 行程 1:1 且零附加延迟。只有超过一屏
+ * 的部分(惯性甩动)才进队列按帧补发,那部分本来就不可能「跟手」,压住管道更重要。
  */
-const MAX_WHEEL_REPORTS_PER_FRAME = 4;
+const WHEEL_BURST_SCREENS = 1;
+
+/**
+ * 队列里每帧补发多少行。只作用于超出突发额度的那部分(惯性甩动的长尾)。
+ *
+ * 给得比过去的 4 条大:这些行已经落后于手了,慢慢挤只会让画面在用户松手后继续自己滚。
+ */
+const MAX_WHEEL_REPORTS_PER_FRAME = 16;
 
 /**
  * 未发送的滚轮行数上限（屏数）。
@@ -1060,24 +1103,19 @@ const MAX_WHEEL_REPORTS_PER_FRAME = 4;
 const MAX_PENDING_WHEEL_SCREENS = 3;
 
 /**
- * 每帧预算 = 待发行数 ÷ 这个除数(再夹进 1..MAX)。
+ * 队列补发时等 agent 重绘的宽限时间,超过就无条件发下一批。
  *
- * 为什么不用固定条数:固定 4 条/帧意味着每帧恰好跳 4 行(约 64px)然后停住,匀速直线,
- * 台阶感就是"卡顿"的来源。按剩余量取商后,大甩动开头满速、尾部自然收窄到 1 行/帧 ——
- * 指数衰减,也就是浏览器惯性滚动的 ease-out 手感。
+ * 只作用于超出突发额度的长尾 —— 突发那一屏是同步发的,压根不经过这里,所以这个值不再
+ * 影响「跟手」。
  *
- * 取 3 而不是更大:一个普通档位约 7 行,3 → 3/2/1/1 四帧收敛,既有减速段又不显迟滞。
+ * 超时兜底不能省:agent 已经滚到顶/底时一个字节都不会回吐,只等信号会把队列锁死,
+ * 症状是"滚到顶之后再往回滚要卡一下"。
+ *
+ * 50ms 约三帧:比一次全屏 TUI 重绘略宽,闭环才真的在闭环(定得比一帧还短就等于每帧
+ * 都超时推进,退化成开环);从 70ms 收下来是因为长尾本就落后于手,等太久只会让它更
+ * 像"画面自己在滚"。
  */
-const WHEEL_EASE_DIVISOR = 3;
-
-/**
- * 等 agent 重绘的宽限时间,超过就无条件发下一批。
- *
- * 闭环必须有超时兜底:agent 已经滚到顶/底时一个字节都不会回吐,只等信号会把队列锁死,
- * 症状是"滚到顶之后再往回滚要卡一下"。70ms 约四帧,足够覆盖一次全屏 TUI 重绘,
- * 又不会在真的没有回吐时让手感明显发粘。
- */
-export const WHEEL_REPAINT_GRACE_MS = 70;
+export const WHEEL_REPAINT_GRACE_MS = 50;
 
 /** 行内没滚满一行的余量,按终端实例累计,方向反转时清零。 */
 interface WheelCarry {
@@ -1169,11 +1207,23 @@ export function attachTerminalWheelScroll(term: Terminal): TerminalWheelScroll {
 
   term.attachCustomWheelEventHandler((event) => {
     if (event.deltaY === 0) return true;
-    if (APP_WHEEL_MOUSE_MODES.has(term.modes.mouseTrackingMode)) {
+    if (APP_MOUSE_REPORTING_MODES.has(term.modes.mouseTrackingMode)) {
       if (replaying) return true;
       return queueAppWheelReports(term, event, carry, pacer);
     }
-    if (term.buffer.active.type !== "alternate") return true;
+    if (term.buffer.active.type !== "alternate") {
+      // 正常缓冲区:自己滚 viewport,别交回 xterm。`consumeWheelEvent` 会对
+      // |deltaY| < 50 的事件乘 0.3 当"疑似触控板"阻尼,那正好反着我们要的 1:1 行程 ——
+      // 触控板轻滑本来就是小 delta,再打三折就成了"滑了半屏只动两行"。
+      const cellHeight = measureCellHeight(term);
+      // 量不到行高(还没渲染、rect 为 0)就交回 xterm。打了折的滚动也比彻底不动好。
+      if (cellHeight === null && event.deltaMode === WheelEvent.DOM_DELTA_PIXEL) return true;
+      const lines = wheelLinesForEvent(event, term.rows, cellHeight, carry);
+      // lines === 0 是余量还没攒满一行,不是失败。事件已经被我们吃掉,别让祖先容器跟着滚。
+      if (lines !== 0) term.scrollLines(lines);
+      event.preventDefault();
+      return false;
+    }
     // listener 是 { passive: false } 注册的，可以拦掉祖先容器的默认滚动。
     event.preventDefault();
     return false;
@@ -1210,21 +1260,19 @@ interface WheelReportPacer {
 }
 
 /**
- * 把待发行数按帧分摊成鼠标上报,并与 agent 的重绘闭环。
+ * 把行数变成鼠标上报:一屏以内当场发,超出的排队按帧补。
  *
- * 两条独立的节流:
+ * **突发**([`WHEEL_BURST_SCREENS`])是手感的全部来源:同步发出,不排 rAF、不等重绘信号。
+ * 一次 write 里带着整个手势的上报,agent 一次 read 读完、一次重绘就位 —— 既没有我们
+ * 自己加的延迟,重绘次数也比拆批更少。
  *
- * 1. **闭环**:发出一批后等 `onWriteParsed`(每帧最多触发一次、解析完成后)再发下一批,
- *    超过 [`WHEEL_REPAINT_GRACE_MS`] 无条件推进。原来是开环 —— 固定每帧灌 4 条,不管
- *    agent 画完没有。一次全屏 TUI 重绘通常超过一帧,于是我们持续跑在 agent 前面:上报
- *    堆在 pty 里,画面以"憋一下、跳一段"的方式回来,帧间距不均,这就是卡顿的主因。
- *    闭环之后每次重绘对应一批上报,节奏由 agent 的实际能力决定,画面匀速。
- *
- * 2. **缓动**:每帧条数按 [`WHEEL_EASE_DIVISOR`] 取剩余量的商,尾部自然收窄成 1 行/帧。
+ * **长尾**才走队列:惯性甩动能给出上千行,那部分无论如何都追不上手,于是反过来优先保护
+ * 管道。每批之后等 `onWriteParsed`(每帧最多一次、解析完成后)再发下一批,超过
+ * [`WHEEL_REPAINT_GRACE_MS`] 无条件推进 —— 超时兜底不能省,agent 滚到顶/底时一个字节都
+ * 不回吐,只等信号会把队列锁死。
  *
  * 方向反转时丢掉反向的余量 —— 用户已经改了主意,把旧方向补完只会让画面先往回跳一段。
- * 总量仍被 [`MAX_PENDING_WHEEL_SCREENS`] 截断:惯性甩动能攒出上千行,补完只会让画面
- * 在用户松手后继续自己滚。
+ * 总量仍被 [`MAX_PENDING_WHEEL_SCREENS`] 截断。
  */
 function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): WheelReportPacer {
   let pendingLines = 0;
@@ -1243,34 +1291,18 @@ function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): 
     if (pendingLines !== 0) schedule();
   });
 
-  const flush = () => {
-    frameScheduled = false;
-    if (cancelled || pendingLines === 0) return;
+  /**
+   * 立刻派发 `count` 条上报。返回真的发出去了多少 —— 拿不到 element 时发不出。
+   *
+   * 合成事件必须在一个同步块里发完:`beginReplay`/`endReplay` 之间的 `onData` 才会被
+   * 认成"滚轮上报"而不是"用户敲键"。
+   */
+  const dispatch = (count: number, step: -1 | 1): number => {
     const element = term.element;
-    if (!element) {
-      pendingLines = 0;
-      return;
-    }
-    // 还在等上一批的重绘:重排一帧继续等,别加深管道深度。
-    if (repaintDeadline !== 0) {
-      if (nowMs() < repaintDeadline) {
-        schedule();
-        return;
-      }
-      repaintDeadline = 0;
-    }
-
-    const step = pendingLines < 0 ? -1 : 1;
-    const budget = Math.max(
-      1,
-      Math.min(MAX_WHEEL_REPORTS_PER_FRAME, Math.ceil(Math.abs(pendingLines) / WHEEL_EASE_DIVISOR)),
-    );
-    const thisFrame = Math.min(Math.abs(pendingLines), budget);
-    pendingLines -= step * thisFrame;
-
+    if (!element || count <= 0) return 0;
     const endReplay = beginReplay();
     try {
-      for (let index = 0; index < thisFrame; index += 1) {
+      for (let index = 0; index < count; index += 1) {
         element.dispatchEvent(
           new WheelEvent("wheel", {
             deltaY: step,
@@ -1286,6 +1318,28 @@ function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): 
     } finally {
       endReplay();
     }
+    return count;
+  };
+
+  const flush = () => {
+    frameScheduled = false;
+    if (cancelled || pendingLines === 0) return;
+    if (!term.element) {
+      pendingLines = 0;
+      return;
+    }
+    // 还在等上一批的重绘:重排一帧继续等,别加深管道深度。
+    if (repaintDeadline !== 0) {
+      if (nowMs() < repaintDeadline) {
+        schedule();
+        return;
+      }
+      repaintDeadline = 0;
+    }
+
+    const step = pendingLines < 0 ? -1 : 1;
+    const thisFrame = Math.min(Math.abs(pendingLines), MAX_WHEEL_REPORTS_PER_FRAME);
+    pendingLines -= step * dispatch(thisFrame, step);
 
     // 只有能收到重绘信号时才闭环;收不到就退回纯 rAF,否则每批都要白等一个宽限期。
     if (repaintSignal) repaintDeadline = nowMs() + WHEEL_REPAINT_GRACE_MS;
@@ -1300,15 +1354,29 @@ function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): 
 
   return {
     enqueue: (lines, clientX, clientY) => {
-      if (cancelled) return;
+      if (cancelled || lines === 0) return;
       // 反向时丢掉旧方向的余量,否则画面会先往回跳一段再跟手。
       if (pendingLines !== 0 && Math.sign(pendingLines) !== Math.sign(lines)) {
         pendingLines = 0;
       }
       // 坐标用最新一次事件的:上报的格子位置该跟着当前指针。
       coords = { clientX, clientY };
+
+      const step: -1 | 1 = lines < 0 ? -1 : 1;
+      let remaining = Math.abs(lines);
+
+      // 突发额度当场发掉。只在队列空着时才允许 —— 前面还压着长尾就插队,画面会先跳一段
+      // 新的再回头补旧的,顺序就乱了。
+      if (pendingLines === 0) {
+        const burst = Math.max(term.rows, 1) * WHEEL_BURST_SCREENS;
+        remaining -= dispatch(Math.min(remaining, burst), step);
+        // 突发同样要让闭环知道 agent 正在画,否则紧随其后的长尾会立刻叠上去。
+        if (repaintSignal && remaining > 0) repaintDeadline = nowMs() + WHEEL_REPAINT_GRACE_MS;
+      }
+
+      if (remaining === 0) return;
       const cap = Math.max(term.rows, 1) * MAX_PENDING_WHEEL_SCREENS;
-      pendingLines = Math.max(-cap, Math.min(cap, pendingLines + lines));
+      pendingLines = Math.max(-cap, Math.min(cap, pendingLines + step * remaining));
       schedule();
     },
     cancel: () => {
@@ -1385,10 +1453,12 @@ export function initTerminal(
     minimumContrastRatio: terminalMinimumContrastRatioForTheme(variant),
     allowTransparency: true,
     allowProposedApi: true,
-    // 本地 scrollback 滚动做成浏览器那样的连续位移（xterm 自己按 rAF 插值到目标行）。
+    // 本地 scrollback 滚动不做插值。xterm 的 smoothScrollDuration 是"把 viewport 按 rAF
+    // 补间到目标行",读起来平滑,代价是画面永远滞后于手指一个插值周期 —— 100ms 时用户
+    // 直接报"滑动有较大延迟"。滚轮本身已经是 1:1 行程(见 wheelLinesForEvent),立刻到位
+    // 才是浏览器的手感。
     // 只对 xterm 亲自滚 viewport 的场景生效：shell / SSH / WSL 面板，以及 agent 终端
-    // 不在 alt screen 的时候。开了鼠标上报的 alt screen 由 agent 重绘，这里管不到，
-    // 那条路径的手感由 attachTerminalWheelScroll 的闭环节流负责。
+    // 不在 alt screen 的时候。开了鼠标上报的 alt screen 由 agent 重绘，这里管不到。
     // 不影响 less / vim 依赖的 alternate-scroll 方向键路径（那条不走 viewport 滚动）。
     smoothScrollDuration: TERMINAL_SMOOTH_SCROLL_MS,
     // 当运行中的 TUI（Claude Code / Codex）开启鼠标上报时，xterm 默认把拖动当作
@@ -1402,6 +1472,11 @@ export function initTerminal(
   term.loadAddon(fitAddon);
   term.loadAddon(unicode11Addon);
   term.unicode.activeVersion = "11";
+
+  // 存活普查:挂在终端自己的销毁时机上,而不是散在各面板的 cleanup 里 —— 后者漏一个就
+  // 永久偏高,反而让仪表本身变成误报源。
+  countTerminalCreated();
+  onTerminalDisposed(term, countTerminalDisposed);
 
   return { term, fitAddon };
 }
@@ -1420,15 +1495,75 @@ export function initTerminal(
  *
  * 不要为了"避免偶发卡顿"再把这里关掉——见 timeline rec10。
  */
+/**
+ * 同时允许存在的 WebGL 终端数。
+ *
+ * 浏览器对 WebGL 上下文有全局硬上限(通常 8–16),**超出时不报错**:它会静默丢弃最老的
+ * 那个上下文。症状是「开久了某个终端画面空白」——那个终端的 context 被后来者顶掉了,
+ * 而它自己不知道。
+ *
+ * 长跑下这个上限很容易撞到:SSH 多标签(最多 10)+ 本地 shell 多标签(最多 10)+ 每个
+ * agent 任务一个终端,全都常挂。取 6 是留足余量的保守值 —— 同时真正在看的终端不会有
+ * 那么多,超出的那些走 DOM 渲染器,慢一点但画面正确。正确优先于快。
+ */
+const MAX_WEBGL_TERMINALS = 6;
+
+let liveWebglContexts = 0;
+
+/** 仅供测试:配额是模块级的,断言之间需要复位。 */
+export function resetWebglContextBudget(): void {
+  liveWebglContexts = 0;
+}
+
+export function liveWebglContextCount(): number {
+  return liveWebglContexts;
+}
+
+// 配额计数器直接充当普查探针 —— 这两件事本来就是同一个数,不要各记一份。
+registerWebglContextProbe(liveWebglContextCount);
+
+/**
+ * 在终端销毁时收到通知。
+ *
+ * xterm 的 `Terminal` 上没有 `onDispose` 事件(那是 IMarker / IDecoration 这类
+ * IDisposableWithEvent 才有的)。但 `Terminal.dispose()` 会连带 dispose 所有 loadAddon
+ * 进去的 addon —— WebglAddon 能自动清理就是靠这条。所以挂一个只有 dispose 有内容的哨兵
+ * addon,就拿到了「终端销毁」这个时机,且走的全是公开 API,不碰 `_core`。
+ */
+function onTerminalDisposed(term: Terminal, onDispose: () => void): void {
+  term.loadAddon({
+    activate: () => {},
+    dispose: onDispose,
+  });
+}
+
 export function loadWebglAddon(term: Terminal): void {
+  // 配额用尽就直接用 DOM 渲染器。不试着"先建再看"—— 建成了就已经把别人顶掉了。
+  if (liveWebglContexts >= MAX_WEBGL_TERMINALS) return;
+
+  let counted = false;
+  const release = () => {
+    if (!counted) return;
+    counted = false;
+    liveWebglContexts -= 1;
+  };
+
   try {
     const webglAddon = new WebglAddon();
+    liveWebglContexts += 1;
+    counted = true;
     webglAddon.onContextLoss(() => {
       console.warn("[terminal] WebGL context lost; falling back to xterm DOM renderer");
+      release();
       webglAddon.dispose();
     });
+    // 终端销毁时归还配额。只挂 onContextLoss 不够:正常关掉一个终端不会触发它,
+    // 于是配额只减不增,开关几次之后所有新终端都被挤到 DOM 渲染器上。
+    onTerminalDisposed(term, release);
     term.loadAddon(webglAddon);
   } catch (err) {
+    // loadAddon 抛出时上面两个回调都没挂上,配额得在这里还,否则永久漏损。
+    release();
     console.warn("[terminal] WebGL addon unavailable; using xterm DOM renderer", err);
     /* 不支持 WebGL 时降级，不影响功能 */
   }

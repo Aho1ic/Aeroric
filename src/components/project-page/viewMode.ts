@@ -105,10 +105,42 @@ export function shouldShowRemoteSshTerminalLayer({
   );
 }
 
+export type CenterWorkspaceMode = "sftp" | "shell" | "docker" | "ssh" | "database" | "notes" | null;
+
+/**
+ * 中央工作区五层覆盖层各自是否可见。
+ *
+ * 这些面板都常挂(见 ProjectPage 的 `*Mounted`),靠 `display` 切换而不是卸载 ——
+ * 卸载会丢掉终端会话、草稿、已加载的索引。代价是它们同时存在于 DOM 里,而每一层都是
+ * `position:absolute; inset:0`:两层同时 `display:flex` 会静默相互遮盖,没有任何报错。
+ *
+ * 所以互斥必须集中在一处算。散在 JSX 里写六处 `&&` 必然漂出"两层同时可见",而集中
+ * 一处能被测试锁死(见 center-layer-exclusivity.test.ts)。
+ *
+ * `primary` 是原有那条主链(diff / 编辑器 / 任务视图)。它在 `null`、`shell`、`ssh`
+ * 三种模式下都要为真:shell 是叠在主链上面的另一层(`shellCenterLayerStyle` 的
+ * zIndex 3),SSH 分屏时左半边仍然是主链。
+ */
+export function centerLayerVisibility(mode: CenterWorkspaceMode): {
+  sftp: boolean;
+  database: boolean;
+  docker: boolean;
+  notes: boolean;
+  primary: boolean;
+} {
+  return {
+    sftp: mode === "sftp",
+    database: mode === "database",
+    docker: mode === "docker",
+    notes: mode === "notes",
+    primary: mode === null || mode === "shell" || mode === "ssh",
+  };
+}
+
 export function centerWorkspaceMode(
   rightPanel: RightPanel,
   shellActive = false,
-): "sftp" | "shell" | "docker" | "ssh" | "database" | "notes" | null {
+): CenterWorkspaceMode {
   if (rightPanel === "sftp") return "sftp";
   if (rightPanel === "ssh") return "ssh";
   if (rightPanel === "database") return "database";
