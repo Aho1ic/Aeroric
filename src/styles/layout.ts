@@ -28,13 +28,13 @@ export const layout = {
   sidebar: {
     width: 138,
     flexShrink: 0,
+    // 首页动画画布是它的兄弟层且铺满整个 welcomeBody,画布每帧全量重绘都会脏掉
+    // 这一层的 backdrop,导致 60Hz 重新模糊。改成不透明实色。
     background: "var(--bg-sidebar)",
     borderRight: "1px solid var(--border-dim)",
     display: "flex",
     flexDirection: "column",
     padding: "12px 7px 10px",
-    backdropFilter: "var(--glass-blur)",
-    WebkitBackdropFilter: "var(--glass-blur)",
   },
   sidebarBrand: {
     display: "flex",
@@ -175,8 +175,6 @@ export const layout = {
     borderRadius: "var(--radius-lg)",
     transition: "box-shadow 0.18s ease, border-color 0.18s ease",
     boxShadow: "var(--shadow-xs)",
-    backdropFilter: "var(--glass-blur-compact)",
-    WebkitBackdropFilter: "var(--glass-blur-compact)",
   },
   searchInput: {
     flex: 1,

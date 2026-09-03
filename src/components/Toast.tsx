@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react";
 import type React from "react";
 
 import { zLayers } from "../styles/zLayers";
@@ -55,8 +55,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // value 每次 render 都换引用时,每显示/关闭一条 toast 都会让全部 useToast()
+  // 消费者重渲染 -- 这些消费者散布在整棵树上,点击一次按钮的反馈就变成一次全局重渲染。
+  const value = useMemo<ToastContextValue>(() => ({ showToast }), [showToast]);
+
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={value}>
       {children}
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </ToastContext.Provider>

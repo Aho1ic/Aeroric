@@ -58,10 +58,9 @@ const POINTER_DRAG_MOVE_TOLERANCE = 5;
 // 映射),切换项目实际是换掉整条侧栏。若不共享滚动位置,新实例会从 scrollTop=0 起绘,
 // 表现为“点一下项目就跳回列表顶部”。这里把滚动位置提到模块级并在实例间同步。
 let sharedRailScrollTop = 0;
-const railScrollSubscribers = new Set<(top: number) => void>();
 
-// 把滚动容器接到共享位置:挂载时恢复,滚动时广播给其他实例。
-function useSharedRailScroll() {
+// 把滚动容器接到共享位置:变为可见时恢复,滚动时只记账。
+function useSharedRailScroll(activeProjectId: string) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // 应用共享值时会触发一次 scroll 事件，需忽略以免自己覆盖自己。
   const applyingRef = useRef(false);
@@ -74,24 +73,17 @@ function useSharedRailScroll() {
     applyingRef.current = false;
   }, []);
 
+  // 挂载时以及每次切换项目时恢复。原先是在 scroll 事件里同步写回其余 N-1 个已挂载
+  // rail 的 scrollTop —— 每个滚动帧 N-1 次强制布局,开的项目越多越卡。切换时恢复
+  // 一次即可达到同样效果:代价从「每帧 N-1 次」降到「每次切换 N 次」。
   useLayoutEffect(() => {
     applyScrollTop(sharedRailScrollTop);
-    railScrollSubscribers.add(applyScrollTop);
-    return () => {
-      railScrollSubscribers.delete(applyScrollTop);
-    };
-  }, [applyScrollTop]);
+  }, [applyScrollTop, activeProjectId]);
 
-  const handleScroll = useCallback(
-    (event: UIEvent<HTMLDivElement>) => {
-      if (applyingRef.current) return;
-      sharedRailScrollTop = event.currentTarget.scrollTop;
-      for (const subscriber of railScrollSubscribers) {
-        if (subscriber !== applyScrollTop) subscriber(sharedRailScrollTop);
-      }
-    },
-    [applyScrollTop],
-  );
+  const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    if (applyingRef.current) return;
+    sharedRailScrollTop = event.currentTarget.scrollTop;
+  }, []);
 
   return { scrollRef, handleScroll };
 }
@@ -497,14 +489,16 @@ export function ProjectRail({
   const [resizing, setResizing] = useState(false);
   const projectItemRefs = useRef<Map<string, HTMLElement>>(new Map());
   const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
+  const railRootRef = useRef<HTMLDivElement>(null);
   const railResizeRef = useRef<{
     pointerId: number;
     startX: number;
     startWidth: number;
+    lastWidth?: number;
   } | null>(null);
   const suppressNextProjectClickRef = useRef(false);
   const { scrollRef: projectListScrollRef, handleScroll: handleProjectListScroll } =
-    useSharedRailScroll();
+    useSharedRailScroll(activeProjectId);
   const isDark = themeVariant === "dark";
   const setRailCollapsed = useCallback(
     (nextCollapsed: boolean) => {
@@ -680,12 +674,17 @@ export function ProjectRail({
     event.preventDefault();
   };
 
+  // 拖动过程中直接写 DOM 宽度,不经过 React。原先每个 pointermove 都调 App 根上的
+  // setProjectRailWidth,连带一次同步 localStorage.setItem —— 每秒 60-120 次
+  // 重渲染整个 App(以及它下面所有已挂载的 ProjectPage)。最终宽度在 pointerup 时
+  // 提交一次。
   const handleRailResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const resize = railResizeRef.current;
     if (!resize || resize.pointerId !== event.pointerId) return;
-    onProjectRailWidthChange?.(
-      normalizeProjectRailWidth(resize.startWidth + event.clientX - resize.startX),
-    );
+    const next = normalizeProjectRailWidth(resize.startWidth + event.clientX - resize.startX);
+    resize.lastWidth = next;
+    const root = railRootRef.current;
+    if (root) root.style.width = `${next}px`;
     event.preventDefault();
   };
 
@@ -695,7 +694,11 @@ export function ProjectRail({
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     railResizeRef.current = null;
     setResizing(false);
+    if (resize.lastWidth !== undefined && resize.lastWidth !== resize.startWidth) {
+      onProjectRailWidthChange?.(resize.lastWidth);
+    }
   };
+
 
   useEffect(() => {
     setExpandedProjectIds((prev) => {
@@ -871,8 +874,6 @@ export function ProjectRail({
           width: PROJECT_RAIL_COLLAPSED_WIDTH,
           flexShrink: 0,
           background: "var(--bg-sidebar)",
-          backdropFilter: "var(--glass-blur)",
-          WebkitBackdropFilter: "var(--glass-blur)",
           borderRight: "1px solid var(--border-dim)",
           display: "flex",
           flexDirection: "column",
@@ -930,13 +931,12 @@ export function ProjectRail({
 
   return (
     <div
+      ref={railRootRef}
       style={{
         position: "relative",
         width: normalizeProjectRailWidth(projectRailWidth),
         flexShrink: 0,
         background: "var(--bg-sidebar)",
-        backdropFilter: "var(--glass-blur)",
-        WebkitBackdropFilter: "var(--glass-blur)",
         borderRight: "1px solid var(--border-dim)",
         display: "flex",
         flexDirection: "column",

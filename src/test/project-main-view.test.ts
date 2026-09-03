@@ -327,12 +327,17 @@ describe("project main view mode", () => {
     ).toBe(null);
   });
 
-  it("hides inactive projects without display none so terminals stay mounted", () => {
+  it("drops inactive projects out of layout while keeping their React tree mounted", () => {
+    // 隐藏项目仍然挂载(终端/编辑器状态要留着),但不能再参与布局:
+    // visibility:hidden 会让 N 棵完整 ProjectPage 继续布局,任何一次 resize/拖动都要
+    // 唤醒它们各自的 ResizeObserver。
     const hidden = projectVisibilityStyle(false);
-
-    expect(hidden.display).toBe("flex");
-    expect(hidden.visibility).toBe("hidden");
+    expect(hidden.display).toBe("none");
     expect(hidden.pointerEvents).toBe("none");
+
+    const visible = projectVisibilityStyle(true);
+    expect(visible.display).toBe("flex");
+    expect(visible.pointerEvents).toBe("auto");
   });
 
   it("collapses the project rail before switching compose controls to icon-only", () => {

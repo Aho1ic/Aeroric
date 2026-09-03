@@ -583,13 +583,27 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
     el.style.background = "transparent";
   };
 
+  // 行高只随尺寸变化。缓存它,否则每次光标移动都要读一次 clientHeight,而紧接着
+  // 又要写 style.height / style.transform —— 读写交替就是每次光标移动一次强制同步
+  // 布局,发生在 xterm 的 write 路径内。
+  let cachedRowHeight = 0;
+  let cachedRows = 0;
+
+  const invalidateRowHeight = () => {
+    cachedRowHeight = 0;
+  };
+
   const render = () => {
     const el = ensureOverlay();
     const screen = getScreen();
     if (!el || !screen) return;
     syncTheme(el);
     const rows = Math.max(1, term.rows);
-    const rowHeight = screen.clientHeight / rows;
+    if (cachedRowHeight <= 0 || cachedRows !== rows) {
+      cachedRowHeight = screen.clientHeight / rows;
+      cachedRows = rows;
+    }
+    const rowHeight = cachedRowHeight;
     if (!(rowHeight > 0)) {
       el.style.display = "none";
       return;
@@ -610,7 +624,8 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
     rafId = null;
   };
 
-  // onRender 频率高，用 rAF 合并；光标移动 / 尺寸变化频率低，直接渲染，保证响应。
+  // 三个来源全部走 rAF 合并。光标移动在 TUI 重绘时其实是高频的(每次重绘都可能移动
+  // 多次),原先直连 render 会把一帧内的多次移动变成多次强制同步布局。
   const scheduleRender = () => {
     if (rafId !== null) return;
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -626,9 +641,12 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
     }
   };
 
-  const cursorDisposable = term.onCursorMove(render);
+  const cursorDisposable = term.onCursorMove(scheduleRender);
   const renderDisposable = term.onRender(scheduleRender);
-  const resizeDisposable = term.onResize(render);
+  const resizeDisposable = term.onResize(() => {
+    invalidateRowHeight();
+    scheduleRender();
+  });
   const themeObserver =
     typeof MutationObserver === "undefined"
       ? null

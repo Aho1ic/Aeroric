@@ -1025,7 +1025,9 @@ body {
   line-height: 1.5;
   color: var(--text-primary);
   background: var(--app-canvas);
-  background-attachment: fixed;
+  /* 不要用 background-attachment: fixed。多层 radial 渐变叠加 fixed 会强制
+   * 把 body 背景相对视口栅格化,而不是跟着滚动层走 —— WKWebView 上是已知的
+   * 滚动卡顿来源。 */
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   -webkit-user-select: none;
@@ -1033,9 +1035,13 @@ body {
 }
 
 /* Global material system: semantic surface tokens stay translucent while blur
- * is applied only at structural/elevated boundaries. Avoiding blur on every
- * nested row keeps terminal, editor and large virtualized lists responsive. */
-:where(input, textarea:not(.xterm-helper-textarea), select),
+ * is applied only at structural/elevated boundaries.
+ *
+ * 不要把 backdrop-filter 加到 input/textarea/select 上。每敲一个字符,输入框
+ * 自身重绘,WKWebView 必须重新采样并模糊它身后的 backdrop;而这些输入框又嵌在
+ * 同样带模糊的祖先里(sidebar 24px / composeCard 24px / modalBox 24px),
+ * 子层的 backdrop 就是父层的输出,必须串行解算 —— 这是全局打字卡顿的主因。
+ * 输入框的可读性由不透明的 --bg-input 承担,不靠模糊。 */
 :where([role="dialog"], [role="menu"], .radix-select-content, .branch-popover-content) {
   backdrop-filter: var(--glass-blur-compact);
   -webkit-backdrop-filter: var(--glass-blur-compact);
@@ -2144,8 +2150,9 @@ body {
   font-weight: 600;
 }
 
-.terminal-record-pane,
-.terminal-record-pane :where(p, span, div, pre, code, li, blockquote, td, th) {
+/* user-select 会继承,不需要枚举后代。原先那条 8 路后代选择器要对长会话记录里
+ * 的每个节点做匹配,该子树每次样式重算都白付一遍成本。 */
+.terminal-record-pane {
   -webkit-user-select: text;
   user-select: text;
 }

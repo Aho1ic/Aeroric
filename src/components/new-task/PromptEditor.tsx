@@ -512,12 +512,28 @@ export function PromptEditor({
     onUpdateSuggestions(getPromptSuggestionQuery(slashSuggestionKind));
   }
 
+  // React 把 onSelect 合成自 selectionchange / keydown / keyup / mousedown,所以每次
+  // 击键这里会再跑一遍 updateSuggestions(handleInput 已经跑过一次),而且组字过程中
+  // 也会触发 -- 会在用户还在选字时就让父组件重渲染。
+  function handleSelect() {
+    if (isComposingRef.current) return;
+    updateSuggestions();
+  }
+
   function handleInput() {
     const editor = editorRef.current;
     if (!editor) return;
     // Skip processing during IME composition to prevent duplicate text on Linux WebKitGTK
     if (isComposingRef.current) return;
-    normalizeEditorCompositionText(editor);
+    // 只在 IME 刚提交完的窗口内清理拼音残留。WebKitGTK 的音节重放是通过一个紧跟
+    // compositionend 的 input 事件到达的,所以窗口足够覆盖它。
+    //
+    // 原先这里对每次击键都跑一遍:既是整个编辑器的 TreeWalk + 正则(O(全文)/键),
+    // 也是正确性 bug -- normalizeCommittedCompositionText 会删掉字母间的撇号
+    // (don't -> dont),然后把光标强制收到编辑器末尾,行内改字直接被打断。
+    if (performance.now() <= ignorePostCompositionUntilRef.current) {
+      normalizeEditorCompositionText(editor);
+    }
     const text = editor.textContent || "";
     const hasChips = !!editor.querySelector("[data-file-path]");
     onSetIsEmpty(!text.trim() && !hasChips);
@@ -709,7 +725,7 @@ export function PromptEditor({
         onBeforeInputCapture={handleBeforeInputCapture}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        onSelect={updateSuggestions}
+        onSelect={handleSelect}
         onCompositionStart={() => {
           isComposingRef.current = true;
           compositionTextRef.current = "";

@@ -333,7 +333,8 @@ describe("cursor line highlight overlay", () => {
     return { container, screen };
   }
 
-  it("inserts a cursor-line overlay into the xterm screen and follows the cursor", () => {
+  it("cursor moves schedule a render asynchronously", () => {
+    vi.useFakeTimers();
     const { term, state, fireCursorMove } = createFakeTerm();
     const { container, screen } = createScreenContainer(480); // 24 rows -> 20px each
 
@@ -348,18 +349,26 @@ describe("cursor line highlight overlay", () => {
 
     state.cursorY = 5;
     fireCursorMove();
+    // 光标移动通过 scheduleRender 汇入 rAF,所以同步看不到变化。
+    expect(overlay!.style.transform).toBe("translateY(0px)");
+    vi.runOnlyPendingTimers();
     expect(overlay!.style.transform).toBe("translateY(100px)");
 
     container.dataset.terminalTheme = "dark";
     fireCursorMove();
+    // rAF 合并后主题也会跟着更新。
+    expect(overlay!.dataset.terminalTheme).toBe("light");
+    vi.runOnlyPendingTimers();
     expect(overlay!.dataset.terminalTheme).toBe("dark");
     expect(overlay!.style.background).toBe("transparent");
 
     dispose();
     container.remove();
+    vi.useRealTimers();
   });
 
   it("clamps the cursor row inside the visible range", () => {
+    vi.useFakeTimers();
     const { term, state, fireCursorMove } = createFakeTerm();
     const { container, screen } = createScreenContainer(480);
 
@@ -368,14 +377,17 @@ describe("cursor line highlight overlay", () => {
 
     state.cursorY = 999;
     fireCursorMove();
+    vi.runOnlyPendingTimers();
     // 24 rows, last row index 23 -> 23 * 20px
     expect(overlay.style.transform).toBe("translateY(460px)");
 
     dispose();
     container.remove();
+    vi.useRealTimers();
   });
 
   it("recomputes row height on resize", () => {
+    vi.useFakeTimers();
     const { term, state, fireResize } = createFakeTerm();
     const { container, screen } = createScreenContainer(480);
 
@@ -385,11 +397,13 @@ describe("cursor line highlight overlay", () => {
     state.rows = 12; // 480 / 12 = 40px
     state.cursorY = 2;
     fireResize();
+    vi.runOnlyPendingTimers();
     expect(overlay.style.height).toBe("40px");
     expect(overlay.style.transform).toBe("translateY(80px)");
 
     dispose();
     container.remove();
+    vi.useRealTimers();
   });
 
   it("removes the overlay on dispose", () => {

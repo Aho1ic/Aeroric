@@ -7,19 +7,27 @@
   --bg-root: rgba(248, 250, 252, 0.7);
   --bg-shell: rgba(247, 248, 252, 0.5);
   --bg-titlebar: rgba(251, 251, 252, 0.68);
-  --bg-sidebar: rgba(246, 246, 248, 0.58);
+  /* 不透明:承载 ProjectRail / RightToolbar / taskPanel 三个常驻全高面板,
+     它们已去掉 backdrop-filter,底色必须自己立得住。取值与
+     App.css 里 prefers-reduced-transparency 的既有降级色一致。 */
+  --bg-sidebar: #f6f6f8;
   --bg-sidebar-elevated: rgba(255, 255, 255, 0.72);
   --bg-panel: rgba(255, 255, 255, 0.62);
   --bg-card: rgba(255, 255, 255, 0.72);
   --bg-hover: rgba(240, 238, 248, 0.64);
   --bg-selected: rgba(124, 58, 237, 0.12);
   --bg-subtle: rgba(244, 244, 247, 0.52);
-  --bg-input: rgba(255, 255, 255, 0.68);
+  /* 不透明:输入框不再有 backdrop-filter(见 App.css 全局材质注释),
+     可读性由实色承担。 */
+  --bg-input: #fdfdfe;
   --terminal-bg: #ffffff;
   --bg: var(--bg-root);
-  --glass-blur: blur(24px) saturate(1.28);
-  --glass-blur-compact: blur(16px) saturate(1.2);
-  --settings-glass-blur: blur(64px) saturate(1.12);
+  /* 模糊半径直接决定 WKWebView 每帧的采样成本,且这些层是嵌套的(子层的
+     backdrop 就是父层的输出,必须串行解算)。saturate() 会在 blur 之后再挂一级
+     滤镜,一并去掉。半径压到原来的一半以下,观感基本不变,合成成本大幅下降。 */
+  --glass-blur: blur(12px);
+  --glass-blur-compact: blur(8px);
+  --settings-glass-blur: blur(20px);
   --settings-glass-bg: #f8fafc;
   --glass-highlight: rgba(255, 255, 255, 0.5);
 
@@ -189,14 +197,14 @@ html.eyecare {
   --bg-root: rgba(246, 237, 220, 0.72);
   --bg-shell: rgba(243, 232, 211, 0.52);
   --bg-titlebar: rgba(246, 237, 220, 0.68);
-  --bg-sidebar: rgba(248, 240, 223, 0.6);
+  --bg-sidebar: #f8f0df;
   --bg-sidebar-elevated: rgba(255, 248, 234, 0.74);
   --bg-panel: rgba(253, 247, 233, 0.64);
   --bg-card: rgba(255, 250, 240, 0.74);
   --bg-hover: rgba(239, 226, 199, 0.66);
   --bg-selected: rgba(101, 84, 51, 0.12);
   --bg-subtle: rgba(242, 231, 208, 0.54);
-  --bg-input: rgba(255, 250, 240, 0.7);
+  --bg-input: #fffaf0;
   --terminal-bg: rgba(253, 246, 227, 0.9);
   --settings-glass-bg: #f7eedb;
   --glass-highlight: rgba(255, 252, 242, 0.48);
@@ -253,14 +261,14 @@ html.dark {
   --bg-root: rgba(7, 8, 10, 0.76);
   --bg-shell: rgba(9, 11, 14, 0.62);
   --bg-titlebar: rgba(7, 8, 10, 0.72);
-  --bg-sidebar: rgba(10, 12, 15, 0.7);
+  --bg-sidebar: #0a0c0f;
   --bg-sidebar-elevated: rgba(17, 20, 25, 0.78);
   --bg-panel: rgba(12, 15, 19, 0.7);
   --bg-card: rgba(19, 23, 29, 0.78);
   --bg-hover: rgba(35, 40, 48, 0.72);
   --bg-selected: rgba(82, 139, 255, 0.18);
   --bg-subtle: rgba(17, 21, 26, 0.66);
-  --bg-input: rgba(12, 15, 19, 0.76);
+  --bg-input: #0c0f13;
   --terminal-bg: rgba(6, 8, 10, 0.94);
   --settings-glass-bg: rgba(12, 15, 19, 0.84);
   --glass-highlight: rgba(255, 255, 255, 0.08);

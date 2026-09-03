@@ -215,7 +215,14 @@ export function NewTaskView({
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>(DEFAULT_SEND_SHORTCUT);
 
   const { editorRef, isComposingRef, handle: editorHandle } = usePromptEditor();
-  const initialPromptHtml = sanitizePromptHtml(initialDraft?.promptHtml ?? "");
+  // DOMPurify 没有空输入快路径:即使草稿是空串也会跑完整条 sanitize 管线并重新
+  // 推导一次 allowed-tags/attrs。这个值只在挂载时用,所以只算一次。
+  const initialPromptHtml = useMemo(
+    () => sanitizePromptHtml(initialDraft?.promptHtml ?? ""),
+    // 挂载时的草稿快照,后续 initialDraft 变化不该重写编辑器内容。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   const editorContentRef = useRef<PromptEditorContent>({
     html: initialPromptHtml,
     text: initialPromptHtml.replace(/<[^>]+>/g, ""),
@@ -714,40 +721,51 @@ export function NewTaskView({
   }, [mentionSearch, otherProjects]);
 
   // Compute the dropdown items based on current mentionSearch
+  //
+  // 每次击键都要重跑。`allFiles` 是 `git ls-files` 的全量结果(后端不截断,见
+  // src-tauri/src/fs.rs 的 list_project_files),所以这里必须:把 needle 的
+  // toLowerCase 提到 filter 外面(原先每个文件要算两次),并在够 8 条时就停,
+  // 而不是全量 filter 完再 slice。
   const mentionItems = useMemo((): MentionItem[] => {
     if (mentionSearch === null) return [];
+
+    const takeMatchingFiles = (files: readonly FileEntry[], needle: string, limit: number) => {
+      const matched: FileEntry[] = [];
+      for (const file of files) {
+        if (
+          !needle ||
+          file.name.toLowerCase().includes(needle) ||
+          file.path.toLowerCase().includes(needle)
+        ) {
+          matched.push(file);
+          if (matched.length >= limit) break;
+        }
+      }
+      return matched;
+    };
 
     const cp = parseCrossProject(mentionSearch, otherProjects);
     if (cp) {
       const sourceProject = otherProjects.find((p) => p.id === cp.id);
       if (sourceProject && isRemoteProject(sourceProject)) return [];
       const files = crossProjectFiles.get(cp.id) ?? [];
-      const search = mentionSearch.substring(mentionSearch.indexOf("/") + 1);
-      return files
-        .filter(
-          (f) =>
-            !search ||
-            f.name.toLowerCase().includes(search.toLowerCase()) ||
-            f.path.toLowerCase().includes(search.toLowerCase()),
-        )
-        .slice(0, 12)
-        .map((f) => ({ kind: "file", file: f, crossProject: cp }));
+      const needle = mentionSearch.substring(mentionSearch.indexOf("/") + 1).toLowerCase();
+      return takeMatchingFiles(files, needle, 12).map((f) => ({
+        kind: "file",
+        file: f,
+        crossProject: cp,
+      }));
     }
 
-    const search = mentionSearch;
-    const currentFiles: MentionItem[] = allFiles
-      .filter(
-        (f) =>
-          !search ||
-          f.name.toLowerCase().includes(search.toLowerCase()) ||
-          f.path.toLowerCase().includes(search.toLowerCase()),
-      )
-      .slice(0, 8)
-      .map((f) => ({ kind: "file", file: f }));
+    const needle = mentionSearch.toLowerCase();
+    const currentFiles: MentionItem[] = takeMatchingFiles(allFiles, needle, 8).map((f) => ({
+      kind: "file",
+      file: f,
+    }));
 
     const matchingProjects: MentionItem[] = otherProjects
       .filter((p) => !isRemoteProject(p))
-      .filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()))
+      .filter((p) => !needle || p.name.toLowerCase().includes(needle))
       .slice(0, 5)
       .map((p) => ({ kind: "project", project: p }));
 

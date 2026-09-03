@@ -52,9 +52,40 @@ export function useDshSessionFeatures(sessionId: string) {
     setViews((current) => ({ ...current, ...incoming }));
   }, []);
 
+  // 流式事件是逐 token 送达的(assistant/chunk),原先每个 token 都 setEvents 一次,
+  // 于是每个 token 都要重跑一遍整段 projection(8 趟全量遍历)。这里按帧合批:
+  // 一帧内到达的事件攒在 ref 里,rAF 里一次性并入。与 useTerminalManager 的
+  // drainPendingOutputs 同一套节奏。
+  const pendingEventsRef = useRef<DshSessionEvent[]>([]);
+  const pendingViewsRef = useRef<Record<number, DshToolEventView>>({});
+  const flushFrameRef = useRef(0);
+
+  const flushPending = useCallback(() => {
+    flushFrameRef.current = 0;
+    const events = pendingEventsRef.current;
+    const views = pendingViewsRef.current;
+    pendingEventsRef.current = [];
+    pendingViewsRef.current = {};
+    if (events.length > 0) merge(events);
+    if (Object.keys(views).length > 0) mergeViews(views);
+  }, [merge, mergeViews]);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushFrameRef.current) return;
+    flushFrameRef.current = requestAnimationFrame(flushPending);
+  }, [flushPending]);
+
+  useEffect(() => {
+    return () => {
+      if (flushFrameRef.current) cancelAnimationFrame(flushFrameRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
+    pendingEventsRef.current = [];
+    pendingViewsRef.current = {};
     setEvents([]);
     setViews({});
     setProjections({});
@@ -67,11 +98,12 @@ export function useDshSessionFeatures(sessionId: string) {
     void listen<DshSessionEventFrame>("dsh-session-event", (envelope) => {
       if (envelope.payload.sessionId !== sessionId) return;
       const event = envelope.payload.event;
-      merge([event]);
+      pendingEventsRef.current.push(event);
       const view = parseDshToolEventView(envelope.payload.view);
       if (view !== undefined && typeof event.seq === "number") {
-        mergeViews({ [event.seq]: view });
+        pendingViewsRef.current[event.seq] = view;
       }
+      scheduleFlush();
     }).then((release) => {
       if (disposed) release();
       else unlisten = release;
@@ -101,7 +133,7 @@ export function useDshSessionFeatures(sessionId: string) {
       disposed = true;
       unlisten?.();
     };
-  }, [merge, mergeViews, sessionId]);
+  }, [merge, mergeViews, scheduleFlush, sessionId]);
 
   const loadOlder = useCallback(async () => {
     const beforeSeq = cursorRef.current;

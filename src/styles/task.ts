@@ -1,6 +1,9 @@
 import type React from "react";
 
 export const task = {
+  // 常驻的全高面板,内部还包着一个滚动列表。带 backdrop-filter 时,列表每滚一帧
+  // 都要重新采样并模糊身后的 backdrop,而它又和 ProjectRail / RightToolbar 同时
+  // 挂载 —— 三层全高模糊层同时压在终端两侧。改成不透明实色,观感几乎不变。
   taskPanel: {
     width: 248,
     flexShrink: 0,
@@ -9,8 +12,6 @@ export const task = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    backdropFilter: "var(--glass-blur)",
-    WebkitBackdropFilter: "var(--glass-blur)",
   },
   taskPanelCollapsed: {
     width: 52,

@@ -291,6 +291,29 @@ export function mergeSessionMessagePages(
   return [...mergedEarlier, ...mergedLater];
 }
 
+/**
+ * Render key for a transcript entry, stable across history paging.
+ *
+ * The array index is not usable: paging PREPENDS earlier pages, so every index
+ * shifts by the page size and React remounts the entire transcript on each
+ * load. Counting from the tail fails symmetrically, because live streaming
+ * APPENDS. Message objects survive `mergeSessionMessagePages` by reference
+ * (only the one boundary entry per page is rebuilt), so identity is the stable
+ * axis. A WeakMap keeps this from retaining anything after the transcript is
+ * dropped.
+ */
+const messageKeys = new WeakMap<SessionMessage, string>();
+let nextMessageKey = 0;
+
+function messageKey(message: SessionMessage): string {
+  if (message.messageId) return `id:${message.messageId}`;
+  const existing = messageKeys.get(message);
+  if (existing !== undefined) return existing;
+  const assigned = `k:${(nextMessageKey += 1)}`;
+  messageKeys.set(message, assigned);
+  return assigned;
+}
+
 export function renderSessionMarkdown(text: string): string {
   return DOMPurify.sanitize(marked(text, { async: false }) as string);
 }
@@ -442,13 +465,48 @@ function CopyButton({ text }: { text: string }) {
  * HTML stays a single sanitized string. Without one — every non-DSH session, and
  * a DSH session that produced nothing — the markup is byte-identical to before.
  */
+/**
+ * Rendered-HTML cache keyed by the exact inputs that produce it.
+ *
+ * `useMemo` dies with the component, and a transcript remounts wholesale
+ * whenever a history page is prepended, so the per-message `marked()` +
+ * `DOMPurify.sanitize()` + `linkDshProducedMentions()` cost was paid again for
+ * every message on every page load — O(pages x messages) parses to display one
+ * conversation. Caching at module scope makes a remount free.
+ *
+ * Bounded so a long-lived window cannot grow it without limit; insertion order
+ * gives FIFO eviction, and re-reading a live entry refreshes its position.
+ */
+const PROSE_HTML_CACHE_LIMIT = 3000;
+const proseHtmlCache = new Map<string, string>();
+
+function renderProseHtml(
+  text: string,
+  mentionPaths: readonly string[],
+  label: (path: string) => string,
+): string {
+  // mentionPaths is a session-wide vocabulary, so its joined form is a cheap
+  // and exact discriminator; `\u0000` cannot occur in a path.
+  const key = `${mentionPaths.join("\u0000")}\u0000\u0000${text}`;
+  const cached = proseHtmlCache.get(key);
+  if (cached !== undefined) {
+    proseHtmlCache.delete(key);
+    proseHtmlCache.set(key, cached);
+    return cached;
+  }
+  const html = linkDshProducedMentions(renderSessionMarkdown(text), mentionPaths, label);
+  proseHtmlCache.set(key, html);
+  if (proseHtmlCache.size > PROSE_HTML_CACHE_LIMIT) {
+    const oldest = proseHtmlCache.keys().next();
+    if (!oldest.done) proseHtmlCache.delete(oldest.value);
+  }
+  return html;
+}
+
 function ProseText({ text, mentionPaths }: { text: string; mentionPaths: readonly string[] }) {
   const { t } = useI18n();
   const html = useMemo(
-    () =>
-      linkDshProducedMentions(renderSessionMarkdown(text), mentionPaths, (path) =>
-        t("dsh.deliverables.open", { path }),
-      ),
+    () => renderProseHtml(text, mentionPaths, (path) => t("dsh.deliverables.open", { path })),
     [mentionPaths, t, text],
   );
   return (
@@ -776,11 +834,10 @@ export function SessionView({
         padding: "20px 26px 32px",
         borderRadius: 22,
         border: "1px solid color-mix(in srgb, var(--border-medium) 88%, #ffffff 12%)",
-        background: "color-mix(in srgb, var(--bg-panel) 82%, transparent)",
-        boxShadow:
-          "inset 0 1px 0 color-mix(in srgb, #ffffff 14%, transparent), 0 22px 54px color-mix(in srgb, #000000 34%, transparent), 0 2px 8px color-mix(in srgb, #000000 22%, transparent)",
-        backdropFilter: "blur(22px) saturate(1.38)",
-        WebkitBackdropFilter: "blur(22px) saturate(1.38)",
+        // 这是会话记录的滚动容器。带 backdrop-filter 时,每滚一帧都要重新采样并
+        // 模糊整块 backdrop;54px 的投影还要跟着重绘。滚动容器上不能挂模糊。
+        background: "var(--bg-panel)",
+        boxShadow: "inset 0 1px 0 color-mix(in srgb, #ffffff 14%, transparent)",
       }}
     >
       {(loading || loadingEarlier) && (
@@ -798,9 +855,9 @@ export function SessionView({
           {t("session.noMessages")}
         </div>
       )}
-      {messages.map((message, index) => (
+      {messages.map((message) => (
         <MessageBubble
-          key={index}
+          key={messageKey(message)}
           message={message}
           sessionId={family === "dsh" ? sessionId : undefined}
           feedback={message.messageId ? feedbackItems[message.messageId] : undefined}

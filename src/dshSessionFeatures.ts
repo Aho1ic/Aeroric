@@ -683,10 +683,53 @@ export function projectDshSessionEvents(
   };
 }
 
+/**
+ * Merge newly delivered events into the ordered event list.
+ *
+ * Live streaming delivers events in ascending `seq`, one per model token, so the
+ * common case is "everything incoming sits after everything current". Rebuilding
+ * a Map over the concatenation and re-sorting it on every token made this
+ * O(n log n) per token, i.e. Θ(n² log n) across a turn — the reason a long
+ * session got progressively slower at everything. That case is now a plain
+ * concat. The Map rebuild is kept as the fallback for history pages (which
+ * prepend) and for out-of-order or duplicated deliveries.
+ */
 export function mergeDshSessionEvents(
   current: readonly DshSessionEvent[],
   incoming: readonly DshSessionEvent[],
 ): DshSessionEvent[] {
+  if (incoming.length === 0) return current as DshSessionEvent[];
+  if (current.length === 0 && incoming.length === 1) return [...incoming];
+
+  let currentMax = -Infinity;
+  let currentOrdered = true;
+  for (const event of current) {
+    const seq = number(event.seq);
+    if (seq === undefined) {
+      currentOrdered = false;
+      break;
+    }
+    if (seq <= currentMax) {
+      currentOrdered = false;
+      break;
+    }
+    currentMax = seq;
+  }
+
+  if (currentOrdered) {
+    let appendOnly = true;
+    let incomingMax = currentMax;
+    for (const event of incoming) {
+      const seq = number(event.seq);
+      if (seq === undefined || seq <= incomingMax) {
+        appendOnly = false;
+        break;
+      }
+      incomingMax = seq;
+    }
+    if (appendOnly) return [...current, ...incoming];
+  }
+
   const bySeq = new Map<number, DshSessionEvent>();
   const withoutSeq: DshSessionEvent[] = [];
   for (const event of [...current, ...incoming]) {

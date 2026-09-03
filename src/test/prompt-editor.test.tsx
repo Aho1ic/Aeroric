@@ -787,12 +787,27 @@ describe("输入事件", () => {
     }).not.toThrow();
   });
 
-  it("输入时顺带清理拼音残留", () => {
-    // Linux WebKitGTK 上 IME 会把音节重放,靠这一步在 input 阶段收掉。
+  it("IME 提交后紧跟的 input 会清理拼音残留", () => {
+    // Linux WebKitGTK 上 IME 会把音节重放一次,残留通过紧跟 compositionend 的
+    // input 事件到达,所以清理窗口挂在 compositionend 之后。
     const { editor } = setup();
+    fireEvent.compositionEnd(editor, { data: "你" });
     editor.textContent = "ni'ni";
     fireEvent.input(editor);
     expect(editor.textContent).toBe("ni");
+  });
+
+  it("普通英文输入不动撇号,光标也不被拖到末尾", () => {
+    // 归一化会删掉字母之间的撇号并把光标收到编辑器末尾。它只对 IME 残留成立,
+    // 对普通输入是数据损坏 —— don't 会变成 dont,行内改字会被打断。
+    const { editor } = setup();
+    editor.textContent = "don't";
+    const caret = caretAt(editor.firstChild!, 3);
+    fireEvent.input(editor);
+    expect(editor.textContent).toBe("don't");
+    const sel = window.getSelection()!;
+    expect(sel.rangeCount).toBe(1);
+    expect(sel.getRangeAt(0).startOffset).toBe(caret.startOffset);
   });
 
   it("组字过程中完全不处理", () => {
