@@ -86,7 +86,7 @@ pub fn write_task_model_patch_in(
         provider = yaml_quote(provider),
         model = yaml_quote(model),
     );
-    fs::write(&path, content).map_err(|error| error.to_string())?;
+    crate::storage::atomic_write_private(&path, &content)?;
     Ok(path)
 }
 
@@ -158,7 +158,7 @@ fn write_task_feature_patch_to(path: &Path, features: Vec<(&str, bool)>) -> Resu
             if enabled { "false" } else { "true" }
         ));
     }
-    fs::write(path, content).map_err(|error| error.to_string())
+    crate::storage::atomic_write_private(path, &content)
 }
 
 /// 任务结束时清理特性 patch。
@@ -210,7 +210,9 @@ pub fn write_custom_provider_settings(
     for model in models {
         out.push_str(&format!("        - id: {}\n", yaml_quote(model)));
     }
-    fs::write(home.join("settings.yaml"), out).map_err(|error| error.to_string())
+    let path = home.join("settings.yaml");
+    reject_symlink_target(&path, "dsh settings.yaml")?;
+    crate::storage::atomic_write_private(&path, &out)
 }
 
 /// Refresh Aeroric's custom provider after access/model edits while preserving
@@ -251,6 +253,7 @@ pub fn refresh_custom_provider_settings(
 /// 所以降级写入与 RPC 写入最终落到同一文件、不并发(此处无锁,仅在 RPC 不可用时使用)。
 pub fn sync_dsh_credentials(home: &Path, api_key: Option<&str>) -> Result<(), String> {
     let path = home.join(".credentials.yaml");
+    reject_symlink_target(&path, "dsh credentials")?;
     let existing = fs::read_to_string(&path).unwrap_or_default();
     let mut lines: Vec<String> = existing
         .lines()
@@ -268,13 +271,22 @@ pub fn sync_dsh_credentials(home: &Path, api_key: Option<&str>) -> Result<(), St
     if content == existing && path.exists() {
         return Ok(());
     }
-    fs::write(&path, content).map_err(|error| error.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    crate::storage::atomic_write_private(&path, &content)
+}
+
+fn reject_symlink_target(path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "Refusing to follow symlink for {label}: {}",
+            path.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Cannot inspect {label} {}: {error}",
+            path.display()
+        )),
     }
-    Ok(())
 }
 
 /// YAML 双引号字符串(路径可能含反斜杠、引号或非 ASCII 字符)。
@@ -536,6 +548,7 @@ pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
         .map_err(|error| format!("Failed to create dsh home: {error}"))?;
 
     let settings = home.join("settings.yaml");
+    reject_symlink_target(&settings, "dsh settings.yaml")?;
     if !settings.exists() {
         crate::storage::atomic_write_private(&settings, SETTINGS_TEMPLATE)
             .map_err(|error| format!("Failed to write dsh settings.yaml: {error}"))?;
@@ -545,6 +558,7 @@ pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
     }
 
     let user_patch = home.join("cordis.patch.yml");
+    reject_symlink_target(&user_patch, "dsh cordis.patch.yml")?;
     let existing = fs::read_to_string(&user_patch).unwrap_or_else(|_| USER_PATCH_TEMPLATE.into());
     match compose_home_patch(&existing, &sessions_root) {
         Some(composed) if composed != existing => {
@@ -564,6 +578,7 @@ pub(crate) fn ensure_dsh_home_at(home: &Path) -> Result<(), String> {
     }
 
     let managed = home.join(MANAGED_PATCH_FILE_NAME);
+    reject_symlink_target(&managed, MANAGED_PATCH_FILE_NAME)?;
     let current_version = fs::read_to_string(&managed)
         .ok()
         .as_deref()
@@ -819,6 +834,29 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+        cleanup_temp_home(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_sync_rejects_symlinks_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let home = temp_home("credential-symlink");
+        fs::create_dir_all(&home).unwrap();
+        let outside = home.join("outside.yaml");
+        let credentials = home.join(".credentials.yaml");
+        fs::write(&outside, "DEEPSEEK_API_KEY: \"outside\"\n").unwrap();
+        symlink(&outside, &credentials).unwrap();
+
+        let error = sync_dsh_credentials(&home, Some("inside"))
+            .expect_err("credential symlinks must fail closed");
+        assert!(error.contains("symlink"), "unexpected error: {error}");
+        assert_eq!(
+            fs::read_to_string(&outside).unwrap(),
+            "DEEPSEEK_API_KEY: \"outside\"\n"
+        );
+
         cleanup_temp_home(&home);
     }
 

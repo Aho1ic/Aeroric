@@ -10,6 +10,7 @@
 
 import { escapeHtmlText, wrapStandaloneHtml } from "./noteExportHtml";
 import { WIKI_EMBED_CLASS, WIKI_LINK_CLASS } from "./enhanceWikiLinks";
+import { compareNotebookPath } from "../../lib/notebookSort";
 
 /** 会被当成笔记、参与导出的扩展名。和后端 `fs_ops::is_note_file` 保持一致。 */
 const NOTE_EXT_RE = /\.(md|markdown|mdx)$/i;
@@ -133,7 +134,7 @@ export function buildIndexHtml(
   siteTitle: string,
   pageCountLabel: string,
 ): string {
-  const sorted = [...pages].sort((a, b) => a.rel.localeCompare(b.rel));
+  const sorted = [...pages].sort((a, b) => compareNotebookPath(a.rel, b.rel));
   const items = sorted
     .map((page) => {
       const href = escapeHtmlText(page.rel);

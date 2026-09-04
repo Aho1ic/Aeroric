@@ -793,12 +793,61 @@ fn agent_api_key_path(id: &str) -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("agent-credentials").join(id))
 }
 
-fn write_agent_api_key(id: &str, api_key: &str) -> Result<(), String> {
-    let path = agent_api_key_path(id)?;
+fn remove_agent_api_key_at_path(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_agent_api_key_at_path(path: &Path, api_key: &str) -> Result<(), String> {
+    let api_key = api_key.trim();
+    // A cleared key must not leave an old wrapper sidecar behind.  The
+    // generated scripts already fail closed for a missing/empty file, so
+    // removing the file is both safer and less ambiguous than writing an
+    // empty placeholder.
+    if api_key.is_empty() {
+        return remove_agent_api_key_at_path(path);
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    atomic_write_private(&path, api_key.trim())
+    atomic_write_private(path, api_key)
+}
+
+fn write_agent_api_key(id: &str, api_key: &str) -> Result<(), String> {
+    let path = agent_api_key_path(id)?;
+    write_agent_api_key_at_path(&path, api_key)
+}
+
+fn sync_agent_credentials_at_path(path: &Path, expected_api_key: &str) -> Result<(), String> {
+    // A blank expected key is an explicit clear operation.  Do not use
+    // `read_to_string(...).unwrap_or_default()` here: an existing sidecar that
+    // cannot be read (for example because of invalid UTF-8 or a transient
+    // permission error) must not be mistaken for an already-empty credential.
+    if expected_api_key.trim().is_empty() {
+        return remove_agent_api_key_at_path(path);
+    }
+
+    // Never treat a symlink as an already-synchronized credential file.  A
+    // read through a symlink could report a matching key while the secret is
+    // actually stored outside Aeroric's private directory.  Rewriting via
+    // `write_agent_api_key_at_path` below replaces the link itself (rename
+    // does not follow it), leaving a regular private file at the expected
+    // location.  Directories and other non-files are left to the write path
+    // to reject with a useful error.
+    let force_rewrite = fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+        .unwrap_or(false);
+    if force_rewrite {
+        return write_agent_api_key_at_path(path, expected_api_key);
+    }
+
+    match fs::read_to_string(path) {
+        Ok(current_key) if current_key.trim() == expected_api_key.trim() => Ok(()),
+        Ok(_) | Err(_) => write_agent_api_key_at_path(path, expected_api_key),
+    }
 }
 
 /// Synchronize the agent credentials file with the API key from settings.
@@ -806,20 +855,176 @@ fn write_agent_api_key(id: &str, api_key: &str) -> Result<(), String> {
 /// agent script itself doesn't need regeneration.
 fn sync_agent_credentials(id: &str, expected_api_key: &str) -> Result<(), String> {
     let path = agent_api_key_path(id)?;
-    let current_key = fs::read_to_string(&path).unwrap_or_default();
-    if current_key.trim() != expected_api_key.trim() {
-        write_agent_api_key(id, expected_api_key)
-    } else {
-        Ok(())
-    }
+    sync_agent_credentials_at_path(&path, expected_api_key)
 }
 
 fn remove_agent_api_key(id: &str) -> Result<(), String> {
     let path = agent_api_key_path(id)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
+    remove_agent_api_key_at_path(&path)
+}
+
+#[derive(Debug)]
+enum AgentFileState {
+    Missing,
+    RegularFile {
+        content: Vec<u8>,
+        #[cfg(unix)]
+        mode: u32,
+    },
+    Symlink(PathBuf),
+    Other,
+}
+
+#[derive(Debug)]
+struct AgentFileSnapshot {
+    path: PathBuf,
+    state: AgentFileState,
+}
+
+/// Filesystem changes made while updating a generated Agent profile.
+///
+/// Settings are persisted after the wrapper/sidecar has been prepared so the
+/// generated path can be stored in the profile.  If that final settings write
+/// fails, restoring these snapshots keeps the old settings and old launcher
+/// mutually consistent instead of leaving a half-applied update behind.
+#[derive(Debug)]
+struct AgentFileTransaction {
+    snapshots: Vec<AgentFileSnapshot>,
+}
+
+struct GeneratedAgentScriptPlan {
+    current_path: String,
+    content: String,
+    target: PathBuf,
+}
+
+impl AgentFileTransaction {
+    /// Capture a set of files, run a fallible mutation, and restore the
+    /// capture when the mutation itself fails.  The caller receives the
+    /// transaction on success so the settings write can still roll the files
+    /// back if it fails later.
+    fn capture_and_apply<F>(
+        paths: impl IntoIterator<Item = PathBuf>,
+        apply: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce() -> Result<(), String>,
+    {
+        let transaction = Self::capture(paths)?;
+        match apply() {
+            Ok(()) => Ok(transaction),
+            Err(error) => match transaction.restore() {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!("{error}; {rollback_error}")),
+            },
+        }
+    }
+
+    fn capture(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self, String> {
+        let mut snapshots = Vec::new();
+        let mut seen = HashSet::new();
+        for path in paths {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let state = match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    AgentFileState::Symlink(fs::read_link(&path).map_err(|error| {
+                        format!("Cannot snapshot Agent file {}: {error}", path.display())
+                    })?)
+                }
+                Ok(metadata) if metadata.is_file() => AgentFileState::RegularFile {
+                    content: fs::read(&path).map_err(|error| {
+                        format!("Cannot snapshot Agent file {}: {error}", path.display())
+                    })?,
+                    #[cfg(unix)]
+                    mode: {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode()
+                    },
+                },
+                Ok(_) => AgentFileState::Other,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    AgentFileState::Missing
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Cannot inspect Agent file {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            snapshots.push(AgentFileSnapshot { path, state });
+        }
+        Ok(Self { snapshots })
+    }
+
+    fn remove_current(path: &Path) -> Result<(), String> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+        if metadata.file_type().is_symlink() || metadata.is_file() {
+            fs::remove_file(path).map_err(|error| error.to_string())
+        } else {
+            Err(format!(
+                "Refusing to replace non-file Agent snapshot target: {}",
+                path.display()
+            ))
+        }
+    }
+
+    fn restore(self) -> Result<(), String> {
+        let mut failures = Vec::new();
+        for snapshot in self.snapshots.into_iter().rev() {
+            let result = (|| match snapshot.state {
+                AgentFileState::Missing => Self::remove_current(&snapshot.path),
+                AgentFileState::RegularFile {
+                    content,
+                    #[cfg(unix)]
+                    mode,
+                } => {
+                    Self::remove_current(&snapshot.path)?;
+                    if let Some(parent) = snapshot.path.parent() {
+                        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                    }
+                    crate::storage::atomic_write_private_bytes(&snapshot.path, &content)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&snapshot.path, fs::Permissions::from_mode(mode))
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok(())
+                }
+                AgentFileState::Symlink(target) => {
+                    Self::remove_current(&snapshot.path)?;
+                    if let Some(parent) = snapshot.path.parent() {
+                        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                    }
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink(&target, &snapshot.path)
+                        .map_err(|error| error.to_string())?;
+                    #[cfg(windows)]
+                    std::os::windows::fs::symlink_file(&target, &snapshot.path)
+                        .map_err(|error| error.to_string())?;
+                    Ok(())
+                }
+                AgentFileState::Other => Ok(()),
+            })();
+            if let Err(error) = result {
+                failures.push(format!("{}: {error}", snapshot.path.display()));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Failed to roll back Agent files: {}",
+                failures.join("; ")
+            ))
+        }
     }
 }
 
@@ -847,8 +1052,41 @@ fn toml_table_key(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn normalize_base_url(value: &str) -> String {
+pub(crate) fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
+}
+
+/// Validate whether a remote (paired-device) request may reuse the key already
+/// stored on the desktop.
+///
+/// The mobile configuration surface deliberately never receives the existing
+/// plaintext key.  An omitted key therefore means "keep the desktop value";
+/// that is only safe when the request still targets the exact same base URL.
+/// Otherwise a paired device could change the URL to an attacker-controlled
+/// endpoint and make the desktop send the saved credential there.  A caller
+/// that supplies a replacement key (or explicitly clears the old one) is
+/// making the credential transition explicit and is allowed to change the URL.
+pub(crate) fn validate_remote_api_key_reuse(
+    stored_base_url: &str,
+    stored_api_key: &str,
+    requested_base_url: Option<&str>,
+    requested_api_key: Option<&str>,
+    clear_api_key: bool,
+) -> Result<(), String> {
+    if clear_api_key
+        || requested_api_key.is_some_and(|value| !value.trim().is_empty())
+        || stored_api_key.trim().is_empty()
+    {
+        return Ok(());
+    }
+
+    let Some(requested_base_url) = requested_base_url else {
+        return Ok(());
+    };
+    if normalize_base_url(stored_base_url) != normalize_base_url(requested_base_url) {
+        return Err("A new API key is required when changing the Base URL".to_string());
+    }
+    Ok(())
 }
 
 fn normalize_settings(settings: AppSettings) -> AppSettings {
@@ -1033,6 +1271,34 @@ where
     Ok(normalized)
 }
 
+fn update_settings_locked_with_agent_files<F>(update: F) -> Result<AppSettings, String>
+where
+    F: FnOnce(&mut AppSettings) -> Result<AgentFileTransaction, String>,
+{
+    let normalized = {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        let transaction = update(&mut settings)?;
+        match persist_settings_unlocked(settings) {
+            Ok(normalized) => {
+                // The new settings and the generated files are now durable;
+                // the snapshots are no longer needed.
+                drop(transaction);
+                normalized
+            }
+            Err(error) => {
+                let rollback = transaction.restore();
+                return match rollback {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(format!("{error}; {rollback_error}")),
+                };
+            }
+        }
+    };
+    clear_cached_versions();
+    Ok(normalized)
+}
+
 fn set_agent_proxy_enabled(settings: &mut AppSettings, agent: &str, enabled: bool) {
     if enabled {
         settings.agent_proxy_enabled.insert(agent.to_string(), true);
@@ -1062,7 +1328,7 @@ fn apply_builtin_agent_access_update(
     }
     if clear_api_key {
         credentials.api_key.clear();
-    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+    } else if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
         credentials.api_key = api_key.trim().to_string();
     }
     if let Some(models) = models {
@@ -1074,7 +1340,7 @@ fn apply_builtin_agent_access_update(
     Ok(())
 }
 
-pub(crate) fn update_builtin_agent_config_internal(
+fn update_builtin_agent_config_internal_with_policy(
     agent: String,
     base_url: Option<String>,
     api_key: Option<String>,
@@ -1082,9 +1348,24 @@ pub(crate) fn update_builtin_agent_config_internal(
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
     proxy_enabled: Option<bool>,
+    enforce_remote_key_boundary: bool,
 ) -> Result<AppSettings, String> {
     let syncs_dsh_home = agent == "dsh";
     let normalized = update_settings_locked(move |settings| {
+        if enforce_remote_key_boundary {
+            let current = settings
+                .builtin_agent_credentials
+                .get(&agent)
+                .cloned()
+                .unwrap_or_default();
+            validate_remote_api_key_reuse(
+                &current.base_url,
+                &current.api_key,
+                base_url.as_deref(),
+                api_key.as_deref(),
+                clear_api_key,
+            )?;
+        }
         apply_builtin_agent_access_update(
             settings,
             &agent,
@@ -1109,6 +1390,52 @@ pub(crate) fn update_builtin_agent_config_internal(
         crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
     }
     Ok(normalized)
+}
+
+pub(crate) fn update_builtin_agent_config_internal(
+    agent: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_builtin_agent_config_internal_with_policy(
+        agent,
+        base_url,
+        api_key,
+        clear_api_key,
+        models,
+        enable_1m_context,
+        proxy_enabled,
+        false,
+    )
+}
+
+/// Remote/mobile variant of [`update_builtin_agent_config_internal`].
+///
+/// The check lives inside the settings lock so a concurrent desktop update
+/// cannot invalidate the URL/key comparison between a read and the write.
+pub(crate) fn update_builtin_agent_config_remote_internal(
+    agent: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_builtin_agent_config_internal_with_policy(
+        agent,
+        base_url,
+        api_key,
+        clear_api_key,
+        models,
+        enable_1m_context,
+        proxy_enabled,
+        true,
+    )
 }
 
 #[tauri::command]
@@ -1528,37 +1855,76 @@ pub async fn save_agent_paths(
 fn upsert_custom_agent_profile_unlocked(
     settings: &mut AppSettings,
     profile: CustomAgentProfile,
-) -> Result<(), String> {
+) -> Result<AgentFileTransaction, String> {
     let mut profile = normalize_custom_agent_profile(profile)
         .ok_or_else(|| "Invalid custom agent profile".to_string())?;
+    let clear_sidecar = profile.api_key.trim().is_empty();
     let existing = settings
         .custom_agents
         .iter()
         .find(|existing| existing.id == profile.id)
         .cloned();
-    let generated_wrapper = existing.as_ref().is_some_and(|existing| {
-        fs::read_to_string(normalize_config_path(existing.path.clone()))
-            .map(|content| is_aeroric_codex_wrapper(&content))
-            .unwrap_or(false)
-    });
-    let generated_settings_changed = existing.as_ref().is_some_and(|existing| {
-        generated_wrapper
-            && profile.codex_like
-            && profile.config_lang == "shellscript"
-            && !profile.base_url.trim().is_empty()
-            && !profile.api_key.trim().is_empty()
-            && !profile.models.is_empty()
-            && (existing.base_url != profile.base_url
-                || existing.api_key != profile.api_key
-                || existing.models != profile.models
-                || existing.enable_chat_completions_proxy != profile.enable_chat_completions_proxy
-                || existing.bridge_python_path != profile.bridge_python_path)
-    });
-    if generated_settings_changed {
+    // A generated wrapper must remain a regular file owned by Aeroric.  Do
+    // not let a generated-looking symlink fall through the ownership probe:
+    // saving the profile while leaving the link untouched would make the
+    // persisted URL/model/key disagree with the launcher that is actually
+    // executed.  Refuse the update explicitly and leave both the link and
+    // settings unchanged; the user can replace the link with a regular file
+    // (or choose a new launcher path) before retrying.
+    if existing
+        .as_ref()
+        .is_some_and(profile_uses_aeroric_generated_wrapper_symlink)
+        || profile_uses_aeroric_generated_wrapper_symlink(&profile)
+    {
+        return Err(
+            "Generated Agent script is symlinked; replace it with a regular file before updating"
+                .to_string(),
+        );
+    }
+    // Both Claude and Codex generated launchers read the API key from the
+    // sidecar and embed the other setup values in the script.  Keep the
+    // launcher and sidecar synchronized when an existing generated profile is
+    // updated; otherwise `update_custom_agent_access` can persist a new
+    // profile while the old wrapper keeps sending requests to the old URL.
+    let existing_generated_wrapper = existing
+        .as_ref()
+        .is_some_and(profile_uses_aeroric_generated_wrapper);
+    // `save_custom_agent_profile` is also used by imports and repair tools.
+    // If a newly supplied profile already points at an Aeroric-generated
+    // launcher, synchronize its sidecar too; otherwise the wrapper can launch
+    // without the key that the profile claims to contain.
+    let profile_is_generated_wrapper = profile_uses_aeroric_generated_wrapper(&profile);
+    let managed_generated_wrapper = existing_generated_wrapper || profile_is_generated_wrapper;
+    let family = profile.agent_family();
+    let generated_shell_wrapper = managed_generated_wrapper
+        && profile.config_lang == "shellscript"
+        && matches!(family, AgentFamily::Claude | AgentFamily::Codex);
+    let generated_settings_changed = match existing.as_ref() {
+        Some(existing) => {
+            generated_shell_wrapper
+                && (existing.agent_family() != family
+                    || existing.label != profile.label
+                    || existing.path != profile.path
+                    || existing.base_url != profile.base_url
+                    || existing.api_key != profile.api_key
+                    || existing.models != profile.models
+                    || existing.enable_1m_context != profile.enable_1m_context
+                    || existing.enable_chat_completions_proxy
+                        != profile.enable_chat_completions_proxy
+                    || existing.bridge_python_path != profile.bridge_python_path)
+        }
+        None => generated_shell_wrapper,
+    };
+    let generated_plan = if generated_shell_wrapper
+        && !profile.api_key.trim().is_empty()
+        && !profile.base_url.trim().is_empty()
+        && !profile.models.is_empty()
+        && generated_settings_changed
+    {
         let draft = AgentSetupDraft {
             id: profile.id.clone(),
             label: profile.label.clone(),
-            kind: AgentSetupKind::Codex,
+            kind: family.setup_kind(),
             base_url: profile.base_url.clone(),
             api_key: profile.api_key.clone(),
             model: profile.models[0].clone(),
@@ -1570,24 +1936,97 @@ fn upsert_custom_agent_profile_unlocked(
             proxy_enabled: false,
         };
         validate_agent_setup_draft(&draft)?;
-        let script = build_codex_agent_script(&draft);
-        let script_path = normalize_config_path(profile.path.clone());
-        let path =
-            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-        profile.path = path.to_string_lossy().into_owned();
-    }
+        let current_path = normalize_config_path(profile.path.clone());
+        let target = generated_agent_script_target_path(&profile.id, &current_path)?;
+        Some(GeneratedAgentScriptPlan {
+            current_path,
+            content: build_agent_script(&draft),
+            target,
+        })
+    } else {
+        None
+    };
 
-    settings
-        .custom_agents
-        .retain(|existing| existing.id != profile.id);
-    settings.custom_agents.push(profile);
-    Ok(())
+    let invalid_managed_wrapper = managed_generated_wrapper
+        && (!generated_shell_wrapper
+            || profile.api_key.trim().is_empty()
+            || profile.base_url.trim().is_empty()
+            || profile.models.is_empty());
+
+    let mut paths = vec![agent_api_key_path(&profile.id)?];
+    let dsh_home = if family == AgentFamily::Dsh {
+        let home = crate::dsh_home::dsh_home_for(&profile.id)?;
+        paths.extend([
+            home.join("settings.yaml"),
+            home.join(".credentials.yaml"),
+            home.join("cordis.patch.yml"),
+            crate::dsh_home::managed_patch_path_in(&home),
+        ]);
+        Some(home)
+    } else {
+        None
+    };
+    if let Some(plan) = &generated_plan {
+        paths.push(plan.target.clone());
+        if !plan.current_path.trim().is_empty() {
+            let previous = PathBuf::from(&plan.current_path);
+            if previous != plan.target {
+                paths.push(previous);
+            }
+        }
+    }
+    let transaction = AgentFileTransaction::capture_and_apply(paths, || -> Result<(), String> {
+        if let Some(home) = dsh_home.as_deref() {
+            // DSH profiles do not use a generated shell wrapper, but their
+            // credentials and provider settings are still part of the same
+            // profile update.  Keep those files in the transaction so a later
+            // settings write cannot leave a half-applied DSH configuration.
+            crate::dsh_home::ensure_dsh_home_at(home)?;
+            let api_key = (!profile.api_key.trim().is_empty()).then_some(profile.api_key.trim());
+            crate::dsh_home::sync_dsh_credentials(home, api_key)?;
+            if !profile.base_url.trim().is_empty() && !profile.models.is_empty() {
+                crate::dsh_home::refresh_custom_provider_settings(
+                    home,
+                    &normalize_base_url(&profile.base_url),
+                    &profile.models,
+                )?;
+            }
+        }
+        if let Some(plan) = generated_plan {
+            let path = write_generated_agent_script(
+                &profile.id,
+                &plan.current_path,
+                &plan.content,
+                &profile.api_key,
+            )?;
+            profile.path = path.to_string_lossy().into_owned();
+        } else if managed_generated_wrapper && !invalid_managed_wrapper {
+            // The script is already current, but the sidecar may have been
+            // deleted or edited outside Aeroric. Repair it without rewriting
+            // the user's launcher file.
+            sync_agent_credentials(&profile.id, &profile.api_key)?;
+        }
+
+        // A generated wrapper that is no longer a valid shell Agent profile,
+        // or a profile explicitly cleared by the user, must not retain a
+        // usable old credential. Do this after all fallible validation above.
+        if clear_sidecar || invalid_managed_wrapper {
+            remove_agent_api_key(&profile.id)?;
+        }
+
+        settings
+            .custom_agents
+            .retain(|existing| existing.id != profile.id);
+        settings.custom_agents.push(profile);
+        Ok(())
+    })?;
+    Ok(transaction)
 }
 
 #[tauri::command]
 pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
+        update_settings_locked_with_agent_files(move |settings| {
             upsert_custom_agent_profile_unlocked(settings, profile)
         })
     })
@@ -1595,7 +2034,7 @@ pub async fn save_custom_agent_profile(profile: CustomAgentProfile) -> Result<Ap
     .map_err(|error| error.to_string())?
 }
 
-pub(crate) fn update_custom_agent_config_internal(
+fn update_custom_agent_config_internal_with_policy(
     id: String,
     base_url: Option<String>,
     api_key: Option<String>,
@@ -1603,9 +2042,11 @@ pub(crate) fn update_custom_agent_config_internal(
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
     enable_chat_completions_proxy: Option<bool>,
+    bridge_python_path: Option<String>,
     proxy_enabled: Option<bool>,
+    enforce_remote_key_boundary: bool,
 ) -> Result<AppSettings, String> {
-    update_settings_locked(move |settings| {
+    update_settings_locked_with_agent_files(move |settings| {
         let normalized_id = sanitize_custom_agent_id(&id);
         let mut profile = settings
             .custom_agents
@@ -1613,16 +2054,42 @@ pub(crate) fn update_custom_agent_config_internal(
             .find(|profile| profile.id == normalized_id)
             .cloned()
             .ok_or_else(|| format!("Agent not found: {id}"))?;
+        let normalized_models = models.map(normalize_model_list);
+        if let Some(models) = normalized_models.as_ref() {
+            if models.is_empty() {
+                return Err("At least one model is required".to_string());
+            }
+            if models.iter().any(|model| !validate_model_name(model)) {
+                return Err(
+                    "Model names cannot contain quotes, backslashes, or newlines".to_string(),
+                );
+            }
+            let family = profile.agent_family();
+            if profile.api_key.trim().is_empty()
+                || (family != AgentFamily::Dsh && profile.base_url.trim().is_empty())
+            {
+                return Err("This agent does not have saved model detection settings".to_string());
+            }
+        }
+        if enforce_remote_key_boundary {
+            validate_remote_api_key_reuse(
+                &profile.base_url,
+                &profile.api_key,
+                base_url.as_deref(),
+                api_key.as_deref(),
+                clear_api_key,
+            )?;
+        }
         if let Some(base_url) = base_url {
             profile.base_url = base_url;
         }
         if clear_api_key {
             profile.api_key.clear();
-        } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
+        } else if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
             profile.api_key = api_key;
         }
-        if let Some(models) = models {
-            profile.models = normalize_model_list(models);
+        if let Some(models) = normalized_models {
+            profile.models = models;
         }
         let family = profile.agent_family();
         if profile.models.is_empty() && family != AgentFamily::Dsh {
@@ -1640,24 +2107,94 @@ pub(crate) fn update_custom_agent_config_internal(
                     "Chat Completions bridge is only available for Codex agents".to_string()
                 );
             }
+            if profile.config_lang != "shellscript" {
+                return Err(
+                    "Chat Completions bridge requires a shell-script Codex agent".to_string(),
+                );
+            }
             profile.enable_chat_completions_proxy = enabled;
         }
-        if family == AgentFamily::Dsh {
-            let home = crate::dsh_home::ensure_dsh_home_for(&profile.id)?;
-            let api_key = (!profile.api_key.trim().is_empty()).then_some(profile.api_key.trim());
-            crate::dsh_home::sync_dsh_credentials(&home, api_key)?;
-            crate::dsh_home::refresh_custom_provider_settings(
-                &home,
-                &normalize_base_url(&profile.base_url),
-                &profile.models,
-            )?;
+        if let Some(bridge_python_path) = bridge_python_path {
+            if family != AgentFamily::Codex {
+                return Err(
+                    "Chat Completions bridge is only available for Codex agents".to_string()
+                );
+            }
+            if profile.config_lang != "shellscript" {
+                return Err(
+                    "Chat Completions bridge requires a shell-script Codex agent".to_string(),
+                );
+            }
+            profile.bridge_python_path = bridge_python_path;
         }
-        upsert_custom_agent_profile_unlocked(settings, profile)?;
+        if family == AgentFamily::Codex
+            && profile.enable_chat_completions_proxy
+            && !profile.bridge_python_path.is_empty()
+        {
+            let probe = probe_chat_bridge_python_program(&profile.bridge_python_path);
+            if let Some(failure) = probe.failure {
+                return Err(format!(
+                    "This Python cannot run the Chat Completions bridge: {failure}"
+                ));
+            }
+        }
+        let transaction = upsert_custom_agent_profile_unlocked(settings, profile)?;
         if let Some(enabled) = proxy_enabled {
             set_agent_proxy_enabled(settings, &normalized_id, enabled);
         }
-        Ok(())
+        Ok(transaction)
     })
+}
+
+pub(crate) fn update_custom_agent_config_internal(
+    id: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    enable_chat_completions_proxy: Option<bool>,
+    bridge_python_path: Option<String>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_custom_agent_config_internal_with_policy(
+        id,
+        base_url,
+        api_key,
+        clear_api_key,
+        models,
+        enable_1m_context,
+        enable_chat_completions_proxy,
+        bridge_python_path,
+        proxy_enabled,
+        false,
+    )
+}
+
+/// Remote/mobile variant of [`update_custom_agent_config_internal`].
+pub(crate) fn update_custom_agent_config_remote_internal(
+    id: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    clear_api_key: bool,
+    models: Option<Vec<String>>,
+    enable_1m_context: Option<bool>,
+    enable_chat_completions_proxy: Option<bool>,
+    bridge_python_path: Option<String>,
+    proxy_enabled: Option<bool>,
+) -> Result<AppSettings, String> {
+    update_custom_agent_config_internal_with_policy(
+        id,
+        base_url,
+        api_key,
+        clear_api_key,
+        models,
+        enable_1m_context,
+        enable_chat_completions_proxy,
+        bridge_python_path,
+        proxy_enabled,
+        true,
+    )
 }
 
 #[tauri::command]
@@ -1678,6 +2215,7 @@ pub async fn update_custom_agent_access(
             None,
             enable_chat_completions_proxy,
             None,
+            None,
         )
     })
     .await
@@ -1687,73 +2225,91 @@ pub async fn update_custom_agent_access(
 #[tauri::command]
 pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, String> {
     let normalized = tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        validate_agent_setup_draft(&draft)?;
-        let mut settings = load_settings_unlocked();
-        let id = allocate_setup_agent_id(&draft.id, &draft.kind, &settings)?;
-        let mut draft = draft;
-        draft.id = id.clone();
-        let (profile_path, config_lang, family) = if matches!(draft.kind, AgentSetupKind::Dsh) {
-            // dsh-like 档案不生成 wrapper 脚本:直接运行 dsh 二进制,隔离 home 与
-            // API key 由启动层按档案注入(DSH_HOME / DEEPSEEK_API_KEY env)。
-            let program = {
-                let detected = crate::platform::detect_path("dsh");
-                if detected.is_empty() {
-                    "dsh".to_string()
-                } else {
-                    detected
-                }
+        update_settings_locked_with_agent_files(move |settings| {
+            validate_agent_setup_draft(&draft)?;
+            let mut draft = draft;
+            let id = allocate_setup_agent_id(&draft.id, &draft.kind, settings)?;
+            draft.id = id.clone();
+            let is_dsh = matches!(draft.kind, AgentSetupKind::Dsh);
+            let models = normalize_setup_models(&draft);
+            let (profile_path, config_lang, family, dsh_home, file_paths) = if is_dsh {
+                // dsh-like 档案不生成 wrapper 脚本:直接运行 dsh 二进制,隔离 home 与
+                // API key 由启动层按档案注入(DSH_HOME / DEEPSEEK_API_KEY env)。
+                let program = {
+                    let detected = crate::platform::detect_path("dsh");
+                    if detected.is_empty() {
+                        "dsh".to_string()
+                    } else {
+                        detected
+                    }
+                };
+                let home = crate::dsh_home::dsh_home_for(&id)?;
+                let file_paths = vec![
+                    home.join("settings.yaml"),
+                    home.join(".credentials.yaml"),
+                    home.join("cordis.patch.yml"),
+                    crate::dsh_home::managed_patch_path_in(&home),
+                ];
+                (
+                    program,
+                    "yaml".to_string(),
+                    "dsh".to_string(),
+                    Some(home),
+                    file_paths,
+                )
+            } else {
+                let script_path = default_agent_script_path(&id)?;
+                let sidecar = agent_api_key_path(&id)?;
+                (
+                    script_path.to_string_lossy().into_owned(),
+                    "shellscript".to_string(),
+                    String::new(),
+                    None,
+                    vec![script_path, sidecar],
+                )
             };
-            let home = crate::dsh_home::ensure_dsh_home_for(&id)?;
-            crate::dsh_home::sync_dsh_credentials(&home, Some(draft.api_key.trim()))?;
-            let base_url = normalize_base_url(&draft.base_url);
-            if !base_url.is_empty() {
-                crate::dsh_home::write_custom_provider_settings(
-                    &home,
-                    &base_url,
-                    &normalize_setup_models(&draft),
-                    &draft.dsh_api_protocol,
-                )?;
-            }
-            (program, "yaml".to_string(), "dsh".to_string())
-        } else {
-            let script = build_agent_script(&draft);
-            let script_path = write_agent_script(&id, &script, &draft.api_key)?;
-            (
-                script_path.to_string_lossy().into_owned(),
-                "shellscript".to_string(),
-                String::new(),
-            )
-        };
-        let profile = CustomAgentProfile {
-            id: id.clone(),
-            label: draft.label.trim().to_string(),
-            path: profile_path,
-            codex_like: matches!(draft.kind, AgentSetupKind::Codex),
-            family,
-            config_lang,
-            base_url: normalize_base_url(&draft.base_url),
-            api_key: draft.api_key.trim().to_string(),
-            models: normalize_setup_models(&draft),
-            enable_1m_context: draft.enable_1m_context,
-            enable_chat_completions_proxy: draft.enable_chat_completions_proxy,
-            bridge_python_path: draft.bridge_python_path.trim().to_string(),
-            username: String::new(),
-            password: String::new(),
-        };
-        let profile = normalize_custom_agent_profile(profile)
+            let profile = normalize_custom_agent_profile(CustomAgentProfile {
+                id: id.clone(),
+                label: draft.label.trim().to_string(),
+                path: profile_path,
+                codex_like: matches!(draft.kind, AgentSetupKind::Codex),
+                family,
+                config_lang,
+                base_url: normalize_base_url(&draft.base_url),
+                api_key: draft.api_key.trim().to_string(),
+                models,
+                enable_1m_context: draft.enable_1m_context,
+                enable_chat_completions_proxy: draft.enable_chat_completions_proxy,
+                bridge_python_path: draft.bridge_python_path.trim().to_string(),
+                username: String::new(),
+                password: String::new(),
+            })
             .ok_or_else(|| "Invalid custom agent profile".to_string())?;
 
-        settings.agent_proxy_enabled.insert(id, draft.proxy_enabled);
-        settings.custom_agents.push(profile);
-
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
+            AgentFileTransaction::capture_and_apply(file_paths, || {
+                if let Some(home) = dsh_home.as_deref() {
+                    crate::dsh_home::ensure_dsh_home_at(home)?;
+                    crate::dsh_home::sync_dsh_credentials(home, Some(draft.api_key.trim()))?;
+                    let base_url = normalize_base_url(&draft.base_url);
+                    if !base_url.is_empty() {
+                        crate::dsh_home::write_custom_provider_settings(
+                            home,
+                            &base_url,
+                            &profile.models,
+                            &draft.dsh_api_protocol,
+                        )?;
+                    }
+                } else {
+                    let script = build_agent_script(&draft);
+                    write_agent_script(&id, &script, &draft.api_key)?;
+                }
+                settings
+                    .agent_proxy_enabled
+                    .insert(id.clone(), draft.proxy_enabled);
+                settings.custom_agents.push(profile.clone());
+                Ok(())
+            })
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1893,70 +2449,17 @@ pub async fn update_custom_agent_models(
     models: Vec<String>,
 ) -> Result<AppSettings, String> {
     let normalized = tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        let normalized_id = sanitize_custom_agent_id(&id);
-        let models = normalize_model_list(models);
-        if models.is_empty() {
-            return Err("At least one model is required".to_string());
-        }
-        if models.iter().any(|model| !validate_model_name(model)) {
-            return Err("Model names cannot contain quotes, backslashes, or newlines".to_string());
-        }
-
-        let Some(profile) = settings
-            .custom_agents
-            .iter_mut()
-            .find(|profile| profile.id == normalized_id)
-        else {
-            return Err("Custom agent not found".to_string());
-        };
-        let family = profile.agent_family();
-        if profile.api_key.trim().is_empty()
-            || (family != AgentFamily::Dsh && profile.base_url.trim().is_empty())
-        {
-            return Err("This agent does not have saved model detection settings".to_string());
-        }
-
-        let draft = AgentSetupDraft {
-            id: profile.id.clone(),
-            label: profile.label.clone(),
-            kind: family.setup_kind(),
-            base_url: profile.base_url.clone(),
-            api_key: profile.api_key.clone(),
-            model: models[0].clone(),
-            models: models.clone(),
-            enable_1m_context: profile.enable_1m_context,
-            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
-            bridge_python_path: profile.bridge_python_path.clone(),
-            dsh_api_protocol: String::new(),
-            proxy_enabled: false,
-        };
-        validate_agent_setup_draft(&draft)?;
-        if family == AgentFamily::Dsh {
-            let home = crate::dsh_home::ensure_dsh_home_for(&profile.id)?;
-            crate::dsh_home::sync_dsh_credentials(&home, Some(profile.api_key.trim()))?;
-            crate::dsh_home::refresh_custom_provider_settings(
-                &home,
-                &normalize_base_url(&profile.base_url),
-                &models,
-            )?;
-        } else {
-            let script = build_agent_script(&draft);
-            let script_path = normalize_config_path(profile.path.clone());
-            let path =
-                write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-            profile.path = path.to_string_lossy().into_owned();
-        }
-        profile.models = models;
-
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
+        update_custom_agent_config_internal(
+            id,
+            None,
+            None,
+            false,
+            Some(models),
+            None,
+            None,
+            None,
+            None,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -2051,71 +2554,17 @@ pub async fn update_custom_agent_chat_completions_proxy(
 ) -> Result<AppSettings, String> {
     let bridge_python_path = bridge_python_path.map(|path| path.trim().to_string());
     let normalized = tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        let normalized_id = sanitize_custom_agent_id(&id);
-
-        let Some(profile) = settings
-            .custom_agents
-            .iter_mut()
-            .find(|profile| profile.id == normalized_id)
-        else {
-            return Err("Custom agent not found".to_string());
-        };
-        if !profile.codex_like {
-            return Err("Chat Completions bridge is only available for Codex agents".to_string());
-        }
-        if profile.models.is_empty()
-            || profile.base_url.trim().is_empty()
-            || profile.api_key.trim().is_empty()
-        {
-            return Err("This agent does not have saved Codex setup settings".to_string());
-        }
-        if !matches!(profile.config_lang.as_str(), "shellscript") {
-            return Err("Chat Completions bridge requires a shell-script Codex agent".to_string());
-        }
-        let draft = AgentSetupDraft {
-            id: profile.id.clone(),
-            label: profile.label.clone(),
-            kind: AgentSetupKind::Codex,
-            base_url: profile.base_url.clone(),
-            api_key: profile.api_key.clone(),
-            model: profile.models[0].clone(),
-            models: profile.models.clone(),
-            enable_1m_context: profile.enable_1m_context,
-            enable_chat_completions_proxy: enabled,
-            bridge_python_path: bridge_python_path
-                .clone()
-                .unwrap_or_else(|| profile.bridge_python_path.clone()),
-            dsh_api_protocol: String::new(),
-            proxy_enabled: false,
-        };
-        validate_agent_setup_draft(&draft)?;
-        // 显式指定了解释器就必须当场验证。放进脚本再让用户去启动终端时才发现问题,
-        // 正是这次要消掉的那类反馈延迟。
-        if enabled && !draft.bridge_python_path.is_empty() {
-            let probe = probe_chat_bridge_python_program(&draft.bridge_python_path);
-            if let Some(failure) = probe.failure {
-                return Err(format!(
-                    "This Python cannot run the Chat Completions bridge: {failure}"
-                ));
-            }
-        }
-        let script = build_codex_agent_script(&draft);
-        let script_path = normalize_config_path(profile.path.clone());
-        let path =
-            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-        profile.path = path.to_string_lossy().into_owned();
-        profile.enable_chat_completions_proxy = enabled;
-        profile.bridge_python_path = draft.bridge_python_path.clone();
-
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
+        update_custom_agent_config_internal(
+            id,
+            None,
+            None,
+            false,
+            None,
+            None,
+            Some(enabled),
+            bridge_python_path,
+            None,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -2129,56 +2578,17 @@ pub async fn update_custom_agent_context(
     enable_1m_context: bool,
 ) -> Result<AppSettings, String> {
     let normalized = tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        let normalized_id = sanitize_custom_agent_id(&id);
-
-        let Some(profile) = settings
-            .custom_agents
-            .iter_mut()
-            .find(|profile| profile.id == normalized_id)
-        else {
-            return Err("Custom agent not found".to_string());
-        };
-        if profile.agent_family() != AgentFamily::Claude {
-            return Err("1M context is only available for Claude Code agents".to_string());
-        }
-        if profile.models.is_empty()
-            || profile.base_url.trim().is_empty()
-            || profile.api_key.trim().is_empty()
-        {
-            return Err("This agent does not have saved Claude setup settings".to_string());
-        }
-
-        let draft = AgentSetupDraft {
-            id: profile.id.clone(),
-            label: profile.label.clone(),
-            kind: AgentSetupKind::ClaudeCode,
-            base_url: profile.base_url.clone(),
-            api_key: profile.api_key.clone(),
-            model: profile.models[0].clone(),
-            models: profile.models.clone(),
-            enable_1m_context,
-            enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
-            bridge_python_path: profile.bridge_python_path.clone(),
-            dsh_api_protocol: String::new(),
-            proxy_enabled: false,
-        };
-        validate_agent_setup_draft(&draft)?;
-        let script = build_claude_code_agent_script(&draft);
-        let script_path = normalize_config_path(profile.path.clone());
-        let path =
-            write_generated_agent_script(&profile.id, &script_path, &script, &profile.api_key)?;
-        profile.path = path.to_string_lossy().into_owned();
-        profile.enable_1m_context = enable_1m_context;
-
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
+        update_custom_agent_config_internal(
+            id,
+            None,
+            None,
+            false,
+            None,
+            Some(enable_1m_context),
+            None,
+            None,
+            None,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -2920,6 +3330,235 @@ mod tests {
             vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
         );
         assert!(settings.custom_agents.is_empty());
+    }
+
+    #[test]
+    fn remote_key_reuse_is_bound_to_the_existing_base_url() {
+        // Whitespace and trailing slashes are presentation differences, not a
+        // credential redirect. The comparison must remain deterministic even
+        // when both sides normalize to an empty URL.
+        assert_eq!(normalize_base_url("  ///  "), "");
+        assert!(
+            validate_remote_api_key_reuse("///", "stored-key", Some(" / "), None, false,).is_ok()
+        );
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1/",
+            "stored-key",
+            Some(" https://api.example.test/v1 "),
+            None,
+            false,
+        )
+        .is_ok());
+        let error = validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "stored-key",
+            Some("https://attacker.example.test/v1"),
+            None,
+            false,
+        )
+        .expect_err("an omitted key must not follow a changed endpoint");
+        assert!(error.contains("new API key"));
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "stored-key",
+            Some("https://attacker.example.test/v1"),
+            Some("replacement"),
+            false,
+        )
+        .is_ok());
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "stored-key",
+            Some("https://attacker.example.test/v1"),
+            None,
+            true,
+        )
+        .is_ok());
+        // An omitted base URL means "leave the current one alone" and is
+        // therefore safe even though no URL comparison is possible.
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "stored-key",
+            None,
+            None,
+            false,
+        )
+        .is_ok());
+        // A blank key is the mobile UI's "keep the existing key" value, not a
+        // replacement. It must still be rejected for a changed endpoint.
+        let blank_key_error = validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "stored-key",
+            Some("https://attacker.example.test/v1"),
+            Some("  \t"),
+            false,
+        )
+        .expect_err("a whitespace-only key must not authorize a URL change");
+        assert!(blank_key_error.contains("new API key"));
+    }
+
+    #[test]
+    fn remote_key_boundary_allows_url_changes_when_no_key_is_stored() {
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            "",
+            Some("https://other.example.test/v1"),
+            None,
+            false,
+        )
+        .is_ok());
+        assert!(validate_remote_api_key_reuse(
+            "https://api.example.test/v1",
+            " \t",
+            Some("https://other.example.test/v1"),
+            None,
+            false,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn empty_agent_api_key_removes_the_existing_sidecar() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-agent-credential-sidecar-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = root.join("agent-key");
+
+        write_agent_api_key_at_path(&path, "  old-key  ").expect("write sidecar");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old-key");
+
+        // Clearing a profile must make the wrapper fail closed rather than
+        // leave the old secret readable from disk.
+        sync_agent_credentials_at_path(&path, " \t").expect("remove sidecar");
+        assert!(!path.exists());
+
+        // A subsequent replacement recreates the sidecar with normalized
+        // contents, which is the path used when the user enters a new key.
+        sync_agent_credentials_at_path(&path, "  new-key\n").expect("rewrite sidecar");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new-key");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_file_transaction_restores_files_when_apply_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-agent-file-transaction-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("wrapper.sh");
+        let second = root.join("credentials");
+        fs::write(&first, b"old wrapper\n").unwrap();
+        fs::write(&second, b"old key\n").unwrap();
+
+        let result =
+            AgentFileTransaction::capture_and_apply([first.clone(), second.clone()], || {
+                fs::write(&first, b"new wrapper\n").map_err(|error| error.to_string())?;
+                fs::write(&second, b"new key\n").map_err(|error| error.to_string())?;
+                Err("simulated settings preparation failure".to_string())
+            });
+
+        assert_eq!(
+            result.expect_err("failed apply must be reported"),
+            "simulated settings preparation failure"
+        );
+        assert_eq!(fs::read(&first).unwrap(), b"old wrapper\n");
+        assert_eq!(fs::read(&second).unwrap(), b"old key\n");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_sync_replaces_a_matching_sidecar_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-agent-credential-symlink-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let outside = root.join("outside-key");
+        let sidecar = root.join("sidecar-key");
+        fs::write(&outside, "same-key").unwrap();
+        symlink(&outside, &sidecar).unwrap();
+
+        sync_agent_credentials_at_path(&sidecar, "same-key").expect("repair symlink");
+        let metadata = fs::symlink_metadata(&sidecar).unwrap();
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&sidecar).unwrap(), "same-key");
+        // Replacing the sidecar must not delete or rewrite the target that was
+        // outside Aeroric's credential directory.
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "same-key");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn updating_a_generated_claude_profile_refreshes_the_wrapper_and_sidecar() {
+        let id = format!("claude-refresh-{}", uuid::Uuid::new_v4().simple());
+        let root = std::env::temp_dir().join(format!("aeroric-claude-upsert-{}", id));
+        fs::create_dir_all(&root).unwrap();
+        let script_path = root.join(format!("agent.{}", native_agent_script_extension()));
+        let old_draft = AgentSetupDraft {
+            id: id.clone(),
+            label: "Claude old".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://old.example/v1".to_string(),
+            api_key: "old-key".to_string(),
+            model: "claude-old".to_string(),
+            models: vec!["claude-old".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+        fs::write(&script_path, build_agent_script(&old_draft)).unwrap();
+
+        let existing = CustomAgentProfile {
+            id: id.clone(),
+            label: "Claude old".to_string(),
+            path: script_path.to_string_lossy().into_owned(),
+            codex_like: false,
+            family: "claude".to_string(),
+            config_lang: "shellscript".to_string(),
+            base_url: old_draft.base_url.clone(),
+            api_key: old_draft.api_key.clone(),
+            models: old_draft.models.clone(),
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            username: String::new(),
+            password: String::new(),
+        };
+        let mut updated = existing.clone();
+        updated.label = "Claude new".to_string();
+        updated.base_url = "https://new.example/v1".to_string();
+        updated.api_key = "new-key".to_string();
+        updated.models = vec!["claude-new".to_string()];
+        updated.enable_1m_context = true;
+        assert_eq!(updated.agent_family(), AgentFamily::Claude);
+
+        let mut settings = AppSettings {
+            custom_agents: vec![existing],
+            ..AppSettings::default()
+        };
+        upsert_custom_agent_profile_unlocked(&mut settings, updated).unwrap();
+
+        let saved = settings.custom_agents.first().unwrap();
+        let script = fs::read_to_string(&saved.path).unwrap();
+        assert!(script.contains("new.example"));
+        assert!(script.contains("claude-new"));
+        assert!(script.contains("[1m]"));
+        assert!(!script.contains("old.example"));
+        let credential_path = agent_api_key_path(&id).unwrap();
+        assert_eq!(fs::read_to_string(&credential_path).unwrap(), "new-key");
+
+        let _ = remove_agent_api_key(&id);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

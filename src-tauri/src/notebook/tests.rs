@@ -254,7 +254,10 @@ fn peeking_a_note_does_not_register_it_as_open() {
 
     let (resolved, opened) = fs_ops::read_note_content(&state, &path).expect("peek");
     assert_eq!(opened.content, "on disk\n");
-    assert_eq!(resolved, vault.join("target.md"));
+    // `register_vault` stores canonical paths; macOS commonly resolves
+    // `/var` to `/private/var`, so compare with the same canonical root the
+    // state uses rather than the pre-canonical fixture spelling.
+    assert_eq!(resolved, vault.canonicalize().unwrap().join("target.md"));
 
     // 关键断言:嵌入读过之后,一次没带基线的保存**仍然**该报冲突。若 peek 也登记
     // 指纹,这里会拿"嵌入渲染那一刻的指纹"当基线,把盲写放过去。
@@ -1214,20 +1217,26 @@ fn trash_ids_from_the_frontend_cannot_escape_the_trash_directory() {
 fn trashing_a_folder_forgets_the_baselines_of_the_notes_inside_it() {
     let vault = temp_vault("trash-baselines");
     let state = registered_state(&vault);
+    // `register_vault` stores the canonical root (`/private/var` on macOS),
+    // while the temp-dir spelling may still use the `/var` symlink.  The
+    // production command passes this canonical root to `trash`; mirror that
+    // contract here so the test does not reject a valid in-vault target.
+    let canonical_vault = vault.canonicalize().unwrap();
     let folder = vault.join("Archive");
     std::fs::create_dir_all(&folder).expect("mkdir");
     let path = note_path(&folder, "note.md");
     fs_ops::create_note(&state, &path, "body\n").expect("create");
     fs_ops::read_note(&state, &path).expect("open");
+    let canonical_path = folder.canonicalize().unwrap().join("note.md");
     assert!(
-        state.last_sig(Path::new(&path)).is_some(),
+        state.last_sig(&canonical_path).is_some(),
         "fixture needs a baseline"
     );
 
     let resolved = state
         .resolve_in_vaults(&folder.to_string_lossy(), false)
         .expect("resolve");
-    trash::trash(&vault, &resolved).expect("trash folder");
+    trash::trash(&canonical_vault, &resolved).expect("trash folder");
     state
         .record_close_subtree(&resolved)
         .expect("forget subtree");
@@ -1236,7 +1245,7 @@ fn trashing_a_folder_forgets_the_baselines_of_the_notes_inside_it() {
     // 将来被复用时会拿一份属于**已经不在这里的文件**的基线去比对,而那次比对
     // 会说"磁盘没变" —— 于是静默覆盖掉别人的内容。
     assert!(
-        state.last_sig(Path::new(&path)).is_none(),
+        state.last_sig(&canonical_path).is_none(),
         "the baseline of a note inside the trashed folder survived"
     );
 

@@ -20,12 +20,13 @@
  * 2. **裸 ISO 日期只在首尾算截止。** Markio 的兜底是"行内任意位置出现的 ISO 日期也
  *    认",于是 `- [ ] 复盘 2026-08-01 那次故障` 会凭空长出一个截止日期。截止日期是
  *    **元数据**,写在首尾;夹在句子中间的日期是正文在说事。
- * 3. **排序是全序。** Markio 的比较器以 `text.localeCompare` 收尾,两篇笔记里同名的
+ * 3. **排序是全序。** Markio 的比较器只以文本比较收尾,两篇笔记里同名的
  *    任务永远打平 —— 那时候顺序由 `sort` 的实现和输入顺序决定,两次扫描之间会跳。
  *    这里以路径 + 行号收尾。
  */
 
 import { normalizeTag } from "./noteTags";
+import { compareNotebookPath, compareNotebookText } from "../../lib/notebookSort";
 
 /** Rust 侧 `NoteTaskRef`。 */
 export type NoteTaskRef = {
@@ -243,9 +244,10 @@ export function compareTasks(a: InboxTask, b: InboxTask): number {
     if (!b.due) return -1;
     return a.due < b.due ? -1 : 1;
   }
-  const byText = a.text.localeCompare(b.text);
+  const byText = compareNotebookText(a.text, b.text);
   if (byText !== 0) return byText;
-  if (a.path !== b.path) return a.path < b.path ? -1 : 1;
+  const byPath = compareNotebookPath(a.path, b.path);
+  if (byPath !== 0) return byPath;
   return a.line - b.line;
 }
 
@@ -348,7 +350,7 @@ export function groupInboxTasks(
         : [...buckets.keys()].sort((a, b) => {
             const left = buckets.get(a)?.[0]?.title ?? a;
             const right = buckets.get(b)?.[0]?.title ?? b;
-            return left.localeCompare(right) || (a < b ? -1 : a > b ? 1 : 0);
+            return compareNotebookText(left, right) || compareNotebookPath(a, b);
           });
 
   const groups: TaskGroup[] = [];

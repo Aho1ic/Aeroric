@@ -412,6 +412,154 @@ function setMacWebKitTextareaAttrs(term: Terminal): void {
 // x10 不算：它的 events 只有 DOWN，滚轮被 restrict 拒掉，拖动也不影响本地选区。
 const APP_MOUSE_REPORTING_MODES: ReadonlySet<string> = new Set(["vt200", "drag", "any"]);
 
+/** UP / DRAG 位，抄 xterm 的 `CoreMouseEventType`（那个 enum 没导出）。 */
+const CORE_MOUSE_EVENT_UP = 2;
+const CORE_MOUSE_EVENT_DRAG = 4;
+
+interface CoreMouseServiceInternals {
+  onProtocolChange?: (listener: (events: number) => void) => { dispose: () => void };
+}
+interface TerminalWithCoreMouseService {
+  _core?: { coreMouseService?: CoreMouseServiceInternals };
+}
+
+/**
+ * 补上 xterm 6.0.0 的一处漏账：按下期间协议一变，鼠标**释放**就永远不上报了。
+ *
+ * `CoreBrowserTerminal.bindMouse` 把 `mouseup` / `mousedrag` 这两个 document 级监听
+ * **只在 mousedown 里**挂上：
+ *
+ * ```js
+ * if (requestedEvents.mouseup) this._document.addEventListener('mouseup', requestedEvents.mouseup);
+ * ```
+ *
+ * 而 `onProtocolChange` 会把它们摘掉，重新被请求时却只是把函数放回 `requestedEvents`，
+ * 不再往 document 上挂：
+ *
+ * ```js
+ * if (!(events & CoreMouseEventType.UP)) {
+ *   this._document.removeEventListener('mouseup', requestedEvents.mouseup);
+ *   requestedEvents.mouseup = null;
+ * } else if (!requestedEvents.mouseup) {
+ *   requestedEvents.mouseup = eventListeners.mouseup;   // ← 没有 addEventListener
+ * }
+ * ```
+ *
+ * 于是只要程序在「按下」和「松手」之间关一次再开一次上报（`\e[?1000l` 紧跟
+ * `\e[?1000h` —— TUI 重绘时重发整段模式串就是这个形状），松手那一下没有任何监听者：
+ * 按下的 `M` 发出去了，释放的 `m` 永远不发。程序那边的按钮状态就永久停在「按住」，
+ * 症状正是「单击一下等于左键长按」。重发同一个 `h`（协议没变）不会触发，必须有那次
+ * 关闭 —— 实测见 `terminal-mouse-release.test.ts`。
+ *
+ * 修法是把 xterm 自己的那两个监听函数抓下来，协议变化时按需重新挂回去 ——
+ * 抓的是它原本要用的同一个函数引用，`addEventListener` 对同引用天然去重，所以重复挂
+ * 是无副作用的 no-op；释放报文仍由 xterm 自己按当前编码和坐标发出，我们不伪造字节。
+ *
+ * 为什么抓引用而不是补发一个合成 mousedown 让它自己重挂：那样会多发一份**按下**报文，
+ * 得再加一条抑制通道去吞掉，反而更容易错。
+ */
+export function attachMouseReleaseStrandGuard(term: Terminal): () => void {
+  const coreMouse = (term as unknown as TerminalWithCoreMouseService)._core?.coreMouseService;
+  const element = term.element;
+  if (!element || typeof coreMouse?.onProtocolChange !== "function") return () => {};
+
+  // xterm 注册的正是这两个函数；抓到引用后重复挂载是 no-op。
+  let capturedMouseUp: EventListenerOrEventListenerObject | null = null;
+  let capturedMouseDrag: EventListenerOrEventListenerObject | null = null;
+  let pressed = false;
+  let restoreAddEventListener: (() => void) | null = null;
+  let restoreTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // mousedown 派发期间临时接管 document.addEventListener，把 xterm 挂上去的那两个
+  // 引用记下来。
+  //
+  // 还原点的选择是这里唯一的坑：
+  // - microtask 不行。微任务队列在**每个监听回调返回后**就会清空，于是补丁会在我们
+  //   自己的捕获回调刚结束、xterm 的 element 级 mousedown 还没跑之前就被撤掉，什么
+  //   都抓不到（实测 capturedMouseUp 恒为 null）。
+  // - document 上的冒泡监听也不行。xterm 的处理里 `cancel(ev)` 会 stopPropagation()，
+  //   事件根本冒不到 document，补丁会永久留在 document 上。
+  //
+  // 用同一个 element 上的冒泡监听：xterm 只调 stopPropagation()（不是
+  // stopImmediatePropagation），同一节点上的其余监听照常执行，而同相位按注册顺序跑 ——
+  // xterm 在构造时就注册了，我们晚于它，所以稳定排在它后面。再加一个 setTimeout(0)
+  // 兜底，覆盖「事件目标恰好就是 element 本身」这种相位退化的情况。
+  const captureDuringMouseDown = () => {
+    if (restoreAddEventListener !== null) return;
+    // Keep the exact property value so restoring the gesture does not replace
+    // the platform method with a fresh bound wrapper on every click.  Apart
+    // from preserving identity, calling it with an explicit receiver retains
+    // the DOM method's normal `this` semantics.
+    const original = document.addEventListener;
+    const patched = (
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ): void => {
+      if (type === "mouseup") capturedMouseUp = listener;
+      if (type === "mousemove") capturedMouseDrag = listener;
+      original.call(document, type, listener, options);
+    };
+    document.addEventListener = patched;
+    restoreAddEventListener = () => {
+      // 只有还是我们那份补丁时才还原,避免踩掉别人后来的包装。
+      if (document.addEventListener === patched) document.addEventListener = original;
+      restoreAddEventListener = null;
+      if (restoreTimer !== null) {
+        clearTimeout(restoreTimer);
+        restoreTimer = null;
+      }
+    };
+    restoreTimer = setTimeout(() => {
+      restoreTimer = null;
+      restoreAddEventListener?.();
+    }, 0);
+  };
+
+  const handleMouseDownCapture = (event: Event) => {
+    if (!(event instanceof MouseEvent) || event.button !== 0) return;
+    pressed = true;
+    captureDuringMouseDown();
+  };
+
+  const handleMouseDownBubble = () => {
+    restoreAddEventListener?.();
+  };
+
+  const handleMouseUp = (event: Event) => {
+    if (event instanceof MouseEvent && event.buttons) return;
+    pressed = false;
+  };
+
+  // 捕获阶段：必须排在 xterm 自己那个 element 级 mousedown 之前，补丁才来得及生效。
+  element.addEventListener("mousedown", handleMouseDownCapture, true);
+  // 冒泡阶段：排在 xterm 的处理之后，抓完就还原。
+  element.addEventListener("mousedown", handleMouseDownBubble);
+  document.addEventListener("mouseup", handleMouseUp, true);
+  document.addEventListener("pointercancel", handleMouseUp, true);
+
+  const protocolDisposable = coreMouse.onProtocolChange((events) => {
+    if (!pressed) return;
+    if (events & CORE_MOUSE_EVENT_UP && capturedMouseUp) {
+      document.addEventListener("mouseup", capturedMouseUp);
+    }
+    if (events & CORE_MOUSE_EVENT_DRAG && capturedMouseDrag) {
+      document.addEventListener("mousemove", capturedMouseDrag);
+    }
+  });
+
+  return () => {
+    protocolDisposable.dispose();
+    element.removeEventListener("mousedown", handleMouseDownCapture, true);
+    element.removeEventListener("mousedown", handleMouseDownBubble);
+    document.removeEventListener("mouseup", handleMouseUp, true);
+    document.removeEventListener("pointercancel", handleMouseUp, true);
+    restoreAddEventListener?.();
+    capturedMouseUp = null;
+    capturedMouseDrag = null;
+  };
+}
+
 /**
  * 这次按下会形成 **xterm 本地选区** 吗?还是会被转发给程序?
  *

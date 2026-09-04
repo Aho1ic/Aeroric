@@ -270,7 +270,7 @@ describe("compareTasks", () => {
   });
 
   it("全打平时按路径再按行号,不是不稳定的", () => {
-    /* Markio 的比较器以 text.localeCompare 收尾:同名任务永远返回 0,顺序由 sort 的
+    /* Markio 的比较器只以文本比较收尾:同名任务永远返回 0,顺序由 sort 的
        实现和输入顺序决定,两次扫描之间会跳。 */
     const a = task({ path: "/vault/a.md", line: 9, text: "同名" });
     const b = task({ path: "/vault/b.md", line: 2, text: "同名" });

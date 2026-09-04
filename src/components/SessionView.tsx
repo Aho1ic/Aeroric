@@ -525,9 +525,12 @@ export function renderProseHtml(
   mentionPaths: readonly string[],
   label: (path: string) => string,
 ): string {
-  // mentionPaths is a session-wide vocabulary, so its joined form is a cheap
-  // and exact discriminator; `\u0000` cannot occur in a path.
-  const key = `${mentionPaths.join("\u0000")}\u0000\u0000${text}`;
+  // The localized aria-label is part of the rendered HTML. Include the labels
+  // themselves in the key (rather than a caller-supplied locale) so every
+  // caller is safe when its translation changes, including tests and embedded
+  // transcript surfaces that use a custom label function.
+  const labels = mentionPaths.map((path) => label(path));
+  const key = JSON.stringify([mentionPaths, labels, text]);
   const cached = proseHtmlCache.get(key);
   if (cached !== undefined) {
     proseHtmlCache.delete(key);

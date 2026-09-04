@@ -62,8 +62,8 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
     Ok(data)
 }
 
-/// 异步启动命名 agent 子进程。超时后通过 `start_kill()` 终止子进程，
-/// 避免阻塞线程和后台 agent 持续运行（M-2 修复）。
+/// 异步启动命名 agent 子进程。超时后终止整个进程树，避免后台 agent
+/// 或它拉起的后代继续运行（M-2 修复）。
 async fn run_naming_agent_with_timeout(
     agent: &str,
     project_path: &str,
@@ -75,7 +75,7 @@ async fn run_naming_agent_with_timeout(
     let use_stdin_prompt = launch.codex_like;
 
     let mut cmd = tokio::process::Command::new(&launch.program);
-    crate::subprocess::configure_background_tokio_command(&mut cmd);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut cmd);
     cmd.args(&launch.args);
     if use_stdin_prompt {
         cmd.args([
@@ -150,8 +150,11 @@ async fn run_naming_agent_with_timeout(
     let status = match tokio::time::timeout(timeout_dur, child.wait()).await {
         Ok(result) => result.map_err(|e| format!("Agent wait error: {}", e))?,
         Err(_) => {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                crate::subprocess::terminate_tokio_process_tree(&mut child),
+            )
+            .await;
             stdout_task.abort();
             stderr_task.abort();
             let _ = stdout_task.await;

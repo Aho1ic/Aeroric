@@ -16,6 +16,7 @@ import {
   type VaultLinkIndex,
 } from "./noteLinks";
 import type { NoteLinkSource } from "./noteBacklinks";
+import { compareNotebookPath } from "../../lib/notebookSort";
 
 /** 图上的一篇笔记。 */
 export type GraphNode = {
@@ -272,7 +273,7 @@ export function layoutNoteGraph(
   for (const [ring, bucket] of [...rings.entries()].sort((a, b) => a[0] - b[0])) {
     bucket.sort((a, b) => {
       const byDegree = b.inDegree + b.outDegree - (a.inDegree + a.outDegree);
-      return byDegree !== 0 ? byDegree : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+      return byDegree !== 0 ? byDegree : compareNotebookPath(a.path, b.path);
     });
 
     if (ring === 0) {

@@ -93,6 +93,17 @@ describe("listNotes", () => {
     expect(notes[0]?.title).toBe("new");
   });
 
+  it("uses the full path as a stable tie-breaker for equal modification times", async () => {
+    mockList([
+      entry({ name: "b.md", path: "/v/b.md", modifiedMs: 500 }),
+      entry({ name: "a.md", path: "/v/a.md", modifiedMs: 500 }),
+    ]);
+
+    const notes = await listNotes("/v");
+
+    expect(notes.map((note) => note.path)).toEqual(["/v/a.md", "/v/b.md"]);
+  });
+
   it("honours the manual order over modification time", async () => {
     mockList(
       [
@@ -106,6 +117,22 @@ describe("listNotes", () => {
     const notes = await listNotes("/v");
 
     expect(notes.map((note) => note.path)).toEqual(["/v/b.md", "/v/a.md"]);
+  });
+
+  it("uses the full path when duplicate basenames share an order rank", async () => {
+    mockList(
+      [
+        entry({ name: "note.md", path: "/v/z/note.md", modifiedMs: 900 }),
+        entry({ name: "note.md", path: "/v/a/note.md", modifiedMs: 100 }),
+      ],
+      // A basename-only order map gives both entries the same rank; the path
+      // tie-breaker must still make the result independent of tree order.
+      ["note.md", "note.md"],
+    );
+
+    const notes = await listNotes("/v");
+
+    expect(notes.map((note) => note.path)).toEqual(["/v/a/note.md", "/v/z/note.md"]);
   });
 
   it("puts unordered notes first so new ones stay visible", async () => {

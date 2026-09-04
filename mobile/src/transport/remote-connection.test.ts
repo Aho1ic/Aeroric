@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { x25519 } from "@noble/curves/ed25519.js";
+import { xsalsa20poly1305 } from "@noble/ciphers/salsa.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import {
   pairWithInvite,
   PairingError,
@@ -22,6 +26,147 @@ function utf8(text: string): Uint8Array {
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function standardBase64FromUrl(value: string): string {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  return normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bytesFromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+function u32(value: number): Uint8Array {
+  const result = new Uint8Array(4);
+  new DataView(result.buffer).setUint32(0, value, false);
+  return result;
+}
+
+function u64(value: bigint): Uint8Array {
+  const result = new Uint8Array(8);
+  new DataView(result.buffer).setBigUint64(0, value, false);
+  return result;
+}
+
+function stringList(values: readonly string[]): Uint8Array {
+  return concatBytes([
+    u32(values.length),
+    ...values.flatMap((value) => {
+      const bytes = utf8(value);
+      return [u32(bytes.length), bytes];
+    }),
+  ]);
+}
+
+/** Mirror the desktop Orca transcript/key schedule for an end-to-end ACK test. */
+function orcaServerResponse(options: {
+  serverKeys: TestServerKeys;
+  helloJson: string;
+  desktopNonce: Uint8Array;
+}): {
+  readyJson: string;
+  transcriptHashB64: string;
+  sealText: (plaintext: string) => string;
+} {
+  const hello = JSON.parse(options.helloJson) as {
+    clientPublicKeyB64: string;
+    clientNonceB64: string;
+    context: {
+      protocol: string;
+      initiator: string;
+      responder: string;
+      transport: string;
+      relayHostId?: string;
+    };
+  };
+  const clientPublic = bytesFromBase64(hello.clientPublicKeyB64);
+  const clientNonce = bytesFromBase64(hello.clientNonceB64);
+  const desktopPublic = x25519.getPublicKey(options.serverKeys.secret);
+  const ready = {
+    type: "e2ee_ready",
+    v: 2,
+    desktopPublicKeyB64: base64(desktopPublic),
+    clientNonceB64: hello.clientNonceB64,
+    desktopNonceB64: base64(options.desktopNonce),
+    selection: { framing: 2, payloadKinds: ["text", "binary"] },
+    context: hello.context,
+  };
+  const text = new TextEncoder();
+  const fields: [string, Uint8Array][] = [
+    ["domain", utf8("orca-mobile-e2ee/v2/transcript")],
+    ["mobile-to-desktop.type", utf8("e2ee_hello")],
+    ["mobile-to-desktop.version", u32(2)],
+    ["mobile-to-desktop.client-public-key", clientPublic],
+    ["mobile-to-desktop.client-nonce", clientNonce],
+    ["mobile-to-desktop.capabilities.framing", concatBytes([u32(1), u32(2)])],
+    ["mobile-to-desktop.capabilities.payload-kinds", stringList(["text", "binary"])],
+    ["mobile-to-desktop.context.protocol", utf8(hello.context.protocol)],
+    ["mobile-to-desktop.context.initiator", utf8(hello.context.initiator)],
+    ["mobile-to-desktop.context.responder", utf8(hello.context.responder)],
+    ["mobile-to-desktop.context.transport", utf8(hello.context.transport)],
+    ["mobile-to-desktop.context.relay-host-id", utf8(hello.context.relayHostId ?? "")],
+    ["desktop-to-mobile.type", utf8("e2ee_ready")],
+    ["desktop-to-mobile.version", u32(2)],
+    ["desktop-to-mobile.desktop-public-key", desktopPublic],
+    ["desktop-to-mobile.client-nonce-echo", clientNonce],
+    ["desktop-to-mobile.desktop-nonce", options.desktopNonce],
+    ["desktop-to-mobile.selection.framing", u32(2)],
+    ["desktop-to-mobile.selection.payload-kinds", stringList(["text", "binary"])],
+    ["desktop-to-mobile.context.protocol", utf8(ready.context.protocol)],
+    ["desktop-to-mobile.context.initiator", utf8(ready.context.initiator)],
+    ["desktop-to-mobile.context.responder", utf8(ready.context.responder)],
+    ["desktop-to-mobile.context.transport", utf8(ready.context.transport)],
+    ["desktop-to-mobile.context.relay-host-id", utf8(ready.context.relayHostId ?? "")],
+  ];
+  const transcript = concatBytes(
+    fields.flatMap(([name, value]) => {
+      const nameBytes = text.encode(name);
+      return [u32(nameBytes.length), nameBytes, u32(value.length), value];
+    }),
+  );
+  const transcriptHash = sha256(transcript);
+  const sharedSecret = x25519.getSharedSecret(options.serverKeys.secret, clientPublic);
+  const salt = sha256(
+    concatBytes([utf8("orca-mobile-e2ee/v2/salt\0"), clientNonce, options.desktopNonce]),
+  );
+  const info = concatBytes([utf8("orca-mobile-e2ee/v2/session\0"), transcriptHash]);
+  const schedule = hkdf(sha256, sharedSecret, salt, info, 96);
+  const sessionId = schedule.slice(64, 96);
+  let sendCounter = 0n;
+  const sealText = (plaintext: string): string => {
+    const kind = 0;
+    const counter = sendCounter++;
+    const nonce = new Uint8Array(24);
+    nonce.set(sessionId.slice(0, 12));
+    nonce[12] = 2;
+    nonce[13] = 1;
+    nonce[14] = kind;
+    nonce.set(u64(counter), 16);
+    const header = concatBytes([sessionId, new Uint8Array([1, kind]), u64(counter)]);
+    const ciphertext = xsalsa20poly1305(schedule.slice(32, 64), nonce).encrypt(
+      concatBytes([header, text.encode(plaintext)]),
+    );
+    return base64(concatBytes([nonce, ciphertext]));
+  };
+  return { readyJson: JSON.stringify(ready), transcriptHashB64: base64(transcriptHash), sealText };
 }
 
 /** 模拟桌面端:WS 对端 + E2EE 服务端会话(严格按序解密客户端帧)。 */
@@ -63,6 +208,32 @@ class FakeWebSocket implements WebSocketLike {
     const { ackJson, session } = testRespondHandshake(keys, hello);
     this.serverSession = session;
     this.onmessage?.({ data: ackJson });
+  }
+
+  /** Orca 服务端在 E2EE 握手阶段返回明文 `e2ee_ready`。 */
+  acceptOrcaHandshake(keys: TestServerKeys): void {
+    const helloJson = this.sent.find((d): d is string => typeof d === "string");
+    if (!helloJson) throw new Error("client never sent Orca hello");
+    const hello = JSON.parse(helloJson) as {
+      type?: string;
+      v?: number;
+      clientNonceB64?: string;
+      context?: unknown;
+    };
+    if (hello.type !== "e2ee_hello" || hello.v !== 2 || !hello.clientNonceB64) {
+      throw new Error("bad Orca hello");
+    }
+    this.onmessage?.({
+      data: JSON.stringify({
+        type: "e2ee_ready",
+        v: 2,
+        desktopPublicKeyB64: standardBase64FromUrl(keys.publicB64),
+        clientNonceB64: hello.clientNonceB64,
+        desktopNonceB64: btoa(String.fromCharCode(...new Uint8Array(32).fill(9))),
+        selection: { framing: 2, payloadKinds: ["text", "binary"] },
+        context: hello.context,
+      }),
+    });
   }
 
   /** 按序解密到目前为止的全部客户端加密帧,返回控制面 JSON 列表。 */
@@ -124,6 +295,34 @@ class FakeWebSocket implements WebSocketLike {
 
   dropped(): void {
     this.onclose?.();
+  }
+}
+
+/** A native bridge can invoke an assigned `onopen` handler synchronously. */
+class SyncOpenThrowWebSocket implements WebSocketLike {
+  sent: string[] = [];
+  closed = false;
+  private openHandler: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: ((event?: { code?: number; reason?: string }) => void) | null = null;
+  onerror: ((event?: { message?: string }) => void) | null = null;
+
+  get onopen(): (() => void) | null {
+    return this.openHandler;
+  }
+
+  set onopen(handler: (() => void) | null) {
+    this.openHandler = handler;
+    if (handler) handler();
+  }
+
+  send(data: string | ArrayBufferLike | Uint8Array): void {
+    if (typeof data === "string") this.sent.push(data);
+    throw new Error("bridge send failed");
+  }
+
+  close(): void {
+    this.closed = true;
   }
 }
 
@@ -191,6 +390,32 @@ afterEach(() => {
 });
 
 describe("RemoteConnection", () => {
+  it("invalidates and closes a synchronously opened socket when the first send fails", () => {
+    const serverKeys = testGenerateServerKeys();
+    const socket = new SyncOpenThrowWebSocket();
+    let factoryCalls = 0;
+    const conn = new RemoteConnection({
+      endpoints: ["ws://sync-open:1"],
+      serverPublicKey: serverKeys.publicB64,
+      authParams: () => ({ deviceToken: "tok" }),
+      wsFactory: () => {
+        factoryCalls += 1;
+        return socket;
+      },
+      jitter: (delay) => delay,
+    });
+
+    conn.start();
+
+    expect(factoryCalls).toBe(1);
+    expect(socket.closed).toBe(true);
+    expect(conn.status).toBe("unauthorized");
+    expect(socket.onopen).toBeNull();
+    expect(socket.onmessage).toBeNull();
+    expect(socket.onclose).toBeNull();
+    expect(socket.onerror).toBeNull();
+  });
+
   it("handshakes, authenticates and reaches online (E2EE end-to-end)", async () => {
     const h = createHarness();
     const authResults: unknown[] = [];
@@ -381,6 +606,131 @@ describe("RemoteConnection", () => {
     expect(h.conn.status).toBe("online");
   });
 
+  it("times out Orca authentication when the desktop stays silent after e2ee_auth", async () => {
+    const serverKeys = testGenerateServerKeys();
+    const sockets: FakeWebSocket[] = [];
+    const conn = new RemoteConnection({
+      endpoints: ["ws://orca:1"],
+      serverPublicKey: serverKeys.publicB64,
+      protocol: "orca",
+      authParams: () => ({ deviceToken: "tok" }),
+      wsFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      handshakeTimeoutMs: 500,
+      jitter: (delay) => delay,
+    });
+
+    conn.start();
+    const socket = sockets[0];
+    socket.open();
+    await flush();
+    socket.acceptOrcaHandshake(serverKeys);
+    await flush();
+
+    expect(conn.status).toBe("authenticating");
+    // hello + encrypted e2ee_auth; no encrypted response follows.
+    expect(socket.sent).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socket.closed).toBe(true);
+    expect(conn.status).toBe("reconnecting");
+  });
+
+  it("fails the Orca candidate when authParams throws after the E2EE handshake", async () => {
+    const serverKeys = testGenerateServerKeys();
+    const sockets: FakeWebSocket[] = [];
+    const authFailure = new Error("credential store unavailable");
+    const conn = new RemoteConnection({
+      endpoints: ["ws://orca:1"],
+      serverPublicKey: serverKeys.publicB64,
+      protocol: "orca",
+      authParams: () => {
+        throw authFailure;
+      },
+      wsFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      handshakeTimeoutMs: 500,
+      jitter: (delay) => delay,
+    });
+
+    conn.start();
+    const socket = sockets[0];
+    socket.open();
+    await flush();
+    socket.acceptOrcaHandshake(serverKeys);
+    await flush();
+
+    expect(socket.closed).toBe(true);
+    expect(conn.status).toBe("reconnecting");
+    expect(conn.authError).toBe(authFailure.message);
+  });
+
+  it("clears the Orca auth timeout after a valid authenticated response", async () => {
+    const serverKeys = testGenerateServerKeys();
+    const clientSecret = new Uint8Array(32).fill(7);
+    const clientNonce = new Uint8Array(32).fill(8);
+    const desktopNonce = new Uint8Array(32).fill(9);
+    let randomCall = 0;
+    const sockets: FakeWebSocket[] = [];
+    const authResults: unknown[] = [];
+    const conn = new RemoteConnection({
+      endpoints: ["ws://orca:1"],
+      serverPublicKey: serverKeys.publicB64,
+      protocol: "orca",
+      authParams: () => ({ deviceToken: "tok" }),
+      randomBytes: (length) => {
+        const value = randomCall++ === 0 ? clientSecret : clientNonce;
+        if (value.length !== length) throw new Error("unexpected random length");
+        return value.slice();
+      },
+      wsFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      handshakeTimeoutMs: 500,
+      jitter: (delay) => delay,
+    });
+    conn.onAuthSuccess((auth) => authResults.push(auth));
+
+    conn.start();
+    const socket = sockets[0];
+    socket.open();
+    await flush();
+    const hello = socket.sent.find((frame): frame is string => typeof frame === "string");
+    expect(hello).toBeDefined();
+    const server = orcaServerResponse({ serverKeys, helloJson: hello!, desktopNonce });
+    socket.onmessage?.({ data: server.readyJson });
+    await flush();
+    expect(socket.sent).toHaveLength(2); // hello + e2ee_auth
+
+    socket.onmessage?.({
+      data: server.sealText(
+        JSON.stringify({
+          type: "e2ee_authenticated",
+          v: 2,
+          transcriptHashB64: server.transcriptHashB64,
+        }),
+      ),
+    });
+    await flush();
+
+    expect(conn.status).toBe("online");
+    expect(authResults).toEqual([{ deviceId: "tok", deviceToken: "tok" }]);
+
+    // Advancing beyond the auth deadline must not tear down an already
+    // authenticated socket; the timer was cleared on the success path.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(conn.status).toBe("online");
+    expect(socket.closed).toBe(false);
+  });
+
   it("correlates requests and pushes independently", async () => {
     const h = createHarness();
     const winner = await goOnline(h);
@@ -444,6 +794,43 @@ describe("RemoteConnection", () => {
     winner.dropped();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.urls.length).toBe(8);
+  });
+
+  it("ignores a delayed binary frame from an obsolete connection generation", async () => {
+    const h = createHarness({ endpoints: ["ws://host-a:1", "ws://host-b:2"] });
+    const winner = await goOnline(h);
+    const sealed = winner.serverSession!.encryptFrame(
+      KIND_CTRL,
+      utf8(JSON.stringify({ v: 2, push: "stale", data: {} })),
+    );
+    let releaseBlob!: (buffer: ArrayBuffer) => void;
+    const delayedBlob = {
+      arrayBuffer: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          releaseBlob = resolve;
+        }),
+    };
+
+    // The old message has entered the serialized Blob chain but is suspended
+    // before its bytes are available.
+    winner.onmessage?.({ data: delayedBlob });
+    await flush();
+
+    winner.dropped();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const replacement = h.sockets[2];
+    replacement.open();
+    await flush();
+    replacement.acceptHandshake(h.serverKeys);
+    await flush();
+    expect(h.conn.status).toBe("authenticating");
+
+    // Resolving the old frame after the new handshake must not decrypt it with
+    // the new session or tear down the replacement connection.
+    releaseBlob(toArrayBuffer(sealed));
+    await flush();
+    expect(h.conn.status).toBe("authenticating");
+    expect(replacement.closed).toBe(false);
   });
 
   it("redials a stale in-flight round when the app returns to the foreground", async () => {

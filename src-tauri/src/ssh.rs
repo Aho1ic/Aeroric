@@ -870,10 +870,7 @@ fn spawn_remote_task_pty(
         app.clone(),
         task_id.to_string(),
         crate::pty::OutputSink::Channel(on_output),
-        crate::pty::PtyEmitMode::Batched {
-            flush_interval: crate::pty::PTY_EMIT_FLUSH_INTERVAL,
-            max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
-        },
+        crate::pty::PtyEmitMode::agent(),
         reader,
         true,
         None,
@@ -1022,10 +1019,7 @@ pub async fn open_ssh_shell(
         app,
         shell_id,
         crate::pty::OutputSink::Channel(on_output),
-        crate::pty::PtyEmitMode::Batched {
-            flush_interval: crate::pty::PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL,
-            max_batch_bytes: crate::pty::PTY_EMIT_MAX_BATCH_BYTES,
-        },
+        crate::pty::PtyEmitMode::interactive(),
         reader,
         false,
         None,

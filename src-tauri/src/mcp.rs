@@ -234,7 +234,7 @@ fn build_test_command(config: &McpServerConfig) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    crate::subprocess::configure_background_tokio_command(&mut cmd);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut cmd);
     cmd
 }
 
@@ -266,6 +266,7 @@ async fn test_mcp_server_internal(config: &McpServerConfig) -> McpTestResult {
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
+        let _ = crate::subprocess::terminate_tokio_process_tree(&mut child).await;
         return McpTestResult::Error {
             message: "无法获取 MCP 服务器进程管道".to_string(),
             stderr: None,
@@ -278,9 +279,8 @@ async fn test_mcp_server_internal(config: &McpServerConfig) -> McpTestResult {
     )
     .await;
 
-    // stdio 服务器在 stdin EOF 后会自行退出;kill 兜底并回收僵尸进程。
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    // stdio 服务器在 stdin EOF 后会自行退出;进程树终止兜底并回收僵尸进程。
+    let _ = crate::subprocess::terminate_tokio_process_tree(&mut child).await;
 
     outcome.unwrap_or(McpTestResult::Timeout {
         message: format!("MCP 服务器在 {MCP_TEST_TIMEOUT_SECS} 秒内未响应初始化请求"),

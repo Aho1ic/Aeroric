@@ -104,7 +104,7 @@ pub(super) async fn run_git_with_timeout(
     validate_project_path(&project_path)?;
 
     let mut command = tokio::process::Command::new("git");
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     let mut child = command
         .args(&args)
         .current_dir(&project_path)
@@ -129,8 +129,11 @@ pub(super) async fn run_git_with_timeout(
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(result) => result.map_err(|error| error.to_string())?,
         Err(_) => {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(1),
+                crate::subprocess::terminate_tokio_process_tree(&mut child),
+            )
+            .await;
             stdout_task.abort();
             stderr_task.abort();
             let _ = stdout_task.await;

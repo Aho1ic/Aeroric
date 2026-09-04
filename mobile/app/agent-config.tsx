@@ -14,6 +14,7 @@ import { useFocusEffect } from "expo-router";
 import { BrainCircuit, Check, LayoutGrid, Plus, Rows3, Search } from "lucide-react-native";
 import { t } from "../src/i18n";
 import { agentFamilyOf } from "../src/agent-family";
+import { chatCompletionsProxyPayload, type AgentConfigKind } from "../src/agent-config-payload";
 import { useConnection } from "../src/state/connection-context";
 import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 import { AnimatedSelection } from "../src/ui/AnimatedSelection";
@@ -24,7 +25,7 @@ import { radii, spacing, theme, typography } from "../src/ui/theme";
 
 type Provider = "anthropic" | "openai" | "deepseek";
 type ViewMode = "bar" | "grid";
-type AgentKind = "codex" | "claude_code" | "dsh";
+type AgentKind = AgentConfigKind;
 
 interface Draft {
   name: string;
@@ -47,6 +48,11 @@ function normalizeModels(models: string[]): string[] {
     result.push(model);
   }
   return result;
+}
+
+/** Keep the same conservative URL comparison as the desktop settings layer. */
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
 }
 
 function providerOf(agent: Pick<AgentConfigEntry, "family" | "codexLike">): Provider {
@@ -110,6 +116,7 @@ function AgentEditor({
   setSelectedModels,
   canChangeKind,
   agentId,
+  originalBaseUrl,
   apiKeyConfigured,
   showBridge,
   request,
@@ -126,6 +133,7 @@ function AgentEditor({
   setSelectedModels: Dispatch<SetStateAction<string[]>>;
   canChangeKind: boolean;
   agentId?: string;
+  originalBaseUrl?: string;
   apiKeyConfigured: boolean;
   showBridge: boolean;
   request: ReturnType<typeof useConnection>["request"];
@@ -134,8 +142,11 @@ function AgentEditor({
   modelInput: string;
   setModelInput: (value: string) => void;
 }) {
+  const baseUrlChanged =
+    Boolean(agentId) && normalizeBaseUrl(draft.baseUrl) !== normalizeBaseUrl(originalBaseUrl ?? "");
   const hasUsableApiKey =
-    Boolean(draft.apiKey.trim()) || (Boolean(agentId) && apiKeyConfigured && !draft.clearApiKey);
+    Boolean(draft.apiKey.trim()) ||
+    (Boolean(agentId) && apiKeyConfigured && !draft.clearApiKey && !baseUrlChanged);
   const detectDisabled = !draft.baseUrl.trim() || !hasUsableApiKey || detecting;
 
   const detect = () => {
@@ -442,6 +453,16 @@ export default function AgentConfigScreen() {
       Alert.alert(t("agentConfig.createFailed"), t("newTask.modelRequired"));
       return;
     }
+    if (
+      agent &&
+      agent.apiKeyConfigured &&
+      !draft.apiKey.trim() &&
+      !draft.clearApiKey &&
+      normalizeBaseUrl(draft.baseUrl) !== normalizeBaseUrl(agent.baseUrl ?? "")
+    ) {
+      Alert.alert(t("agentConfig.apiKeyRequiredForBaseUrlChange"));
+      return;
+    }
     setSaving(true);
     const payload = {
       ...(agent ? { id: agent.id } : {}),
@@ -450,7 +471,7 @@ export default function AgentConfigScreen() {
       ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
       ...(agent && draft.clearApiKey ? { clearApiKey: true } : {}),
       models,
-      enableChatCompletionsProxy: draft.kind === "codex" && draft.bridge,
+      ...chatCompletionsProxyPayload(draft.kind, draft.bridge),
       proxyEnabled: draft.proxy,
     };
     request(agent ? "agentConfig.save" : "agentConfig.create", payload)
@@ -479,6 +500,7 @@ export default function AgentConfigScreen() {
         setSelectedModels={setSelectedModels}
         canChangeKind={!agent}
         agentId={agent?.id}
+        originalBaseUrl={agent?.baseUrl}
         apiKeyConfigured={Boolean(agent?.apiKeyConfigured)}
         showBridge={agent?.id !== "codex"}
         request={request}

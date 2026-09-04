@@ -572,15 +572,28 @@ pub(super) fn split_codex_config_for_dynamic_base_url(config: &str) -> (&str, &s
     (&config[..index], &config[after_base_url..])
 }
 
+fn has_aeroric_marker_line(content: &str, prefix: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        let Some(version) = line.strip_prefix(prefix) else {
+            return false;
+        };
+        !version.is_empty() && version.chars().all(|ch| ch.is_ascii_digit())
+    })
+}
+
 pub(super) fn is_aeroric_codex_wrapper(content: &str) -> bool {
-    content.contains("# AERORIC_CODEX_WRAPPER_VERSION=")
+    // Match a complete marker line, not an arbitrary substring.  A user
+    // script that merely mentions the marker in an echo/comment must not be
+    // treated as an Aeroric-owned launcher and overwritten during migration.
+    has_aeroric_marker_line(content, "# AERORIC_CODEX_WRAPPER_VERSION=")
         || is_aeroric_codex_chat_proxy_wrapper(content)
         || (content.contains("export CODEX_HOME=")
             && content.contains("model_catalog_json = \"model-catalog.json\""))
 }
 
 pub(super) fn is_aeroric_codex_chat_proxy_wrapper(content: &str) -> bool {
-    content.contains("# AERORIC_CODEX_CHAT_PROXY_VERSION=")
+    has_aeroric_marker_line(content, "# AERORIC_CODEX_CHAT_PROXY_VERSION=")
 }
 
 #[cfg(not(windows))]
@@ -1352,9 +1365,78 @@ pub(super) fn generated_agent_script_target_path(
 
 pub(super) fn is_aeroric_generated_agent_wrapper(content: &str) -> bool {
     is_aeroric_codex_wrapper(content)
-        || content.contains(CLAUDE_AGENT_SCRIPT_MARKER_PREFIX)
+        || has_aeroric_marker_line(content, CLAUDE_AGENT_SCRIPT_MARKER_PREFIX)
         || (content.contains("export CLAUDE_CONFIG_DIR=")
             && content.contains("CLAUDE_CODE_SESSION_ENV_DIR"))
+}
+
+/// Refuse to replace a non-Aeroric file when a settings update needs to write
+/// a generated launcher.  Custom shell profiles are allowed to point at any
+/// user-owned script; silently replacing that script would be a destructive
+/// surprise (and could also turn an unrelated executable path into an agent
+/// launcher).  Missing and empty files remain recoverable migration targets,
+/// while symlinks and unreadable files fail closed.
+fn validate_generated_script_target(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Cannot inspect generated Agent script: {error}")),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Refusing to overwrite symlinked Agent script: {}",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "Refusing to overwrite non-file Agent script: {}",
+            path.display()
+        ));
+    }
+    let content = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "Refusing to overwrite unreadable Agent script {}: {error}",
+            path.display()
+        )
+    })?;
+    if !content.is_empty() && !is_aeroric_generated_agent_wrapper(&content) {
+        return Err(format!(
+            "Refusing to overwrite user-authored Agent script: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn read_regular_agent_script(path: &Path) -> Option<String> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    fs::read_to_string(path).ok()
+}
+
+/// Read a launcher only for ownership detection.  A symlink is never accepted
+/// as a write target, but following it here lets callers distinguish a
+/// generated wrapper behind a link from an unrelated user script.  Without
+/// this separate probe an existing generated symlink looks like an ordinary
+/// custom script and a settings update can silently persist values that the
+/// old launcher still ignores.
+fn read_agent_script_for_ownership_detection(path: &Path) -> Option<(bool, bool)> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    let is_symlink = metadata.file_type().is_symlink();
+    if !is_symlink && !metadata.is_file() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    Some((is_symlink, is_aeroric_generated_agent_wrapper(&content)))
+}
+
+pub(super) fn profile_uses_aeroric_generated_wrapper_symlink(profile: &CustomAgentProfile) -> bool {
+    let normalized_path = normalize_config_path(profile.path.clone());
+    read_agent_script_for_ownership_detection(Path::new(&normalized_path))
+        .is_some_and(|(is_symlink, generated)| is_symlink && generated)
 }
 
 pub(super) fn write_generated_agent_script(
@@ -1364,18 +1446,27 @@ pub(super) fn write_generated_agent_script(
     api_key: &str,
 ) -> Result<PathBuf, String> {
     let target = generated_agent_script_target_path(id, current_path)?;
-    write_agent_script_at_path(&target, content)?;
-    write_agent_api_key(id, api_key)?;
-
+    validate_generated_script_target(&target)?;
     let previous = PathBuf::from(normalize_config_path(current_path.to_string()));
+    let mut paths = vec![target.clone(), agent_api_key_path(id)?];
     if !current_path.trim().is_empty() && previous != target {
-        let remove_previous = fs::read_to_string(&previous)
-            .map(|existing| is_aeroric_generated_agent_wrapper(&existing))
-            .unwrap_or(false);
-        if remove_previous {
-            let _ = fs::remove_file(previous);
-        }
+        paths.push(previous.clone());
     }
+    let transaction = AgentFileTransaction::capture_and_apply(paths, || {
+        write_agent_script_at_path(&target, content)?;
+        write_agent_api_key(id, api_key)?;
+
+        if !current_path.trim().is_empty() && previous != target {
+            let remove_previous = fs::read_to_string(&previous)
+                .map(|existing| is_aeroric_generated_agent_wrapper(&existing))
+                .unwrap_or(false);
+            if remove_previous {
+                fs::remove_file(&previous).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    })?;
+    drop(transaction);
     Ok(target)
 }
 
@@ -1387,8 +1478,17 @@ pub(super) fn write_agent_script(
     let dir = agent_scripts_dir()?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = default_agent_script_path(id)?;
-    write_agent_script_at_path(&path, content)?;
-    write_agent_api_key(id, api_key)?;
+    // Initial setup also targets a deterministic path under Aeroric's script
+    // directory.  An orphaned file can still be user-owned, so apply the same
+    // non-clobbering policy as updates before writing it.
+    validate_generated_script_target(&path)?;
+    let transaction =
+        AgentFileTransaction::capture_and_apply([path.clone(), agent_api_key_path(id)?], || {
+            write_agent_script_at_path(&path, content)?;
+            write_agent_api_key(id, api_key)?;
+            Ok(())
+        })?;
+    drop(transaction);
     Ok(path)
 }
 
@@ -1414,16 +1514,28 @@ pub(super) fn remove_agent_profile_file(path: &str) -> Result<(), String> {
 
 pub(super) fn profile_uses_aeroric_generated_wrapper(profile: &CustomAgentProfile) -> bool {
     let normalized_path = normalize_config_path(profile.path.clone());
-    if fs::read_to_string(&normalized_path)
-        .map(|content| is_aeroric_generated_agent_wrapper(&content))
-        .unwrap_or(false)
+    if read_agent_script_for_ownership_detection(Path::new(&normalized_path))
+        .is_some_and(|(_, generated)| generated)
     {
         return true;
     }
     let expected_path = default_agent_script_path(&profile.id)
         .ok()
         .map(|path| normalize_config_path(path.to_string_lossy().into_owned()));
+    // A missing or empty default launcher can be recreated during migration,
+    // but an existing non-generated file at that path is user-owned and must
+    // not be inferred to be ours merely from its filename.
+    let path_is_recoverable = match fs::symlink_metadata(&normalized_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            read_regular_agent_script(Path::new(&normalized_path))
+                .map(|content| content.is_empty())
+                .unwrap_or(false)
+        }
+        _ => false,
+    };
     expected_path.as_deref() == Some(normalized_path.as_str())
+        && path_is_recoverable
         && profile.config_lang == "shellscript"
         && !profile.base_url.trim().is_empty()
         && !profile.api_key.trim().is_empty()
@@ -3134,6 +3246,135 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             script_path.to_string_lossy()
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn generated_script_updates_refuse_to_overwrite_user_authored_targets() {
+        let id = format!("safe-target-{}", uuid::Uuid::new_v4().simple());
+        let dir = std::env::temp_dir().join(format!("aeroric-generated-target-{}", id));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(format!("agent.{}", native_agent_script_extension()));
+        let original = "#!/bin/sh\necho user-owned\n";
+        fs::write(&target, original).unwrap();
+
+        let draft = AgentSetupDraft {
+            id: id.clone(),
+            label: "Safe target".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://example.test/v1".to_string(),
+            api_key: "replacement-key".to_string(),
+            model: "claude-sonnet".to_string(),
+            models: vec!["claude-sonnet".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+        let error = write_generated_agent_script(
+            &id,
+            &target.to_string_lossy(),
+            &build_agent_script(&draft),
+            &draft.api_key,
+        )
+        .expect_err("a generated update must not clobber a user script");
+        assert!(error.contains("user-authored"), "unexpected error: {error}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), original);
+        assert!(agent_api_key_path(&id)
+            .map(|path| !path.exists())
+            .unwrap_or(true));
+
+        let _ = remove_agent_api_key(&id);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn generated_script_updates_can_recover_an_empty_target() {
+        let id = format!("empty-target-{}", uuid::Uuid::new_v4().simple());
+        let dir = std::env::temp_dir().join(format!("aeroric-empty-target-{}", id));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join(format!("agent.{}", native_agent_script_extension()));
+        fs::write(&target, "").unwrap();
+
+        let draft = AgentSetupDraft {
+            id: id.clone(),
+            label: "Empty target".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://example.test/v1".to_string(),
+            api_key: "replacement-key".to_string(),
+            model: "claude-sonnet".to_string(),
+            models: vec!["claude-sonnet".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+        write_generated_agent_script(
+            &id,
+            &target.to_string_lossy(),
+            &build_agent_script(&draft),
+            &draft.api_key,
+        )
+        .expect("an empty migration target is safe to regenerate");
+        assert!(fs::read_to_string(&target)
+            .unwrap()
+            .contains(CLAUDE_AGENT_SCRIPT_MARKER));
+
+        let _ = remove_agent_api_key(&id);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_script_updates_refuse_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let id = format!("symlink-target-{}", uuid::Uuid::new_v4().simple());
+        let dir = std::env::temp_dir().join(format!("aeroric-symlink-target-{}", id));
+        fs::create_dir_all(&dir).unwrap();
+        let real_target = dir.join("user.sh");
+        let link = dir.join(format!("agent.{}", native_agent_script_extension()));
+        let original = "#!/bin/sh\necho user-owned\n";
+        fs::write(&real_target, original).unwrap();
+        symlink(&real_target, &link).unwrap();
+
+        let draft = AgentSetupDraft {
+            id: id.clone(),
+            label: "Symlink target".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://example.test/v1".to_string(),
+            api_key: "replacement-key".to_string(),
+            model: "claude-sonnet".to_string(),
+            models: vec!["claude-sonnet".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+        let error = write_generated_agent_script(
+            &id,
+            &link.to_string_lossy(),
+            &build_agent_script(&draft),
+            &draft.api_key,
+        )
+        .expect_err("a symlink must never be replaced");
+        assert!(error.contains("symlink"), "unexpected error: {error}");
+        assert_eq!(fs::read_to_string(&real_target).unwrap(), original);
+
+        let _ = remove_agent_api_key(&id);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn marker_mentions_inside_user_scripts_are_not_treated_as_generated() {
+        let user_script = r#"#!/bin/sh
+echo '# AERORIC_CLAUDE_WRAPPER_VERSION=7'
+echo '# AERORIC_CODEX_WRAPPER_VERSION=6-extra'
+"#;
+        assert!(!is_aeroric_generated_agent_wrapper(user_script));
+        assert!(!is_aeroric_codex_wrapper(user_script));
     }
 
     #[test]

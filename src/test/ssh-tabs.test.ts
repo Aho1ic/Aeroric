@@ -123,12 +123,36 @@ describe("openSshTab", () => {
   });
 
   // 到顶时把焦点挪走会让用户以为开成功了。
-  it("撞上限时焦点不跳到别的标签", () => {
+  it("撞上限时保留当前焦点,不跳到别的标签", () => {
     const tabs = Array.from({ length: SSH_TERMINAL_MAX_SESSIONS }, (_, i) =>
       tabOf(`t${i}`, `c${i}`),
     );
-    const result = openSshTab({ tabs, connection: connection("new"), now: 5 });
-    expect(result.activeTabId).toBe(`t${SSH_TERMINAL_MAX_SESSIONS - 1}`);
+    const result = openSshTab({
+      tabs,
+      connection: connection("new"),
+      activeTabId: "t3",
+      now: 5,
+    });
+    expect(result.activeTabId).toBe("t3");
+    expect(result.limitReached).toBe(true);
+  });
+
+  it("撞上限时焦点缺失或失效会回落到现有标签", () => {
+    const tabs = Array.from({ length: SSH_TERMINAL_MAX_SESSIONS }, (_, i) =>
+      tabOf(`t${i}`, `c${i}`),
+    );
+    const missing = openSshTab({ tabs, connection: connection("new"), now: 6 });
+    expect(missing.activeTabId).toBe("t9");
+    expect(missing.limitReached).toBe(true);
+
+    const stale = openSshTab({
+      tabs,
+      connection: connection("new"),
+      activeTabId: "gone",
+      now: 7,
+    });
+    expect(stale.activeTabId).toBe("t9");
+    expect(stale.limitReached).toBe(true);
   });
 
   it("上限之内聚焦已有标签不受上限影响", () => {

@@ -95,6 +95,7 @@ vi.mock("../components/terminalShared", () => ({
     })(),
   }),
   attachMacWebKitTerminalGuard: () => vi.fn(),
+  attachMouseReleaseStrandGuard: () => vi.fn(),
   attachCursorLineHighlight: () => vi.fn(),
   applyTerminalFontSize: () => null,
   applyTerminalFontFamily: () => null,

@@ -8,6 +8,8 @@
  * 突然从标签云里"多出来"一条新的。归一化的 key 用小写,显示用第一次出现的原样。
  */
 
+import { compareNotebookPath, compareNotebookText } from "../../lib/notebookSort";
+
 /** Rust 侧 `NoteTagRef`。 */
 export type NoteTagRef = {
   /** 标签文本,不含 `#`,原始大小写。 */
@@ -90,10 +92,10 @@ export function collectTags(
   const entries = [...map.values()];
   for (const entry of entries) {
     // 引用按路径再按行号 —— `sources` 已按路径排好,这里只需要稳住组内行号。
-    entry.refs.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
+    entry.refs.sort((a, b) => compareNotebookPath(a.path, b.path) || a.line - b.line);
     entry.notes = new Set(entry.refs.map((ref) => ref.path)).size;
   }
-  entries.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  entries.sort((a, b) => b.count - a.count || compareNotebookText(a.key, b.key));
   return entries;
 }
 
@@ -142,5 +144,5 @@ export function tagsInNote(sources: readonly NoteTagSource[], path: string): Not
       }
     }
   }
-  return [...map.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  return [...map.values()].sort((a, b) => b.count - a.count || compareNotebookText(a.key, b.key));
 }

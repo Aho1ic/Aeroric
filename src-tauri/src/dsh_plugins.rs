@@ -152,12 +152,13 @@ fn command_for_agent(agent: &str, home: &Path) -> Command {
     let mut command = Command::new(&launch.program);
     // 同 dsh_webui:dsh 在 Windows 上是 .cmd,不加这个标志每次列插件都会闪一个
     // 控制台窗口。
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     command
         .args(launch.args)
         .envs(launch.extra_env)
         .env("PATH", crate::app_settings::get_login_shell_path())
-        .env("DSH_HOME", home);
+        .env("DSH_HOME", home)
+        .kill_on_drop(true);
     if let Some(working_dir) = launch.working_dir {
         command.current_dir(working_dir);
     }

@@ -16,9 +16,6 @@ pub(crate) fn configure_background_tokio_command(cmd: &mut tokio::process::Comma
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
-#[cfg(not(windows))]
-pub(crate) fn configure_background_tokio_command(_cmd: &mut tokio::process::Command) {}
-
 /// 让子进程成为新进程组的组长,这样 `terminate_process_tree` 可以用 `kill(-pgid)`
 /// 一次带走它 fork 出来的全部后代(shell -c 里的后台进程、npx 拉起的 node 等)。
 #[cfg(unix)]
@@ -148,10 +145,37 @@ fn taskkill_process_tree_args(pid: u32) -> [String; 4] {
     ]
 }
 
-/// Terminate a Tokio child and all of its descendants on Windows.
+/// Terminate a Tokio child and all of its descendants.
 ///
-/// `Child::kill` only targets the direct process. `taskkill /T` is the
-/// Windows equivalent of the Unix process-group path used above.
+/// The child must have been started with
+/// [`configure_terminable_tokio_process_tree`]. On Unix that puts the child
+/// in its own process group so one `SIGKILL` reaches descendants; on Windows
+/// `taskkill /T` provides the equivalent tree operation. The final `wait`
+/// always reaps the direct child instead of leaving a zombie behind.
+#[cfg(unix)]
+pub(crate) async fn terminate_tokio_process_tree(
+    child: &mut tokio::process::Child,
+) -> std::io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+
+    if let Some(pid) = child.id() {
+        // The process was configured with setpgid(0, 0), so its pid is also
+        // the process-group id. `signal_process_group` falls back to the
+        // direct pid when the group has already disappeared.
+        let _ = signal_process_group(pid, libc::SIGKILL);
+    } else {
+        // A child without a pid is unusual (normally it means it already
+        // exited), but preserve the old best-effort behaviour.
+        let _ = child.kill().await;
+    }
+
+    child.wait().await.map(|_| ())
+}
+
+/// Windows uses `taskkill /T` because `Child::kill` only targets the direct
+/// process. This is the equivalent of the Unix process-group path above.
 #[cfg(windows)]
 pub(crate) async fn terminate_tokio_process_tree(
     child: &mut tokio::process::Child,
@@ -179,11 +203,14 @@ pub(crate) async fn terminate_tokio_process_tree(
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn terminate_process_tree(child: &mut std::process::Child) -> std::io::Result<()> {
+pub(crate) async fn terminate_tokio_process_tree(
+    child: &mut tokio::process::Child,
+) -> std::io::Result<()> {
     if child.try_wait()?.is_some() {
         return Ok(());
     }
-    child.kill()
+    child.kill().await?;
+    child.wait().await.map(|_| ())
 }
 
 #[cfg(test)]
@@ -282,9 +309,12 @@ mod tests {
         };
         assert!(process_exists(descendant_pid));
 
-        // 组长和后代在同一个进程组里,所以一次 kill(-pgid) 要同时带走两个。
-        assert!(signal_process_group(leader, libc::SIGKILL));
-        let _ = child.wait().await;
+        // 组长和后代在同一个进程组里,所以一次 kill(-pgid) 要同时带走两个;
+        // helper 同时负责回收组长,避免留下 zombie。
+        terminate_tokio_process_tree(&mut child)
+            .await
+            .expect("terminate tokio process tree");
+        assert!(!process_exists(leader as i32));
         let deadline = Instant::now() + Duration::from_secs(2);
         while process_exists(descendant_pid) && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;

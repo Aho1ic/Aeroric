@@ -73,7 +73,7 @@ import {
   type ProjectActionKind,
   type ProjectActionResult,
 } from "./project-page/actionFeedback";
-import { projectVisibilityStyle } from "./project-page/visibility";
+import { mountedSubtreeVisibilityStyle } from "./visibility";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { dispatchFileViewerCommand } from "./file-viewer/editorCommandEvents";
 import { isSqliteDatabaseFileName } from "./file-explorer/fileEntryUtils";
@@ -1571,7 +1571,7 @@ export function ProjectPage({
         ...s.projectBody,
         position: "absolute",
         inset: 0,
-        ...projectVisibilityStyle(visible),
+        ...mountedSubtreeVisibilityStyle(visible),
       }}
     >
       <ProjectRail

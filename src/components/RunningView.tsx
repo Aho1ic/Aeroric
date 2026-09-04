@@ -32,6 +32,7 @@ import {
 import { useI18n } from "../i18n";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import { shouldOfferWindowsNodeInstaller } from "./agentRuntimeRecovery";
+import { mountedSubtreeVisibilityStyle } from "./visibility";
 import { AgentConfigSwitchDialog, type AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
 import { Button } from "./ui/Button";
 import s from "../styles";
@@ -575,12 +576,9 @@ export function RunningView({
       style={{
         position: "absolute",
         inset: 0,
-        display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        visibility: visible ? "visible" : "hidden",
-        pointerEvents: visible ? "auto" : "none",
-        zIndex: visible ? 1 : 0,
+        ...mountedSubtreeVisibilityStyle(visible),
       }}
     >
       {/* Header */}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Columns2, Copy, Edit3, Maximize2, Plus, Server, Trash2 } from "lucide-react";
 import type { FontFamily, SshConnection, TerminalFontSize, ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
@@ -386,6 +386,19 @@ export function SshWorkspace({
   const { t } = useI18n();
   const [tabs, setTabs] = useState<SshTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const tabsRef = useRef<SshTab[]>([]);
+  // State updaters can be batched when two cards are clicked before React
+  // renders again. Keep the latest selection available to the tab state
+  // machine so a limit hit never restores a stale tab.
+  const activeTabIdRef = useRef<string | null>(null);
+  const commitTabs = useCallback((next: SshTab[]) => {
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
+  const commitActiveTabId = useCallback((next: string | null) => {
+    activeTabIdRef.current = next;
+    setActiveTabId(next);
+  }, []);
   const [showCards, setShowCards] = useState(true);
   const [editingConnection, setEditingConnection] = useState<SshConnection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -402,16 +415,26 @@ export function SshWorkspace({
   const rightShowsCards = showCards || !hasOpenTabs;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 
-  const openConnection = useCallback((connection: SshConnection, forceNew = false) => {
-    setTabs((prev) => {
-      const result = openSshTab({ tabs: prev, connection, forceNew, now: Date.now() });
-      setActiveTabId(result.activeTabId);
+  const openConnection = useCallback(
+    (connection: SshConnection, forceNew = false) => {
+      const result = openSshTab({
+        tabs: tabsRef.current,
+        connection,
+        forceNew,
+        activeTabId: activeTabIdRef.current,
+        now: Date.now(),
+      });
+      commitTabs(result.tabs);
+      commitActiveTabId(result.activeTabId);
       setLimitNotice(result.limitReached);
-      return result.tabs;
-    });
-    // 到顶时留在卡片视图:那儿才有「限制已达」的提示可看。
-    setShowCards(false);
-  }, []);
+      if (!result.limitReached) {
+        // A successful open/focus enters the terminal. When the limit is hit,
+        // keep the current view and explain why nothing moved.
+        setShowCards(false);
+      }
+    },
+    [commitActiveTabId, commitTabs],
+  );
 
   /**
    * 连接从名单里消失了(在别处删的、或远端同步下来的),清掉指向它的标签。
@@ -422,38 +445,39 @@ export function SshWorkspace({
    */
   useEffect(() => {
     const live = new Set(connections.map((connection) => connection.id));
-    const orphan = tabs.find((tab) => !live.has(tab.connectionId));
+    const currentTabs = tabsRef.current;
+    const orphan = currentTabs.find((tab) => !live.has(tab.connectionId));
     if (!orphan) return;
-    setTabs((prev) => {
-      let next = prev;
-      let nextActive = activeTabId;
-      for (const tab of prev) {
-        if (live.has(tab.connectionId)) continue;
-        const result = pruneSshTabsForConnection({
-          tabs: next,
-          activeTabId: nextActive,
-          connectionId: tab.connectionId,
-        });
-        next = result.tabs;
-        nextActive = result.activeTabId;
-      }
-      setActiveTabId(nextActive);
-      if (next.length === 0) setShowCards(true);
-      return next;
-    });
-  }, [activeTabId, connections, tabs]);
+    let next = currentTabs;
+    let nextActive = activeTabIdRef.current;
+    for (const tab of currentTabs) {
+      if (live.has(tab.connectionId)) continue;
+      const result = pruneSshTabsForConnection({
+        tabs: next,
+        activeTabId: nextActive,
+        connectionId: tab.connectionId,
+      });
+      next = result.tabs;
+      nextActive = result.activeTabId;
+    }
+    commitTabs(next);
+    commitActiveTabId(nextActive);
+    if (next.length === 0) setShowCards(true);
+  }, [commitActiveTabId, commitTabs, connections]);
 
   const handleCloseTab = useCallback(
     (tabId: string) => {
-      setTabs((prev) => {
-        const result = closeSshTab({ tabs: prev, activeTabId, tabId });
-        setActiveTabId(result.activeTabId);
-        if (result.tabs.length === 0) setShowCards(true);
-        return result.tabs;
+      const result = closeSshTab({
+        tabs: tabsRef.current,
+        activeTabId: activeTabIdRef.current,
+        tabId,
       });
+      commitTabs(result.tabs);
+      commitActiveTabId(result.activeTabId);
+      if (result.tabs.length === 0) setShowCards(true);
       setLimitNotice(false);
     },
-    [activeTabId],
+    [commitActiveTabId, commitTabs],
   );
 
   const saveConnection = (connection: SshConnection) => {
@@ -478,12 +502,14 @@ export function SshWorkspace({
       onConnectionsChange(next);
     }
     // 同一台主机可能开着多个标签,全部清掉。SshTerminalPanel 卸载时会 kill 后端 shell。
-    setTabs((prev) => {
-      const result = pruneSshTabsForConnection({ tabs: prev, activeTabId, connectionId });
-      setActiveTabId(result.activeTabId);
-      if (result.tabs.length === 0) setShowCards(true);
-      return result.tabs;
+    const result = pruneSshTabsForConnection({
+      tabs: tabsRef.current,
+      activeTabId: activeTabIdRef.current,
+      connectionId,
     });
+    commitTabs(result.tabs);
+    commitActiveTabId(result.activeTabId);
+    if (result.tabs.length === 0) setShowCards(true);
   };
 
   const renderChooserOrTerminal = () => (
@@ -507,7 +533,7 @@ export function SshWorkspace({
           activeTabId={rightShowsCards ? null : activeTabId}
           atLimit={tabs.length >= SSH_TERMINAL_MAX_SESSIONS}
           onSelect={(tabId) => {
-            setActiveTabId(tabId);
+            commitActiveTabId(tabId);
             // 点标签就是要看那个终端,顺手从卡片视图退出来。
             setShowCards(false);
           }}

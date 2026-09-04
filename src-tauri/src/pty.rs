@@ -20,16 +20,15 @@ use crate::TaskManager;
 const SESSION_WAIT_POLL: Duration = Duration::from_millis(50);
 const SESSION_WAIT_MAX: Duration = Duration::from_millis(500);
 const PTY_READ_BUFFER_SIZE: usize = 32 * 1024;
-pub(crate) const PTY_EMIT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
-/// 交互式远程终端(SSH / WSL shell)的合并窗口。
+const PTY_EMIT_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+/// 交互式终端(本地 / SSH / WSL shell)的合并窗口。
 ///
 /// 这类会话里人在等自己的回显,agent 那档 16ms 会被感知成手感发粘;但完全不合并
-/// (`Immediate`)更糟 —— 每次 PTY read 单独发一条 IPC 消息,前端逐条跑控制符扫描与
-/// ANSI 重映射,TUI 重绘或大量输出时主线程被消息洪水占满,击键回显排在后面,
-/// 而且丢掉了有界 channel 的背压。4ms 相对网络 RTT 可忽略,却能把一次突发的
-/// 几十条消息合成一条。
-pub(crate) const PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL: Duration = Duration::from_millis(4);
-pub(crate) const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
+/// 更糟 —— 每次 PTY read 单独发一条 IPC,前端逐条跑控制符扫描与 ANSI 重映射,
+/// TUI 重绘或大量输出时主线程被消息洪水占满,击键回显排在后面,而且丢掉了有界
+/// channel 的背压。4ms 相对人的感知可忽略,却能把一次突发的几十条消息合成一条。
+const PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL: Duration = Duration::from_millis(4);
+const PTY_EMIT_MAX_BATCH_BYTES: usize = 64 * 1024;
 /// 有界 channel 容量：满时 reader 线程阻塞，反压传播至 OS 内核 PTY 缓冲区，
 /// 最终使写入进程（Claude/Codex）的 write() 系统调用阻塞，从源头限流。
 const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
@@ -436,13 +435,35 @@ pub(crate) fn register_pty_handles(
     Ok(child_handle)
 }
 
+/// PTY 输出的合并策略。
+///
+/// 只有两档,由 `agent()` / `interactive()` 构造 —— 曾经存在的 `Immediate`(每次
+/// PTY read 单发一条 IPC)已经删除:它丢掉了有界 channel 的背压,reader 线程会把
+/// 消息无限塞进 tao 的无界 user-event 队列,而每条 emit 都是主线程上的一次
+/// `evaluateJavaScript`。所有路径现在都合并。
 #[derive(Clone, Copy)]
-pub(crate) enum PtyEmitMode {
-    Immediate,
-    Batched {
-        flush_interval: Duration,
-        max_batch_bytes: usize,
-    },
+pub(crate) struct PtyEmitMode {
+    flush_interval: Duration,
+    max_batch_bytes: usize,
+}
+
+impl PtyEmitMode {
+    /// agent / SSH-agent 任务:人不盯着逐字回显,16ms 换更少的 IPC 次数。
+    pub(crate) fn agent() -> Self {
+        Self {
+            flush_interval: PTY_EMIT_FLUSH_INTERVAL,
+            max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
+        }
+    }
+
+    /// 交互式 shell(本地 / SSH / WSL):人在等自己的回显,见
+    /// `PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL` 的注释。
+    pub(crate) fn interactive() -> Self {
+        Self {
+            flush_interval: PTY_EMIT_INTERACTIVE_FLUSH_INTERVAL,
+            max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
+        }
+    }
 }
 
 /// 输出归宿：agent / SSH 任务用 Channel 直投单一前端订阅者，跳过事件总线的全局广播
@@ -475,11 +496,41 @@ fn send_pty_chunk(app: &AppHandle, id: &str, sink: &OutputSink, data: String) {
     }
 }
 
-fn flush_pty_batch(app: &AppHandle, id: &str, sink: &OutputSink, batch: &mut String) {
-    if batch.is_empty() {
-        return;
+/// 合并 PTY 输出并按窗口/字节数投递。
+///
+/// `flush` 只在有数据时被调用,拿到的是攒好的一整段(非空)。空窗口不触发投递:
+/// 交互式档 4ms 一跳,静默会话一天能空跳两千万次,没必要每次都走投递路径。
+///
+/// 从 `spawn_pty_reader` 里抽出来是为了能不带 `AppHandle` 地测:真实投递要 Wry 运行时,
+/// 而这里要守的性质(顺序、不丢段、攒够就发、断开前收尾)与投递目标无关。
+fn run_emit_batcher(
+    rx: std::sync::mpsc::Receiver<String>,
+    flush_interval: Duration,
+    max_batch_bytes: usize,
+    mut flush: impl FnMut(String),
+) {
+    let mut batch = String::new();
+    let mut flush_if_pending = |batch: &mut String| {
+        if !batch.is_empty() {
+            flush(std::mem::take(batch));
+        }
+    };
+    loop {
+        match rx.recv_timeout(flush_interval) {
+            Ok(chunk) => {
+                batch.push_str(&chunk);
+                if batch.len() >= max_batch_bytes {
+                    flush_if_pending(&mut batch);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => flush_if_pending(&mut batch),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // 断开前把残留段发出去,否则最后一批输出永远到不了前端。
+                flush_if_pending(&mut batch);
+                break;
+            }
+        }
     }
-    send_pty_chunk(app, id, sink, std::mem::take(batch));
 }
 
 /// 在后台线程中读取 PTY 输出，按 sink 把数据投递给前端。
@@ -507,38 +558,21 @@ pub(crate) fn spawn_pty_reader(
         let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
         // 保存上次读取中不完整的 UTF-8 字节序列
         let mut leftover: Vec<u8> = Vec::new();
-        let (emit_tx, emit_worker) = match emit_mode {
-            PtyEmitMode::Immediate => (None, None),
-            PtyEmitMode::Batched {
-                flush_interval,
-                max_batch_bytes,
-            } => {
-                let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
-                let emit_app = app.clone();
-                let emit_id = id.clone();
-                let worker_sink = sink.clone();
-                let worker = std::thread::spawn(move || {
-                    let mut batch = String::new();
-                    loop {
-                        match rx.recv_timeout(flush_interval) {
-                            Ok(chunk) => {
-                                batch.push_str(&chunk);
-                                if batch.len() >= max_batch_bytes {
-                                    flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
-                                }
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
-                                break;
-                            }
-                        }
-                    }
+        let PtyEmitMode {
+            flush_interval,
+            max_batch_bytes,
+        } = emit_mode;
+        let (emit_tx, emit_worker) = {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
+            let emit_app = app.clone();
+            let emit_id = id.clone();
+            let worker_sink = sink.clone();
+            let worker = std::thread::spawn(move || {
+                run_emit_batcher(rx, flush_interval, max_batch_bytes, |batch| {
+                    send_pty_chunk(&emit_app, &emit_id, &worker_sink, batch)
                 });
-                (Some(tx), Some(worker))
-            }
+            });
+            (tx, worker)
         };
         loop {
             match reader.read(&mut buf) {
@@ -581,13 +615,9 @@ pub(crate) fn spawn_pty_reader(
                         if let Some(ref tx) = session_tx {
                             let _ = tx.send(data.clone());
                         }
-                        if let Some(ref tx) = emit_tx {
-                            match tx.send(data) {
-                                Ok(()) => {}
-                                Err(err) => send_pty_chunk(&app, &id, &sink, err.0),
-                            }
-                        } else {
-                            send_pty_chunk(&app, &id, &sink, data);
+                        // worker 已退出(PTY 关闭竞态)时直接投递,不丢数据。
+                        if let Err(err) = emit_tx.send(data) {
+                            send_pty_chunk(&app, &id, &sink, err.0);
                         }
                     }
 
@@ -598,9 +628,7 @@ pub(crate) fn spawn_pty_reader(
             }
         }
         drop(emit_tx);
-        if let Some(worker) = emit_worker {
-            let _ = worker.join();
-        }
+        let _ = emit_worker.join();
         // session_tx 在此处被 drop，watcher 端的 Receiver 将收到 Disconnected 信号
         if let Some(f) = on_finish {
             f();
@@ -1808,10 +1836,7 @@ pub async fn run_task(
         app.clone(),
         task_id.clone(),
         OutputSink::Channel(on_output),
-        PtyEmitMode::Batched {
-            flush_interval: PTY_EMIT_FLUSH_INTERVAL,
-            max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
-        },
+        PtyEmitMode::agent(),
         reader,
         true,
         session_tx,
@@ -2345,10 +2370,7 @@ pub async fn resume_task(
         app.clone(),
         task_id.clone(),
         OutputSink::Channel(on_output),
-        PtyEmitMode::Batched {
-            flush_interval: PTY_EMIT_FLUSH_INTERVAL,
-            max_batch_bytes: PTY_EMIT_MAX_BATCH_BYTES,
-        },
+        PtyEmitMode::agent(),
         reader,
         true,
         None,
@@ -2538,7 +2560,8 @@ pub async fn open_shell(
             event_name: "shell-output",
             id_key: "shell_id",
         },
-        PtyEmitMode::Immediate,
+        // 本地 shell 曾是唯一还留在无合并路径上的 sink,agent / SSH / WSL-agent 早已合并。
+        PtyEmitMode::interactive(),
         reader,
         false,
         None,
@@ -2575,6 +2598,79 @@ mod tests {
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// 本地 shell 从「每次 read 单发一条」改成合并后,首要风险是输出丢失或乱序。
+    /// 这条喂进带序号的多段数据,断言投递出去的拼接结果与输入逐字节相同。
+    #[test]
+    fn batcher_delivers_every_byte_in_order() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
+        let mut expected = String::new();
+        for i in 0..2000 {
+            expected.push_str(&format!("line-{i:05}-中文\n"));
+        }
+        // 按行分组喂进去,模拟 reader 的分段。切片必须落在字符边界上:`run_emit_batcher`
+        // 收的是 `String`,拼接不完整 UTF-8 是上游 reader 的 `leftover` 缓冲负责的事。
+        let lines: Vec<String> = expected.split_inclusive('\n').map(str::to_owned).collect();
+        let fed_chunks = lines.len();
+        let producer = std::thread::spawn(move || {
+            for chunk in lines {
+                tx.send(chunk).expect("batcher alive");
+            }
+        });
+
+        let mut delivered = String::new();
+        let mut batch_count = 0usize;
+        run_emit_batcher(rx, Duration::from_millis(4), 64 * 1024, |batch| {
+            assert!(!batch.is_empty(), "flush must never deliver an empty batch");
+            batch_count += 1;
+            delivered.push_str(&batch);
+        });
+        producer.join().expect("producer finished");
+
+        assert_eq!(delivered, expected);
+        // 合并的意义就在这里:投递次数必须显著少于喂进去的片段数,否则等于没合并。
+        assert!(
+            batch_count < fed_chunks,
+            "batched {batch_count} times for {fed_chunks} chunks — no coalescing happened"
+        );
+    }
+
+    /// 发送端断开时必须把残留的一段发出去,否则命令的最后一屏输出永远到不了前端。
+    #[test]
+    fn batcher_flushes_the_remainder_on_disconnect() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
+        tx.send("tail".to_string()).expect("send");
+        drop(tx);
+
+        let mut delivered = String::new();
+        // flush 窗口取得极长,确保投递只可能来自断开分支而不是超时分支。
+        run_emit_batcher(rx, Duration::from_secs(3600), 64 * 1024, |batch| {
+            delivered.push_str(&batch);
+        });
+
+        assert_eq!(delivered, "tail");
+    }
+
+    /// 攒够 `max_batch_bytes` 要立刻投递,不能等到窗口到点 —— 否则大量输出会把
+    /// 一整批堆到内存里,再一次性砸给主线程。
+    #[test]
+    fn batcher_flushes_early_once_the_byte_cap_is_reached() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
+        let producer = std::thread::spawn(move || {
+            for _ in 0..4 {
+                tx.send("x".repeat(32)).expect("batcher alive");
+            }
+        });
+
+        let mut batches: Vec<usize> = Vec::new();
+        // 窗口 1 小时:任何投递都只能由字节上限或断开触发。上限 64 → 每两段一投。
+        run_emit_batcher(rx, Duration::from_secs(3600), 64, |batch| {
+            batches.push(batch.len());
+        });
+        producer.join().expect("producer finished");
+
+        assert_eq!(batches, vec![64, 64]);
     }
 
     #[test]

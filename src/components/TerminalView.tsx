@@ -18,6 +18,7 @@ import {
   createSmartWriter,
   createTerminalFitScheduler,
   attachMacWebKitTerminalGuard,
+  attachMouseReleaseStrandGuard,
   attachCursorLineHighlight,
   applyTerminalFontSize,
   applyTerminalFontFamily,
@@ -167,6 +168,8 @@ export function TerminalView({
       const disposeInputFix = attachMacWebKitShiftInputFix(term);
       const disposeWindowsImeFix = attachWindowsIMEPositionFix(term);
       const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+      // 必须在 term.open 之后:要拿 term.element 和 _core.coreMouseService。
+      const disposeReleaseStrandGuard = attachMouseReleaseStrandGuard(term);
       const disposeCursorLineHighlight = highlightCursorLine
         ? attachCursorLineHighlight(term, container)
         : () => {};
@@ -211,6 +214,7 @@ export function TerminalView({
           // 先停掉待发的滚轮帧:rAF 回调若打在已 dispose 的 term 上会抛。
           wheelScroll.dispose();
           disposeMacWebKitGuard();
+          disposeReleaseStrandGuard();
           disposeCursorLineHighlight();
           disposeInputFix();
           disposeWindowsImeFix();

@@ -63,6 +63,22 @@ export interface OpenSshTabResult {
 }
 
 /**
+ * Keep the tab state usable even when a caller has lost its selection.
+ *
+ * A valid selection is always preferred.  The fallback is only for defensive
+ * recovery (for example, a restored state referring to a tab that was already
+ * removed); choosing the last tab preserves the pre-limit behavior and, more
+ * importantly, never leaves a non-empty workspace without a visible terminal.
+ */
+function validOrFallbackActiveTabId(
+  tabs: readonly SshTab[],
+  activeTabId: string | null | undefined,
+): string | null {
+  if (activeTabId && tabs.some((tab) => tab.id === activeTabId)) return activeTabId;
+  return tabs[tabs.length - 1]?.id ?? null;
+}
+
+/**
  * 打开一个连接。
  *
  * 默认「聚焦已有标签」:点连接卡片时如果这台主机已经开着,就切过去而不是再连一条。
@@ -72,12 +88,15 @@ export function openSshTab({
   tabs,
   connection,
   forceNew = false,
+  activeTabId = null,
   now,
   maxTabs = SSH_TERMINAL_MAX_SESSIONS,
 }: {
   tabs: readonly SshTab[];
   connection: SshConnection;
   forceNew?: boolean;
+  /** The currently selected tab, preserved when the session limit is hit. */
+  activeTabId?: string | null;
   now: number;
   maxTabs?: number;
 }): OpenSshTabResult {
@@ -88,10 +107,11 @@ export function openSshTab({
     }
   }
   if (tabs.length >= maxTabs) {
-    // 到顶就什么都不动,连 activeTabId 也保持原样 —— 把焦点挪走会让用户以为开成功了。
+    // 到顶就什么都不新建,保留当前焦点。若调用方没有可用焦点,回落到
+    // 现有最后一个标签,避免非空工作区被切成一个空终端面板。
     return {
       tabs: [...tabs],
-      activeTabId: tabs[tabs.length - 1]?.id ?? null,
+      activeTabId: validOrFallbackActiveTabId(tabs, activeTabId),
       limitReached: true,
     };
   }

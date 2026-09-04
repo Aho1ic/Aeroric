@@ -318,7 +318,7 @@ impl LocalLspSession {
             }),
         )
         .await;
-        let _ = self.child.kill().await;
+        let _ = crate::subprocess::terminate_tokio_process_tree(&mut self.child).await;
     }
 }
 
@@ -634,17 +634,22 @@ fn insert_local_lsp_session(session_key: String, session: LocalLspSession) {
     }
 }
 
-fn remove_local_lsp_session(session_key: &str) {
-    if let Ok(mut sessions) = LOCAL_LSP_SESSIONS.lock() {
-        sessions.remove(session_key);
-    }
-}
-
 fn take_local_lsp_session(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
     LOCAL_LSP_SESSIONS
         .lock()
         .ok()
         .and_then(|mut sessions| sessions.remove(session_key))
+}
+
+async fn shutdown_lsp_handle(handle: Arc<AsyncMutex<LocalLspSession>>) {
+    let mut session = handle.lock().await;
+    session.shutdown().await;
+}
+
+async fn shutdown_local_lsp_session(session_key: &str) {
+    if let Some(handle) = take_local_lsp_session(session_key) {
+        shutdown_lsp_handle(handle).await;
+    }
 }
 
 fn take_local_lsp_sessions_with_prefix(
@@ -676,17 +681,17 @@ fn insert_remote_lsp_session(session_key: String, session: LocalLspSession) {
     }
 }
 
-fn remove_remote_lsp_session(session_key: &str) {
-    if let Ok(mut sessions) = REMOTE_LSP_SESSIONS.lock() {
-        sessions.remove(session_key);
-    }
-}
-
 fn take_remote_lsp_session(session_key: &str) -> Option<Arc<AsyncMutex<LocalLspSession>>> {
     REMOTE_LSP_SESSIONS
         .lock()
         .ok()
         .and_then(|mut sessions| sessions.remove(session_key))
+}
+
+async fn shutdown_remote_lsp_session(session_key: &str) {
+    if let Some(handle) = take_remote_lsp_session(session_key) {
+        shutdown_lsp_handle(handle).await;
+    }
 }
 
 fn take_remote_lsp_sessions_with_prefix(
@@ -751,7 +756,7 @@ fn tokio_ssh_command_for_remote_command(
 ) -> Command {
     let spec = crate::ssh::ssh_command_spec_for_remote_command(connection, remote_command);
     let mut command = Command::new(spec.program);
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     command.args(spec.args);
     for (key, value) in spec.env {
         command.env(key, value);
@@ -1638,11 +1643,11 @@ async fn run_local_lsp_session_request(
     match timeout(LSP_TIMEOUT, run).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => {
-            remove_local_lsp_session(&session_key);
+            shutdown_local_lsp_session(&session_key).await;
             Err(err)
         }
         Err(_) => {
-            remove_local_lsp_session(&session_key);
+            shutdown_local_lsp_session(&session_key).await;
             Err("language server request timed out".to_string())
         }
     }
@@ -1681,7 +1686,7 @@ async fn start_local_lsp_session(
     workspace_name: String,
     not_found_message: &str,
 ) -> Result<LocalLspSession, String> {
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1829,11 +1834,11 @@ async fn run_remote_lsp_session_request(
     match timeout(LSP_TIMEOUT, run).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => {
-            remove_remote_lsp_session(&session_key);
+            shutdown_remote_lsp_session(&session_key).await;
             Err(err)
         }
         Err(_) => {
-            remove_remote_lsp_session(&session_key);
+            shutdown_remote_lsp_session(&session_key).await;
             Err("language server request timed out".to_string())
         }
     }
@@ -1981,11 +1986,11 @@ async fn run_local_lsp_workspace_symbol_session_request(
     match timeout(LSP_TIMEOUT, run).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => {
-            remove_local_lsp_session(&session_key);
+            shutdown_local_lsp_session(&session_key).await;
             Err(err)
         }
         Err(_) => {
-            remove_local_lsp_session(&session_key);
+            shutdown_local_lsp_session(&session_key).await;
             Err("language server request timed out".to_string())
         }
     }
@@ -2061,11 +2066,11 @@ async fn run_remote_lsp_workspace_symbol_session_request(
     match timeout(LSP_TIMEOUT, run).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => {
-            remove_remote_lsp_session(&session_key);
+            shutdown_remote_lsp_session(&session_key).await;
             Err(err)
         }
         Err(_) => {
-            remove_remote_lsp_session(&session_key);
+            shutdown_remote_lsp_session(&session_key).await;
             Err("language server request timed out".to_string())
         }
     }

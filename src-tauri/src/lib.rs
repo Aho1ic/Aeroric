@@ -291,6 +291,11 @@ pub fn run() {
             std::thread::spawn(|| {
                 crate::hooks::cache_status(crate::hooks::ensure_installed());
             });
+            // 压实历次运行遗留的超标终端历史。放后台线程:这是 O(超标文件总量) 的
+            // 读+重写,不能压在启动路径上。见 compact_oversized_terminal_histories。
+            std::thread::spawn(|| {
+                let _ = crate::storage::compact_oversized_terminal_histories();
+            });
             // 启动 hook 事件文件 watcher
             crate::event_watcher::start(app.handle().clone());
             crate::usage_index::start(app.handle().clone());

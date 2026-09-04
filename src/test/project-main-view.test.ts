@@ -20,7 +20,7 @@ import {
   shouldForceCollapseRail,
   shouldShowWorkspaceTabs,
 } from "../components/project-page/viewMode";
-import { projectVisibilityStyle } from "../components/project-page/visibility";
+import { mountedSubtreeVisibilityStyle } from "../components/visibility";
 
 describe("project main view mode", () => {
   it("prioritizes SSH, terminal and file auxiliary workspaces and requires an Agent for split", () => {
@@ -327,17 +327,21 @@ describe("project main view mode", () => {
     ).toBe(null);
   });
 
-  it("drops inactive projects out of layout while keeping their React tree mounted", () => {
-    // 隐藏项目仍然挂载(终端/编辑器状态要留着),但不能再参与布局:
-    // visibility:hidden 会让 N 棵完整 ProjectPage 继续布局,任何一次 resize/拖动都要
-    // 唤醒它们各自的 ResizeObserver。
-    const hidden = projectVisibilityStyle(false);
+  it("drops hidden-but-mounted subtrees out of layout and off the animation timeline", () => {
+    // 保活的子树(ProjectPage / 任务面板 / shell 标签)不能用 visibility:hidden 藏:
+    // 那样它们仍在布局里,也仍在动画时间线上 —— 实测藏着的子树和可见子树跑一样多轮
+    // 动画(2 秒 20 轮),每轮都要重绘。只有 display:none 能真正摘掉。
+    const hidden = mountedSubtreeVisibilityStyle(false);
     expect(hidden.display).toBe("none");
     expect(hidden.pointerEvents).toBe("none");
 
-    const visible = projectVisibilityStyle(true);
+    const visible = mountedSubtreeVisibilityStyle(true);
     expect(visible.display).toBe("flex");
     expect(visible.pointerEvents).toBe("auto");
+
+    // xterm 的挂载容器要 block:那层的子节点由 xterm 自己建,不能变成 flex item。
+    expect(mountedSubtreeVisibilityStyle(true, "block").display).toBe("block");
+    expect(mountedSubtreeVisibilityStyle(false, "block").display).toBe("none");
   });
 
   it("collapses the project rail before switching compose controls to icon-only", () => {

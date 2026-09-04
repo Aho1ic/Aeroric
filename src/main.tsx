@@ -8,10 +8,15 @@ import { AgentVersionsProvider } from "./hooks/useAgentVersions";
 import { I18nProvider, staticT } from "./i18n";
 import { scheduleMarketplacePreload } from "./components/skill-hub/marketplaceData";
 import { installResourceCensusProbe } from "./lib/resourceCensus";
+import { installStallRecorder, installStallReportProbe } from "./lib/stallRecorder";
 
 scheduleMarketplacePreload();
 // dev-only:往 window 挂 __aeroricCensus(),用来在控制台读存活资源快照。
 installResourceCensusProbe();
+// 卡顿归因。dev / release 都装:间歇卡顿只在真实使用里出现,而这两个探针的代价
+// 接近零(longtask 由浏览器被动上报;invoke 计时是每次调用两次 performance.now())。
+installStallRecorder();
+installStallReportProbe();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

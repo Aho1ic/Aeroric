@@ -1153,7 +1153,8 @@ async fn command_output(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    command.kill_on_drop(true);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     let mut child = command.spawn().map_err(|error| {
         let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
             AgentInstallErrorCode::ProcessBlocked
@@ -1164,7 +1165,7 @@ async fn command_output(
     })?;
     loop {
         if cancelled.load(Ordering::Relaxed) {
-            let _ = child.kill().await;
+            let _ = crate::subprocess::terminate_tokio_process_tree(&mut child).await;
             return Err(InstallError::new(
                 AgentInstallErrorCode::Cancelled,
                 "Installation cancelled",
@@ -1181,7 +1182,7 @@ async fn command_output(
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
-                let _ = child.kill().await;
+                let _ = crate::subprocess::terminate_tokio_process_tree(&mut child).await;
                 return Err(InstallError::new(
                     AgentInstallErrorCode::InstallFailed,
                     format!("{context}: {error}"),
@@ -1193,7 +1194,7 @@ async fn command_output(
 
 async fn detect_version(program: &Path, cancelled: &AtomicBool) -> InstallResult<String> {
     let mut command = Command::new(program);
-    crate::subprocess::configure_background_tokio_command(&mut command);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     command.arg("--version");
     let output = command_output(command, cancelled, "Version verification failed").await?;
     if !output.status.success() {

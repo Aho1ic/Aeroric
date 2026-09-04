@@ -236,9 +236,10 @@ const zh = {
   "agentConfig.title": "Agent 配置",
   "agentConfig.baseUrl": "接口地址",
   "agentConfig.apiKey": "API Key",
-  "agentConfig.apiKeyConfiguredPlaceholder": "已配置（留空保持不变）",
+  "agentConfig.apiKeyConfiguredPlaceholder": "已配置（地址不变可留空）",
   "agentConfig.apiKeyConfiguredHint":
-    "电脑端已有 API Key；为保护凭据，手机端不会读取明文。留空将保留原值。",
+    "电脑端已有 API Key；为保护凭据，手机端不会读取明文。地址不变时留空可保留原值；更换地址必须输入新 key。",
+  "agentConfig.apiKeyRequiredForBaseUrlChange": "更换接口地址时必须输入新的 API Key。",
   "agentConfig.clearApiKey": "清除已保存的 API Key",
   "agentConfig.clearApiKeyHint": "保存后 Agent 将无法使用该凭据，除非同时输入新的 API Key。",
   "agentConfig.models": "模型列表",
@@ -508,9 +509,10 @@ const en: Record<MessageKey, string> = {
   "agentConfig.title": "Agent config",
   "agentConfig.baseUrl": "Base URL",
   "agentConfig.apiKey": "API key",
-  "agentConfig.apiKeyConfiguredPlaceholder": "Configured (leave blank to keep)",
+  "agentConfig.apiKeyConfiguredPlaceholder": "Configured (leave blank if URL is unchanged)",
   "agentConfig.apiKeyConfiguredHint":
-    "An API key is configured on the desktop. Its plaintext is never sent to the phone; leave this blank to keep it.",
+    "An API key is configured on the desktop. Its plaintext is never sent to the phone; leave this blank only when the URL is unchanged. A new URL requires a new key.",
+  "agentConfig.apiKeyRequiredForBaseUrlChange": "Enter a new API key when changing the Base URL.",
   "agentConfig.clearApiKey": "Clear saved API key",
   "agentConfig.clearApiKeyHint":
     "After saving, the agent cannot use this credential unless you enter a replacement key.",

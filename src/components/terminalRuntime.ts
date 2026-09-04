@@ -5,6 +5,7 @@ import {
   applyTerminalFontSize,
   applyTerminalTheme,
   attachMacWebKitTerminalGuard,
+  attachMouseReleaseStrandGuard,
   createSmartWriter,
   createTerminalFitScheduler,
   fitTerminalAtBottom,
@@ -76,6 +77,8 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
     resumeOnAnyOutput: true,
   });
   const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+  // 必须在 term.open 之后:要拿 term.element 和 _core.coreMouseService。
+  const disposeReleaseStrandGuard = attachMouseReleaseStrandGuard(term);
 
   const sendInput = (data: string) => {
     if (disposed) return;
@@ -155,6 +158,7 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions): Terminal
       disposeSmartCopy();
       linuxIME.dispose();
       disposeMacWebKitGuard();
+      disposeReleaseStrandGuard();
       disposeInputFix();
       disposeWindowsImeFix();
       term.dispose();

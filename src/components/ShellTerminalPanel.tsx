@@ -8,6 +8,7 @@ import { createTerminalRuntime, type TerminalRuntime } from "./terminalRuntime";
 import { Minus, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { shellTerminalPanelRootStyle } from "./project-page/viewMode";
+import { mountedSubtreeVisibilityStyle } from "./visibility";
 import { compactTerminalLabel, formatTerminalTabLabel } from "./terminalTabLabel";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import "@xterm/xterm/css/xterm.css";
@@ -208,8 +209,7 @@ const ShellTerminalInstance = forwardRef<
         overflow: "hidden",
         padding: "4px 6px",
         cursor: "text",
-        visibility: isActive ? "visible" : "hidden",
-        pointerEvents: isActive ? "auto" : "none",
+        ...mountedSubtreeVisibilityStyle(isActive, "block"),
       }}
     />
   );

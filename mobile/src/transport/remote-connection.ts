@@ -293,6 +293,8 @@ export class RemoteConnection {
   private session: E2eeSession | OrcaE2EESession | null = null;
   private handshake: PendingHandshake | OrcaE2EEPendingHandshake | null = null;
   private orcaAuthenticated = false;
+  /** Token captured for the current Orca handshake; authParams must not be re-read on ACK. */
+  private orcaDeviceToken: string | null = null;
   private rpcVersion: RpcVersion = RPC_V2;
   private capabilities: RpcCapability[] = [];
   private statusValue: ConnectionStatus = "idle";
@@ -514,6 +516,8 @@ export class RemoteConnection {
       phase: "dialing" | "ready" | "active" | "online" | "failed";
       dialTimer: unknown | null;
       handshakeTimer: unknown | null;
+      /** Orca sends auth after the E2EE ready frame; that response has its own deadline. */
+      authTimer: unknown | null;
       error: string | null;
       messageChain: Promise<void>;
     };
@@ -523,8 +527,10 @@ export class RemoteConnection {
     const detach = (candidate: Candidate) => {
       this.clearAttemptTimeout(candidate.dialTimer);
       this.clearAttemptTimeout(candidate.handshakeTimer);
+      this.clearAttemptTimeout(candidate.authTimer);
       candidate.dialTimer = null;
       candidate.handshakeTimer = null;
+      candidate.authTimer = null;
       candidate.ws.onopen = null;
       candidate.ws.onmessage = null;
       candidate.ws.onclose = null;
@@ -585,7 +591,9 @@ export class RemoteConnection {
       if (generation !== this.generation || active !== candidate) return;
       candidate.phase = "online";
       this.clearAttemptTimeout(candidate.handshakeTimer);
+      this.clearAttemptTimeout(candidate.authTimer);
       candidate.handshakeTimer = null;
+      candidate.authTimer = null;
       for (const other of candidates) {
         if (other === candidate || other.phase === "failed") continue;
         other.phase = "failed";
@@ -608,6 +616,10 @@ export class RemoteConnection {
     };
 
     for (const endpoint of this.endpoints) {
+      // A synchronous WebSocket bridge (or a synchronous send failure) can
+      // invalidate this round while the loop is still installing handlers.
+      // Do not create more candidates for an obsolete generation.
+      if (generation !== this.generation) return;
       let ws: WebSocketLike;
       try {
         ws = this.wsFactory(endpoint);
@@ -620,20 +632,19 @@ export class RemoteConnection {
         phase: "dialing",
         dialTimer: null,
         handshakeTimer: null,
+        authTimer: null,
         error: null,
         messageChain: Promise.resolve(),
       };
       candidates.push(candidate);
+      // Register the candidate before assigning callbacks. Some native
+      // bridges invoke `onopen` synchronously from the setter; teardown must
+      // then be able to close this socket and invalidate the round.
+      this.racers = candidates.map((item) => item.ws);
       candidate.dialTimer = this.setAttemptTimeout(() => {
         failCandidate(candidate, "WebSocket dial timeout");
       }, this.dialTimeoutMs);
-      ws.onopen = () => {
-        if (generation !== this.generation || candidate.phase !== "dialing") return;
-        this.clearAttemptTimeout(candidate.dialTimer);
-        candidate.dialTimer = null;
-        candidate.phase = "ready";
-        finishRound();
-      };
+      if (generation !== this.generation) return;
       ws.onmessage = (event) => {
         if (
           generation !== this.generation ||
@@ -641,10 +652,6 @@ export class RemoteConnection {
           (candidate.phase !== "active" && candidate.phase !== "online")
         )
           return;
-        if (typeof event.data === "string") {
-          this.clearAttemptTimeout(candidate.handshakeTimer);
-          candidate.handshakeTimer = null;
-        }
         // Blob.arrayBuffer() is asynchronous; serialize frames per socket so
         // a later frame cannot overtake an earlier Blob during E2EE.
         candidate.messageChain = candidate.messageChain
@@ -655,6 +662,23 @@ export class RemoteConnection {
               ws,
               (error) => failCandidate(candidate, error),
               () => markOnline(candidate),
+              () => {
+                // Only a successfully parsed hello_ack/e2ee_ready completes
+                // the E2EE handshake. Arbitrary text must not keep a silent
+                // candidate alive indefinitely.
+                this.clearAttemptTimeout(candidate.handshakeTimer);
+                candidate.handshakeTimer = null;
+              },
+              () => {
+                // Orca's e2ee_auth is not an RPC request and therefore has no
+                // pending-request timer. Give its encrypted response a
+                // dedicated deadline so a quiet desktop cannot strand the
+                // connection in `authenticating` forever.
+                this.clearAttemptTimeout(candidate.authTimer);
+                candidate.authTimer = this.setAttemptTimeout(() => {
+                  failCandidate(candidate, "Orca authentication timeout");
+                }, this.handshakeTimeoutMs);
+              },
             ),
           )
           .catch(() => undefined);
@@ -670,7 +694,23 @@ export class RemoteConnection {
       ws.onerror = () => {
         // onerror 后通常伴随 onclose;这里不重复调度
       };
+      if (generation !== this.generation) return;
+      // Install the remaining handlers before `onopen`: a native bridge may
+      // invoke the setter synchronously for an already-open socket, and its
+      // first hello send can in turn synchronously deliver a response.
+      ws.onopen = () => {
+        if (generation !== this.generation || candidate.phase !== "dialing") return;
+        this.clearAttemptTimeout(candidate.dialTimer);
+        candidate.dialTimer = null;
+        candidate.phase = "ready";
+        finishRound();
+      };
+      // The setter above may invoke `onopen` synchronously.  If the initial
+      // hello send failed, that callback tears the candidate down and bumps
+      // the generation; do not continue installing or creating candidates.
+      if (generation !== this.generation) return;
     }
+    if (generation !== this.generation) return;
     this.racers = candidates.map((candidate) => candidate.ws);
     if (candidates.length === 0) {
       this.scheduleReconnect();
@@ -681,6 +721,7 @@ export class RemoteConnection {
   private beginHandshake(ws: WebSocketLike): boolean {
     this.session = null;
     this.orcaAuthenticated = false;
+    this.orcaDeviceToken = null;
     try {
       this.handshake =
         this.protocol === "orca"
@@ -850,25 +891,27 @@ export class RemoteConnection {
     this.session = null;
     this.handshake = null;
     this.orcaAuthenticated = false;
+    this.orcaDeviceToken = null;
     this.rpcVersion = RPC_V2;
     this.capabilities = [];
     this.ws = null;
     this.activeEndpoint = null;
     this.dialStartedAt = null;
-    if (this.racers.length > 0) {
-      const racers = this.racers;
-      this.racers = [];
-      this.generation += 1;
-      for (const ws of racers) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        try {
-          ws.close();
-        } catch {
-          // 已关闭的 socket close 再抛错可忽略
-        }
+    const racers = this.racers;
+    this.racers = [];
+    // Invalidate callbacks even when a socket was not fully registered yet.
+    // This matters for synchronous WebSocket bridges and for a send() that
+    // throws from inside the initial onopen callback.
+    this.generation += 1;
+    for (const ws of racers) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        // 已关闭的 socket close 再抛错可忽略
       }
     }
   }
@@ -1011,7 +1054,14 @@ export class RemoteConnection {
     ws: WebSocketLike,
     onCandidateFailure: (error: string) => void,
     onAuthenticated: () => void,
+    onHandshakeComplete: () => void,
+    onOrcaAuthStarted: () => void,
   ): Promise<void> {
+    // A Blob/ArrayBuffer bridge can suspend this method while the socket is
+    // torn down and a new generation starts.  Never let a queued callback from
+    // that obsolete generation inspect or mutate the replacement session.
+    if (generation !== this.generation || this.ws !== ws) return;
+
     // 明文 text 只存在于握手阶段(hello_ack / e2ee_ready)。
     if (typeof data === "string" && this.handshake && !this.session) {
       const handshake = this.handshake;
@@ -1024,14 +1074,23 @@ export class RemoteConnection {
         onCandidateFailure(message);
         return;
       }
+      onHandshakeComplete();
       this.setStatus("authenticating");
       if (this.session instanceof OrcaE2EESession) {
-        const deviceToken = this.authParams().deviceToken;
+        let deviceToken: unknown;
+        try {
+          deviceToken = this.authParams().deviceToken;
+        } catch (err) {
+          onCandidateFailure(err instanceof Error ? err.message : String(err));
+          return;
+        }
         if (typeof deviceToken !== "string" || deviceToken.length === 0) {
           onCandidateFailure("bad_auth");
           return;
         }
+        this.orcaDeviceToken = deviceToken;
         try {
+          onOrcaAuthStarted();
           ws.send(
             this.session.encryptText(
               JSON.stringify({
@@ -1106,7 +1165,10 @@ export class RemoteConnection {
         this.reconnectAttempts = 0;
         this.setStatus("online");
         onAuthenticated();
-        const token = this.authParams().deviceToken;
+        // Use the token that was authenticated in this handshake. Re-reading
+        // authParams here could throw (or return a different token) after the
+        // server has already accepted the original credentials.
+        const token = this.orcaDeviceToken;
         this.authListeners.forEach((listener) =>
           listener({
             deviceId: typeof token === "string" ? token : "orca",
@@ -1149,6 +1211,7 @@ export class RemoteConnection {
     }
 
     const bytes = await decodeBinaryData(data);
+    if (generation !== this.generation || this.ws !== ws) return;
     if (!bytes) return;
     let opened: { kind: number; plain: Uint8Array };
     try {
@@ -1269,10 +1332,25 @@ export function pairWithInvite(options: {
       }
       return `电脑在验证配对码时断开连接,请重新生成二维码${suffix}`;
     };
+    const detach = () => {
+      // `finish` is only called after the socket factory returns, but keeping
+      // this helper tolerant of an unassigned socket makes the cleanup path
+      // safe if that ordering ever changes (or a test bridge throws midway).
+      if (!ws) return;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+    };
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       timers.clearTimeout(timer);
+      // Detach before close: a native bridge is allowed to dispatch `close`
+      // synchronously from `close()`.  More importantly, a late frame queued
+      // by an old socket must not keep running the pairing state machine after
+      // the promise has settled.
+      detach();
       try {
         ws.close();
       } catch {
@@ -1293,20 +1371,9 @@ export function pairWithInvite(options: {
       return;
     }
 
-    ws.onopen = () => {
-      if (handshake) {
-        phase = "handshake";
-        // send 抛出时 socket 可能仍是 open,onclose 不会触发,配对会一直挂到超时。
-        // 走既有失败路径立刻结束,与握手后各步的 send 一致。
-        try {
-          ws.send(handshake.helloJson);
-        } catch (err) {
-          finish(() => reject(pairingError("network", err)));
-        }
-      }
-    };
     let messageChain = Promise.resolve();
     ws.onmessage = (event) => {
+      if (settled) return;
       // 握手响应(明文 text)
       if (typeof event.data === "string") {
         if (!handshake || session) return;
@@ -1342,8 +1409,9 @@ export function pairWithInvite(options: {
       // E2EE sequence number when an Android bridge emits mixed frame types.
       messageChain = messageChain
         .then(async () => {
-          if (!session) return;
+          if (settled || !session) return;
           const bytes = await decodeBinaryData(event.data);
+          if (settled || !session) return;
           if (!bytes) {
             finish(() =>
               reject(
@@ -1447,5 +1515,26 @@ export function pairWithInvite(options: {
       const message = event?.message?.trim();
       if (message) socketError = message;
     };
+    // Install all observers before `onopen`: a native bridge may invoke the
+    // setter synchronously for an already-open socket, and the first hello
+    // send can synchronously produce a response or throw.  In either case a
+    // settled pairing must leave no callbacks attached to the old socket.
+    ws.onopen = () => {
+      if (handshake) {
+        phase = "handshake";
+        // send 抛出时 socket 可能仍是 open,onclose 不会触发,配对会一直挂到超时。
+        // 走既有失败路径立刻结束,与握手后各步的 send 一致。
+        try {
+          ws.send(handshake.helloJson);
+        } catch (err) {
+          finish(() => reject(pairingError("network", err)));
+        }
+      }
+    };
+    // `onopen` may have settled the promise synchronously while it was being
+    // assigned.  `finish` normally detached everything already; this final
+    // call is an idempotent guard for bridges whose property setters perform
+    // additional work after invoking the handler.
+    if (settled) detach();
   });
 }

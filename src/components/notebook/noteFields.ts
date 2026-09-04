@@ -10,6 +10,8 @@
  * 在界面上是两个不同的取值,折起来就等于替用户改数据。
  */
 
+import { compareNotebookPath, compareNotebookText } from "../../lib/notebookSort";
+
 /** Rust 侧 `NoteField`:一篇笔记里的一个字段。 */
 export type NoteField = {
   /** key 的原始文本,保持大小写。 */
@@ -124,17 +126,17 @@ export function collectFields(
       // 这一次排序是实打实起作用的,不是防御性的:Map 保的是**到达**顺序,而
       // `sources` 只在走真后端时才按路径排好(Rust 侧 `scan_vault_fields` 排了)。
       // 换句话说,顺序的承诺归这一层,不归上游。
-      notes: [...notes.values()].sort((a, b) => a.path.localeCompare(b.path)),
+      notes: [...notes.values()].sort((a, b) => compareNotebookPath(a.path, b.path)),
     }));
-    values.sort((a, b) => b.notes.length - a.notes.length || a.value.localeCompare(b.value));
+    values.sort((a, b) => b.notes.length - a.notes.length || compareNotebookText(a.value, b.value));
     building.entry.values = values;
     building.entry.notes = building.paths.size;
     building.entry.emptyNotes = [...building.emptyNotes.values()].sort((a, b) =>
-      a.path.localeCompare(b.path),
+      compareNotebookPath(a.path, b.path),
     );
     entries.push(building.entry);
   }
-  entries.sort((a, b) => b.notes - a.notes || a.key.localeCompare(b.key));
+  entries.sort((a, b) => b.notes - a.notes || compareNotebookText(a.key, b.key));
   return entries;
 }
 

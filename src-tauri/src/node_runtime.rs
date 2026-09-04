@@ -106,8 +106,9 @@ async fn node_version(node_path: &std::path::Path) -> Result<String, String> {
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    crate::subprocess::configure_background_tokio_command(&mut command);
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     let output = tokio::time::timeout(Duration::from_secs(15), command.output())
         .await
         .map_err(|_| "verification_failed: Node.js version check timed out".to_string())?
@@ -143,8 +144,9 @@ async fn install_node_with_winget() -> Result<(), String> {
         .args(winget_node_install_args())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    crate::subprocess::configure_background_tokio_command(&mut command);
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    crate::subprocess::configure_terminable_tokio_process_tree(&mut command);
     let output = tokio::time::timeout(Duration::from_secs(15 * 60), command.output())
         .await
         .map_err(|_| "node_install_failed: Node.js installation timed out".to_string())?

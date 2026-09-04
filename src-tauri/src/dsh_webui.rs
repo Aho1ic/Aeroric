@@ -455,8 +455,11 @@ impl DshWebUiManager {
                     }
                 }
 
-                crate::subprocess::signal_process_group(pid, libc::SIGKILL);
-                let _ = child.wait().await;
+                crate::subprocess::terminate_tokio_process_tree(child)
+                    .await
+                    .map_err(|error| {
+                        format!("Could not terminate DSH Web process tree: {error}")
+                    })?;
             }
         }
 
@@ -465,6 +468,13 @@ impl DshWebUiManager {
             crate::subprocess::terminate_tokio_process_tree(child)
                 .await
                 .map_err(|error| format!("Could not terminate DSH Web process tree: {error}"))?;
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            crate::subprocess::terminate_tokio_process_tree(child)
+                .await
+                .map_err(|error| format!("Could not terminate DSH Web process: {error}"))?;
         }
 
         Ok(())

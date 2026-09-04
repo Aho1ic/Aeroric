@@ -27,6 +27,7 @@ import {
   type NoteSig,
 } from "./notebookApi";
 import { deriveTitle, joinNote, splitNote, type NoteFrontmatter } from "./noteFrontmatter";
+import { compareNotebookPath } from "../../lib/notebookSort";
 
 /** 面板里的一条笔记。`body` 是不含 frontmatter 的正文。 */
 export type VaultNote = {
@@ -89,11 +90,13 @@ export async function listNotes(vault: string): Promise<VaultNote[]> {
     .sort((a, b) => {
       const left = rank.get(baseName(a.path));
       const right = rank.get(baseName(b.path));
-      if (left !== undefined && right !== undefined) return left - right;
+      if (left !== undefined && right !== undefined) {
+        return left - right || compareNotebookPath(a.path, b.path);
+      }
       // 没排过的笔记(新建 / 外部拖进来的)排在最前,让用户第一眼看到。
       if (left !== undefined) return 1;
       if (right !== undefined) return -1;
-      return b.modifiedMs - a.modifiedMs;
+      return b.modifiedMs - a.modifiedMs || compareNotebookPath(a.path, b.path);
     })
     .map((entry) => ({
       path: entry.path,

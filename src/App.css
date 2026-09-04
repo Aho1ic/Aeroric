@@ -4895,6 +4895,19 @@ html:not(.dark) .xterm {
 
 .xterm-helper-textarea {
   caret-color: transparent !important;
+  /* xterm 把这个隐藏 textarea 停在**光标那一格**上（`_syncTextArea` 写 left/top +
+   * 一格宽高），而它在 z-index:5 的 .xterm-helpers 里，于是它是那一格的最上层命中
+   * 目标 —— 正好是用户点提示符时最常落的位置。
+   *
+   * 它是纯 IME 宿主（opacity:0，焦点一律由 term.focus() / textarea.focus() 程序化
+   * 给），从来不该接收鼠标。之前它能被命中时，attachMacWebKitTerminalGuard 又在
+   * pointerdown 里同步把它 disabled 掉，浏览器随即不再向已禁用的表单控件派发
+   * mousedown —— Chromium 与 WKWebView 实测都是「pointerdown 之后直接 pointerup，
+   * 中间没有 mousedown」，这一下点击被整个吞掉：xterm 收不到 mousedown，既不起选区，
+   * 开着鼠标上报时也不会有按下报文发给程序。
+   *
+   * pointer-events:none 只改命中测试，不影响 focus / composition 事件，IME 照常。 */
+  pointer-events: none;
 }
 
 /* Agent 终端的当前光标行定位层（保持透明，不遮挡输入文字）。

@@ -2,7 +2,9 @@
 //!
 //! 安全说明:已配对设备可以写入新的 API Key，但 `agentConfig.list`
 //! 永不回传已有明文凭据。列表只返回 `apiKeyConfigured`;保存时缺失或
-//! 空 `apiKey` 表示保留原值，清除必须显式发送 `clearApiKey=true`。
+//! 空 `apiKey` 表示保留原值(仅限 base URL 不变)，清除必须显式发送
+//! `clearApiKey=true`。换 URL 时必须同时提供新 key，避免把旧凭据发到
+//! 未经确认的端点。
 //!
 //! 保存统一走 app settings 的锁内字段更新入口，由它负责校验、wrapper
 //! 脚本重写与设置文件的原子持久化。
@@ -151,8 +153,8 @@ fn bool_param(params: &Value, key: &str) -> Result<Option<bool>, String> {
 fn apply_api_key_update(current: &mut String, api_key: Option<String>, clear: bool) {
     if clear {
         current.clear();
-    } else if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
-        *current = api_key;
+    } else if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
+        *current = api_key.trim().to_string();
     }
 }
 
@@ -216,7 +218,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
     if matches!(id.as_str(), "claude" | "codex" | "dsh") {
         let update_id = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            crate::app_settings::update_builtin_agent_config_internal(
+            crate::app_settings::update_builtin_agent_config_remote_internal(
                 update_id,
                 base_url,
                 api_key,
@@ -235,7 +237,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
 
     let update_id = id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::app_settings::update_custom_agent_config_internal(
+        crate::app_settings::update_custom_agent_config_remote_internal(
             update_id,
             base_url,
             api_key,
@@ -243,6 +245,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
             models,
             enable_1m_context,
             enable_chat_completions_proxy,
+            None,
             proxy_enabled,
         )
     })
@@ -283,9 +286,16 @@ pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, S
                 _ => AgentSetupKind::ClaudeCode,
             });
             if base_url.is_empty() {
-                base_url = credentials.base_url;
+                base_url = credentials.base_url.clone();
             }
             if api_key.is_empty() {
+                crate::app_settings::validate_remote_api_key_reuse(
+                    &credentials.base_url,
+                    &credentials.api_key,
+                    (!base_url.is_empty()).then_some(base_url.as_str()),
+                    None,
+                    false,
+                )?;
                 api_key = credentials.api_key;
             }
         } else {
@@ -299,6 +309,13 @@ pub(crate) async fn agent_config_detect_models(params: Value) -> Result<Value, S
                 base_url = profile.base_url.clone();
             }
             if api_key.is_empty() {
+                crate::app_settings::validate_remote_api_key_reuse(
+                    &profile.base_url,
+                    &profile.api_key,
+                    (!base_url.is_empty()).then_some(base_url.as_str()),
+                    None,
+                    false,
+                )?;
                 api_key = profile.api_key.clone();
             }
         }
@@ -446,6 +463,8 @@ mod tests {
         apply_api_key_update(&mut current, None, false);
         assert_eq!(current, "keep-me");
         apply_api_key_update(&mut current, Some(String::new()), false);
+        assert_eq!(current, "keep-me");
+        apply_api_key_update(&mut current, Some("  \t".to_string()), false);
         assert_eq!(current, "keep-me");
         apply_api_key_update(&mut current, Some("replacement".to_string()), false);
         assert_eq!(current, "replacement");

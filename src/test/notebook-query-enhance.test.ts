@@ -108,7 +108,7 @@ describe("enhanceNoteQueries", () => {
     const rows = Array.from(root.querySelectorAll("tbody tr")).map((tr) =>
       Array.from(tr.querySelectorAll("td")).map((td) => td.textContent),
     );
-    // 默认按标题排,localeCompare 下 丙 < 甲 < 乙(拼音 bing < jia < yi)。
+    // 默认按标题排,固定的中文拼音比较器下 丙 < 甲 < 乙(bing < jia < yi)。
     expect(rows).toEqual([
       ["丙", "done"],
       ["甲", "active"],

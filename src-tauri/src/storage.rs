@@ -392,6 +392,56 @@ pub(crate) fn truncate_task_terminal_history(task_id: &str) -> Result<(), String
     atomic_write_private(&path, "")
 }
 
+/// 把 terminal-history 目录里超标的历史文件压实回上限。返回压实了几个。
+///
+/// 为什么需要单独一遍:`append_terminal_history_file` 只在**下一次追加**时压实。
+/// 任务跑完后文件就再也不会被追加,于是永久停在它当时的大小上 —— 实测这台机器
+/// 上 `~/.aeroric/terminal-history` 是 900 MB / 198 个文件,其中 11 个超过
+/// 12 MB 上界(最大 162.9 MB),且全部在 37 天以上没被动过。压实逻辑本身是对的,
+/// 缺的只是一个不依赖"恰好又来了一次追加"的触发点。
+///
+/// 只压实、不删除:历史仍然是用户会去翻的内容,末 8 MB 与读路径取的窗口一致,
+/// 所以压实对读语义没有影响。
+pub(crate) fn compact_oversized_terminal_histories() -> Result<usize, String> {
+    let dir = terminal_history_dir()?;
+    if !dir.exists() {
+        return Ok(0);
+    }
+    compact_oversized_histories_in(
+        &dir,
+        MAX_TERMINAL_HISTORY_BYTES,
+        TERMINAL_HISTORY_COMPACT_SLACK_BYTES,
+    )
+}
+
+/// `compact_oversized_terminal_histories` 的目录版,与「主目录是哪个」解耦以便测试
+/// (同 `resolve_data_dir_from` 的理由:真实路径取自 `$HOME`,改环境变量是进程级的)。
+fn compact_oversized_histories_in(
+    dir: &Path,
+    max_bytes: usize,
+    slack_bytes: usize,
+) -> Result<usize, String> {
+    let high_water = (max_bytes as u64).saturating_add(slack_bytes as u64);
+    let mut compacted = 0usize;
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() <= high_water {
+            continue;
+        }
+        // 逐个失败互不影响:一个文件权限异常不该让整轮清理停下。
+        let Ok((_, tail)) = read_terminal_history_tail_bytes(&path, max_bytes as u64) else {
+            continue;
+        };
+        if atomic_write_private_bytes(&path, utf8_tail_bytes(&tail, max_bytes)).is_ok() {
+            compacted += 1;
+        }
+    }
+    Ok(compacted)
+}
+
 /// 终端历史当前字节数(文件缺失=0)。terminal hub 的水位初始化用。
 pub(crate) fn task_terminal_history_len(task_id: &str) -> u64 {
     terminal_history_path(task_id)
@@ -840,6 +890,63 @@ mod tests {
             .expect("a fallback must always explain itself");
         // 原始原因要原样带出:用户和我们都靠它判断到底是磁盘满还是权限问题。
         assert!(reason.contains("home is read-only"), "{reason}");
+    }
+
+    /// 任务跑完后文件不再被追加,所以「只在下次追加时压实」等于永不压实。这条守的
+    /// 就是那批遗留文件(实测 900 MB / 最大 162.9 MB)能被真正收回。
+    #[test]
+    fn sweep_compacts_files_left_over_the_cap() {
+        let dir = std::env::temp_dir().join(format!("aeroric-sweep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp history dir");
+
+        let oversized = dir.join("finished-task");
+        fs::write(&oversized, "x".repeat(500)).expect("seed oversized");
+        let untouched = dir.join("small-task");
+        fs::write(&untouched, "y".repeat(50)).expect("seed small");
+
+        // max=100, slack=40 → 高水位 140:500 字节的要压实,50 字节的不动。
+        let compacted = compact_oversized_histories_in(&dir, 100, 40).expect("sweep");
+
+        assert_eq!(compacted, 1);
+        // 压实回 max_bytes,而不是回到高水位。
+        assert_eq!(fs::metadata(&oversized).expect("stat").len(), 100);
+        assert_eq!(fs::metadata(&untouched).expect("stat").len(), 50);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 压实必须保留**尾部**:用户翻历史看的是最近的输出,砍错方向等于丢掉有用的那段。
+    #[test]
+    fn sweep_keeps_the_tail_not_the_head() {
+        let dir = std::env::temp_dir().join(format!("aeroric-sweep-tail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp history dir");
+        let path = dir.join("task");
+        fs::write(&path, "AAAAAAAAAABBBBBBBBBB").expect("seed");
+
+        compact_oversized_histories_in(&dir, 10, 2).expect("sweep");
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "BBBBBBBBBB");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 多字节字符不许被腰斩成非法 UTF-8 —— 读路径直接把它当字符串投给前端。
+    #[test]
+    fn sweep_never_splits_a_multibyte_char() {
+        let dir = std::env::temp_dir().join(format!("aeroric-sweep-utf8-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp history dir");
+        let path = dir.join("task");
+        // 每个「好」是 3 字节;截到 10 字节必然落在某个字符中间。
+        fs::write(&path, "好".repeat(8)).expect("seed");
+
+        compact_oversized_histories_in(&dir, 10, 2).expect("sweep");
+
+        let bytes = fs::read(&path).expect("read");
+        assert!(bytes.len() <= 10);
+        let text = std::str::from_utf8(&bytes).expect("compaction must leave valid UTF-8");
+        assert!(text.chars().all(|c| c == '好'), "{text}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(not(windows))]

@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     fitTerminalAtBottom: vi.fn(() => ({ cols: 90, rows: 28 })),
     createSmartWriter: vi.fn(() => writer),
     attachMacWebKitTerminalGuard: vi.fn(() => vi.fn()),
+    attachMouseReleaseStrandGuard: vi.fn(() => vi.fn()),
     loadWebglAddon: vi.fn(),
   };
 });
@@ -41,6 +42,7 @@ vi.mock("../components/terminalShared", async (importOriginal) => {
     applyTerminalFontSize: mocks.applyTerminalFontSize,
     applyTerminalTheme: mocks.applyTerminalTheme,
     attachMacWebKitTerminalGuard: mocks.attachMacWebKitTerminalGuard,
+    attachMouseReleaseStrandGuard: mocks.attachMouseReleaseStrandGuard,
     createSmartWriter: mocks.createSmartWriter,
     createTerminalFitScheduler: actual.createTerminalFitScheduler,
     TERMINAL_RESIZE_SETTLE_MS: actual.TERMINAL_RESIZE_SETTLE_MS,

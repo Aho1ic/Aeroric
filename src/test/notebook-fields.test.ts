@@ -62,8 +62,8 @@ describe("collectFields", () => {
       [source("/v/a.md", { status: ["done"] }), source("/v/b.md", { status: ["Done"] })],
       stem,
     );
-    // 断言"两条各一篇"而不是它们的先后:同数时的排列来自 `localeCompare` 的语言
-    // 环境排序,写死顺序等于把一个无关细节钉进用例。
+    // 断言"两条各一篇"而不是它们的先后:同数时的排列来自固定 locale 的语言
+    // 排序,这里不把一个显示层细节钉进聚合规则。
     expect(entries[0].values).toHaveLength(2);
     expect(entries[0].values.map((value) => value.value).sort()).toEqual(["Done", "done"]);
     expect(entries[0].values.map((value) => value.notes.length)).toEqual([1, 1]);

@@ -18,6 +18,7 @@
 //      顺序由 sort 实现和输入顺序决定,两次扫描之间会跳。这里一律以 path 收尾。
 
 import { normalizeFieldKey, type NoteFieldSource } from "./noteFields";
+import { compareNotebookPath, compareNotebookText } from "../../lib/notebookSort";
 
 /** 一个解析好的查询。 */
 export interface NoteQuery {
@@ -152,8 +153,10 @@ export function runNoteQuery(
   // 否则两次扫描之间顺序会跳。
   rows.sort((a, b) => {
     const primary =
-      query.sort === "value" ? a.value.localeCompare(b.value) : a.title.localeCompare(b.title);
-    return primary || a.path.localeCompare(b.path);
+      query.sort === "value"
+        ? compareNotebookText(a.value, b.value)
+        : compareNotebookText(a.title, b.title);
+    return primary || compareNotebookPath(a.path, b.path);
   });
 
   const total = rows.length;
