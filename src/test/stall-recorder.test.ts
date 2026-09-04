@@ -5,15 +5,39 @@ import {
   stallReport,
 } from "../lib/stallRecorder";
 
-interface TauriInternalsShape {
-  invoke: (command: string, args?: unknown, options?: unknown) => Promise<unknown>;
+/**
+ * 一次 `invoke` 在真实运行时的样子:`ipc-protocol.js` 把它发成一个到
+ * `ipc://localhost/<cmd>` 的 POST(macOS / Linux)。记录器就是从这个 URL 取 command 名的,
+ * 所以测试也从这一层驱动,而不是去调某个内部函数。
+ */
+function ipcUrl(command: string): string {
+  return `ipc://localhost/${encodeURIComponent(command)}`;
 }
 
-function internals(): TauriInternalsShape {
-  const value = (globalThis as { __TAURI_INTERNALS__?: TauriInternalsShape })
-    .__TAURI_INTERNALS__;
-  if (!value) throw new Error("__TAURI_INTERNALS__ missing");
-  return value;
+/** Windows / Android 上换成 `<scheme>://ipc.localhost/<cmd>`,两种都得认。 */
+function ipcUrlWindows(command: string): string {
+  return `http://ipc.localhost/${encodeURIComponent(command)}`;
+}
+
+/** 发一次 IPC 请求 —— 走 `globalThis.fetch`,也就是记录器包装的那一层。 */
+function sendIpc(url: string, init?: RequestInit): Promise<Response> {
+  return globalThis.fetch(url, init);
+}
+
+/**
+ * 装一个 `fetch` 替身,并返回它看到的调用。
+ *
+ * `advanceMs` 让时钟在「请求期间」推进,用来伪造一次慢命令。
+ */
+function stubFetch(advanceMs: (url: string) => number, tick: (ms: number) => void) {
+  const seen: { url: string; init?: RequestInit }[] = [];
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : String(input);
+    seen.push({ url, init });
+    tick(advanceMs(url));
+    return Promise.resolve(new Response("null"));
+  });
+  return seen;
 }
 
 /** `Event.timeStamp` 只有 getter,Object.assign 设不上,得 defineProperty。 */
@@ -29,24 +53,24 @@ describe("stall recorder", () => {
   });
 
   afterEach(() => {
-    delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
   it("names the slow command so a stalled click is attributable", async () => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: (command: string) => {
-        // 命令执行期间时钟推进 —— 模拟一次 900ms 的后端调用。
-        now += command === "slow_command" ? 900 : 5;
-        return Promise.resolve(`${command}-ok`);
+    // 命令执行期间时钟推进 —— 模拟一次 900ms 的后端调用。
+    stubFetch(
+      (url) => (url.endsWith("slow_command") ? 900 : 5),
+      (ms) => {
+        now += ms;
       },
-    };
+    );
     installStallRecorder();
 
-    await internals().invoke("slow_command");
-    await internals().invoke("fast_command");
+    await sendIpc(ipcUrl("slow_command"));
+    await sendIpc(ipcUrl("fast_command"));
 
     const report = stallReport();
     expect(report.slowInvokes.map((s) => s.label)).toEqual(["slow_command"]);
@@ -58,15 +82,13 @@ describe("stall recorder", () => {
   it("still times a command that rejects, and preserves the rejection", async () => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: () => {
-        now += 500;
-        return Promise.reject(new Error("backend blew up"));
-      },
-    };
+    vi.stubGlobal("fetch", () => {
+      now += 500;
+      return Promise.reject(new Error("backend blew up"));
+    });
     installStallRecorder();
 
-    await expect(internals().invoke("failing_command")).rejects.toThrow("backend blew up");
+    await expect(sendIpc(ipcUrl("failing_command"))).rejects.toThrow("backend blew up");
 
     const report = stallReport();
     expect(report.slowInvokes.map((s) => s.label)).toEqual(["failing_command"]);
@@ -76,15 +98,15 @@ describe("stall recorder", () => {
   it("aggregates high-frequency commands that are individually fast", async () => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: () => {
-        now += 3;
-        return Promise.resolve(null);
+    stubFetch(
+      () => 3,
+      (ms) => {
+        now += ms;
       },
-    };
+    );
     installStallRecorder();
 
-    for (let i = 0; i < 40; i += 1) await internals().invoke("chatty_command");
+    for (let i = 0; i < 40; i += 1) await sendIpc(ipcUrl("chatty_command"));
 
     const report = stallReport();
     // 单次 3ms 从不越过慢阈值,但累计 120ms 必须看得见 —— 这正是"高频小命令磨掉
@@ -97,15 +119,15 @@ describe("stall recorder", () => {
   it("bounds each sample bucket so the recorder cannot become a leak", async () => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: () => {
-        now += 200;
-        return Promise.resolve(null);
+    stubFetch(
+      () => 200,
+      (ms) => {
+        now += ms;
       },
-    };
+    );
     installStallRecorder();
 
-    for (let i = 0; i < 80; i += 1) await internals().invoke(`slow_${i}`);
+    for (let i = 0; i < 80; i += 1) await sendIpc(ipcUrl(`slow_${i}`));
 
     const report = stallReport();
     expect(report.slowInvokes).toHaveLength(50);
@@ -137,20 +159,72 @@ describe("stall recorder", () => {
     expect(report.slowInputs.at(-1)?.atMs).toBe(79 * 10_000 + 900);
   });
 
-  it("passes through arguments and the resolved value unchanged", async () => {
-    const seen: unknown[] = [];
-    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
-      invoke: (command: string, args?: unknown, options?: unknown) => {
-        seen.push({ command, args, options });
-        return Promise.resolve({ ok: true });
-      },
-    };
+  it("passes the request through untouched and returns the same response", async () => {
+    const seen = stubFetch(
+      () => 0,
+      () => {},
+    );
     installStallRecorder();
 
-    const result = await internals().invoke("cmd", { a: 1 }, { headers: {} });
+    const init = { method: "POST", headers: { "Tauri-Callback": "1" } };
+    const response = await sendIpc(ipcUrl("cmd"), init);
 
-    expect(result).toEqual({ ok: true });
-    expect(seen).toEqual([{ command: "cmd", args: { a: 1 }, options: { headers: {} } }]);
+    expect(await response.text()).toBe("null");
+    expect(seen).toEqual([{ url: ipcUrl("cmd"), init }]);
+  });
+
+  it("leaves non-IPC requests unmeasured so ordinary traffic is not attributed to a command", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    stubFetch(
+      () => 800,
+      (ms) => {
+        now += ms;
+      },
+    );
+    installStallRecorder();
+
+    // 资源加载和普通网络请求都不是 IPC,再慢也不该算到某个 command 头上。
+    await sendIpc("asset://localhost/assets/index.js");
+    await sendIpc("https://example.com/api/models");
+
+    const report = stallReport();
+    expect(report.slowInvokes).toEqual([]);
+    expect(report.invokeTotals).toEqual([]);
+  });
+
+  it("reads the command out of the Windows IPC url shape too", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    stubFetch(
+      () => 700,
+      (ms) => {
+        now += ms;
+      },
+    );
+    installStallRecorder();
+
+    await sendIpc(ipcUrlWindows("load_projects"));
+
+    expect(stallReport().slowInvokes.map((s) => s.label)).toEqual(["load_projects"]);
+  });
+
+  it("survives the real tauri internals descriptor instead of blanking the app", () => {
+    // 回归测试。tauri 用 `Object.defineProperty` 定义 `invoke` 且只给 `value`
+    // (`scripts/core.js:81`),于是 writable / configurable 都是 false。记录器曾经
+    // 直接 `internals.invoke = …`:严格模式下当场抛 TypeError,而它跑在 createRoot
+    // 之前 —— 整个应用白屏。之前的替身是对象字面量(invoke 可写),抓不到这个。
+    const internals = {};
+    Object.defineProperty(internals, "invoke", {
+      value: (command: string) => Promise.resolve(`${command}-ok`),
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(internals, "invoke");
+    expect(descriptor).toMatchObject({ writable: false, configurable: false });
+    vi.stubGlobal("__TAURI_INTERNALS__", internals);
+
+    expect(() => installStallRecorder()).not.toThrow();
+    // 而且探针要真的装上了,不是靠静默跳过来「不抛」。
+    expect(stallReport().invokeProbeActive).toBe(true);
   });
 
   it("records a click that did not reach JS promptly — the shape long tasks cannot see", () => {

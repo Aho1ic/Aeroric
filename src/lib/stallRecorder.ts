@@ -85,6 +85,14 @@ export interface StallReport {
   invokeTotals: InvokeStat[];
   /** 观察器是否真的装上了(Safari/WKWebView 不支持 longtask 时为 false)。 */
   longTaskObserverActive: boolean;
+  /**
+   * invoke 计时是否真的装上了。
+   *
+   * 这一位不是多余的:探针本身就曾经因为「以为能改的属性其实只读」而静默失效
+   * (见 `installStallRecorder()` 的注释)。三个桶全空时,先看这里是不是 false ——
+   * 否则会把「探针没装上」误读成「没有卡顿」。
+   */
+  invokeProbeActive: boolean;
 }
 
 const longTasks: StallSample[] = [];
@@ -93,6 +101,9 @@ const slowInputs: InputSample[] = [];
 const invokeStats = new Map<string, InvokeStat>();
 let longTaskObserverActive = false;
 let longTaskObserver: PerformanceObserver | null = null;
+let invokeProbeActive = false;
+/** 包装前的 `fetch`,reset 时还原 —— 否则重复装载会套娃,一次调用记多份。 */
+let originalFetchRef: typeof globalThis.fetch | null = null;
 let installed = false;
 
 function record(bucket: StallSample[], sample: StallSample): void {
@@ -100,15 +111,40 @@ function record(bucket: StallSample[], sample: StallSample): void {
   if (bucket.length > MAX_SAMPLES) bucket.shift();
 }
 
-interface TauriInternals {
-  invoke?: (command: string, args?: unknown, options?: unknown) => Promise<unknown>;
+/**
+ * 从 IPC 请求的 URL 里取出 command 名。
+ *
+ * `invoke` 最终由 `ipc-protocol.js` 发成一个 POST(tauri 2.11 `scripts/ipc-protocol.js`),
+ * 目标 URL 由 `convertFileSrc(cmd, 'ipc')` 拼出,两种形状(见 `scripts/core.js`):
+ *
+ * - macOS / Linux:`ipc://localhost/<encodeURIComponent(cmd)>`
+ * - Windows / Android:`<scheme>://ipc.localhost/<encodeURIComponent(cmd)>`
+ *
+ * 不是 IPC 就返回 null。先做廉价的字符串判断再解析 URL —— 这个函数在每个 fetch 上
+ * 都要跑一遍,不能给每次调用都摊上一次 URL 构造。
+ */
+function ipcCommandFromUrl(url: string): string | null {
+  if (!url.includes("ipc")) return null;
+  const isIpc = url.startsWith("ipc://") || url.includes("://ipc.localhost/");
+  if (!isIpc) return null;
+  try {
+    const path = new URL(url).pathname.replace(/^\//, "");
+    if (!path) return null;
+    return decodeURIComponent(path);
+  } catch {
+    return null;
+  }
 }
 
-function tauriInternals(): TauriInternals | null {
-  if (!("__TAURI_INTERNALS__" in globalThis)) return null;
-  const internals = (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-  if (typeof internals !== "object" || internals === null) return null;
-  return internals;
+/** 把一次 fetch 的输入归一成 URL 字符串。`Request` 与 `URL` 都要认。 */
+function requestUrl(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  if (typeof input === "object" && input !== null && "url" in input) {
+    const url = (input as { url?: unknown }).url;
+    if (typeof url === "string") return url;
+  }
+  return "";
 }
 
 /** 监听的输入事件。`pointerdown` 抓按下,`click` 抓完整一次点击。 */
@@ -174,11 +210,24 @@ function installInputDelayProbe(): void {
 /**
  * 装上记录器。幂等,重复调用无副作用。
  *
- * 两个探针:
+ * 三个探针:
  * - `longtask` 观察器:主线程被占住超过 50 ms 就上报。**它只告诉你卡了多久,不告诉
  *   你是谁** —— Long Tasks API 的归因字段在 WebKit 上基本是空的。所以要配合下面那个。
- * - `__TAURI_INTERNALS__.invoke` 包装:所有 `invoke` 都从这里过(193 个文件各自
- *   `import { invoke }`,逐个包装不现实;这一个点全覆盖)。慢命令直接点名。
+ * - `window.fetch` 包装:所有 `invoke` 最终都发成一个到 `ipc://` 的 POST,command 名
+ *   在 URL 里。慢命令直接点名。
+ * - 输入延迟探针:量「点下去多久才轮到 JS」。
+ *
+ * **为什么包 `fetch` 而不是 `__TAURI_INTERNALS__.invoke`** —— 后者包不了。tauri 用
+ * `Object.defineProperty` 定义它且只给 `value`(`scripts/core.js:81`),于是
+ * `writable` 和 `configurable` 都默认 false:属性既不可写也不可重定义。ESM 是严格
+ * 模式,`internals.invoke = …` 会当场抛 `TypeError`;这里跑在 `createRoot` 之前,
+ * 抛出去就是整个应用白屏。`window.__TAURI_INTERNALS__` 自身同样是只给 `value` 的
+ * `defineProperty`(`src/manager/webview.rs:173`),所以连「换掉整个对象」也不行。
+ *
+ * 这个坑在两处验证里都是隐形的:standalone WKWebView 里没有 `__TAURI_INTERNALS__`,
+ * 守卫直接短路;单测的替身是对象字面量,`invoke` 是普通可写属性。只有真实 webview
+ * 才会抛。所以下面每个装载点都包在 try/catch 里,并且把「有没有真的装上」放进
+ * `StallReport` —— 探针自己静默失效,比没有探针更糟。
  */
 export function installStallRecorder(): void {
   if (installed) return;
@@ -209,10 +258,13 @@ export function installStallRecorder(): void {
     }
   }
 
-  const internals = tauriInternals();
-  const original = internals?.invoke;
-  if (internals && typeof original === "function") {
-    internals.invoke = (command: string, args?: unknown, options?: unknown) => {
+  // 见上:`internals.invoke` 不可写也不可重定义,只能包真实传输层。
+  if (typeof globalThis.fetch === "function") {
+    const originalFetch = globalThis.fetch;
+    const wrapped = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const command = ipcCommandFromUrl(requestUrl(input));
+      if (command === null) return originalFetch.call(globalThis, input, init);
+
       const startedAt = performance.now();
       const settle = () => {
         const durationMs = performance.now() - startedAt;
@@ -233,7 +285,7 @@ export function installStallRecorder(): void {
         }
       };
       // 成功和失败都要计时:一个报错但很慢的命令同样把点击拖住了。
-      return original.call(internals, command, args, options).then(
+      return originalFetch.call(globalThis, input, init).then(
         (value) => {
           settle();
           return value;
@@ -244,6 +296,15 @@ export function installStallRecorder(): void {
         },
       );
     };
+    try {
+      globalThis.fetch = wrapped;
+      invokeProbeActive = globalThis.fetch === wrapped;
+      originalFetchRef = invokeProbeActive ? originalFetch : null;
+    } catch {
+      // 真发生就说明这个引擎连 fetch 都锁了。记下来,别把应用带崩。
+      invokeProbeActive = false;
+      originalFetchRef = null;
+    }
   }
 }
 
@@ -258,8 +319,10 @@ export function installStallRecorder(): void {
  *   这是「点了没反应」最典型的形状:延迟发生在 JS 之前,所以长任务和慢命令都抓不到。
  * - `slowInputs` 里 `toFrameMs` 很大而 `toHandlerMs` 很小 → JS 收到得很及时,是画
  *   不出来:合成/GPU 那一侧。
- * - 三个桶全空但用户确实感到卡 → 卡在进程之外:磁盘或 CPU 被别的进程吃满、或整机
- *   内存压力把进程换出,这时看 `top` / `vm_stat` / `fs_usage`。
+ * - 三个桶全空但用户确实感到卡 → **先看 `invokeProbeActive` / `longTaskObserverActive`**。
+ *   都为 true 才能推断「不在进程里」:那种情况是磁盘或 CPU 被别的进程吃满、或整机
+ *   内存压力把进程换出,看 `top` / `vm_stat` / `fs_usage`。有 false 的先修探针 ——
+ *   空报告可能只是没测到。
  * - `invokeTotals` 里某条 `calls` 极大而 `maxMs` 很小 → 高频小命令,单次不慢但
  *   把主线程磨没了。
  */
@@ -270,6 +333,7 @@ export function stallReport(): StallReport {
     slowInputs: [...slowInputs],
     invokeTotals: [...invokeStats.values()].sort((a, b) => b.totalMs - a.totalMs).slice(0, 20),
     longTaskObserverActive,
+    invokeProbeActive,
   };
 }
 
@@ -286,9 +350,9 @@ export function installStallReportProbe(): void {
 /**
  * 清空已记录的样本,并允许重新装载。
  *
- * 重置 `installed` 是给测试用的:每个用例换一份 `__TAURI_INTERNALS__` 替身,
- * 幂等守卫会让第二次 `installStallRecorder()` 变成空操作,包装就挂不到新替身上。
- * 生产路径只在启动时装一次,不受影响。
+ * 重置 `installed` 是给测试用的:每个用例换一份传输层替身,幂等守卫会让第二次
+ * `installStallRecorder()` 变成空操作,包装就挂不到新替身上。生产路径只在启动时
+ * 装一次,不受影响。
  */
 export function resetStallRecorder(): void {
   longTasks.length = 0;
@@ -300,5 +364,16 @@ export function resetStallRecorder(): void {
   longTaskObserver?.disconnect();
   longTaskObserver = null;
   longTaskObserverActive = false;
+  // fetch 也要还原:不还原的话重装会把上一层包装当成 original 套进去,
+  // 一次 IPC 被记两遍,而且套娃层数随 reset 次数线性增长。
+  if (originalFetchRef) {
+    try {
+      globalThis.fetch = originalFetchRef;
+    } catch {
+      // 还原不了就只能留着,但至少别让 reset 本身抛出去。
+    }
+    originalFetchRef = null;
+  }
+  invokeProbeActive = false;
   installed = false;
 }
