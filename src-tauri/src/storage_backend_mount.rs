@@ -494,10 +494,7 @@ mod tests {
             .rename("/manifest.json.tmp", "/manifest.json")
             .expect("rename should replace the old manifest");
 
-        assert_eq!(
-            std::fs::read(mount.join("manifest.json")).unwrap(),
-            b"new"
-        );
+        assert_eq!(std::fs::read(mount.join("manifest.json")).unwrap(), b"new");
         assert!(!mount.join("manifest.json.tmp").exists());
 
         drop(backend);

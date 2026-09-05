@@ -748,7 +748,11 @@ mod tests {
             &[],
             &[remote(
                 "big.bin",
-                &format!("{}{}", super::super::scan::OVERSIZE_PREFIX, 70 * 1024 * 1024),
+                &format!(
+                    "{}{}",
+                    super::super::scan::OVERSIZE_PREFIX,
+                    70 * 1024 * 1024
+                ),
             )],
             &[],
             &[],
@@ -767,7 +771,11 @@ mod tests {
             &[local("big.bin", "local-hash")],
             &[remote(
                 "big.bin",
-                &format!("{}{}", super::super::scan::OVERSIZE_PREFIX, 70 * 1024 * 1024),
+                &format!(
+                    "{}{}",
+                    super::super::scan::OVERSIZE_PREFIX,
+                    70 * 1024 * 1024
+                ),
             )],
             &[baseline("big.bin", "old-local", "old-remote")],
             &[],

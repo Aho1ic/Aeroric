@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
-use crate::storage::atomic_write;
 use crate::authorize_app_restart;
+use crate::storage::atomic_write;
 
 // ── Security: hardcoded allowed notification source ──────────────────────────
 
