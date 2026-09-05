@@ -40,6 +40,8 @@ mod mcp;
 mod node_runtime;
 mod notebook;
 mod notification;
+mod omp_home;
+mod omp_rpc;
 mod path_guard;
 mod permissions;
 mod platform;
@@ -54,6 +56,7 @@ mod search;
 mod secrets;
 mod session;
 mod session_dsh;
+mod session_omp;
 mod sftp;
 mod skills;
 mod sse;
@@ -438,6 +441,7 @@ pub fn run() {
         .manage(remote::RemoteState::new())
         .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
+        .manage(omp_rpc::OmpRpcManager::new())
         .manage(notebook::state::NotebookState::default())
         .manage(ExitAuthorization::default())
         .on_window_event(|window, event| {
@@ -826,6 +830,12 @@ pub fn run() {
             dsh_webui::prompt_dsh_task,
             dsh_webui::cancel_dsh_task,
             dsh_webui::complete_dsh_task,
+            omp_rpc::run_omp_task,
+            omp_rpc::prompt_omp_task,
+            omp_rpc::cancel_omp_task,
+            omp_rpc::complete_omp_task,
+            omp_rpc::respond_omp_server_request,
+            omp_rpc::get_omp_state,
             dsh_webui::list_dsh_commands,
             dsh_webui::execute_dsh_command,
             dsh_webui::list_dsh_message_feedback,
@@ -1160,6 +1170,8 @@ pub fn run() {
             tauri::async_runtime::block_on(manager.shutdown());
             let webui_manager = app_handle.state::<dsh_webui::DshWebUiManager>();
             tauri::async_runtime::block_on(webui_manager.shutdown_all());
+            // omp rpc-ui 进程在 stdin EOF 时按协议正常退出。
+            app_handle.state::<omp_rpc::OmpRpcManager>().shutdown_all();
         }
         // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
         // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。

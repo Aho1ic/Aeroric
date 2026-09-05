@@ -118,6 +118,7 @@
   --usage-claude: #d97706;
   --usage-codex: #a78bfa;
   --usage-dsh: #0891b2;
+  --usage-omp: #7c6ff0;
   --usage-chart-input: #7894b5;
   --usage-chart-output: #7da894;
   --usage-chart-cache-creation: #c3a36f;
@@ -333,6 +334,7 @@ html.dark {
   --usage-claude: #d19a66;
   --usage-codex: #8fb8d8;
   --usage-dsh: #56b6c2;
+  --usage-omp: #9d8cff;
   --usage-chart-input: #61afef;
   --usage-chart-output: #22c55e;
   --usage-chart-cache-creation: #e5c07b;

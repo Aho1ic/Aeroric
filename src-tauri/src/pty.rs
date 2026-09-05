@@ -1455,6 +1455,14 @@ pub async fn run_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     validate_task_id(&task_id)?;
+    // omp 走 rpc-ui 驱动通道(run_omp_task),绝不能当 PTY 任务拉起:
+    // 会话注册、审批回帧、状态机都依赖 RPC 帧分发。置于截断历史之前,
+    // 误路由不会破坏现场。
+    if crate::app_settings::get_agent_launch_spec(&agent).family
+        == crate::app_settings::AgentFamily::Omp
+    {
+        return Err("Use run_omp_task for omp agents".to_string());
+    }
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -2244,10 +2252,15 @@ pub async fn resume_task(
             "DeepSeek Harness sessions cannot be resumed natively; continue the task to start a new session with carried-over context".to_string(),
         );
     }
+    // omp 走 rpc-ui 通道的原生 resume:前端直接调 run_omp_task(--resume)。
+    if launch.family == crate::app_settings::AgentFamily::Omp {
+        return Err("Use run_omp_task to resume oh-my-pi sessions".to_string());
+    }
     let selected_model = normalized_selected_model(selected_model.as_deref());
-    let reasoning_effort = normalized_reasoning_effort(
+    // B5:与 run_task 统一为 family 版校验(dsh off/high/max;claude/codex 原词表)。
+    let reasoning_effort = normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
-        is_codex,
+        launch.family,
         selected_model.as_deref(),
     )?;
     let speed = normalized_speed(speed.as_deref())?;

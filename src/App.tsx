@@ -1426,6 +1426,25 @@ function App() {
       });
       return;
     }
+    if (agentFamily(task.agent, agentOptionsRef.current) === "omp") {
+      invoke("run_omp_task", {
+        taskId: task.id,
+        agent: task.agent,
+        projectPath,
+        prompt: promptOverride ?? task.prompt,
+        sessionId: task.ompSessionId ?? task.ompSessionPath,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        permissionMode: task.permissionMode,
+        images,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
     invoke(taskCommandName("local", "run"), {
       taskId: task.id,
       projectPath,
@@ -1879,6 +1898,12 @@ function App() {
       });
       return;
     }
+    if (task && agentFamily(task.agent, agentOptionsRef.current) === "omp") {
+      invoke("cancel_omp_task", { taskId }).catch((e: unknown) => {
+        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
+      });
+      return;
+    }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
     invoke(taskCommandName("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
@@ -1905,6 +1930,26 @@ function App() {
         permissionMode: task.permissionMode,
         images: [],
         clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        onOutput: tm.createOutputChannel(task.id),
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
+      return;
+    }
+    if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "omp") {
+      // omp 原生 resume:以持久化的会话 id/文件路径 --resume 重连,不重放原 prompt。
+      invoke("run_omp_task", {
+        taskId: task.id,
+        agent: task.agent,
+        projectPath: task.worktreePath ?? project.path,
+        prompt: "",
+        sessionId: sessionId || task.ompSessionId || task.ompSessionPath,
+        selectedModel: task.selectedModel,
+        reasoningEffort: task.reasoningEffort,
+        permissionMode: task.permissionMode,
+        images: [],
         onOutput: tm.createOutputChannel(task.id),
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2434,6 +2479,18 @@ function App() {
       return;
     }
 
+    if (completionCommand === "complete_omp_task") {
+      // omp:关 stdin → 进程 exit 0,后端 waiter 负责落 done。
+      invoke(completionCommand, { taskId })
+        .then(() => {
+          scheduleForDoneTask(taskId);
+        })
+        .catch((e: unknown) => {
+          showToast(t("toast.completeTaskFailed", { error: String(e) }));
+        });
+      return;
+    }
+
     if (completionCommand === "complete_task") {
       invoke(completionCommand, { taskId, projectPath })
         .then(() => {
@@ -2823,6 +2880,8 @@ function App() {
           codexSessionPath: family === "codex" ? sessionPath : undefined,
           dshSessionId: family === "dsh" ? sessionId : undefined,
           dshSessionPath: family === "dsh" ? sessionPath : undefined,
+          ompSessionId: family === "omp" ? sessionId : undefined,
+          ompSessionPath: family === "omp" ? sessionPath : undefined,
         };
         const unchanged =
           task.claudeSessionId === fields.claudeSessionId &&
@@ -2831,6 +2890,8 @@ function App() {
           task.codexSessionPath === fields.codexSessionPath &&
           task.dshSessionId === fields.dshSessionId &&
           task.dshSessionPath === fields.dshSessionPath &&
+          task.ompSessionId === fields.ompSessionId &&
+          task.ompSessionPath === fields.ompSessionPath &&
           task.sessionAgent === task.agent &&
           task.sessionCodexLike === (family === "codex") &&
           task.sessionFamily === family;

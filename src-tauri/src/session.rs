@@ -41,7 +41,9 @@ pub(crate) struct ClaudeSessionInfo {
 }
 
 /// omp(rpc-ui) 会话信息:仅记录 task_id 关联的 session id 与文件路径。
+/// `session_id` 经 task-session 事件同步给前端,持久化在任务字段里。
 pub(crate) struct OmpSessionInfo {
+    #[allow(dead_code)]
     pub(crate) session_id: String,
     pub(crate) session_path: String,
 }
@@ -1316,9 +1318,11 @@ pub(crate) fn validate_session_path_for(
             .into_iter()
             .filter_map(|p| p.canonicalize().ok())
             .collect(),
-        // omp 会话根白名单由 session_omp::omp_session_allowed_roots 在 Phase 2 提供;
-        // 当前返回空集即拒绝所有 omp 会话路径(Phase 1 尚无 omp 任务,安全)。
-        crate::app_settings::AgentFamily::Omp => Vec::new(),
+        // omp:托管 home(agent-homes/*/sessions)+ 用户自有 ~/.omp/agent/sessions。
+        crate::app_settings::AgentFamily::Omp => crate::session_omp::omp_session_allowed_roots()
+            .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect(),
     };
 
     if allowed_roots.is_empty() {

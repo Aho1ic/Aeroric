@@ -223,7 +223,7 @@ describe("NewTaskView start terminal", () => {
     );
   });
 
-  it("separates the three Agent configuration groups without boxed columns", async () => {
+  it("separates the four Agent configuration groups without boxed columns", async () => {
     const user = userEvent.setup();
 
     render(
@@ -238,16 +238,18 @@ describe("NewTaskView start terminal", () => {
     const claudeGroup = document.querySelector<HTMLElement>('[data-agent-family="claude"]');
     const codexGroup = document.querySelector<HTMLElement>('[data-agent-family="codex"]');
     const dshGroup = document.querySelector<HTMLElement>('[data-agent-family="dsh"]');
+    const ompGroup = document.querySelector<HTMLElement>('[data-agent-family="omp"]');
     expect(claudeGroup).not.toBeNull();
     expect(codexGroup).not.toBeNull();
     expect(dshGroup).not.toBeNull();
-    for (const group of [claudeGroup!, codexGroup!, dshGroup!]) {
+    expect(ompGroup).not.toBeNull();
+    for (const group of [claudeGroup!, codexGroup!, dshGroup!, ompGroup!]) {
       expect(group.style.borderWidth).toBe("0px");
       expect(group.style.borderStyle).toBe("none");
       expect(group.style.background).toBe("transparent");
     }
 
-    expect(document.querySelectorAll("[data-agent-menu-separator]")).toHaveLength(2);
+    expect(document.querySelectorAll("[data-agent-menu-separator]")).toHaveLength(3);
     expect(within(claudeGroup!).getByText("Claude configurations").parentElement).toHaveClass(
       "compose-agent-menu-title--claude",
     );
@@ -257,6 +259,9 @@ describe("NewTaskView start terminal", () => {
     expect(
       within(dshGroup!).getByText("DeepSeek Harness configurations").parentElement,
     ).toHaveClass("compose-agent-menu-title--dsh");
+    expect(within(ompGroup!).getByText("oh-my-pi configurations").parentElement).toHaveClass(
+      "compose-agent-menu-title--omp",
+    );
   });
 
   it("previews slash skills and inserts the selected skill like the CLI", async () => {

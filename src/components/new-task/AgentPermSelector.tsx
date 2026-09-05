@@ -227,6 +227,7 @@ export function groupAgentOptions(
   claude: AgentOption[];
   codex: AgentOption[];
   dsh: AgentOption[];
+  omp: AgentOption[];
 } {
   const byFamily = (family: AgentOption["family"]) =>
     rankAgentOptionsByUsage(
@@ -237,6 +238,7 @@ export function groupAgentOptions(
     claude: byFamily("claude"),
     codex: byFamily("codex"),
     dsh: byFamily("dsh"),
+    omp: byFamily("omp"),
   };
 }
 
@@ -409,7 +411,7 @@ export function AgentPermSelector({
   }
 
   function renderAgentColumn(
-    family: "claude" | "codex" | "dsh",
+    family: "claude" | "codex" | "dsh" | "omp",
     label: string,
     options: typeof agentOptions,
   ) {
@@ -550,6 +552,12 @@ export function AgentPermSelector({
                   aria-hidden="true"
                 />
                 {renderAgentColumn("dsh", t("newTask.dshAgents"), groupedAgents.dsh)}
+                <div
+                  className="compose-agent-menu-separator"
+                  data-agent-menu-separator
+                  aria-hidden="true"
+                />
+                {renderAgentColumn("omp", t("newTask.ompAgents"), groupedAgents.omp)}
               </Select.Viewport>
             </Select.Content>
           </Select.Portal>

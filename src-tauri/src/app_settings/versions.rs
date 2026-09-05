@@ -810,10 +810,7 @@ mod tests {
     #[test]
     fn extracts_omp_semver_from_version_banner() {
         // `omp --version` 输出形如 "omp/18.1.10"。
-        assert_eq!(
-            extract_semver("omp/18.1.10\n"),
-            Some("18.1.10".to_string())
-        );
+        assert_eq!(extract_semver("omp/18.1.10\n"), Some("18.1.10".to_string()));
         assert_eq!(
             extract_semver("omp/18.2.0-rc.1\n"),
             Some("18.2.0-rc.1".to_string())

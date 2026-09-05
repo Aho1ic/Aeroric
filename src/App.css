@@ -1830,6 +1830,11 @@ body {
   text-shadow: 0 0 12px color-mix(in srgb, var(--usage-dsh) 28%, transparent);
 }
 
+.compose-agent-menu-title--omp {
+  color: var(--usage-omp);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--usage-omp) 28%, transparent);
+}
+
 .compose-agent-menu-title--claude img {
   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-claude) 35%, transparent));
 }
@@ -1841,6 +1846,10 @@ body {
 
 .compose-agent-menu-title--dsh img {
   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-dsh) 35%, transparent));
+}
+
+.compose-agent-menu-title--omp img {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--usage-omp) 35%, transparent));
 }
 
 .compose-agent-menu-separator {
