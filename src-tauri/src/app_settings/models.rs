@@ -1237,11 +1237,9 @@ mod tests {
 
         // base URL 刻意不带端口:hyper-util 只在 URL 显式给了端口时才用 URL 的端口覆盖
         // `resolve_to_addrs` 里的端口,不带端口才能让钉住的端口生效。
-        let base_url = validate_model_base_url(
-            "http://detect-failover.test/v1",
-            ModelDetectionPolicy::LocalUser,
-        )
-        .unwrap();
+        let base_url =
+            validate_model_base_url("http://localhost/v1", ModelDetectionPolicy::LocalUser)
+                .unwrap();
 
         let detected = detect_models_over_http(
             &AgentSetupKind::Dsh,

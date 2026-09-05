@@ -1,4 +1,14 @@
-import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { confirm } from "./lib/appDialog";
 import { setTheme as setAppTheme } from "@tauri-apps/api/app";
@@ -70,6 +80,7 @@ import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from ".
 import { taskCommandName } from "./projectTarget";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
+import { flushTasksBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -153,6 +164,79 @@ interface ResetTaskProcessResult {
 interface ResolvedTaskSession {
   sessionId?: string;
   sessionPath?: string;
+}
+
+async function flushProjectTasksForRemoteLaunch(projectId: string): Promise<void> {
+  await withTimeout(
+    flushProjectTasks(projectId),
+    TASK_FLUSH_TIMEOUT_MS,
+    "Timed out while saving the task. The remote request was rejected.",
+  );
+}
+
+interface TaskLaunchOptions {
+  persistBeforeLaunch?: boolean;
+}
+
+type RemoteTaskRequestPayload = {
+  requestId?: string;
+  kind: "create" | "resume";
+  projectId?: string;
+  taskId?: string;
+  prompt?: string;
+  agent?: string;
+  permissionMode?: string;
+  selectedModel?: string;
+  reasoningEffort?: string | null;
+  speed?: string;
+  dshAgentPreset?: string;
+};
+
+function rollbackTaskMutation(current: Task, previous: Task, applied: Task): Task {
+  const before = previous as unknown as Record<string, unknown>;
+  const after = applied as unknown as Record<string, unknown>;
+  const present = current as unknown as Record<string, unknown>;
+  const restored = { ...present };
+
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (Object.is(before[key], after[key]) || !Object.is(present[key], after[key])) continue;
+    if (Object.prototype.hasOwnProperty.call(before, key)) restored[key] = before[key];
+    else delete restored[key];
+  }
+
+  return restored as unknown as Task;
+}
+
+function mergeChangedTaskSessionFields(current: Task, previous: Task, source: Task): Task {
+  const next = { ...current };
+  if (!Object.is(source.claudeSessionId, previous.claudeSessionId)) {
+    next.claudeSessionId = source.claudeSessionId;
+  }
+  if (!Object.is(source.claudeSessionPath, previous.claudeSessionPath)) {
+    next.claudeSessionPath = source.claudeSessionPath;
+  }
+  if (!Object.is(source.codexSessionId, previous.codexSessionId)) {
+    next.codexSessionId = source.codexSessionId;
+  }
+  if (!Object.is(source.codexSessionPath, previous.codexSessionPath)) {
+    next.codexSessionPath = source.codexSessionPath;
+  }
+  if (!Object.is(source.dshSessionId, previous.dshSessionId)) {
+    next.dshSessionId = source.dshSessionId;
+  }
+  if (!Object.is(source.dshSessionPath, previous.dshSessionPath)) {
+    next.dshSessionPath = source.dshSessionPath;
+  }
+  if (!Object.is(source.sessionAgent, previous.sessionAgent)) {
+    next.sessionAgent = source.sessionAgent;
+  }
+  if (!Object.is(source.sessionCodexLike, previous.sessionCodexLike)) {
+    next.sessionCodexLike = source.sessionCodexLike;
+  }
+  if (!Object.is(source.sessionFamily, previous.sessionFamily)) {
+    next.sessionFamily = source.sessionFamily;
+  }
+  return next;
 }
 
 function localRouterAgentFor(agent: AgentType, options: AgentOption[]): LocalRouterAgent | null {
@@ -309,7 +393,14 @@ function App() {
   const [dshWebSearchEnabled, setDshWebSearchEnabled] = useState<boolean>(
     getInitialDshWebSearchEnabled,
   );
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjectsState] = useState<Project[]>([]);
+  const projectsRef = useRef<Project[]>([]);
+  const setProjects = useCallback<Dispatch<SetStateAction<Project[]>>>((update) => {
+    const previous = projectsRef.current;
+    const next = typeof update === "function" ? update(previous) : update;
+    projectsRef.current = next;
+    setProjectsState(next);
+  }, []);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => {
     const saved = loadCollapsedProjectGroups();
@@ -323,13 +414,27 @@ function App() {
     () => loadProjectRailWidth() ?? PROJECT_RAIL_EXPANDED_WIDTH,
   );
   const projectRailWidthCustomizedRef = useRef(loadProjectRailWidth() !== null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasksState] = useState<Task[]>([]);
+  const tasksRef = useRef<Task[]>([]);
+  const setTasks = useCallback<Dispatch<SetStateAction<Task[]>>>((update) => {
+    const previous = tasksRef.current;
+    const next = typeof update === "function" ? update(previous) : update;
+    tasksRef.current = next;
+    setTasksState(next);
+  }, []);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
-  const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
+  const [sshConnections, setSshConnectionsState] = useState<SshConnection[]>([]);
+  const sshConnectionsRef = useRef<SshConnection[]>([]);
+  const setSshConnections = useCallback<Dispatch<SetStateAction<SshConnection[]>>>((update) => {
+    const previous = sshConnectionsRef.current;
+    const next = typeof update === "function" ? update(previous) : update;
+    sshConnectionsRef.current = next;
+    setSshConnectionsState(next);
+  }, []);
   const [condaEnvironments, setCondaEnvironments] = useState<CondaEnvironment[]>([]);
   const [selectedCondaEnvPath, setSelectedCondaEnvPath] = useState<string | null>(() =>
     localStorage.getItem(SELECTED_CONDA_ENV_KEY),
@@ -343,6 +448,8 @@ function App() {
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
+  const remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>());
+  const startupReadyRef = useRef<Promise<void>>(Promise.resolve());
   const manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set());
   const agentOptionsRef = useRef(agentOptions);
 
@@ -415,7 +522,7 @@ function App() {
         showToast(t("toast.saveSshConnectionsFailed", { error: String(e) }), "error");
       });
     },
-    [showToast, t],
+    [setSshConnections, showToast, t],
   );
 
   const handleDeleteSshConnection = useCallback(
@@ -430,7 +537,7 @@ function App() {
         showToast(t("toast.deleteSshConnectionFailed", { error: String(e) }), "error");
       }
     },
-    [showToast, t],
+    [setSshConnections, showToast, t],
   );
 
   const mountProject = useCallback((projectId: string) => {
@@ -508,6 +615,61 @@ function App() {
     }
     window.addEventListener("keydown", handleHideWindow, true);
     return () => window.removeEventListener("keydown", handleHideWindow, true);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let lifecyclePromise: Promise<void> | null = null;
+    const completeLifecycleAction = (action: "exit" | "restart") => {
+      if (lifecyclePromise) return lifecyclePromise;
+      lifecyclePromise = (async () => {
+        try {
+          await flushTasksBeforeExit();
+          await invoke(
+            action === "restart" ? "restart_app_after_task_flush" : "exit_app_after_task_flush",
+          );
+        } catch (error) {
+          console.error("Failed to save tasks before exit", error);
+          showToastRef.current(
+            tRef.current("toast.exitSaveFailed", { error: String(error) }),
+            "error",
+          );
+        } finally {
+          lifecyclePromise = null;
+        }
+      })();
+      return lifecyclePromise;
+    };
+    const closeListener =
+      APP_PLATFORM === "macos"
+        ? Promise.resolve(() => {})
+        : getCurrentWindow().onCloseRequested((event) => {
+            event.preventDefault();
+            void completeLifecycleAction("exit");
+          });
+    const exitListener = listen("app-exit-requested", () => {
+      void completeLifecycleAction("exit");
+    });
+    const restartListener = listen("app-restart-requested", () => {
+      void completeLifecycleAction("restart");
+    });
+    let disposed = false;
+    void Promise.all([closeListener, exitListener, restartListener])
+      .then(() => {
+        if (disposed) return;
+        return invoke("app_exit_listener_ready");
+      })
+      .catch((error) => {
+        console.error("Failed to register app lifecycle listener", error);
+      });
+
+    return () => {
+      disposed = true;
+      closeListener.then((unlisten) => unlisten());
+      exitListener.then((unlisten) => unlisten());
+      restartListener.then((unlisten) => unlisten());
+    };
   }, []);
 
   useEffect(() => {
@@ -645,13 +807,15 @@ function App() {
       });
     }
 
-    init().catch((e: unknown) => {
+    const startup = init();
+    startupReadyRef.current = startup;
+    startup.catch((e: unknown) => {
       console.error(e);
       showToastRef.current(String(e), "error");
     });
     // Mount-only: callbacks are read through refs so a language switch never
     // re-runs startup normalization. See the ref sync effect above.
-  }, []);
+  }, [setProjects, setSshConnections, setTasks]);
 
   useEffect(() => {
     // 后端启动时若数据目录不可写,会退到临时目录甚至内存库继续启动(而不是像以前
@@ -724,7 +888,7 @@ function App() {
     loadFromBackend();
     window.addEventListener(SKILL_HUB_CHANGED_EVENT, handleSkillHubChanged);
     return () => window.removeEventListener(SKILL_HUB_CHANGED_EVENT, handleSkillHubChanged);
-  }, []);
+  }, [setProjects]);
 
   // Tauri event listeners (agent-output is handled inside useTerminalManager)
   useEffect(() => {
@@ -929,38 +1093,22 @@ function App() {
   // 见 src-tauri/src/remote/tasks_rpc.rs)。latest-ref 避免闭包过期 state。
   const remoteRequestRef = useRef({
     projects,
-    tasks,
     submit: handleSubmitTask,
     resume: handleResumeTask,
     runTodo: handleRunTodoTask,
     sshConnections,
     t,
   });
+  remoteRequestRef.current = {
+    projects,
+    submit: handleSubmitTask,
+    resume: handleResumeTask,
+    runTodo: handleRunTodoTask,
+    sshConnections,
+    t,
+  };
   useEffect(() => {
-    remoteRequestRef.current = {
-      projects,
-      tasks,
-      submit: handleSubmitTask,
-      resume: handleResumeTask,
-      runTodo: handleRunTodoTask,
-      sshConnections,
-      t,
-    };
-  });
-  useEffect(() => {
-    const p = listen<{
-      requestId?: string;
-      kind: "create" | "resume";
-      projectId?: string;
-      taskId?: string;
-      prompt?: string;
-      agent?: string;
-      permissionMode?: string;
-      selectedModel?: string;
-      reasoningEffort?: string | null;
-      speed?: string;
-      dshAgentPreset?: string;
-    }>("remote-task-request", async (e) => {
+    const p = listen<RemoteTaskRequestPayload>("remote-task-request", async (e) => {
       const {
         requestId,
         kind,
@@ -993,125 +1141,136 @@ function App() {
           console.error("remote_complete_task_request failed", err);
         }
       };
-      const current = remoteRequestRef.current;
-      if (kind === "resume") {
-        if (!taskId) {
-          await complete(false, undefined, "Resume request is missing taskId");
+      try {
+        await startupReadyRef.current;
+      } catch (error) {
+        await complete(false, undefined, `Desktop initialization failed: ${String(error)}`);
+        return;
+      }
+      const queueProjectId =
+        projectId ??
+        (taskId ? tasksRef.current.find((item) => item.id === taskId)?.projectId : undefined);
+      const runRequest = async () => {
+        const latest = remoteRequestRef.current;
+        if (kind === "resume") {
+          if (!taskId) {
+            await complete(false, undefined, "Resume request is missing taskId");
+            return;
+          }
+          const task = tasksRef.current.find((item) => item.id === taskId);
+          if (!task) {
+            await complete(false, undefined, `Task not found: ${taskId}`);
+            return;
+          }
+          if (projectId && task.projectId !== projectId) {
+            await complete(false, undefined, "Task does not belong to the requested project");
+            return;
+          }
+          const project = projectsRef.current.find((item) => item.id === task.projectId);
+          if (!project) {
+            await complete(false, undefined, "Task project is missing on the desktop");
+            return;
+          }
+          const location = resolveProjectLocation(project);
+          if (
+            location.kind === "ssh" &&
+            !sshConnectionsRef.current.some((connection) => connection.id === location.connectionId)
+          ) {
+            await complete(false, undefined, "SSH connection is not configured on the desktop");
+            return;
+          }
+          if (
+            location.kind === "ssh" &&
+            !task.claudeSessionId &&
+            !task.codexSessionId &&
+            !task.claudeSessionPath &&
+            !task.codexSessionPath
+          ) {
+            await complete(false, undefined, "SSH task has no resumable session");
+            return;
+          }
+          // todo 任务从未启动过:走首次启动而非 session 恢复
+          try {
+            const accepted =
+              task.status === "todo"
+                ? await latest.runTodo(task, { persistBeforeLaunch: true })
+                : await latest.resume(taskId, { persistBeforeLaunch: true });
+            const pendingTask = accepted
+              ? tasksRef.current.find((item) => item.id === taskId)
+              : undefined;
+            await complete(
+              accepted,
+              accepted ? taskId : undefined,
+              accepted ? undefined : "Task cannot be resumed on this desktop",
+              pendingTask,
+            );
+          } catch (error) {
+            await complete(false, undefined, `Failed to save task before resume: ${String(error)}`);
+          }
           return;
         }
-        const task = current.tasks.find((item) => item.id === taskId);
-        if (!task) {
-          await complete(false, undefined, `Task not found: ${taskId}`);
+        if (kind !== "create" || !prompt) {
+          await complete(false, undefined, "Invalid task creation request");
           return;
         }
-        if (projectId && task.projectId !== projectId) {
-          await complete(false, undefined, "Task does not belong to the requested project");
-          return;
-        }
-        const project = current.projects.find((item) => item.id === task.projectId);
+        const project = projectsRef.current.find((item) => item.id === projectId);
         if (!project) {
-          await complete(false, undefined, "Task project is missing on the desktop");
+          showToastRef.current(latest.t("remote.taskRequest.projectMissing"), "error");
+          await complete(false, undefined, "Project not found on the desktop");
           return;
         }
         const location = resolveProjectLocation(project);
         if (
           location.kind === "ssh" &&
-          !current.sshConnections.some((connection) => connection.id === location.connectionId)
+          !sshConnectionsRef.current.some((connection) => connection.id === location.connectionId)
         ) {
           await complete(false, undefined, "SSH connection is not configured on the desktop");
           return;
         }
-        if (
-          location.kind === "ssh" &&
-          !task.claudeSessionId &&
-          !task.codexSessionId &&
-          !task.claudeSessionPath &&
-          !task.codexSessionPath
-        ) {
-          await complete(false, undefined, "SSH task has no resumable session");
-          return;
-        }
-        // todo 任务从未启动过:走首次启动而非 session 恢复
-        const accepted =
-          task.status === "todo" ? current.runTodo(task) : await current.resume(taskId);
-        const pendingTask = accepted
-          ? {
-              ...task,
-              status: "pending" as TaskStatus,
-              approval: undefined,
-              attentionRequestedAt: undefined,
-            }
-          : undefined;
-        if (accepted && pendingTask) {
-          // React 的 setTasks updater 可能在当前异步回调返回后才执行;
-          // 先把远程确认快照直接排队,再 flush,避免手机下一次 tasks.list 读到旧文件。
-          persistProjectTasks(
-            task.projectId,
-            current.tasks.map((item) => (item.id === task.id ? pendingTask : item)),
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
+        try {
+          const createdTask = await latest.submit(
+            project,
+            {
+              prompt,
+              agent: (agent ?? "claude") as AgentType,
+              permissionMode: (permissionMode ?? "ask") as PermissionMode,
+              selectedModel,
+              reasoningEffort,
+              speed,
+              dshAgentPreset,
+              images: [],
+              texts: [],
+              immediate: true,
+              launchMode: "local",
+              baseBranch: "",
+            },
+            { persistBeforeLaunch: true },
           );
-          await flushProjectTasks(task.projectId);
+          await complete(
+            !!createdTask,
+            createdTask?.id,
+            createdTask ? undefined : "Desktop rejected the task creation request",
+            createdTask ?? undefined,
+          );
+        } catch (error) {
+          await complete(false, undefined, `Failed to save task before launch: ${String(error)}`);
         }
-        await complete(
-          accepted,
-          accepted ? taskId : undefined,
-          accepted ? undefined : "Task cannot be resumed on this desktop",
-          pendingTask,
-        );
+      };
+
+      if (!queueProjectId) {
+        await runRequest();
         return;
       }
-      if (kind !== "create" || !prompt) {
-        await complete(false, undefined, "Invalid task creation request");
-        return;
+      const previous = remoteTaskMutationQueuesRef.current.get(queueProjectId) ?? Promise.resolve();
+      const queued = previous.catch(() => {}).then(runRequest);
+      remoteTaskMutationQueuesRef.current.set(queueProjectId, queued);
+      try {
+        await queued;
+      } finally {
+        if (remoteTaskMutationQueuesRef.current.get(queueProjectId) === queued) {
+          remoteTaskMutationQueuesRef.current.delete(queueProjectId);
+        }
       }
-      const project = current.projects.find((item) => item.id === projectId);
-      if (!project) {
-        showToastRef.current(current.t("remote.taskRequest.projectMissing"), "error");
-        await complete(false, undefined, "Project not found on the desktop");
-        return;
-      }
-      const location = resolveProjectLocation(project);
-      if (
-        location.kind === "ssh" &&
-        !current.sshConnections.some((connection) => connection.id === location.connectionId)
-      ) {
-        await complete(false, undefined, "SSH connection is not configured on the desktop");
-        return;
-      }
-      const createdTask = await current.submit(project, {
-        prompt,
-        agent: (agent ?? "claude") as AgentType,
-        permissionMode: (permissionMode ?? "ask") as PermissionMode,
-        selectedModel,
-        reasoningEffort,
-        speed,
-        dshAgentPreset,
-        images: [],
-        texts: [],
-        immediate: true,
-        launchMode: "local",
-        baseBranch: "",
-      });
-      // Remote callers must not race the debounced desktop task write. The
-      // returned task snapshot lets the phone render immediately while this
-      // flush guarantees the next tasks.list/tasks.get sees the same task.
-      if (createdTask) {
-        // 同上:不要依赖 setTasks updater 已经完成,远程响应前显式排入最新快照。
-        persistProjectTasks(
-          project.id,
-          [createdTask, ...current.tasks],
-          showToastRef.current,
-          formatSaveTasksErrorRef.current,
-        );
-        await flushProjectTasks(project.id);
-      }
-      await complete(
-        !!createdTask,
-        createdTask?.id,
-        createdTask ? undefined : "Desktop rejected the task creation request",
-        createdTask ?? undefined,
-      );
     });
     return () => {
       p.then((fn) => fn());
@@ -1377,12 +1536,15 @@ function App() {
       baseBranch: string;
       injectPromptIntoTerminal?: boolean;
     },
+    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
   ) {
     const taskId = createTaskId();
     const projectLocation = resolveProjectLocation(project);
     const remoteConnection =
       projectLocation.kind === "ssh"
-        ? sshConnections.find((connection) => connection.id === projectLocation.connectionId)
+        ? sshConnectionsRef.current.find(
+            (connection) => connection.id === projectLocation.connectionId,
+          )
         : null;
 
     if (projectLocation.kind !== "local") {
@@ -1442,13 +1604,6 @@ function App() {
       status: immediate ? "pending" : "todo",
       createdAt: Date.now(),
     };
-    // setTasks 的 updater 由 React 调度;远程 task.create 需要在返回前可等待的持久化快照。
-    persistProjectTasks(
-      baseTask.projectId,
-      [baseTask, ...tasks],
-      showToastRef.current,
-      formatSaveTasksErrorRef.current,
-    );
     setTasks((prev) => {
       const next = [baseTask, ...prev];
       persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
@@ -1459,6 +1614,36 @@ function App() {
     updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
 
     if (!immediate) return baseTask;
+
+    if (persistBeforeLaunch) {
+      try {
+        await flushProjectTasksForRemoteLaunch(baseTask.projectId);
+        if (tasksRef.current.find((task) => task.id === taskId) !== baseTask) {
+          throw new Error("Task changed while saving; the remote request was rejected.");
+        }
+      } catch (error) {
+        setTasks((prev) => {
+          if (prev.find((task) => task.id === taskId) !== baseTask) return prev;
+          const next = prev.filter((task) => task.id !== taskId);
+          persistProjectTasks(
+            baseTask.projectId,
+            next,
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
+          return next;
+        });
+        setProjectViews((prev) => {
+          const view = prev[project.id];
+          if (view?.selectedTaskId !== taskId) return prev;
+          return {
+            ...prev,
+            [project.id]: { ...view, selectedTaskId: null, isNewTask: true },
+          };
+        });
+        throw error;
+      }
+    }
 
     // 2) 终端 buffer 在 PTY 启动前就要建好，否则首批输出会进不来 buffer。
     tm.resetTaskTerminal(taskId);
@@ -1511,20 +1696,6 @@ function App() {
           persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
           return next;
         });
-        persistProjectTasks(
-          baseTask.projectId,
-          [
-            {
-              ...baseTask,
-              worktreePath,
-              worktreeBranch,
-              baseBranch: resolvedBaseBranch,
-            },
-            ...tasks,
-          ],
-          showToastRef.current,
-          formatSaveTasksErrorRef.current,
-        );
       } catch (e) {
         showToast(t("toast.worktreeCreateFailed", { error: String(e) }), "error");
         // 回滚刚加的占位 task
@@ -1533,12 +1704,6 @@ function App() {
           persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
           return next;
         });
-        persistProjectTasks(
-          baseTask.projectId,
-          tasks,
-          showToastRef.current,
-          formatSaveTasksErrorRef.current,
-        );
         tm.removeTaskBuffers([taskId]);
         return null;
       }
@@ -1563,37 +1728,75 @@ function App() {
     return launchedTask;
   }
 
-  function handleRunTodoTask(task: Task) {
-    const project = projects.find((p) => p.id === task.projectId);
+  async function handleRunTodoTask(
+    task: Task,
+    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
+  ) {
+    const sourceTask = tasksRef.current.find((item) => item.id === task.id) ?? task;
+    const project = projectsRef.current.find((p) => p.id === sourceTask.projectId);
     if (!project) return false;
 
+    const pendingTask: Task = {
+      ...sourceTask,
+      status: "pending",
+      attentionRequestedAt: undefined,
+    };
     setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === task.id
-          ? { ...t, status: "pending" as TaskStatus, attentionRequestedAt: undefined }
-          : t,
-      );
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      const next = prev.map((item) => (item.id === sourceTask.id ? pendingTask : item));
+      persistProjectTasks(sourceTask.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
-    tm.resetTaskTerminal(task.id);
-    updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
+
+    if (persistBeforeLaunch) {
+      try {
+        await flushProjectTasksForRemoteLaunch(sourceTask.projectId);
+        if (tasksRef.current.find((item) => item.id === sourceTask.id) !== pendingTask) {
+          throw new Error("Task changed while saving; the remote request was rejected.");
+        }
+      } catch (error) {
+        setTasks((prev) => {
+          const next = prev.map((current) =>
+            current.id === sourceTask.id
+              ? rollbackTaskMutation(current, sourceTask, pendingTask)
+              : current,
+          );
+          persistProjectTasks(
+            sourceTask.projectId,
+            next,
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
+          return next;
+        });
+        throw error;
+      }
+    }
+
+    tm.resetTaskTerminal(sourceTask.id);
+    updateProjectView(sourceTask.projectId, { selectedTaskId: sourceTask.id, isNewTask: false });
     const projectLocation = resolveProjectLocation(project);
     if (projectLocation.kind === "ssh") {
-      const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
+      const connection = sshConnectionsRef.current.find(
+        (item) => item.id === projectLocation.connectionId,
+      );
       if (!connection) {
         showToast(t("toast.remoteProjectMissingConnection"), "error");
-        updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
+        updateTaskStatus(
+          sourceTask.id,
+          "failed",
+          undefined,
+          t("toast.remoteProjectMissingConnection"),
+        );
         return false;
       }
-      invokeRemoteRunTask(task, connection, projectLocation.remotePath);
+      invokeRemoteRunTask(pendingTask, connection, projectLocation.remotePath);
       return true;
     }
     if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(task, projectLocation.distribution, projectLocation.linuxPath);
+      invokeWslRunTask(pendingTask, projectLocation.distribution, projectLocation.linuxPath);
       return true;
     }
-    invokeRunTask(task, task.worktreePath ?? project.path, []);
+    invokeRunTask(pendingTask, pendingTask.worktreePath ?? project.path, []);
     return true;
   }
 
@@ -1848,14 +2051,20 @@ function App() {
     return { sessionId, sessionPath };
   }
 
-  async function handleResumeTask(taskId: string) {
-    const task = tasks.find((item) => item.id === taskId);
+  async function handleResumeTask(
+    taskId: string,
+    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
+  ) {
+    const task = tasksRef.current.find((item) => item.id === taskId);
     if (!task) return false;
-    const project = projects.find((item) => item.id === task.projectId);
+    const project = projectsRef.current.find((item) => item.id === task.projectId);
     if (!project) return false;
 
     const owner = resolveTaskSessionOwner(task, agentOptions);
     const session = await resolveTaskSessionReference(task, project);
+    // Session lookup can involve IPC and recovery scans. Do not apply or launch
+    // a stale resume after the user edits or deletes this task while it waits.
+    if (tasksRef.current.find((item) => item.id === taskId) !== task) return false;
     if (!session.sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return false;
@@ -1870,17 +2079,50 @@ function App() {
       attentionRequestedAt: undefined,
       failureReason: undefined,
     };
-    pendingTaskStartsRef.current[taskId] = () => {
-      invokeResumeTask(taskWithSession, project, session.sessionId!);
-    };
-
     setTasks((prev) => {
       const next = prev.map((item) => (item.id === taskId ? taskWithSession : item));
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
+    setActiveProject(project);
+    mountProject(project.id);
+    updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
+
+    if (persistBeforeLaunch) {
+      try {
+        await flushProjectTasksForRemoteLaunch(task.projectId);
+        if (tasksRef.current.find((item) => item.id === taskId) !== taskWithSession) {
+          throw new Error("Task changed while saving; the remote request was rejected.");
+        }
+      } catch (error) {
+        setTasks((prev) => {
+          const next = prev.map((current) =>
+            current.id === taskId ? rollbackTaskMutation(current, task, taskWithSession) : current,
+          );
+          persistProjectTasks(
+            task.projectId,
+            next,
+            showToastRef.current,
+            formatSaveTasksErrorRef.current,
+          );
+          return next;
+        });
+        throw error;
+      }
+    }
+
     tm.resetTaskTerminal(taskId);
     setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
+    if (persistBeforeLaunch) {
+      // The remote broker has a finite wait. Start immediately after the
+      // durable commit; the terminal manager buffers output until xterm is
+      // ready, just like the create/todo paths.
+      invokeResumeTask(taskWithSession, project, session.sessionId!);
+    } else {
+      pendingTaskStartsRef.current[taskId] = () => {
+        invokeResumeTask(taskWithSession, project, session.sessionId!);
+      };
+    }
     return true;
   }
 
@@ -1888,7 +2130,7 @@ function App() {
     taskId: string,
     values: AgentConfigSwitchValues,
   ): Promise<boolean> {
-    const task = tasks.find((item) => item.id === taskId);
+    const task = tasksRef.current.find((item) => item.id === taskId);
     if (!task) return false;
     const project = projects.find((item) => item.id === task.projectId);
     if (!project) return false;
@@ -1955,7 +2197,8 @@ function App() {
       return false;
     }
 
-    let sourceTask = mergeResetTaskSession(task, resetSnapshot);
+    const sourceBaseTask = tasksRef.current.find((item) => item.id === taskId) ?? task;
+    let sourceTask = mergeResetTaskSession(sourceBaseTask, resetSnapshot);
     let sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
     const sourceSession = await resolveTaskSessionReference(sourceTask, project);
     sourceTask = applyResolvedTaskSession(sourceTask, sourceOwner, sourceSession);
@@ -2064,8 +2307,13 @@ function App() {
       );
     }
 
-    const nextTask: Task = {
-      ...sourceTask,
+    const latestTask = tasksRef.current.find((item) => item.id === taskId);
+    if (!latestTask) {
+      showToast(t("running.switchConfigFailed", { error: "Task no longer exists" }), "error");
+      return false;
+    }
+    const committedTask: Task = {
+      ...mergeChangedTaskSessionFields(latestTask, task, sourceTask),
       agent: values.agent,
       selectedModel: values.selectedModel,
       reasoningEffort: values.reasoningEffort ?? undefined,
@@ -2075,14 +2323,36 @@ function App() {
       attentionRequestedAt: undefined,
       failureReason: undefined,
     };
-    const nextTasks = tasks.map((item) => (item.id === taskId ? nextTask : item));
-    setTasks(nextTasks);
-    persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-    await flushProjectTasks(task.projectId);
+    setTasks((prev) => {
+      const current = prev.find((item) => item.id === taskId);
+      if (!current) return prev;
+      const nextTasks = prev.map((item) => (item.id === taskId ? committedTask : item));
+      persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
+      return nextTasks;
+    });
+    try {
+      await flushProjectTasks(task.projectId);
+    } catch (error) {
+      setTasks((prev) => {
+        const current = prev.find((item) => item.id === taskId);
+        if (!current) return prev;
+        const restoredTask = rollbackTaskMutation(current, task, committedTask);
+        const nextTasks = prev.map((item) => (item.id === taskId ? restoredTask : item));
+        persistProjectTasks(
+          task.projectId,
+          nextTasks,
+          showToastRef.current,
+          formatSaveTasksErrorRef.current,
+        );
+        return nextTasks;
+      });
+      showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
+      return false;
+    }
 
     pendingTaskStartsRef.current[taskId] = () => {
       if (resumeSessionId) {
-        invokeResumeTask(nextTask, project, resumeSessionId);
+        invokeResumeTask(committedTask, project, resumeSessionId);
         return;
       }
 
@@ -2096,7 +2366,7 @@ function App() {
           return;
         }
         invokeRemoteRunTask(
-          nextTask,
+          committedTask,
           connection,
           projectLocation.remotePath,
           injectPrompt,
@@ -2106,7 +2376,7 @@ function App() {
       }
       if (projectLocation.kind === "wsl") {
         invokeWslRunTask(
-          nextTask,
+          committedTask,
           projectLocation.distribution,
           projectLocation.linuxPath,
           injectPrompt,
@@ -2115,8 +2385,8 @@ function App() {
         return;
       }
       invokeRunTask(
-        nextTask,
-        nextTask.worktreePath ?? project.path,
+        committedTask,
+        committedTask.worktreePath ?? project.path,
         [],
         [],
         injectPrompt,
@@ -2520,7 +2790,11 @@ function App() {
             showToastRef.current,
             formatSaveTasksErrorRef.current,
           );
-        if (task && status === "done") void flushProjectTasks(task.projectId);
+        if (task && status === "done") {
+          void flushProjectTasks(task.projectId).catch((error: unknown) => {
+            console.error("Failed to flush completed task", error);
+          });
+        }
       }
       return changed ? next : prev;
     });
@@ -2580,7 +2854,9 @@ function App() {
             showToastRef.current,
             formatSaveTasksErrorRef.current,
           );
-          void flushProjectTasks(task.projectId);
+          void flushProjectTasks(task.projectId).catch((error: unknown) => {
+            console.error("Failed to flush task session", error);
+          });
         }
       }
       return changed ? next : prev;
@@ -2629,7 +2905,7 @@ function App() {
     invoke("init_project_config", { projectPath: updated.path }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
-  }, [hubProjectId, projects, mountProject, showToast, formatSaveProjectsError, t]);
+  }, [hubProjectId, projects, mountProject, setProjects, showToast, formatSaveProjectsError, t]);
 
   const handleReorderProjects = useCallback(
     (orderedProjectIds: string[]) => {
@@ -2639,7 +2915,7 @@ function App() {
         return next;
       });
     },
-    [formatSaveProjectsError, showToast],
+    [formatSaveProjectsError, setProjects, showToast],
   );
 
   const handleExitSkillHub = useCallback(() => {

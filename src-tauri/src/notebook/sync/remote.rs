@@ -1,16 +1,18 @@
 //! 把 `StorageBackend`(18 种协议)接成引擎要的 [`RemoteFs`]。
 //!
-//! ## 存在性来自 read_dir,身份来自 manifest
+//! ## 存在性来自 read_dir,身份来自当前内容
 //!
 //! 这是这一层最重要的一条,理由在 [`super::manifest`] 的模块文档里:manifest 若充当
 //! 存在性依据,一次没写成功就会让 diff 判成远端删除,进而软删用户的笔记。所以:
 //!
 //! ```text
 //! list() 的路径集合 ← 递归 read_dir。远端真有什么就是什么。
-//! list() 的 hash    ← manifest 命中且 size 校验通过就用;否则下载现算。
+//! list() 的 hash    ← 对可 hash 文件读取当前内容后计算。
+//! device / seq      ← 只有当前 hash 与 manifest 一致时才复用逻辑戳。
 //! ```
 //!
-//! manifest 丢了的代价是下一轮多几次下载,不是删数据。
+//! manifest 丢了的代价是逻辑戳暂时未知,不是删数据。不能只凭 size 相同相信 manifest:
+//! 外部工具做一次等长覆盖就会留下陈旧 hash,进而让这次编辑被忽略或覆盖。
 //!
 //! ## 为什么不用 `join_storage_path`
 //!
@@ -22,6 +24,7 @@
 //! 回 `../../etc/passwd`,而我们会拿它去 `get`/`put`。本地侧 `scan::resolve_rel` 已经这么
 //! 做了,远端侧不能少。
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
 use super::diff::RemoteEntry;
@@ -41,7 +44,9 @@ pub struct StorageRemote<'a> {
     /// 本机 device_id 与当前逻辑序号,写进 manifest 条目用。
     device: String,
     seq: i64,
-    manifest: Manifest,
+    /// 延迟到第一次完整列表时加载。调用方先完成本地快照，才能保证本地扫描失败时
+    /// 不发生任何远端访问。
+    manifest: OnceCell<Manifest>,
     /// 有没有改动待写。没有就不写 —— 白写一遍会平白更新远端文件的 mtime。
     dirty: bool,
 }
@@ -127,13 +132,12 @@ fn load_manifest(backend: &dyn StorageBackend, root: &str) -> Manifest {
 impl<'a> StorageRemote<'a> {
     pub fn open(backend: &'a dyn StorageBackend, root: &str, device: &str, seq: i64) -> Self {
         let root = normalize_root(root);
-        let manifest = load_manifest(backend, &root);
         Self {
             backend,
             root,
             device: device.to_string(),
             seq,
-            manifest,
+            manifest: OnceCell::new(),
             dirty: false,
         }
     }
@@ -147,12 +151,18 @@ impl<'a> StorageRemote<'a> {
     /// 两件不同的事。压成 0 的话,前者会拿 0 去和清单里的真实 size 比,于是每条命中都
     /// 被判成过期,每轮把整个远端重新下载一遍。
     fn list_files(&self) -> Result<BTreeMap<String, Option<u64>>, String> {
+        self.list_files_with_limits(MAX_FILES, MAX_DEPTH)
+    }
+
+    fn list_files_with_limits(
+        &self,
+        max_files: usize,
+        max_depth: usize,
+    ) -> Result<BTreeMap<String, Option<u64>>, String> {
         let mut out: BTreeMap<String, Option<u64>> = BTreeMap::new();
+        let mut files = 0usize;
         let mut stack: Vec<(String, usize)> = vec![(self.root.clone(), 0)];
         while let Some((dir, depth)) = stack.pop() {
-            if depth > MAX_DEPTH || out.len() >= MAX_FILES {
-                continue;
-            }
             // 这里**不吞错**。列不动一个子目录就整轮失败 —— 静默跳过会让那些文件看起来
             // 「远端没有」,而那正好是 diff 判删除的条件,一次权限抖动就能删掉一批笔记。
             let entries = self.backend.read_dir(&dir)?;
@@ -171,8 +181,20 @@ impl<'a> StorageRemote<'a> {
                     continue;
                 }
                 if entry.is_dir {
+                    if depth >= max_depth {
+                        return Err(format!(
+                            "Notebook sync remote scan is incomplete: directory depth limit ({max_depth}) reached at {}",
+                            entry.path
+                        ));
+                    }
                     stack.push((entry.path.clone(), depth + 1));
                 } else {
+                    if files >= max_files {
+                        return Err(format!(
+                            "Notebook sync remote scan is incomplete: file limit ({max_files}) exceeded at {rel}"
+                        ));
+                    }
+                    files += 1;
                     out.insert(rel, entry.size);
                 }
             }
@@ -182,20 +204,51 @@ impl<'a> StorageRemote<'a> {
 }
 
 impl StorageRemote<'_> {
+    fn manifest(&self) -> &Manifest {
+        self.manifest
+            .get_or_init(|| load_manifest(self.backend, &self.root))
+    }
+
+    fn manifest_mut(&mut self) -> &mut Manifest {
+        if self.manifest.get().is_none() {
+            let manifest = load_manifest(self.backend, &self.root);
+            let _ = self.manifest.set(manifest);
+        }
+        self.manifest
+            .get_mut()
+            .expect("manifest initialized before mutable access")
+    }
+
     /// 补一次 size。`read_dir` 没报大小时才走这里。
     ///
     /// 现存 18 个协议的 `capability_for` 都声明了 `rich_metadata`,所以这条路正常不会走
     /// 到。留着是因为「不会走到」和「走到了会错」是两回事:少了它,没报 size 的条目只能
     /// 拿一个校验不了的 hash 蒙,而蒙错的方向是**把远端的编辑当成没变**。
-    fn resolve_size(&self, rel_path: &str, listed: Option<u64>) -> Option<u64> {
-        if listed.is_some() {
-            return listed;
+    fn resolve_size(&self, rel_path: &str, listed: Option<u64>) -> Result<u64, String> {
+        if let Some(size) = listed {
+            return Ok(size);
         }
         if !self.backend.capability().stat {
-            return None;
+            return Err(format!(
+                "Notebook sync remote scan cannot verify the size of {rel_path}"
+            ));
         }
-        let abs = resolve_remote(&self.root, rel_path).ok()?;
-        self.backend.stat(&abs).ok()?.size
+        let abs = resolve_remote(&self.root, rel_path)?;
+        let stat = self
+            .backend
+            .stat(&abs)
+            .map_err(|error| format!("Cannot stat remote notebook file {abs}: {error}"))?;
+        if stat.is_dir {
+            return Err(format!(
+                "Notebook sync remote path changed from file to directory: {abs}"
+            ));
+        }
+        stat.size.ok_or_else(|| {
+            format!(
+                "Notebook sync remote scan cannot verify the size of {rel_path}; refusing an \
+                 unbounded content read"
+            )
+        })
     }
 }
 
@@ -204,23 +257,14 @@ impl RemoteFs for StorageRemote<'_> {
         let files = self.list_files()?;
         let mut out = Vec::with_capacity(files.len());
         for (rel, listed_size) in files {
-            let size = self.resolve_size(&rel, listed_size);
-            // 命中清单且 size 对得上 —— 直接用记着的 hash,零下载。这是正常路径。
-            //
-            // size 未知时**不查清单**:没有校验字段的命中等于无条件相信一份可能陈旧的
-            // hash,而 hash 陈旧的后果是远端的编辑被判成「没变」,然后被本地覆盖掉。
-            if let Some(entry) = size.and_then(|s| self.manifest.verified(&rel, s)) {
-                out.push(Manifest::to_remote_entry(&rel, entry));
-                continue;
-            }
-            // 没命中(首次同步、被别的工具改过、上一轮 commit 丢了、size 未知)。
-            if let Some(big) = size.filter(|s| *s > MAX_HASH_BYTES) {
+            let size = self.resolve_size(&rel, listed_size)?;
+            if size > MAX_HASH_BYTES {
                 // 超大文件不下载来算 hash。标记成 oversize,和本地扫描同一个口径 ——
                 // 本地也有同名文件时 diff 那边跳过它(两侧都算不出 hash),而它**在场**
                 // 这件事让它不会被判成远端删除。
                 out.push(RemoteEntry {
                     path: rel,
-                    hash: format!("{OVERSIZE_PREFIX}{big}"),
+                    hash: format!("{OVERSIZE_PREFIX}{size}"),
                     device: String::new(),
                     seq: 0,
                 });
@@ -228,13 +272,15 @@ impl RemoteFs for StorageRemote<'_> {
             }
             let abs = resolve_remote(&self.root, &rel)?;
             let bytes = self.backend.read(&abs)?;
+            let hash = hash64(&bytes).to_string();
+            let stamp = self.manifest().matching_hash(&rel, &hash);
             out.push(RemoteEntry {
                 path: rel,
-                hash: hash64(&bytes).to_string(),
-                // 现算出来的 hash 没有对应的逻辑戳:我们不知道是谁写的。空值比编一个
-                // 好 —— 这两个字段只用于显示,不参与任何判定。
-                device: String::new(),
-                seq: 0,
+                hash,
+                // manifest 只证明它曾为同一份内容记过账。hash 不匹配时是谁写的未知,
+                // 空值比沿用旧逻辑戳或编一个更准确。
+                device: stamp.map(|entry| entry.device.clone()).unwrap_or_default(),
+                seq: stamp.map(|entry| entry.seq).unwrap_or(0),
             });
         }
         Ok(out)
@@ -255,15 +301,13 @@ impl RemoteFs for StorageRemote<'_> {
             }
         }
         self.backend.write(&abs, bytes)?;
-        self.manifest.put(
-            path,
-            ManifestEntry {
-                hash: hash.to_string(),
-                device: self.device.clone(),
-                seq: self.seq,
-                size: bytes.len() as u64,
-            },
-        );
+        let entry = ManifestEntry {
+            hash: hash.to_string(),
+            device: self.device.clone(),
+            seq: self.seq,
+            size: bytes.len() as u64,
+        };
+        self.manifest_mut().put(path, entry);
         self.dirty = true;
         Ok(())
     }
@@ -271,7 +315,7 @@ impl RemoteFs for StorageRemote<'_> {
     fn delete(&mut self, path: &str) -> Result<(), String> {
         let abs = resolve_remote(&self.root, path)?;
         self.backend.delete(&abs)?;
-        self.manifest.remove(path);
+        self.manifest_mut().remove(path);
         self.dirty = true;
         Ok(())
     }
@@ -280,7 +324,7 @@ impl RemoteFs for StorageRemote<'_> {
         if !self.dirty {
             return Ok(());
         }
-        let bytes = self.manifest.to_bytes()?;
+        let bytes = self.manifest().to_bytes()?;
         let dir = join_under(&self.root, MANIFEST_DIR);
         let _ = self.backend.create_dir(&dir);
         let final_path = join_under(&self.root, &format!("{MANIFEST_DIR}/{MANIFEST_NAME}"));
@@ -326,6 +370,8 @@ mod tests {
         hide_sizes: bool,
         can_rename: bool,
         can_stat: bool,
+        /// 内容读取记录,用来证明 manifest 命中仍重新验证当前内容。
+        reads: Vec<String>,
         /// 按顺序记下每一次写/改/删,用来断言 tmp-then-rename 的次序。
         calls: Vec<String>,
     }
@@ -361,6 +407,10 @@ mod tests {
 
         fn calls(&self) -> Vec<String> {
             self.inner.lock().expect("lock").calls.clone()
+        }
+
+        fn reads(&self) -> Vec<String> {
+            self.inner.lock().expect("lock").reads.clone()
         }
 
         fn paths(&self) -> Vec<String> {
@@ -447,7 +497,8 @@ mod tests {
         }
 
         fn read(&self, path: &str) -> Result<Vec<u8>, String> {
-            let state = self.inner.lock().expect("lock");
+            let mut state = self.inner.lock().expect("lock");
+            state.reads.push(path.to_string());
             state
                 .files
                 .get(path)
@@ -608,14 +659,27 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_hit_avoids_the_download() {
+    fn opening_a_remote_does_not_access_the_backend() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/.notebook-sync/manifest.json", b"{}");
+
+        let _remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+
+        assert!(
+            backend.reads().is_empty(),
+            "manifest loading must wait until after the local snapshot"
+        );
+    }
+
+    #[test]
+    fn a_matching_manifest_hash_preserves_the_logical_stamp_after_rehashing() {
         let backend = FakeBackend::new();
         backend.put_file("/notes/a.md", b"alpha");
         let mut manifest = Manifest::default();
         manifest.put(
             "a.md",
             ManifestEntry {
-                hash: "recorded".to_string(),
+                hash: hash_of(b"alpha"),
                 device: "dev-9".to_string(),
                 seq: 42,
                 size: 5,
@@ -630,14 +694,17 @@ mod tests {
         let listed = remote.list().expect("list");
 
         assert_eq!(listed.len(), 1);
-        // 用记着的值,没去读内容 —— 否则这里会是 alpha 的真 hash。
-        assert_eq!(listed[0].hash, "recorded");
+        assert_eq!(listed[0].hash, hash_of(b"alpha"));
         assert_eq!(listed[0].device, "dev-9");
         assert_eq!(listed[0].seq, 42);
+        assert!(
+            backend.reads().contains(&"/notes/a.md".to_string()),
+            "复用逻辑戳之前必须读取并验证当前内容"
+        );
     }
 
     #[test]
-    fn a_stale_manifest_entry_is_caught_by_the_size_check() {
+    fn a_stale_manifest_entry_is_replaced_by_the_current_hash() {
         let backend = FakeBackend::new();
         backend.put_file("/notes/a.md", b"edited elsewhere");
         let mut manifest = Manifest::default();
@@ -660,6 +727,36 @@ mod tests {
         let listed = remote.list().expect("list");
 
         assert_eq!(listed[0].hash, hash_of(b"edited elsewhere"));
+        assert_eq!(listed[0].device, "");
+        assert_eq!(listed[0].seq, 0);
+    }
+
+    #[test]
+    fn an_equal_size_external_edit_is_not_hidden_by_the_manifest() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/a.md", b"bravo");
+        let mut manifest = Manifest::default();
+        manifest.put(
+            "a.md",
+            ManifestEntry {
+                hash: hash_of(b"alpha"),
+                device: "dev-9".to_string(),
+                seq: 42,
+                size: 5,
+            },
+        );
+        backend.put_file(
+            "/notes/.notebook-sync/manifest.json",
+            &manifest.to_bytes().expect("bytes"),
+        );
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let listed = remote.list().expect("list");
+
+        assert_eq!(listed[0].hash, hash_of(b"bravo"));
+        assert_ne!(listed[0].hash, hash_of(b"alpha"));
+        assert_eq!(listed[0].device, "", "旧内容的逻辑戳不能沿用");
+        assert_eq!(listed[0].seq, 0);
     }
 
     #[test]
@@ -667,6 +764,7 @@ mod tests {
         let backend = FakeBackend::new();
         backend.put_file("/notes/a.md", b"alpha");
         backend.put_file("/notes/.notebook-sync/manifest.json", b"{}");
+        backend.put_file("/notes/.notebook-sync/local-only.bin", b"not notebook data");
         backend.put_file("/notes/.notebook-sync/manifest.json.tmp", b"{}");
 
         let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
@@ -774,6 +872,59 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_depth_limit_returns_an_incomplete_scan_error() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/sub/note.md", b"must not be omitted");
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let error = remote
+            .list_files_with_limits(MAX_FILES, 0)
+            .expect_err("an unvisited remote directory must not be omitted");
+
+        assert!(error.contains("depth limit"), "unexpected error: {error}");
+        assert!(
+            backend.calls().is_empty(),
+            "a failed remote scan must not mutate the backend"
+        );
+    }
+
+    #[test]
+    fn a_remote_file_limit_returns_an_incomplete_scan_error() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/a.md", b"a");
+        backend.put_file("/notes/b.md", b"b");
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let error = remote
+            .list_files_with_limits(1, MAX_DEPTH)
+            .expect_err("a partial remote file list must not be accepted");
+
+        assert!(error.contains("file limit"), "unexpected error: {error}");
+        assert!(
+            backend.calls().is_empty(),
+            "a failed remote scan must not mutate the backend"
+        );
+    }
+
+    #[test]
+    fn skipped_remote_entries_do_not_consume_scan_budgets() {
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/.git/objects/ab/cdef", b"ignored");
+        backend.put_file("/notes/.notebook-sync/manifest.json", b"{}");
+        backend.put_file("/notes/note.md", b"visible");
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let files = remote
+            .list_files_with_limits(1, 0)
+            .expect("skipped entries must not exhaust the scan budgets");
+
+        assert_eq!(
+            files.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["note.md"]
+        );
+    }
+
+    #[test]
     fn an_oversize_remote_file_is_present_but_unhashed() {
         let backend = FakeBackend::new();
         backend.put_file("/notes/big.bin", b"stub");
@@ -837,12 +988,13 @@ mod tests {
         let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
         let listed = remote.list().expect("list");
 
-        // read_dir 没报 size,但 stat 能补上,于是清单命中照样成立。
-        assert_eq!(listed[0].hash, "recorded");
+        // read_dir 没报 size,stat 可以判断它不是 oversize；内容身份仍由当前 bytes 决定。
+        assert_eq!(listed[0].hash, hash_of(b"alpha"));
+        assert_eq!(listed[0].device, "");
     }
 
     #[test]
-    fn an_unverifiable_manifest_entry_is_not_trusted() {
+    fn an_unverifiable_remote_size_fails_before_content_read() {
         let backend = FakeBackend::new();
         backend.put_file("/notes/a.md", b"edited elsewhere");
         let mut manifest = Manifest::default();
@@ -866,22 +1018,21 @@ mod tests {
         }
 
         let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
-        let listed = remote.list().expect("list");
+        let error = remote
+            .list()
+            .expect_err("unknown size must not trigger an unbounded read");
 
-        // size 校验不了(read_dir 不报、stat 也没有)→ 现算,不能相信一个可能陈旧的
-        // hash。相信的后果是远端的编辑被判成「没变」,然后被本地那份覆盖掉。
-        assert_eq!(
-            listed[0].hash,
-            hash_of(b"edited elsewhere"),
-            "无法校验的清单条目必须现算,不能直接用"
+        assert!(error.contains("cannot verify the size"));
+        assert!(
+            backend.reads().iter().all(|path| !path.ends_with("/a.md")),
+            "the content must not be read when its size is unverifiable"
         );
     }
 
     #[test]
-    fn an_unknown_size_is_not_silently_read_as_zero() {
-        // 「后端没报大小」不能塌成 `Some(0)`。塌了的话,一条记着 size 0 的旧条目
-        // (那篇笔记当时是空的)会在这里假命中,于是别的设备后来写进去的内容被判成
-        // 「远端没变」,下一轮被本地那份空文件覆盖掉。
+    fn an_unknown_size_is_rejected_instead_of_reading_an_unbounded_object() {
+        // 「后端没报大小」既不能塌成 `Some(0)`,也不能为了算 hash 把未知大小的对象
+        // 整块读进内存。前者会误判内容没变,后者会让一次同步承担无界内存风险。
         let backend = FakeBackend::new();
         backend.put_file("/notes/a.md", b"written by another device");
         let mut manifest = Manifest::default();
@@ -905,12 +1056,12 @@ mod tests {
         }
 
         let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
-        let listed = remote.list().expect("list");
+        let error = remote.list().expect_err("unknown size must be rejected");
 
-        assert_eq!(
-            listed[0].hash,
-            hash_of(b"written by another device"),
-            "size 未知时必须现算,不能拿 0 去和清单里的 size 比"
+        assert!(error.contains("refusing an unbounded content read"));
+        assert!(
+            backend.reads().iter().all(|path| !path.ends_with("/a.md")),
+            "the content must not be read when its size is unknown"
         );
     }
 
@@ -1093,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn a_round_trip_through_put_and_list_needs_no_download() {
+    fn a_round_trip_through_put_and_list_reuses_the_stamp_after_validation() {
         let backend = FakeBackend::new();
         {
             let mut remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
@@ -1103,7 +1254,7 @@ mod tests {
             remote.commit().expect("commit");
         }
 
-        // 换一个「设备」重新打开:它读到的 hash 应该来自清单,连内容都不用碰。
+        // 换一个「设备」重新打开:当前内容与清单一致,所以可以复用写入设备的逻辑戳。
         let remote = StorageRemote::open(&backend, "/notes", "dev-2", 1);
         let listed = remote.list().expect("list");
 
@@ -1114,5 +1265,6 @@ mod tests {
             "记账里的设备是写下这份内容的那台"
         );
         assert_eq!(listed[0].seq, 7);
+        assert!(backend.reads().contains(&"/notes/a.md".to_string()));
     }
 }

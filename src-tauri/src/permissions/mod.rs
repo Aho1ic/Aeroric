@@ -657,6 +657,7 @@ pub async fn reset_system_permission(id: String) -> Result<SystemPermission, Str
 /// 重启本应用,让刚授予的权限生效(macOS 的 TCC 判定在进程启动时缓存)。
 #[tauri::command]
 pub fn restart_app_for_permissions(app: tauri::AppHandle) {
+    crate::authorize_app_restart(&app);
     app.request_restart();
 }
 

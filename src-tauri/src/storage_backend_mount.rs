@@ -79,11 +79,12 @@ impl StorageBackend for MountBackend {
         for item in self.root.read_dir(&dir).map_err(|e| e.to_string())? {
             let item = item.map_err(|e| e.to_string())?;
             let name = item.file_name().to_string_lossy().to_string();
-            let metadata = match item.metadata() {
-                Ok(metadata) => metadata,
-                // 挂载卷上偶发的失效条目不应让整个列目录失败。
-                Err(_) => continue,
-            };
+            let metadata = item.metadata().map_err(|error| {
+                format!(
+                    "Cannot inspect mounted storage entry {}: {error}",
+                    join_storage_path(&parent, &name)
+                )
+            })?;
             let is_dir = metadata.is_dir();
             entries.push(StorageEntry {
                 path: join_storage_path(&parent, &name),
@@ -133,11 +134,13 @@ impl StorageBackend for MountBackend {
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
         let from = validate_storage_mutation_path(from)?;
+        let to = validate_storage_mutation_path(to)?;
         let source = relative_mount_path(&from);
-        let destination = relative_mount_path(to);
-        if self.root.symlink_metadata(&destination).is_ok() {
-            return Err("A file or folder with that name already exists".to_string());
-        }
+        let destination = relative_mount_path(&to);
+        // cap_std's rename is the capability-scoped equivalent of
+        // std::fs::rename and replaces an existing file atomically where the
+        // mounted filesystem supports POSIX rename semantics. The previous
+        // existence check made repeated manifest commits fail deterministically.
         self.root
             .rename(source, &self.root, destination)
             .map_err(|e| e.to_string())
@@ -458,6 +461,45 @@ mod tests {
         let backend = MountBackend::open(&mount).unwrap();
         assert!(backend.delete("/").is_err());
         assert!(backend.rename("/", "/renamed").is_err());
+        drop(backend);
+        std::fs::remove_dir_all(&mount).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mount_backend_propagates_metadata_errors_with_the_entry_path() {
+        use std::os::unix::fs::symlink;
+
+        let mount = temp_dir("metadata-error");
+        symlink("missing-target", mount.join("broken-link")).unwrap();
+        let backend = MountBackend::open(&mount).unwrap();
+
+        let error = backend
+            .read_dir("/")
+            .expect_err("a dangling entry must not be silently omitted");
+        assert!(error.contains("broken-link"), "unexpected error: {error}");
+
+        drop(backend);
+        std::fs::remove_dir_all(&mount).unwrap();
+    }
+
+    #[test]
+    fn mount_backend_rename_replaces_an_existing_file() {
+        let mount = temp_dir("rename-replace");
+        std::fs::write(mount.join("manifest.json.tmp"), b"new").unwrap();
+        std::fs::write(mount.join("manifest.json"), b"old").unwrap();
+        let backend = MountBackend::open(&mount).unwrap();
+
+        backend
+            .rename("/manifest.json.tmp", "/manifest.json")
+            .expect("rename should replace the old manifest");
+
+        assert_eq!(
+            std::fs::read(mount.join("manifest.json")).unwrap(),
+            b"new"
+        );
+        assert!(!mount.join("manifest.json.tmp").exists());
+
         drop(backend);
         std::fs::remove_dir_all(&mount).unwrap();
     }

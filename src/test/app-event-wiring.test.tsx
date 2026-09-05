@@ -21,19 +21,23 @@ interface Subscription {
   unlisten: ReturnType<typeof vi.fn>;
 }
 
-const { invokeMock, subscriptions } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  subscriptions: [] as Array<{
-    event: string;
-    handler: (event: { payload: unknown }) => void;
-    unlisten: ReturnType<typeof vi.fn>;
-  }>,
-}));
+const { invokeMock, subscriptions, closeRequestedHandlers, flushTasksBeforeExitMock } = vi.hoisted(
+  () => ({
+    invokeMock: vi.fn(),
+    subscriptions: [] as Array<{
+      event: string;
+      handler: (event: { payload: unknown }) => void;
+      unlisten: ReturnType<typeof vi.fn>;
+    }>,
+    closeRequestedHandlers: [] as Array<(event: { preventDefault: () => void }) => void>,
+    flushTasksBeforeExitMock: vi.fn(),
+  }),
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => invokeMock(command, args),
-  // 非 Tauri 环境:跳过 getCurrentWindow/setTheme 那条原生主题同步分支。
-  isTauri: () => false,
+  // 此文件验证原生窗口与退出事件接线，因此保留 Tauri 分支。
+  isTauri: () => true,
   Channel: class {
     onmessage: ((message: unknown) => void) | null = null;
   },
@@ -73,9 +77,17 @@ vi.mock("@tauri-apps/api/window", () => ({
     listen: vi.fn(async () => () => {}),
     setTitle: vi.fn(async () => {}),
     setTheme: vi.fn(async () => {}),
+    setBackgroundColor: vi.fn(async () => {}),
     hide: vi.fn(async () => {}),
     onThemeChanged: vi.fn(async () => () => {}),
+    onCloseRequested: vi.fn(async (handler: (event: { preventDefault: () => void }) => void) => {
+      closeRequestedHandlers.push(handler);
+      return () => {};
+    }),
   })),
+}));
+vi.mock("../taskFlush", () => ({
+  flushTasksBeforeExit: flushTasksBeforeExitMock,
 }));
 // 纯装饰性 canvas 动画,依赖 jsdom 没实现的 Path2D/DOMMatrix。
 vi.mock("../components/recursive-hero-effect/RecursiveHeroCanvas", () => ({
@@ -93,6 +105,8 @@ const { AgentVersionsProvider } = await import("../hooks/useAgentVersions");
 const EXPECTED_EVENTS = [
   "agent-operation-changed",
   "aeroric:app-settings-changed",
+  "app-exit-requested",
+  "app-restart-requested",
   "dbx-production-confirm-requested",
   "dsh-approval-requested",
   "dsh-approval-resolved",
@@ -221,7 +235,10 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("aeroric:language", "en");
   subscriptions.length = 0;
+  closeRequestedHandlers.length = 0;
   invokeMock.mockReset();
+  flushTasksBeforeExitMock.mockReset();
+  flushTasksBeforeExitMock.mockResolvedValue(undefined);
   installInvokeDispatcher({});
 });
 
@@ -271,6 +288,62 @@ describe("App 装配层:全局事件订阅", () => {
         1,
       );
     }
+  });
+});
+
+describe("App 装配层:退出前任务落盘", () => {
+  it("普通退出事件等待刷新后才调用授权退出 command", async () => {
+    let releaseFlush!: () => void;
+    flushTasksBeforeExitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    renderApp();
+    await waitForSubscriptions();
+
+    await emit("app-exit-requested", null);
+    expect(invokeMock).not.toHaveBeenCalledWith("exit_app_after_task_flush");
+
+    releaseFlush();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("exit_app_after_task_flush", undefined),
+    );
+  });
+
+  it("重启事件等待刷新后调用授权重启 command", async () => {
+    let releaseFlush!: () => void;
+    flushTasksBeforeExitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    renderApp();
+    await waitForSubscriptions();
+
+    await emit("app-restart-requested", null);
+    expect(invokeMock).not.toHaveBeenCalledWith("restart_app_after_task_flush");
+
+    releaseFlush();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("restart_app_after_task_flush", undefined),
+    );
+  });
+
+  it("非 macOS 窗口关闭会阻止默认关闭且保存失败时不退出", async () => {
+    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    renderApp();
+    await waitForSubscriptions();
+    const preventDefault = vi.fn();
+
+    expect(closeRequestedHandlers).toHaveLength(1);
+    closeRequestedHandlers[0]({ preventDefault });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(flushTasksBeforeExitMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).not.toHaveBeenCalledWith("exit_app_after_task_flush");
   });
 });
 

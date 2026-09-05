@@ -41,6 +41,9 @@ const SKIP_DIRS: &[&str] = &[
     "coverage",
 ];
 
+/// Remote sync bookkeeping is local/provider metadata, never notebook data.
+pub const SYNC_PRIVATE_DIR: &str = ".notebook-sync";
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteEntry {
@@ -77,6 +80,8 @@ pub fn is_scan_skip_dir(name: &str) -> bool {
     SKIP_DIRS.iter().any(|skip| *skip == lower)
         // vault 私有目录:历史快照、回收站、索引都不是用户的笔记。
         || lower == VAULT_PRIVATE_DIR
+        // 远端同步清单也不是用户数据，且不应参与它自己的同步。
+        || lower == SYNC_PRIVATE_DIR
 }
 
 /// 笔记树额外要跳过的目录。
@@ -426,8 +431,8 @@ fn scan_dir(
 
     // 目录在前、文件在后,各自按名字排序。用 lowercase 比对,免得大小写混排
     // 在三个平台上给出三种顺序。
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
     dirs.append(&mut files);
     Ok((dirs, truncated))
 }

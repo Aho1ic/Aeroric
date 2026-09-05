@@ -3294,6 +3294,7 @@ export const en: Record<string, string> = {
     "Failed to load project file list, @ references unavailable: {error}",
   "toast.saveProjectsFailed": "Failed to save project list: {error}",
   "toast.saveTasksFailed": "Failed to save tasks for project {projectId}: {error}",
+  "toast.exitSaveFailed": "Could not save tasks before exiting. The app remains open: {error}",
   "wsl.title": "WSL",
   "wsl.openProject": "Open WSL Project",
   "wsl.distribution": "Distribution",

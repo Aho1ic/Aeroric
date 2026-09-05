@@ -41,12 +41,19 @@ export function useCustomThemes(): UseCustomThemesResult {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // DOM injection happens before React commits the matching state update. Keep
+  // the active id synchronous so an older render cannot miss a delete.
+  const activeIdRef = useRef<string | null>(null);
+  // A later apply/remove invalidates older async reads. Otherwise a slow read
+  // can resurrect a theme after the user has removed or disabled it.
+  const operationRef = useRef(0);
   // 卸载之后不再 setState。启动链是两段 await,中途卸载是可能的。
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      operationRef.current += 1;
     };
   }, []);
 
@@ -60,7 +67,9 @@ export function useCustomThemes(): UseCustomThemesResult {
   }, []);
 
   const apply = useCallback(async (id: string | null) => {
+    const operation = ++operationRef.current;
     if (id === null) {
+      activeIdRef.current = null;
       setInjectedCss(null);
       writeStoredThemeId(null);
       if (alive.current) {
@@ -71,6 +80,8 @@ export function useCustomThemes(): UseCustomThemesResult {
     }
     try {
       const css = await readCustomTheme(id);
+      if (operation !== operationRef.current) return;
+      activeIdRef.current = id;
       setInjectedCss(css);
       writeStoredThemeId(id);
       if (alive.current) {
@@ -79,6 +90,8 @@ export function useCustomThemes(): UseCustomThemesResult {
       }
     } catch (err) {
       // 读不回来(文件被手工删了)就把持久化一起清掉,否则每次启动都失败一次。
+      if (operation !== operationRef.current) return;
+      activeIdRef.current = null;
       setInjectedCss(null);
       writeStoredThemeId(null);
       if (alive.current) {
@@ -110,7 +123,7 @@ export function useCustomThemes(): UseCustomThemesResult {
       setBusy(true);
       try {
         // 删的是生效中的那套,先撤掉注入 —— 否则界面上会留着一份已经不存在的样式。
-        if (id === activeId) await apply(null);
+        if (id === activeIdRef.current) await apply(null);
         await deleteCustomTheme(id);
         await refresh();
       } catch (err) {
@@ -119,7 +132,7 @@ export function useCustomThemes(): UseCustomThemesResult {
         if (alive.current) setBusy(false);
       }
     },
-    [activeId, apply, refresh],
+    [apply, refresh],
   );
 
   const openDir = useCallback(() => customThemeDir(), []);
@@ -139,7 +152,9 @@ export function useCustomThemes(): UseCustomThemesResult {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isCustomThemePanicKey(event)) return;
       event.preventDefault();
+      operationRef.current += 1;
       if (disableCustomTheme() && alive.current) setActiveId(null);
+      activeIdRef.current = null;
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);

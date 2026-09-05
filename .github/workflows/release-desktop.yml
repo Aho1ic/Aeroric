@@ -27,18 +27,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Check tag matches package.json / Cargo.toml / tauri.conf.json
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG=$(jq -r .version package.json)
-          TAURI=$(jq -r .version src-tauri/tauri.conf.json)
-          CARGO=$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' src-tauri/Cargo.toml)
-          echo "tag=$TAG package.json=$PKG tauri.conf.json=$TAURI Cargo.toml=$CARGO"
-          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$TAURI" ] || [ "$TAG" != "$CARGO" ]; then
-            echo "::error::Version mismatch — tag '$TAG' must equal package.json ($PKG), tauri.conf.json ($TAURI), and Cargo.toml ($CARGO)"
-            exit 1
-          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check version sources and release tag
+        run: node scripts/check-version.mjs --tag "$GITHUB_REF_NAME"
 
   build:
     name: Build ${{ matrix.name }}

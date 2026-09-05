@@ -17,6 +17,7 @@
     "format:check": "prettier --check \"{src,packages,mobile/app,mobile/src}/**/*.{ts,tsx,css,json}\"",
     "typecheck": "tsc --noEmit && pnpm --dir mobile typecheck",
     "check:design-tokens": "node scripts/generate-design-tokens.mjs --check",
+    "check:version": "node scripts/check-version.mjs",
     "generate:design-tokens": "node scripts/generate-design-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

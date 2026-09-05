@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import type { Project, Task } from "../types";
 
 interface Args {
@@ -18,10 +18,10 @@ export function useWorktreeDiffStats({ projects, tasks, setTasks, persistTasks }
   // 用 ref 让事件路径能拿到最新值（diff-stats 需要 projectPath 反查、需要 task 当前 worktree 字段）。
   const projectsRef = useRef(projects);
   const tasksRef = useRef(tasks);
-  useEffect(() => {
+  useLayoutEffect(() => {
     projectsRef.current = projects;
   }, [projects]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     tasksRef.current = tasks;
   }, [tasks]);
 

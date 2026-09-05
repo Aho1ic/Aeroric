@@ -5,11 +5,11 @@
 //!
 //! ## 与 Markio 的两处实质分歧
 //!
-//! **一、远端身份不是 etag,是内容 hash。** Markio 判「远端变了没」靠
+//! **一、远端身份不是 etag,是当前内容 hash。** Markio 判「远端变了没」靠
 //! `remote.hash != base.remoteEtag`,而那个 `hash` 是各家云盘的 etag。Aeroric 的
 //! `StorageEntry` 没有 etag(只有 size 与 mtime),拿 mtime 顶替既会漏检(改了但
-//! mtime 没动)又会误报(touch 一下没改内容)。所以远端那一侧的身份由我们自己写在
-//! 远端的 sidecar manifest 提供,里面记的是内容 hash —— 比较全程不碰任何时钟。
+//! mtime 没动)又会误报(touch 一下没改内容)。所以这一层每轮读取可 hash 的远端内容
+//! 并计算 hash；sidecar manifest 只在 hash 验证一致时提供 device/seq 逻辑戳。
 //!
 //! **二、没有 `newest` 策略。**
 //!
@@ -39,7 +39,8 @@ use std::collections::BTreeMap;
 use super::scan::FileSig;
 use super::store::{Baseline, StoredResolution, Tombstone};
 
-/// 远端清单里的一条。来自远端 sidecar manifest,不是 provider 的 list 元数据。
+/// 远端清单里的一条。内容 hash 来自本轮远端读取；device/seq 可来自已验证的 sidecar
+/// manifest，而不是 provider 的 list 元数据。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteEntry {
@@ -103,6 +104,13 @@ impl Resolution {
             "fork" if !fork_path.is_empty() => Resolution::Fork { fork_path },
             _ => Resolution::KeepLocal,
         }
+    }
+}
+
+impl RemoteEntry {
+    /// Whether the entry is present but deliberately not content-hashed.
+    pub fn is_oversize(&self) -> bool {
+        self.hash.starts_with(super::scan::OVERSIZE_PREFIX)
     }
 }
 
@@ -173,7 +181,7 @@ pub struct DiffOpts<'a> {
 
 /// 算出这一轮该做什么。
 ///
-/// 三路输入:`local`(本轮扫描)、`remote`(远端 manifest)、`baseline` + `tombstones`
+/// 三路输入:`local`(本轮扫描)、`remote`(本轮远端内容快照)、`baseline` + `tombstones`
 /// (上次同步成功时的样子)。`tombstones` 只该传**还在窗口期内**的那些,过期判定在
 /// [`super::store::live_tombstones`] 一处做。
 pub fn plan(
@@ -202,6 +210,12 @@ pub fn plan(
             continue;
         }
         let remote_entry = remote_map.get(path).copied();
+        // Remote oversize entries are presence markers only. Their content is
+        // intentionally unavailable for a safe hash comparison, so neither
+        // side may be selected as the source of a destructive action.
+        if remote_entry.is_some_and(|entry| entry.is_oversize()) {
+            continue;
+        }
         let base = base_map.get(path).copied();
         match (remote_entry, base) {
             (None, None) => actions.push(one(path, Action::Upload, "new_local")),
@@ -257,6 +271,11 @@ pub fn plan(
     // 第二遍:远端有、本地没有的。
     for (path, remote_entry) in &remote_map {
         if local_map.contains_key(path) {
+            continue;
+        }
+        // Do not turn an unhashable remote presence marker into an unbounded
+        // download (or a delete based on an incomplete comparison).
+        if remote_entry.is_oversize() {
             continue;
         }
         let base = base_map.get(path).copied();
@@ -721,6 +740,44 @@ mod tests {
     fn an_oversize_file_that_is_new_on_both_sides_is_still_left_alone() {
         let got = plan(&[oversize("big.bin")], &[], &[], &[], ask());
         assert!(got.actions.is_empty(), "{:?}", got.actions);
+    }
+
+    #[test]
+    fn an_oversize_remote_file_missing_locally_is_not_downloaded() {
+        let got = plan(
+            &[],
+            &[remote(
+                "big.bin",
+                &format!("{}{}", super::super::scan::OVERSIZE_PREFIX, 70 * 1024 * 1024),
+            )],
+            &[],
+            &[],
+            ask(),
+        );
+        assert!(
+            got.actions.is_empty(),
+            "an unhashable remote file must not become an unbounded download: {:?}",
+            got.actions
+        );
+    }
+
+    #[test]
+    fn an_oversize_remote_file_does_not_override_a_hashable_local_file() {
+        let got = plan(
+            &[local("big.bin", "local-hash")],
+            &[remote(
+                "big.bin",
+                &format!("{}{}", super::super::scan::OVERSIZE_PREFIX, 70 * 1024 * 1024),
+            )],
+            &[baseline("big.bin", "old-local", "old-remote")],
+            &[],
+            ask(),
+        );
+        assert!(
+            got.actions.is_empty(),
+            "an unknown remote hash must not trigger upload/download/conflict: {:?}",
+            got.actions
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ Run Claude Code, Codex, and custom agents across projects with live terminals, t
 </p>
 
 <p align="center">
-  <strong>Current release:</strong> v1.3.8 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
+  <strong>Current release:</strong> v1.4.6 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">
@@ -209,6 +209,13 @@ Windows installer was signed. Repositories that enable the required-signing
 policy only publish signed and notarized macOS installers and Authenticode-signed
 Windows installers.
 
+Local builds (and unsigned builds) are ad-hoc signed rather than Developer ID
+signed. Because the app's `cdhash` changes on every rebuild, an upgraded ad-hoc
+build may silently lose your system permission grants. The permissions panel
+detects this and offers "Re-authorize", which resets and re-requests the
+relevant system services. If the panel shows permissions as "not granted" after
+upgrading, run this re-authorization before starting agent tasks.
+
 ## Development
 
 Local builds need Node.js 24, pnpm 10, Rust stable, the Tauri platform dependencies for your OS, and a sibling DBX checkout that satisfies `src-tauri/Cargo.toml`:
@@ -237,7 +244,7 @@ The frontend is React 19 + TypeScript + Vite. The desktop shell is Tauri 2 + Rus
 
 ## Release Checklist
 
-For a tagged release such as `v1.3.8`, keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version before pushing the tag. After the desktop workflow finishes, verify the release contains:
+For a tagged release such as `vX.Y.Z`, keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` on the same version before pushing the tag. After the desktop workflow finishes, verify the release contains:
 
 - `Aeroric-X.Y.Z-1.x86_64.rpm`
 - `Aeroric_X.Y.Z_aarch64.dmg`

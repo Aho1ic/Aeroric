@@ -102,8 +102,8 @@ pub struct Baseline {
     ///
     /// 注意这是**内容** hash,不是 provider 的 etag。Aeroric 的 `StorageEntry` 根本
     /// 没有 etag,而拿 mtime 当 etag 用既会漏检(改了但 mtime 没动)又会误报
-    /// (touch 一下没改内容)。所以远端那一侧的身份由我们自己写的 sidecar manifest
-    /// 提供 —— 见 P8c。
+    /// (touch 一下没改内容)。同步每轮读取可 hash 的远端内容来计算它；sidecar manifest
+    /// 只在内容 hash 验证一致时提供 device/seq 逻辑戳。
     pub remote_hash: String,
     /// 写下这份远端内容的设备与它当时的 seq。判因果顺序用。
     pub remote_device: String,

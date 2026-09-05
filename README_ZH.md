@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：</strong> v1.3.8 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
+  <strong>当前版本：</strong> v1.4.6 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">
@@ -208,6 +208,11 @@ SSH 连接可以在 Aeroric 中集中管理，远程 Shell、项目操作和智�
 xattr -rd com.apple.quarantine /Applications/Aeroric.app
 ```
 
+本地构建（以及未签名构建）采用 ad-hoc 签名而非开发者签名。由于应用 `cdhash`
+每次重建都会变化，升级到 ad-hoc 构建后可能静默丢失已授权的系统权限。权限面板
+会检测到这种情况并提供"重新授权"，重置并重新请求相关系统服务。若升级后权限
+面板显示为"未授权"，请在进行智能体任务前执行该重新授权操作。
+
 ## 开发
 
 本地构建需要 Node.js 24、pnpm 10、Rust stable、当前系统对应的 Tauri 平台依赖，以及满足 `src-tauri/Cargo.toml` 路径依赖的同级 DBX 仓库：
@@ -233,7 +238,7 @@ pnpm tauri build    # 构建生产桌面包
 
 ## 发布检查
 
-发布 `v1.3.8` 这类 tag 前，需要确保 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 版本一致。桌面构建工作流完成后，确认 Release 中包含：
+发布 `vX.Y.Z` 这类 tag 前，需要确保 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 版本一致。桌面构建工作流完成后，确认 Release 中包含：
 
 - `Aeroric-X.Y.Z-1.x86_64.rpm`
 - `Aeroric_X.Y.Z_aarch64.dmg`

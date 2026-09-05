@@ -14,6 +14,8 @@ use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
 use crate::storage::atomic_write;
+use crate::authorize_app_exit;
+use crate::authorize_app_restart;
 
 // ── Security: hardcoded allowed notification source ──────────────────────────
 
@@ -1398,6 +1400,7 @@ pub async fn restart_and_install_release_update(
         if let Some(dir) = update_dir {
             let _ = tokio::fs::remove_dir_all(dir).await;
         }
+        authorize_app_restart(&app);
         app.request_restart();
         (installed_app_path, true)
     };
@@ -1406,6 +1409,7 @@ pub async fn restart_and_install_release_update(
         let result = launch_update_helper().inspect_err(|error| {
             let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error.clone()));
         })?;
+        authorize_app_exit(&app);
         app.exit(0);
         result
     };

@@ -17,32 +17,28 @@
 //!
 //! ```text
 //! 存在性  ← read_dir 递归列目录。远端真有什么就是什么,列不出来的东西不存在。
-//! 内容身份 ← manifest。没记到的条目退化成「不知道 hash」,那时候现算(下载后 hash),
-//!            而不是当成「不存在」。
+//! 内容身份 ← 当前远端内容。可 hash 文件每轮读取后计算,不能由清单代替。
+//! 逻辑戳   ← manifest。只有当前内容 hash 与清单一致时,才复用 device / seq。
 //! ```
 //!
-//! 于是 manifest 丢失的最坏后果是**下一轮多花几次下载重新算 hash**,不是删数据。
+//! 于是 manifest 丢失的最坏后果是逻辑戳暂时未知,不是删数据。
 //! 这也让「每轮结束写一次」成为可以接受的策略 —— 逐文件写的话,两万个文件要把整份
 //! 清单来回写两万遍。
 //!
-//! ## 条目为什么带 size
+//! ## 为什么不能用 size 验证 hash
 //!
-//! `size` 是 manifest 的**校验字段**,不是元数据。远端文件被别的工具改过(直接在网盘
-//! 网页版编辑、另一个客户端覆盖),manifest 里的 hash 就成了陈旧的谎。比 size 能抓住
-//! 绝大多数这种情况,代价是零 —— `read_dir` 本来就带 size。对不上就当没记过,现算。
-//!
-//! 注意 `mtime` **不做**校验字段:那是挂钟,而且网盘的 mtime 语义各家不同(有的记
-//! 上传时间,有的透传原始时间)。用它会把「时钟不可信」这个已经关掉的缺口从后门放回来。
+//! 旧格式保留 `size` 以维持兼容并辅助诊断,但它不是内容身份。远端文件可能被外部工具
+//! 从 `alpha` 等长改成 `bravo`;size 仍为 5,旧 hash 却已经失效。`mtime` 同样不能充当
+//! 校验字段:它是挂钟,而且不同 provider 的语义不同。没有可信 etag/version 时,只有
+//! 重新计算当前内容 hash 才能验证一条 manifest 记录。
 
 use std::collections::BTreeMap;
-
-use super::diff::RemoteEntry;
 
 /// manifest 在远端根下的相对位置。
 ///
 /// 放在一个点开头的目录里,和本地 `.notebook/` 对称。列目录时要**跳过整个目录** ——
 /// 不然它自己会被当成一篇笔记同步下来,而它每轮都在变,于是每轮都有一个假冲突。
-pub const MANIFEST_DIR: &str = ".notebook-sync";
+pub const MANIFEST_DIR: &str = super::fs_ops::SYNC_PRIVATE_DIR;
 pub const MANIFEST_NAME: &str = "manifest.json";
 
 /// 写入时的临时名。先写它再 rename,避免读到写了一半的清单。
@@ -60,7 +56,7 @@ pub struct ManifestEntry {
     /// 写下这个版本的设备与它当时的逻辑序号。只用于显示与排障,**不参与顺序判定**。
     pub device: String,
     pub seq: i64,
-    /// 校验字段:和 `read_dir` 报的 size 对不上就说明这条已经过期。
+    /// 写入时的内容大小。保留用于格式兼容与排障,不能代替内容 hash 验证。
     pub size: u64,
 }
 
@@ -101,13 +97,11 @@ impl Manifest {
             .map_err(|e| format!("Cannot serialize notebook sync manifest: {e}"))
     }
 
-    /// 取一条,并用 `read_dir` 报的实际 size 校验。
-    ///
-    /// 返回 `None` 有两种含义,调用方处理方式相同(现算 hash):没记过,或者记的已经过期。
-    pub fn verified(&self, path: &str, actual_size: u64) -> Option<&ManifestEntry> {
+    /// 当前内容 hash 与记录一致时,返回它的逻辑戳来源。
+    pub fn matching_hash(&self, path: &str, actual_hash: &str) -> Option<&ManifestEntry> {
         self.entries
             .get(path)
-            .filter(|entry| entry.size == actual_size)
+            .filter(|entry| entry.hash == actual_hash)
     }
 
     pub fn put(&mut self, path: &str, entry: ManifestEntry) {
@@ -116,16 +110,6 @@ impl Manifest {
 
     pub fn remove(&mut self, path: &str) {
         self.entries.remove(path);
-    }
-
-    /// 组装成 diff 要的一条。
-    pub fn to_remote_entry(path: &str, entry: &ManifestEntry) -> RemoteEntry {
-        RemoteEntry {
-            path: path.to_string(),
-            hash: entry.hash.clone(),
-            device: entry.device.clone(),
-            seq: entry.seq,
-        }
     }
 }
 
@@ -183,38 +167,35 @@ mod tests {
     }
 
     #[test]
-    fn a_size_mismatch_invalidates_the_recorded_hash() {
-        // 远端被别的工具改过(网页版编辑、另一个客户端覆盖),manifest 里的 hash 就是
-        // 陈旧的谎。比 size 零成本地抓住绝大多数这种情况。
+    fn only_a_matching_current_hash_reuses_the_recorded_stamp() {
         let mut m = Manifest::default();
-        m.put("a.md", entry("stale", 10));
-        assert!(m.verified("a.md", 10).is_some());
+        m.put("a.md", entry("current", 10));
+        assert!(m.matching_hash("a.md", "current").is_some());
         assert!(
-            m.verified("a.md", 11).is_none(),
-            "size 对不上就不能拿这个 hash 当真"
+            m.matching_hash("a.md", "different").is_none(),
+            "陈旧 hash 不能贡献旧版本的逻辑戳"
         );
     }
 
     #[test]
-    fn an_unrecorded_path_is_not_verified() {
+    fn an_unrecorded_path_has_no_matching_hash() {
         let m = Manifest::default();
-        assert!(m.verified("nope.md", 0).is_none());
+        assert!(m.matching_hash("nope.md", "hash").is_none());
     }
 
     #[test]
-    fn a_zero_byte_file_can_still_be_verified() {
-        // size 0 不能被当成「没读到」的哨兵 —— 空笔记是合法的。
+    fn a_zero_byte_file_can_still_match_by_hash() {
         let mut m = Manifest::default();
         m.put("empty.md", entry("h-empty", 0));
-        assert!(m.verified("empty.md", 0).is_some());
+        assert!(m.matching_hash("empty.md", "h-empty").is_some());
     }
 
     #[test]
-    fn removing_an_entry_makes_it_unverifiable() {
+    fn removing_an_entry_removes_its_logical_stamp() {
         let mut m = Manifest::default();
         m.put("a.md", entry("h", 1));
         m.remove("a.md");
-        assert!(m.verified("a.md", 1).is_none());
+        assert!(m.matching_hash("a.md", "h").is_none());
     }
 
     #[test]
@@ -228,15 +209,5 @@ mod tests {
         assert!(!is_manifest_path("notebook-sync/a.md"));
         // 前缀相同但不是同一个目录 —— 不能用裸 starts_with。
         assert!(!is_manifest_path(".notebook-sync-backup/a.md"));
-    }
-
-    #[test]
-    fn to_remote_entry_carries_the_logical_stamp() {
-        let e = entry("h", 4);
-        let got = Manifest::to_remote_entry("a.md", &e);
-        assert_eq!(got.path, "a.md");
-        assert_eq!(got.hash, "h");
-        assert_eq!(got.device, "dev-a");
-        assert_eq!(got.seq, 3);
     }
 }

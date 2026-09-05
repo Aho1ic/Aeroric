@@ -15,6 +15,7 @@ use crate::storage::{aeroric_dir, atomic_write, ensure_aeroric_dirs, load_projec
 
 /// 未配置技能库时使用的默认目录名（位于 `~/.aeroric/` 下）。
 const DEFAULT_HUB_DIR_NAME: &str = "skills_hub";
+const AERORIC_USER_AGENT: &str = concat!("Aeroric/", env!("CARGO_PKG_VERSION"));
 
 const SKILLS_SH_ORIGIN: &str = "https://skills.sh";
 const GITHUB_API_ORIGIN: &str = "https://api.github.com";
@@ -1916,7 +1917,7 @@ fn classify_marketplace_skill(text: &str) -> Vec<String> {
 async fn marketplace_get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
     let mut request = MARKETPLACE_HTTP_CLIENT
         .get(url)
-        .header(USER_AGENT, "Aeroric/1.3.8")
+        .header(USER_AGENT, AERORIC_USER_AGENT)
         .header(ACCEPT, "application/vnd.github+json, application/json");
     if url.starts_with(GITHUB_API_ORIGIN) {
         if let Some(token) = github_auth_token() {
@@ -2106,7 +2107,7 @@ async fn fetch_raw_github_file(
     }
     let response = MARKETPLACE_HTTP_CLIENT
         .get(url)
-        .header(USER_AGENT, "Aeroric/1.3.8")
+        .header(USER_AGENT, AERORIC_USER_AGENT)
         .send()
         .await
         .map_err(|error| format!("Failed to download SKILL.md: {error}"))?
@@ -2750,7 +2751,7 @@ pub async fn install_marketplace_skill(
     );
     let mut archive_request = MARKETPLACE_HTTP_CLIENT
         .get(archive_url)
-        .header(USER_AGENT, "Aeroric/1.3.8")
+        .header(USER_AGENT, AERORIC_USER_AGENT)
         .header(ACCEPT, "application/vnd.github+json");
     if let Some(token) = github_auth_token() {
         archive_request =

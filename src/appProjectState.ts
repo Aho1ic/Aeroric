@@ -153,6 +153,10 @@ export function flushProjectTasks(projectId: string): Promise<void> {
   return queuedProjectTaskPersist.flush(projectId);
 }
 
+export function flushAllProjectTasks(): Promise<void> {
+  return queuedProjectTaskPersist.flushAll();
+}
+
 export interface ProjectViewState {
   selectedTaskId: string | null;
   isNewTask: boolean;

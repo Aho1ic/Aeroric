@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use usage::CodexRpcClient;
 
@@ -101,6 +101,98 @@ pub struct TaskManager {
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExitAction {
+    Exit,
+    Restart,
+}
+
+impl ExitAction {
+    fn event_name(self) -> &'static str {
+        match self {
+            Self::Exit => "app-exit-requested",
+            Self::Restart => "app-restart-requested",
+        }
+    }
+}
+
+#[derive(Default)]
+struct ExitState {
+    frontend_ready: bool,
+    pending: Option<ExitAction>,
+    authorized: Option<ExitAction>,
+}
+
+#[derive(Default)]
+struct ExitAuthorization(Mutex<ExitState>);
+
+impl ExitAuthorization {
+    fn authorize(&self, action: ExitAction) {
+        self.0.lock().authorized = Some(action);
+    }
+
+    fn take_authorization(&self, action: ExitAction) -> bool {
+        let mut state = self.0.lock();
+        if state.authorized == Some(action) {
+            state.authorized = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Mark the frontend lifecycle listener as installed and return one request
+    /// that arrived before the listener was ready.
+    fn mark_frontend_ready(&self) -> Option<ExitAction> {
+        let mut state = self.0.lock();
+        state.frontend_ready = true;
+        state.pending.take()
+    }
+
+    /// Queue one lifecycle request until the frontend is ready. When it is
+    /// already ready, the caller should emit the event immediately.
+    fn queue_or_emit(&self, action: ExitAction) -> bool {
+        let mut state = self.0.lock();
+        if state.frontend_ready {
+            true
+        } else {
+            state.pending.get_or_insert(action);
+            false
+        }
+    }
+
+    fn requeue(&self, action: ExitAction) {
+        let mut state = self.0.lock();
+        if state.authorized.is_none() {
+            state.pending.get_or_insert(action);
+        }
+    }
+}
+
+fn emit_lifecycle_request(app: &tauri::AppHandle, action: ExitAction) {
+    if let Err(error) = app.emit(action.event_name(), ()) {
+        app.state::<ExitAuthorization>().requeue(action);
+        eprintln!("Failed to notify frontend about {:?}: {error}", action);
+    }
+}
+
+fn request_lifecycle_action(app: &tauri::AppHandle, action: ExitAction) {
+    if app.state::<ExitAuthorization>().queue_or_emit(action) {
+        emit_lifecycle_request(app, action);
+    }
+}
+
+/// Allow an internal operation that has already completed its frontend save
+/// handshake to finish an ordinary `app.exit` request.
+pub(crate) fn authorize_app_exit(app: &tauri::AppHandle) {
+    app.state::<ExitAuthorization>().authorize(ExitAction::Exit);
+}
+
+pub(crate) fn authorize_app_restart(app: &tauri::AppHandle) {
+    app.state::<ExitAuthorization>()
+        .authorize(ExitAction::Restart);
+}
+
 impl TaskManager {
     /// Atomically remove a task/shell from all PTY maps (masters, writers, children).
     /// Locks are acquired in a fixed order to prevent deadlocks.
@@ -192,6 +284,25 @@ fn hide_main_window(window: tauri::Window) {
     hide_window_to_dock(window);
     #[cfg(not(target_os = "macos"))]
     let _ = window;
+}
+
+#[tauri::command]
+fn exit_app_after_task_flush(app: tauri::AppHandle) {
+    authorize_app_exit(&app);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn restart_app_after_task_flush(app: tauri::AppHandle) {
+    authorize_app_restart(&app);
+    app.request_restart();
+}
+
+#[tauri::command]
+fn app_exit_listener_ready(app: tauri::AppHandle) {
+    if let Some(action) = app.state::<ExitAuthorization>().mark_frontend_ready() {
+        emit_lifecycle_request(&app, action);
+    }
 }
 
 /// `main` 的前置分支:ssh 以 `--ssh-proxy-bridge` 拉起本程序时进入代理桥模式。
@@ -326,23 +437,32 @@ pub fn run() {
         .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
         .manage(notebook::state::NotebookState::default())
+        .manage(ExitAuthorization::default())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
             // 点 Dock 图标可唤回(见下方 Reopen 处理)。
-            // 其他平台没有托盘/Dock 唤回入口,保持默认退出行为,避免窗口隐藏后无法找回。
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 hide_window_to_dock(window.clone());
                 api.prevent_close();
             }
             #[cfg(not(target_os = "macos"))]
-            let _ = (window, event);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Window close events can arrive before the webview has finished
+                // registering its listener. Route them through the same
+                // replayable lifecycle handshake as menu/application exits.
+                api.prevent_close();
+                request_lifecycle_action(window.app_handle(), ExitAction::Exit);
+            }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             hide_main_window,
+            exit_app_after_task_flush,
+            restart_app_after_task_flush,
+            app_exit_listener_ready,
             pty::run_task,
             pty::resume_task,
             pty::cancel_task,
@@ -1020,11 +1140,23 @@ pub fn run() {
         }
     };
 
-    app.run(|_app_handle, _event| {
-        if let tauri::RunEvent::Exit = _event {
-            let manager = _app_handle.state::<local_router_commands::LocalRouterManager>();
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+            let action = if *code == Some(tauri::RESTART_EXIT_CODE) {
+                ExitAction::Restart
+            } else {
+                ExitAction::Exit
+            };
+            let authorization = app_handle.state::<ExitAuthorization>();
+            if !authorization.take_authorization(action) {
+                api.prevent_exit();
+                request_lifecycle_action(app_handle, action);
+            }
+        }
+        if let tauri::RunEvent::Exit = event {
+            let manager = app_handle.state::<local_router_commands::LocalRouterManager>();
             tauri::async_runtime::block_on(manager.shutdown());
-            let webui_manager = _app_handle.state::<dsh_webui::DshWebUiManager>();
+            let webui_manager = app_handle.state::<dsh_webui::DshWebUiManager>();
             tauri::async_runtime::block_on(webui_manager.shutdown_all());
         }
         // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
@@ -1032,8 +1164,8 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         {
             use tauri::Manager;
-            if let tauri::RunEvent::Reopen { .. } = _event {
-                if let Some(window) = _app_handle.get_webview_window("main") {
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }

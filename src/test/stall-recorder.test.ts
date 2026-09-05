@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installStallRecorder,
-  resetStallRecorder,
-  stallReport,
-} from "../lib/stallRecorder";
+import { installStallRecorder, resetStallRecorder, stallReport } from "../lib/stallRecorder";
 
 /**
  * 一次 `invoke` 在真实运行时的样子:`ipc-protocol.js` 把它发成一个到

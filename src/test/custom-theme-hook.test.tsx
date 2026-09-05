@@ -82,6 +82,28 @@ describe("useCustomThemes", () => {
     expect(seen.current?.activeId).toBe("solar");
   });
 
+  it("旧 render 的删除回调也能撤掉刚注入的主题", async () => {
+    localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, "solar");
+    stubBackend({
+      theme_custom_list: () => [SOLAR],
+      theme_custom_read: () => "body {}",
+      theme_custom_delete: () => null,
+    });
+    const { seen } = harness();
+    const staleRemove = seen.current?.remove;
+    if (!staleRemove) throw new Error("remove callback was not available");
+
+    // CSS 可能先于 activeId 的 React 提交落地,所以刻意使用初始 render 的回调。
+    await waitFor(() => expect(injectedCss()).not.toBeNull());
+    await act(async () => {
+      await staleRemove("solar");
+    });
+
+    expect(injectedCss()).toBeNull();
+    expect(readStoredThemeId()).toBeNull();
+    expect(seen.current?.activeId).toBeNull();
+  });
+
   it("记住的那套读不回来时清掉持久化并报错", async () => {
     localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, "gone");
     stubBackend({

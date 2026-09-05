@@ -1614,10 +1614,7 @@ mod tests {
             // 那时报的错是「连接断了」而不是「响应不对」,排查方向全歪。
             let mut buf = Vec::new();
             let mut chunk = [0u8; 4096];
-            loop {
-                let Ok(read) = stream.read(&mut chunk).await else {
-                    break;
-                };
+            while let Ok(read) = stream.read(&mut chunk).await {
                 if read == 0 {
                     break;
                 }

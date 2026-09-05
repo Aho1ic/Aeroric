@@ -183,6 +183,13 @@ function renderApp() {
  * 省掉之后所有"没有应答"的断言都恒真)。
  */
 async function emitRemoteRequest(payload: unknown): Promise<void> {
+  const { handling } = await startRemoteRequest(payload);
+  await act(async () => {
+    await handling;
+  });
+}
+
+async function startRemoteRequest(payload: unknown): Promise<{ handling: Promise<void> }> {
   const subscription = await waitFor(() => {
     const found = subscriptions.find((s) => s.event === REMOTE_EVENT);
     if (!found) throw new Error(`no listener for ${REMOTE_EVENT}`);
@@ -190,9 +197,11 @@ async function emitRemoteRequest(payload: unknown): Promise<void> {
   });
   // handler 内部会 setTasks / setActiveProject,要包在 act 里,否则 React 报
   // "not wrapped in act" 且断言可能看到半提交的状态。
-  await act(async () => {
-    await subscription.handler({ payload });
+  let handling!: Promise<void>;
+  act(() => {
+    handling = Promise.resolve(subscription.handler({ payload }));
   });
+  return { handling };
 }
 
 type Reply = {
@@ -698,5 +707,150 @@ describe("remote-task-request:create", () => {
     const replyIdx = after.findIndex(([c]) => c === REPLY);
     expect(saveIdx, "落盘必须发生过").toBeGreaterThanOrEqual(0);
     expect(saveIdx).toBeLessThan(replyIdx);
+  });
+
+  it("同一项目的两个并发创建最终保存在同一份完整快照中", async () => {
+    installInvokeDispatcher({ projects: [project({ id: "p1" })] });
+    renderApp();
+    await waitForBoot();
+
+    const { handling: first } = await startRemoteRequest({
+      requestId: "r1",
+      kind: "create",
+      projectId: "p1",
+      prompt: "first task",
+    });
+    const { handling: second } = await startRemoteRequest({
+      requestId: "r2",
+      kind: "create",
+      projectId: "p1",
+      prompt: "second task",
+    });
+    await act(async () => {
+      await Promise.all([first, second]);
+    });
+
+    expect(realReplies()).toHaveLength(2);
+    expect(realReplies().every((reply) => reply.accepted)).toBe(true);
+    const saves = invokeMock.mock.calls.filter(
+      ([command, args]) =>
+        command === "save_project_tasks" &&
+        (args as { projectId?: string } | undefined)?.projectId === "p1",
+    );
+    const finalTasks = (saves.at(-1)?.[1] as { tasks: Task[] }).tasks;
+    expect(finalTasks.map((item) => item.prompt)).toEqual(
+      expect.arrayContaining(["first task", "second task"]),
+    );
+    expect(new Set(finalTasks.map((item) => item.id).filter(Boolean)).size).toBe(2);
+  });
+
+  it("保存完成前既不启动进程也不向手机确认", async () => {
+    let releaseSave!: () => void;
+    const pendingSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      onInvoke: (command) => (command === "save_project_tasks" ? pendingSave : undefined),
+    });
+    renderApp();
+    await waitForBoot();
+
+    const { handling } = await startRemoteRequest({
+      requestId: "r1",
+      kind: "create",
+      projectId: "p1",
+      prompt: "wait for disk",
+    });
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.some(([command]) => command === "save_project_tasks")).toBe(
+        true,
+      );
+    });
+
+    expect(invokeMock.mock.calls.some(([command]) => command === "run_task")).toBe(false);
+    expect(realReplies()).toHaveLength(0);
+
+    releaseSave();
+    await act(async () => {
+      await handling;
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "run_task")).toBe(true);
+    expect(await nextReply()).toMatchObject({ accepted: true });
+  });
+
+  it.each([
+    {
+      name: "local",
+      project: () => project({ id: "p1" }),
+      sshConnections: () => [] as SshConnection[],
+      launchCommand: "run_task",
+    },
+    {
+      name: "SSH",
+      project: () => sshProject("p1", "c1"),
+      sshConnections: () => [sshConnection({ id: "c1" })],
+      launchCommand: "run_remote_task",
+    },
+    {
+      name: "WSL",
+      project: (): Project => ({
+        ...project({ id: "p1", path: wslProjectPath("Ubuntu", "/home/me/app") }),
+        location: { kind: "wsl", distribution: "Ubuntu", linuxPath: "/home/me/app" },
+      }),
+      sshConnections: () => [] as SshConnection[],
+      launchCommand: "run_wsl_task",
+    },
+  ])("保存失败时拒绝且不启动，$name 恢复后只启动一个进程", async (target) => {
+    let saveAttempts = 0;
+    installInvokeDispatcher({
+      projects: [target.project()],
+      sshConnections: target.sshConnections(),
+      onInvoke: (command) => {
+        if (command !== "save_project_tasks") return undefined;
+        saveAttempts += 1;
+        return saveAttempts === 1 ? Promise.reject(new Error("disk full")) : Promise.resolve();
+      },
+    });
+    renderApp();
+    await waitForBoot();
+
+    await emitRemoteRequest({
+      requestId: "r1",
+      kind: "create",
+      projectId: "p1",
+      prompt: "first attempt",
+    });
+
+    expect(await nextReply()).toMatchObject({ requestId: "r1", accepted: false });
+    for (const command of ["run_task", "run_remote_task", "run_wsl_task"]) {
+      expect(
+        invokeMock.mock.calls.filter(([calledCommand]) => calledCommand === command),
+        `${command} must not run after a failed save`,
+      ).toHaveLength(0);
+    }
+
+    await emitRemoteRequest({
+      requestId: "r2",
+      kind: "create",
+      projectId: "p1",
+      prompt: "retry",
+    });
+
+    expect(realReplies().at(-1)).toMatchObject({ requestId: "r2", accepted: true });
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === target.launchCommand),
+    ).toHaveLength(1);
+    for (const command of ["run_task", "run_remote_task", "run_wsl_task"]) {
+      if (command === target.launchCommand) continue;
+      expect(
+        invokeMock.mock.calls.filter(([calledCommand]) => calledCommand === command),
+        `${command} must not be used for ${target.name}`,
+      ).toHaveLength(0);
+    }
+    const successfulSave = invokeMock.mock.calls
+      .filter(([command]) => command === "save_project_tasks")
+      .at(-1)?.[1] as { tasks: Task[] };
+    expect(successfulSave.tasks.map((item) => item.prompt)).toEqual(["retry"]);
   });
 });

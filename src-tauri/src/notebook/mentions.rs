@@ -695,7 +695,7 @@ fn plan_wrap(
     let mut skipped = Vec::new();
     // 先按位置**降序**排:从后往前替换,前面那些还没处理的偏移就不会被这次插入顶偏。
     let mut ordered: Vec<&MentionTarget> = targets.to_vec();
-    ordered.sort_by(|a, b| b.start.cmp(&a.start));
+    ordered.sort_by_key(|b| std::cmp::Reverse(b.start));
 
     let mut out = content.to_string();
     let mut count = 0usize;

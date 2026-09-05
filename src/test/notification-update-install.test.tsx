@@ -6,6 +6,10 @@ import { I18nProvider } from "../i18n";
 import { NotificationBell, UpdateBanner } from "../components/NotificationBell";
 import { useNotifications } from "../hooks/useNotifications";
 
+const { flushTasksBeforeExitMock } = vi.hoisted(() => ({
+  flushTasksBeforeExitMock: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
@@ -18,8 +22,14 @@ vi.mock("../hooks/useNotifications", () => ({
   useNotifications: vi.fn(),
 }));
 
+vi.mock("../taskFlush", () => ({
+  flushTasksBeforeExit: flushTasksBeforeExitMock,
+}));
+
 describe("Notification release updater", () => {
   beforeEach(() => {
+    flushTasksBeforeExitMock.mockReset();
+    flushTasksBeforeExitMock.mockResolvedValue(undefined);
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_pending_release_update") return Promise.resolve(null);
@@ -92,6 +102,105 @@ describe("Notification release updater", () => {
 
     await user.click(screen.getByRole("button", { name: "Restart and update v9.9.9" }));
 
+    expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {
+      tagName: "v9.9.9",
+    });
+  });
+
+  it("does not start the installer before task saves finish", async () => {
+    const user = userEvent.setup();
+    let releaseFlush!: () => void;
+    flushTasksBeforeExitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installerPath: "/tmp/Aeroric_9.9.9_aarch64.dmg",
+          readyToRestart: true,
+          checksumVerified: true,
+          helperStatus: "ready",
+          error: null,
+        });
+      }
+      if (command === "restart_and_install_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installedAppPath: "/Applications/Aeroric.app",
+          restarted: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    render(
+      <I18nProvider>
+        <NotificationBell />
+      </I18nProvider>,
+    );
+    await user.click(screen.getByTitle("Releases"));
+    const restart = await screen.findByRole("button", { name: "Restart and update v9.9.9" });
+
+    await user.click(restart);
+    expect(invoke).not.toHaveBeenCalledWith(
+      "restart_and_install_release_update",
+      expect.anything(),
+    );
+    releaseFlush();
+    await screen.findByText(/Installed to \/Applications\/Aeroric\.app/);
+    expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {
+      tagName: "v9.9.9",
+    });
+  });
+
+  it("keeps the update retryable when task persistence fails", async () => {
+    const user = userEvent.setup();
+    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_pending_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installerPath: "/tmp/Aeroric_9.9.9_aarch64.dmg",
+          readyToRestart: true,
+          checksumVerified: true,
+          helperStatus: "ready",
+          error: null,
+        });
+      }
+      if (command === "restart_and_install_release_update") {
+        return Promise.resolve({
+          tagName: "v9.9.9",
+          assetName: "Aeroric_9.9.9_aarch64.dmg",
+          installedAppPath: "/Applications/Aeroric.app",
+          restarted: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    render(
+      <I18nProvider>
+        <NotificationBell />
+      </I18nProvider>,
+    );
+    await user.click(screen.getByTitle("Releases"));
+    const restart = await screen.findByRole("button", { name: "Restart and update v9.9.9" });
+
+    await user.click(restart);
+    expect(await screen.findByText(/disk full/)).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith(
+      "restart_and_install_release_update",
+      expect.anything(),
+    );
+
+    flushTasksBeforeExitMock.mockResolvedValueOnce(undefined);
+    await user.click(restart);
+    await screen.findByText(/Installed to \/Applications\/Aeroric\.app/);
     expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {
       tagName: "v9.9.9",
     });

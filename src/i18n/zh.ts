@@ -3178,6 +3178,7 @@ export const zh: Record<string, string> = {
   "toast.loadProjectFilesFailed": "加载项目文件列表失败，@ 引用不可用：{error}",
   "toast.saveProjectsFailed": "保存项目列表失败：{error}",
   "toast.saveTasksFailed": "保存任务失败（项目 {projectId}）：{error}",
+  "toast.exitSaveFailed": "退出前无法保存任务，应用已保持打开：{error}",
   "wsl.title": "WSL",
   "wsl.openProject": "打开 WSL 项目",
   "wsl.distribution": "发行版",

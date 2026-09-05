@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,7 +14,14 @@ import type {
   SystemPermissionStatus,
 } from "../types";
 
+const { flushTasksBeforeExitMock } = vi.hoisted(() => ({
+  flushTasksBeforeExitMock: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../taskFlush", () => ({
+  flushTasksBeforeExit: flushTasksBeforeExitMock,
+}));
 
 function permission(overrides: Partial<SystemPermission> & { id: string }): SystemPermission {
   const status = overrides.status ?? "notGranted";
@@ -80,6 +87,8 @@ function row(name: string) {
 describe("PermissionsPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
+    flushTasksBeforeExitMock.mockReset();
+    flushTasksBeforeExitMock.mockResolvedValue(undefined);
   });
 
   it("lists every permission with its status and a settings shortcut", async () => {
@@ -171,6 +180,86 @@ describe("PermissionsPanel", () => {
     await user.click(restart);
 
     expect(invoke).toHaveBeenCalledWith("restart_app_for_permissions");
+  });
+
+  it("waits for task persistence before restarting and stays open when saving fails", async () => {
+    let releaseFlush!: () => void;
+    flushTasksBeforeExitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_system_permissions") {
+        return Promise.resolve(
+          report([
+            permission({
+              id: "screen-recording",
+              status: "granted",
+              restartRequired: true,
+              needsRestart: true,
+            }),
+          ]),
+        );
+      }
+      if (command === "restart_app_for_permissions") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected command: ${String(command)}`));
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    const restart = await screen.findByRole("button", { name: "Restart Now" });
+
+    await user.click(restart);
+    expect(invoke).not.toHaveBeenCalledWith("restart_app_for_permissions");
+    releaseFlush();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_app_for_permissions"));
+
+    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    await user.click(restart);
+    expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "restart_app_for_permissions"),
+    ).toHaveLength(1);
+  });
+
+  it("does not issue duplicate restart requests while the save handshake is pending", async () => {
+    let releaseFlush!: () => void;
+    flushTasksBeforeExitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "list_system_permissions") {
+        return Promise.resolve(
+          report([
+            permission({
+              id: "screen-recording",
+              status: "granted",
+              restartRequired: true,
+              needsRestart: true,
+            }),
+          ]),
+        );
+      }
+      if (command === "restart_app_for_permissions") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected command: ${String(command)}`));
+    });
+    renderPanel();
+    const restart = await screen.findByRole("button", { name: "Restart Now" });
+
+    fireEvent.click(restart);
+    fireEvent.click(restart);
+    expect(flushTasksBeforeExitMock).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalledWith("restart_app_for_permissions");
+
+    releaseFlush();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_app_for_permissions"));
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "restart_app_for_permissions"),
+    ).toHaveLength(1);
   });
 
   it("grants everything it can in one pass and names what is left to do by hand", async () => {

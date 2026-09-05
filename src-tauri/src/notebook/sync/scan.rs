@@ -75,69 +75,126 @@ impl FileSig {
 /// 扫一遍 vault。结果按路径排序 —— 目录遍历顺序是文件系统给的,不排序会让同一个
 /// vault 在两次扫描间给出不同顺序,而顺序会进到进度显示和测试断言里。
 pub fn scan_vault(vault: &Path) -> Result<Vec<FileSig>, String> {
-    if !vault.is_dir() {
+    scan_vault_with_limits(vault, MAX_FILES, MAX_DEPTH)
+}
+
+fn scan_vault_with_limits(
+    vault: &Path,
+    max_files: usize,
+    max_depth: usize,
+) -> Result<Vec<FileSig>, String> {
+    let metadata = std::fs::metadata(vault).map_err(|error| {
+        format!(
+            "Cannot inspect notebook sync vault {}: {error}",
+            vault.display()
+        )
+    })?;
+    if !metadata.is_dir() {
         return Err(format!("{} is not a directory", vault.display()));
     }
     let mut out = Vec::new();
     let mut files = 0usize;
-    walk(vault, vault, 0, &mut files, &mut out);
+    walk(vault, vault, 0, max_files, max_depth, &mut files, &mut out)?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
 
-fn walk(vault: &Path, dir: &Path, depth: usize, files: &mut usize, out: &mut Vec<FileSig>) {
-    if depth > MAX_DEPTH || *files >= MAX_FILES {
-        return;
-    }
-    // 读不动某个子目录(权限)不该让整次扫描失败:其余文件仍然该被同步。
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if *files >= MAX_FILES {
-            return;
-        }
+fn walk(
+    vault: &Path,
+    dir: &Path,
+    depth: usize,
+    max_files: usize,
+    max_depth: usize,
+    files: &mut usize,
+    out: &mut Vec<FileSig>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        format!(
+            "Cannot read notebook sync directory {}: {error}",
+            dir.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Cannot read an entry in notebook sync directory {}: {error}",
+                dir.display()
+            )
+        })?;
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "Cannot inspect notebook sync path {}: {error}",
+                path.display()
+            )
+        })?;
         // 不跟软链,与 `vault_walk` 一致:跟了会让同一份内容以两个相对路径出现,
         // 于是同一份内容被上传两次,而删掉本体后那个软链路径还留在远端。
         if file_type.is_symlink() {
             continue;
         }
         if file_type.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if is_scan_skip_dir(&name) {
+            let name = entry.file_name();
+            let name = name.to_str().ok_or_else(|| {
+                format!(
+                    "Notebook sync directory name is not valid UTF-8: {}",
+                    path.display()
+                )
+            })?;
+            if is_scan_skip_dir(name) {
                 continue;
             }
-            walk(vault, &path, depth + 1, files, out);
+            if depth >= max_depth {
+                return Err(format!(
+                    "Notebook sync scan is incomplete: directory depth limit ({max_depth}) reached at {}",
+                    path.display()
+                ));
+            }
+            walk(vault, &path, depth + 1, max_files, max_depth, files, out)?;
             continue;
         }
         if !file_type.is_file() {
             continue;
         }
-        let Some(sig) = signature_of(vault, &path) else {
-            continue;
-        };
+        if *files >= max_files {
+            return Err(format!(
+                "Notebook sync scan is incomplete: file limit ({max_files}) exceeded at {}",
+                path.display()
+            ));
+        }
+        let sig = signature_of(vault, &path)?;
         *files += 1;
         out.push(sig);
     }
+    Ok(())
 }
 
-/// 算一个文件的签名。读不动就返回 `None`(静默跳过,同 `vault_walk` 的取舍)。
-fn signature_of(vault: &Path, path: &Path) -> Option<FileSig> {
+/// 算一个文件的签名。任何读取失败都必须终止整轮扫描,否则缺少的条目会被 diff 当成删除。
+fn signature_of(vault: &Path, path: &Path) -> Result<FileSig, String> {
     let rel = relative_path(vault, path)?;
-    let meta = std::fs::metadata(path).ok()?;
+    let meta = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Cannot inspect notebook sync file {}: {error}",
+            path.display()
+        )
+    })?;
+    if !meta.file_type().is_file() {
+        return Err(format!(
+            "Notebook sync path changed type during scan: {}",
+            path.display()
+        ));
+    }
     let size = meta.len();
-    let mtime_ms = mtime_ms_of(&meta);
+    let mtime_ms = mtime_ms_of(&meta, path)?;
     let hash = if size > MAX_HASH_BYTES {
         format!("{OVERSIZE_PREFIX}{size}")
     } else {
-        let bytes = std::fs::read(path).ok()?;
+        let bytes = std::fs::read(path).map_err(|error| {
+            format!("Cannot read notebook sync file {}: {error}", path.display())
+        })?;
         hash64(&bytes).to_string()
     };
-    Some(FileSig {
+    Ok(FileSig {
         path: rel,
         mtime_ms,
         size,
@@ -149,27 +206,52 @@ fn signature_of(vault: &Path, path: &Path) -> Option<FileSig> {
 ///
 /// 不接受非 `Normal` 的路径组件:`..` 出现在这里意味着遍历跑到了 vault 外面,
 /// 那种条目宁可丢掉也不能带进同步 —— 它会被当成远端的一个相对 key 用。
-fn relative_path(vault: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(vault).ok()?;
+fn relative_path(vault: &Path, path: &Path) -> Result<String, String> {
+    let rel = path.strip_prefix(vault).map_err(|error| {
+        format!(
+            "Cannot make notebook sync path {} relative to {}: {error}",
+            path.display(),
+            vault.display()
+        )
+    })?;
     let mut parts = Vec::new();
     for component in rel.components() {
         match component {
-            std::path::Component::Normal(part) => parts.push(part.to_str()?.to_string()),
-            _ => return None,
+            std::path::Component::Normal(part) => {
+                let part = part.to_str().ok_or_else(|| {
+                    format!("Notebook sync path is not valid UTF-8: {}", path.display())
+                })?;
+                parts.push(part.to_string());
+            }
+            _ => {
+                return Err(format!(
+                    "Notebook sync path has an unsafe component: {}",
+                    path.display()
+                ));
+            }
         }
     }
     if parts.is_empty() {
-        return None;
+        return Err(format!(
+            "Notebook sync path has no relative components: {}",
+            path.display()
+        ));
     }
-    Some(parts.join("/"))
+    Ok(parts.join("/"))
 }
 
-fn mtime_ms_of(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
+fn mtime_ms_of(meta: &std::fs::Metadata, path: &Path) -> Result<i64, String> {
+    let modified = meta.modified().map_err(|error| {
+        format!(
+            "Cannot read notebook sync modification time for {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(modified
+        .duration_since(std::time::UNIX_EPOCH)
         .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 /// 把扫描结果做成 `路径 → 签名` 的表。
@@ -185,10 +267,15 @@ pub fn by_path(sigs: Vec<FileSig>) -> std::collections::BTreeMap<String, FileSig
 /// 「没变」「变了」「没了」三种,不能把后两种混成一个错误。
 pub fn signature_at(vault: &Path, rel_path: &str) -> Result<Option<FileSig>, String> {
     let path = resolve_rel(vault, rel_path)?;
-    if !path.is_file() {
-        return Ok(None);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.file_type().is_file() => Ok(None),
+        Ok(_) => signature_of(vault, &path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Cannot inspect notebook sync file {}: {error}",
+            path.display()
+        )),
     }
-    Ok(signature_of(vault, &path))
 }
 
 /// 这条相对路径在同步范围之外吗?
@@ -294,6 +381,8 @@ mod tests {
         let vault = temp_vault();
         write(&vault, ".notebook/index.db", b"sqlite");
         write(&vault, ".notebook/history/一.md", b"old");
+        write(&vault, ".notebook-sync/manifest.json", b"{}");
+        write(&vault, ".notebook-sync/user-file.bin", b"not notebook data");
         write(&vault, "一.md", b"new");
         let sigs = scan_vault(&vault).expect("scan");
         let paths: Vec<&str> = sigs.iter().map(|s| s.path.as_str()).collect();
@@ -363,19 +452,122 @@ mod tests {
         assert!(!sigs[0].is_oversize(), "正好等于上限的应该照常算 hash");
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinks_are_not_followed() {
         // 跟了的话同一份内容以两个 relPath 出现:上传两次,而删掉本体后那个软链
         // 路径还赖在远端。
         let vault = temp_vault();
         write(&vault, "real.md", b"body");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(vault.join("real.md"), vault.join("link.md")).expect("symlink");
-        #[cfg(not(unix))]
-        return;
         let sigs = scan_vault(&vault).expect("scan");
         let paths: Vec<&str> = sigs.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, vec!["real.md"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_fails_the_whole_scan() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let vault = temp_vault();
+        let path = vault.join("blocked.md");
+        write(&vault, "blocked.md", b"must not look deleted");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("remove permissions");
+
+        let result = scan_vault(&vault);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restore permissions");
+
+        let error = result.expect_err("unreadable files must make the snapshot incomplete");
+        assert!(
+            error.contains("blocked.md"),
+            "error needs path context: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_fails_the_whole_scan() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let vault = temp_vault();
+        let path = vault.join("blocked");
+        write(&vault, "blocked/note.md", b"must not look deleted");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("remove permissions");
+
+        let result = scan_vault(&vault);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("restore permissions");
+
+        let error = result.expect_err("unreadable directories must make the snapshot incomplete");
+        assert!(
+            error.contains("blocked"),
+            "error needs path context: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn re_signing_does_not_treat_permission_errors_as_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let vault = temp_vault();
+        let path = vault.join("blocked.md");
+        write(&vault, "blocked.md", b"present");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("remove permissions");
+
+        let result = signature_at(&vault, "blocked.md");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restore permissions");
+
+        assert!(
+            result.is_err(),
+            "permission errors must not become Ok(None)"
+        );
+        assert!(signature_at(&vault, "missing.md")
+            .expect("missing is not an I/O failure")
+            .is_none());
+    }
+
+    #[test]
+    fn exceeding_the_file_budget_is_an_incomplete_scan_error() {
+        let vault = temp_vault();
+        write(&vault, "a.md", b"a");
+        write(&vault, "b.md", b"b");
+
+        let error = scan_vault_with_limits(&vault, 1, MAX_DEPTH)
+            .expect_err("a partial file list must never be returned as a snapshot");
+        assert!(error.contains("file limit"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn exceeding_the_depth_budget_is_an_incomplete_scan_error() {
+        let vault = temp_vault();
+        write(&vault, "nested/note.md", b"deep");
+
+        let error = scan_vault_with_limits(&vault, MAX_FILES, 0)
+            .expect_err("an unvisited directory must never be omitted silently");
+        assert!(error.contains("depth limit"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn skipped_directories_do_not_exhaust_the_depth_budget() {
+        let vault = temp_vault();
+        write(&vault, ".notebook/nested/private.db", b"private");
+        write(&vault, "note.md", b"visible");
+
+        let scanned = scan_vault_with_limits(&vault, MAX_FILES, 0).expect("complete scan");
+        assert_eq!(
+            scanned
+                .iter()
+                .map(|sig| sig.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["note.md"]
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! 执行一轮同步:扫描 → 写 tombstone → diff → 逐条执行 → 收尾。
+//! 执行一轮同步:扫描 → 远端清单 → 写 tombstone → diff → 逐条执行 → 收尾。
 //!
 //! 远端那一侧抽成 [`RemoteFs`] trait,这一层不知道云盘协议。测试用内存假实现,P8c 用
 //! `StorageBackend` 实现它。
@@ -33,8 +33,9 @@ use super::store::{self, Baseline, Tombstone};
 
 /// 远端文件系统。P8c 用 `StorageBackend` 实现,测试用内存假实现。
 pub trait RemoteFs {
-    /// 远端清单。带内容 hash 与 `(device, seq)` 逻辑戳 —— 来自远端 sidecar manifest,
-    /// 不是 provider 的 list 元数据(那里没有 etag,见 `diff` 的模块文档)。
+    /// 远端清单。内容 hash 来自本轮读取的远端内容；manifest 仅在 hash 匹配时提供
+    /// `(device, seq)` 逻辑戳。两者都不是 provider 的 list 元数据(那里没有 etag,见
+    /// `diff` 的模块文档)。
     fn list(&self) -> Result<Vec<RemoteEntry>, String>;
     fn get(&self, path: &str) -> Result<Vec<u8>, String>;
     /// 写入并返回落盘后的内容 hash。
@@ -110,6 +111,15 @@ pub fn run(
         return Err(format!("Unknown notebook sync remote: {remote_id}"));
     }
 
+    // 本地扫描必须先于任何持久状态或远端访问。一个读取错误代表「快照不完整」,不是
+    // 「那些文件都被删了」；若先清 tombstone 或写删除意图,失败的一轮也会改变同步事实。
+    let scanned = scan::scan_vault(vault)?;
+
+    // 远端清单也是本轮 diff 的完整快照。远端目录读取、深度或文件数限制失败时,不能
+    // 先清理旧 tombstone 或写入新的删除意图,否则这次没有任何文件动作的失败轮次仍会
+    // 改变下一轮的同步事实。
+    let remote_entries = remote.list()?;
+
     // 过期的 tombstone 在这里真删掉,不是只在读时过滤。
     //
     // 放在一轮的最前面有两个理由:这里本来就要按 TTL 判一次「哪些还算数」,先删后读是同一
@@ -121,7 +131,6 @@ pub fn run(
     // 而挂多个远端时每轮都只清自己那份会让别的远端的旧记录一直留着。
     store::prune_tombstones(&conn, now_ms)?;
 
-    let scanned = scan::scan_vault(vault)?;
     let baselines = store::baselines(&conn, remote_id)?;
 
     // 先落 tombstone,再动任何东西。顺序见模块文档。
@@ -140,7 +149,6 @@ pub fn run(
     // vault 级 `strategy`。
     let decided = store::resolutions(&conn, remote_id)?;
 
-    let remote_entries = remote.list()?;
     let plan = diff::plan(
         &scanned,
         &remote_entries,
@@ -294,10 +302,24 @@ fn execute(
             }
         }
         Action::Download => {
+            if remote_entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .is_some_and(RemoteEntry::is_oversize)
+            {
+                return settle(OutcomeStatus::Pending {
+                    detail: "oversize_not_hashable",
+                });
+            }
             let bytes = match remote.get(path) {
                 Ok(bytes) => bytes,
                 Err(error) => return failed(error),
             };
+            if bytes.len() as u64 > scan::MAX_HASH_BYTES {
+                return settle(OutcomeStatus::Pending {
+                    detail: "oversize_not_hashable",
+                });
+            }
             if let Err(error) = local.write(vault, path, &bytes) {
                 return failed(error);
             }
@@ -456,10 +478,24 @@ fn apply_resolution(
         }
         diff::Resolution::Fork { fork_path } => {
             // 远端那份另存一份,本地这份照常上传。两边都留,谁都不丢。
+            if remote_entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .is_some_and(RemoteEntry::is_oversize)
+            {
+                return settle(OutcomeStatus::Pending {
+                    detail: "oversize_not_hashable",
+                });
+            }
             let bytes = match remote.get(path) {
                 Ok(bytes) => bytes,
                 Err(error) => return failed(error),
             };
+            if bytes.len() as u64 > scan::MAX_HASH_BYTES {
+                return settle(OutcomeStatus::Pending {
+                    detail: "oversize_not_hashable",
+                });
+            }
             if let Err(error) = local.write(vault, fork_path, &bytes) {
                 return failed(error);
             }
@@ -537,6 +573,7 @@ fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -550,6 +587,8 @@ mod tests {
         put: Vec<String>,
         fail_put: bool,
         fail_delete: bool,
+        fail_list: bool,
+        list_calls: Cell<usize>,
     }
 
     impl FakeRemote {
@@ -568,6 +607,10 @@ mod tests {
 
     impl RemoteFs for FakeRemote {
         fn list(&self) -> Result<Vec<RemoteEntry>, String> {
+            self.list_calls.set(self.list_calls.get() + 1);
+            if self.fail_list {
+                return Err("list boom".to_string());
+            }
             Ok(self
                 .files
                 .iter()
@@ -1457,6 +1500,170 @@ mod tests {
             &mut local
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_scan_changes_neither_sync_state_nor_the_remote() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let vault = bound("scan-fail-is-atomic");
+        let path = vault.join("blocked.md");
+        write_note(&vault, "blocked.md", b"local body");
+
+        let conn = store::open(&vault).expect("conn");
+        let hash = crate::notebook::state::hash64(b"local body").to_string();
+        let baseline = Baseline {
+            path: "blocked.md".to_string(),
+            local_hash: hash.clone(),
+            local_mtime_ms: NOW - 10_000,
+            remote_hash: hash,
+            remote_device: "dev-b".to_string(),
+            remote_seq: 4,
+            synced_at: NOW - 10_000,
+        };
+        store::set_baseline(&conn, "r1", &baseline).expect("baseline");
+        store::add_tombstone(
+            &conn,
+            "r1",
+            &Tombstone {
+                path: "expired.md".to_string(),
+                deleted_at: NOW - store::TOMBSTONE_TTL_MS - 1,
+                remote_hash: "old".to_string(),
+            },
+        )
+        .expect("expired tombstone");
+        store::bump_seq(&conn, "r1", NOW - 10_000).expect("seed seq");
+        let target_before = store::get_remote(&conn, "r1")
+            .expect("target")
+            .expect("bound target");
+        drop(conn);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("remove permissions");
+        let mut remote = FakeRemote::with(&[("blocked.md", b"remote body")]);
+        let mut local = FakeLocal::default();
+        let result = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restore permissions");
+
+        assert!(
+            result.is_err(),
+            "an incomplete local snapshot must abort the round"
+        );
+        assert_eq!(remote.list_calls.get(), 0, "the remote must not be listed");
+        assert!(remote.deleted.is_empty(), "no remote file may be deleted");
+        assert!(remote.put.is_empty(), "no remote file may be overwritten");
+        assert!(
+            local.soft_deleted.is_empty(),
+            "no local file may be deleted"
+        );
+
+        let conn = store::open(&vault).expect("reopen");
+        assert_eq!(
+            store::baselines(&conn, "r1").expect("baselines"),
+            vec![baseline],
+            "the baseline must remain byte-for-byte equivalent"
+        );
+        let tombstone_rows: i64 = conn
+            .query_row("SELECT count(*) FROM tombstone", [], |row| row.get(0))
+            .expect("count tombstones");
+        assert_eq!(tombstone_rows, 1, "even expired tombstones are not pruned");
+        assert_eq!(
+            store::get_remote(&conn, "r1")
+                .expect("target")
+                .expect("bound target"),
+            target_before,
+            "seq and last_sync_at must not advance"
+        );
+    }
+
+    #[test]
+    fn a_failed_remote_scan_changes_neither_sync_state_nor_the_remote() {
+        let vault = bound("remote-scan-fail-is-atomic");
+
+        let conn = store::open(&vault).expect("conn");
+        let hash = crate::notebook::state::hash64(b"local body").to_string();
+        let baseline = Baseline {
+            path: "gone.md".to_string(),
+            local_hash: hash.clone(),
+            local_mtime_ms: NOW - 10_000,
+            remote_hash: hash,
+            remote_device: "dev-b".to_string(),
+            remote_seq: 4,
+            synced_at: NOW - 10_000,
+        };
+        store::set_baseline(&conn, "r1", &baseline).expect("baseline");
+        store::add_tombstone(
+            &conn,
+            "r1",
+            &Tombstone {
+                path: "expired.md".to_string(),
+                deleted_at: NOW - store::TOMBSTONE_TTL_MS - 1,
+                remote_hash: "old".to_string(),
+            },
+        )
+        .expect("expired tombstone");
+        store::bump_seq(&conn, "r1", NOW - 10_000).expect("seed seq");
+        let target_before = store::get_remote(&conn, "r1")
+            .expect("target")
+            .expect("bound target");
+        drop(conn);
+
+        let mut remote = FakeRemote {
+            fail_list: true,
+            ..FakeRemote::default()
+        };
+        let mut local = FakeLocal::default();
+        let result = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        );
+
+        assert!(result.is_err(), "an incomplete remote snapshot must abort");
+        assert_eq!(
+            remote.list_calls.get(),
+            1,
+            "the remote should be listed once"
+        );
+        assert!(remote.deleted.is_empty(), "no remote file may be deleted");
+        assert!(remote.put.is_empty(), "no remote file may be overwritten");
+        assert!(
+            local.soft_deleted.is_empty(),
+            "no local file may be deleted"
+        );
+
+        let conn = store::open(&vault).expect("reopen");
+        assert_eq!(
+            store::baselines(&conn, "r1").expect("baselines"),
+            vec![baseline],
+            "the baseline must remain byte-for-byte equivalent"
+        );
+        let tombstone_rows: i64 = conn
+            .query_row("SELECT count(*) FROM tombstone", [], |row| row.get(0))
+            .expect("count tombstones");
+        assert_eq!(
+            tombstone_rows, 1,
+            "the failed round must not prune tombstones"
+        );
+        assert_eq!(
+            store::get_remote(&conn, "r1")
+                .expect("target")
+                .expect("bound target"),
+            target_before,
+            "seq and last_sync_at must not advance"
+        );
     }
 
     #[test]

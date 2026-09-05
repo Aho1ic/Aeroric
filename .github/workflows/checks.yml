@@ -197,6 +197,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Check version consistency
+        run: pnpm check:version
+
       # mobile 是 workspace 成员，依赖解析在根 pnpm-lock.yaml 的 `mobile:`
       # importer 下，自己没有 lockfile。`pnpm --dir mobile audit` 因此只会报
       # ERR_PNPM_AUDIT_NO_LOCKFILE；根审计已经覆盖 mobile 的依赖树。

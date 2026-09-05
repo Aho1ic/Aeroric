@@ -25,6 +25,7 @@ import type {
   SystemPermissionStatus,
 } from "../../types";
 import { useI18n } from "../../i18n";
+import { flushTasksBeforeExit } from "../../taskFlush";
 import s from "../../styles";
 
 const PERMISSION_ICONS: Record<string, LucideIcon> = {
@@ -149,6 +150,8 @@ export function PermissionsPanel() {
   const [grantingAll, setGrantingAll] = useState(false);
   const [manualIds, setManualIds] = useState<string[]>([]);
   const [restartIds, setRestartIds] = useState<string[]>([]);
+  const [restarting, setRestarting] = useState(false);
+  const restartInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const baseline = useRef<Record<string, SystemPermissionStatus> | null>(null);
 
@@ -263,10 +266,17 @@ export function PermissionsPanel() {
   }, []);
 
   const restart = useCallback(async () => {
+    if (restartInFlight.current) return;
+    restartInFlight.current = true;
+    setRestarting(true);
     try {
+      await flushTasksBeforeExit();
       await invoke("restart_app_for_permissions");
     } catch (nextError) {
       setError(String(nextError));
+    } finally {
+      restartInFlight.current = false;
+      setRestarting(false);
     }
   }, []);
 
@@ -353,7 +363,11 @@ export function PermissionsPanel() {
           tone="warning"
           text={t("permissions.restartRequired")}
           action={
-            <button style={s.primaryActionBtn} onClick={() => void restart()}>
+            <button
+              style={s.primaryActionBtn}
+              onClick={() => void restart()}
+              disabled={busy || restarting}
+            >
               <RotateCw size={14} />
               {t("permissions.restartNow")}
             </button>
