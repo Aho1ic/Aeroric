@@ -3,11 +3,13 @@ import {
   AGENT_OPTIONS,
   agentFamily,
   agentOptionsFromProfiles,
+  agentSupportsReasoningEffort,
   customAgentToOption,
   familyFromCodexLike,
   isBuiltInAgent,
   isCodexLikeAgent,
   isDshAgent,
+  isOmpAgent,
   normalizeAgentConfigLang,
   normalizeProtocolFamily,
   profileFamily,
@@ -49,6 +51,32 @@ describe("protocol family", () => {
     expect(agentFamily("dsh")).toBe("dsh");
   });
 
+  it("registers omp as a built-in agent option with yaml config", () => {
+    const omp = AGENT_OPTIONS.find((option) => option.value === "omp");
+    expect(omp).toBeDefined();
+    expect(omp?.label).toBe("oh-my-pi");
+    expect(omp?.configLang).toBe("yaml");
+    expect(omp?.family).toBe("omp");
+    expect(omp?.codexLike).toBe(false);
+  });
+
+  it("treats omp as built-in and prefixes colliding custom ids", () => {
+    expect(isBuiltInAgent("omp")).toBe(true);
+    expect(sanitizeAgentId("omp")).toBe("local_omp");
+    expect(sanitizeAgentId("OMP")).toBe("local_omp");
+  });
+
+  it("exposes isOmpAgent for the omp family", () => {
+    expect(isOmpAgent("omp")).toBe(true);
+    expect(isOmpAgent("dsh")).toBe(false);
+    expect(isOmpAgent("claude")).toBe(false);
+    expect(isOmpAgent("codex")).toBe(false);
+  });
+
+  it("allows reasoning-effort selection for omp (thinking-level vocabulary)", () => {
+    expect(agentSupportsReasoningEffort("omp")).toBe(true);
+  });
+
   it("keeps isCodexLikeAgent semantics (dsh is not codex-like)", () => {
     expect(isCodexLikeAgent("claude")).toBe(false);
     expect(isCodexLikeAgent("codex")).toBe(true);
@@ -87,9 +115,14 @@ describe("protocol family", () => {
     expect(normalizeAgentConfigLang("yaml")).toBe("yaml");
     expect(normalizeAgentConfigLang("nope")).toBe("shellscript");
     expect(normalizeProtocolFamily("dsh")).toBe("dsh");
+    expect(normalizeProtocolFamily("omp")).toBe("omp");
     expect(normalizeProtocolFamily("x")).toBeUndefined();
     expect(familyFromCodexLike(true)).toBe("codex");
     expect(familyFromCodexLike(false)).toBe("claude");
+  });
+
+  it("derives family for the four built-ins", () => {
+    expect(agentFamily("omp")).toBe("omp");
   });
 
   it("falls back to codex family for unknown agents (legacy behavior)", () => {

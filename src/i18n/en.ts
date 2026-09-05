@@ -524,6 +524,9 @@ export const en: Record<string, string> = {
   "appSettings.codexPathHint": "Leave empty to use codex from the system PATH.",
   "appSettings.dshPathHint":
     "Use dsh from PATH, or select a DeepSeek Harness checkout after running pnpm install and pnpm run build.",
+  "appSettings.ompPath": "oh-my-pi Path",
+  "appSettings.ompPathHint":
+    "Leave empty to use omp from the system PATH, or set the oh-my-pi binary path (e.g. ~/.local/bin/omp).",
   "appSettings.chooseDshSource": "Choose DeepSeek Harness source directory",
   "appSettings.addAgent": "Add Agent",
   "appSettings.agentRuntime": "Agent Runtime",

@@ -413,6 +413,12 @@ fn inferred_agent_family(program: &str) -> Option<AgentFamily> {
     ) {
         return Some(AgentFamily::Dsh);
     }
+    if matches!(
+        file_name.as_deref(),
+        Some("omp" | "omp.exe" | "omp.cmd" | "omp.js" | "omp.ps1")
+    ) {
+        return Some(AgentFamily::Omp);
+    }
     inferred_agent_codex_like(program).map(AgentFamily::from_codex_like)
 }
 

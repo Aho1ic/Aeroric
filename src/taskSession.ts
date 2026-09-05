@@ -27,8 +27,14 @@ function hasDshSession(task: Task): boolean {
   return Boolean(task.dshSessionId || task.dshSessionPath);
 }
 
+function hasOmpSession(task: Task): boolean {
+  return Boolean(task.ompSessionId || task.ompSessionPath);
+}
+
 export function hasTaskSessionPath(task: Task): boolean {
-  return Boolean(task.claudeSessionPath || task.codexSessionPath || task.dshSessionPath);
+  return Boolean(
+    task.claudeSessionPath || task.codexSessionPath || task.dshSessionPath || task.ompSessionPath,
+  );
 }
 
 function owner(agent: AgentType, family: ProtocolFamily): TaskSessionOwner {
@@ -55,6 +61,7 @@ export function resolveTaskSessionOwner(
   if (hasCodexSession(task)) present.push("codex");
   if (hasClaudeSession(task)) present.push("claude");
   if (hasDshSession(task)) present.push("dsh");
+  if (hasOmpSession(task)) present.push("omp");
   if (present.length === 1) {
     return owner(agent, present[0]);
   }
@@ -69,6 +76,7 @@ export function getTaskSessionFieldsByFamily(
     claude: { sessionId: task.claudeSessionId, sessionPath: task.claudeSessionPath },
     codex: { sessionId: task.codexSessionId, sessionPath: task.codexSessionPath },
     dsh: { sessionId: task.dshSessionId, sessionPath: task.dshSessionPath },
+    omp: { sessionId: task.ompSessionId, sessionPath: task.ompSessionPath },
   };
   const current = byFamily[family];
   const legacy = (Object.keys(byFamily) as ProtocolFamily[])
@@ -94,7 +102,8 @@ export function canNativeResumeWithAgent(
   agentOptions?: AgentOption[],
 ): boolean {
   const source = resolveTaskSessionOwner(task, agentOptions);
-  // dsh headless 无原生 resume(Phase 7 引入 fork/web 接续),接续走 handoff。
+  // dsh 无原生 CLI resume:接续走自身 Web RPC 通道(App.tsx 里直接 run_dsh_task
+  // 重连会话);在配置切换策略解析中 dsh 走 handoff。omp 支持 `--resume` 原生接续。
   if (source.family === "dsh") return false;
   if (source.family !== agentFamily(targetAgent, agentOptions)) return false;
 
@@ -116,8 +125,9 @@ export function canAdoptSessionForAgent(
   agentOptions?: AgentOption[],
 ): boolean {
   const source = resolveTaskSessionOwner(task, agentOptions);
-  // dsh 收养同样依赖原生 resume,Phase 7 前不可用。
-  if (source.family === "dsh") return false;
+  // 收养依赖 claude/codex 的 home 内 transcript 迁移;omp 的 --resume 接受文件
+  // 路径,无需收养(跨档案场景 Phase 7 处理);dsh 不可用。
+  if (source.family === "dsh" || source.family === "omp") return false;
   if (source.family !== agentFamily(targetAgent, agentOptions)) return false;
   return source.agent !== targetAgent && !canNativeResumeWithAgent(task, targetAgent, agentOptions);
 }
@@ -149,6 +159,8 @@ export function hasTaskContinuationContext(task: Task): boolean {
     task.codexSessionId ||
     task.codexSessionPath ||
     task.dshSessionId ||
-    task.dshSessionPath,
+    task.dshSessionPath ||
+    task.ompSessionId ||
+    task.ompSessionPath,
   );
 }

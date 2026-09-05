@@ -302,6 +302,7 @@ pub(super) fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> 
         }
         "codex" => settings.codex_path.clone(),
         "dsh" => settings.dsh_path.clone(),
+        "omp" => settings.omp_path.clone(),
         _ => settings.claude_path.clone(),
     }
 }

@@ -58,10 +58,28 @@ export const AGENT_OPTIONS: AgentOption[] = [
     codexLike: false,
     family: "dsh",
   },
+  {
+    value: "omp",
+    label: "oh-my-pi",
+    configFile: "",
+    configLang: "yaml",
+    codexLike: false,
+    family: "omp",
+  },
 ];
 
 export function isBuiltInAgent(agent: AgentType): agent is BuiltInAgentType {
-  return agent === "claude" || agent === "claude_gpt55" || agent === "codex" || agent === "dsh";
+  return (
+    agent === "claude" ||
+    agent === "claude_gpt55" ||
+    agent === "codex" ||
+    agent === "dsh" ||
+    agent === "omp"
+  );
+}
+
+export function isOmpAgent(agent: AgentType, options?: AgentOption[]): boolean {
+  return agentFamily(agent, options) === "omp";
 }
 
 export function normalizeAgentConfigLang(value: unknown): AgentConfigLang {
@@ -71,7 +89,9 @@ export function normalizeAgentConfigLang(value: unknown): AgentConfigLang {
 }
 
 export function normalizeProtocolFamily(value: unknown): ProtocolFamily | undefined {
-  return value === "claude" || value === "codex" || value === "dsh" ? value : undefined;
+  return value === "claude" || value === "codex" || value === "dsh" || value === "omp"
+    ? value
+    : undefined;
 }
 
 export function familyFromCodexLike(codexLike: boolean): ProtocolFamily {
@@ -178,7 +198,7 @@ export function isDshAgent(agent: AgentType, options?: AgentOption[]): boolean {
  *
  * DSH 的 Off/High/Max 由内置官方模型目录声明,提供方 / 自定义提供方档案的目录
  * 不保证带 reasoning 元数据,因此只有内置 `dsh` 允许选择并传参,其余 dsh 档案
- * 只做模型选择。claude / codex 族不受此限制。
+ * 只做模型选择。claude / codex / omp 族不受此限制(omp 走 thinking level 词表)。
  */
 export function agentSupportsReasoningEffort(agent: AgentType, options?: AgentOption[]): boolean {
   if (agentFamily(agent, options) !== "dsh") return true;

@@ -1238,8 +1238,9 @@ pub(super) fn build_agent_script(draft: &AgentSetupDraft) -> String {
     match draft.kind {
         AgentSetupKind::Codex => build_codex_agent_script(draft),
         AgentSetupKind::ClaudeCode => build_claude_code_agent_script(draft),
-        // dsh-like 档案不走 wrapper 脚本(setup_agent_profile 单独分支处理)。
-        AgentSetupKind::Dsh => String::new(),
+        // dsh/omp 档案不走 wrapper 脚本(setup_agent_profile 单独分支处理,
+        // omp 直接使用托管 home,无需生成启动脚本)。
+        AgentSetupKind::Dsh | AgentSetupKind::Omp => String::new(),
     }
 }
 
@@ -1277,6 +1278,7 @@ pub(super) fn setup_agent_kind_suffix(kind: &AgentSetupKind) -> &'static str {
         AgentSetupKind::Codex => "codex",
         AgentSetupKind::ClaudeCode => "claude",
         AgentSetupKind::Dsh => "dsh",
+        AgentSetupKind::Omp => "omp",
     }
 }
 
@@ -1300,11 +1302,13 @@ pub(super) fn allocate_setup_agent_id(
     // 内置 agent id 全部保留。当前 `preferred` 总会带上 `_{suffix}` 后缀,拼不出
     // 裸 id,所以这里只是把不变量写全:内置集合一旦变化,自定义档案也不该占用。
     let is_used = |candidate: &str| {
-        matches!(candidate, "claude" | "claude_gpt55" | "codex" | "dsh")
-            || settings
-                .custom_agents
-                .iter()
-                .any(|profile| profile.id == candidate)
+        matches!(
+            candidate,
+            "claude" | "claude_gpt55" | "codex" | "dsh" | "omp"
+        ) || settings
+            .custom_agents
+            .iter()
+            .any(|profile| profile.id == candidate)
     };
     if !is_used(&preferred) {
         return Ok(preferred);

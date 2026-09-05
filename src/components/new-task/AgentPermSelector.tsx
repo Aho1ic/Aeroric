@@ -26,6 +26,7 @@ import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import deepseekLogo from "../../assets/deepseek.svg";
+import ompLogo from "../../assets/omp.svg";
 import type { DshAgentPreset } from "../../dshSettings";
 
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
@@ -53,6 +54,8 @@ function agentIcon(agent: AgentType, options = [] as ReturnType<typeof useAgentO
       return chatgptLogo;
     case "dsh":
       return deepseekLogo;
+    case "omp":
+      return ompLogo;
     default:
       return claudeLogo;
   }

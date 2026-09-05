@@ -28,6 +28,7 @@ export interface AppSettings {
   claude_gpt55_path: string;
   codex_path: string;
   dsh_path?: string;
+  omp_path?: string;
   claude_config_path: string;
   claude_gpt55_config_path: string;
   codex_config_path: string;
@@ -277,6 +278,7 @@ export interface AgentVersions {
   claude_gpt55_version: string;
   codex_version: string;
   dsh_version?: string;
+  omp_version?: string | null;
 }
 
 export interface AgentUpgradeChannel {
@@ -333,7 +335,7 @@ export type AgentInstallStage =
   | "failed"
   | "cancelled";
 
-export type AgentToolId = "claude" | "codex" | "dsh";
+export type AgentToolId = "claude" | "codex" | "dsh" | "omp";
 
 export interface AgentToolStatus {
   agent: AgentToolId;

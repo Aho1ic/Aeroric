@@ -72,7 +72,7 @@ describe("useAgentOptions settings cache", () => {
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("first")).toHaveTextContent(
-      "Claude Code,Codex,DeepSeek Harness:loading",
+      "Claude Code,Codex,DeepSeek Harness,oh-my-pi:loading",
     );
 
     await act(async () => {

@@ -25,7 +25,7 @@ import { settingsForm } from "../../styles/panelChrome";
 
 const AUTO_VERSION_DETECT_DELAY_MS = 350;
 
-type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path" | "dsh_path";
+type AgentPathField = "claude_path" | "claude_gpt55_path" | "codex_path" | "dsh_path" | "omp_path";
 type AgentConfigPathField =
   | "claude_config_path"
   | "claude_gpt55_config_path"
@@ -35,13 +35,15 @@ type AgentVersionField =
   | "claude_version"
   | "claude_gpt55_version"
   | "codex_version"
-  | "dsh_version";
+  | "dsh_version"
+  | "omp_version";
 
 const pathFieldByAgent: Record<BuiltInAgentType, AgentPathField> = {
   claude: "claude_path",
   claude_gpt55: "claude_gpt55_path",
   codex: "codex_path",
   dsh: "dsh_path",
+  omp: "omp_path",
 };
 
 const versionFieldByAgent: Record<BuiltInAgentType, AgentVersionField> = {
@@ -49,9 +51,12 @@ const versionFieldByAgent: Record<BuiltInAgentType, AgentVersionField> = {
   claude_gpt55: "claude_gpt55_version",
   codex: "codex_version",
   dsh: "dsh_version",
+  omp: "omp_version",
 };
 
-const configPathFieldByAgent: Record<BuiltInAgentType, AgentConfigPathField> = {
+// omp 的配置文件固定在托管 home(~/.aeroric/agent-homes/omp/config.yml)中,
+// 不提供自定义 config 路径覆盖,因此这里没有 omp 条目。
+const configPathFieldByAgent: Partial<Record<BuiltInAgentType, AgentConfigPathField>> = {
   claude: "claude_config_path",
   claude_gpt55: "claude_gpt55_config_path",
   codex: "codex_config_path",
@@ -63,6 +68,7 @@ const pathLabelKeyByAgent: Record<BuiltInAgentType, string> = {
   claude_gpt55: "appSettings.claudeGpt55Path",
   codex: "appSettings.codexPath",
   dsh: "appSettings.dshPath",
+  omp: "appSettings.ompPath",
 };
 
 const pathHintKeyByAgent: Record<BuiltInAgentType, string> = {
@@ -70,6 +76,7 @@ const pathHintKeyByAgent: Record<BuiltInAgentType, string> = {
   claude_gpt55: "appSettings.claudeGpt55PathHint",
   codex: "appSettings.codexPathHint",
   dsh: "appSettings.dshPathHint",
+  omp: "appSettings.ompPathHint",
 };
 
 function findCustomAgent(settings: AppSettings, agentKey: AgentKey): CustomAgentProfile | null {
@@ -378,7 +385,8 @@ export const AgentPathSection = forwardRef<
     currentPath !== originalPath ||
     currentConfigPath !== originalConfigPath ||
     currentProxyEnabled !== originalProxyEnabled;
-  const versionValue = versionField ? versions[versionField] : customVersion;
+  // omp_version 在后端为 Option<String>,未探测时为 null,统一归一为空串。
+  const versionValue = versionField ? (versions[versionField] ?? "") : customVersion;
 
   useImperativeHandle(ref, () => ({ isDirty, save: handleSave }), [isDirty, handleSave]);
 
@@ -420,15 +428,18 @@ export const AgentPathSection = forwardRef<
               <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
               {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleUpgrade()}
-              disabled={upgrading || refreshing || loading}
-            >
-              <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
-              {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
-            </Button>
+            {/* omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入;此前隐藏按钮避免死端。 */}
+            {builtInAgent !== "omp" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleUpgrade()}
+                disabled={upgrading || refreshing || loading}
+              >
+                <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
+                {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
+              </Button>
+            )}
           </div>
         </div>
       )}

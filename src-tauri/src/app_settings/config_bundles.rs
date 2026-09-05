@@ -92,6 +92,7 @@ pub(super) fn builtin_agent_details(agent: &str) -> Option<(&'static str, &'stat
         "claude_gpt55" => Some(("Claude GPT-5.5", "shellscript", false)),
         "codex" => Some(("Codex", "toml", true)),
         "dsh" => Some(("DeepSeek Harness", "yaml", false)),
+        "omp" => Some(("oh-my-pi", "yaml", false)),
         _ => None,
     }
 }
@@ -102,6 +103,7 @@ fn bundle_agent_family(agent: &AgentConfigBundleAgent) -> AgentFamily {
             "claude" => AgentFamily::Claude,
             "codex" | "claude_gpt55" => AgentFamily::Codex,
             "dsh" => AgentFamily::Dsh,
+            "omp" => AgentFamily::Omp,
             _ => AgentFamily::from_codex_like(agent.codex_like),
         };
     }

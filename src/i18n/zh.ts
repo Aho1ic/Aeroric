@@ -483,6 +483,9 @@ export const zh: Record<string, string> = {
   "appSettings.codexPathHint": "留空则从系统 PATH 中使用 codex。",
   "appSettings.dshPathHint":
     "可填写 PATH 中的 dsh，或 DeepSeek Harness 源码目录；源码目录需先执行 pnpm install 和 pnpm run build。",
+  "appSettings.ompPath": "oh-my-pi 路径",
+  "appSettings.ompPathHint":
+    "留空则从系统 PATH 中使用 omp，或填写 oh-my-pi 二进制路径（如 ~/.local/bin/omp）。",
   "appSettings.chooseDshSource": "选择 DeepSeek Harness 源码目录",
   "appSettings.addAgent": "添加 Agent",
   "appSettings.agentRuntime": "Agent 运行方式",

@@ -284,7 +284,7 @@ pub(super) fn model_auth_attempts(kind: &AgentSetupKind) -> [AgentModelAuth; 3] 
             AgentModelAuth::BearerAndApiKey,
             AgentModelAuth::ApiKey,
         ],
-        AgentSetupKind::Dsh => [
+        AgentSetupKind::Dsh | AgentSetupKind::Omp => [
             AgentModelAuth::Bearer,
             AgentModelAuth::BearerAndApiKey,
             AgentModelAuth::ApiKey,
@@ -345,7 +345,7 @@ pub(super) struct DetectionFailures {
 /// 前缀匹配),再退回另一种 CLI UA。两个都试完仍失败才认为不是 UA 问题。
 fn model_user_agent_attempts(kind: &AgentSetupKind) -> [&'static str; 2] {
     match kind {
-        AgentSetupKind::Codex | AgentSetupKind::Dsh => {
+        AgentSetupKind::Codex | AgentSetupKind::Dsh | AgentSetupKind::Omp => {
             [CODEX_CLI_DETECT_USER_AGENT, CLAUDE_CLI_DETECT_USER_AGENT]
         }
         AgentSetupKind::ClaudeCode => [CLAUDE_CLI_DETECT_USER_AGENT, CODEX_CLI_DETECT_USER_AGENT],

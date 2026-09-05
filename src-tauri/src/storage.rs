@@ -134,6 +134,18 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub dsh_session_path: Option<String>,
+    #[serde(
+        rename = "ompSessionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub omp_session_id: Option<String>,
+    #[serde(
+        rename = "ompSessionPath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub omp_session_path: Option<String>,
     #[serde(rename = "sessionAgent", skip_serializing_if = "Option::is_none")]
     pub session_agent: Option<String>,
     #[serde(

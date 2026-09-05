@@ -59,18 +59,21 @@ const EMPTY_STATUSES: AgentStatuses = {
   claude: null,
   codex: null,
   dsh: null,
+  omp: null,
 };
 
 const EMPTY_LATEST_VERSIONS: AgentLatestVersions = {
   claude: "",
   codex: "",
   dsh: "",
+  omp: "",
 };
 
 const EMPTY_OPERATIONS: AgentOperations = {
   claude: null,
   codex: null,
   dsh: null,
+  omp: null,
 };
 
 const AgentVersionsContext = createContext<AgentVersionsContextValue | null>(null);

@@ -11,10 +11,48 @@ export const REASONING_EFFORTS = [
 /** DeepSeek Harness adapter-owned effort ids. DSH does not use the Claude/Codex vocabulary. */
 export const DSH_REASONING_EFFORTS = ["off", "high", "max"] as const;
 
+/**
+ * oh-my-pi thinking level 词表(`--thinking <level>` / `set_thinking_level`)。
+ * omp 不含 `ultra`(Claude/Codex 专有),`auto` 由运行期解析,不进静态词表。
+ */
+export const OMP_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
 export type ReasoningEffort =
   | (typeof REASONING_EFFORTS)[number]
   | (typeof DSH_REASONING_EFFORTS)[number];
+export type OmpThinkingLevel = (typeof OMP_THINKING_LEVELS)[number];
 export type TaskSpeed = "standard" | "fast";
+
+/**
+ * Aeroric 统一 effort 词表 → omp thinking level。omp 原生支持全部 7 档
+ * (见 OMP_THINKING_LEVELS),因此这些档位恒等透传;仅 ultra(omp 无此档,
+ * Claude/Codex 专有)封顶为 max。保存过的历史 effort 值因此能原样传给 omp。
+ */
+export const OMP_THINKING_LEVEL_MAP: Record<ReasoningEffort, OmpThinkingLevel> = {
+  off: "off",
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+  ultra: "max",
+};
+
+export function ompThinkingLevelFor(effort: string | undefined): OmpThinkingLevel {
+  if (effort && Object.hasOwn(OMP_THINKING_LEVEL_MAP, effort)) {
+    return OMP_THINKING_LEVEL_MAP[effort as ReasoningEffort];
+  }
+  return "medium";
+}
 
 /** 不开放推理强度的配置共用这一份空列表,避免每次渲染都产生新引用。 */
 export const NO_REASONING_EFFORTS: readonly ReasoningEffort[] = [];
@@ -65,11 +103,12 @@ export function availableReasoningEfforts(
   return REASONING_EFFORTS.filter((effort) => effort !== "ultra");
 }
 
-/** Family-aware effort vocabulary. DSH values come from dsh-llm-deepseek. */
+/** Family-aware effort vocabulary. DSH values come from dsh-llm-deepseek; omp uses thinking levels. */
 export function availableReasoningEffortsForFamily(
   family: import("./types").ProtocolFamily,
   model: string | undefined,
 ): readonly ReasoningEffort[] {
   if (family === "dsh") return DSH_REASONING_EFFORTS;
+  if (family === "omp") return OMP_THINKING_LEVELS;
   return availableReasoningEfforts(family === "codex", model);
 }

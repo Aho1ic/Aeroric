@@ -231,10 +231,10 @@ export type {
   TableChildObjectType,
 } from "./types/database";
 
-export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex" | "dsh";
+export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex" | "dsh" | "omp";
 export type AgentType = BuiltInAgentType | (string & {});
 /** 协议族:决定启动参数、会话格式与配置文件形态;codexLike 布尔为其派生。 */
-export type ProtocolFamily = "claude" | "codex" | "dsh";
+export type ProtocolFamily = "claude" | "codex" | "dsh" | "omp";
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";
 export type ThemeVariant = "dark" | "light" | "eyecare";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
@@ -324,6 +324,9 @@ export interface Task {
   dshSessionPath?: string;
   dshWorkspaceId?: string;
   dshPromptMode?: string;
+  /** omp(rpc-ui) 会话 UUID v7 与 .jsonl 文件绝对路径。 */
+  ompSessionId?: string;
+  ompSessionPath?: string;
   /** 实际创建当前会话的 Agent；切换配置失败后仍用于定位原会话 home。 */
   sessionAgent?: AgentType;
   /** 实际会话所属协议族；避免切换后的 task.agent 误导 resume/session 解析。 */
@@ -921,7 +924,7 @@ export interface UsageSnapshot {
   fetchedAt: number;
 }
 
-export type UsageStatisticsAgent = "all" | "codex" | "claude" | "dsh";
+export type UsageStatisticsAgent = "all" | "codex" | "claude" | "dsh" | "omp";
 export type UsageStatisticsRange = 1 | 7 | 14 | 30;
 
 export interface UsageStatisticsTotals {
@@ -956,6 +959,7 @@ export interface UsageStatistics {
     codex: UsageStatisticsTotals;
     claude: UsageStatisticsTotals;
     dsh?: UsageStatisticsTotals;
+    omp?: UsageStatisticsTotals;
   };
 }
 

@@ -23,13 +23,14 @@ import {
 
 describe("agent options", () => {
   it("exposes only clean release launch profiles in dropdown order", () => {
-    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual(["claude", "codex", "dsh"]);
+    expect(AGENT_OPTIONS.map((agent) => agent.value)).toEqual(["claude", "codex", "dsh", "omp"]);
   });
 
   it("labels the release launch profiles clearly", () => {
     expect(agentDisplayLabel("claude")).toBe("Claude Code");
     expect(agentDisplayLabel("codex")).toBe("Codex");
     expect(agentDisplayLabel("dsh")).toBe("DeepSeek Harness");
+    expect(agentDisplayLabel("omp")).toBe("oh-my-pi");
   });
 
   it("ships release profiles without local config file paths", () => {
@@ -37,6 +38,7 @@ describe("agent options", () => {
       ["claude", ""],
       ["codex", ""],
       ["dsh", ""],
+      ["omp", ""],
     ]);
   });
 

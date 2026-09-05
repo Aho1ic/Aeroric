@@ -1,12 +1,22 @@
 import { useState, memo, type MouseEvent } from "react";
 import { Trash2, Star, Play, GitBranch, RotateCcw } from "lucide-react";
-import type { Task } from "../../types";
+import type { ProtocolFamily, Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import { agentDisplayLabel, isCodexLikeAgent } from "../../agents";
+import { agentDisplayLabel, agentFamily, isCodexLikeAgent } from "../../agents";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
+import deepseekLogo from "../../assets/deepseek.svg";
+import ompLogo from "../../assets/omp.svg";
+
+/** 任务徽标按会话协议族四元判断;sessionFamily 缺省时回退 task.agent 的族。 */
+const logoByFamily: Record<ProtocolFamily, string> = {
+  claude: claudeLogo,
+  codex: chatgptLogo,
+  dsh: deepseekLogo,
+  omp: ompLogo,
+};
 
 function statusLabelKey(status: Task["status"]): string {
   switch (status) {
@@ -55,6 +65,7 @@ export const TaskListItem = memo(
     const [hov, setHov] = useState(false);
     const displayTitle = task.name ?? task.prompt;
     const codexLike = isCodexLikeAgent(task.agent);
+    const logo = logoByFamily[task.sessionFamily ?? agentFamily(task.agent)];
     return (
       <div
         style={{
@@ -90,7 +101,7 @@ export const TaskListItem = memo(
           </div>
         </div>
         <img
-          src={task.agent === "claude" ? claudeLogo : chatgptLogo}
+          src={logo}
           title={agentDisplayLabel(task.agent)}
           style={{
             ...s.agentBadge,

@@ -252,3 +252,56 @@ describe("dsh session family", () => {
     expect(hasTaskSessionPath({ ...dshTask, dshSessionPath: undefined })).toBe(false);
   });
 });
+
+describe("omp session family", () => {
+  const ompTask: Task = {
+    ...baseTask,
+    agent: "omp",
+    ompSessionId: "0198c7a2-7f4a-7d3e-9f2a-3b6c5d4e4f50",
+    ompSessionPath: "/tmp/omp/session.jsonl",
+    sessionAgent: "omp",
+    sessionFamily: "omp",
+  };
+
+  it("resolves omp owners from sessionFamily", () => {
+    expect(resolveTaskSessionOwner(ompTask)).toEqual({
+      agent: "omp",
+      family: "omp",
+      codexLike: false,
+    });
+  });
+
+  it("selects omp session fields by family", () => {
+    const fields = getTaskSessionFieldsByFamily(ompTask, "omp");
+    expect(fields.sessionId).toBe("0198c7a2-7f4a-7d3e-9f2a-3b6c5d4e4f50");
+    expect(fields.sessionPath).toBe("/tmp/omp/session.jsonl");
+  });
+
+  it("offers native resume for omp sessions but no adoption", () => {
+    expect(canNativeResumeWithAgent(ompTask, "omp")).toBe(true);
+    expect(canNativeResumeWithAgent(ompTask, "claude")).toBe(false);
+    expect(canAdoptSessionForAgent(ompTask, "omp")).toBe(false);
+  });
+
+  it("routes omp config-switch continuation through resume", () => {
+    expect(resolveConfigSwitchSessionStrategy(ompTask, "omp", true)).toBe("resume");
+  });
+
+  it("infers omp family for legacy tasks with only omp session fields", () => {
+    const legacy: Task = {
+      ...baseTask,
+      agent: "omp",
+      ompSessionId: "0198c7a2-7f4a-7d3e-9f2a-3b6c5d4e4f50",
+    };
+    expect(resolveTaskSessionOwner(legacy).family).toBe("omp");
+  });
+
+  it("counts omp session fields as continuation context", () => {
+    expect(hasTaskContinuationContext({ ...baseTask, prompt: "", ompSessionId: "x" })).toBe(true);
+  });
+
+  it("keeps cancelled omp tasks visible when a transcript path exists", () => {
+    expect(hasTaskSessionPath(ompTask)).toBe(true);
+    expect(hasTaskSessionPath({ ...ompTask, ompSessionPath: undefined })).toBe(false);
+  });
+});

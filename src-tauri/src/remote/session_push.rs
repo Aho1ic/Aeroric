@@ -70,6 +70,7 @@ pub(crate) async fn session_messages(params: Value) -> Result<Value, String> {
         crate::app_settings::AgentFamily::Codex => task.codex_session_path.clone(),
         crate::app_settings::AgentFamily::Claude => task.claude_session_path.clone(),
         crate::app_settings::AgentFamily::Dsh => task.dsh_session_path.clone(),
+        crate::app_settings::AgentFamily::Omp => task.omp_session_path.clone(),
     };
     let Some(session_path) = session_path else {
         return Ok(json!({ "available": false, "reason": "no_session", "messages": [] }));

@@ -103,6 +103,7 @@ pub(super) fn detect_versions_for_settings(settings: &AppSettings) -> AgentVersi
             .unwrap_or_default(),
         dsh_version: detect_version(&get_agent_launch_spec_from_settings(settings, "dsh"))
             .unwrap_or_default(),
+        omp_version: detect_version(&get_agent_launch_spec_from_settings(settings, "omp")),
     }
 }
 
@@ -740,14 +741,18 @@ pub(super) fn upgrade_kind_for_agent(
         "claude" => Some(AgentUpgradeKind::Claude),
         "codex" | "claude_gpt55" => Some(AgentUpgradeKind::Codex),
         "dsh" => Some(AgentUpgradeKind::Dsh),
+        // omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入;在此之前视为无升级路径。
+        "omp" => None,
         other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
-            .map(|profile| match profile.agent_family() {
-                AgentFamily::Codex => AgentUpgradeKind::Codex,
-                AgentFamily::Dsh => AgentUpgradeKind::Dsh,
-                AgentFamily::Claude => AgentUpgradeKind::Claude,
+            .and_then(|profile| match profile.agent_family() {
+                AgentFamily::Codex => Some(AgentUpgradeKind::Codex),
+                AgentFamily::Dsh => Some(AgentUpgradeKind::Dsh),
+                AgentFamily::Claude => Some(AgentUpgradeKind::Claude),
+                // omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入。
+                AgentFamily::Omp => None,
             }),
     }
 }
@@ -799,6 +804,19 @@ mod tests {
         assert_eq!(
             extract_semver("OpenAI Codex v0.131.0 (research preview)"),
             Some("0.131.0".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_omp_semver_from_version_banner() {
+        // `omp --version` 输出形如 "omp/18.1.10"。
+        assert_eq!(
+            extract_semver("omp/18.1.10\n"),
+            Some("18.1.10".to_string())
+        );
+        assert_eq!(
+            extract_semver("omp/18.2.0-rc.1\n"),
+            Some("18.2.0-rc.1".to_string())
         );
     }
 

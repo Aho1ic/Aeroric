@@ -157,6 +157,7 @@ pub enum AgentSetupKind {
     Codex,
     ClaudeCode,
     Dsh,
+    Omp,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -521,6 +522,9 @@ pub struct AppSettings {
     pub codex_path: String,
     #[serde(default)]
     pub dsh_path: String,
+    /// oh-my-pi(rpc-ui) 的托管路径;为空时 omp 走默认 home。
+    #[serde(default)]
+    pub omp_path: String,
     #[serde(default)]
     pub claude_config_path: String,
     #[serde(default)]
@@ -566,6 +570,7 @@ impl Default for AppSettings {
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
             dsh_path: String::new(),
+            omp_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
@@ -596,6 +601,7 @@ pub enum AgentFamily {
     Claude,
     Codex,
     Dsh,
+    Omp,
 }
 
 impl AgentFamily {
@@ -604,6 +610,7 @@ impl AgentFamily {
             AgentFamily::Claude => "claude",
             AgentFamily::Codex => "codex",
             AgentFamily::Dsh => "dsh",
+            AgentFamily::Omp => "omp",
         }
     }
 
@@ -612,6 +619,7 @@ impl AgentFamily {
             "claude" => Some(AgentFamily::Claude),
             "codex" => Some(AgentFamily::Codex),
             "dsh" => Some(AgentFamily::Dsh),
+            "omp" => Some(AgentFamily::Omp),
             _ => None,
         }
     }
@@ -633,6 +641,7 @@ impl AgentFamily {
             AgentFamily::Claude => AgentSetupKind::ClaudeCode,
             AgentFamily::Codex => AgentSetupKind::Codex,
             AgentFamily::Dsh => AgentSetupKind::Dsh,
+            AgentFamily::Omp => AgentSetupKind::Omp,
         }
     }
 }
@@ -655,6 +664,7 @@ fn configured_agent_family(settings: &AppSettings, agent: &str) -> AgentFamily {
         "claude" => AgentFamily::Claude,
         "codex" | "claude_gpt55" => AgentFamily::Codex,
         "dsh" => AgentFamily::Dsh,
+        "omp" => AgentFamily::Omp,
         other => settings
             .custom_agents
             .iter()
@@ -736,7 +746,7 @@ pub fn resolve_family_param(family: Option<&str>, is_codex: bool) -> AgentFamily
 }
 
 pub fn is_known_agent(agent: &str) -> bool {
-    matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh")
+    matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh" | "omp")
         || load_settings_internal()
             .custom_agents
             .iter()
@@ -1105,6 +1115,11 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         } else {
             normalize_agent_configured_path("dsh", &settings.dsh_path)
         },
+        omp_path: if settings.omp_path.is_empty() {
+            String::new()
+        } else {
+            normalize_agent_configured_path("omp", &settings.omp_path)
+        },
         claude_config_path: normalize_config_path(settings.claude_config_path),
         claude_gpt55_config_path: normalize_config_path(settings.claude_gpt55_config_path),
         codex_config_path: normalize_config_path(settings.codex_config_path),
@@ -1189,6 +1204,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_gpt55_path: String::new(),
             codex_path: String::new(),
             dsh_path: String::new(),
+            omp_path: String::new(),
             claude_config_path: String::new(),
             claude_gpt55_config_path: String::new(),
             codex_config_path: String::new(),
@@ -1575,6 +1591,13 @@ pub async fn update_agent_path_settings(
                         settings.dsh_config_path = config_path;
                     }
                 }
+                "omp" => {
+                    if let Some(executable_path) = executable_path {
+                        settings.omp_path = executable_path;
+                    }
+                    // omp 配置固定在托管 home(~/.aeroric/agent-homes/omp/config.yml),
+                    // 不支持 config_path 覆盖。
+                }
                 _ => {
                     if let Some(executable_path) = executable_path {
                         let normalized_id = sanitize_custom_agent_id(&agent);
@@ -1660,6 +1683,11 @@ pub(crate) fn list_builtin_dsh_models() -> Vec<String> {
     ]
 }
 
+/// 内建 omp 的托管 home(`PI_CODING_AGENT_DIR` 目标),与用户自己的 `~/.omp` 隔离。
+pub(crate) fn omp_managed_home() -> Option<PathBuf> {
+    crate::platform::home_dir().map(|home| home.join(".aeroric").join("agent-homes").join("omp"))
+}
+
 pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
@@ -1668,6 +1696,9 @@ pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, 
         "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
         "codex" => Ok(home.join(".codex").join("config.toml")),
         "dsh" => crate::dsh_home::dsh_settings_path(),
+        "omp" => omp_managed_home()
+            .map(|dir| dir.join("config.yml"))
+            .ok_or_else(|| "Cannot find home directory".to_string()),
         _ => Err(format!("Unknown built-in agent: {agent}")),
     }
 }
@@ -1710,6 +1741,7 @@ pub async fn export_all_agent_config_bundle(
             "claude_gpt55".to_string(),
             "codex".to_string(),
             "dsh".to_string(),
+            "omp".to_string(),
         ];
         agent_ids.extend(
             settings
@@ -2928,6 +2960,9 @@ pub struct AgentVersions {
     pub codex_version: String,
     #[serde(default)]
     pub dsh_version: String,
+    /// omp(rpc-ui) 版本;未探测时为空。
+    #[serde(default)]
+    pub omp_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

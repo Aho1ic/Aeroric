@@ -176,6 +176,7 @@ fn setup_id(label: &str, requested: Option<String>, kind: &AgentSetupKind) -> St
         AgentSetupKind::Codex => "codex",
         AgentSetupKind::ClaudeCode => "claude",
         AgentSetupKind::Dsh => "dsh",
+        AgentSetupKind::Omp => "omp",
     };
     let mut id = source
         .trim()

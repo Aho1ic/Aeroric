@@ -35,7 +35,7 @@ pub(super) fn sanitize_custom_agent_id(value: &str) -> String {
         .to_string();
     match trimmed.as_str() {
         "" => String::new(),
-        "claude" | "claude_gpt55" | "codex" => format!("local_{}", trimmed),
+        "claude" | "claude_gpt55" | "codex" | "dsh" | "omp" => format!("local_{}", trimmed),
         _ => trimmed,
     }
 }

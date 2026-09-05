@@ -161,11 +161,14 @@ fn finalize_task_exit(
         let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
         let dsh_info = tm.dsh_sessions.lock().remove(task_id);
         let dsh_path = dsh_info.map(|info| info.session_path);
+        let omp_info = tm.omp_sessions.lock().remove(task_id);
+        let omp_path = omp_info.map(|info| info.session_path);
         had_agent_session = match family {
             crate::app_settings::AgentFamily::Codex => codex_path.is_some(),
-            // dsh headless 的状态完全由退出码驱动:会话文件存在不代表任务成功
+            // dsh/omp 的状态完全由退出码驱动:会话文件存在不代表任务成功
             // (非零退出 = failed,即使 transcript 已经写入)。
             crate::app_settings::AgentFamily::Dsh => false,
+            crate::app_settings::AgentFamily::Omp => false,
             crate::app_settings::AgentFamily::Claude => {
                 // lazy attach 注入的占位条目不算"曾真正建立过会话"，
                 // 否则 Claude 异常退出会被误标为 done。
@@ -183,6 +186,9 @@ fn finalize_task_exit(
             claimed.remove(&path);
         }
         if let Some(path) = dsh_path {
+            claimed.remove(&path);
+        }
+        if let Some(path) = omp_path {
             claimed.remove(&path);
         }
     }

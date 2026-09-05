@@ -78,7 +78,7 @@ mod wsl;
 mod wsl_fs;
 mod wsl_git;
 
-use session::{ClaudeSessionInfo, CodexSessionInfo};
+use session::{ClaudeSessionInfo, CodexSessionInfo, OmpSessionInfo};
 use session_dsh::DshSessionInfo;
 
 pub struct TaskManager {
@@ -93,6 +93,7 @@ pub struct TaskManager {
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
     pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
+    pub(crate) omp_sessions: Mutex<HashMap<String, OmpSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
     /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
     pub(crate) initial_input_signals: pty::StartupSignalRegistry,
@@ -426,6 +427,7 @@ pub fn run() {
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
             dsh_sessions: Mutex::new(HashMap::new()),
+            omp_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
             initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
             wsl_active_ids: Mutex::new(HashSet::new()),
