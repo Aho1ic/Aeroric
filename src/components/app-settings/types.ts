@@ -477,12 +477,21 @@ export function formatAgentBalanceDisplay(
   const locale = language === "zh" ? "zh-CN" : "en-US";
   const scale = Math.max(balance.used, balance.total ?? 0);
   const compact = scale >= COMPACT_BALANCE_THRESHOLD;
+  // 两侧小数位都写死。只给 maximumFractionDigits 的话,minimumFractionDigits 取的是
+  // 实现给的默认值:紧凑记数下 Node 22 按货币位数补成 `$1.00`,Node 24 / 新 ICU 给
+  // `$1`。同一份构建在 WKWebView / WebView2 / WebKitGTK 上也会各说一套 —— 这不是
+  // 测试口味问题,是同一个数字在不同平台上显示不一样。
   const formatter = new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
     ...(compact
-      ? { notation: "compact" as const, maximumFractionDigits: 2 }
-      : { maximumFractionDigits: 2 }),
+      ? {
+          notation: "compact" as const,
+          // 紧凑档不补零:`$1 / $13.95M` 比 `$1.00 / $13.95M` 更像同一档的两个数。
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2,
+        }
+      : { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   });
   return {
     used: formatter.format(balance.used),

@@ -57,12 +57,13 @@ describe("formatAgentBalanceDisplay", () => {
   });
 
   /**
-   * 门槛看 used 与 total 的较大者:已用很小但总额上百万时两边要同档,
-   * 否则会出现 `$1.00 / $13.95M` 这种一边精确一边紧凑的错位。
+   * 门槛看 used 与 total 的较大者:已用很小但总额上百万时,两边必须出自**同一个**
+   * formatter,否则会出现「一边精确一边紧凑」的错位。紧凑档不补零,所以 1 是 `$1`
+   * 而不是 `$1.00` —— 小数位在实现里写死了,不跟着 Node / WebView 的 ICU 默认值走。
    */
   it("picks the notation from the larger side so both sides match", () => {
     expect(formatAgentBalanceDisplay({ used: 1, total: 13_954_113 }, "en")).toEqual({
-      used: "$1.00",
+      used: "$1",
       total: "$13.95M",
     });
   });
