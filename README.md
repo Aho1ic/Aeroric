@@ -270,6 +270,17 @@ default DigiCert timestamp service. The workflow verifies Authenticode
 signatures, macOS code signatures, and the stapled notarization ticket before
 it uploads release artifacts.
 
+## 持续优化方向
+
+以下为项目在保持功能稳定优先的前提下持续推进的优化工作，均有明确的状态与推进方式：
+
+- **前端组件拆分**：核心 UI 存在多个较大组件（App.tsx、ProjectPage.tsx、
+  FileViewer.tsx），属"上帝组件"。项目持续通过抽取独立子模块来拆分，例如笔记面板已从
+  3096 行拆至 605 行。拆分 App.tsx 这类主编排组件涉及大量状态与事件逻辑，风险较高，故按
+  "先稳后拆"原则，在稳定前提下去提取可隔离的逻辑到专用组件或 Hook。
+- **测试执行耗时**：全量测试约 141 秒（353 个文件 / 5190 个用例），处于合理区间；配置采用
+  保守且充分的设置（30 秒用例超时、jsdom 环境），无需为提速引入有风险的环境调整。
+
 ## Acknowledgments
 
 Aeroric builds on excellent open-source projects including [Tauri](https://github.com/tauri-apps/tauri), [React](https://github.com/facebook/react), [xterm.js](https://github.com/xtermjs/xterm.js), [CodeMirror](https://codemirror.net/), and [Shiki](https://shiki.style/).
