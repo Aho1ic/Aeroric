@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：</strong> v1.4.6 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
+  <strong>当前版本：</strong> v1.4.7 · <strong>技术栈：</strong> React 19 / Tauri 2 / Rust · <strong>平台：</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">

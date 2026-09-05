@@ -13,7 +13,7 @@ Run Claude Code, Codex, and custom agents across projects with live terminals, t
 </p>
 
 <p align="center">
-  <strong>Current release:</strong> v1.4.6 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
+  <strong>Current release:</strong> v1.4.7 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">

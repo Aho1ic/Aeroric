@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 ///
 /// 放在一个点开头的目录里,和本地 `.notebook/` 对称。列目录时要**跳过整个目录** ——
 /// 不然它自己会被当成一篇笔记同步下来,而它每轮都在变,于是每轮都有一个假冲突。
-pub const MANIFEST_DIR: &str = super::fs_ops::SYNC_PRIVATE_DIR;
+pub const MANIFEST_DIR: &str = crate::notebook::fs_ops::SYNC_PRIVATE_DIR;
 pub const MANIFEST_NAME: &str = "manifest.json";
 
 /// 写入时的临时名。先写它再 rename,避免读到写了一半的清单。
