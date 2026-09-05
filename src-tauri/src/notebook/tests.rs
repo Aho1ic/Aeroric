@@ -1921,9 +1921,12 @@ fn same_millisecond_attachments_do_not_overwrite_each_other() {
 #[test]
 fn attachment_names_stay_under_the_filesystem_byte_limit() {
     let vault = temp_vault("attach-long");
-    // 多数文件系统的单段名上限是 255 **字节**,一个 CJK 字符占 3 字节。不截断的
-    // 话这条笔记的附件名就是 ENAMETOOLONG,保存直接失败。
-    let long_stem = "安".repeat(200);
+    // 多数文件系统的单段名上限是 255 **字节**,一个 CJK 字符占 3 字节。80 个字是 240
+    // 字节,笔记名带上 `.md` 是 243 字节 —— 在按字节算的 ext4 上刚好能落地(macOS 按
+    // 字符算,更宽松);而由它派生的附件名还要挂上 `-<13 位毫秒>.png`,共 258 字节,
+    // 不截断就是 ENAMETOOLONG,保存直接失败。种子本身也得过这条线,不然测试在 Linux
+    // 上死在 `write` 那一行,连被测的截断都走不到。
+    let long_stem = "安".repeat(80);
     let note = vault.join(format!("{long_stem}.md"));
     std::fs::write(&note, "body\n").expect("seed");
 
