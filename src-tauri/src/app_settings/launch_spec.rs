@@ -21,10 +21,14 @@ use std::path::{Path, PathBuf};
 
 // 这份清单不是手挑的 —— 手挑漏了 6 个,靠编译器枚举出来的。
 use super::{
-    agent_scripts_dir, append_agent_credential_env, append_agent_proxy_env,
-    append_builtin_agent_api_env, append_local_router_env, configured_agent_family, detect_path,
-    get_agent_configured_path, normalize_config_path, AgentFamily, AgentLaunchSpec, AppSettings,
+    append_agent_credential_env, append_agent_proxy_env, append_builtin_agent_api_env,
+    append_local_router_env, configured_agent_family, detect_path, get_agent_configured_path,
+    normalize_config_path, AgentFamily, AgentLaunchSpec, AppSettings,
 };
+// 只有 `ensure_user_agent_script_executable`(non-Windows)用它。同下:不门控就是
+// Windows 目标上的一条 unused import。
+#[cfg(not(windows))]
+use super::agent_scripts_dir;
 // 只有 Windows 分支的 `prepend_to_path` 用它。不加 cfg 门控的话,非 Windows 目标上
 // 是个 unused import;删掉则 Windows 编译不过。
 #[cfg(windows)]

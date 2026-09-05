@@ -368,6 +368,8 @@ mod tests {
         fail_read_dir: BTreeSet<String>,
         /// 报不出 size(模拟 rich_metadata 不成立的后端)。
         hide_sizes: bool,
+        /// `stat` 声称可用,但对文件报不出 size。
+        hide_stat_sizes: bool,
         can_rename: bool,
         can_stat: bool,
         /// 内容读取记录,用来证明 manifest 命中仍重新验证当前内容。
@@ -547,14 +549,20 @@ mod tests {
         fn stat(&self, path: &str) -> Result<StorageStat, String> {
             let state = self.inner.lock().expect("lock");
             if let Some(bytes) = state.files.get(path) {
-                let size = state
-                    .size_override
-                    .get(path)
-                    .copied()
-                    .unwrap_or(bytes.len() as u64);
+                let size = if state.hide_stat_sizes {
+                    None
+                } else {
+                    Some(
+                        state
+                            .size_override
+                            .get(path)
+                            .copied()
+                            .unwrap_or(bytes.len() as u64),
+                    )
+                };
                 return Ok(StorageStat {
                     is_dir: false,
-                    size: Some(size),
+                    size,
                     modified_at_ms: None,
                 });
             }
@@ -1051,8 +1059,11 @@ mod tests {
         );
         {
             let mut state = backend.inner.lock().expect("lock");
+            // read_dir 不报 size,`stat` 声称可用却也报不出 —— 这才是「大小未知」。
+            // 上一个测试那种「后端没有 stat 能力」在 `resolve_size` 里是更早的一条分支,
+            // 走不到这句要求的错误话术。
             state.hide_sizes = true;
-            state.can_stat = false;
+            state.hide_stat_sizes = true;
         }
 
         let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);

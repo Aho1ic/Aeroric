@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
+// 只有 macOS 分支的 dmg 安装路径用它:Windows/Linux 走 helper + `authorize_app_exit`。
+#[cfg(target_os = "macos")]
 use crate::authorize_app_restart;
 use crate::storage::atomic_write;
 

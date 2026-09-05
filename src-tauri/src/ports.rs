@@ -1,6 +1,9 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::net::TcpListener;
+// `Path` / `PathBuf` 只出现在 cwd 归因那几个函数里,它们在 Windows 上没有实现(靠
+// netstat + tasklist,拿不到 cwd),只在测试里被直接调用。
+#[cfg(any(not(windows), test))]
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::process::Command;

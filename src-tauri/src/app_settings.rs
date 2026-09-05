@@ -29,7 +29,9 @@ use launch_spec::{get_agent_launch_spec_from_settings, normalize_agent_configure
 // `use super::*` 拿不到兄弟模块的 pub(crate) 项,所以要在这里转一手。
 // 调用点只有 agent_scripts 的测试(那个文件 L2010 起的 `#[cfg(test)]` 块),
 // 不加门控在非测试构建里就是个 unused import。
-#[cfg(test)]
+// 被测的函数本身是 `#[cfg(not(windows))]`(改的是 unix 权限位),re-export 得跟着门控,
+// 否则 Windows 的 test 目标解析不到这个名字。
+#[cfg(all(test, not(windows)))]
 pub(crate) use launch_spec::ensure_user_agent_script_executable;
 
 use agent_env::*;

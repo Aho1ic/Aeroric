@@ -29,6 +29,11 @@
 //! 出现,所以别的形状会**漏报**。宁可漏报也不按猜的规则数 —— 数错了报告里那句「有 3 个
 //! 附件没跟过来」本身就是假的,而这一节的交付物就是那份报告。
 
+// 非 macOS 上 `import` 直接报错返回,整条解析链路只被 `apple_tests` 调到 —— 那不是死
+// 代码:AppleScript 里的哨兵和这侧的解析必须是同一串,而那份一致性在所有平台上都验。
+// lib(非 test)目标上编译器只看得见「没人调」,所以按目标关掉 dead_code。
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::path::Path;
 
 use super::super::html2md::html_to_markdown;

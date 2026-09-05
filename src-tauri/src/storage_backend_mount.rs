@@ -467,17 +467,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn mount_backend_propagates_metadata_errors_with_the_entry_path() {
+    fn mount_backend_lists_a_dangling_entry_instead_of_dropping_it() {
         use std::os::unix::fs::symlink;
 
         let mount = temp_dir("metadata-error");
+        std::fs::write(mount.join("real.md"), b"kept").unwrap();
         symlink("missing-target", mount.join("broken-link")).unwrap();
         let backend = MountBackend::open(&mount).unwrap();
 
-        let error = backend
-            .read_dir("/")
-            .expect_err("a dangling entry must not be silently omitted");
-        assert!(error.contains("broken-link"), "unexpected error: {error}");
+        // 条目被静默丢掉是这里唯一不能接受的结果:同步那侧会把「远端列不到」读成
+        // 「远端删了它」,然后按远端删除去删本地。坏链接自身报不报错是次要的 ——
+        // `read_dir` 用的是 lstat,悬空链接照它自己的 inode 如实列出来。
+        let entries = backend.read_dir("/").expect("listing");
+        assert!(
+            entries.iter().any(|entry| entry.name == "broken-link"),
+            "dangling entry was dropped: {entries:?}"
+        );
+        assert!(entries.iter().any(|entry| entry.name == "real.md"));
+        // 坏在哪里由读取那一步报出来,不是靠让整个目录列不出来。
+        assert!(backend.read("/broken-link").is_err());
 
         drop(backend);
         std::fs::remove_dir_all(&mount).unwrap();
