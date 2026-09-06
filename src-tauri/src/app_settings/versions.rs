@@ -249,6 +249,7 @@ pub(super) enum AgentUpgradeKind {
     Claude,
     Codex,
     Dsh,
+    Omp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -570,6 +571,7 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
                 AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
                 AgentUpgradeKind::Codex => "@openai/codex",
                 AgentUpgradeKind::Dsh => "@deepseek-ai/dsh",
+                AgentUpgradeKind::Omp => "@oh-my-pi/pi-coding-agent",
             };
             let target_version = target_version
                 .map(str::trim)
@@ -597,6 +599,8 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
         AgentUpgradeKind::Codex => "codex",
         // dsh 无 Homebrew 渠道;npm 是唯一官方分发。
         AgentUpgradeKind::Dsh => "",
+        // omp 走 can1357/tap 的 formula,brew 升级要带 tap 全名。
+        AgentUpgradeKind::Omp => "can1357/tap/omp",
     };
     if brew_name.is_empty() {
         return Vec::new();
@@ -612,7 +616,10 @@ pub(super) fn build_agent_upgrade_commands_from_detection(
             ],
         }];
     }
-    if kind == AgentUpgradeKind::Claude && configured_manager == "standalone" {
+    if matches!(kind, AgentUpgradeKind::Claude | AgentUpgradeKind::Omp)
+        && configured_manager == "standalone"
+    {
+        // omp 官方安装脚本(~/.local/bin/omp)自带 `omp update` 自升级。
         return vec![AgentUpgradeCommand {
             channel: "native".to_string(),
             program: launch_program.to_string(),
@@ -631,6 +638,7 @@ pub(super) fn build_agent_upgrade_commands(
         AgentUpgradeKind::Claude => "@anthropic-ai/claude-code",
         AgentUpgradeKind::Codex => "@openai/codex",
         AgentUpgradeKind::Dsh => "@deepseek-ai/dsh",
+        AgentUpgradeKind::Omp => "@oh-my-pi/pi-coding-agent",
     };
     let manager = detected_upgrade_manager(launch_program);
     let npm_program = (manager == "npm")
@@ -640,6 +648,7 @@ pub(super) fn build_agent_upgrade_commands(
         AgentUpgradeKind::Claude => "claude-code",
         AgentUpgradeKind::Codex => "codex",
         AgentUpgradeKind::Dsh => "",
+        AgentUpgradeKind::Omp => "can1357/tap/omp",
     };
     let brew_install = (!brew_name.is_empty() && manager != "npm")
         .then(|| matching_brew_install(launch_program, brew_name))
@@ -669,6 +678,7 @@ pub(super) fn build_agent_upgrade_commands(
             AgentUpgradeKind::Claude => "Claude Code",
             AgentUpgradeKind::Codex => "Codex",
             AgentUpgradeKind::Dsh => "DeepSeek Harness",
+            AgentUpgradeKind::Omp => "oh-my-pi",
         };
         Err(format!(
             "Cannot upgrade the active {label} installation at {launch_program:?} (detected channel: {manager}). Aeroric will not modify another installed copy. Repair this installation or configure the executable that should be used."
@@ -741,18 +751,17 @@ pub(super) fn upgrade_kind_for_agent(
         "claude" => Some(AgentUpgradeKind::Claude),
         "codex" | "claude_gpt55" => Some(AgentUpgradeKind::Codex),
         "dsh" => Some(AgentUpgradeKind::Dsh),
-        // omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入;在此之前视为无升级路径。
-        "omp" => None,
+        "omp" => Some(AgentUpgradeKind::Omp),
         other => settings
             .custom_agents
             .iter()
             .find(|profile| profile.id == other)
-            .and_then(|profile| match profile.agent_family() {
-                AgentFamily::Codex => Some(AgentUpgradeKind::Codex),
-                AgentFamily::Dsh => Some(AgentUpgradeKind::Dsh),
-                AgentFamily::Claude => Some(AgentUpgradeKind::Claude),
-                // omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入。
-                AgentFamily::Omp => None,
+            .map(|profile| match profile.agent_family() {
+                AgentFamily::Codex => AgentUpgradeKind::Codex,
+                AgentFamily::Dsh => AgentUpgradeKind::Dsh,
+                AgentFamily::Claude => AgentUpgradeKind::Claude,
+                // 自定义 omp 档案归并到内建 omp 二进制升级(与 dsh-like 同策略)。
+                AgentFamily::Omp => AgentUpgradeKind::Omp,
             }),
     }
 }
@@ -762,6 +771,7 @@ pub(super) fn upgrade_binary_agent(kind: AgentUpgradeKind) -> &'static str {
         AgentUpgradeKind::Claude => "claude",
         AgentUpgradeKind::Codex => "codex",
         AgentUpgradeKind::Dsh => "dsh",
+        AgentUpgradeKind::Omp => "omp",
     }
 }
 

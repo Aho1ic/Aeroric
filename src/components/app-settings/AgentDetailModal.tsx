@@ -35,6 +35,7 @@ import {
 import { ModelSelectionList } from "./ModelSelectionList";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { DSH_REASONING_EFFORTS, normalizeModelList, sameModel } from "../../modelOptions";
+import { OMP_THINKING_LEVELS } from "../../modelOptions";
 import { refreshLocalRouterRuntime } from "./shared";
 import { agentForm } from "../../styles/panelChrome";
 
@@ -87,6 +88,8 @@ export function AgentDetailModal({
   const isCodex = option.codexLike === true;
   // DeepSeek API 为 OpenAI 兼容(/models + Bearer),模型探测复用 codex 通道。
   const agentIsDsh = option.family === "dsh";
+  // omp 的默认思考档存托管 config.yml(defaultThinkingLevel),speed 概念不存在。
+  const agentIsOmp = option.family === "omp";
   // dsh 只有内置官方配置能选推理强度,提供方 / 自定义提供方档案不暴露该项。
   const effortSupported = agentSupportsReasoningEffort(option.value, [option]);
   const isBuiltIn = isBuiltInAgent(option.value);
@@ -140,7 +143,10 @@ export function AgentDetailModal({
 
   function handleFileContentChange(content: string) {
     setFileState({ status: "loaded", content });
-    if (agentIsDsh) return;
+    // dsh/omp 的 effort 存在各自的托管通道,raw 配置里没有可解析的键;
+    // 在这里重析只会把段选重置成 null 并制造假 dirty(omp 的整文件保存
+    // 还会覆盖刚写入的 defaultThinkingLevel)。
+    if (agentIsDsh || agentIsOmp) return;
     setReasoningEffort(readModelReasoningEffort(content));
     setReasoningSpeed(readModelReasoningSpeed(content));
   }
@@ -205,6 +211,23 @@ export function AgentDetailModal({
         setReasoningSpeed(null);
         setOriginalReasoningSpeed(null);
       }
+      if (agentIsOmp) {
+        // 托管 config.yml 的 defaultThinkingLevel;未设置时跟随 omp 默认 high。
+        invoke<string | null>("get_omp_thinking_level", { agent: agentKey })
+          .then((saved) => {
+            if (cancelled) return;
+            const effort = OMP_THINKING_LEVELS.find((item) => item === saved) ?? "high";
+            setReasoningEffort(effort);
+            setOriginalReasoningEffort(effort);
+            setReasoningSpeed(null);
+            setOriginalReasoningSpeed(null);
+          })
+          .catch(() => {
+            if (cancelled) return;
+            setReasoningEffort("high");
+            setOriginalReasoningEffort("high");
+          });
+      }
       if (deletable) {
         const profile =
           loadedSettings.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
@@ -260,7 +283,7 @@ export function AgentDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [agentIsDsh, agentKey, deletable, settings]);
+  }, [agentIsDsh, agentIsOmp, agentKey, deletable, settings]);
 
   async function handleExportConfig() {
     if (exporting || importing) return;
@@ -427,10 +450,13 @@ export function AgentDetailModal({
     !sameModels(normalizeModels(selectedModels), originalSelectedModels);
   const canSaveReasoningEffort =
     effortSupported &&
-    (agentIsDsh || fileState.status === "loaded") &&
+    (agentIsDsh || agentIsOmp || fileState.status === "loaded") &&
     reasoningEffort !== originalReasoningEffort;
   const canSaveReasoningSpeed =
-    !agentIsDsh && fileState.status === "loaded" && reasoningSpeed !== originalReasoningSpeed;
+    !agentIsDsh &&
+    !agentIsOmp &&
+    fileState.status === "loaded" &&
+    reasoningSpeed !== originalReasoningSpeed;
   const canSave1mContext =
     Boolean(customProfile && option.family === "claude") &&
     enable1mContext !== originalEnable1mContext;
@@ -594,8 +620,16 @@ export function AgentDetailModal({
         setOriginalReasoningEffort(effort);
       }
 
+      if (agentIsOmp && canSaveReasoningEffort) {
+        const effort = OMP_THINKING_LEVELS.find((item) => item === reasoningEffort) ?? "high";
+        await invoke("update_omp_thinking_level", { agent: agentKey, effort });
+        setReasoningEffort(effort);
+        setOriginalReasoningEffort(effort);
+      }
+
       if (
         !agentIsDsh &&
+        !agentIsOmp &&
         (canSaveReasoningEffort || canSaveReasoningSpeed) &&
         latestContent !== null
       ) {
@@ -616,13 +650,13 @@ export function AgentDetailModal({
 
       if (isDirty && fileState.status === "loaded") {
         let contentToSave = fileState.content;
-        if (!agentIsDsh && canSaveReasoningEffort) {
+        if (!agentIsDsh && !agentIsOmp && canSaveReasoningEffort) {
           contentToSave = setModelReasoningEffort(
             contentToSave,
             reasoningEffort as ModelReasoningEffort | null,
           );
         }
-        if (!agentIsDsh && canSaveReasoningSpeed) {
+        if (!agentIsDsh && !agentIsOmp && canSaveReasoningSpeed) {
           contentToSave = setModelReasoningSpeed(contentToSave, reasoningSpeed);
         }
         await invoke("write_agent_config_file", { agent: agentKey, content: contentToSave });
@@ -1095,73 +1129,82 @@ export function AgentDetailModal({
                     )}
 
                     {/* Reasoning effort */}
-                    {effortSupported && (agentIsDsh || fileState.status === "loaded") && (
-                      <div style={{ marginBottom: 18 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 8,
-                            marginBottom: 8,
-                          }}
-                        >
-                          <div>
-                            <div
-                              style={{
-                                fontSize: 13,
-                                fontWeight: 600,
-                                color: "var(--text-primary)",
-                              }}
-                            >
-                              {t("appSettings.reasoningEffort")}
-                            </div>
-                            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}>
-                              {t(
-                                agentIsDsh
-                                  ? "appSettings.dshReasoningEffortHint"
-                                  : "appSettings.reasoningEffortHint",
-                              )}
+                    {effortSupported &&
+                      (agentIsDsh || agentIsOmp || fileState.status === "loaded") && (
+                        <div style={{ marginBottom: 18 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 8,
+                              marginBottom: 8,
+                            }}
+                          >
+                            <div>
+                              <div
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: "var(--text-primary)",
+                                }}
+                              >
+                                {t("appSettings.reasoningEffort")}
+                              </div>
+                              <div
+                                style={{ marginTop: 3, fontSize: 11, color: "var(--text-hint)" }}
+                              >
+                                {t(
+                                  agentIsDsh
+                                    ? "appSettings.dshReasoningEffortHint"
+                                    : agentIsOmp
+                                      ? "appSettings.ompThinkingLevelHint"
+                                      : "appSettings.reasoningEffortHint",
+                                )}
+                              </div>
                             </div>
                           </div>
+                          <AnimatedSelectionGroup
+                            value={
+                              reasoningEffort ?? (agentIsDsh || agentIsOmp ? "high" : "default")
+                            }
+                            options={[
+                              ...(agentIsDsh || agentIsOmp
+                                ? []
+                                : [
+                                    {
+                                      value: "default",
+                                      label: t("appSettings.reasoningEffortDefault"),
+                                      style: { flex: "1.7 1 0", minWidth: 92 },
+                                    },
+                                  ]),
+                              ...(agentIsDsh
+                                ? DSH_REASONING_EFFORTS
+                                : agentIsOmp
+                                  ? OMP_THINKING_LEVELS
+                                  : isCodex
+                                    ? CODEX_REASONING_EFFORTS
+                                    : CLAUDE_REASONING_EFFORTS
+                              ).map((effort) => ({
+                                value: effort,
+                                label: t(`appSettings.reasoningEffort.${effort}`),
+                              })),
+                            ]}
+                            onChange={(value) =>
+                              setReasoningEffort(
+                                value === "default" ? null : (value as AgentReasoningEffort),
+                              )
+                            }
+                            ariaLabel={t("appSettings.reasoningEffort")}
+                            equalWidth
+                            className="agent-config-switch-segmented reasoning"
+                            itemClassName="agent-config-switch-segmented-item"
+                          />
                         </div>
-                        <AnimatedSelectionGroup
-                          value={reasoningEffort ?? (agentIsDsh ? "high" : "default")}
-                          options={[
-                            ...(agentIsDsh
-                              ? []
-                              : [
-                                  {
-                                    value: "default",
-                                    label: t("appSettings.reasoningEffortDefault"),
-                                    style: { flex: "1.7 1 0", minWidth: 92 },
-                                  },
-                                ]),
-                            ...(agentIsDsh
-                              ? DSH_REASONING_EFFORTS
-                              : isCodex
-                                ? CODEX_REASONING_EFFORTS
-                                : CLAUDE_REASONING_EFFORTS
-                            ).map((effort) => ({
-                              value: effort,
-                              label: t(`appSettings.reasoningEffort.${effort}`),
-                            })),
-                          ]}
-                          onChange={(value) =>
-                            setReasoningEffort(
-                              value === "default" ? null : (value as AgentReasoningEffort),
-                            )
-                          }
-                          ariaLabel={t("appSettings.reasoningEffort")}
-                          equalWidth
-                          className="agent-config-switch-segmented reasoning"
-                          itemClassName="agent-config-switch-segmented-item"
-                        />
-                      </div>
-                    )}
+                      )}
 
                     {/* Reasoning speed */}
-                    {!agentIsDsh && fileState.status === "loaded" && (
+                    {!agentIsDsh && !agentIsOmp && fileState.status === "loaded" && (
                       <div style={{ marginBottom: 18 }}>
                         <div
                           style={{

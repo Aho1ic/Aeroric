@@ -5,6 +5,7 @@ import { Button } from "../ui/Button";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import deepseekLogo from "../../assets/deepseek.svg";
+import ompLogo from "../../assets/omp.svg";
 import {
   type AgentInstallErrorCode,
   type AgentInstallStage,
@@ -12,7 +13,7 @@ import {
 } from "./types";
 import { useAgentVersions } from "../../hooks/useAgentVersions";
 
-const AGENTS = ["claude", "codex", "dsh"] as const;
+const AGENTS = ["claude", "codex", "dsh", "omp"] as const;
 type Agent = (typeof AGENTS)[number];
 
 const installErrorKey: Record<AgentInstallErrorCode, string> = {
@@ -108,8 +109,22 @@ export function AgentUpdatesPanel() {
 
       return {
         agent,
-        name: agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "DeepSeek Harness",
-        logo: agent === "claude" ? claudeLogo : agent === "codex" ? chatgptLogo : deepseekLogo,
+        name:
+          agent === "claude"
+            ? "Claude Code"
+            : agent === "codex"
+              ? "Codex"
+              : agent === "omp"
+                ? "oh-my-pi"
+                : "DeepSeek Harness",
+        logo:
+          agent === "claude"
+            ? claudeLogo
+            : agent === "codex"
+              ? chatgptLogo
+              : agent === "omp"
+                ? ompLogo
+                : deepseekLogo,
         installed: Boolean(status?.installed),
         statusLoading: !status,
         unsupported: status?.error_code === "unsupported_platform",

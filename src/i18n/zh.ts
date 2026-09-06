@@ -380,6 +380,7 @@ export const zh: Record<string, string> = {
   "appSettings.providerAnthropic": "Anthropic",
   "appSettings.providerOpenAI": "OpenAI",
   "appSettings.providerDeepSeekHarness": "DeepSeek Harness",
+  "appSettings.providerOhMyPi": "oh-my-pi",
   "appSettings.provider": "服务商",
   "appSettings.viewMode": "视图模式",
   "appSettings.viewCards": "条形视图",
@@ -553,6 +554,8 @@ export const zh: Record<string, string> = {
   "appSettings.reasoningEffort": "推理强度",
   "appSettings.reasoningEffortHint": "保存后会将 model_reasoning_effort 写入本地 Codex 配置文件。",
   "appSettings.dshReasoningEffortHint": "保存为 DeepSeek Harness 新任务的默认推理强度。",
+  "appSettings.ompThinkingLevelHint":
+    "保存为 oh-my-pi 新任务的默认思考档（defaultThinkingLevel）。",
   "appSettings.reasoningEffortDefault": "Model Default",
   "appSettings.reasoningEffort.off": "Off",
   "appSettings.reasoningEffort.minimal": "Minimal",

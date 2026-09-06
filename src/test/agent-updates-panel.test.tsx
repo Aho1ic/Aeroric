@@ -18,6 +18,7 @@ const { invokeMock, listenMock, listeners, latestVersions, toolStatuses, operati
       { agent: "claude", version: "1.1.0", error_code: null as string | null, error: "" },
       { agent: "codex", version: "1.1.0", error_code: null as string | null, error: "" },
       { agent: "dsh", version: "0.1.0-rc.6", error_code: null as string | null, error: "" },
+      { agent: "omp", version: "18.1.10", error_code: null as string | null, error: "" },
     ],
     toolStatuses: [
       {
@@ -58,6 +59,20 @@ const { invokeMock, listenMock, listeners, latestVersions, toolStatuses, operati
         version: "0.1.0-rc.5",
         path: "/usr/local/bin/dsh",
         channel: "npm",
+        managed: false,
+        error_code: null as string | null,
+        error: "",
+      },
+      {
+        agent: "omp",
+        supported: true,
+        platform: "macos",
+        architecture: "aarch64",
+        libc: "",
+        installed: true,
+        version: "18.1.10",
+        path: "/Users/tester/.local/bin/omp",
+        channel: "standalone",
         managed: false,
         error_code: null as string | null,
         error: "",
@@ -217,15 +232,16 @@ describe("AgentUpdatesPanel", () => {
 
     expect(await screen.findAllByText(/Current version: 1\.0\.0/)).toHaveLength(2);
     expect(screen.getAllByText(/Latest version: 1\.1\.0/)).toHaveLength(2);
+    // claude/codex/dsh 有更新;omp(18.1.10 == 18.1.10)是第四张卡的 Up to date。
     expect(screen.getAllByText("Update available")).toHaveLength(3);
-    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Up to date")).toHaveLength(1);
   });
 
   it("marks an Agent as up to date when both versions match", async () => {
     latestVersions[0].version = "1.0.0";
     renderPanel();
 
-    expect(await screen.findByText("Up to date")).toBeInTheDocument();
+    expect((await screen.findAllByText("Up to date")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Update available")).toHaveLength(2);
   });
 
@@ -249,7 +265,7 @@ describe("AgentUpdatesPanel", () => {
     renderPanel();
 
     const upgradeButtons = await screen.findAllByRole("button", { name: "Upgrade" });
-    expect(upgradeButtons).toHaveLength(3);
+    expect(upgradeButtons).toHaveLength(4);
     await user.click(upgradeButtons[1]);
 
     await waitFor(() =>
@@ -342,7 +358,8 @@ describe("AgentUpdatesPanel", () => {
         }),
       );
     }
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Upgrade" })).toHaveLength(3));
+    // 四张卡全部回到可升级(claude/codex 完成后恢复,dsh/omp 未动过)。
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Upgrade" })).toHaveLength(4));
   });
 
   it("labels the action Install and reports the install result for a missing Agent", async () => {
@@ -530,7 +547,8 @@ describe("AgentUpdatesPanel background operations", () => {
     // 重新挂载后仍是「升级中」，不会退回「一键升级」。
     expect(await screen.findByRole("button", { name: "Upgrading..." })).toBeInTheDocument();
     const upgradeAgain = await screen.findAllByRole("button", { name: "Upgrade" });
-    expect(upgradeAgain).toHaveLength(2);
+    // 四张卡:claude 升级中,其余三张可升级。
+    expect(upgradeAgain).toHaveLength(3);
     expect(operations).toHaveLength(1);
   });
 

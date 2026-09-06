@@ -91,6 +91,74 @@ pub(crate) fn ensure_omp_home_for(agent: &str) -> Result<OmpHomePaths, String> {
     })
 }
 
+/// omp thinking level 词表(与前端 `OMP_THINKING_LEVELS` 一致)。
+pub(crate) fn is_valid_omp_thinking_level(effort: &str) -> bool {
+    matches!(
+        effort,
+        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+    )
+}
+
+const OMP_DEFAULT_THINKING_KEY: &str = "defaultThinkingLevel:";
+
+/// 从 config.yml 内容解析 `defaultThinkingLevel`(omp schema 默认 "high",
+/// 缺键时返回 None 由调用方补默认)。纯函数,便于测试。
+fn read_omp_effort_from_config(content: &str) -> Option<String> {
+    for line in content.lines() {
+        // 只认根级键(无缩进),避免命中注释或嵌套块里的同名键。
+        let Some(value) = line.strip_prefix(OMP_DEFAULT_THINKING_KEY) else {
+            continue;
+        };
+        let value = value.trim().trim_matches(['"', '\'']);
+        return is_valid_omp_thinking_level(value).then(|| value.to_string());
+    }
+    None
+}
+
+/// 在 config.yml 内容中行级替换 `defaultThinkingLevel`,缺失则追加。
+/// 纯函数,便于测试。
+fn apply_omp_effort_to_config(content: &str, effort: &str) -> String {
+    let mut replaced = false;
+    let mut lines: Vec<String> = content
+        .lines()
+        .map(|line| {
+            if !replaced && line.starts_with(OMP_DEFAULT_THINKING_KEY) {
+                replaced = true;
+                format!("{OMP_DEFAULT_THINKING_KEY} {effort}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    if !replaced {
+        lines.push(format!("{OMP_DEFAULT_THINKING_KEY} {effort}"));
+    }
+    let mut updated = lines.join("\n");
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated
+}
+
+/// 读取托管 config.yml 的 `defaultThinkingLevel`(omp schema 默认 "high")。
+pub(crate) fn read_omp_reasoning_effort(agent: &str) -> Option<String> {
+    let home = omp_home_for(agent).ok()?;
+    let content = fs::read_to_string(home.join("config.yml")).ok()?;
+    read_omp_effort_from_config(&content)
+}
+
+/// 更新托管 config.yml 的 `defaultThinkingLevel`(设置面板的 omp 默认思考档)。
+pub(crate) fn update_omp_reasoning_effort(agent: &str, effort: &str) -> Result<(), String> {
+    let effort = effort.trim();
+    if !is_valid_omp_thinking_level(effort) {
+        return Err(format!("Invalid omp thinking level: {effort}"));
+    }
+    let paths = ensure_omp_home_for(agent)?;
+    let content = fs::read_to_string(&paths.config_path).unwrap_or_default();
+    let updated = apply_omp_effort_to_config(&content, effort);
+    crate::storage::atomic_write_private(&paths.config_path, &updated)
+}
+
 /// 每次启动 omp 进程都要注入的环境变量(见计划 §2.2)。
 pub(crate) fn omp_agent_env(home: &std::path::Path) -> Vec<(String, String)> {
     vec![
@@ -125,6 +193,53 @@ mod tests {
         assert_eq!(config_version_marker(&content), Some(OMP_CONFIG_VERSION));
         assert!(content.contains("startup:\n  quiet: true"));
         assert!(content.contains("compaction:\n  asyncEnabled: false"));
+    }
+
+    #[test]
+    fn omp_thinking_level_validation_rejects_unknown_levels() {
+        assert!(is_valid_omp_thinking_level("off"));
+        assert!(is_valid_omp_thinking_level("xhigh"));
+        assert!(is_valid_omp_thinking_level("max"));
+        assert!(!is_valid_omp_thinking_level("ultra"));
+        assert!(!is_valid_omp_thinking_level("auto"));
+        assert!(!is_valid_omp_thinking_level(""));
+    }
+
+    #[test]
+    fn omp_effort_config_roundtrip_replaces_root_key_only() {
+        let base = managed_config_content();
+        // 缺键时读到 None,追加后能读回。
+        assert_eq!(read_omp_effort_from_config(&base), None);
+        let updated = apply_omp_effort_to_config(&base, "xhigh");
+        assert_eq!(
+            read_omp_effort_from_config(&updated).as_deref(),
+            Some("xhigh")
+        );
+        // 受管标记行不受影响。
+        assert!(updated.starts_with(OMP_CONFIG_MARKER_PREFIX));
+        // 再次更新走替换而不是追加。
+        let updated_again = apply_omp_effort_to_config(&updated, "low");
+        assert_eq!(updated_again.matches("defaultThinkingLevel").count(), 1);
+        assert_eq!(
+            read_omp_effort_from_config(&updated_again).as_deref(),
+            Some("low")
+        );
+        // 注释行与嵌套块里的同名键不参与解析。
+        let tricky = format!(
+            "# {key} max\ncompaction:\n  {key} off\n{key} high\n",
+            key = OMP_DEFAULT_THINKING_KEY
+        );
+        assert_eq!(
+            read_omp_effort_from_config(&tricky).as_deref(),
+            Some("high")
+        );
+        // 非法值视为未设置。
+        assert_eq!(
+            read_omp_effort_from_config("defaultThinkingLevel: ultra"),
+            None
+        );
+        // 更新以换行结尾,保持 YAML 合法。
+        assert!(apply_omp_effort_to_config(&base, "off").ends_with('\n'));
     }
 
     #[test]

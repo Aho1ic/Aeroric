@@ -2164,6 +2164,9 @@ pub(crate) async fn run_agent_operation(
     if binary_agent == "dsh" {
         return run_dsh_operation(app, operation_id, kind, cancelled, expected_version).await;
     }
+    if binary_agent == "omp" {
+        return run_omp_operation(app, operation_id, kind, cancelled, expected_version).await;
+    }
     let Some(agent) = BuiltInAgent::parse(binary_agent) else {
         return OperationOutcome::Error {
             code: AgentInstallErrorCode::InvalidAgent,
@@ -2346,6 +2349,145 @@ fn dsh_status() -> AgentToolStatus {
     }
 }
 
+/// omp 的安装/升级操作:未安装时走 npm 全局安装(官方包),已安装时按真实
+/// 路径推断升级通道(npm / Homebrew tap / `omp update` 自升级)。
+async fn run_omp_operation(
+    app: &AppHandle,
+    operation_id: &str,
+    kind: crate::agent_ops::AgentOperationKind,
+    cancelled: &Arc<AtomicBool>,
+    expected_version: Option<&str>,
+) -> crate::agent_ops::OperationOutcome {
+    use crate::agent_ops::{AgentOperationKind, OperationOutcome};
+
+    let sink = ProgressSink {
+        app,
+        operation_id,
+        agent: "omp",
+    };
+    if kind == AgentOperationKind::Install {
+        if cancelled.load(Ordering::Relaxed) {
+            return OperationOutcome::Error {
+                code: AgentInstallErrorCode::Cancelled,
+                message: "Install cancelled".to_string(),
+            };
+        }
+        sink.emit(
+            AgentInstallStage::Installing,
+            20,
+            "Installing oh-my-pi via npm",
+        );
+        let target = expected_version.map(str::to_string);
+        let cancel_flag = cancelled.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Install cancelled".to_string());
+            }
+            crate::app_settings::run_omp_npm_install(target.as_deref())
+        })
+        .await;
+        return match outcome {
+            Ok(Ok(detail)) => {
+                sink.emit(AgentInstallStage::Completed, 100, "Install complete");
+                OperationOutcome::Install(AgentInstallResult {
+                    operation_id: operation_id.to_string(),
+                    agent: "omp".to_string(),
+                    success: true,
+                    supported: true,
+                    platform: std::env::consts::OS.to_string(),
+                    architecture: std::env::consts::ARCH.to_string(),
+                    libc: current_libc_label().to_string(),
+                    version: String::new(),
+                    path: String::new(),
+                    channel: "npm".to_string(),
+                    managed: false,
+                    stage: AgentInstallStage::Completed,
+                    progress: 100,
+                    login_command: String::new(),
+                    error_code: None,
+                    message: if detail.is_empty() {
+                        "installed".to_string()
+                    } else {
+                        detail
+                    },
+                })
+            }
+            Ok(Err(message)) => OperationOutcome::Error {
+                code: AgentInstallErrorCode::InstallFailed,
+                message,
+            },
+            Err(error) => OperationOutcome::Error {
+                code: AgentInstallErrorCode::Internal,
+                message: format!("The install worker failed: {error}"),
+            },
+        };
+    }
+
+    if cancelled.load(Ordering::Relaxed) {
+        return OperationOutcome::Error {
+            code: AgentInstallErrorCode::Cancelled,
+            message: "Upgrade cancelled".to_string(),
+        };
+    }
+    sink.emit(
+        AgentInstallStage::Installing,
+        30,
+        "Running the oh-my-pi upgrade",
+    );
+    let target = expected_version.map(str::to_string);
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::app_settings::run_builtin_agent_upgrade("omp", target.as_deref())
+    })
+    .await;
+    match outcome {
+        Ok(Ok(result)) => {
+            sink.emit(AgentInstallStage::Completed, 100, "Upgrade complete");
+            OperationOutcome::Upgrade(result)
+        }
+        Ok(Err(message)) => OperationOutcome::Error {
+            code: AgentInstallErrorCode::InstallFailed,
+            message,
+        },
+        Err(error) => OperationOutcome::Error {
+            code: AgentInstallErrorCode::Internal,
+            message: format!("The upgrade worker failed: {error}"),
+        },
+    }
+}
+
+/// omp 的安装状态:单文件 Bun 二进制(curl 脚本/Homebrew tap/npm 三种分发),
+/// 无 tools_dir 托管概念,渠道由真实路径推断(standalone/npm/homebrew)。
+fn omp_status() -> AgentToolStatus {
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from(&settings, "omp");
+    let version = crate::app_settings::detect_launch_version(&launch).unwrap_or_default();
+    let configured = crate::app_settings::configured_agent_path(&settings, "omp");
+    let effective_program = if launch.program.trim().is_empty() {
+        configured.clone()
+    } else {
+        launch.program.clone()
+    };
+    let channel = if version.is_empty() || launch.program.trim().is_empty() {
+        String::new()
+    } else {
+        crate::app_settings::upgrade_manager_for_path(&effective_program).to_string()
+    };
+    AgentToolStatus {
+        agent: "omp".to_string(),
+        supported: true,
+        platform: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        libc: current_libc_label(),
+        installed: !version.is_empty(),
+        version,
+        path: effective_program,
+        channel,
+        managed: false,
+        error_code: None,
+        error: String::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_agent_tool_status() -> Result<Vec<AgentToolStatus>, String> {
     tokio::task::spawn_blocking(|| {
@@ -2353,6 +2495,7 @@ pub async fn get_agent_tool_status() -> Result<Vec<AgentToolStatus>, String> {
             status_for(BuiltInAgent::Claude),
             status_for(BuiltInAgent::Codex),
             dsh_status(),
+            omp_status(),
         ]
     })
     .await
@@ -2434,6 +2577,36 @@ async fn latest_dsh_version(cancelled: &AtomicBool) -> InstallResult<String> {
     Ok(version.to_string())
 }
 
+/// 查询 omp 在 npm registry 的最新版本号(@oh-my-pi/pi-coding-agent)。
+async fn latest_omp_version(cancelled: &AtomicBool) -> InstallResult<String> {
+    let client = http_client(&["registry.npmjs.org"])?;
+    let bytes = download_small_bytes(
+        &client,
+        "https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest",
+        MAX_METADATA_BYTES,
+        cancelled,
+    )
+    .await?;
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        InstallError::new(
+            AgentInstallErrorCode::DownloadFailed,
+            format!("Invalid omp registry metadata: {error}"),
+        )
+    })?;
+    let version = metadata
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| {
+            InstallError::new(
+                AgentInstallErrorCode::DownloadFailed,
+                "omp registry metadata has no version",
+            )
+        })?;
+    Ok(version.to_string())
+}
+
 /// 单个内置 Agent 的最新可用版本。查询失败时只返回错误信息，不影响其它 Agent。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentLatestVersion {
@@ -2478,6 +2651,21 @@ pub async fn get_agent_latest_versions() -> Result<Vec<AgentLatestVersion>, Stri
         },
         Err(error) => AgentLatestVersion {
             agent: "dsh".to_string(),
+            version: String::new(),
+            error_code: Some(error.code),
+            error: error.message,
+        },
+    });
+    // omp:npm registry 查询;升级走 npm/Homebrew tap/`omp update` 三通道。
+    results.push(match latest_omp_version(&cancelled).await {
+        Ok(version) => AgentLatestVersion {
+            agent: "omp".to_string(),
+            version,
+            error_code: None,
+            error: String::new(),
+        },
+        Err(error) => AgentLatestVersion {
+            agent: "omp".to_string(),
             version: String::new(),
             error_code: Some(error.code),
             error: error.message,

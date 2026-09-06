@@ -428,18 +428,15 @@ export const AgentPathSection = forwardRef<
               <RefreshCw size={12} className={refreshing ? "spin" : undefined} />
               {refreshing ? t("appSettings.refreshing") : t("appSettings.refreshVersions")}
             </Button>
-            {/* omp 升级通道(AgentUpgradeKind::Omp)在 Phase 4 接入;此前隐藏按钮避免死端。 */}
-            {builtInAgent !== "omp" && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void handleUpgrade()}
-                disabled={upgrading || refreshing || loading}
-              >
-                <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
-                {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleUpgrade()}
+              disabled={upgrading || refreshing || loading}
+            >
+              <RefreshCw size={12} className={upgrading ? "spin" : undefined} />
+              {upgrading ? t("appSettings.upgrading") : t("appSettings.upgradeToLatest")}
+            </Button>
           </div>
         </div>
       )}

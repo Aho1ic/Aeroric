@@ -21,7 +21,7 @@ import {
 export const AGENT_STATUS_REFRESH_INTERVAL_MS = 30_000;
 export const AGENT_LATEST_REFRESH_INTERVAL_MS = 5 * 60_000;
 
-const AGENTS: readonly AgentToolId[] = ["claude", "codex", "dsh"];
+const AGENTS: readonly AgentToolId[] = ["claude", "codex", "dsh", "omp"];
 
 type AgentStatuses = Record<AgentToolId, AgentToolStatus | null>;
 type AgentLatestVersions = Record<AgentToolId, string>;

@@ -405,6 +405,8 @@ fn agent_config_path_from_settings(
             .or_else(|| app_settings::default_builtin_agent_config_path("codex").ok())),
         "dsh" => Ok(configured_path(&settings.dsh_config_path)
             .or_else(|| app_settings::default_builtin_agent_config_path("dsh").ok())),
+        // omp 配置固定在托管 home 的 config.yml(Phase 1 的默认路径解析已覆盖)。
+        "omp" => Ok(app_settings::default_builtin_agent_config_path("omp").ok()),
         _ => settings
             .custom_agents
             .iter()
@@ -488,6 +490,16 @@ pub(crate) fn read_agent_reasoning_settings_from_settings(
             )),
             None,
         );
+    }
+    if crate::app_settings::agent_family_in(settings, agent)
+        == crate::app_settings::AgentFamily::Omp
+    {
+        // omp 的默认思考档写在托管 config.yml 的 defaultThinkingLevel;
+        // 无键时跟随 omp schema 默认("high")。speed 概念 omp 不存在。
+        let effort = crate::omp_home::read_omp_reasoning_effort(agent)
+            .or_else(|| crate::omp_home::read_omp_reasoning_effort("omp"))
+            .unwrap_or_else(|| "high".to_string());
+        return (Some(effort), None);
     }
     let content = match agent_config_path_from_settings(agent, settings) {
         Ok(Some(path)) => fs::read_to_string(&path).unwrap_or_default(),

@@ -208,7 +208,7 @@ describe("AllAgentConfigsPanel", () => {
     expect(await screen.findByRole("dialog", { name: "Agent Settings" })).toBeInTheDocument();
   });
 
-  it("renders three animated provider tabs with two adjacent separators", async () => {
+  it("renders four animated provider tabs with adjacent separators", async () => {
     const user = userEvent.setup();
     render(
       <I18nProvider>
@@ -219,10 +219,10 @@ describe("AllAgentConfigsPanel", () => {
     const tablist = screen.getByRole("tablist", { name: "Provider" });
     expect(tablist).toHaveClass("animated-selection", "agent-provider-tabs");
     const tabs = within(tablist).getAllByRole("tab");
-    expect(tabs).toHaveLength(3);
+    expect(tabs).toHaveLength(4);
     expect(
       tabs.slice(1).filter((tab) => tab.previousElementSibling === tabs[tabs.indexOf(tab) - 1]),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
 
     await user.click(tabs[1]);
     expect(tabs[1]).toHaveAttribute("aria-selected", "true");

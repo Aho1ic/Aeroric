@@ -836,6 +836,8 @@ pub fn run() {
             omp_rpc::complete_omp_task,
             omp_rpc::respond_omp_server_request,
             omp_rpc::get_omp_state,
+            omp_rpc::update_omp_thinking_level,
+            omp_rpc::get_omp_thinking_level,
             dsh_webui::list_dsh_commands,
             dsh_webui::execute_dsh_command,
             dsh_webui::list_dsh_message_feedback,

@@ -24,6 +24,7 @@ import type { ThemeVariant } from "../../types";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 import deepseekLogo from "../../assets/deepseek.svg";
+import ompLogo from "../../assets/omp.svg";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { zLayers } from "../../styles/zLayers";
 import { refreshLocalRouterRuntime } from "./shared";
@@ -413,6 +414,15 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
                 </>
               ),
             },
+            {
+              value: "omp",
+              label: (
+                <>
+                  <img src={ompLogo} alt="" style={{ width: 16, height: 16 }} />
+                  {t("appSettings.providerOhMyPi")}
+                </>
+              ),
+            },
           ]}
           itemStyle={{ minHeight: 30, padding: "6px 12px", fontSize: 12.5 }}
         />
@@ -522,9 +532,11 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
               logo={
                 option.family === "dsh"
                   ? deepseekLogo
-                  : option.family === "codex"
-                    ? chatgptLogo
-                    : claudeLogo
+                  : option.family === "omp"
+                    ? ompLogo
+                    : option.family === "codex"
+                      ? chatgptLogo
+                      : claudeLogo
               }
               baseUrl={meta.baseUrl}
               apiKey={meta.apiKey}
@@ -547,9 +559,11 @@ export function AllAgentConfigsPanel({ themeVariant }: { themeVariant: ThemeVari
           logo={
             editingAgent.family === "dsh"
               ? deepseekLogo
-              : editingAgent.family === "codex"
-                ? chatgptLogo
-                : claudeLogo
+              : editingAgent.family === "omp"
+                ? ompLogo
+                : editingAgent.family === "codex"
+                  ? chatgptLogo
+                  : claudeLogo
           }
           settings={settings}
           onClose={() => setEditingAgent(null)}

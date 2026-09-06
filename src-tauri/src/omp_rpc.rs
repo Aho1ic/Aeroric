@@ -959,6 +959,26 @@ pub async fn get_omp_state(
     request_with_timeout(&session, "get_state", json!({})).await
 }
 
+/// 保存 omp 族配置的默认思考档(写入托管 config.yml 的 `defaultThinkingLevel`)。
+#[tauri::command]
+pub async fn update_omp_thinking_level(agent: String, effort: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::omp_home::update_omp_reasoning_effort(&agent, &effort)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 读取 omp 族配置的默认思考档(未设置时为 None,前端回退 omp 默认 high)。
+#[tauri::command]
+pub async fn get_omp_thinking_level(agent: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        Ok::<Option<String>, String>(crate::omp_home::read_omp_reasoning_effort(&agent))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

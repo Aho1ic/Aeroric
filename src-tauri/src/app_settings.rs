@@ -2351,6 +2351,125 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
     Ok(normalized)
 }
 
+/// omp rpc-ui 模型探测的总预算:进程冷启动(Bun + native addon 解压)最慢的一档。
+const OMP_MODEL_DISCOVERY_BUDGET: Duration = Duration::from_secs(20);
+
+/// 起一个 `omp --mode rpc-ui --no-session` 短命进程,经 `get_available_models`
+/// 拉取模型目录并归并为 `provider/model-id`。失败(omp 未装/无凭据)返回 Err,
+/// 由调用方呈现;探测进程无论成败都会被杀掉。
+fn list_builtin_omp_models() -> Result<Vec<String>, String> {
+    use std::io::Write as IoWrite;
+    use std::sync::mpsc;
+
+    let launch = get_agent_launch_spec("omp");
+    let mut cmd = Command::new(&launch.program);
+    crate::subprocess::configure_background_command(&mut cmd);
+    cmd.args(&launch.args)
+        .arg("--mode")
+        .arg("rpc-ui")
+        .arg("--no-session")
+        .env("PATH", get_login_shell_path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (key, value) in &launch.extra_env {
+        cmd.env(key, value);
+    }
+    if let Some(home) = omp_managed_home() {
+        cmd.env("PI_CODING_AGENT_DIR", home);
+        cmd.env("OMP_APP_NAME", "aeroric");
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|error| format!("Failed to start omp for model discovery: {error}"))?;
+    let mut stdin = child.stdin.take();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "omp stdout is unavailable".to_string())?;
+
+    if let Some(stdin) = stdin.as_mut() {
+        let _ = writeln!(
+            stdin,
+            r#"{{"id":"p","type":"negotiate_protocol","protocolVersion":2}}"#
+        );
+        let _ = writeln!(stdin, r#"{{"id":"m","type":"get_available_models"}}"#);
+        let _ = stdin.flush();
+    }
+
+    let (sender, receiver) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let started = std::time::Instant::now();
+    let mut models: Vec<String> = Vec::new();
+    let mut settled: Option<Result<(), String>> = None;
+    while settled.is_none() {
+        let elapsed = started.elapsed();
+        if elapsed >= OMP_MODEL_DISCOVERY_BUDGET {
+            settled = Some(Err("omp model discovery timed out".to_string()));
+            break;
+        }
+        let Ok(line) = receiver.recv_timeout(OMP_MODEL_DISCOVERY_BUDGET - elapsed) else {
+            settled = Some(Err("omp exited before listing models".to_string()));
+            break;
+        };
+        let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if frame.get("type").and_then(|v| v.as_str()) != Some("response")
+            || frame.get("command").and_then(|v| v.as_str()) != Some("get_available_models")
+        {
+            continue;
+        }
+        if frame.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            settled = Some(Err(format!(
+                "omp model discovery failed: {}",
+                frame
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+            )));
+            break;
+        }
+        if let Some(items) = frame
+            .get("data")
+            .and_then(|data| data.get("models"))
+            .and_then(|models| models.as_array())
+        {
+            for item in items {
+                let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let provider = item.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                if id.is_empty() || provider.is_empty() {
+                    continue;
+                }
+                let model = format!("{provider}/{id}");
+                if !models.contains(&model) {
+                    models.push(model);
+                }
+            }
+        }
+        settled = Some(Ok(()));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    settled.unwrap_or_else(|| Err("omp model discovery did not settle".to_string()))?;
+    Ok(models)
+}
+
 #[tauri::command]
 pub async fn detect_agent_models(
     kind: AgentSetupKind,
@@ -2427,6 +2546,17 @@ pub async fn list_agent_models(agent: String) -> Result<AgentModels, String> {
             // dsh-like 自定义档案未探测/保存模型时回落内建 DeepSeek 目录。
             return Ok(AgentModels {
                 models: list_builtin_dsh_models(),
+                balance: None,
+                reasoning_effort,
+                reasoning_speed,
+            });
+        }
+
+        if agent == "omp" {
+            // omp 无 CLI 模型列表;起一个 --no-session 的 rpc-ui 进程经
+            // `get_available_models` 拉取,再归并为 `provider/model-id`。
+            return Ok(AgentModels {
+                models: list_builtin_omp_models()?,
                 balance: None,
                 reasoning_effort,
                 reasoning_speed,
@@ -2885,6 +3015,35 @@ pub(crate) fn run_dsh_package_manager_upgrade(
             message: error,
         }],
     }
+}
+
+/// omp 未安装时的兜底安装:npm 全局安装官方包。npm 不在 PATH 时返回官方
+/// 安装指引(curl 脚本 / Homebrew tap 由用户自行选择)。阻塞式,由调用方放进
+/// spawn_blocking。
+pub(crate) fn run_omp_npm_install(target_version: Option<&str>) -> Result<String, String> {
+    let npm = detect_path("npm");
+    if npm.trim().is_empty() {
+        return Err(
+            "npm is unavailable on PATH. Install oh-my-pi with `curl https://omp.sh/install | sh`, \
+             `brew install can1357/tap/omp`, or `npm install -g @oh-my-pi/pi-coding-agent`."
+                .to_string(),
+        );
+    }
+    let package = "@oh-my-pi/pi-coding-agent";
+    let target = target_version
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .unwrap_or("latest");
+    run_agent_upgrade(&AgentUpgradeCommand {
+        channel: "npm".to_string(),
+        program: npm,
+        args: vec![
+            "install".to_string(),
+            "-g".to_string(),
+            "--min-release-age=0".to_string(),
+            format!("{package}@{target}"),
+        ],
+    })
 }
 
 /// Claude/Codex 的包管理器升级(dsh 走 `agent_tools` 的托管路径)。

@@ -407,6 +407,7 @@ export const en: Record<string, string> = {
   "appSettings.providerAnthropic": "Anthropic",
   "appSettings.providerOpenAI": "OpenAI",
   "appSettings.providerDeepSeekHarness": "DeepSeek Harness",
+  "appSettings.providerOhMyPi": "oh-my-pi",
   "appSettings.provider": "Provider",
   "appSettings.viewMode": "View mode",
   "appSettings.viewCards": "Bar view",
@@ -597,6 +598,8 @@ export const en: Record<string, string> = {
     "Writes model_reasoning_effort to the local Codex config file.",
   "appSettings.dshReasoningEffortHint":
     "Saves the default reasoning effort for new DeepSeek Harness tasks.",
+  "appSettings.ompThinkingLevelHint":
+    "Saves the default thinking level (defaultThinkingLevel) for new oh-my-pi tasks.",
   "appSettings.reasoningEffortDefault": "Model Default",
   "appSettings.reasoningEffort.off": "Off",
   "appSettings.reasoningEffort.minimal": "Minimal",

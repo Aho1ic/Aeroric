@@ -104,10 +104,11 @@ export function ModelOptionsMenu({
     ? availableReasoningEffortsForFamily(family, selectedModel)
     : NO_REASONING_EFFORTS;
   // DSH uses its adapter-owned Off/High/Max efforts and has no speed control;
+  // omp uses its thinking-level vocabulary and also has no speed concept.
   // Claude/Codex keep their existing effort and speed menus. Only the built-in
   // DSH config exposes efforts — provider profiles are model-selection only.
   const showReasoning = efforts.length > 0;
-  const showSpeed = family !== "dsh";
+  const showSpeed = family !== "dsh" && family !== "omp";
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
   const pendingPanelRef = useRef<Panel | null>(null);
@@ -239,8 +240,9 @@ export function ModelOptionsMenu({
   }
 
   function renderReasoningOptions() {
+    // dsh/omp 的词表自带"关闭"档且总是显式传值,没有 "Model Default" 项。
     const options: Array<ReasoningEffort | null> =
-      family === "dsh" ? [...efforts] : [null, ...efforts];
+      family === "dsh" || family === "omp" ? [...efforts] : [null, ...efforts];
     return options.map((effort) => {
       const active = reasoningEffort === effort;
       return (

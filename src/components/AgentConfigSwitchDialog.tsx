@@ -17,6 +17,7 @@ import {
 import claudeLogo from "../assets/claude.svg";
 import chatgptLogo from "../assets/chatgpt.svg";
 import deepseekLogo from "../assets/deepseek.svg";
+import ompLogo from "../assets/omp.svg";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentUsageStats } from "../hooks/useAgentUsage";
 import { rankAgentOptionsByUsage } from "../lib/agentUsageRanking";
@@ -26,6 +27,7 @@ import {
   availableReasoningEfforts,
   DSH_REASONING_EFFORTS,
   NO_REASONING_EFFORTS,
+  OMP_THINKING_LEVELS,
   type ReasoningEffort,
   type TaskSpeed,
 } from "../modelOptions";
@@ -99,6 +101,10 @@ export function AgentConfigSwitchDialog({
         agentOptions.filter((option) => option.family === "dsh"),
         agentUsageStats,
       ),
+      omp: rankAgentOptionsByUsage(
+        agentOptions.filter((option) => option.family === "omp"),
+        agentUsageStats,
+      ),
     }),
     [agentOptions, agentUsageStats],
   );
@@ -114,7 +120,9 @@ export function AgentConfigSwitchDialog({
         ? NO_REASONING_EFFORTS
         : family === "dsh"
           ? DSH_REASONING_EFFORTS
-          : availableReasoningEfforts(codexLike, selectedModel),
+          : family === "omp"
+            ? OMP_THINKING_LEVELS
+            : availableReasoningEfforts(codexLike, selectedModel),
     [codexLike, effortAllowed, family, selectedModel],
   );
 
@@ -160,7 +168,9 @@ export function AgentConfigSwitchDialog({
         const effortCatalog: readonly string[] =
           family === "dsh"
             ? DSH_REASONING_EFFORTS
-            : availableReasoningEfforts(codexLike, result.models[0]);
+            : family === "omp"
+              ? OMP_THINKING_LEVELS
+              : availableReasoningEfforts(codexLike, result.models[0]);
         if (
           effortAllowed &&
           result.reasoning_effort &&
@@ -168,7 +178,7 @@ export function AgentConfigSwitchDialog({
         ) {
           setReasoningEffort((current) => current ?? (result.reasoning_effort as ReasoningEffort));
         }
-        if (family !== "dsh" && result.reasoning_speed === "fast") {
+        if (family !== "dsh" && family !== "omp" && result.reasoning_speed === "fast") {
           setSpeed((current) => (current === "standard" ? "fast" : current));
         }
       })
@@ -202,7 +212,7 @@ export function AgentConfigSwitchDialog({
         agent,
         selectedModel: selectedModel || undefined,
         reasoningEffort: effortAllowed ? reasoningEffort : null,
-        speed: family === "dsh" ? "standard" : speed,
+        speed: family === "dsh" || family === "omp" ? "standard" : speed,
         permissionMode,
       });
       if (applied === false) setSubmitting(false);
@@ -212,7 +222,7 @@ export function AgentConfigSwitchDialog({
   }
 
   const renderConfigGroup = (
-    groupFamily: "claude" | "codex" | "dsh",
+    groupFamily: "claude" | "codex" | "dsh" | "omp",
     label: string,
     options: AgentOption[],
   ) => (
@@ -224,7 +234,9 @@ export function AgentConfigSwitchDialog({
               ? chatgptLogo
               : groupFamily === "dsh"
                 ? deepseekLogo
-                : claudeLogo
+                : groupFamily === "omp"
+                  ? ompLogo
+                  : claudeLogo
           }
           alt=""
           aria-hidden="true"
@@ -255,7 +267,9 @@ export function AgentConfigSwitchDialog({
                       ? chatgptLogo
                       : optionFamily === "dsh"
                         ? deepseekLogo
-                        : claudeLogo
+                        : optionFamily === "omp"
+                          ? ompLogo
+                          : claudeLogo
                   }
                   alt=""
                   aria-hidden="true"
@@ -324,6 +338,7 @@ export function AgentConfigSwitchDialog({
               {renderConfigGroup("claude", t("newTask.claudeAgents"), groupedOptions.claude)}
               {renderConfigGroup("codex", t("newTask.codexAgents"), groupedOptions.codex)}
               {renderConfigGroup("dsh", "DeepSeek Harness", groupedOptions.dsh)}
+              {renderConfigGroup("omp", "oh-my-pi", groupedOptions.omp)}
             </div>
           </section>
 
