@@ -1296,6 +1296,7 @@ pub(super) fn allocate_setup_agent_id(
         .strip_suffix("_codex")
         .or_else(|| requested.strip_suffix("_claude"))
         .or_else(|| requested.strip_suffix("_dsh"))
+        .or_else(|| requested.strip_suffix("_omp"))
         .unwrap_or(&requested);
     let base = if base.is_empty() { "agent" } else { base };
     let preferred = sanitize_custom_agent_id(&format!("{base}_{suffix}"));

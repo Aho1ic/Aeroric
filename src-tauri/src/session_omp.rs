@@ -107,6 +107,18 @@ pub(crate) fn omp_session_allowed_roots() -> Vec<PathBuf> {
     if let Ok(managed) = crate::omp_home::omp_home_for("omp") {
         roots.push(managed.join("sessions"));
     }
+    // 自定义 omp 档案(Phase 7)的会话在各自 home(agent-homes/{id}/sessions);
+    // 校验只拿到 family 拿不到档案 id,放行全部 Aeroric 托管 home 的 sessions
+    // ——这些目录都在 ~/.aeroric 隔离目录内,且仅用于 omp 族的会话读取。
+    if let Some(root) =
+        crate::platform::home_dir().map(|home| home.join(".aeroric").join("agent-homes"))
+    {
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                roots.push(entry.path().join("sessions"));
+            }
+        }
+    }
     if let Some(default_dir) = crate::platform::home_dir() {
         roots.push(default_dir.join(".omp").join("agent").join("sessions"));
     }

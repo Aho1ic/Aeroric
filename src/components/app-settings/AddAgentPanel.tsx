@@ -77,6 +77,11 @@ const kindOptions: { kind: AgentSetupKind; labelKey: string; hintKey: string }[]
     labelKey: "appSettings.agentSetupDsh",
     hintKey: "appSettings.agentSetupDshHint",
   },
+  {
+    kind: "omp",
+    labelKey: "appSettings.agentSetupOmp",
+    hintKey: "appSettings.agentSetupOmpHint",
+  },
 ];
 
 /** dsh 官方 provider 的默认探测端点(留空 base URL 时使用)。 */
@@ -211,7 +216,8 @@ function deriveAgentId(label: string, baseUrl: string, kind: AgentSetupKind): st
   const urlId = idFromBaseUrl(baseUrl);
   const baseId = labelId || urlId;
   if (!baseId) return "";
-  const suffix = kind === "codex" ? "codex" : kind === "dsh" ? "dsh" : "claude";
+  const suffix =
+    kind === "codex" ? "codex" : kind === "dsh" ? "dsh" : kind === "omp" ? "omp" : "claude";
   return sanitizeAgentId(`${baseId}_${suffix}`);
 }
 
@@ -441,7 +447,7 @@ export function AddAgentPanel({
       ...(kind === "codex" && enableChatCompletionsProxy && bridgePythonPath.trim()
         ? { bridge_python_path: bridgePythonPath.trim() }
         : {}),
-      ...(kind === "dsh" ? { dsh_api_protocol: dshApiProtocol } : {}),
+      ...(kind === "dsh" || kind === "omp" ? { dsh_api_protocol: dshApiProtocol } : {}),
       ...(proxyEnabled ? { proxy_enabled: true } : {}),
     };
     setSaving(true);
@@ -509,7 +515,13 @@ export function AddAgentPanel({
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       setSaved(true);
       const family: ProtocolFamily =
-        draft.kind === "dsh" ? "dsh" : draft.kind === "codex" ? "codex" : "claude";
+        draft.kind === "dsh"
+          ? "dsh"
+          : draft.kind === "omp"
+            ? "omp"
+            : draft.kind === "codex"
+              ? "codex"
+              : "claude";
       onSaved(savedAgentId, family);
     } catch (err) {
       setError(String(err));
@@ -1348,6 +1360,29 @@ export function AddAgentPanel({
             </div>
             {apiKeyField}
           </div>
+
+          {kind === "omp" && (
+            <div className="add-agent-field">
+              <label style={agentForm.label} htmlFor="omp-api-protocol">
+                {t("appSettings.dshApiProtocol")}
+              </label>
+              <select
+                id="omp-api-protocol"
+                className="add-agent-select"
+                value={dshApiProtocol}
+                onChange={(event) => {
+                  setDshApiProtocol(event.target.value as DshApiProtocol);
+                  resetModelDiscovery();
+                }}
+              >
+                {DSH_API_PROTOCOLS.map((protocol) => (
+                  <option key={protocol} value={protocol}>
+                    {protocol}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {modelFields}
         </>

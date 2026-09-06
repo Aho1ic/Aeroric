@@ -25,7 +25,7 @@ import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
 import { Button } from "./ui/Button";
 
 const RANGE_OPTIONS: UsageStatisticsRange[] = [1, 7, 14, 30];
-const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude", "dsh"];
+const AGENT_OPTIONS: UsageStatisticsAgent[] = ["all", "codex", "claude", "dsh", "omp"];
 
 // Format numbers/currency/dates against the user's chosen UI language rather
 // than the OS locale, so an English UI never renders "US$0.12" / localized
@@ -477,6 +477,7 @@ function SourceSummary({
   codex,
   claude,
   dsh,
+  omp,
   tokenLabel,
   requestLabel,
   title,
@@ -485,13 +486,20 @@ function SourceSummary({
   codex: UsageStatisticsTotals;
   claude: UsageStatisticsTotals;
   dsh?: UsageStatisticsTotals;
+  omp?: UsageStatisticsTotals;
   tokenLabel: string;
   requestLabel: string;
   title: string;
   locale: string;
 }) {
   // 每个 agent 都带成本估算,便于核对总成本的构成。
-  const max = Math.max(1, codex.totalTokens, claude.totalTokens, dsh?.totalTokens ?? 0);
+  const max = Math.max(
+    1,
+    codex.totalTokens,
+    claude.totalTokens,
+    dsh?.totalTokens ?? 0,
+    omp?.totalTokens ?? 0,
+  );
   return (
     <section className="usage-panel" style={s.usageSourceSummary}>
       <div style={s.usageSectionTitle}>{title}</div>
@@ -500,6 +508,7 @@ function SourceSummary({
           { name: "Codex", totals: codex, color: "var(--accent)" },
           { name: "Claude", totals: claude, color: "var(--success)" },
           ...(dsh ? [{ name: "DeepSeek", totals: dsh, color: "var(--info, #4D6BFE)" }] : []),
+          ...(omp ? [{ name: "oh-my-pi", totals: omp, color: "var(--usage-omp)" }] : []),
         ].map((item) => (
           <div key={item.name} style={s.usageSourceRow}>
             <strong>{item.name}</strong>
@@ -768,6 +777,7 @@ export function UsageDashboard({ embedded = false }: { embedded?: boolean }) {
                 codex={statistics.breakdown.codex}
                 claude={statistics.breakdown.claude}
                 dsh={statistics.breakdown.dsh}
+                omp={statistics.breakdown.omp}
                 tokenLabel={t("usageStats.tokensShort")}
                 requestLabel={t("usageStats.requestsShort")}
                 title={t("usageStats.sourceBreakdown")}

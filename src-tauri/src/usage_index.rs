@@ -222,7 +222,11 @@ fn parse_source(path: &Path) -> Option<Vec<UsageRequest>> {
         return None;
     }
     let content = fs::read_to_string(path).ok()?;
-    if analytics::is_dsh_session(&content) {
+    // omp 的判定谓词更具体(title 槽/version:3),放在 dsh(接受任意数字
+    // version 的 {type:"session"} 头)之前,避免无 title 槽的 omp 文件被 dsh 吞掉。
+    if analytics::is_omp_session(&content) {
+        Some(analytics::parse_omp_usage_requests(&content))
+    } else if analytics::is_dsh_session(&content) {
         Some(analytics::parse_dsh_usage_requests(&content))
     } else if analytics::is_codex_session(&content) {
         Some(analytics::parse_codex_usage_requests(&content))
@@ -283,6 +287,7 @@ fn replace_source(
                         UsageAgent::Codex => "codex",
                         UsageAgent::Claude => "claude",
                         UsageAgent::Dsh => "dsh",
+                        UsageAgent::Omp => "omp",
                     },
                     request.model,
                     as_sql_integer(request.input_tokens),
@@ -441,6 +446,7 @@ pub(crate) fn load_requests(
             let agent = match row.get::<_, String>(2)?.as_str() {
                 "codex" => UsageAgent::Codex,
                 "dsh" => UsageAgent::Dsh,
+                "omp" => UsageAgent::Omp,
                 _ => UsageAgent::Claude,
             };
             Ok(UsageRequest {

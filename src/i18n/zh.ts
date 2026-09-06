@@ -495,6 +495,9 @@ export const zh: Record<string, string> = {
   "appSettings.agentSetupClaude": "Claude Code",
   "appSettings.agentSetupClaudeHint": "生成隔离的 Claude Code 启动脚本。",
   "appSettings.agentSetupDsh": "DeepSeek Harness",
+  "appSettings.agentSetupOmp": "oh-my-pi",
+  "appSettings.agentSetupOmpHint":
+    "注册隔离的 oh-my-pi 档案，对接自定义 OpenAI 兼容或 Anthropic 网关。",
   "appSettings.agentSetupDshHint":
     "隔离 DSH_HOME 档案;Base URL 留空则使用 DeepSeek 官方 provider。",
   "appSettings.dshOfficialProviderHint":
@@ -2511,6 +2514,7 @@ export const zh: Record<string, string> = {
   "usageStats.agent.codex": "Codex",
   "usageStats.agent.claude": "Claude",
   "usageStats.agent.dsh": "DeepSeek",
+  "usageStats.agent.omp": "oh-my-pi",
   "usageStats.totalTokens": "Tokens",
   "usageStats.inputTokens": "新增输入",
   "usageStats.outputTokens": "Output",

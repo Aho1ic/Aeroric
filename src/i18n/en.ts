@@ -536,6 +536,9 @@ export const en: Record<string, string> = {
   "appSettings.agentSetupClaude": "Claude Code",
   "appSettings.agentSetupClaudeHint": "Generate an isolated Claude Code launcher.",
   "appSettings.agentSetupDsh": "DeepSeek Harness",
+  "appSettings.agentSetupOmp": "oh-my-pi",
+  "appSettings.agentSetupOmpHint":
+    "Register an isolated oh-my-pi profile with a custom OpenAI-compatible or Anthropic gateway.",
   "appSettings.agentSetupDshHint":
     "Isolated DSH_HOME profile; leave Base URL empty for the official DeepSeek provider.",
   "appSettings.dshOfficialProviderHint":
@@ -2611,6 +2614,7 @@ export const en: Record<string, string> = {
   "usageStats.agent.codex": "Codex",
   "usageStats.agent.claude": "Claude",
   "usageStats.agent.dsh": "DeepSeek",
+  "usageStats.agent.omp": "oh-my-pi",
   "usageStats.totalTokens": "Tokens",
   "usageStats.inputTokens": "New input",
   "usageStats.outputTokens": "Output",

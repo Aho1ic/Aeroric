@@ -77,6 +77,28 @@ pub(crate) fn is_dsh_session(content: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// omp 会话:首行 256 字节 title 槽(`type:"title"`)或直接 `{type:"session",version:3}`
+/// header;之后是 `{type:"message",message:{role,...}}` 树形 entry。取前几行按
+/// "message entry + omp 独有字段(message 对象 / parentId 短 id)" 判定,避免与
+/// claude/codex 的行格式误撞。
+pub(crate) fn is_omp_session(content: &str) -> bool {
+    for line in content.lines().take(SESSION_FORMAT_DETECTION_LINES) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(Value::as_str) {
+            // title 槽是 omp 独有(v:1 + pad 填充)。
+            Some("title") if v.get("v").and_then(Value::as_u64) == Some(1) => return true,
+            Some("session") if v.get("version").and_then(Value::as_u64) == Some(3) => return true,
+            Some("message") if v.get("message").is_some() && v.get("parentId").is_some() => {
+                return true
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Claude transcript 不像 Codex 那样自带 `model_context_window`，只在每条 assistant
 /// 消息上记录 model。为了让终端顶栏能显示"上下文占用 / 窗口"，这里按 model 推导窗口。
 ///
@@ -307,6 +329,7 @@ pub(crate) enum UsageAgent {
     Codex,
     Claude,
     Dsh,
+    Omp,
 }
 
 #[derive(Clone, Debug)]
@@ -354,6 +377,8 @@ pub(crate) struct UsageStatisticsBreakdown {
     pub(crate) claude: UsageStatisticsTotals,
     #[serde(default)]
     pub(crate) dsh: UsageStatisticsTotals,
+    #[serde(default)]
+    pub(crate) omp: UsageStatisticsTotals,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -597,6 +622,52 @@ pub(crate) fn parse_dsh_usage_requests(content: &str) -> Vec<UsageRequest> {
         }
     }
     requests
+}
+
+/// omp 会话 token 聚合:每条带 `usage` 的 assistant message entry 计一次请求。
+/// 模型直接取消息上的 `model`(omp 的 AssistantMessage 自带,无独立路由事件);
+/// usage 字段名为 omp catalog 的 `input/output/cacheRead/cacheWrite`;时间戳取
+/// entry 的 `timestamp`(ISO 8601)。
+pub(crate) fn parse_omp_usage_line(line: &str) -> Option<UsageRequest> {
+    let val = serde_json::from_str::<Value>(line).ok()?;
+    if val.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let message = val.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let usage = message.get("usage")?;
+    let input = usage.get("input").and_then(Value::as_u64).unwrap_or(0);
+    let output = usage.get("output").and_then(Value::as_u64);
+    // 全零的 usage(如中断的首包)不产生用量记录,与其它族的处理一致。
+    let cache_read = usage.get("cacheRead").and_then(Value::as_u64).unwrap_or(0);
+    let cache_write = usage.get("cacheWrite").and_then(Value::as_u64).unwrap_or(0);
+    if input == 0 && output.unwrap_or(0) == 0 && cache_read == 0 && cache_write == 0 {
+        return None;
+    }
+    let timestamp_text = val.get("timestamp").and_then(Value::as_str)?;
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp_text).ok()?;
+    let timestamp_ms = timestamp.timestamp_millis();
+    let date = timestamp.with_timezone(&chrono::Local).date_naive();
+    Some(UsageRequest {
+        timestamp: timestamp_ms as f64 / 1000.0,
+        date,
+        agent: UsageAgent::Omp,
+        model: message
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        input_tokens: input,
+        output_tokens: output.unwrap_or(0),
+        cache_creation_tokens: cache_write,
+        cache_read_tokens: cache_read,
+    })
+}
+
+pub(crate) fn parse_omp_usage_requests(content: &str) -> Vec<UsageRequest> {
+    content.lines().filter_map(parse_omp_usage_line).collect()
 }
 
 /// 剥掉结尾的 ISO 发布日期,例如 `gpt-5-4-mini-2026-03-17`。
@@ -992,6 +1063,10 @@ fn usage_roots_for_home(home: &Path) -> Vec<PathBuf> {
             if name == ".dsh" {
                 roots.insert(entry.path().join("sessions"));
             }
+            // omp 的会话在 ~/.omp/agent/sessions(多一层 agent 目录)。
+            if name == ".omp" {
+                roots.insert(entry.path().join("agent").join("sessions"));
+            }
         }
     }
 
@@ -1015,7 +1090,8 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         "codex" => Some(UsageAgent::Codex),
         "claude" => Some(UsageAgent::Claude),
         "dsh" => Some(UsageAgent::Dsh),
-        _ => return Err("agent must be all, codex, claude, or dsh".to_owned()),
+        "omp" => Some(UsageAgent::Omp),
+        _ => return Err("agent must be all, codex, claude, dsh, or omp".to_owned()),
     };
 
     let now = chrono::Local::now();
@@ -1063,6 +1139,14 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         false,
         min_timestamp,
     );
+    let (omp, _) = aggregate_requests(
+        &requests,
+        from,
+        to,
+        Some(UsageAgent::Omp),
+        false,
+        min_timestamp,
+    );
 
     Ok(UsageStatistics {
         range_days,
@@ -1072,7 +1156,12 @@ fn read_usage_statistics_sync(range_days: u32, agent: String) -> Result<UsageSta
         updated_at: crate::usage_index::latest_updated_at()?,
         totals,
         series,
-        breakdown: UsageStatisticsBreakdown { codex, claude, dsh },
+        breakdown: UsageStatisticsBreakdown {
+            codex,
+            claude,
+            dsh,
+            omp,
+        },
     })
 }
 
@@ -1089,6 +1178,38 @@ pub async fn read_usage_statistics(
 #[cfg(test)]
 mod session_metrics_tests {
     use super::*;
+
+    #[test]
+    fn omp_usage_requests_parse_catalog_usage_fields() {
+        let content = concat!(
+            r#"{"type":"title","v":1,"title":"demo","updatedAt":"2026-09-06T00:00:00.000Z","pad":"  "}"#,
+            "\n",
+            r#"{"type":"session","version":3,"id":"0198-omp","timestamp":"2026-09-06T00:00:00.500Z","cwd":"/tmp/demo"}"#,
+            "\n",
+            r#"{"type":"message","id":"m1","parentId":null,"timestamp":"2026-09-06T00:00:01.000Z","message":{"role":"user","content":"hi"}}"#,
+            "\n",
+            r#"{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-09-06T00:00:02.000Z","message":{"role":"assistant","model":"anthropic/claude-sonnet-4-5","content":[],"usage":{"input":100,"output":20,"cacheRead":50,"cacheWrite":5,"totalTokens":175}}}"#,
+            "\n",
+            r#"{"type":"message","id":"m3","parentId":"m2","timestamp":"2026-09-06T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[],"isError":false}}"#,
+            "\n",
+            r#"{"type":"message","id":"m4","parentId":"m3","timestamp":"2026-09-06T00:00:04.000Z","message":{"role":"assistant","model":"anthropic/claude-sonnet-4-5","content":[],"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}}"#,
+            "\n",
+        );
+        assert!(is_omp_session(content));
+        let requests = parse_omp_usage_requests(content);
+        // 全零 usage 与 user/toolResult 条目不产生记录。
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].agent, UsageAgent::Omp);
+        assert_eq!(requests[0].model, "anthropic/claude-sonnet-4-5");
+        assert_eq!(requests[0].input_tokens, 100);
+        assert_eq!(requests[0].output_tokens, 20);
+        assert_eq!(requests[0].cache_read_tokens, 50);
+        assert_eq!(requests[0].cache_creation_tokens, 5);
+        // 非 omp 内容不误判。
+        assert!(!is_omp_session(
+            r#"{"type":"assistant","message":{"role":"assistant"}}"#
+        ));
+    }
 
     #[test]
     fn dsh_usage_requests_track_route_model_and_usage_fields() {

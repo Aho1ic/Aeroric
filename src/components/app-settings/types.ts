@@ -411,7 +411,7 @@ export interface AgentInstallResult {
   message: string;
 }
 
-export type AgentSetupKind = "codex" | "claude_code" | "dsh";
+export type AgentSetupKind = "codex" | "claude_code" | "dsh" | "omp";
 export type DshApiProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
 
 export interface AgentSetupDraft {

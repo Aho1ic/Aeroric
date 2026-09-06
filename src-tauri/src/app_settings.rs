@@ -2000,6 +2000,14 @@ fn upsert_custom_agent_profile_unlocked(
     } else {
         None
     };
+    // omp 档案的凭据/网关写进托管 home 的 models.yml,与 settings.json 同事务更新。
+    let omp_home = if family == AgentFamily::Omp {
+        let home = crate::omp_home::omp_home_for(&profile.id)?;
+        paths.push(home.join("models.yml"));
+        Some(home)
+    } else {
+        None
+    };
     if let Some(plan) = &generated_plan {
         paths.push(plan.target.clone());
         if !plan.current_path.trim().is_empty() {
@@ -2025,6 +2033,16 @@ fn upsert_custom_agent_profile_unlocked(
                     &profile.models,
                 )?;
             }
+        }
+        if let Some(home) = omp_home.as_deref() {
+            crate::omp_home::ensure_omp_home_for(&profile.id)?;
+            crate::omp_home::write_custom_provider_models_yml(
+                home,
+                &normalize_base_url(&profile.base_url),
+                profile.api_key.trim(),
+                &crate::omp_home::read_omp_api_protocol(home),
+                &profile.models,
+            )?;
         }
         if let Some(plan) = generated_plan {
             let path = write_generated_agent_script(
@@ -2265,6 +2283,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
             let id = allocate_setup_agent_id(&draft.id, &draft.kind, settings)?;
             draft.id = id.clone();
             let is_dsh = matches!(draft.kind, AgentSetupKind::Dsh);
+            let is_omp = matches!(draft.kind, AgentSetupKind::Omp);
             let models = normalize_setup_models(&draft);
             let (profile_path, config_lang, family, dsh_home, file_paths) = if is_dsh {
                 // dsh-like 档案不生成 wrapper 脚本:直接运行 dsh 二进制,隔离 home 与
@@ -2290,6 +2309,26 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
                     "dsh".to_string(),
                     Some(home),
                     file_paths,
+                )
+            } else if is_omp {
+                // omp-like 档案同理:直接运行 omp 二进制,托管 home
+                // (PI_CODING_AGENT_DIR = agent-homes/{id})在下方事务里初始化,
+                // 自定义 provider 写进 home 的 models.yml。
+                let program = {
+                    let detected = crate::platform::detect_path("omp");
+                    if detected.is_empty() {
+                        "omp".to_string()
+                    } else {
+                        detected
+                    }
+                };
+                let home = crate::omp_home::omp_home_for(&id)?;
+                (
+                    program,
+                    "yaml".to_string(),
+                    "omp".to_string(),
+                    None,
+                    vec![home.join("config.yml"), home.join("models.yml")],
                 )
             } else {
                 let script_path = default_agent_script_path(&id)?;
@@ -2333,6 +2372,20 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
                             &draft.dsh_api_protocol,
                         )?;
                     }
+                } else if is_omp {
+                    let home = crate::omp_home::omp_home_for(&id)?;
+                    crate::omp_home::ensure_omp_home_for(&id)?;
+                    crate::omp_home::write_custom_provider_models_yml(
+                        &home,
+                        &normalize_base_url(&draft.base_url),
+                        draft.api_key.trim(),
+                        &if draft.dsh_api_protocol.is_empty() {
+                            "openai-completions".to_string()
+                        } else {
+                            draft.dsh_api_protocol
+                        },
+                        &profile.models,
+                    )?;
                 } else {
                     let script = build_agent_script(&draft);
                     write_agent_script(&id, &script, &draft.api_key)?;
