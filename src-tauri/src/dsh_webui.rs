@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::{sleep, Duration, Instant};
@@ -3050,11 +3050,13 @@ pub async fn export_dsh_session_log(
     }
     // Stream into a sibling `.part` file and rename once complete. A mid-stream
     // failure must not leave a truncated archive at the chosen path, which may
-    // be a file the user already agreed to replace.
+    // be a file the user already agreed to replace. 写盘走 tokio::fs(内部
+    // spawn_blocking),不阻塞 runtime worker 线程。
     let mut partial = target.clone().into_os_string();
     partial.push(".part");
     let partial = PathBuf::from(partial);
-    let mut file = std::fs::File::create(&partial)
+    let mut file = tokio::fs::File::create(&partial)
+        .await
         .map_err(|error| format!("Cannot write {}: {error}", partial.display()))?;
     let mut bytes: u64 = 0;
     let mut stream = response.bytes_stream();
@@ -3067,23 +3069,25 @@ pub async fn export_dsh_session_log(
                 return Err(format!("Session log export stream failed: {error}"));
             }
         };
-        if let Err(error) = std::io::Write::write_all(&mut file, &chunk) {
+        if let Err(error) = file.write_all(&chunk).await {
             drop(file);
             let _ = std::fs::remove_file(&partial);
             return Err(format!("Cannot write {}: {error}", partial.display()));
         }
         bytes += chunk.len() as u64;
     }
-    if let Err(error) = std::io::Write::flush(&mut file) {
+    if let Err(error) = file.flush().await {
         drop(file);
         let _ = std::fs::remove_file(&partial);
         return Err(format!("Cannot write {}: {error}", partial.display()));
     }
     drop(file);
-    std::fs::rename(&partial, &target).map_err(|error| {
-        let _ = std::fs::remove_file(&partial);
-        format!("Cannot save {}: {error}", target.display())
-    })?;
+    tokio::fs::rename(&partial, &target)
+        .await
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&partial);
+            format!("Cannot save {}: {error}", target.display())
+        })?;
     Ok(DshSessionLogExport {
         path: target.to_string_lossy().to_string(),
         bytes,

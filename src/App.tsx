@@ -99,6 +99,28 @@ import { DshQuestionDialog, type DshQuestionRequest } from "./components/DshQues
 import { OmpApprovalDialog } from "./components/OmpApprovalDialog";
 import { OmpQuestionDialog } from "./components/OmpQuestionDialog";
 import type { OmpUiRequest } from "./ompUiRequests";
+import {
+  APP_EXIT_REQUESTED_EVENT,
+  APP_RESTART_REQUESTED_EVENT,
+  DSH_APPROVAL_REQUESTED_EVENT,
+  DSH_APPROVAL_RESOLVED_EVENT,
+  DSH_HOST_AGENT_ERROR_EVENT,
+  DSH_HOST_ARCHIVED_SESSIONS_CHANGED_EVENT,
+  DSH_HOST_SESSION_ADDED_EVENT,
+  DSH_HOST_SESSION_REMOVED_EVENT,
+  DSH_HOST_SESSION_STATUS_EVENT,
+  DSH_HOST_WORKSPACE_CHANGED_EVENT,
+  DSH_HOST_WORKSPACE_ORDER_CHANGED_EVENT,
+  DSH_HOST_WORKSPACE_REMOVED_EVENT,
+  DSH_QUESTION_REQUESTED_EVENT,
+  DSH_QUESTION_RESOLVED_EVENT,
+  OMP_UI_REQUEST_EVENT,
+  OMP_UI_REQUEST_RESOLVED_EVENT,
+  REMOTE_TASK_REQUEST_EVENT,
+  REMOTE_TERMINAL_RESIZED_EVENT,
+  TASK_SESSION_EVENT,
+  TASK_STATUS_EVENT,
+} from "./tauriEvents";
 import "./App.css";
 
 import {
@@ -654,10 +676,10 @@ function App() {
             event.preventDefault();
             void completeLifecycleAction("exit");
           });
-    const exitListener = listen("app-exit-requested", () => {
+    const exitListener = listen(APP_EXIT_REQUESTED_EVENT, () => {
       void completeLifecycleAction("exit");
     });
-    const restartListener = listen("app-restart-requested", () => {
+    const restartListener = listen(APP_RESTART_REQUESTED_EVENT, () => {
       void completeLifecycleAction("restart");
     });
     let disposed = false;
@@ -899,7 +921,7 @@ function App() {
   // Tauri event listeners (agent-output is handled inside useTerminalManager)
   useEffect(() => {
     const p1 = listen<{ task_id: string; status: TaskStatus; failure_reason?: string }>(
-      "task-status",
+      TASK_STATUS_EVENT,
       (e) => {
         const { task_id, status, failure_reason } = e.payload;
         if (manuallyCompletedDshTasksRef.current.has(task_id) && status !== "done") return;
@@ -923,12 +945,12 @@ function App() {
       session_path: string;
       codex_like?: boolean;
       family?: string;
-    }>("task-session", (e) => {
+    }>(TASK_SESSION_EVENT, (e) => {
       const { task_id, session_id, session_path, codex_like, family } = e.payload;
       updateTaskSession(task_id, session_id, session_path, codex_like, family);
     });
     const p3 = listen<{ task_id: string; cols: number; rows: number }>(
-      "remote-terminal-resized",
+      REMOTE_TERMINAL_RESIZED_EVENT,
       (e) => {
         const { task_id, cols, rows } = e.payload;
         tm.handleRemoteResize(task_id, cols, rows);
@@ -957,7 +979,7 @@ function App() {
       toolName: string;
       callId?: string;
       reason?: string;
-    }>("dsh-approval-requested", (e) => {
+    }>(DSH_APPROVAL_REQUESTED_EVENT, (e) => {
       setDshApprovalRequests((prev) => {
         const request = {
           rpcId: e.payload.rpcId,
@@ -983,7 +1005,7 @@ function App() {
         options?: Array<{ label: string; description?: string }>;
         multiSelect?: boolean;
       }>;
-    }>("dsh-question-requested", (e) => {
+    }>(DSH_QUESTION_REQUESTED_EVENT, (e) => {
       setDshQuestionRequests((prev) => {
         const request = {
           rpcId: e.payload.rpcId,
@@ -994,16 +1016,19 @@ function App() {
         return [...next, request];
       });
     });
-    const p8 = listen<{ sessionId?: string; approvalId?: string }>("dsh-approval-resolved", (e) => {
-      setDshApprovalRequests((prev) =>
-        prev.filter(
-          (item) =>
-            !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
-        ),
-      );
-    });
+    const p8 = listen<{ sessionId?: string; approvalId?: string }>(
+      DSH_APPROVAL_RESOLVED_EVENT,
+      (e) => {
+        setDshApprovalRequests((prev) =>
+          prev.filter(
+            (item) =>
+              !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
+          ),
+        );
+      },
+    );
     const p9 = listen<{ sessionId?: string; questionRpcId?: string }>(
-      "dsh-question-resolved",
+      DSH_QUESTION_RESOLVED_EVENT,
       (e) => {
         setDshQuestionRequests((prev) =>
           prev.filter((item) => item.rpcId !== e.payload.questionRpcId),
@@ -1024,7 +1049,7 @@ function App() {
       optionDetails?: unknown;
       placeholder?: unknown;
       prefill?: unknown;
-    }>("omp-ui-request", (e) => {
+    }>(OMP_UI_REQUEST_EVENT, (e) => {
       const payload = e.payload;
       const request: OmpUiRequest = {
         taskId: payload.task_id,
@@ -1044,41 +1069,45 @@ function App() {
         return [...next, request];
       });
     });
-    const p9c = listen<{ task_id: string; request_id: string }>("omp-ui-request-resolved", (e) => {
-      setOmpUiRequests((prev) =>
-        prev.filter(
-          (item) => !(item.taskId === e.payload.task_id && item.requestId === e.payload.request_id),
-        ),
-      );
-    });
+    const p9c = listen<{ task_id: string; request_id: string }>(
+      OMP_UI_REQUEST_RESOLVED_EVENT,
+      (e) => {
+        setOmpUiRequests((prev) =>
+          prev.filter(
+            (item) =>
+              !(item.taskId === e.payload.task_id && item.requestId === e.payload.request_id),
+          ),
+        );
+      },
+    );
     // DSH events.host is the live invalidation channel for settings/session
     // surfaces. Re-emit one browser event with the original payload so panels
     // can refresh their own snapshot without coupling App to their state.
     const dispatchDshHostRefresh = (eventName: string, payload: unknown) => {
       window.dispatchEvent(new CustomEvent("dsh-host-refresh", { detail: { eventName, payload } }));
     };
-    const p10 = listen("dsh-host-session-added", (e) =>
+    const p10 = listen(DSH_HOST_SESSION_ADDED_EVENT, (e) =>
       dispatchDshHostRefresh("session-added", e.payload),
     );
-    const p11 = listen("dsh-host-session-removed", (e) =>
+    const p11 = listen(DSH_HOST_SESSION_REMOVED_EVENT, (e) =>
       dispatchDshHostRefresh("session-removed", e.payload),
     );
-    const p12 = listen("dsh-host-session-status", (e) =>
+    const p12 = listen(DSH_HOST_SESSION_STATUS_EVENT, (e) =>
       dispatchDshHostRefresh("session-status", e.payload),
     );
-    const p13 = listen("dsh-host-workspace-changed", (e) =>
+    const p13 = listen(DSH_HOST_WORKSPACE_CHANGED_EVENT, (e) =>
       dispatchDshHostRefresh("workspace-changed", e.payload),
     );
-    const p14 = listen("dsh-host-workspace-removed", (e) =>
+    const p14 = listen(DSH_HOST_WORKSPACE_REMOVED_EVENT, (e) =>
       dispatchDshHostRefresh("workspace-removed", e.payload),
     );
-    const p15 = listen("dsh-host-workspace-order-changed", (e) =>
+    const p15 = listen(DSH_HOST_WORKSPACE_ORDER_CHANGED_EVENT, (e) =>
       dispatchDshHostRefresh("workspace-order-changed", e.payload),
     );
-    const p16 = listen("dsh-host-archived-sessions-changed", (e) =>
+    const p16 = listen(DSH_HOST_ARCHIVED_SESSIONS_CHANGED_EVENT, (e) =>
       dispatchDshHostRefresh("archived-sessions-changed", e.payload),
     );
-    const p17 = listen<{ message?: string; error?: string }>("dsh-host-agent-error", (e) => {
+    const p17 = listen<{ message?: string; error?: string }>(DSH_HOST_AGENT_ERROR_EVENT, (e) => {
       const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
       showToastRef.current(msg, "error");
     });
@@ -1167,7 +1196,7 @@ function App() {
     t,
   };
   useEffect(() => {
-    const p = listen<RemoteTaskRequestPayload>("remote-task-request", async (e) => {
+    const p = listen<RemoteTaskRequestPayload>(REMOTE_TASK_REQUEST_EVENT, async (e) => {
       const {
         requestId,
         kind,

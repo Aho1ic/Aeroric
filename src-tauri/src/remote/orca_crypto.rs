@@ -313,7 +313,12 @@ fn validate_hello(value: &Value, expected: &Context) -> Result<(), String> {
     {
         return Err("Unsupported Orca E2EE capabilities".to_string());
     }
-    validate_context(value.get("context").unwrap(), expected)
+    validate_context(
+        value
+            .get("context")
+            .ok_or_else(|| "Missing context".to_string())?,
+        expected,
+    )
 }
 
 fn validate_ready(hello: &Value, ready: &Value, expected: &Context) -> Result<(), String> {
@@ -369,7 +374,12 @@ fn validate_ready(hello: &Value, ready: &Value, expected: &Context) -> Result<()
     {
         return Err("Unsupported Orca E2EE selection".to_string());
     }
-    validate_context(ready.get("context").unwrap(), expected)
+    validate_context(
+        ready
+            .get("context")
+            .ok_or_else(|| "Missing context".to_string())?,
+        expected,
+    )
 }
 
 fn validate_context(value: &Value, expected: &Context) -> Result<(), String> {
@@ -423,6 +433,11 @@ fn encode_transcript(
     let context = hello
         .get("context")
         .ok_or_else(|| "Missing context".to_string())?;
+    // ready 的 context 已由 validate_ready 的 require_keys 校验;这里再显式
+    // 取一次,让后续字段不再依赖跨函数不变量。
+    let ready_context = ready
+        .get("context")
+        .ok_or_else(|| "Missing ready context".to_string())?;
     let fields: Vec<(&str, Vec<u8>)> = vec![
         ("domain", TRANSCRIPT_DOMAIN.to_vec()),
         ("mobile-to-desktop.type", bytes("e2ee_hello")),
@@ -472,23 +487,23 @@ fn encode_transcript(
         ),
         (
             "desktop-to-mobile.context.protocol",
-            json_string(ready.get("context").unwrap(), "protocol")?,
+            json_string(ready_context, "protocol")?,
         ),
         (
             "desktop-to-mobile.context.initiator",
-            json_string(ready.get("context").unwrap(), "initiator")?,
+            json_string(ready_context, "initiator")?,
         ),
         (
             "desktop-to-mobile.context.responder",
-            json_string(ready.get("context").unwrap(), "responder")?,
+            json_string(ready_context, "responder")?,
         ),
         (
             "desktop-to-mobile.context.transport",
-            json_string(ready.get("context").unwrap(), "transport")?,
+            json_string(ready_context, "transport")?,
         ),
         (
             "desktop-to-mobile.context.relay-host-id",
-            json_string_optional(ready.get("context").unwrap(), "relayHostId"),
+            json_string_optional(ready_context, "relayHostId"),
         ),
     ];
     let mut result = Vec::new();

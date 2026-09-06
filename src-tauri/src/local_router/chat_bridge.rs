@@ -663,26 +663,29 @@ impl ChatSseTransformer {
             for call in tool_calls {
                 let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let function = call.get("function").unwrap_or(&Value::Null);
-                if !self.tools.contains_key(&index) {
-                    let state = ToolState {
-                        id: call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4().simple())),
-                        call_id: call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
-                        name: function
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("tool")
-                            .to_string(),
-                        arguments: String::new(),
-                        output_index: index + usize::from(self.text_started),
-                    };
+                // entry 一次完成"惰性建 + 取可变引用":孤立的 arguments.delta
+                // (未先收 item.added)也会在这里建出状态,不 panic。
+                let is_new = !self.tools.contains_key(&index);
+                let state = self.tools.entry(index).or_insert_with(|| ToolState {
+                    id: call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4().simple())),
+                    call_id: call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
+                    name: function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string(),
+                    arguments: String::new(),
+                    output_index: index + usize::from(self.text_started),
+                });
+                if is_new {
                     emit_event(
                         "response.output_item.added",
                         json!({
@@ -699,12 +702,10 @@ impl ChatSseTransformer {
                         }),
                         output,
                     );
-                    self.tools.insert(index, state);
                 }
                 let Some(arguments) = function.get("arguments").and_then(Value::as_str) else {
                     continue;
                 };
-                let state = self.tools.get_mut(&index).expect("tool state exists");
                 state.arguments.push_str(arguments);
                 emit_event(
                     "response.function_call_arguments.delta",

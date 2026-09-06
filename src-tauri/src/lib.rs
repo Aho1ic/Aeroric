@@ -84,6 +84,21 @@ mod wsl_git;
 use session::{ClaudeSessionInfo, CodexSessionInfo, OmpSessionInfo};
 use session_dsh::DshSessionInfo;
 
+/// TaskManager 锁序表(2026-09 全量审查固化;新增多锁函数前先对照)。
+///
+/// 全局顺序(仅列会被同时持有的锁;叶子锁单独持有,不参与排序):
+/// 1. `cancelled_tasks` / `manually_completed_tasks` —— 同族函数内成对出现,
+///    先 cancelled 后 manually(见 pty.rs finalize/cancel/complete 三处);
+/// 2. 四族 sessions(codex/claude/dsh/omp)彼此独立,从不同时持有两族;
+/// 3. `claimed_session_paths` 在 sessions 释放之后获取(先取条目再释放占用);
+/// 4. `pty_masters` → `pty_writers` → `child_handles` → `pending_pty_sizes`
+///    按 reset/cleanup 流程固定次序取放;
+/// 5. dsh_webui 侧:`completed_tasks` → `active_sessions`(三处全局同序,
+///    见 dispatch_mux_frame / send_terminal_text_if_current / begin_task_completion);
+/// 6. `codex_rpc`、`wsl_active_ids`、`initial_input_signals` 为叶子锁。
+///
+/// 约束:任何锁不得跨越 `.await` 持有(parking_lot 无中毒,但 await 上的
+/// 死锁不受锁序保护);omp/远端 waiter 线程取锁必须用显式作用域限界。
 pub struct TaskManager {
     pub(crate) pty_masters:
         Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
