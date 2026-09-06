@@ -157,14 +157,17 @@ describe("agent options", () => {
         overflow: "hidden",
       }),
     );
+    // 列数跟着渲染的族数走,不写死 track 表 —— 否则多出的族会落到隐式第二行,
+    // 被 overflow:hidden 连带把第一行各列的底部一起裁掉。
     expect(composeAgentMenuViewportStyle()).toEqual(
       expect.objectContaining({
         display: "grid",
-        gridTemplateColumns:
-          "minmax(0, max-content) 1px minmax(0, max-content) 1px minmax(0, max-content)",
+        gridAutoFlow: "column",
+        gridAutoColumns: "minmax(0, max-content)",
         overflow: "hidden",
       }),
     );
+    expect(composeAgentMenuViewportStyle()).not.toHaveProperty("gridTemplateColumns");
     expect(composeAgentMenuColumnStyle()).toEqual(
       expect.objectContaining({
         minHeight: 0,

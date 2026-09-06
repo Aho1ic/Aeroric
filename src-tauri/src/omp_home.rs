@@ -16,9 +16,11 @@ const OMP_CONFIG_MARKER_PREFIX: &str = "# AERORIC_OMP_CONFIG_VERSION=";
 
 pub(crate) struct OmpHomePaths {
     pub home: PathBuf,
-    // Phase 4(配置面板读写 config.yml)/ Phase 5(mcp.json 生成)消费。
+    // Phase 4(配置面板读写 config.yml)消费。
     #[allow(dead_code)]
     pub config_path: PathBuf,
+    // 实际写入走 mcp::omp_mcp_config_for_launch(home)(home.join("mcp.json")
+    // 与本字段等价);保留字段是为 OmpHomePaths 的路径清单完整性。
     #[allow(dead_code)]
     pub mcp_path: PathBuf,
 }

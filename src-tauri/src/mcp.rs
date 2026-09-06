@@ -627,6 +627,66 @@ pub fn dsh_mcp_patch_for_launch(dsh_home: &Path) -> Result<Option<PathBuf>, Stri
     Ok(Some(path))
 }
 
+/// 构造 omp `mcp.json` 的 JSON(`{mcpServers:{name:{type:"stdio",command,args,env}}}`),
+/// 与 omp 官方 `MCPConfigFile` 同构;server name 即 JSON 键,无 dsh 那样的字符约束。
+fn build_omp_mcp_config(servers: &[&McpServerConfig]) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for server in servers {
+        let mut entry = serde_json::Map::new();
+        entry.insert(
+            "type".to_string(),
+            serde_json::Value::String("stdio".to_string()),
+        );
+        entry.insert(
+            "command".to_string(),
+            serde_json::Value::String(server.command.clone()),
+        );
+        if !server.args.is_empty() {
+            entry.insert(
+                "args".to_string(),
+                serde_json::Value::Array(
+                    server
+                        .args
+                        .iter()
+                        .map(|arg| serde_json::Value::String(arg.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if !server.env.is_empty() {
+            // env 用 BTreeMap 排序落盘,避免每次生成的文件内容顺序抖动。
+            let env: serde_json::Map<String, serde_json::Value> = server
+                .env
+                .iter()
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+                .collect();
+            entry.insert("env".to_string(), serde_json::Value::Object(env));
+        }
+        map.insert(server.name.clone(), serde_json::Value::Object(entry));
+    }
+    serde_json::json!({ "mcpServers": serde_json::Value::Object(map) })
+}
+
+/// 重写 omp 托管 home 的 `mcp.json`。omp 无 patch 机制,直接读 home 层配置;
+/// 每次任务启动前重写(server 增删改在下一次启动生效;不支持热加载)。
+/// 与 dsh 不同,无 server 时也写入空骨架,让"清空 MCP"在下一次启动生效。
+pub fn omp_mcp_config_for_launch(omp_home: &Path) -> Result<(), String> {
+    let settings = load_mcp_settings()?;
+    let servers = active_servers(&settings);
+    let raw = if servers.is_empty() {
+        "{\n  \"mcpServers\": {}\n}".to_string()
+    } else {
+        serde_json::to_string_pretty(&build_omp_mcp_config(&servers))
+            .map_err(|err| format!("无法序列化 omp MCP 配置: {err}"))?
+    };
+    ensure_private_dir(omp_home)?;
+    atomic_write_private(&omp_home.join("mcp.json"), &raw)
+        .map_err(|err| format!("无法写入 omp MCP 配置: {err}"))?;
+    Ok(())
+}
+
 // ── Tauri commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -686,6 +746,61 @@ mod tests {
         assert!(patch.contains("command: \"npx\""));
         assert!(patch.contains("- \"mcp-thing\""));
         assert!(patch.contains("\"TOKEN\": \"se\\\"cret\""));
+    }
+
+    #[test]
+    fn builds_omp_mcp_config_in_official_shape() {
+        let mut fs_server = server("filesystem", "/usr/local/bin/files-mcp");
+        fs_server.args = vec!["--root".to_string(), "/tmp".to_string()];
+        fs_server
+            .env
+            .insert("TOKEN".to_string(), "secret".to_string());
+        let config = build_omp_mcp_config(&[&fs_server]);
+        let servers = config
+            .get("mcpServers")
+            .and_then(|value| value.as_object())
+            .expect("mcpServers object");
+        let entry = servers
+            .get("filesystem")
+            .and_then(|value| value.as_object())
+            .expect("server entry");
+        // omp 官方 MCPServerConfig:stdio 类型显式标注,command/args/env 原样透传。
+        assert_eq!(
+            entry.get("type").and_then(|value| value.as_str()),
+            Some("stdio")
+        );
+        assert_eq!(
+            entry.get("command").and_then(|value| value.as_str()),
+            Some("/usr/local/bin/files-mcp")
+        );
+        assert_eq!(
+            entry
+                .get("args")
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            entry
+                .get("env")
+                .and_then(|value| value.get("TOKEN"))
+                .and_then(|value| value.as_str()),
+            Some("secret")
+        );
+        // 空骨架字面量与构造器空实现保持一致,防两处漂移。
+        assert_eq!(
+            serde_json::to_string_pretty(&build_omp_mcp_config(&[]))
+                .unwrap()
+                .replace('\n', "")
+                .replace(' ', ""),
+            "{\"mcpServers\":{}}"
+        );
+        // server name 不做 dsh 那样的字符净化(JSON 键原样保留)。
+        let unicode = build_omp_mcp_config(&[&server("我的 server", "npx")]);
+        assert!(unicode
+            .get("mcpServers")
+            .and_then(|value| value.as_object())
+            .is_some_and(|map| map.contains_key("我的 server")));
     }
 
     #[test]

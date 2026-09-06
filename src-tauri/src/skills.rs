@@ -422,6 +422,8 @@ fn agent_skills_dir(project_path: &Path, agent: &str) -> PathBuf {
         "codex" => ".codex/skills",
         // dsh-skill-filesystem 的项目级根之一(另一处是 .agents/skills)。
         "dsh" => ".dsh/skills",
+        // omp 原生读取项目 .omp/skills(另一处是 .agents/skills)。
+        "omp" => ".omp/skills",
         _ => ".claude/skills",
     };
     project_path.join(sub)
@@ -880,6 +882,19 @@ fn prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> {
         }
         return roots;
     }
+    if agent == "omp" {
+        // omp 的 skill 发现根:项目 .omp/skills 与 .agents/skills,
+        // 用户级为托管 PI_CODING_AGENT_DIR 下的 skills(不读用户自己的 ~/.omp)。
+        roots.push(project_path.join(".omp").join("skills"));
+        roots.push(project_path.join(".agents").join("skills"));
+        if let Ok(home) = crate::omp_home::omp_home_for(agent) {
+            roots.push(home.join("skills"));
+        }
+        if let Some(home) = crate::platform::home_dir() {
+            roots.push(home.join(".agents").join("skills"));
+        }
+        return roots;
+    }
     let codex_like = agent == "codex";
     if codex_like {
         roots.push(project_path.join(".agents").join("skills"));
@@ -923,6 +938,15 @@ fn project_prompt_skill_roots(project_path: &Path, agent: &str) -> Vec<PathBuf> 
         "dsh" | "all" => {
             roots.push(project_path.join(".dsh").join("skills"));
             if agent == "dsh" {
+                roots.push(project_path.join(".agents").join("skills"));
+            }
+        }
+        _ => {}
+    }
+    match agent {
+        "omp" | "all" => {
+            roots.push(project_path.join(".omp").join("skills"));
+            if agent == "omp" {
                 roots.push(project_path.join(".agents").join("skills"));
             }
         }
@@ -1181,7 +1205,7 @@ pub async fn list_project_skills(
     project_only: Option<bool>,
 ) -> Result<Vec<PromptSkill>, String> {
     tokio::task::spawn_blocking(move || {
-        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "all") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "omp" | "all") {
             return Err(format!("Unsupported agent skill type: {}", agent));
         }
         let project_path = PathBuf::from(project_path);
@@ -1263,7 +1287,7 @@ pub async fn install_skill(
     strategy: String,
 ) -> Result<InstallResult, String> {
     tokio::task::spawn_blocking(move || {
-        if !matches!(agent.as_str(), "claude" | "codex" | "dsh") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "omp") {
             return Err(format!("Unsupported agent: {}", agent));
         }
         if !matches!(
@@ -1446,7 +1470,7 @@ pub async fn uninstall_skill(
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         validate_skill_name(&skill_name)?;
-        if !matches!(agent.as_str(), "claude" | "codex" | "dsh") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "dsh" | "omp") {
             return Err(format!("Unsupported agent: {}", agent));
         }
         let mut file = load_installations_internal();
@@ -1575,7 +1599,7 @@ pub async fn delete_skill(skill_name: String, skill_path: String) -> Result<Dele
 
         for project in load_projects()? {
             let project_path = Path::new(&project.path);
-            for agent in ["claude", "codex", "dsh"] {
+            for agent in ["claude", "codex", "dsh", "omp"] {
                 let link = agent_skills_dir(project_path, agent).join(&skill_name);
                 if symlink_points_to(&link, &skill_canonical) {
                     candidate_links.insert(link);

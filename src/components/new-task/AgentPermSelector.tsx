@@ -180,8 +180,11 @@ export function composeAgentMenuContentStyle(): CSSProperties {
 export function composeAgentMenuViewportStyle(): CSSProperties {
   return {
     display: "grid",
-    gridTemplateColumns:
-      "minmax(0, max-content) 1px minmax(0, max-content) 1px minmax(0, max-content)",
+    // 一族一列,列数由渲染的族数决定:显式 track 表会在新增一族时把多出的列
+    // 挤到隐式第二行,而该行既被 overflow:hidden 裁掉、又白占一行高度,把第一行
+    // 的列底部一起顶出可视区。按流向自动开列则永远只有一行,不随族数漂移。
+    gridAutoFlow: "column",
+    gridAutoColumns: "minmax(0, max-content)",
     gap: 10,
     maxHeight: "min(320px, var(--radix-select-content-available-height))",
     overflow: "hidden",
@@ -530,12 +533,17 @@ export function AgentPermSelector({
             )}
           </Select.Trigger>
           <Select.Portal>
+            {/* 不要关掉 avoidCollisions:composer 在 newTaskOuter 里居中,trigger 因此
+                永远落在窗口下半部,向下那侧的可用高度总是小于向上那侧(1280x720 下
+                134px vs 560px)。一旦钉死 side="bottom" 且禁用避让,菜单只能挤进较小
+                的一侧,每列七八个配置只露得出两行,余下的被列内滚动藏起来 —— 而列滚
+                动条是隐藏的,看上去就是「配置下方被裁掉了」。留着避让,Radix 会翻到
+                向上那侧,可用高度回到 320px 设计上限。 */}
             <Select.Content
               position="popper"
               side="bottom"
               align="start"
               sideOffset={6}
-              avoidCollisions={false}
               style={composeAgentMenuContentStyle()}
             >
               <Select.Viewport style={composeAgentMenuViewportStyle()}>

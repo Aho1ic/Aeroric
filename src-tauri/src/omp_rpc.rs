@@ -726,6 +726,8 @@ pub async fn run_omp_task(
     let agent_for_home = agent.clone();
     let (home, launch) = tokio::task::spawn_blocking(move || -> Result<(_, _), String> {
         let paths = crate::omp_home::ensure_omp_home_for(&agent_for_home)?;
+        // MCP 变更随任务启动重写(omp 不支持热加载,进程重启即生效)。
+        crate::mcp::omp_mcp_config_for_launch(&paths.home)?;
         let launch = crate::app_settings::get_agent_launch_spec(&agent_for_home);
         Ok((paths, launch))
     })

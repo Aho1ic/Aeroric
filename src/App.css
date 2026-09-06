@@ -3174,9 +3174,12 @@ html.dark .notebook-rich-text font[color="#000000"] {
   letter-spacing: 0;
 }
 
+/* 两列换行,而不是按族数写死 track 数:族数一变(例如加入 omp 变成四族),
+   写死的三列会把最后一族单独甩到第二行、宽度只有邻居的三分之一。两列时四族
+   排成整齐的 2×2,且配置名在 720px 对话框里仍有 334px 可用宽度不被省略。 */
 .agent-config-switch-groups {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
