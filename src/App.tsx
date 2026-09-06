@@ -96,6 +96,9 @@ import s from "./styles";
 import { launchDshWebUi } from "./dshWebUi";
 import { DshApprovalDialog, type DshApprovalRequest } from "./components/DshApprovalDialog";
 import { DshQuestionDialog, type DshQuestionRequest } from "./components/DshQuestionDialog";
+import { OmpApprovalDialog } from "./components/OmpApprovalDialog";
+import { OmpQuestionDialog } from "./components/OmpQuestionDialog";
+import type { OmpUiRequest } from "./ompUiRequests";
 import "./App.css";
 
 import {
@@ -445,6 +448,9 @@ function App() {
   // DSH approval / question dialogs
   const [dshApprovalRequests, setDshApprovalRequests] = useState<DshApprovalRequest[]>([]);
   const [dshQuestionRequests, setDshQuestionRequests] = useState<DshQuestionRequest[]>([]);
+  // omp(extension_ui_request)审批/提问队列:select/confirm/input/editor 一队,
+  // 弹窗按方法分流到 OmpApprovalDialog(confirm)或 OmpQuestionDialog(其余)。
+  const [ompUiRequests, setOmpUiRequests] = useState<OmpUiRequest[]>([]);
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
@@ -899,6 +905,16 @@ function App() {
         if (manuallyCompletedDshTasksRef.current.has(task_id) && status !== "done") return;
         updateTaskStatus(task_id, status, undefined, failure_reason);
         if (status === "done") scheduleForDoneTask(task_id);
+        // 任务到终态时 omp 进程已经收场(EOF 会 reject 全部挂起的
+        // extension_ui_request):必须同步出队,否则弹窗会对着已死的会话
+        // 永远回应失败,overlay 卡死整个应用。
+        if (status === "done" || status === "failed" || status === "cancelled") {
+          setOmpUiRequests((prev) =>
+            prev.some((item) => item.taskId === task_id)
+              ? prev.filter((item) => item.taskId !== task_id)
+              : prev,
+          );
+        }
       },
     );
     const p2 = listen<{
@@ -994,6 +1010,47 @@ function App() {
         );
       },
     );
+    // omp(extension_ui_request)审批/提问请求与解决事件;请求被后端回应(含取消)
+    // 后由 omp-ui-request-resolved 出队,弹窗本地 onClose 只做乐观移除。
+    // 注意:omp_rpc.rs 的事件载荷是 snake_case(与 task-session 一致),
+    // 这里显式映射成 camelCase 的 OmpUiRequest。
+    const p9b = listen<{
+      task_id: string;
+      request_id: string;
+      method: OmpUiRequest["method"];
+      title?: unknown;
+      message?: unknown;
+      options?: unknown;
+      optionDetails?: unknown;
+      placeholder?: unknown;
+      prefill?: unknown;
+    }>("omp-ui-request", (e) => {
+      const payload = e.payload;
+      const request: OmpUiRequest = {
+        taskId: payload.task_id,
+        requestId: payload.request_id,
+        method: payload.method,
+        title: typeof payload.title === "string" ? payload.title : null,
+        message: typeof payload.message === "string" ? payload.message : null,
+        options: Array.isArray(payload.options) ? (payload.options as string[]) : null,
+        optionDetails: Array.isArray(payload.optionDetails)
+          ? (payload.optionDetails as Array<{ description?: string }>)
+          : null,
+        placeholder: typeof payload.placeholder === "string" ? payload.placeholder : null,
+        prefill: typeof payload.prefill === "string" ? payload.prefill : null,
+      };
+      setOmpUiRequests((prev) => {
+        const next = prev.filter((item) => item.requestId !== request.requestId);
+        return [...next, request];
+      });
+    });
+    const p9c = listen<{ task_id: string; request_id: string }>("omp-ui-request-resolved", (e) => {
+      setOmpUiRequests((prev) =>
+        prev.filter(
+          (item) => !(item.taskId === e.payload.task_id && item.requestId === e.payload.request_id),
+        ),
+      );
+    });
     // DSH events.host is the live invalidation channel for settings/session
     // surfaces. Re-emit one browser event with the original payload so panels
     // can refresh their own snapshot without coupling App to their state.
@@ -1075,6 +1132,8 @@ function App() {
       p7.then((fn) => fn());
       p8.then((fn) => fn());
       p9.then((fn) => fn());
+      p9b.then((fn) => fn());
+      p9c.then((fn) => fn());
       p10.then((fn) => fn());
       p11.then((fn) => fn());
       p12.then((fn) => fn());
@@ -3163,6 +3222,24 @@ function App() {
       <DshQuestionDialog
         request={dshQuestionRequests[0] ?? null}
         onClose={() => setDshQuestionRequests((prev) => prev.slice(1))}
+      />
+      <OmpApprovalDialog
+        request={ompUiRequests.find((item) => item.method === "confirm") ?? null}
+        onClose={() =>
+          setOmpUiRequests((prev) => {
+            const index = prev.findIndex((item) => item.method === "confirm");
+            return index === -1 ? prev : prev.filter((_, i) => i !== index);
+          })
+        }
+      />
+      <OmpQuestionDialog
+        request={ompUiRequests.find((item) => item.method !== "confirm") ?? null}
+        onClose={() =>
+          setOmpUiRequests((prev) => {
+            const index = prev.findIndex((item) => item.method !== "confirm");
+            return index === -1 ? prev : prev.filter((_, i) => i !== index);
+          })
+        }
       />
     </div>
   );

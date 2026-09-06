@@ -7,14 +7,16 @@
 //! `get_state` 返回的 sessionFile,发现线程只作兜底。
 
 use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::session::OmpSessionInfo;
+use crate::session::{OmpSessionInfo, SessionContent, SessionMessage};
 use crate::TaskManager;
 
 pub(crate) fn register_omp_session(
@@ -191,6 +193,180 @@ pub(crate) fn spawn_omp_session_watcher(
     });
 }
 
+/// 读取 omp 会话文件头(`{type:"session",id,...}` 行)的会话 id。
+/// 只流式读前 4 行:title 槽固定 256 字节,header 必然在其中,避免整读大文件。
+pub(crate) fn read_omp_session_header(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(file).lines().take(4) {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) == Some("session") {
+            return value.get("id").and_then(Value::as_str).map(str::to_string);
+        }
+    }
+    None
+}
+
+/// 解析 omp 会话 JSONL 行为 Aeroric 的会话消息。
+///
+/// 布局:首行 256 字节 title 槽、次行 header(`{type:"session",...}`)、之后为
+/// append-only entry 树。entry 里的 `message` 对象与 omp RPC 的 AgentMessage 同构:
+/// - user:content 为字符串或 `[{type:"text",...},{type:"image",...}]` 数组
+/// - assistant:content 数组含 `{type:"text"|"thinking"|"toolCall",...}`
+/// - toolResult:content 数组(文本项拼接为输出)
+///
+/// compaction/model_usage 等非消息 entry 与空行跳过;entry 树按文件线性序展示
+/// (omp 的分支树在 Aeroric 中平铺,与 claude/codex 解析的处理一致)。
+pub(crate) fn parse_omp_session_lines<S: AsRef<str>>(
+    lines: &[S],
+) -> Result<Vec<SessionMessage>, String> {
+    let mut messages = Vec::new();
+    for line in lines {
+        let line = line.as_ref();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        let message_id = value.get("id").and_then(Value::as_str).map(str::to_string);
+        let content = match role {
+            "user" => parse_omp_user_content(message),
+            "assistant" => parse_omp_assistant_content(message),
+            "toolResult" => parse_omp_tool_result_content(message),
+            // developer 等其它角色按原样跳过,避免会话视图出现无法渲染的条目。
+            _ => continue,
+        };
+        if content.is_empty() {
+            continue;
+        }
+        messages.push(SessionMessage {
+            role: role.to_string(),
+            content,
+            message_id,
+        });
+    }
+    Ok(messages)
+}
+
+fn parse_omp_user_content(message: &Value) -> Vec<SessionContent> {
+    match message.get("content") {
+        // 空字符串/空文本项不渲染空气泡。
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            vec![SessionContent::Text { text: text.clone() }]
+        }
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                    (!text.trim().is_empty()).then_some(SessionContent::Text {
+                        text: text.to_string(),
+                    })
+                }
+                // 图片附件只保留占位元数据,不内联 base64。
+                Some("image") => Some(SessionContent::Attachment {
+                    name: "image".to_string(),
+                    media_type: item
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png")
+                        .to_string(),
+                    source: "inline-image".to_string(),
+                }),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_omp_assistant_content(message: &Value) -> Vec<SessionContent> {
+    let Some(Value::Array(items)) = message.get("content") else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                (!text.trim().is_empty()).then_some(SessionContent::Text {
+                    text: text.to_string(),
+                })
+            }
+            Some("thinking") => {
+                let thinking = item
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                (!thinking.trim().is_empty()).then_some(SessionContent::Thinking {
+                    thinking: thinking.to_string(),
+                })
+            }
+            Some("toolCall") => {
+                let input = match item.get("arguments") {
+                    Some(Value::String(raw)) => raw.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                Some(SessionContent::ToolUse {
+                    id: item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string(),
+                    input,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn parse_omp_tool_result_content(message: &Value) -> Vec<SessionContent> {
+    let tool_call_id = message
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let output = match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("text") => item.get("text").and_then(Value::as_str).map(str::to_string),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    // 空输出不渲染空 result 卡片;返回空 vec 让外层把整条消息过滤掉。
+    if output.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![SessionContent::ToolResult {
+        id: tool_call_id,
+        output,
+    }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +398,102 @@ mod tests {
         // temp 根目录本身(tempRelative === "")→ 裸 "-tmp"。
         assert_eq!(omp_project_dir_name(&std::env::temp_dir()), "-tmp");
         fs::remove_dir_all(&root).ok();
+    }
+
+    fn omp_line(json: serde_json::Value) -> String {
+        json.to_string()
+    }
+
+    #[test]
+    fn parses_user_assistant_toolresult_entries() {
+        let lines = vec![
+            // 首行 title 槽(带空格填充)与 header 行都要跳过。
+            omp_line(serde_json::json!({"type":"title","v":1,"title":"demo"})) + "          ",
+            omp_line(
+                serde_json::json!({"type":"session","version":3,"id":"0198-omp","timestamp":"2026-09-06T00:00:00.000Z","cwd":"/tmp/demo"}),
+            ),
+            omp_line(serde_json::json!({
+                "type":"message","id":"m1","parentId":null,"timestamp":"2026-09-06T00:00:01.000Z",
+                "message":{"role":"user","content":"hello omp","timestamp":1}
+            })),
+            omp_line(serde_json::json!({
+                "type":"message","id":"m2","parentId":"m1","timestamp":"2026-09-06T00:00:02.000Z",
+                "message":{"role":"assistant","content":[
+                    {"type":"thinking","thinking":"think hard"},
+                    {"type":"text","text":"hi there"},
+                    {"type":"toolCall","id":"call-1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}
+                ],"stopReason":"toolUse","usage":{"input":10,"output":5},"timestamp":2}
+            })),
+            omp_line(serde_json::json!({
+                "type":"message","id":"m3","parentId":"m2","timestamp":"2026-09-06T00:00:03.000Z",
+                "message":{"role":"toolResult","toolCallId":"call-1","toolName":"bash",
+                    "content":[{"type":"text","text":"file.txt"}],"isError":false,"timestamp":3}
+            })),
+            // 非 message entry(compaction)与空行跳过。
+            omp_line(serde_json::json!({"type":"compaction","id":"c1","parentId":"m3"})),
+            "   ".to_string(),
+        ];
+        let messages = parse_omp_session_lines(&lines).unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "user");
+        assert!(
+            matches!(&messages[0].content[0], SessionContent::Text { text } if text == "hello omp")
+        );
+        assert_eq!(messages[1].message_id.as_deref(), Some("m2"));
+        assert!(
+            matches!(&messages[1].content[0], SessionContent::Thinking { thinking } if thinking == "think hard")
+        );
+        assert!(
+            matches!(&messages[1].content[1], SessionContent::Text { text } if text == "hi there")
+        );
+        assert!(
+            matches!(&messages[1].content[2], SessionContent::ToolUse { name, id, .. } if name == "bash" && id == "call-1")
+        );
+        assert!(
+            matches!(&messages[2].content[0], SessionContent::ToolResult { id, output } if id == "call-1" && output == "file.txt")
+        );
+    }
+
+    #[test]
+    fn parses_user_content_arrays_with_images() {
+        let lines = vec![omp_line(serde_json::json!({
+            "type":"message","id":"m1","parentId":null,
+            "message":{"role":"user","content":[
+                {"type":"text","text":"look at this"},
+                {"type":"image","data":"QUJD","mimeType":"image/jpeg"}
+            ]}
+        }))];
+
+        let messages = parse_omp_session_lines(&lines).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content.len(), 2);
+        assert!(
+            matches!(&messages[0].content[0], SessionContent::Text { text } if text == "look at this")
+        );
+        assert!(
+            matches!(&messages[0].content[1], SessionContent::Attachment { media_type, .. } if media_type == "image/jpeg")
+        );
+    }
+
+    #[test]
+    fn reads_session_header_id_and_ignores_title_slot() {
+        let dir = std::env::temp_dir().join(format!("omp-hdr-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("2026-09-06T00-00-00_0198c7a2-0000-7d3e-9f2a-3b6c5d4e4f50.jsonl");
+        let title_line = r#"{"type":"title","v":1,"title":"t"}"#;
+        let padded = format!("{title_line:<256}");
+        fs::write(
+            &path,
+            format!(
+                "{padded}\n{}\n",
+                omp_line(serde_json::json!({"type":"session","version":3,"id":"0198c7a2-0000-7d3e-9f2a-3b6c5d4e4f50"}))
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_omp_session_header(&path).as_deref(),
+            Some("0198c7a2-0000-7d3e-9f2a-3b6c5d4e4f50")
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 }

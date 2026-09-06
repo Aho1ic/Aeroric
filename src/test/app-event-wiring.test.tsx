@@ -120,6 +120,8 @@ const EXPECTED_EVENTS = [
   "dsh-host-workspace-removed",
   "dsh-question-requested",
   "dsh-question-resolved",
+  "omp-ui-request",
+  "omp-ui-request-resolved",
   "project-pinned-changed",
   "remote-task-request",
   "remote-terminal-resized",

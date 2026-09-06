@@ -905,6 +905,10 @@ pub async fn read_session_messages(
             let (lines, _) = read_session_tail(&canonical)?;
             return crate::session_dsh::parse_dsh_session_lines(&lines);
         }
+        if family == crate::app_settings::AgentFamily::Omp {
+            let (lines, _) = read_session_tail(&canonical)?;
+            return crate::session_omp::parse_omp_session_lines(&lines);
+        }
         let (lines, detected_codex) = read_session_tail(&canonical)?;
         Ok(parse_session_messages_with_format(
             &lines,
@@ -947,10 +951,14 @@ pub async fn read_session_message_page(
         }
         let (lines, next_cursor, has_more) =
             read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES)?;
-        let messages = if family == crate::app_settings::AgentFamily::Dsh {
-            crate::session_dsh::parse_dsh_session_lines(&lines)?
-        } else {
-            parse_session_messages_with_format(&lines, is_codex, is_codex)
+        let messages = match family {
+            crate::app_settings::AgentFamily::Dsh => {
+                crate::session_dsh::parse_dsh_session_lines(&lines)?
+            }
+            crate::app_settings::AgentFamily::Omp => {
+                crate::session_omp::parse_omp_session_lines(&lines)?
+            }
+            _ => parse_session_messages_with_format(&lines, is_codex, is_codex),
         };
         Ok(SessionMessagePage {
             messages,
@@ -974,6 +982,9 @@ pub async fn read_session_id(
         let canonical = validate_session_path_for(&session_path, &project_path, family)?;
         if family == crate::app_settings::AgentFamily::Dsh {
             return Ok(crate::session_dsh::read_dsh_session_header(&canonical).map(|(id, _)| id));
+        }
+        if family == crate::app_settings::AgentFamily::Omp {
+            return Ok(crate::session_omp::read_omp_session_header(&canonical));
         }
         Ok(resolve_session_id_from_file(&canonical, is_codex))
     })
@@ -999,6 +1010,18 @@ pub async fn recover_task_session(
                 agent.as_deref().unwrap_or("dsh"),
                 &project_path,
                 created_at - 10_000,
+            )
+            .map(|(session_id, path)| RecoveredSession {
+                session_id,
+                session_path: path.to_string_lossy().into_owned(),
+            }));
+        }
+        if family == crate::app_settings::AgentFamily::Omp {
+            // omp 的会话文件名不含 prompt,同样按创建时间兜底发现。
+            return Ok(crate::session_omp::discover_omp_session_since(
+                agent.as_deref().unwrap_or("omp"),
+                std::path::Path::new(&project_path),
+                (created_at - 10_000).max(0) as u128,
             )
             .map(|(session_id, path)| RecoveredSession {
                 session_id,

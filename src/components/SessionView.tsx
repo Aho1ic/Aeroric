@@ -40,7 +40,8 @@ export interface SessionContent {
 }
 
 export interface SessionMessage {
-  role: "user" | "assistant";
+  /** omp 的 toolResult 消息会出现在这里;渲染按 "user"/其余=assistant 二分。 */
+  role: "user" | "assistant" | (string & {});
   content: SessionContent[];
   messageId?: string;
 }

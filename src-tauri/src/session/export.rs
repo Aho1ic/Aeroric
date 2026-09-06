@@ -58,12 +58,15 @@ pub(super) fn export_session_markdown_inner(
     };
     lines.retain(|line| !line.trim().is_empty());
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    let messages = if family == crate::app_settings::AgentFamily::Dsh {
-        crate::session_dsh::parse_dsh_session_lines(&line_refs)?
-    } else if is_codex_format(&line_refs) {
-        parse_codex_session(&line_refs)
-    } else {
-        parse_claude_session(&line_refs)
+    let messages = match family {
+        crate::app_settings::AgentFamily::Dsh => {
+            crate::session_dsh::parse_dsh_session_lines(&line_refs)?
+        }
+        crate::app_settings::AgentFamily::Omp => {
+            crate::session_omp::parse_omp_session_lines(&line_refs)?
+        }
+        _ if is_codex_format(&line_refs) => parse_codex_session(&line_refs),
+        _ => parse_claude_session(&line_refs),
     };
 
     let out_file = File::create(&canonical_out)
