@@ -791,8 +791,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string_pretty(&build_omp_mcp_config(&[]))
                 .unwrap()
-                .replace('\n', "")
-                .replace(' ', ""),
+                .replace(['\n', ' '], ""),
             "{\"mcpServers\":{}}"
         );
         // server name 不做 dsh 那样的字符净化(JSON 键原样保留)。
