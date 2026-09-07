@@ -1,15 +1,14 @@
-//! omp(rpc-ui)会话发现与注册。
+//! omp 会话发现与注册。
 //!
-//! omp 的会话文件是明文 JSONL:`~/.omp/agent/sessions/<encoded-cwd>/<ISO>_<uuidv7>.jsonl`
+//! omp 的会话文件是明文 JSONL:`<PI_CODING_AGENT_DIR>/agent/sessions/<encoded-cwd>/<ISO>_<uuidv7>.jsonl`
 //! (编码规则见 `omp_project_dir_name`:home 内 `-<relative>`、temp 内 `-tmp<relative>`、
 //! 其它 `--<absolute>--`,`/ \ :` 统一替换为 `-`)。文件懒创建:首个 assistant 消息
-//! 产出时才落盘,但文件名(含 uuid)在会话创建时就已确定——因此优先信任
-//! `get_state` 返回的 sessionFile,发现线程只作兜底。
+//! 产出时才落盘,但文件名(含 uuid)在会话创建时就已确定。omp 跑在 PTY 里,Aeroric
+//! 拿不到会话文件名,只能靠 `spawn_omp_session_watcher` 扫目录认领。
 
 use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -136,6 +135,39 @@ pub(crate) fn omp_session_id_from_file_name(path: &Path) -> Option<String> {
     Some(id.to_string())
 }
 
+/// 解析前端传来的会话引用(`ompSessionId ?? ompSessionPath`,两种形态都可能)
+/// 为 `(session_id, path)`。resume 时 `omp_sessions` 已被 `finalize_task_exit`
+/// 清空,需要据此立即重新注册,不能等 watcher —— 旧会话文件的 mtime 早于
+/// `since_ms`,发现逻辑扫不到它。
+pub(crate) fn resolve_omp_session_ref(
+    agent: &str,
+    project_path: &Path,
+    session_ref: &str,
+) -> Option<(String, PathBuf)> {
+    let session_ref = session_ref.trim();
+    if session_ref.is_empty() {
+        return None;
+    }
+    if session_ref.ends_with(".jsonl") {
+        let path = PathBuf::from(session_ref);
+        if path.is_file() {
+            let id = omp_session_id_from_file_name(&path)?;
+            return Some((id, path));
+        }
+        return None;
+    }
+    let dir = omp_sessions_dir_for(agent)
+        .ok()?
+        .join(omp_project_dir_name(project_path));
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if omp_session_id_from_file_name(&path).as_deref() == Some(session_ref) {
+            return Some((session_ref.to_string(), path));
+        }
+    }
+    None
+}
+
 /// 扫描 sessions 目录,返回 mtime 晚于 `since_ms` 的最新 `.jsonl` 会话文件。
 pub(crate) fn discover_omp_session_since(
     agent: &str,
@@ -177,31 +209,49 @@ pub(crate) fn discover_omp_session_since(
     Some((session_id, path))
 }
 
-/// 兜底 watcher:`get_state` 没给 sessionFile(懒创建)时轮询会话目录,直到文件
-/// 落盘或 `stop` 置位。发现后注册会话;从未落盘则静默结束(短会话可能根本没有
-/// assistant 输出,同样不产生文件)。
+/// omp 会话 watcher:会话文件懒创建(首个 assistant 消息才落盘),因此轮询会话
+/// 目录直到文件出现、任务已被别处认领、或 PTY 进程退出。
+///
+/// 与 dsh watcher(`session_dsh.rs`)的差别在预算:dsh 是 headless 一次性进程,
+/// 文件启动即建,2 分钟固定宽限足够;omp 是交互式 TUI,用户可能空闲很久才发第一
+/// 条消息,固定截止会让长会话永远挂不上。所以这里以进程存活为界,并在前 2 分钟
+/// 之后把轮询间隔从 500ms 放宽到 5s —— 空闲会话不该每秒扫两次目录。
 pub(crate) fn spawn_omp_session_watcher(
     app: AppHandle,
     task_id: String,
     agent: String,
     project_path: PathBuf,
-    stop: std::sync::Arc<AtomicBool>,
     since_ms: u128,
 ) {
-    thread::spawn(move || loop {
-        if stop.load(Ordering::Acquire) {
-            return;
+    thread::spawn(move || {
+        for tick in 0u32.. {
+            {
+                let tm = app.state::<TaskManager>();
+                if tm.omp_sessions.lock().contains_key(&task_id) {
+                    return;
+                }
+                if !tm.child_handles.lock().contains_key(&task_id) {
+                    // 进程已退出:再发现一次,秒退的短会话也能补挂。
+                    if let Some((session_id, path)) =
+                        discover_omp_session_since(&agent, &project_path, since_ms)
+                    {
+                        register_omp_session(&app, &task_id, &session_id, &path);
+                    }
+                    return;
+                }
+            }
+            if let Some((session_id, path)) =
+                discover_omp_session_since(&agent, &project_path, since_ms)
+            {
+                register_omp_session(&app, &task_id, &session_id, &path);
+                return;
+            }
+            thread::sleep(if tick < 240 {
+                Duration::from_millis(500)
+            } else {
+                Duration::from_secs(5)
+            });
         }
-        if let Some((session_id, path)) =
-            discover_omp_session_since(&agent, &project_path, since_ms)
-        {
-            register_omp_session(&app, &task_id, &session_id, &path);
-            return;
-        }
-        if stop.load(Ordering::Acquire) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(500));
     });
 }
 

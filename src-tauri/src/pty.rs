@@ -166,7 +166,10 @@ fn finalize_task_exit(
         had_agent_session = match family {
             crate::app_settings::AgentFamily::Codex => codex_path.is_some(),
             // dsh/omp 的状态完全由退出码驱动:会话文件存在不代表任务成功
-            // (非零退出 = failed,即使 transcript 已经写入)。
+            // (非零退出 = failed,即使 transcript 已经写入)。omp 的交互式 TUI
+            // 正常退出为 0(`runInteractiveMode` 返回后自然结束),所以非零退出
+            // 一定是真崩溃,不该被"已写过会话文件"掩盖。这与 Claude 的处理相反
+            // 是刻意的:Claude 走 lazy attach 占位条目,只能靠会话真实性反推。
             crate::app_settings::AgentFamily::Dsh => false,
             crate::app_settings::AgentFamily::Omp => false,
             crate::app_settings::AgentFamily::Claude => {
@@ -788,6 +791,111 @@ fn add_dsh_launch_args(cmd: &mut CommandBuilder, dsh_home: &Path, patch_files: &
     }
 }
 
+/// Aeroric 权限模式 → omp `--approval-mode`。
+fn omp_permission_flag(permission_mode: &str) -> Option<&'static str> {
+    match permission_mode {
+        "ask" => Some("always-ask"),
+        "auto_edit" => Some("write"),
+        "full_access" => Some("yolo"),
+        _ => None,
+    }
+}
+
+/// Aeroric 统一 effort 词表 → omp thinking level(与前端 OMP_THINKING_LEVEL_MAP
+/// 恒等映射一致:omp 原生 7 档透传,ultra 封顶 max)。
+fn omp_thinking_level(effort: &str) -> Option<&'static str> {
+    match effort {
+        "off" => Some("off"),
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        "ultra" => Some("max"),
+        _ => None,
+    }
+}
+
+/// 为 oh-my-pi 构建 CommandBuilder。
+///
+/// **不传 `--mode`**:上游 `main.ts` 以 `parsedArgs.mode === undefined` 判定
+/// 是否进入原生交互式 TUI,任何 `--mode` 值都会把 omp 打成非交互通道。
+fn build_omp_cmd(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&launch.program);
+    c.args(&launch.args);
+    if let Some(flag) = omp_permission_flag(permission_mode) {
+        c.arg("--approval-mode");
+        c.arg(flag);
+    }
+    c
+}
+
+/// omp 启动参数:托管 home 的 env + launcher flag。所有 flag 必须在位置参数
+/// (prompt)之前——位置参数会被 omp 当作"启动后自动提交的首条消息"。
+fn add_omp_launch_args(
+    cmd: &mut CommandBuilder,
+    home: &Path,
+    project_path: &str,
+    selected_model: Option<&str>,
+    thinking_level: Option<&str>,
+    resume: Option<&str>,
+) {
+    // 颜色由 setup_env 统一给(TERM/COLORTERM/FORCE_COLOR);omp_agent_env 只负责
+    // 托管 home 重定向与 setup wizard 短路,不得含抑制颜色的变量。
+    //
+    // 注意:这些变量还必须经 `setup_omp_env` 在 `setup_env` 之后再确认一次 ——
+    // `setup_env` 会合并 login-shell 环境,可能带回 PI_PROFILE 把重定向作废。
+    for (key, value) in crate::omp_home::omp_agent_env(home) {
+        cmd.env(key, value);
+    }
+    cmd.arg("--cwd");
+    cmd.arg(project_path);
+    if let Some(model) = selected_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        cmd.arg("--model");
+        cmd.arg(model);
+    }
+    if let Some(level) = thinking_level
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .and_then(omp_thinking_level)
+    {
+        cmd.arg("--thinking");
+        cmd.arg(level);
+    }
+    if let Some(resume) = resume.map(str::trim).filter(|resume| !resume.is_empty()) {
+        cmd.arg("--resume");
+        cmd.arg(resume);
+    }
+}
+
+/// `setup_env` 之后的 omp 环境收尾。必须在 `setup_env` 之后调用。
+///
+/// omp 的 profile 优先于 `PI_CODING_AGENT_DIR`:上游 `dirs.ts` 的
+/// `resolveActiveAgentDirOverride` 是 `activeProfile ? undefined : ...`,只要
+/// `PI_PROFILE`/`OMP_PROFILE` 有值,`PI_CODING_AGENT_DIR` 直接被丢弃,omp 转去读
+/// `~/.omp/profiles/<name>/agent`。而 `setup_env` 会把 login-shell 环境合并进来
+/// —— 用户在 rc 里 export 过 profile,托管 home 就静默失效:hook 不加载(任务永远
+/// 停在 running)、MCP 配置读不到,而且 Aeroric 会去写用户自己的 `~/.omp`,违背
+/// "绝不触碰用户 home"的前提。
+fn setup_omp_env(cmd: &mut CommandBuilder, home: &Path, task_id: &str, agent: &str) {
+    cmd.env_remove("PI_PROFILE");
+    cmd.env_remove("OMP_PROFILE");
+    // login-shell 可能覆盖过这几项,重放一次以它们为准。
+    for (key, value) in crate::omp_home::omp_agent_env(home) {
+        cmd.env(key, value);
+    }
+    // omp 的 hook 装在托管 home 的 `hooks/post/*.js`,不走 `hooks::usable_for`
+    // 那条改写 claude/codex 配置的路径,但同样以这两个守卫变量判定"由 Aeroric 拉起"。
+    setup_aeroric_env(cmd, task_id, agent, false);
+}
+
 fn codex_project_trust_override(project_path: &str) -> String {
     format!(
         "projects.{}.trust_level=\"trusted\"",
@@ -830,7 +938,9 @@ pub(crate) fn normalized_speed_for(
     Ok(normalized)
 }
 
-/// family 版 effort 校验:dsh 使用 DeepSeek 官方 adapter 的 off/high/max。
+/// family 版 effort 校验:dsh 使用 DeepSeek 官方 adapter 的 off/high/max;
+/// omp 用自己的 7 档 thinking 词表(额外接受 `ultra`,由 `omp_thinking_level`
+/// 封顶到 max)。落到默认分支会用 claude 词表,会把 omp 的 off/minimal 判为非法。
 pub(crate) fn normalized_reasoning_effort_for(
     reasoning_effort: Option<&str>,
     family: crate::app_settings::AgentFamily,
@@ -845,6 +955,20 @@ pub(crate) fn normalized_reasoning_effort_for(
             Some(effort) => effort.to_ascii_lowercase(),
         };
         return if ["off", "high", "max"].contains(&effort.as_str()) {
+            Ok(Some(effort))
+        } else {
+            Err("Invalid reasoningEffort".to_string())
+        };
+    }
+    if family == crate::app_settings::AgentFamily::Omp {
+        let effort = match reasoning_effort
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+        {
+            None => return Ok(None),
+            Some(effort) => effort.to_ascii_lowercase(),
+        };
+        return if omp_thinking_level(&effort).is_some() {
             Ok(Some(effort))
         } else {
             Err("Invalid reasoningEffort".to_string())
@@ -1309,11 +1433,13 @@ fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
     }
 }
 
-fn initial_prompt_args(prompt: &str, is_codex: bool) -> Vec<String> {
+/// 位置参数形式的首条 prompt。`use_double_dash` 为真时插入 POSIX `--` 分隔符,
+/// 使以 `-` 开头的 prompt 不被 launcher 当作 flag(codex / dsh / omp 均支持 `--`)。
+fn initial_prompt_args(prompt: &str, use_double_dash: bool) -> Vec<String> {
     if prompt.is_empty() {
         return Vec::new();
     }
-    if is_codex {
+    if use_double_dash {
         vec!["--".to_string(), prompt.to_string()]
     } else {
         vec![prompt.to_string()]
@@ -1384,6 +1510,8 @@ fn wrapper_forwards_initial_prompt(
 ///
 /// 现在的规则不再看 `use_hooks`:
 /// - dsh:headless 一次性进程,只认 argv。
+/// - omp:原生交互式 TUI 把位置参数当"启动后自动提交的首条消息"(上游
+///   `runInteractiveMode` 在 TUI init 完成后 `session.prompt(...)`),比注入更可靠。
 /// - 未被强制注入:能转发 argv 就用 argv。
 /// - 被强制注入 + Aeroric 生成的包装脚本:仍用 argv。prompt 由 CLI 解析,不经过
 ///   任何 TUI,startup 门控吃不到它;而注入路径依赖时序,门控误判时会把 prompt
@@ -1392,11 +1520,12 @@ fn wrapper_forwards_initial_prompt(
 ///   可能先于 composer 出现,这条路径已长期验证,不在本次修复范围内。
 fn resolve_native_initial_prompt(
     is_dsh: bool,
+    is_omp: bool,
     is_builtin_native: bool,
     wrapper_forwards_argv: bool,
     force_prompt_injection: bool,
 ) -> bool {
-    if is_dsh {
+    if is_dsh || is_omp {
         return true;
     }
     if !(is_builtin_native || wrapper_forwards_argv) {
@@ -1455,14 +1584,6 @@ pub async fn run_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     validate_task_id(&task_id)?;
-    // omp 走 rpc-ui 驱动通道(run_omp_task),绝不能当 PTY 任务拉起:
-    // 会话注册、审批回帧、状态机都依赖 RPC 帧分发。置于截断历史之前,
-    // 误路由不会破坏现场。
-    if crate::app_settings::get_agent_launch_spec(&agent).family
-        == crate::app_settings::AgentFamily::Omp
-    {
-        return Err("Use run_omp_task for omp agents".to_string());
-    }
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1540,6 +1661,7 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let is_codex = launch.codex_like;
     let is_dsh = launch.family == crate::app_settings::AgentFamily::Dsh;
+    let is_omp = launch.family == crate::app_settings::AgentFamily::Omp;
     let selected_model = normalized_selected_model(selected_model.as_deref());
     let reasoning_effort = normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
@@ -1563,16 +1685,18 @@ pub async fn run_task(
     };
 
     let force_prompt_injection =
-        !is_dsh && should_force_prompt_injection(is_codex, force_prompt_injection);
+        !is_dsh && !is_omp && should_force_prompt_injection(is_codex, force_prompt_injection);
     // 包装脚本要读文件,只读一次。
     let is_builtin_native = uses_native_initial_prompt(&agent, is_codex);
     let wrapper_forwards_argv =
         !is_builtin_native && wrapper_forwards_initial_prompt(is_codex, &launch);
     // dsh(headless)只接受 argv 位置参数投递 prompt,永远走 native 路径;
-    // PTY 注入对无 composer 的一次性进程无意义。
-    let native_cli_args_supported = is_dsh || is_builtin_native || wrapper_forwards_argv;
+    // PTY 注入对无 composer 的一次性进程无意义。omp 的原生 TUI 把位置参数当
+    // "启动后自动提交的首条消息",同样只走 argv。
+    let native_cli_args_supported = is_dsh || is_omp || is_builtin_native || wrapper_forwards_argv;
     let use_native_initial_prompt = resolve_native_initial_prompt(
         is_dsh,
+        is_omp,
         is_builtin_native,
         wrapper_forwards_argv,
         force_prompt_injection,
@@ -1588,6 +1712,7 @@ pub async fn run_task(
     let version_agent = agent.clone();
     let use_explicit_session = !is_codex
         && !is_dsh
+        && !is_omp
         && tokio::task::spawn_blocking(move || {
             crate::app_settings::agent_version_gte(&version_agent, "2.1.87")
         })
@@ -1600,14 +1725,14 @@ pub async fn run_task(
     } else {
         None
     };
-    let claude_settings_path = if is_codex || is_dsh {
+    let claude_settings_path = if is_codex || is_dsh || is_omp {
         None
     } else {
         crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
     };
 
     // MCP 配置路径/profile 名:Claude 用 --mcp-config,Codex 用 -p
-    let claude_mcp_config_path = if is_codex || is_dsh {
+    let claude_mcp_config_path = if is_codex || is_dsh || is_omp {
         None
     } else {
         crate::mcp::claude_mcp_config_path_for_launch()?
@@ -1675,7 +1800,39 @@ pub async fn run_task(
         None
     };
 
-    let mut cmd = if let Some((dsh_home_path, dsh_patches)) = dsh_launch_ctx.as_ref() {
+    // omp:初始化托管 home(PI_CODING_AGENT_DIR)并重写 mcp.json。omp 无 patch
+    // 机制,直接读 home 层 mcp.json,故每次任务启动前重写。
+    let omp_home = if is_omp {
+        let agent_for_omp = agent.clone();
+        Some(
+            tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+                let paths = crate::omp_home::ensure_omp_home_for(&agent_for_omp)?;
+                crate::mcp::omp_mcp_config_for_launch(&paths.home)?;
+                Ok(paths.home)
+            })
+            .await
+            .map_err(|e| e.to_string())??,
+        )
+    } else {
+        None
+    };
+
+    let mut cmd = if let Some(omp_home_path) = omp_home.as_ref() {
+        let mut c = build_omp_cmd(&launch, &permission_mode);
+        add_omp_launch_args(
+            &mut c,
+            omp_home_path,
+            &project_path,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            None,
+        );
+        // 位置参数 = omp TUI 启动后自动提交的首条消息;`--` 保护以 `-` 开头的 prompt。
+        for arg in initial_prompt_args(&final_prompt, true) {
+            c.arg(arg);
+        }
+        c
+    } else if let Some((dsh_home_path, dsh_patches)) = dsh_launch_ctx.as_ref() {
         let mut c = build_dsh_cmd(&launch, &permission_mode, final_prompt.is_empty());
         add_dsh_launch_args(&mut c, dsh_home_path, dsh_patches);
         // prompt 位置参数必须在所有 launcher flag 之后;`--` 防止以 `-` 开头的
@@ -1745,7 +1902,9 @@ pub async fn run_task(
     if let Some(model) = selected_model.as_deref() {
         cmd.env("AERORIC_AGENT_MODEL", model);
     }
-    if use_hooks {
+    if let Some(omp_home_path) = omp_home.as_ref() {
+        setup_omp_env(&mut cmd, omp_home_path, &task_id, &agent);
+    } else if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent, is_codex);
     }
     for (key, value) in &launch.extra_env {
@@ -1817,9 +1976,31 @@ pub async fn run_task(
             since_ms,
         );
     }
-    // dsh 无 /status 命令，状态由退出码驱动；会话发现由 transcript watcher
-    // 接管，不启动会向交互输入区写字符的轮询 watcher。
+    // omp 会话文件懒创建(首个 assistant 消息才落盘),同一 watcher 认领带 prompt
+    // 的任务和空 prompt 的交互会话。since 回拨 10s 抵消时钟/文件系统粒度误差。
+    if is_omp {
+        let since_ms = created_at
+            .unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+                    .unwrap_or_default()
+            })
+            .saturating_sub(10_000)
+            .max(0) as u128;
+        crate::session_omp::spawn_omp_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            agent.clone(),
+            PathBuf::from(&project_path),
+            since_ms,
+        );
+    }
+    // dsh/omp 无 `/status` 命令,会话发现由各自的 transcript watcher 接管;
+    // 绝不能启动会往交互输入区写字符的轮询 watcher。
     let needs_status_session_watcher = !is_dsh
+        && !is_omp
         && (pre_session_id.is_none() || is_codex)
         && should_start_status_session_watcher(use_hooks, is_codex, !starts_with_prompt);
     let session_tx = if needs_status_session_watcher {
@@ -2140,6 +2321,11 @@ pub async fn reset_task_process(
     let mut codex_info = task_manager.codex_sessions.lock().remove(&task_id);
     let mut claude_info = task_manager.claude_sessions.lock().remove(&task_id);
     let mut dsh_info = task_manager.dsh_sessions.lock().remove(&task_id);
+    // omp 现在是 PTY 族,子进程就在 child_handles 里,与 claude/codex 同路径被
+    // 下面的 kill 终止;这里只需和它们一样清掉会话注册,免得旧 watcher 把状态
+    // 报到替换进程上。
+    let omp_info = task_manager.omp_sessions.lock().remove(&task_id);
+    let omp_path = omp_info.as_ref().map(|info| info.session_path.clone());
     let codex_path = codex_info.as_ref().map(|info| info.session_path.clone());
     let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
     let dsh_path = dsh_info.as_ref().map(|info| info.session_path.clone());
@@ -2151,6 +2337,9 @@ pub async fn reset_task_process(
         claimed.remove(path);
     }
     if let Some(path) = dsh_path.as_ref() {
+        claimed.remove(path);
+    }
+    if let Some(path) = omp_path.as_ref() {
         claimed.remove(path);
     }
     drop(claimed);
@@ -2252,10 +2441,7 @@ pub async fn resume_task(
             "DeepSeek Harness sessions cannot be resumed natively; continue the task to start a new session with carried-over context".to_string(),
         );
     }
-    // omp 走 rpc-ui 通道的原生 resume:前端直接调 run_omp_task(--resume)。
-    if launch.family == crate::app_settings::AgentFamily::Omp {
-        return Err("Use run_omp_task to resume oh-my-pi sessions".to_string());
-    }
+    let is_omp = launch.family == crate::app_settings::AgentFamily::Omp;
     let selected_model = normalized_selected_model(selected_model.as_deref());
     // B5:与 run_task 统一为 family 版校验(dsh off/high/max;claude/codex 原词表)。
     let reasoning_effort = normalized_reasoning_effort_for(
@@ -2281,14 +2467,14 @@ pub async fn resume_task(
             .await
             .unwrap_or(false)
     };
-    let claude_settings_path = if is_codex {
+    let claude_settings_path = if is_codex || is_omp {
         None
     } else {
         crate::hooks::claude_settings_path_for_launch(speed.as_deref() == Some("fast"), use_hooks)?
     };
 
     // MCP 配置路径/profile 名:Claude 用 --mcp-config,Codex 用 -p
-    let claude_mcp_config_path = if is_codex {
+    let claude_mcp_config_path = if is_codex || is_omp {
         None
     } else {
         crate::mcp::claude_mcp_config_path_for_launch()?
@@ -2304,7 +2490,37 @@ pub async fn resume_task(
         None
     };
 
-    let mut cmd = if is_codex {
+    // omp:与 run_task 同样的托管 home 初始化 + mcp.json 重写。
+    let omp_home = if is_omp {
+        let agent_for_omp = agent.clone();
+        Some(
+            tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+                let paths = crate::omp_home::ensure_omp_home_for(&agent_for_omp)?;
+                crate::mcp::omp_mcp_config_for_launch(&paths.home)?;
+                Ok(paths.home)
+            })
+            .await
+            .map_err(|e| e.to_string())??,
+        )
+    } else {
+        None
+    };
+
+    let mut cmd = if let Some(omp_home_path) = omp_home.as_ref() {
+        let mut c = build_omp_cmd(&launch, &permission_mode);
+        // omp `--resume` 同时接受会话文件绝对路径与 session id;前端传来的
+        // session_id 两种形态都可能(取 ompSessionId ?? ompSessionPath)。
+        // 不追加位置参数:resume 是接续已有会话,不重放原 prompt。
+        add_omp_launch_args(
+            &mut c,
+            omp_home_path,
+            &project_path,
+            selected_model.as_deref(),
+            reasoning_effort.as_deref(),
+            Some(&session_id),
+        );
+        c
+    } else if is_codex {
         let mut c = build_codex_cmd(&launch, &permission_mode);
         add_codex_launch_args(
             &mut c,
@@ -2353,7 +2569,9 @@ pub async fn resume_task(
     if let Some(model) = selected_model.as_deref() {
         cmd.env("AERORIC_AGENT_MODEL", model);
     }
-    if use_hooks {
+    if let Some(omp_home_path) = omp_home.as_ref() {
+        setup_omp_env(&mut cmd, omp_home_path, &task_id, &agent);
+    } else if use_hooks {
         setup_aeroric_env(&mut cmd, &task_id, &agent, is_codex);
     }
     for (key, value) in &launch.extra_env {
@@ -2371,8 +2589,20 @@ pub async fn resume_task(
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
-    if !use_hooks {
+    if is_omp {
+        // omp 的 session_id 已知,但 finalize_task_exit 在上次退出时清掉了
+        // omp_sessions 与 claimed_session_paths;立即按引用重新注册,让历史视图
+        // 与下一次退出清理都能拿到会话。claude/codex 的 resume watcher 不认
+        // omp 的目录布局,不能复用。
+        if let Some((resolved_id, path)) = crate::session_omp::resolve_omp_session_ref(
+            &agent,
+            std::path::Path::new(&project_path),
+            &session_id,
+        ) {
+            crate::session_omp::register_omp_session(&app, &task_id, &resolved_id, &path);
+        }
+    } else if !use_hooks {
+        // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
         spawn_resume_session_watcher(
             app.clone(),
             task_id.clone(),
@@ -2770,6 +3000,208 @@ mod tests {
                 .map(|value| value.to_string_lossy().into_owned()),
             Some("workspace-write".to_string())
         );
+    }
+
+    /// 不传 `--mode` 是 omp 进入原生交互式 TUI 的**前提**:上游 main.ts 以
+    /// `parsedArgs.mode === undefined` 判定 interactive,任何 `--mode` 值都会把
+    /// omp 打回非交互通道,终端里就再也看不到原生 TUI 的排版。
+    #[test]
+    fn omp_cmd_omits_mode_flag() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "omp".to_string(),
+            ..Default::default()
+        };
+        let argv = cmd_argv(&build_omp_cmd(&launch, "auto_edit"));
+        assert!(
+            !argv.iter().any(|arg| arg == "--mode"),
+            "omp 带 --mode 就不是交互式 TUI 了:{argv:?}"
+        );
+    }
+
+    #[test]
+    fn omp_cmd_maps_permission_modes() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "omp".to_string(),
+            ..Default::default()
+        };
+        for (mode, expected) in [
+            ("ask", "always-ask"),
+            ("auto_edit", "write"),
+            ("full_access", "yolo"),
+        ] {
+            let argv = cmd_argv(&build_omp_cmd(&launch, mode));
+            assert_eq!(
+                argv,
+                vec!["omp", "--approval-mode", expected],
+                "permission mode {mode}"
+            );
+        }
+        // 未知模式不追加 flag,交给 omp 自己的默认值。
+        assert_eq!(cmd_argv(&build_omp_cmd(&launch, "fast")), vec!["omp"]);
+    }
+
+    #[test]
+    fn omp_launch_args_keep_flags_before_positional_prompt() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "omp".to_string(),
+            ..Default::default()
+        };
+        let mut cmd = build_omp_cmd(&launch, "ask");
+        let home = PathBuf::from("/tmp/aeroric-omp-home");
+        add_omp_launch_args(
+            &mut cmd,
+            &home,
+            "/work/project",
+            Some("gpt-5"),
+            Some("ultra"),
+            Some("/tmp/session.jsonl"),
+        );
+        for arg in initial_prompt_args("--not-a-flag", true) {
+            cmd.arg(arg);
+        }
+        assert_eq!(
+            cmd_argv(&cmd),
+            vec![
+                "omp",
+                "--approval-mode",
+                "always-ask",
+                "--cwd",
+                "/work/project",
+                "--model",
+                "gpt-5",
+                // ultra 封顶到 max。
+                "--thinking",
+                "max",
+                "--resume",
+                "/tmp/session.jsonl",
+                "--",
+                "--not-a-flag",
+            ]
+        );
+        assert_eq!(
+            cmd.get_env("PI_CODING_AGENT_DIR")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("/tmp/aeroric-omp-home".to_string())
+        );
+        // 颜色必须活到 spawn:`CommandBuilder::new` 会把 Aeroric 自己的环境快照
+        // 进去,而 Aeroric 可能正是被一个设了 NO_COLOR=1 的终端/agent 拉起的。
+        // add_omp_launch_args 自己不设它,setup_env 再把继承来的那份 env_remove 掉。
+        let inherited_no_color = cmd.get_env("NO_COLOR").is_some();
+        setup_env(&mut cmd);
+        assert!(
+            cmd.get_env("NO_COLOR").is_none(),
+            "omp 在 PTY 里跑,NO_COLOR 会让原生 TUI 掉色(继承到:{inherited_no_color})"
+        );
+        assert_eq!(
+            cmd.get_env("TERM")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("xterm-256color".to_string())
+        );
+    }
+
+    /// omp 的 profile 覆盖 `PI_CODING_AGENT_DIR`(上游 `dirs.ts` 的
+    /// `resolveActiveAgentDirOverride`:`activeProfile ? undefined : …`),而
+    /// `setup_env` 会把 login-shell 环境合并进来。用户在 rc 里 export 过 profile
+    /// 时,托管 home 会**静默**失效:hook 不加载 → 任务永远停在 running,而且
+    /// Aeroric 转去读写用户自己的 `~/.omp`。
+    #[test]
+    fn omp_env_clears_profile_after_setup_env() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "omp".to_string(),
+            ..Default::default()
+        };
+        let home = PathBuf::from("/tmp/aeroric-omp-home");
+        let mut cmd = build_omp_cmd(&launch, "ask");
+        add_omp_launch_args(&mut cmd, &home, "/work/project", None, None, None);
+        // 模拟 login-shell 带回 profile 的情形。
+        cmd.env("PI_PROFILE", "sota");
+        cmd.env("OMP_PROFILE", "sota");
+        setup_env(&mut cmd);
+        setup_omp_env(&mut cmd, &home, "task-1", "omp");
+        assert!(
+            cmd.get_env("PI_PROFILE").is_none(),
+            "PI_PROFILE 非空会让 omp 丢弃 PI_CODING_AGENT_DIR"
+        );
+        assert!(cmd.get_env("OMP_PROFILE").is_none());
+        assert_eq!(
+            cmd.get_env("PI_CODING_AGENT_DIR")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("/tmp/aeroric-omp-home".to_string())
+        );
+        // hook 的守卫变量同样要活到 spawn。
+        assert_eq!(
+            cmd.get_env("AERORIC_TASK_ID")
+                .map(|value| value.to_string_lossy().into_owned()),
+            Some("task-1".to_string())
+        );
+        assert!(cmd.get_env("AERORIC_EVENT_DIR").is_some());
+    }
+
+    #[test]
+    fn omp_launch_args_skip_empty_optionals() {
+        let launch = crate::app_settings::AgentLaunchSpec {
+            program: "omp".to_string(),
+            ..Default::default()
+        };
+        let mut cmd = build_omp_cmd(&launch, "unknown");
+        add_omp_launch_args(
+            &mut cmd,
+            &PathBuf::from("/tmp/h"),
+            "/work/project",
+            Some("   "),
+            None,
+            Some(""),
+        );
+        assert_eq!(cmd_argv(&cmd), vec!["omp", "--cwd", "/work/project"]);
+    }
+
+    #[test]
+    fn omp_thinking_level_maps_identity_with_ultra_cap() {
+        assert_eq!(omp_thinking_level("off"), Some("off"));
+        assert_eq!(omp_thinking_level("minimal"), Some("minimal"));
+        assert_eq!(omp_thinking_level("low"), Some("low"));
+        assert_eq!(omp_thinking_level("xhigh"), Some("xhigh"));
+        assert_eq!(omp_thinking_level("max"), Some("max"));
+        assert_eq!(omp_thinking_level("ultra"), Some("max"));
+        assert_eq!(omp_thinking_level("bogus"), None);
+    }
+
+    /// omp 的 effort 词表与 claude 不同(有 off/minimal,没有 ultracode)。
+    /// 落到默认分支会把 off/minimal 判为非法、并把 ultra 改写成 claude 的 ultracode。
+    #[test]
+    fn omp_effort_validation_uses_the_omp_vocabulary() {
+        let omp = crate::app_settings::AgentFamily::Omp;
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("off"), omp, None).unwrap(),
+            Some("off".to_string())
+        );
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("minimal"), omp, None).unwrap(),
+            Some("minimal".to_string())
+        );
+        // ultra 在校验层原样通过,由 add_omp_launch_args 封顶到 max。
+        assert_eq!(
+            normalized_reasoning_effort_for(Some("ultra"), omp, None).unwrap(),
+            Some("ultra".to_string())
+        );
+        assert_eq!(
+            normalized_reasoning_effort_for(None, omp, None).unwrap(),
+            None
+        );
+        assert!(normalized_reasoning_effort_for(Some("ultracode"), omp, None).is_err());
+    }
+
+    /// omp 的首条 prompt 必须走 argv(TUI 启动后自动提交),不能走 PTY 注入 ——
+    /// 注入依赖启动门控时序,门控误判就把 prompt 丢了。
+    #[test]
+    fn omp_always_uses_native_initial_prompt() {
+        assert!(resolve_native_initial_prompt(
+            false, true, false, false, false
+        ));
+        // 即便请求了强制注入也不改判。
+        assert!(resolve_native_initial_prompt(
+            false, true, false, false, true
+        ));
     }
 
     #[test]

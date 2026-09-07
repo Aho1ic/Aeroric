@@ -254,6 +254,23 @@ pub(crate) async fn task_respond<R: Runtime>(
     Ok(json!({ "sent": true }))
 }
 
+/// 解析任务的协议族:优先用会话族(已建会话的任务最准),否则回落到 agent 归属。
+async fn lifecycle_family(
+    task: &crate::storage::Task,
+) -> Result<crate::app_settings::AgentFamily, String> {
+    if let Some(family) = task
+        .session_family
+        .as_deref()
+        .and_then(crate::app_settings::AgentFamily::parse)
+    {
+        return Ok(family);
+    }
+    let agent = task.agent.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::app_settings::agent_family(&agent))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// RPC `task.cancel { projectId, taskId }`:直调桌面 cancel_task 同一内核。
 pub(crate) async fn task_cancel<R: Runtime>(
     app: &AppHandle<R>,
@@ -265,6 +282,7 @@ pub(crate) async fn task_cancel<R: Runtime>(
         .clone()
         .unwrap_or_else(|| project.path.clone());
     let tm = app.state::<TaskManager>();
+    // omp 是 PTY 族,子进程就在 child_handles 里,与 claude/codex 走同一内核。
     crate::pty::cancel_task_core(app, &tm, &task.id, &project_path)?;
     Ok(json!({ "ok": true }))
 }
@@ -279,25 +297,15 @@ pub(crate) async fn task_complete<R: Runtime>(
         .worktree_path
         .clone()
         .unwrap_or_else(|| project.path.clone());
-    let family = match task
-        .session_family
-        .as_deref()
-        .and_then(crate::app_settings::AgentFamily::parse)
-    {
-        Some(family) => family,
-        None => {
-            let agent = task.agent.clone();
-            tauri::async_runtime::spawn_blocking(move || crate::app_settings::agent_family(&agent))
-                .await
-                .map_err(|error| error.to_string())?
-        }
-    };
+    let family = lifecycle_family(&task).await?;
     let tm = app.state::<TaskManager>();
-    if family == crate::app_settings::AgentFamily::Dsh {
-        let dsh = app.state::<crate::dsh_webui::DshWebUiManager>();
-        crate::dsh_webui::complete_dsh_task_core(app, &dsh, &tm, &task.id, &project_path).await?;
-    } else {
-        crate::pty::complete_task_core(app, &tm, &task.id, &project_path)?;
+    match family {
+        crate::app_settings::AgentFamily::Dsh => {
+            let dsh = app.state::<crate::dsh_webui::DshWebUiManager>();
+            crate::dsh_webui::complete_dsh_task_core(app, &dsh, &tm, &task.id, &project_path)
+                .await?;
+        }
+        _ => crate::pty::complete_task_core(app, &tm, &task.id, &project_path)?,
     }
     Ok(json!({ "ok": true }))
 }

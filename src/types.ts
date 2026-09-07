@@ -324,7 +324,7 @@ export interface Task {
   dshSessionPath?: string;
   dshWorkspaceId?: string;
   dshPromptMode?: string;
-  /** omp(rpc-ui) 会话 UUID v7 与 .jsonl 文件绝对路径。 */
+  /** omp 会话 UUID v7 与 .jsonl 文件绝对路径。 */
   ompSessionId?: string;
   ompSessionPath?: string;
   /** 实际创建当前会话的 Agent；切换配置失败后仍用于定位原会话 home。 */

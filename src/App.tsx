@@ -96,9 +96,6 @@ import s from "./styles";
 import { launchDshWebUi } from "./dshWebUi";
 import { DshApprovalDialog, type DshApprovalRequest } from "./components/DshApprovalDialog";
 import { DshQuestionDialog, type DshQuestionRequest } from "./components/DshQuestionDialog";
-import { OmpApprovalDialog } from "./components/OmpApprovalDialog";
-import { OmpQuestionDialog } from "./components/OmpQuestionDialog";
-import type { OmpUiRequest } from "./ompUiRequests";
 import {
   APP_EXIT_REQUESTED_EVENT,
   APP_RESTART_REQUESTED_EVENT,
@@ -114,8 +111,6 @@ import {
   DSH_HOST_WORKSPACE_REMOVED_EVENT,
   DSH_QUESTION_REQUESTED_EVENT,
   DSH_QUESTION_RESOLVED_EVENT,
-  OMP_UI_REQUEST_EVENT,
-  OMP_UI_REQUEST_RESOLVED_EVENT,
   REMOTE_TASK_REQUEST_EVENT,
   REMOTE_TERMINAL_RESIZED_EVENT,
   TASK_SESSION_EVENT,
@@ -470,9 +465,6 @@ function App() {
   // DSH approval / question dialogs
   const [dshApprovalRequests, setDshApprovalRequests] = useState<DshApprovalRequest[]>([]);
   const [dshQuestionRequests, setDshQuestionRequests] = useState<DshQuestionRequest[]>([]);
-  // omp(extension_ui_request)审批/提问队列:select/confirm/input/editor 一队,
-  // 弹窗按方法分流到 OmpApprovalDialog(confirm)或 OmpQuestionDialog(其余)。
-  const [ompUiRequests, setOmpUiRequests] = useState<OmpUiRequest[]>([]);
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
@@ -927,16 +919,6 @@ function App() {
         if (manuallyCompletedDshTasksRef.current.has(task_id) && status !== "done") return;
         updateTaskStatus(task_id, status, undefined, failure_reason);
         if (status === "done") scheduleForDoneTask(task_id);
-        // 任务到终态时 omp 进程已经收场(EOF 会 reject 全部挂起的
-        // extension_ui_request):必须同步出队,否则弹窗会对着已死的会话
-        // 永远回应失败,overlay 卡死整个应用。
-        if (status === "done" || status === "failed" || status === "cancelled") {
-          setOmpUiRequests((prev) =>
-            prev.some((item) => item.taskId === task_id)
-              ? prev.filter((item) => item.taskId !== task_id)
-              : prev,
-          );
-        }
       },
     );
     const p2 = listen<{
@@ -1035,51 +1017,6 @@ function App() {
         );
       },
     );
-    // omp(extension_ui_request)审批/提问请求与解决事件;请求被后端回应(含取消)
-    // 后由 omp-ui-request-resolved 出队,弹窗本地 onClose 只做乐观移除。
-    // 注意:omp_rpc.rs 的事件载荷是 snake_case(与 task-session 一致),
-    // 这里显式映射成 camelCase 的 OmpUiRequest。
-    const p9b = listen<{
-      task_id: string;
-      request_id: string;
-      method: OmpUiRequest["method"];
-      title?: unknown;
-      message?: unknown;
-      options?: unknown;
-      optionDetails?: unknown;
-      placeholder?: unknown;
-      prefill?: unknown;
-    }>(OMP_UI_REQUEST_EVENT, (e) => {
-      const payload = e.payload;
-      const request: OmpUiRequest = {
-        taskId: payload.task_id,
-        requestId: payload.request_id,
-        method: payload.method,
-        title: typeof payload.title === "string" ? payload.title : null,
-        message: typeof payload.message === "string" ? payload.message : null,
-        options: Array.isArray(payload.options) ? (payload.options as string[]) : null,
-        optionDetails: Array.isArray(payload.optionDetails)
-          ? (payload.optionDetails as Array<{ description?: string }>)
-          : null,
-        placeholder: typeof payload.placeholder === "string" ? payload.placeholder : null,
-        prefill: typeof payload.prefill === "string" ? payload.prefill : null,
-      };
-      setOmpUiRequests((prev) => {
-        const next = prev.filter((item) => item.requestId !== request.requestId);
-        return [...next, request];
-      });
-    });
-    const p9c = listen<{ task_id: string; request_id: string }>(
-      OMP_UI_REQUEST_RESOLVED_EVENT,
-      (e) => {
-        setOmpUiRequests((prev) =>
-          prev.filter(
-            (item) =>
-              !(item.taskId === e.payload.task_id && item.requestId === e.payload.request_id),
-          ),
-        );
-      },
-    );
     // DSH events.host is the live invalidation channel for settings/session
     // surfaces. Re-emit one browser event with the original payload so panels
     // can refresh their own snapshot without coupling App to their state.
@@ -1161,8 +1098,6 @@ function App() {
       p7.then((fn) => fn());
       p8.then((fn) => fn());
       p9.then((fn) => fn());
-      p9b.then((fn) => fn());
-      p9c.then((fn) => fn());
       p10.then((fn) => fn());
       p11.then((fn) => fn());
       p12.then((fn) => fn());
@@ -1506,25 +1441,6 @@ function App() {
         permissionMode: task.permissionMode,
         images,
         clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
-      });
-      return;
-    }
-    if (agentFamily(task.agent, agentOptionsRef.current) === "omp") {
-      invoke("run_omp_task", {
-        taskId: task.id,
-        agent: task.agent,
-        projectPath,
-        prompt: promptOverride ?? task.prompt,
-        sessionId: task.ompSessionId ?? task.ompSessionPath,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        permissionMode: task.permissionMode,
-        images,
         onOutput: tm.createOutputChannel(task.id),
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1986,12 +1902,6 @@ function App() {
       });
       return;
     }
-    if (task && agentFamily(task.agent, agentOptionsRef.current) === "omp") {
-      invoke("cancel_omp_task", { taskId }).catch((e: unknown) => {
-        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-      });
-      return;
-    }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
     invoke(taskCommandName("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
@@ -2018,26 +1928,6 @@ function App() {
         permissionMode: task.permissionMode,
         images: [],
         clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
-      });
-      return;
-    }
-    if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "omp") {
-      // omp 原生 resume:以持久化的会话 id/文件路径 --resume 重连,不重放原 prompt。
-      invoke("run_omp_task", {
-        taskId: task.id,
-        agent: task.agent,
-        projectPath: task.worktreePath ?? project.path,
-        prompt: "",
-        sessionId: sessionId || task.ompSessionId || task.ompSessionPath,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        permissionMode: task.permissionMode,
-        images: [],
         onOutput: tm.createOutputChannel(task.id),
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2562,18 +2452,6 @@ function App() {
         .catch((e: unknown) => {
           manuallyCompletedDshTasksRef.current.delete(taskId);
           tm.resumeTaskOutput(taskId);
-          showToast(t("toast.completeTaskFailed", { error: String(e) }));
-        });
-      return;
-    }
-
-    if (completionCommand === "complete_omp_task") {
-      // omp:关 stdin → 进程 exit 0,后端 waiter 负责落 done。
-      invoke(completionCommand, { taskId })
-        .then(() => {
-          scheduleForDoneTask(taskId);
-        })
-        .catch((e: unknown) => {
           showToast(t("toast.completeTaskFailed", { error: String(e) }));
         });
       return;
@@ -3251,24 +3129,6 @@ function App() {
       <DshQuestionDialog
         request={dshQuestionRequests[0] ?? null}
         onClose={() => setDshQuestionRequests((prev) => prev.slice(1))}
-      />
-      <OmpApprovalDialog
-        request={ompUiRequests.find((item) => item.method === "confirm") ?? null}
-        onClose={() =>
-          setOmpUiRequests((prev) => {
-            const index = prev.findIndex((item) => item.method === "confirm");
-            return index === -1 ? prev : prev.filter((_, i) => i !== index);
-          })
-        }
-      />
-      <OmpQuestionDialog
-        request={ompUiRequests.find((item) => item.method !== "confirm") ?? null}
-        onClose={() =>
-          setOmpUiRequests((prev) => {
-            const index = prev.findIndex((item) => item.method !== "confirm");
-            return index === -1 ? prev : prev.filter((_, i) => i !== index);
-          })
-        }
       />
     </div>
   );

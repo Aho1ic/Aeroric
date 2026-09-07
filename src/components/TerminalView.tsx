@@ -56,8 +56,6 @@ interface TerminalViewProps {
   onSnapshot?: (snapshot: string) => void;
   highlightCursorLine?: boolean;
   dshVariant?: boolean;
-  /** omp(rpc-ui) 输出:非 PTY 流,复用 headless 卡片式终端表面。 */
-  ompVariant?: boolean;
 }
 
 interface TerminalRuntime {
@@ -85,7 +83,6 @@ export function TerminalView({
   onSnapshot,
   highlightCursorLine = false,
   dshVariant = false,
-  ompVariant = false,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<TerminalRuntime | null>(null);
@@ -500,8 +497,8 @@ export function TerminalView({
       ref={containerRef}
       data-testid="agent-terminal"
       data-terminal-theme={themeVariant}
-      data-terminal-variant={dshVariant ? "dsh" : ompVariant ? "omp" : "native"}
-      className={dshVariant || ompVariant ? "dsh-terminal-surface" : undefined}
+      data-terminal-variant={dshVariant ? "dsh" : "native"}
+      className={dshVariant ? "dsh-terminal-surface" : undefined}
       style={{
         width: "100%",
         height: "100%",

@@ -562,8 +562,10 @@ fn family_hooks_usable(
             status.claude_installed
                 && crate::app_settings::claude_version_gte(CLAUDE_HOOK_MIN_VERSION)
         }
-        // dsh/omp 不走 claude/codex 的 hook 机制:dsh 状态由自身 WebUI 通道上报,
-        // omp 状态由 rpc-ui 的 RPC 事件驱动(见 omp_rpc.rs)。
+        // dsh/omp 不走 claude/codex 的 hook 机制(改写用户 settings.json /
+        // config.toml 的那一套):dsh 状态由自身 WebUI 通道上报;omp 用装在托管
+        // home 里的原生 omp hook(见 `omp_home::ensure_omp_home_for`),事件写进
+        // 同一份 events.jsonl,由 event_watcher 消费。
         AgentFamily::Dsh => false,
         AgentFamily::Omp => false,
     }

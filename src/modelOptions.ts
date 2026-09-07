@@ -13,7 +13,11 @@ export const DSH_REASONING_EFFORTS = ["off", "high", "max"] as const;
 
 /**
  * oh-my-pi thinking level 词表(`--thinking <level>` / `set_thinking_level`)。
- * omp 不含 `ultra`(Claude/Codex 专有),`auto` 由运行期解析,不进静态词表。
+ * omp 不含 `ultra`(Claude/Codex 专有),`auto` 由运行期解析,不进静态词表
+ * (`omp_home.rs::is_valid_omp_thinking_level` 也显式拒 `auto`)。
+ *
+ * 镜像基线:can1357/oh-my-pi `packages/coding-agent/src/thinking.ts`
+ * @ 9a5a8c0077(2026-09-06 核对,七档逐字一致)。锚点与 upstream-sync 注册表同步。
  */
 export const OMP_THINKING_LEVELS = [
   "off",

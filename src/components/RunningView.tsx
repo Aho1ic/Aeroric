@@ -15,7 +15,6 @@ import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
 import { DshComposer } from "./DshComposer";
-import { OmpComposer } from "./OmpComposer";
 import { DshTrajectoryHost } from "./DshTrajectoryHost";
 import { DshTrajectoryOverlay } from "./DshTrajectoryOverlay";
 import { useToast } from "./Toast";
@@ -183,7 +182,6 @@ export function RunningView({
   const isInterrupted = task.status === "interrupted";
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
   const isDshSession = sessionOwner.family === "dsh";
-  const isOmpSession = sessionOwner.family === "omp";
   const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
   const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
   const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
@@ -569,7 +567,6 @@ export function RunningView({
         rawReplayData={restoreState.rawReplayData}
         highlightCursorLine
         dshVariant={sessionOwner.family === "dsh"}
-        ompVariant={isOmpSession}
       />
     </div>
   ) : undefined;
@@ -1041,7 +1038,7 @@ export function RunningView({
             <div style={{ flex: 1, minHeight: 0 }}>
               <TerminalView
                 key={terminalViewKey}
-                onInput={isDshSession || isOmpSession ? () => {} : onInput}
+                onInput={isDshSession ? () => {} : onInput}
                 onResize={onResize}
                 onRegisterTerminal={onRegisterTerminal}
                 onReady={onTerminalReady}
@@ -1055,7 +1052,6 @@ export function RunningView({
                 rawReplayData={restoreState.rawReplayData}
                 highlightCursorLine
                 dshVariant={sessionOwner.family === "dsh"}
-                ompVariant={isOmpSession}
               />
             </div>
           </div>
@@ -1079,10 +1075,6 @@ export function RunningView({
           taskId={task.id}
           sessionId={persistedSessionId ?? recoveredSession?.sessionId}
         />
-      )}
-      {isOmpSession && (
-        // omp 没有 PTY writer,输入一律走 prompt_omp_task(RPC prompt)。
-        <OmpComposer taskId={task.id} />
       )}
 
       {/* Status bar when task is done and no session path (terminal fallback).

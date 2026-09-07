@@ -524,7 +524,7 @@ pub struct AppSettings {
     pub codex_path: String,
     #[serde(default)]
     pub dsh_path: String,
-    /// oh-my-pi(rpc-ui) 的托管路径;为空时 omp 走默认 home。
+    /// oh-my-pi 的托管路径;为空时 omp 走默认 home。
     #[serde(default)]
     pub omp_path: String,
     #[serde(default)]
@@ -3174,7 +3174,7 @@ pub struct AgentVersions {
     pub codex_version: String,
     #[serde(default)]
     pub dsh_version: String,
-    /// omp(rpc-ui) 版本;未探测时为空。
+    /// omp 版本;未探测时为空。
     #[serde(default)]
     pub omp_version: Option<String>,
 }
