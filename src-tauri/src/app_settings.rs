@@ -2826,9 +2826,20 @@ pub async fn delete_custom_agent_profile(id: String) -> Result<AppSettings, Stri
             .cloned();
         if let Some(profile) = removed_profile.as_ref() {
             let generated = profile_uses_aeroric_generated_wrapper(profile);
-            remove_agent_profile_file(&profile.path)?;
-            remove_agent_api_key(&normalized_id)?;
+            // 只删 Aeroric 自己生成的 wrapper 脚本。dsh / omp 档案不生成 wrapper,
+            // 它们的 `path` 是 detect_path() 探到的用户自己装的二进制
+            // (`/opt/homebrew/bin/omp` 之类),而 profile_uses_aeroric_generated_wrapper
+            // 要求 config_lang == "shellscript",这两族都是 "yaml" ——
+            // 无条件调用会把用户的 omp/dsh 可执行文件本体删掉,连带拆掉内置档案
+            // 和其余同族档案。
             if generated {
+                remove_agent_profile_file(&profile.path)?;
+            }
+            remove_agent_api_key(&normalized_id)?;
+            // 凭据不只在 agent-credentials sidecar 里:dsh 的 .credentials.yaml 与
+            // omp 的 models.yml(内含明文 apiKey)都躺在隔离 home 中,删档案必须一起清,
+            // 否则"删除"之后密钥仍留在磁盘上。
+            if generated || matches!(profile.agent_family(), AgentFamily::Dsh | AgentFamily::Omp) {
                 remove_exact_generated_agent_home(&normalized_id)?;
             }
         }
@@ -4201,6 +4212,62 @@ mod tests {
         assert!(!selected.exists());
         assert!(sibling.join("settings.json").exists());
         assert!(remove_exact_generated_agent_home_at(&homes, "../outside").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 删除 dsh / omp 档案不得删掉用户自己装的二进制。
+    ///
+    /// 这两族不生成 wrapper:`setup_agent_profile` 把 `detect_path("omp")` 探到的
+    /// 绝对路径(`/opt/homebrew/bin/omp`)直接存进 `profile.path`。
+    /// `delete_custom_agent_profile` 曾无条件 `remove_agent_profile_file(&profile.path)`,
+    /// 于是"删除档案"把 omp 可执行文件本体删了,内置 omp 与其余同族档案一起失效。
+    #[test]
+    fn deleting_a_dsh_or_omp_profile_must_not_delete_the_user_installed_binary() {
+        let root =
+            std::env::temp_dir().join(format!("aeroric-omp-delete-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("omp");
+        fs::write(&binary, "#!/bin/sh\nexec real-omp \"$@\"\n").unwrap();
+
+        for family in ["omp", "dsh"] {
+            let profile = CustomAgentProfile {
+                id: format!("demo_{family}"),
+                label: format!("Demo {family}"),
+                path: binary.to_string_lossy().into_owned(),
+                codex_like: false,
+                family: family.to_string(),
+                // 两族都是 yaml —— 正是 profile_uses_aeroric_generated_wrapper 的
+                // "shellscript" 要求落空、旧代码因此走上无条件删除的原因。
+                config_lang: "yaml".to_string(),
+                base_url: "https://api.example.com/v1".to_string(),
+                api_key: "sk-secret".to_string(),
+                models: vec!["demo-model".to_string()],
+                enable_1m_context: false,
+                enable_chat_completions_proxy: false,
+                bridge_python_path: String::new(),
+                username: String::new(),
+                password: String::new(),
+            };
+
+            // 删除路径的守卫条件:非 Aeroric 生成的 launcher 一律不碰。
+            assert!(
+                !profile_uses_aeroric_generated_wrapper(&profile),
+                "{family} 档案不该被认成 Aeroric 生成的 wrapper"
+            );
+            assert!(
+                matches!(profile.agent_family(), AgentFamily::Dsh | AgentFamily::Omp),
+                "{family} 档案必须归到 dsh/omp 族,隔离 home 才会被清理"
+            );
+        }
+
+        // 反过来确认这条守卫确实是唯一的屏障:去掉它就会删掉这个文件。
+        assert!(binary.exists());
+        remove_agent_profile_file(&binary.to_string_lossy()).unwrap();
+        assert!(
+            !binary.exists(),
+            "remove_agent_profile_file 会真的删文件 —— 所以删除路径必须靠 generated 守卫拦住"
+        );
+
         let _ = fs::remove_dir_all(root);
     }
 

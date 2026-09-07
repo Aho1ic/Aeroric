@@ -3064,6 +3064,12 @@ pub async fn export_dsh_session_log(
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
+                // tokio::fs 的 write_all 返回时可能还有一个后台 blocking 写任务
+                // 持着 Arc<StdFile>,而 File 的 Drop 不等它。不先 flush 就 drop,
+                // Windows 上紧随的 remove_file 会撞 ERROR_SHARING_VIOLATION,把
+                // 截断的 .part 留在用户选的路径旁边。另两条错误分支的 write_all/
+                // flush 本身已失败,不存在在途任务,只有这条需要显式收尾。
+                let _ = file.flush().await;
                 drop(file);
                 let _ = std::fs::remove_file(&partial);
                 return Err(format!("Session log export stream failed: {error}"));

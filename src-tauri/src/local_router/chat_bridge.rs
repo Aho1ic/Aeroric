@@ -663,8 +663,10 @@ impl ChatSseTransformer {
             for call in tool_calls {
                 let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let function = call.get("function").unwrap_or(&Value::Null);
-                // entry 一次完成"惰性建 + 取可变引用":孤立的 arguments.delta
-                // (未先收 item.added)也会在这里建出状态,不 panic。
+                // entry 一次完成「惰性建 + 取可变引用」,省掉后面一次 get_mut 查找。
+                // 首次见到某个 index 时同步发一条 output_item.added;这与改写前的
+                // 行为一致 —— 旧代码在 vacant 分支里无条件 insert,后面的
+                // get_mut().expect() 其实不可达,并没有修掉真实的 panic 路径。
                 let is_new = !self.tools.contains_key(&index);
                 let state = self.tools.entry(index).or_insert_with(|| ToolState {
                     id: call
