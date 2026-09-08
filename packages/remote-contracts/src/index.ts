@@ -106,7 +106,7 @@ export interface RpcTaskProjection {
   name?: string;
   prompt: string;
   agent: string;
-  family?: "claude" | "codex" | "dsh";
+  family?: "claude" | "codex" | "dsh" | "omp";
   selectedModel?: string;
   dshAgentPreset?: string;
   reasoningEffort?: string;
@@ -117,7 +117,7 @@ export interface RpcTaskProjection {
   attentionRequestedAt?: number;
   starred?: boolean;
   failureReason?: string;
-  sessionFamily?: "claude" | "codex" | "dsh";
+  sessionFamily?: "claude" | "codex" | "dsh" | "omp";
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;

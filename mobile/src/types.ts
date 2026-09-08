@@ -182,7 +182,7 @@ export interface SessionAppendedPush {
 }
 
 /** RPC agents.list 的条目(桌面内置 + 自定义 agent 的窄面视图)。 */
-export type AgentFamily = "claude" | "codex" | "dsh";
+export type AgentFamily = "claude" | "codex" | "dsh" | "omp";
 
 export interface AgentChoice {
   id: string;

@@ -14,13 +14,13 @@ import type {
   SystemPermissionStatus,
 } from "../types";
 
-const { flushTasksBeforeExitMock } = vi.hoisted(() => ({
-  flushTasksBeforeExitMock: vi.fn(),
+const { flushPendingSavesMock } = vi.hoisted(() => ({
+  flushPendingSavesMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../taskFlush", () => ({
-  flushTasksBeforeExit: flushTasksBeforeExitMock,
+  flushPendingSavesBeforeExit: flushPendingSavesMock,
 }));
 
 function permission(overrides: Partial<SystemPermission> & { id: string }): SystemPermission {
@@ -87,8 +87,8 @@ function row(name: string) {
 describe("PermissionsPanel", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
-    flushTasksBeforeExitMock.mockReset();
-    flushTasksBeforeExitMock.mockResolvedValue(undefined);
+    flushPendingSavesMock.mockReset();
+    flushPendingSavesMock.mockResolvedValue(undefined);
   });
 
   it("lists every permission with its status and a settings shortcut", async () => {
@@ -184,7 +184,7 @@ describe("PermissionsPanel", () => {
 
   it("waits for task persistence before restarting and stays open when saving fails", async () => {
     let releaseFlush!: () => void;
-    flushTasksBeforeExitMock.mockImplementationOnce(
+    flushPendingSavesMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseFlush = resolve;
@@ -215,7 +215,7 @@ describe("PermissionsPanel", () => {
     releaseFlush();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_app_for_permissions"));
 
-    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    flushPendingSavesMock.mockRejectedValueOnce(new Error("disk full"));
     await user.click(restart);
     expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
     expect(
@@ -225,7 +225,7 @@ describe("PermissionsPanel", () => {
 
   it("does not issue duplicate restart requests while the save handshake is pending", async () => {
     let releaseFlush!: () => void;
-    flushTasksBeforeExitMock.mockImplementationOnce(
+    flushPendingSavesMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseFlush = resolve;
@@ -252,7 +252,7 @@ describe("PermissionsPanel", () => {
 
     fireEvent.click(restart);
     fireEvent.click(restart);
-    expect(flushTasksBeforeExitMock).toHaveBeenCalledTimes(1);
+    expect(flushPendingSavesMock).toHaveBeenCalledTimes(1);
     expect(invoke).not.toHaveBeenCalledWith("restart_app_for_permissions");
 
     releaseFlush();

@@ -10,14 +10,20 @@
 //!
 //! ```text
 //! delete_local   按过期的「本地没变」判断软删,吃掉刚写的内容
-//! download       按过期判断覆盖写,同上
+//! download       按过期判断覆盖写,同上;网络等待期间的新保存同样会被覆盖
 //! upload         读的是新内容,却把快照里的旧 hash 写进基线 —— 基线从此说谎,
 //!                下一轮还会再传一次
-//! delete_remote  按过期的「本地已删」判断删远端,而用户可能刚把它建回来
+//! delete_remote  按过期的「本地已删」判断删远端,而用户可能刚把它建回来;
+//!                远端在 list 之后被别的设备改过,也会被无条件覆盖
 //! ```
 //!
 //! 这里每个动作执行前重新算一次那**一个**文件的签名,和快照对不上就把这条转成冲突,
-//! 不往下走。代价是一次单文件 hash。
+//! 不往下走。代价是一次单文件 hash。远端那一侧同样复验:上传和删除远端之前用
+//! [`RemoteFs::head`] 对一下本轮清单里的身份,不一致就挂起 `remote_changed_during_sync`。
+//! 下载则在 `get` 之后、写盘之前再验一次本地,挡住网络等待这段窗口。
+//!
+//! 远端复验到 `put` 之间理论上仍有窗口。那段不会破坏本地数据,下一轮扫描会发现基线与
+//! 本地不一致并重传;先 `put` 再复验则已经覆盖了别人的内容,不可逆。这是取舍,不是遗漏。
 //!
 //! ## tombstone 先落盘,再执行(缺口三的修法)
 //!
@@ -37,6 +43,15 @@ pub trait RemoteFs {
     /// `(device, seq)` 逻辑戳。两者都不是 provider 的 list 元数据(那里没有 etag,见
     /// `diff` 的模块文档)。
     fn list(&self) -> Result<Vec<RemoteEntry>, String>;
+    /// 某一个路径**此刻**的远端身份,看不到则 `None`。
+    ///
+    /// 语义必须与 [`RemoteFs::list`] 逐条产出的 `hash` 完全一致(含超大文件的
+    /// `oversize:<size>` 标记),否则复验会把「没变」判成「变了」,每轮都挂起。
+    ///
+    /// 故意**不给默认实现**:一个返回 `Ok(None)` 的默认值等于宣称「远端没有这个文件」,
+    /// 于是每次上传都会被判成不一致而挂起 —— 症状离原因很远。多一处编译错误好过多一个
+    /// 静默错答。
+    fn head(&self, path: &str) -> Result<Option<String>, String>;
     fn get(&self, path: &str) -> Result<Vec<u8>, String>;
     /// 写入并返回落盘后的内容 hash。
     fn put(&mut self, path: &str, bytes: &[u8], hash: &str) -> Result<(), String>;
@@ -280,6 +295,19 @@ fn execute(
                 Err(error) => return failed(error),
             };
             let hash = crate::notebook::state::hash64(&bytes).to_string();
+            // 远端复验:清单是几分钟前的观察,别的设备可能已经改了这个文件。
+            // 顺序是「读本地 → 复验远端 → put」。复验到 put 之间理论上仍有窗口,但那一段
+            // 不会破坏本地数据,下一轮扫描会发现基线与本地不一致并重传;而先 put 再复验
+            // 则已经覆盖了别人的内容,不可逆。这是取舍,不是遗漏。
+            match remote_identity_drifted(path, remote_entries, &*remote) {
+                Ok(false) => {}
+                Ok(true) => {
+                    return settle(OutcomeStatus::Pending {
+                        detail: "remote_changed_during_sync",
+                    })
+                }
+                Err(error) => return failed(error),
+            }
             if let Err(error) = remote.put(path, &bytes, &hash) {
                 return failed(error);
             }
@@ -320,6 +348,27 @@ fn execute(
                     detail: "oversize_not_hashable",
                 });
             }
+            // 网络等待期间用户可能正好保存了这个文件。开头那次复验是 `get` 之前做的,
+            // 覆盖掉的正是这段时间里的编辑,所以写盘前必须再验一次。
+            match verify(vault, path, snapshot) {
+                Ok(Drift::Unchanged) => {}
+                Ok(Drift::Changed) => {
+                    return settle(OutcomeStatus::Pending {
+                        detail: "local_changed_during_sync",
+                    })
+                }
+                Ok(Drift::Gone) => {
+                    return settle(OutcomeStatus::Pending {
+                        detail: "local_gone_during_sync",
+                    })
+                }
+                Ok(Drift::Appeared) => {
+                    return settle(OutcomeStatus::Pending {
+                        detail: "local_appeared_during_sync",
+                    })
+                }
+                Err(error) => return failed(error),
+            }
             if let Err(error) = local.write(vault, path, &bytes) {
                 return failed(error);
             }
@@ -327,9 +376,11 @@ fn execute(
             let hash = crate::notebook::state::hash64(&bytes).to_string();
             let base = Baseline {
                 path: path.to_string(),
-                local_hash: hash,
+                local_hash: hash.clone(),
                 local_mtime_ms: now_ms,
-                remote_hash: entry.map(|e| e.hash.clone()).unwrap_or_default(),
+                // 基线描述的是**真正落到本地的那份内容**。清单条目的 hash 是 `get` 之前的
+                // 观察,可能已经过期;记错的话下一轮会以为两侧不一致而无意义重传。
+                remote_hash: hash,
                 remote_device: entry.map(|e| e.device.clone()).unwrap_or_default(),
                 remote_seq: entry.map(|e| e.seq).unwrap_or(0),
                 synced_at: now_ms,
@@ -340,6 +391,15 @@ fn execute(
             }
         }
         Action::DeleteRemote => {
+            match remote_identity_drifted(path, remote_entries, &*remote) {
+                Ok(false) => {}
+                Ok(true) => {
+                    return settle(OutcomeStatus::Pending {
+                        detail: "remote_changed_during_sync",
+                    })
+                }
+                Err(error) => return failed(error),
+            }
             if let Err(error) = remote.delete(path) {
                 return failed(error);
             }
@@ -432,9 +492,17 @@ fn apply_resolution(
 
     match chosen {
         diff::Resolution::KeepLocal => {
+            // 「本地已删 / 远端已改」这类冲突里本地其实不存在。保留本地 = 让删除继续
+            // 传播到远端,不能去上传一个不存在的文件 —— 那会每轮 ENOENT,永不收敛。
+            // 与下面 `KeepRemote` 按远端是否在场分流是同一条对称的判据。
+            let action = if snapshot.contains_key(&planned.path) {
+                Action::Upload
+            } else {
+                Action::DeleteRemote
+            };
             let upload = PlannedAction {
                 path: planned.path.clone(),
-                action: Action::Upload,
+                action,
                 reason: planned.reason,
             };
             execute(
@@ -570,6 +638,23 @@ fn verify(
     })
 }
 
+/// 远端那一侧从本轮清单到现在变了没。
+///
+/// 「计划以为不存在、现在出现了」和「计划以为存在、现在没了」都算变了 —— 前者会让上传
+/// 覆盖掉别人刚建的文件,后者说明删除的对象已经不是我们看到的那一份。
+fn remote_identity_drifted(
+    path: &str,
+    remote_entries: &[RemoteEntry],
+    remote: &dyn RemoteFs,
+) -> Result<bool, String> {
+    let planned = remote_entries
+        .iter()
+        .find(|entry| entry.path == path)
+        .map(|entry| entry.hash.as_str());
+    let current = remote.head(path)?;
+    Ok(current.as_deref() != planned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,6 +674,25 @@ mod tests {
         fail_delete: bool,
         fail_list: bool,
         list_calls: Cell<usize>,
+        /// `list()` 返回之后,别的设备对远端做的那一次改动。
+        ///
+        /// 不去真改 `files`,而是让 `head` 看到改动后的状态 —— 这正是「清单是过期观察」
+        /// 的准确建模,顺带让 `remote.put` / `remote.deleted` 的断言仍能反映本机行为。
+        after_list: Option<RemoteMutation>,
+        /// `get()` 期间用户对本地做的那一次改动。用来复现「下载等待期间保存了笔记」。
+        during_get: Option<LocalMutation>,
+    }
+
+    /// 另一台设备在 list 之后对远端做的事。
+    enum RemoteMutation {
+        Write { path: String, bytes: Vec<u8> },
+        Delete { path: String },
+    }
+
+    /// 用户在 `get` 等待期间对本地做的事。
+    enum LocalMutation {
+        Write { abs: PathBuf, bytes: Vec<u8> },
+        Remove { abs: PathBuf },
     }
 
     impl FakeRemote {
@@ -602,6 +706,33 @@ mod tests {
                 );
             }
             me
+        }
+
+        fn after_list(mut self, mutation: RemoteMutation) -> Self {
+            self.after_list = Some(mutation);
+            self
+        }
+
+        fn during_get(mut self, mutation: LocalMutation) -> Self {
+            self.during_get = Some(mutation);
+            self
+        }
+
+        /// `list` 那一刻的身份。
+        fn listed_identity(&self, path: &str) -> Option<String> {
+            self.files.get(path).map(|(_, hash, _, _)| hash.clone())
+        }
+
+        /// `head` 此刻看到的身份 —— 叠加了 `after_list` 那次改动。
+        fn current_identity(&self, path: &str) -> Option<String> {
+            match &self.after_list {
+                Some(RemoteMutation::Write {
+                    path: changed,
+                    bytes,
+                }) if changed == path => Some(crate::notebook::state::hash64(bytes).to_string()),
+                Some(RemoteMutation::Delete { path: changed }) if changed == path => None,
+                _ => self.listed_identity(path),
+            }
         }
     }
 
@@ -622,12 +753,30 @@ mod tests {
                 })
                 .collect())
         }
+
+        fn head(&self, path: &str) -> Result<Option<String>, String> {
+            Ok(self.current_identity(path))
+        }
         fn get(&self, path: &str) -> Result<Vec<u8>, String> {
+            if let Some(mutation) = &self.during_get {
+                match mutation {
+                    LocalMutation::Write { abs, bytes } => {
+                        if let Some(parent) = abs.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        std::fs::write(abs, bytes).map_err(|e| e.to_string())?;
+                    }
+                    LocalMutation::Remove { abs } => {
+                        let _ = std::fs::remove_file(abs);
+                    }
+                }
+            }
             self.files
                 .get(path)
                 .map(|(bytes, _, _, _)| bytes.clone())
                 .ok_or_else(|| format!("remote 404: {path}"))
         }
+
         fn put(&mut self, path: &str, bytes: &[u8], hash: &str) -> Result<(), String> {
             if self.fail_put {
                 return Err("put boom".to_string());
@@ -758,6 +907,169 @@ mod tests {
         assert_eq!(
             std::fs::read(vault.join("b.md")).expect("read"),
             b"remote body"
+        );
+    }
+
+    #[test]
+    fn a_download_baselines_the_bytes_it_actually_received() {
+        // **R3 的一半。** 清单是 `get` 之前的观察。基线若沿用清单里的 hash,而取到的其实
+        // 是别的内容,基线就在说谎 —— 下一轮会以为两侧不一致而无意义重传。
+        let vault = bound("download-baseline");
+        let mut remote = FakeRemote::with(&[("b.md", b"remote body")]);
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        let conn = store::open(&vault).expect("conn");
+        let bases = store::baselines(&conn, "r1").expect("bases");
+        let expected = crate::notebook::state::hash64(b"remote body").to_string();
+        assert_eq!(bases[0].remote_hash, expected);
+        assert_eq!(bases[0].local_hash, expected);
+        // 逻辑戳仍来自清单条目 —— manifest 的记账语义不变。
+        assert_eq!(bases[0].remote_device, "dev-b");
+        assert_eq!(bases[0].remote_seq, 5);
+    }
+
+    #[test]
+    fn an_edit_saved_while_the_download_is_in_flight_is_not_overwritten() {
+        // **R3 的另一半。** 开头那次本地复验发生在 `remote.get` **之前**,而要覆盖的正是
+        // 网络等待这段时间里的编辑。少了写盘前那次复验,用户刚保存的内容就被吃掉。
+        let vault = bound("download-race");
+        write_note(&vault, "a.md", b"v1");
+        let snapshot = scan::by_path(scan::scan_vault(&vault).expect("scan"));
+
+        let mut remote =
+            FakeRemote::with(&[("a.md", b"v2-remote")]).during_get(LocalMutation::Write {
+                abs: vault.join("a.md"),
+                bytes: b"saved while the download was pending".to_vec(),
+            });
+        let entries = remote.list().expect("list");
+        let mut local = FakeLocal::default();
+        let conn = store::open(&vault).expect("conn");
+        let planned = PlannedAction {
+            path: "a.md".to_string(),
+            action: Action::Download,
+            reason: "remote_modified",
+        };
+        let got = execute(
+            &vault,
+            "r1",
+            &planned,
+            &snapshot,
+            &[],
+            &entries,
+            NOW,
+            &conn,
+            &mut remote,
+            &mut local,
+        );
+
+        assert_eq!(
+            got.status,
+            OutcomeStatus::Pending {
+                detail: "local_changed_during_sync"
+            }
+        );
+        assert_eq!(
+            std::fs::read(vault.join("a.md")).expect("read"),
+            b"saved while the download was pending",
+            "下载等待期间保存的内容必须还在"
+        );
+        assert!(
+            store::baselines(&conn, "r1").expect("bases").is_empty(),
+            "没写下去就不该留基线"
+        );
+    }
+
+    #[test]
+    fn a_note_deleted_while_the_download_is_in_flight_is_not_resurrected() {
+        // 同一段窗口里的删除。写下去就是把用户刚删掉的文件复活。
+        let vault = bound("download-race-delete");
+        write_note(&vault, "a.md", b"v1");
+        let snapshot = scan::by_path(scan::scan_vault(&vault).expect("scan"));
+
+        let mut remote =
+            FakeRemote::with(&[("a.md", b"v2-remote")]).during_get(LocalMutation::Remove {
+                abs: vault.join("a.md"),
+            });
+        let entries = remote.list().expect("list");
+        let mut local = FakeLocal::default();
+        let conn = store::open(&vault).expect("conn");
+        let planned = PlannedAction {
+            path: "a.md".to_string(),
+            action: Action::Download,
+            reason: "remote_modified",
+        };
+        let got = execute(
+            &vault,
+            "r1",
+            &planned,
+            &snapshot,
+            &[],
+            &entries,
+            NOW,
+            &conn,
+            &mut remote,
+            &mut local,
+        );
+
+        assert_eq!(
+            got.status,
+            OutcomeStatus::Pending {
+                detail: "local_gone_during_sync"
+            }
+        );
+        assert!(!vault.join("a.md").exists(), "删掉的文件不该被复活");
+    }
+
+    #[test]
+    fn a_note_created_while_the_download_is_in_flight_is_not_overwritten() {
+        // 计划以为本地没有它(新远端文件),而等待期间用户自己建了一个同名的。
+        let vault = bound("download-race-create");
+        let snapshot = scan::by_path(scan::scan_vault(&vault).expect("scan"));
+
+        let mut remote =
+            FakeRemote::with(&[("new.md", b"remote body")]).during_get(LocalMutation::Write {
+                abs: vault.join("new.md"),
+                bytes: b"typed here first".to_vec(),
+            });
+        let entries = remote.list().expect("list");
+        let mut local = FakeLocal::default();
+        let conn = store::open(&vault).expect("conn");
+        let planned = PlannedAction {
+            path: "new.md".to_string(),
+            action: Action::Download,
+            reason: "new_remote",
+        };
+        let got = execute(
+            &vault,
+            "r1",
+            &planned,
+            &snapshot,
+            &[],
+            &entries,
+            NOW,
+            &conn,
+            &mut remote,
+            &mut local,
+        );
+
+        assert_eq!(
+            got.status,
+            OutcomeStatus::Pending {
+                detail: "local_appeared_during_sync"
+            }
+        );
+        assert_eq!(
+            std::fs::read(vault.join("new.md")).expect("read"),
+            b"typed here first"
         );
     }
 
@@ -1244,6 +1556,7 @@ mod tests {
         }
 
         remote.fail_put = true;
+
         let second = run(
             &vault,
             "r1",
@@ -1268,6 +1581,241 @@ mod tests {
             1,
             "没执行成功的决定要留着下一轮再试"
         );
+    }
+
+    #[test]
+    fn keep_local_on_a_deleted_local_file_propagates_the_deletion() {
+        // **R4。** 「本地已删 / 远端已改」选保留本地时,本地文件并不存在。无条件转 Upload
+        // 会每轮 ENOENT,永不收敛。保留本地 = 让删除继续传播到远端。
+        let vault = bound("keep-local-tombstone");
+        write_note(&vault, "a.md", b"v1");
+        let mut remote = FakeRemote::with(&[("a.md", b"v1")]);
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("seed");
+
+        std::fs::remove_file(vault.join("a.md")).expect("rm");
+        remote.files.insert(
+            "a.md".to_string(),
+            (
+                b"v2-from-elsewhere".to_vec(),
+                crate::notebook::state::hash64(b"v2-from-elsewhere").to_string(),
+                "dev-b".to_string(),
+                6,
+            ),
+        );
+
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Local,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+        let got = outcome(&report, "a.md");
+        assert_eq!(got.reason, "local_tombstone_remote_modified");
+        assert_eq!(got.status, OutcomeStatus::Done, "不该失败在 ENOENT 上");
+        assert_eq!(remote.deleted, vec!["a.md"]);
+        assert!(!remote.files.contains_key("a.md"));
+        assert!(!vault.join("a.md").exists());
+        assert_eq!(report.seq, Some(2));
+
+        let conn = store::open(&vault).expect("conn");
+        assert!(
+            store::resolutions(&conn, "r1").expect("read").is_empty(),
+            "落定的决定必须清掉"
+        );
+    }
+
+    #[test]
+    fn a_remote_edit_after_list_is_not_overwritten_by_upload() {
+        // **R2 上传。** 清单是几分钟前的观察。别的设备在 list 之后改了这个文件,Ask 策略
+        // 也不能静默覆盖 —— 那是别人刚写进去的内容。
+        let vault = bound("remote-race-upload");
+        write_note(&vault, "a.md", b"base");
+        let mut remote = FakeRemote::with(&[("a.md", b"base")]);
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("seed");
+        remote.put.clear();
+
+        write_note(&vault, "a.md", b"local edit");
+        remote.after_list = Some(RemoteMutation::Write {
+            path: "a.md".to_string(),
+            bytes: b"new edit from another device".to_vec(),
+        });
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        assert_eq!(
+            outcome(&report, "a.md").status,
+            OutcomeStatus::Pending {
+                detail: "remote_changed_during_sync"
+            }
+        );
+        assert!(remote.put.is_empty(), "远端刚改过的内容不该被覆盖");
+        assert_eq!(remote.files["a.md"].0, b"base".to_vec());
+        assert!(report.seq.is_none(), "挂起时不该推进 seq");
+    }
+
+    #[test]
+    fn a_remote_edit_after_list_is_not_deleted() {
+        // **R2 删除。** 本地已经删了,计划是把删除传播到远端。但 list 之后远端被改过,
+        // 删掉的就不再是我们看到的那一份。
+        let vault = bound("remote-race-delete");
+        write_note(&vault, "a.md", b"base");
+        let mut remote = FakeRemote::with(&[("a.md", b"base")]);
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("seed");
+
+        std::fs::remove_file(vault.join("a.md")).expect("rm");
+        remote.after_list = Some(RemoteMutation::Write {
+            path: "a.md".to_string(),
+            bytes: b"new edit from another device".to_vec(),
+        });
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        assert_eq!(
+            outcome(&report, "a.md").status,
+            OutcomeStatus::Pending {
+                detail: "remote_changed_during_sync"
+            }
+        );
+        assert!(remote.deleted.is_empty(), "远端刚改过的内容不该被删");
+        assert_eq!(remote.files["a.md"].0, b"base".to_vec());
+        assert!(report.seq.is_none());
+    }
+
+    #[test]
+    fn a_remote_file_that_appeared_after_list_is_not_overwritten() {
+        // 计划以为远端没有它(新本地文件),而 list 之后别人先传了一份同名的。
+        let vault = bound("remote-race-appeared");
+        write_note(&vault, "new.md", b"typed here first");
+        let mut remote = FakeRemote::default().after_list(RemoteMutation::Write {
+            path: "new.md".to_string(),
+            bytes: b"typed elsewhere first".to_vec(),
+        });
+        let mut local = FakeLocal::default();
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        assert_eq!(
+            outcome(&report, "new.md").status,
+            OutcomeStatus::Pending {
+                detail: "remote_changed_during_sync"
+            }
+        );
+        assert!(remote.put.is_empty());
+        assert!(report.seq.is_none());
+    }
+
+    #[test]
+    fn a_remote_file_that_vanished_after_list_is_not_deleted() {
+        // 计划以为远端还在(本地已删,要传播删除),而 list 之后别人先删了。再 delete 一次
+        // 对多数后端是幂等的,但身份已经变了,不能当成本轮的成功。
+        let vault = bound("remote-race-gone");
+        write_note(&vault, "a.md", b"base");
+        let mut remote = FakeRemote::with(&[("a.md", b"base")]);
+        let mut local = FakeLocal::default();
+        run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("seed");
+
+        std::fs::remove_file(vault.join("a.md")).expect("rm");
+        remote.after_list = Some(RemoteMutation::Delete {
+            path: "a.md".to_string(),
+        });
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW + 1000,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+
+        assert_eq!(
+            outcome(&report, "a.md").status,
+            OutcomeStatus::Pending {
+                detail: "remote_changed_during_sync"
+            }
+        );
+        assert!(remote.deleted.is_empty());
+        assert!(report.seq.is_none());
+    }
+
+    #[test]
+    fn an_unchanged_remote_still_uploads_and_advances_seq() {
+        // 复验不能把「没变」误判成「变了」,否则每轮都挂起、永远推不进 seq。
+        let vault = bound("remote-stable-upload");
+        write_note(&vault, "a.md", b"hello");
+        let mut remote = FakeRemote::default();
+        let mut local = FakeLocal::default();
+        let report = run(
+            &vault,
+            "r1",
+            ConflictStrategy::Ask,
+            NOW,
+            &mut remote,
+            &mut local,
+        )
+        .expect("run");
+        assert_eq!(outcome(&report, "a.md").status, OutcomeStatus::Done);
+        assert_eq!(remote.put, vec!["a.md"]);
+        assert_eq!(report.seq, Some(1));
     }
 
     #[test]
@@ -1446,6 +1994,9 @@ mod tests {
         impl RemoteFs for NoCommit {
             fn list(&self) -> Result<Vec<RemoteEntry>, String> {
                 self.0.list()
+            }
+            fn head(&self, path: &str) -> Result<Option<String>, String> {
+                self.0.head(path)
             }
             fn get(&self, path: &str) -> Result<Vec<u8>, String> {
                 self.0.get(path)

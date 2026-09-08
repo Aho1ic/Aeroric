@@ -6,8 +6,8 @@ import { I18nProvider } from "../i18n";
 import { NotificationBell, UpdateBanner } from "../components/NotificationBell";
 import { useNotifications } from "../hooks/useNotifications";
 
-const { flushTasksBeforeExitMock } = vi.hoisted(() => ({
-  flushTasksBeforeExitMock: vi.fn(),
+const { flushPendingSavesMock } = vi.hoisted(() => ({
+  flushPendingSavesMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -23,13 +23,13 @@ vi.mock("../hooks/useNotifications", () => ({
 }));
 
 vi.mock("../taskFlush", () => ({
-  flushTasksBeforeExit: flushTasksBeforeExitMock,
+  flushPendingSavesBeforeExit: flushPendingSavesMock,
 }));
 
 describe("Notification release updater", () => {
   beforeEach(() => {
-    flushTasksBeforeExitMock.mockReset();
-    flushTasksBeforeExitMock.mockResolvedValue(undefined);
+    flushPendingSavesMock.mockReset();
+    flushPendingSavesMock.mockResolvedValue(undefined);
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_pending_release_update") return Promise.resolve(null);
@@ -110,7 +110,7 @@ describe("Notification release updater", () => {
   it("does not start the installer before task saves finish", async () => {
     const user = userEvent.setup();
     let releaseFlush!: () => void;
-    flushTasksBeforeExitMock.mockImplementationOnce(
+    flushPendingSavesMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseFlush = resolve;
@@ -160,7 +160,7 @@ describe("Notification release updater", () => {
 
   it("keeps the update retryable when task persistence fails", async () => {
     const user = userEvent.setup();
-    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    flushPendingSavesMock.mockRejectedValueOnce(new Error("disk full"));
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "get_pending_release_update") {
         return Promise.resolve({
@@ -198,7 +198,7 @@ describe("Notification release updater", () => {
       expect.anything(),
     );
 
-    flushTasksBeforeExitMock.mockResolvedValueOnce(undefined);
+    flushPendingSavesMock.mockResolvedValueOnce(undefined);
     await user.click(restart);
     await screen.findByText(/Installed to \/Applications\/Aeroric\.app/);
     expect(invoke).toHaveBeenCalledWith("restart_and_install_release_update", {

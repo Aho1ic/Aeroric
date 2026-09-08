@@ -1,4 +1,4 @@
-import { flushAllProjectTasks } from "./appProjectState";
+import { flushAllProjectTasks, flushProjects } from "./appProjectState";
 
 export const TASK_FLUSH_TIMEOUT_MS = 10_000;
 
@@ -51,9 +51,20 @@ export function createTaskFlushCoordinator(flushAll: () => Promise<void>) {
     return withTimeout(
       inFlightOperation,
       timeoutMs,
-      "Timed out while saving tasks. The app was kept open.",
+      "Timed out while saving your work. The app was kept open.",
     );
   };
 }
 
-export const flushTasksBeforeExit = createTaskFlushCoordinator(flushAllProjectTasks);
+/**
+ * 退出/重启前把两条保存队列都落盘。
+ *
+ * 任务和项目走的是两条独立队列(`taskPersistence` 防抖串行、`projectPersistence` 链式串行)。
+ * 只等任务那条的话,项目侧排着的快照会随进程一起消失 —— 表现是「刚改的项目名/顺序退出后没了」。
+ *
+ * 并行等而不是串行:两者互不依赖,串行会把退出前的等待时间翻倍。任一失败则整体 reject,由调用方
+ * 保持应用存活。
+ */
+export const flushPendingSavesBeforeExit = createTaskFlushCoordinator(async () => {
+  await Promise.all([flushAllProjectTasks(), flushProjects()]);
+});

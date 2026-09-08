@@ -25,7 +25,7 @@ import type {
   SystemPermissionStatus,
 } from "../../types";
 import { useI18n } from "../../i18n";
-import { flushTasksBeforeExit } from "../../taskFlush";
+import { flushPendingSavesBeforeExit } from "../../taskFlush";
 import s from "../../styles";
 
 const PERMISSION_ICONS: Record<string, LucideIcon> = {
@@ -270,7 +270,7 @@ export function PermissionsPanel() {
     restartInFlight.current = true;
     setRestarting(true);
     try {
-      await flushTasksBeforeExit();
+      await flushPendingSavesBeforeExit();
       await invoke("restart_app_for_permissions");
     } catch (nextError) {
       setError(String(nextError));

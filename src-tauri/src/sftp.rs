@@ -1491,6 +1491,63 @@ fn copy_or_move_paths(
     }
 }
 
+/// 同一存储连接内,源路径的目标就是自身时必须在任何删除/复制/重命名之前拒绝。
+///
+/// 本地分支早有这条防护(见 `copy_local_paths_to_directory`)。存储分支漏掉它的后果不是
+/// 「操作失败」而是丢数据:`Replace` 会先把同名条目删掉,而那个条目就是源本身。
+fn reject_storage_self_targets(sources: &[String], target_dir: &str) -> Result<(), String> {
+    for path in sources {
+        let destination = crate::storage_backend::join_storage_path(
+            target_dir,
+            &crate::storage_backend::path_basename(path),
+        );
+        if destination == *path {
+            return Err("Cannot replace a file or folder with itself".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// 同一存储连接内部的复制/移动。抽出后端注入点,自我目标回归不必碰真实凭据。
+fn copy_or_move_within_storage(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    paths: &[String],
+    target_dir: &str,
+    move_paths: bool,
+    conflict_strategy: SftpConflictStrategy,
+) -> Result<(), String> {
+    let capability = backend.capability();
+    if move_paths && !capability.rename {
+        return Err("This connection cannot move files".to_string());
+    }
+    if !move_paths && !capability.copy {
+        return Err("This connection cannot copy files".to_string());
+    }
+    let target_dir = validate_storage_path(target_dir)?;
+    let sources = paths
+        .iter()
+        .map(|path| validate_storage_path(path))
+        .collect::<Result<Vec<_>, String>>()?;
+    reject_storage_self_targets(&sources, &target_dir)?;
+    let names = sources
+        .iter()
+        .map(|path| crate::storage_backend::path_basename(path))
+        .collect::<Vec<_>>();
+    ensure_storage_names_available(backend, &names, &target_dir, conflict_strategy)?;
+    for path in &sources {
+        let destination = crate::storage_backend::join_storage_path(
+            &target_dir,
+            &crate::storage_backend::path_basename(path),
+        );
+        if move_paths {
+            backend.rename(path, &destination)?;
+        } else {
+            backend.copy(path, &destination)?;
+        }
+    }
+    Ok(())
+}
+
 /// 处理任一端为 storage 的复制/移动。
 ///
 /// 跨后端(storage ↔ ssh)先落地到 0700 的临时目录再转发,复用现有 scp 路径。
@@ -1518,40 +1575,13 @@ fn copy_or_move_storage_paths(
             },
         ) if connection_id == target_id => {
             let backend = storage_backend_for(connection_id)?;
-            let capability = backend.capability();
-            if move_paths && !capability.rename {
-                return Err("This connection cannot move files".to_string());
-            }
-            if !move_paths && !capability.copy {
-                return Err("This connection cannot copy files".to_string());
-            }
-            let target_dir = validate_storage_path(target_path)?;
-            let sources = paths
-                .iter()
-                .map(|path| validate_storage_path(path))
-                .collect::<Result<Vec<_>, String>>()?;
-            let names = sources
-                .iter()
-                .map(|path| crate::storage_backend::path_basename(path))
-                .collect::<Vec<_>>();
-            ensure_storage_names_available(
+            copy_or_move_within_storage(
                 backend.as_ref(),
-                &names,
-                &target_dir,
+                &paths,
+                target_path,
+                move_paths,
                 conflict_strategy,
-            )?;
-            for path in &sources {
-                let destination = crate::storage_backend::join_storage_path(
-                    &target_dir,
-                    &crate::storage_backend::path_basename(path),
-                );
-                if move_paths {
-                    backend.rename(path, &destination)?;
-                } else {
-                    backend.copy(path, &destination)?;
-                }
-            }
-            Ok(())
+            )
         }
         // 存储 → 本地。
         (
@@ -2066,5 +2096,166 @@ mod tests {
             "data"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 记录每一次后端调用的假后端。回归要断言的是"零破坏性调用",不是错误文案。
+    #[derive(Default)]
+    struct RecordingBackend {
+        entries: Vec<crate::storage_backend::StorageEntry>,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingBackend {
+        fn with_file(dir: &str, name: &str) -> Self {
+            Self {
+                entries: vec![crate::storage_backend::StorageEntry {
+                    name: name.to_string(),
+                    path: crate::storage_backend::join_storage_path(dir, name),
+                    is_dir: false,
+                    size: Some(4),
+                    modified_at_ms: None,
+                }],
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("lock").clone()
+        }
+
+        fn record(&self, call: String) {
+            self.calls.lock().expect("lock").push(call);
+        }
+    }
+
+    impl crate::storage_backend::StorageBackend for RecordingBackend {
+        fn capability(&self) -> crate::storage_backend::Capability {
+            crate::storage_backend::Capability::FULL
+        }
+
+        fn read_dir(
+            &self,
+            path: &str,
+        ) -> Result<Vec<crate::storage_backend::StorageEntry>, String> {
+            self.record(format!("read_dir {path}"));
+            Ok(self.entries.clone())
+        }
+
+        fn read(&self, path: &str) -> Result<Vec<u8>, String> {
+            self.record(format!("read {path}"));
+            Ok(b"data".to_vec())
+        }
+
+        fn write(&self, path: &str, _bytes: &[u8]) -> Result<(), String> {
+            self.record(format!("write {path}"));
+            Ok(())
+        }
+
+        fn create_dir(&self, path: &str) -> Result<(), String> {
+            self.record(format!("create_dir {path}"));
+            Ok(())
+        }
+
+        fn delete(&self, path: &str) -> Result<(), String> {
+            self.record(format!("delete {path}"));
+            Ok(())
+        }
+
+        fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+            self.record(format!("rename {from} -> {to}"));
+            Ok(())
+        }
+
+        fn copy(&self, from: &str, to: &str) -> Result<(), String> {
+            self.record(format!("copy {from} -> {to}"));
+            Ok(())
+        }
+
+        fn stat(&self, path: &str) -> Result<crate::storage_backend::StorageStat, String> {
+            self.record(format!("stat {path}"));
+            Ok(crate::storage_backend::StorageStat::default())
+        }
+    }
+
+    /// Replace 策略下把条目粘贴回自己所在的目录:必须在 `delete` 之前就失败,
+    /// 否则那个 `delete` 删掉的就是源文件本身。
+    #[test]
+    fn storage_replace_into_same_directory_deletes_nothing() {
+        let backend = RecordingBackend::with_file("/notes", "same.txt");
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/same.txt".to_string()],
+            "/notes",
+            false,
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert_eq!(
+            result,
+            Err("Cannot replace a file or folder with itself".to_string())
+        );
+        assert!(backend.calls().is_empty(), "{:?}", backend.calls());
+    }
+
+    /// 移动到自身所在目录同样是空操作,不能走到 `rename`。
+    #[test]
+    fn storage_move_into_same_directory_renames_nothing() {
+        let backend = RecordingBackend::with_file("/notes", "same.txt");
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/same.txt".to_string()],
+            "/notes/",
+            true,
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert!(result.is_err());
+        assert!(backend.calls().is_empty(), "{:?}", backend.calls());
+    }
+
+    /// 一批里只要有一个是自我目标,整批都不执行 —— 部分执行会留下半搬移状态。
+    #[test]
+    fn storage_self_target_rejects_the_whole_batch() {
+        let backend = RecordingBackend::with_file("/notes", "same.txt");
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &[
+                "/notes/other.txt".to_string(),
+                "/notes/same.txt".to_string(),
+            ],
+            "/notes",
+            false,
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert!(result.is_err());
+        assert!(backend.calls().is_empty(), "{:?}", backend.calls());
+    }
+
+    /// 真正跨目录的搬移仍然按 Replace 语义先删同名目标再复制。
+    #[test]
+    fn storage_copy_across_directories_still_replaces() {
+        let backend = RecordingBackend::with_file("/archive", "same.txt");
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/same.txt".to_string()],
+            "/archive",
+            false,
+            super::SftpConflictStrategy::Replace,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "read_dir /archive".to_string(),
+                "delete /archive/same.txt".to_string(),
+                "copy /notes/same.txt -> /archive/same.txt".to_string(),
+            ]
+        );
     }
 }

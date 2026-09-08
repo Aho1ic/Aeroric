@@ -85,6 +85,7 @@ pub(crate) async fn agent_config_list() -> Result<Value, String> {
                 "DeepSeek Harness",
                 crate::app_settings::AgentFamily::Dsh,
             ),
+            builtin("omp", "oh-my-pi", crate::app_settings::AgentFamily::Omp),
         ];
         for profile in &settings.custom_agents {
             if profile.id.is_empty() {
@@ -455,6 +456,49 @@ mod tests {
 
         let view = profile_view(&profile, false);
         assert_eq!(view["family"], "dsh");
+        assert_eq!(view["codexLike"], false);
+    }
+
+    #[test]
+    fn agent_config_list_includes_built_in_omp() {
+        let listed = tauri::async_runtime::block_on(agent_config_list()).expect("list");
+        let agents = listed["agents"].as_array().expect("agents");
+        let omp = agents
+            .iter()
+            .find(|entry| entry["id"] == "omp")
+            .expect("内置 omp 必须出现在 agentConfig.list 里");
+        assert_eq!(omp["family"], "omp");
+        assert_eq!(omp["label"], "oh-my-pi");
+        assert_eq!(omp["codexLike"], false);
+        for id in ["claude", "codex", "dsh"] {
+            assert!(
+                agents.iter().any(|entry| entry["id"] == id),
+                "missing built-in {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_view_exposes_omp_as_an_explicit_family() {
+        let profile = CustomAgentProfile {
+            id: "my-omp".to_string(),
+            label: "My Pi".to_string(),
+            path: "omp".to_string(),
+            codex_like: false,
+            family: "omp".to_string(),
+            config_lang: "yaml".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: vec!["gpt-5.3-codex".to_string()],
+            enable_1m_context: false,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            username: String::new(),
+            password: String::new(),
+        };
+
+        let view = profile_view(&profile, false);
+        assert_eq!(view["family"], "omp");
         assert_eq!(view["codexLike"], false);
     }
 

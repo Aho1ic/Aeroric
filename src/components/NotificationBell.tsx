@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { NotificationItem, ReleaseInstallResult, ReleaseUpdatePrepareResult } from "../types";
 import { useNotifications } from "../hooks/useNotifications";
 import { useI18n } from "../i18n";
-import { flushTasksBeforeExit } from "../taskFlush";
+import { flushPendingSavesBeforeExit } from "../taskFlush";
 import s from "../styles";
 
 const notificationBodyStyle: CSSProperties = {
@@ -118,7 +118,7 @@ function NotificationEntry({
 
     setRestarting(true);
     try {
-      await flushTasksBeforeExit();
+      await flushPendingSavesBeforeExit();
       const result = await invoke<ReleaseInstallResult>("restart_and_install_release_update", {
         tagName: releaseTag,
       });

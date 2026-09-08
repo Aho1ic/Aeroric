@@ -2599,7 +2599,8 @@ pub async fn resume_task(
             std::path::Path::new(&project_path),
             &session_id,
         ) {
-            crate::session_omp::register_omp_session(&app, &task_id, &resolved_id, &path);
+            // 这里的路径是显式解析出来的,不参与 watcher 之间的认领竞争:返回值无意义。
+            let _ = crate::session_omp::register_omp_session(&app, &task_id, &resolved_id, &path);
         }
     } else if !use_hooks {
         // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)

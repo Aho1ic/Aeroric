@@ -6,7 +6,7 @@
  * - `mode="modal"`:首页项目卡片 ＋ 触发的底部抽屉,`lockedProjectId` 锁定项目、不显示选择器
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -17,7 +17,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { BrainCircuit, BookmarkPlus, Gauge, Zap } from "lucide-react-native";
+import { BrainCircuit, BookmarkPlus, Gauge, Sigma, Zap } from "lucide-react-native";
 import { t } from "../i18n";
 import { agentFamilyOf, reasoningOptionsForFamily } from "../agent-family";
 import { useConnection } from "../state/connection-context";
@@ -42,7 +42,7 @@ import { ANTHROPIC_BRAND, AnthropicIcon, OpenAIIcon } from "../ui/brand-icons";
 import { Button, Field } from "../ui/primitives";
 import { radii, spacing, theme, typography } from "../ui/theme";
 
-/** 两栏各默认显示 5 行，更多配置在各自列内滚动。 */
+/** 每列默认显示 5 行，更多配置在各自列内滚动。 */
 const AGENT_ROW_HEIGHT = 40;
 const AGENT_LIST_MAX_HEIGHT = AGENT_ROW_HEIGHT * 5 + 4 * 4 + 8;
 
@@ -64,6 +64,65 @@ function defaultSelectionForFamily(family: AgentFamily): AgentTaskSelection {
   return family === "dsh"
     ? { ...DEFAULT_AGENT_TASK_SELECTION, reasoningEffort: "high" }
     : DEFAULT_AGENT_TASK_SELECTION;
+}
+
+/**
+ * 一族 agent 的选择列。
+ *
+ * 抽出来是因为现在有四族(claude / codex / dsh / omp),四份逐字相同的 35 行 JSX 会让
+ * 「加一族」变成「再抄一遍」,而抄漏一处的表现是那一列的选中态和别人不一样。
+ */
+function AgentFamilyColumn({
+  icon,
+  title,
+  choices,
+  selectedId,
+  onSelect,
+}: {
+  icon: ReactNode;
+  title: string;
+  choices: AgentChoice[];
+  selectedId: string;
+  onSelect: (choice: AgentChoice) => void;
+}) {
+  return (
+    <View style={styles.agentColumn}>
+      <View style={styles.agentColumnHeader}>
+        {icon}
+        <Text style={styles.agentColumnTitle}>{title}</Text>
+      </View>
+      <ScrollView
+        style={styles.agentList}
+        contentContainerStyle={styles.agentRows}
+        nestedScrollEnabled
+        directionalLockEnabled
+        keyboardShouldPersistTaps="handled"
+      >
+        {choices.length > 0 ? (
+          choices.map((choice) => (
+            <AnimatedPressable
+              key={choice.id}
+              style={[styles.agentRow, selectedId === choice.id && styles.agentRowActive]}
+              onPress={() => onSelect(choice)}
+              accessibilityRole="button"
+              accessibilityLabel={choice.label}
+              accessibilityState={{ selected: selectedId === choice.id }}
+            >
+              <Text
+                style={[styles.agentRowText, selectedId === choice.id && styles.agentRowTextActive]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {choice.label}
+              </Text>
+            </AnimatedPressable>
+          ))
+        ) : (
+          <Text style={styles.agentEmpty}>—</Text>
+        )}
+      </ScrollView>
+    </View>
+  );
 }
 
 function normalizeModels(rawModels: string[]): string[] {
@@ -175,6 +234,10 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
   );
   const dshAgents = useMemo(
     () => agents.filter((choice) => agentFamilyOf(choice) === "dsh"),
+    [agents],
+  );
+  const ompAgents = useMemo(
+    () => agents.filter((choice) => agentFamilyOf(choice) === "omp"),
     [agents],
   );
   const selectedAgent = useMemo(() => agents.find((item) => item.id === agent), [agent, agents]);
@@ -444,116 +507,34 @@ function NewTaskForm({ lockedProjectId, onClose, onCreated }: NewTaskFormProps) 
 
       <Text style={styles.sectionLabel}>{t("newTask.agent")}</Text>
       <View style={styles.agentColumns}>
-        <View style={styles.agentColumn}>
-          <View style={styles.agentColumnHeader}>
-            <AnthropicIcon size={15} color={ANTHROPIC_BRAND} />
-            <Text style={styles.agentColumnTitle}>{t("newTask.anthropic")}</Text>
-          </View>
-          <ScrollView
-            style={styles.agentList}
-            contentContainerStyle={styles.agentRows}
-            nestedScrollEnabled
-            directionalLockEnabled
-            keyboardShouldPersistTaps="handled"
-          >
-            {anthropicAgents.length > 0 ? (
-              anthropicAgents.map((choice) => (
-                <AnimatedPressable
-                  key={choice.id}
-                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
-                  onPress={() => selectAgent(choice)}
-                  accessibilityRole="button"
-                  accessibilityLabel={choice.label}
-                  accessibilityState={{ selected: agent === choice.id }}
-                >
-                  <Text
-                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {choice.label}
-                  </Text>
-                </AnimatedPressable>
-              ))
-            ) : (
-              <Text style={styles.agentEmpty}>—</Text>
-            )}
-          </ScrollView>
-        </View>
-
-        <View style={styles.agentColumn}>
-          <View style={styles.agentColumnHeader}>
-            <OpenAIIcon size={15} color={theme.text} />
-            <Text style={styles.agentColumnTitle}>{t("newTask.openai")}</Text>
-          </View>
-          <ScrollView
-            style={styles.agentList}
-            contentContainerStyle={styles.agentRows}
-            nestedScrollEnabled
-            directionalLockEnabled
-            keyboardShouldPersistTaps="handled"
-          >
-            {openaiAgents.length > 0 ? (
-              openaiAgents.map((choice) => (
-                <AnimatedPressable
-                  key={choice.id}
-                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
-                  onPress={() => selectAgent(choice)}
-                  accessibilityRole="button"
-                  accessibilityLabel={choice.label}
-                  accessibilityState={{ selected: agent === choice.id }}
-                >
-                  <Text
-                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {choice.label}
-                  </Text>
-                </AnimatedPressable>
-              ))
-            ) : (
-              <Text style={styles.agentEmpty}>—</Text>
-            )}
-          </ScrollView>
-        </View>
-
-        <View style={styles.agentColumn}>
-          <View style={styles.agentColumnHeader}>
-            <BrainCircuit size={15} color={theme.accent} />
-            <Text style={styles.agentColumnTitle}>{t("newTask.deepseek")}</Text>
-          </View>
-          <ScrollView
-            style={styles.agentList}
-            contentContainerStyle={styles.agentRows}
-            nestedScrollEnabled
-            directionalLockEnabled
-            keyboardShouldPersistTaps="handled"
-          >
-            {dshAgents.length > 0 ? (
-              dshAgents.map((choice) => (
-                <AnimatedPressable
-                  key={choice.id}
-                  style={[styles.agentRow, agent === choice.id && styles.agentRowActive]}
-                  onPress={() => selectAgent(choice)}
-                  accessibilityRole="button"
-                  accessibilityLabel={choice.label}
-                  accessibilityState={{ selected: agent === choice.id }}
-                >
-                  <Text
-                    style={[styles.agentRowText, agent === choice.id && styles.agentRowTextActive]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {choice.label}
-                  </Text>
-                </AnimatedPressable>
-              ))
-            ) : (
-              <Text style={styles.agentEmpty}>—</Text>
-            )}
-          </ScrollView>
-        </View>
+        <AgentFamilyColumn
+          icon={<AnthropicIcon size={15} color={ANTHROPIC_BRAND} />}
+          title={t("newTask.anthropic")}
+          choices={anthropicAgents}
+          selectedId={agent}
+          onSelect={selectAgent}
+        />
+        <AgentFamilyColumn
+          icon={<OpenAIIcon size={15} color={theme.text} />}
+          title={t("newTask.openai")}
+          choices={openaiAgents}
+          selectedId={agent}
+          onSelect={selectAgent}
+        />
+        <AgentFamilyColumn
+          icon={<BrainCircuit size={15} color={theme.accent} />}
+          title={t("newTask.deepseek")}
+          choices={dshAgents}
+          selectedId={agent}
+          onSelect={selectAgent}
+        />
+        <AgentFamilyColumn
+          icon={<Sigma size={15} color={theme.accent} />}
+          title={t("newTask.omp")}
+          choices={ompAgents}
+          selectedId={agent}
+          onSelect={selectAgent}
+        />
       </View>
 
       <Text style={styles.sectionLabel}>{t("newTask.model")}</Text>

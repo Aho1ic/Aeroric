@@ -250,6 +250,43 @@ impl StorageRemote<'_> {
             )
         })
     }
+
+    /// 一个相对路径**此刻**的身份:内容 hash,或超大文件的 `oversize:<size>` 标记。
+    ///
+    /// `list` 与 `head` 共用这一份实现。分成两处写的话它们会漂移,而漂移的症状是复验把
+    /// 「没变」判成「变了」,每轮都挂起。
+    fn identity_of(&self, rel_path: &str, listed_size: Option<u64>) -> Result<String, String> {
+        let size = self.resolve_size(rel_path, listed_size)?;
+        if size > MAX_HASH_BYTES {
+            // 超大文件不下载来算 hash。标记成 oversize,和本地扫描同一个口径 ——
+            // 本地也有同名文件时 diff 那边跳过它(两侧都算不出 hash),而它**在场**
+            // 这件事让它不会被判成远端删除。
+            return Ok(format!("{OVERSIZE_PREFIX}{size}"));
+        }
+        let abs = resolve_remote(&self.root, rel_path)?;
+        let bytes = self.backend.read(&abs)?;
+        Ok(hash64(&bytes).to_string())
+    }
+
+    /// 目标目录里这个名字的条目。存在性只认 `read_dir` —— 见模块文档,manifest 充当
+    /// 存在性依据会让一次没写成功变成「远端删除」,进而软删用户的笔记。
+    fn entry_at(
+        &self,
+        rel_path: &str,
+    ) -> Result<Option<crate::storage_backend::StorageEntry>, String> {
+        let abs = resolve_remote(&self.root, rel_path)?;
+        let (parent, name) = abs.rsplit_once('/').ok_or("Unsafe remote path")?;
+        let parent = if parent.is_empty() { "/" } else { parent };
+        // 列不动父目录时当「看不到」。这里吞错是安全的:不一致的方向只会让动作挂起,
+        // 而「计划也认为不存在」的方向等同于今天的无条件写入(`put` 自己会建父目录),
+        // 新建远端子目录的第一次上传不能因为父目录还不存在就失败。
+        let Ok(entries) = self.backend.read_dir(parent) else {
+            return Ok(None);
+        };
+        Ok(entries
+            .into_iter()
+            .find(|entry| !entry.is_dir && entry.name == name))
+    }
 }
 
 impl RemoteFs for StorageRemote<'_> {
@@ -257,23 +294,13 @@ impl RemoteFs for StorageRemote<'_> {
         let files = self.list_files()?;
         let mut out = Vec::with_capacity(files.len());
         for (rel, listed_size) in files {
-            let size = self.resolve_size(&rel, listed_size)?;
-            if size > MAX_HASH_BYTES {
-                // 超大文件不下载来算 hash。标记成 oversize,和本地扫描同一个口径 ——
-                // 本地也有同名文件时 diff 那边跳过它(两侧都算不出 hash),而它**在场**
-                // 这件事让它不会被判成远端删除。
-                out.push(RemoteEntry {
-                    path: rel,
-                    hash: format!("{OVERSIZE_PREFIX}{size}"),
-                    device: String::new(),
-                    seq: 0,
-                });
-                continue;
-            }
-            let abs = resolve_remote(&self.root, &rel)?;
-            let bytes = self.backend.read(&abs)?;
-            let hash = hash64(&bytes).to_string();
-            let stamp = self.manifest().matching_hash(&rel, &hash);
+            let hash = self.identity_of(&rel, listed_size)?;
+            // oversize 标记不是内容 hash,拿它去查 manifest 只会得到一个没有意义的命中。
+            let stamp = if hash.starts_with(OVERSIZE_PREFIX) {
+                None
+            } else {
+                self.manifest().matching_hash(&rel, &hash)
+            };
             out.push(RemoteEntry {
                 path: rel,
                 hash,
@@ -284,6 +311,13 @@ impl RemoteFs for StorageRemote<'_> {
             });
         }
         Ok(out)
+    }
+
+    fn head(&self, path: &str) -> Result<Option<String>, String> {
+        let Some(entry) = self.entry_at(path)? else {
+            return Ok(None);
+        };
+        self.identity_of(path, entry.size).map(Some)
     }
 
     fn get(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -951,6 +985,53 @@ mod tests {
             listed[0].hash,
             format!("{OVERSIZE_PREFIX}{}", MAX_HASH_BYTES + 1),
             "超过上限就只记尺寸,不下载来算 hash"
+        );
+    }
+
+    #[test]
+    fn head_agrees_with_list_on_ordinary_and_oversize_files() {
+        // `head` 与 `list` 必须共用同一份身份计算。漂移的症状是复验把「没变」判成「变了」,
+        // 每轮都挂起。
+        let backend = FakeBackend::new();
+        backend.put_file("/notes/a.md", b"alpha");
+        backend.put_file("/notes/big.bin", b"stub");
+        backend
+            .inner
+            .lock()
+            .expect("lock")
+            .size_override
+            .insert("/notes/big.bin".to_string(), MAX_HASH_BYTES + 1);
+
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        let listed = remote.list().expect("list");
+        let ordinary = listed.iter().find(|e| e.path == "a.md").expect("ordinary");
+        let oversize = listed
+            .iter()
+            .find(|e| e.path == "big.bin")
+            .expect("oversize");
+
+        assert_eq!(
+            remote.head("a.md").expect("head ordinary"),
+            Some(ordinary.hash.clone())
+        );
+        assert_eq!(
+            remote.head("big.bin").expect("head oversize"),
+            Some(oversize.hash.clone())
+        );
+        assert!(oversize.hash.starts_with(OVERSIZE_PREFIX));
+        assert_eq!(remote.head("missing.md").expect("head missing"), None);
+    }
+
+    #[test]
+    fn head_treats_a_missing_parent_as_absent() {
+        // 新建远端子目录的第一次上传:父目录还不存在,`read_dir` 会失败。那必须是
+        // 「看不到」而不是错误,否则这条上传永远走不到 `put`。
+        let backend = FakeBackend::new();
+        let remote = StorageRemote::open(&backend, "/notes", "dev-1", 7);
+        assert_eq!(
+            remote.head("nested/new.md").expect("head"),
+            None,
+            "还不存在的父目录不能让 head 失败"
         );
     }
 

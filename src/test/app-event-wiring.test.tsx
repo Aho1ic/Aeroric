@@ -21,7 +21,7 @@ interface Subscription {
   unlisten: ReturnType<typeof vi.fn>;
 }
 
-const { invokeMock, subscriptions, closeRequestedHandlers, flushTasksBeforeExitMock } = vi.hoisted(
+const { invokeMock, subscriptions, closeRequestedHandlers, flushPendingSavesMock } = vi.hoisted(
   () => ({
     invokeMock: vi.fn(),
     subscriptions: [] as Array<{
@@ -30,7 +30,7 @@ const { invokeMock, subscriptions, closeRequestedHandlers, flushTasksBeforeExitM
       unlisten: ReturnType<typeof vi.fn>;
     }>,
     closeRequestedHandlers: [] as Array<(event: { preventDefault: () => void }) => void>,
-    flushTasksBeforeExitMock: vi.fn(),
+    flushPendingSavesMock: vi.fn(),
   }),
 );
 
@@ -87,7 +87,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   })),
 }));
 vi.mock("../taskFlush", () => ({
-  flushTasksBeforeExit: flushTasksBeforeExitMock,
+  flushPendingSavesBeforeExit: flushPendingSavesMock,
 }));
 // 纯装饰性 canvas 动画,依赖 jsdom 没实现的 Path2D/DOMMatrix。
 vi.mock("../components/recursive-hero-effect/RecursiveHeroCanvas", () => ({
@@ -237,8 +237,8 @@ beforeEach(() => {
   subscriptions.length = 0;
   closeRequestedHandlers.length = 0;
   invokeMock.mockReset();
-  flushTasksBeforeExitMock.mockReset();
-  flushTasksBeforeExitMock.mockResolvedValue(undefined);
+  flushPendingSavesMock.mockReset();
+  flushPendingSavesMock.mockResolvedValue(undefined);
   installInvokeDispatcher({});
 });
 
@@ -294,7 +294,7 @@ describe("App 装配层:全局事件订阅", () => {
 describe("App 装配层:退出前任务落盘", () => {
   it("普通退出事件等待刷新后才调用授权退出 command", async () => {
     let releaseFlush!: () => void;
-    flushTasksBeforeExitMock.mockImplementationOnce(
+    flushPendingSavesMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseFlush = resolve;
@@ -314,7 +314,7 @@ describe("App 装配层:退出前任务落盘", () => {
 
   it("重启事件等待刷新后调用授权重启 command", async () => {
     let releaseFlush!: () => void;
-    flushTasksBeforeExitMock.mockImplementationOnce(
+    flushPendingSavesMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseFlush = resolve;
@@ -333,7 +333,7 @@ describe("App 装配层:退出前任务落盘", () => {
   });
 
   it("非 macOS 窗口关闭会阻止默认关闭且保存失败时不退出", async () => {
-    flushTasksBeforeExitMock.mockRejectedValueOnce(new Error("disk full"));
+    flushPendingSavesMock.mockRejectedValueOnce(new Error("disk full"));
     renderApp();
     await waitForSubscriptions();
     const preventDefault = vi.fn();
@@ -342,7 +342,7 @@ describe("App 装配层:退出前任务落盘", () => {
     closeRequestedHandlers[0]({ preventDefault });
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(flushTasksBeforeExitMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(flushPendingSavesMock).toHaveBeenCalledTimes(1));
     expect(invokeMock).not.toHaveBeenCalledWith("exit_app_after_task_flush");
   });
 });

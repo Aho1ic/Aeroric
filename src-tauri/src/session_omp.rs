@@ -18,18 +18,25 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::session::{OmpSessionInfo, SessionContent, SessionMessage};
 use crate::TaskManager;
 
-pub(crate) fn register_omp_session(
-    app: &AppHandle,
+/// 认领一条 omp 会话文件并广播给前端。
+///
+/// 返回**是否由本次调用认领成功**。`false` 说明这条路径已经属于别的任务 —— 同项目下多个
+/// omp 任务会扫到同一个目录,谁先落盘谁先被看到。调用方(watcher)必须据此继续等自己的文件
+/// 出现,而不是把别人的会话当成自己的然后退出。
+pub(crate) fn register_omp_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_id: &str,
     session_id: &str,
     session_path: &Path,
-) {
+) -> bool {
     let path_string = session_path.to_string_lossy().into_owned();
     {
         let tm = app.state::<TaskManager>();
         let mut claimed = tm.claimed_session_paths.lock();
+        // 插入是原子的:即使两个 watcher 在同一瞬间都看到这条未认领的路径,也只有一个能
+        // 拿到它。这正是返回值要覆盖的竞态。
         if !claimed.insert(path_string.clone()) {
-            return;
+            return false;
         }
         tm.omp_sessions.lock().insert(
             task_id.to_string(),
@@ -49,6 +56,7 @@ pub(crate) fn register_omp_session(
             "family": "omp",
         }),
     );
+    true
 }
 
 /// omp 会话目录名编码(对应 omp 官方 `session-paths.ts` 的 `getDefaultSessionDirName`):
@@ -191,20 +199,26 @@ pub(crate) fn resolve_omp_session_ref(
     None
 }
 
-/// 扫描 sessions 目录,返回 mtime 晚于 `since_ms` 的最新 `.jsonl` 会话文件。
-pub(crate) fn discover_omp_session_since(
-    agent: &str,
-    project_path: &Path,
+/// 在一个会话目录里挑 mtime 晚于 `since_ms` 的最新 `.jsonl`。
+///
+/// `claimed` 非空时跳过其中的路径。会话恢复入口按时间兜底发现,不该过滤(那条路径本来就是
+/// 它自己的);watcher 必须过滤,否则同项目下的第二个任务会认领第一个任务的会话。
+///
+/// 接目录而不接 `(agent, project_path)`:目录解析要读真实 home,接进来就没法在测试里
+/// 摆出「一条已认领 + 一条更旧的未认领」这个局面,而那正是要防的那个 bug。
+fn newest_omp_session_in_dir(
+    dir: &Path,
     since_ms: u128,
+    claimed: Option<&std::collections::HashSet<String>>,
 ) -> Option<(String, PathBuf)> {
-    let dir = omp_sessions_dir_for(agent)
-        .ok()?
-        .join(omp_project_dir_name(project_path));
     let entries = fs::read_dir(dir).ok()?;
     let mut best: Option<(SystemTime, PathBuf)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if claimed.is_some_and(|claimed| claimed.contains(path.to_string_lossy().as_ref())) {
             continue;
         }
         // 单个条目元数据异常只跳过,不能让整个发现流程返回 None。
@@ -232,13 +246,50 @@ pub(crate) fn discover_omp_session_since(
     Some((session_id, path))
 }
 
+fn omp_project_sessions_dir(agent: &str, project_path: &Path) -> Option<PathBuf> {
+    Some(
+        omp_sessions_dir_for(agent)
+            .ok()?
+            .join(omp_project_dir_name(project_path)),
+    )
+}
+
+/// 按 mtime 取最新的会话文件,**不**过滤已认领。会话恢复入口用它。
+pub(crate) fn discover_omp_session_since(
+    agent: &str,
+    project_path: &Path,
+    since_ms: u128,
+) -> Option<(String, PathBuf)> {
+    let dir = omp_project_sessions_dir(agent, project_path)?;
+    newest_omp_session_in_dir(&dir, since_ms, None)
+}
+
+/// 同上,但跳过已被其他任务认领的路径。watcher 用它。
+pub(crate) fn discover_unclaimed_omp_session_since<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    agent: &str,
+    project_path: &Path,
+    since_ms: u128,
+) -> Option<(String, PathBuf)> {
+    let dir = omp_project_sessions_dir(agent, project_path)?;
+    let claimed = {
+        let tm = app.state::<TaskManager>();
+        let claimed = tm.claimed_session_paths.lock().clone();
+        claimed
+    };
+    newest_omp_session_in_dir(&dir, since_ms, Some(&claimed))
+}
+
 /// omp 会话 watcher:会话文件懒创建(首个 assistant 消息才落盘),因此轮询会话
-/// 目录直到文件出现、任务已被别处认领、或 PTY 进程退出。
+/// 目录直到**自己的**文件出现、任务已被别处认领、或 PTY 进程退出。
 ///
 /// 与 dsh watcher(`session_dsh.rs`)的差别在预算:dsh 是 headless 一次性进程,
 /// 文件启动即建,2 分钟固定宽限足够;omp 是交互式 TUI,用户可能空闲很久才发第一
 /// 条消息,固定截止会让长会话永远挂不上。所以这里以进程存活为界,并在前 2 分钟
 /// 之后把轮询间隔从 500ms 放宽到 5s —— 空闲会话不该每秒扫两次目录。
+///
+/// 同项目下的多个 omp 任务共用一个会话目录。所以发现要跳过已认领的路径,而认领本身
+/// 还可能输给同一瞬间的另一个 watcher —— 那时不能退出,要继续等自己的文件出现。
 pub(crate) fn spawn_omp_session_watcher(
     app: AppHandle,
     task_id: String,
@@ -254,9 +305,10 @@ pub(crate) fn spawn_omp_session_watcher(
                     return;
                 }
                 if !tm.child_handles.lock().contains_key(&task_id) {
-                    // 进程已退出:再发现一次,秒退的短会话也能补挂。
+                    // 进程已退出:再发现一次,秒退的短会话也能补挂。这是最后一次机会,
+                    // 认领输了也只能收摊 —— 进程都没了,不会再有属于自己的文件出现。
                     if let Some((session_id, path)) =
-                        discover_omp_session_since(&agent, &project_path, since_ms)
+                        discover_unclaimed_omp_session_since(&app, &agent, &project_path, since_ms)
                     {
                         register_omp_session(&app, &task_id, &session_id, &path);
                     }
@@ -264,10 +316,12 @@ pub(crate) fn spawn_omp_session_watcher(
                 }
             }
             if let Some((session_id, path)) =
-                discover_omp_session_since(&agent, &project_path, since_ms)
+                discover_unclaimed_omp_session_since(&app, &agent, &project_path, since_ms)
             {
-                register_omp_session(&app, &task_id, &session_id, &path);
-                return;
+                // 认领成功才收工。失败说明这条路径刚被别的任务拿走,自己的还没落盘。
+                if register_omp_session(&app, &task_id, &session_id, &path) {
+                    return;
+                }
             }
             thread::sleep(if tick < 240 {
                 Duration::from_millis(500)
@@ -507,6 +561,123 @@ mod tests {
         assert_eq!(
             omp_session_id_from_file_name(Path::new("garbage.jsonl")),
             None
+        );
+    }
+
+    fn touch_session(dir: &Path, name: &str, mtime_offset_secs: u64) -> PathBuf {
+        let path = dir.join(name);
+        let file = fs::File::create(&path).expect("create session");
+        // 显式设 mtime 摆出「已认领的那条更新」这个局面。靠写入顺序 + sleep 也能凑出来,
+        // 但那样断言就依赖文件系统的时间精度了。
+        let when = SystemTime::UNIX_EPOCH + Duration::from_secs(1_760_000_000 + mtime_offset_secs);
+        file.set_modified(when).expect("set mtime");
+        path
+    }
+
+    /// **R7 的核心。** 同项目下的第二个 omp 任务不能认领第一个任务的会话文件。
+    ///
+    /// 只按 mtime 取最新的话,第二个 watcher 会选中已被认领的那条(它更新),然后退出;
+    /// 自己的文件随后落盘也不再有人来绑。
+    #[test]
+    fn discovery_skips_a_session_another_task_already_claimed() {
+        let dir = std::env::temp_dir().join(format!("aeroric-omp-claim-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let mine = touch_session(&dir, "2026-09-08T10-00-00_mine.jsonl", 10);
+        let theirs = touch_session(&dir, "2026-09-08T10-05-00_theirs.jsonl", 20);
+
+        // 不过滤时取到的是更新的那条 —— 也就是别人的。
+        assert_eq!(
+            newest_omp_session_in_dir(&dir, 0, None).map(|(_, path)| path),
+            Some(theirs.clone())
+        );
+
+        let claimed: std::collections::HashSet<String> = [theirs.to_string_lossy().into_owned()]
+            .into_iter()
+            .collect();
+        let found = newest_omp_session_in_dir(&dir, 0, Some(&claimed));
+        assert_eq!(
+            found.as_ref().map(|(_, path)| path.clone()),
+            Some(mine),
+            "已被认领的那条必须跳过,即使它更新"
+        );
+        assert_eq!(found.map(|(id, _)| id).as_deref(), Some("mine"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 全部都被认领时返回 `None` —— watcher 据此继续等,而不是拿别人的顶上。
+    #[test]
+    fn discovery_yields_nothing_when_every_session_is_claimed() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-omp-allclaim-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let only = touch_session(&dir, "2026-09-08T10-00-00_only.jsonl", 10);
+
+        let claimed: std::collections::HashSet<String> =
+            [only.to_string_lossy().into_owned()].into_iter().collect();
+        assert!(newest_omp_session_in_dir(&dir, 0, Some(&claimed)).is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 恢复入口不过滤:那条路径本来就是它自己的。
+    #[test]
+    fn recovery_discovery_does_not_filter_claimed_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-omp-recover-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let only = touch_session(&dir, "2026-09-08T10-00-00_only.jsonl", 10);
+
+        assert_eq!(
+            newest_omp_session_in_dir(&dir, 0, None).map(|(_, path)| path),
+            Some(only)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 认领一条已属于别人的路径必须返回 `false`,而不是静默成功。
+    ///
+    /// 静默 `return` 的后果不是「少一次注册」:watcher 拿不到信号,会以为自己绑上了然后
+    /// 退出循环,于是自己的会话文件出现之后再也没人来绑。
+    #[test]
+    fn claiming_a_taken_path_reports_failure() {
+        let app = tauri::test::mock_app();
+        app.manage(crate::TaskManager {
+            pty_masters: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            pty_writers: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            child_handles: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            pending_pty_sizes: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            cancelled_tasks: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            manually_completed_tasks: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            codex_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            claude_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            dsh_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            omp_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            claimed_session_paths: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            initial_input_signals: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            wsl_active_ids: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            codex_rpc: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+        });
+        let handle = app.handle().clone();
+        let path = Path::new("/tmp/aeroric-omp-shared/2026-09-08T10-00-00_shared.jsonl");
+
+        assert!(
+            register_omp_session(&handle, "task-one", "shared", path),
+            "第一个任务应当认领成功"
+        );
+        assert!(
+            !register_omp_session(&handle, "task-two", "shared", path),
+            "同一条路径不能被第二个任务再认领一次"
+        );
+
+        let tm = handle.state::<crate::TaskManager>();
+        assert!(tm.omp_sessions.lock().contains_key("task-one"));
+        assert!(
+            !tm.omp_sessions.lock().contains_key("task-two"),
+            "认领失败的任务不该留下会话绑定"
         );
     }
 

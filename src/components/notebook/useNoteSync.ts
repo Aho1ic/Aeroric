@@ -1,6 +1,6 @@
 /* 云盘同步面板的状态与动作。
  *
- * 抽成 hook 而不是写进 NotebookPanel(那个文件已经 3800 行)。这里有四件必须一处做对的事:
+ * 抽成 hook 而不是写进 NotebookPanel(那个文件已经 3800 行)。这里有五件必须一处做对的事:
  *
  * 1. **状态是两路数据拼的。** 目标列表(含 `autoSync`、上次同步时间)在库里,调度状态(退避、
  *    下一轮还有多久)在进程内存里。后端故意分成两条命令,因为状态栏这一路要高频问而不该每次
@@ -16,6 +16,11 @@
  *
  * 4. **`ask` 从不碰冲突文件。** 刷新走的是 `runSync(..., "ask")`:非冲突动作照做(那也正是
  *    守护线程刚做过的),冲突一律挂起。所以「刷新」在任何时候按都不会覆盖谁的内容。
+ *
+ * 5. **一次请求的结果只能写回发起它的那个远端。** `notebook_sync_run` 是整库同步,可以跑几
+ *    分钟;这期间用户完全可能切到另一个远端。晚到的响应若照原样写回 `report`,界面就会在 B
+ *    上显示 A 的冲突清单,而用户在那上面做的每条决定都会带着 A 的两个 hash 存到 B 上去。
+ *    所以这里有一个请求代次:换远端或换 vault 时自增,`await` 回来后代次不符就整份丢弃。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -202,32 +207,45 @@ export function useNoteSync(vault: string | null, enabled: boolean): NoteSyncApi
     };
   }, [enabled, reloadToken, remoteId, vault]);
 
-  /* 换远端时把上一轮的报告丢掉。那份报告讲的是另一个远端的冲突,留着会让用户对着 A 的
-     冲突清单给 B 做决定。`stale` 跟着清 —— 它讲的是刚被丢掉的那份报告。 */
+  /* 换远端(或换 vault)时把上一轮的报告丢掉。那份报告讲的是另一个远端的冲突,留着会让用户
+     对着 A 的冲突清单给 B 做决定。`stale` 跟着清 —— 它讲的是刚被丢掉的那份报告。
+
+     同一处自增请求代次,让"结果归属"只有**一个**失效来源。`running` 也在这里复位:一次
+     被丢弃的请求不会再去写它,而不复位的话切换后的新目标会永久显示「正在同步」。 */
+  const generationRef = useRef(0);
   useEffect(() => {
+    generationRef.current += 1;
     setReport(null);
     setStale(false);
-  }, [remoteId]);
+    setRunning(false);
+    setError(null);
+  }, [remoteId, vault]);
 
   const refresh = useCallback(() => setReloadToken((current) => current + 1), []);
 
   const sync = useCallback(
     (strategy?: "ask" | "local" | "remote") => {
       if (!vault || !remoteId) return;
+      /* 记下这次请求属于哪一代。`await` 之后 `remoteId` 可能已经换了,而这份结果讲的是
+         发起时那个远端 —— 写回去就是让用户对着 A 的冲突清单给 B 做决定。 */
+      const generation = generationRef.current;
       setRunning(true);
       setError(null);
       void (async () => {
         try {
           const next = await runSync(vault, remoteId, strategy ?? "ask");
+          if (generation !== generationRef.current) return;
           setReport(next);
           // 新报告落地,「可能过期」这件事就说完了。
           setStale(false);
         } catch (failure: unknown) {
+          if (generation !== generationRef.current) return;
           setError(messageOf(failure));
         } finally {
           /* 无论成败都重读一次:成功时决定可能被执行掉了(后端会删),失败时目标上的
-             `lastSyncAt` 也可能已经动过。 */
-          setRunning(false);
+             `lastSyncAt` 也可能已经动过。被丢弃的请求不复位 `running` —— 代次自增那一处
+             已经复位过,再写一次会把新一轮的「正在同步」抹掉。 */
+          if (generation === generationRef.current) setRunning(false);
           refresh();
         }
       })();

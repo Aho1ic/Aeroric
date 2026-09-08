@@ -80,7 +80,7 @@ import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from ".
 import { taskCommandName } from "./projectTarget";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
-import { flushTasksBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
+import { flushPendingSavesBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -645,7 +645,7 @@ function App() {
       if (lifecyclePromise) return lifecyclePromise;
       lifecyclePromise = (async () => {
         try {
-          await flushTasksBeforeExit();
+          await flushPendingSavesBeforeExit();
           await invoke(
             action === "restart" ? "restart_app_after_task_flush" : "exit_app_after_task_flush",
           );

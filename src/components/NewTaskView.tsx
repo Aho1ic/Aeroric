@@ -353,6 +353,7 @@ export function NewTaskView({
         targetAgent !== "claude" &&
         !isCodexLikeAgent(targetAgent, agentOptions) &&
         !isDshAgent(targetAgent, agentOptions) &&
+        !isOmpAgent(targetAgent, agentOptions) &&
         !option?.custom
       ) {
         modelRequestIdRef.current += 1;
@@ -584,7 +585,7 @@ export function NewTaskView({
   const contextFileName = agentFamily(agent, agentOptions) === "claude" ? "CLAUDE.md" : "AGENTS.md";
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
   const agentSupportsModelSelection =
-    agent === "claude" || codexLikeAgent || dshAgent || customAgent;
+    agent === "claude" || codexLikeAgent || dshAgent || ompAgent || customAgent;
   const modelSelectable = agentSupportsModelSelection;
   const availableEfforts = agentSupportsReasoningEffort(agent, agentOptions)
     ? availableReasoningEffortsForFamily(agentFamily(agent, agentOptions), selectedModel)

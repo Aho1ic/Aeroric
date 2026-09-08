@@ -132,6 +132,11 @@ export function persistProjects(
   queuedProjectPersist(projects, { onError, formatError });
 }
 
+/** 等项目保存队列排空。退出/重启前必须等它 —— 排着的快照是用户刚做的改动。 */
+export function flushProjects(): Promise<void> {
+  return queuedProjectPersist.flush();
+}
+
 const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
   invoke("save_project_tasks", { projectId, tasks }),
 );

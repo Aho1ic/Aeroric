@@ -1,6 +1,6 @@
 /* `useNoteSync` 的取数与事件。
  *
- * 五件"错了不报错、只是悄悄做错事"的:
+ * 六件"错了不报错、只是悄悄做错事"的:
  *
  *   1. **非 cloud 的远端不能进来。** `git` 走另一套命令,选中它之后按「立即同步」会拿一个
  *      `notebook_sync_run` 处理不了的目标去调。
@@ -8,7 +8,9 @@
  *      一轮变成两轮写。它只该标记过期 + 重查。
  *   3. **提交决定时那两个 hash 要原样来自本轮报告。** 自己造一个会让防覆盖的闸门失效。
  *   4. **换远端要丢掉上一轮的报告。** 否则用户对着 A 的冲突清单给 B 做决定。
- *   5. **状态轮询失败不能写进 `error`。** 那个位置是给用户动作的失败留的。
+ *   5. **晚到的响应只能写回发起它的那个远端。** 整库同步能跑几分钟,期间用户会切走;写错
+ *      归属的表现是 B 上显示 A 的冲突清单,而被丢弃的请求还会把 B 卡在「正在同步」。
+ *   6. **状态轮询失败不能写进 `error`。** 那个位置是给用户动作的失败留的。
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -289,6 +291,83 @@ describe("换远端", () => {
     // 落回而不是显示空白 —— 而且 `activeId` 自己也要跟着改,不能只让 `active` 兜。
     await waitFor(() => expect(result.current.activeId).toBe("r-cloud"));
     expect(result.current.active?.target.id).toBe("r-cloud");
+  });
+
+  it("切走之后,先前那个远端的迟到结果不写进界面", async () => {
+    /* `notebook_sync_run` 是整库同步,可以跑几分钟。用户切到 B 之后 A 的响应才回来 ——
+       照原样写回 `report` 的话,B 上显示的是 A 的冲突清单,而在那上面做的每条决定都会
+       带着 A 的两个 hash 存到 B 上去。 */
+    remotes = [cloudRemote, { ...cloudRemote, id: "r-two", root: "/dav/other" }];
+    let finishA: ((value: SyncReport) => void) | undefined;
+    const lateA = new Promise<SyncReport>((resolve) => {
+      finishA = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "notebook_sync_remotes") return remotes;
+      if (command === "notebook_sync_status") return [status()];
+      if (command === "notebook_sync_resolutions") return resolutions;
+      if (command === "notebook_sync_run") return lateA;
+      if (command === "notebook_sync_resolve") return null;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useNoteSync("/v", true));
+    await waitFor(() => expect(result.current.activeId).toBe("r-cloud"));
+    act(() => result.current.sync());
+    act(() => result.current.selectRemote("r-two"));
+    await waitFor(() => expect(result.current.activeId).toBe("r-two"));
+
+    await act(async () => {
+      finishA?.(report());
+      await lateA;
+    });
+
+    expect(result.current.activeId).toBe("r-two");
+    expect(result.current.report).toBeNull();
+    // 被丢弃的那次请求不能把新目标卡在「正在同步」上。
+    expect(result.current.running).toBe(false);
+    // 报告没落地,`decide` 就没有可回传的 hash —— 不能凭空拿 A 的那一对去提交给 B。
+    await act(async () => result.current.decide("a.md", { kind: "keepLocal" }));
+    expect(callsTo("notebook_sync_resolve")).toHaveLength(0);
+  });
+
+  it("切走之后,先前那个远端的失败也不写进界面", async () => {
+    remotes = [cloudRemote, { ...cloudRemote, id: "r-two", root: "/dav/other" }];
+    let failA: ((reason: Error) => void) | undefined;
+    const lateA = new Promise<SyncReport>((_resolve, reject) => {
+      failA = reject;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "notebook_sync_remotes") return remotes;
+      if (command === "notebook_sync_status") return [status()];
+      if (command === "notebook_sync_resolutions") return resolutions;
+      if (command === "notebook_sync_run") return lateA;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useNoteSync("/v", true));
+    await waitFor(() => expect(result.current.activeId).toBe("r-cloud"));
+    act(() => result.current.sync());
+    act(() => result.current.selectRemote("r-two"));
+    await waitFor(() => expect(result.current.activeId).toBe("r-two"));
+
+    await act(async () => {
+      failA?.(new Error("A 那边超时了"));
+      await lateA.catch(() => {});
+    });
+
+    // 这条错误讲的是 A,挂在 B 上会让用户以为刚选中的远端出了问题。
+    expect(result.current.error).toBeNull();
+    expect(result.current.running).toBe(false);
+  });
+
+  it("没切走时结果照常落地 —— 代次校验不能过严", async () => {
+    const { result } = renderHook(() => useNoteSync("/v", true));
+    await waitFor(() => expect(result.current.activeId).toBe("r-cloud"));
+    await act(async () => result.current.sync());
+    await waitFor(() => expect(result.current.report).not.toBeNull());
+    expect(result.current.running).toBe(false);
+    expect(result.current.error).toBeNull();
   });
 });
 

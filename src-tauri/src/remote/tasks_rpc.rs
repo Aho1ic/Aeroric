@@ -143,11 +143,19 @@ impl ApprovalRegistry {
 pub(crate) async fn agents_list() -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let settings = crate::app_settings::load_settings_internal();
-        let mut agents = vec![
-            json!({ "id": "claude", "label": "Claude Code", "codexLike": false, "family": "claude" }),
-            json!({ "id": "codex", "label": "Codex", "codexLike": true, "family": "codex" }),
-            json!({ "id": "dsh", "label": "DeepSeek Harness", "codexLike": false, "family": "dsh" }),
+        /// 手机新建任务页的内置族。漏掉一族的表现不是报错,是那一列永远空着。
+        const BUILTIN: &[(&str, &str, bool, &str)] = &[
+            ("claude", "Claude Code", false, "claude"),
+            ("codex", "Codex", true, "codex"),
+            ("dsh", "DeepSeek Harness", false, "dsh"),
+            ("omp", "oh-my-pi", false, "omp"),
         ];
+        let mut agents: Vec<Value> = BUILTIN
+            .iter()
+            .map(|(id, label, codex_like, family)| {
+                json!({ "id": id, "label": label, "codexLike": codex_like, "family": family })
+            })
+            .collect();
         for profile in &settings.custom_agents {
             if profile.id.is_empty() {
                 continue;
@@ -579,5 +587,25 @@ mod tests {
         assert!(broker
             .resolve(&request_id, Ok(json!({ "accepted": true })))
             .is_err());
+    }
+
+    #[test]
+    fn agents_list_includes_built_in_omp() {
+        let listed = tauri::async_runtime::block_on(agents_list()).expect("list");
+        let agents = listed.as_array().expect("array");
+        let omp = agents
+            .iter()
+            .find(|entry| entry["id"] == "omp")
+            .expect("内置 omp 必须出现在 agents.list 里");
+        assert_eq!(omp["family"], "omp");
+        assert_eq!(omp["label"], "oh-my-pi");
+        assert_eq!(omp["codexLike"], false);
+        // 旧三族不能被挤掉。
+        for id in ["claude", "codex", "dsh"] {
+            assert!(
+                agents.iter().any(|entry| entry["id"] == id),
+                "missing built-in {id}"
+            );
+        }
     }
 }
