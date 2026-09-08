@@ -120,6 +120,29 @@ pub(crate) fn omp_session_allowed_roots() -> Vec<PathBuf> {
     }
     if let Some(default_dir) = crate::platform::home_dir() {
         roots.push(default_dir.join(".omp").join("agent").join("sessions"));
+        roots.extend(omp_profile_session_roots(&default_dir));
+    }
+    roots
+}
+
+/// `<home>/.omp/profiles/<name>/agent/sessions` —— profile 作用域的会话目录。
+///
+/// 用户在 shell rc 里 export 过 `PI_PROFILE` / `OMP_PROFILE` 时,omp 的 agent dir
+/// 变成 `~/.omp/profiles/<name>/agent`(上游 `dirs.ts::resolveActiveAgentDirOverride`
+/// 让 profile 优先于 `PI_CODING_AGENT_DIR`),会话就落在那底下而非托管 home。
+///
+/// 漏掉这一支,历史视图会在 `session.rs` 的 allowed-roots 校验处拒掉真实存在的
+/// 会话文件,前端表现为"加载很久之后失败"。
+///
+/// 只放行 `<profile>/agent/sessions` 这一层,不是整个 `~/.omp`。
+fn omp_profile_session_roots(home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(entries) = fs::read_dir(home.join(".omp").join("profiles")) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                roots.push(entry.path().join("agent").join("sessions"));
+            }
+        }
     }
     roots
 }
@@ -432,6 +455,45 @@ fn parse_omp_tool_result_content(message: &Value) -> Vec<SessionContent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// profile 作用域的会话目录必须在放行名单里。
+    ///
+    /// 用户 shell rc 里 export 了 `PI_PROFILE=sota`,omp 就把会话写到
+    /// `~/.omp/profiles/sota/agent/sessions/`。这一支缺失时,历史视图会在
+    /// `session.rs` 的 allowed-roots 校验处拒掉真实存在的会话文件——前端只看到
+    /// "加载很久后失败",看不出是路径被拒。
+    #[test]
+    fn profile_scoped_session_dirs_are_allowed_roots() {
+        let home = std::env::temp_dir().join(format!("aeroric-omp-roots-{}", uuid::Uuid::new_v4()));
+        let profiles = home.join(".omp").join("profiles");
+        for name in ["sota", "just", "zzz"] {
+            fs::create_dir_all(profiles.join(name).join("agent").join("sessions")).unwrap();
+        }
+        // 非目录项不得变成 root。
+        fs::write(profiles.join("stray.txt"), b"x").unwrap();
+
+        let roots = omp_profile_session_roots(&home);
+
+        for name in ["sota", "just", "zzz"] {
+            let expected = profiles.join(name).join("agent").join("sessions");
+            assert!(roots.contains(&expected), "missing root for profile {name}");
+        }
+        assert_eq!(
+            roots.len(),
+            3,
+            "stray file must not become a root: {roots:?}"
+        );
+
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// 没有 profiles 目录时不得 panic,返回空。
+    #[test]
+    fn absent_profiles_dir_yields_no_roots() {
+        let home =
+            std::env::temp_dir().join(format!("aeroric-omp-noprof-{}", uuid::Uuid::new_v4()));
+        assert!(omp_profile_session_roots(&home).is_empty());
+    }
 
     #[test]
     fn session_id_extracts_from_omp_file_name() {
