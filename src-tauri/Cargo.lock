@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "aeroric"
-version = "1.4.7"
+version = "1.4.8"
 dependencies = [
  "axum",
  "base64 0.22.1",
