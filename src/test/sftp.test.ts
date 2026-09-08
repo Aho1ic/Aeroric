@@ -170,10 +170,35 @@ describe("sftp panel helpers", () => {
     expect(sftpKeyAction({ metaKey: false, key: "Backspace", code: "Backspace" })).toBe(null);
   });
 
-  it("formats the light terminal background as a readable light surface", async () => {
+  it("keeps every light-terminal ANSI color readable on the white surface", async () => {
     const { LIGHT_THEME } = await import("../components/terminalShared");
     expect(LIGHT_THEME.background).toBe("#ffffff");
-    expect(LIGHT_THEME.foreground).toBe("#24292f");
+
+    // 浅色终端跑 minimumContrastRatio = 4.5。调色板本身就该达标:否则 xterm 会在
+    // 渲染时按亮度盲混硬压,把 One Light 的色相搅浑。这条断言守的是"别再塞进一个
+    // 白底上看不清的色",单看色值肉眼是判不出来的。
+    const relativeLuminance = (hex: string): number => {
+      const channels = [1, 3, 5].map((offset) => {
+        const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const contrastOnWhite = (hex: string): number => (1 + 0.05) / (relativeLuminance(hex) + 0.05);
+
+    const inkKeys = Object.keys(LIGHT_THEME).filter(
+      (key) => key !== "background" && key !== "selectionBackground",
+    ) as (keyof typeof LIGHT_THEME)[];
+    expect(inkKeys.length).toBeGreaterThan(15);
+    for (const key of inkKeys) {
+      expect(contrastOnWhite(LIGHT_THEME[key]), `${key} on white`).toBeGreaterThanOrEqual(4.5);
+    }
+
+    // normal 与 bright 必须可区分,否则 TUI 的两档强调色会塌成一个色。
+    for (const hue of ["Red", "Green", "Yellow", "Blue", "Magenta", "Cyan"] as const) {
+      const normal = LIGHT_THEME[hue.toLowerCase() as keyof typeof LIGHT_THEME];
+      expect(LIGHT_THEME[`bright${hue}`], `bright${hue}`).not.toBe(normal);
+    }
   });
 
   it("detects existing destination names before copy and move operations", () => {

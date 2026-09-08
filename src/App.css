@@ -450,6 +450,66 @@
   }
 }
 
+/* oh-my-pi 的 π 徽标替代 Claude 动画。刻意不复用鲸鱼的游动关键帧:那是"生物在
+ * 水里摆动",而 π 是个常数,用呼吸式的缩放 + 辉光更贴它的气质,也让两族在首页
+ * 一眼可辨。 */
+.omp-pi-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(128px, 32vw);
+  aspect-ratio: 1;
+  margin-bottom: 10px;
+  position: relative;
+}
+
+/* 辉光垫在 π 下面,用 ::before 画,不额外插 DOM 节点。 */
+.omp-pi-hero::before {
+  content: "";
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--usage-omp) 26%, transparent) 0%,
+    transparent 70%
+  );
+  animation: aeroric-omp-pi-glow 3.2s ease-in-out infinite;
+}
+
+.omp-pi-hero img {
+  display: block;
+  width: 74%;
+  height: 74%;
+  object-fit: contain;
+  transform-origin: center;
+  animation: aeroric-omp-pi-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes aeroric-omp-pi-breathe {
+  0%,
+  100% {
+    transform: scale(0.94) translate3d(0, 1.5px, 0);
+  }
+
+  50% {
+    transform: scale(1.06) translate3d(0, -1.5px, 0);
+  }
+}
+
+@keyframes aeroric-omp-pi-glow {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
 @media (max-width: 760px) {
   .settings-modal-box {
     width: calc(100vw - 16px) !important;
@@ -1900,21 +1960,49 @@ body {
   box-sizing: border-box;
 }
 
-.dsh-terminal-surface .xterm-viewport {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-hint) 38%, transparent) transparent;
+/* 终端滚动条:所有终端(agent / dsh / omp / SSH)共用一套。
+ *
+ * 4px 轨道,拇指铺满整条并由 border-radius:999px 把上下收成半圆。
+ *
+ * **绝不要**在这里写 `scrollbar-width` / `scrollbar-color`。Safari/WKWebView 已
+ * 支持这两个标准属性,而一旦出现,WebKit 就放弃 `::-webkit-scrollbar` 自绘、退回
+ * 系统 overlay 滚动条 —— 那东西在静止时是隐形的(macOS 的"滚动时显示"),等于把
+ * 终端滚动条整条抹掉。Safari 实测:纯 webkit 规则可见 4.0px;同时写
+ * scrollbar-width:thin 则可见 0px。要给非 WebKit 引擎兜底,写在下面的
+ * `@supports not selector(::-webkit-scrollbar)` 里,别放进这条。
+ *
+ * 也不要用 `border:1px solid transparent` + `background-clip:padding-box` 去做内缩:
+ * 4px 轨道被两侧各吃掉 1px 只剩 2px,圆头在 2px 宽度上根本看不出来。 */
+.xterm-viewport::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
 
-.dsh-terminal-surface .xterm-viewport::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.dsh-terminal-surface .xterm-viewport::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 6px;
-  background-clip: padding-box;
-  background-color: color-mix(in srgb, var(--text-hint) 38%, transparent);
+.xterm-viewport::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--text-hint) 42%, transparent);
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-hint) 66%, transparent);
+}
+
+/* 轨道两端不留箭头按钮,否则 4px 轨道会被按钮挤成断续的三段。 */
+.xterm-viewport::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* 非 WebKit 引擎(Firefox 等)没有上面那套伪元素,用标准属性兜底。WebKit 命中
+ * `selector(::-webkit-scrollbar)`,不会进这一支,因此不会被 overlay 抹掉。 */
+@supports not selector(::-webkit-scrollbar) {
+  .xterm-viewport {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-hint) 42%, transparent) transparent;
+  }
 }
 
 .model-options-submenu[data-state="open"] {

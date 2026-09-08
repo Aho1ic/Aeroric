@@ -17,50 +17,79 @@ import type { ThemeVariant } from "../types";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
+/**
+ * 深色终端配色 = 本机 Ghostty 的 `~/.config/ghostty/themes/one-dark-pro`,逐值对齐。
+ *
+ * 只有 `background` 例外:Ghostty 是实色 `#1e2127`,这里保留 Aeroric 的毛玻璃
+ * `rgba(6,8,10,.94)`(与 `--terminal-bg` 同值,终端四周的内边距靠它才不露边)。
+ * 前景、光标、选区与 16 色 ANSI 全部取 Ghostty 的值 —— 它们才是"文字颜色",
+ * 也是用户在两边来回看时会直接比对的部分。
+ *
+ * 注意 `black` 是被上游刻意抬亮的 `#4b5263`(而非接近背景的 `#1b1d23`):
+ * 很多 TUI 用 ANSI 0 画分隔线与 dim 文字,压到接近背景就等于看不见。
+ */
 export const DARK_THEME = {
   background: "rgba(6, 8, 10, 0.94)",
-  foreground: "#d6dce8",
+  foreground: "#d7dae0",
   cursor: "#528bff",
-  selectionBackground: "#1f4662",
-  black: "#1b1d23",
-  red: "#e06c75",
-  green: "#98c379",
-  yellow: "#e5c07b",
-  blue: "#61afef",
-  magenta: "#c678dd",
-  cyan: "#56b6c2",
-  white: "#b8c0ce",
-  brightBlack: "#7b8494",
-  brightRed: "#e88388",
-  brightGreen: "#b0d48c",
-  brightYellow: "#f0cf8c",
-  brightBlue: "#79c0ff",
-  brightMagenta: "#d19aee",
-  brightCyan: "#6fc5d0",
-  brightWhite: "#eef1f7",
+  cursorAccent: "#1e2127",
+  selectionBackground: "#3e4451",
+  selectionForeground: "#e6e6e6",
+  black: "#4b5263",
+  red: "#e05561",
+  green: "#8cc265",
+  yellow: "#d18f52",
+  blue: "#4aa5f0",
+  magenta: "#c162de",
+  cyan: "#42b3c2",
+  white: "#d7dae0",
+  brightBlack: "#7f8899",
+  brightRed: "#ff616e",
+  brightGreen: "#a5e075",
+  brightYellow: "#f0a45d",
+  brightBlue: "#4dc4ff",
+  brightMagenta: "#de73ff",
+  brightCyan: "#4cd1e0",
+  brightWhite: "#e6e6e6",
 };
 
+/**
+ * 浅色终端配色 = One Light(One Dark Pro 的官方浅色同族)压暗到白底达标后的版本。
+ *
+ * 本机 Ghostty 只装了 `one-dark-pro`,没有浅色主题可抄,所以浅色取同一色系的
+ * One Light,保证两种模式看起来是同一个产品,而不是两套无关配色。
+ *
+ * One Light 的原值在白底上大多只有 3.2~4.2:1(red #e45649 = 3.67,green #50a14f
+ * = 3.21),达不到浅色模式的 4.5:1 门槛。这里保持 H/S、只压 L:normal 档到
+ * 5.6:1,bright 档到 4.6:1 —— 与旧的 GitHub 浅色一致地遵循"normal 更深、bright
+ * 更跳"。magenta 原值已有 6.11:1,压不出两档差异,故其 bright 反向提亮到 4.6:1。
+ * 若直接交给 xterm 的 minimumContrastRatio 自动压,它只按亮度盲混,会把色相搅乱。
+ *
+ * 刻意**不设** `selectionForeground`:浅色模式 minimumContrastRatio 是 4.5,
+ * xterm 会自己保证选区里文字可读;写死前景反而会把语法色全抹平。深色模式该值是
+ * 1(不自动调),所以那边必须照 Ghostty 显式给出选区前景。
+ */
 export const LIGHT_THEME = {
   background: "#ffffff",
-  foreground: "#24292f",
-  cursor: "#24292f",
+  foreground: "#383a42",
+  cursor: "#383a42",
   selectionBackground: "#b3d7ff",
-  black: "#24292f",
-  red: "#cf222e",
-  green: "#116329",
-  yellow: "#9a6700",
-  blue: "#0550ae",
-  magenta: "#8250df",
-  cyan: "#1b7c83",
-  white: "#3f3f46",
-  brightBlack: "#57606a",
-  brightRed: "#a40e26",
-  brightGreen: "#1a7f37",
-  brightYellow: "#633c01",
-  brightBlue: "#0969da",
-  brightMagenta: "#6639ba",
-  brightCyan: "#3192aa",
-  brightWhite: "#24292f",
+  black: "#383a42",
+  red: "#c52b1d",
+  green: "#3a7439",
+  yellow: "#8b5f01",
+  blue: "#165aef",
+  magenta: "#a626a4",
+  cyan: "#016e9d",
+  white: "#66676e",
+  brightBlack: "#4f525e",
+  brightRed: "#dd3121",
+  brightGreen: "#418341",
+  brightYellow: "#9d6b01",
+  brightBlue: "#306cf1",
+  brightMagenta: "#c62dc3",
+  brightCyan: "#017cb1",
+  brightWhite: "#383a42",
 };
 
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.

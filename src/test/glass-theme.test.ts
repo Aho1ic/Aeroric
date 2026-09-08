@@ -77,12 +77,22 @@ describe("shared frosted glass theme", () => {
   it("keeps the light terminal white while preserving themed variants", () => {
     expect(LIGHT_THEME.background).toBe("#ffffff");
     expect(DARK_THEME.background).toContain("rgba(");
-    expect(DARK_THEME.foreground).toBe("#d6dce8");
-    expect(DARK_THEME.white).toBe("#b8c0ce");
-    expect(DARK_THEME.brightBlack).toBe("#7b8494");
-    expect(DARK_THEME.brightWhite).toBe("#eef1f7");
-    expect(DARK_THEME.cursor).toBe("#528bff");
-    expect(DARK_THEME.selectionBackground).toBe("#1f4662");
     expect(EYECARE_THEME.background).toContain("rgba(");
+  });
+
+  // 深色终端逐值对齐 ~/.config/ghostty/themes/one-dark-pro。这里钉住的是"抄自
+  // Ghostty"这件事本身:改动任何一项都意味着两边不再一致,必须是有意为之。
+  // 不去读那个文件——测试不能依赖开发机上的用户配置。
+  it("mirrors the Ghostty One Dark Pro palette in dark mode", () => {
+    expect(DARK_THEME.foreground).toBe("#d7dae0");
+    expect(DARK_THEME.cursor).toBe("#528bff");
+    expect(DARK_THEME.cursorAccent).toBe("#1e2127");
+    expect(DARK_THEME.selectionBackground).toBe("#3e4451");
+    expect(DARK_THEME.selectionForeground).toBe("#e6e6e6");
+    // ANSI 0 被上游刻意抬亮,压回接近背景会让 TUI 的分隔线与 dim 文字消失。
+    expect(DARK_THEME.black).toBe("#4b5263");
+    expect(DARK_THEME.brightBlack).toBe("#7f8899");
+    expect(DARK_THEME.white).toBe("#d7dae0");
+    expect(DARK_THEME.brightWhite).toBe("#e6e6e6");
   });
 });

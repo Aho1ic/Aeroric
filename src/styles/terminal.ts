@@ -116,7 +116,30 @@ export const terminal = {
     flexDirection: "column" as const,
     position: "relative" as const,
   },
-  terminalContainer: { flex: 1, overflow: "hidden" as const, padding: "14px 16px 16px" },
+  /**
+   * 内边距的底色必须与终端自身一致,否则深色模式下 `--bg-panel`(rgba(12,15,19,.7))
+   * 与终端的 `--terminal-bg`(rgba(6,8,10,.94))并排,四周会出现一圈明显更亮的边框。
+   * 浅色/护眼模式同理,只是对比弱、不易察觉。
+   */
+  terminalContainer: {
+    flex: 1,
+    overflow: "hidden" as const,
+    padding: "14px 16px 16px",
+    background: "var(--terminal-bg)",
+  },
+  /**
+   * omp 的输入框是 TUI 自己画在最后一行的,贴着容器底边会显得没有落脚点。
+   * 额外垫高底部内边距,让输入框离窗口底边有一段留白。
+   *
+   * 只加**纵向**内边距:横向内边距会从 FitAddon 的可用宽度里扣,改了就改列数与
+   * 折行位置,而 omp 的 TUI 会把状态栏和边框画到最后一列。
+   */
+  terminalContainerOmp: {
+    flex: 1,
+    overflow: "hidden" as const,
+    padding: "14px 16px 28px",
+    background: "var(--terminal-bg)",
+  },
   interruptedSessionWrap: {
     flex: 1,
     minHeight: 0,

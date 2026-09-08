@@ -182,6 +182,7 @@ export function RunningView({
   const isInterrupted = task.status === "interrupted";
   const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
   const isDshSession = sessionOwner.family === "dsh";
+  const isOmpSession = sessionOwner.family === "omp";
   const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
   const rawPersistedSessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath;
   const persistedSessionId = sessionFields.sessionId ?? sessionFields.legacySessionId;
@@ -551,7 +552,7 @@ export function RunningView({
   };
 
   const terminalHistoryFallback = hasTerminalRestoreState ? (
-    <div style={s.terminalContainer}>
+    <div style={isOmpSession ? s.terminalContainerOmp : s.terminalContainer}>
       <TerminalView
         key={`${terminalViewKey}-history`}
         onInput={() => {}}
@@ -1017,7 +1018,13 @@ export function RunningView({
             {t("session.loading")}
           </div>
         ) : isActive || !sessionPath ? (
-          <div style={{ ...s.terminalContainer, display: "flex", flexDirection: "column" }}>
+          <div
+            style={{
+              ...(isOmpSession ? s.terminalContainerOmp : s.terminalContainer),
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
             {!isActive && !sessionPath && (
               <div
                 role="alert"

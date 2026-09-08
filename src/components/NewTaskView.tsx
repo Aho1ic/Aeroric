@@ -9,6 +9,7 @@ import {
   agentSupportsReasoningEffort,
   isCodexLikeAgent,
   isDshAgent,
+  isOmpAgent,
 } from "../agents";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import {
@@ -58,6 +59,7 @@ import {
 import claudeGif from "../assets/gif/claude.gif";
 import codexGif from "../assets/gif/codex.gif";
 import deepseekLogo from "../assets/deepseek.svg";
+import ompLogo from "../assets/omp.svg";
 import s from "../styles";
 import {
   availableReasoningEffortsForFamily,
@@ -577,6 +579,7 @@ export function NewTaskView({
 
   const codexLikeAgent = isCodexLikeAgent(agent, agentOptions);
   const dshAgent = isDshAgent(agent, agentOptions);
+  const ompAgent = isOmpAgent(agent, agentOptions);
   // dsh 读取 AGENTS.md/CLAUDE.md 两者(去重),UI 默认展示 AGENTS.md 入口。
   const contextFileName = agentFamily(agent, agentOptions) === "claude" ? "CLAUDE.md" : "AGENTS.md";
   const customAgent = agentOptions.some((option) => option.value === agent && option.custom);
@@ -997,6 +1000,10 @@ export function NewTaskView({
         {dshAgent ? (
           <div className="dsh-whale-hero" data-testid="dsh-whale-animation" aria-hidden="true">
             <img src={deepseekLogo} alt="" />
+          </div>
+        ) : ompAgent ? (
+          <div className="omp-pi-hero" data-testid="omp-pi-animation" aria-hidden="true">
+            <img src={ompLogo} alt="" />
           </div>
         ) : (
           <img src={codexLikeAgent ? codexGif : claudeGif} alt="" style={s.newTaskClaudeGif} />
