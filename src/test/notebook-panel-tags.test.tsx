@@ -357,8 +357,16 @@ describe("NotebookPanel", () => {
 
         submitRename(dialog, "job");
 
-        // 不重扫的话清单上还留着 `#work` 那一行,点它会展开一堆跳不到的引用。
-        await waitFor(() => expect(tagNames()).toEqual(["#job, 1 uses in 1 notes"]));
+        /* 不重扫的话清单上还留着 `#work` 那一行,点它会展开一堆跳不到的引用。
+
+           这一条比同组其他几条多等一跳:它们断言的是窗里的报告(重命名一返回就有),
+           而这里要等「重命名返回 → refreshTags 推进 token → effect 重跑 → vaultTags
+           返回 → setData」。同一个 3000ms 挂钟下链条长一倍,`test:coverage` 那一遍
+           (355 个文件并行 + 插桩,整体比裸跑慢 ~1.7x)就会在这一条上先超时。
+           放宽的是等待预算,不是断言本身 —— 列表必须真的变成 `#job` 才算过。 */
+        await waitFor(() => expect(tagNames()).toEqual(["#job, 1 uses in 1 notes"]), {
+          timeout: 10000,
+        });
         expect(harness.tagScanCalls).toBeGreaterThan(before);
       });
 
