@@ -108,6 +108,15 @@ function nextFrame(): Promise<void> {
   });
 }
 
+/**
+ * 假时钟版的 `nextFrame`:推进一个 rAF tick(sinon 的假 rAF 是 16ms 一帧),同时把
+ * microtask 冲干净。给那些既要按帧推进、又不能让 `WHEEL_REPAINT_GRACE_MS` 自己走完
+ * 的用例用 —— 真时钟下这两件事是赛跑,快慢由 CI 负载决定。
+ */
+async function advanceFrame(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(16);
+}
+
 function wheel(deltaY: number, init: WheelEventInit = {}) {
   const event = new WheelEvent("wheel", { deltaY, cancelable: true, ...init });
   const preventDefault = vi.spyOn(event, "preventDefault");
@@ -365,25 +374,39 @@ describe("attachTerminalWheelScroll", () => {
   it("waits for the agent's repaint before draining the queued tail", async () => {
     // 长尾仍然闭环:不管 agent 画完没有就按帧灌,我们会跑在它前面,画面变成
     // "憋一下、跳一段"。突发那一屏不受这条约束 —— 它是同步发的。
-    const { handler, replayed, repaint } = fakeTerminal("alternate", "vt200", {
-      rows: 16,
-      cellHeight: 16,
-      repaintSignal: true,
+    //
+    // 这一条必须用假时钟。真时钟下它是在赛跑:两个 rAF(jsdom 里 ~32ms)要跑在
+    // WHEEL_REPAINT_GRACE_MS(50ms)之前,只剩 ~18ms 余量。CI 上并行一满,两帧就
+    // 超过宽限期,于是队列按「超时兜底」正常放行 —— 断言看到 32 条,像是没在等重绘,
+    // 其实是等过头了。那条兜底本身由下一个用例守着。
+    // 假掉 performance 和 rAF 之后,nowMs() 和帧都归这里推,宽限期不会自己走完。
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "Date"],
     });
-    // 800/16 = 50 行,但单个事件被 MAX_WHEEL_LINES_PER_EVENT_SCREENS 截到 3 屏 = 48 行。
-    handler(wheel(800).event); // 48 行 → 突发 16,排队 32
-    const burst = replayed.length;
-    expect(burst).toBe(16);
+    try {
+      const { handler, replayed, repaint } = fakeTerminal("alternate", "vt200", {
+        rows: 16,
+        cellHeight: 16,
+        repaintSignal: true,
+      });
+      // 800/16 = 50 行,但单个事件被 MAX_WHEEL_LINES_PER_EVENT_SCREENS 截到 3 屏 = 48 行。
+      handler(wheel(800).event); // 48 行 → 突发 16,排队 32
+      const burst = replayed.length;
+      expect(burst).toBe(16);
 
-    // 突发之后就在等重绘:后续帧一条都不补,而不是继续加深管道深度。
-    await nextFrame();
-    await nextFrame();
-    expect(replayed).toHaveLength(burst);
+      // 突发之后就在等重绘:后续帧一条都不补,而不是继续加深管道深度。
+      // 两帧 32ms,离 50ms 的宽限期还差着 —— 这里不补发只能是因为在等信号。
+      await advanceFrame();
+      await advanceFrame();
+      expect(replayed).toHaveLength(burst);
 
-    // agent 画完了 → 放行下一批。
-    repaint();
-    await nextFrame();
-    expect(replayed.length).toBeGreaterThan(burst);
+      // agent 画完了 → 放行下一批。
+      repaint();
+      await advanceFrame();
+      expect(replayed.length).toBeGreaterThan(burst);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("advances without a repaint once the grace period lapses", async () => {
