@@ -411,14 +411,18 @@ fn agent_config_path_from_settings(
             .custom_agents
             .iter()
             .find(|profile| profile.id == agent)
-            .map(|profile| {
-                if profile.agent_family() == app_settings::AgentFamily::Dsh {
-                    app_settings::custom_agent_home(&profile.id)
-                        .ok()
-                        .map(|home| home.join("settings.yaml"))
-                } else {
-                    configured_path(&profile.path)
+            .map(|profile| match profile.agent_family() {
+                // profile.path 的语义是"可执行 wrapper 脚本"(见自定义 agent 表单提示),
+                // 不是配置文件——omp 家族用户常直接填 omp 二进制,读它只会报
+                // "stream did not contain valid UTF-8"。omp 家族的配置与内置 omp
+                // 一样固定在托管 home 的 config.yml。
+                app_settings::AgentFamily::Omp => {
+                    app_settings::default_builtin_agent_config_path("omp").ok()
                 }
+                app_settings::AgentFamily::Dsh => app_settings::custom_agent_home(&profile.id)
+                    .ok()
+                    .map(|home| home.join("settings.yaml")),
+                _ => configured_path(&profile.path),
             })
             .ok_or_else(|| format!("Unknown agent: {}", agent)),
     }

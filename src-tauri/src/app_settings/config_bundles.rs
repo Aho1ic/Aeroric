@@ -259,10 +259,13 @@ pub(super) fn collect_agent_config_bundle_agent(
         .find(|profile| profile.id == agent)
         .ok_or_else(|| format!("Unknown agent: {agent}"))?;
     let family = profile.agent_family();
-    let path = if family == AgentFamily::Dsh {
-        crate::dsh_home::dsh_home_for(&profile.id)?.join("settings.yaml")
-    } else {
-        PathBuf::from(normalize_config_path(profile.path.clone()))
+    // profile.path 是可执行 wrapper 路径,不是配置文件;omp / dsh 两族的实际配置
+    // 分别在托管 home 的 config.yml 与各自 home 的 settings.yaml(与
+    // config.rs::agent_config_path_from_settings 的解析保持一致)。
+    let path = match family {
+        AgentFamily::Dsh => crate::dsh_home::dsh_home_for(&profile.id)?.join("settings.yaml"),
+        AgentFamily::Omp => default_builtin_agent_config_path("omp")?,
+        _ => PathBuf::from(normalize_config_path(profile.path.clone())),
     };
     let config_present = config_content.is_some() || path.is_file();
     let config_content = match config_content {
