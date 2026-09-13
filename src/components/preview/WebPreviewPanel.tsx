@@ -10,7 +10,7 @@ import {
   remoteInvokeOptions,
 } from "../../hooks/useCancellableInvoke";
 import type { ListeningPort, RunProcessSnapshot, SshConnection } from "../../types";
-import { writeClipboardText } from "../file-explorer/clipboard";
+import { writeClipboardText } from "../../lib/clipboard";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { panelChrome } from "../../styles/panelChrome";
 import {

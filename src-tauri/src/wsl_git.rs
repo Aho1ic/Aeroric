@@ -1,6 +1,6 @@
 use crate::git::trim_output;
+use crate::git_path_guard::GitFlavor;
 use std::{
-    collections::HashSet,
     io::Write,
     process::{Output, Stdio},
 };
@@ -27,48 +27,23 @@ fn normalize_linux_project_path(linux_project_path: &str) -> Result<String, Stri
     }
 }
 
+// 路径 / revision 防御与参数构造统一在 `git_path_guard`(本地 git.rs、远端
+// remote_git.rs 共用同一份判定);这里保留 wsl 命名的委托别名,调用点与测试不动。
+
 fn validate_wsl_git_relative_path(file_path: &str) -> Result<(), String> {
-    if file_path.is_empty() {
-        return Err("File path must not be empty".to_string());
-    }
-    if file_path.starts_with('/') {
-        return Err("File path must be relative".to_string());
-    }
-    if file_path.split('/').any(|part| part == "." || part == "..") {
-        return Err("File path must stay inside the WSL git worktree".to_string());
-    }
-    if file_path.contains('\0') {
-        return Err("File path must not contain NUL bytes".to_string());
-    }
-    Ok(())
+    crate::git_path_guard::validate_git_relative_path(GitFlavor::Wsl, file_path)
 }
 
 fn is_protected_wsl_git_relative_path(file_path: &str) -> bool {
-    file_path
-        .split('/')
-        .find(|component| !component.is_empty())
-        .map(|component| {
-            component.eq_ignore_ascii_case(".git") || component.eq_ignore_ascii_case(".aeroric")
-        })
-        .unwrap_or(false)
+    crate::git_path_guard::is_protected_git_relative_path(file_path)
 }
 
 fn validate_wsl_git_discard_path(file_path: &str) -> Result<(), String> {
-    validate_wsl_git_relative_path(file_path)?;
-    if is_protected_wsl_git_relative_path(file_path) {
-        return Err("Refusing to delete protected project metadata".to_string());
-    }
-    Ok(())
+    crate::git_path_guard::validate_git_discard_path(GitFlavor::Wsl, file_path)
 }
 
 fn validate_wsl_git_revision(revision: &str) -> Result<(), String> {
-    if revision.is_empty() {
-        return Err("Git revision must not be empty".to_string());
-    }
-    if revision.starts_with('-') || revision.contains('\0') {
-        return Err("Invalid git revision".to_string());
-    }
-    Ok(())
+    crate::git_path_guard::validate_git_revision(revision)
 }
 
 fn build_wsl_git_command(linux_project_path: &str, args: &[String]) -> String {
@@ -120,79 +95,30 @@ fn run_wsl_git(
 }
 
 fn str_args(args: &[&str]) -> Vec<String> {
-    args.iter().map(|arg| (*arg).to_string()).collect()
-}
-
-fn unique_wsl_git_file_paths(file_paths: Vec<String>) -> Result<Vec<String>, String> {
-    let mut seen = HashSet::new();
-    let mut unique = Vec::new();
-    for file_path in file_paths {
-        validate_wsl_git_relative_path(&file_path)?;
-        if seen.insert(file_path.clone()) {
-            unique.push(file_path);
-        }
-    }
-    Ok(unique)
+    crate::git_path_guard::str_args(args)
 }
 
 fn wsl_git_path_args(base: &[&str], file_paths: Vec<String>) -> Result<Vec<String>, String> {
-    let file_paths = unique_wsl_git_file_paths(file_paths)?;
-    if file_paths.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut args = str_args(base);
-    args.push("--".to_string());
-    args.extend(file_paths);
-    Ok(args)
+    crate::git_path_guard::git_path_args(GitFlavor::Wsl, base, file_paths)
 }
 
 fn wsl_git_unstage_args(has_head: bool, file_paths: Vec<String>) -> Result<Vec<String>, String> {
-    if has_head {
-        wsl_git_path_args(&["restore", "--staged"], file_paths)
-    } else {
-        wsl_git_path_args(&["reset"], file_paths)
-    }
+    crate::git_path_guard::git_unstage_args(GitFlavor::Wsl, has_head, file_paths)
 }
 
 fn wsl_git_discard_files_args(
     file_paths: Vec<String>,
     untracked: bool,
 ) -> Result<Vec<String>, String> {
-    let mut file_paths = unique_wsl_git_file_paths(file_paths)?;
-    if untracked {
-        for file_path in &file_paths {
-            validate_wsl_git_discard_path(file_path)?;
-        }
-    }
-    if file_paths.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut args = if untracked {
-        str_args(&["clean", "-f"])
-    } else {
-        str_args(&["restore"])
-    };
-    args.push("--".to_string());
-    args.append(&mut file_paths);
-    Ok(args)
+    crate::git_path_guard::git_discard_files_args(GitFlavor::Wsl, file_paths, untracked)
 }
 
 fn wsl_git_push_args(branch: Option<&str>) -> Result<Vec<String>, String> {
-    let mut args = str_args(&["push"]);
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
-        validate_wsl_git_revision(branch)?;
-        args.push("origin".to_string());
-        args.push(branch.to_string());
-    }
-    Ok(args)
+    crate::git_path_guard::git_push_args(branch)
 }
 
 fn combined_output(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
+    crate::git_path_guard::combined_output(output)
 }
 
 fn wsl_git_has_head(distribution: &str, linux_project_path: &str) -> Result<bool, String> {

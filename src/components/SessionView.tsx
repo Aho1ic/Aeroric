@@ -15,6 +15,7 @@ import {
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useI18n } from "../i18n";
+import { writeClipboardText } from "../lib/clipboard";
 import {
   DSH_MENTION_ATTRIBUTE,
   dshMentionVocabulary,
@@ -428,10 +429,12 @@ function AttachmentCard({ content }: { content: SessionContent }) {
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
+    void writeClipboardText(text)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => undefined);
   };
   return (
     <button

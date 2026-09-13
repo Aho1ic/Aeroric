@@ -1,6 +1,5 @@
 import { useCallback, useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "../lib/appDialog";
 import * as Popover from "@radix-ui/react-popover";
 import {
   X,
@@ -18,12 +17,14 @@ import {
   Copy,
 } from "lucide-react";
 import { getFileColor } from "../utils";
+import { writeClipboardText } from "../lib/clipboard";
 import { AnimatedSelectionGroup, AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import ReactCodeMirror, { EditorView, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import type { Extension } from "@codemirror/state";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
+import { useLocalHistory } from "./file-viewer/useLocalHistory";
 import { databaseApi } from "../lib/databaseApi";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type {
@@ -33,8 +34,6 @@ import type {
   DiagnosticItem,
   FormatFileResult,
   GitBlameResult,
-  LocalHistoryEntry,
-  LocalHistorySnapshot,
   LspInlayHint,
   LspSymbol,
   TestCoverageSummary,
@@ -232,7 +231,7 @@ function FilePreviewPane({
       if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
         throw new Error(t("file.diagnosticsCopyUnavailable"));
       }
-      await navigator.clipboard.writeText(diagnosticsClipboardText(filteredFileDiagnostics));
+      await writeClipboardText(diagnosticsClipboardText(filteredFileDiagnostics));
       setDiagnosticCopyCount(filteredFileDiagnostics.length);
     } catch (err) {
       setDiagnosticCopyError(String(err));
@@ -1968,20 +1967,6 @@ export function FileViewer({
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
-  const [localHistoryTarget, setLocalHistoryTarget] = useState<{
-    path: string;
-    name: string;
-  } | null>(null);
-  const [localHistoryEntries, setLocalHistoryEntries] = useState<LocalHistoryEntry[]>([]);
-  const [localHistorySelectedId, setLocalHistorySelectedId] = useState<string | null>(null);
-  const [localHistorySnapshot, setLocalHistorySnapshot] = useState<LocalHistorySnapshot | null>(
-    null,
-  );
-  const [localHistoryCurrentContent, setLocalHistoryCurrentContent] = useState("");
-  const [localHistoryLoading, setLocalHistoryLoading] = useState(false);
-  const [localHistorySnapshotLoading, setLocalHistorySnapshotLoading] = useState(false);
-  const [localHistoryRestoring, setLocalHistoryRestoring] = useState(false);
-  const [localHistoryError, setLocalHistoryError] = useState<string | null>(null);
   const [reloadVersions, setReloadVersions] = useState<Record<string, number>>({});
 
   const handleDirtyChange = useCallback((path: string, dirty: boolean) => {
@@ -1994,136 +1979,33 @@ export function FileViewer({
     });
   }, []);
 
-  const openLocalHistory = useCallback((tab: OpenFileTab) => {
-    setMenuOpen(false);
-    setLocalHistoryTarget({ path: tab.path, name: tab.name });
-    setLocalHistoryEntries([]);
-    setLocalHistorySelectedId(null);
-    setLocalHistorySnapshot(null);
-    setLocalHistoryCurrentContent("");
-    setLocalHistoryError(null);
-  }, []);
-
-  const closeLocalHistory = useCallback(() => {
-    setLocalHistoryTarget(null);
-    setLocalHistoryEntries([]);
-    setLocalHistorySelectedId(null);
-    setLocalHistorySnapshot(null);
-    setLocalHistoryCurrentContent("");
-    setLocalHistoryError(null);
-  }, []);
-
-  useEffect(() => {
-    if (!localHistoryTarget) return;
-    let cancelled = false;
-    setLocalHistoryLoading(true);
-    setLocalHistoryError(null);
-    setLocalHistorySnapshot(null);
-    setLocalHistorySelectedId(null);
-
-    void Promise.all([
-      invoke<LocalHistoryEntry[]>("list_local_history", {
-        projectPath,
-        filePath: localHistoryTarget.path,
-      }),
-      invoke<string>("read_file_content", {
-        projectPath,
-        path: localHistoryTarget.path,
-      }),
-    ])
-      .then(([entries, currentContent]) => {
-        if (cancelled) return;
-        setLocalHistoryEntries(entries);
-        setLocalHistoryCurrentContent(currentContent);
-        setLocalHistorySelectedId(entries[0]?.id ?? null);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLocalHistoryEntries([]);
-        setLocalHistoryCurrentContent("");
-        setLocalHistoryError(String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLocalHistoryLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [localHistoryTarget, projectPath]);
-
-  useEffect(() => {
-    if (!localHistoryTarget || !localHistorySelectedId) {
-      setLocalHistorySnapshot(null);
-      return;
-    }
-    let cancelled = false;
-    setLocalHistorySnapshotLoading(true);
-    setLocalHistoryError(null);
-
-    void invoke<LocalHistorySnapshot>("read_local_history_entry", {
-      projectPath,
-      filePath: localHistoryTarget.path,
-      entryId: localHistorySelectedId,
-    })
-      .then((snapshot) => {
-        if (!cancelled) setLocalHistorySnapshot(snapshot);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setLocalHistorySnapshot(null);
-          setLocalHistoryError(String(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLocalHistorySnapshotLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [localHistorySelectedId, localHistoryTarget, projectPath]);
-
-  const restoreLocalHistory = useCallback(async () => {
-    if (!localHistoryTarget || !localHistorySnapshot || localHistoryRestoring) return;
-    const confirmed = await confirm(t("file.localHistoryRestoreConfirm"), {
-      title: t("file.localHistory"),
-      kind: "warning",
-    });
-    if (!confirmed) return;
-    setLocalHistoryRestoring(true);
-    setLocalHistoryError(null);
-    try {
-      const restored = await invoke<LocalHistorySnapshot>("restore_local_history_entry", {
-        projectPath,
-        filePath: localHistoryTarget.path,
-        entryId: localHistorySnapshot.entry.id,
-      });
-      setLocalHistorySnapshot(restored);
-      setLocalHistoryCurrentContent(restored.content);
-      setReloadVersions((prev) => ({
-        ...prev,
-        [localHistoryTarget.path]: (prev[localHistoryTarget.path] ?? 0) + 1,
-      }));
-      handleDirtyChange(localHistoryTarget.path, false);
-      const entries = await invoke<LocalHistoryEntry[]>("list_local_history", {
-        projectPath,
-        filePath: localHistoryTarget.path,
-      });
-      setLocalHistoryEntries(entries);
-    } catch (err) {
-      setLocalHistoryError(String(err));
-    } finally {
-      setLocalHistoryRestoring(false);
-    }
-  }, [
-    handleDirtyChange,
-    localHistoryRestoring,
-    localHistorySnapshot,
-    localHistoryTarget,
+  const {
+    target: localHistoryTarget,
+    entries: localHistoryEntries,
+    selectedId: localHistorySelectedId,
+    snapshot: localHistorySnapshot,
+    currentContent: localHistoryCurrentContent,
+    loading: localHistoryLoading,
+    snapshotLoading: localHistorySnapshotLoading,
+    restoring: localHistoryRestoring,
+    error: localHistoryError,
+    setSelectedId: setLocalHistorySelectedId,
+    open: openLocalHistory,
+    close: closeLocalHistory,
+    restore: restoreLocalHistory,
+  } = useLocalHistory({
     projectPath,
     t,
-  ]);
+    onOpen: useCallback(() => setMenuOpen(false), []),
+    onRestored: useCallback(
+      (path: string) => {
+        // 恢复改写了磁盘文件:让对应 tab 重读内容,并清掉脏标记。
+        setReloadVersions((prev) => ({ ...prev, [path]: (prev[path] ?? 0) + 1 }));
+        handleDirtyChange(path, false);
+      },
+      [handleDirtyChange],
+    ),
+  });
 
   useEffect(() => {
     setPreviewModes((prev) => {

@@ -48,7 +48,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { Button } from "../ui/Button";
-import { writeClipboardText } from "../file-explorer/clipboard";
+import { writeClipboardText } from "../../lib/clipboard";
 import { settingsForm } from "../../styles/panelChrome";
 import {
   APP_SETTINGS_CHANGED_EVENT,

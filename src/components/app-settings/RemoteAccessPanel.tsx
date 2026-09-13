@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import { writeClipboardText } from "../file-explorer/clipboard";
+import { writeClipboardText } from "../../lib/clipboard";
 import { Button } from "../ui/Button";
 
 interface RemoteStatus {

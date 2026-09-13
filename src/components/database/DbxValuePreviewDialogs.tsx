@@ -12,6 +12,7 @@
 import { Copy, Search } from "lucide-react";
 
 import { useI18n } from "../../i18n";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   dbxGridColumnType,
   dbxGridRowsToJson,
@@ -56,7 +57,7 @@ export interface DbxValuePreviewDialogsProps {
 
 /** 复制统一走这里:剪贴板不可用时静默,失败时把错误抛回错误条。 */
 function copyText(text: string, onError: (message: string) => void) {
-  navigator.clipboard?.writeText(text).catch((err) => onError(String(err)));
+  writeClipboardText(text).catch((err) => onError(String(err)));
 }
 
 /** 列预览与行预览共用的搜索框:放大镜绝对定位在左侧,input 让出 28px 内边距。 */

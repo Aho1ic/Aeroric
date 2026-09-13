@@ -19,6 +19,7 @@ import { useCallback, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { useI18n } from "../../i18n";
 import { confirm } from "../../lib/appDialog";
+import { writeClipboardText } from "../../lib/clipboard";
 import { databaseApi } from "../../lib/databaseApi";
 import {
   dbxGridRowsToTsv,
@@ -612,7 +613,7 @@ export function useDbxGridEditing(deps: DbxGridEditingDeps): DbxGridEditing {
       .filter((row): row is DatabaseRow => Boolean(row));
     if (rows.length === 0) return;
     try {
-      await navigator.clipboard?.writeText(dbxGridRowsToTsv(visibleTableColumns, rows));
+      await writeClipboardText(dbxGridRowsToTsv(visibleTableColumns, rows));
     } catch (err) {
       setError(String(err));
     }
@@ -639,7 +640,7 @@ export function useDbxGridEditing(deps: DbxGridEditingDeps): DbxGridEditing {
         if (row) {
           const value = row.values[dbxSelectedCell.columnIndex];
           const text = valueToText(value);
-          navigator.clipboard?.writeText(text);
+          void writeClipboardText(text).catch(() => undefined);
         }
         event.preventDefault();
         return;

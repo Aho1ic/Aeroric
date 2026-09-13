@@ -1,12 +1,7 @@
 import { useState } from "react";
 import { AlertCircle } from "lucide-react";
 import { useI18n } from "../../i18n";
-
-function formatBytes(byteLength: number): string {
-  if (byteLength < 1024) return `${byteLength} B`;
-  if (byteLength < 1024 * 1024) return `${(byteLength / 1024).toFixed(1)} KB`;
-  return `${(byteLength / 1024 / 1024).toFixed(1)} MB`;
-}
+import { formatBytes } from "../../utils/format";
 
 export function ImagePreviewPane({
   src,

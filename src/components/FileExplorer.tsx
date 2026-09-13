@@ -10,7 +10,7 @@ import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, RotateCcw, Search, X } fr
 import s from "../styles";
 import { useToast } from "./Toast";
 import { useI18n } from "../i18n";
-import { writeClipboardText } from "./file-explorer/clipboard";
+import { writeClipboardText } from "../lib/clipboard";
 import { FileExplorerContextMenu } from "./file-explorer/ContextMenu";
 import { CreateInputRow } from "./file-explorer/CreateInputRow";
 import { RenameInputRow } from "./file-explorer/RenameInputRow";

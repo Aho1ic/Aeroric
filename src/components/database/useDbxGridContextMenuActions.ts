@@ -11,6 +11,7 @@
 import { useCallback } from "react";
 
 import { databaseApi } from "../../lib/databaseApi";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   cellPreviewText,
   dbxGridColumnSortable,
@@ -155,7 +156,7 @@ export function useDbxGridContextMenuActions(
   const writeClipboard = useCallback(
     async (text: string) => {
       try {
-        await navigator.clipboard?.writeText(text);
+        await writeClipboardText(text);
       } catch (err) {
         onError(String(err));
       }
@@ -282,7 +283,7 @@ export function useDbxGridContextMenuActions(
         if (!options) return;
         try {
           const statement = await databaseApi.dbxBuildDataGridCopyInsertStatement(options.insert);
-          if (statement) await navigator.clipboard?.writeText(statement);
+          if (statement) await writeClipboardText(statement);
         } catch (err) {
           onError(String(err));
         }
@@ -294,7 +295,7 @@ export function useDbxGridContextMenuActions(
         if (!options?.update) return;
         try {
           const statements = await databaseApi.dbxBuildDataGridCopyUpdateStatements(options.update);
-          if (statements.length > 0) await navigator.clipboard?.writeText(statements.join("\n"));
+          if (statements.length > 0) await writeClipboardText(statements.join("\n"));
         } catch (err) {
           onError(String(err));
         }

@@ -10,6 +10,7 @@
 
 import { useI18n } from "../../i18n";
 import { valueToText } from "../../lib/databaseUtils";
+import { writeClipboardText } from "../../lib/clipboard";
 import s from "../../styles";
 import type { DbQueryResult } from "../../types";
 import { Button as DbxButton } from "../ui/Button";
@@ -134,7 +135,7 @@ export function DbxCellDetailPanel({ grid, queryResult, onUpdateCell }: DbxCellD
           variant="outline"
           size="sm"
           onClick={() => {
-            navigator.clipboard?.writeText(valueToText(dbxCellDetail.value));
+            void writeClipboardText(valueToText(dbxCellDetail.value)).catch(() => undefined);
           }}
         >
           {t("common.copy")}

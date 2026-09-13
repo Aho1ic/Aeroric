@@ -1,17 +1,6 @@
-import {
-  lazy,
-  Suspense,
-  useState,
-  useEffect,
-  useMemo,
-  useCallback,
-  useRef,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { confirm } from "./lib/appDialog";
-import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -22,43 +11,39 @@ import type {
   AgentType,
   PermissionMode,
   ProtocolFamily,
-  ThemeMode,
-  ThemeVariant,
-  TerminalFontSize,
-  TaskDisplayWindow,
   SkillHubConfig,
   SshConnection,
   CondaEnvironment,
   StartupDegradation,
 } from "./types";
 import type { AgentOption } from "./agents";
-import type { LocalRouterAgent, LocalRouterStatus } from "./components/app-settings/types";
-import { isActiveTaskStatus, resolveProjectLocation, sshProjectPath } from "./types";
+import type {
+  AppSettings,
+  LocalRouterAgent,
+  LocalRouterStatus,
+} from "./components/app-settings/types";
 import {
-  DEFAULT_UI_FONT_BY_PLATFORM,
-  DEFAULT_MONO_FONT_BY_PLATFORM,
-  LEGACY_DEFAULT_MONO_FONTS,
+  isActiveTaskStatus,
+  isArchivableTaskStatus,
+  isTerminalTaskStatus,
+  resolveProjectLocation,
+  sshProjectPath,
 } from "./types";
-import type { FontFamily } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ReleasePage } from "./components/ReleasePage";
 import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
+import { expiredTaskIds, shouldRunCleanup } from "./taskCleanup";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   SKILL_HUB_CHANGED_EVENT,
+  normalizeAutoCleanupSettings,
 } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut } from "./shortcuts";
-import {
-  APP_PLATFORM,
-  FONT_PLATFORM,
-  getFontStorageKey,
-  getTerminalFontSizeStorageKey,
-} from "./platform";
-import { composeFontStack } from "./utils/fonts";
+import { APP_PLATFORM } from "./platform";
 import {
   agentDisplayLabel,
   agentFamily,
@@ -68,14 +53,12 @@ import {
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { recordAgentConfigUsage } from "./hooks/useAgentUsage";
+import { useAppAppearance } from "./hooks/useAppAppearance";
+import { useDshHostEvents } from "./hooks/useDshHostEvents";
+import { useRefState } from "./hooks/useRefState";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
-import {
-  getInitialSftpLocalDefaultPath,
-  normalizeSftpLocalDefaultPath,
-  SFTP_LOCAL_PATH_STORAGE_KEY,
-} from "./settings";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { taskCommandName } from "./projectTarget";
 import { taskCompletionCommand } from "./taskCompletion";
@@ -94,23 +77,11 @@ import {
 } from "./components/project-page/viewMode";
 import s from "./styles";
 import { launchDshWebUi } from "./dshWebUi";
-import { DshApprovalDialog, type DshApprovalRequest } from "./components/DshApprovalDialog";
-import { DshQuestionDialog, type DshQuestionRequest } from "./components/DshQuestionDialog";
+import { DshApprovalDialog } from "./components/DshApprovalDialog";
+import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import {
   APP_EXIT_REQUESTED_EVENT,
   APP_RESTART_REQUESTED_EVENT,
-  DSH_APPROVAL_REQUESTED_EVENT,
-  DSH_APPROVAL_RESOLVED_EVENT,
-  DSH_HOST_AGENT_ERROR_EVENT,
-  DSH_HOST_ARCHIVED_SESSIONS_CHANGED_EVENT,
-  DSH_HOST_SESSION_ADDED_EVENT,
-  DSH_HOST_SESSION_REMOVED_EVENT,
-  DSH_HOST_SESSION_STATUS_EVENT,
-  DSH_HOST_WORKSPACE_CHANGED_EVENT,
-  DSH_HOST_WORKSPACE_ORDER_CHANGED_EVENT,
-  DSH_HOST_WORKSPACE_REMOVED_EVENT,
-  DSH_QUESTION_REQUESTED_EVENT,
-  DSH_QUESTION_RESOLVED_EVENT,
   REMOTE_TASK_REQUEST_EVENT,
   REMOTE_TERMINAL_RESIZED_EVENT,
   TASK_SESSION_EVENT,
@@ -143,19 +114,7 @@ import {
   PROJECT_PINNED_CHANGED_EVENT,
   type ProjectPinnedChangedPayload,
 } from "./appRemoteEvents";
-import {
-  disableTextInputAutoFeatures,
-  getInitialAttentionBadge,
-  getInitialDshWebSearchEnabled,
-  getInitialFontFamily,
-  getInitialTaskDisplayWindow,
-  getInitialTerminalFontSize,
-  getInitialThemeMode,
-  getSystemPrefersDark,
-  nativeThemeForVariant,
-  nativeWindowBackgroundForVariant,
-  resolveThemeVariant,
-} from "./appThemeState";
+import { disableTextInputAutoFeatures } from "./appThemeState";
 import {
   getTaskSessionFieldsByFamily,
   resolveConfigSwitchSessionStrategy,
@@ -381,46 +340,28 @@ function App() {
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
 
-  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
-  const [systemPrefersDark, setSystemPrefersDark] = useState(getSystemPrefersDark);
-  const themeVariant: ThemeVariant = resolveThemeVariant(themeMode, systemPrefersDark);
-  const [terminalFontSize, setTerminalFontSize] = useState<TerminalFontSize>(
-    getInitialTerminalFontSize,
-  );
-  const [taskDisplayWindow, setTaskDisplayWindow] = useState<TaskDisplayWindow>(
-    getInitialTaskDisplayWindow,
-  );
-  const [attentionBadge, setAttentionBadge] = useState<boolean>(getInitialAttentionBadge);
-  const [sftpLocalDefaultPath, setSftpLocalDefaultPath] = useState<string>(
-    getInitialSftpLocalDefaultPath,
-  );
-  const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily(
-      getFontStorageKey("ui"),
-      DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM],
-      [],
-      FONT_PLATFORM === "macos" ? "aeroric:uiFontFamily" : undefined,
-    ),
-  );
-  const [monoFontFamily, setMonoFontFamily] = useState<FontFamily>(() =>
-    getInitialFontFamily(
-      getFontStorageKey("mono"),
-      DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM],
-      LEGACY_DEFAULT_MONO_FONTS,
-      FONT_PLATFORM === "macos" ? "aeroric:monoFontFamily" : undefined,
-    ),
-  );
-  const [dshWebSearchEnabled, setDshWebSearchEnabled] = useState<boolean>(
-    getInitialDshWebSearchEnabled,
-  );
-  const [projects, setProjectsState] = useState<Project[]>([]);
-  const projectsRef = useRef<Project[]>([]);
-  const setProjects = useCallback<Dispatch<SetStateAction<Project[]>>>((update) => {
-    const previous = projectsRef.current;
-    const next = typeof update === "function" ? update(previous) : update;
-    projectsRef.current = next;
-    setProjectsState(next);
-  }, []);
+  const {
+    themeMode,
+    setThemeMode,
+    systemPrefersDark,
+    themeVariant,
+    terminalFontSize,
+    setTerminalFontSize,
+    taskDisplayWindow,
+    setTaskDisplayWindow,
+    attentionBadge,
+    setAttentionBadge,
+    sftpLocalDefaultPath,
+    setSftpLocalDefaultPath,
+    uiFontFamily,
+    setUiFontFamily,
+    monoFontFamily,
+    setMonoFontFamily,
+    dshWebSearchEnabled,
+    setDshWebSearchEnabled,
+    handleToggleTheme,
+  } = useAppAppearance();
+  const [projects, setProjects, projectsRef] = useRefState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => {
     const saved = loadCollapsedProjectGroups();
@@ -434,27 +375,13 @@ function App() {
     () => loadProjectRailWidth() ?? PROJECT_RAIL_EXPANDED_WIDTH,
   );
   const projectRailWidthCustomizedRef = useRef(loadProjectRailWidth() !== null);
-  const [tasks, setTasksState] = useState<Task[]>([]);
-  const tasksRef = useRef<Task[]>([]);
-  const setTasks = useCallback<Dispatch<SetStateAction<Task[]>>>((update) => {
-    const previous = tasksRef.current;
-    const next = typeof update === "function" ? update(previous) : update;
-    tasksRef.current = next;
-    setTasksState(next);
-  }, []);
+  const [tasks, setTasks, tasksRef] = useRefState<Task[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
-  const [sshConnections, setSshConnectionsState] = useState<SshConnection[]>([]);
-  const sshConnectionsRef = useRef<SshConnection[]>([]);
-  const setSshConnections = useCallback<Dispatch<SetStateAction<SshConnection[]>>>((update) => {
-    const previous = sshConnectionsRef.current;
-    const next = typeof update === "function" ? update(previous) : update;
-    sshConnectionsRef.current = next;
-    setSshConnectionsState(next);
-  }, []);
+  const [sshConnections, setSshConnections, sshConnectionsRef] = useRefState<SshConnection[]>([]);
   const [condaEnvironments, setCondaEnvironments] = useState<CondaEnvironment[]>([]);
   const [selectedCondaEnvPath, setSelectedCondaEnvPath] = useState<string | null>(() =>
     localStorage.getItem(SELECTED_CONDA_ENV_KEY),
@@ -462,9 +389,9 @@ function App() {
   const [hubMode, setHubMode] = useState(false);
   const [showReleasePage, setShowReleasePage] = useState(false);
 
-  // DSH approval / question dialogs
-  const [dshApprovalRequests, setDshApprovalRequests] = useState<DshApprovalRequest[]>([]);
-  const [dshQuestionRequests, setDshQuestionRequests] = useState<DshQuestionRequest[]>([]);
+  // DSH approval / question dialogs + 宿主失效通道的转发,整簇在 hook 里。
+  const { dshApprovalRequests, dshQuestionRequests, dismissApproval, dismissQuestion } =
+    useDshHostEvents();
 
   const tm = useTerminalManager();
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
@@ -589,40 +516,6 @@ function App() {
   }
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches);
-
-    setSystemPrefersDark(mediaQuery.matches);
-    mediaQuery.addEventListener("change", handleChange);
-
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    root.classList.toggle("dark", themeVariant === "dark");
-    root.classList.toggle("eyecare", themeVariant === "eyecare");
-    localStorage.setItem("aeroric:theme", themeMode);
-  }, [themeVariant, themeMode]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    // Keep AppKit/Win32 chrome on the exact variant already resolved for the
-    // web UI. In particular, an explicit dark value is more reliable than
-    // resetting to `null` for system mode and waiting for a second native
-    // appearance propagation. The window background is also the surface shown
-    // through macOS's transparent title bar.
-    const nativeTheme = nativeThemeForVariant(themeVariant);
-    const currentWindow = getCurrentWindow();
-    Promise.all([
-      setAppTheme(nativeTheme),
-      currentWindow.setTheme(nativeTheme),
-      currentWindow.setBackgroundColor(nativeWindowBackgroundForVariant(themeVariant)),
-    ]).catch(console.error);
-  }, [themeVariant]);
-
-  useEffect(() => {
     // Cmd+W 收起窗口（隐藏到 Dock），仅 macOS 启用：隐藏后点 Dock 图标可唤回
     // （见 lib.rs Reopen）。其他平台没有 Dock/托盘唤回入口，隐藏后窗口会丢失，故不启用。
     // 在捕获阶段拦截，先于 xterm 等组件的 keydown 处理，避免被吞掉。
@@ -700,29 +593,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(getTerminalFontSizeStorageKey(), String(terminalFontSize));
-  }, [terminalFontSize]);
-
-  useEffect(() => {
-    localStorage.setItem("aeroric:taskDisplayWindow", String(taskDisplayWindow));
-  }, [taskDisplayWindow]);
-
-  useEffect(() => {
-    localStorage.setItem("aeroric:attentionBadge", attentionBadge ? "1" : "0");
-  }, [attentionBadge]);
-
-  useEffect(() => {
-    localStorage.setItem("aeroric:dshWebSearchEnabled", dshWebSearchEnabled ? "1" : "0");
-  }, [dshWebSearchEnabled]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      SFTP_LOCAL_PATH_STORAGE_KEY,
-      normalizeSftpLocalDefaultPath(sftpLocalDefaultPath),
-    );
-  }, [sftpLocalDefaultPath]);
-
-  useEffect(() => {
     saveProjectGroupNames(projectGroups);
   }, [projectGroups]);
 
@@ -737,25 +607,6 @@ function App() {
       setProjectRailWidth(projectRailWidthForProjects(projects));
     }
   }, [projects]);
-
-  useEffect(() => {
-    const value = uiFontFamily.trim() || DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM];
-    localStorage.setItem(getFontStorageKey("ui"), value);
-    // 用户只选单个族名时补齐当前平台的回退链，避免 Windows / Linux 缺字形。
-    document.documentElement.style.setProperty(
-      "--font-ui",
-      composeFontStack(value, DEFAULT_UI_FONT_BY_PLATFORM[FONT_PLATFORM]),
-    );
-  }, [uiFontFamily]);
-
-  useEffect(() => {
-    const value = monoFontFamily.trim() || DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM];
-    localStorage.setItem(getFontStorageKey("mono"), value);
-    document.documentElement.style.setProperty(
-      "--font-mono",
-      composeFontStack(value, DEFAULT_MONO_FONT_BY_PLATFORM[FONT_PLATFORM]),
-    );
-  }, [monoFontFamily]);
 
   // Keep the events.host downlink subscription alive while any DSH task is active.
   // The backend command is idempotent: calling start again while running
@@ -772,18 +623,6 @@ function App() {
       invoke("stop_dsh_host_events").catch(console.error);
     }
   }, [tasks]);
-
-  const handleToggleTheme = useCallback(() => {
-    setThemeMode((currentMode) => {
-      // Toggle only cycles between the two standard variants. Special themes
-      // (eyecare and any future opt-in variants) retreat to "light" so the
-      // shortcut remains a one-tap escape hatch back to the canonical pair.
-      if (currentMode === "dark") return "light";
-      if (currentMode === "light") return "dark";
-      if (currentMode === "system") return systemPrefersDark ? "light" : "dark";
-      return "light";
-    });
-  }, [systemPrefersDark]);
 
   useEffect(() => {
     async function init() {
@@ -836,6 +675,68 @@ function App() {
     // Mount-only: callbacks are read through refs so a language switch never
     // re-runs startup normalization. See the ref sync effect above.
   }, [setProjects, setSshConnections, setTasks]);
+
+  /**
+   * 定时自动物理删除超期的已结束任务。
+   *
+   * 跑在前端而不是 Rust 守护线程:`deleteTasks` 是所有删除的唯一收口(跳过收藏、
+   * cancel 活跃任务、清 worktree、重写 tasks.json、清终端缓冲、删 .log、修正选中项)。
+   * 后端另写一套的真正障碍不是重复劳动,而是前端内存里的 `tasks` 数组不知道后端删过
+   * 东西,下一次 persist 会把已删任务整份写回去。代价是应用不开就不清理 —— 与
+   * Claude Code 的 `cleanupPeriodDays`(启动时扫一遍)是同一种取舍。
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const runCleanup = async () => {
+      // 必须等启动把 tasks 读进来:空数组时什么都删不到,却会把 lastRunAt 推到当下,
+      // 于是这一个周期被白白跳过。
+      await startupReadyRef.current?.catch(() => {});
+      if (cancelled) return;
+
+      const settings = await invoke<AppSettings>("load_app_settings").catch(() => null);
+      if (cancelled || !settings) return;
+
+      const cleanup = normalizeAutoCleanupSettings(settings.auto_cleanup_settings);
+      if (!cleanup.enabled) return;
+
+      const now = Date.now();
+      const persistLastRun = () =>
+        invoke("update_auto_cleanup_settings", {
+          autoCleanupSettings: { ...cleanup, last_run_at: now },
+        }).catch((error: unknown) => {
+          console.error("Failed to record auto cleanup run", error);
+        });
+
+      // 刚打开开关:只记时间,一条都不删。否则用户勾上复选框的下一秒就丢半年记录。
+      if (cleanup.last_run_at == null) {
+        await persistLastRun();
+        return;
+      }
+      if (!shouldRunCleanup(cleanup, now)) return;
+
+      const expired = expiredTaskIds(tasksRef.current, cleanup, now);
+      if (expired.length > 0) {
+        deleteTasksRef.current(expired);
+        showToastRef.current(
+          tRef.current("toast.autoCleanupDone", { count: expired.length }),
+          "success",
+        );
+      }
+      // 删没删到都要更新:weekly 模式下不更新会在同一个时间槽内反复重算。
+      await persistLastRun();
+    };
+
+    void runCleanup();
+    // 半小时一次:weekly 模式最迟晚 30 分钟执行,而删除本身是低频维护动作。
+    const timer = window.setInterval(() => void runCleanup(), 30 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // 挂载一次。设置变更由下一次轮询自然读到 —— 用户改完配置不需要立刻触发一轮删除。
+    // (tasksRef / projectsRef / sshConnectionsRef 来自 useRefState,身份恒定,只为过 lint。)
+  }, [projectsRef, sshConnectionsRef, tasksRef]);
 
   useEffect(() => {
     // 后端启动时若数据目录不可写,会退到临时目录甚至内存库继续启动(而不是像以前
@@ -952,102 +853,6 @@ function App() {
       // Rust/Tauri 事件桥接到现有 DOM 事件总线，让所有设置消费者统一刷新。
       dispatchAppSettingsChanged(window);
     });
-    // DSH approval / question dialogs — the agent pauses until the client responds.
-    const p6 = listen<{
-      type: string;
-      rpcId: string;
-      sessionId: string;
-      approvalId: string;
-      toolName: string;
-      callId?: string;
-      reason?: string;
-    }>(DSH_APPROVAL_REQUESTED_EVENT, (e) => {
-      setDshApprovalRequests((prev) => {
-        const request = {
-          rpcId: e.payload.rpcId,
-          sessionId: e.payload.sessionId,
-          approvalId: e.payload.approvalId,
-          toolName: e.payload.toolName,
-          callId: e.payload.callId,
-          reason: e.payload.reason,
-        } satisfies DshApprovalRequest;
-        const next = prev.filter((item) => item.rpcId !== request.rpcId);
-        return [...next, request];
-      });
-    });
-    const p7 = listen<{
-      type: string;
-      rpcId: string;
-      sessionId: string;
-      questions: Array<{
-        id: string;
-        question: string;
-        detail?: string;
-        header?: string;
-        options?: Array<{ label: string; description?: string }>;
-        multiSelect?: boolean;
-      }>;
-    }>(DSH_QUESTION_REQUESTED_EVENT, (e) => {
-      setDshQuestionRequests((prev) => {
-        const request = {
-          rpcId: e.payload.rpcId,
-          sessionId: e.payload.sessionId,
-          questions: e.payload.questions,
-        } satisfies DshQuestionRequest;
-        const next = prev.filter((item) => item.rpcId !== request.rpcId);
-        return [...next, request];
-      });
-    });
-    const p8 = listen<{ sessionId?: string; approvalId?: string }>(
-      DSH_APPROVAL_RESOLVED_EVENT,
-      (e) => {
-        setDshApprovalRequests((prev) =>
-          prev.filter(
-            (item) =>
-              !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
-          ),
-        );
-      },
-    );
-    const p9 = listen<{ sessionId?: string; questionRpcId?: string }>(
-      DSH_QUESTION_RESOLVED_EVENT,
-      (e) => {
-        setDshQuestionRequests((prev) =>
-          prev.filter((item) => item.rpcId !== e.payload.questionRpcId),
-        );
-      },
-    );
-    // DSH events.host is the live invalidation channel for settings/session
-    // surfaces. Re-emit one browser event with the original payload so panels
-    // can refresh their own snapshot without coupling App to their state.
-    const dispatchDshHostRefresh = (eventName: string, payload: unknown) => {
-      window.dispatchEvent(new CustomEvent("dsh-host-refresh", { detail: { eventName, payload } }));
-    };
-    const p10 = listen(DSH_HOST_SESSION_ADDED_EVENT, (e) =>
-      dispatchDshHostRefresh("session-added", e.payload),
-    );
-    const p11 = listen(DSH_HOST_SESSION_REMOVED_EVENT, (e) =>
-      dispatchDshHostRefresh("session-removed", e.payload),
-    );
-    const p12 = listen(DSH_HOST_SESSION_STATUS_EVENT, (e) =>
-      dispatchDshHostRefresh("session-status", e.payload),
-    );
-    const p13 = listen(DSH_HOST_WORKSPACE_CHANGED_EVENT, (e) =>
-      dispatchDshHostRefresh("workspace-changed", e.payload),
-    );
-    const p14 = listen(DSH_HOST_WORKSPACE_REMOVED_EVENT, (e) =>
-      dispatchDshHostRefresh("workspace-removed", e.payload),
-    );
-    const p15 = listen(DSH_HOST_WORKSPACE_ORDER_CHANGED_EVENT, (e) =>
-      dispatchDshHostRefresh("workspace-order-changed", e.payload),
-    );
-    const p16 = listen(DSH_HOST_ARCHIVED_SESSIONS_CHANGED_EVENT, (e) =>
-      dispatchDshHostRefresh("archived-sessions-changed", e.payload),
-    );
-    const p17 = listen<{ message?: string; error?: string }>(DSH_HOST_AGENT_ERROR_EVENT, (e) => {
-      const msg = e.payload?.message ?? e.payload?.error ?? "DSH agent error";
-      showToastRef.current(msg, "error");
-    });
     // 生产库写操作的后端闸。Rust 侧把执行挂住等这条答复(见
     // src-tauri/src/database/query.rs 的 enforce_production_sql_confirmation),
     // 所以无论确认、取消还是弹窗本身出错,都必须回一次 —— 不回会让查询
@@ -1094,18 +899,6 @@ function App() {
       p3.then((fn) => fn());
       p4.then((fn) => fn());
       p5.then((fn) => fn());
-      p6.then((fn) => fn());
-      p7.then((fn) => fn());
-      p8.then((fn) => fn());
-      p9.then((fn) => fn());
-      p10.then((fn) => fn());
-      p11.then((fn) => fn());
-      p12.then((fn) => fn());
-      p13.then((fn) => fn());
-      p14.then((fn) => fn());
-      p15.then((fn) => fn());
-      p16.then((fn) => fn());
-      p17.then((fn) => fn());
       p18.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1298,7 +1091,7 @@ function App() {
     return () => {
       p.then((fn) => fn());
     };
-  }, []);
+  }, [projectsRef, sshConnectionsRef, tasksRef]);
 
   async function handleOpen() {
     const selected = await openDialog({ directory: true, multiple: false });
@@ -1433,9 +1226,7 @@ function App() {
         projectPath,
         prompt: promptOverride ?? task.prompt,
         sessionId: task.dshSessionId,
-        workspaceId: task.dshWorkspaceId,
         agentPreset: task.dshAgentPreset,
-        promptMode: task.dshPromptMode,
         selectedModel: task.selectedModel,
         reasoningEffort: task.reasoningEffort,
         permissionMode: task.permissionMode,
@@ -1920,9 +1711,7 @@ function App() {
         // user message; subsequent input goes through the DSH composer.
         prompt: "",
         sessionId,
-        workspaceId: task.dshWorkspaceId,
         agentPreset: task.dshAgentPreset,
-        promptMode: task.dshPromptMode,
         selectedModel: task.selectedModel,
         reasoningEffort: task.reasoningEffort,
         permissionMode: task.permissionMode,
@@ -2483,6 +2272,18 @@ function App() {
     });
   }
 
+  /**
+   * 把 `changedTasks` 涉及的每个项目各落盘一次。
+   * 一次批量操作常跨多个项目,而 tasks.json 是按项目分文件的:漏掉一个项目
+   * 就意味着那个项目的改动只活在内存里。
+   */
+  function persistAffectedProjects(changedTasks: Task[], next: Task[]) {
+    const affectedProjectIds = new Set(changedTasks.map((task) => task.projectId));
+    affectedProjectIds.forEach((pid) =>
+      persistProjectTasks(pid, next, showToast, formatSaveTasksError),
+    );
+  }
+
   function deleteTasks(taskIds: string[]) {
     taskIds = taskIds.filter((id) => !tasks.find((task) => task.id === id)?.starred);
     if (taskIds.length === 0) return;
@@ -2519,10 +2320,7 @@ function App() {
         });
 
       const next = prev.filter((task) => !toDelete.has(task.id));
-      const affectedProjectIds = new Set(deletingTasks.map((t) => t.projectId));
-      affectedProjectIds.forEach((pid) =>
-        persistProjectTasks(pid, next, showToast, formatSaveTasksError),
-      );
+      persistAffectedProjects(deletingTasks, next);
       return next;
     });
 
@@ -2545,6 +2343,13 @@ function App() {
       return changed ? next : prev;
     });
   }
+
+  /**
+   * `deleteTasks` 是普通函数声明,每次渲染都是新引用,进不了 `[]` deps 的 effect。
+   * 渲染期赋值(与 `remoteRequestRef` 同一手法),让挂载一次的定时清理拿到最新那份。
+   */
+  const deleteTasksRef = useRef(deleteTasks);
+  deleteTasksRef.current = deleteTasks;
 
   async function handleDeleteTask(taskId: string) {
     const task = tasks.find((item) => item.id === taskId);
@@ -2590,6 +2395,41 @@ function App() {
     );
     if (!ok) return;
     deleteTasks(projectTaskIds);
+  }
+
+  /**
+   * 归档不弹确认框:它可撤销,数据一字不动,只是从主列表移走。
+   * 活动中的任务不允许归档 —— 归档会让它从列表消失,而它仍在等用户反应。
+   */
+  function handleArchiveTasks(taskIds: string[]) {
+    const ids = new Set(taskIds);
+    const now = Date.now();
+    setTasks((prev) => {
+      const changed = prev.filter(
+        (task) => ids.has(task.id) && isArchivableTaskStatus(task.status) && !task.archivedAt,
+      );
+      if (changed.length === 0) return prev;
+      const changedIds = new Set(changed.map((task) => task.id));
+      const next = prev.map((task) =>
+        changedIds.has(task.id) ? { ...task, archivedAt: now } : task,
+      );
+      persistAffectedProjects(changed, next);
+      return next;
+    });
+  }
+
+  function handleUnarchiveTasks(taskIds: string[]) {
+    const ids = new Set(taskIds);
+    setTasks((prev) => {
+      const changed = prev.filter((task) => ids.has(task.id) && task.archivedAt);
+      if (changed.length === 0) return prev;
+      const changedIds = new Set(changed.map((task) => task.id));
+      const next = prev.map((task) =>
+        changedIds.has(task.id) ? { ...task, archivedAt: undefined } : task,
+      );
+      persistAffectedProjects(changed, next);
+      return next;
+    });
   }
 
   function handleToggleTaskStar(taskId: string) {
@@ -2794,12 +2634,22 @@ function App() {
         const attentionRequestedAt =
           status === "input_required" ? (extra?.attentionRequestedAt ?? Date.now()) : undefined;
 
-        if (task.status === status && task.attentionRequestedAt === attentionRequestedAt) {
+        // 已有值不刷新:failed → cancelled 之类的二次跃迁不应改写结束时间。
+        // 离开终态(续跑)清空,否则续跑后的任务会被当成早已结束。
+        const completedAt = isTerminalTaskStatus(status)
+          ? (task.completedAt ?? Date.now())
+          : undefined;
+
+        if (
+          task.status === status &&
+          task.attentionRequestedAt === attentionRequestedAt &&
+          task.completedAt === completedAt
+        ) {
           return task;
         }
 
         changed = true;
-        const updated: Task = { ...task, status, attentionRequestedAt };
+        const updated: Task = { ...task, status, attentionRequestedAt, completedAt };
         if (status === "failed" && failureReason) updated.failureReason = failureReason;
         return updated;
       });
@@ -2991,6 +2841,8 @@ function App() {
                 }
                 onDeleteTask={handleDeleteTask}
                 onDeleteTasks={handleDeleteTasks}
+                onArchiveTasks={handleArchiveTasks}
+                onUnarchiveTasks={handleUnarchiveTasks}
                 onDeleteAllTasks={() => handleDeleteAllTasks(project)}
                 onToggleTaskStar={handleToggleTaskStar}
                 onRenameTask={handleRenameTask}
@@ -3122,14 +2974,8 @@ function App() {
         onDshWebSearchEnabledChange={setDshWebSearchEnabled}
       />
       {showReleasePage && <ReleasePage onClose={() => setShowReleasePage(false)} />}
-      <DshApprovalDialog
-        request={dshApprovalRequests[0] ?? null}
-        onClose={() => setDshApprovalRequests((prev) => prev.slice(1))}
-      />
-      <DshQuestionDialog
-        request={dshQuestionRequests[0] ?? null}
-        onClose={() => setDshQuestionRequests((prev) => prev.slice(1))}
-      />
+      <DshApprovalDialog request={dshApprovalRequests[0] ?? null} onClose={dismissApproval} />
+      <DshQuestionDialog request={dshQuestionRequests[0] ?? null} onClose={dismissQuestion} />
     </div>
   );
 }

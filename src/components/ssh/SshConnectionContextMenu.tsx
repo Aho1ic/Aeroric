@@ -3,6 +3,7 @@ import { Check, ChevronRight, Clipboard, Link, Plug, Terminal, Trash2 } from "lu
 import { createPortal } from "react-dom";
 import type { SshConnection } from "../../types";
 import { useI18n } from "../../i18n";
+import { writeClipboardText } from "../../lib/clipboard";
 import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
 import { sshConnectionCommand, sshConnectionUrl } from "./sshConnectionActions";
@@ -64,9 +65,8 @@ export function SshConnectionContextMenu({
   }, [onClose]);
 
   async function copy(value: string, kind: "link" | "command") {
-    if (!navigator.clipboard?.writeText) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await writeClipboardText(value);
       setCopied(kind);
       window.setTimeout(() => setCopied(null), 900);
     } catch {

@@ -1,3 +1,8 @@
+/**
+ * 全应用唯一的"写剪贴板"入口。优先走异步 Clipboard API，被 WebView 拒绝时
+ * 退回 execCommand。notebook 面板刻意不用这里的 execCommand 回退（会抢
+ * CodeMirror 焦点），那边直接用 navigator.clipboard，是既定例外。
+ */
 export async function writeClipboardText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {

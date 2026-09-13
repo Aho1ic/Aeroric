@@ -18,6 +18,7 @@ import {
 import type { AeroricDbConnectionConfig, DbEndpoint, DbxDatabaseType } from "../../types";
 import { useI18n } from "../../i18n";
 import { databaseApi } from "../../lib/databaseApi";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   Button as DbxButton,
   ButtonGroup as DbxButtonGroup,
@@ -1792,7 +1793,7 @@ export function ConnectionDialog({
                 icon={Copy}
                 aria-label={t("database.copyTestResult")}
                 onClick={() => {
-                  void navigator.clipboard.writeText(connectionTestResult.message);
+                  void writeClipboardText(connectionTestResult.message).catch(() => undefined);
                 }}
               />
             </span>

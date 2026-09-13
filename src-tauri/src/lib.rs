@@ -7,6 +7,7 @@ use tauri::{Emitter, Manager};
 use usage::CodexRpcClient;
 
 mod agent_assist;
+mod agent_family_maps;
 mod agent_ops;
 mod agent_tools;
 mod agent_usage;
@@ -31,6 +32,7 @@ mod event_watcher;
 mod formatter;
 mod fs;
 mod git;
+mod git_path_guard;
 mod hooks;
 mod local_history;
 mod local_router;
@@ -45,11 +47,14 @@ mod path_guard;
 mod permissions;
 mod platform;
 mod ports;
+mod posix_fs;
 mod protocol_decode;
 mod pty;
 mod remote;
 mod remote_fs;
 mod remote_git;
+mod remote_os;
+mod report;
 mod run_config;
 mod search;
 mod secrets;
@@ -57,6 +62,7 @@ mod session;
 mod session_dsh;
 mod session_omp;
 mod sftp;
+mod sftp_windows;
 mod skills;
 mod sse;
 mod ssh;
@@ -610,6 +616,7 @@ pub fn run() {
             sftp::storage_unmount_connection,
             git::generate_commit_message,
             agent_assist::generate_task_name,
+            report::generate_weekly_report,
             git::git_status,
             git::git_list_branches,
             git::git_create_branch,
@@ -720,6 +727,7 @@ pub fn run() {
             remote::remote_revoke_device,
             remote::remote_complete_task_request,
             ssh::load_ssh_connections,
+            ssh::get_ssh_connection_password,
             ssh::save_ssh_connections,
             ssh::delete_ssh_connection,
             ssh::open_ssh_shell,
@@ -826,6 +834,8 @@ pub fn run() {
             app_settings::rename_custom_agent_profile,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,
+            app_settings::update_auto_cleanup_settings,
+            app_settings::update_weekly_report_settings,
             dsh_plugins::list_dsh_plugins,
             dsh_plugins::install_dsh_plugin,
             dsh_plugins::uninstall_dsh_plugin,

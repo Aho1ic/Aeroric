@@ -28,6 +28,7 @@ import { useCallback, type MutableRefObject, type SetStateAction } from "react";
 
 import { useI18n } from "../../i18n";
 import { confirm } from "../../lib/appDialog";
+import { writeClipboardText } from "../../lib/clipboard";
 import { databaseApi } from "../../lib/databaseApi";
 import { quoteSqlName } from "../../lib/databaseUtils";
 import type {
@@ -412,7 +413,7 @@ export function useConnectionLifecycleActions(
 
   const copyNodeName = useCallback(
     (name: string) => {
-      navigator.clipboard?.writeText(name).catch((err) => {
+      void writeClipboardText(name).catch((err) => {
         setError(String(err));
       });
     },

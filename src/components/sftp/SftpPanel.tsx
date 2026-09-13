@@ -8,7 +8,6 @@ import {
   ArrowUp,
   ArrowUpDown,
   Archive,
-  Check,
   ChevronRight,
   ChevronDown,
   Cloud,
@@ -38,7 +37,7 @@ import type { StorageCapability, StorageConnection } from "../../types/storage";
 import { storageConnectionSummary } from "../storage/storageProtocolForm";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
-import { writeClipboardText } from "../file-explorer/clipboard";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   createSftpDirectory,
   deleteSftpPaths,
@@ -49,15 +48,18 @@ import {
 import { SftpPreview } from "./SftpPreview";
 import { formatBytes } from "../../utils/format";
 import {
+  canonicalizeRemotePath,
   defaultSftpPathForEndpoint,
   DEFAULT_SFTP_SORT_PREFERENCE,
   filterSftpTreeEntriesByName,
+  formatRemotePathForDisplay,
   formatSftpModifiedTime,
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   groupSftpSshConnections,
   groupSftpStorageConnections,
   inferFileType,
+  isWindowsRemotePath,
   normalizeSftpSortPreference,
   sftpBreadcrumbSegments,
   sftpClickAction,
@@ -647,7 +649,11 @@ export function SftpPanel({
   const goToPath = useCallback(
     (side: PaneSide) => {
       const pane = panes[side];
-      const path = pane.pathInput.trim() || "/";
+      // SSH 远端可能是 Windows 主机,用户手输 `C:\Users\x` 也要落成正斜杠的规范形式。
+      const path =
+        pane.endpoint.kind === "ssh"
+          ? canonicalizeRemotePath(pane.pathInput)
+          : pane.pathInput.trim() || "/";
       const endpoint = { ...pane.endpoint, path };
       setEndpoint(side, endpoint);
     },
@@ -657,7 +663,10 @@ export function SftpPanel({
   const startPane = useCallback(
     (side: PaneSide) => {
       const pane = panes[side];
-      const path = pane.pathInput.trim() || "/";
+      const path =
+        pane.endpoint.kind === "ssh"
+          ? canonicalizeRemotePath(pane.pathInput)
+          : pane.pathInput.trim() || "/";
       const endpoint = { ...pane.endpoint, path };
       updatePane(side, () => ({ ...makeInitialPane(endpoint, defaultSort), configured: true }));
       setTimeout(() => {
@@ -1069,6 +1078,9 @@ export function SftpPanel({
     const pane = panes[side];
     const opposite: PaneSide = side === "left" ? "right" : "left";
     const selectedName = pane.selectedPath ? sftpFileName(pane.selectedPath) : null;
+    const pathSegments = sftpBreadcrumbSegments(pane.endpoint.path);
+    // Windows 远端的路径条按当地习惯显示反斜杠,状态里存的仍是正斜杠的规范形式。
+    const windowsRemote = pane.endpoint.kind === "ssh" && isWindowsRemotePath(pane.endpoint.path);
     const filteredTree = filterSftpTreeEntriesByName(
       pane.entries,
       pane.childrenByPath,
@@ -1149,9 +1161,6 @@ export function SftpPanel({
                         <span className="sftp-machine-meta">{localDefaultPath}</span>
                       </span>
                     </Select.ItemText>
-                    <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                      <Check />
-                    </Select.ItemIndicator>
                   </Select.Item>
                   {sshConnectionGroups.map((group) => (
                     <Select.Group key={group.label}>
@@ -1174,9 +1183,6 @@ export function SftpPanel({
                               </span>
                             </span>
                           </Select.ItemText>
-                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                            <Check />
-                          </Select.ItemIndicator>
                         </Select.Item>
                       ))}
                     </Select.Group>
@@ -1207,9 +1213,6 @@ export function SftpPanel({
                               </span>
                             </span>
                           </Select.ItemText>
-                          <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                            <Check />
-                          </Select.ItemIndicator>
                         </Select.Item>
                       ))}
                     </Select.Group>
@@ -1246,15 +1249,17 @@ export function SftpPanel({
             ) : (
               <>
                 <div className="sftp-breadcrumbs">
-                  {sftpBreadcrumbSegments(pane.endpoint.path).map((segment, index) => (
+                  {pathSegments.map((segment, index) => (
                     <button
                       key={segment.path}
                       type="button"
                       className="sftp-breadcrumb-btn"
                       onClick={() => setEndpoint(side, { ...pane.endpoint, path: segment.path })}
                     >
-                      {index > 0 && <span className="sftp-breadcrumb-sep">/</span>}
-                      <span>{segment.label}</span>
+                      {index > 0 && !/[/\\]$/.test(pathSegments[index - 1].label) && (
+                        <span className="sftp-breadcrumb-sep">{windowsRemote ? "\\" : "/"}</span>
+                      )}
+                      <span>{formatRemotePathForDisplay(segment.label)}</span>
                     </button>
                   ))}
                 </div>

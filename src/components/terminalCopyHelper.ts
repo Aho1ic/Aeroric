@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeClipboardText } from "../lib/clipboard";
 import { shouldSuppressPrintableKeyRepeat } from "./terminalInputFix";
 
 /** Threshold below which we use the fast synchronous path. */
@@ -139,17 +140,9 @@ export async function smartCopy(terminal: Terminal): Promise<boolean> {
   if (!text) return false;
 
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
   } catch {
-    // Fallback for older WebView or permission denial
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
+    // Copy failed; keep returning true so the caller does not send SIGINT.
   }
 
   return true;

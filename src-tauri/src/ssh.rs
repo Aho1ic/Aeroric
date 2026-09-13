@@ -13,6 +13,11 @@ use tauri::ipc::Channel;
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, State};
 
+use crate::agent_family_maps::{
+    claude_permission_args, codex_permission_args, dsh_permission_mode, omp_permission_flag,
+    omp_thinking_level,
+};
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SshConnection {
     pub id: String,
@@ -24,8 +29,22 @@ pub struct SshConnection {
     pub username: String,
     #[serde(rename = "identityFile", skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// 明文密码。**只在反序列化方向有值** —— `skip_serializing` 让它永远不被写出去:
+    /// 既不进 IPC 返回值,也不进 `ssh-connections.json`。
+    ///
+    /// 为什么用属性而不是在 `load_ssh_connections` 里手动清空:手动清空是一个可以被忘掉
+    /// 的步骤(下一个人加一条返回连接的命令就漏了),而属性让"明文出不去"成为结构性事实。
+    /// 前端要判断有没有密码看 `hasPassword`,要取明文走 `get_ssh_connection_password`。
+    #[serde(default, skip_serializing)]
     pub password: Option<String>,
+    /// 这条连接在 `ssh-passwords.json` 里存了密码。
+    ///
+    /// 为什么需要它:落盘侧刻意把密码摘出去单独存 0o600 文件,而读取侧原先又把明文合并
+    /// 回连接对象整体交给渲染进程 —— 拆分的意义被抵消,全部主机的登录凭据常驻 WebView
+    /// 堆。前端真正需要的只是"有没有密码"(决定禁不禁用「复制密码」、编辑框显不显示
+    /// "已保存"),而不是密码本身。取明文走 `get_ssh_connection_password`,一次操作一条。
+    #[serde(rename = "hasPassword", default, skip_serializing_if = "is_false")]
+    pub has_password: bool,
     #[serde(rename = "remotePath", skip_serializing_if = "Option::is_none")]
     pub remote_path: Option<String>,
     #[serde(
@@ -57,15 +76,33 @@ fn ssh_passwords_path() -> Result<PathBuf, String> {
 
 static SSH_CONNECTIONS_STORAGE_LOCK: Mutex<()> = Mutex::new(());
 
+/// 拆出公共信息与密码表。
+///
+/// `existing` 是盘上已存的密码表。传入连接的 `password` 为 `None`/空串时**保留** `existing`
+/// 里那一条 —— 这是"留空不改密码"的语义,而且现在它必须在后端兑现:`load_ssh_connections`
+/// 不再把明文交给前端,前端手里的连接对象 `password` 恒为 `None`,若这里照旧从零重建
+/// 密码表,用户改一次备注就会把**所有**主机的密码抹掉。
 fn prepare_ssh_connections_for_storage(
     connections: Vec<SshConnection>,
+    existing: &BTreeMap<String, String>,
 ) -> (Vec<SshConnection>, BTreeMap<String, String>) {
     let mut public_connections = Vec::with_capacity(connections.len());
     let mut passwords = BTreeMap::new();
     for mut connection in connections {
-        if let Some(password) = connection.password.take().filter(|value| !value.is_empty()) {
-            passwords.insert(connection.id.clone(), password);
+        match connection.password.take().filter(|value| !value.is_empty()) {
+            Some(password) => {
+                passwords.insert(connection.id.clone(), password);
+            }
+            None => {
+                if let Some(kept) = existing.get(&connection.id) {
+                    passwords.insert(connection.id.clone(), kept.clone());
+                }
+            }
         }
+        // `has_password` 是从密码表派生的,不落盘 —— 落了就成了第二个事实来源,而它会与
+        // 密码文件独立变化(比如手工删 ssh-passwords.json),之后前端会看见一个说"有密码"
+        // 的连接却取不到明文。`skip_serializing_if = "is_false"` 让 false 根本不写出去。
+        connection.has_password = false;
         public_connections.push(connection);
     }
     (public_connections, passwords)
@@ -83,12 +120,37 @@ fn load_ssh_passwords() -> Result<BTreeMap<String, String>, String> {
 
 fn write_ssh_connections_storage(connections: Vec<SshConnection>) -> Result<(), String> {
     crate::storage::ensure_aeroric_dirs()?;
-    let (public_connections, passwords) = prepare_ssh_connections_for_storage(connections);
+    // 先读盘上已存的密码表:传入连接密码为空时要保留它,否则"留空不改"变成"留空清空"。
+    let existing = load_ssh_passwords()?;
+    let (public_connections, passwords) =
+        prepare_ssh_connections_for_storage(connections, &existing);
     let public_raw =
         serde_json::to_string_pretty(&public_connections).map_err(|e| e.to_string())?;
     let password_raw = serde_json::to_string_pretty(&passwords).map_err(|e| e.to_string())?;
     crate::storage::atomic_write_private(&ssh_passwords_path()?, &format!("{password_raw}\n"))?;
     crate::storage::atomic_write_private(&ssh_connections_path()?, &format!("{public_raw}\n"))
+}
+
+/// 把盘上存的密码补回一条从前端传来的连接。
+///
+/// 连接动作(`open_ssh_shell` / `run_remote_task` / `resume_remote_task`)的入参是前端
+/// 手里的连接对象,而那个对象的 `password` 现在恒为 `None`。明文由后端按 id 自己取,
+/// 不再往渲染进程走一趟再回来。
+///
+/// **已有明文时不覆盖**:新建/编辑对话框里"测试连接"用的是用户刚敲进去、还没保存的
+/// 密码,那一条必须优先。
+fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(), String> {
+    if connection
+        .password
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(());
+    }
+    let passwords = load_ssh_passwords()?;
+    connection.password = passwords.get(&connection.id).cloned();
+    connection.has_password = connection.password.is_some();
+    Ok(())
 }
 
 fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
@@ -176,12 +238,24 @@ fn is_remote_dsh_agent(agent: &str) -> bool {
     agent == "dsh"
 }
 
-fn dsh_permission_mode(permission_mode: &str) -> Option<&'static str> {
-    match permission_mode {
-        "ask" => Some("read-only"),
-        "auto_edit" => Some("workspace-write"),
-        "full_access" => Some("danger-full-access"),
-        _ => None,
+fn is_remote_omp_agent(agent: &str) -> bool {
+    agent == "omp"
+}
+
+/// 远端 agent id → 协议族。**穷尽的**四族映射:漏一族的后果不是编译错误而是运行时
+/// 静默走错分支 —— omp 曾落到 `else => Claude`,于是 `normalized_reasoning_effort_for`
+/// 用 claude 词表校验 omp 的思考档,`off`/`minimal` 被判非法,SSH 项目上的 omp 任务
+/// 永远起不来;反过来 `ultracode` 被判合法,又会把 ultracode prelude 注进 omp 的 TUI。
+fn remote_agent_family(agent: &str) -> crate::app_settings::AgentFamily {
+    use crate::app_settings::AgentFamily;
+    if is_remote_dsh_agent(agent) {
+        AgentFamily::Dsh
+    } else if is_remote_omp_agent(agent) {
+        AgentFamily::Omp
+    } else if is_remote_codex_like_agent(agent) {
+        AgentFamily::Codex
+    } else {
+        AgentFamily::Claude
     }
 }
 
@@ -213,6 +287,12 @@ fn remote_agent_program_word(agent: &str) -> Result<String, String> {
     })
 }
 
+/// 远端 agent 的启动参数。
+///
+/// omp 走自己一支:它的 flag 名与其余三族都不同(`--approval-mode` / `--thinking`,
+/// 而不是 `--permission-mode` / `--effort`),且**所有 flag 必须在位置参数之前** ——
+/// omp 把位置参数当作"启动后自动提交的首条消息"。落到 claude 那支的后果是被推一个
+/// omp 不认识的 `--effort`。
 fn remote_agent_args(
     agent: &str,
     permission_mode: &str,
@@ -220,27 +300,23 @@ fn remote_agent_args(
     reasoning_effort: Option<&str>,
     speed: Option<&str>,
 ) -> Vec<String> {
+    if is_remote_omp_agent(agent) {
+        return remote_omp_args(permission_mode, selected_model, reasoning_effort);
+    }
+    // 权限档 → 启动参数的唯一映射表在 agent_family_maps(本地 pty.rs 共用)。
     let mut args = match if is_remote_codex_like_agent(agent) {
         "codex"
     } else {
         agent
     } {
-        "claude" => match permission_mode {
-            "ask" => vec!["--permission-mode".to_string(), "default".to_string()],
-            "auto_edit" => vec!["--permission-mode".to_string(), "acceptEdits".to_string()],
-            "full_access" => vec!["--dangerously-skip-permissions".to_string()],
-            _ => vec![],
-        },
-        "codex" => match permission_mode {
-            "auto_edit" => vec![
-                "--sandbox".to_string(),
-                "workspace-write".to_string(),
-                "-a".to_string(),
-                "on-request".to_string(),
-            ],
-            "full_access" => vec!["--dangerously-bypass-approvals-and-sandbox".to_string()],
-            _ => vec![],
-        },
+        "claude" => claude_permission_args(permission_mode)
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        "codex" => codex_permission_args(permission_mode)
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         _ => vec![],
     };
 
@@ -279,6 +355,42 @@ fn remote_agent_args(
         }
     }
 
+    args
+}
+
+/// omp 远端启动参数,与本地 `pty.rs::build_omp_cmd` + `add_omp_launch_args` 同形。
+///
+/// 两处刻意的差异:
+/// - 不给 `--cwd`。远端命令已经是 `cd -- <path> && omp ...`(见 `build_remote_task_command`),
+///   再传一次是重复;本地那边没有 `cd` 这一步所以必须显式给。
+/// - 不设 `PI_CODING_AGENT_DIR`。托管 home 在本机,远端主机上没有这个目录;远端 omp
+///   用对端用户自己的配置,与远端 claude / codex 一致。
+/// - 不传 `speed`。omp 没有对应 flag。
+fn remote_omp_args(
+    permission_mode: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(flag) = omp_permission_flag(permission_mode) {
+        args.push("--approval-mode".to_string());
+        args.push(flag.to_string());
+    }
+    if let Some(model) = selected_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if let Some(level) = reasoning_effort
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .and_then(omp_thinking_level)
+    {
+        args.push("--thinking".to_string());
+        args.push(level.to_string());
+    }
     args
 }
 
@@ -329,7 +441,9 @@ fn build_remote_task_command(
             args.push("--profile".to_string());
             args.push("headless".to_string());
             args.push("--".to_string());
-        } else if is_remote_codex_like_agent(agent) {
+        } else if is_remote_codex_like_agent(agent) || is_remote_omp_agent(agent) {
+            // omp 与 codex 一样把位置参数当首条消息。缺 `--` 时,一个以 `-` 开头的
+            // prompt 会被当成 flag 解析。
             args.push("--".to_string());
         }
         args.push(prompt.to_string());
@@ -905,29 +1019,61 @@ fn spawn_remote_task_pty(
     Ok(())
 }
 
+/// 带明文密码的连接列表。**进程内用**,不经 IPC。
+///
+/// 连接动作需要明文(`ssh_command_spec_from_args` 要把它塞进 `sshpass`,sudo 过滤器要
+/// 拿它应答提示),但那是后端自己的事 —— 明文没有理由往渲染进程走一趟再回来。
+fn load_ssh_connections_with_passwords() -> Result<Vec<SshConnection>, String> {
+    let path = ssh_connections_path()?;
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    crate::storage::ensure_private_file_permissions(&path)?;
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut connections: Vec<SshConnection> =
+        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let passwords = load_ssh_passwords()?;
+    let mut has_legacy_password = false;
+    for connection in &mut connections {
+        if let Some(password) = passwords.get(&connection.id) {
+            connection.password = Some(password.clone());
+        } else if connection.password.is_some() {
+            // 老格式把密码内联在 ssh-connections.json 里。下一次写入会把它迁到
+            // ssh-passwords.json。
+            has_legacy_password = true;
+        }
+        connection.has_password = connection
+            .password
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    }
+    if has_legacy_password {
+        save_ssh_connections_sync(connections.clone())?;
+    }
+    Ok(connections)
+}
+
+/// 按 id 取一条连接的明文密码。
+///
+/// 单独一条命令而不是让 `load_ssh_connections` 带上明文:暴露窗口从"列表加载后常驻"
+/// 缩到"用户点复制密码的那一刻",泄漏面从全部连接缩到一条。
+#[tauri::command]
+pub async fn get_ssh_connection_password(connection_id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let passwords = load_ssh_passwords()?;
+        Ok(passwords.get(&connection_id).cloned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 连接列表。**返回值里 `password` 恒为 `None`**,只用 `hasPassword` 表示存过密码。
 #[tauri::command]
 pub async fn load_ssh_connections() -> Result<Vec<SshConnection>, String> {
     tokio::task::spawn_blocking(|| {
-        let path = ssh_connections_path()?;
-        if !path.exists() {
-            return Ok(vec![]);
-        }
-        crate::storage::ensure_private_file_permissions(&path)?;
-        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let mut connections: Vec<SshConnection> =
-            serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-        let passwords = load_ssh_passwords()?;
-        let mut has_legacy_password = false;
+        let mut connections = load_ssh_connections_with_passwords()?;
         for connection in &mut connections {
-            if let Some(password) = passwords.get(&connection.id) {
-                connection.password = Some(password.clone());
-            } else if connection.password.is_some() {
-                // Migrate the old inline-password format on the next write.
-                has_legacy_password = true;
-            }
-        }
-        if has_legacy_password {
-            save_ssh_connections_sync(connections.clone())?;
+            connection.password = None;
         }
         Ok(connections)
     })
@@ -954,12 +1100,14 @@ pub async fn open_ssh_shell(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     shell_id: String,
-    connection: SshConnection,
+    mut connection: SshConnection,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_ssh_shell_id(&shell_id)?;
+    // 明文密码由后端按 id 自取,不经渲染进程。已带明文(未保存的新连接)时不覆盖。
+    hydrate_ssh_password(&mut connection)?;
     let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
@@ -1052,7 +1200,7 @@ pub async fn run_remote_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    connection: SshConnection,
+    mut connection: SshConnection,
     remote_project_path: String,
     prompt: String,
     agent: String,
@@ -1066,15 +1214,11 @@ pub async fn run_remote_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
+    // 明文密码由后端按 id 自取,不经渲染进程。已带明文(未保存的新连接)时不覆盖。
+    hydrate_ssh_password(&mut connection)?;
     let is_codex = is_remote_codex_like_agent(&agent);
     let is_dsh = is_remote_dsh_agent(&agent);
-    let family = if is_dsh {
-        crate::app_settings::AgentFamily::Dsh
-    } else if is_codex {
-        crate::app_settings::AgentFamily::Codex
-    } else {
-        crate::app_settings::AgentFamily::Claude
-    };
+    let family = remote_agent_family(&agent);
     let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
     let reasoning_effort = crate::pty::normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
@@ -1128,7 +1272,7 @@ pub async fn resume_remote_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    connection: SshConnection,
+    mut connection: SshConnection,
     remote_project_path: String,
     agent: String,
     session_id: String,
@@ -1141,6 +1285,8 @@ pub async fn resume_remote_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     crate::pty::validate_task_id(&task_id)?;
+    // 明文密码由后端按 id 自取,不经渲染进程。已带明文(未保存的新连接)时不覆盖。
+    hydrate_ssh_password(&mut connection)?;
     let is_codex = is_remote_codex_like_agent(&agent);
     let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
     let reasoning_effort = crate::pty::normalized_reasoning_effort(
@@ -1242,6 +1388,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: false,
@@ -1263,21 +1410,25 @@ mod tests {
 
     #[test]
     fn persisted_ssh_connections_keep_passwords_out_of_public_json() {
-        let (public, passwords) = prepare_ssh_connections_for_storage(vec![SshConnection {
-            id: "conn-1".to_string(),
-            name: "prod".to_string(),
-            group: None,
-            host: "prod.example.com".to_string(),
-            port: 22,
-            username: "deploy".to_string(),
-            identity_file: None,
-            password: Some("secret".to_string()),
-            remote_path: None,
-            auto_sudo_with_password: false,
-            use_proxy: false,
-            created_at: 1,
-            last_connected_at: None,
-        }]);
+        let (public, passwords) = prepare_ssh_connections_for_storage(
+            vec![SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: Some("secret".to_string()),
+                has_password: false,
+                remote_path: None,
+                auto_sudo_with_password: false,
+                use_proxy: false,
+                created_at: 1,
+                last_connected_at: None,
+            }],
+            &BTreeMap::new(),
+        );
 
         let public_json = serde_json::to_string(&public).unwrap();
 
@@ -1298,6 +1449,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: Some("old-secret".to_string()),
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1313,6 +1465,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: Some("new-secret".to_string()),
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1322,13 +1475,109 @@ mod tests {
         ];
 
         let remaining = remove_ssh_connection(connections, "conn-1");
-        let (public, passwords) = prepare_ssh_connections_for_storage(remaining);
+        let (public, passwords) = prepare_ssh_connections_for_storage(remaining, &BTreeMap::new());
 
         assert_eq!(public.len(), 1);
         assert_eq!(public[0].id, "conn-2");
         assert_eq!(public[0].name, "prod");
         assert!(!passwords.contains_key("conn-1"));
         assert_eq!(passwords.get("conn-2"), Some(&"new-secret".to_string()));
+    }
+
+    /// 落盘侧刻意把密码摘出去单独存 0o600 文件。读取侧若把明文合并回连接对象整体交给
+    /// 渲染进程,那个拆分就白做了 —— 全部主机的登录凭据(含 sudo 口令)常驻 WebView 堆。
+    #[test]
+    fn public_connections_carry_only_a_has_password_flag() {
+        let stored = BTreeMap::from([("conn-1".to_string(), "secret".to_string())]);
+        let (public, _) = prepare_ssh_connections_for_storage(
+            vec![SshConnection {
+                id: "conn-1".to_string(),
+                name: "prod".to_string(),
+                group: None,
+                host: "prod.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                identity_file: None,
+                password: Some("secret".to_string()),
+                has_password: true,
+                remote_path: None,
+                auto_sudo_with_password: false,
+                use_proxy: false,
+                created_at: 1,
+                last_connected_at: None,
+            }],
+            &stored,
+        );
+        let json = serde_json::to_string(&public).unwrap();
+        assert!(!json.contains("secret"), "公共 JSON 不得含明文: {json}");
+        // 派生标记也不落盘 —— 否则它会与密码文件独立漂移。
+        assert!(!json.contains("hasPassword"), "派生标记不该落盘: {json}");
+    }
+
+    /// 这条防的是一个**数据丢失**回归:`load_ssh_connections` 不再返回明文之后,前端手里
+    /// 的连接对象 `password` 恒为 `None`。若保存时照旧从零重建密码表,用户改一次备注就会
+    /// 把所有主机的密码抹掉。
+    #[test]
+    fn saving_without_a_password_keeps_the_stored_one() {
+        let stored = BTreeMap::from([
+            ("conn-1".to_string(), "kept".to_string()),
+            ("conn-2".to_string(), "old".to_string()),
+        ]);
+        let connection = |id: &str, password: Option<&str>| SshConnection {
+            id: id.to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: password.map(str::to_string),
+            has_password: false,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        };
+
+        let (_, passwords) = prepare_ssh_connections_for_storage(
+            vec![
+                // 前端回传的形态:密码位为空。
+                connection("conn-1", None),
+                // 用户真的敲了新密码:必须覆盖。
+                connection("conn-2", Some("fresh")),
+                // 空串与 None 同义(既有语义)。
+                connection("conn-3", Some("")),
+            ],
+            &stored,
+        );
+
+        assert_eq!(passwords.get("conn-1"), Some(&"kept".to_string()));
+        assert_eq!(passwords.get("conn-2"), Some(&"fresh".to_string()));
+        assert_eq!(passwords.get("conn-3"), None);
+    }
+
+    /// 未保存的新连接在"测试连接"时带着用户刚敲进去的密码。补水不得覆盖它。
+    #[test]
+    fn hydration_never_overwrites_an_explicit_password() {
+        let mut connection = SshConnection {
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: Some("typed-just-now".to_string()),
+            has_password: false,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        };
+        hydrate_ssh_password(&mut connection).expect("hydrate");
+        assert_eq!(connection.password.as_deref(), Some("typed-just-now"));
     }
 
     #[test]
@@ -1343,6 +1592,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: None,
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1385,6 +1635,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: Some("/Users/me/.ssh/prod key".to_string()),
                 password: None,
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1452,6 +1703,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: Some("secret".to_string()),
+            has_password: false,
             remote_path: Some("/srv/app".to_string()),
             auto_sudo_with_password: true,
             use_proxy: false,
@@ -1488,6 +1740,7 @@ mod tests {
                 username: "deploy && whoami".to_string(),
                 identity_file: None,
                 password: None,
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1516,6 +1769,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: Some("secret".to_string()),
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1549,6 +1803,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: Some("secret".to_string()),
+                has_password: false,
                 remote_path: None,
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1581,6 +1836,7 @@ mod tests {
                 username: "deploy".to_string(),
                 identity_file: None,
                 password: None,
+                has_password: false,
                 remote_path: Some("/srv/app".to_string()),
                 auto_sudo_with_password: false,
                 use_proxy: false,
@@ -1643,6 +1899,75 @@ mod tests {
                 .unwrap(),
             "cd -- '/srv/app' && 'codex' --sandbox workspace-write -a on-request -- 'inspect status'"
         );
+    }
+
+    /// omp 的 flag 名与其余三族都不同,且 prompt 是位置参数所以必须有 `--` 分隔。
+    /// 回归:omp 曾走 claude 那支,被推一个它不认识的 `--effort`、且没有 `--`。
+    #[test]
+    fn remote_omp_task_command_uses_omp_flags_and_separator() {
+        assert_eq!(
+            build_remote_task_command(
+                "omp",
+                "auto_edit",
+                "/srv/app",
+                Some("inspect status"),
+                Some("gpt-5"),
+                Some("minimal"),
+                None,
+            )
+            .unwrap(),
+            // `AERORIC_AGENT_MODEL` 由 `build_remote_command` 对所有家族统一前置。
+            "cd -- '/srv/app' && AERORIC_AGENT_MODEL=gpt-5 'omp' --approval-mode write --model gpt-5 --thinking minimal -- 'inspect status'"
+        );
+    }
+
+    /// omp 没有 `--effort`,也不认 claude 的 `ultracode`;`ultra` 封顶到 `max`。
+    #[test]
+    fn remote_omp_never_receives_claude_effort_vocabulary() {
+        let args = remote_agent_args("omp", "full_access", None, Some("ultra"), Some("fast"));
+        assert_eq!(
+            args,
+            vec![
+                "--approval-mode".to_string(),
+                "yolo".to_string(),
+                "--thinking".to_string(),
+                "max".to_string(),
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--effort"));
+        // omp 没有 speed 概念,`fast` 不该漏出任何 flag。
+        assert!(!args.iter().any(|arg| arg == "--settings"));
+    }
+
+    /// 这是"SSH 项目上 omp 任务永远起不来"那条 bug 的直接断言:family 推断把 omp 判成
+    /// claude 时,`normalized_reasoning_effort_for` 会用 claude 词表拒掉 `off`/`minimal`。
+    #[test]
+    fn remote_agent_family_maps_all_four_families() {
+        use crate::app_settings::AgentFamily;
+        assert_eq!(remote_agent_family("omp"), AgentFamily::Omp);
+        assert_eq!(remote_agent_family("dsh"), AgentFamily::Dsh);
+        assert_eq!(remote_agent_family("codex"), AgentFamily::Codex);
+        assert_eq!(remote_agent_family("claude_gpt55"), AgentFamily::Codex);
+        assert_eq!(remote_agent_family("claude"), AgentFamily::Claude);
+
+        // 端到端:omp 的 off/minimal 必须被判合法,ultracode 必须被拒。
+        for level in ["off", "minimal", "max"] {
+            assert!(
+                crate::pty::normalized_reasoning_effort_for(
+                    Some(level),
+                    remote_agent_family("omp"),
+                    None
+                )
+                .is_ok(),
+                "omp 应接受 {level}"
+            );
+        }
+        assert!(crate::pty::normalized_reasoning_effort_for(
+            Some("ultracode"),
+            remote_agent_family("omp"),
+            None
+        )
+        .is_err());
     }
 
     #[test]
@@ -1815,6 +2140,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: false,

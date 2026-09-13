@@ -6,12 +6,17 @@
  * 在紧凑档里它是主要的导航方式:那一档笔记列表默认收起,tab 条就是唯一能一眼
  * 看到多条笔记的地方。
  *
+ * 选中轨道走共享的 AnimatedSelectionTrack(role="tablist" + 下划线指示条),
+ * 每个页签是一个 data-animated-selection-item 容器,里面并排选中钮与关闭钮
+ * —— 与 ProjectWorkspaceTabs 同一套结构。
+ *
  * 脏标记用的是自动保存的状态,不是自己另算一份:
  * - pending / saving:圆点。会在一秒内自己消失,不拦关闭。
  * - error:感叹号 + 危险色。这一档关闭要确认 —— 那条编辑真的会丢。
  */
 
 import { AlertCircle, X } from "lucide-react";
+import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 import type { NoteSaveState } from "./useNoteAutosave";
 
 export type NoteTabItem = {
@@ -34,9 +39,11 @@ export function NoteTabStrip({ tabs, activeId, onSelect, onClose, t }: NoteTabSt
   if (tabs.length < 2) return null;
 
   return (
-    <div
+    <AnimatedSelectionTrack
+      value={activeId ?? ""}
       role="tablist"
-      aria-label={t("notebook.openNotes")}
+      variant="underline"
+      ariaLabel={t("notebook.openNotes")}
       style={{
         display: "flex",
         alignItems: "stretch",
@@ -56,16 +63,13 @@ export function NoteTabStrip({ tabs, activeId, onSelect, onClose, t }: NoteTabSt
         return (
           <div
             key={tab.id}
+            data-animated-selection-item
+            data-selection-value={tab.id}
             style={{
               display: "flex",
               alignItems: "center",
               gap: 2,
               maxWidth: 168,
-              borderRadius: "6px 6px 0 0",
-              background: active ? "var(--bg-panel)" : "transparent",
-              border: "1px solid",
-              borderColor: active ? "var(--border-dim)" : "transparent",
-              borderBottom: "none",
               paddingRight: 2,
             }}
           >
@@ -73,6 +77,7 @@ export function NoteTabStrip({ tabs, activeId, onSelect, onClose, t }: NoteTabSt
               type="button"
               role="tab"
               aria-selected={active}
+              tabIndex={active ? 0 : -1}
               /* 保存失败要能被读屏听见:状态栏只播报当前那条,非当前的 tab 失败了
                  就没有别的渠道。正常态不给 aria-label,名字由文本本身来 —— 少一层
                  需要跟着标题同步的东西。 */
@@ -157,6 +162,6 @@ export function NoteTabStrip({ tabs, activeId, onSelect, onClose, t }: NoteTabSt
           </div>
         );
       })}
-    </div>
+    </AnimatedSelectionTrack>
   );
 }

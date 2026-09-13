@@ -6,7 +6,6 @@ import type {
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from "react";
-import { Button, type ButtonSize, type ButtonVariant } from "./Button";
 
 export function Field({
   label,
@@ -141,33 +140,5 @@ export function Toolbar({ style, ...props }: HTMLAttributes<HTMLDivElement>) {
       style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 40, ...style }}
       {...props}
     />
-  );
-}
-
-export function IconButton({
-  label,
-  children,
-  active,
-  variant = "ghost",
-  size = "icon",
-  ...props
-}: React.ComponentProps<typeof Button> & {
-  label: string;
-  children: ReactNode;
-  active?: boolean;
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-}) {
-  return (
-    <Button
-      aria-label={label}
-      title={label}
-      active={active}
-      variant={variant}
-      size={size}
-      {...props}
-    >
-      {children}
-    </Button>
   );
 }

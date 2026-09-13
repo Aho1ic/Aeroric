@@ -11,6 +11,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::agent_family_maps::{
+    claude_permission_args, codex_permission_args, dsh_permission_mode, omp_permission_flag,
+    omp_thinking_level,
+};
 use crate::session::{
     should_start_status_session_watcher, spawn_claude_lazy_session_attach,
     spawn_codex_session_recovery, spawn_resume_session_watcher, spawn_status_session_watcher,
@@ -703,19 +707,9 @@ fn build_claude_cmd(
     // （wheelup/wheeldown → scroll:lineUp/lineDown）逐行滚动，滚轮回到"翻看内容"的语义。
     // 代价是本地框选要按 ⌥Option（macOS，initTerminal 已开 macOptionClickForcesSelection）
     // 或 Shift（Win/Linux），与 iTerm2 / VS Code 一致。
-    match permission_mode {
-        "ask" => {
-            c.arg("--permission-mode");
-            c.arg("default");
-        }
-        "auto_edit" => {
-            c.arg("--permission-mode");
-            c.arg("acceptEdits");
-        }
-        "full_access" => {
-            c.arg("--dangerously-skip-permissions");
-        }
-        _ => {}
+    // 权限档 → 启动参数的唯一映射表在 agent_family_maps(远端 ssh.rs 共用)。
+    for arg in claude_permission_args(permission_mode) {
+        c.arg(arg);
     }
     c
 }
@@ -727,19 +721,8 @@ fn build_codex_cmd(
 ) -> CommandBuilder {
     let mut c = CommandBuilder::new(&launch.program);
     c.args(&launch.args);
-    match permission_mode {
-        "auto_edit" => {
-            // 等价于已弃用的 --full-auto（codex >= 0.128 已移除该别名）：
-            // 工作区内自动写、越界命令才升级审批。
-            c.arg("--sandbox");
-            c.arg("workspace-write");
-            c.arg("-a");
-            c.arg("on-request");
-        }
-        "full_access" => {
-            c.arg("--dangerously-bypass-approvals-and-sandbox");
-        }
-        _ => {}
+    for arg in codex_permission_args(permission_mode) {
+        c.arg(arg);
     }
     c
 }
@@ -766,13 +749,7 @@ fn build_dsh_cmd(
         c.arg("--profile");
         c.arg("headless");
     }
-    let dsh_permission = match permission_mode {
-        "ask" => Some("read-only"),
-        "auto_edit" => Some("workspace-write"),
-        "full_access" => Some("danger-full-access"),
-        _ => None,
-    };
-    if let Some(mode) = dsh_permission {
+    if let Some(mode) = dsh_permission_mode(permission_mode) {
         c.env("DSH_PERMISSION_MODE", mode);
     }
     // 受管 patch 已禁用遥测 row;env 再兜底一层,防 dsh 未来默认值变化。
@@ -788,32 +765,6 @@ fn add_dsh_launch_args(cmd: &mut CommandBuilder, dsh_home: &Path, patch_files: &
     for patch in patch_files {
         cmd.arg("--patch");
         cmd.arg(patch.to_string_lossy().as_ref());
-    }
-}
-
-/// Aeroric 权限模式 → omp `--approval-mode`。
-fn omp_permission_flag(permission_mode: &str) -> Option<&'static str> {
-    match permission_mode {
-        "ask" => Some("always-ask"),
-        "auto_edit" => Some("write"),
-        "full_access" => Some("yolo"),
-        _ => None,
-    }
-}
-
-/// Aeroric 统一 effort 词表 → omp thinking level(与前端 OMP_THINKING_LEVEL_MAP
-/// 恒等映射一致:omp 原生 7 档透传,ultra 封顶 max)。
-fn omp_thinking_level(effort: &str) -> Option<&'static str> {
-    match effort {
-        "off" => Some("off"),
-        "minimal" => Some("minimal"),
-        "low" => Some("low"),
-        "medium" => Some("medium"),
-        "high" => Some("high"),
-        "xhigh" => Some("xhigh"),
-        "max" => Some("max"),
-        "ultra" => Some("max"),
-        _ => None,
     }
 }
 
@@ -3154,17 +3105,6 @@ mod tests {
             Some(""),
         );
         assert_eq!(cmd_argv(&cmd), vec!["omp", "--cwd", "/work/project"]);
-    }
-
-    #[test]
-    fn omp_thinking_level_maps_identity_with_ultra_cap() {
-        assert_eq!(omp_thinking_level("off"), Some("off"));
-        assert_eq!(omp_thinking_level("minimal"), Some("minimal"));
-        assert_eq!(omp_thinking_level("low"), Some("low"));
-        assert_eq!(omp_thinking_level("xhigh"), Some("xhigh"));
-        assert_eq!(omp_thinking_level("max"), Some("max"));
-        assert_eq!(omp_thinking_level("ultra"), Some("max"));
-        assert_eq!(omp_thinking_level("bogus"), None);
     }
 
     /// omp 的 effort 词表与 claude 不同(有 off/minimal,没有 ultracode)。

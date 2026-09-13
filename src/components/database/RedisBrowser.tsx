@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useRedisBrowser } from "../../hooks/useRedisBrowser";
+import { usePanelResize } from "../../hooks/usePanelResize";
 import {
   clearRedisCommandHistory,
   isRedisClearScreenCommand,
@@ -27,6 +28,7 @@ import {
   saveRedisCommandHistory,
 } from "../../lib/redisCommandSession";
 import { classifyRedisCommandSafety } from "../../lib/redisCommandSafety";
+import { writeClipboardText } from "../../lib/clipboard";
 import { redisKeySearchPattern } from "../../lib/redisKeyPattern";
 import {
   buildRedisKeyTree,
@@ -103,12 +105,20 @@ export function RedisBrowser({
   const [memberDetailView, setMemberDetailView] = useState<"json" | "raw">("json");
   const [memberJsonWordWrap, setMemberJsonWordWrap] = useState(loadRedisJsonWordWrap);
   const [memberDetailPanelWidth, setMemberDetailPanelWidth] = useState(420);
-  const [resizingMemberDetail, setResizingMemberDetail] = useState(false);
-  const memberDetailResizeStartRef = useRef({ x: 0, width: 420 });
+  // 拖拽改宽的监听骨架在 usePanelResize;宽度状态留在这里,起点由开始拖拽时的
+  // 闭包记下(与原先写进 startRef 再回读等价)。
+  const {
+    resizingKind: resizingMemberDetail,
+    beginResize: beginMemberDetailResize,
+    endResize: endMemberDetailResize,
+  } = usePanelResize<boolean>();
   const [memberHashFieldWidth, setMemberHashFieldWidth] = useState(180);
   const [memberZsetScoreWidth, setMemberZsetScoreWidth] = useState(120);
-  const [resizingMemberColumn, setResizingMemberColumn] = useState<"hash" | "zset" | null>(null);
-  const memberColumnResizeStartRef = useRef({ x: 0, width: 0 });
+  const {
+    resizingKind: resizingMemberColumn,
+    beginResize: beginMemberColumnResize,
+    endResize: endMemberColumnResize,
+  } = usePanelResize<"hash" | "zset">();
   const [memberEditValue, setMemberEditValue] = useState("");
   const [savingMember, setSavingMember] = useState(false);
   const [newMemberField, setNewMemberField] = useState("");
@@ -169,8 +179,8 @@ export function RedisBrowser({
     hashSearchRequestIdRef.current += 1;
     setEditingMemberId(null);
     setMemberDetailView("json");
-    setResizingMemberDetail(false);
-    setResizingMemberColumn(null);
+    endMemberDetailResize();
+    endMemberColumnResize();
     setMemberEditValue("");
     setSavingMember(false);
     setNewMemberField("");
@@ -241,57 +251,6 @@ export function RedisBrowser({
     },
     [],
   );
-
-  useEffect(() => {
-    if (!resizingMemberDetail) return undefined;
-    const originalCursor = document.body.style.cursor;
-    const originalUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const handlePointerMove = (event: PointerEvent) => {
-      const { x, width } = memberDetailResizeStartRef.current;
-      setMemberDetailPanelWidth(clampRedisMemberDetailWidth(width + x - event.clientX));
-    };
-    const handlePointerUp = () => {
-      setResizingMemberDetail(false);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    return () => {
-      document.body.style.cursor = originalCursor;
-      document.body.style.userSelect = originalUserSelect;
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [resizingMemberDetail]);
-
-  useEffect(() => {
-    if (!resizingMemberColumn) return undefined;
-    const originalCursor = document.body.style.cursor;
-    const originalUserSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const handlePointerMove = (event: PointerEvent) => {
-      const { x, width } = memberColumnResizeStartRef.current;
-      const nextWidth = width + event.clientX - x;
-      if (resizingMemberColumn === "hash") {
-        setMemberHashFieldWidth(clampRedisHashFieldWidth(nextWidth));
-      } else {
-        setMemberZsetScoreWidth(clampRedisZsetScoreWidth(nextWidth));
-      }
-    };
-    const handlePointerUp = () => {
-      setResizingMemberColumn(null);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    return () => {
-      document.body.style.cursor = originalCursor;
-      document.body.style.userSelect = originalUserSelect;
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [resizingMemberColumn]);
 
   useEffect(() => {
     const nextValueDraft = redisValueText(redis.selectedValue?.value ?? "");
@@ -411,13 +370,11 @@ export function RedisBrowser({
     setFetchingAllKeys(false);
   };
   const copyKeyName = (keyRaw: string) => {
-    navigator.clipboard?.writeText(keyRaw).catch(() => undefined);
+    void writeClipboardText(keyRaw).catch(() => undefined);
   };
   const copyValue = () => {
     if (!redis.selectedValue) return;
-    navigator.clipboard
-      ?.writeText(redisValueText(redis.selectedValue.value))
-      .catch(() => undefined);
+    void writeClipboardText(redisValueText(redis.selectedValue.value)).catch(() => undefined);
   };
   const selectedValueText = redisValueText(redis.selectedValue?.value ?? "");
   const selectedValueIsStream = redis.selectedValue?.key_type.toLowerCase() === "stream";
@@ -502,7 +459,7 @@ export function RedisBrowser({
     setMemberDetailView(selectedMember?.format === "json" ? "json" : "raw");
   }, [selectedMember?.format, selectedMember?.id]);
   const copyMember = (row: RedisMemberRow) => {
-    navigator.clipboard?.writeText(row.copyText).catch(() => undefined);
+    void writeClipboardText(row.copyText).catch(() => undefined);
   };
   const closeMemberDetail = () => {
     setEditingMemberId(null);
@@ -510,19 +467,28 @@ export function RedisBrowser({
   };
   const startMemberDetailResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    memberDetailResizeStartRef.current = { x: event.clientX, width: memberDetailPanelWidth };
-    setResizingMemberDetail(true);
+    const startClientX = event.clientX;
+    beginMemberDetailResize(true, (moveEvent) =>
+      setMemberDetailPanelWidth(
+        clampRedisMemberDetailWidth(memberDetailPanelWidth + startClientX - moveEvent.clientX),
+      ),
+    );
   };
   const startMemberColumnResize = (
     kind: "hash" | "zset",
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     event.preventDefault();
-    memberColumnResizeStartRef.current = {
-      x: event.clientX,
-      width: kind === "hash" ? memberHashFieldWidth : memberZsetScoreWidth,
-    };
-    setResizingMemberColumn(kind);
+    const startClientX = event.clientX;
+    const startWidth = kind === "hash" ? memberHashFieldWidth : memberZsetScoreWidth;
+    beginMemberColumnResize(kind, (moveEvent) => {
+      const nextWidth = startWidth + moveEvent.clientX - startClientX;
+      if (kind === "hash") {
+        setMemberHashFieldWidth(clampRedisHashFieldWidth(nextWidth));
+      } else {
+        setMemberZsetScoreWidth(clampRedisZsetScoreWidth(nextWidth));
+      }
+    });
   };
   const startEditMember = (row: RedisMemberRow) => {
     if (readOnly || !row.editAction) return;
@@ -768,7 +734,7 @@ export function RedisBrowser({
     const statement = redisInsertStatement(redis.selectedValue);
     if (!statement) return;
     setValueFormatError("");
-    navigator.clipboard?.writeText(statement).catch(() => undefined);
+    void writeClipboardText(statement).catch(() => undefined);
   };
   const updateJsonDraft = (pretty: boolean) => {
     if (!redis.selectedValue || readOnly || redis.selectedValue.value_is_binary) return;

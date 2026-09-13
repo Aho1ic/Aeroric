@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -12,28 +12,12 @@ use transport::{
 
 pub(crate) const MAX_STASH_DIFF_CHARS: usize = 200_000;
 
+use crate::git_path_guard::{validate_git_revision, GitFlavor};
+
+/// 本地 worktree 的路径防御判定统一在 `git_path_guard`,WSL / 远端共用同一份;
+/// 这里保留原名作一行委托,调用点与测试不动。
 fn validate_git_relative_path(relative_path: &str) -> Result<(), String> {
-    if relative_path.is_empty() {
-        return Err("File path must not be empty".to_string());
-    }
-
-    let path = Path::new(relative_path);
-    if path.is_absolute() {
-        return Err("File path must be relative".to_string());
-    }
-
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir
-            | std::path::Component::RootDir
-            | std::path::Component::Prefix(_) => {
-                return Err("File path must stay inside the git worktree".to_string());
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
+    crate::git_path_guard::validate_git_relative_path(GitFlavor::Local, relative_path)
 }
 
 /// 允许 `git clone` / `git remote add` 接收的 URL 形态。
@@ -126,29 +110,11 @@ fn validate_clone_target(target: &str) -> Result<(), String> {
 }
 
 fn unique_git_file_paths(file_paths: Vec<String>) -> Result<Vec<String>, String> {
-    let mut seen = HashSet::new();
-    let mut paths = Vec::new();
-
-    for file_path in file_paths {
-        validate_git_relative_path(&file_path)?;
-        if seen.insert(file_path.clone()) {
-            paths.push(file_path);
-        }
-    }
-
-    Ok(paths)
+    crate::git_path_guard::unique_git_file_paths(GitFlavor::Local, file_paths)
 }
 
 fn git_path_args(base_args: &[&str], file_paths: Vec<String>) -> Result<Vec<String>, String> {
-    let paths = unique_git_file_paths(file_paths)?;
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut args: Vec<String> = base_args.iter().map(|arg| (*arg).to_string()).collect();
-    args.push("--".to_string());
-    args.extend(paths);
-    Ok(args)
+    crate::git_path_guard::git_path_args(GitFlavor::Local, base_args, file_paths)
 }
 
 fn git_worktree_root(project_path: &str) -> Result<PathBuf, String> {
@@ -187,20 +153,8 @@ fn git_has_head(worktree_root: &str) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
-const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".aeroric"];
-
 fn is_protected_project_relative_path(relative_path: &str) -> bool {
-    Path::new(relative_path)
-        .components()
-        .find_map(|component| match component {
-            std::path::Component::Normal(name) => name.to_str().map(|name| {
-                PROTECTED_FIRST_SEGMENTS
-                    .iter()
-                    .any(|protected| name.eq_ignore_ascii_case(protected))
-            }),
-            _ => None,
-        })
-        .unwrap_or(false)
+    crate::git_path_guard::is_protected_git_relative_path(relative_path)
 }
 
 fn apply_login_shell_env(cmd: &mut Command) {
@@ -472,24 +426,6 @@ fn validate_git_branch_name(branch_name: &str) -> Result<(), String> {
     // (option injection), even before the "--" separator is applied.
     if branch_name.starts_with('-') {
         return Err("Branch name must not start with '-'".to_string());
-    }
-    Ok(())
-}
-
-/// Reject a user-supplied revision / commit hash that git could parse as an
-/// option. A malicious repository can carry a ref such as
-/// `refs/heads/--output=/path` (creatable via `git update-ref`), which then
-/// shows up in the branch list and flows back here as `branch`/`commit_hash`.
-/// Without this guard, `git show`/`git log` would treat it as `--output=` and
-/// write attacker-controlled content to an arbitrary path (option injection,
-/// CWE-88). Callers should additionally pass `--end-of-options` where the local
-/// git version supports it.
-pub(crate) fn validate_git_revision(revision: &str) -> Result<(), String> {
-    if revision.is_empty() {
-        return Err("Git revision must not be empty".to_string());
-    }
-    if revision.starts_with('-') || revision.contains('\0') {
-        return Err("Invalid git revision".to_string());
     }
     Ok(())
 }
@@ -2288,6 +2224,14 @@ pub async fn merge_task_worktree(
     if branch.trim().is_empty() || base_branch.trim().is_empty() {
         return Err("Branch and base branch are required".to_string());
     }
+    // 与其余七处接收 revision 的命令同一形状。缺这两行时,两个值会进 `git merge` 的
+    // 参数位与 `git fetch . <branch>:<base>` 的 refspec;git 在 `--` 之前把任何以 `-`
+    // 开头的位置参数当选项解析,而 `git fetch` 认 `--upload-pack=<cmd>` 并对本地路径
+    // remote(`.`)经 shell 执行它 —— 与 `git_clone` 上用回归测试钉死的那条 RCE 同类。
+    // refspec 无法靠 `--end-of-options` 保护(选项在它之前就解析完了),首字符检查是
+    // 唯一可靠手段。
+    validate_git_revision(&branch)?;
+    validate_git_revision(&base_branch)?;
 
     tokio::task::spawn_blocking(move || -> Result<String, String> {
         // 0) worktree 自身有未提交修改 → 拒绝合并，避免丢失工作进度
@@ -2312,7 +2256,10 @@ pub async fn merge_task_worktree(
 
         if original_branch == base_branch {
             // 主仓正在 base 上，直接合并（保留 merge commit 让历史可追溯）
-            let merge_out = run_git(&project_path, &["merge", "--no-ff", &branch])?;
+            let merge_out = run_git(
+                &project_path,
+                &["merge", "--no-ff", "--end-of-options", &branch],
+            )?;
             let combined = format!(
                 "{}{}",
                 String::from_utf8_lossy(&merge_out.stdout),
@@ -2470,7 +2417,7 @@ mod tests {
         git_conflict_preview, git_dir, git_fetch, git_has_head, git_init, git_log,
         git_resolve_conflict, git_show_diff, git_stash_diff, git_stash_list, git_stash_push,
         git_worktree_root, is_protected_project_relative_path, list_untracked_files,
-        parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
+        merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
         parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list, path_to_string,
         resolve_conflict_markers_keep_both, run_git, run_git_check,
         untracked_files_under_directory, validate_clone_target, validate_git_revision,
@@ -3135,6 +3082,46 @@ mod tests {
         assert!(error.contains("must not start with"), "error = {error}");
         assert!(!sentinel.exists(), "选项注入执行了命令");
         assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn merge_task_worktree_refuses_option_like_revisions_without_running_git() {
+        // 与上面 clone 那条同类:`branch` 会进 `git fetch . <branch>:<base>` 的 refspec,
+        // 而 refspec 在 `--` 之前解析,`--upload-pack=<cmd>` 对本地路径 remote 会经 shell
+        // 执行。所以必须在 git 被调起**之前**拒掉。
+        let repo = TempRepo::new();
+        repo.configure_identity();
+        repo.commit_file("note.md", "hello", "first");
+        let project_path = repo.path_string();
+
+        let worktrees_root = repo.path.join(".aeroric").join("worktrees");
+        fs::create_dir_all(&worktrees_root).unwrap();
+        let worktree = worktrees_root.join("wt");
+        fs::create_dir_all(&worktree).unwrap();
+        let worktree_path = path_to_string(&worktree.canonicalize().unwrap()).unwrap();
+
+        let sentinel =
+            std::env::temp_dir().join(format!("aeroric-merge-rce-{}", uuid::Uuid::new_v4()));
+        let payload = format!("--upload-pack=touch {};git-upload-pack", sentinel.display());
+
+        let error = merge_task_worktree(
+            project_path.clone(),
+            worktree_path.clone(),
+            payload.clone(),
+            "main".to_string(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Invalid git revision", "error = {error}");
+        assert!(!sentinel.exists(), "选项注入执行了命令");
+
+        // base_branch 也是 refspec 的一半,同样得挡。
+        let error =
+            merge_task_worktree(project_path, worktree_path, "feature".to_string(), payload)
+                .await
+                .unwrap_err();
+        assert_eq!(error, "Invalid git revision", "error = {error}");
+        assert!(!sentinel.exists(), "选项注入执行了命令");
     }
 
     #[tokio::test]

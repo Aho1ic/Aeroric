@@ -18,11 +18,13 @@ import {
 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useMongoBrowser } from "../../hooks/useMongoBrowser";
+import { writeClipboardText } from "../../lib/clipboard";
 import s from "../../styles";
 import type { AeroricDbConnectionConfig } from "../../types";
 import { Button as DbxButton, MenuItem as DbxMenuItem } from "../ui/Button";
 import { AnimatedSelectionGroup } from "../ui/AnimatedSelection";
 import { confirmDbxProductionOperation, hasProductionProtection } from "./databaseProductionSafety";
+import { readMigratedDbxStorageValue, mongoDocumentRawId } from "./databaseViewModel";
 
 interface Props {
   connectionId: string;
@@ -43,7 +45,9 @@ interface Props {
 const MONGO_WORKSPACE_DEFAULT_PAGE_SIZE = 100;
 const MONGO_WORKSPACE_PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000] as const;
 const EMPTY_DOCUMENT_DRAFT = "{\n  \n}";
-const MONGO_VIEW_MODE_STORAGE_KEY = "dbx-mongo-view-mode";
+const MONGO_VIEW_MODE_STORAGE_KEY = "aeroric:database:mongo-view-mode";
+/** 改名前的键名(不带 `aeroric:` 前缀)。只有 `loadMongoViewMode` 的迁移回退还读它。 */
+const LEGACY_MONGO_VIEW_MODE_STORAGE_KEY = "dbx-mongo-view-mode";
 type MongoViewMode = "document" | "table";
 type MongoFilterMode =
   | "equals"
@@ -81,13 +85,11 @@ function nextMongoFilterRuleId() {
 }
 
 function loadMongoViewMode(): MongoViewMode {
-  try {
-    if (typeof window === "undefined") return "document";
-    const value = window.localStorage.getItem(MONGO_VIEW_MODE_STORAGE_KEY);
-    return value === "table" || value === "document" ? value : "document";
-  } catch {
-    return "document";
-  }
+  const value = readMigratedDbxStorageValue(
+    MONGO_VIEW_MODE_STORAGE_KEY,
+    LEGACY_MONGO_VIEW_MODE_STORAGE_KEY,
+  );
+  return value === "table" || value === "document" ? value : "document";
 }
 
 function saveMongoViewMode(value: MongoViewMode) {
@@ -103,11 +105,6 @@ function mongoDocumentId(document: unknown) {
   if (document && typeof document === "object" && "_id" in document)
     return String((document as { _id: unknown })._id);
   return "";
-}
-
-function mongoDocumentRawId(document: unknown): unknown | null {
-  if (!document || typeof document !== "object" || !("_id" in document)) return null;
-  return (document as { _id: unknown })._id;
 }
 
 function mongoDocumentColumns(documents: unknown[]): string[] {
@@ -591,10 +588,10 @@ export function MongoBrowser({
     loadDocuments(activeDatabase, activeCollection, filter, sort, pageSize, structured);
   };
   const copyCollectionName = (collection: string) => {
-    navigator.clipboard?.writeText(collection).catch(() => undefined);
+    void writeClipboardText(collection).catch(() => undefined);
   };
   const copyDocumentJson = (document: unknown) => {
-    navigator.clipboard?.writeText(JSON.stringify(document, null, 2)).catch(() => undefined);
+    void writeClipboardText(JSON.stringify(document, null, 2)).catch(() => undefined);
   };
   const selectCollection = (collection: string) => {
     setColumnVisibilityOpen(false);
