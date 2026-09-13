@@ -242,6 +242,19 @@ fn as_sql_integer(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
 
+/// [`UsageAgent`] → `agent` 列的字面量。与 [`parse_usage_agent`] 互为逆向。
+///
+/// 这两个 match 是库里 `agent` 列的唯一值域来源:写入只可能产出这四个字面量,所以读取
+/// 认不出来就一定是旧行或坏行,不是新家族。
+fn usage_agent_column(agent: UsageAgent) -> &'static str {
+    match agent {
+        UsageAgent::Codex => "codex",
+        UsageAgent::Claude => "claude",
+        UsageAgent::Dsh => "dsh",
+        UsageAgent::Omp => "omp",
+    }
+}
+
 fn replace_source(
     connection: &mut Connection,
     path: &str,
@@ -283,12 +296,7 @@ fn replace_source(
                     index.min(i64::MAX as usize) as i64,
                     request.timestamp,
                     request.date.to_string(),
-                    match request.agent {
-                        UsageAgent::Codex => "codex",
-                        UsageAgent::Claude => "claude",
-                        UsageAgent::Dsh => "dsh",
-                        UsageAgent::Omp => "omp",
-                    },
+                    usage_agent_column(request.agent),
                     request.model,
                     as_sql_integer(request.input_tokens),
                     as_sql_integer(request.output_tokens),
@@ -408,11 +416,36 @@ fn refresh_index_inner(force: bool) -> Result<bool, String> {
     Ok(changed)
 }
 
+/// `agent` 列的字面量 → [`UsageAgent`]。与 [`replace_source`] 里写库的那个 match 互为
+/// 逆向,两边必须同时改。
+///
+/// 认不出来回 `None`,调用方**跳过这一行**而不是归到某一族。原来这里是
+/// `_ => UsageAgent::Claude`:库里只可能出现上面那四个字面量(写入侧同一个 match 产出),
+/// 所以认不出来意味着降级回滚留下的旧行或库被写坏 —— 那种行记到 claude 名下,用户看到的
+/// 是 claude 用量凭空变多,而且和 breakdown 四族之和对不上。宁可少算不可错算。
+fn parse_usage_agent(value: &str) -> Option<UsageAgent> {
+    match value {
+        "codex" => Some(UsageAgent::Codex),
+        "claude" => Some(UsageAgent::Claude),
+        "dsh" => Some(UsageAgent::Dsh),
+        "omp" => Some(UsageAgent::Omp),
+        _ => None,
+    }
+}
+
 pub(crate) fn load_requests(
     from: chrono::NaiveDate,
     to: chrono::NaiveDate,
 ) -> Result<Vec<UsageRequest>, String> {
     let connection = open_database()?;
+    load_requests_from(&connection, from, to)
+}
+
+fn load_requests_from(
+    connection: &Connection,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+) -> Result<Vec<UsageRequest>, String> {
     let mut statement = connection
         .prepare(
             "
@@ -443,13 +476,10 @@ pub(crate) fn load_requests(
                         Box::new(error),
                     )
                 })?;
-            let agent = match row.get::<_, String>(2)?.as_str() {
-                "codex" => UsageAgent::Codex,
-                "dsh" => UsageAgent::Dsh,
-                "omp" => UsageAgent::Omp,
-                _ => UsageAgent::Claude,
+            let Some(agent) = parse_usage_agent(&row.get::<_, String>(2)?) else {
+                return Ok(None);
             };
-            Ok(UsageRequest {
+            Ok(Some(UsageRequest {
                 timestamp: row.get(0)?,
                 date,
                 agent,
@@ -458,11 +488,17 @@ pub(crate) fn load_requests(
                 output_tokens: row.get::<_, i64>(5)?.max(0) as u64,
                 cache_creation_tokens: row.get::<_, i64>(6)?.max(0) as u64,
                 cache_read_tokens: row.get::<_, i64>(7)?.max(0) as u64,
-            })
+            }))
         })
         .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    let mut requests = Vec::new();
+    for row in rows {
+        // 认不出 agent 的行在这里被丢掉,不进任何一族的统计。
+        if let Some(request) = row.map_err(|error| error.to_string())? {
+            requests.push(request);
+        }
+    }
+    Ok(requests)
 }
 
 pub(crate) fn latest_updated_at() -> Result<i64, String> {
@@ -767,5 +803,131 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_requests", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // ── agent 列的读写映射 ─────────────────────────────────────────────────
+
+    /// 下一个 [`UsageAgent`]。穷尽 `match`:新增一族时这里不编译,于是下面那条往返测试
+    /// 一定会覆盖到它。
+    fn next_agent(agent: UsageAgent) -> Option<UsageAgent> {
+        match agent {
+            UsageAgent::Codex => Some(UsageAgent::Claude),
+            UsageAgent::Claude => Some(UsageAgent::Dsh),
+            UsageAgent::Dsh => Some(UsageAgent::Omp),
+            UsageAgent::Omp => None,
+        }
+    }
+
+    fn all_agents() -> Vec<UsageAgent> {
+        let mut agents = vec![UsageAgent::Codex];
+        while let Some(next) = next_agent(*agents.last().expect("至少有 Codex")) {
+            assert!(!agents.contains(&next), "next_agent 成环:{next:?}");
+            agents.push(next);
+        }
+        agents
+    }
+
+    /// 写进去的每一族都要原样读回来。两个 match 反向不一致 = 用量记到别人名下。
+    #[test]
+    fn every_agent_survives_a_database_round_trip() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_database(&connection).unwrap();
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+
+        let agents = all_agents();
+        assert_eq!(agents.len(), 4, "清单漏了 agent");
+        for (index, agent) in agents.iter().enumerate() {
+            replace_source(
+                &mut connection,
+                &format!("/tmp/session-{index}.jsonl"),
+                SourceState {
+                    modified_ns: 1,
+                    size: 10,
+                },
+                &[UsageRequest {
+                    timestamp: index as f64,
+                    date: day,
+                    agent: *agent,
+                    model: "m".to_owned(),
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                }],
+            )
+            .unwrap();
+        }
+
+        let loaded = load_requests_from(&connection, day, day).unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .map(|request| request.agent)
+                .collect::<Vec<_>>(),
+            agents,
+            "读回来的 agent 与写进去的不一致"
+        );
+    }
+
+    /// 认不出的 agent 必须被跳过,而不是记到 claude 名下。
+    ///
+    /// 这种行只可能来自降级回滚留下的旧库或写坏的库(写入侧只产出四个已知字面量)。
+    /// 原来的 `_ => UsageAgent::Claude` 会让它变成 claude 的用量:面板上 claude 凭空多出
+    /// 一截,且总计与四族之和对不上。用裸 SQL 造这一行 —— 类型安全的写入路径造不出来。
+    #[test]
+    fn an_unrecognized_agent_is_skipped_instead_of_counted_as_claude() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_database(&connection).unwrap();
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 9, 2).unwrap();
+
+        replace_source(
+            &mut connection,
+            "/tmp/known.jsonl",
+            SourceState {
+                modified_ns: 1,
+                size: 10,
+            },
+            &[UsageRequest {
+                timestamp: 1.0,
+                date: day,
+                agent: UsageAgent::Claude,
+                model: "claude-sonnet-5".to_owned(),
+                input_tokens: 7,
+                output_tokens: 3,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            }],
+        )
+        .unwrap();
+        connection
+            .execute(
+                "
+                INSERT INTO usage_requests (
+                    source_path, request_index, timestamp, date, agent, model,
+                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
+                ) VALUES ('/tmp/mystery.jsonl', 0, 2.0, ?1, 'gemini', 'gemini-3', 999, 999, 0, 0)
+                ",
+                params![day.to_string()],
+            )
+            .unwrap();
+
+        let loaded = load_requests_from(&connection, day, day).unwrap();
+        assert_eq!(loaded.len(), 1, "认不出的行不该进结果");
+        assert_eq!(loaded[0].agent, UsageAgent::Claude);
+        assert_eq!(loaded[0].input_tokens, 7, "claude 的 input 不该被那行污染");
+        assert_eq!(loaded[0].model, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn the_agent_column_mapping_is_reversible() {
+        for agent in all_agents() {
+            assert_eq!(
+                parse_usage_agent(usage_agent_column(agent)),
+                Some(agent),
+                "{agent:?} 的读写映射不自洽"
+            );
+        }
+        assert_eq!(parse_usage_agent("gemini"), None);
+        assert_eq!(parse_usage_agent(""), None);
     }
 }

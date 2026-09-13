@@ -19,22 +19,20 @@ export interface DshSlashCommand {
   name: string;
   /** One-line description (i18n key under `dsh.slash.*`). */
   descriptionKey: string;
-  /** Whether the command takes a free-text argument after the name. */
-  hasArg: boolean;
   /** popupSelect-style: caller resolves the argument from a picker. */
   popup?: "model" | "skill" | "subagent" | "permission";
 }
 
 export const DSH_SLASH_COMMANDS: readonly DshSlashCommand[] = [
-  { name: "compact", descriptionKey: "dsh.slash.compact", hasArg: false },
-  { name: "feedback", descriptionKey: "dsh.slash.feedback", hasArg: true },
-  { name: "goal", descriptionKey: "dsh.slash.goal", hasArg: true },
-  { name: "plan", descriptionKey: "dsh.slash.plan", hasArg: true },
-  { name: "permission", descriptionKey: "dsh.slash.permission", hasArg: true, popup: "permission" },
-  { name: "export", descriptionKey: "dsh.slash.export", hasArg: false },
-  { name: "model", descriptionKey: "dsh.slash.model", hasArg: true, popup: "model" },
-  { name: "skill", descriptionKey: "dsh.slash.skill", hasArg: true, popup: "skill" },
-  { name: "subagent", descriptionKey: "dsh.slash.subagent", hasArg: true, popup: "subagent" },
+  { name: "compact", descriptionKey: "dsh.slash.compact" },
+  { name: "feedback", descriptionKey: "dsh.slash.feedback" },
+  { name: "goal", descriptionKey: "dsh.slash.goal" },
+  { name: "plan", descriptionKey: "dsh.slash.plan" },
+  { name: "permission", descriptionKey: "dsh.slash.permission", popup: "permission" },
+  { name: "export", descriptionKey: "dsh.slash.export" },
+  { name: "model", descriptionKey: "dsh.slash.model", popup: "model" },
+  { name: "skill", descriptionKey: "dsh.slash.skill", popup: "skill" },
+  { name: "subagent", descriptionKey: "dsh.slash.subagent", popup: "subagent" },
 ];
 
 /**

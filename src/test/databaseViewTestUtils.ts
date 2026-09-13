@@ -97,8 +97,12 @@ export function resetDatabaseViewMocks() {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
     configurable: true,
   });
-  window.localStorage.removeItem("aeroric:database:pinned-nosql-tree-nodes");
-  window.localStorage.removeItem("aeroric:database:extra-dbx-connection-groups");
+  /* 原来只 removeItem 了 database 那两个键。它们确实是 databaseViewModel.ts:320-322
+     导出的全部 database 持久化键,但这批文件会渲染带 I18nProvider 的树,而
+     i18n.tsx:50 的 effect 每次挂载都写 `aeroric:language`,那个键不在名单里 ——
+     语言在同文件内一路继承。真正的陷阱是新增 database 持久化键时容易忘了同步
+     这份名单,所以直接整体清掉。 */
+  window.localStorage.clear();
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "db_load_connections") return Promise.resolve([]);
     if (command === "dbx_list_connections") return Promise.resolve([]);

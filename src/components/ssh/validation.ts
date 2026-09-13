@@ -1,3 +1,4 @@
+import { canonicalizeRemotePath } from "../sftp/sftpTypes";
 import type { SshConnection } from "../../types";
 
 export interface SshConnectionDraft {
@@ -59,7 +60,9 @@ export function normalizeSshConnectionDraft(
   if (port === null) return null;
   const identityFile = draft.identityFile.trim();
   const password = draft.password.trim();
-  const remotePath = draft.remotePath.trim();
+  // 远程路径统一存正斜杠形式,Windows 主机填 `C:\Users\...` 也能直接被 SFTP 面板复用。
+  const trimmedRemotePath = draft.remotePath.trim();
+  const remotePath = trimmedRemotePath ? canonicalizeRemotePath(trimmedRemotePath) : "";
   const group = draft.group.trim() || existing?.group?.trim() || "";
   return {
     id: existing?.id ?? String(idSeed),

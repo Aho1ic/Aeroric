@@ -103,20 +103,34 @@ describe("useDshLiveSessions — projection/jobs/queue consumption", () => {
     const jobs: DshJobsFrame = {
       type: "session/jobs",
       sessionId: "s1",
-      jobs: [{ id: "j1", kind: "bash", status: "running", label: "lint" }],
+      jobs: [
+        { id: "j1", kind: "bash", status: "running", label: "lint" },
+        { id: "j2", kind: "bash", status: "completed", label: "test" },
+      ],
     };
     const queue: DshQueueFrame = {
       type: "session/queue",
       sessionId: "s1",
-      items: [{ itemId: "q1", text: "then do X" }],
+      items: [
+        { itemId: "q1", text: "then do X" },
+        { itemId: "q2", text: "then do Y" },
+      ],
     };
     handlers["dsh-session-jobs"]({ payload: jobs });
     handlers["dsh-session-queue"]({ payload: queue });
 
     await waitFor(() => {
-      const s = sessions as { s1?: { jobs?: unknown[]; queue?: unknown[] } };
-      expect(s.s1?.jobs?.length).toBe(1);
-      expect(s.s1?.queue?.length).toBe(1);
+      const s = sessions as {
+        s1?: { jobs?: unknown[]; queue?: unknown[] };
+      };
+      expect(s.s1?.jobs).toEqual([
+        { id: "j1", kind: "bash", status: "running", label: "lint" },
+        { id: "j2", kind: "bash", status: "completed", label: "test" },
+      ]);
+      expect(s.s1?.queue).toEqual([
+        { itemId: "q1", text: "then do X" },
+        { itemId: "q2", text: "then do Y" },
+      ]);
     });
     unmount();
   });

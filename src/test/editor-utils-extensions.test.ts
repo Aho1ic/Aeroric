@@ -374,15 +374,25 @@ describe("createInlineBlameExtension", () => {
     expect(after!.textContent).toContain("new");
   });
 
-  it("blame 标记不吃鼠标事件(点它不该动光标)", () => {
-    const view = mount(
-      "hello",
+  it("blame 标记不吃鼠标事件(事件不进编辑器的处理链)", () => {
+    // jsdom 没有布局,posAtCoords 永远算不出位置,所以「点了光标没动」这种断言
+    // 无论 ignoreEvent 是 true 还是 false 都恒真 —— 换成钉 ignoreEvent 真正的
+    // 观察点:CodeMirror 的 eventBelongsToEditor 会因此把事件整条丢掉,
+    // 编辑器注册的 mousedown 处理器一次都收不到。
+    const seen = vi.fn();
+    const view = mount("hello", [
       createInlineBlameExtension({ enabled: true, lines: [blameLine(1)] }),
-    );
+      EditorView.domEventHandlers({ mousedown: () => seen() }),
+    ]);
     const marker = view.dom.querySelector(".cm-inline-blame")!;
-    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
-    expect(() => marker.dispatchEvent(event)).not.toThrow();
-    expect(view.state.doc.toString()).toBe("hello");
+    marker.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(seen).not.toHaveBeenCalled();
+
+    // 正对照:同一个处理器对正文行上的 mousedown 必须照收,否则上面那条是空断言。
+    view.contentDOM
+      .querySelector(".cm-line")!
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(seen).toHaveBeenCalledTimes(1);
   });
 
   it("不改动文档内容,只是加装饰", () => {

@@ -5,7 +5,7 @@
  * 在面板测试里没有真实来源。
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useNoteAttachmentDrop } from "../components/notebook/useNoteAttachmentDrop";
 
@@ -80,6 +80,14 @@ describe("useNoteAttachmentDrop", () => {
         });
       return Promise.reject(new Error(`unexpected command: ${command}`));
     });
+  });
+
+  /* :113 在 it 内把 devicePixelRatio 改成 2 且从不还原,之后同文件所有用例都在 DPR=2
+     下跑:它们传的落点 { x: 1, y: 1 } 会被换算成 (0.5, 0.5) 而不是 (1, 1)。现在只断言
+     invoke 有没有被调所以看不出来,而这个文件专测坐标换算 —— 任何新增的、断言具体
+     坐标的用例都会单跑/全量跑不一致。jsdom 默认是 1,还原回 1。 */
+  afterEach(() => {
+    Object.defineProperty(window, "devicePixelRatio", { value: 1, configurable: true });
   });
 
   it("没有打开笔记时提示,并且仍然接手事件", () => {

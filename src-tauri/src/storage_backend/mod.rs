@@ -353,9 +353,23 @@ mod tests {
     }
 
     #[test]
-    fn every_protocol_has_a_display_name() {
-        for protocol in StorageProtocol::ALL {
-            assert!(!protocol_display_name(protocol).is_empty());
-        }
+    fn every_protocol_has_a_distinct_display_name() {
+        // 穷尽 match 已经保证每个变体都有名字;这条要抓的是复制粘贴串臂
+        // (S3 写成 Dropbox、两个 WebDAV 共用一个名字),错误信息会指向错的协议。
+        let names: Vec<_> = StorageProtocol::ALL
+            .into_iter()
+            .map(protocol_display_name)
+            .collect();
+        let unique: std::collections::BTreeSet<_> = names.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "duplicate display names: {names:?}"
+        );
+        assert_eq!(protocol_display_name(StorageProtocol::S3), "Amazon S3");
+        assert_eq!(protocol_display_name(StorageProtocol::Dropbox), "Dropbox");
+        assert!(protocol_display_name(StorageProtocol::Smb).contains("SMB"));
+        assert!(protocol_display_name(StorageProtocol::WebdavHttps).contains("HTTPS"));
+        assert!(protocol_display_name(StorageProtocol::WebdavHttp).contains("HTTP"));
     }
 }

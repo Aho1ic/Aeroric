@@ -169,10 +169,12 @@ describe("splitScrollSync", () => {
     expect(preview.scrollTop).toBe(450);
   });
 
-  it("不可滚动的元素比例为 0,不抛", () => {
+  it("不可滚动的元素比例为 0,setRatio 也不改 scrollTop", () => {
     // 内容比视口短时 scrollHeight - clientHeight <= 0,除法会得到 Infinity/NaN。
     const pane = paneFromElement(scrollable(100, 500));
     expect(pane.getRatio()).toBe(0);
-    expect(() => pane.setRatio(0.5)).not.toThrow();
+    pane.setRatio(0.5);
+    expect(pane.el.scrollTop).toBe(0);
+    expect(Number.isNaN(pane.el.scrollTop)).toBe(false);
   });
 });

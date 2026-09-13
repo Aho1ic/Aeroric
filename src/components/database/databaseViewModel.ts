@@ -321,6 +321,31 @@ export const PINNED_TREE_NODE_IDS_STORAGE_KEY = "aeroric:database:pinned-nosql-t
 export const EXTRA_DBX_CONNECTION_GROUPS_STORAGE_KEY =
   "aeroric:database:extra-dbx-connection-groups";
 
+/**
+ * 读一个 `aeroric:database:*` 键,顺手把还留在旧键名下的值搬过来。
+ *
+ * DBX 面板早期几个视图偏好用的是不带前缀的 `dbx-*` 键名,破坏了「localStorage 一律
+ * `aeroric:` 前缀」的约定(清理本应用的存储时按前缀扫,不带前缀的会被漏掉)。改名不能
+ * 直接换字符串:那样老用户的视图偏好会静默回到默认值。
+ *
+ * 所以新键没值时回退读旧键,并**立刻写回新键、删掉旧键** —— 只回退读不写回的话,每次
+ * 启动都要再迁移一遍,而任何一次「保存」都会只写新键,于是旧键成了永远读不到的僵尸值。
+ */
+export function readMigratedDbxStorageValue(key: string, legacyKey: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const current = window.localStorage.getItem(key);
+    if (current !== null) return current;
+    const legacy = window.localStorage.getItem(legacyKey);
+    if (legacy === null) return null;
+    window.localStorage.setItem(key, legacy);
+    window.localStorage.removeItem(legacyKey);
+    return legacy;
+  } catch {
+    return null;
+  }
+}
+
 export function loadPinnedTreeNodeIds() {
   if (typeof window === "undefined") return new Set<string>();
   try {

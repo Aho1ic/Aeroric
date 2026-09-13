@@ -336,12 +336,19 @@ describe("ShellTerminalPanel 关闭会话", () => {
       if (name === "kill_shell") return Promise.reject(new Error("boom"));
       return Promise.resolve(undefined);
     });
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.error 会对
+       本文件**剩下的所有用例**永久静音(全文没有 afterEach,配置也没开 restoreMocks)。
+       这个文件测的正是终端面板的挂载/销毁/dispose —— React 的 "not wrapped in act"、
+       重复 key、effect 抛错全走 console.error,静音之后这些回归在 CI 里彻底看不见。 */
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await renderThree();
-    fireEvent.click(closeTab("Terminal 1"));
-    await advance(60);
-    expect(tabs()).toHaveLength(2);
-    errorSpy.mockRestore();
+    try {
+      await renderThree();
+      fireEvent.click(closeTab("Terminal 1"));
+      await advance(60);
+      expect(tabs()).toHaveLength(2);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -727,13 +734,17 @@ describe("ShellTerminalPanel 卸载与竞态", () => {
       if (name === "open_shell") return Promise.reject(new Error("no pty"));
       return Promise.resolve(undefined);
     });
+    // 同 :339 —— 还原必须在 finally 里,否则一处失败就对整份文件剩下的用例失明。
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const onReady = vi.fn();
-    renderPanel({ onReady });
-    await advance(500);
-    expect(onReady).not.toHaveBeenCalled();
-    expect(tabs()).toHaveLength(1);
-    errorSpy.mockRestore();
+    try {
+      const onReady = vi.fn();
+      renderPanel({ onReady });
+      await advance(500);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(tabs()).toHaveLength(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("关掉某个会话只 dispose 它自己的终端", async () => {

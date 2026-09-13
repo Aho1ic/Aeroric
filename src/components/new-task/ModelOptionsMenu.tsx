@@ -20,6 +20,7 @@ import {
 } from "../../modelOptions";
 import s from "../../styles";
 import { zLayers } from "../../styles/zLayers";
+import { CONTROL_ICON_SIZE } from "./AgentPermSelector";
 
 type Panel = "model" | "reasoning" | "speed";
 
@@ -444,7 +445,7 @@ export function ModelOptionsMenu({
             gap: 5,
           }}
         >
-          <Cpu size={14} strokeWidth={2} color="var(--usage-codex)" />
+          <Cpu size={CONTROL_ICON_SIZE} strokeWidth={2} color="var(--usage-codex)" />
           {!compact && (
             <span
               data-model-summary

@@ -526,6 +526,51 @@ fn is_dsh_agent(agent: &str) -> bool {
     agent == "dsh"
 }
 
+fn is_omp_agent(agent: &str) -> bool {
+    agent == "omp"
+}
+
+/// WSL agent id → 协议族。**穷尽的**四族映射 —— 与 `ssh.rs::remote_agent_family` 同一
+/// 失效模式:omp 曾落到 `else => Claude`,于是用 claude 词表校验 omp 的思考档,
+/// `off`/`minimal` 被判非法,WSL 项目上的 omp 任务永远起不来。
+fn wsl_agent_family(agent: &str) -> crate::app_settings::AgentFamily {
+    use crate::app_settings::AgentFamily;
+    if is_dsh_agent(agent) {
+        AgentFamily::Dsh
+    } else if is_omp_agent(agent) {
+        AgentFamily::Omp
+    } else if matches!(agent, "codex" | "claude_gpt55") {
+        AgentFamily::Codex
+    } else {
+        AgentFamily::Claude
+    }
+}
+
+/// 与 `pty.rs::omp_permission_flag` 同一张表。
+fn omp_wsl_permission_flag(permission_mode: &str) -> Option<&'static str> {
+    match permission_mode {
+        "ask" => Some("always-ask"),
+        "auto_edit" => Some("write"),
+        "full_access" => Some("yolo"),
+        _ => None,
+    }
+}
+
+/// 与 `pty.rs::omp_thinking_level` 同一张表:7 档透传,`ultra` 封顶 `max`。
+fn omp_wsl_thinking_level(effort: &str) -> Option<&'static str> {
+    match effort {
+        "off" => Some("off"),
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        "ultra" => Some("max"),
+        _ => None,
+    }
+}
+
 fn dsh_permission_mode(permission_mode: &str) -> Option<&'static str> {
     match permission_mode {
         "ask" => Some("read-only"),
@@ -542,6 +587,9 @@ fn agent_args(
     reasoning_effort: Option<&str>,
     speed: Option<&str>,
 ) -> Vec<String> {
+    if is_omp_agent(agent) {
+        return omp_wsl_args(permission_mode, selected_model, reasoning_effort);
+    }
     let agent = if matches!(agent, "codex" | "claude_gpt55") {
         "codex"
     } else {
@@ -602,6 +650,38 @@ fn agent_args(
         }
     }
 
+    args
+}
+
+/// omp 的 WSL 启动参数,与本地 `pty.rs::build_omp_cmd` + `add_omp_launch_args` 同形。
+/// 不给 `--cwd`(`project_shell_command` 已经先 `cd`)、不设托管 home、不传 `speed`
+/// (omp 无对应 flag)。omp 用 `--approval-mode` / `--thinking`,不是 `--permission-mode`
+/// / `--effort`。
+fn omp_wsl_args(
+    permission_mode: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(flag) = omp_wsl_permission_flag(permission_mode) {
+        args.push("--approval-mode".to_string());
+        args.push(flag.to_string());
+    }
+    if let Some(model) = selected_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if let Some(level) = reasoning_effort
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .and_then(omp_wsl_thinking_level)
+    {
+        args.push("--thinking".to_string());
+        args.push(level.to_string());
+    }
     args
 }
 
@@ -677,7 +757,9 @@ fn agent_invocation_args(
             args.push("--profile".to_string());
             args.push("headless".to_string());
             args.push("--".to_string());
-        } else if codex_like {
+        } else if codex_like || is_omp_agent(agent) {
+            // omp 与 codex 一样把位置参数当首条消息;缺 `--` 时以 `-` 开头的 prompt
+            // 会被当成 flag。
             args.push("--".to_string());
         }
         args.push(prompt.to_string());
@@ -1406,13 +1488,7 @@ pub async fn run_wsl_task(
     ensure_distribution_available(&distribution)?;
     let is_codex = matches!(agent.as_str(), "codex" | "claude_gpt55");
     let is_dsh = is_dsh_agent(&agent);
-    let family = if is_dsh {
-        crate::app_settings::AgentFamily::Dsh
-    } else if is_codex {
-        crate::app_settings::AgentFamily::Codex
-    } else {
-        crate::app_settings::AgentFamily::Claude
-    };
+    let family = wsl_agent_family(&agent);
     let selected_model = crate::pty::normalized_selected_model(selected_model.as_deref());
     let reasoning_effort = crate::pty::normalized_reasoning_effort_for(
         reasoning_effort.as_deref(),
@@ -1783,6 +1859,59 @@ mod tests {
             ),
             "cd -- '/home/me/app' && exec env AERORIC_AGENT_MODEL=claude-sonnet claude"
         );
+    }
+
+    /// 与 `ssh.rs` 那条同一失效模式:omp 曾落到 claude 那支,被推 `--effort`(omp 不认识)
+    /// 且 prompt 前没有 `--`。
+    #[test]
+    fn wsl_omp_invocation_uses_omp_flags_and_separator() {
+        let args = agent_invocation_args(
+            "omp",
+            "auto_edit",
+            Some("inspect status"),
+            None,
+            Some("gpt-5"),
+            Some("minimal"),
+            Some("fast"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--approval-mode",
+                "write",
+                "--model",
+                "gpt-5",
+                "--thinking",
+                "minimal",
+                "--",
+                "inspect status",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--effort"));
+        assert!(!args.iter().any(|arg| arg == "--settings"));
+    }
+
+    #[test]
+    fn wsl_agent_family_maps_all_four_families() {
+        use crate::app_settings::AgentFamily;
+        assert_eq!(wsl_agent_family("omp"), AgentFamily::Omp);
+        assert_eq!(wsl_agent_family("dsh"), AgentFamily::Dsh);
+        assert_eq!(wsl_agent_family("codex"), AgentFamily::Codex);
+        assert_eq!(wsl_agent_family("claude_gpt55"), AgentFamily::Codex);
+        assert_eq!(wsl_agent_family("claude"), AgentFamily::Claude);
+
+        // 端到端:判成 claude 时 omp 的 off/minimal 会被 claude 词表拒掉。
+        for level in ["off", "minimal", "max"] {
+            assert!(
+                crate::pty::normalized_reasoning_effort_for(
+                    Some(level),
+                    wsl_agent_family("omp"),
+                    None
+                )
+                .is_ok(),
+                "omp 应接受 {level}"
+            );
+        }
     }
 
     #[test]

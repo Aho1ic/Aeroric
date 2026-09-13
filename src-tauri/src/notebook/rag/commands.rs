@@ -609,10 +609,12 @@ mod tests {
     #[test]
     fn omitted_search_options_fall_back_to_the_defaults() {
         let options = SearchOptionsDto::default().into_options();
-        let defaults = SearchOptions::default();
-        assert_eq!(options.limit, defaults.limit);
-        assert_eq!(options.expand_links, defaults.expand_links);
-        assert_eq!(options.per_doc, defaults.per_doc);
+        // 字面量必须钉在这里,不能读 SearchOptions::default() —— 那是 into_options
+        // 自己的来源。把 limit 改成 0 的话,任何省略 limit 的搜索都永远没有结果,
+        // 而这是全仓库唯一钉住这个字面量的测试。
+        assert_eq!(options.limit, 8);
+        assert!(options.expand_links);
+        assert_eq!(options.per_doc, 3);
         assert!(options.rerank.is_none());
     }
 
@@ -649,22 +651,31 @@ mod tests {
     #[test]
     fn every_upper_bound_goes_through_the_same_rule() {
         // 漏掉一处不会有任何症状,直到用户清空那个输入框。所以逐个 DTO 字段验一遍
-        // 落到了默认值,而不是只验共用函数本身。
+        // 落到了默认值,而不是只验共用函数本身。默认值钉字面量,不读 Default ——
+        // 否则把 DEFAULT_MAX_TOKENS 改成 0,RAG 上下文会变成空串而测试照绿。
         let search = SearchOptionsDto {
             limit: Some(0),
             ..Default::default()
         }
         .into_options();
-        assert_eq!(search.limit, SearchOptions::default().limit);
+        assert_eq!(search.limit, 8);
 
-        let ctx = ContextOptionsDto {
+        let zeroed = ContextOptionsDto {
             max_tokens: Some(0),
             current_chars: Some(0),
         }
         .into_options();
-        let defaults = ContextOptions::default();
-        assert_eq!(ctx.max_tokens, defaults.max_tokens);
-        assert_eq!(ctx.current_chars, defaults.current_chars);
+        assert_eq!(zeroed.max_tokens, 3000);
+        assert_eq!(zeroed.current_chars, 1200);
+
+        // Some(0) 与 None 必须走同一条路径;漏掉 None 会让「没填」和「清空」分叉。
+        let omitted = ContextOptionsDto {
+            max_tokens: None,
+            current_chars: None,
+        }
+        .into_options();
+        assert_eq!(omitted.max_tokens, 3000);
+        assert_eq!(omitted.current_chars, 1200);
     }
 
     #[test]
@@ -686,18 +697,6 @@ mod tests {
         assert_eq!(options.limit, 5);
         assert!(!options.expand_links);
         assert_eq!(options.per_doc, 1);
-    }
-
-    #[test]
-    fn context_options_fall_back_to_the_defaults() {
-        let options = ContextOptionsDto {
-            max_tokens: Some(0),
-            current_chars: None,
-        }
-        .into_options();
-        let defaults = ContextOptions::default();
-        assert_eq!(options.max_tokens, defaults.max_tokens);
-        assert_eq!(options.current_chars, defaults.current_chars);
     }
 
     #[test]

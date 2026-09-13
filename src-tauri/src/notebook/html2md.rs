@@ -907,10 +907,39 @@ impl Renderer {
     }
 
     fn finish(mut self) -> String {
+        self.close_truncated_blocks();
         self.flush_line();
         // 规整：把 3+ 连续换行压成 2 个，并加引用/列表前缀已在内联处理。
         let normalized = normalize_blank_lines(&self.out);
         normalized.trim().to_string()
+    }
+
+    /// 输入在 `<pre>` / `<table>` 内部就断掉时,把缓冲里的文字补刷出来。
+    ///
+    /// 这两种块的文本先攒在 `pre_buf` / `cell_buf` 里,只有闭标签才会落到 `out`;
+    /// 半截 HTML(剪藏被截断、localStorage 里的 `richtext` 正文被截断)因此会整段
+    /// 丢文字,而 `<p>` / `<ul>` 之类只会退化成没有结构的纯文本。结构可以退化,
+    /// 文字不能丢 —— 这里按「文档末尾隐式闭合」补上闭标签,复用同一套 `on_close`。
+    fn close_truncated_blocks(&mut self) {
+        // 跳过区(nav/footer/aside)里的文字本就该丢,但栈不清空会让下面的合成
+        // 闭标签被 on_close 的跳过分支吃掉。
+        self.skip_stack.clear();
+        while self.pre_depth > 0 {
+            self.on_close("pre");
+        }
+        if self.in_table_cell {
+            self.on_close("td");
+        }
+        while !self.tables.is_empty() {
+            if self
+                .tables
+                .last()
+                .is_some_and(|table| table.cur_row.is_some())
+            {
+                self.on_close("tr");
+            }
+            self.on_close("table");
+        }
     }
 }
 
@@ -1279,25 +1308,55 @@ mod tests {
         assert_eq!(out, "too many spaces here");
     }
 
+    /// 半截 HTML 的下限:结构可以退化,文字不能丢。
+    ///
+    /// 用户导入的 `richtext` 正文和网页剪藏都可能在标签中间断掉,变成空白笔记
+    /// 是最糟的结果 —— 而只 `let _ =` 遍历一遍的话,「对含 `<` 的输入直接返回
+    /// 空串」这种实现也照绿。
     #[test]
-    fn test_truncated_html_no_panic() {
-        // 各种半截 / 畸形输入：只要求不 panic。
-        let inputs = [
-            "<p>unclosed paragraph",
-            "<a href=\"http://x.com\">no close",
-            "<div><span>nested <b>bold",
-            "<!-- comment never closed",
-            "<",
-            "<<<>>>",
-            "<img src=",
-            "plain text only",
-            "<ul><li>item",
-            "<pre><code>code without close",
-            "<table><tr><td>cell",
+    fn truncated_html_degrades_structure_but_keeps_the_text() {
+        // 每对是(畸形输入,输出里必须出现的文字)。
+        let must_keep = [
+            ("<p>unclosed paragraph", "unclosed paragraph"),
+            ("<a href=\"http://x.com\">no close", "no close"),
+            ("<div><span>nested <b>bold", "bold"),
+            ("<ul><li>item", "item"),
+            ("<pre><code>code without close", "code without close"),
+            ("<table><tr><td>cell", "cell"),
+            ("<h1>truncated heading", "truncated heading"),
+            (
+                "<blockquote>quoted but never closed",
+                "quoted but never closed",
+            ),
         ];
-        for inp in inputs {
-            let _ = html_to_markdown(inp, false);
-            let _ = html_to_markdown(inp, true);
+        for (input, text) in must_keep {
+            for readability in [false, true] {
+                let out = html_to_markdown(input, readability);
+                assert!(
+                    out.contains(text),
+                    "{input:?} (readability={readability}) lost its text: {out:?}"
+                );
+            }
+        }
+
+        // 没有标签的纯文本必须原样通过。
+        assert_eq!(md("plain text only"), "plain text only");
+        // 列表标记要还在,否则半截列表会退成一坨连排文字。
+        assert!(md("<ul><li>item").starts_with("- "));
+        // 半截表格仍是合法的 GFM 表格(表头行 + 分隔线),而不是裸文字。
+        assert_eq!(md("<table><tr><td>cell"), "| cell |\n| --- |");
+        // 半截 pre 仍闭合成代码围栏,否则后面的正文会被吸进代码块。
+        assert_eq!(
+            md("<pre><code>code without close"),
+            "```\ncode without close\n```"
+        );
+        // readability 该丢的还是要丢:nav 里的内容不是正文。
+        assert_eq!(html_to_markdown("<nav><pre>skipped code", true), "");
+
+        // 纯畸形语法(没有可保留的正文)只要求不 panic。
+        for input in ["<!-- comment never closed", "<", "<<<>>>", "<img src="] {
+            let _ = html_to_markdown(input, false);
+            let _ = html_to_markdown(input, true);
         }
     }
 

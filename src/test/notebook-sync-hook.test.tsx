@@ -97,6 +97,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  /* :376 的 console.warn spy 把还原写在断言之后,中间失败就对文件剩余用例静音。
+     这个文件其余用例测的正是同步失败路径,警告是主要观察面。 */
+  vi.restoreAllMocks();
 });
 
 const callsTo = (command: string) => invokeMock.mock.calls.filter((call) => call[0] === command);

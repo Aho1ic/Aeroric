@@ -2725,17 +2725,96 @@ pub fn cancel_agent_tool_install(operation_id: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// slug 直接拼进下载 URL,所以要钉住每一对映射:只断 `is_ok()` 的话,把
+    /// aarch64 与 x86_64 两臂对调照样绿,而用户会装到跑不起来的异架构二进制。
     #[test]
-    fn platform_matrix_covers_all_requested_native_targets() {
-        for arch in ["x86_64", "aarch64"] {
-            assert!(claude_platform_for("macos", arch, LinuxLibc::Glibc).is_ok());
-            assert!(claude_platform_for("windows", arch, LinuxLibc::Glibc).is_ok());
-            assert!(claude_platform_for("linux", arch, LinuxLibc::Glibc).is_ok());
-            assert!(claude_platform_for("linux", arch, LinuxLibc::Musl).is_ok());
-            assert!(codex_target_for("macos", arch).is_ok());
-            assert!(codex_target_for("windows", arch).is_ok());
-            assert!(codex_target_for("linux", arch).is_ok());
-        }
+    fn claude_platform_slugs_match_the_upstream_release_names() {
+        assert_eq!(
+            claude_platform_for("macos", "aarch64", LinuxLibc::Glibc).unwrap(),
+            "darwin-arm64"
+        );
+        assert_eq!(
+            claude_platform_for("macos", "x86_64", LinuxLibc::Glibc).unwrap(),
+            "darwin-x64"
+        );
+        // macOS 上没有 libc 之分,两种取值都该落到同一个 slug。
+        assert_eq!(
+            claude_platform_for("macos", "aarch64", LinuxLibc::Musl).unwrap(),
+            "darwin-arm64"
+        );
+        assert_eq!(
+            claude_platform_for("windows", "aarch64", LinuxLibc::Glibc).unwrap(),
+            "win32-arm64"
+        );
+        assert_eq!(
+            claude_platform_for("windows", "x86_64", LinuxLibc::Glibc).unwrap(),
+            "win32-x64"
+        );
+        // Linux 上 musl 后缀写反 = glibc 机器上装 musl 包(或反过来),必然起不来。
+        assert_eq!(
+            claude_platform_for("linux", "aarch64", LinuxLibc::Glibc).unwrap(),
+            "linux-arm64"
+        );
+        assert_eq!(
+            claude_platform_for("linux", "x86_64", LinuxLibc::Glibc).unwrap(),
+            "linux-x64"
+        );
+        assert_eq!(
+            claude_platform_for("linux", "aarch64", LinuxLibc::Musl).unwrap(),
+            "linux-arm64-musl"
+        );
+        assert_eq!(
+            claude_platform_for("linux", "x86_64", LinuxLibc::Musl).unwrap(),
+            "linux-x64-musl"
+        );
+    }
+
+    #[test]
+    fn codex_target_slugs_match_the_upstream_release_names() {
+        assert_eq!(
+            codex_target_for("macos", "aarch64").unwrap(),
+            "aarch64-apple-darwin"
+        );
+        assert_eq!(
+            codex_target_for("macos", "x86_64").unwrap(),
+            "x86_64-apple-darwin"
+        );
+        assert_eq!(
+            codex_target_for("windows", "aarch64").unwrap(),
+            "aarch64-pc-windows-msvc"
+        );
+        assert_eq!(
+            codex_target_for("windows", "x86_64").unwrap(),
+            "x86_64-pc-windows-msvc"
+        );
+        // Codex 的 Linux 包只有 musl 一种,glibc 机器也拉这个。
+        assert_eq!(
+            codex_target_for("linux", "aarch64").unwrap(),
+            "aarch64-unknown-linux-musl"
+        );
+        assert_eq!(
+            codex_target_for("linux", "x86_64").unwrap(),
+            "x86_64-unknown-linux-musl"
+        );
+    }
+
+    #[test]
+    fn unsupported_platforms_report_the_os_and_arch() {
+        let error = claude_platform_for("freebsd", "x86_64", LinuxLibc::Glibc).unwrap_err();
+        assert_eq!(error.code, AgentInstallErrorCode::UnsupportedPlatform);
+        assert!(
+            error.message.contains("freebsd") && error.message.contains("x86_64"),
+            "{}",
+            error.message
+        );
+
+        let error = codex_target_for("linux", "riscv64").unwrap_err();
+        assert_eq!(error.code, AgentInstallErrorCode::UnsupportedPlatform);
+        assert!(
+            error.message.contains("linux") && error.message.contains("riscv64"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

@@ -10,7 +10,6 @@ export type AuxiliaryWorkspaceType = "ssh" | "file" | "terminal";
 export type AuxiliaryWorkspaceLayout = "split" | "full";
 
 export const AUXILIARY_SPLIT_GRID_TEMPLATE = "minmax(0, 1fr) 1px minmax(0, 1fr)";
-export const SSH_SPLIT_GRID_TEMPLATE = AUXILIARY_SPLIT_GRID_TEMPLATE;
 
 export function resolveAuxiliaryWorkspace({
   sshActive,

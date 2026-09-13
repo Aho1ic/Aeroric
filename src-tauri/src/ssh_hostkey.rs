@@ -410,6 +410,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: false,

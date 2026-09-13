@@ -243,22 +243,41 @@ async function waitForBoot(): Promise<void> {
 /**
  * 等到启动链路把任务读进 state。
  *
- * 必须等:handler 从 `remoteRequestRef.current.tasks` 里找任务,而那个 ref 每次渲染后同步。
+ * 必须等:handler 从 `tasksRef.current` 里找任务,而那个 ref 在 `setTasks` 里同步写。
  * 任务还没进 state 就发请求,拿到的一律是 "Task not found" —— 于是所有更靠后的校验
  * 都测不到(**看着像通过,其实全停在第一道闸门**)。
  *
  * 探针本身用「归属校验」这条路:带一个永不匹配的 projectId,
  * 任务在 → 回 "Task does not belong to the requested project",任务不在 → 回 "Task not found"。
  * 两种回答都**没有副作用**(归属校验在 resume/runTodo 之前),所以可以安全地反复发。
+ *
+ * 但「可以反复发」不等于「该在轮询里发」:原来的写法把探针放进 waitFor 的回调,
+ * 从第一轮起就发,于是整段启动链路(load_projects → ssh → load_project_tasks)
+ * 期间每 50ms 就往活着的 App 里真发一次远程请求 + 一次 invoke + 一次全树重渲染。
+ * 负载下单轮自身耗时就超过 50ms,轮询叠着排,3000ms 预算被探针本身吃光,
+ * 而不是用来等启动链路完成。
+ *
+ * 现在先等那个**不带副作用**的启动信号(`waitForBoot`,只读 invoke 调用记录),
+ * 到位之后才发探针 —— App.tsx:818-834 里 `get_active_task_ids` 之后到 `setTasks`
+ * 之间没有别的 await,所以 `waitForBoot` 那次 act 冲干净微任务时 ref 已经写上了,
+ * 正常路径上探针恰好发一次。外层 waitFor 留着当安全网:启动链路哪天多一跳 await,
+ * 它会补发而不是让整份文件成片红。
  */
 async function waitForTaskLoaded(taskId: string): Promise<void> {
-  await waitFor(async () => {
-    const requestId = `probe-${probeCounter++}`;
-    await emitRemoteRequest({ requestId, kind: "resume", taskId, projectId: PROBE_PROJECT });
-    const probe = replies().find((reply) => reply.requestId === requestId);
-    if (!probe) throw new Error("probe not answered yet");
-    if (probe.error === `Task not found: ${taskId}`) throw new Error(`${taskId} not in state yet`);
-  });
+  await waitForBoot();
+  await waitFor(
+    async () => {
+      const requestId = `probe-${probeCounter++}`;
+      await emitRemoteRequest({ requestId, kind: "resume", taskId, projectId: PROBE_PROJECT });
+      const probe = replies().find((reply) => reply.requestId === requestId);
+      if (!probe) throw new Error("probe not answered yet");
+      if (probe.error === `Task not found: ${taskId}`) {
+        throw new Error(`${taskId} not in state yet`);
+      }
+    },
+    // 探针一轮就是一次完整的请求处理,50ms 一轮会让重试自己抢光 CPU。
+    { interval: 250 },
+  );
 }
 
 /** 真实请求的应答(把探针的过滤掉)。 */

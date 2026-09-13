@@ -218,10 +218,11 @@ export function composeAgentMenuColumnViewportStyle(): CSSProperties {
 }
 
 /**
- * 分三族之后各自按使用频次重排(近 7 天 → 历史总数 → 最后使用时间 → 原序)。
+ * 分四族(claude / codex / dsh / omp)之后各自按使用频次重排
+ * (近 7 天 → 历史总数 → 最后使用时间 → 原序)。
  *
  * `usageStats` 省略或为空时结果与原来逐字一致 —— 排序退化成「内置在前 + 档案声明序」。
- * 三列各自判断「是否整列近 7 天全为 0」,所以某一族冷了不会被另一族的热度带着换主键。
+ * 四列各自判断「是否整列近 7 天全为 0」,所以某一族冷了不会被另一族的热度带着换主键。
  */
 export function groupAgentOptions(
   options: AgentOption[],

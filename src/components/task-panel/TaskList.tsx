@@ -8,9 +8,9 @@ import {
   type MouseEvent,
   type UIEvent,
 } from "react";
-import { Play, Star, Trash2, X } from "lucide-react";
+import { Archive, Play, Star, Trash2, X } from "lucide-react";
 import type { Task, TaskDisplayWindow } from "../../types";
-import { isActiveTaskStatus } from "../../types";
+import { isActiveTaskStatus, isArchivableTaskStatus } from "../../types";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -59,6 +59,8 @@ export function TaskList({
   onToggleTaskStar,
   onRunTodo,
   onResumeTask,
+  onArchiveTasks,
+  onUnarchiveTasks,
 }: {
   tasks: Task[];
   taskDisplayWindow: TaskDisplayWindow;
@@ -70,6 +72,8 @@ export function TaskList({
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
+  onArchiveTasks: (taskIds: string[]) => void;
+  onUnarchiveTasks: (taskIds: string[]) => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -144,9 +148,13 @@ export function TaskList({
     const todoTasks: Task[] = [];
     const todayTasks: Task[] = [];
     const earlierTasks: Task[] = [];
+    const archivedTasks: Task[] = [];
 
     for (const task of sorted) {
-      if (
+      // 归档优先于全部其它分组:已归档就不该再出现在 attention / today / earlier 里。
+      if (task.archivedAt) {
+        archivedTasks.push(task);
+      } else if (
         task.status === "input_required" ||
         task.status === "detached" ||
         task.status === "interrupted"
@@ -197,6 +205,8 @@ export function TaskList({
     appendGroup("todo", t("status.todo"), todoTasks, true);
     appendGroup("today", t("task.today"), todayTasks);
     appendGroup("earlier", t("task.earlier"), earlierTasks);
+    // 放最后一组:主列表默认看的是活跃工作,归档是"翻回去找"的区域。
+    appendGroup("archived", t("task.archived"), archivedTasks);
 
     return nextRows;
   }, [cutoffTs, onResumeTask, sorted, t, todayTs]);
@@ -244,6 +254,11 @@ export function TaskList({
 
   const selectedTasks = selectableTasks.filter((task) => selectedIds.has(task.id));
 
+  // 活动中的任务归档后会从列表消失,而它仍在等用户反应 —— 按钮只处理非活动且未归档的。
+  const archivableSelectedIds = selectedTasks
+    .filter((task) => isArchivableTaskStatus(task.status) && !task.archivedAt)
+    .map((task) => task.id);
+
   const offsets = useMemo(() => {
     const nextOffsets = [0];
     for (const row of rows) {
@@ -282,8 +297,17 @@ export function TaskList({
             <Play size={13} />
           </button>
           <button
+            disabled={archivableSelectedIds.length === 0}
+            title={t("task.archiveSelected")}
+            onClick={() => onArchiveTasks(archivableSelectedIds)}
+          >
+            <Archive size={13} />
+          </button>
+          {/* 物理删除降级为次级动作:危险色 + 位置在归档之后,归档才是默认路径。 */}
+          <button
             disabled={selectedTasks.every((task) => task.starred)}
             title={t("task.deleteTask")}
+            style={{ color: "var(--danger)" }}
             onClick={() =>
               selectedTasks.filter((task) => !task.starred).forEach((task) => onDeleteTask(task.id))
             }
@@ -328,6 +352,9 @@ export function TaskList({
                   onRunTodo={row.showRunTodo ? () => onRunTodo(row.task) : undefined}
                   onResumeTask={
                     row.showResumeTask && onResumeTask ? () => onResumeTask(row.task.id) : undefined
+                  }
+                  onUnarchive={
+                    row.task.archivedAt ? () => onUnarchiveTasks([row.task.id]) : undefined
                   }
                 />
               )}

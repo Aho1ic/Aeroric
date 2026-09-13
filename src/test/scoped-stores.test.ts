@@ -5,6 +5,7 @@ import {
 } from "../components/database/databaseWorkspaceStore";
 import { createDebugPanelStore } from "../components/debug/debugPanelStore";
 import { createNotebookStore } from "../components/notebook/notebookStore";
+import type { DebugSessionSnapshot } from "../types";
 
 describe("scoped workspace stores", () => {
   it("keeps database instances isolated and resets nested state", () => {
@@ -29,10 +30,30 @@ describe("scoped workspace stores", () => {
   it("applies functional debug session updates without sharing instances", () => {
     const first = createDebugPanelStore();
     const second = createDebugPanelStore();
+    const snapshot = (debugId: string): DebugSessionSnapshot => ({
+      debugId,
+      configId: "cfg",
+      name: debugId,
+      program: "/bin/app",
+      cwd: "/repo",
+      status: "running",
+      output: "",
+      callStack: [],
+      scopes: [],
+      startedAt: 1,
+    });
+
+    first.getState().setSessions([snapshot("a")]);
+    // updater 必须收到当前数组并把返回值落库,而不是把函数本身存进 state。
+    first.getState().setSessions((sessions) => [...sessions, snapshot("b")]);
+
+    expect(first.getState().sessions.map((session) => session.debugId)).toEqual(["a", "b"]);
+    expect(second.getState().sessions).toEqual([]);
+
     first.getState().setWatchDraft("count");
-    first.getState().setSessions((sessions) => sessions);
-    expect(first.getState().watchDraft).toBe("count");
-    expect(second.getState().watchDraft).toBe("");
+    first.getState().reset();
+    expect(first.getState().watchDraft).toBe("");
+    expect(first.getState().sessions).toEqual([]);
   });
 
   it("hydrates and updates notebook state through functional actions", () => {

@@ -15,7 +15,12 @@ async fn db_type(state: &DbxState, connection_id: &str) -> Result<DatabaseType, 
         .ok_or_else(|| format!("Connection config not found: {connection_id}"))
 }
 
-fn emit_transfer_progress(app: &AppHandle, progress: dbx_core::transfer::TransferProgress) {
+/// 泛化 runtime 是为了让测试能用 `tauri::test::mock_app` 真的收一次事件;
+/// 生产调用点全部传 `AppHandle<Wry>`,行为不变。
+fn emit_transfer_progress<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    progress: dbx_core::transfer::TransferProgress,
+) {
     let _ = app.emit("dbx-transfer-progress", progress);
 }
 
@@ -390,6 +395,7 @@ mod tests {
         terminal_status_for_fk_result, TransferExit,
     };
     use dbx_core::transfer::{TransferRequest, TransferStatus};
+    use tauri::Listener;
 
     fn request() -> TransferRequest {
         TransferRequest {
@@ -443,9 +449,54 @@ mod tests {
     }
 
     #[test]
-    fn transfer_progress_event_helper_is_callable() {
-        let _ =
-            emit_transfer_progress as fn(&tauri::AppHandle, dbx_core::transfer::TransferProgress);
+    fn transfer_progress_reaches_the_frontend_event_channel() {
+        // 前端用 listen("dbx-transfer-progress") 收进度(src/lib/databaseApi.ts:107),
+        // 并按 transferId 过滤、按 status/terminal 判终止。事件名拼错一个字符或
+        // payload 退回 snake_case,进度条就永远不动、传输永远显示不出终态,而且
+        // emit 的返回值被丢弃,运行时不会有任何报错。所以这里把事件名和 payload
+        // 形状一起钉住。
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = received.clone();
+        let _listener = handle.listen("dbx-transfer-progress", move |event| {
+            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+                sink.lock().expect("progress sink").push(payload);
+            }
+        });
+
+        emit_transfer_progress(
+            &handle,
+            dbx_core::transfer::TransferProgress {
+                transfer_id: "transfer-7".to_string(),
+                table: "orders".to_string(),
+                table_index: 1,
+                total_tables: 2,
+                rows_transferred: 40,
+                total_rows: Some(100),
+                status: TransferStatus::Error,
+                error: Some("target table is read-only".to_string()),
+                terminal: true,
+            },
+        );
+
+        let events = received.lock().expect("progress sink");
+        assert_eq!(
+            events.len(),
+            1,
+            "the frontend listens on \"dbx-transfer-progress\"; got {events:?}"
+        );
+        let payload = &events[0];
+        assert_eq!(payload["transferId"], "transfer-7");
+        assert_eq!(payload["table"], "orders");
+        assert_eq!(payload["tableIndex"], 1);
+        assert_eq!(payload["totalTables"], 2);
+        assert_eq!(payload["rowsTransferred"], 40);
+        assert_eq!(payload["totalRows"], 100);
+        // isTerminalDbxTransferProgress 比对的是这两个字面量。
+        assert_eq!(payload["status"], "error");
+        assert_eq!(payload["terminal"], true);
+        assert_eq!(payload["error"], "target table is read-only");
     }
 
     #[test]

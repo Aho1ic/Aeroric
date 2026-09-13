@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ssh::SshConnection;
 
-const MAX_SFTP_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_SFTP_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_SFTP_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_SFTP_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -103,21 +103,18 @@ fn validate_sftp_local_path(path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn validate_sftp_remote_path(path: &str) -> Result<String, String> {
-    if !path.starts_with('/') {
-        return Err("Remote path must be absolute".to_string());
-    }
+/// 进程边界上的最后一道闸。路径在到这里之前必然已经过 `RemoteShell::validate_path`
+/// (OS 感知、拒相对分量、归一化),所以这里只挡 NUL —— 它是唯一能截断 argv 的字符,
+/// 而 argv 是 scp 唯一的入口。刻意不在这里重复"必须绝对"的判断:那需要知道远端 OS,
+/// 而 scp 的两个 spec 函数拿到的已经是校验过的路径。
+fn ensure_no_nul(path: &str) -> Result<String, String> {
     if path.contains('\0') {
         return Err("Remote path contains forbidden characters".to_string());
     }
-    Ok(if path == "/" {
-        "/".to_string()
-    } else {
-        path.trim_end_matches('/').to_string()
-    })
+    Ok(path.to_string())
 }
 
-fn validate_entry_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_entry_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." {
         return Err("Invalid file name".to_string());
     }
@@ -364,6 +361,165 @@ fn run_ssh_output(connection: &SshConnection, remote_command: String) -> Result<
     Ok(output.stdout)
 }
 
+/// 一个 SSH 端点上"远端是什么 OS + 按 OS 选构建器"的唯一入口。
+///
+/// 为什么是个结构体而不是让每个构建器自己探测:探测虽然带缓存,但"先定 OS,再用同一个
+/// OS 走完这次操作"是个必须成立的不变量 —— 跨连接搬运时同一段代码会先后面对两台机器,
+/// 把 OS 绑在值上比每次查缓存更难写错。构造一次 = 至多一次额外往返(之后命中缓存)。
+struct RemoteShell<'a> {
+    connection: &'a SshConnection,
+    os: crate::remote_os::RemoteOs,
+}
+
+impl<'a> RemoteShell<'a> {
+    fn detect(connection: &'a SshConnection) -> Result<Self, String> {
+        let os = crate::remote_os::detect_remote_os_with(connection, |connection, command| {
+            run_ssh_output(connection, command)
+        })?;
+        Ok(Self { connection, os })
+    }
+
+    fn is_windows(&self) -> bool {
+        matches!(self.os, crate::remote_os::RemoteOs::Windows)
+    }
+
+    /// OS 感知校验 + 归一化。返回值一律是正斜杠形式,与前端
+    /// `sftpTypes.ts::canonicalizeRemotePath` 同一套规则;反斜杠只在 PowerShell 脚本
+    /// 内部出现(`to_windows_native_path`)。
+    fn validate_path(&self, path: &str) -> Result<String, String> {
+        crate::remote_os::validate_remote_path(path, self.os)
+    }
+
+    fn validate_paths(&self, paths: &[String]) -> Result<Vec<String>, String> {
+        paths.iter().map(|path| self.validate_path(path)).collect()
+    }
+
+    fn run(&self, command: String) -> Result<Vec<u8>, String> {
+        run_ssh_output(self.connection, command)
+    }
+
+    fn read_dir(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_read_dir_command(path)
+        } else {
+            build_remote_read_dir_command(path)
+        })
+    }
+
+    fn read_text(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_read_text_command(path)
+        } else {
+            build_remote_read_text_command(path)
+        })
+    }
+
+    fn image_preview(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_image_preview_command(path)
+        } else {
+            build_remote_image_preview_command(path)
+        })
+    }
+
+    fn directory_summary(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_directory_summary_command(path)
+        } else {
+            build_remote_directory_summary_command(path)
+        })
+    }
+
+    fn create_dir(&self, path: &str) -> Result<(), String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_create_dir_command(path)
+        } else {
+            build_remote_create_dir_command(path)
+        })
+        .map(|_| ())
+    }
+
+    fn delete(&self, paths: &[String]) -> Result<(), String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_delete_command(paths)
+        } else {
+            build_remote_delete_command(paths)
+        })
+        .map(|_| ())
+    }
+
+    fn rename(&self, path: &str, new_name: &str) -> Result<(), String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_rename_command(path, new_name)?
+        } else {
+            build_remote_rename_command(path, new_name)?
+        })
+        .map(|_| ())
+    }
+
+    fn copy_or_move(
+        &self,
+        source_paths: &[String],
+        target_directory: &str,
+        move_paths: bool,
+        conflict_strategy: SftpConflictStrategy,
+    ) -> Result<(), String> {
+        self.run(if self.is_windows() {
+            crate::sftp_windows::build_windows_copy_or_move_command(
+                source_paths,
+                target_directory,
+                move_paths,
+                conflict_strategy,
+            )?
+        } else {
+            build_remote_copy_or_move_command(
+                source_paths,
+                target_directory,
+                move_paths,
+                conflict_strategy,
+            )?
+        })
+        .map(|_| ())
+    }
+
+    /// 上传/跨机搬运前的目标目录预检。三种策略各自的脚本在两个 OS 上语义一致,
+    /// 错误文本也逐字相同(见 `sftp_windows.rs` 的对应断言)。
+    fn prepare_target(
+        &self,
+        names: &[String],
+        target_directory: &str,
+        conflict_strategy: SftpConflictStrategy,
+    ) -> Result<(), String> {
+        let command = match (self.is_windows(), conflict_strategy) {
+            (true, SftpConflictStrategy::Fail) => {
+                crate::sftp_windows::build_windows_conflict_check_command(names, target_directory)?
+            }
+            (true, SftpConflictStrategy::Merge) => {
+                crate::sftp_windows::build_windows_merge_conflict_check_command(
+                    names,
+                    target_directory,
+                )?
+            }
+            (true, SftpConflictStrategy::Replace) => {
+                crate::sftp_windows::build_windows_delete_target_names_command(
+                    names,
+                    target_directory,
+                )?
+            }
+            (false, SftpConflictStrategy::Fail) => {
+                build_remote_conflict_check_command(names, target_directory)?
+            }
+            (false, SftpConflictStrategy::Merge) => {
+                build_remote_merge_conflict_check_command(names, target_directory)?
+            }
+            (false, SftpConflictStrategy::Replace) => {
+                build_remote_delete_target_names_command(names, target_directory)?
+            }
+        };
+        self.run(command).map(|_| ())
+    }
+}
+
 fn scp_base_spec(connection: &SshConnection) -> CommandSpec {
     let password = connection
         .password
@@ -434,8 +590,10 @@ fn scp_upload_spec(
         validate_sftp_local_path(path)?;
         spec.args.push(path.to_string());
     }
-    spec.args
-        .push(remote_scp_target(connection, remote_directory));
+    spec.args.push(remote_scp_target(
+        connection,
+        &ensure_no_nul(remote_directory)?,
+    ));
     Ok(spec)
 }
 
@@ -447,7 +605,7 @@ fn scp_download_spec(
     validate_sftp_local_path(local_directory)?;
     let mut spec = scp_base_spec(connection);
     for path in remote_paths {
-        validate_sftp_remote_path(path)?;
+        ensure_no_nul(path)?;
         spec.args.push(remote_scp_target(connection, path));
     }
     spec.args.push(local_directory.to_string());
@@ -497,7 +655,8 @@ fn parse_remote_entries(remote_path: &str, raw: &str) -> Vec<SftpEntry> {
             let is_dir = kind == "d";
             Some(SftpEntry {
                 name: name.to_string(),
-                path: join_remote_path(remote_path, name),
+                // OS 感知的 join:POSIX 那个在盘根 `C:/` 上会拼出 `C://name`。
+                path: crate::remote_os::join_remote_path(remote_path, name),
                 is_dir,
                 extension: extension_for_name(name, is_dir),
                 size,
@@ -821,8 +980,9 @@ pub async fn sftp_read_dir(endpoint: SftpEndpoint) -> Result<Vec<SftpEntry>, Str
     tokio::task::spawn_blocking(move || match endpoint {
         SftpEndpoint::Local { path } => read_local_dir(path),
         SftpEndpoint::Ssh { connection, path } => {
-            let path = validate_sftp_remote_path(&path)?;
-            let stdout = run_ssh_output(&connection, build_remote_read_dir_command(&path))?;
+            let shell = RemoteShell::detect(&connection)?;
+            let path = shell.validate_path(&path)?;
+            let stdout = shell.read_dir(&path)?;
             Ok(parse_remote_entries(
                 &path,
                 &String::from_utf8_lossy(&stdout),
@@ -860,9 +1020,9 @@ pub async fn sftp_read_text_file(endpoint: SftpEndpoint) -> Result<String, Strin
             std::fs::read_to_string(&path).map_err(|e| e.to_string())
         }
         SftpEndpoint::Ssh { connection, path } => {
-            let path = validate_sftp_remote_path(&path)?;
-            let stdout = run_ssh_output(&connection, build_remote_read_text_command(&path))?;
-            String::from_utf8(stdout).map_err(|e| e.to_string())
+            let shell = RemoteShell::detect(&connection)?;
+            let path = shell.validate_path(&path)?;
+            String::from_utf8(shell.read_text(&path)?).map_err(|e| e.to_string())
         }
         SftpEndpoint::Storage {
             connection_id,
@@ -920,10 +1080,11 @@ pub async fn sftp_read_image_preview(
             })
         }
         SftpEndpoint::Ssh { connection, path } => {
-            let path = validate_sftp_remote_path(&path)?;
+            let shell = RemoteShell::detect(&connection)?;
+            let path = shell.validate_path(&path)?;
             let mime_type = remote_image_mime_type(&path)
                 .ok_or_else(|| "Unsupported image format".to_string())?;
-            let stdout = run_ssh_output(&connection, build_remote_image_preview_command(&path))?;
+            let stdout = shell.image_preview(&path)?;
             let encoded = String::from_utf8_lossy(&stdout)
                 .chars()
                 .filter(|ch| !ch.is_whitespace())
@@ -989,10 +1150,9 @@ pub async fn sftp_read_directory_summary(
             read_local_directory_summary(&path)
         }
         SftpEndpoint::Ssh { connection, path } => {
-            let path = validate_sftp_remote_path(&path)?;
-            let stdout =
-                run_ssh_output(&connection, build_remote_directory_summary_command(&path))?;
-            parse_remote_directory_summary(&stdout)
+            let shell = RemoteShell::detect(&connection)?;
+            let path = shell.validate_path(&path)?;
+            parse_remote_directory_summary(&shell.directory_summary(&path)?)
         }
         SftpEndpoint::Storage {
             connection_id,
@@ -1018,8 +1178,10 @@ pub async fn sftp_create_directory(endpoint: SftpEndpoint, name: String) -> Resu
                 std::fs::create_dir(&target).map_err(|e| e.to_string())
             }
             SftpEndpoint::Ssh { connection, path } => {
-                let target = join_remote_path(&validate_sftp_remote_path(&path)?, name);
-                run_ssh_output(&connection, build_remote_create_dir_command(&target)).map(|_| ())
+                let shell = RemoteShell::detect(&connection)?;
+                // 用 remote_os 的 join:它在盘根上不会拼出 `C://name`。
+                let target = crate::remote_os::join_remote_path(&shell.validate_path(&path)?, name);
+                shell.create_dir(&target)
             }
             SftpEndpoint::Storage {
                 connection_id,
@@ -1049,11 +1211,9 @@ pub async fn sftp_delete_paths(endpoint: SftpEndpoint, paths: Vec<String>) -> Re
             Ok(())
         }
         SftpEndpoint::Ssh { connection, .. } => {
-            let paths = paths
-                .into_iter()
-                .map(|path| validate_sftp_remote_path(&path))
-                .collect::<Result<Vec<_>, String>>()?;
-            run_ssh_output(&connection, build_remote_delete_command(&paths)).map(|_| ())
+            let shell = RemoteShell::detect(&connection)?;
+            let paths = shell.validate_paths(&paths)?;
+            shell.delete(&paths)
         }
         SftpEndpoint::Storage { connection_id, .. } => {
             let backend = storage_backend_for(&connection_id)?;
@@ -1094,9 +1254,9 @@ pub async fn sftp_rename_path(
                 std::fs::rename(&source, destination).map_err(|e| e.to_string())
             }
             SftpEndpoint::Ssh { connection, .. } => {
-                let path = validate_sftp_remote_path(&path)?;
-                run_ssh_output(&connection, build_remote_rename_command(&path, new_name)?)
-                    .map(|_| ())
+                let shell = RemoteShell::detect(&connection)?;
+                let path = shell.validate_path(&path)?;
+                shell.rename(&path, new_name)
             }
             SftpEndpoint::Storage { connection_id, .. } => {
                 let source = validate_storage_path(&path)?;
@@ -1362,21 +1522,10 @@ fn copy_or_move_paths(
                 path: target_path,
             },
         ) if connection.id == target_connection.id => {
-            let source_paths = paths
-                .into_iter()
-                .map(|path| validate_sftp_remote_path(&path))
-                .collect::<Result<Vec<_>, String>>()?;
-            let target_path = validate_sftp_remote_path(target_path)?;
-            run_ssh_output(
-                connection,
-                build_remote_copy_or_move_command(
-                    &source_paths,
-                    &target_path,
-                    move_paths,
-                    conflict_strategy,
-                )?,
-            )
-            .map(|_| ())
+            let shell = RemoteShell::detect(connection)?;
+            let source_paths = shell.validate_paths(&paths)?;
+            let target_path = shell.validate_path(target_path)?;
+            shell.copy_or_move(&source_paths, &target_path, move_paths, conflict_strategy)
         }
         (
             SftpEndpoint::Local { .. },
@@ -1385,24 +1534,10 @@ fn copy_or_move_paths(
                 path: target_path,
             },
         ) => {
-            let target_path = validate_sftp_remote_path(target_path)?;
+            let shell = RemoteShell::detect(connection)?;
+            let target_path = shell.validate_path(target_path)?;
             let names = local_basenames(&paths)?;
-            if conflict_strategy == SftpConflictStrategy::Fail {
-                run_ssh_output(
-                    connection,
-                    build_remote_conflict_check_command(&names, &target_path)?,
-                )?;
-            } else if conflict_strategy == SftpConflictStrategy::Merge {
-                run_ssh_output(
-                    connection,
-                    build_remote_merge_conflict_check_command(&names, &target_path)?,
-                )?;
-            } else if conflict_strategy == SftpConflictStrategy::Replace {
-                run_ssh_output(
-                    connection,
-                    build_remote_delete_target_names_command(&names, &target_path)?,
-                )?;
-            }
+            shell.prepare_target(&names, &target_path, conflict_strategy)?;
             run_command_spec(scp_upload_spec(connection, &paths, &target_path)?)?;
             if move_paths {
                 delete_local_sources(&paths)?;
@@ -1410,10 +1545,8 @@ fn copy_or_move_paths(
             Ok(())
         }
         (SftpEndpoint::Ssh { connection, .. }, SftpEndpoint::Local { path: target_path }) => {
-            let source_paths = paths
-                .into_iter()
-                .map(|path| validate_sftp_remote_path(&path))
-                .collect::<Result<Vec<_>, String>>()?;
+            let shell = RemoteShell::detect(connection)?;
+            let source_paths = shell.validate_paths(&paths)?;
             ensure_local_target_names_available(
                 &remote_basenames(&source_paths)?,
                 target_path,
@@ -1421,7 +1554,7 @@ fn copy_or_move_paths(
             )?;
             run_command_spec(scp_download_spec(connection, &source_paths, target_path)?)?;
             if move_paths {
-                run_ssh_output(connection, build_remote_delete_command(&source_paths))?;
+                shell.delete(&source_paths)?;
             }
             Ok(())
         }
@@ -1442,10 +1575,10 @@ fn copy_or_move_paths(
             std::fs::create_dir(&temp_root).map_err(|e| e.to_string())?;
             tighten_temp_directory_permissions(&temp_root)?;
             let temp_string = temp_root.to_string_lossy().into_owned();
-            let source_paths = paths
-                .iter()
-                .map(|path| validate_sftp_remote_path(path))
-                .collect::<Result<Vec<_>, String>>()?;
+            // 两台机器的 OS 各自探测:源可能是 Linux、目标可能是 Windows,反之亦然。
+            let source_shell = RemoteShell::detect(connection)?;
+            let target_shell = RemoteShell::detect(target_connection)?;
+            let source_paths = source_shell.validate_paths(&paths)?;
             let transfer_result = (|| {
                 run_command_spec(scp_download_spec(connection, &source_paths, &temp_string)?)?;
                 let local_paths = std::fs::read_dir(&temp_root)
@@ -1453,31 +1586,16 @@ fn copy_or_move_paths(
                     .filter_map(|entry| entry.ok())
                     .map(|entry| entry.path().to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
-                let target_path = validate_sftp_remote_path(target_path)?;
+                let target_path = target_shell.validate_path(target_path)?;
                 let names = remote_basenames(&source_paths)?;
-                if conflict_strategy == SftpConflictStrategy::Fail {
-                    run_ssh_output(
-                        target_connection,
-                        build_remote_conflict_check_command(&names, &target_path)?,
-                    )?;
-                } else if conflict_strategy == SftpConflictStrategy::Merge {
-                    run_ssh_output(
-                        target_connection,
-                        build_remote_merge_conflict_check_command(&names, &target_path)?,
-                    )?;
-                } else if conflict_strategy == SftpConflictStrategy::Replace {
-                    run_ssh_output(
-                        target_connection,
-                        build_remote_delete_target_names_command(&names, &target_path)?,
-                    )?;
-                }
+                target_shell.prepare_target(&names, &target_path, conflict_strategy)?;
                 run_command_spec(scp_upload_spec(
                     target_connection,
                     &local_paths,
                     &target_path,
                 )?)?;
                 if move_paths {
-                    run_ssh_output(connection, build_remote_delete_command(&source_paths))?;
+                    source_shell.delete(&source_paths)?;
                 }
                 Ok(())
             })();
@@ -1678,10 +1796,8 @@ fn transfer_storage_via_temp_dir(
                 }
             }
             SftpEndpoint::Ssh { connection, .. } => {
-                let source_paths = paths
-                    .iter()
-                    .map(|path| validate_sftp_remote_path(path))
-                    .collect::<Result<Vec<_>, String>>()?;
+                let shell = RemoteShell::detect(connection)?;
+                let source_paths = shell.validate_paths(&paths)?;
                 run_command_spec(scp_download_spec(connection, &source_paths, &temp_string)?)?;
             }
             SftpEndpoint::Local { .. } => {
@@ -1725,28 +1841,14 @@ fn transfer_storage_via_temp_dir(
                 connection,
                 path: target_path,
             } => {
-                let target_path = validate_sftp_remote_path(target_path)?;
+                let shell = RemoteShell::detect(connection)?;
+                let target_path = shell.validate_path(target_path)?;
                 let local_paths = staged
                     .iter()
                     .map(|path| path.to_string_lossy().into_owned())
                     .collect::<Vec<_>>();
                 let names = local_basenames(&local_paths)?;
-                if conflict_strategy == SftpConflictStrategy::Fail {
-                    run_ssh_output(
-                        connection,
-                        build_remote_conflict_check_command(&names, &target_path)?,
-                    )?;
-                } else if conflict_strategy == SftpConflictStrategy::Merge {
-                    run_ssh_output(
-                        connection,
-                        build_remote_merge_conflict_check_command(&names, &target_path)?,
-                    )?;
-                } else if conflict_strategy == SftpConflictStrategy::Replace {
-                    run_ssh_output(
-                        connection,
-                        build_remote_delete_target_names_command(&names, &target_path)?,
-                    )?;
-                }
+                shell.prepare_target(&names, &target_path, conflict_strategy)?;
                 run_command_spec(scp_upload_spec(connection, &local_paths, &target_path)?)?;
             }
             SftpEndpoint::Local { .. } => {
@@ -1764,11 +1866,9 @@ fn transfer_storage_via_temp_dir(
                     }
                 }
                 SftpEndpoint::Ssh { connection, .. } => {
-                    let source_paths = paths
-                        .iter()
-                        .map(|path| validate_sftp_remote_path(path))
-                        .collect::<Result<Vec<_>, String>>()?;
-                    run_ssh_output(connection, build_remote_delete_command(&source_paths))?;
+                    let shell = RemoteShell::detect(connection)?;
+                    let source_paths = shell.validate_paths(&paths)?;
+                    shell.delete(&source_paths)?;
                 }
                 SftpEndpoint::Local { .. } => {}
             }
@@ -1802,9 +1902,12 @@ mod tests {
 
     #[test]
     fn remote_endpoint_requires_absolute_paths() {
-        let result = super::validate_sftp_remote_path("tmp/app");
+        use crate::remote_os::RemoteOs;
 
-        assert!(result.is_err());
+        assert!(crate::remote_os::validate_remote_path("tmp/app", RemoteOs::Posix).is_err());
+        // Windows 远端上,POSIX 风格的绝对路径同样不是合法输入 —— 它没有盘符。
+        assert!(crate::remote_os::validate_remote_path("/srv/app", RemoteOs::Windows).is_err());
+        assert!(crate::remote_os::validate_remote_path("C:/Users", RemoteOs::Windows).is_ok());
     }
 
     #[test]
@@ -1852,6 +1955,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: Some("secret".to_string()),
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: false,
@@ -1896,6 +2000,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: true,
@@ -1930,6 +2035,7 @@ mod tests {
             username: "deploy".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: None,
             auto_sudo_with_password: false,
             use_proxy: false,

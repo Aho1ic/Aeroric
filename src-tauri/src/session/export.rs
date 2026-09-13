@@ -80,7 +80,7 @@ pub(super) fn export_session_markdown_inner(
 }
 
 /// Validate the renderer-provided export target without trusting the save dialog.
-pub(super) fn validate_export_output_path(output_path: &str) -> Result<PathBuf, String> {
+pub(crate) fn validate_export_output_path(output_path: &str) -> Result<PathBuf, String> {
     let path = Path::new(output_path);
     if !path.is_absolute() {
         return Err("Output path must be absolute".into());
@@ -201,7 +201,9 @@ pub(super) fn write_export_markdown<W: Write>(
     Ok(())
 }
 
-fn sanitize_md_inline(value: &str) -> String {
+/// 折叠一切空白与控制字符成单个空格。凡要塞进 md 单行结构(标题、bullet)的文本
+/// 都必须先过这里:一个裸换行就能把 bullet 结构撑破。
+pub(crate) fn sanitize_md_inline(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     let mut previous_was_space = false;
     for character in value.trim().chars() {
@@ -222,7 +224,7 @@ fn sanitize_md_code_span(value: &str) -> String {
     sanitize_md_inline(value).replace('`', "'")
 }
 
-fn format_timestamp_ms(milliseconds: i64) -> String {
+pub(crate) fn format_timestamp_ms(milliseconds: i64) -> String {
     use chrono::{TimeZone, Utc};
     Utc.timestamp_millis_opt(milliseconds)
         .single()

@@ -582,7 +582,8 @@ export const database = {
     alignItems: "end",
     gap: 8,
     padding: "8px 14px",
-    borderBottom: "1px solid var(--border-dim)",
+    // 刻意不给 borderBottom:它紧贴在网格的 sticky 表头之上,两条边框叠在一起就是用户
+    // 报的那条发丝缝。分界交给表头自己的 borderBottom 承担。
     background: "var(--bg-panel)",
     flexWrap: "wrap" as const,
   },
@@ -730,7 +731,20 @@ export const database = {
     padding: "4px 8px",
     borderBottom: "1px solid var(--border-medium)",
     borderRight: "1px solid var(--border-medium)",
+    // --bg-subtle 自带 alpha(亮 0.52 / 羊皮纸 0.54 / 暗 0.66,见 themes.css),所以吸顶
+    // 表头底下的数据行会透上来 —— 重度模糊是把那层透视糊掉。半径取仓库现有最重的一档
+    // (panels.ts 的 composeBox)。
+    //
+    // 这是共享 token,七处在用(DataGridView / MongoBrowser / RedisBrowser /
+    // DriverManagerPanel / TableStructurePanel / TableInfoPanel / DbxValuePreviewDialogs),
+    // 七处结构相同(sticky th + overflow:auto 容器 + 半透明底),所以不单开一份:
+    // 分叉出第二份只会让另外六处继续漏。
+    //
+    // 代价是滚动时每帧都要重采样并模糊 backdrop,这是 sticky 表头 + 滚动网格的固有成本;
+    // prefers-reduced-transparency 那档会把 --bg-subtle 降级成实色自动兜底。
     background: "var(--bg-subtle)",
+    backdropFilter: "blur(28px) saturate(1.32)",
+    WebkitBackdropFilter: "blur(28px) saturate(1.32)",
     color: "var(--text-secondary)",
     fontWeight: 700,
     textAlign: "left" as const,

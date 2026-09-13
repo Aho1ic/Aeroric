@@ -15,6 +15,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   Smartphone,
+  Trash2,
   Type,
   Zap,
 } from "lucide-react";
@@ -136,6 +137,11 @@ const notebookEmbeddingPanel = lazyPanel(() =>
     default: NotebookEmbeddingPanel,
   })),
 );
+const cleanupReportPanel = lazyPanel(() =>
+  import("./CleanupReportPanel").then(({ CleanupReportPanel }) => ({
+    default: CleanupReportPanel,
+  })),
+);
 const wslPanel = lazyPanel(() =>
   import("./WslPanel").then(({ WslPanel }) => ({ default: WslPanel })),
 );
@@ -241,6 +247,13 @@ export const SETTINGS_PANEL_REGISTRY: readonly SettingsPanelEntry[] = [
     section: "application",
     icon: NotebookPen,
     ...notebookEmbeddingPanel,
+  },
+  {
+    key: "cleanup-report",
+    labelKey: "appSettings.cleanupReport",
+    section: "application",
+    icon: Trash2,
+    ...cleanupReportPanel,
   },
   {
     key: "wsl",

@@ -506,6 +506,111 @@ impl Default for NotebookEmbeddingSettings {
     }
 }
 
+/// 自动物理删除对话记录的调度配置。
+///
+/// `mode == "weekly"` 时看 `weekday`/`hour`,`mode == "interval"` 时看 `interval_days`。
+/// 判定与执行都在前端(`src/taskCleanup.ts`):删除的唯一收口 `deleteTasks` 在那边,
+/// 后端另写一套会让前端内存里的旧任务数组在下次落盘时把已删任务写回去。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AutoCleanupSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cleanup_mode")]
+    pub mode: String,
+    /// 0 = 周日,6 = 周六。仅 `mode == "weekly"` 生效。
+    #[serde(default)]
+    pub weekday: u8,
+    /// 0-23 本地小时。仅 `mode == "weekly"` 生效。
+    #[serde(default = "default_cleanup_hour")]
+    pub hour: u8,
+    /// 仅 `mode == "interval"` 生效。
+    #[serde(default = "default_cleanup_interval_days")]
+    pub interval_days: u16,
+    /// 任务进入终态后保留多少天才允许删。对齐 Claude Code 的 `cleanupPeriodDays` 默认 30。
+    #[serde(default = "default_cleanup_retain_days")]
+    pub retain_days: u16,
+    /// 上次实际执行的时刻,epoch 毫秒。首次启用时由前端置为当前时间,避免立刻删一大批。
+    #[serde(default)]
+    pub last_run_at: Option<i64>,
+}
+
+fn default_cleanup_mode() -> String {
+    "weekly".to_string()
+}
+
+fn default_cleanup_hour() -> u8 {
+    20
+}
+
+fn default_cleanup_interval_days() -> u16 {
+    7
+}
+
+fn default_cleanup_retain_days() -> u16 {
+    30
+}
+
+impl Default for AutoCleanupSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_cleanup_mode(),
+            weekday: 0,
+            hour: default_cleanup_hour(),
+            interval_days: default_cleanup_interval_days(),
+            retain_days: default_cleanup_retain_days(),
+            last_run_at: None,
+        }
+    }
+}
+
+/// 越界值一律夹紧而不报错:UI 只给合法选项,这里防的是手改 `settings.json`。
+/// 报错会让一个手抖的数字把整份设置卡住。
+fn normalize_auto_cleanup_settings(mut settings: AutoCleanupSettings) -> AutoCleanupSettings {
+    if settings.mode != "weekly" && settings.mode != "interval" {
+        settings.mode = default_cleanup_mode();
+    }
+    settings.weekday = settings.weekday.min(6);
+    settings.hour = settings.hour.min(23);
+    settings.interval_days = settings.interval_days.clamp(1, 365);
+    settings.retain_days = settings.retain_days.clamp(1, 3650);
+    settings
+}
+
+/// 周报配置。`week_start_day` / `week_end_day` 用 0=周日 .. 6=周六,默认 1 → 0 即周一到周日。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct WeeklyReportSettings {
+    #[serde(default = "default_week_start_day")]
+    pub week_start_day: u8,
+    #[serde(default)]
+    pub week_end_day: u8,
+    /// md 输出目录绝对路径。为空时前端每次弹目录选择框。
+    #[serde(default)]
+    pub output_dir: String,
+}
+
+fn default_week_start_day() -> u8 {
+    1
+}
+
+impl Default for WeeklyReportSettings {
+    fn default() -> Self {
+        Self {
+            week_start_day: default_week_start_day(),
+            week_end_day: 0,
+            output_dir: String::new(),
+        }
+    }
+}
+
+/// `output_dir` 原样保留:目录可能暂时不存在(外置盘未挂载),校验留给生成时的
+/// `validate_export_output_path`,否则设置面板会因为一次未挂载而存不下路径。
+fn normalize_weekly_report_settings(mut settings: WeeklyReportSettings) -> WeeklyReportSettings {
+    settings.week_start_day = settings.week_start_day.min(6);
+    settings.week_end_day = settings.week_end_day.min(6);
+    settings
+}
+
 fn default_custom_agent_codex_like() -> bool {
     true
 }
@@ -563,6 +668,10 @@ pub struct AppSettings {
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
     pub terminal_shift_enter_newline: bool,
+    #[serde(default)]
+    pub auto_cleanup_settings: AutoCleanupSettings,
+    #[serde(default)]
+    pub weekly_report_settings: WeeklyReportSettings,
 }
 
 impl Default for AppSettings {
@@ -590,6 +699,8 @@ impl Default for AppSettings {
             dsh_telemetry_enabled: false,
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
+            auto_cleanup_settings: AutoCleanupSettings::default(),
+            weekly_report_settings: WeeklyReportSettings::default(),
         }
     }
 }
@@ -1143,6 +1254,8 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
         dsh_web_search_enabled: settings.dsh_web_search_enabled,
         dsh_telemetry_enabled: settings.dsh_telemetry_enabled,
+        auto_cleanup_settings: normalize_auto_cleanup_settings(settings.auto_cleanup_settings),
+        weekly_report_settings: normalize_weekly_report_settings(settings.weekly_report_settings),
     }
 }
 
@@ -1224,6 +1337,8 @@ fn load_settings_unlocked() -> AppSettings {
             terminal_shift_enter_newline: default_shift_enter_newline(),
             dsh_web_search_enabled: true,
             dsh_telemetry_enabled: false,
+            auto_cleanup_settings: AutoCleanupSettings::default(),
+            weekly_report_settings: WeeklyReportSettings::default(),
         });
         if let Ok(dir) = aeroric_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -1543,6 +1658,36 @@ pub async fn update_notebook_embedding_settings(
     tokio::task::spawn_blocking(move || {
         update_settings_locked(move |settings| {
             settings.notebook_embedding_settings = notebook_embedding_settings;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 夹紧不在这里做:`normalize_settings` 已经过一遍 `normalize_auto_cleanup_settings`,
+/// 于是手改文件与走 UI 两条路得到同一份约束。
+#[tauri::command]
+pub async fn update_auto_cleanup_settings(
+    auto_cleanup_settings: AutoCleanupSettings,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            settings.auto_cleanup_settings = auto_cleanup_settings;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_weekly_report_settings(
+    weekly_report_settings: WeeklyReportSettings,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        update_settings_locked(move |settings| {
+            settings.weekly_report_settings = weekly_report_settings;
             Ok(())
         })
     })
@@ -3995,6 +4140,86 @@ mod tests {
             settings.notebook_embedding_settings.provider,
             crate::notebook::rag::embed::EmbedProvider::Ollama
         );
+    }
+
+    #[test]
+    fn legacy_settings_get_safe_cleanup_and_report_defaults() {
+        // 升级前的 settings.json 里没有这两段。默认必须是"清理关着、区间是周一到周日" ——
+        // 一个默认开启的物理删除会在用户毫不知情的情况下清掉半年记录。
+        let settings: AppSettings = serde_json::from_str("{}").expect("parse");
+        assert!(!settings.auto_cleanup_settings.enabled);
+        assert_eq!(settings.auto_cleanup_settings.mode, "weekly");
+        assert_eq!(settings.auto_cleanup_settings.weekday, 0);
+        assert_eq!(settings.auto_cleanup_settings.hour, 20);
+        assert_eq!(settings.auto_cleanup_settings.retain_days, 30);
+        assert_eq!(settings.auto_cleanup_settings.last_run_at, None);
+        assert_eq!(settings.weekly_report_settings.week_start_day, 1);
+        assert_eq!(settings.weekly_report_settings.week_end_day, 0);
+        assert!(settings.weekly_report_settings.output_dir.is_empty());
+    }
+
+    #[test]
+    fn normalize_settings_preserves_cleanup_and_report_sections() {
+        // `normalize_settings` 逐字段重建结构体(不是 `..settings`),漏掉一段的表现是
+        // "改完设置、重启就回默认",而编译期看不出来。
+        let normalized = normalize_settings(AppSettings {
+            auto_cleanup_settings: AutoCleanupSettings {
+                enabled: true,
+                mode: "interval".to_string(),
+                weekday: 3,
+                hour: 9,
+                interval_days: 14,
+                retain_days: 60,
+                last_run_at: Some(1_757_000_000_000),
+            },
+            weekly_report_settings: WeeklyReportSettings {
+                week_start_day: 0,
+                week_end_day: 6,
+                output_dir: "/tmp/reports".to_string(),
+            },
+            ..AppSettings::default()
+        });
+        assert!(normalized.auto_cleanup_settings.enabled);
+        assert_eq!(normalized.auto_cleanup_settings.mode, "interval");
+        assert_eq!(normalized.auto_cleanup_settings.interval_days, 14);
+        assert_eq!(normalized.auto_cleanup_settings.retain_days, 60);
+        assert_eq!(
+            normalized.auto_cleanup_settings.last_run_at,
+            Some(1_757_000_000_000)
+        );
+        assert_eq!(normalized.weekly_report_settings.week_start_day, 0);
+        assert_eq!(normalized.weekly_report_settings.week_end_day, 6);
+        assert_eq!(normalized.weekly_report_settings.output_dir, "/tmp/reports");
+    }
+
+    #[test]
+    fn hand_edited_out_of_range_cleanup_values_are_clamped_not_rejected() {
+        // 手改过 settings.json 的用户不该被一个手抖的数字挡在设置面板外,更不该让
+        // `interval_days: 0` 变成"每 0 天删一次"。
+        let normalized = normalize_settings(AppSettings {
+            auto_cleanup_settings: AutoCleanupSettings {
+                enabled: true,
+                mode: "monthly".to_string(),
+                weekday: 99,
+                hour: 250,
+                interval_days: 0,
+                retain_days: 0,
+                last_run_at: None,
+            },
+            weekly_report_settings: WeeklyReportSettings {
+                week_start_day: 42,
+                week_end_day: 42,
+                output_dir: String::new(),
+            },
+            ..AppSettings::default()
+        });
+        assert_eq!(normalized.auto_cleanup_settings.mode, "weekly");
+        assert_eq!(normalized.auto_cleanup_settings.weekday, 6);
+        assert_eq!(normalized.auto_cleanup_settings.hour, 23);
+        assert_eq!(normalized.auto_cleanup_settings.interval_days, 1);
+        assert_eq!(normalized.auto_cleanup_settings.retain_days, 1);
+        assert_eq!(normalized.weekly_report_settings.week_start_day, 6);
+        assert_eq!(normalized.weekly_report_settings.week_end_day, 6);
     }
 
     #[test]

@@ -51,6 +51,11 @@ describe("stall recorder", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    /* 必须还原 spy:下面十来条用例各自 `vi.spyOn(performance, "now")` 装一个冻结的
+       时钟(每个闭包捕获自己的 `let now`),不还原的话没有自己 spy 的用例会继承上一条
+       结束时冻住的那个值。这个文件测的正是**耗时** —— 冻结时钟下所有时长算成 0,
+       slowInvokes 恒为空,"没有慢命令" 那类断言变成永真。 */
+    vi.restoreAllMocks();
   });
 
   it("names the slow command so a stalled click is attributable", async () => {

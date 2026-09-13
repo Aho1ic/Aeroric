@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { RedisValue } from "../types";
 import { mergeRedisValuePage } from "../hooks/useRedisBrowser";
 import {
   clampRedisHashFieldWidth,
   clampRedisZsetScoreWidth,
   escapeRedisArg,
+  loadRedisJsonWordWrap,
   redisInsertStatement,
   redisJsonChildNodes,
   redisJsonText,
@@ -13,6 +14,7 @@ import {
   redisMemberRows,
   redisStreamMemberGroups,
   redisValueMemberKind,
+  saveRedisJsonWordWrap,
 } from "../components/database/redisBrowserState";
 
 function value(keyType: string, data: unknown, overrides: Partial<RedisValue> = {}): RedisValue {
@@ -125,5 +127,43 @@ describe("redisBrowserState", () => {
     expect(redisKeySizeLabel("hash", 3)).toBe("3");
     expect(clampRedisHashFieldWidth(10)).toBe(120);
     expect(clampRedisZsetScoreWidth(999)).toBe(260);
+  });
+
+  /* 自动换行偏好的键名从 `dbx-redis-json-word-wrap` 改成
+     `aeroric:database:redis-json-word-wrap`(localStorage 一律带 `aeroric:` 前缀,否则清理
+     本应用存储时会被漏掉)。直接换字符串会让老用户关掉的换行又变回开着。 */
+  describe("loadRedisJsonWordWrap 的键名迁移", () => {
+    beforeEach(() => {
+      window.localStorage.clear();
+    });
+
+    it("旧键里的 false 仍然生效,并被搬到新键、删掉旧键", () => {
+      window.localStorage.setItem("dbx-redis-json-word-wrap", "false");
+
+      expect(loadRedisJsonWordWrap()).toBe(false);
+      // 只回退读不写回的话,下一次「保存」只写新键,旧键成了永远读不到的僵尸值。
+      expect(window.localStorage.getItem("aeroric:database:redis-json-word-wrap")).toBe("false");
+      expect(window.localStorage.getItem("dbx-redis-json-word-wrap")).toBeNull();
+    });
+
+    it("新键有值时不看旧键", () => {
+      // 迁移只在新键缺失时发生;否则用户改过的新值会被一个陈旧的旧键顶掉。
+      window.localStorage.setItem("aeroric:database:redis-json-word-wrap", "true");
+      window.localStorage.setItem("dbx-redis-json-word-wrap", "false");
+
+      expect(loadRedisJsonWordWrap()).toBe(true);
+      expect(window.localStorage.getItem("dbx-redis-json-word-wrap")).toBe("false");
+    });
+
+    it("两个键都没有时默认开启", () => {
+      expect(loadRedisJsonWordWrap()).toBe(true);
+    });
+
+    it("保存只写新键", () => {
+      saveRedisJsonWordWrap(false);
+
+      expect(window.localStorage.getItem("aeroric:database:redis-json-word-wrap")).toBe("false");
+      expect(window.localStorage.getItem("dbx-redis-json-word-wrap")).toBeNull();
+    });
   });
 });

@@ -412,20 +412,31 @@ describe("attachTerminalWheelScroll", () => {
   it("advances without a repaint once the grace period lapses", async () => {
     // agent 滚到顶/底时一个字节都不回吐,只等信号会把队列锁死 —— 症状是"滚到顶再往回
     // 滚要卡一下"。超时兜底必须能自己推进。
-    const { handler, replayed } = fakeTerminal("alternate", "vt200", {
-      rows: 16,
-      cellHeight: 16,
-      repaintSignal: true,
+    //
+    // 和上一条同样用假时钟(:383 那个形状)。真时钟下这里只留 40ms 余量,而放行必须由
+    // 一次真实 rAF 回调落在这 40ms 里 —— jsdom 的 rAF 底层是 setTimeout(16),CPU 超订时
+    // 会被饿到几十毫秒一拍,90ms 内可能一帧都不落,replayed.length 仍等于 burst,硬性
+    // 正向断言直接翻红。假掉 rAF 和 performance 之后,宽限期与帧节奏都归这里推。
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "Date"],
     });
-    handler(wheel(800).event); // 48 行 → 突发 16,排队 32
-    const burst = replayed.length;
-    expect(burst).toBe(16);
+    try {
+      const { handler, replayed } = fakeTerminal("alternate", "vt200", {
+        rows: 16,
+        cellHeight: 16,
+        repaintSignal: true,
+      });
+      handler(wheel(800).event); // 48 行 → 突发 16,排队 32
+      const burst = replayed.length;
+      expect(burst).toBe(16);
 
-    // 一次 repaint 都不给,只等宽限期过去。
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, WHEEL_REPAINT_GRACE_MS + 40);
-    });
-    expect(replayed.length).toBeGreaterThan(burst);
+      // 一次 repaint 都不给,只等宽限期过去:多推一帧(16ms)保证有一次 flush 落在
+      // 截止点之后 —— 恰好落在 50ms 上的那一帧还在等信号。
+      await vi.advanceTimersByTimeAsync(WHEEL_REPAINT_GRACE_MS + 16);
+      expect(replayed.length).toBeGreaterThan(burst);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drains a fling in few large batches rather than dribbling it out", async () => {

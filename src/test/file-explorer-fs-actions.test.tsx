@@ -281,6 +281,11 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  /* jsdom 没有 document.execCommand。:1415 / :2342 用 defineProperty 装了一个恒返回
+     false 的 vi.fn,不删的话对该文件剩下约 60 个用例都是「恒失败的剪贴板兜底」。
+     当前后续用例走 clipboard 成功路径所以没红,但任何新增的「execCommand 兜底成功」
+     用例会全量跑拿到 false 桩子、单跑拿到 jsdom 未实现版本,两种跑法结论不同。 */
+  Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("删除", () => {

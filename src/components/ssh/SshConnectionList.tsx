@@ -7,6 +7,7 @@ import { SshConnectionContextMenu, type SshConnectionProtocol } from "./SshConne
 import { useCopyFeedback } from "./useCopyFeedback";
 import { SshGroupContextMenu } from "./SshGroupContextMenu";
 import { mergeSshGroupNames, normalizeSshGroupName } from "./sshGroups";
+import { copySshConnectionPassword } from "./sshConnectionActions";
 
 interface Props {
   connections: SshConnection[];
@@ -54,10 +55,9 @@ export function SshConnectionList({
   const [draftGroup, setDraftGroup] = useState<string | null>(null);
   const [groupMenu, setGroupMenu] = useState<{ group: string; x: number; y: number } | null>(null);
   // 只有真的写进剪贴板才给成功反馈，否则用户会以为复制成功了。
-  const copyPassword = async (connectionId: string, password: string) => {
+  const copyPassword = async (connection: SshConnection) => {
     try {
-      await navigator.clipboard?.writeText(password);
-      markCopied(connectionId);
+      if (await copySshConnectionPassword(connection)) markCopied(connection.id);
     } catch (error) {
       console.warn("copy ssh password failed", error);
     }
@@ -241,8 +241,8 @@ export function SshConnectionList({
               )}
               {groupConnections.map((connection) => {
                 const selected = connection.id === selectedId;
-                const password = connection.password?.trim() ?? "";
-                const canCopyPassword = password.length > 0;
+                // 明文不再随列表下发,只看后端给的标记。
+                const canCopyPassword = Boolean(connection.hasPassword);
                 return (
                   <button
                     key={connection.id}
@@ -285,14 +285,14 @@ export function SshConnectionList({
                         onClick={(event) => {
                           event.stopPropagation();
                           if (!canCopyPassword) return;
-                          void copyPassword(connection.id, password);
+                          void copyPassword(connection);
                         }}
                         onKeyDown={(event) => {
                           if (event.key !== "Enter" && event.key !== " ") return;
                           event.preventDefault();
                           event.stopPropagation();
                           if (!canCopyPassword) return;
-                          void copyPassword(connection.id, password);
+                          void copyPassword(connection);
                         }}
                       >
                         {copiedId === connection.id ? <Check size={13} /> : <Copy size={13} />}

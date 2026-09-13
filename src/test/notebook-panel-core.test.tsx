@@ -382,7 +382,22 @@ describe("NotebookPanel", () => {
     // 等的是「渲染完了」而不是 data-math-source:后者在 `await getKatex()` **之前**
     // 就写上了(见 noteVisuals 的 renderMathBlock),等它会早一拍放行,满负载跑
     // 整个套件时 KaTeX 的动态 import 还没回来,下面那条 `.katex` 就会扑空。
-    await waitFor(() => expect(math?.querySelector(".katex")).not.toBeNull());
+    //
+    // 预算显式抬到 15000ms:这是全仓**唯一**一处真等 KaTeX 落地的断言,`getKatex()`
+    // 走真实 `import("katex")`(noteVisuals.ts:55-65),katexPromise 是模块级缓存 ——
+    // 每个 worker 冷加载恰好一次,时间全花在 Vite 解析/转换/v8 插桩一个 ~270KB 的
+    // CJS 包上。node_modules/.vite 暖了只剩几十毫秒,冷的那一遍在 9 fork 争抢 CPU 时
+    // 会吃穿默认的 3000ms(setup.ts:10),而本文件又是全仓最重的之一(真实 CodeMirror
+    // + userEvent)。
+    // 注:审查清单记的症状是「一次全量红、随后两次全绿」,但那一次翻红**本次没有复现**
+    // ——冷缓存那一遍难以按需重放。所以放宽的依据是上面那条链本身(唯一、缓存、每 worker
+    // 一次的重型动态 import),不是那次观测。已验证的是:把 renderMathBlock 的 innerHTML
+    // 注入换成纯文本后,这条恰好耗满 15015ms 才翻红 —— 说明断言不空转、这个预算真的在用。
+    // 放宽的是等待预算,不是断言本身:KaTeX 必须真的把 `.katex` 渲染进去才算过 ——
+    // 换成 mock 就不再验证真实数学渲染了,那是本条用例存在的唯一理由。
+    await waitFor(() => expect(math?.querySelector(".katex")).not.toBeNull(), {
+      timeout: 15000,
+    });
     // 原式留在 data-math-source 里 —— 渲染后 textContent 变成 KaTeX 的
     // HTML+MathML 拼接,复制/导出还要用原式。
     expect(math?.getAttribute("data-math-source")).toBe("E=mc^2");

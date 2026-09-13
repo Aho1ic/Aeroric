@@ -37,8 +37,13 @@ describe("databaseSidebarTreeState", () => {
     expect(connectionBadgeText("主数据库")).toBe("主数");
     expect(connectionBadgeText("")).toBe("DB");
 
-    const item = connection("one", "Production");
-    expect(connectionBadgeColor(item)).toBe(connectionBadgeColor(item));
+    // 哈希兜底必须落到固定色值,不能只自比较。stableNameHash("Production") % 8 === 1
+    // 对应 CONNECTION_BADGE_COLORS[1] = "#0f766e"; Staging 落到 "#ca8a04"。
+    expect(connectionBadgeColor(connection("one", "Production"))).toBe("#0f766e");
+    expect(connectionBadgeColor(connection("two", "Staging"))).toBe("#ca8a04");
+    expect(connectionBadgeColor(connection("one", "Production"))).not.toBe(
+      connectionBadgeColor(connection("two", "Staging")),
+    );
     expect(connectionBadgeColor(connection("two", "Custom", { dbx: { color: " #123456 " } }))).toBe(
       "#123456",
     );

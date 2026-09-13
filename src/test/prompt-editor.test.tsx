@@ -51,9 +51,8 @@ const skillB: PromptSkill = { name: "refactor", path: "/skills/refactor" };
 const cmdA: DshSlashCommand = {
   name: "compact",
   descriptionKey: "dsh.slash.compact",
-  hasArg: false,
 };
-const cmdB: DshSlashCommand = { name: "export", descriptionKey: "dsh.slash.export", hasArg: false };
+const cmdB: DshSlashCommand = { name: "export", descriptionKey: "dsh.slash.export" };
 
 // ---------------------------------------------------------------------------
 // Selection 辅助

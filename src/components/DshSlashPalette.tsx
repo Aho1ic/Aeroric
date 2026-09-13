@@ -48,13 +48,7 @@ export function DshSlashPalette({
           )
           .map((row) => {
             const known = DSH_SLASH_COMMANDS.find((command) => command.name === row.name);
-            return (
-              known ?? {
-                name: row.name,
-                descriptionKey: "dsh.slash.title",
-                hasArg: Boolean(row.input?.hint),
-              }
-            );
+            return known ?? { name: row.name, descriptionKey: "dsh.slash.title" };
           });
         if (commands.length > 0) setRemoteCommands(commands);
       })

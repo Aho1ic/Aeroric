@@ -1,4 +1,5 @@
 import type { RedisValue } from "../../types/database";
+import { readMigratedDbxStorageValue } from "./databaseViewModel";
 
 export type RedisMemberKind = "list" | "set" | "hash" | "zset" | "stream";
 
@@ -41,7 +42,9 @@ export interface RedisJsonNode {
   parentKind: "object" | "array" | "root";
 }
 
-const REDIS_JSON_WRAP_STORAGE_KEY = "dbx-redis-json-word-wrap";
+const REDIS_JSON_WRAP_STORAGE_KEY = "aeroric:database:redis-json-word-wrap";
+/** 改名前的键名(不带 `aeroric:` 前缀)。只有 `loadRedisJsonWordWrap` 的迁移回退还读它。 */
+const LEGACY_REDIS_JSON_WRAP_STORAGE_KEY = "dbx-redis-json-word-wrap";
 
 export function redisValueText(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
@@ -97,12 +100,11 @@ export function redisJsonValue(value: string): { value: unknown } | null {
 }
 
 export function loadRedisJsonWordWrap(): boolean {
-  try {
-    if (typeof window === "undefined") return true;
-    return window.localStorage.getItem(REDIS_JSON_WRAP_STORAGE_KEY) !== "false";
-  } catch {
-    return true;
-  }
+  // 默认开:只有显式存过 "false" 才关。
+  return (
+    readMigratedDbxStorageValue(REDIS_JSON_WRAP_STORAGE_KEY, LEGACY_REDIS_JSON_WRAP_STORAGE_KEY) !==
+    "false"
+  );
 }
 
 export function saveRedisJsonWordWrap(enabled: boolean): void {

@@ -512,7 +512,7 @@ describe("MongoBrowser", () => {
     await userEvent.click(await screen.findByText("app"));
     await userEvent.click(await screen.findByText("users"));
     await userEvent.click(screen.getByRole("button", { name: /Table|表格/ }));
-    expect(window.localStorage.getItem("dbx-mongo-view-mode")).toBe("table");
+    expect(window.localStorage.getItem("aeroric:database:mongo-view-mode")).toBe("table");
     expect(screen.getByRole("columnheader", { name: "_id" })).toBeInTheDocument();
 
     firstRender.unmount();
@@ -528,7 +528,37 @@ describe("MongoBrowser", () => {
     expect(await screen.findByRole("columnheader", { name: "_id" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Document|文档/ }));
-    expect(window.localStorage.getItem("dbx-mongo-view-mode")).toBe("document");
+    expect(window.localStorage.getItem("aeroric:database:mongo-view-mode")).toBe("document");
+  });
+
+  it("旧键名里的视图偏好会被迁移到带前缀的新键", async () => {
+    /* 视图偏好的键名从 `dbx-mongo-view-mode` 改成 `aeroric:database:mongo-view-mode`
+       (localStorage 一律带 `aeroric:` 前缀,否则清理本应用存储时会被漏掉)。直接换字符串
+       会让老用户的偏好静默回到默认的「文档」视图,所以新键没值时要回退读旧键 —— 并且要
+       写回新键、删掉旧键,不然每次启动都得重新迁移,而任何一次保存只写新键,旧键就成了
+       永远读不到的僵尸值。 */
+    window.localStorage.setItem("dbx-mongo-view-mode", "table");
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "dbx_mongo_list_databases") return Promise.resolve(["app"]);
+      if (command === "dbx_mongo_list_collections") return Promise.resolve(["users"]);
+      if (command === "dbx_mongo_find_documents") {
+        return Promise.resolve({ documents: [{ _id: "1", name: "Ada" }], total: 1 });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <I18nProvider>
+        <MongoBrowser connectionId="mongo" readOnly={false} />
+      </I18nProvider>,
+    );
+
+    await userEvent.click(await screen.findByText("app"));
+    await userEvent.click(await screen.findByText("users"));
+    // 旧键里的 "table" 真的生效了:表格视图的列头在,而不是回到文档视图。
+    expect(await screen.findByRole("columnheader", { name: "_id" })).toBeInTheDocument();
+    expect(window.localStorage.getItem("aeroric:database:mongo-view-mode")).toBe("table");
+    expect(window.localStorage.getItem("dbx-mongo-view-mode")).toBeNull();
   });
 
   it("toggles DBX-style Mongo table column visibility", async () => {

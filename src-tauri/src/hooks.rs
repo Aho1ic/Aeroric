@@ -920,24 +920,97 @@ command = \"echo user-stop\"\n";
         }
     }
 
+    /// 下一个协议族。穷尽 `match`:新增一族时这里不编译。
+    fn next_family(
+        family: crate::app_settings::AgentFamily,
+    ) -> Option<crate::app_settings::AgentFamily> {
+        use crate::app_settings::AgentFamily;
+
+        match family {
+            AgentFamily::Claude => Some(AgentFamily::Codex),
+            AgentFamily::Codex => Some(AgentFamily::Dsh),
+            AgentFamily::Dsh => Some(AgentFamily::Omp),
+            AgentFamily::Omp => None,
+        }
+    }
+
+    /// 全部协议族:从 Claude 沿 [`next_family`] 走到尽头。
+    ///
+    /// 为什么不直接写字面量数组:数组漏一项编译器不会说话 —— Omp 就这样漏过一次,
+    /// `family_hooks_usable` 的 Omp 分支一直没有测试覆盖。改成走 [`next_family`] 后,
+    /// 新增一族会让那个穷尽 match 不编译,而把它接进链条就等于把它加进这个清单。
+    ///
+    /// 仍能绕过的一种写法:把新一族接成 `=> None` 的死头(于是有两个终点)。这条链
+    /// 不查这个 —— 真的穷尽枚举要么上 `strum` 之类的 derive,要么等
+    /// `mem::variant_count` 稳定,为一个测试 helper 不值得。
+    fn all_families() -> Vec<crate::app_settings::AgentFamily> {
+        use crate::app_settings::AgentFamily;
+
+        let mut families = vec![AgentFamily::Claude];
+        while let Some(next) = next_family(*families.last().expect("链条至少有 Claude")) {
+            // 成环会让这个 while 转不完。先查再 push,把死循环换成一条能读的失败。
+            assert!(
+                !families.contains(&next),
+                "next_family 成环:{} 已经在链条里",
+                next.as_str()
+            );
+            families.push(next);
+        }
+        families
+    }
+
     /// node 缺失时任何 family 都不可用——hook 命令跑不起来。
     #[test]
     fn family_hooks_need_node() {
-        use crate::app_settings::AgentFamily;
         let status = HookInstallStatus {
             node_path: String::new(),
             ..installed_status()
         };
-        for family in [AgentFamily::Claude, AgentFamily::Codex, AgentFamily::Dsh] {
-            assert!(!family_hooks_usable(family, &status));
+        for family in all_families() {
+            assert!(
+                !family_hooks_usable(family, &status),
+                "{} 在 node 缺失时不该判为可用",
+                family.as_str()
+            );
         }
     }
 
-    /// dsh 不走 claude/codex 的 hook 机制,即便两边都装好也必须为 false。
+    /// 链条真的走遍了每一族。`all_families` 是上面两条循环测试的取值来源,它自己漏一项
+    /// 会让那两条测试静默缩小覆盖面 —— 那正是 Omp 漏测的形态。
+    ///
+    /// 用 `AgentFamily::parse` 作独立对照:清单里的每一族都能从自己的 `as_str` 解析
+    /// 回来,且四个字面名一个不少。
     #[test]
-    fn dsh_family_never_uses_hooks() {
+    fn the_family_chain_covers_every_family() {
         use crate::app_settings::AgentFamily;
-        assert!(!family_hooks_usable(AgentFamily::Dsh, &installed_status()));
+
+        let families = all_families();
+        for family in &families {
+            assert_eq!(
+                AgentFamily::parse(family.as_str()),
+                Some(*family),
+                "{} 的 as_str/parse 不自洽",
+                family.as_str()
+            );
+        }
+        for name in ["claude", "codex", "dsh", "omp"] {
+            let expected = AgentFamily::parse(name).expect("已知 family 名应能解析");
+            assert!(families.contains(&expected), "链条漏了 {name}");
+        }
+    }
+
+    /// dsh/omp 不走 claude/codex 的 hook 机制(见 `family_hooks_usable` 的注释),
+    /// 即便 claude 与 codex 两边都装好、node 也在,这两族仍必须为 false。
+    #[test]
+    fn dsh_and_omp_families_never_use_hooks() {
+        use crate::app_settings::AgentFamily;
+        for family in [AgentFamily::Dsh, AgentFamily::Omp] {
+            assert!(
+                !family_hooks_usable(family, &installed_status()),
+                "{} 不该走 claude/codex 的 hook 机制",
+                family.as_str()
+            );
+        }
     }
 
     /// 未安装对应 family 的 hook 时不可用,且两个 family 相互独立:

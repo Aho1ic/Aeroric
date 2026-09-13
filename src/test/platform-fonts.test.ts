@@ -32,10 +32,26 @@ describe("platform font profiles", () => {
   });
 
   it("provides platform-compatible UI and terminal fallback chains", () => {
-    expect(DEFAULT_UI_FONT_BY_PLATFORM.windows).toContain("Segoe UI");
-    expect(DEFAULT_UI_FONT_BY_PLATFORM.linux).toContain("Noto Sans");
-    expect(DEFAULT_MONO_FONT_BY_PLATFORM.windows).toContain("Cascadia Mono");
-    expect(DEFAULT_MONO_FONT_BY_PLATFORM.linux).toContain("DejaVu Sans Mono");
+    // 契约是形状,不是某几个字面量子串:每条链必须带通用族收尾,且至少有
+    // 一个具体字体 + 通用族,否则 composeFontStack 拼出来的栈在对应平台
+    // 会变成单字体、CJK / 度量回退全丢。
+    const generic: Record<string, true> = {
+      "sans-serif": true,
+      serif: true,
+      monospace: true,
+      "ui-monospace": true,
+    };
+
+    for (const stack of [
+      ...Object.values(DEFAULT_UI_FONT_BY_PLATFORM),
+      ...Object.values(DEFAULT_MONO_FONT_BY_PLATFORM),
+    ]) {
+      const parts = composeFontStack(stack, stack)
+        .split(",")
+        .map((entry) => entry.trim().replace(/^["']|["']$/g, ""));
+      expect(parts.length).toBeGreaterThan(1);
+      expect(generic[parts.at(-1)!]).toBe(true);
+    }
   });
 
   it("migrates a legacy mac font only when a legacy key is explicitly provided", () => {

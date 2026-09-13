@@ -49,19 +49,31 @@ enum Session {
 }
 
 /// `XDG_SESSION_TYPE` 最可靠,但 display 变量在它缺失时也能定性。
-fn session() -> Session {
-    match std::env::var("XDG_SESSION_TYPE").as_deref() {
-        Ok("wayland") => return Session::Wayland,
-        Ok("x11") => return Session::X11,
+///
+/// 判定本身抽成纯函数:`session()` 的返回值决定 `screen_recording_probe` /
+/// `input_monitoring_probe` 报 Granted 还是 Unknown,判错就是面板上一句错的结论,
+/// 而在并行测试里改进程环境(`set_var`)不安全,只能把入参喂进来测。
+fn session_from(xdg_session_type: Option<&str>, wayland_display: bool, display: bool) -> Session {
+    match xdg_session_type {
+        Some("wayland") => return Session::Wayland,
+        Some("x11") => return Session::X11,
         _ => {}
     }
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    if wayland_display {
         Session::Wayland
-    } else if std::env::var_os("DISPLAY").is_some() {
+    } else if display {
         Session::X11
     } else {
         Session::Unknown
     }
+}
+
+fn session() -> Session {
+    session_from(
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+    )
 }
 
 /// portal 是 DBus 服务,但不引 DBus 依赖也能判断它装没装:看激活文件在不在。
@@ -345,11 +357,29 @@ mod tests {
 
     #[test]
     fn session_detection_prefers_xdg_session_type() {
-        // 只验证纯函数分支:不改进程环境,避免影响并行测试。
-        assert!(matches!(
-            session(),
-            Session::X11 | Session::Wayland | Session::Unknown
-        ));
+        // XDG_SESSION_TYPE 说了算:即使 display 变量指向另一种会话也不改结论。
+        // 一台 Wayland 机器上通常同时有 DISPLAY(XWayland),两臂对调就会把
+        // Wayland 报成 X11,面板于是谎称"截屏不需要授权"。
+        assert_eq!(session_from(Some("wayland"), false, true), Session::Wayland);
+        assert_eq!(session_from(Some("x11"), true, false), Session::X11);
+    }
+
+    #[test]
+    fn session_detection_falls_back_to_the_display_variables() {
+        // XDG_SESSION_TYPE 缺失或是别的值(tty/mir/……)时才看 display 变量,
+        // 且 WAYLAND_DISPLAY 优先于 DISPLAY(XWayland 下两者都在)。
+        assert_eq!(session_from(None, true, true), Session::Wayland);
+        assert_eq!(session_from(None, false, true), Session::X11);
+        assert_eq!(session_from(Some("tty"), true, false), Session::Wayland);
+        assert_eq!(session_from(Some("tty"), false, true), Session::X11);
+    }
+
+    #[test]
+    fn no_graphical_session_is_unknown_not_x11() {
+        // 纯 tty / SSH:必须报 Unknown,否则 screen_recording_probe 会按 X11
+        // 直接报 Granted,而那里根本截不了屏。
+        assert_eq!(session_from(None, false, false), Session::Unknown);
+        assert_eq!(session_from(Some("tty"), false, false), Session::Unknown);
     }
 
     #[test]

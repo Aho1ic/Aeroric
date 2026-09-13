@@ -151,12 +151,14 @@ interface Fixture {
   projects?: Project[];
   tasksByProject?: Record<string, Task[]>;
   activeTaskIds?: string[];
+  appSettings?: Record<string, unknown>;
 }
 
 function installInvokeDispatcher({
   projects = [],
   tasksByProject = {},
   activeTaskIds = [],
+  appSettings = {},
 }: Fixture) {
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
@@ -170,7 +172,7 @@ function installInvokeDispatcher({
       case "detect_conda_environments":
         return [];
       case "load_app_settings":
-        return {};
+        return appSettings;
       default:
         // 启动期有大量与本用例无关的探测调用,静默返回 null,断言才只反映被测接线。
         return null;
@@ -217,18 +219,59 @@ function savedTaskSnapshots(projectId: string): Task[][] {
     .map(([, args]) => (args as { tasks: Task[] }).tasks);
 }
 
+/**
+ * 读最后一次落盘快照里的这条任务。**不等待** —— 专门给外层 waitFor 的回调用。
+ *
+ * 存在的理由:原来那些 `waitFor(async () => expect((await latestSavedTask(...)).status)...)`
+ * 是嵌套 waitFor —— 外层默认 3000ms,回调里 `latestSavedTask` 自己又是一个 3000ms 的
+ * waitFor。条件不满足时内层要耗满 3000ms 才 reject,外层这时已经超时,于是**外层单
+ * 一次轮询就吃掉全部预算**,报出来还是内层那句「not in any persisted snapshot yet」,
+ * 看不出真因。轮询条件必须是同步读,等待只能有一层。
+ */
+function savedTaskNow(projectId: string, taskId: string): Task | undefined {
+  const snapshots = savedTaskSnapshots(projectId);
+  return snapshots[snapshots.length - 1]?.find((item) => item.id === taskId);
+}
+
 /** 等过 taskPersistence 的 350ms 防抖窗口,拿最后一次落盘的快照。 */
 async function latestSavedTask(projectId: string, taskId: string): Promise<Task> {
-  const found = await waitFor(
+  return await waitFor(
     () => {
-      const snapshots = savedTaskSnapshots(projectId);
-      const last = snapshots[snapshots.length - 1]?.find((item) => item.id === taskId);
+      const last = savedTaskNow(projectId, taskId);
       if (!last) throw new Error(`${taskId} not in any persisted snapshot yet`);
       return last;
     },
     { timeout: 3000 },
   );
-  return found;
+}
+
+/**
+ * 等到最后一次落盘快照里这条任务满足 `predicate`。
+ *
+ * 单层 waitFor:回调是纯同步读,所以 3000ms 预算真的全用在等落盘上。
+ * 失败信息带上当前值 —— 「一直停在 running」和「压根没落盘」是两种完全不同的 bug。
+ */
+async function waitForSavedTask(
+  projectId: string,
+  taskId: string,
+  wanted: string,
+  predicate: (task: Task) => boolean,
+): Promise<Task> {
+  return await waitFor(
+    () => {
+      const last = savedTaskNow(projectId, taskId);
+      if (!last) throw new Error(`${taskId} not in any persisted snapshot yet`);
+      if (!predicate(last)) {
+        throw new Error(
+          `${taskId} 还不满足「${wanted}」:status=${last.status} completedAt=${String(
+            last.completedAt,
+          )}`,
+        );
+      }
+      return last;
+    },
+    { timeout: 3000 },
+  );
 }
 
 beforeEach(() => {
@@ -372,22 +415,88 @@ describe("App 装配层:task-status / task-session 接线", () => {
     // 事件链路才知道 App 真的用上了它。
     installInvokeDispatcher({
       projects: [project({ id: "p1" })],
-      tasksByProject: { p1: [task({ id: "t-1", status: "running" })] },
+      tasksByProject: {
+        p1: [task({ id: "t-1", status: "running" }), task({ id: "t-2", status: "running" })],
+      },
       activeTaskIds: ["t-1"],
     });
     renderApp();
     await waitForSubscriptions();
-    await waitFor(async () => expect((await latestSavedTask("p1", "t-1")).status).toBe("detached"));
+    await waitForSavedTask("p1", "t-1", "detached", (saved) => saved.status === "detached");
 
     await emit("task-status", { task_id: "t-1", status: "running" });
     await emit("task-status", { task_id: "t-1", status: "input_required" });
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    /* 被忽略的事件在盘上不留痕迹(内容相同,fingerprint 跳过保存)。要证明它们
+       已经被处理过,靠另一条**会落盘**的事件当有序屏障:同一条 handler、同一个
+       setTasks、事件按序处理 —— t-2 落成 done 时,前面两条已被同一 handler 处理完。
+       原来的 600ms 真实睡眠是负向断言 + 真实等待:负载慢 → 多余的 effect 还没跑完
+       就断言了,就算把守卫删掉也照绿(假绿),同时还净烧 600ms 挂钟。 */
+    await emit("task-status", { task_id: "t-2", status: "done" });
+    await waitForSavedTask("p1", "t-2", "done", (saved) => saved.status === "done");
 
-    expect((await latestSavedTask("p1", "t-1")).status).toBe("detached");
+    expect(savedTaskNow("p1", "t-1")?.status).toBe("detached");
+    // 加固:任何一次落盘快照里 t-1 都不该出现 running / input_required。
+    // 防抖合并会削弱这条(中间态可能不落盘),主鉴别力在上一行的最终状态。
+    const everSeen = savedTaskSnapshots("p1")
+      .map((snapshot) => snapshot.find((item) => item.id === "t-1")?.status)
+      .filter((status) => status === "running" || status === "input_required");
+    expect(everSeen).toEqual([]);
 
     // 终态方向不设限:detached → done 必须放行,否则任务永远停在 detached。
     await emit("task-status", { task_id: "t-1", status: "done" });
-    await waitFor(async () => expect((await latestSavedTask("p1", "t-1")).status).toBe("done"));
+    await waitForSavedTask("p1", "t-1", "done", (saved) => saved.status === "done");
+  });
+
+  it("completedAt 只在首次进入终态时写入,二次跃迁不刷新", async () => {
+    // 周报的"本周完成了什么"与定时清理的"超期"都读这一个字段。若每次终态事件
+    // 都刷新它,一个 failed 后又被 cancel 的任务会把结束时间推到当下,保留期
+    // 就永远算不到头。
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      tasksByProject: { p1: [task({ id: "t-1", status: "running" })] },
+      activeTaskIds: [],
+    });
+    renderApp();
+    await waitForSubscriptions();
+
+    await emit("task-status", { task_id: "t-1", status: "failed", failure_reason: "boom" });
+    const first = (
+      await waitForSavedTask(
+        "p1",
+        "t-1",
+        "completedAt 已写入",
+        (saved) => (saved.completedAt ?? 0) > 0,
+      )
+    ).completedAt as number;
+
+    await emit("task-status", { task_id: "t-1", status: "cancelled" });
+    await waitForSavedTask("p1", "t-1", "cancelled", (saved) => saved.status === "cancelled");
+
+    expect((await latestSavedTask("p1", "t-1")).completedAt).toBe(first);
+  });
+
+  it("任务被续跑离开终态时 completedAt 被清空", async () => {
+    // 否则续跑中的任务带着旧结束时间,定时清理会把一个正在跑的任务判成超期。
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      tasksByProject: { p1: [task({ id: "t-1", status: "running" })] },
+      activeTaskIds: [],
+    });
+    renderApp();
+    await waitForSubscriptions();
+
+    await emit("task-status", { task_id: "t-1", status: "done" });
+    await waitForSavedTask(
+      "p1",
+      "t-1",
+      "completedAt 已写入",
+      (saved) => (saved.completedAt ?? 0) > 0,
+    );
+
+    await emit("task-status", { task_id: "t-1", status: "running" });
+    await waitForSavedTask("p1", "t-1", "running", (saved) => saved.status === "running");
+
+    expect((await latestSavedTask("p1", "t-1")).completedAt).toBeUndefined();
   });
 
   it("task-session 事件按 family 把 session 落到对应的字段", async () => {
@@ -412,6 +521,109 @@ describe("App 装配层:task-status / task-session 接线", () => {
     expect(saved.codexSessionId).toBe("sess-abc");
     expect(saved.codexSessionPath).toBe("/tmp/sess-abc.jsonl");
     expect(saved.claudeSessionId).toBeUndefined();
+  });
+});
+
+describe("App 装配层:定时自动删除", () => {
+  const DAY_MS = 86_400_000;
+
+  function invokedWith(command: string): Array<Record<string, unknown>> {
+    return invokeMock.mock.calls
+      .filter(([name]) => name === command)
+      .map(([, args]) => (args ?? {}) as Record<string, unknown>);
+  }
+
+  it("到点后把超期的已结束任务真的删掉", async () => {
+    // 纯函数判定另有单测;这里唯一要证的是那条判定接到了真正的删除路径上 ——
+    // 接错的表现是"配置生效了但磁盘一直不回收",从 UI 上完全看不出来。
+    const now = Date.now();
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      tasksByProject: {
+        p1: [
+          task({ id: "t-old", status: "done", completedAt: now - 60 * DAY_MS }),
+          task({ id: "t-fresh", status: "done", completedAt: now - DAY_MS }),
+          task({ id: "t-running", status: "running", createdAt: now - 90 * DAY_MS }),
+        ],
+      },
+      appSettings: {
+        auto_cleanup_settings: {
+          enabled: true,
+          mode: "interval",
+          interval_days: 7,
+          retain_days: 30,
+          last_run_at: now - 30 * DAY_MS,
+        },
+      },
+    });
+    renderApp();
+    await waitForSubscriptions();
+
+    const deleted = await waitFor(
+      () => {
+        const calls = invokedWith("delete_task_terminal_histories");
+        if (calls.length === 0) throw new Error("cleanup never reached deleteTasks");
+        return calls[0].taskIds as string[];
+      },
+      { timeout: 3000 },
+    );
+
+    expect(deleted).toEqual(["t-old"]);
+    // 落盘的快照里也必须没有它,否则下次启动它又回来了。
+    const snapshot = await waitFor(() => {
+      const snapshots = savedTaskSnapshots("p1");
+      const last = snapshots[snapshots.length - 1];
+      if (!last) throw new Error("no persisted snapshot yet");
+      return last;
+    });
+    expect(snapshot.map((item) => item.id)).not.toContain("t-old");
+
+    // 执行时刻必须回写,否则半小时后的下一轮会重算同一个周期。
+    const recorded = invokedWith("update_auto_cleanup_settings");
+    expect(recorded.length).toBeGreaterThan(0);
+  });
+
+  it("首次启用只记时间,一条都不删", async () => {
+    // 勾上复选框的下一秒丢掉半年记录是不可接受的失败模式。
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      tasksByProject: {
+        p1: [task({ id: "t-old", status: "done", completedAt: Date.now() - 400 * DAY_MS })],
+      },
+      appSettings: {
+        auto_cleanup_settings: {
+          enabled: true,
+          mode: "interval",
+          interval_days: 7,
+          retain_days: 1,
+        },
+      },
+    });
+    renderApp();
+    await waitForSubscriptions();
+
+    await waitFor(() => {
+      if (invokedWith("update_auto_cleanup_settings").length === 0) {
+        throw new Error("first run should record the timestamp");
+      }
+    });
+    expect(invokedWith("delete_task_terminal_histories")).toEqual([]);
+  });
+
+  it("功能关闭时既不删也不写配置", async () => {
+    installInvokeDispatcher({
+      projects: [project({ id: "p1" })],
+      tasksByProject: {
+        p1: [task({ id: "t-old", status: "done", completedAt: Date.now() - 400 * DAY_MS })],
+      },
+      appSettings: {},
+    });
+    renderApp();
+    await waitForSubscriptions();
+    await waitFor(() => expect(invokedWith("load_app_settings").length).toBeGreaterThan(0));
+
+    expect(invokedWith("delete_task_terminal_histories")).toEqual([]);
+    expect(invokedWith("update_auto_cleanup_settings")).toEqual([]);
   });
 });
 

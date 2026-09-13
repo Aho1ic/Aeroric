@@ -1,5 +1,5 @@
 import { useState, memo, type MouseEvent } from "react";
-import { Trash2, Star, Play, GitBranch, RotateCcw } from "lucide-react";
+import { Trash2, Star, Play, GitBranch, RotateCcw, ArchiveRestore } from "lucide-react";
 import type { ProtocolFamily, Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
@@ -51,6 +51,7 @@ export const TaskListItem = memo(
     onToggleStar,
     onRunTodo,
     onResumeTask,
+    onUnarchive,
   }: {
     task: Task;
     selected: boolean;
@@ -60,6 +61,8 @@ export const TaskListItem = memo(
     onToggleStar: () => void;
     onRunTodo?: () => void;
     onResumeTask?: () => void;
+    /** 仅已归档任务传入;传了就把星标位换成"取消归档"。 */
+    onUnarchive?: () => void;
   }) {
     const { t } = useI18n();
     const [hov, setHov] = useState(false);
@@ -123,24 +126,45 @@ export const TaskListItem = memo(
             <GitBranch size={11} strokeWidth={2.2} />
           </span>
         )}
-        {!task.starred && (
+        {/* 归档态占用星标位:已归档任务收藏与否已无意义,而"退回主列表"是它唯一需要的动作。 */}
+        {onUnarchive ? (
           <button
             type="button"
-            aria-label={task.starred ? t("task.unstar") : t("task.star")}
-            title={task.starred ? t("task.unstar") : t("task.star")}
+            aria-label={t("task.unarchive")}
+            title={t("task.unarchive")}
             style={{
               ...s.taskStarBtn,
-              opacity: task.starred ? 1 : hov ? 0.7 : 0,
-              pointerEvents: task.starred || hov ? "auto" : "none",
-              color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
+              opacity: hov ? 0.7 : 0,
+              pointerEvents: hov ? "auto" : "none",
+              color: "var(--text-hint)",
             }}
             onClick={(e) => {
               e.stopPropagation();
-              onToggleStar();
+              onUnarchive();
             }}
           >
-            <Star size={12} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
+            <ArchiveRestore size={12} strokeWidth={2.2} />
           </button>
+        ) : (
+          !task.starred && (
+            <button
+              type="button"
+              aria-label={task.starred ? t("task.unstar") : t("task.star")}
+              title={task.starred ? t("task.unstar") : t("task.star")}
+              style={{
+                ...s.taskStarBtn,
+                opacity: task.starred ? 1 : hov ? 0.7 : 0,
+                pointerEvents: task.starred || hov ? "auto" : "none",
+                color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleStar();
+              }}
+            >
+              <Star size={12} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
+            </button>
+          )
         )}
         {onRunTodo && (
           <button
@@ -194,5 +218,6 @@ export const TaskListItem = memo(
     prev.selected === next.selected &&
     prev.multiSelected === next.multiSelected &&
     (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined) &&
-    (prev.onResumeTask !== undefined) === (next.onResumeTask !== undefined),
+    (prev.onResumeTask !== undefined) === (next.onResumeTask !== undefined) &&
+    (prev.onUnarchive !== undefined) === (next.onUnarchive !== undefined),
 );

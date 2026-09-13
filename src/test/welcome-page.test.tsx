@@ -18,6 +18,16 @@ vi.mock("../components/recursive-hero-effect/recursive-hero-effect", () => ({
     setReducedMotion: vi.fn(),
   })),
 }));
+// SshTerminalPanel 会拉进 xterm 与真实 PTY runtime,jsdom 里跑不动;这里只要证明
+// 首页把双击接到了它上面,面板内部行为由 ssh-workspace 系列测试覆盖。
+vi.mock("../components/ssh/SshTerminalPanel", () => ({
+  SshTerminalPanel: (props: { initialConnectionId?: string; autoConnect?: boolean }) =>
+    React.createElement(
+      "div",
+      { "data-testid": "ssh-terminal" },
+      `${props.initialConnectionId}:${props.autoConnect}`,
+    ),
+}));
 
 function remoteProject(): Project {
   return {
@@ -249,5 +259,37 @@ describe("WelcomePage project cards", () => {
     });
     expect((input as HTMLInputElement).style.border).toBe("1px solid transparent");
     expect(input).toHaveStyle({ textTransform: "none" });
+  });
+
+  it("opens an SSH terminal from the home SSH page instead of creating a project", async () => {
+    const user = userEvent.setup();
+    const onOpenSshProject = vi.fn();
+
+    renderWelcome({ onOpenSshProject });
+
+    await user.click(screen.getByRole("button", { name: "SSH" }));
+    await user.dblClick(
+      await screen.findByRole("button", { name: /Prod SSH.*192\.168\.10\.95:22/ }),
+    );
+
+    // 双击 = 开终端并自动连接,不是建项目。
+    expect(await screen.findByTestId("ssh-terminal")).toHaveTextContent("conn-1:true");
+    expect(onOpenSshProject).not.toHaveBeenCalled();
+  });
+
+  it("drops the home SSH terminal when the sidebar switches views", async () => {
+    const user = userEvent.setup();
+
+    renderWelcome();
+
+    await user.click(screen.getByRole("button", { name: "SSH" }));
+    await user.dblClick(
+      await screen.findByRole("button", { name: /Prod SSH.*192\.168\.10\.95:22/ }),
+    );
+    expect(await screen.findByTestId("ssh-terminal")).toBeInTheDocument();
+
+    // 换主视图必须卸掉面板,否则 PTY 留在别的页面下面。
+    await user.click(screen.getByRole("button", { name: "Projects" }));
+    expect(screen.queryByTestId("ssh-terminal")).toBeNull();
   });
 });

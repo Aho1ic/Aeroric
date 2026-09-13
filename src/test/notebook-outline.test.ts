@@ -177,7 +177,11 @@ describe("analyzeNote — 字数与阅读时长", () => {
     expect(analyzeNote(words).readingMinutes).toBe(4);
   });
 
-  it("undefined 输入不抛", () => {
-    expect(() => analyzeNote(undefined as unknown as string)).not.toThrow();
+  it("undefined 输入按空文档处理", () => {
+    expect(analyzeNote(undefined as unknown as string)).toEqual({
+      outline: [],
+      words: 0,
+      readingMinutes: 0,
+    });
   });
 });

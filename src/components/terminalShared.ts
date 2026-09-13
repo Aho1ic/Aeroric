@@ -771,7 +771,9 @@ export function attachMacWebKitTerminalGuard({
 // 让光标位置跟随 xterm 的光标 Y，但不遮挡输入文字。
 export function attachCursorLineHighlight(term: Terminal, container: HTMLElement): () => void {
   let overlay: HTMLDivElement | null = null;
-  let rafId: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  // 已排但还没落地的那一帧的取消函数。`scheduleTerminalFrame` 会按可见性在 rAF 与
+  // setTimeout 之间选路,两种句柄不同类,所以这里只存"怎么取消",不存句柄本身。
+  let cancelFrame: (() => void) | null = null;
 
   const getScreen = () => container.querySelector<HTMLElement>(".xterm-screen");
   const getThemeVariant = (): ThemeVariant => {
@@ -829,30 +831,24 @@ export function attachCursorLineHighlight(term: Terminal, container: HTMLElement
   };
 
   const cancelScheduledRender = () => {
-    if (rafId === null) return;
-    if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(rafId as number);
-    } else {
-      globalThis.clearTimeout(rafId as ReturnType<typeof globalThis.setTimeout>);
-    }
-    rafId = null;
+    if (cancelFrame === null) return;
+    cancelFrame();
+    cancelFrame = null;
   };
 
-  // 三个来源全部走 rAF 合并。光标移动在 TUI 重绘时其实是高频的(每次重绘都可能移动
-  // 多次),原先直连 render 会把一帧内的多次移动变成多次强制同步布局。
+  /* 三个来源(光标移动 / 重绘 / resize)全部合并成一帧。光标移动在 TUI 重绘时是高频的
+     (每次重绘都可能移动多次),直连 render 会把一帧内的多次移动变成多次强制同步布局。
+
+     走共享的 `scheduleTerminalFrame` 而不是自己写一套 rAF:窗口不可见时浏览器把 rAF
+     降到近乎停止,而 xterm 仍在写入、光标仍在移动,自己那套的 setTimeout 分支只在
+     `requestAnimationFrame` 不存在时才生效(SSR / 测试环境),真机上救不了这个场景 ——
+     overlay 会一直停在切走前那一行,直到用户切回来。 */
   const scheduleRender = () => {
-    if (rafId !== null) return;
-    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-      rafId = window.requestAnimationFrame(() => {
-        rafId = null;
-        render();
-      });
-    } else {
-      rafId = globalThis.setTimeout(() => {
-        rafId = null;
-        render();
-      }, 16);
-    }
+    if (cancelFrame !== null) return;
+    cancelFrame = scheduleTerminalFrame(() => {
+      cancelFrame = null;
+      render();
+    });
   };
 
   const cursorDisposable = term.onCursorMove(scheduleRender);
@@ -1035,12 +1031,31 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function scheduleFrame(callback: FrameRequestCallback): void {
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(callback);
-    return;
+/**
+ * 排一帧终端写入。
+ *
+ * 可见时用 rAF,与刷新同步、不撕裂。**隐藏时必须退到 `setTimeout`** —— 浏览器在窗口
+ * 不可见时把 rAF 降到近乎停止,而 PTY 数据仍在源源不断到达 JS。只靠 rAF 会让输出攒在
+ * 内存里,等切回前台再连续补帧,表现就是"终端哗啦一下刷到底部"。
+ *
+ * 原来那条 `setTimeout` 回退只在 `window.requestAnimationFrame` 不存在时生效(SSR /
+ * 测试环境),不看可见性,所以真机上一次也没救过这个场景。
+ *
+ * 返回取消函数:调用方(比如 `useTerminalManager` 卸载时)需要能撤掉已排的那一次,
+ * 而 rAF 与 setTimeout 的句柄不同类,把"怎么取消"封在这里比让调用方分辨两种句柄可靠。
+ */
+export function scheduleTerminalFrame(callback: FrameRequestCallback): () => void {
+  const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  if (
+    !hidden &&
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    const handle = window.requestAnimationFrame(callback);
+    return () => window.cancelAnimationFrame(handle);
   }
-  globalThis.setTimeout(() => callback(nowMs()), 16);
+  const timer = globalThis.setTimeout(() => callback(nowMs()), 16);
+  return () => globalThis.clearTimeout(timer);
 }
 
 function refreshTerminalCursorLine(term: Terminal): void {
@@ -1116,7 +1131,7 @@ export function createSmartWriter(
       globalThis.setTimeout(run, delayMs);
       return;
     }
-    scheduleFrame(run);
+    scheduleTerminalFrame(run);
   }
 
   function drainPending() {
@@ -1220,7 +1235,7 @@ export function createSmartWriter(
   function pauseForUserInput(durationMs = TERMINAL_USER_INPUT_PAUSE_MS) {
     state.inputPausedUntil = Math.max(state.inputPausedUntil, nowMs() + durationMs);
     refreshTerminalCursorLine(term);
-    scheduleFrame(() => refreshTerminalCursorLine(term));
+    scheduleTerminalFrame(() => refreshTerminalCursorLine(term));
     if (state.pendingChunks.length > 0) scheduleDrain(durationMs);
   }
 
@@ -1526,7 +1541,7 @@ function createWheelReportPacer(term: Terminal, beginReplay: () => () => void): 
   const schedule = () => {
     if (frameScheduled || cancelled) return;
     frameScheduled = true;
-    scheduleFrame(flush);
+    scheduleTerminalFrame(flush);
   };
 
   return {
@@ -1969,6 +1984,11 @@ export function fitTerminalAtBottom(
     // A renderer can disappear during teardown; revealing the container is enough.
   }
 
+  /* 这里刻意不走 `scheduleTerminalFrame`,是这个文件里唯一一处裸 rAF。原因有两条:
+     一是它要的正是"下一次**绘制**",隐藏时那条 setTimeout 分支会在没有绘制发生的
+     情况下就把遮罩摘掉,反而露出中间态 —— 而窗口不可见时本来就没人看得见重排,
+     晚一点揭开没有代价;二是它按 container 去重(WeakMap 里存的是帧句柄,回调里还要
+     比较句柄身份来判断自己是否已被顶替),而共享调度器只返回取消函数、不暴露句柄。 */
   const pendingFrame = terminalRevealFrames.get(container);
   if (pendingFrame !== undefined) window.cancelAnimationFrame(pendingFrame);
   const frame = window.requestAnimationFrame(() => {

@@ -9,6 +9,7 @@ import { SshTerminalPanel } from "./SshTerminalPanel";
 import { useCopyFeedback } from "./useCopyFeedback";
 import { SshGroupContextMenu } from "./SshGroupContextMenu";
 import { useSshGroups } from "./useSshGroups";
+import { copySshConnectionPassword } from "./sshConnectionActions";
 import { AnimatedSelectionTrack } from "../ui/AnimatedSelection";
 import {
   SSH_TERMINAL_MAX_SESSIONS,
@@ -52,12 +53,6 @@ function groupConnections(
   );
   if (ungrouped.length > 0) grouped.push([fallbackGroup, ungrouped, false]);
   return grouped;
-}
-
-async function copyConnectionPassword(connection: SshConnection) {
-  const password = connection.password ?? "";
-  if (!password || !navigator.clipboard?.writeText) return;
-  await navigator.clipboard.writeText(password);
 }
 
 function SshCardPicker({
@@ -123,7 +118,8 @@ function SshCardPicker({
           <div style={s.sshProjectCardGrid}>
             {items.map((connection) => {
               const selected = selectedId === connection.id;
-              const canCopyPassword = Boolean(connection.password);
+              // 明文不再随列表下发,只看后端给的标记。
+              const canCopyPassword = Boolean(connection.hasPassword);
               return (
                 <div
                   key={connection.id}
@@ -182,8 +178,8 @@ function SshCardPicker({
                     onClick={(event) => {
                       event.stopPropagation();
                       if (!canCopyPassword) return;
-                      void copyConnectionPassword(connection).then(() => {
-                        markCopied(connection.id);
+                      void copySshConnectionPassword(connection).then((copied) => {
+                        if (copied) markCopied(connection.id);
                       });
                     }}
                   >

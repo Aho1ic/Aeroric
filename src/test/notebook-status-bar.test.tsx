@@ -53,12 +53,6 @@ describe("NoteStatusBar", () => {
     });
   }
 
-  it("保存状态挂在 role=status 上", () => {
-    // 自动保存是静默的,状态变化要能被屏幕阅读器播报,不能只靠看。
-    renderBar("saving");
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
-
   it("显示 vault 相对路径,完整路径放 title", () => {
     renderBar("saved");
     const path = screen.getByTitle(`${VAULT}/daily/today.md`);

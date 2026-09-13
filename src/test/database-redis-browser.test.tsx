@@ -1626,7 +1626,7 @@ describe("RedisBrowser", () => {
     expect(wordWrap).toBeChecked();
     await userEvent.click(wordWrap);
     expect(wordWrap).not.toBeChecked();
-    expect(window.localStorage.getItem("dbx-redis-json-word-wrap")).toBe("false");
+    expect(window.localStorage.getItem("aeroric:database:redis-json-word-wrap")).toBe("false");
     expect(jsonTree).toHaveStyle("white-space: pre");
 
     await userEvent.click(

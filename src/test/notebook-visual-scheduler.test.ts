@@ -229,20 +229,60 @@ describe("scheduleVisualBlocks — correctness", () => {
   });
 });
 
-describe("scheduleVisualBlocks — first paint perf", () => {
-  it("setup + visible render on 500-block doc with cheap renderer is fast", async () => {
+describe("scheduleVisualBlocks — first paint cost", () => {
+  it("500 个块只量一遍布局,首屏之外的一个都不渲染", async () => {
+    /* 这里原来断言 `performance.now()` 差值 < 100ms。那是全仓唯一一条挂钟性能断言,
+       和被测逻辑无关:一次 GC 停顿、或 OS 在 9 个 fork 争抢下把这个 worker 挂起,
+       就直接翻红,重跑必绿。
+
+       换成数**工作量**——同一个「首屏别卡住」的契约,但门槛与机器忙不忙无关:
+       - 每个块的 getBoundingClientRect 只调一次(O(n),不是每块重新扫全表的 O(n²));
+       - 首屏之外的 487 个块在 setup 阶段一个都不渲染(它们要等 IO 滚进视口)。
+       这两条才是「500 块的文档不会冻住主线程好几秒」的真实来源。 */
     const root = makeBlocks(500);
-    stubLayout(root);
-    const t0 = performance.now();
-    const handle = scheduleVisualBlocks<HTMLElement>(root, "div.viz-block", () => undefined, {
-      viewportHeight: 1080,
-      yieldFn: instantYield,
+    const measured = new Map<string, number>();
+    Array.from(root.querySelectorAll<HTMLElement>("div.viz-block")).forEach((block, index) => {
+      const top = index * 100;
+      block.getBoundingClientRect = () => {
+        const idx = block.dataset.idx!;
+        measured.set(idx, (measured.get(idx) ?? 0) + 1);
+        return {
+          top,
+          bottom: top + 80,
+          left: 0,
+          right: 100,
+          width: 100,
+          height: 80,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
     });
-    // Sync setup cost — visible queue starts but isn't awaited here.
-    const setupMs = performance.now() - t0;
-    // Aeroric 的 lint 只允许 console.warn / console.error。
-    console.warn(`[bench] scheduleVisualBlocks setup (500 blocks): ${setupMs.toFixed(2)}ms`);
-    expect(setupMs).toBeLessThan(100);
+
+    const rendered: number[] = [];
+    const handle = scheduleVisualBlocks<HTMLElement>(
+      root,
+      "div.viz-block",
+      (block) => {
+        rendered.push(Number(block.dataset.idx));
+      },
+      { viewportHeight: 1080, visibilityMargin: 200, yieldFn: instantYield },
+    );
+
+    // 布局只在 setup 里量,每块恰好一次 —— 多量一遍就是 O(n²) 回归。
+    expect(measured.size).toBe(500);
+    expect([...measured.values()].every((count) => count === 1)).toBe(true);
+
+    // 首屏集合走完(renderer 与 instantYield 都是同步/微任务,排空只需要冲干净
+    // microtask 队列,不占任何挂钟时间)。
+    for (let tick = 0; tick < 200; tick += 1) await Promise.resolve();
+
+    // 视口 1080 + 余量 200,块间距 100:top <= 1280 的是 0..12,共 13 块。
+    // 首屏只渲染这 13 块,剩下 487 块必须留给 IntersectionObserver ——
+    // 若 setup 顺手把全部 500 块排进队列,这条立刻红。
+    expect(rendered).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(FakeIntersectionObserver.instances[0]!.observed).toHaveLength(487);
     handle.disconnect();
   });
 });

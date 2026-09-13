@@ -255,7 +255,14 @@ describe("NotebookPanel", () => {
         // 跳转后正文要先渲染出来,滚动才发生在下一帧。
         await waitFor(() => expect(scrolled).toContain("第二节"));
       } finally {
-        Element.prototype.scrollIntoView = original;
+        /* jsdom 不实现 scrollIntoView,所以 `original` 是 undefined —— 赋值回去会在
+           Element.prototype 上留下一个值为 undefined 的**自有属性**,而原先根本没有
+           这个属性(`"scrollIntoView" in Element.prototype` 由 false 翻成 true)。
+           多数调用点用 `typeof x === "function"` 判定,对两者一致;但
+           DshTrajectoryLedger.tsx:192 是无保护的 `?.scrollIntoView(...)`,会因为
+           「属性存在但不是函数」而抛。原本没有就删掉,原本有才还原。 */
+        if (original) Element.prototype.scrollIntoView = original;
+        else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
       }
     });
 

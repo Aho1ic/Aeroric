@@ -43,6 +43,82 @@ export interface AppSettings {
   custom_agents?: CustomAgentProfile[];
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
+  auto_cleanup_settings?: AutoCleanupSettings;
+  weekly_report_settings?: WeeklyReportSettings;
+}
+
+/**
+ * 定时自动物理删除对话记录的配置。字段名 snake_case,与 Rust 的 `AppSettings` 一致 ——
+ * 于是 `load_app_settings` 读回来的对象与发给 `update_auto_cleanup_settings` 的载荷
+ * 是同一个形状,不需要来回转换,也就没有"某个字段转换时漏了"这类 bug。
+ */
+export interface AutoCleanupSettings {
+  enabled: boolean;
+  mode: "weekly" | "interval";
+  /** 0 = 周日 .. 6 = 周六。仅 `weekly` 模式生效。 */
+  weekday: number;
+  /** 0-23 本地小时。仅 `weekly` 模式生效。 */
+  hour: number;
+  /** 仅 `interval` 模式生效。 */
+  interval_days: number;
+  /** 任务进入终态后保留多少天才允许删。 */
+  retain_days: number;
+  /** 上次实际执行的时刻,epoch 毫秒。缺失表示"从未跑过"。 */
+  last_run_at?: number;
+}
+
+export const DEFAULT_AUTO_CLEANUP_SETTINGS: AutoCleanupSettings = {
+  enabled: false,
+  mode: "weekly",
+  weekday: 0,
+  hour: 20,
+  interval_days: 7,
+  retain_days: 30,
+};
+
+/** 周报的统计区间与输出目录。`week_start_day` / `week_end_day` 用 0=周日 .. 6=周六。 */
+export interface WeeklyReportSettings {
+  week_start_day: number;
+  week_end_day: number;
+  /** md 输出目录绝对路径。为空时每次生成都问一次。 */
+  output_dir: string;
+}
+
+export const DEFAULT_WEEKLY_REPORT_SETTINGS: WeeklyReportSettings = {
+  week_start_day: 1,
+  week_end_day: 0,
+  output_dir: "",
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(Math.trunc(value), min), max);
+}
+
+/** 字段缺失或越界时补齐,保证判定函数拿到的一定是合法值。上下界与 Rust 侧一致。 */
+export function normalizeAutoCleanupSettings(
+  value: Partial<AutoCleanupSettings> | null | undefined,
+): AutoCleanupSettings {
+  const merged = { ...DEFAULT_AUTO_CLEANUP_SETTINGS, ...(value ?? {}) };
+  return {
+    ...merged,
+    mode: merged.mode === "interval" ? "interval" : "weekly",
+    weekday: clampInt(merged.weekday, 0, 6),
+    hour: clampInt(merged.hour, 0, 23),
+    interval_days: clampInt(merged.interval_days, 1, 365),
+    retain_days: clampInt(merged.retain_days, 1, 3650),
+  };
+}
+
+export function normalizeWeeklyReportSettings(
+  value: Partial<WeeklyReportSettings> | null | undefined,
+): WeeklyReportSettings {
+  const merged = { ...DEFAULT_WEEKLY_REPORT_SETTINGS, ...(value ?? {}) };
+  return {
+    ...merged,
+    week_start_day: clampInt(merged.week_start_day, 0, 6),
+    week_end_day: clampInt(merged.week_end_day, 0, 6),
+  };
 }
 
 export interface LocalRouterSettings {

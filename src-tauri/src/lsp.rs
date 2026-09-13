@@ -2251,6 +2251,7 @@ mod tests {
             username: "tester".to_string(),
             identity_file: None,
             password: None,
+            has_password: false,
             remote_path: Some("/srv/app".to_string()),
             auto_sudo_with_password: false,
             use_proxy: false,

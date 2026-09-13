@@ -267,6 +267,8 @@ function projectPageProps(
     onSelectTask: vi.fn(),
     onDeleteTask: vi.fn(),
     onDeleteTasks: vi.fn(),
+    onArchiveTasks: vi.fn(),
+    onUnarchiveTasks: vi.fn(),
     onDeleteAllTasks: vi.fn(),
     onToggleTaskStar: vi.fn(),
     onRenameTask: vi.fn(),

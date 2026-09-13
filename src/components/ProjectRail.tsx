@@ -11,6 +11,8 @@ import {
   type UIEvent,
 } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronRight,
   Bot,
@@ -29,7 +31,7 @@ import {
   X,
 } from "lucide-react";
 import type { Project, Task, ThemeVariant } from "../types";
-import { isActiveTaskStatus, resolveProjectLocation } from "../types";
+import { isActiveTaskStatus, isArchivableTaskStatus, resolveProjectLocation } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { NotificationBell } from "./NotificationBell";
@@ -102,7 +104,8 @@ export function projectMatchesRailSearch(project: Project, query: string) {
 }
 
 function getProjectStatus(tasks: Task[], projectId: string): ProjectStatus {
-  const projectTasks = tasks.filter((t) => t.projectId === projectId);
+  // 归档任务不参与侧栏指示:归档后仍亮黄点会让"已处理完"的项目一直看着像有活。
+  const projectTasks = tasks.filter((t) => t.projectId === projectId && !t.archivedAt);
   if (
     projectTasks.some(
       (t) => t.status === "input_required" || t.status === "detached" || t.status === "interrupted",
@@ -186,6 +189,7 @@ function RailTaskItem({
   onRunTodo,
   onResumeTask,
   allowSessionRecovery,
+  onUnarchive,
 }: {
   task: Task;
   selected: boolean;
@@ -197,6 +201,8 @@ function RailTaskItem({
   onRunTodo: () => void;
   onResumeTask?: () => void;
   allowSessionRecovery?: boolean;
+  /** 仅已归档任务传入;传了就把星标位换成"取消归档"。 */
+  onUnarchive?: () => void;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -260,34 +266,66 @@ function RailTaskItem({
         {displayTitle.length > 72 ? "..." : ""}
       </span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 1, flexShrink: 0 }}>
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={task.starred ? t("task.unstar") : t("task.star")}
-          title={task.starred ? t("task.unstar") : t("task.star")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleStar();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            event.stopPropagation();
-            onToggleStar();
-          }}
-          style={{
-            width: 18,
-            height: 18,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: 5,
-            color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
-            opacity: task.starred || hovered ? 1 : 0.45,
-          }}
-        >
-          <Star size={10.5} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
-        </span>
+        {/* 归档态占用星标位:已归档任务收藏与否已无意义,而"退回主列表"是它唯一需要的动作。 */}
+        {onUnarchive ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t("task.unarchive")}
+            title={t("task.unarchive")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onUnarchive();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onUnarchive();
+            }}
+            style={{
+              width: 18,
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 5,
+              color: "var(--text-hint)",
+              opacity: hovered ? 1 : 0.45,
+            }}
+          >
+            <ArchiveRestore size={10.5} strokeWidth={2.2} />
+          </span>
+        ) : (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={task.starred ? t("task.unstar") : t("task.star")}
+            title={task.starred ? t("task.unstar") : t("task.star")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleStar();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleStar();
+            }}
+            style={{
+              width: 18,
+              height: 18,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 5,
+              color: task.starred ? "var(--star-fg)" : "var(--text-hint)",
+              opacity: task.starred || hovered ? 1 : 0.45,
+            }}
+          >
+            <Star size={10.5} strokeWidth={2.2} fill={task.starred ? "currentColor" : "none"} />
+          </span>
+        )}
         {canRunTodo && (
           <span
             role="button"
@@ -380,7 +418,9 @@ function RailTaskItem({
 
 // 待确认(input_required)任务数——用于黄色数量角标
 function getAttentionCount(tasks: Task[], projectId: string): number {
-  return tasks.filter((t) => t.projectId === projectId && t.status === "input_required").length;
+  return tasks.filter(
+    (t) => t.projectId === projectId && t.status === "input_required" && !t.archivedAt,
+  ).length;
 }
 
 // 项目状态指示:启用角标且存在待确认任务时显示数量角标,否则回退为小圆点。
@@ -428,6 +468,8 @@ export function ProjectRail({
   onSelectTask,
   onDeleteTask,
   onDeleteTasks,
+  onArchiveTasks,
+  onUnarchiveTasks,
   onToggleTaskStar,
   onRunTodo,
   onResumeTask,
@@ -458,6 +500,8 @@ export function ProjectRail({
   onSelectTask: (projectId: string, id: string) => void;
   onDeleteTask: (id: string) => void;
   onDeleteTasks?: (ids: string[]) => void;
+  onArchiveTasks?: (ids: string[]) => void;
+  onUnarchiveTasks?: (ids: string[]) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
@@ -1078,6 +1122,13 @@ export function ProjectRail({
                 const deletableSelectedTaskIds = selectedProjectTasks
                   .filter((task) => !task.starred)
                   .map((task) => task.id);
+                const archivableSelectedTaskIds = selectedProjectTasks
+                  .filter((task) => isArchivableTaskStatus(task.status) && !task.archivedAt)
+                  .map((task) => task.id);
+                // 归档任务沉到列表底部的独立分区,与主列表分开;不受任何时间窗过滤,
+                // 否则用户主动归档的东西会因为"太旧"而彻底找不回来。
+                const activeTasks = tasks.filter((task) => !task.archivedAt);
+                const archivedTasks = tasks.filter((task) => task.archivedAt);
                 return (
                   <div key={project.id} style={{ marginBottom: 6 }}>
                     <div
@@ -1337,6 +1388,37 @@ export function ProjectRail({
                             </span>
                             <button
                               type="button"
+                              aria-label={t("task.archiveSelected")}
+                              title={t("task.archiveSelected")}
+                              disabled={archivableSelectedTaskIds.length === 0 || !onArchiveTasks}
+                              onClick={() => onArchiveTasks?.(archivableSelectedTaskIds)}
+                              style={{
+                                minWidth: 24,
+                                height: 24,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 4,
+                                padding: "0 6px",
+                                border: "none",
+                                borderRadius: 5,
+                                background: "transparent",
+                                color: "var(--text-secondary)",
+                                cursor:
+                                  archivableSelectedTaskIds.length > 0 && onArchiveTasks
+                                    ? "pointer"
+                                    : "default",
+                                opacity:
+                                  archivableSelectedTaskIds.length > 0 && onArchiveTasks ? 1 : 0.45,
+                                fontFamily: "var(--font-ui)",
+                                fontSize: 10.8,
+                              }}
+                            >
+                              <Archive size={11} strokeWidth={2.2} />
+                              <span>{t("common.archive")}</span>
+                            </button>
+                            <button
+                              type="button"
                               aria-label={t("task.deleteSelected")}
                               title={t("task.deleteSelected")}
                               disabled={deletableSelectedTaskIds.length === 0 || !onDeleteTasks}
@@ -1405,23 +1487,63 @@ export function ProjectRail({
                             {t("task.noTasksYet")}
                           </div>
                         ) : (
-                          tasks.map((task) => (
-                            <RailTaskItem
-                              key={task.id}
-                              task={task}
-                              selected={selectedTaskId === task.id}
-                              multiSelected={selectedTaskIds.has(task.id)}
-                              isNewTask={isNewTask}
-                              onSelect={(event) => handleTaskClick(event, project, tasks, task)}
-                              onDelete={() => onDeleteTask(task.id)}
-                              onToggleStar={() => onToggleTaskStar(task.id)}
-                              onRunTodo={() => onRunTodo(task)}
-                              allowSessionRecovery={
-                                resolveProjectLocation(project).kind === "local"
-                              }
-                              onResumeTask={onResumeTask ? () => onResumeTask(task.id) : undefined}
-                            />
-                          ))
+                          <>
+                            {activeTasks.map((task) => (
+                              <RailTaskItem
+                                key={task.id}
+                                task={task}
+                                selected={selectedTaskId === task.id}
+                                multiSelected={selectedTaskIds.has(task.id)}
+                                isNewTask={isNewTask}
+                                onSelect={(event) => handleTaskClick(event, project, tasks, task)}
+                                onDelete={() => onDeleteTask(task.id)}
+                                onToggleStar={() => onToggleTaskStar(task.id)}
+                                onRunTodo={() => onRunTodo(task)}
+                                allowSessionRecovery={
+                                  resolveProjectLocation(project).kind === "local"
+                                }
+                                onResumeTask={
+                                  onResumeTask ? () => onResumeTask(task.id) : undefined
+                                }
+                              />
+                            ))}
+                            {archivedTasks.length > 0 && (
+                              <div
+                                style={{
+                                  padding: "8px 8px 3px",
+                                  fontSize: 10.2,
+                                  fontWeight: 650,
+                                  letterSpacing: 0.3,
+                                  textTransform: "uppercase",
+                                  color: "var(--text-hint)",
+                                }}
+                              >
+                                {t("task.archived")}
+                              </div>
+                            )}
+                            {archivedTasks.map((task) => (
+                              <RailTaskItem
+                                key={task.id}
+                                task={task}
+                                selected={selectedTaskId === task.id}
+                                multiSelected={selectedTaskIds.has(task.id)}
+                                isNewTask={isNewTask}
+                                onSelect={(event) => handleTaskClick(event, project, tasks, task)}
+                                onDelete={() => onDeleteTask(task.id)}
+                                onToggleStar={() => onToggleTaskStar(task.id)}
+                                onRunTodo={() => onRunTodo(task)}
+                                allowSessionRecovery={
+                                  resolveProjectLocation(project).kind === "local"
+                                }
+                                onResumeTask={
+                                  onResumeTask ? () => onResumeTask(task.id) : undefined
+                                }
+                                onUnarchive={
+                                  onUnarchiveTasks ? () => onUnarchiveTasks([task.id]) : undefined
+                                }
+                              />
+                            ))}
+                          </>
                         )}
                       </div>
                     )}

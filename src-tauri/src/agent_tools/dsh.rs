@@ -633,14 +633,34 @@ mod tests {
 
     #[test]
     fn every_source_upgrade_block_explains_why_it_fell_back() {
-        for block in [
-            SourceUpgradeBlock::NotAGitRepository,
-            SourceUpgradeBlock::DirtyWorktree,
-            SourceUpgradeBlock::NoUpstream,
-            SourceUpgradeBlock::MissingGit,
-            SourceUpgradeBlock::MissingPnpm,
-        ] {
-            assert!(!block.reason().is_empty());
+        // 文案必须和变体对得上:MissingGit 与 MissingPnpm 两臂对调,用户会看到
+        // 「装了 git 却提示缺 pnpm」。is_empty 抓不到这件事。
+        use SourceUpgradeBlock::*;
+        let cases: &[(SourceUpgradeBlock, &[&str])] = &[
+            (NotAGitRepository, &["git", "repository"]),
+            (DirtyWorktree, &["uncommitted"]),
+            (NoUpstream, &["upstream"]),
+            (MissingGit, &["git"]),
+            (MissingPnpm, &["pnpm"]),
+        ];
+        let mut reasons = std::collections::BTreeSet::new();
+        for (block, needles) in cases {
+            // 穷尽 match:新增变体时这里编译不过,逼着把文案加进上面的表。
+            match block {
+                NotAGitRepository | DirtyWorktree | NoUpstream | MissingGit | MissingPnpm => {}
+            }
+            let reason = block.reason();
+            for needle in *needles {
+                assert!(
+                    reason.contains(needle),
+                    "{block:?} reason {reason:?} should mention {needle:?}"
+                );
+            }
+            assert!(
+                reasons.insert(reason),
+                "two blocks share the same reason: {reason}"
+            );
         }
+        assert_eq!(reasons.len(), cases.len());
     }
 }

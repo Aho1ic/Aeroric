@@ -144,6 +144,8 @@ export function ProjectPage({
   onSelectTask,
   onDeleteTask,
   onDeleteTasks,
+  onArchiveTasks,
+  onUnarchiveTasks,
   onToggleTaskStar,
   onRenameTask,
   onGenerateTaskName,
@@ -202,6 +204,8 @@ export function ProjectPage({
   onSelectTask: (projectId: string, id: string) => void;
   onDeleteTask: (id: string) => void;
   onDeleteTasks: (ids: string[]) => void;
+  onArchiveTasks: (ids: string[]) => void;
+  onUnarchiveTasks: (ids: string[]) => void;
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
   onRenameTask: (id: string, name: string) => void;
@@ -1599,6 +1603,8 @@ export function ProjectPage({
         onSelectTask={handleSelectTask}
         onDeleteTask={onDeleteTask}
         onDeleteTasks={onDeleteTasks}
+        onArchiveTasks={onArchiveTasks}
+        onUnarchiveTasks={onUnarchiveTasks}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
         onResumeTask={onResumeTask}

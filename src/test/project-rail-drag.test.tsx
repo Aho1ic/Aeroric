@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, Task } from "../types";
 import { ProjectRail } from "../components/ProjectRail";
@@ -31,6 +31,15 @@ function task(id: string, projectId: string, createdAt: number): Task {
     createdAt,
   };
 }
+
+/* 用例之间必须清 localStorage:`i18n.tsx:50` 的 effect 每次 I18nProvider 挂载都把当前
+   语言写回去,所以 :463 那条 `setItem("aeroric:language","zh")` 会一路继承给后面的用例。
+   受害者是那些按英文字面量查询、自己又不设语言的用例(例如「opens the agent settings
+   section」按 { name: "Agent settings" } 找):它们现在只是因为排在 zh 那条之前才通过 ——
+   把 zh 用例上移一条、或在它前面新增任何 zh 用例,立刻红。 */
+beforeEach(() => {
+  localStorage.clear();
+});
 
 describe("ProjectRail project dragging", () => {
   it("keeps a slim strip with the toggle and footer actions while the page owns the collapsed state", () => {

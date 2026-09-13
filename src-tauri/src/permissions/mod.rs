@@ -851,7 +851,56 @@ mod tests {
     #[test]
     fn identity_reports_a_subject_and_signature_kind() {
         let identity = imp::identity();
+        // subject 是系统记账用的主体。三条来源(bundle id / 签名 identifier /
+        // exe 路径)在测试进程里至少有一条能拿到,退到 "unknown" 说明取身份这一步
+        // 整个坏了 —— 而面板会拿这个字符串向用户解释「设置里明明开了」。
         assert!(!identity.subject.is_empty());
-        assert!(!identity.signature.is_empty());
+        assert_ne!(
+            identity.subject, "unknown",
+            "identity() fell back to the last-resort placeholder"
+        );
+        // 取值域钉住 classify_signature / AppIdentity::not_applicable 实际会吐的
+        // 那些字面量(含 linker-signed:测试二进制在 macOS 上就是这种)。把各臂
+        // 返回值互换,权限面板会告诉用户一个错的签名状态,而那决定 TCC 授权
+        // 会不会在重签后失效。
+        const KINDS: &[&str] = &[
+            "linker-signed",
+            "adhoc",
+            "developer-id",
+            "signed",
+            "unsigned",
+            "not-applicable",
+        ];
+        assert!(
+            KINDS.contains(&identity.signature.as_str()),
+            "unknown signature kind: {}",
+            identity.signature
+        );
+        match identity.signature.as_str() {
+            "adhoc" | "unsigned" | "linker-signed" => {
+                assert!(
+                    !identity.stable_across_updates,
+                    "{} must be treated as unstable so the panel warns about re-auth after resigning",
+                    identity.signature
+                );
+            }
+            "developer-id" | "signed" | "not-applicable" => {
+                assert!(
+                    identity.stable_across_updates,
+                    "{} should survive an upgrade",
+                    identity.signature
+                );
+            }
+            other => panic!("unhandled signature kind {other}"),
+        }
+
+        // 不稳定就必须带 warning:面板靠它提示「重签后要重新授权」。悄悄丢掉这条
+        // 提示,用户只会看到开关是开的、应用却拿不到权限。
+        if !identity.stable_across_updates {
+            assert!(
+                identity.warning.is_some(),
+                "an unstable identity must explain itself"
+            );
+        }
     }
 }

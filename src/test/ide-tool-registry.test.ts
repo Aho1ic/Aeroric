@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { zh } from "../i18n/zh";
 import {
   getCommandPaletteIdeTools,
   getToolbarIdeTools,
@@ -8,18 +9,19 @@ import {
 
 describe("ide tool registry", () => {
   it("registers IDE tools as metadata only", () => {
-    expect(IDE_TOOL_REGISTRY.map((tool) => tool.id)).toEqual([
-      "git-advanced",
-      "problems",
-      "tests",
-      "debug",
-      "run",
-      "preview",
-      "search",
-      "skills",
+    expect(IDE_TOOL_REGISTRY.map((tool) => [tool.id, tool.titleKey, tool.commandId])).toEqual([
+      ["git-advanced", "gitAdvanced.title", "git-advanced"],
+      ["problems", "problems.title", "problems"],
+      ["tests", "tests.title", "test-explorer"],
+      ["debug", "debug.title", "debug"],
+      ["run", "run.title", "run-configurations"],
+      ["preview", "preview.title", "web-preview"],
+      ["search", "toolbar.search", "search-files"],
+      ["skills", "skills.installedSkills", "project-skills"],
     ]);
-    expect(IDE_TOOL_REGISTRY.every((tool) => typeof tool.titleKey === "string")).toBe(true);
-    expect(IDE_TOOL_REGISTRY.every((tool) => typeof tool.commandId === "string")).toBe(true);
+    for (const tool of IDE_TOOL_REGISTRY) {
+      expect(zh[tool.titleKey], tool.titleKey).toEqual(expect.any(String));
+    }
   });
 
   it("uses a distinct icon for Git Advanced instead of the Git Changes branch icon", () => {

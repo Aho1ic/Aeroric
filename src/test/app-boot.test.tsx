@@ -144,7 +144,15 @@ function savedTaskSnapshots(projectId: string): Task[][] {
     .map(([, args]) => (args as { tasks: Task[] }).tasks);
 }
 
-/** 等待 taskPersistence 的 350ms 防抖窗口过去，拿到最后落盘的任务快照。 */
+/**
+ * 等待 taskPersistence 的 350ms 防抖窗口过去，拿到最后落盘的任务快照。
+ *
+ * 预算保持默认量级的 3000ms —— 实测过,不要凭"全 App 挂载很重"的直觉去放宽:
+ * 这条链(renderApp 全量挂载 → 启动探测 invoke → get_active_task_ids → setState →
+ * 350ms 防抖 → save_project_tasks)裸跑 357/360ms,9 个重文件并行时 389/360ms。
+ * 原因是耗时**由那个固定的 350ms 防抖主导**,而 setTimeout 是挂钟、不随 CPU 争抢
+ * 放大;可放大的只有 ~10-40ms 的同步部分。3000ms 有 7 倍以上余量。
+ */
 async function savedTasksFor(projectId: string): Promise<Task[]> {
   await waitFor(() => expect(savedTaskSnapshots(projectId).length).toBeGreaterThan(0), {
     timeout: 3000,

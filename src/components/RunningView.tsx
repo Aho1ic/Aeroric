@@ -29,6 +29,7 @@ import {
   hasTaskContinuationContext,
   resolveTaskSessionOwner,
 } from "../taskSession";
+import { ymd } from "./notebook/noteTemplates";
 import { useI18n } from "../i18n";
 import type { TerminalResizeFn } from "../hooks/useTerminalManager";
 import { shouldOfferWindowsNodeInstaller } from "./agentRuntimeRecovery";
@@ -407,7 +408,9 @@ export function RunningView({
           .slice(0, 50)
           .replace(/[^\w\u4e00-\u9fa5-]+/g, "_")
           .replace(/^_+|_+$/g, "") || "session";
-      const date = new Date().toISOString().slice(0, 10);
+      // 本地日期,不用 `toISOString().slice(0, 10)` —— 那是 UTC 日期,UTC+8 在早上
+      // 08:00 之前给的是昨天,于是上午导出的文件名会写成前一天。
+      const date = ymd(new Date());
       const defaultName = `aeroric-${slug}-${date}.md`;
 
       const outputPath = await saveDialog({

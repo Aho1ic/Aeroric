@@ -13,6 +13,12 @@ declare module "node:fs" {
     isDirectory(): boolean;
   }
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
+  export function mkdtempSync(prefix: string): string;
+  export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
+}
+
+declare module "node:os" {
+  export function tmpdir(): string;
 }
 
 declare module "node:path" {
@@ -21,4 +27,4 @@ declare module "node:path" {
   export function relative(from: string, to: string): string;
 }
 
-declare const process: { cwd(): string };
+declare const process: { cwd(): string; env: Record<string, string | undefined> };

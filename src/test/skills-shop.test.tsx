@@ -113,13 +113,15 @@ describe("SkillsShop", () => {
     );
 
     await user.type(screen.getByRole("textbox", { name: "Search online skills..." }), "react");
-    await waitFor(
-      () =>
-        expect(invokeMock).toHaveBeenCalledWith(
-          "search_marketplace_skills",
-          expect.objectContaining({ query: "react" }),
-        ),
-      { timeout: 1200 },
+    /* 原先把预算收紧到 1200ms,守的是 SkillsShop 那个真实 300ms 防抖 → load() → invoke。
+       通过路径一满足就返回,收紧到默认 3000ms 以下没有任何收益,纯粹把余量让出去 ——
+       前面已经串了两次 selectOptions + 两次 waitFor,user.type 的 5 个按键各触发一次
+       重渲染,负载下 jsdom 的 300ms 定时器会滑,1200ms 是这一串里最薄的一层。 */
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "search_marketplace_skills",
+        expect.objectContaining({ query: "react" }),
+      ),
     );
   });
 

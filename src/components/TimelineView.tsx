@@ -41,7 +41,8 @@ function formatTime(ts: number): string {
   return `${hh}:${mm}`;
 }
 
-function taskTitle(task: Task): string {
+/** 任务显示名:`name` 优先,否则 prompt 首行。周报共用同一套规则,别再写一份。 */
+export function taskTitle(task: Task): string {
   if (task.name && task.name.trim()) return task.name;
   const prompt = task.prompt.trim();
   return prompt.length > 0 ? prompt.split("\n")[0] : "(untitled)";
@@ -102,8 +103,11 @@ export function TimelineView({
       yesterday: new Map(),
       earlier: new Map(),
     };
+    // 归档的不进首页时间线:归档承诺的是"从主列表移走",而这是三处任务列表面之一
+    // (另两处是 ProjectRail 与 task-panel/TaskList)。漏掉这里,用户归档完回首页
+    // 会看见它们还在。
     const sorted = [...tasks]
-      .filter((task) => task.createdAt >= cutoff)
+      .filter((task) => task.archivedAt == null && task.createdAt >= cutoff)
       .sort((a, b) => b.createdAt - a.createdAt);
     for (const task of sorted) {
       const bucket = bucketFor(task.createdAt, now);

@@ -52,6 +52,7 @@ import {
   type LocalRouterStatus,
 } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
+import { WeeklyReportBar } from "./WeeklyReportBar";
 import type { SshProjectInput } from "./ssh/sshProject";
 import { useSshGroups } from "./ssh/useSshGroups";
 import { DockerIcon } from "./DockerIcon";
@@ -62,6 +63,7 @@ import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
 import { APP_PLATFORM } from "../platform";
 import type { WslProjectInput } from "./wsl/WslProjectDialog";
+import appLogo from "../assets/app-logo.png";
 import s from "../styles";
 
 const SftpPanel = lazy(() =>
@@ -84,6 +86,9 @@ const NotebookPanel = lazy(() =>
 );
 const SshProjectPage = lazy(() =>
   import("./ssh/SshProjectDialog").then((module) => ({ default: module.SshProjectPage })),
+);
+const SshTerminalPanel = lazy(() =>
+  import("./ssh/SshTerminalPanel").then((module) => ({ default: module.SshTerminalPanel })),
 );
 const StorageConnectionPage = lazy(() =>
   import("./storage/StorageConnectionPage").then((module) => ({
@@ -448,6 +453,9 @@ export function WelcomePage({
   const [sftpOpen, setSftpOpen] = useState(false);
   const [sftpConnectionId, setSftpConnectionId] = useState<string | undefined>();
   const [sftpStorageConnectionId, setSftpStorageConnectionId] = useState<string | undefined>();
+  // 首页的 SSH 终端只从卡片手势进来,必然带连接,所以用「有没有连接 id」表示开合,
+  // 不像 SFTP 那样另立一个 boolean(它能从侧栏不带连接打开)。
+  const [sshTerminalConnectionId, setSshTerminalConnectionId] = useState<string | undefined>();
   const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
   const keepRecursiveBackgroundMounted = themeVariant === "light";
   const showRecursiveBackground = view === "projects" && !sftpOpen;
@@ -457,6 +465,8 @@ export function WelcomePage({
     setSftpOpen(false);
     setSftpConnectionId(undefined);
     setSftpStorageConnectionId(undefined);
+    // 换主视图必须收掉终端,否则 PTY 在别的页面下面继续挂着。
+    setSshTerminalConnectionId(undefined);
     setView(nextView);
   }, []);
 
@@ -554,7 +564,17 @@ export function WelcomePage({
         <div style={s.sidebar}>
           <div style={s.sidebarBrand}>
             <div style={s.sidebarBrandIcon}>
-              <span style={s.sidebarBrandBadge}>A</span>
+              <img
+                src={appLogo}
+                alt="Aeroric logo"
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  borderRadius: "var(--radius-sm)",
+                  objectFit: "cover",
+                  display: "block",
+                }}
+              />
             </div>
             <div>
               <div style={s.sidebarBrandTitle}>Aeroric</div>
@@ -675,7 +695,28 @@ export function WelcomePage({
           </div>
         </div>
 
-        {sftpOpen ? (
+        {sshTerminalConnectionId ? (
+          <LazyPane>
+            <SshTerminalPanel
+              key={sshTerminalConnectionId}
+              connections={sshConnections}
+              onConnectionsChange={onSshConnectionsChange}
+              onDeleteConnection={onDeleteSshConnection}
+              active
+              width="100%"
+              themeVariant={themeVariant}
+              terminalFontSize={terminalFontSize}
+              monoFontFamily={monoFontFamily}
+              initialConnectionId={sshTerminalConnectionId}
+              autoConnect
+              onConnectSftp={(connection) => {
+                setSshTerminalConnectionId(undefined);
+                setSftpConnectionId(connection.id);
+                setSftpOpen(true);
+              }}
+            />
+          </LazyPane>
+        ) : sftpOpen ? (
           <LazyPane>
             <SftpPanel
               key={sftpConnectionId ?? sftpStorageConnectionId ?? "default"}
@@ -691,18 +732,21 @@ export function WelcomePage({
             />
           </LazyPane>
         ) : view === "timeline" ? (
-          <TimelineView
-            projects={allProjects}
-            tasks={tasks}
-            onTaskClick={(task) => {
-              if (task.projectId === skillHubConfig?.hubProjectId) {
-                onEnterSkillHub();
-                return;
-              }
-              const project = allProjects.find((p) => p.id === task.projectId);
-              if (project) onProjectClick(project);
-            }}
-          />
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+            <WeeklyReportBar tasks={tasks} projects={allProjects} />
+            <TimelineView
+              projects={allProjects}
+              tasks={tasks}
+              onTaskClick={(task) => {
+                if (task.projectId === skillHubConfig?.hubProjectId) {
+                  onEnterSkillHub();
+                  return;
+                }
+                const project = allProjects.find((p) => p.id === task.projectId);
+                if (project) onProjectClick(project);
+              }}
+            />
+          </div>
         ) : view === "usage" ? (
           <LazyPane>
             <UsageDashboard />
@@ -755,6 +799,11 @@ export function WelcomePage({
               onOpenSftp={(connection) => {
                 setSftpConnectionId(connection.id);
                 setSftpOpen(true);
+              }}
+              onOpenTerminal={(connection) => {
+                // 保持 view 停在 "ssh":关掉终端后回到 SSH 页,而不是项目列表。
+                setSftpOpen(false);
+                setSshTerminalConnectionId(connection.id);
               }}
             />
           </LazyPane>

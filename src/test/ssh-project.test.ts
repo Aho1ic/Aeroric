@@ -74,10 +74,11 @@ describe("SSH project opening", () => {
     );
   });
 
-  it("opens SSH and SFTP actions from the home SSH context menu", async () => {
+  it("opens a terminal, not a project, from the home SSH context menu", async () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     const onOpenSftp = vi.fn();
+    const onOpenTerminal = vi.fn();
     const sshPage = () => screen.getByRole("button", { name: /Prod.*example\.com:22/ });
 
     render(
@@ -90,23 +91,55 @@ describe("SSH project opening", () => {
           onClose: vi.fn(),
           onOpen,
           onOpenSftp,
+          onOpenTerminal,
         }),
       ),
     );
 
+    // Connect → SSH 是"用 ssh 连上去",不是建项目。带 remotePath 的连接也一样。
     fireEvent.contextMenu(sshPage(), { clientX: 80, clientY: 80 });
     await user.click(screen.getByRole("menuitem", { name: "Connect" }));
     await user.click(screen.getByRole("menuitem", { name: "SSH" }));
-    expect(onOpen).toHaveBeenCalledWith({
-      connectionId: "conn-1",
-      remotePath: "/srv/apps/aeroric",
-      name: "Prod",
-    });
+    expect(onOpenTerminal).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }));
+    expect(onOpen).not.toHaveBeenCalled();
 
     fireEvent.contextMenu(sshPage(), { clientX: 80, clientY: 80 });
     await user.click(screen.getByRole("menuitem", { name: "Connect" }));
     await user.click(screen.getByRole("menuitem", { name: "SFTP" }));
     expect(onOpenSftp).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens a terminal on card double-click and only creates a project from the footer", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const onOpenTerminal = vi.fn();
+
+    render(
+      React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(SshProjectPage, {
+          connections: [connection("/srv/apps/aeroric")],
+          onConnectionsChange: vi.fn(),
+          onClose: vi.fn(),
+          onOpen,
+          onOpenTerminal,
+        }),
+      ),
+    );
+
+    await user.dblClick(screen.getByRole("button", { name: /Prod.*example\.com:22/ }));
+    expect(onOpenTerminal).toHaveBeenCalledWith(expect.objectContaining({ id: "conn-1" }));
+    expect(onOpen).not.toHaveBeenCalled();
+
+    // 页脚按钮是唯一建项目的手势,不能被一起改掉。
+    await user.click(screen.getByRole("button", { name: "Open SSH project" }));
+    expect(onOpen).toHaveBeenCalledWith({
+      connectionId: "conn-1",
+      remotePath: "/srv/apps/aeroric",
+      name: "Prod",
+    });
   });
 
   it("copies an SSH command from the home SSH context menu", async () => {

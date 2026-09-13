@@ -377,7 +377,18 @@ mod tests {
 
     #[test]
     fn overrides_table_export_format() {
-        assert_eq!(export_request_with_format(request(), "csv").format, "csv");
+        let base = request();
+        let mut out = export_request_with_format(base.clone(), "csv");
+        assert_eq!(out.format, "csv");
+        // 这个函数真正会出的错是顺手改坏别的字段:file_path 被清掉,
+        // 导出会写到空路径;skip_count 被改回 false,多跑一次 count 查询。
+        // 把 format 改回去之后整份请求必须与输入逐字段相同。
+        out.format = base.format.clone();
+        assert_eq!(
+            serde_json::to_value(&out).unwrap(),
+            serde_json::to_value(&base).unwrap(),
+            "export_request_with_format must not touch any field other than format"
+        );
     }
 
     #[test]

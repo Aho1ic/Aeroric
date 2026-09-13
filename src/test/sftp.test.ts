@@ -5,21 +5,28 @@ import {
   formatSftpPreviewSize,
 } from "../components/sftp/SftpPreview";
 import {
+  canonicalizeRemotePath,
   defaultSftpPathForEndpoint,
+  formatRemotePathForDisplay,
   formatSftpTransferPercent,
   flattenSftpTreeEntries,
   filterSftpTreeEntriesByName,
   formatSftpModifiedTime,
+  isWindowsRemotePath,
   groupSftpSshConnections,
   normalizeSftpSortPreference,
   pruneExpandedPathsForFolderSelection,
+  remoteRootOf,
   sftpProgressRingBackground,
   sftpBreadcrumbSegments,
   sftpClickAction,
   sftpDropOperation,
   sftpEndpointKey,
   sftpFileIconKind,
+  sftpFileName,
+  sftpJoinPath,
   sftpKeyAction,
+  sftpParentPath,
   sortSftpEntries,
   shouldPromptForSftpConflict,
   shouldPromptForUnknownSftpConflict,
@@ -88,6 +95,122 @@ describe("sftp panel helpers", () => {
         "/repo",
       ),
     ).toBe("/srv/app");
+  });
+
+  /// Windows 远端在配置里存的是 `C:\...`,面板必须拿到正斜杠的规范形式,否则拼接与上跳全乱。
+  it("canonicalizes a Windows remote path stored with backslashes", () => {
+    expect(
+      defaultSftpPathForEndpoint(
+        "ssh",
+        {
+          id: "conn-win",
+          name: "Laptop",
+          host: "192.168.1.9",
+          port: 22,
+          username: "Administrator",
+          remotePath: "C:\\Users\\Administrator\\Documents",
+          createdAt: 1,
+        },
+        "/repo",
+      ),
+    ).toBe("C:/Users/Administrator/Documents");
+    expect(defaultSftpPathForEndpoint("storage", undefined, "/repo")).toBe("/");
+  });
+
+  it("canonicalizes remote paths to the forward-slash form", () => {
+    expect(canonicalizeRemotePath("C:\\Users\\Administrator")).toBe("C:/Users/Administrator");
+    expect(canonicalizeRemotePath("c:\\Users/Admin\\Docs")).toBe("C:/Users/Admin/Docs");
+    expect(canonicalizeRemotePath("c:/users")).toBe("C:/users");
+    expect(canonicalizeRemotePath("C:")).toBe("C:/");
+    expect(canonicalizeRemotePath("C:\\")).toBe("C:/");
+    expect(canonicalizeRemotePath("C:\\Users\\")).toBe("C:/Users");
+    expect(canonicalizeRemotePath("C:\\\\Users\\\\Admin")).toBe("C:/Users/Admin");
+    expect(canonicalizeRemotePath("//server/share")).toBe("//server/share");
+    expect(canonicalizeRemotePath("\\\\server\\share\\dir\\")).toBe("//server/share/dir");
+    expect(canonicalizeRemotePath("/srv//app/")).toBe("/srv/app");
+    expect(canonicalizeRemotePath("/")).toBe("/");
+    expect(canonicalizeRemotePath("")).toBe("/");
+  });
+
+  it("POSIX 路径里的反斜杠与首尾空白原样保留", () => {
+    // 这两类字符在 POSIX 上是合法文件名字符。归一化若把它们当成 Windows 分隔符/噪音,
+    // 得到的是**另一个**路径 —— 而这个返回值会一路走到远端的 `rm -rf`。
+    expect(canonicalizeRemotePath("/home/u/a\\b")).toBe("/home/u/a\\b");
+    expect(canonicalizeRemotePath("/home/u/tail ")).toBe("/home/u/tail ");
+    expect(canonicalizeRemotePath("/home/u/ lead")).toBe("/home/u/ lead");
+    // 与 Rust 侧 remote_os.rs::canonicalize_posix_path 的断言一一对应。
+  });
+
+  it("recognizes drive-letter and UNC paths as Windows remote paths", () => {
+    expect(isWindowsRemotePath("C:/Users")).toBe(true);
+    expect(isWindowsRemotePath("c:\\Users")).toBe(true);
+    expect(isWindowsRemotePath("C:")).toBe(true);
+    expect(isWindowsRemotePath("//server/share")).toBe(true);
+    expect(isWindowsRemotePath("/srv/app")).toBe(false);
+    expect(isWindowsRemotePath("/")).toBe(false);
+    expect(isWindowsRemotePath("/C:/trap")).toBe(false);
+  });
+
+  it("resolves the root a remote path belongs to", () => {
+    expect(remoteRootOf("/srv/app")).toBe("/");
+    expect(remoteRootOf("/")).toBe("/");
+    expect(remoteRootOf("C:/Users/Admin")).toBe("C:/");
+    expect(remoteRootOf("c:/users")).toBe("C:/");
+    expect(remoteRootOf("C:")).toBe("C:/");
+    expect(remoteRootOf("//server/share/dir")).toBe("//server/share");
+    expect(remoteRootOf("//server")).toBe("//server");
+  });
+
+  /// 仅展示层还原反斜杠,状态里永远不能出现反斜杠。
+  it("renders Windows paths with backslashes for display only", () => {
+    expect(formatRemotePathForDisplay("C:/Users/Admin")).toBe("C:\\Users\\Admin");
+    expect(formatRemotePathForDisplay("C:/")).toBe("C:\\");
+    expect(formatRemotePathForDisplay("//server/share")).toBe("\\\\server\\share");
+    expect(formatRemotePathForDisplay("/srv/app")).toBe("/srv/app");
+    expect(formatRemotePathForDisplay("/")).toBe("/");
+  });
+
+  /// 上跳必须停在盘符根,跌到 POSIX 的 "/" 会让后端在 Windows 主机上列出一个不存在的目录。
+  it("stops parent traversal at the drive or UNC root", () => {
+    expect(sftpParentPath("/srv/app")).toBe("/srv");
+    expect(sftpParentPath("/srv")).toBe("/");
+    expect(sftpParentPath("/")).toBe("/");
+    expect(sftpParentPath("C:/Users/Admin/Documents")).toBe("C:/Users/Admin");
+    expect(sftpParentPath("C:/Users")).toBe("C:/");
+    expect(sftpParentPath("C:/")).toBe("C:/");
+    expect(sftpParentPath("//server/share/dir")).toBe("//server/share");
+    expect(sftpParentPath("//server/share")).toBe("//server/share");
+  });
+
+  it("joins onto a drive root without doubling the separator", () => {
+    expect(sftpJoinPath("/", "srv")).toBe("/srv");
+    expect(sftpJoinPath("/srv", "app")).toBe("/srv/app");
+    expect(sftpJoinPath("/srv/", "app")).toBe("/srv/app");
+    expect(sftpJoinPath("C:/", "Users")).toBe("C:/Users");
+    expect(sftpJoinPath("C:/Users", "Admin")).toBe("C:/Users/Admin");
+    expect(sftpJoinPath("//server/share", "dir")).toBe("//server/share/dir");
+  });
+
+  it("falls back to the root instead of an empty name at a drive root", () => {
+    expect(sftpFileName("/srv/app")).toBe("app");
+    expect(sftpFileName("/srv/app/")).toBe("app");
+    expect(sftpFileName("C:/Users/Admin")).toBe("Admin");
+    expect(sftpFileName("C:/")).toBe("C:/");
+    expect(sftpFileName("//server/share")).toBe("//server/share");
+  });
+
+  it("starts Windows breadcrumbs at the drive or UNC root", () => {
+    expect(sftpBreadcrumbSegments("C:/Users/Administrator/Documents")).toEqual([
+      { label: "C:/", path: "C:/" },
+      { label: "Users", path: "C:/Users" },
+      { label: "Administrator", path: "C:/Users/Administrator" },
+      { label: "Documents", path: "C:/Users/Administrator/Documents" },
+    ]);
+    expect(sftpBreadcrumbSegments("C:/")).toEqual([{ label: "C:/", path: "C:/" }]);
+    expect(sftpBreadcrumbSegments("//server/share/dir")).toEqual([
+      { label: "//server/share", path: "//server/share" },
+      { label: "dir", path: "//server/share/dir" },
+    ]);
   });
 
   it("groups SFTP SSH choices by saved SSH connection group", () => {

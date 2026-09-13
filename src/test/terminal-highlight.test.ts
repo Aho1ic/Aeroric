@@ -9,6 +9,7 @@ import {
   EYECARE_THEME,
   LIGHT_THEME,
   remapAnsiForTheme,
+  scheduleTerminalFrame,
   splitTerminalWriteChunk,
   TERMINAL_WRITE_CHUNK_SIZE,
 } from "../components/terminalShared";
@@ -261,23 +262,30 @@ describe("terminal output highlighting", () => {
   });
 
   it("yields queued rendering while the browser has pending input", () => {
-    vi.useFakeTimers();
     let inputPending = true;
-    Object.defineProperty(navigator, "scheduling", {
-      configurable: true,
-      value: { isInputPending: () => inputPending },
-    });
-    const write = vi.fn((_data: string, callback?: () => void) => callback?.());
-    const writer = createSmartWriter({ write } as unknown as Terminal);
+    /* `navigator.scheduling` 必须在 finally 里清掉:断言一失败就跳过收尾,这个属性会
+       泄漏到本文件后面每一个 describe。带 `isInputPending` 时 `createSmartWriter` 走的是
+       "有待处理输入就让路"的分支而不是默认分支,于是后面的用例单跑绿、整文件跑红 ——
+       症状还会指向那些无辜的用例。同理 fake timers 也要还回去。 */
+    try {
+      vi.useFakeTimers();
+      Object.defineProperty(navigator, "scheduling", {
+        configurable: true,
+        value: { isInputPending: () => inputPending },
+      });
+      const write = vi.fn((_data: string, callback?: () => void) => callback?.());
+      const writer = createSmartWriter({ write } as unknown as Terminal);
 
-    writer.write("background output");
-    expect(write).not.toHaveBeenCalled();
+      writer.write("background output");
+      expect(write).not.toHaveBeenCalled();
 
-    inputPending = false;
-    vi.runAllTimers();
-    expect(write).toHaveBeenCalledWith("background output", expect.any(Function));
-    Reflect.deleteProperty(navigator, "scheduling");
-    vi.useRealTimers();
+      inputPending = false;
+      vi.runAllTimers();
+      expect(write).toHaveBeenCalledWith("background output", expect.any(Function));
+    } finally {
+      Reflect.deleteProperty(navigator, "scheduling");
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -428,5 +436,130 @@ describe("cursor line highlight overlay", () => {
 
     dispose();
     container.remove();
+  });
+
+  /* overlay 的重绘走共享的 `scheduleTerminalFrame`。窗口不可见时浏览器把 rAF 降到近乎
+     停止,而 xterm 仍在写入、光标仍在移动 —— 如果只靠 rAF,overlay 会一直停在切走前那
+     一行,直到用户切回来。下面钉住"隐藏时仍然落地"和"两条路径都能取消"。 */
+  function stubVisibility(state: "visible" | "hidden") {
+    const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+    return () => {
+      Reflect.deleteProperty(document, "visibilityState");
+      if (original) Object.defineProperty(Document.prototype, "visibilityState", original);
+    };
+  }
+
+  it("document 隐藏时仍然通过 setTimeout 分支落地重绘", () => {
+    /* rAF 存在但永不回调 —— 真机上窗口不可见时就是这个样子。所以这条测试能区分
+       "退到了 setTimeout" 和 "只是 jsdom 把 rAF 实现成了 setTimeout"。
+       用赋值而不是 spyOn:jsdom 的 rAF 经常不是 own property,spyOn 再 mockRestore
+       会把属性删掉,后面依赖 rAF 的用例就会炸。 */
+    const restoreVisibility = stubVisibility("hidden");
+    const origRaf = window.requestAnimationFrame;
+    const raf = vi.fn().mockReturnValue(1);
+    window.requestAnimationFrame = raf as typeof window.requestAnimationFrame;
+    try {
+      vi.useFakeTimers();
+      const { term, state, fireCursorMove } = createFakeTerm();
+      const { container, screen } = createScreenContainer(480); // 24 rows -> 20px each
+
+      const dispose = attachCursorLineHighlight(term, container);
+      const overlay = screen.querySelector<HTMLElement>(".aeroric-cursor-line")!;
+
+      state.cursorY = 5;
+      fireCursorMove();
+      expect(overlay.style.transform).toBe("translateY(0px)");
+
+      vi.runOnlyPendingTimers();
+      expect(overlay.style.transform).toBe("translateY(100px)");
+      expect(raf).not.toHaveBeenCalled();
+
+      dispose();
+      container.remove();
+    } finally {
+      window.requestAnimationFrame = origRaf;
+      restoreVisibility();
+      vi.useRealTimers();
+    }
+  });
+
+  it("卸载时会撤掉已排的那一帧 —— rAF 与 setTimeout 两条路径都算", () => {
+    // 可见:走 rAF,dispose 必须调 cancelAnimationFrame,否则切走后那一帧还会落地。
+    {
+      const restoreVisibility = stubVisibility("visible");
+      const origRaf = window.requestAnimationFrame;
+      const origCancel = window.cancelAnimationFrame;
+      const raf = vi.fn().mockReturnValue(77);
+      const cancelRaf = vi.fn();
+      window.requestAnimationFrame = raf as typeof window.requestAnimationFrame;
+      window.cancelAnimationFrame = cancelRaf as typeof window.cancelAnimationFrame;
+      try {
+        const { term, fireCursorMove } = createFakeTerm();
+        const { container } = createScreenContainer(480);
+        const dispose = attachCursorLineHighlight(term, container);
+        fireCursorMove();
+        expect(raf).toHaveBeenCalledTimes(1);
+        dispose();
+        expect(cancelRaf).toHaveBeenCalledWith(77);
+        container.remove();
+      } finally {
+        window.requestAnimationFrame = origRaf;
+        window.cancelAnimationFrame = origCancel;
+        restoreVisibility();
+      }
+    }
+    // 隐藏:走 setTimeout,dispose 必须调 clearTimeout。
+    {
+      const restoreVisibility = stubVisibility("hidden");
+      const origSet = globalThis.setTimeout;
+      const origClear = globalThis.clearTimeout;
+      const setT = vi.fn().mockReturnValue(88);
+      const clearT = vi.fn();
+      globalThis.setTimeout = setT as unknown as typeof setTimeout;
+      globalThis.clearTimeout = clearT as unknown as typeof clearTimeout;
+      try {
+        const { term, fireCursorMove } = createFakeTerm();
+        const { container } = createScreenContainer(480);
+        const dispose = attachCursorLineHighlight(term, container);
+        fireCursorMove();
+        expect(setT).toHaveBeenCalled();
+        dispose();
+        expect(clearT).toHaveBeenCalledWith(88);
+        container.remove();
+      } finally {
+        globalThis.setTimeout = origSet;
+        globalThis.clearTimeout = origClear;
+        restoreVisibility();
+      }
+    }
+  });
+});
+
+describe("scheduleTerminalFrame", () => {
+  function stubVisibility(state: "visible" | "hidden") {
+    const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+    return () => {
+      Reflect.deleteProperty(document, "visibilityState");
+      if (original) Object.defineProperty(Document.prototype, "visibilityState", original);
+    };
+  }
+
+  it("取消函数拦住回调 —— rAF 与 setTimeout 两条路径都算", () => {
+    vi.useFakeTimers();
+    try {
+      for (const visibility of ["visible", "hidden"] as const) {
+        const restoreVisibility = stubVisibility(visibility);
+        const cb = vi.fn();
+        const cancel = scheduleTerminalFrame(cb);
+        cancel();
+        vi.runAllTimers();
+        expect(cb, `${visibility} 路径取消后回调仍跑了`).not.toHaveBeenCalled();
+        restoreVisibility();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

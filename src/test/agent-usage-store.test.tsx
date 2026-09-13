@@ -42,6 +42,9 @@ describe("agent usage store", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetAgentUsageCacheForTests();
+    /* :141 的 console.error spy 用的是「断言之后 mockRestore」,中间任一断言抛出就走不到
+       还原,后续用例的 React 警告与 store 错误日志会一起消失。兜在这里。 */
+    vi.restoreAllMocks();
   });
 
   it("loads the snapshot on mount", async () => {

@@ -361,6 +361,35 @@ mod tests {
         assert!(OMP_HOOK_SCRIPT.contains("willContinue"));
     }
 
+    /// 子代理继承父的 extension 并重新注册 handler,它们的 agent_end 若也写 Stop,
+    /// 主任务会在还在跑的时候被标成 input_required(黄叹号)。ctx.hasUI 是唯一能
+    /// 分辨主交互会话的判别式:子代理创建时写死 false。删掉这道门 bug 立刻复发,
+    /// 而其余断言在带 bug 的脚本上照样通过,所以必须单独钉住。
+    #[test]
+    fn bundled_hook_reports_only_for_the_interactive_session() {
+        assert!(
+            OMP_HOOK_SCRIPT.contains("ctx?.hasUI !== true"),
+            "少了 hasUI 门,子代理终态会把主任务错标成等待输入"
+        );
+        assert_eq!(
+            OMP_HOOK_SCRIPT.matches("ctx?.hasUI !== true").count(),
+            3,
+            "三个 handler 都必须过 hasUI 门"
+        );
+        // 压缩的 deferredHandoff 分支会在主会话上发出 willContinue 未设的
+        // agent_end,hasUI 门挡不住;工具重新跑起来是唯一的复位信号。
+        assert!(
+            OMP_HOOK_SCRIPT.contains("pi.on(\"tool_execution_start\""),
+            "少了复位信号,压缩后粘住的 input_required 无法自愈"
+        );
+        assert!(OMP_HOOK_SCRIPT.contains("PostToolUse"));
+        // tool_call 是 fail-closed 控制钩子,超时/抛错会被转成 { block: true }。
+        assert!(
+            !OMP_HOOK_SCRIPT.contains("pi.on(\"tool_call\""),
+            "tool_call 会掐掉工具执行,观测用 tool_execution_start"
+        );
+    }
+
     #[test]
     fn omp_thinking_level_validation_rejects_unknown_levels() {
         assert!(is_valid_omp_thinking_level("off"));

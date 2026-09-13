@@ -6,7 +6,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HARNESS_VAULT, NotebookVaultHarness } from "./notebookVaultHarness";
-import { editorValue, renderNotebook, setEditorValue } from "./notebookPanelKit";
+import { editorValue, editorView, renderNotebook, setEditorValue } from "./notebookPanelKit";
 
 /* 注意 `async` 不是可以省的:harness 的失败分支是同步 `throw`,而真实 `invoke`
  * 只会以 rejection 的形式报错。写成 `Promise.resolve(harness.handle(...))` 的话
@@ -460,34 +460,53 @@ describe("NotebookPanel", () => {
 
     it("捕获之后接着打的字不会被抹掉", async () => {
       /* CodeMirror 有个 200ms 的输入闩:局部改动后的 200ms 内,外部传进来的 value 会
-         被存成一个挂起的更新,而那个闭包捕获的是**当时**的 value。闩过期时它会把用户
-         之后打的字盖掉。追加完 bump `editorEpoch` 重建编辑器就是为了扔掉它。
+         被存成一个挂起的更新(`useCodeMirror` 里的 `pendingUpdate`),而那个闭包捕获的
+         是**当时**的 value。闩过期时它会把用户之后打的字盖掉。追加完 bump `editorEpoch`
+         重建编辑器就是为了扔掉它 —— `pendingUpdate` / `typingLatch` 都是 per-hook 的
+         useState ref,key 一变整个 hook 实例连同那个闭包一起没了(卸载时还会
+         `view.destroy()` + `typingLatch.cancel()`)。
 
-         只断言「编辑器内容变了」抓不到这件事:闩没上膛时受控 value 自己就生效了。 */
+         只断言「编辑器内容变了」抓不到这件事:闩没上膛时受控 value 自己就生效了。
+
+         这一条原来的写法是 `waitFor(..., { interval: 1 })` + 1200ms 真实睡眠,把鉴别力
+         押在「轮询完成时真实经过时间 < 200ms」这个挂钟条件上。实测:空载时它**能**抓住
+         变异(3/3 翻红),所以并不是无条件假绿 —— 但它的鉴别力随负载漂移,而闩本身是
+         按 tick 计数的(`TimeoutLatch` 走 `setInterval(…, 1)`,要 200 跳才到期),
+         jsdom 在高负载下 1ms 定时器会被饿到几秒一跳。也就是说这条用例在什么负载下
+         守得住、什么负载下守不住,都不是它自己能决定的。
+
+         改成直接查那个「扔掉」有没有发生,再把挂起的更新**原样重放一次**:
+         `forceUpdate` 做的就是往它闭包里那个 view 上 dispatch「整篇换成捕获前的 value」。
+         少了 bump,那个 view 就还是活着的当前编辑器,重放会把刚打的字盖回旧正文;
+         有 bump,它已经 destroy,dispatch 只改一个没人看的 viewState,页面上的字不动。
+         两边都不看时钟。 */
       harness.seed("Inbox.md", "旧正文\n");
       renderNotebook();
       await screen.findByRole("textbox", { name: "Quick note content" });
       fireEvent.click(screen.getAllByRole("button", { name: "Inbox" })[0] as HTMLElement);
       await waitFor(() => expect(editorValue()).toContain("旧正文"));
       // 上膛:局部改动。追加在末尾,所以捕获仍然读到「旧正文 + 这句」。
-      setEditorValue("旧正文\n又加了一句\n");
+      const stale = editorView();
+      const staleValue = "旧正文\n又加了一句\n";
+      setEditorValue(staleValue);
 
       capture("捕获的一句", "Inbox");
-      /* 不能拿「编辑器内容出现了那句」当等待条件:默认 50ms 一轮的轮询,轮到的时候
-         距离上膛往往已经超过 200ms,闩自己过期、挂起的更新在我们打字**之前**就平静
-         生效了 —— 于是有没有重建编辑器在 DOM 上没区别。改成等窗关闭(它和 bump 在
-         同一个 await 续体里,批到同一次渲染),1ms 一轮,真实时间还远没走到 200ms。 */
-      await waitFor(
-        () => expect(screen.queryByRole("dialog", { name: "Quick capture" })).toBeNull(),
-        {
-          interval: 1,
-        },
-      );
-      expect(editorValue()).toContain("捕获的一句");
+
+      await waitFor(() => expect(editorValue()).toContain("捕获的一句"));
+      /* 编辑器真的被重建了:旧实例已 destroy,挂起闭包连着它一起作废。
+         判据用 `dom.isConnected` 而不是 `destroyed` —— 后者在类型声明里是 private
+         (@codemirror/view 的 index.d.ts:810),而 `destroy()` 做的第一件事之一就是
+         `this.dom.remove()`(index.js:8583),所以「dom 脱离文档」是同一件事的公开信号。 */
+      expect(stale.dom.isConnected).toBe(false);
+      expect(editorView()).not.toBe(stale);
 
       setEditorValue("重建之后打的字\n");
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+      /* 把挂起的更新原样重放:`forceUpdate` 就是这一句(见 useCodeMirror 的
+         `pendingUpdate.current`)。闩到期时它会在这个时刻执行。 */
+      act(() => {
+        stale.dispatch({
+          changes: { from: 0, to: stale.state.doc.length, insert: staleValue },
+        });
       });
 
       expect(editorValue()).toBe("重建之后打的字\n");

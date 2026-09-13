@@ -9,6 +9,7 @@ import { sshProjectInputForConnection, type SshProjectInput } from "./sshProject
 import { useCopyFeedback } from "./useCopyFeedback";
 import { SshGroupContextMenu } from "./SshGroupContextMenu";
 import { useSshGroups } from "./useSshGroups";
+import { copySshConnectionPassword } from "./sshConnectionActions";
 
 export {
   deriveRemoteProjectName,
@@ -24,16 +25,11 @@ interface Props {
   onClose: () => void;
   onOpen: (input: SshProjectInput) => void;
   onOpenSftp?: (connection: SshConnection) => void;
+  onOpenTerminal?: (connection: SshConnection) => void;
 }
 
 function connectionTarget(connection: SshConnection): string {
   return `${connection.username}@${connection.host}:${connection.port}`;
-}
-
-async function copyConnectionPassword(connection: SshConnection) {
-  const password = connection.password ?? "";
-  if (!password || !navigator.clipboard?.writeText) return;
-  await navigator.clipboard.writeText(password);
 }
 
 /**
@@ -127,6 +123,7 @@ export function SshProjectPage({
   onClose,
   onOpen,
   onOpenSftp,
+  onOpenTerminal,
 }: Props) {
   const { t } = useI18n();
   const firstOpenable = connections.find((connection) => connection.remotePath?.trim());
@@ -252,7 +249,8 @@ export function SshProjectPage({
                   {grouped.map((connection) => {
                     const selected = connection.id === selectedConnection?.id;
                     const hasRemotePath = Boolean(connection.remotePath?.trim());
-                    const canCopyPassword = Boolean(connection.password?.trim());
+                    // 明文不再随列表下发,只看后端给的标记。
+                    const canCopyPassword = Boolean(connection.hasPassword);
                     const copied = copiedConnectionId === connection.id;
                     return (
                       <div
@@ -275,7 +273,9 @@ export function SshProjectPage({
                           onClick={() => setSelectedId(connection.id)}
                           onDoubleClick={(event) => {
                             event.preventDefault();
-                            openConnection(connection);
+                            // 双击 = 开一个 ssh 终端,与项目无关。建项目只走页脚
+                            // 「Open SSH project」按钮。
+                            onOpenTerminal?.(connection);
                           }}
                         >
                           <span style={s.sshProjectCardIcon}>
@@ -319,8 +319,8 @@ export function SshProjectPage({
                           disabled={!canCopyPassword}
                           onClick={() => {
                             if (!canCopyPassword) return;
-                            void copyConnectionPassword(connection).then(() => {
-                              markCopied(connection.id);
+                            void copySshConnectionPassword(connection).then((copied) => {
+                              if (copied) markCopied(connection.id);
                             });
                           }}
                         >
@@ -416,7 +416,7 @@ export function SshProjectPage({
               onOpenSftp?.(connection);
               return;
             }
-            openConnection(connection);
+            onOpenTerminal?.(connection);
           }}
           onDelete={(connection) => deleteConnection(connection.id)}
         />

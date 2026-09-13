@@ -91,8 +91,6 @@ export interface Task {
   claudeSessionPath?: string;
   dshSessionId?: string;
   dshSessionPath?: string;
-  dshWorkspaceId?: string;
-  dshPromptMode?: string;
   sessionAgent?: string;
   sessionCodexLike?: boolean;
 }

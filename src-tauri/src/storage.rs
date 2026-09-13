@@ -114,6 +114,18 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub attention_requested_at: Option<i64>,
+    #[serde(
+        rename = "completedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub completed_at: Option<i64>,
+    #[serde(
+        rename = "archivedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub archived_at: Option<i64>,
     #[serde(rename = "claudeSessionId", skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
     #[serde(rename = "claudeSessionPath", skip_serializing_if = "Option::is_none")]
@@ -173,10 +185,12 @@ pub struct Task {
     pub base_branch: Option<String>,
     #[serde(rename = "worktreeDiscarded", skip_serializing_if = "Option::is_none")]
     pub worktree_discarded: Option<bool>,
+    // 与同结构体内其余数值字段(createdAt/completedAt/archivedAt)同宽:
+    // 前端 Task 侧是 number,窄成 i32 只会制造无谓的类型分歧。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub additions: Option<i32>,
+    pub additions: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deletions: Option<i32>,
+    pub deletions: Option<i64>,
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────

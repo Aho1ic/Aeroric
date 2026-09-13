@@ -139,7 +139,9 @@ export function defaultSftpPathForEndpoint(
   if (kind === "local") return localDefaultPath;
   // storage 的路径前缀由后端 `root` 配置解析,前端始终从 "/" 开始。
   if (kind === "storage") return "/";
-  return connection?.remotePath?.trim() || "/";
+  // 历史配置里可能存着 `C:\Users\Administrator\Documents`,归一化后才能进入前端状态。
+  const remotePath = connection?.remotePath?.trim();
+  return remotePath ? canonicalizeRemotePath(remotePath) : "/";
 }
 
 export type SftpStorageConnectionGroup = {
@@ -168,8 +170,70 @@ export function groupSftpStorageConnections(
   return groups;
 }
 
+/**
+ * 远程路径的规范形式统一用正斜杠:POSIX 是 `/home/user`,Windows 是 `C:/Users/Admin`,
+ * UNC 是 `//server/share`。Windows 远端把 `C:\Users` 存进配置很自然,但前端一旦让
+ * 反斜杠流进状态,拼接、比较、面包屑就要处处分叉,所以入口先归一化,只在展示时还原。
+ *
+ * 两套规则必须分开:POSIX 上 `\` 与首尾空白都是合法文件名字符,套 Windows 规则会把
+ * `/home/u/a\b` 改写成 `/home/u/a/b` —— 一个不同的目标。与 Rust 侧
+ * `remote_os.rs::canonicalize_remote_path` 保持逐条一致。
+ */
+export function canonicalizeRemotePath(path: string): string {
+  return isWindowsRemotePath(path) ? canonicalizeWindowsPath(path) : canonicalizePosixPath(path);
+}
+
+function canonicalizeWindowsPath(path: string): string {
+  const slashed = path.trim().replace(/\\/g, "/");
+  if (!slashed) return "/";
+  // UNC 的前导 `//` 属于主机名,只有它不能被压缩成单斜杠。
+  const uncPrefix = slashed.startsWith("//") ? "//" : "";
+  const collapsed = uncPrefix + slashed.slice(uncPrefix.length).replace(/\/{2,}/g, "/");
+  // 盘符统一大写,否则 `c:/x` 与 `C:/x` 会在状态里被当成两个不同目录。
+  const cased = /^[a-z]:(?:\/|$)/.test(collapsed)
+    ? collapsed[0].toUpperCase() + collapsed.slice(1)
+    : collapsed;
+  const root = remoteRootOf(cased);
+  const trimmed = cased.replace(/\/+$/, "");
+  // 根自身没有可去掉的尾斜杠,`C:` 这类缺斜杠的输入还要补回根形式。
+  if (!trimmed || trimmed === root.replace(/\/$/, "")) return root;
+  return trimmed;
+}
+
+function canonicalizePosixPath(path: string): string {
+  // 空串是"还没选路径"的哨兵,回落到根。除此之外不动空白、不动反斜杠。
+  if (!path) return "/";
+  const collapsed = path.replace(/\/{2,}/g, "/");
+  if (collapsed.length <= 1) return collapsed || "/";
+  return collapsed.replace(/\/+$/, "") || "/";
+}
+
+/** 盘符路径与 UNC 都按 Windows 语义处理,其余按 POSIX。 */
+export function isWindowsRemotePath(path: string): boolean {
+  const slashed = path.trim().replace(/\\/g, "/");
+  return /^[A-Za-z]:(?:\/|$)/.test(slashed) || /^\/\/[^/]/.test(slashed);
+}
+
+/** 路径所属的根:POSIX 是 `/`,盘符是 `C:/`,UNC 是 `//server/share`。 */
+export function remoteRootOf(path: string): string {
+  const slashed = path.trim().replace(/\\/g, "/");
+  const drive = /^([A-Za-z]):(?:\/|$)/.exec(slashed);
+  if (drive) return `${drive[1].toUpperCase()}:/`;
+  const unc = /^\/\/([^/]+)(?:\/([^/]+))?/.exec(slashed);
+  if (unc) return unc[2] ? `//${unc[1]}/${unc[2]}` : `//${unc[1]}`;
+  return "/";
+}
+
+/** 仅供展示:Windows 远端的路径用反斜杠更符合用户在自己机器上看到的样子。 */
+export function formatRemotePathForDisplay(path: string): string {
+  return isWindowsRemotePath(path) ? path.replace(/\//g, "\\") : path;
+}
+
 export function sftpFileName(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
+  // 盘符根、UNC 共享根去掉尾斜杠后剩下的是根本身,直接回退成根,别让标题栏显示成 "C:"。
+  const root = remoteRootOf(path);
+  if (!trimmed || trimmed === root.replace(/\/$/, "")) return root;
   return trimmed.split("/").pop() || path;
 }
 
@@ -189,25 +253,35 @@ export function shouldPromptForUnknownSftpConflict(
 
 export function sftpParentPath(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
-  if (!trimmed || trimmed === "/") return "/";
+  // 上跳止步于所在根:Windows 远端从 `C:/x` 往上是 `C:/`,不能跌到 POSIX 的 `/`。
+  const root = remoteRootOf(path);
+  const rootPrefix = root.replace(/\/$/, "");
+  if (!trimmed || trimmed === rootPrefix) return root;
   const idx = trimmed.lastIndexOf("/");
-  if (idx <= 0) return "/";
+  if (idx < root.length) return root;
   return trimmed.slice(0, idx);
 }
 
 export function sftpJoinPath(parent: string, name: string): string {
-  if (!parent || parent === "/") return `/${name}`;
+  if (!parent) return `/${name}`;
+  const root = remoteRootOf(parent);
+  // 根已自带尾斜杠,再拼一层会得到 `C://x` 这种后端不认的路径。
+  if (parent === root) return root.endsWith("/") ? `${root}${name}` : `${root}/${name}`;
   return `${parent.replace(/\/+$/, "")}/${name}`;
 }
 
 export function sftpBreadcrumbSegments(path: string): SftpBreadcrumbSegment[] {
   const trimmed = path.trim().replace(/\/+$/, "");
-  if (!trimmed || trimmed === "/") return [{ label: "/", path: "/" }];
-  const parts = trimmed.split("/").filter(Boolean);
-  return parts.map((part, index) => ({
+  const root = remoteRootOf(path);
+  const rootPrefix = root.replace(/\/$/, "");
+  // POSIX 根沿用 "/" 单段;Windows 则以盘符根 / UNC 共享根作为第一段。
+  if (!trimmed || trimmed === rootPrefix) return [{ label: root, path: root }];
+  const parts = trimmed.slice(rootPrefix.length).split("/").filter(Boolean);
+  const branch = parts.map((part, index) => ({
     label: part,
-    path: `/${parts.slice(0, index + 1).join("/")}`,
+    path: `${rootPrefix}/${parts.slice(0, index + 1).join("/")}`,
   }));
+  return root === "/" ? branch : [{ label: root, path: root }, ...branch];
 }
 
 export function flattenSftpTreeEntries(

@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { forceParsing } from "@codemirror/language";
 import { EditorView } from "@uiw/react-codemirror";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NoteSourceEditor } from "../components/notebook/NoteSourceEditor";
+import type { ThemeVariant } from "../types";
 
 /* WYSIWYG 装饰层的行为测试。
  *
@@ -13,12 +14,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: () => Promise.resolve(undefined),
 }));
 
-function mountEditor(value: string, wysiwyg = true) {
+function mountEditor(value: string, wysiwyg = true, themeVariant: ThemeVariant = "light") {
   render(
     <NoteSourceEditor
       value={value}
       onChange={() => {}}
-      themeVariant="light"
+      themeVariant={themeVariant}
       ariaLabel="Body"
       wysiwyg={wysiwyg}
     />,
@@ -44,10 +45,6 @@ function forceParse(view: EditorView) {
   // 解析推进后 StateField 要收到一次事务才会重建(见 state.ts 的 fullyParsed 分支)。
   view.dispatch({});
 }
-
-beforeEach(() => {
-  document.documentElement.classList.remove("dark");
-});
 
 describe("WYSIWYG 装饰", () => {
   it("关闭时不加任何装饰", () => {
@@ -155,16 +152,31 @@ describe("WYSIWYG 装饰", () => {
     expect(view.state.doc.length).toBe(source.length);
   });
 
-  it("暗色主题下不抛", () => {
-    document.documentElement.classList.add("dark");
-    expect(() => mountEditor("```js\nx\n```\n")).not.toThrow();
+  it("暗色主题真的换成暗色配色,而不是照着亮色渲染", () => {
+    // themeVariant 是唯一的配色入口(组件不读 documentElement 的 class),
+    // 所以这里以 "dark" 挂载,并用 CodeMirror 的公开 facet 判定它确实进了暗色分支。
+    const dark = mountEditor("```js\nx\n```\n", true, "dark");
+    expect(dark.view.state.facet(EditorView.darkTheme)).toBe(true);
+    cleanup();
+
+    const light = mountEditor("```js\nx\n```\n", true, "light");
+    expect(light.view.state.facet(EditorView.darkTheme)).toBe(false);
   });
 
-  it("空文档不抛", () => {
-    expect(() => mountEditor("")).not.toThrow();
+  it("空文档上不产生任何 widget,文档也仍是空的", () => {
+    const { content, view } = mountEditor("");
+    expect(view.state.doc.length).toBe(0);
+    // 空文档凭空造 widget 不会抛异常,只会在编辑区里冒出用户没写的东西。
+    expect(content.querySelector(".cm-md-code-widget")).toBeNull();
+    expect(content.querySelector(".cm-md-table-widget")).toBeNull();
+    expect(content.querySelector(".cm-md-frontmatter-widget")).toBeNull();
   });
 
-  it("未闭合围栏不抛", () => {
-    expect(() => mountEditor("```js\nunclosed\n")).not.toThrow();
+  it("未闭合围栏不吞掉后面的内容,也不改文档", () => {
+    const source = "```js\nunclosed\n";
+    const { content, view } = mountEditor(source);
+    // 装饰层若把未闭合围栏整段换成 block widget,"unclosed" 这段可见文本就没了。
+    expect(view.state.doc.toString()).toBe(source);
+    expect(content.textContent).toContain("unclosed");
   });
 });

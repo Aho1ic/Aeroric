@@ -20,6 +20,12 @@
 |------|------|------|
 | [长跑内存增长的采样口径与静态结论](./references/long-run-memory-profiling.md) | 存活计数 + RSS 双路采样怎么对照判读、已修的四处结构性泄漏(SSH 会话、WebGL 配额、prose 缓存字节上界、面板常驻),以及为何 scrollback / 轮询间隔等参数在拿到实测曲线前不动 | `performance`, `memory`, `leak`, `profiling`, `webgl`, `ssh`, `cache` |
 
+### 测试
+
+| 文档 | 描述 | 标签 |
+|------|------|------|
+| [时序脆弱与共享状态污染的五种机制](./references/flaky-test-patterns.md) | 假绿为什么比翻红危险、挂钟条件/嵌套 waitFor/带副作用轮询/清理不在 finally/全局状态继承这五种机制的判据与修法，含「有序事件屏障」的四条前置条件与 ADR-001（为什么不 mock katex），面向新增或修脆弱测试前的必读校准 | `testing`, `flaky`, `shared-state`, `waitFor`, `fake-timers`, `mutation-testing`, `codemirror` |
+
 ### 安全与凭据
 
 | 文档 | 描述 | 标签 |

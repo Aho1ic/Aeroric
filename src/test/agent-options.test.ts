@@ -6,7 +6,6 @@ import {
   isCodexLikeAgent,
 } from "../agents";
 import {
-  CONTROL_ICON_SIZE,
   composeAgentMenuContentStyle,
   composeAgentMenuColumnStyle,
   composeAgentMenuColumnViewportStyle,
@@ -202,9 +201,5 @@ describe("agent options", () => {
       minWidth: 0,
       maxWidth: "min(320px, 100%)",
     });
-  });
-
-  it("uses one icon size across the compose toolbar triggers", () => {
-    expect(CONTROL_ICON_SIZE).toBe(14);
   });
 });

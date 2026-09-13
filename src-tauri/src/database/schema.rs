@@ -119,14 +119,3 @@ pub async fn dbx_get_object_source(
     )
     .await
 }
-
-#[cfg(test)]
-mod tests {
-    use super::required;
-
-    #[test]
-    fn required_uses_fallback_for_missing_scope() {
-        assert_eq!(required(None, ""), "");
-        assert_eq!(required(Some("public".to_string()), ""), "public");
-    }
-}

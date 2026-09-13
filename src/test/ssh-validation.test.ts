@@ -78,6 +78,33 @@ describe("normalizeSshConnectionDraft", () => {
     });
   });
 
+  /// Windows 主机填 `C:\Users\...` 也要存成正斜杠,SFTP 面板与后端才不用各自猜分隔符。
+  it("canonicalizes a Windows remote path and still omits an empty one", () => {
+    const base = {
+      name: "laptop",
+      host: "192.168.1.9",
+      port: "22",
+      username: "Administrator",
+      identityFile: "",
+      password: "",
+      group: "",
+      autoSudoWithPassword: false,
+      useProxy: false,
+    };
+
+    expect(
+      normalizeSshConnectionDraft(
+        { ...base, remotePath: " c:\\Users\\Administrator\\Documents\\ " },
+        1,
+        2,
+      ),
+    ).toMatchObject({ remotePath: "C:/Users/Administrator/Documents" });
+
+    expect(normalizeSshConnectionDraft({ ...base, remotePath: "  " }, 1, 2)).not.toHaveProperty(
+      "remotePath",
+    );
+  });
+
   /// 勾选状态必须能存下来,否则每次重开对话框都退回不走代理。
   it("persists the proxy opt-in and omits it when unchecked", () => {
     const base = {

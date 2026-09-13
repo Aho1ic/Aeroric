@@ -12,11 +12,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 源码根目录。`CARGO_MANIFEST_DIR` 在编译期定死,不受测试进程 cwd 影响。
-fn source_root() -> PathBuf {
+pub(crate) fn source_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
     for entry in entries {
         let path = entry.expect("dir entry").path();

@@ -157,13 +157,13 @@ describe("命令目录来源", () => {
     expect(errors).toHaveLength(0);
   });
 
-  it("hasArg 由远端的 input.hint 决定", async () => {
+  it("点击远端命令行插入名字并关面板", async () => {
     invoke.mockResolvedValue([{ name: "withhint", input: { hint: "x" } }, { name: "nohint" }]);
-    renderPalette({ sessionId: "s1" });
+    const { editorInsert, onDismiss } = renderPalette({ sessionId: "s1" });
     await waitFor(() => expect(options()).toHaveLength(2));
-    // hasArg 不上屏,通过"点了之后插入的是纯名字"间接确认两者都能插
     fireEvent.click(options()[0]);
-    expect(options().length).toBeGreaterThan(0);
+    expect(editorInsert).toHaveBeenCalledWith("withhint");
+    expect(onDismiss).toHaveBeenCalled();
   });
 });
 
@@ -347,7 +347,6 @@ describe("二级选择器的候选来源", () => {
   const cmd = (popup: DshSlashCommand["popup"]): DshSlashCommand => ({
     name: String(popup),
     descriptionKey: "dsh.slash.title",
-    hasArg: true,
     popup,
   });
 
@@ -469,7 +468,6 @@ describe("二级选择器的键盘接管", () => {
   const permissionCmd: DshSlashCommand = {
     name: "permission",
     descriptionKey: "dsh.slash.title",
-    hasArg: true,
     popup: "permission",
   };
 
@@ -632,7 +630,6 @@ describe("二级选择器的错误分支", () => {
     renderPicker({
       name: "model",
       descriptionKey: "dsh.slash.title",
-      hasArg: true,
       popup: "model",
     });
     await waitFor(() => expect(screen.getByText(/TypeError|not iterable/)).toBeInTheDocument());
@@ -644,7 +641,6 @@ describe("二级选择器的错误分支", () => {
     renderPicker({
       name: "skill",
       descriptionKey: "dsh.slash.title",
-      hasArg: true,
       popup: "skill",
     });
     await waitFor(() => expect(screen.getByText(/TypeError|not a function/)).toBeInTheDocument());
@@ -654,7 +650,6 @@ describe("二级选择器的错误分支", () => {
     renderPicker({
       name: "permission",
       descriptionKey: "dsh.slash.title",
-      hasArg: true,
       popup: "permission",
     });
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));

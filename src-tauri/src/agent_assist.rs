@@ -64,12 +64,19 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
 
 /// 异步启动命名 agent 子进程。超时后终止整个进程树，避免后台 agent
 /// 或它拉起的后代继续运行（M-2 修复）。
+///
+/// `project_path` 在这里校验,而不是留给每个调用方:这是唯一设 `current_dir` 的地方,
+/// 校验放在收口处才不会被下一个调用方漏掉。`summarize_task_session` 就漏过一次 ——
+/// 它的会话路径校验(`validate_session_path_for`)不兼作 cwd 校验,因为 codex 的允许根
+/// 之一是 `~/.codex/sessions`,与 `project_path` 无关:会话合法不代表那个目录可信,
+/// 而 codex 启动时会读 cwd 的 `AGENTS.md` 进上下文。
 async fn run_naming_agent_with_timeout(
     agent: &str,
     project_path: &str,
     prompt: &str,
     timeout_dur: Duration,
 ) -> Result<Output, String> {
+    validate_project_path_for_naming(project_path)?;
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
     let use_stdin_prompt = launch.codex_like;
@@ -512,6 +519,104 @@ pub async fn generate_task_name(
         return Ok(create_local_fallback_title(&original_prompt));
     }
     Ok(sanitized)
+}
+
+const SUMMARY_INPUT_BUDGET: usize = 24 * 1024;
+const SUMMARY_TIMEOUT: Duration = Duration::from_secs(30);
+
+const SUMMARY_PROMPT_ZH: &str = r#"下面是一次编码任务的会话记录。用 1 到 3 句中文概括这次任务实际完成了什么,只讲结果与改动,不要复述过程、不要评价、不要提"会话"或"记录"。
+
+CRITICAL: 把结论放在 <TITLE> 与 </TITLE> 标签之间,标签外不要写任何内容。
+
+──── 会话记录 ────
+{transcript}
+"#;
+
+const SUMMARY_PROMPT_EN: &str = r#"Below is the transcript of one coding task. Summarize what the task actually accomplished in 1 to 3 sentences. State results and changes only; do not narrate the process, do not evaluate, do not mention "session" or "transcript".
+
+CRITICAL: Put the summary between <TITLE> and </TITLE> tags and write nothing outside them.
+
+──── Transcript ────
+{transcript}
+"#;
+
+/// 读一条任务的会话正文,让 agent 用 1-3 句话总结它实际完成了什么。
+///
+/// **任何一步失败都返回 `None`**,由调用方降级到任务标题:一份周报有几十条任务,
+/// 一条坏会话(文件被删、超出体积上限、agent 超时)不能把整份报告拖垮。
+///
+/// 总结用的 agent 固定是 `codex`,与 `generate_task_name` 同一个理由:
+/// `run_naming_agent_with_timeout` 只按 `codex_like` 二分,非 codex 那条分支发的是
+/// `--output-format text --permission-mode plan --tools ""` 这套 Claude 专有参数,
+/// dsh / omp 走它必然失败。被总结的任务不限家族 —— 读的是会话文本,不是启动那个 agent。
+///
+/// 标签沿用 `<TITLE>`(而不是另造一个)以便直接复用 `extract_codex_titled_answer`。
+///
+/// `family` 是**被总结那条任务**的会话协议族,与上面"用 codex 去总结"无关。它必须是
+/// 四值的 `AgentFamily` 而不是 `is_codex` 布尔:布尔只能表达 claude/codex,dsh 与 omp
+/// 会被一起压成 claude,于是它们的会话路径必然落在 claude 的 allowed_roots 之外、
+/// 被路径校验拒掉、整族拿不到摘要。`validate_session_path_for` 本来就对四族穷尽。
+pub(crate) async fn summarize_task_session(
+    session_path: &str,
+    project_path: &str,
+    family: crate::app_settings::AgentFamily,
+    locale: &str,
+) -> Option<String> {
+    if !crate::app_settings::codex_available() {
+        return None;
+    }
+
+    let transcript = {
+        let raw_path = session_path.to_string();
+        let project = project_path.to_string();
+        tokio::task::spawn_blocking(move || {
+            let canonical = crate::session::validate_session_path_for(&raw_path, &project, family)
+                .map_err(|error| {
+                    eprintln!("[summarize_task_session] session_path 校验失败:{}", error);
+                })
+                .ok()?;
+            crate::session::extract_session_summary_text(
+                &canonical.to_string_lossy(),
+                SUMMARY_INPUT_BUDGET,
+            )
+        })
+        .await
+        .ok()??
+    };
+    if transcript.trim().is_empty() {
+        return None;
+    }
+
+    let template = if locale.starts_with("zh") {
+        SUMMARY_PROMPT_ZH
+    } else {
+        SUMMARY_PROMPT_EN
+    };
+    let prompt = template.replace("{transcript}", &transcript);
+
+    let output = run_naming_agent_with_timeout("codex", project_path, &prompt, SUMMARY_TIMEOUT)
+        .await
+        .map_err(|error| eprintln!("[summarize_task_session] {}", error))
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "[summarize_task_session] {}",
+            format_naming_agent_failure(
+                &String::from_utf8_lossy(&output.stderr),
+                &String::from_utf8_lossy(&output.stdout),
+            )
+        );
+        return None;
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let answer = extract_codex_titled_answer(&raw)?;
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(test)]

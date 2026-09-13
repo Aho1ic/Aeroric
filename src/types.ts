@@ -105,7 +105,13 @@ export interface SshConnection {
   port: number;
   username: string;
   identityFile?: string;
+  /**
+   * 明文密码。**只在写入方向有值**:保存新密码时填它,`load_ssh_connections` 返回的永远是
+   * `undefined`。判断有没有已存密码看 `hasPassword`,取明文走 `get_ssh_connection_password`。
+   */
   password?: string;
+  /** 这条连接在后端存了密码。与 `password` 不对称:读取时只给这个布尔,不给明文。 */
+  hasPassword?: boolean;
   remotePath?: string;
   autoSudoWithPassword?: boolean;
   /** 勾选后这条连接每次都经「设置 > 代理」里配置的全局代理建立。 */
@@ -314,6 +320,10 @@ export interface Task {
   status: TaskStatus;
   createdAt: number;
   attentionRequestedAt?: number;
+  /** 进入终态(done/failed/cancelled)的时刻,epoch 毫秒。旧任务缺省。 */
+  completedAt?: number;
+  /** 归档时刻,epoch 毫秒。有值即已归档,从主列表移走但数据完整保留。 */
+  archivedAt?: number;
   starred?: boolean;
   failureReason?: string;
   codexSessionId?: string;
@@ -322,8 +332,6 @@ export interface Task {
   claudeSessionPath?: string;
   dshSessionId?: string;
   dshSessionPath?: string;
-  dshWorkspaceId?: string;
-  dshPromptMode?: string;
   /** omp 会话 UUID v7 与 .jsonl 文件绝对路径。 */
   ompSessionId?: string;
   ompSessionPath?: string;
@@ -381,6 +389,24 @@ export function isActiveTaskStatus(status: TaskStatus): boolean {
     status === "input_required" ||
     status === "detached"
   );
+}
+
+/**
+ * 可以归档吗。
+ *
+ * 不能直接用 `!isActiveTaskStatus(status)`:那个谓词服务于"别删还在跑的东西",包含
+ * `input_required` 与 `detached`。但归档只是从主列表移走,不影响任务继续存在 ——
+ * 而 `input_required` 恰恰是最该能收起来的一类(它会一直亮着角标等你回应,可你也许
+ * 就是不想现在回应)。真正不该归档的只有"正在产出、随时会自己改状态"的那两个:
+ * 归档 `running`/`pending` 会让用户以为收好了,实际它下一秒就变 `done` 又冒出来。
+ */
+export function isArchivableTaskStatus(status: TaskStatus): boolean {
+  return status !== "running" && status !== "pending";
+}
+
+/** 终态 = 不会再自行推进的状态。todo 未开工、interrupted 可续跑,都不算。 */
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return status === "done" || status === "failed" || status === "cancelled";
 }
 
 // ── System permissions ───────────────────────────────────────────────────────

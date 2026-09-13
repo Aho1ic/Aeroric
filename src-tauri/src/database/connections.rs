@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn default_connection_config_round_trips_new_dbx_fields() {
-        let config = default_connection_config(
+        let mut config = default_connection_config(
             "mysql-1",
             "mysql",
             DbxDatabaseType::Mysql,
@@ -799,16 +799,56 @@ mod tests {
             Some("app".to_string()),
             true,
         );
-        let mut connection = mysql_connection_with_dbx(serde_json::to_value(config).unwrap());
+        // 必须填非默认值:这几个字段的 serde 属性都是 `#[serde(default)]`,
+        // 断言空值/false 的话,「解析器完整读回」与「解析器根本不读这几个键、
+        // 靠 default 兜底」两种结果一模一样。
+        config.agent_java_options = vec!["-Xmx512m".to_string(), "-Duser.timezone=UTC".to_string()];
+        config.init_script = Some("SET NAMES utf8mb4".to_string());
+        config.is_production = true;
+        config.production_databases = vec!["orders".to_string(), "billing".to_string()];
+
+        let mut connection = mysql_connection_with_dbx(serde_json::to_value(&config).unwrap());
         connection.read_only = true;
 
         let parsed = parse_core_config(&connection).unwrap();
 
-        assert!(parsed.agent_java_options.is_empty());
-        assert_eq!(parsed.init_script, None);
+        assert_eq!(
+            parsed.agent_java_options,
+            vec!["-Xmx512m".to_string(), "-Duser.timezone=UTC".to_string()]
+        );
+        assert_eq!(parsed.init_script.as_deref(), Some("SET NAMES utf8mb4"));
+        // is_production / production_databases 决定危险 SQL 要不要先弹确认框,
+        // 丢了就等于在生产库上静默执行 DELETE。
+        assert!(parsed.is_production);
+        assert_eq!(
+            parsed.production_databases,
+            vec!["orders".to_string(), "billing".to_string()]
+        );
+        assert!(parsed.read_only);
+        // 顺带钉住 default_connection_config 自己给的非平凡默认值:
+        // save_password 一旦退成 false,下次保存会删掉已存的密码。
+        assert!(parsed.save_password);
+    }
+
+    #[test]
+    fn an_absent_production_marker_parses_as_not_production() {
+        // 老配置文件里没有这几个键,必须仍能解析,且不能把普通库误标成生产库
+        // (误标只会多弹一次确认框,漏标才是删错数据)。
+        let parsed = parse_core_config(&mysql_connection_with_dbx(json!({
+            "id": "mysql-2",
+            "name": "mysql",
+            "db_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "username": "root",
+            "password": "",
+        })))
+        .unwrap();
+
         assert!(!parsed.is_production);
         assert!(parsed.production_databases.is_empty());
-        assert!(parsed.read_only);
+        assert!(parsed.agent_java_options.is_empty());
+        assert_eq!(parsed.init_script, None);
     }
 
     #[test]

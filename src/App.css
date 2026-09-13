@@ -4005,7 +4005,7 @@ html.dark .agent-detail-modal {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 5px 30px 5px 9px;
+  padding: 5px 9px;
   border-radius: 5px;
   color: var(--text-primary);
   cursor: pointer;

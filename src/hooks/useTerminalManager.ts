@@ -8,6 +8,7 @@ import {
   terminalBufferAbsLength,
   type TerminalRingBuffer,
 } from "../terminalRingBuffer";
+import { scheduleTerminalFrame } from "../components/terminalShared";
 
 // ── Buffer constants ─────────────────────────────────────────────────────────
 
@@ -70,10 +71,16 @@ export function useTerminalManager() {
 
   const pendingOutputsRef = useRef<Map<string, string[]>>(new Map());
   const stoppedTaskOutputsRef = useRef<Set<string>>(new Set());
-  const rafIdRef = useRef<number>(0);
+  /**
+   * 已排的那一次排空的取消函数;`null` 表示没排。
+   *
+   * 不存 rAF 句柄:排空可能落在 rAF 也可能落在 setTimeout(窗口隐藏时),两者句柄不同类。
+   * 让调度器把"怎么取消"一起交回来,这里就只需要判断有没有。
+   */
+  const cancelDrainRef = useRef<(() => void) | null>(null);
 
   const drainPendingOutputs = useCallback(() => {
-    rafIdRef.current = 0;
+    cancelDrainRef.current = null;
     if (
       (
         navigator as unknown as {
@@ -81,7 +88,7 @@ export function useTerminalManager() {
         }
       ).scheduling?.isInputPending?.()
     ) {
-      rafIdRef.current = requestAnimationFrame(drainPendingOutputs);
+      cancelDrainRef.current = scheduleTerminalFrame(drainPendingOutputs);
       return;
     }
     const pendingOutputs = pendingOutputsRef.current;
@@ -102,8 +109,8 @@ export function useTerminalManager() {
         break;
       }
     }
-    if (pendingOutputs.size > 0 && !rafIdRef.current) {
-      rafIdRef.current = requestAnimationFrame(drainPendingOutputs);
+    if (pendingOutputs.size > 0 && !cancelDrainRef.current) {
+      cancelDrainRef.current = scheduleTerminalFrame(drainPendingOutputs);
     }
   }, [enqueueTerminalWrite]);
 
@@ -117,8 +124,8 @@ export function useTerminalManager() {
         pendingOutputs.set(taskId, arr);
       }
       arr.push(data);
-      if (!rafIdRef.current) {
-        rafIdRef.current = requestAnimationFrame(drainPendingOutputs);
+      if (!cancelDrainRef.current) {
+        cancelDrainRef.current = scheduleTerminalFrame(drainPendingOutputs);
       }
     },
     [drainPendingOutputs],
@@ -145,7 +152,8 @@ export function useTerminalManager() {
 
   useEffect(() => {
     return () => {
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+      cancelDrainRef.current?.();
+      cancelDrainRef.current = null;
     };
   }, []);
 

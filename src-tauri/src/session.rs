@@ -21,9 +21,12 @@ use parse::*;
 pub(crate) use parse::parse_session_lines;
 
 use export::export_session_markdown_inner;
-pub use export::ExportTaskMeta;
 #[cfg(test)]
-use export::{validate_export_output_path, write_export_markdown};
+use export::write_export_markdown;
+pub use export::ExportTaskMeta;
+/// 周报(`crate::report`)复用这套 md 清理与路径校验:另写一份迟早跟这里跑偏,
+/// 而"bullet 被换行撑破""导出路径没 canonicalize"都是已经在这里解决过的问题。
+pub(crate) use export::{format_timestamp_ms, sanitize_md_inline, validate_export_output_path};
 
 #[derive(Clone)]
 pub(crate) struct CodexSessionInfo {
