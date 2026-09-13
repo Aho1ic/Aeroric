@@ -24,16 +24,16 @@ describe("SSH connection actions", () => {
     );
   });
 
-  it("builds a paste-ready password SSH command with the complete connection target", () => {
+  it("builds a paste-ready SSH command that never carries the password", () => {
+    // 复制命令不夹带 SSHPASS:整串命令进剪贴板等于把明文交给任意能读
+    // 剪贴板的进程。即使连接存了密码,命令也必须是纯 ssh 调用。
     expect(
       sshConnectionCommand({
         ...connection,
         host: "10.0.0.8",
         username: "root",
-        password: " s3c'ret value ",
+        hasPassword: true,
       }),
-    ).toBe(
-      "env SSHPASS=' s3c'\\''ret value ' sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -i '/Users/me/key file' -p 2222 root@10.0.0.8",
-    );
+    ).toBe("ssh -i '/Users/me/key file' -p 2222 root@10.0.0.8");
   });
 });

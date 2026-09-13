@@ -46,7 +46,6 @@ pub(crate) struct ClaudeSessionInfo {
 /// omp 会话信息:仅记录 task_id 关联的 session id 与文件路径。
 /// `session_id` 经 task-session 事件同步给前端,持久化在任务字段里。
 pub(crate) struct OmpSessionInfo {
-    #[allow(dead_code)]
     pub(crate) session_id: String,
     pub(crate) session_path: String,
 }

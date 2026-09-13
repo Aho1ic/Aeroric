@@ -374,7 +374,7 @@ pub(super) fn import_agent_config_entry(
                 "claude_gpt55" => &mut settings.claude_gpt55_config_path,
                 "codex" => &mut settings.codex_config_path,
                 "dsh" => &mut settings.dsh_config_path,
-                _ => unreachable!(),
+                _ => return Err(format!("unsupported built-in agent id: {}", agent.id)),
             };
             let path = if configured_path.trim().is_empty() {
                 let default_path = default_builtin_agent_config_path(&agent.id)?;
@@ -601,7 +601,7 @@ fn import_agent_paths(
                 "claude_gpt55" => &settings.claude_gpt55_config_path,
                 "codex" => &settings.codex_config_path,
                 "dsh" => &settings.dsh_config_path,
-                _ => unreachable!(),
+                _ => return Err(format!("unsupported built-in agent id: {}", agent.id)),
             };
             let path = if configured_path.trim().is_empty() {
                 default_builtin_agent_config_path(&agent.id)?

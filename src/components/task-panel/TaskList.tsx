@@ -11,6 +11,7 @@ import {
 import { Archive, Play, Star, Trash2, X } from "lucide-react";
 import type { Task, TaskDisplayWindow } from "../../types";
 import { isActiveTaskStatus, isArchivableTaskStatus } from "../../types";
+import { hasTaskSession } from "../../taskSession";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -177,12 +178,9 @@ export function TaskList({
     const canResumeTask = (task: Task) => {
       if (!onResumeTask || task.status === "todo" || isActiveTaskStatus(task.status)) return false;
       if (task.worktreeDiscarded) return false;
-      return Boolean(
-        task.codexSessionId ||
-        task.codexSessionPath ||
-        task.claudeSessionId ||
-        task.claudeSessionPath,
-      );
+      // 四族统一判断:omp 支持 `--resume`,dsh 走自身重连;只认 codex/claude
+      // 会让 omp/dsh 任务永远拿不到列表级恢复入口。
+      return hasTaskSession(task);
     };
     const appendGroup = (key: string, label: string, groupTasks: Task[], showRunTodo = false) => {
       if (groupTasks.length === 0) return;

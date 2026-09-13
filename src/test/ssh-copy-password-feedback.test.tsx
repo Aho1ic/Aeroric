@@ -5,13 +5,20 @@ import { I18nProvider } from "../i18n";
 import { SshConnectionList } from "../components/ssh/SshConnectionList";
 import type { SshConnection } from "../types";
 
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  invoke,
+}));
+
 const connection: SshConnection = {
   id: "conn-1",
   name: "Prod box",
   host: "10.0.0.5",
   port: 22,
   username: "deploy",
-  password: "s3cret",
+  // 连接记录只带 hasPassword,明文按需经 get_ssh_connection_password 取。
+  hasPassword: true,
   createdAt: 0,
 };
 
@@ -33,6 +40,8 @@ function renderList() {
 describe("SSH copy password click feedback", () => {
   beforeEach(() => {
     localStorage.setItem("aeroric:language", "en");
+    invoke.mockReset();
+    invoke.mockResolvedValue("s3cret");
   });
 
   it("marks the copy action as copied after a successful write", async () => {
@@ -50,7 +59,10 @@ describe("SSH copy password click feedback", () => {
 
     await user.click(copyAction);
 
-    expect(writeText).toHaveBeenCalledWith("s3cret");
+    expect(invoke).toHaveBeenCalledWith("get_ssh_connection_password", { connectionId: "conn-1" });
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("s3cret");
+    });
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute(
         "data-copied",

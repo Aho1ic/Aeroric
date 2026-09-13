@@ -628,14 +628,17 @@ describe("右键菜单", () => {
 });
 
 describe("复制密码", () => {
-  it("有密码时可点,复制后短暂显示已复制", async () => {
+  it("存了密码时可点,按需取明文复制后短暂显示已复制", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
-    renderWorkspace({ connections: [conn({ password: "s3cret" })] });
+    // 新模型:连接记录只带 hasPassword,明文经 get_ssh_connection_password 取。
+    invoke.mockResolvedValue("s3cret");
+    renderWorkspace({ connections: [conn({ hasPassword: true })] });
     const copy = screen.getByLabelText("Copy password");
     expect(copy).not.toBeDisabled();
     fireEvent.click(copy);
-    expect(writeText).toHaveBeenCalledWith("s3cret");
+    expect(invoke).toHaveBeenCalledWith("get_ssh_connection_password", { connectionId: "c1" });
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("s3cret"));
     await waitFor(() =>
       expect(screen.getByLabelText("Copy password")).toHaveAttribute("data-copied", "true"),
     );
@@ -644,32 +647,42 @@ describe("复制密码", () => {
   it("没有密码时按钮禁用,点了不写剪贴板", () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
-    renderWorkspace({ connections: [conn({ password: undefined })] });
+    renderWorkspace({ connections: [conn({ hasPassword: false })] });
     const copy = screen.getByLabelText("Copy password");
     expect(copy).toBeDisabled();
     fireEvent.click(copy);
     expect(writeText).not.toHaveBeenCalled();
   });
 
-  it("复制不会顺手打开终端", () => {
+  it("复制不会顺手打开终端", async () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn(() => Promise.resolve()) } });
-    renderWorkspace({ connections: [conn({ password: "x" })] });
+    invoke.mockResolvedValue("x");
+    renderWorkspace({ connections: [conn({ hasPassword: true })] });
     fireEvent.click(screen.getByLabelText("Copy password"));
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
     expect(screen.queryByTestId("terminal-panel")).not.toBeInTheDocument();
   });
 
   /**
-   * 变异测试:复制密码有三道闸门 —— 按钮的 `disabled`、onClick 里的
-   * `if (!canCopyPassword) return`、`copyConnectionPassword` 里的 `!password`。
-   * 只有 `disabled` 那道是可观测的(摘掉本文件挂 2 条);另两道摘掉全绿,
-   * 是 `disabled` 背后的兜底。不为它们补 jsdom 用例(用户点不到禁用按钮),
-   * 也不建议删 —— 那个函数是模块级的,将来被别处调到时它就是唯一防线。
+   * 变异测试:复制密码有几道闸门 —— 按钮的 `disabled`(看 hasPassword)、
+   * onClick 里的 `if (!canCopyPassword) return`、`copySshConnectionPassword`
+   * 里后端没取到明文时的 `!password`。只有 `disabled` 那道是可观测的
+   * (摘掉本文件挂 2 条);另两道摘掉全绿,是 `disabled` 背后的兜底。
+   * 不为它们补 jsdom 用例(用户点不到禁用按钮),也不建议删。
    */
-  it("空密码串等于没密码,不写剪贴板", () => {
+  it("后端没存明文时,按钮可点但不写剪贴板", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
-    renderWorkspace({ connections: [conn({ password: "" })] });
-    expect(screen.getByLabelText("Copy password")).toBeDisabled();
+    invoke.mockResolvedValue(null);
+    renderWorkspace({ connections: [conn({ hasPassword: true })] });
+    const copy = screen.getByLabelText("Copy password");
+    expect(copy).not.toBeDisabled();
+    fireEvent.click(copy);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("get_ssh_connection_password", { connectionId: "c1" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
     expect(writeText).not.toHaveBeenCalled();
   });
 });

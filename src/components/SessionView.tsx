@@ -398,7 +398,10 @@ function AttachmentCard({ content }: { content: SessionContent }) {
   const source = content.source ?? "";
   const mediaType = content.mediaType ?? "application/octet-stream";
   const name = content.name || "attachment";
-  const canPreviewImage = mediaType.startsWith("image/") && /^(data:|https?:\/\/)/.test(source);
+  // 只接受 data:/blob:(DSH 附件经 get_dsh_session_attachment 拿 base64 再转
+  // data/blob URL)。https? 分支会被 CSP 的 img-src 'self' data: blob: 拦成
+  // 静默裂图,所以不放行远程源。
+  const canPreviewImage = mediaType.startsWith("image/") && /^(data:|blob:)/.test(source);
 
   return (
     <div style={{ margin: "7px 0" }}>

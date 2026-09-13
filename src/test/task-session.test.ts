@@ -4,6 +4,7 @@ import {
   canNativeResumeWithAgent,
   getTaskSessionFields,
   hasTaskContinuationContext,
+  hasTaskSession,
   hasTaskSessionPath,
   resolveConfigSwitchSessionStrategy,
   resolveTaskSessionOwner,
@@ -285,6 +286,12 @@ describe("omp session family", () => {
 
   it("routes omp config-switch continuation through resume", () => {
     expect(resolveConfigSwitchSessionStrategy(ompTask, "omp", true)).toBe("resume");
+  });
+
+  it("counts omp sessions as resumable for the unified session gate", () => {
+    expect(hasTaskSession(ompTask)).toBe(true);
+    expect(hasTaskSession({ ...ompTask, ompSessionPath: undefined })).toBe(true);
+    expect(hasTaskSession(baseTask)).toBe(false);
   });
 
   it("infers omp family for legacy tasks with only omp session fields", () => {

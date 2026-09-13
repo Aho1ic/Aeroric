@@ -441,9 +441,12 @@ fn build_remote_task_command(
             args.push("--profile".to_string());
             args.push("headless".to_string());
             args.push("--".to_string());
-        } else if is_remote_codex_like_agent(agent) || is_remote_omp_agent(agent) {
-            // omp 与 codex 一样把位置参数当首条消息。缺 `--` 时,一个以 `-` 开头的
-            // prompt 会被当成 flag 解析。
+        } else if is_remote_codex_like_agent(agent)
+            || is_remote_omp_agent(agent)
+            || agent == "claude"
+        {
+            // codex / omp / claude 都把位置参数当首条消息,且都支持 `--` 终止 flag
+            // 解析。缺 `--` 时,一个以 `-` 开头的 prompt 会被当成 flag 解析。
             args.push("--".to_string());
         }
         args.push(prompt.to_string());
@@ -934,7 +937,7 @@ fn spawn_remote_task_exit_monitor(
                     "failure_reason": format!("Remote process exited with code {}", status.exit_code())
                 })
             };
-            let _ = app.emit("task-status", payload);
+            let _ = app.emit(crate::event_names::TASK_STATUS, payload);
             return;
         }
 
@@ -1880,7 +1883,7 @@ mod tests {
                 None,
             )
             .unwrap(),
-            "cd -- '/srv/app'\\''s repo' && 'claude' --permission-mode acceptEdits 'fix Bob'\\''s bug'"
+            "cd -- '/srv/app'\\''s repo' && 'claude' --permission-mode acceptEdits -- 'fix Bob'\\''s bug'"
         );
     }
 

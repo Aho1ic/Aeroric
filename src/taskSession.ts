@@ -37,6 +37,20 @@ export function hasTaskSessionPath(task: Task): boolean {
   );
 }
 
+/** 四族统一的"有没有会话"判断(ID 或 path 任一即可)。 */
+export function hasTaskSession(task: Task): boolean {
+  return Boolean(
+    task.claudeSessionId ||
+    task.claudeSessionPath ||
+    task.codexSessionId ||
+    task.codexSessionPath ||
+    task.dshSessionId ||
+    task.dshSessionPath ||
+    task.ompSessionId ||
+    task.ompSessionPath,
+  );
+}
+
 function owner(agent: AgentType, family: ProtocolFamily): TaskSessionOwner {
   return { agent, family, codexLike: family === "codex" };
 }

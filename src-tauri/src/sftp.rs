@@ -81,26 +81,48 @@ fn validate_sftp_local_path(path: &str) -> Result<PathBuf, String> {
     }
     let normalized = path.components().collect::<PathBuf>();
     let s = normalized.to_string_lossy();
-    let sensitive = [
-        "/.ssh",
-        "/etc/",
-        "/usr/bin/",
-        "/usr/sbin/",
-        "/sbin/",
-        "/bin/",
-        "/System/",
-        "/Library/LaunchDaemons/",
-        "/Library/LaunchAgents/",
+    // "/.ssh" 是 home 内的相对形态,保持 anywhere-contains;
+    // 系统目录用锚定匹配:目录本身与目录下的内容都要挡。若只按带尾斜杠的
+    // 前缀 contains,路径恰好等于 /etc、/bin 本身时会漏过,随后的
+    // remove_dir_all 会把整个目录删掉。
+    if s.contains("/.ssh") {
+        return Err("SFTP operations are not allowed in sensitive path: /.ssh".to_string());
+    }
+    let sensitive_dirs = [
+        "/etc",
+        "/usr/bin",
+        "/usr/sbin",
+        "/sbin",
+        "/bin",
+        "/System",
+        "/Library/LaunchDaemons",
+        "/Library/LaunchAgents",
     ];
-    for prefix in &sensitive {
-        if s.contains(prefix) {
+    for dir in &sensitive_dirs {
+        if s == *dir || s.starts_with(&format!("{dir}/")) {
             return Err(format!(
-                "SFTP operations are not allowed in sensitive path: {}",
-                prefix
+                "SFTP operations are not allowed in sensitive path: {dir}"
             ));
         }
     }
     Ok(path)
+}
+
+/// SFTP 本地栏的起始路径允许留空或写 `~`,落到当前用户 home;
+/// 面板默认值不再硬编码某个具体机器的目录。
+fn resolve_sftp_local_entry_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    let expanded = if trimmed.is_empty() || trimmed == "~" {
+        crate::platform::home_dir()
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        crate::platform::home_dir().map(|home| home.join(rest))
+    } else {
+        None
+    };
+    match expanded {
+        Some(expanded) => validate_sftp_local_path(&expanded.to_string_lossy()),
+        None => validate_sftp_local_path(path),
+    }
 }
 
 /// 进程边界上的最后一道闸。路径在到这里之前必然已经过 `RemoteShell::validate_path`
@@ -675,7 +697,7 @@ fn parse_remote_entries(remote_path: &str, raw: &str) -> Vec<SftpEntry> {
 }
 
 fn read_local_dir(path: String) -> Result<Vec<SftpEntry>, String> {
-    let path = validate_sftp_local_path(&path)?;
+    let path = resolve_sftp_local_entry_path(&path)?;
     let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
     let mut result = entries
         .flatten()
@@ -1898,6 +1920,54 @@ mod tests {
         let result = super::validate_sftp_local_path("relative/path");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn local_endpoint_blocks_sensitive_dirs_and_the_dirs_themselves() {
+        for path in [
+            "/etc",
+            "/etc/hosts",
+            "/bin",
+            "/usr/bin",
+            "/System/Library",
+            "/bin/tool",
+        ] {
+            assert!(
+                super::validate_sftp_local_path(path).is_err(),
+                "expected {path} to be rejected"
+            );
+        }
+        // 同名前缀但不是该系统目录的路径不应被误伤。
+        assert!(super::validate_sftp_local_path("/opt/etcetera/notes").is_ok());
+        assert!(super::validate_sftp_local_path("/Users/aeroric/.ssh").is_err());
+        assert!(super::validate_sftp_local_path("/Users/aeroric/project").is_ok());
+    }
+
+    #[test]
+    fn local_entry_path_falls_back_to_home_for_empty_and_tilde() {
+        let home = match crate::platform::home_dir() {
+            Some(home) => home.to_string_lossy().into_owned(),
+            None => return,
+        };
+
+        assert_eq!(
+            super::resolve_sftp_local_entry_path("").expect("empty fallback"),
+            std::path::PathBuf::from(&home)
+        );
+        assert_eq!(
+            super::resolve_sftp_local_entry_path("~").expect("tilde fallback"),
+            std::path::PathBuf::from(&home)
+        );
+        assert_eq!(
+            super::resolve_sftp_local_entry_path("~/Downloads").expect("tilde join"),
+            std::path::PathBuf::from(&home).join("Downloads")
+        );
+        assert_eq!(
+            super::resolve_sftp_local_entry_path("/tmp").expect("absolute passthrough"),
+            std::path::PathBuf::from("/tmp")
+        );
+        // home 形态最终也过敏感路径闸。
+        assert!(super::resolve_sftp_local_entry_path("~/.ssh").is_err());
     }
 
     #[test]

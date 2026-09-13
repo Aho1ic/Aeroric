@@ -28,6 +28,7 @@ mod dsh_home;
 mod dsh_plugins;
 mod dsh_protocol;
 mod dsh_webui;
+mod event_names;
 mod event_watcher;
 mod formatter;
 mod fs;

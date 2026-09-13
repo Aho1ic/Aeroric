@@ -59,6 +59,9 @@ try {
   const packageVersion = readJson("package.json").version;
   const tauriVersion = readJson("src-tauri/tauri.conf.json").version;
   const cargoVersion = cargoPackageVersion();
+  const mobilePackageVersion = readJson("mobile/package.json").version;
+  // expo 格式:版本在顶层 `expo` 对象下,不在文件根。
+  const mobileExpoVersion = readJson("mobile/app.json")?.expo?.version;
   const readmeVersion = readMarkedVersion(
     "README.md",
     /<strong>Current release:<\/strong>\s*v([0-9A-Za-z.+-]+)/,
@@ -71,6 +74,8 @@ try {
     "package.json": packageVersion,
     "src-tauri/tauri.conf.json": tauriVersion,
     "src-tauri/Cargo.toml": cargoVersion,
+    "mobile/package.json": mobilePackageVersion,
+    "mobile/app.json": mobileExpoVersion,
     "README.md": readmeVersion,
     "README_ZH.md": readmeZhVersion,
   };

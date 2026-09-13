@@ -563,7 +563,21 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     );
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
-    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    {
+        let mut file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        // 写失败也要清掉半份临时文件,否则失败一次就留一份垃圾。
+        if let Err(error) = file.write_all(content.as_bytes()) {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
+        // rename 前刷盘:崩溃后落到目标路径的文件才不会截断或丢内容。
+        if let Err(error) = file.sync_all() {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
+    }
     finish_atomic_rename(&tmp, path)
 }
 
@@ -696,6 +710,12 @@ pub fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> Result<(), Str
         let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
         // 写失败也要清掉半份临时文件,否则失败一次就留一份垃圾。
         if let Err(error) = file.write_all(content) {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
+        // rename 前刷盘:崩溃后落到目标路径的文件才不会截断或丢内容。
+        if let Err(error) = file.sync_all() {
             drop(file);
             let _ = fs::remove_file(&tmp);
             return Err(error.to_string());

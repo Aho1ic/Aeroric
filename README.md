@@ -5,7 +5,7 @@
 <h1 align="center">Aeroric: Desktop Workspace for AI Coding Agents</h1>
 
 <p align="center">
-Run Claude Code, Codex, and custom agents across projects with live terminals, task tracking, Git, SSH, WSL, SFTP, Docker, database tools, Skill Hub, Markdown docs, quick notes, and release workflows in one lightweight desktop app.
+Run Claude Code, Codex, DeepSeek Harness, and oh-my-pi — plus custom agents — across projects with live terminals, task tracking, Git, SSH, WSL, SFTP, Docker, database tools, Skill Hub, Markdown docs, quick notes, and release workflows in one lightweight desktop app.
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Aeroric does not replace Claude Code or Codex. It calls the native CLIs and adds
 
 - **Run recursive agent workflows**: start tasks, inspect output, branch into follow-up actions, and keep the evolving context visible.
 - **Manage project workspaces**: open local or remote projects and organize tasks, files, Git state, and runtime status around each repository.
-- **Run Claude Code, Codex, and custom agents**: create tasks, choose permission modes, stream PTY output, provide interactive input, resume sessions, and cancel work when needed.
+- **Run four built-in agent families and custom agents**: Claude Code, Codex, DeepSeek Harness, oh-my-pi, or any custom CLI — create tasks, choose permission modes, stream PTY output, provide interactive input, resume sessions, and cancel work when needed.
 - **Browse, edit, and execute project files**: inspect repository files, modify scripts, run commands, use language-server features, and keep file operations close to the agent conversation.
 - **Read and edit Markdown**: switch between rendered reading mode and source editing mode for README files, plans, specs, generated reports, and local knowledge notes.
 - **Use IDE-grade project tools**: search and replace, inspect diagnostics, jump through symbols, run tests, debug with DAP, manage run configurations, and preview local web apps.

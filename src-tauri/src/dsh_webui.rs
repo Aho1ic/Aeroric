@@ -25,6 +25,14 @@ mod protocol_inventory;
 mod startup;
 mod terminal_render;
 
+use crate::event_names::{
+    DSH_APPROVAL_REQUESTED, DSH_APPROVAL_RESOLVED, DSH_HOST_AGENT_ERROR,
+    DSH_HOST_ARCHIVED_SESSIONS_CHANGED, DSH_HOST_REMOTE_EVENT, DSH_HOST_SESSION_ADDED,
+    DSH_HOST_SESSION_REMOVED, DSH_HOST_SESSION_STATUS, DSH_HOST_STREAM_ERROR,
+    DSH_HOST_WORKSPACE_CHANGED, DSH_HOST_WORKSPACE_ORDER_CHANGED, DSH_HOST_WORKSPACE_REMOVED,
+    DSH_QUESTION_REQUESTED, DSH_QUESTION_RESOLVED, DSH_SESSION_EVENT, DSH_SESSION_JOBS,
+    DSH_SESSION_PROJECTION, DSH_SESSION_QUEUE, DSH_SESSION_SUBSCRIBED,
+};
 pub(crate) use api_client::DshApiClient;
 use api_client::{bounded_utf8_prefix, DSH_HTTP_ERROR_SNIPPET_BYTES};
 use build_readiness::{
@@ -1293,7 +1301,7 @@ fn dispatch_mux_frame(
 
     let result = match frame_type {
         "session/event" => {
-            let _ = app.emit("dsh-session-event", &payload);
+            let _ = app.emit(DSH_SESSION_EVENT, &payload);
             // 会话记录仍然收录引导命令,只是它的回显不进终端。
             if !state.is_internal_command_echo(task_id, &payload) {
                 let mut folds = state.reasoning_folds.lock();
@@ -1354,42 +1362,42 @@ fn dispatch_mux_frame(
         }
 
         "session/subscribed" => {
-            let _ = app.emit("dsh-session-subscribed", &payload);
+            let _ = app.emit(DSH_SESSION_SUBSCRIBED, &payload);
             Ok(())
         }
 
         "approval/requested" => {
-            let _ = app.emit("dsh-approval-requested", &payload);
+            let _ = app.emit(DSH_APPROVAL_REQUESTED, &payload);
             Ok(())
         }
 
         "approval/resolved" => {
-            let _ = app.emit("dsh-approval-resolved", &payload);
+            let _ = app.emit(DSH_APPROVAL_RESOLVED, &payload);
             Ok(())
         }
 
         "question/requested" => {
-            let _ = app.emit("dsh-question-requested", &payload);
+            let _ = app.emit(DSH_QUESTION_REQUESTED, &payload);
             Ok(())
         }
 
         "question/resolved" => {
-            let _ = app.emit("dsh-question-resolved", &payload);
+            let _ = app.emit(DSH_QUESTION_RESOLVED, &payload);
             Ok(())
         }
 
         "session/queue" => {
-            let _ = app.emit("dsh-session-queue", &payload);
+            let _ = app.emit(DSH_SESSION_QUEUE, &payload);
             Ok(())
         }
 
         "session/jobs" => {
-            let _ = app.emit("dsh-session-jobs", &payload);
+            let _ = app.emit(DSH_SESSION_JOBS, &payload);
             Ok(())
         }
 
         "session/projection" => {
-            let _ = app.emit("dsh-session-projection", &payload);
+            let _ = app.emit(DSH_SESSION_PROJECTION, &payload);
             Ok(())
         }
 
@@ -1588,7 +1596,7 @@ async fn start_task_session_stream(
             if let Some(values) = projections.get("values").and_then(Value::as_object) {
                 for (key, value) in values {
                     let _ = app.emit(
-                        "dsh-session-projection",
+                        DSH_SESSION_PROJECTION,
                         json!({
                             "type": "session/projection",
                             "sessionId": session_id,
@@ -2817,16 +2825,16 @@ fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
         .unwrap_or_default();
 
     let event_name = match frame_type {
-        "host/session-added" => "dsh-host-session-added",
-        "host/session-removed" => "dsh-host-session-removed",
-        "host/session-status" => "dsh-host-session-status",
-        "host/agent-error" => "dsh-host-agent-error",
-        "host/workspace-changed" => "dsh-host-workspace-changed",
-        "host/workspace-removed" => "dsh-host-workspace-removed",
-        "host/workspace-order-changed" => "dsh-host-workspace-order-changed",
-        "host/archived-sessions-changed" => "dsh-host-archived-sessions-changed",
-        "host/remote-event" => "dsh-host-remote-event",
-        "stream/error" => "dsh-host-stream-error",
+        "host/session-added" => DSH_HOST_SESSION_ADDED,
+        "host/session-removed" => DSH_HOST_SESSION_REMOVED,
+        "host/session-status" => DSH_HOST_SESSION_STATUS,
+        "host/agent-error" => DSH_HOST_AGENT_ERROR,
+        "host/workspace-changed" => DSH_HOST_WORKSPACE_CHANGED,
+        "host/workspace-removed" => DSH_HOST_WORKSPACE_REMOVED,
+        "host/workspace-order-changed" => DSH_HOST_WORKSPACE_ORDER_CHANGED,
+        "host/archived-sessions-changed" => DSH_HOST_ARCHIVED_SESSIONS_CHANGED,
+        "host/remote-event" => DSH_HOST_REMOTE_EVENT,
+        "stream/error" => DSH_HOST_STREAM_ERROR,
         // Forward-compatibility: silently drop unknown frame types.
         _ => return,
     };
@@ -2852,7 +2860,7 @@ async fn consume_host_events(
             Ok(downlink) => downlink,
             Err(error) => {
                 let _ = app.emit(
-                    "dsh-host-stream-error",
+                    DSH_HOST_STREAM_ERROR,
                     json!({ "type": "stream/error", "error": format!("events.host connection failed: {error}") }),
                 );
                 tokio::select! {
@@ -2879,14 +2887,14 @@ async fn consume_host_events(
                 }
                 Some(Err(error)) => {
                     let _ = app.emit(
-                        "dsh-host-stream-error",
+                        DSH_HOST_STREAM_ERROR,
                         json!({ "type": "stream/error", "error": error }),
                     );
                     break;
                 }
                 None => {
                     let _ = app.emit(
-                        "dsh-host-stream-error",
+                        DSH_HOST_STREAM_ERROR,
                         json!({ "type": "stream/error", "error": format!("events.host {transport} stream ended") }),
                     );
                     break;

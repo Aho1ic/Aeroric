@@ -136,24 +136,40 @@ fn read_and_dispatch(app: &AppHandle, path: &PathBuf, offset: u64) -> Option<u64
         return Some(offset);
     }
     file.seek(SeekFrom::Start(offset)).ok()?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf).ok()?;
+    // 按字节读,不要求整段是合法 UTF-8:hook 写入的 events.jsonl 混进非法字节时,
+    // read_to_string 会在中间失败、offset 永不前进,watcher 每轮原地重读整段。
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
 
-    // 仅处理整行(以 \n 结尾的),残行留待下次循环
+    let (events, new_offset) = parse_events_and_offset(&buf, offset);
+    for ev in &events {
+        dispatch(app, ev);
+    }
+    Some(new_offset)
+}
+
+/// 从本次读到的字节里解析完整行的事件,返回 (事件列表, 应推进到的 offset)。
+///
+/// 每行单独做 `String::from_utf8_lossy`:非法 UTF-8 只影响所在行(该行 JSON 大概率
+/// 解析失败被跳过),绝不会让 offset 停滞 —— 只要行以 \n 结尾,无论解析成败都推进
+/// 到该行末尾;残行(无 \n)留待下次循环,保持增量读取语义不变。
+fn parse_events_and_offset(buf: &[u8], offset: u64) -> (Vec<HookEvent>, u64) {
+    let mut events = Vec::new();
     let mut last_complete_end = 0usize;
-    for (idx, ch) in buf.char_indices() {
-        if ch == '\n' {
-            let line = &buf[last_complete_end..idx];
-            last_complete_end = idx + 1;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(ev) = serde_json::from_str::<HookEvent>(line) {
-                dispatch(app, &ev);
-            }
+    for (idx, byte) in buf.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf[last_complete_end..idx]);
+        last_complete_end = idx + 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(ev) = serde_json::from_str::<HookEvent>(&line) {
+            events.push(ev);
         }
     }
-    Some(offset + last_complete_end as u64)
+    (events, offset + last_complete_end as u64)
 }
 
 fn dispatch(app: &AppHandle, ev: &HookEvent) {
@@ -289,7 +305,7 @@ fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
     if let Some(approval) = approval {
         payload["approval"] = serde_json::to_value(approval).unwrap_or_default();
     }
-    let _ = app.emit("task-status", payload);
+    let _ = app.emit(crate::event_names::TASK_STATUS, payload);
 }
 
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。
@@ -325,5 +341,25 @@ mod tests {
 
         assert!(event_is_codex_like(&codex_event));
         assert!(!event_is_codex_like(&claude_event));
+    }
+
+    /// 非法 UTF-8 字节不能卡死增量读取:坏行被跳过,后续事件照常解析,
+    /// offset 推进到本次读到的最后一个完整行末尾;残行不消费。
+    #[test]
+    fn invalid_utf8_does_not_stall_subsequent_events() {
+        let mut buf = b"{\"task_id\":\"t1\",\"event\":\"Stop\"}\n".to_vec();
+        // 非法 UTF-8(独立一行)+ 合法事件 + 无换行的残行
+        buf.extend_from_slice(&[0xFF, 0xFE, b'\n']);
+        buf.extend_from_slice(b"{\"task_id\":\"t2\",\"agent\":\"codex\",\"event\":\"Stop\"}\n");
+        let complete_len = buf.len() as u64;
+        buf.extend_from_slice(b"{\"task_id\":\"t3\"");
+
+        let (events, new_offset) = super::parse_events_and_offset(&buf, 0);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].task_id, "t1");
+        assert_eq!(events[1].task_id, "t2");
+        assert!(event_is_codex_like(&events[1]));
+        assert_eq!(new_offset, complete_len);
     }
 }

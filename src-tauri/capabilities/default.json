@@ -9,8 +9,11 @@
     "core:window:allow-set-background-color",
     "core:window:allow-set-theme",
     "core:window:allow-hide",
-    "opener:allow-open-url",
-    "opener:allow-default-urls",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    },
+    "opener:allow-reveal-item-in-dir",
     "dialog:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text"

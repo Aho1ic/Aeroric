@@ -4,8 +4,14 @@ on:
   workflow_call:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
+
+# 同一 ref 的新提交会取消还在跑的旧检查;push(main)不取消,避免误杀发布门禁。
+# pull_request 的 group 天然带 refs/pull/*/merge 前缀,与 push 的组互不干扰。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -62,7 +68,8 @@ jobs:
       # specified」报错。lockfile 由 pnpm 10 生成，pnpm 9 会以
       # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH 拒绝 --frozen-lockfile。
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        # v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -73,13 +80,15 @@ jobs:
             pnpm-lock.yaml
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.97.0
           components: rustfmt, clippy
 
       - name: Cache Rust dependencies
-        uses: swatinem/rust-cache@v2
+        # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: |
             ./src-tauri -> target

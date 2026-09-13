@@ -160,7 +160,7 @@ fn javascript_profile_command(
             args.extend(tool_args.iter().map(|arg| arg.to_string()));
             args
         }
-        _ => unreachable!("unknown package manager"),
+        _ => return Err("unknown package manager".to_string()),
     };
     Ok((command, args))
 }

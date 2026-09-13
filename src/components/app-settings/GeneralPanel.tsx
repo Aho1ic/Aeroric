@@ -7,7 +7,7 @@ import {
   TASK_DISPLAY_WINDOW_VALUES,
   type TaskDisplayWindow,
 } from "../../types";
-import { DEFAULT_SFTP_LOCAL_PATH, normalizeSftpLocalDefaultPath } from "../../settings";
+import { normalizeSftpLocalDefaultPath } from "../../settings";
 import s from "../../styles";
 
 export function GeneralPanel({
@@ -172,7 +172,7 @@ export function GeneralPanel({
         <input
           type="text"
           value={sftpLocalDefaultPath}
-          placeholder={DEFAULT_SFTP_LOCAL_PATH}
+          placeholder="~"
           onChange={(event) => onSftpLocalDefaultPathChange(event.currentTarget.value)}
           onBlur={(event) =>
             onSftpLocalDefaultPathChange(normalizeSftpLocalDefaultPath(event.currentTarget.value))

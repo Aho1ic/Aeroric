@@ -8,6 +8,12 @@
  * 里要转义好几层,上一轮就是在这上面翻的车,拿到的是空结果而不是可信结论。
  *
  * 用法:node scripts/scan-csp-hazards.mjs <包名> [包名...]
+ *
+ * 状态:经根 package.json 的 `check:csp-hazards` 接线(显式传参与渲染管线对齐),
+ * 仅手动审查工具,未接 CI。已知发现项:dompurify 的命中全部位于 istanbul
+ * 覆盖率插桩产物 `dist/purify.cov.cjs.js`(`new Function("return this")` 来自
+ * 插桩代码,不是 purify 本体);应用实际加载的入口是 `dist/purify.es.mjs` /
+ * `dist/purify.cjs.js`,不受影响。
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";

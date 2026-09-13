@@ -259,7 +259,7 @@ export const zh: Record<string, string> = {
   "appSettings.taskDisplayRecentDays": "最近 {days} 天",
   "appSettings.taskDisplayAll": "所有任务",
   "appSettings.sftpLocalDefaultPath": "SFTP 本地默认路径",
-  "appSettings.sftpLocalDefaultPathHint": "在非本地项目中打开 SFTP 时，作为本地栏的起始目录。",
+  "appSettings.sftpLocalDefaultPathHint": "在非本地项目中打开 SFTP 时，作为本地栏的起始目录。留空或填 ~ 表示跟随当前用户的 home 目录。",
   "appSettings.attentionBadge": "待确认角标",
   "appSettings.attentionBadgeToggle": "显示待确认任务数量",
   "appSettings.attentionBadgeHint":

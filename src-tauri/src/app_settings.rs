@@ -2574,6 +2574,11 @@ fn list_builtin_omp_models() -> Result<Vec<String>, String> {
         cmd.env(key, value);
     }
     if let Some(home) = omp_managed_home() {
+        // 与 pty::setup_omp_env 对齐:上游 dirs.ts 在 activeProfile 存在时忽略
+        // PI_CODING_AGENT_DIR,不清掉 profile 会让探测进程读用户自己的 ~/.omp
+        // 而不是托管 home。
+        cmd.env_remove("PI_PROFILE");
+        cmd.env_remove("OMP_PROFILE");
         cmd.env("PI_CODING_AGENT_DIR", home);
         cmd.env("OMP_APP_NAME", "aeroric");
     }
@@ -3105,7 +3110,7 @@ pub async fn detect_agent_paths() -> Result<AppSettings, String> {
                         PathBuf::from(normalize_config_path(settings.codex_config_path.clone()))
                     }
                 }
-                _ => unreachable!(),
+                _ => return Err(format!("unexpected built-in agent: {agent}")),
             };
             let config_content = fs::read_to_string(&config_path).unwrap_or_default();
             let credentials =
@@ -3114,7 +3119,7 @@ pub async fn detect_agent_paths() -> Result<AppSettings, String> {
             match agent {
                 "claude" => settings.claude_config_path = config_path_string,
                 "codex" => settings.codex_config_path = config_path_string,
-                _ => unreachable!(),
+                _ => return Err(format!("unexpected built-in agent: {agent}")),
             }
             if !credentials.base_url.is_empty()
                 || !credentials.api_key.is_empty()

@@ -131,6 +131,8 @@ export interface RpcTaskProjection {
   claudeSessionPath?: string;
   dshSessionId?: string;
   dshSessionPath?: string;
+  ompSessionId?: string;
+  ompSessionPath?: string;
   sessionAgent?: string;
   sessionCodexLike?: boolean;
 }

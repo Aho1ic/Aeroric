@@ -280,7 +280,7 @@ export const en: Record<string, string> = {
   "appSettings.taskDisplayAll": "All tasks",
   "appSettings.sftpLocalDefaultPath": "SFTP local default path",
   "appSettings.sftpLocalDefaultPathHint":
-    "Used as the starting local folder when opening SFTP outside a local project.",
+    "Used as the starting local folder when opening SFTP outside a local project. Leave empty or use ~ to follow the user's home directory.",
   "appSettings.attentionBadge": "Attention Badge",
   "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
   "appSettings.attentionBadgeHint":

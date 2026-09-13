@@ -220,7 +220,7 @@ fn finalize_task_exit(
     } else {
         serde_json::json!({ "task_id": task_id, "status": status })
     };
-    let _ = app.emit("task-status", payload);
+    let _ = app.emit(crate::event_names::TASK_STATUS, payload);
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(app, task_id);
@@ -1385,7 +1385,8 @@ fn prompt_with_project_prefix(prompt: &str, prompt_prefix: &str) -> String {
 }
 
 /// 位置参数形式的首条 prompt。`use_double_dash` 为真时插入 POSIX `--` 分隔符,
-/// 使以 `-` 开头的 prompt 不被 launcher 当作 flag(codex / dsh / omp 均支持 `--`)。
+/// 使以 `-` 开头的 prompt 不被 launcher 当作 flag(codex / dsh / omp / claude 均支持
+/// `--`;claude 为 commander 系,实测 2.1.234:`claude -- --version` 走 prompt 路径)。
 fn initial_prompt_args(prompt: &str, use_double_dash: bool) -> Vec<String> {
     if prompt.is_empty() {
         return Vec::new();
@@ -1842,7 +1843,9 @@ pub async fn run_task(
             c.arg(path.to_string_lossy().as_ref());
         }
         if use_native_initial_prompt {
-            for arg in initial_prompt_args(&final_prompt, false) {
+            // claude 与 codex/dsh/omp 一样接受 `--` 终止 flag 解析,以 `-` 开头的
+            // prompt 不能被当成 flag。
+            for arg in initial_prompt_args(&final_prompt, true) {
                 c.arg(arg);
             }
         }
@@ -2220,6 +2223,8 @@ pub struct ResetTaskProcessResult {
     codex_session_path: Option<String>,
     dsh_session_id: Option<String>,
     dsh_session_path: Option<String>,
+    omp_session_id: Option<String>,
+    omp_session_path: Option<String>,
 }
 
 fn wait_for_terminal_history_to_settle(task_id: &str) {
@@ -2275,7 +2280,7 @@ pub async fn reset_task_process(
     // omp 现在是 PTY 族,子进程就在 child_handles 里,与 claude/codex 同路径被
     // 下面的 kill 终止;这里只需和它们一样清掉会话注册,免得旧 watcher 把状态
     // 报到替换进程上。
-    let omp_info = task_manager.omp_sessions.lock().remove(&task_id);
+    let mut omp_info = task_manager.omp_sessions.lock().remove(&task_id);
     let omp_path = omp_info.as_ref().map(|info| info.session_path.clone());
     let codex_path = codex_info.as_ref().map(|info| info.session_path.clone());
     let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
@@ -2337,6 +2342,13 @@ pub async fn reset_task_process(
             .remove(&late_info.session_path);
         dsh_info = Some(late_info);
     }
+    if let Some(late_info) = task_manager.omp_sessions.lock().remove(&task_id) {
+        task_manager
+            .claimed_session_paths
+            .lock()
+            .remove(&late_info.session_path);
+        omp_info = Some(late_info);
+    }
 
     let claude_info = claude_info.filter(|info| !info.is_placeholder);
     Ok(ResetTaskProcessResult {
@@ -2347,6 +2359,8 @@ pub async fn reset_task_process(
         codex_session_path: codex_info.map(|info| info.session_path),
         dsh_session_id: dsh_info.as_ref().map(|info| info.session_id.clone()),
         dsh_session_path: dsh_info.map(|info| info.session_path),
+        omp_session_id: omp_info.as_ref().map(|info| info.session_id.clone()),
+        omp_session_path: omp_info.map(|info| info.session_path),
     })
 }
 

@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit && pnpm --dir mobile typecheck",
     "check:design-tokens": "node scripts/generate-design-tokens.mjs --check",
     "check:version": "node scripts/check-version.mjs",
+    "check:csp-hazards": "node scripts/scan-csp-hazards.mjs mermaid katex marked dompurify shiki marked-alert marked-footnote",
     "generate:design-tokens": "node scripts/generate-design-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

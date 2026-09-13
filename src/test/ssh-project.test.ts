@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,12 @@ import {
 } from "../components/ssh/SshProjectDialog";
 import { SshConnectionList } from "../components/ssh/SshConnectionList";
 import { SshWorkspace } from "../components/ssh/SshWorkspace";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  invoke,
+}));
 
 function connection(remotePath?: string): SshConnection {
   return {
@@ -51,13 +57,15 @@ describe("SSH project opening", () => {
       value: { writeText },
       configurable: true,
     });
+    // 连接记录只带 hasPassword,明文按需经 get_ssh_connection_password 取。
+    invoke.mockResolvedValue("secret-pass");
 
     render(
       React.createElement(
         I18nProvider,
         null,
         React.createElement(SshProjectPage, {
-          connections: [{ ...connection("/srv/apps/aeroric"), password: "secret-pass" }],
+          connections: [{ ...connection("/srv/apps/aeroric"), hasPassword: true }],
           onConnectionsChange: () => {},
           onClose: () => {},
           onOpen: () => {},
@@ -67,7 +75,7 @@ describe("SSH project opening", () => {
 
     await user.click(screen.getByRole("button", { name: "Copy password" }));
 
-    expect(writeText).toHaveBeenCalledWith("secret-pass");
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("secret-pass"));
     expect(screen.getByRole("button", { name: "Copy password" })).toHaveAttribute(
       "data-copied",
       "true",
@@ -142,7 +150,7 @@ describe("SSH project opening", () => {
     });
   });
 
-  it("copies an SSH command from the home SSH context menu", async () => {
+  it("copies a paste-ready SSH command from the home SSH context menu without the password", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -155,9 +163,7 @@ describe("SSH project opening", () => {
         I18nProvider,
         null,
         React.createElement(SshProjectPage, {
-          connections: [
-            { ...connection("/srv/apps/aeroric"), port: 2222, password: "secret-pass" },
-          ],
+          connections: [{ ...connection("/srv/apps/aeroric"), port: 2222, hasPassword: true }],
           onConnectionsChange: vi.fn(),
           onClose: vi.fn(),
           onOpen: vi.fn(),
@@ -170,9 +176,8 @@ describe("SSH project opening", () => {
       clientY: 80,
     });
     await user.click(screen.getByRole("menuitem", { name: "Copy SSH command" }));
-    expect(writeText).toHaveBeenCalledWith(
-      "env SSHPASS=secret-pass sshpass -e ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -p 2222 deploy@example.com",
-    );
+    // 复制命令不夹带 SSHPASS,明文经独立的"Copy password"动作按需取。
+    expect(writeText).toHaveBeenCalledWith("ssh -p 2222 deploy@example.com");
   });
 
   it("physically deletes a connection from the home SSH context menu", async () => {
@@ -327,13 +332,14 @@ describe("SSH project opening", () => {
       value: { writeText },
       configurable: true,
     });
+    invoke.mockResolvedValue("card-secret");
 
     render(
       React.createElement(
         I18nProvider,
         null,
         React.createElement(SshConnectionList, {
-          connections: [{ ...connection("/srv/apps/aeroric"), password: "card-secret" }],
+          connections: [{ ...connection("/srv/apps/aeroric"), hasPassword: true }],
           selectedId: null,
           onSelect: vi.fn(),
           onCreate: vi.fn(),
@@ -345,7 +351,7 @@ describe("SSH project opening", () => {
 
     await user.click(screen.getByRole("button", { name: "Copy password" }));
 
-    expect(writeText).toHaveBeenCalledWith("card-secret");
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("card-secret"));
   });
 
   it("opens SFTP from the sidebar SSH connection context menu", async () => {
@@ -411,13 +417,14 @@ describe("SSH project opening", () => {
       value: { writeText },
       configurable: true,
     });
+    invoke.mockResolvedValue("workspace-secret");
 
     render(
       React.createElement(
         I18nProvider,
         null,
         React.createElement(SshWorkspace, {
-          connections: [{ ...connection("/srv/apps/aeroric"), password: "workspace-secret" }],
+          connections: [{ ...connection("/srv/apps/aeroric"), hasPassword: true }],
           onConnectionsChange: vi.fn(),
           active: true,
           themeVariant: "light",
@@ -432,7 +439,7 @@ describe("SSH project opening", () => {
     const copyButton = screen.getByRole("button", { name: "Copy password" });
     await user.click(copyButton);
 
-    expect(writeText).toHaveBeenCalledWith("workspace-secret");
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("workspace-secret"));
     expect(copyButton).toHaveAttribute("data-copied", "true");
   });
 });

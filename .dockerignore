@@ -1,0 +1,37 @@
+# remote-relay/Dockerfile 以仓库根为构建上下文,但只 COPY remote-protocol/ 与
+# remote-relay/ 两个 crate。这里把其余内容挡在上下文外:缩小 build context
+# 上传体积,也避免本地构建产物/前端源码变化打穿镜像层缓存。
+#
+# 注意:刻意不用 `*` + `!` 白名单式排除 —— 根目录当前没有 Cargo.toml /
+# Cargo.lock(remote-relay、remote-protocol 各自带自己的 Cargo.lock,不在排除
+# 之列),保持显式清单,日后 Dockerfile 若增加根级 COPY,先来这里对账。
+
+# 版本控制与协作 / 流程元数据
+.git
+.github
+.trellis
+.review-findings
+
+# 文档与静态资产
+docs
+knowledge
+Aeroric_frame
+public
+
+# 前端 / 移动端 / 桌面源码(镜像构建不参与)
+src
+src-tauri
+mobile
+packages
+dist
+coverage
+
+# 工具脚本与 workspace 杂项
+scripts
+patches
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# Node 与 Rust 构建产物(含 remote-relay/target、remote-protocol/target)
+**/node_modules
+**/target

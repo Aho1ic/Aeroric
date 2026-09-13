@@ -138,6 +138,8 @@ interface ResetTaskProcessResult {
   codexSessionPath?: string;
   dshSessionId?: string;
   dshSessionPath?: string;
+  ompSessionId?: string;
+  ompSessionPath?: string;
 }
 
 interface ResolvedTaskSession {
@@ -206,6 +208,12 @@ function mergeChangedTaskSessionFields(current: Task, previous: Task, source: Ta
   if (!Object.is(source.dshSessionPath, previous.dshSessionPath)) {
     next.dshSessionPath = source.dshSessionPath;
   }
+  if (!Object.is(source.ompSessionId, previous.ompSessionId)) {
+    next.ompSessionId = source.ompSessionId;
+  }
+  if (!Object.is(source.ompSessionPath, previous.ompSessionPath)) {
+    next.ompSessionPath = source.ompSessionPath;
+  }
   if (!Object.is(source.sessionAgent, previous.sessionAgent)) {
     next.sessionAgent = source.sessionAgent;
   }
@@ -247,6 +255,7 @@ function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Ta
   const hasCodexSnapshot = Boolean(snapshot.codexSessionId || snapshot.codexSessionPath);
   const hasClaudeSnapshot = Boolean(snapshot.claudeSessionId || snapshot.claudeSessionPath);
   const hasDshSnapshot = Boolean(snapshot.dshSessionId || snapshot.dshSessionPath);
+  const hasOmpSnapshot = Boolean(snapshot.ompSessionId || snapshot.ompSessionPath);
   const next: Task = {
     ...task,
     codexSessionId: snapshot.codexSessionId ?? task.codexSessionId,
@@ -255,9 +264,13 @@ function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Ta
     claudeSessionPath: snapshot.claudeSessionPath ?? task.claudeSessionPath,
     dshSessionId: snapshot.dshSessionId ?? task.dshSessionId,
     dshSessionPath: snapshot.dshSessionPath ?? task.dshSessionPath,
+    ompSessionId: snapshot.ompSessionId ?? task.ompSessionId,
+    ompSessionPath: snapshot.ompSessionPath ?? task.ompSessionPath,
   };
 
-  const present = [hasCodexSnapshot, hasClaudeSnapshot, hasDshSnapshot].filter(Boolean).length;
+  const present = [hasCodexSnapshot, hasClaudeSnapshot, hasDshSnapshot, hasOmpSnapshot].filter(
+    Boolean,
+  ).length;
   if (present !== 1) return next;
   if (hasCodexSnapshot) {
     return {
@@ -266,6 +279,8 @@ function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Ta
       claudeSessionPath: undefined,
       dshSessionId: undefined,
       dshSessionPath: undefined,
+      ompSessionId: undefined,
+      ompSessionPath: undefined,
       sessionAgent: task.agent,
       sessionCodexLike: true,
       sessionFamily: "codex",
@@ -278,9 +293,25 @@ function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Ta
       codexSessionPath: undefined,
       dshSessionId: undefined,
       dshSessionPath: undefined,
+      ompSessionId: undefined,
+      ompSessionPath: undefined,
       sessionAgent: task.agent,
       sessionCodexLike: false,
       sessionFamily: "claude",
+    };
+  }
+  if (hasDshSnapshot) {
+    return {
+      ...next,
+      codexSessionId: undefined,
+      codexSessionPath: undefined,
+      claudeSessionId: undefined,
+      claudeSessionPath: undefined,
+      ompSessionId: undefined,
+      ompSessionPath: undefined,
+      sessionAgent: task.agent,
+      sessionCodexLike: false,
+      sessionFamily: "dsh",
     };
   }
   return {
@@ -289,9 +320,11 @@ function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Ta
     codexSessionPath: undefined,
     claudeSessionId: undefined,
     claudeSessionPath: undefined,
+    dshSessionId: undefined,
+    dshSessionPath: undefined,
     sessionAgent: task.agent,
     sessionCodexLike: false,
-    sessionFamily: "dsh",
+    sessionFamily: "omp",
   };
 }
 
@@ -310,6 +343,8 @@ function applyResolvedTaskSession(
     codexSessionPath: undefined,
     dshSessionId: undefined,
     dshSessionPath: undefined,
+    ompSessionId: undefined,
+    ompSessionPath: undefined,
     sessionAgent: owner.agent,
     sessionCodexLike: family === "codex",
     sessionFamily: family,
@@ -326,6 +361,13 @@ function applyResolvedTaskSession(
       ...base,
       dshSessionId: session.sessionId ?? task.dshSessionId,
       dshSessionPath: session.sessionPath ?? task.dshSessionPath,
+    };
+  }
+  if (family === "omp") {
+    return {
+      ...base,
+      ompSessionId: session.sessionId ?? task.ompSessionId,
+      ompSessionPath: session.sessionPath ?? task.ompSessionPath,
     };
   }
   return {
@@ -1000,7 +1042,11 @@ function App() {
             !task.claudeSessionId &&
             !task.codexSessionId &&
             !task.claudeSessionPath &&
-            !task.codexSessionPath
+            !task.codexSessionPath &&
+            !task.dshSessionId &&
+            !task.dshSessionPath &&
+            !task.ompSessionId &&
+            !task.ompSessionPath
           ) {
             await complete(false, undefined, "SSH task has no resumable session");
             return;
@@ -1831,6 +1877,7 @@ function App() {
             sessionPath: fields.legacySessionPath,
             projectPath,
             isCodex: owner.codexLike,
+            family: owner.family,
           })) ?? undefined;
         if (sessionId) sessionPath = fields.legacySessionPath;
       } catch (error) {
@@ -2285,42 +2332,46 @@ function App() {
   }
 
   function deleteTasks(taskIds: string[]) {
-    taskIds = taskIds.filter((id) => !tasks.find((task) => task.id === id)?.starred);
+    taskIds = taskIds.filter((id) => !tasksRef.current.find((task) => task.id === id)?.starred);
     if (taskIds.length === 0) return;
 
-    setTasks((prev) => {
-      const toDelete = new Set(taskIds);
-      const deletingTasks = prev.filter((task) => toDelete.has(task.id));
+    const toDelete = new Set(taskIds);
+    const deletingTasks = tasksRef.current.filter((task) => toDelete.has(task.id));
+    if (deletingTasks.length === 0) return;
 
-      if (deletingTasks.length === 0) return prev;
+    // 副作用不能放进 setTasks 的 updater:StrictMode 下 dev 会双调 updater,
+    // cancel_task 会被发两次。这里先在快照上算好删除集,副作用在外面做,
+    // updater 里只做数组过滤与落盘排队。
+    taskIds.forEach((taskId) => {
+      delete pendingTaskStartsRef.current[taskId];
+    });
 
-      taskIds.forEach((taskId) => {
-        delete pendingTaskStartsRef.current[taskId];
+    deletingTasks
+      .filter((task) => isActiveTaskStatus(task.status))
+      .forEach((task) => {
+        const proj = projects.find((p) => p.id === task.projectId);
+        const projectPath = task.worktreePath ?? proj?.path ?? "";
+        invoke("cancel_task", { taskId: task.id, projectPath })
+          .catch((e: unknown) => {
+            showToast(t("toast.cancelTaskFailed", { error: String(e) }));
+          })
+          .finally(() => {
+            if (proj) cleanupTaskWorktree(task, proj.path);
+          });
       });
 
-      deletingTasks
-        .filter((task) => isActiveTaskStatus(task.status))
-        .forEach((task) => {
-          const proj = projects.find((p) => p.id === task.projectId);
-          const projectPath = task.worktreePath ?? proj?.path ?? "";
-          invoke("cancel_task", { taskId: task.id, projectPath })
-            .catch((e: unknown) => {
-              showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-            })
-            .finally(() => {
-              if (proj) cleanupTaskWorktree(task, proj.path);
-            });
-        });
+    deletingTasks
+      .filter((task) => !isActiveTaskStatus(task.status))
+      .forEach((task) => {
+        const proj = projects.find((p) => p.id === task.projectId);
+        if (proj) cleanupTaskWorktree(task, proj.path);
+      });
 
-      deletingTasks
-        .filter((task) => !isActiveTaskStatus(task.status))
-        .forEach((task) => {
-          const proj = projects.find((p) => p.id === task.projectId);
-          if (proj) cleanupTaskWorktree(task, proj.path);
-        });
-
+    setTasks((prev) => {
+      const stillDeleting = prev.filter((task) => toDelete.has(task.id));
+      if (stillDeleting.length === 0) return prev;
       const next = prev.filter((task) => !toDelete.has(task.id));
-      persistAffectedProjects(deletingTasks, next);
+      persistAffectedProjects(stillDeleting, next);
       return next;
     });
 

@@ -204,7 +204,7 @@ function makeInitialPane(
     selectedPath: null,
     selectedPaths: new Set(),
     selectionAnchorPath: null,
-    pathInput: endpoint.path,
+    pathInput: endpoint.path || "~",
     editingPath: false,
     configured: false,
     expandedPaths: new Set(),
@@ -1158,7 +1158,7 @@ export function SftpPanel({
                     <Select.ItemText>
                       <span className="sftp-machine-copy">
                         <span className="sftp-machine-name">{t("sftp.local")}</span>
-                        <span className="sftp-machine-meta">{localDefaultPath}</span>
+                        <span className="sftp-machine-meta">{localDefaultPath || "~"}</span>
                       </span>
                     </Select.ItemText>
                   </Select.Item>

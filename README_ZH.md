@@ -5,7 +5,7 @@
 <h1 align="center">Aeroric：面向 AI 编程智能体的桌面工作台</h1>
 
 <p align="center">
-  在一个轻量桌面应用里管理 Claude Code、Codex、自定义智能体、多项目任务、实时终端、Git、SSH、WSL、SFTP、Docker、数据库、Skill Hub、Markdown 文档、随手记和版本发布流程。
+  在一个轻量桌面应用里管理 Claude Code、Codex、DeepSeek Harness、oh-my-pi、自定义智能体、多项目任务、实时终端、Git、SSH、WSL、SFTP、Docker、数据库、Skill Hub、Markdown 文档、随手记和版本发布流程。
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Aeroric 不替代 Claude Code 或 Codex，而是直接调用本机 CLI，并在�
 
 - **递归式智能体任务流**：启动任务、查看输出、派生后续操作，并在演进过程中持续跟踪上下文。
 - **管理项目工作区**：打开本地或远程项目，让任务、文件、Git 和运行状态围绕项目组织。
-- **运行 Claude Code、Codex 和自定义智能体**：创建任务、选择权限模式、查看 PTY 实时输出、交互输入、恢复会话和取消任务。
+- **运行四个内建智能体家族和自定义智能体**：Claude Code、Codex、DeepSeek Harness、oh-my-pi 或任意自定义 CLI —— 创建任务、选择权限模式、查看 PTY 实时输出、交互输入、恢复会话和取消任务。
 - **浏览、修改并运行项目文件**：在同一流程里完成仓库文件浏览、源码修改、脚本执行、语言服务辅助和调试迭代。
 - **阅读和编辑 Markdown**：在渲染阅读模式与源码编辑模式之间切换，适合维护 README、计划、规格文档、自动生成报告和本地知识笔记。
 - **使用 IDE 级项目工具**：搜索替换、诊断查看、符号跳转、测试运行、DAP 调试、运行配置和本地 Web 预览。

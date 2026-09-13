@@ -963,7 +963,7 @@ fn spawn_wsl_exit_monitor(
                     "failure_reason": format!("WSL process exited with code {}", status.exit_code())
                 })
             };
-            let _ = app.emit("task-status", payload);
+            let _ = app.emit(crate::event_names::TASK_STATUS, payload);
             return;
         }
         std::thread::sleep(Duration::from_millis(100));

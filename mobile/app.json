@@ -2,7 +2,7 @@
   "expo": {
     "name": "Aeroric",
     "slug": "aeroric-mobile",
-    "version": "1.4.6",
+    "version": "1.4.8",
     "scheme": "aeroric",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.aeroric.mobile",
-      "buildNumber": "10406",
+      "buildNumber": "10408",
       "infoPlist": {
         "NSCameraUsageDescription": "Aeroric 需要相机权限扫描桌面端的配对二维码",
         "NSLocalNetworkUsageDescription": "Aeroric 需要访问局域网以连接电脑上的远程服务",
@@ -21,7 +21,7 @@
     },
     "android": {
       "package": "com.aeroric.mobile",
-      "versionCode": 10406,
+      "versionCode": 10408,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#0B0C10",

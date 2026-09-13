@@ -16,4 +16,10 @@ COPY --from=build /build/remote-relay/target/release/aeroric-remote-relay /usr/l
 ENV RELAY_PORT=6791
 EXPOSE 6791
 USER nobody
+# 健康检查:relay 是纯 WS 服务,未知路径一律静默关闭,没有可探测的 HTTP 路由;
+# bookworm-slim 也没有 curl/wget。所以用 bash 内建的 /dev/tcp 做端口级探测:
+# 能建立 TCP 连接即视为存活。探测连接不会完成 WS 握手,10s 握手超时后被服务端
+# 回收;不经过 client_connect 的限流,也只短暂占用连接槽位。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${RELAY_PORT:-6791}"]
 CMD ["aeroric-remote-relay"]

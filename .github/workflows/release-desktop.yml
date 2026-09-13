@@ -108,7 +108,8 @@ jobs:
       # 与 checks.yml 一致：版本由 package.json 的 packageManager 决定，
       # 不再显式传 `version:`（两者同时存在会让 action 直接报错）。
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        # v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -117,13 +118,15 @@ jobs:
           cache: pnpm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.97.0
           targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
-        uses: swatinem/rust-cache@v2
+        # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: ./src-tauri -> target
           key: ${{ matrix.target }}
@@ -623,7 +626,8 @@ jobs:
           )
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           generate_release_notes: true
           # Only upload installer artifacts and the checksum file.
