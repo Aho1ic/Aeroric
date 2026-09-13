@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_HANDOFF_COMPLETION_RESERVE_TOKENS,
+  DEFAULT_HANDOFF_CONTEXT_WINDOW_TOKENS,
+  estimateHandoffTokens,
   formatSessionHandoff,
   hasStructuredSessionTranscript,
   originalTaskPrompt,
@@ -108,5 +111,69 @@ describe("session handoff prompt", () => {
     expect(twice.match(/\[Aeroric context handoff\]/g)).toHaveLength(1);
     expect(twice).toContain("Original task:\nFix the pairing flow");
     expect(twice).not.toContain("Original task:\n[Aeroric context handoff]");
+  });
+
+  it("estimates wide characters as one token each and narrow as two per token", () => {
+    expect(estimateHandoffTokens("a".repeat(100))).toBe(50);
+    expect(estimateHandoffTokens("中".repeat(100))).toBe(100);
+    expect(estimateHandoffTokens("")).toBe(0);
+  });
+
+  it("budgets an oversized transcript to head + tail with an omission marker", () => {
+    // 60 条 × 4000 个 ASCII 字符 ≈ 每条约 2000 token,总计约 12 万,远超默认预算
+    // (128K 窗口 - 64K completion - 16K 余量 = 48K 转录预算)。
+    const messages = Array.from({ length: 60 }, (_, index) => ({
+      role: "user" as const,
+      content: [{ type: "text" as const, text: `m${index}-unique ${"a".repeat(4000)}` }],
+    }));
+
+    const result = formatSessionHandoff(task, "sota", messages, "no terminal");
+
+    expect(result).toContain("characters of the structured conversation omitted");
+    expect(result).toContain("m0-unique");
+    expect(result).toContain("m59-unique");
+    expect(result).not.toContain("m30-unique");
+    // 估算函数对产物复算:整个交接(去掉原任务等固定段)应在转录预算量级内,
+    // 这里只验证没有把整段原样塞回去。
+    expect(estimateHandoffTokens(result)).toBeLessThan(60_000);
+  });
+
+  it("keeps the full transcript when the target window is large enough", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => ({
+      role: "user" as const,
+      content: [{ type: "text" as const, text: `m${index}-unique ${"a".repeat(4000)}` }],
+    }));
+
+    const result = formatSessionHandoff(task, "sota", messages, "no terminal", {
+      contextWindowTokens: 262_144,
+      completionReserveTokens: 64_000,
+    });
+
+    expect(result).not.toContain("characters of the structured conversation omitted");
+    expect(result).toContain("m0-unique");
+    expect(result).toContain("m30-unique");
+    expect(result).toContain("m59-unique");
+  });
+
+  it("keeps the tail of a single message that alone exceeds the budget", () => {
+    const huge = `${"a".repeat(199_000)} tail-marker-after-the-crash`;
+    const messages = [{ role: "user" as const, content: [{ type: "text" as const, text: huge }] }];
+
+    const result = formatSessionHandoff(task, "sota", messages, "");
+
+    expect(result).toContain("tail-marker-after-the-crash");
+    expect(result).not.toContain(huge);
+    expect(estimateHandoffTokens(result)).toBeLessThan(
+      DEFAULT_HANDOFF_CONTEXT_WINDOW_TOKENS - DEFAULT_HANDOFF_COMPLETION_RESERVE_TOKENS,
+    );
+  });
+
+  it("budgets the terminal fallback too, not just the structured transcript", () => {
+    const terminalHistory = `progress ${"终".repeat(70_000)} last-line-marker`;
+
+    const result = formatSessionHandoff(task, "sota", [], terminalHistory);
+
+    expect(result).toContain("terminal history omitted to fit the context window");
+    expect(result).toContain("last-line-marker");
   });
 });
