@@ -48,6 +48,22 @@ pub struct Project {
     // 置顶：在各自分组内排最前，分组折叠时仍露出。桌面与手机共享同一份状态。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    // 用户手动定制的头像。三个字段全可缺省，空的整块也省略：
+    // 老 projects.json 没有这个键时照旧加载，没定制过的项目也不会凭空长出 "avatar": {}。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<ProjectAvatar>,
+}
+
+/// [`Project::avatar`] 的内容。`color` 存的是调色板**键名**而不是色值，
+/// 这样换主题时调色板可以整体重调，已定制的项目跟着变。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectAvatar {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

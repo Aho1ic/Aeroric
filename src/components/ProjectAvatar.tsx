@@ -1,22 +1,28 @@
 import type React from "react";
-import { getAvatarGradient } from "../utils";
+import { resolveProjectAvatar } from "../projectAvatar";
+import type { ProjectAvatarOverride } from "../types";
 
+/**
+ * 项目头像。`avatar` 缺省时按名字自动取色取首字母,
+ * 定制项逐字段覆盖 —— 合并规则全在 `resolveProjectAvatar` 里。
+ */
 export function ProjectAvatar({
   name,
+  avatar,
   size = 28,
   style: extraStyle,
 }: {
   name: string;
+  avatar?: ProjectAvatarOverride;
   size?: number;
   style?: React.CSSProperties;
 }) {
-  const [from, to] = getAvatarGradient(name);
-  const initials =
-    name.length >= 2
-      ? name[0] + (name.match(/[-_\s]([a-zA-Z])/)?.[1] ?? name[1])
-      : name.slice(0, 2);
+  const { gradient, emoji, label, colorKey } = resolveProjectAvatar(name, avatar);
+  const [from, to] = gradient;
   return (
     <div
+      data-avatar-color={colorKey}
+      data-avatar-mode={emoji ? "emoji" : "label"}
       style={{
         width: size,
         height: size,
@@ -26,15 +32,18 @@ export function ProjectAvatar({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: size * 0.38,
-        fontWeight: 700,
+        // emoji 自带字形高度,按字母那档缩放会显小。
+        fontSize: emoji ? size * 0.52 : size * 0.38,
+        fontWeight: emoji ? 400 : 700,
         color: "var(--fg-on-accent)",
-        letterSpacing: 0.3,
+        letterSpacing: emoji ? 0 : 0.3,
+        lineHeight: 1,
         boxShadow: `0 2px 5px ${from}55`,
+        userSelect: "none",
         ...extraStyle,
       }}
     >
-      {initials}
+      {emoji || label}
     </div>
   );
 }

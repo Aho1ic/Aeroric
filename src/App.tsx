@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   Project,
+  ProjectAvatarOverride,
   Task,
   TaskStatus,
   AgentType,
@@ -650,7 +651,7 @@ function App() {
     }
   }, [projects]);
 
-  // Keep the events.host downlink subscription alive while any DSH task is active.
+  // Keep the remote.mux downlink subscription alive while any DSH task is active.
   // The backend command is idempotent: calling start again while running
   // simply replaces the abort token, so it is safe to re-invoke.
   useEffect(() => {
@@ -2602,6 +2603,16 @@ function App() {
     setActiveProject((prev) => (prev?.id === projectId ? { ...prev, name: normalized } : prev));
   }
 
+  function handleSetProjectAvatar(projectId: string, avatar: ProjectAvatarOverride | undefined) {
+    // `avatar: undefined` = 清除定制。Rust 侧 skip_serializing_if 会把这个键整块省掉。
+    setProjects((prev) => {
+      const next = prev.map((p) => (p.id === projectId ? { ...p, avatar } : p));
+      persistProjects(next, showToast, formatSaveProjectsError);
+      return next;
+    });
+    setActiveProject((prev) => (prev?.id === projectId ? { ...prev, avatar } : prev));
+  }
+
   function handleToggleProjectHidden(projectId: string) {
     setProjects((prev) => {
       const next = prev.map((p) =>
@@ -2971,6 +2982,7 @@ function App() {
             onProjectClick={handleProjectClick}
             onDeleteProject={handleDeleteProject}
             onRenameProject={handleRenameProject}
+            onSetProjectAvatar={handleSetProjectAvatar}
             onToggleProjectHidden={handleToggleProjectHidden}
             projectGroups={projectGroups}
             collapsedProjectGroups={collapsedProjectGroups}

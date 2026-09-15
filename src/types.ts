@@ -12,6 +12,23 @@ export interface Project {
   hiddenFromRail?: boolean;
   /** 置顶：在各自分组内排最前，分组折叠时仍露出。桌面与手机共享同一份状态。 */
   pinned?: boolean;
+  /** 用户手动定制的头像。缺省=按名字自动取色取首字母。 */
+  avatar?: ProjectAvatarOverride;
+}
+
+/**
+ * 项目头像的定制项。三个字段各自可缺省,缺的那项回落到自动值。
+ *
+ * `color` 存的是**调色板键名**而不是色值:换主题时调色板可以整体重调,
+ * 已定制的项目跟着变,不会卡在一个和新主题不搭的旧十六进制上。
+ */
+export interface ProjectAvatarOverride {
+  /** `AVATAR_PALETTE` 的键。非法键在读取时被丢弃(等同未定制)。 */
+  color?: string;
+  /** 单个字素簇。设了它就不显示首字母。 */
+  emoji?: string;
+  /** 自定义首字母,显示宽度上限 3(拉丁算 1,CJK/全角算 1.5)。 */
+  label?: string;
 }
 
 export type ProjectLocation =
@@ -1214,10 +1231,13 @@ export interface DshPresetList {
 }
 
 // ── DeepSeek Harness live session projection / jobs / queue types ────────────
-// Mirror the session/projection, session/jobs, session/queue push frames the
-// dsh web subprocess emits over events.mux. The backend forwards each frame
-// verbatim as a Tauri event (dispatch_mux_frame in dsh_webui.rs), so these
-// are the wire shapes the frontend consumes.
+// Mirror the projection / jobs / queue push frames Aeroric receives over the
+// dsh web `/api/remote.mux` WebSocket: the `session/follow` stream carries
+// snapshot / event / assistant-stream, and `session/control` carries
+// baseline / queue / jobs / projection. The Rust mux client translates each
+// one into a Tauri event (`dsh-session-projection`, `dsh-session-jobs`,
+// `dsh-session-queue`, `dsh-session-subscribed`) keeping the `type` tags
+// below, so these are the shapes the frontend consumes.
 
 /** `session/projection` push frame: one projection unit's finished value. */
 export interface DshProjectionFrame {
@@ -1300,7 +1320,12 @@ export interface DshQueueFrame {
   items: DshQueueItem[];
 }
 
-/** `session/subscribed` frame: confirms the mux subscription with lastSeq. */
+/**
+ * `session/subscribed`: the frontend-facing subscription ack with lastSeq.
+ * On `/api/remote.mux` there is no dedicated subscribed frame — the opening
+ * `session/follow` snapshot is the subscription proof, and the mux client
+ * emits this shape from it.
+ */
 export interface DshSubscribedFrame {
   type: "session/subscribed";
   sessionId: string;

@@ -1221,7 +1221,7 @@ export function ProjectRail({
                           userSelect: "none",
                         }}
                       >
-                        <ProjectAvatar name={project.name} size={25} />
+                        <ProjectAvatar name={project.name} avatar={project.avatar} size={25} />
                         <AttentionIndicator
                           status={status}
                           count={attentionCount}

@@ -1,4 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Search,
@@ -36,12 +45,15 @@ import type {
   FontFamily,
   SkillHubConfig,
   SshConnection,
+  ProjectAvatarOverride,
 } from "../types";
 import { isRemoteProject, resolveProjectLocation } from "../types";
 import type { StorageConnection } from "../types/storage";
 import { storageApi } from "../lib/storageApi";
-import { getAvatarGradient, shortenPath } from "../utils";
+import { shortenPath } from "../utils";
+import { projectAvatarOf } from "../projectAvatar";
 import { ProjectAvatar } from "./ProjectAvatar";
+import { ProjectAppearanceEditor } from "./ProjectAppearanceEditor";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -52,7 +64,7 @@ import {
   type LocalRouterStatus,
 } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
-import { WeeklyReportBar } from "./WeeklyReportBar";
+import { WeeklyReportButton } from "./WeeklyReportButton";
 import type { SshProjectInput } from "./ssh/sshProject";
 import { useSshGroups } from "./ssh/useSshGroups";
 import { DockerIcon } from "./DockerIcon";
@@ -351,6 +363,7 @@ export function WelcomePage({
   onProjectClick,
   onDeleteProject,
   onRenameProject,
+  onSetProjectAvatar = () => {},
   onToggleProjectHidden,
   projectGroups = [],
   collapsedProjectGroups: controlledCollapsedProjectGroups,
@@ -391,6 +404,7 @@ export function WelcomePage({
   onProjectClick: (p: Project) => void;
   onDeleteProject: (projectId: string) => void;
   onRenameProject: (projectId: string, name: string) => void;
+  onSetProjectAvatar?: (projectId: string, avatar: ProjectAvatarOverride | undefined) => void;
   onToggleProjectHidden: (projectId: string) => void;
   projectGroups?: string[];
   collapsedProjectGroups?: ReadonlySet<string>;
@@ -429,6 +443,7 @@ export function WelcomePage({
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [avatarEditingProjectId, setAvatarEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
   const editingProjectNameRef = useRef("");
   const editingProjectInputRef = useRef<HTMLInputElement | null>(null);
@@ -732,21 +747,19 @@ export function WelcomePage({
             />
           </LazyPane>
         ) : view === "timeline" ? (
-          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-            <WeeklyReportBar tasks={tasks} projects={allProjects} />
-            <TimelineView
-              projects={allProjects}
-              tasks={tasks}
-              onTaskClick={(task) => {
-                if (task.projectId === skillHubConfig?.hubProjectId) {
-                  onEnterSkillHub();
-                  return;
-                }
-                const project = allProjects.find((p) => p.id === task.projectId);
-                if (project) onProjectClick(project);
-              }}
-            />
-          </div>
+          <TimelineView
+            projects={allProjects}
+            tasks={tasks}
+            headerAction={<WeeklyReportButton tasks={tasks} projects={allProjects} />}
+            onTaskClick={(task) => {
+              if (task.projectId === skillHubConfig?.hubProjectId) {
+                onEnterSkillHub();
+                return;
+              }
+              const project = allProjects.find((p) => p.id === task.projectId);
+              if (project) onProjectClick(project);
+            }}
+          />
         ) : view === "usage" ? (
           <LazyPane>
             <UsageDashboard />
@@ -979,11 +992,13 @@ export function WelcomePage({
                       )}
                       {(!groupCollapsed || Boolean(query.trim())) &&
                         group.projects.map((p) => {
-                          const [from] = getAvatarGradient(p.name);
+                          // 卡片悬停投影跟着头像实际颜色走,定制过的项目也对得上。
+                          const [from] = projectAvatarOf(p).gradient;
                           const isEditingProject = editingProjectId === p.id;
+                          const isEditingAvatar = avatarEditingProjectId === p.id;
                           return (
+                            <Fragment key={p.id}>
                             <div
-                              key={p.id}
                               role="button"
                               tabIndex={0}
                               style={{
@@ -1015,13 +1030,33 @@ export function WelcomePage({
                                 onProjectClick(p);
                               }}
                             >
-                              <ProjectAvatar
-                                name={p.name}
-                                size={34}
+                              <button
+                                type="button"
+                                aria-label={t("projectAvatar.edit")}
+                                title={t("projectAvatar.edit")}
+                                aria-expanded={isEditingAvatar}
                                 style={{
-                                  boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none",
+                                  padding: 0,
+                                  border: "none",
+                                  background: "none",
+                                  cursor: "pointer",
+                                  borderRadius: 10,
+                                  lineHeight: 0,
                                 }}
-                              />
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAvatarEditingProjectId(isEditingAvatar ? null : p.id);
+                                }}
+                              >
+                                <ProjectAvatar
+                                  name={p.name}
+                                  avatar={p.avatar}
+                                  size={34}
+                                  style={{
+                                    boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none",
+                                  }}
+                                />
+                              </button>
 
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 {isEditingProject ? (
@@ -1171,6 +1206,29 @@ export function WelcomePage({
                                 <Trash2 size={14} strokeWidth={1.8} />
                               </button>
                             </div>
+                            {isEditingAvatar && (
+                              <div
+                                style={{
+                                  padding: "12px 14px",
+                                  margin: "-4px 0 8px 0",
+                                  borderRadius: 10,
+                                  border: "1px solid var(--border-dim)",
+                                  background: "var(--bg-elevated)",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <ProjectAppearanceEditor
+                                  name={p.name}
+                                  avatar={p.avatar}
+                                  onCancel={() => setAvatarEditingProjectId(null)}
+                                  onSave={(next) => {
+                                    onSetProjectAvatar(p.id, next);
+                                    setAvatarEditingProjectId(null);
+                                  }}
+                                />
+                              </div>
+                            )}
+                            </Fragment>
                           );
                         })}
                     </section>
