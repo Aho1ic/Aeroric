@@ -25,7 +25,6 @@ import type {
 } from "./components/app-settings/types";
 import {
   isActiveTaskStatus,
-  isArchivableTaskStatus,
   resolveProjectLocation,
   sshProjectPath,
 } from "./types";
@@ -87,6 +86,13 @@ import {
   resumeWslTask,
   type TaskLaunchDeps,
 } from "./state/app";
+import {
+  archiveTasksInList,
+  clearSelectedTasksInView,
+  renameTaskInList,
+  toggleTaskStarInList,
+  unarchiveTasksInList,
+} from "./state/app/taskMutations";
 import {
   assignProjectGroup,
   clearProjectGroupFromList,
@@ -2329,20 +2335,7 @@ function AppShell() {
     invoke(CLEANUP_COMMANDS.deleteTaskTerminalHistories, { taskIds }).catch((e: unknown) => {
       showToast(t("toast.deleteTaskHistoryFailed", { error: String(e) }), "warning");
     });
-    setProjectViews((prev) => {
-      const toDelete = new Set(taskIds);
-      let changed = false;
-      const next = { ...prev };
-
-      for (const [projectId, view] of Object.entries(prev)) {
-        if (view.selectedTaskId && toDelete.has(view.selectedTaskId)) {
-          next[projectId] = { ...view, selectedTaskId: null, isNewTask: true };
-          changed = true;
-        }
-      }
-
-      return changed ? next : prev;
-    });
+    setProjectViews((prev) => clearSelectedTasksInView(prev, toDelete));
   }
 
   /**
@@ -2403,31 +2396,22 @@ function AppShell() {
    * 活动中的任务不允许归档 —— 归档会让它从列表消失,而它仍在等用户反应。
    */
   function handleArchiveTasks(taskIds: string[]) {
-    const ids = new Set(taskIds);
-    const now = Date.now();
     setTasks((prev) => {
-      const changed = prev.filter(
-        (task) => ids.has(task.id) && isArchivableTaskStatus(task.status) && !task.archivedAt,
-      );
-      if (changed.length === 0) return prev;
-      const changedIds = new Set(changed.map((task) => task.id));
-      const next = prev.map((task) =>
-        changedIds.has(task.id) ? { ...task, archivedAt: now } : task,
-      );
+      const next = archiveTasksInList(prev, taskIds);
+      if (next === prev) return prev;
+      const ids = new Set(taskIds);
+      const changed = next.filter((task) => ids.has(task.id) && task.archivedAt);
       persistAffectedProjects(changed, next);
       return next;
     });
   }
 
   function handleUnarchiveTasks(taskIds: string[]) {
-    const ids = new Set(taskIds);
     setTasks((prev) => {
+      const next = unarchiveTasksInList(prev, taskIds);
+      if (next === prev) return prev;
+      const ids = new Set(taskIds);
       const changed = prev.filter((task) => ids.has(task.id) && task.archivedAt);
-      if (changed.length === 0) return prev;
-      const changedIds = new Set(changed.map((task) => task.id));
-      const next = prev.map((task) =>
-        changedIds.has(task.id) ? { ...task, archivedAt: undefined } : task,
-      );
       persistAffectedProjects(changed, next);
       return next;
     });
@@ -2437,7 +2421,7 @@ function AppShell() {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
       if (!task) return prev;
-      const next = prev.map((t) => (t.id === taskId ? { ...t, starred: !t.starred } : t));
+      const next = toggleTaskStarInList(prev, taskId);
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
@@ -2447,7 +2431,7 @@ function AppShell() {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
       if (!task) return prev;
-      const next = prev.map((t) => (t.id === taskId ? { ...t, name: name || undefined } : t));
+      const next = renameTaskInList(prev, taskId, name);
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
