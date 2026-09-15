@@ -80,7 +80,8 @@ export const GIT_MIRRORS = {
     wsl: "wsl_git_resolve_conflict",
   },
   showCommitDiff: {
-    local: "git_show_commit_diff",
+    // 本地命令名是 git_show_diff（历史名），SSH/WSL 才叫 show_commit_diff。
+    local: "git_show_diff",
     ssh: "remote_git_show_commit_diff",
     wsl: "wsl_git_show_commit_diff",
   },
@@ -95,6 +96,16 @@ export type GitMirrorKey = keyof typeof GIT_MIRRORS;
 
 export function gitCommand(target: InvokeTarget, key: GitMirrorKey): string {
   return requireCommand(GIT_MIRRORS[key], target);
+}
+
+/**
+ * 既有组件的 `gitCommandName("git_stage")` 习惯：local 用裸名，
+ * ssh/wsl 加 `remote_` / `wsl_` 前缀。与镜像表约定一致，供未建镜像键的命令使用。
+ */
+export function prefixGitCommand(logicalLocalCommand: string, target: InvokeTarget): string {
+  if (target.kind === "ssh") return `remote_${logicalLocalCommand}`;
+  if (target.kind === "wsl") return `wsl_${logicalLocalCommand}`;
+  return logicalLocalCommand;
 }
 
 export async function gitStatus(target: InvokeTarget) {

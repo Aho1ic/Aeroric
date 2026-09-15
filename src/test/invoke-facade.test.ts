@@ -10,9 +10,10 @@ import { FS_MIRRORS } from "../lib/api/fs";
 import type { InvokeTarget } from "../lib/target";
 
 const local: InvokeTarget = { kind: "local", path: "/repo" };
+const sshConnection = { id: "c1", host: "h", port: 22, username: "u" };
 const ssh: InvokeTarget = {
   kind: "ssh",
-  connection: { id: "c1", host: "h", port: 22, username: "u" },
+  connection: sshConnection,
   projectPath: "/srv/repo",
 };
 const wsl: InvokeTarget = {
@@ -63,7 +64,7 @@ describe("projectArgs / fileArgs", () => {
 
   it("builds ssh project args", () => {
     expect(projectArgs(ssh)).toEqual({
-      connection: ssh.connection,
+      connection: sshConnection,
       remoteProjectPath: "/srv/repo",
     });
   });

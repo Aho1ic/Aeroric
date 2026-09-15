@@ -19,7 +19,8 @@ import type {
   GitStashEntry,
   RemoteProjectTarget,
 } from "../../types";
-import { targetProjectArgs } from "../../projectTarget";
+import { prefixGitCommand } from "../../lib/api/git";
+import { resolveInvokeTarget } from "../../lib/target";
 import { branchGraphSummary, projectRelativeGitPath, stashDisplayTitle } from "./gitAdvancedState";
 import { panelChrome } from "../../styles/panelChrome";
 
@@ -38,17 +39,20 @@ export function GitAdvancedPanel({
 }) {
   const { t } = useI18n();
   const isRemote = Boolean(remote);
-  const gitCommandContext = useMemo(
-    () => (remote ? targetProjectArgs(remote) : { projectPath }),
+  const invokeTarget = useMemo(
+    () => resolveInvokeTarget(projectPath, remote),
     [projectPath, remote],
   );
+  const gitCommandContext = useMemo(() => {
+    if (!remote) return { projectPath };
+    if (remote.kind === "ssh") {
+      return { connection: remote.connection, remoteProjectPath: remote.projectPath };
+    }
+    return { distribution: remote.distribution, linuxProjectPath: remote.projectPath };
+  }, [projectPath, remote]);
   const gitCommandName = useCallback(
-    (command: string) => {
-      if (remote?.kind === "ssh") return `remote_${command}`;
-      if (remote?.kind === "wsl") return `wsl_${command}`;
-      return command;
-    },
-    [remote],
+    (command: string) => prefixGitCommand(command, invokeTarget),
+    [invokeTarget],
   );
   const invokeGitCommand = useCallback(
     async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {

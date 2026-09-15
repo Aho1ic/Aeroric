@@ -27,18 +27,25 @@ export const FS_MIRRORS = {
 
 export type FsMirrorKey = keyof typeof FS_MIRRORS;
 
-export async function readDirEntries(target: InvokeTarget, path: string) {
-  return invokeFileFor(target, FS_MIRRORS.readDir, path);
+export async function readDirEntries<T = unknown>(target: InvokeTarget, path: string): Promise<T> {
+  return invokeFileFor<T>(target, FS_MIRRORS.readDir, path);
 }
 
-export async function readFileContent(target: InvokeTarget, path: string) {
-  return invokeFileFor(target, FS_MIRRORS.readContent, path);
+export async function readFileContent(target: InvokeTarget, path: string): Promise<string> {
+  return invokeFileFor<string>(target, FS_MIRRORS.readContent, path);
 }
 
-export async function writeFileContent(target: InvokeTarget, path: string, content: string) {
+export async function writeFileContent(
+  target: InvokeTarget,
+  path: string,
+  content: string,
+): Promise<unknown> {
   return invokeFileFor(target, FS_MIRRORS.writeContent, path, { content });
 }
 
-export async function readImagePreview(target: InvokeTarget, path: string) {
-  return invokeFileFor(target, FS_MIRRORS.readImage, path);
+export async function readImagePreview<T = unknown>(
+  target: InvokeTarget,
+  path: string,
+): Promise<T> {
+  return invokeFileFor<T>(target, FS_MIRRORS.readImage, path);
 }

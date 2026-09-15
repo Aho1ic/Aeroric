@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Columns2, FileCode, Rows3, X } from "lucide-react";
 import { DiffFileBlock } from "./git-diff/DiffFileBlock";
 import { parseDiff } from "./git-diff/parse";
@@ -14,7 +13,9 @@ import {
 import s from "../styles";
 import type { RemoteProjectTarget } from "../types";
 import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
-import { targetProjectArgs } from "../projectTarget";
+import { GIT_MIRRORS } from "../lib/api/git";
+import { invokeProjectFor, resolveCommand } from "../lib/invokeFacade";
+import { resolveInvokeTarget } from "../lib/target";
 
 const VIEW_MODE_KEY = "aeroric.diffViewMode";
 
@@ -58,61 +59,35 @@ export function GitDiffViewer({
 
     const loadDiff = async () => {
       try {
+        const target = resolveInvokeTarget(projectPath, remote);
+        const isRemote = Boolean(remote);
         let result: string;
         if (mode === "commit" && commitHash) {
-          if (remote) {
-            const command =
-              remote.kind === "ssh" ? "remote_git_show_commit_diff" : "wsl_git_show_commit_diff";
-            result = await invokeWithTimeout(
-              invoke<string>(command, {
-                ...targetProjectArgs(remote),
-                commitHash,
-              }),
-              command,
-              remoteInvokeOptions(),
-            );
-          } else {
-            result = await invoke<string>("git_show_diff", { projectPath, commitHash });
-          }
+          const command = resolveCommand(GIT_MIRRORS.showCommitDiff, target);
+          const promise = invokeProjectFor<string>(target, GIT_MIRRORS.showCommitDiff, {
+            commitHash,
+          });
+          result = await (isRemote
+            ? invokeWithTimeout(promise, command, remoteInvokeOptions())
+            : promise);
         } else if (mode === "commit-file" && commitHash && filePath !== undefined) {
-          if (remote) {
-            const command =
-              remote.kind === "ssh" ? "remote_git_show_file_diff" : "wsl_git_show_file_diff";
-            result = await invokeWithTimeout(
-              invoke<string>(command, {
-                ...targetProjectArgs(remote),
-                commitHash,
-                filePath,
-              }),
-              command,
-              remoteInvokeOptions(),
-            );
-          } else {
-            result = await invoke<string>("git_show_file_diff", {
-              projectPath,
-              commitHash,
-              filePath,
-            });
-          }
+          const command = resolveCommand(GIT_MIRRORS.showFileDiff, target);
+          const promise = invokeProjectFor<string>(target, GIT_MIRRORS.showFileDiff, {
+            commitHash,
+            filePath,
+          });
+          result = await (isRemote
+            ? invokeWithTimeout(promise, command, remoteInvokeOptions())
+            : promise);
         } else if (mode === "file" && filePath !== undefined) {
-          if (remote) {
-            const command = remote.kind === "ssh" ? "remote_git_file_diff" : "wsl_git_file_diff";
-            result = await invokeWithTimeout(
-              invoke<string>(command, {
-                ...targetProjectArgs(remote),
-                filePath,
-                staged: staged ?? false,
-              }),
-              command,
-              remoteInvokeOptions(),
-            );
-          } else {
-            result = await invoke<string>("git_file_diff", {
-              projectPath,
-              filePath,
-              staged: staged ?? false,
-            });
-          }
+          const command = resolveCommand(GIT_MIRRORS.fileDiff, target);
+          const promise = invokeProjectFor<string>(target, GIT_MIRRORS.fileDiff, {
+            filePath,
+            staged: staged ?? false,
+          });
+          result = await (isRemote
+            ? invokeWithTimeout(promise, command, remoteInvokeOptions())
+            : promise);
         } else {
           result = "";
         }

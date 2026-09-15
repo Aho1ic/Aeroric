@@ -28,7 +28,8 @@ import {
 import { useTextInputIMEFix } from "./useTextInputIMEFix";
 import type { RemoteProjectTarget } from "../types";
 import { AnimatedSelectionGroup } from "./ui/AnimatedSelection";
-import { targetProjectArgs } from "../projectTarget";
+import { prefixGitCommand } from "../lib/api/git";
+import { resolveInvokeTarget } from "../lib/target";
 
 interface GitFileChange {
   path: string;
@@ -57,14 +58,21 @@ export function GitChanges({
 }: Props) {
   const { t } = useI18n();
   const isRemote = Boolean(remote);
-  const gitCommandContext = remote ? targetProjectArgs(remote) : { projectPath };
+  const invokeTarget = useMemo(
+    () => resolveInvokeTarget(projectPath, remote),
+    [projectPath, remote],
+  );
+  // 与 projectTarget.targetProjectArgs 保持同一参数形状，避免后端多收/少收字段。
+  const gitCommandContext = useMemo(() => {
+    if (!remote) return { projectPath };
+    if (remote.kind === "ssh") {
+      return { connection: remote.connection, remoteProjectPath: remote.projectPath };
+    }
+    return { distribution: remote.distribution, linuxProjectPath: remote.projectPath };
+  }, [projectPath, remote]);
   const gitCommandName = useCallback(
-    (localCommand: string) => {
-      if (remote?.kind === "ssh") return `remote_${localCommand}`;
-      if (remote?.kind === "wsl") return `wsl_${localCommand}`;
-      return localCommand;
-    },
-    [remote],
+    (logicalLocalCommand: string) => prefixGitCommand(logicalLocalCommand, invokeTarget),
+    [invokeTarget],
   );
   const [changes, setChanges] = useState<GitFileChange[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,7 +125,7 @@ export function GitChanges({
         const result = remote
           ? await safeInvoke<GitFileChange[]>(
               gitCommandName("git_changes"),
-              targetProjectArgs(remote),
+              gitCommandContext,
               remoteInvokeOptions(),
             )
           : await safeInvoke<GitFileChange[]>("git_status", { projectPath });
@@ -129,7 +137,7 @@ export function GitChanges({
         if (!isCancelled()) setLoading(false);
       }
     },
-    [projectPath, remote, safeInvoke, isCancelled, gitCommandName],
+    [projectPath, remote, safeInvoke, isCancelled, gitCommandName, gitCommandContext],
   );
 
   useEffect(() => {

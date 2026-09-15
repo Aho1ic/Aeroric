@@ -39,7 +39,9 @@ import type {
   TestCoverageSummary,
   ThemeVariant,
 } from "../types";
-import { targetCommand, targetFileArgs } from "../projectTarget";
+import { FS_MIRRORS, readFileContent as fsReadFileContent, writeFileContent as fsWriteFileContent } from "../lib/api/fs";
+import { invokeFileFor } from "../lib/invokeFacade";
+import { resolveInvokeTarget } from "../lib/target";
 import { useI18n } from "../i18n";
 import { isRunnableScriptFile, selectRunnableCondaEnvironment } from "./file-viewer/run";
 import { lineColumnToOffset } from "./file-viewer/position";
@@ -177,6 +179,10 @@ function FilePreviewPane({
   const isSqliteDatabase = isSqliteDatabaseFile(fileName);
   // LSP 首版仅支持 SSH 远程；WSL 项目暂不启动语言服务器。
   const lspRemote = remote?.kind === "ssh" ? remote : undefined;
+  const invokeTarget = useMemo(
+    () => resolveInvokeTarget(projectPath, remote),
+    [projectPath, remote],
+  );
   const sqliteEndpoint = useMemo(
     () => (isSqliteDatabase ? sqliteEndpointForFile(filePath, remote) : null),
     [filePath, isSqliteDatabase, remote],
@@ -298,14 +304,7 @@ function FilePreviewPane({
       setSaveStatus("saving");
       setFormatError(null);
       try {
-        if (remote) {
-          await invoke(
-            targetCommand(remote, "", "remote_write_file_content", "wsl_write_file_content"),
-            { ...targetFileArgs(remote, filePath), content: value },
-          );
-        } else {
-          await invoke("write_file_content", { path: filePath, content: value, projectPath });
-        }
+        await fsWriteFileContent(invokeTarget, filePath, value);
         if (saveRevisionRef.current !== revision) return false;
         onDirtyChange?.(filePath, false);
 
@@ -317,10 +316,7 @@ function FilePreviewPane({
           try {
             await invoke<FormatFileResult>("format_file", { projectPath, filePath });
             if (saveRevisionRef.current !== revision) return false;
-            const nextContent = await invoke<string>("read_file_content", {
-              path: filePath,
-              projectPath,
-            });
+            const nextContent = await fsReadFileContent(invokeTarget, filePath);
             if (saveRevisionRef.current !== revision) return false;
             setContent(nextContent);
           } catch (err) {
@@ -343,7 +339,7 @@ function FilePreviewPane({
         return false;
       }
     },
-    [filePath, formatOnSave, onDirtyChange, projectPath, remote],
+    [filePath, formatOnSave, onDirtyChange, projectPath, remote, invokeTarget],
   );
   const languageServer = useLanguageServer({
     projectPath,
@@ -815,22 +811,14 @@ function FilePreviewPane({
             setLoading(false);
           })
         : isPreviewableImage
-          ? invoke<ImagePreviewData>(
-              remote
-                ? targetCommand(remote, "", "remote_read_image_preview", "wsl_read_image_preview")
-                : "read_image_preview",
-              remote ? targetFileArgs(remote, filePath) : { path: filePath, projectPath },
-            ).then((preview) => {
-              if (cancelled) return;
-              setImagePreview(preview);
-              setLoading(false);
-            })
-          : invoke<string>(
-              remote
-                ? targetCommand(remote, "", "remote_read_file_content", "wsl_read_file_content")
-                : "read_file_content",
-              remote ? targetFileArgs(remote, filePath) : { path: filePath, projectPath },
-            ).then((nextContent) => {
+          ? invokeFileFor<ImagePreviewData>(invokeTarget, FS_MIRRORS.readImage, filePath).then(
+              (preview) => {
+                if (cancelled) return;
+                setImagePreview(preview);
+                setLoading(false);
+              },
+            )
+          : fsReadFileContent(invokeTarget, filePath).then((nextContent: string) => {
               if (cancelled) return;
               setContent(nextContent);
               setLoading(false);
@@ -851,6 +839,7 @@ function FilePreviewPane({
     isPreviewableImage,
     isSqliteDatabase,
     remote,
+    invokeTarget,
     sqliteEndpoint,
     onDirtyChange,
     resetLspActions,
