@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { HOOKS_COMMANDS } from "../../lib/api/agentSettings";
 import { CheckCircle2, AlertCircle, XCircle, RefreshCw } from "lucide-react";
 
 import { useI18n } from "../../i18n";
@@ -67,7 +68,7 @@ export function HooksPanel() {
   const uninstall = useCallback(async () => {
     setAction("uninstalling");
     try {
-      await invoke("uninstall_hooks");
+      await invoke(HOOKS_COMMANDS.uninstall);
       await refresh();
     } finally {
       setAction("idle");

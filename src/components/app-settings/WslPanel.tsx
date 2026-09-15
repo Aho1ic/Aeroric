@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { WSL_SETTINGS_COMMANDS } from "../../lib/api/agentSettings";
 import { confirm } from "../../lib/appDialog";
 import { Download, Eye, EyeOff, RefreshCw, RotateCcw, Save } from "lucide-react";
 import type {
@@ -136,21 +137,21 @@ export function WslPanel() {
     setBusy(true);
     setError(null);
     try {
-      await invoke("save_wsl_settings", { settings });
-      await invoke("write_wsl_config_file", {
+      await invoke(WSL_SETTINGS_COMMANDS.saveSettings, { settings });
+      await invoke(WSL_SETTINGS_COMMANDS.writeConfigFile, {
         kind: "global",
         distribution: null,
         content: globalConfig,
       });
       if (selected) {
-        await invoke("write_wsl_config_file", {
+        await invoke(WSL_SETTINGS_COMMANDS.writeConfigFile, {
           kind: "wslConf",
           distribution: selected,
           content: wslConf,
         });
         await Promise.all(
           Object.entries(agentConfigs).map(([agent, content]) =>
-            invoke("write_wsl_agent_config", { distribution: selected, agent, content }),
+            invoke(WSL_SETTINGS_COMMANDS.writeAgentConfig, { distribution: selected, agent, content }),
           ),
         );
       }
@@ -171,7 +172,7 @@ export function WslPanel() {
     setBusy(true);
     setError(null);
     try {
-      await invoke("restart_wsl");
+      await invoke(WSL_SETTINGS_COMMANDS.restart);
       setDirtyRestart(false);
       await load();
     } catch (nextError) {

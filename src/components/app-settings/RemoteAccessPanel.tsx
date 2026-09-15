@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { REMOTE_ACCESS_COMMANDS } from "../../lib/api/agentSettings";
 import { listen } from "@tauri-apps/api/event";
 import { confirm } from "../../lib/appDialog";
 import { QRCodeSVG } from "qrcode.react";
@@ -550,7 +551,7 @@ export function RemoteAccessPanel() {
     setRevokingDeviceId(device.id);
     setDevicesError(null);
     try {
-      await invoke("remote_revoke_device", { deviceId: device.id });
+      await invoke(REMOTE_ACCESS_COMMANDS.revokeDevice, { deviceId: device.id });
       await refresh({ waitForCurrent: true });
     } catch (error) {
       if (mountedRef.current) {

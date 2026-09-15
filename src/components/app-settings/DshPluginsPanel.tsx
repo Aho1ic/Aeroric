@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_PLUGIN_COMMANDS } from "../../lib/api/agentSettings";
 import {
   Bot,
   Check,
@@ -163,7 +164,7 @@ export function DshPluginsPanel() {
     setOpeningConfig(true);
     setConfigOpenError(false);
     try {
-      await invoke("open_dsh_config_file", { agent: "dsh" });
+      await invoke(DSH_PLUGIN_COMMANDS.openConfigFile, { agent: "dsh" });
     } catch {
       setConfigOpenError(true);
     } finally {
@@ -746,7 +747,7 @@ function AgentPresetsView({
   async function openPresetDocument(preset: string) {
     onRuntimeError(null);
     try {
-      await invoke("open_dsh_agent_preset_document", { preset });
+      await invoke(DSH_PLUGIN_COMMANDS.openAgentPresetDocument, { preset });
     } catch (error: unknown) {
       onRuntimeError(errorMessage(error));
     }
@@ -757,7 +758,7 @@ function AgentPresetsView({
     onRuntimeError(null);
     setSavingPreset(from);
     try {
-      await invoke("copy_dsh_agent_preset", {
+      await invoke(DSH_PLUGIN_COMMANDS.copyAgentPreset, {
         from,
         targetPreset,
         name: targetPreset.trim(),
@@ -777,7 +778,7 @@ function AgentPresetsView({
     onRuntimeError(null);
     setSavingPreset(preset);
     try {
-      await invoke("remove_dsh_agent_preset", { preset });
+      await invoke(DSH_PLUGIN_COMMANDS.removeAgentPreset, { preset });
       const snapshot = await invoke<DshSettingsSnapshot>("get_dsh_settings_snapshot", {
         agent: "dsh",
       });

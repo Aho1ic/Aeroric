@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { PERMISSIONS_COMMANDS } from "../../lib/api/agentSettings";
 import {
   Accessibility,
   Camera,
@@ -227,7 +228,7 @@ export function PermissionsPanel() {
   const openSettings = useCallback(async (id: string) => {
     setError(null);
     try {
-      await invoke("open_system_permission_settings", { id });
+      await invoke(PERMISSIONS_COMMANDS.openSystemSettings, { id });
     } catch (nextError) {
       setError(String(nextError));
     }
@@ -271,7 +272,7 @@ export function PermissionsPanel() {
     setRestarting(true);
     try {
       await flushPendingSavesBeforeExit();
-      await invoke("restart_app_for_permissions");
+      await invoke(PERMISSIONS_COMMANDS.restartForPermissions);
     } catch (nextError) {
       setError(String(nextError));
     } finally {

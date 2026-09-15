@@ -1,6 +1,7 @@
 import type React from "react";
 import { createElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LOCAL_ROUTER_STATUS_COMMANDS } from "../../lib/api/agentSettings";
 import { APP_PLATFORM } from "../../platform";
 import s from "../../styles";
 import type { AgentKey } from "./types";
@@ -33,7 +34,7 @@ export const shortcutKeyStyle: React.CSSProperties = {
 
 export async function refreshLocalRouterRuntime(): Promise<void> {
   try {
-    await invoke("get_local_router_status");
+    await invoke(LOCAL_ROUTER_STATUS_COMMANDS.getStatus);
   } catch {
     // The router may be disabled or unavailable. Agent settings should still save.
   }
