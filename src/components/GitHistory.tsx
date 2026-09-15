@@ -19,7 +19,9 @@ import { useI18n } from "../i18n";
 import { zLayers } from "../styles/zLayers";
 import { GitFileBrowser, GitFileViewToggle, useGitFileViewMode } from "./git-view/GitFileBrowser";
 import type { RemoteProjectTarget } from "../types";
-import { targetProjectArgs } from "../projectTarget";
+import { prefixGitCommand } from "../lib/api/git";
+import { projectArgs } from "../lib/invokeFacade";
+import { resolveInvokeTarget } from "../lib/target";
 
 interface GitCommit {
   hash: string;
@@ -76,14 +78,14 @@ export function GitHistory({
 }: Props) {
   const { t } = useI18n();
   const isRemote = Boolean(remote);
-  const gitCommandContext = remote ? targetProjectArgs(remote) : { projectPath };
+  const invokeTarget = useMemo(
+    () => resolveInvokeTarget(projectPath, remote),
+    [projectPath, remote],
+  );
+  const gitCommandContext = useMemo(() => projectArgs(invokeTarget), [invokeTarget]);
   const gitCommandName = useCallback(
-    (localCommand: string) => {
-      if (remote?.kind === "ssh") return `remote_${localCommand}`;
-      if (remote?.kind === "wsl") return `wsl_${localCommand}`;
-      return localCommand;
-    },
-    [remote],
+    (localCommand: string) => prefixGitCommand(localCommand, invokeTarget),
+    [invokeTarget],
   );
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [remoteCounts, setRemoteCounts] = useState<GitRemoteCounts>({
@@ -126,13 +128,11 @@ export function GitHistory({
 
   const loadBranches = useCallback(async () => {
     try {
-      const list = remote
-        ? await safeInvoke<GitBranchInfo[]>(
-            gitCommandName("git_list_branches"),
-            targetProjectArgs(remote),
-            remoteInvokeOptions(),
-          )
-        : await safeInvoke<GitBranchInfo[]>("git_list_branches", { projectPath });
+      const list = await safeInvoke<GitBranchInfo[]>(
+        gitCommandName("git_list_branches"),
+        gitCommandContext,
+        isRemote ? remoteInvokeOptions() : undefined,
+      );
       if (list === null) return; // Component unmounted
       setBranches(list);
       // Set initial branch to current if not yet set
@@ -141,9 +141,9 @@ export function GitHistory({
         return list.find((b) => b.current)?.name ?? "";
       });
     } catch (e) {
-      if (remote && !isCancelled()) setError(formatInvokeError(e));
+      if (isRemote && !isCancelled()) setError(formatInvokeError(e));
     }
-  }, [projectPath, remote, safeInvoke, isCancelled, gitCommandName]);
+  }, [gitCommandContext, isRemote, safeInvoke, isCancelled, gitCommandName]);
 
   const refresh = useCallback(
     async (query?: string, branch?: string) => {
@@ -151,28 +151,16 @@ export function GitHistory({
       setError(null);
       const activeBranch = branch ?? selectedBranch;
       try {
-        const logParams = remote
-          ? {
-              ...targetProjectArgs(remote),
-              limit: 50,
-              search: query ?? searchQuery,
-              branch: activeBranch || null,
-            }
-          : {
-              projectPath,
-              limit: 50,
-              search: query ?? searchQuery,
-              branch: activeBranch || null,
-            };
-        const remoteParams = remote
-          ? {
-              ...targetProjectArgs(remote),
-              branch: activeBranch || null,
-            }
-          : {
-              projectPath,
-              branch: activeBranch || null,
-            };
+        const logParams = {
+          ...gitCommandContext,
+          limit: 50,
+          search: query ?? searchQuery,
+          branch: activeBranch || null,
+        };
+        const remoteParams = {
+          ...gitCommandContext,
+          branch: activeBranch || null,
+        };
         const [log, remoteCountsResult] = await Promise.all([
           safeInvoke<GitCommit[]>(
             gitCommandName("git_log"),
@@ -197,8 +185,7 @@ export function GitHistory({
       }
     },
     [
-      projectPath,
-      remote,
+      gitCommandContext,
       searchQuery,
       selectedBranch,
       safeInvoke,
@@ -241,7 +228,7 @@ export function GitHistory({
         const detail = await safeInvoke<GitCommitDetail>(
           gitCommandName("git_commit_detail"),
           {
-            ...(remote ? targetProjectArgs(remote) : { projectPath }),
+            ...gitCommandContext,
             commitHash: commit.hash,
           },
           isRemote ? remoteInvokeOptions() : undefined,
@@ -257,7 +244,7 @@ export function GitHistory({
         if (!isCancelled()) setLoadingDetail(false);
       }
     },
-    [projectPath, onCommitSelect, remote, safeInvoke, isCancelled, isRemote, gitCommandName],
+    [onCommitSelect, gitCommandContext, safeInvoke, isCancelled, isRemote, gitCommandName],
   );
 
   const handlePull = async () => {
