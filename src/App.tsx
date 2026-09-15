@@ -34,7 +34,6 @@ import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { expiredTaskIds, shouldRunCleanup } from "./taskCleanup";
 import {
-  APP_SETTINGS_CHANGED_EVENT,
   SKILL_HUB_CHANGED_EVENT,
   normalizeAutoCleanupSettings,
 } from "./components/app-settings/types";
@@ -59,7 +58,6 @@ import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
   CLEANUP_COMMANDS,
-  DBX_COMMANDS,
   LOCAL_ROUTER_COMMANDS,
   REMOTE_TASK_COMMANDS,
   TASK_PROCESS_COMMANDS,
@@ -73,6 +71,7 @@ import {
   useSshConnectionPersistence,
   useDisableTextInputAutoFeatures,
 } from "./state/app/useAppShellHooks";
+import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -126,9 +125,6 @@ import { DshApprovalDialog } from "./components/DshApprovalDialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import {
   REMOTE_TASK_REQUEST_EVENT,
-  REMOTE_TERMINAL_RESIZED_EVENT,
-  TASK_SESSION_EVENT,
-  TASK_STATUS_EVENT,
 } from "./tauriEvents";
 import "./App.css";
 
@@ -151,8 +147,6 @@ import {
 import {
   applyProjectPinnedChange,
   dispatchAppSettingsChanged,
-  PROJECT_PINNED_CHANGED_EVENT,
-  type ProjectPinnedChangedPayload,
 } from "./appRemoteEvents";
 import { disableTextInputAutoFeatures } from "./appThemeState";
 import { AppProviders } from "./state/app";
@@ -811,97 +805,23 @@ function AppShell() {
   }, [setProjects]);
 
   // Tauri event listeners (agent-output is handled inside useTerminalManager)
-  useEffect(() => {
-    const p1 = listen<{ task_id: string; status: TaskStatus; failure_reason?: string }>(
-      TASK_STATUS_EVENT,
-      (e) => {
-        const { task_id, status, failure_reason } = e.payload;
-        if (manuallyCompletedDshTasksRef.current.has(task_id) && status !== "done") return;
-        updateTaskStatus(task_id, status, undefined, failure_reason);
-        if (status === "done") scheduleForDoneTask(task_id);
-      },
-    );
-    const p2 = listen<{
-      task_id: string;
-      session_id: string;
-      session_path: string;
-      codex_like?: boolean;
-      family?: string;
-    }>(TASK_SESSION_EVENT, (e) => {
-      const { task_id, session_id, session_path, codex_like, family } = e.payload;
-      updateTaskSession(task_id, session_id, session_path, codex_like, family);
-    });
-    const p3 = listen<{ task_id: string; cols: number; rows: number }>(
-      REMOTE_TERMINAL_RESIZED_EVENT,
-      (e) => {
-        const { task_id, cols, rows } = e.payload;
-        tm.handleRemoteResize(task_id, cols, rows);
-      },
-    );
-    const p4 = listen<ProjectPinnedChangedPayload>(PROJECT_PINNED_CHANGED_EVENT, (e) => {
+  useAppCoreTauriListeners({
+    updateTaskStatus,
+    scheduleForDoneTask,
+    updateTaskSession,
+    handleRemoteResize: tm.handleRemoteResize,
+    applyPinnedChange: (payload) => {
       setProjects((prev) => {
-        const next = applyProjectPinnedChange(prev, e.payload);
+        const next = applyProjectPinnedChange(prev, payload);
         if (next !== prev) {
-          // 把字段补丁合入桌面当前最新快照；串行持久化队列会让它排在任何旧写入之后。
           persistProjects(next, showToastRef.current, formatSaveProjectsErrorRef.current);
         }
         return next;
       });
-    });
-    const p5 = listen(APP_SETTINGS_CHANGED_EVENT, () => {
-      // Rust/Tauri 事件桥接到现有 DOM 事件总线，让所有设置消费者统一刷新。
-      dispatchAppSettingsChanged(window);
-    });
-    // 生产库写操作的后端闸。Rust 侧把执行挂住等这条答复(见
-    // src-tauri/src/database/query.rs 的 enforce_production_sql_confirmation),
-    // 所以无论确认、取消还是弹窗本身出错,都必须回一次 —— 不回会让查询
-    // 一直卡到后端超时。
-    const p18 = listen<{
-      requestId: string;
-      connection: string;
-      databases: string[];
-      sql: string;
-    }>("dbx-production-confirm-requested", (e) => {
-      const { requestId, connection, databases, sql } = e.payload;
-      void (async () => {
-        const translate = tRef.current;
-        let approved = false;
-        try {
-          const scope =
-            databases.length > 0
-              ? databases.join(", ")
-              : translate("database.productionEntireConnection");
-          approved = await confirm(
-            translate("database.productionSqlWarning", { connection, databases: scope, sql }),
-            {
-              title: translate("database.productionWarningTitle"),
-              kind: "warning",
-              okLabel: translate("database.execute"),
-              cancelLabel: translate("common.cancel"),
-            },
-          );
-        } catch (error) {
-          // 弹窗自身出错时保持 approved=false(拒绝)并显式吞掉:不吞会冒成
-          // unhandled rejection,而这里已经没有人 await 这个 async 了。
-          console.warn("production confirmation dialog failed", error);
-        }
-        try {
-          await invoke(DBX_COMMANDS.respondProductionConfirmation, { requestId, approved });
-        } catch (error) {
-          console.warn("failed to answer production confirmation", error);
-        }
-      })();
-    });
-    return () => {
-      p1.then((fn) => fn());
-      p2.then((fn) => fn());
-      p3.then((fn) => fn());
-      p4.then((fn) => fn());
-      p5.then((fn) => fn());
-      p18.then((fn) => fn());
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    },
+    translateRef: tRef,
+    isManuallyCompletedDsh: (taskId) => manuallyCompletedDshTasksRef.current.has(taskId),
+  });
 
   // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
   // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
