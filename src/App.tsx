@@ -1,9 +1,8 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { confirm } from "./lib/appDialog";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   Project,
   ProjectAvatarOverride,
@@ -40,8 +39,6 @@ import {
   normalizeAutoCleanupSettings,
 } from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
-import { isHideWindowShortcut } from "./shortcuts";
-import { APP_PLATFORM } from "./platform";
 import {
   agentDisplayLabel,
   agentFamily,
@@ -61,17 +58,21 @@ import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from ".
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
-  APP_SHELL_COMMANDS,
   CLEANUP_COMMANDS,
   DBX_COMMANDS,
   LOCAL_ROUTER_COMMANDS,
   REMOTE_TASK_COMMANDS,
-  SSH_CONNECTION_COMMANDS,
   TASK_PROCESS_COMMANDS,
 } from "./lib/api/appCommands";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
-import { useProjectsStore, useTasksStore } from "./state/app";
+import {
+  useHostStateMirrors,
+  useAppLifecycle,
+  useHideWindowShortcut,
+  useSshConnectionPersistence,
+  useDisableTextInputAutoFeatures,
+} from "./state/app/useAppShellHooks";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -107,7 +108,7 @@ import {
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
-import { flushPendingSavesBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
+import { TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -124,8 +125,6 @@ import { launchDshWebUi } from "./dshWebUi";
 import { DshApprovalDialog } from "./components/DshApprovalDialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import {
-  APP_EXIT_REQUESTED_EVENT,
-  APP_RESTART_REQUESTED_EVENT,
   REMOTE_TASK_REQUEST_EVENT,
   REMOTE_TERMINAL_RESIZED_EVENT,
   TASK_SESSION_EVENT,
@@ -463,17 +462,7 @@ function AppShell() {
   const [tasks, setTasks, tasksRef] = useRefState<Task[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   // App 仍是 projects/tasks 的权威源；store 只做只读镜像 + Ops 写回，避免双写盘。
-  useEffect(() => {
-    useProjectsStore.getState().syncFromHost(projects);
-  }, [projects]);
-  useEffect(() => {
-    useTasksStore.getState().syncFromHost(tasks);
-  }, [tasks]);
-  useEffect(() => {
-    useProjectsStore
-      .getState()
-      .setSelectedProjectId(activeProject?.id ?? null);
-  }, [activeProject]);
+  useHostStateMirrors(projects, tasks, activeProject?.id ?? null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
@@ -558,30 +547,11 @@ function AppShell() {
     persistTasks: persistTasksForHook,
   });
 
-  const handleSshConnectionsChange = useCallback(
-    (connections: SshConnection[]) => {
-      setSshConnections(connections);
-      invoke(SSH_CONNECTION_COMMANDS.save, { connections }).catch((e: unknown) => {
-        console.error(e);
-        showToast(t("toast.saveSshConnectionsFailed", { error: String(e) }), "error");
-      });
-    },
-    [setSshConnections, showToast, t],
-  );
-
-  const handleDeleteSshConnection = useCallback(
-    async (connectionId: string) => {
-      try {
-        const connections = await invoke<SshConnection[]>("delete_ssh_connection", {
-          connectionId,
-        });
-        setSshConnections(connections);
-      } catch (e: unknown) {
-        console.error(e);
-        showToast(t("toast.deleteSshConnectionFailed", { error: String(e) }), "error");
-      }
-    },
-    [setSshConnections, showToast, t],
+  const { handleSshConnectionsChange, handleDeleteSshConnection } = useSshConnectionPersistence(
+    setSshConnections,
+    showToast,
+    (error) => t("toast.saveSshConnectionsFailed", { error }),
+    (error) => t("toast.deleteSshConnectionFailed", { error }),
   );
 
   const mountProject = useCallback((projectId: string) => {
@@ -612,82 +582,14 @@ function AppShell() {
     return projectViews[projectId] ?? createDefaultProjectViewState();
   }
 
-  useEffect(() => {
-    // Cmd+W 收起窗口（隐藏到 Dock），仅 macOS 启用：隐藏后点 Dock 图标可唤回
-    // （见 lib.rs Reopen）。其他平台没有 Dock/托盘唤回入口，隐藏后窗口会丢失，故不启用。
-    // 在捕获阶段拦截，先于 xterm 等组件的 keydown 处理，避免被吞掉。
-    if (APP_PLATFORM !== "macos") return;
-    function handleHideWindow(event: KeyboardEvent) {
-      if (!isHideWindowShortcut(event, APP_PLATFORM)) return;
-      event.preventDefault();
-      // 走后端命令收起窗口：全屏时需先退出全屏再隐藏，否则会留下黑屏的空 Space。
-      invoke(APP_SHELL_COMMANDS.hideWindow).catch(console.error);
-    }
-    window.addEventListener("keydown", handleHideWindow, true);
-    return () => window.removeEventListener("keydown", handleHideWindow, true);
-  }, []);
+  useHideWindowShortcut();
 
-  useEffect(() => {
-    if (!isTauri()) return;
+  useAppLifecycle(
+    showToast,
+    (error) => t("toast.exitSaveFailed", { error }),
+  );
 
-    let lifecyclePromise: Promise<void> | null = null;
-    const completeLifecycleAction = (action: "exit" | "restart") => {
-      if (lifecyclePromise) return lifecyclePromise;
-      lifecyclePromise = (async () => {
-        try {
-          await flushPendingSavesBeforeExit();
-          await invoke(
-            action === "restart" ? "restart_app_after_task_flush" : "exit_app_after_task_flush",
-          );
-        } catch (error) {
-          console.error("Failed to save tasks before exit", error);
-          showToastRef.current(
-            tRef.current("toast.exitSaveFailed", { error: String(error) }),
-            "error",
-          );
-        } finally {
-          lifecyclePromise = null;
-        }
-      })();
-      return lifecyclePromise;
-    };
-    const closeListener =
-      APP_PLATFORM === "macos"
-        ? Promise.resolve(() => {})
-        : getCurrentWindow().onCloseRequested((event) => {
-            event.preventDefault();
-            void completeLifecycleAction("exit");
-          });
-    const exitListener = listen(APP_EXIT_REQUESTED_EVENT, () => {
-      void completeLifecycleAction("exit");
-    });
-    const restartListener = listen(APP_RESTART_REQUESTED_EVENT, () => {
-      void completeLifecycleAction("restart");
-    });
-    let disposed = false;
-    void Promise.all([closeListener, exitListener, restartListener])
-      .then(() => {
-        if (disposed) return;
-        return invoke(APP_SHELL_COMMANDS.exitListenerReady);
-      })
-      .catch((error) => {
-        console.error("Failed to register app lifecycle listener", error);
-      });
-
-    return () => {
-      disposed = true;
-      closeListener.then((unlisten) => unlisten());
-      exitListener.then((unlisten) => unlisten());
-      restartListener.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleFocusIn = (event: FocusEvent) => disableTextInputAutoFeatures(event.target);
-    document.addEventListener("focusin", handleFocusIn, true);
-    document.querySelectorAll("input, textarea").forEach(disableTextInputAutoFeatures);
-    return () => document.removeEventListener("focusin", handleFocusIn, true);
-  }, []);
+  useDisableTextInputAutoFeatures(disableTextInputAutoFeatures);
 
   useEffect(() => {
     saveProjectGroupNames(projectGroups);
