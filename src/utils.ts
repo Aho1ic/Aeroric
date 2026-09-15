@@ -1,20 +1,18 @@
-export const AVATAR_COLORS: [string, string][] = [
-  ["#2563D6", "#1E4FA8"],
-  ["#4F63D7", "#3F46A6"],
-  ["#6D55D2", "#5540A8"],
-  ["#7B4CC7", "#61369C"],
-  ["#0891B2", "#0E6F86"],
-  ["#0D9488", "#0F6B64"],
-  ["#0B80C6", "#075E91"],
-  ["#0A9A73", "#087354"],
-  ["#5B6FD6", "#4250A8"],
-  ["#12A4C7", "#0B7892"],
-];
+import { fileIconOf } from "./lib/fileIcons";
+import { AVATAR_PALETTE, AVATAR_PALETTE_KEYS, autoAvatarColorKey } from "./projectAvatar";
+import type { AvatarGradient } from "./projectAvatar";
 
-export function getAvatarGradient(name: string): [string, string] {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+/**
+ * 调色板的渐变对列表。唯一数据源是 `projectAvatar.AVATAR_PALETTE` ——
+ * 这里只是给不关心键名的老调用点保留的视图。
+ */
+export const AVATAR_COLORS: readonly AvatarGradient[] = AVATAR_PALETTE_KEYS.map(
+  (key) => AVATAR_PALETTE[key],
+);
+
+/** 按名字自动取渐变。定制过的项目要走 `resolveProjectAvatar`,它认 `Project.avatar`。 */
+export function getAvatarGradient(name: string): AvatarGradient {
+  return AVATAR_PALETTE[autoAvatarColorKey(name)];
 }
 
 export function shortenPath(p: string) {
@@ -83,70 +81,15 @@ export function getGitStatusLabel(status: string): string {
 
 // ── 文件颜色工具 ──────────────────────────────────────────────────────────────
 
+/**
+ * 文件名 → 图标颜色 token。
+ *
+ * 委托给 `lib/fileIcons` 的那张表:此前这里有一份独立的 switch,和文件树的字形表
+ * 各说各话(`.wasm` 有专属颜色但字形是通用文件,`Makefile` 有 build 颜色但字形是
+ * 通用文件,`.env` 走 config 颜色而字形按后缀落到 text)。现在颜色和字形同源。
+ */
 export function getFileColor(name: string, ext?: string): string {
-  const n = name.toLowerCase();
-  const e = ext ?? (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
-
-  if (n === "dockerfile" || n.startsWith("dockerfile.")) return "var(--icon-file-docker)";
-  if (n === "makefile" || n === "gnumakefile" || n === "justfile") return "var(--icon-file-build)";
-  if (n === "gemfile" || n === "rakefile") return "var(--icon-file-ruby)";
-  if (n.startsWith(".git") || n.startsWith(".docker") || n === ".editorconfig" || n === ".npmrc")
-    return "var(--icon-file-config)";
-  if (n === ".env" || n.startsWith(".env.")) return "var(--icon-file-config)";
-
-  switch (e) {
-    case "ts":
-    case "tsx":
-      return "var(--icon-file-ts)";
-    case "js":
-    case "jsx":
-    case "mjs":
-    case "cjs":
-      return "var(--icon-file-js)";
-    case "json":
-    case "jsonc":
-      return "var(--icon-file-json)";
-    case "rs":
-      return "var(--icon-file-rust)";
-    case "html":
-    case "htm":
-      return "var(--icon-file-html)";
-    case "css":
-    case "scss":
-    case "sass":
-      return "var(--icon-file-css)";
-    case "md":
-    case "mdx":
-      return "var(--icon-file-md)";
-    case "yaml":
-    case "yml":
-      return "var(--icon-file-yaml)";
-    case "toml":
-      return "var(--icon-file-toml)";
-    case "py":
-      return "var(--icon-file-python)";
-    case "go":
-      return "var(--icon-file-go)";
-    case "sh":
-    case "bash":
-    case "zsh":
-      return "var(--icon-file-shell)";
-    case "lock":
-      return "var(--icon-file-config)";
-    case "svg":
-      return "var(--icon-file-svg)";
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "webp":
-    case "ico":
-      return "var(--icon-file-image)";
-    case "wasm":
-      return "var(--icon-file-wasm)";
-    default:
-      return "var(--icon-file-default)";
-  }
+  return fileIconOf(name, ext).color;
 }
 
 // ── 文件类型扩展名集合 ────────────────────────────────────────────────────────

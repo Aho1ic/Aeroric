@@ -10,6 +10,7 @@ import {
   getFileColor,
   CODE_EXTS,
 } from "../utils";
+import { fileIconOf } from "../lib/fileIcons";
 
 // ── getAvatarGradient ────────────────────────────────────────────────────────
 
@@ -152,8 +153,21 @@ describe("getFileColor", () => {
     expect(getFileColor(".env.production")).toBe("var(--icon-file-config)");
   });
 
+  it("LICENSE / NOTICE 这类无扩展名的已知文件有专属颜色", () => {
+    expect(getFileColor("NOTICE")).toBe("var(--icon-file-license)");
+    expect(getFileColor("LICENSE")).toBe("var(--icon-file-license)");
+  });
+
   it("无扩展名的未知文件返回默认图标颜色 token", () => {
-    expect(getFileColor("NOTICE")).toBe("var(--icon-file-default)");
+    expect(getFileColor("SOMETHING-UNKNOWN")).toBe("var(--icon-file-default)");
+    expect(getFileColor("mystery.qqq")).toBe("var(--icon-file-default)");
+  });
+
+  it("颜色与文件树字形同源:同一张表", () => {
+    // getFileColor 曾有一份独立 switch,和图标字形表各说各话。
+    for (const name of ["App.tsx", "Makefile", ".env", "NOTICE", "mystery.qqq"]) {
+      expect(getFileColor(name), name).toBe(fileIconOf(name).color);
+    }
   });
 
   it("ext 参数优先于从文件名推断的扩展名", () => {

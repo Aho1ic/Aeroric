@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  fileIconKind,
   filterFileEntriesByName,
   normalizeFileSortPreference,
   sortFileEntries,
 } from "../components/file-explorer/fileEntryUtils";
 import type { FsEntry } from "../components/file-explorer/types";
+import { entryIconOf } from "../lib/fileIcons";
 
 const entries: FsEntry[] = [
   {
@@ -14,18 +14,18 @@ const entries: FsEntry[] = [
     is_dir: false,
     extension: "py",
     is_gitignored: false,
-    modifiedAtMs: 300,
+    modified_at_ms: 300,
   },
-  { name: "src", path: "/repo/src", is_dir: true, is_gitignored: false, modifiedAtMs: 100 },
+  { name: "src", path: "/repo/src", is_dir: true, is_gitignored: false, modified_at_ms: 100 },
   {
     name: "README.md",
     path: "/repo/README.md",
     is_dir: false,
     extension: "md",
     is_gitignored: false,
-    modifiedAtMs: 500,
+    modified_at_ms: 500,
   },
-  { name: "docs", path: "/repo/docs", is_dir: true, is_gitignored: false, modifiedAtMs: 900 },
+  { name: "docs", path: "/repo/docs", is_dir: true, is_gitignored: false, modified_at_ms: 900 },
 ];
 
 describe("file explorer sorting", () => {
@@ -88,11 +88,13 @@ describe("file explorer sorting", () => {
   });
 
   it("classifies database, model, video, and wheel files", () => {
-    expect(fileIconKind({ name: "index.db", is_dir: false, extension: "db" })).toBe("database");
-    expect(fileIconKind({ name: "model.pt", is_dir: false, extension: "pt" })).toBe("model");
-    expect(fileIconKind({ name: "model.pth", is_dir: false, extension: "pth" })).toBe("model");
-    expect(fileIconKind({ name: "detector.onnx", is_dir: false, extension: "onnx" })).toBe("model");
-    expect(fileIconKind({ name: "clip.mp4", is_dir: false, extension: "mp4" })).toBe("video");
-    expect(fileIconKind({ name: "pkg.whl", is_dir: false, extension: "whl" })).toBe("package");
+    expect(entryIconOf({ name: "index.db", is_dir: false, extension: "db" }).kind).toBe("database");
+    expect(entryIconOf({ name: "model.pt", is_dir: false, extension: "pt" }).kind).toBe("model");
+    expect(entryIconOf({ name: "model.pth", is_dir: false, extension: "pth" }).kind).toBe("model");
+    expect(entryIconOf({ name: "detector.onnx", is_dir: false, extension: "onnx" }).kind).toBe(
+      "model",
+    );
+    expect(entryIconOf({ name: "clip.mp4", is_dir: false, extension: "mp4" }).kind).toBe("video");
+    expect(entryIconOf({ name: "pkg.whl", is_dir: false, extension: "whl" }).kind).toBe("package");
   });
 });

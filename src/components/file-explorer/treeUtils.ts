@@ -82,8 +82,9 @@ export function isSameEntry(a: FsEntry, b: FsEntry) {
     a.name === b.name &&
     a.is_dir === b.is_dir &&
     a.extension === b.extension &&
-    a.modifiedAtMs === b.modifiedAtMs &&
-    a.is_gitignored === b.is_gitignored
+    a.modified_at_ms === b.modified_at_ms &&
+    a.is_gitignored === b.is_gitignored &&
+    a.is_symlink === b.is_symlink
   );
 }
 

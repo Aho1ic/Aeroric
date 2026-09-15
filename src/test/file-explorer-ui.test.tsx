@@ -31,7 +31,7 @@ const entries = [
     is_dir: false,
     extension: "tsx",
     is_gitignored: false,
-    modifiedAtMs: 200,
+    modified_at_ms: 200,
   },
   {
     name: "README.md",
@@ -39,7 +39,7 @@ const entries = [
     is_dir: false,
     extension: "md",
     is_gitignored: false,
-    modifiedAtMs: 100,
+    modified_at_ms: 100,
   },
 ];
 
@@ -127,7 +127,7 @@ describe("FileExplorer UI", () => {
             is_dir: false,
             extension: "db",
             is_gitignored: false,
-            modifiedAtMs: 300,
+            modified_at_ms: 300,
           },
         ]);
       }
@@ -173,7 +173,7 @@ describe("FileExplorer UI", () => {
             is_dir: true,
             extension: undefined,
             is_gitignored: false,
-            modifiedAtMs: 100,
+            modified_at_ms: 100,
           },
         ]);
       }
@@ -184,7 +184,7 @@ describe("FileExplorer UI", () => {
           is_dir: true,
           extension: undefined,
           is_gitignored: false,
-          modifiedAtMs: 200,
+          modified_at_ms: 200,
         },
       ]);
     });
@@ -235,7 +235,7 @@ describe("FileExplorer UI", () => {
             is_dir: true,
             extension: undefined,
             is_gitignored: false,
-            modifiedAtMs: 300,
+            modified_at_ms: 300,
           },
           {
             name: "other",
@@ -243,7 +243,7 @@ describe("FileExplorer UI", () => {
             is_dir: true,
             extension: undefined,
             is_gitignored: false,
-            modifiedAtMs: 200,
+            modified_at_ms: 200,
           },
         ]);
       }

@@ -61,22 +61,22 @@ type Entry = {
   path: string;
   is_dir: boolean;
   extension?: string;
-  modifiedAtMs: number;
+  modified_at_ms: number;
   is_gitignored: boolean;
 };
 
-function dir(path: string, modifiedAtMs = 100): Entry {
+function dir(path: string, modified_at_ms = 100): Entry {
   return {
     name: path.slice(path.lastIndexOf("/") + 1),
     path,
     is_dir: true,
     extension: undefined,
-    modifiedAtMs,
+    modified_at_ms,
     is_gitignored: false,
   };
 }
 
-function file(path: string, modifiedAtMs = 100): Entry {
+function file(path: string, modified_at_ms = 100): Entry {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const dot = name.lastIndexOf(".");
   return {
@@ -84,7 +84,7 @@ function file(path: string, modifiedAtMs = 100): Entry {
     path,
     is_dir: false,
     extension: dot > 0 ? name.slice(dot + 1) : undefined,
-    modifiedAtMs,
+    modified_at_ms,
     is_gitignored: false,
   };
 }
@@ -666,7 +666,7 @@ describe("重命名", () => {
       fs.set(
         "/repo",
         (fs.get("/repo") ?? []).map((entry) =>
-          entry.path === oldPath ? file(`/repo/${newName}`, entry.modifiedAtMs) : entry,
+          entry.path === oldPath ? file(`/repo/${newName}`, entry.modified_at_ms) : entry,
         ),
       );
       return Promise.resolve(undefined);
@@ -2482,7 +2482,7 @@ describe("零散分支", () => {
   it("没有分隔符的条目路径也能取出名字", async () => {
     // 后端理论上可以回相对名(比如根就是当前目录时),`lastIndexOf` 两个都返回 -1。
     fs.set("/repo", [
-      { name: "weird", path: "weird", is_dir: false, modifiedAtMs: 1, is_gitignored: false },
+      { name: "weird", path: "weird", is_dir: false, modified_at_ms: 1, is_gitignored: false },
     ]);
     vi.mocked(confirm).mockResolvedValue(false);
     renderExplorer();

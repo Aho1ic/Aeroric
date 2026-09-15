@@ -6,10 +6,10 @@ import {
 } from "../components/file-viewer/editorUtils";
 import {
   fileExtension,
-  fileIconKind,
   isSqliteDatabaseFile as isSqliteDatabaseEntry,
   isSqliteDatabaseFileName,
 } from "../components/file-explorer/fileEntryUtils";
+import { entryIconOf } from "../lib/fileIcons";
 
 /**
  * 后缀判定的现状固化测试。
@@ -129,15 +129,18 @@ describe("两处 sqlite 判定等价", () => {
   });
 });
 
-describe("fileIconKind", () => {
+describe("entryIconOf", () => {
   const entry = (name: string, extension?: string, is_dir = false) => ({
     name,
     extension,
     is_dir,
   });
+  const kindOf = (name: string, extension?: string, is_dir = false) =>
+    entryIconOf(entry(name, extension, is_dir)).kind;
 
-  it("目录优先于任何后缀", () => {
-    expect(fileIconKind(entry("assets.png", undefined, true))).toBe("folder");
+  it("目录优先于任何后缀:名字带 .png 的目录仍是目录", () => {
+    expect(kindOf("assets.png", undefined, true)).toBe("folder");
+    expect(kindOf("assets", undefined, true)).toBe("folder-assets");
   });
 
   it.each([
@@ -159,11 +162,11 @@ describe("fileIconKind", () => {
     ["i.gif", "image"],
     ["i.webp", "image"],
     ["i.bmp", "image"],
-    ["i.svg", "image"],
+    ["i.svg", "vector"],
     ["d.md", "markdown"],
     ["d.mdx", "markdown"],
-    ["d.json", "json"],
-    ["d.jsonc", "json"],
+    ["d.json", "data"],
+    ["d.jsonc", "data"],
     ["a.zip", "archive"],
     ["a.tar", "archive"],
     ["a.gz", "archive"],
@@ -179,15 +182,15 @@ describe("fileIconKind", () => {
     ["s.py", "code"],
     ["s.rs", "code"],
     ["s.go", "code"],
-    ["s.css", "code"],
-    ["s.scss", "code"],
-    ["s.html", "code"],
-    ["s.htm", "code"],
-    ["s.yaml", "code"],
-    ["s.yml", "code"],
-    ["s.toml", "code"],
-    ["s.sh", "code"],
-    ["s.sql", "code"],
+    ["s.css", "style"],
+    ["s.scss", "style"],
+    ["s.html", "markup"],
+    ["s.htm", "markup"],
+    ["s.yaml", "data"],
+    ["s.yml", "data"],
+    ["s.toml", "data"],
+    ["s.sh", "shell"],
+    ["s.sql", "database"],
     ["s.java", "code"],
     ["s.c", "code"],
     ["s.cpp", "code"],
@@ -195,34 +198,94 @@ describe("fileIconKind", () => {
     ["s.hpp", "code"],
     ["r.txt", "text"],
     ["r.log", "text"],
-    ["r.env", "text"],
-    ["r.ini", "text"],
-    ["r.conf", "text"],
+    ["r.ini", "config"],
+    ["r.conf", "config"],
     ["mystery.xyz", "file"],
-    ["LICENSE", "file"],
   ] as const)("%s → %s", (name, kind) => {
-    expect(fileIconKind(entry(name))).toBe(kind);
+    expect(kindOf(name)).toBe(kind);
   });
 
   it("图标表与 isPreviewableImageFile 用的是同一组图片后缀", () => {
-    // 这两处目前是两份字面重复的清单。合并时若只改一处,这条会挂。
+    // svg 在图标表里是 vector(矢量,画的是调色板而不是照片框),仍然可预览。
     for (const ext of IMAGE_EXTS) {
-      expect(fileIconKind(entry(`x.${ext}`)), ext).toBe("image");
+      expect(["image", "vector"], ext).toContain(kindOf(`x.${ext}`));
       expect(isPreviewableImageFile(`x.${ext}`), ext).toBe(true);
     }
   });
 
   it("图标表与 sqlite 判定用的是同一组后缀", () => {
     for (const ext of SQLITE_EXTS) {
-      expect(fileIconKind(entry(`x.${ext}`)), ext).toBe("database");
+      expect(kindOf(`x.${ext}`), ext).toBe("database");
       expect(isSqliteDatabaseFileName(`x.${ext}`), ext).toBe(true);
     }
   });
 
   it("`.markdown` 现在拿不到 markdown 图标(与 isMarkdownFile 不一致)", () => {
-    // 现状记录:isMarkdownFile("a.markdown") 为 true,但图标表只有 md/mdx。
-    // 这条是故意钉住"不一致"本身 —— 改的时候会看到它挂,从而是有意识地改。
+    // 现状记录:isMarkdownFile("a.markdown") 为 true,但图标表只有 md/mdx/rst/adoc。
     expect(isMarkdownFile("a.markdown")).toBe(true);
-    expect(fileIconKind(entry("a.markdown"))).toBe("file");
+    expect(kindOf("a.markdown")).toBe("file");
+  });
+
+  // ── 兜底与优先级(NZ-1 的核心语义) ────────────────────────────────────────
+
+  it("符号链接优先于目录与后缀", () => {
+    // is_dir 走的是跟随链接后的类型,所以指向目录的链接两个标记同时为真;
+    // 先判目录就再也画不出"这是链接"。
+    expect(entryIconOf({ name: "src", is_dir: true, is_symlink: true }).kind).toBe("symlink");
+    expect(entryIconOf({ name: "main.rs", is_dir: false, is_symlink: true }).kind).toBe("symlink");
+    expect(entryIconOf({ name: "main.rs", is_dir: false, is_symlink: false }).kind).toBe("code");
+  });
+
+  it("精确文件名优先于后缀,且大小写不敏感", () => {
+    // vite.config.ts:精确名(build)胜过后缀 ts(code)。
+    expect(kindOf("vite.config.ts")).toBe("build");
+    expect(kindOf("package.json")).toBe("manifest");
+    expect(kindOf("Dockerfile")).toBe("docker");
+    expect(kindOf("DOCKERFILE")).toBe("docker");
+    expect(kindOf("CMakeLists.txt")).toBe("build");
+    expect(kindOf("LICENSE")).toBe("license");
+  });
+
+  it("名字前缀族在精确名之后、后缀之前命中", () => {
+    // .env.production 的后缀是 production(表里没有),靠前缀族才落到 config。
+    expect(kindOf(".env")).toBe("config");
+    expect(kindOf(".env.production")).toBe("config");
+    // Dockerfile.prod 的后缀是 prod(表里没有)。
+    expect(kindOf("Dockerfile.prod")).toBe("docker");
+    expect(kindOf(".gitignore")).toBe("git");
+  });
+
+  it("多段名字按最后一段后缀命中", () => {
+    expect(kindOf("types.d.ts")).toBe("code");
+    expect(kindOf("bundle.tar.gz")).toBe("archive");
+    expect(kindOf("bundle.tar.zst")).toBe("archive");
+  });
+
+  it("后端的 extension 优先于名字里推出的后缀", () => {
+    // 名字里没有点:靠 extension 认出 rust。
+    expect(kindOf("weird", "rs")).toBe("code");
+    // ext 覆盖名字推出的后缀 —— 与 fileExtension / isSqliteDatabaseFile 同一约定:
+    // 后端报的类型比名字权威(它对 `opaque` 报 `sqlite` 时必须认)。
+    expect(kindOf("opaque", "sqlite")).toBe("database");
+    expect(kindOf("foo.ts", "rs")).toBe("code");
+  });
+
+  it("未知后缀 / 未知目录 / 名叫 constructor 的文件都落兜底,不命中 Object.prototype", () => {
+    expect(kindOf("mystery.qqq")).toBe("file");
+    expect(kindOf("NOTICE.unknownext")).toBe("file");
+    expect(kindOf("constructor")).toBe("file");
+    expect(kindOf("toString")).toBe("file");
+    expect(kindOf("constructor", undefined, true)).toBe("folder");
+    expect(kindOf("zzz-unknown", undefined, true)).toBe("folder");
+  });
+
+  it("每个 kind 都带一个 CSS 变量颜色", () => {
+    for (const name of ["main.rs", "a.png", "unknown.qqq", "package.json"]) {
+      expect(entryIconOf(entry(name)).color, name).toMatch(/^var\(--icon-/);
+    }
+    expect(entryIconOf({ name: "src", is_dir: true }).color).toMatch(/^var\(--icon-/);
+    expect(entryIconOf({ name: "link", is_dir: false, is_symlink: true }).color).toMatch(
+      /^var\(--icon-/,
+    );
   });
 });

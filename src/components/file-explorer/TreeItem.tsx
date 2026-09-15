@@ -60,6 +60,7 @@ export function TreeItem({
         name={node.name}
         ext={node.extension}
         isDir={node.is_dir}
+        isSymlink={node.is_symlink}
         expanded={node.expanded}
         isGitignored={node.is_gitignored}
       />
