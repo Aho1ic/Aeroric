@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { SKILL_HUB_COMMANDS } from "../../lib/api/agentSettings";
 import { X, Plus, Trash2, AlertTriangle } from "lucide-react";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
@@ -60,7 +61,7 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
   const handleUninstall = useCallback(
     async (ins: SkillInstallation) => {
       try {
-        await invoke("uninstall_skill", {
+        await invoke(SKILL_HUB_COMMANDS.uninstall, {
           skillName: ins.skillName,
           projectId: ins.projectId,
           agent: ins.agent,

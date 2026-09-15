@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { AGENT_SETTINGS_COMMANDS } from "../../lib/api/agentSettings";
 import { Check, Download, Eye, EyeOff, RefreshCw, Trash2, Upload, X, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -298,7 +299,7 @@ export function AgentDetailModal({
     setError(null);
     setTransferMessage(null);
     try {
-      await invoke("export_agent_config_bundle", {
+      await invoke(AGENT_SETTINGS_COMMANDS.exportConfigBundle, {
         agent: agentKey,
         outputPath,
         configContent: fileState.status === "loaded" ? fileState.content : null,
@@ -413,7 +414,7 @@ export function AgentDetailModal({
     setDeleting(true);
     setError(null);
     try {
-      await invoke("delete_custom_agent_profile", { id: agentKey });
+      await invoke(AGENT_SETTINGS_COMMANDS.deleteCustomProfile, { id: agentKey });
       await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       onDeleted?.();
@@ -499,7 +500,7 @@ export function AgentDetailModal({
 
       if (isCredsDirty || (isBuiltIn && canSaveModels)) {
         if (deletable && customProfile) {
-          await invoke("update_custom_agent_access", {
+          await invoke(AGENT_SETTINGS_COMMANDS.updateCustomAccess, {
             id: agentKey,
             baseUrl: baseUrl !== originalBaseUrl ? baseUrl.trim() : null,
             apiKey: apiKey !== originalApiKey && apiKey.trim() ? apiKey.trim() : null,
@@ -537,7 +538,7 @@ export function AgentDetailModal({
       if (isNameDirty) {
         const next = agentName.trim();
         if (next) {
-          await invoke("rename_custom_agent_profile", { id: agentKey, label: next });
+          await invoke(AGENT_SETTINGS_COMMANDS.renameCustomProfile, { id: agentKey, label: next });
           setAgentName(next);
           setOriginalAgentName(next);
         }
@@ -615,14 +616,14 @@ export function AgentDetailModal({
 
       if (agentIsDsh && canSaveReasoningEffort) {
         const effort = DSH_REASONING_EFFORTS.find((item) => item === reasoningEffort) ?? "high";
-        await invoke("update_dsh_reasoning_effort", { agent: agentKey, effort });
+        await invoke(AGENT_SETTINGS_COMMANDS.updateDshReasoningEffort, { agent: agentKey, effort });
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
       }
 
       if (agentIsOmp && canSaveReasoningEffort) {
         const effort = OMP_THINKING_LEVELS.find((item) => item === reasoningEffort) ?? "high";
-        await invoke("update_omp_thinking_level", { agent: agentKey, effort });
+        await invoke(AGENT_SETTINGS_COMMANDS.updateOmpThinkingLevel, { agent: agentKey, effort });
         setReasoningEffort(effort);
         setOriginalReasoningEffort(effort);
       }
@@ -641,7 +642,7 @@ export function AgentDetailModal({
         latestContent = updatedContent;
         setFileState({ status: "loaded", content: updatedContent });
         if (!isDirty) {
-          await invoke("write_agent_config_file", { agent: agentKey, content: updatedContent });
+          await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: updatedContent });
           setOriginal(updatedContent);
           setOriginalReasoningEffort(reasoningEffort);
           setOriginalReasoningSpeed(reasoningSpeed);
@@ -659,7 +660,7 @@ export function AgentDetailModal({
         if (!agentIsDsh && !agentIsOmp && canSaveReasoningSpeed) {
           contentToSave = setModelReasoningSpeed(contentToSave, reasoningSpeed);
         }
-        await invoke("write_agent_config_file", { agent: agentKey, content: contentToSave });
+        await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: contentToSave });
         setFileState({ status: "loaded", content: contentToSave });
         setOriginal(contentToSave);
         if (!agentIsDsh) {

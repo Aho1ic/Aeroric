@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { AGENT_SETTINGS_COMMANDS } from "../../lib/api/agentSettings";
 import { Check, Download, RefreshCw, Trash2, Upload, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -240,7 +241,7 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke("write_agent_config_file", { agent: agentKey, content: fileState.content });
+      await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: fileState.content });
       setOriginal(fileState.content);
       const effort = readModelReasoningEffort(fileState.content);
       setReasoningEffort(effort);
@@ -270,7 +271,7 @@ export function AgentConfigPanel({
     setError(null);
     setTransferMessage(null);
     try {
-      await invoke("export_agent_config_bundle", {
+      await invoke(AGENT_SETTINGS_COMMANDS.exportConfigBundle, {
         agent: agentKey,
         outputPath,
         configContent: fileState.status === "loaded" ? fileState.content : null,
@@ -356,7 +357,7 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke("rename_custom_agent_profile", { id: agentKey, label: next });
+      await invoke(AGENT_SETTINGS_COMMANDS.renameCustomProfile, { id: agentKey, label: next });
       setAgentName(next);
       setOriginalAgentName(next);
       await refreshLocalRouterRuntime();
@@ -376,7 +377,7 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke("delete_custom_agent_profile", { id: agentKey });
+      await invoke(AGENT_SETTINGS_COMMANDS.deleteCustomProfile, { id: agentKey });
       await refreshLocalRouterRuntime();
       window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
       onDeleted?.();
@@ -461,7 +462,7 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke("write_agent_config_file", { agent: agentKey, content });
+      await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content });
       setFileState({ status: "loaded", content });
       setOriginal(content);
       setOriginalReasoningEffort(reasoningEffort);
@@ -482,7 +483,7 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke("write_agent_config_file", { agent: agentKey, content });
+      await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content });
       setFileState({ status: "loaded", content });
       setOriginal(content);
       setOriginalReasoningSpeed(reasoningSpeed);

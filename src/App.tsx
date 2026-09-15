@@ -63,6 +63,15 @@ import { useI18n } from "./i18n";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { taskCommandByKind } from "./lib/api/session";
 import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
+import {
+  APP_SHELL_COMMANDS,
+  CLEANUP_COMMANDS,
+  DBX_COMMANDS,
+  LOCAL_ROUTER_COMMANDS,
+  REMOTE_TASK_COMMANDS,
+  SSH_CONNECTION_COMMANDS,
+  TASK_PROCESS_COMMANDS,
+} from "./lib/api/appCommands";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
@@ -513,7 +522,7 @@ function AppShell() {
   const handleSshConnectionsChange = useCallback(
     (connections: SshConnection[]) => {
       setSshConnections(connections);
-      invoke("save_ssh_connections", { connections }).catch((e: unknown) => {
+      invoke(SSH_CONNECTION_COMMANDS.save, { connections }).catch((e: unknown) => {
         console.error(e);
         showToast(t("toast.saveSshConnectionsFailed", { error: String(e) }), "error");
       });
@@ -573,7 +582,7 @@ function AppShell() {
       if (!isHideWindowShortcut(event, APP_PLATFORM)) return;
       event.preventDefault();
       // 走后端命令收起窗口：全屏时需先退出全屏再隐藏，否则会留下黑屏的空 Space。
-      invoke("hide_main_window").catch(console.error);
+      invoke(APP_SHELL_COMMANDS.hideWindow).catch(console.error);
     }
     window.addEventListener("keydown", handleHideWindow, true);
     return () => window.removeEventListener("keydown", handleHideWindow, true);
@@ -620,7 +629,7 @@ function AppShell() {
     void Promise.all([closeListener, exitListener, restartListener])
       .then(() => {
         if (disposed) return;
-        return invoke("app_exit_listener_ready");
+        return invoke(APP_SHELL_COMMANDS.exitListenerReady);
       })
       .catch((error) => {
         console.error("Failed to register app lifecycle listener", error);
@@ -751,7 +760,7 @@ function AppShell() {
 
       const now = Date.now();
       const persistLastRun = () =>
-        invoke("update_auto_cleanup_settings", {
+        invoke(CLEANUP_COMMANDS.updateAutoCleanup, {
           autoCleanupSettings: { ...cleanup, last_run_at: now },
         }).catch((error: unknown) => {
           console.error("Failed to record auto cleanup run", error);
@@ -936,7 +945,7 @@ function AppShell() {
           console.warn("production confirmation dialog failed", error);
         }
         try {
-          await invoke("respond_dbx_production_confirmation", { requestId, approved });
+          await invoke(DBX_COMMANDS.respondProductionConfirmation, { requestId, approved });
         } catch (error) {
           console.warn("failed to answer production confirmation", error);
         }
@@ -995,7 +1004,7 @@ function AppShell() {
         resultTask?: Task,
       ) => {
         try {
-          await invoke("remote_complete_task_request", {
+          await invoke(REMOTE_TASK_COMMANDS.completeTaskRequest, {
             requestId,
             accepted,
             taskId: resultTaskId,
@@ -2019,7 +2028,7 @@ function AppShell() {
         // Validate with std::process before changing Router state or touching
         // the current PTY. A missing/non-executable profile cannot disturb a
         // healthy run or make the global target disagree with it.
-        await invoke("validate_agent_launch", {
+        await invoke(LOCAL_ROUTER_COMMANDS.validateAgentLaunch, {
           agent: values.agent,
           projectPath: task.worktreePath ?? project.path,
         });
@@ -2050,7 +2059,7 @@ function AppShell() {
       );
       if (localRouterTarget) {
         try {
-          await invoke("switch_local_router_target", {
+          await invoke(LOCAL_ROUTER_COMMANDS.switchTarget, {
             agent: localRouterTarget.agent,
             targetId: localRouterTarget.targetId,
           });
@@ -2277,7 +2286,7 @@ function AppShell() {
     if (!task) return;
 
     try {
-      await invoke("reset_task_process", { taskId });
+      await invoke(TASK_PROCESS_COMMANDS.reset, { taskId });
     } catch (e: unknown) {
       showToast(t("toast.resetTaskFailed", { error: String(e) }));
       return;
@@ -2366,7 +2375,7 @@ function AppShell() {
       .forEach((task) => {
         const proj = projects.find((p) => p.id === task.projectId);
         const projectPath = task.worktreePath ?? proj?.path ?? "";
-        invoke("cancel_task", { taskId: task.id, projectPath })
+        invoke(TASK_PROCESS_COMMANDS.cancelLocal, { taskId: task.id, projectPath })
           .catch((e: unknown) => {
             showToast(t("toast.cancelTaskFailed", { error: String(e) }));
           })
@@ -2391,7 +2400,7 @@ function AppShell() {
     });
 
     tm.removeTaskBuffers(taskIds);
-    invoke("delete_task_terminal_histories", { taskIds }).catch((e: unknown) => {
+    invoke(CLEANUP_COMMANDS.deleteTaskTerminalHistories, { taskIds }).catch((e: unknown) => {
       showToast(t("toast.deleteTaskHistoryFailed", { error: String(e) }), "warning");
     });
     setProjectViews((prev) => {

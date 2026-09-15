@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { SKILL_HUB_COMMANDS } from "../../lib/api/agentSettings";
 import { FolderOpen, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import type { Project, SkillHubConfig, SetSkillHubResult } from "../../types";
@@ -64,7 +65,7 @@ export function SkillsPanel() {
     setBusy(true);
     setError(null);
     try {
-      await invoke("clear_skill_hub");
+      await invoke(SKILL_HUB_COMMANDS.clear);
       setConfig(null);
       window.dispatchEvent(new CustomEvent(SKILL_HUB_CHANGED_EVENT));
     } catch (e) {

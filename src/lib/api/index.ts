@@ -4,3 +4,5 @@ export * from "./search";
 export * from "./session";
 export * from "./lsp";
 export * from "./worktree";
+export * from "./appCommands";
+export * from "./agentSettings";
