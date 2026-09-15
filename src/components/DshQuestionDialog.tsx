@@ -19,7 +19,8 @@ interface AskUserQuestionItem {
 }
 
 export interface DshQuestionRequest {
-  rpcId: string;
+  eventId: string;
+  clientId: string;
   sessionId: string;
   questions: AskUserQuestionItem[];
 }
@@ -29,6 +30,14 @@ interface QuestionAnswer {
   selected: string[];
   custom?: string;
 }
+
+/**
+ * waterfall 回包的两种终局:交答案,或者「我不答」往下传。
+ * `next` 交给下一个应答者(手机端等),没人接时 Host 自己收尾。
+ */
+type DshQuestionOutcome =
+  | { kind: "result"; value: { answers: QuestionAnswer[] } }
+  | { kind: "next" };
 
 export function DshQuestionDialog({
   request,
@@ -81,24 +90,20 @@ export function DshQuestionDialog({
     });
   }
 
-  async function handleSubmit() {
-    if (submitting || !request) return;
+  /**
+   * waterfall 回包:outcome 就是结果本身,没有 apiproxy 那层 { ok, value } / { ok, error }
+   * 信封。失败必须留在原地报错 —— 直接关掉会让 agent 永远等下去。
+   */
+  async function respond(target: DshQuestionRequest, outcome: DshQuestionOutcome) {
     setSubmitting(true);
     setError(null);
 
     try {
-      await invoke("respond_dsh_server_request", {
-        rpcId: request.rpcId,
-        sessionId: request.sessionId,
-        result: {
-          ok: true,
-          value: {
-            sessionId: request.sessionId,
-            answer: {
-              answers: Array.from(answers.values()),
-            },
-          },
-        },
+      await invoke("respond_dsh_remote_event", {
+        eventId: target.eventId,
+        clientId: target.clientId,
+        sessionId: target.sessionId,
+        outcome,
       });
       onClose();
     } catch (e) {
@@ -107,28 +112,18 @@ export function DshQuestionDialog({
     }
   }
 
+  async function handleSubmit() {
+    if (submitting || !request) return;
+    await respond(request, {
+      kind: "result",
+      value: { answers: Array.from(answers.values()) },
+    });
+  }
+
+  /** 取消/点遮罩 = 不作答,交给下一个应答者;Host 那边没人接就自己收尾。 */
   async function handleCancel() {
     if (submitting || !request) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await invoke("respond_dsh_server_request", {
-        rpcId: request.rpcId,
-        sessionId: request.sessionId,
-        result: {
-          ok: false,
-          error: {
-            code: "cancelled",
-            message: "the user closed this question request",
-            details: {},
-          },
-        },
-      });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setSubmitting(false);
-    }
+    await respond(request, { kind: "next" });
   }
 
   return (

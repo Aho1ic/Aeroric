@@ -61,8 +61,16 @@ export function ompThinkingLevelFor(effort: string | undefined): OmpThinkingLeve
 /** 不开放推理强度的配置共用这一份空列表,避免每次渲染都产生新引用。 */
 export const NO_REASONING_EFFORTS: readonly ReasoningEffort[] = [];
 
-/** dsh 内建默认模型目录(`@deepseek-ai/dsh-llm-deepseek` 的官方目录)。 */
-export const DSH_DEFAULT_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
+/**
+ * dsh 内建默认模型目录(`@deepseek-ai/dsh-llm-deepseek` 的官方目录)。首项即新会话
+ * 默认模型:上游 c291e7961a 把 `agent-default-model` 指向 `deepseek-flash`
+ * (DeepSeek-V41-Flash,支持图像输入),因此它必须排在 v4 系列之前。
+ */
+export const DSH_DEFAULT_MODELS = [
+  "deepseek-flash",
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+] as const;
 
 export function normalizeModelList(models: string[]): string[] {
   const result: string[] = [];

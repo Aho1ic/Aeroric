@@ -633,10 +633,10 @@ describe("App 装配层:DSH 审批 / 提问对话框", () => {
     await waitForSubscriptions();
 
     await emit("dsh-approval-requested", {
-      type: "approval",
-      rpcId: "rpc-1",
+      type: "approval/request",
+      eventId: "evt-1",
+      clientId: "client-1",
       sessionId: "s-1",
-      approvalId: "a-1",
       toolName: "Bash",
       reason: "rm -rf build",
     });
@@ -647,22 +647,22 @@ describe("App 装配层:DSH 审批 / 提问对话框", () => {
     expect(screen.getByText("rm -rf build")).toBeInTheDocument();
   });
 
-  it("同一个 rpcId 重复推送只留一份,不会叠出两层框", async () => {
+  it("同一个 eventId 重复推送只留一份,不会叠出两层框", async () => {
     renderApp();
     await waitForSubscriptions();
 
     const request = {
-      type: "approval",
-      rpcId: "rpc-1",
+      type: "approval/request",
+      eventId: "evt-1",
+      clientId: "client-1",
       sessionId: "s-1",
-      approvalId: "a-1",
       toolName: "Bash",
     };
     await emit("dsh-approval-requested", request);
     await emit("dsh-approval-requested", { ...request, toolName: "Bash" });
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    // 队列去重靠 rpcId。重复项会让用户答完第一层后又冒出一个一模一样的框。
+    // 队列去重靠 eventId。重复项会让用户答完第一层后又冒出一个一模一样的框。
     expect(screen.getAllByText("Bash")).toHaveLength(1);
   });
 
@@ -671,43 +671,43 @@ describe("App 装配层:DSH 审批 / 提问对话框", () => {
     await waitForSubscriptions();
 
     await emit("dsh-approval-requested", {
-      type: "approval",
-      rpcId: "rpc-1",
+      type: "approval/request",
+      eventId: "evt-1",
+      clientId: "client-1",
       sessionId: "s-1",
-      approvalId: "a-1",
       toolName: "Bash",
     });
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
 
-    await emit("dsh-approval-resolved", { sessionId: "s-1", approvalId: "a-1" });
+    await emit("dsh-approval-resolved", { eventId: "evt-1", sessionId: "s-1" });
 
-    // 不撤的话桌面会留一个已经没有对端的死框,再点一次答复会打到一个已完成的 rpc。
+    // 不撤的话桌面会留一个已经没有对端的死框,再点一次答复会打到一个已经结束的
+    // waterfall 事件。
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("resolved 事件按 sessionId + approvalId 匹配,不误伤同 session 的另一条审批", async () => {
+  it("resolved 事件按 eventId 匹配,不误伤同 session 的另一条审批", async () => {
     renderApp();
     await waitForSubscriptions();
 
-    for (const [rpcId, approvalId, toolName] of [
-      ["rpc-1", "a-1", "Bash"],
-      ["rpc-2", "a-2", "Write"],
+    for (const [eventId, toolName] of [
+      ["evt-1", "Bash"],
+      ["evt-2", "Write"],
     ]) {
       await emit("dsh-approval-requested", {
-        type: "approval",
-        rpcId,
+        type: "approval/request",
+        eventId,
+        clientId: "client-1",
         sessionId: "s-1",
-        approvalId,
         toolName,
       });
     }
     // 队列只渲染头部一条。
     expect(await screen.findByText("Bash")).toBeInTheDocument();
 
-    await emit("dsh-approval-resolved", { sessionId: "s-1", approvalId: "a-1" });
+    await emit("dsh-approval-resolved", { eventId: "evt-1", sessionId: "s-1" });
 
-    // 只匹配 approvalId 会撤掉两条,只匹配 sessionId 会把整个会话的审批清空 ——
-    // 两种写法都让第二条工具调用永远等不到答复。
+    // 只按 sessionId 撤会把整个会话的审批清空 —— 第二条工具调用就永远等不到答复。
     expect(await screen.findByText("Write")).toBeInTheDocument();
   });
 
@@ -716,16 +716,16 @@ describe("App 装配层:DSH 审批 / 提问对话框", () => {
     await waitForSubscriptions();
 
     await emit("dsh-question-requested", {
-      type: "question",
-      rpcId: "q-rpc-1",
+      type: "user-questions/request",
+      eventId: "q-evt-1",
+      clientId: "client-1",
       sessionId: "s-1",
       questions: [{ id: "q1", question: "Which database should I target?" }],
     });
     expect(await screen.findByText("Which database should I target?")).toBeInTheDocument();
 
-    // 提问的 resolved 事件带的是 questionRpcId(不是 approvalId),字段名接错
-    // 会让框撤不掉。
-    await emit("dsh-question-resolved", { sessionId: "s-1", questionRpcId: "q-rpc-1" });
+    // resolved 带的也是 eventId,字段名接错会让框撤不掉。
+    await emit("dsh-question-resolved", { eventId: "q-evt-1", sessionId: "s-1" });
     await waitFor(() =>
       expect(screen.queryByText("Which database should I target?")).not.toBeInTheDocument(),
     );
@@ -743,9 +743,9 @@ describe("App 装配层:DSH host 事件的再广播", () => {
     };
     window.addEventListener("dsh-host-refresh", onRefresh);
 
-    // 后端事件名 → 再广播用的短名。这张表是 App.tsx:809-829 的镜像:那七行长得
-    // 几乎一样,粘错一行(比如 workspace-removed 报成 workspace-changed)编译照过、
-    // 类型照过,只有面板刷错东西时才看得出来。
+    // 后端事件名 → 再广播用的短名。这张表是 useDshHostEvents.ts 里那串 dispatch 的镜像:
+    // 那七行长得几乎一样,粘错一行(比如 workspace-removed 报成 workspace-changed)
+    // 编译照过、类型照过,只有面板刷错东西时才看得出来。
     const mapping: Array<[string, string]> = [
       ["dsh-host-session-added", "session-added"],
       ["dsh-host-session-removed", "session-removed"],

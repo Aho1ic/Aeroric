@@ -5,7 +5,7 @@
 //! 以及在 lifecycle 锁上排队以免两次启动互相踩。
 //!
 //! 会话层的东西(RPC、事件流、终端渲染)不在这里 —— 那些在父模块和
-//! `api_client` / `event_stream` / `terminal_render` 里。
+//! `api_client` / `remote_mux` / `terminal_render` 里。
 
 use super::*;
 

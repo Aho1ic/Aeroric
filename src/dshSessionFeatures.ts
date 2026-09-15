@@ -177,18 +177,109 @@ function usageNumber(data: Dict, key: string): number {
 }
 
 /**
- * Whether a streaming chunk carried model output.
+ * The fragments one packed delta run carries, in stream order.
  *
- * Time to first token is measured from the first chunk that actually produced
- * something, so a chunk that only reports usage or a tool-call frame must not
- * start the clock.
+ * A run packs one block's deltas without joining their boundaries, so the
+ * fragments are the original chunks' texts — `args` for a tool call's arguments
+ * and `texts` for model output
+ * (`packages/llm/llm/src/assistant-stream.ts:21`).
  */
-function isTokenChunk(data: Dict): boolean {
-  const chunk = dict(data.chunk);
-  const kind = text(chunk.type) ?? "";
-  return (
-    kind === "text" || kind === "reasoning" || kind === "token" || text(chunk.text) !== undefined
-  );
+function runFragments(record: Dict): string[] {
+  const list = record.type === "tool-call-chunks" ? record.args : record.texts;
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => text(item) ?? "");
+}
+
+/**
+ * Whether one raw stream chunk carried model output.
+ *
+ * Mirrors `isTokenDelta` (`packages/llm/llm/src/assistant-stream.ts:246`): a
+ * usage, finish, or block frame reports the call's shape rather than its output,
+ * so it must not start the first-token clock. A tool-call delta counts as soon
+ * as it names the tool, which is output even before any arguments arrive.
+ */
+function isTokenDelta(chunk: Dict): boolean {
+  switch (chunk.type) {
+    case "text-delta":
+    case "reasoning-delta":
+      return (text(chunk.text) ?? "") !== "";
+    case "tool-call-delta":
+      return (text(chunk.argumentsDelta) ?? "") !== "" || text(chunk.name) !== undefined;
+    default:
+      return false;
+  }
+}
+
+/**
+ * When one packed run first produced a token.
+ *
+ * A run's members are not events of their own, so each member's time is
+ * reconstructed from the run's `time0` and the gaps `dt` holds — the same walk
+ * `runFirstTokenTime` does upstream
+ * (`packages/llm/llm/src/assistant-stream.ts:299`).
+ */
+function runFirstTokenTime(record: Dict): number | undefined {
+  const time0 = number(record.time0);
+  if (time0 === undefined) return undefined;
+  if (record.type === "tool-call-chunks" && text(record.name) !== undefined) return time0;
+  const gaps = Array.isArray(record.dt) ? record.dt : [];
+  let at = time0;
+  for (const [index, fragment] of runFragments(record).entries()) {
+    if (index > 0) at += number(gaps[index - 1]) ?? 0;
+    if (fragment !== "") return at;
+  }
+  return undefined;
+}
+
+/**
+ * When an assistant attempt's stream first produced a token.
+ *
+ * The Harness retired the per-token `assistant/chunk` event: an attempt's exact
+ * timed stream now rides the event that settles it — `assistant/message.stream`
+ * for a committed reply and `assistant/attempt.stream` for one that committed
+ * nothing (`packages/core/session/src/types.ts:335`) — as compact records. So
+ * time to first token is read from those records rather than from the arrival of
+ * a chunk event, which is also why it no longer depends on which events a page
+ * happened to load.
+ */
+function streamFirstTokenTime(value: unknown): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const item of value) {
+    const record = dict(item);
+    const at =
+      record.type === "chunk"
+        ? isTokenDelta(dict(record.chunk))
+          ? number(record.time)
+          : undefined
+        : runFirstTokenTime(record);
+    if (at !== undefined) return at;
+  }
+  return undefined;
+}
+
+/**
+ * The text one compact stream carried, for the one kind of delta asked for.
+ *
+ * An attempt that committed no message left its stream as the only trace of
+ * what the model produced, and a failed attempt often produced reasoning and no
+ * text at all — so the two are read separately rather than concatenated into one
+ * misleading reply.
+ */
+function streamText(value: unknown, kind: "text" | "reasoning"): string {
+  if (!Array.isArray(value)) return "";
+  const run = kind === "text" ? "text-chunks" : "reasoning-chunks";
+  const delta = kind === "text" ? "text-delta" : "reasoning-delta";
+  let out = "";
+  for (const item of value) {
+    const record = dict(item);
+    if (record.type === run) {
+      out += runFragments(record).join("");
+      continue;
+    }
+    const chunk = dict(record.chunk);
+    if (record.type === "chunk" && chunk.type === delta) out += text(chunk.text) ?? "";
+  }
+  return out;
 }
 
 function preview(event: DshSessionEvent): { title: string; detail?: string } {
@@ -204,11 +295,31 @@ function preview(event: DshSessionEvent): { title: string; detail?: string } {
         title: "Assistant message",
         detail: contentText(data.content ?? dict(data.message).content),
       };
-    case "assistant/chunk":
-      return { title: "Assistant stream", detail: text(dict(data.chunk).text) ?? text(data.chunk) };
+    case "assistant/attempt": {
+      // An attempt event exists only because the model committed no message, so
+      // its stream is the whole record of what that attempt produced. Reasoning
+      // stands in for text because a failed attempt often produced only that.
+      const streamed = streamText(data.stream, "text") || streamText(data.stream, "reasoning");
+      return { title: "Assistant attempt", detail: streamed || undefined };
+    }
+    case "system/message":
+      return {
+        title: "System prompt",
+        detail: contentText(data.content ?? dict(data.message).content),
+      };
     case "tool/call":
       return { title: `Tool: ${text(data.name) ?? "tool"}`, detail: text(data.arguments) };
     case "tool/result":
+      return {
+        title: "Tool result",
+        detail: contentText(data.content ?? dict(data.message).content),
+      };
+    // A `run_code` program dispatches tools of its own. The pair reads in
+    // `tool/call`'s vocabulary so a sub-call renders through the same path as a
+    // native one (`packages/core/tools/src/types.ts:40`).
+    case "tool/ptc-dispatch-start":
+      return { title: `Tool: ${text(data.name) ?? "tool"}` };
+    case "tool/ptc-dispatch":
       return {
         title: "Tool result",
         detail: contentText(data.content ?? dict(data.message).content),
@@ -247,10 +358,18 @@ function isErrorResult(event: DshSessionEvent): boolean {
   );
 }
 
+/**
+ * The id that pairs a call with the event settling it.
+ *
+ * A `run_code` sub-dispatch pairs on `subCallId` instead, because `callId` on
+ * that pair names the parent program's own call
+ * (`packages/core/tools/src/types.ts:43`); reading `subCallId` first keeps the
+ * sub-call a call of its own rather than a second settlement of its parent.
+ */
 function callId(event: DshSessionEvent): string | undefined {
   const data = eventData(event);
   const source = dict(dict(data.message).source);
-  return text(data.callId) ?? text(source.callId);
+  return text(data.subCallId) ?? text(data.callId) ?? text(source.callId);
 }
 
 function parseJson(value: unknown): Dict {
@@ -276,8 +395,8 @@ export {
   dict as dshDict,
   eventData as dshEventData,
   isErrorResult as dshEventIsError,
-  isTokenChunk as dshIsTokenChunk,
   number as dshNumber,
+  streamFirstTokenTime as dshStreamFirstTokenTime,
   text as dshText,
   usage as dshUsage,
 };
@@ -337,49 +456,35 @@ function updateStats(events: DshSessionEvent[]): DshStats {
     cacheWriteTokens: 0,
   };
   const turns = new Set<number>();
-  const steps = new Map<string, { start: number; firstToken?: number }>();
+  const steps = new Map<string, number>();
   const calls = new Map<string, number>();
   for (const event of events) {
     const data = eventData(event);
     const turn = eventTurn(event);
     const step = eventStep(event);
     const stepKey = turn !== undefined && step !== undefined ? `${turn}:${step}` : undefined;
-    if (event.type === "step/start" && stepKey) steps.set(stepKey, { start: eventTime(event) });
-    if (event.type === "assistant/chunk" && stepKey) {
-      const open = steps.get(stepKey);
-      if (isTokenChunk(data) && open && open.firstToken === undefined)
-        open.firstToken = eventTime(event);
-    }
+    if (event.type === "step/start" && stepKey) steps.set(stepKey, eventTime(event));
     if (event.type === "assistant/message" && stepKey) {
-      const open = steps.get(stepKey);
-      if (open) {
-        stats.llmMs += Math.max(0, eventTime(event) - open.start);
-        if (open.firstToken !== undefined) {
-          stats.ttftMs += Math.max(0, open.firstToken - open.start);
+      const start = steps.get(stepKey);
+      if (start !== undefined) {
+        stats.llmMs += Math.max(0, eventTime(event) - start);
+        // The reply carries the attempt's own timed stream, so the first token is
+        // read from it rather than from a separately delivered chunk event.
+        const firstToken = streamFirstTokenTime(data.stream);
+        if (firstToken !== undefined) {
+          stats.ttftMs += Math.max(0, firstToken - start);
           stats.ttftSteps += 1;
-          const output = usageNumber(data, "outputTokens");
-          stats.decodeMs += Math.max(0, eventTime(event) - open.firstToken);
-          stats.decodeTokens += output;
+          stats.decodeMs += Math.max(0, eventTime(event) - firstToken);
+          stats.decodeTokens += usageNumber(data, "outputTokens");
         }
         steps.delete(stepKey);
       }
+      // Token accounting travels with the reply it belongs to: the Harness keeps
+      // no separate usage record (`packages/core/session/src/types.ts:325`).
       stats.inputTokens += usageNumber(data, "inputTokens");
       stats.outputTokens += usageNumber(data, "outputTokens");
       stats.cacheReadTokens += usageNumber(data, "cacheReadTokens");
       stats.cacheWriteTokens += usageNumber(data, "cacheWriteTokens");
-    }
-    if (event.type === "assistant/chunk") {
-      const chunkUsage = dict(dict(data.chunk).usage);
-      stats.inputTokens = Math.max(stats.inputTokens, number(chunkUsage.inputTokens) ?? 0);
-      stats.outputTokens = Math.max(stats.outputTokens, number(chunkUsage.outputTokens) ?? 0);
-      stats.cacheReadTokens = Math.max(
-        stats.cacheReadTokens,
-        number(chunkUsage.cacheReadTokens) ?? 0,
-      );
-      stats.cacheWriteTokens = Math.max(
-        stats.cacheWriteTokens,
-        number(chunkUsage.cacheWriteTokens) ?? 0,
-      );
     }
     if (event.type === "tool/call") {
       const id = callId(event);
@@ -570,21 +675,23 @@ export interface DshTimelineRecord {
 
 function timelineKind(type: string): DshTimelineKind | undefined {
   if (type === "user/message") return "user";
-  if (type === "assistant/message") return "assistant";
-  if (type === "tool/call") return "tool";
+  // An attempt is a model call that committed no message, so it is plotted in
+  // the same lane: the time it spent is the session's time either way.
+  if (type === "assistant/message" || type === "assistant/attempt") return "assistant";
+  if (type === "tool/call" || type === "tool/ptc-dispatch-start") return "tool";
   if (type === "compaction/summary") return "compacted";
-  // Streaming chunks and step boundaries are how the other records are measured,
-  // never records themselves; a result belongs to the call it settles.
-  if (type === "assistant/chunk" || type === "step/start" || type === "step/end") return undefined;
-  if (type === "tool/result") return undefined;
+  // Step boundaries are how the other records are measured, never records
+  // themselves; a result belongs to the call it settles.
+  if (type === "step/start" || type === "step/end") return undefined;
+  if (type === "tool/result" || type === "tool/ptc-dispatch") return undefined;
   return "system";
 }
 
 /**
  * Fold the event stream into the operations the timing overview plots.
  *
- * Durations come from the same pairings the stats panel sums — `tool/call` to
- * its `tool/result` by call id, `step/start` to the `assistant/message` that
+ * Durations come from the same pairings the stats panel sums — a call to the
+ * event settling it by call id, `step/start` to the `assistant/message` that
  * closes it — so the overview and the totals can never disagree. An operation
  * still open when the page ends keeps a zero width rather than being stretched
  * to now, which would make a live session's last span grow on every render.
@@ -592,21 +699,16 @@ function timelineKind(type: string): DshTimelineKind | undefined {
 function updateTimeline(events: DshSessionEvent[], titles: ReadonlyMap<number, string>) {
   const records: DshTimelineRecord[] = [];
   const openTools = new Map<string, DshTimelineRecord>();
-  const openSteps = new Map<string, { start: number; firstToken?: number }>();
+  const openSteps = new Map<string, number>();
   for (const [index, event] of events.entries()) {
     const seq = eventSeq(event, index);
     const turn = eventTurn(event);
     const step = eventStep(event);
     const stepKey = turn !== undefined && step !== undefined ? `${turn}:${step}` : undefined;
     if (event.type === "step/start" && stepKey) {
-      openSteps.set(stepKey, { start: eventTime(event) });
+      openSteps.set(stepKey, eventTime(event));
     }
-    if (event.type === "assistant/chunk" && stepKey) {
-      const open = openSteps.get(stepKey);
-      if (isTokenChunk(eventData(event)) && open && open.firstToken === undefined)
-        open.firstToken = eventTime(event);
-    }
-    if (event.type === "tool/result") {
+    if (event.type === "tool/result" || event.type === "tool/ptc-dispatch") {
       const id = callId(event);
       const open = id === undefined ? undefined : openTools.get(id);
       if (id !== undefined && open) {
@@ -629,16 +731,23 @@ function updateTimeline(events: DshSessionEvent[], titles: ReadonlyMap<number, s
       ...(turn === undefined ? {} : { turn }),
     };
     if (kind === "assistant") {
-      const open = stepKey ? openSteps.get(stepKey) : undefined;
-      if (open) {
-        record.startedAt = open.start;
-        record.durationMs = Math.max(0, eventTime(event) - open.start);
-        if (open.firstToken !== undefined) {
-          record.ttftMs = Math.max(0, open.firstToken - open.start);
-          record.decodeMs = Math.max(0, eventTime(event) - open.firstToken);
+      const start = stepKey === undefined ? undefined : openSteps.get(stepKey);
+      if (start !== undefined) {
+        record.startedAt = start;
+        record.durationMs = Math.max(0, eventTime(event) - start);
+        const firstToken = streamFirstTokenTime(eventData(event).stream);
+        if (firstToken !== undefined) {
+          record.ttftMs = Math.max(0, firstToken - start);
+          record.decodeMs = Math.max(0, eventTime(event) - firstToken);
         }
-        if (stepKey) openSteps.delete(stepKey);
+        // Only a committed reply closes the step: a retried attempt leaves it
+        // open so the reply that finally settles it is still measured from the
+        // request, rather than from the moment the failed attempt gave up.
+        if (event.type === "assistant/message" && stepKey !== undefined)
+          openSteps.delete(stepKey);
       }
+      // An attempt committed nothing, so there is no reply to blame for it.
+      if (event.type === "assistant/attempt") record.isError = true;
     }
     if (kind === "tool") {
       const id = callId(event);

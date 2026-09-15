@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { projectDshSessionEvents } from "../dshSessionFeatures";
 import type { DshSessionEvent } from "../dshSessionFeatures";
 import {
+  DSH_KNOWN_SESSION_EVENT_TYPES,
   deriveDshLedger,
   dshLedgerCategory,
   dshLedgerRows,
@@ -34,7 +35,21 @@ const bashTool = {
   },
 };
 
-/** One turn: a request header, a reply, and the tool call it ordered. */
+/**
+ * One packed run of text deltas, as an attempt's compact stream records it.
+ *
+ * `time0` is the first fragment's own timestamp and `dt` holds the gaps to the
+ * ones after it, so the run states when the model produced each fragment without
+ * an event per token (`packages/llm/llm/src/assistant-stream.ts:21`).
+ */
+function textRun(time0: number, texts: readonly string[], dt: readonly number[] = []) {
+  return { type: "text-chunks", time0, index: 0, dt, texts };
+}
+
+/**
+ * One turn: a header, an attempt that committed nothing, the reply that did, and
+ * the tool call that reply ordered.
+ */
 function turnEvents(): DshSessionEvent[] {
   return [
     { type: "turn/start", seq: 1, time: 1_000, data: { turn: 1 } },
@@ -47,16 +62,22 @@ function turnEvents(): DshSessionEvent[] {
     },
     { type: "step/start", seq: 4, time: 1_100, data: { turn: 1, step: 1 } },
     {
-      type: "assistant/chunk",
+      type: "assistant/attempt",
       seq: 5,
-      time: 1_200,
-      data: { turn: 1, step: 1, chunk: { type: "text", text: "on it" } },
+      time: 1_250,
+      data: { turn: 1, step: 1, stream: [textRun(1_150, ["par"])] },
     },
     {
       type: "assistant/message",
       seq: 6,
       time: 1_400,
-      data: { turn: 1, step: 1, content: "on it", usage: { inputTokens: 30, outputTokens: 10 } },
+      data: {
+        turn: 1,
+        step: 1,
+        content: "on it",
+        stream: [textRun(1_200, ["on ", "it"], [40])],
+        usage: { inputTokens: 30, outputTokens: 10 },
+      },
     },
     {
       type: "tool/call",
@@ -79,7 +100,8 @@ describe("dshLedgerTag", () => {
   it("maps every kind the panel colours, and falls back to SYSTEM", () => {
     expect(dshLedgerTag("user/message")).toBe("USER");
     expect(dshLedgerTag("assistant/message")).toBe("ASSISTANT");
-    expect(dshLedgerTag("assistant/chunk")).toBe("ASSISTANT");
+    expect(dshLedgerTag("assistant/attempt")).toBe("ASSISTANT");
+    expect(dshLedgerTag("system/message")).toBe("SYSTEM");
     expect(dshLedgerTag("tool/call")).toBe("TOOL");
     expect(dshLedgerTag("tool/result")).toBe("TOOL");
     expect(dshLedgerTag("turn/start")).toBe("TURN");
@@ -99,6 +121,54 @@ describe("dshLedgerTag", () => {
     expect(dshLedgerCategory(dshLedgerTag("user/message"))).toBe("message");
     expect(dshLedgerCategory(dshLedgerTag("step/start"))).toBe("lifecycle");
     expect(dshLedgerCategory(dshLedgerTag("session/end"))).toBe("system");
+  });
+});
+
+describe("DSH_KNOWN_SESSION_EVENT_TYPES", () => {
+  it("states the vocabulary of the Harness build Aeroric mirrors", () => {
+    // Mirrored from `packages/core/session/src/known-event-types.ts:23` at
+    // `c291e7961a`: 56 declared types.
+    expect(Object.keys(DSH_KNOWN_SESSION_EVENT_TYPES)).toHaveLength(56);
+  });
+
+  it("carries the renamed sub-dispatch pair and not the name it replaced", () => {
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["tool/ptc-dispatch"]).toBe(true);
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["tool/ptc-dispatch-start"]).toBe(true);
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["tool/code-dispatch"]).toBeUndefined();
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["tool/code-dispatch-start"]).toBeUndefined();
+  });
+
+  it("drops the retired per-token event and carries what replaced it", () => {
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["assistant/chunk"]).toBeUndefined();
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["assistant/attempt"]).toBe(true);
+    expect(DSH_KNOWN_SESSION_EVENT_TYPES["system/message"]).toBe(true);
+  });
+
+  it("carries every type the release added, so a mirrored event is never raw", () => {
+    for (const type of [
+      "model/selection",
+      "subagent/catalog",
+      "subagent/model-selection-policy",
+      "deliverables/presented",
+      "feedback/message-put",
+      "feedback/message-delete",
+      "session-log-deepseek/delivery-accepted",
+    ]) {
+      expect(DSH_KNOWN_SESSION_EVENT_TYPES[type]).toBe(true);
+    }
+  });
+
+  it("shows an event outside the vocabulary raw rather than as nothing", () => {
+    // A newer Harness' event and a downstream plugin's are both outside the
+    // mirrored list by construction, and the panel is the only place their data
+    // can be read.
+    const unknown = rowAt(
+      [{ type: "tool/code-dispatch", seq: 1, time: 1, data: { name: "bash", subCallId: "s1" } }],
+      1,
+    );
+    expect(unknown.payload).toBe('{\n  "name": "bash",\n  "subCallId": "s1"\n}');
+    // A mirrored type states its own detail, so it is never dumped raw.
+    expect(rowAt(turnEvents(), 2).payload).toBe("list the files");
   });
 });
 
@@ -157,14 +227,91 @@ describe("deriveDshLedger", () => {
     expect(orphan[0]).toMatchObject({ tag: "TOOL", seq: 9, result: "done" });
   });
 
-  it("keeps the streaming chunks out of the rows and in the reply's timing", () => {
-    expect(rows(turnEvents()).map((row) => row.seq)).toEqual([1, 2, 3, 4, 6, 7, 9, 10]);
+  it("reads the reply's timing from the stream the reply itself carries", () => {
+    expect(rows(turnEvents()).map((row) => row.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 9, 10]);
     expect(rowAt(turnEvents(), 6)).toMatchObject({
       startedAt: 1_100,
       durationMs: 300,
       ttftMs: 100,
       decodeMs: 200,
     });
+  });
+
+  it("stands an attempt that committed no message up as its own failed row", () => {
+    // The attempt streamed `par` at 1_150 and gave up at 1_250, both inside the
+    // step the request opened at 1_100.
+    expect(rowAt(turnEvents(), 5)).toMatchObject({
+      tag: "ASSISTANT",
+      title: "Assistant attempt",
+      preview: "par",
+      payload: "par",
+      status: "error",
+      startedAt: 1_100,
+      durationMs: 150,
+      ttftMs: 50,
+      decodeMs: 100,
+    });
+    expect(rowAt(turnEvents(), 5).usage).toBeUndefined();
+  });
+
+  it("leaves the step open for the reply that follows a failed attempt", () => {
+    // Both are measured from the request at 1_100: an attempt that committed
+    // nothing must not make the reply look like it started when the attempt
+    // gave up.
+    expect(rowAt(turnEvents(), 6).startedAt).toBe(1_100);
+    expect(rowAt(turnEvents(), 5).startedAt).toBe(1_100);
+  });
+
+  it("does not let an attempt adopt the calls the reply ordered", () => {
+    expect(rowAt(turnEvents(), 7).parentSeq).toBe(6);
+  });
+
+  it("reads an attempt's reasoning when it produced no text at all", () => {
+    const row = rowAt(
+      [
+        { type: "step/start", seq: 1, time: 100, data: { turn: 1, step: 1 } },
+        {
+          type: "assistant/attempt",
+          seq: 2,
+          time: 400,
+          data: {
+            turn: 1,
+            step: 1,
+            stream: [
+              { type: "reasoning-chunks", time0: 200, index: 0, dt: [50], texts: ["hm", "mm"] },
+            ],
+          },
+        },
+      ],
+      2,
+    );
+    expect(row).toMatchObject({ preview: "hmmm", ttftMs: 100, decodeMs: 200 });
+  });
+
+  it("starts the clock at the first token, not at a usage or finish frame", () => {
+    const row = rowAt(
+      [
+        { type: "step/start", seq: 1, time: 100, data: { turn: 1, step: 1 } },
+        {
+          type: "assistant/message",
+          seq: 2,
+          time: 500,
+          data: {
+            turn: 1,
+            step: 1,
+            content: "hi",
+            stream: [
+              { type: "chunk", time: 150, chunk: { type: "block-start", blockType: "text" } },
+              { type: "text-chunks", time0: 200, index: 0, dt: [], texts: [""] },
+              { type: "text-chunks", time0: 300, index: 0, dt: [], texts: ["hi"] },
+              { type: "chunk", time: 480, chunk: { type: "usage", usage: { outputTokens: 1 } } },
+            ],
+          },
+        },
+      ],
+      2,
+    );
+    expect(row).toMatchObject({ ttftMs: 200, decodeMs: 200 });
   });
 
   it("reports the same reply timing and token counts the stats panel sums", () => {
@@ -271,5 +418,178 @@ describe("deriveDshLedger", () => {
       { type: "user/message", seq: 1, time: 1, data: { content: "\n\n  first line \nsecond" } },
     ];
     expect(rowAt(events, 1).preview).toBe("first line");
+  });
+
+  it("folds a run_code sub-dispatch into one row under the call that ran it", () => {
+    const events: DshSessionEvent[] = [
+      {
+        type: "assistant/message",
+        seq: 1,
+        time: 100,
+        data: { turn: 1, step: 1, content: "running" },
+      },
+      {
+        type: "tool/call",
+        seq: 2,
+        time: 200,
+        data: { turn: 1, step: 1, callId: "root", name: "run_code" },
+      },
+      {
+        type: "tool/ptc-dispatch-start",
+        seq: 3,
+        time: 300,
+        data: {
+          turn: 1,
+          step: 1,
+          rootCallId: "root",
+          parentCallId: "root",
+          subCallId: "root:ptc:1",
+          name: "read_file",
+          arguments: { path: "src/main.ts" },
+        },
+      },
+      {
+        type: "tool/ptc-dispatch",
+        seq: 4,
+        time: 450,
+        data: {
+          turn: 1,
+          step: 1,
+          rootCallId: "root",
+          parentCallId: "root",
+          subCallId: "root:ptc:1",
+          name: "read_file",
+          arguments: { path: "src/main.ts" },
+          isError: false,
+          content: "export {}",
+        },
+      },
+    ];
+    // The pair settles on `subCallId`, so the sub-call is one row rather than a
+    // second settlement of the `run_code` call that ran it.
+    expect(rows(events).map((row) => row.seq)).toEqual([1, 2, 3]);
+    expect(rowAt(events, 3)).toMatchObject({
+      tag: "TOOL",
+      seqs: [3, 4],
+      toolName: "read_file",
+      callId: "root:ptc:1",
+      parentSeq: 2,
+      depth: 2,
+      durationMs: 150,
+      status: "complete",
+      result: "export {}",
+      payload: '{\n  "path": "src/main.ts"\n}',
+    });
+    expect(rowAt(events, 2)).toMatchObject({ status: "running", parentSeq: 1 });
+  });
+
+  it("leaves a sub-dispatch running until the event settling it arrives", () => {
+    const events: DshSessionEvent[] = [
+      {
+        type: "tool/ptc-dispatch-start",
+        seq: 1,
+        time: 100,
+        data: { parentCallId: "root", subCallId: "root:ptc:1", name: "read_file" },
+      },
+    ];
+    expect(rowAt(events, 1)).toMatchObject({ status: "running", callId: "root:ptc:1" });
+  });
+
+  it("marks a failed sub-dispatch an error, the same as a native call", () => {
+    const events: DshSessionEvent[] = [
+      {
+        type: "tool/ptc-dispatch-start",
+        seq: 1,
+        time: 100,
+        data: { parentCallId: "root", subCallId: "s1", name: "read_file" },
+      },
+      {
+        type: "tool/ptc-dispatch",
+        seq: 2,
+        time: 200,
+        data: { parentCallId: "root", subCallId: "s1", name: "read_file", isError: true },
+      },
+    ];
+    expect(rowAt(events, 1)).toMatchObject({ status: "error", durationMs: 100 });
+  });
+
+  it("folds a replaced system prompt into the node that replaced it", () => {
+    const events: DshSessionEvent[] = [
+      {
+        type: "system/message",
+        seq: 1,
+        time: 100,
+        data: { turn: 1, step: 1, content: "be brief" },
+        surfaceOp: "append",
+      },
+      { type: "user/message", seq: 2, time: 200, data: { turn: 1, content: "go" } },
+      {
+        type: "system/message",
+        seq: 3,
+        time: 300,
+        data: { turn: 1, step: 1, content: "be brief and cite files" },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 },
+        sourceEventSeqs: [1],
+      },
+    ];
+    // The replacement takes the shadowed node's place on the surface, so the
+    // panel shows one prompt rather than two it would both call current.
+    expect(rows(events).map((row) => row.seq)).toEqual([2, 3]);
+    expect(rowAt(events, 3)).toMatchObject({
+      tag: "SYSTEM",
+      title: "System prompt",
+      seqs: [1, 3],
+      payload: "be brief and cite files",
+    });
+  });
+
+  it("keeps both prompts when the replacement cites neither of them", () => {
+    const events: DshSessionEvent[] = [
+      {
+        type: "system/message",
+        seq: 1,
+        time: 100,
+        data: { turn: 1, step: 1, content: "be brief" },
+        surfaceOp: "append",
+      },
+      {
+        type: "system/message",
+        seq: 2,
+        time: 200,
+        data: { turn: 1, step: 1, content: "cite files" },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 1 },
+        sourceEventSeqs: [99],
+      },
+    ];
+    expect(rows(events).map((row) => row.seq)).toEqual([1, 2]);
+  });
+
+  it("keeps every row a compaction checkpoint shadowed, so the log stays readable", () => {
+    const events: DshSessionEvent[] = [
+      { type: "user/message", seq: 1, time: 100, data: { turn: 1, content: "first" } },
+      {
+        type: "assistant/message",
+        seq: 2,
+        time: 200,
+        data: { turn: 1, step: 1, content: "reply" },
+      },
+      {
+        type: "compaction/summary",
+        seq: 3,
+        time: 300,
+        data: { compactionId: "c1", text: "summary" },
+      },
+      {
+        // Compaction replaces the span it summarised, which on a log surface is
+        // every row of it: folding those away would leave nothing to read.
+        type: "user/message",
+        seq: 4,
+        time: 400,
+        data: { turn: 1, content: "checkpoint" },
+        surfaceOp: { op: "replace", startSeq: 1, endSeq: 2 },
+        sourceEventSeqs: [1, 2, 3],
+      },
+    ];
+    expect(rows(events).map((row) => row.seq)).toEqual([1, 2, 3, 4]);
   });
 });

@@ -35,6 +35,83 @@ describe("official dsh web plugin manifest", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("mirrors the row count of the upstream base+web-app composition", () => {
+    // 上游 c291e7961a:base 的单个 insert 铺 84 行,web-app 再 insert 68 行,
+    // 其余 26 个 web-app 条目都是按 id 覆盖。数目变了说明上游增删过行,清单要重生成。
+    expect(OFFICIAL_DSH_WEB_PLUGINS).toHaveLength(152);
+  });
+
+  it.each([
+    // base 层新增(DeepSeek 协议扩展、会话日志、包清单、独立的 http fetch 后端)
+    ["deepseek-llm-api-extensions", "@deepseek-ai/dsh-deepseek-llm-api-extensions"],
+    ["session-log-deepseek", "@deepseek-ai/dsh-session-log-deepseek"],
+    ["plugin-package-inventory-deepseek", "@deepseek-ai/dsh-plugin-package-inventory-deepseek"],
+    ["web-fetch-http", "@deepseek-ai/dsh-web-fetch-http"],
+    // web-app 层新增:controller 族、上传、资源模型与新的 ui 行
+    ["subagent-model-selection-settings", "@deepseek-ai/dsh-tool-subagent/model-selection-settings"],
+    ["open-in-app", "@deepseek-ai/dsh-host-open-in-app"],
+    ["ui-open-in-app", "@deepseek-ai/dsh-client-ui-open-in-app"],
+    ["session-turn-outline", "@deepseek-ai/dsh-session-turn-outline"],
+    ["session-controller", "@deepseek-ai/dsh-api-session-controller"],
+    ["workspace-files", "@deepseek-ai/dsh-api-workspace-files"],
+    ["settings-controller", "@deepseek-ai/dsh-api-settings-controller"],
+    ["workspace-controller", "@deepseek-ai/dsh-api-workspace-controller"],
+    ["file-upload", "@deepseek-ai/dsh-client-file-upload"],
+    ["ui-session", "@deepseek-ai/dsh-client-ui-session"],
+    ["resources", "@deepseek-ai/dsh-client-resources"],
+    ["ui-sidebar-right", "@deepseek-ai/dsh-client-ui-sidebar-right"],
+    ["ui-sidebar-documentpreview", "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"],
+    ["ui-sidebar-files", "@deepseek-ai/dsh-client-ui-sidebar-files"],
+    ["ui-approval", "@deepseek-ai/dsh-client-ui-approval"],
+    ["ui-chat", "@deepseek-ai/dsh-client-ui-chat"],
+  ])("carries the upstream-added %s row enabled by default", (entryId, moduleName) => {
+    const plugin = entry(entryId);
+    expect(plugin).toBeDefined();
+    expect(plugin?.moduleName).toBe(moduleName);
+    expect(plugin?.enabled).toBe(true);
+  });
+
+  it.each([
+    // 上游删掉的行。留着会让面板显示已经不存在的插件,并把它算进"官方已知"集合。
+    "tool-subagent-report",
+    "tool-str-replace-editor",
+    "api-gateway",
+    "client-runtime",
+  ])("drops the %s row that upstream removed", (entryId) => {
+    expect(entry(entryId)).toBeUndefined();
+  });
+
+  it("keeps command-goal disabled now that the Web surface moved it behind presets", () => {
+    // 唯一一处默认态翻转:web-app 层显式 `disabled: true`(命令归 agent preset)。
+    // 标成启用会让面板把一个实际没挂载的行显示为 active。
+    expect(entry("command-goal")?.enabled).toBe(false);
+    expect(entry("command-goal")?.fiberPhase).toBe(null);
+    // 同层一起被 preset 接管的行,默认态与之一致。
+    expect(entry("tool-goal")?.enabled).toBe(false);
+    expect(entry("tool-web")?.enabled).toBe(false);
+    // goal 服务与会话驱动仍留在 host plane。
+    expect(entry("goal")?.enabled).toBe(true);
+    expect(entry("goal-round-driver")?.enabled).toBe(true);
+  });
+
+  it("keeps the upstream baseline for rows Aeroric overrides at runtime", () => {
+    // 上游基线是启用(telemetry 只在用户反馈时上报);Aeroric 用 dsh_home.rs 的
+    // 受管 patch 单独把它压成 disabled,清单不能替那层做决定。
+    expect(entry("session-telemetry-otel")?.enabled).toBe(true);
+  });
+
+  it.each([
+    // macOS/Linux 上按 `process.platform` 表达式求值的行。
+    ["bash-sandbox", true],
+    ["pwsh-sandbox", false],
+    // 上游自带 `disabled: true` 的行。
+    ["hmr", false],
+    ["skill-badge", false],
+    ["ui-schedule", false],
+  ])("resolves the %s row default for the macOS/Linux Web profile", (entryId, enabled) => {
+    expect(entry(entryId)?.enabled).toBe(enabled);
+  });
+
   it.each([
     ["session-reference", "@deepseek-ai/dsh-session-reference"],
     ["file-reference-local", "@deepseek-ai/dsh-file-reference-local"],

@@ -9,13 +9,16 @@ export interface DshPluginInventoryEntry {
   version?: string;
 }
 
-// Mirrored from deepseek-harness/packages/bundle/{base,web-app}/cordis.patch.yml.
+// Mirrored from deepseek-harness/packages/bundle/{base,web-app}/cordis.patch.yml
+// at upstream c291e7961a: base inserts every row, web-app overrides rows by id.
 // The last column is the effective default state of the Web profile on macOS/Linux.
 const OFFICIAL_WEB_PLUGIN_MANIFEST = `
 timer|@deepseek-ai/cordis-plugin-timer|1
 hmr|@deepseek-ai/cordis-plugin-hmr|0
 llm|@deepseek-ai/dsh-llm|1
+deepseek-llm-api-extensions|@deepseek-ai/dsh-deepseek-llm-api-extensions|1
 session|@deepseek-ai/dsh-session|1
+session-log-deepseek|@deepseek-ai/dsh-session-log-deepseek|1
 typert|@deepseek-ai/dsh-typert-registry|1
 typert-loader|@deepseek-ai/dsh-typert-loader|1
 typert-gateway|@deepseek-ai/dsh-api-gateway|1
@@ -23,6 +26,7 @@ session-title|@deepseek-ai/dsh-session-title|1
 session-title-llm|@deepseek-ai/dsh-session-title-first-prompt-llm|1
 user-questions|@deepseek-ai/dsh-user-questions|1
 agent|@deepseek-ai/dsh-agent|1
+plugin-package-inventory-deepseek|@deepseek-ai/dsh-plugin-package-inventory-deepseek|1
 agent-default-model|@deepseek-ai/dsh-agent-default-model|1
 jobs|@deepseek-ai/dsh-jobs-local|1
 llm-retry|@deepseek-ai/dsh-llm-retry|1
@@ -33,6 +37,10 @@ session-persistence-jsonl|@deepseek-ai/dsh-session-persistence-jsonl|1
 attachment-local|@deepseek-ai/dsh-attachment-local|1
 session-query-sqlite|@deepseek-ai/dsh-session-query-sqlite|1
 session-projection|@deepseek-ai/dsh-session-projection|1
+storage|@deepseek-ai/dsh-storage|1
+storage-json|@deepseek-ai/dsh-storage-json|1
+storage-domain|@deepseek-ai/dsh-storage-domain|1
+session-projection-cache|@deepseek-ai/dsh-session-projection-cache|1
 session-telemetry-otel|@deepseek-ai/dsh-session-telemetry-otel|1
 subprocess|@deepseek-ai/dsh-subprocess-local|1
 sandbox|@deepseek-ai/dsh-sandbox-local|1
@@ -57,7 +65,7 @@ commands|@deepseek-ai/dsh-commands|1
 command-feedback|@deepseek-ai/dsh-command-feedback|1
 goal|@deepseek-ai/dsh-goal|1
 goal-round-driver|@deepseek-ai/dsh-goal-round-driver|1
-command-goal|@deepseek-ai/dsh-command-goal|1
+command-goal|@deepseek-ai/dsh-command-goal|0
 plan-mode|@deepseek-ai/dsh-plan-mode|0
 token-meter|@deepseek-ai/dsh-token-meter|1
 compaction-basic|@deepseek-ai/dsh-compaction-basic|0
@@ -69,7 +77,6 @@ tool-subagent-control|@deepseek-ai/dsh-tool-subagent-control|0
 tool-subagent-list-agents|@deepseek-ai/dsh-tool-subagent-control/list-agents|0
 tool-subagent|@deepseek-ai/dsh-tool-subagent|0
 tool-subagent-fork|@deepseek-ai/dsh-tool-subagent|0
-tool-subagent-report|@deepseek-ai/dsh-tool-subagent-report|1
 workflow-worker-thread|@deepseek-ai/dsh-workflow-worker-thread|0
 tool-workflow|@deepseek-ai/dsh-tool-workflow|0
 timeout-policy|@deepseek-ai/dsh-tool-call-timeout-policy|1
@@ -80,30 +87,33 @@ tool-result-pruner|@deepseek-ai/dsh-compaction-tool-result-pruner|0
 tool-todo|@deepseek-ai/dsh-tool-todo|0
 tool-goal|@deepseek-ai/dsh-tool-goal|0
 tool-ralph|@deepseek-ai/dsh-tool-ralph|0
-tool-str-replace-editor|@deepseek-ai/dsh-tool-str-replace-editor|0
 repeat-tool-reminder|@deepseek-ai/dsh-repeat-tool-reminder|1
 web|@deepseek-ai/dsh-web|1
 web-search-deepseek|@deepseek-ai/dsh-web-search-deepseek|1
+web-fetch-http|@deepseek-ai/dsh-web-fetch-http|1
 tool-web|@deepseek-ai/dsh-tool-web|0
 tools|@deepseek-ai/dsh-tools|1
 system-prompt|@deepseek-ai/dsh-system-prompt|1
 agent-loop|@deepseek-ai/dsh-agent-loop|1
 fs-sandbox|@deepseek-ai/dsh-fs-sandbox|1
 llm-deepseek|@deepseek-ai/dsh-llm-deepseek|1
+subagent-model-selection-settings|@deepseek-ai/dsh-tool-subagent/model-selection-settings|1
 code-runtime|@deepseek-ai/dsh-code-runtime-worker-thread|1
-storage|@deepseek-ai/dsh-storage|1
-storage-json|@deepseek-ai/dsh-storage-json|1
-storage-domain|@deepseek-ai/dsh-storage-domain|1
 message-feedback|@deepseek-ai/dsh-message-feedback|1
 session-log-download|@deepseek-ai/dsh-session-log-export|1
+open-in-app|@deepseek-ai/dsh-host-open-in-app|1
+ui-open-in-app|@deepseek-ai/dsh-client-ui-open-in-app|1
 workspace|@deepseek-ai/dsh-workspace|1
-session-projection-cache|@deepseek-ai/dsh-session-projection-cache|1
 session-reference|@deepseek-ai/dsh-session-reference|1
 file-reference-local|@deepseek-ai/dsh-file-reference-local|1
 session-stats|@deepseek-ai/dsh-session-stats|1
+session-turn-outline|@deepseek-ai/dsh-session-turn-outline|1
 directory-picker|@deepseek-ai/dsh-host-directory-picker-auto|1
 plugin-inventory|@deepseek-ai/dsh-host-plugin-inventory|1
-api-gateway|@deepseek-ai/dsh-host-apiproxy|1
+session-controller|@deepseek-ai/dsh-api-session-controller|1
+workspace-files|@deepseek-ai/dsh-api-workspace-files|1
+settings-controller|@deepseek-ai/dsh-api-settings-controller|1
+workspace-controller|@deepseek-ai/dsh-api-workspace-controller|1
 cordis-host-runner|@deepseek-ai/dsh-cordis-host-runner|1
 web-startup|@deepseek-ai/dsh-web-app/startup|1
 webserver|@deepseek-ai/dsh-host-webserver|1
@@ -111,19 +121,26 @@ web-runtime|@deepseek-ai/dsh-web-app|1
 client-hmr|@deepseek-ai/dsh-client-hmr|1
 modules|@deepseek-ai/dsh-client-modules|1
 connection|@deepseek-ai/dsh-client-connection|1
+file-upload|@deepseek-ai/dsh-client-file-upload|1
 api-remotes|@deepseek-ai/dsh-api-remotes|1
-client-runtime|@deepseek-ai/dsh-client-runtime|1
 cordis-client-runner|@deepseek-ai/dsh-cordis-client-runner|1
 ui-theme|@deepseek-ai/dsh-client-ui-theme|1
 locale|@deepseek-ai/dsh-client-locale|1
 ui-layout|@deepseek-ai/dsh-client-ui-layout|1
 ui-renderer|@deepseek-ai/dsh-client-ui-renderer|1
+ui-session|@deepseek-ai/dsh-client-ui-session|1
+resources|@deepseek-ai/dsh-client-resources|1
 ui-sidebar|@deepseek-ai/dsh-client-ui-sidebar|1
+ui-sidebar-right|@deepseek-ai/dsh-client-ui-sidebar-right|1
+ui-sidebar-documentpreview|@deepseek-ai/dsh-client-ui-sidebar-documentpreview|1
+ui-sidebar-files|@deepseek-ai/dsh-client-ui-sidebar-files|1
 ui-settings|@deepseek-ai/dsh-client-ui-settings|1
 ui-settings-general|@deepseek-ai/dsh-client-ui-settings-general|1
 ui-settings-models|@deepseek-ai/dsh-client-ui-settings-models|1
 ui-settings-plugin-inventory|@deepseek-ai/dsh-client-ui-settings-plugin-inventory|1
 ui-conversation|@deepseek-ai/dsh-client-ui-conversation|1
+ui-approval|@deepseek-ai/dsh-client-ui-approval|1
+ui-chat|@deepseek-ai/dsh-client-ui-chat|1
 ui-brand-official|@deepseek-ai/dsh-client-ui-brand-official|1
 ui-attachment|@deepseek-ai/dsh-client-ui-attachment|1
 ui-tool|@deepseek-ai/dsh-client-ui-tool|1
@@ -136,6 +153,7 @@ ui-commands|@deepseek-ai/dsh-client-ui-commands|1
 ui-skill|@deepseek-ai/dsh-client-ui-skill|1
 ui-subagent|@deepseek-ai/dsh-client-ui-subagent|1
 ui-reference|@deepseek-ai/dsh-client-ui-reference|1
+ui-schedule|@deepseek-ai/dsh-client-ui-schedule|0
 ui-jobs|@deepseek-ai/dsh-client-ui-jobs|1
 ui-goal|@deepseek-ai/dsh-client-ui-goal|1
 ui-message-feedback|@deepseek-ai/dsh-client-ui-message-feedback|1

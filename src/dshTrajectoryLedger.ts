@@ -12,9 +12,10 @@
  * resolves a call against it by tool name — the same window upstream uses
  * (`ui-trajectory/src/client/trajectory-snapshot-builder.ts:224`), and by name
  * because Aeroric's `tool/call` carries `name` while the header carries only
- * definitions. The Harness emits no parent call id
- * (`packages/core/agent-loop/src/tool-calls.ts:263`), so a call nests under the
- * assistant message that ordered it and never deeper.
+ * definitions. A model-ordered `tool/call` carries no parent call id
+ * (`packages/core/agent-loop/src/tool-calls.ts:264`), so it nests under the
+ * assistant message that ordered it; a `run_code` program's sub-dispatch does
+ * name its parent, and nests under that call instead.
  */
 
 import type { DshDict, DshTrajectoryEntry, DshSessionEvent } from "./dshSessionFeatures";
@@ -23,8 +24,8 @@ import {
   dshEventCallId,
   dshEventData,
   dshEventIsError,
-  dshIsTokenChunk,
   dshNumber,
+  dshStreamFirstTokenTime,
   dshText,
   dshUsage,
 } from "./dshSessionFeatures";
@@ -81,9 +82,9 @@ export interface DshLedgerRow {
   status: DshLedgerStatus;
   turn?: number;
   step?: number;
-  /** 0 a turn boundary, 1 a turn's own row, 2 a call under an assistant reply. */
+  /** 0 a turn boundary, 1 a turn's own row, 2 a call under the row that ordered it. */
   depth: 0 | 1 | 2;
-  /** The assistant reply that ordered this call, for the `Hierarchy` link. */
+  /** The row that ordered this call, for the `Hierarchy` link. */
   parentSeq?: number;
   callId?: string;
   toolName?: string;
@@ -131,6 +132,79 @@ export function dshLedgerCategory(tag: DshLedgerTag): DshLedgerCategory {
   if (tag === "TURN" || tag === "STEP") return "lifecycle";
   return "system";
 }
+
+/**
+ * Every event type this build of the Harness declares, mirrored from
+ * `packages/core/session/src/known-event-types.ts:23` at `c291e7961a`
+ * (0.1.5-rc.2).
+ *
+ * The Harness refuses to reconstruct a log holding a type outside this set
+ * unless the event marks itself `ignorable`, because an unrecognized required
+ * event may change how the rest of the log reads. A panel cannot refuse to draw
+ * a session the Harness already served, so the set is used for the one decision
+ * a viewer does own: a type stated here has a curated detail and is shown that
+ * way, while one outside it — a newer Harness' event, or a downstream plugin's,
+ * which are outside the list by construction — has its payload shown raw rather
+ * than silently shown as empty.
+ */
+export const DSH_KNOWN_SESSION_EVENT_TYPES: Readonly<Record<string, true>> = {
+  "agent-preset/selected": true,
+  "agent/inbox/spliced": true,
+  "approval/asked": true,
+  "approval/decided": true,
+  "approval/policy": true,
+  "assistant/attempt": true,
+  "assistant/message": true,
+  "command/done": true,
+  "command/run": true,
+  "compaction/end": true,
+  "compaction/prune": true,
+  "compaction/start": true,
+  "compaction/summary": true,
+  "deliverables/presented": true,
+  "feedback/message-delete": true,
+  "feedback/message-put": true,
+  "feedback/record": true,
+  "goal/change": true,
+  "hook/invoked": true,
+  "hook/result": true,
+  "llm/retry": true,
+  "llm/retry-started": true,
+  "model/selection": true,
+  "permission/preset": true,
+  "plan/mode": true,
+  "request/context": true,
+  "request/header": true,
+  "sandbox/mode": true,
+  "schedule/change": true,
+  "session-log-deepseek/delivery-accepted": true,
+  "session/end-seed": true,
+  "session/title": true,
+  "session/title-llm-request": true,
+  "step/end": true,
+  "step/start": true,
+  "subagent/catalog": true,
+  "subagent/descriptor": true,
+  "subagent/model-selection-policy": true,
+  "system/message": true,
+  "team/member": true,
+  "team/message/delivered": true,
+  "team/message/queued": true,
+  "team/task": true,
+  "todo/write": true,
+  "tool-workflow/agent-end": true,
+  "tool-workflow/agent-start": true,
+  "tool-workflow/run-end": true,
+  "tool-workflow/run-start": true,
+  "tool/call": true,
+  "tool/ptc-dispatch": true,
+  "tool/ptc-dispatch-start": true,
+  "tool/result": true,
+  "turn/end": true,
+  "turn/start": true,
+  "user/message": true,
+  "web/deepseek-search-llm-request": true,
+};
 
 const PREVIEW_CHARS = 160;
 
@@ -227,8 +301,19 @@ function payloadOf(entry: DshTrajectoryEntry): string | undefined {
   switch (entry.type) {
     case "tool/call":
       return formatArguments(data.arguments);
+    // A sub-dispatch's arguments are already JSON-normalized before the event is
+    // appended (`packages/core/tools/src/types.ts:33`), so they are a value
+    // rather than the model's raw string.
+    case "tool/ptc-dispatch-start":
+    case "tool/ptc-dispatch":
+      return formatJson(data.arguments);
+    // `assistant/attempt` committed no message, so its streamed text is the only
+    // record of what it produced; a `system/message`'s rendered prompt is the
+    // whole content of a system node, which a one-line preview cannot carry.
     case "user/message":
     case "assistant/message":
+    case "assistant/attempt":
+    case "system/message":
       return entry.detail || undefined;
     case "command/run":
       return dshText(data.args) || undefined;
@@ -239,22 +324,44 @@ function payloadOf(entry: DshTrajectoryEntry): string | undefined {
     case "request/header":
       return formatJson(data.header);
     default:
-      return undefined;
+      // An event this build does not know has no curated detail, so its payload
+      // is shown as it arrived rather than as nothing: a newer Harness' event and
+      // a downstream plugin's are both outside the mirrored vocabulary, and the
+      // panel is the only place their data can be read at all.
+      return DSH_KNOWN_SESSION_EVENT_TYPES[entry.type] === true ? undefined : formatJson(data);
   }
 }
 
 /** The row's own output, for the rows that carry one without being paired. */
 function resultOf(entry: DshTrajectoryEntry): string | undefined {
   switch (entry.type) {
-    // Only reached for a result whose call is on a page not yet loaded; a paired
-    // result is folded into its call instead.
+    // Only reached for a settlement whose call is on a page not yet loaded; a
+    // paired one is folded into its call instead.
     case "tool/result":
+    case "tool/ptc-dispatch":
     case "command/done":
     case "compaction/summary":
       return entry.detail || undefined;
     default:
       return undefined;
   }
+}
+
+/**
+ * How a row ended.
+ *
+ * An `assistant/attempt` event is appended precisely because the model committed
+ * no message — a failed, retried, cancelled, or stream-error attempt that reached
+ * settlement (`packages/core/session/src/types.ts:340`) — so the attempt itself
+ * did not succeed. Which of those it was is recorded by the events around it
+ * (`llm/retry`, `turn/end`), never by the attempt, so the row states only that it
+ * committed nothing.
+ */
+function statusOf(entry: DshTrajectoryEntry, event: DshSessionEvent): DshLedgerStatus {
+  if (dshEventIsError(event) || entry.type === "assistant/attempt") return "error";
+  return entry.type === "tool/call" || entry.type === "tool/ptc-dispatch-start"
+    ? "running"
+    : "complete";
 }
 
 function draftRow(
@@ -270,6 +377,8 @@ function draftRow(
   const schema = toolName === undefined ? undefined : schemas.get(toolName);
   const payload = payloadOf(entry);
   const result = resultOf(entry);
+  // An attempt carries no usage: the Harness accounts tokens on the reply that
+  // committed (`packages/core/session/src/types.ts:325`).
   const usage = entry.type === "assistant/message" ? usageOf(data) : undefined;
   const nested = tag === "TOOL" && parent !== undefined;
   return {
@@ -279,9 +388,9 @@ function draftRow(
     title: entry.title,
     preview: previewOf(entry.detail),
     startedAt: entry.time,
-    // A call is running until its result arrives; nothing else waits on a later
-    // event to be readable.
-    status: dshEventIsError(event) ? "error" : entry.type === "tool/call" ? "running" : "complete",
+    // A call is running until the event settling it arrives; nothing else waits
+    // on a later event to be readable.
+    status: statusOf(entry, event),
     depth: tag === "TURN" ? 0 : nested ? 2 : 1,
     ...(entry.turn === undefined ? {} : { turn: entry.turn }),
     ...(entry.step === undefined ? {} : { step: entry.step }),
@@ -294,6 +403,55 @@ function draftRow(
     ...(usage === undefined ? {} : { usage }),
     entry,
   };
+}
+
+/**
+ * The row a call nests under.
+ *
+ * A model-ordered call nests under the assistant message that ordered it. A
+ * `run_code` sub-dispatch names its parent, so it nests under that call instead
+ * of under the reply — the program, not the model, dispatched it.
+ */
+function parentOf(
+  entry: DshTrajectoryEntry,
+  openCalls: ReadonlyMap<string, Draft>,
+  lastAssistant: Draft | undefined,
+): Draft | undefined {
+  if (entry.type !== "tool/ptc-dispatch-start" && entry.type !== "tool/ptc-dispatch") {
+    return lastAssistant;
+  }
+  const parent = dshText(dshEventData(entry.event).parentCallId);
+  return (parent === undefined ? undefined : openCalls.get(parent)) ?? lastAssistant;
+}
+
+/**
+ * The surface nodes one event replaced, when it replaced any.
+ *
+ * Only a message-producing event carries a surface operation, and `'append'` —
+ * the normal path — replaces nothing (`packages/core/session/src/types.ts:434`).
+ */
+function replaceRange(event: DshSessionEvent): { startSeq: number; endSeq: number } | undefined {
+  const op = dshDict(event.surfaceOp);
+  if (op.op !== "replace") return undefined;
+  const startSeq = dshNumber(op.startSeq);
+  const endSeq = dshNumber(op.endSeq);
+  return startSeq === undefined || endSeq === undefined ? undefined : { startSeq, endSeq };
+}
+
+/**
+ * The earlier events one event cites as its sources.
+ *
+ * A replacement must cite every surface node it shadows, so the citation is the
+ * exact set rather than an inference from the range
+ * (`packages/core/session/src/types.ts:430`).
+ */
+function citedSeqs(event: DshSessionEvent): number[] {
+  const cited = event.sourceEventSeqs;
+  if (!Array.isArray(cited)) return [];
+  return cited.flatMap((value) => {
+    const seq = dshNumber(value);
+    return seq === undefined ? [] : [seq];
+  });
 }
 
 /** Give a lifecycle row the width of the boundary event that closed it. */
@@ -337,7 +495,8 @@ export function deriveDshLedger(entries: readonly DshTrajectoryEntry[]): readonl
   const openCalls = new Map<string, Draft>();
   const openTurns = new Map<number, Draft>();
   const openStepRows = new Map<string, Draft>();
-  const openSteps = new Map<string, { start: number; firstToken?: number }>();
+  const openSteps = new Map<string, number>();
+  const systemNodes = new Map<number, Draft>();
   let schemas: ReadonlyMap<string, DshLedgerToolSchema> = new Map();
   let activeTurn: number | undefined;
   let lastAssistant: Draft | undefined;
@@ -353,22 +512,10 @@ export function deriveDshLedger(entries: readonly DshTrajectoryEntry[]): readonl
     }
 
     if (entry.type === "step/start" && stepKey !== undefined) {
-      openSteps.set(stepKey, { start: entry.time });
+      openSteps.set(stepKey, entry.time);
     }
 
-    if (entry.type === "assistant/chunk") {
-      const open = stepKey === undefined ? undefined : openSteps.get(stepKey);
-      if (
-        open !== undefined &&
-        open.firstToken === undefined &&
-        dshIsTokenChunk(eventData(entry))
-      ) {
-        open.firstToken = entry.time;
-      }
-      continue;
-    }
-
-    if (entry.type === "tool/result") {
+    if (entry.type === "tool/result" || entry.type === "tool/ptc-dispatch") {
       const id = dshEventCallId(event);
       const open = id === undefined ? undefined : openCalls.get(id);
       if (id !== undefined && open !== undefined) {
@@ -393,30 +540,57 @@ export function deriveDshLedger(entries: readonly DshTrajectoryEntry[]): readonl
       openStepRows.delete(stepKey);
     }
 
-    const row = draftRow(entry, schemas, lastAssistant);
+    const row = draftRow(entry, schemas, parentOf(entry, openCalls, lastAssistant));
     rows.push(row);
 
     // The header applies to the calls that follow it, never to itself.
     if (entry.type === "request/header") schemas = headerSchemas(event);
     if (entry.type === "turn/start" && entry.turn !== undefined) openTurns.set(entry.turn, row);
     if (entry.type === "step/start" && stepKey !== undefined) openStepRows.set(stepKey, row);
-    if (entry.type === "tool/call") {
+    if (entry.type === "tool/call" || entry.type === "tool/ptc-dispatch-start") {
       const id = dshEventCallId(event);
       if (id !== undefined) openCalls.set(id, row);
     }
-    if (entry.type === "assistant/message") {
-      lastAssistant = row;
-      const open = stepKey === undefined ? undefined : openSteps.get(stepKey);
-      if (open !== undefined && stepKey !== undefined) {
+    if (entry.type === "system/message") {
+      const range = replaceRange(event);
+      const cited = citedSeqs(event);
+      if (range !== undefined) {
+        // The replacement takes the shadowed node's place on the surface, so the
+        // two are one operation — a prompt rewritten — rather than two prompts
+        // the panel would then show as both current.
+        const folded: number[] = [];
+        for (const [seq, node] of [...systemNodes]) {
+          if (seq < range.startSeq || seq > range.endSeq) continue;
+          if (cited.length > 0 && !cited.includes(seq)) continue;
+          folded.push(...node.seqs);
+          rows.splice(rows.indexOf(node), 1);
+          systemNodes.delete(seq);
+        }
+        if (folded.length > 0) row.seqs = [...folded, ...row.seqs].sort((a, b) => a - b);
+      }
+      systemNodes.set(entry.seq, row);
+    }
+    if (entry.type === "assistant/message" || entry.type === "assistant/attempt") {
+      const start = stepKey === undefined ? undefined : openSteps.get(stepKey);
+      if (start !== undefined) {
         // A reply is measured from the request that asked for it, the same
         // pairing the stats panel sums, so the two can never disagree.
-        row.startedAt = open.start;
-        row.durationMs = Math.max(0, entry.time - open.start);
-        if (open.firstToken !== undefined) {
-          row.ttftMs = Math.max(0, open.firstToken - open.start);
-          row.decodeMs = Math.max(0, entry.time - open.firstToken);
+        row.startedAt = start;
+        row.durationMs = Math.max(0, entry.time - start);
+        // The attempt's own stream states when its first token arrived, so the
+        // split no longer depends on a separately delivered chunk event.
+        const firstToken = dshStreamFirstTokenTime(eventData(entry).stream);
+        if (firstToken !== undefined) {
+          row.ttftMs = Math.max(0, firstToken - start);
+          row.decodeMs = Math.max(0, entry.time - firstToken);
         }
-        openSteps.delete(stepKey);
+      }
+      // An attempt committed no message, so it ordered no calls and did not
+      // settle the step: the reply that finally settles it is still measured from
+      // the request rather than from the moment the failed attempt gave up.
+      if (entry.type === "assistant/message") {
+        lastAssistant = row;
+        if (stepKey !== undefined) openSteps.delete(stepKey);
       }
     }
   }

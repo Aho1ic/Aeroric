@@ -13,15 +13,15 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::{sleep, Duration, Instant};
-use tokio_tungstenite::connect_async;
 use url::{Host, Url};
+use uuid::Uuid;
 
 mod api_client;
 mod build_readiness;
 mod commands;
 mod dto;
-mod event_stream;
 mod protocol_inventory;
+mod remote_mux;
 mod startup;
 mod terminal_render;
 
@@ -38,8 +38,9 @@ use api_client::{bounded_utf8_prefix, DSH_HTTP_ERROR_SNIPPET_BYTES};
 use build_readiness::{
     checkout_not_built_error, dsh_checkout_missing_artifacts, explain_dsh_web_failure,
 };
-use event_stream::{
-    dsh_event_websocket_url, legacy_sse_downlink, websocket_downlink, DshEventDownlink,
+use remote_mux::{
+    parse_remote_event_item, DshMuxStream, DshRemoteMux, RemoteEventItem,
+    REMOTE_EVENT_STREAM_ENDPOINT,
 };
 use startup::{
     ensure_dsh_webui, ensure_dsh_webui_locked, exited_dsh_web_error, DshWebStartupOutput,
@@ -112,7 +113,7 @@ pub struct DshWebUiManager {
     /// is no longer allowed to become running again until it is explicitly
     /// started/resumed.
     completed_tasks: Arc<Mutex<HashSet<String>>>,
-    /// One long-lived events.mux subscription per Aeroric task.  DSH sessions
+    /// One long-lived `/api/remote.mux` subscription per Aeroric task.  DSH sessions
     /// remain interactive after a turn ends, so the stream must outlive the
     /// command that admitted the first prompt.
     session_stream_aborts: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
@@ -131,7 +132,10 @@ pub struct DshWebUiManager {
     /// 任务,任务结束后会话详情仍然要找回真正的实例,否则 `session.*` 会打到
     /// 内置实例上。归属一旦确定就不会再变,缓存下来省掉重复的磁盘反查。
     session_hosts: Arc<Mutex<HashMap<String, String>>>,
-    /// Abort sender for the background `events.host` subscription.
+    /// Approval / question requests awaiting a reply, plus the `clientId` of the
+    /// `$events` generation that raised them. Both are generation-scoped.
+    pending_waterfalls: Arc<Mutex<WaterfallRegistry>>,
+    /// Abort sender for the background host-wide `remote.mux` subscription.
     host_events_abort: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
@@ -190,6 +194,7 @@ impl DshWebUiManager {
             internal_commands: Arc::new(Mutex::new(HashMap::new())),
             session_hosts: Arc::new(Mutex::new(HashMap::new())),
             host_events_abort: Arc::new(Mutex::new(None)),
+            pending_waterfalls: Arc::new(Mutex::new(WaterfallRegistry::default())),
         }
     }
 
@@ -740,7 +745,7 @@ impl DshApiClient {
         if let Some(agent_preset) = agent_preset.filter(|value| !value.trim().is_empty()) {
             payload["agentPreset"] = Value::String(agent_preset.to_string());
         }
-        let value = self.call("session.create", payload).await?;
+        let value = self.remote_request("session/create", payload).await?;
         let id = value
             .get("sessionId")
             .and_then(Value::as_str)
@@ -755,12 +760,35 @@ impl DshApiClient {
         ))
     }
 
-    async fn models(&self, session_id: &str) -> Result<DshSessionModels, String> {
-        serde_json::from_value(
-            self.call("session.models", json!({ "sessionId": session_id }))
-                .await?,
-        )
-        .map_err(|error| format!("DSH session.models payload was invalid: {error}"))
+    /// Session model selector data.
+    ///
+    /// 0.1.5 replaced the session-scoped `session.models` with the
+    /// deployment-wide `session/modelCatalog`, which takes no wire arguments
+    /// and renamed two fields: `default` (was `current`) and
+    /// `routableProviders: string[]` (was `routable: bool`).  The session's own
+    /// live selection moved to the `modelSelection` projection, which only
+    /// reaches clients through the `session/follow` baseline frame -- there is
+    /// no unary read for it.  That is fine for the one caller: it reads
+    /// `current` purely as the fallback when the launch did not name a model,
+    /// and at session start the deployment default *is* the effective
+    /// selection (the session has not selected anything yet).
+    async fn models(&self, _session_id: &str) -> Result<DshSessionModels, String> {
+        let catalog = self.remote_unit("session/modelCatalog").await?;
+        let default = catalog
+            .get("default")
+            .cloned()
+            .ok_or_else(|| "DSH session/modelCatalog returned no default selection".to_string())?;
+        let routable = catalog
+            .get("routableProviders")
+            .and_then(Value::as_array)
+            .is_some_and(|providers| !providers.is_empty());
+        serde_json::from_value(json!({
+            "current": default,
+            "routable": routable,
+            "groups": catalog.get("groups").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+            "failures": catalog.get("failures").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+        }))
+        .map_err(|error| format!("DSH session/modelCatalog payload was invalid: {error}"))
     }
 
     async fn select_model(
@@ -776,11 +804,13 @@ impl DshApiClient {
         if let Some(effort) = &selection.reasoning_effort {
             payload["reasoningEffort"] = Value::String(effort.clone());
         }
-        self.call("session.selectModel", payload).await.map(|_| ())
+        self.remote_request("session/selectModel", payload)
+            .await
+            .map(|_| ())
     }
 
     async fn cancel(&self, session_id: &str) -> Result<(), String> {
-        self.call("session.cancel", json!({ "sessionId": session_id }))
+        self.remote_request("session/cancel", json!({ "sessionId": session_id }))
             .await
             .map(|_| ())
     }
@@ -790,6 +820,24 @@ impl DshApiClient {
     /// they are not part of the static apiproxy domain map.
     pub(crate) async fn remote_call(&self, method: &str, args: Value) -> Result<Value, String> {
         self.call(method, json!({ "args": args })).await
+    }
+
+    /// Call a Remote whose sole wire parameter is named `request` -- the shape
+    /// most Typert endpoints use (`session/page`, `workspace/create`, ...).
+    pub(crate) async fn remote_request(
+        &self,
+        method: &str,
+        request: Value,
+    ) -> Result<Value, String> {
+        self.remote_call(method, json!({ "request": request }))
+            .await
+    }
+
+    /// Call a Remote that declares no wire parameters.  The gateway's
+    /// `assertExactArguments` rejects a missing argument object, so the empty
+    /// object is required rather than optional.
+    pub(crate) async fn remote_unit(&self, method: &str) -> Result<Value, String> {
+        self.remote_call(method, json!({})).await
     }
 
     async fn list_commands(&self, session_id: &str) -> Result<Value, String> {
@@ -867,17 +915,20 @@ impl DshApiClient {
                 "data": data,
             }));
         }
-        let mut payload = json!({
+        let mut request = json!({
+            // 0.1.5 requires a client-minted request id on the exact accepted
+            // user message; the official Web client mints a plain randomUUID.
+            "requestId": Uuid::new_v4().to_string(),
             "sessionId": session_id,
             "mode": normalize_prompt_mode(mode)?,
             "content": content,
         });
         if let Some(zone) = client_time_zone.filter(|value| !value.trim().is_empty()) {
-            payload["clientTimeZone"] = Value::String(zone.to_string());
+            request["clientTimeZone"] = Value::String(zone.to_string());
         }
-        let value = self.call("session.prompt", payload).await?;
+        let value = self.remote_request("session/prompt", request).await?;
         if value.get("accepted").and_then(Value::as_bool) != Some(true) {
-            return Err("DSH session.prompt did not acknowledge the prompt".to_string());
+            return Err("DSH session/prompt did not acknowledge the prompt".to_string());
         }
         Ok(value)
     }
@@ -887,29 +938,34 @@ impl DshApiClient {
     }
 
     async fn list_preset_details(&self) -> Result<DshPresetList, String> {
-        let value = self.call("agentPreset.list", json!({})).await?;
+        let value = self.remote_unit("agentPresets/list").await?;
         let presets = serde_json::from_value(
             value
                 .get("presets")
                 .cloned()
                 .unwrap_or(Value::Array(Vec::new())),
         )
-        .map_err(|error| format!("DSH agentPreset.list payload was invalid: {error}"))?;
+        .map_err(|error| format!("DSH agentPresets/list payload was invalid: {error}"))?;
+        // 0.1.5 split the roster from the opener capability: `AgentPresetRoster`
+        // no longer carries `hasDocument`, and whether a preset directory can be
+        // opened natively is now the settings controller's own capability.
+        let has_document = self
+            .remote_unit("settings/canOpenAgentPresetDirectory")
+            .await?
+            .as_bool()
+            .unwrap_or(false);
         Ok(DshPresetList {
             presets,
             authorable: value
                 .get("authorable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            has_document: value
-                .get("hasDocument")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            has_document,
         })
     }
 
     async fn describe_settings(&self) -> Result<DshSettingsDescription, String> {
-        serde_json::from_value(self.call("settings.describe", json!({})).await?)
+        serde_json::from_value(self.remote_unit("settings/describe").await?)
             .map_err(|error| format!("DSH settings.describe payload was invalid: {error}"))
     }
 
@@ -1129,26 +1185,75 @@ fn session_event_terminal_output(payload: &Value, fold: &mut ReasoningFold) -> O
         .unwrap_or_default();
     let data = event.get("data").unwrap_or(&Value::Null);
     let output = match event_type {
-        "assistant/chunk" => {
-            let chunk = data.get("chunk").unwrap_or(&Value::Null);
-            let chunk_type = chunk
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if chunk_type == "reasoning-delta" {
-                if let Some(text) = chunk.get("text").and_then(Value::as_str) {
-                    fold.push(text);
+        // 0.1.5 retired `assistant/chunk` outright (it is not a rename): the
+        // timed stream is now embedded in `assistant/message.stream` as compact
+        // `AssistantStreamRecord`s.  So the durable answer arrives *with* the
+        // message, and the old "drop assistant/message to avoid duplicating the
+        // live chunks" rule inverts -- keeping it would render no assistant text
+        // at all.  Live per-token delta is a separate `assistant-stream` frame
+        // on the `session/follow` carrier, which `consume_session_events`
+        // opens (DSH-14).
+        "assistant/message" => {
+            let mut answer = String::new();
+            for record in data
+                .get("stream")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                match record
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                {
+                    // Reasoning folds exactly as the old reasoning-delta did, so
+                    // an open block still flushes when the answer claims the row.
+                    "reasoning-chunks" => {
+                        for text in record
+                            .get("texts")
+                            .and_then(Value::as_array)
+                            .map(Vec::as_slice)
+                            .unwrap_or_default()
+                        {
+                            if let Some(text) = text.as_str() {
+                                fold.push(text);
+                            }
+                        }
+                    }
+                    "text-chunks" => {
+                        for text in record
+                            .get("texts")
+                            .and_then(Value::as_array)
+                            .map(Vec::as_slice)
+                            .unwrap_or_default()
+                        {
+                            if let Some(text) = text.as_str() {
+                                answer.push_str(text);
+                            }
+                        }
+                    }
+                    // A raw `chunk` record is any non-delta chunk kind (block
+                    // markers, usage, finish); only text-delta carries answer text.
+                    "chunk" => {
+                        if let Some(text) = record.get("chunk").and_then(json_text) {
+                            answer.push_str(&text);
+                        }
+                    }
+                    // `tool-call-chunks` is the fourth arm and deliberately skipped:
+                    // it carries `args` (JSON argument fragments), not `texts`, and
+                    // tool traffic renders through the tool-card path. Reading its
+                    // `texts` yields nothing; appending its `args` would splice JSON
+                    // fragments into the assistant's prose.
+                    "tool-call-chunks" => {}
+                    _ => {}
                 }
-                return None;
             }
-            // text-delta is the answer itself and streams verbatim; every other
-            // chunk kind (block markers, tool-call deltas, usage, finish) carries
-            // no text and renders as nothing.
-            json_text(chunk)
+            if answer.is_empty() {
+                None
+            } else {
+                Some(answer)
+            }
         }
-        // assistant/message is the assembled durable copy of chunks already
-        // rendered live. Emitting it again duplicates every completed answer.
-        "assistant/message" => None,
         "tool/call" => render_tool_event_view(payload, "call").or_else(|| {
             let name = data.get("name").and_then(Value::as_str).unwrap_or("tool");
             Some(format!("\r\n▸ {name}\r\n"))
@@ -1212,21 +1317,21 @@ fn session_event_terminal_output(payload: &Value, fold: &mut ReasoningFold) -> O
     }
 }
 
-/// 是否是流式文本增量。这类事件后面还会有后续增量,行尾单词可以先攒着等下一
-/// 片;其它事件之后不保证还有输出,必须立刻落地。
+/// 是否是流式文本增量 —— 后面还会有后续增量时,行尾单词可以先攒着等下一片。
+///
+/// 持久事件里不存在这种增量:`assistant/chunk` 已退役,答案随
+/// `assistant/message.stream` 整段到达,必须立刻落地。真正的逐 token 增量是
+/// `session/follow` 载体上的 `assistant-stream` 帧,`consume_session_events`
+/// 已经开那条载体 (DSH-14),但那些帧在 `follow_frame_envelope` 里走
+/// `session/event` 信封;接帧时这里要认那种帧,而不是持久事件。
 fn event_is_stream_delta(payload: &Value) -> bool {
     let Some(event) = payload.get("event") else {
         return false;
     };
-    if event.get("type").and_then(Value::as_str) != Some("assistant/chunk") {
-        return false;
-    }
-    event
-        .get("data")
-        .and_then(|data| data.get("chunk"))
-        .and_then(|chunk| chunk.get("type"))
-        .and_then(Value::as_str)
-        == Some("text-delta")
+    // 持久事件一律整段到达。留下这个读取是为了让流式帧接入时有明确的挂点,
+    // 而不是让调用方以为换行状态永远不必攒词。
+    let _ = event;
+    false
 }
 
 fn emit_session_event_output(
@@ -1258,6 +1363,55 @@ fn payload_with_rpc_id(envelope: &Value) -> Value {
         object.insert("rpcId".to_string(), Value::String(rpc_id.to_string()));
     }
     payload
+}
+
+/// Wrap one `session/follow` item into the envelope `dispatch_mux_frame` reads.
+///
+/// The follow stream carries three shapes: the opening `SessionFollowBaseline`
+/// (`{records, hasMore}`), bare `SessionWireEvent`s, and — because we open with
+/// `assistantStream: true` — process-local `assistant-stream` presentation
+/// frames. The Host does not repeat `sessionId` per item, so it is reattached
+/// here; `dispatch_mux_frame` filters on it.
+fn follow_frame_envelope(session_id: &str, value: Value) -> Value {
+    // Opening snapshot: replay each record as a session event so the terminal and
+    // the trajectory ledger see one uniform stream.
+    if value.get("records").is_some() {
+        return json!({
+            "type": "session/subscribed",
+            "payload": {
+                "type": "session/subscribed",
+                "sessionId": session_id,
+                "records": value.get("records").cloned().unwrap_or(Value::Array(Vec::new())),
+                "hasMore": value.get("hasMore").and_then(Value::as_bool).unwrap_or(false),
+            },
+        });
+    }
+    json!({
+        "type": "session/event",
+        "payload": {
+            "type": "session/event",
+            "sessionId": session_id,
+            "event": value,
+        },
+    })
+}
+
+/// Wrap one `session/control` item. Control items are already discriminated
+/// (`session/queue`, `session/jobs`, `session/projection`); only the envelope
+/// and the session id need adding.
+fn control_frame_envelope(session_id: &str, value: Value) -> Value {
+    let frame_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut payload = value;
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("sessionId".to_string())
+            .or_insert_with(|| Value::String(session_id.to_string()));
+    }
+    json!({ "type": frame_type, "payload": payload })
 }
 
 /// Dispatch one parsed mux envelope. Every session-addressed frame is filtered
@@ -1416,37 +1570,28 @@ fn dispatch_mux_frame(
     result
 }
 
-/// DSH rc.7 exposes network event streams as downlink-only WebSockets. Older
-/// audited releases exposed the same envelopes as SSE, so a failed WebSocket
-/// handshake falls back to the legacy GET without changing higher layers.
-async fn open_dsh_event_downlink(
+/// Open one `/api/remote.mux` generation and subscribe the two logical streams
+/// a live session needs: `session/follow` (durable events + in-flight assistant
+/// presentation frames) and `session/control` (queue / jobs / projection).
+///
+/// There is no SSE fallback — the carrier must be bidirectional to send `open`.
+async fn open_dsh_session_streams(
     api: &DshApiClient,
-    path: &str,
-) -> Result<DshEventDownlink, String> {
-    let websocket_url = dsh_event_websocket_url(&api.base_url, path)?;
-    match connect_async(websocket_url.as_str()).await {
-        Ok((socket, _)) => Ok(websocket_downlink(socket)),
-        Err(websocket_error) => {
-            let response = api
-                .client
-                .get(format!("{}{path}", api.base_url))
-                .header("accept", "text/event-stream")
-                .send()
-                .await
-                .map_err(|sse_error| {
-                    format!(
-                        "DSH WebSocket handshake failed: {websocket_error}; legacy SSE connection failed: {sse_error}"
-                    )
-                })?;
-            if !response.status().is_success() {
-                return Err(format!(
-                    "DSH WebSocket handshake failed: {websocket_error}; legacy SSE returned HTTP {}",
-                    response.status()
-                ));
-            }
-            Ok(legacy_sse_downlink(response))
-        }
-    }
+    session_id: &str,
+) -> Result<(DshRemoteMux, DshMuxStream, DshMuxStream), String> {
+    let mux = DshRemoteMux::connect(&api.base_url).await?;
+    let follow = mux.open(
+        "session/follow",
+        json!({
+            "address": { "sessionId": session_id },
+            "assistantStream": true,
+        }),
+    )?;
+    let control = mux.open(
+        "session/control",
+        json!({ "address": { "sessionId": session_id } }),
+    )?;
+    Ok((mux, follow, control))
 }
 
 async fn consume_session_events(
@@ -1461,12 +1606,12 @@ async fn consume_session_events(
 ) -> Result<(), String> {
     let mut opened = Some(events_open);
     loop {
-        let downlink = tokio::select! {
+        let streams = tokio::select! {
             _ = &mut abort => return Ok(()),
-            downlink = open_dsh_event_downlink(api, "/api/events.mux") => downlink,
+            streams = open_dsh_session_streams(api, session_id) => streams,
         };
-        let mut downlink = match downlink {
-            Ok(downlink) => downlink,
+        let (mux, mut follow, mut control) = match streams {
+            Ok(streams) => streams,
             Err(error) => {
                 if let Some(sender) = opened.take() {
                     let _ = sender.send(Err(error.clone()));
@@ -1487,14 +1632,25 @@ async fn consume_session_events(
         if let Some(sender) = opened.take() {
             let _ = sender.send(Ok(()));
         }
-        let transport = downlink.transport.label();
         let disconnected = loop {
-            let next = tokio::select! {
+            // `session/follow` frames are session-scoped events; `session/control`
+            // frames already carry their own discriminated `type`. Both are
+            // normalised into the mux envelope `dispatch_mux_frame` consumes.
+            let frame = tokio::select! {
                 _ = &mut abort => return Ok(()),
-                next = downlink.next() => next,
+                next = follow.next() => match next {
+                    Some(Ok(value)) => Ok(follow_frame_envelope(session_id, value)),
+                    Some(Err(error)) => Err(error),
+                    None => Err("DSH session/follow stream ended".to_string()),
+                },
+                next = control.next() => match next {
+                    Some(Ok(value)) => Ok(control_frame_envelope(session_id, value)),
+                    Some(Err(error)) => Err(error),
+                    None => Err("DSH session/control stream ended".to_string()),
+                },
             };
-            match next {
-                Some(Ok(envelope)) => {
+            match frame {
+                Ok(envelope) => {
                     if let Err(error) =
                         dispatch_mux_frame(app, state, &envelope, task_id, session_id, on_output)
                     {
@@ -1506,10 +1662,10 @@ async fn consume_session_events(
                         );
                     }
                 }
-                Some(Err(error)) => break error,
-                None => break format!("DSH {transport} event stream ended"),
+                Err(error) => break error,
             }
         };
+        drop(mux);
         state.send_terminal_text_if_current(
             task_id,
             session_id,
@@ -2069,31 +2225,37 @@ impl DshApiClient {
 
     // ── Workspace ─────────────────────────────────────────────────────────────
 
+    /// Workspace roster.
+    ///
+    /// 0.1.5 has no unary equivalent: the roster is the `{type:'baseline'}`
+    /// opening frame of the `workspace/follow` stream, and the gateway rejects
+    /// opening a stream remote over unary POST outright. We open one throwaway
+    /// mux generation, take the baseline, then cancel the stream — the roster
+    /// is a point-in-time read, and live invalidation rides the long-lived
+    /// host subscription (`consume_host_events`).
     async fn list_workspaces(&self) -> Result<DshWorkspaceList, String> {
-        let value = self.call("workspace.list", json!({})).await?;
-        let items: Vec<DshWorkspace> = serde_json::from_value(
-            value
-                .get("items")
-                .cloned()
-                .unwrap_or(Value::Array(Vec::new())),
-        )
-        .map_err(|e| format!("DSH workspace.list items was invalid: {e}"))?;
-        let archived: Vec<String> = serde_json::from_value(
-            value
-                .get("archivedSessionIds")
-                .cloned()
-                .unwrap_or(Value::Array(Vec::new())),
-        )
-        .map_err(|e| format!("DSH workspace.list archivedSessionIds was invalid: {e}"))?;
-        Ok(DshWorkspaceList {
-            items,
-            archived_session_ids: archived,
-        })
+        let mux = DshRemoteMux::connect(&self.base_url).await?;
+        let result = {
+            let mut stream = mux.open("workspace/follow", json!({}))?;
+            match stream.next().await {
+                Some(Ok(item)) => {
+                    let value = item.get("value").cloned().ok_or_else(|| {
+                        "DSH workspace/follow baseline carried no value".to_string()
+                    })?;
+                    serde_json::from_value(value)
+                        .map_err(|e| format!("DSH workspace baseline was invalid: {e}"))
+                }
+                Some(Err(error)) => Err(error),
+                None => Err("DSH workspace/follow stream ended before its baseline".to_string()),
+            }
+        };
+        drop(mux);
+        result
     }
 
     async fn create_workspace(&self, path: &str) -> Result<(DshWorkspace, bool), String> {
         let value = self
-            .call("workspace.create", json!({ "path": path }))
+            .remote_request("workspace/create", json!({ "path": path }))
             .await?;
         let workspace: DshWorkspace = serde_json::from_value(
             value
@@ -2115,8 +2277,8 @@ impl DshApiClient {
         title: &str,
     ) -> Result<DshWorkspace, String> {
         let value = self
-            .call(
-                "workspace.rename",
+            .remote_request(
+                "workspace/rename",
                 json!({ "workspaceId": workspace_id, "title": title }),
             )
             .await?;
@@ -2130,7 +2292,7 @@ impl DshApiClient {
     }
 
     async fn delete_workspace(&self, workspace_id: &str) -> Result<(), String> {
-        self.call("workspace.delete", json!({ "workspaceId": workspace_id }))
+        self.remote_request("workspace/delete", json!({ "workspaceId": workspace_id }))
             .await
             .map(|_| ())
     }
@@ -2144,7 +2306,9 @@ impl DshApiClient {
         if let Some(before) = before_workspace_id {
             payload["beforeWorkspaceId"] = Value::String(before.to_string());
         }
-        let value = self.call("workspace.insertBefore", payload).await?;
+        let value = self
+            .remote_request("workspace/insertBefore", payload)
+            .await?;
         let ids: Vec<String> = serde_json::from_value(
             value
                 .get("workspaceIds")
@@ -2165,7 +2329,9 @@ impl DshApiClient {
         if let Some(before) = before_session_id {
             payload["beforeSessionId"] = Value::String(before.to_string());
         }
-        let value = self.call("workspace.insertSessionBefore", payload).await?;
+        let value = self
+            .remote_request("workspace/insertSessionBefore", payload)
+            .await?;
         serde_json::from_value(
             value.get("workspace").cloned().ok_or_else(|| {
                 "DSH workspace.insertSessionBefore returned no workspace".to_string()
@@ -2176,8 +2342,8 @@ impl DshApiClient {
 
     async fn workspace_archive_session(&self, session_id: &str) -> Result<Vec<String>, String> {
         let value = self
-            .call(
-                "workspace.archiveSession",
+            .remote_request(
+                "workspace/archiveSession",
                 json!({ "sessionId": session_id }),
             )
             .await?;
@@ -2815,7 +2981,7 @@ fn dsh_permission_preset(mode: &str) -> Result<&'static str, String> {
     }
 }
 
-/// Dispatch a single parsed frame from the `events.host` downlink.
+/// Dispatch a single parsed frame from the host-wide `/api/remote.mux` downlink.
 /// Each frame type maps to a `dsh-host-*` Tauri event so the frontend
 /// can react to session/workspace lifecycle changes without polling.
 fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
@@ -2841,27 +3007,200 @@ fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
     let _ = app.emit(event_name, payload);
 }
 
-/// Background task: subscribe to `events.host` and re-emit each frame as a
-/// Tauri event. Runs until the provided abort signal fires and reconnects after
-/// transport loss. The shared opener negotiates rc.7 WebSocket or legacy SSE.
+/// One in-flight approval / question request, keyed by its `eventId`.
+///
+/// The reply must quote both the `eventId` and the `clientId` from the ready
+/// frame of the generation that raised it, so the id is tracked alongside the
+/// pending set rather than being re-derived at reply time.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingWaterfall {
+    pub(crate) kind: WaterfallKind,
+    pub(crate) session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WaterfallKind {
+    Approval,
+    Question,
+}
+
+/// The pending-waterfall map plus the current generation's `clientId`.
+///
+/// `clientId` lives here because it is generation-scoped exactly like the
+/// pending entries: both are cleared when the carrier reconnects.
+#[derive(Debug, Default)]
+pub(crate) struct WaterfallRegistry {
+    client_id: Option<String>,
+    pending: HashMap<String, PendingWaterfall>,
+}
+
+impl WaterfallRegistry {
+    fn set_client_id(&mut self, client_id: String) {
+        self.client_id = Some(client_id);
+    }
+
+    pub(crate) fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    fn clear(&mut self) {
+        self.client_id = None;
+        self.pending.clear();
+    }
+
+    fn insert(&mut self, event_id: String, entry: PendingWaterfall) {
+        self.pending.insert(event_id, entry);
+    }
+
+    pub(crate) fn remove(&mut self, event_id: &str) -> Option<PendingWaterfall> {
+        self.pending.remove(event_id)
+    }
+
+    pub(crate) fn all_pending(&self) -> Vec<&PendingWaterfall> {
+        self.pending.values().collect()
+    }
+}
+
+/// Emit one waterfall request as the approval / question Tauri event the
+/// frontend already listens for, and record it so the reply can be routed.
+fn dispatch_waterfall_request(
+    app: &AppHandle,
+    registry: &Mutex<WaterfallRegistry>,
+    event_id: &str,
+    event: &str,
+    payload: &Value,
+) {
+    let (kind, event_name) = match event {
+        "permission/request" => (WaterfallKind::Approval, DSH_APPROVAL_REQUESTED),
+        "user-questions/request" => (WaterfallKind::Question, DSH_QUESTION_REQUESTED),
+        // Unknown waterfall events must not be silently swallowed: the Host
+        // blocks until it is answered, so surface it instead of stalling.
+        _ => {
+            let _ = app.emit(
+                DSH_HOST_STREAM_ERROR,
+                json!({
+                    "type": "stream/error",
+                    "error": format!("Unsupported DSH waterfall event {event}"),
+                }),
+            );
+            return;
+        }
+    };
+
+    let session_id = payload
+        .get("sessionId")
+        .or_else(|| payload.get("agentId"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let client_id = {
+        let mut registry = registry.lock();
+        registry.insert(
+            event_id.to_string(),
+            PendingWaterfall {
+                kind,
+                session_id: session_id.clone(),
+            },
+        );
+        registry.client_id().map(str::to_string)
+    };
+
+    let mut frame = payload.clone();
+    if let Some(object) = frame.as_object_mut() {
+        object.insert("eventId".to_string(), Value::String(event_id.to_string()));
+        if let Some(client_id) = client_id {
+            object.insert("clientId".to_string(), Value::String(client_id));
+        }
+        if let Some(session_id) = session_id {
+            object
+                .entry("sessionId".to_string())
+                .or_insert(Value::String(session_id));
+        }
+    }
+    let _ = app.emit(event_name, &frame);
+}
+
+/// The Host withdrew a pending request (turn aborted, peer answered it).
+/// Emit the matching `*_RESOLVED` event so the dialog closes.
+fn dispatch_waterfall_cancel(app: &AppHandle, registry: &Mutex<WaterfallRegistry>, event_id: &str) {
+    let Some(entry) = registry.lock().remove(event_id) else {
+        return;
+    };
+    let event_name = match entry.kind {
+        WaterfallKind::Approval => DSH_APPROVAL_RESOLVED,
+        WaterfallKind::Question => DSH_QUESTION_RESOLVED,
+    };
+    let _ = app.emit(
+        event_name,
+        json!({
+            "eventId": event_id,
+            "sessionId": entry.session_id,
+            "cancelled": true,
+        }),
+    );
+}
+
+/// Translate one `$events` emit into the legacy `host/*` frame shape the
+/// frontend already consumes, so the Tauri event vocabulary is unchanged.
+fn host_frame_for_remote_event(event: &str, payload: &Value) -> Option<Value> {
+    let frame_type = match event {
+        "api-session/added" => "host/session-added",
+        "api-session/removed" => "host/session-removed",
+        "api-session/status" => "host/session-status",
+        "api-session/error" => "host/agent-error",
+        // `api-session/activity` only bumps a durable timestamp; the session
+        // list re-reads it from the workspace baseline, so it needs no frame.
+        _ => return None,
+    };
+    let mut frame = payload.clone();
+    let object = frame.as_object_mut()?;
+    object.insert("type".to_string(), Value::String(frame_type.to_string()));
+    Some(frame)
+}
+
+/// Translate one `workspace/follow` increment into a legacy `host/*` frame.
+fn host_frame_for_workspace_change(value: &Value) -> Option<Value> {
+    let frame_type = match value.get("type").and_then(Value::as_str)? {
+        "upsert" => "host/workspace-changed",
+        "remove" => "host/workspace-removed",
+        "order" => "host/workspace-order-changed",
+        "archived" => "host/archived-sessions-changed",
+        // `baseline` is the opening snapshot; `list_workspaces` reads it
+        // directly, so re-emitting it here would double-apply.
+        _ => return None,
+    };
+    let mut frame = value.clone();
+    let object = frame.as_object_mut()?;
+    object.insert("type".to_string(), Value::String(frame_type.to_string()));
+    Some(frame)
+}
+
+/// Background task: subscribe host-wide streams on one `/api/remote.mux`
+/// generation and re-emit each frame as a Tauri event. Runs until the abort
+/// signal fires and reconnects after carrier loss.
+///
+/// Two logical streams share the socket: `$events` (Cordis application events
+/// plus the approval / question waterfall) and `workspace/follow` (live
+/// workspace and archived-session invalidation).
 async fn consume_host_events(
     app: AppHandle,
     api: DshApiClient,
+    pending_waterfalls: Arc<Mutex<WaterfallRegistry>>,
     mut abort: tokio::sync::oneshot::Receiver<()>,
 ) {
     loop {
-        let downlink = tokio::select! {
+        let opened = tokio::select! {
             biased;
             _ = &mut abort => return,
-            result = open_dsh_event_downlink(&api, "/api/events.host") => result,
+            result = open_dsh_host_streams(&api) => result,
         };
 
-        let mut downlink = match downlink {
-            Ok(downlink) => downlink,
+        let (mux, mut events, mut workspaces) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 let _ = app.emit(
                     DSH_HOST_STREAM_ERROR,
-                    json!({ "type": "stream/error", "error": format!("events.host connection failed: {error}") }),
+                    json!({ "type": "stream/error", "error": format!("remote.mux connection failed: {error}") }),
                 );
                 tokio::select! {
                     biased;
@@ -2871,36 +3210,93 @@ async fn consume_host_events(
                 continue;
             }
         };
-        let transport = downlink.transport.label();
 
-        loop {
-            let envelope = tokio::select! {
+        // Every waterfall request is scoped to one physical generation: the
+        // Host drops its pending map when the socket dies, so a reply carrying
+        // a stale clientId would be rejected.
+        pending_waterfalls.lock().clear();
+
+        let disconnected = loop {
+            enum HostFrame {
+                Event(Value),
+                Workspace(Value),
+            }
+            let frame = tokio::select! {
                 biased;
                 _ = &mut abort => return,
-                envelope = downlink.next() => envelope,
+                next = events.next() => match next {
+                    Some(Ok(value)) => Ok(HostFrame::Event(value)),
+                    Some(Err(error)) => Err(error),
+                    None => Err("$events stream ended".to_string()),
+                },
+                next = workspaces.next() => match next {
+                    Some(Ok(value)) => Ok(HostFrame::Workspace(value)),
+                    Some(Err(error)) => Err(error),
+                    None => Err("workspace/follow stream ended".to_string()),
+                },
             };
 
-            match envelope {
-                Some(Ok(envelope)) => {
-                    let payload = envelope.get("payload").unwrap_or(&Value::Null);
-                    dispatch_host_frame(&app, payload);
+            match frame {
+                Ok(HostFrame::Event(value)) => {
+                    match parse_remote_event_item(&value) {
+                        Ok(RemoteEventItem::Ready { client_id, .. }) => {
+                            pending_waterfalls.lock().set_client_id(client_id);
+                        }
+                        Ok(RemoteEventItem::Emit { event, args }) => {
+                            // Cordis emits carry a positional args array; the
+                            // host/session notifications put their payload first.
+                            let payload = args.first().cloned().unwrap_or(Value::Null);
+                            if let Some(frame) = host_frame_for_remote_event(&event, &payload) {
+                                dispatch_host_frame(&app, &frame);
+                            }
+                            let _ = app.emit(
+                                DSH_HOST_REMOTE_EVENT,
+                                json!({
+                                    "type": "host/remote-event",
+                                    "event": event,
+                                    "payload": payload,
+                                }),
+                            );
+                        }
+                        Ok(RemoteEventItem::Waterfall {
+                            event_id,
+                            event,
+                            request,
+                            ..
+                        }) => {
+                            dispatch_waterfall_request(
+                                &app,
+                                &pending_waterfalls,
+                                &event_id,
+                                &event,
+                                &request,
+                            );
+                        }
+                        Ok(RemoteEventItem::Cancel { event_id }) => {
+                            dispatch_waterfall_cancel(&app, &pending_waterfalls, &event_id);
+                        }
+                        Err(error) => {
+                            let _ = app.emit(
+                                DSH_HOST_STREAM_ERROR,
+                                json!({ "type": "stream/error", "error": error }),
+                            );
+                        }
+                    }
                 }
-                Some(Err(error)) => {
-                    let _ = app.emit(
-                        DSH_HOST_STREAM_ERROR,
-                        json!({ "type": "stream/error", "error": error }),
-                    );
-                    break;
+                Ok(HostFrame::Workspace(value)) => {
+                    if let Some(frame) = host_frame_for_workspace_change(&value) {
+                        dispatch_host_frame(&app, &frame);
+                    }
                 }
-                None => {
-                    let _ = app.emit(
-                        DSH_HOST_STREAM_ERROR,
-                        json!({ "type": "stream/error", "error": format!("events.host {transport} stream ended") }),
-                    );
-                    break;
-                }
+                Err(error) => break error,
             }
-        }
+        };
+
+        drop(mux);
+        let _ = app.emit(
+            DSH_HOST_STREAM_ERROR,
+            json!({ "type": "stream/error", "error": disconnected }),
+        );
 
         // Stream ended without the abort signal — wait briefly then reconnect.
         tokio::select! {
@@ -2911,15 +3307,30 @@ async fn consume_host_events(
     }
 }
 
+/// Open one host-wide `/api/remote.mux` generation with its two streams.
+async fn open_dsh_host_streams(
+    api: &DshApiClient,
+) -> Result<(DshRemoteMux, DshMuxStream, DshMuxStream), String> {
+    let mux = DshRemoteMux::connect(&api.base_url).await?;
+    let events = mux.open(REMOTE_EVENT_STREAM_ENDPOINT, json!({}))?;
+    let workspaces = mux.open("workspace/follow", json!({}))?;
+    Ok((mux, events, workspaces))
+}
+
 fn start_host_events_subscription(app: AppHandle, state: &DshWebUiManager, api: DshApiClient) {
     let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
     if let Some(previous) = state.host_events_abort.lock().replace(abort_tx) {
         let _ = previous.send(());
     }
-    tokio::spawn(consume_host_events(app, api, abort_rx));
+    tokio::spawn(consume_host_events(
+        app,
+        api,
+        state.pending_waterfalls.clone(),
+        abort_rx,
+    ));
 }
 
-/// Start subscribing to the `events.host` downlink in the background.
+/// Start subscribing to the host-wide `/api/remote.mux` downlink in the background.
 /// The subscription auto-reconnects on disconnect and stops when
 /// `stop_dsh_host_events` is called or the DSH process is shut down.
 #[tauri::command]
@@ -2929,12 +3340,12 @@ pub async fn start_dsh_host_events(
 ) -> Result<(), String> {
     let api = get_dsh_api(&state).await?;
     // Replace the previous subscription atomically; otherwise a task-status
-    // refresh can leave multiple events.host consumers running forever.
+    // refresh can leave multiple remote.mux consumers running forever.
     start_host_events_subscription(app, &state, api);
     Ok(())
 }
 
-/// Stop the background `events.host` subscription (if running).
+/// Stop the background host-wide `/api/remote.mux` subscription (if running).
 #[tauri::command]
 pub fn stop_dsh_host_events(state: State<'_, DshWebUiManager>) {
     if let Some(tx) = state.host_events_abort.lock().take() {
@@ -3133,31 +3544,11 @@ pub async fn pick_dsh_host_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 建链那三个用例留在父模块 —— 它们测的是 `open_dsh_event_downlink` 的降级
-    // 决策(WebSocket 握手被拒后回落 SSE),那个函数在这里。用到的传输标记和
-    // 两个 tokio/tungstenite 类型从子模块与依赖里取。
-    use super::event_stream::DshEventTransport;
-    use futures_util::SinkExt;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // 旧 `open_dsh_event_downlink` 建链三用例已随 /api/events.mux 载体一起退役
+    // (DSH-14);接替它们的是 remote.mux 载体两用例,在文件后段。
+    use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
-    use tokio::net::TcpStream;
     use tokio_tungstenite::tungstenite::Message;
-
-    async fn read_http_request(stream: &mut TcpStream) -> String {
-        let mut request = Vec::new();
-        let mut chunk = [0_u8; 1024];
-        loop {
-            let read = stream.read(&mut chunk).await.expect("request is readable");
-            if read == 0 {
-                break;
-            }
-            request.extend_from_slice(&chunk[..read]);
-            if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-                break;
-            }
-        }
-        String::from_utf8(request).expect("request headers are UTF-8")
-    }
 
     #[test]
     fn bounds_http_error_snippets_at_utf8_boundaries() {
@@ -3238,148 +3629,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opens_rc7_mux_and_host_websocket_downlinks_and_reconnects() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test listener binds");
-        let address = listener.local_addr().expect("listener has an address");
-        let seen_paths = Arc::new(Mutex::new(Vec::new()));
-        let server_paths = seen_paths.clone();
-        let server = tokio::spawn(async move {
-            for sequence in 0..3 {
-                let (stream, _) = listener.accept().await.expect("WebSocket connects");
-                let request_paths = server_paths.clone();
-                // tungstenite fixes the callback's error type to a large HTTP response;
-                // this test callback only records the path and always accepts the response.
-                #[allow(clippy::result_large_err)]
-                let callback =
-                    move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                          response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                        request_paths.lock().push(request.uri().path().to_string());
-                        Ok(response)
-                    };
-                let mut socket = tokio_tungstenite::accept_hdr_async(stream, callback)
-                    .await
-                    .expect("WebSocket handshake succeeds");
-                socket
-                    .send(Message::Text(
-                        json!({
-                            "type": "server-request",
-                            "rpcId": format!("rpc-{sequence}"),
-                            "method": if sequence == 1 { "host/config-changed" } else { "session/subscribed" },
-                            "payload": { "sequence": sequence },
-                        })
-                        .to_string()
-                        ,
-                    ))
-                    .await
-                    .expect("event frame is sent");
-                socket.close(None).await.expect("WebSocket closes cleanly");
-            }
-        });
-        let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
-
-        for (sequence, path) in [
-            (0, "/api/events.mux"),
-            (1, "/api/events.host"),
-            // A fresh connection after the first mux closes exercises reconnect setup.
-            (2, "/api/events.mux"),
-        ] {
-            let mut downlink = open_dsh_event_downlink(&api, path)
-                .await
-                .expect("rc7 WebSocket downlink opens");
-            assert_eq!(downlink.transport, DshEventTransport::WebSocket);
-            let envelope = tokio::time::timeout(Duration::from_secs(1), downlink.next())
-                .await
-                .expect("event arrives before timeout")
-                .expect("downlink remains open")
-                .expect("event frame is valid");
-            assert_eq!(envelope["type"], "server-request");
-            assert_eq!(envelope["payload"]["sequence"], sequence);
-        }
-
-        server.await.expect("test server exits");
-        assert_eq!(
-            *seen_paths.lock(),
-            vec!["/api/events.mux", "/api/events.host", "/api/events.mux"]
-        );
-    }
-
-    #[tokio::test]
-    async fn falls_back_to_legacy_sse_after_a_websocket_upgrade_rejection() {
+    async fn opens_session_streams_over_the_remote_mux_carrier() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener binds");
         let address = listener.local_addr().expect("listener has an address");
         let server = tokio::spawn(async move {
-            let (mut websocket, _) = listener.accept().await.expect("WebSocket attempt connects");
-            let websocket_request = read_http_request(&mut websocket).await;
-            assert!(websocket_request.starts_with("GET /api/events.mux HTTP/1.1"));
-            websocket
-                .write_all(
-                    b"HTTP/1.1 426 Upgrade Required\r\nUpgrade: websocket\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                )
+            let (stream, _) = listener.accept().await.expect("mux connects");
+            let mut socket = tokio_tungstenite::accept_async(stream)
                 .await
-                .expect("426 response is written");
-            drop(websocket);
+                .expect("mux handshake succeeds");
+            // Two `open` frames: session/follow then session/control.
+            let follow_open = tokio::time::timeout(Duration::from_secs(1), socket.next())
+                .await
+                .expect("open arrives before timeout")
+                .expect("carrier remains open")
+                .expect("open frame is valid");
+            let open: Value = serde_json::from_str(&match follow_open {
+                Message::Text(text) => text.to_string(),
+                other => panic!("expected a text open frame, got {other:?}"),
+            })
+            .expect("open frame is JSON");
+            assert_eq!(open["type"], "open");
+            assert_eq!(open["endpoint"], "session/follow");
+            assert_eq!(open["payload"]["args"]["address"]["sessionId"], "sess-1");
+            assert_eq!(open["payload"]["args"]["assistantStream"], true);
+            let follow_stream_id = open["streamId"]
+                .as_str()
+                .expect("open carries streamId")
+                .to_string();
 
-            let (mut sse, _) = listener.accept().await.expect("SSE fallback connects");
-            let sse_request = read_http_request(&mut sse).await;
-            assert!(sse_request.starts_with("GET /api/events.mux HTTP/1.1"));
-            assert!(sse_request
-                .to_ascii_lowercase()
-                .contains("accept: text/event-stream"));
-            let body = concat!(
-                "data: {\"type\":\"server-request\",\"rpcId\":\"legacy\",",
-                "\"method\":\"session/subscribed\",\"payload\":{}}\n\n"
-            );
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(), body
-            );
-            sse.write_all(response.as_bytes())
+            let control_open = tokio::time::timeout(Duration::from_secs(1), socket.next())
                 .await
-                .expect("SSE response is written");
+                .expect("second open arrives before timeout")
+                .expect("carrier remains open")
+                .expect("second open frame is valid");
+            let open: Value = serde_json::from_str(&match control_open {
+                Message::Text(text) => text.to_string(),
+                other => panic!("expected a text open frame, got {other:?}"),
+            })
+            .expect("open frame is JSON");
+            assert_eq!(open["endpoint"], "session/control");
+
+            // One item on each logical stream, then an end that closes the carrier.
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "item",
+                        "streamId": follow_stream_id,
+                        "value": { "type": "event", "event": { "type": "turn/end" } },
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("follow item is sent");
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "item",
+                        "streamId": open["streamId"].as_str().unwrap(),
+                        "value": { "type": "projection", "key": "modelSelection" },
+                    })
+                    .to_string(),
+                ))
+                .await
+                .expect("control item is sent");
+            tokio::time::sleep(Duration::from_millis(50)).await;
         });
         let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
 
-        let mut downlink = open_dsh_event_downlink(&api, "/api/events.mux")
+        let (mux, mut follow, mut control) = open_dsh_session_streams(&api, "sess-1")
             .await
-            .expect("legacy SSE fallback opens");
-        assert_eq!(downlink.transport, DshEventTransport::LegacySse);
-        let envelope = tokio::time::timeout(Duration::from_secs(1), downlink.next())
+            .expect("session streams open");
+        let follow_item = tokio::time::timeout(Duration::from_secs(1), follow.next())
             .await
-            .expect("legacy event arrives before timeout")
-            .expect("legacy stream returns an event")
-            .expect("legacy frame is valid");
-        assert_eq!(envelope["rpcId"], "legacy");
+            .expect("follow item arrives before timeout")
+            .expect("follow stream remains open")
+            .expect("follow item is valid");
+        assert_eq!(follow_item["event"]["type"], "turn/end");
+        let control_item = tokio::time::timeout(Duration::from_secs(1), control.next())
+            .await
+            .expect("control item arrives before timeout")
+            .expect("control stream remains open")
+            .expect("control item is valid");
+        assert_eq!(control_item["type"], "projection");
+        assert!(mux.is_alive());
         server.await.expect("test server exits");
     }
 
     #[tokio::test]
-    async fn dropping_a_downlink_cancels_its_websocket_worker() {
+    async fn dropping_a_mux_generation_closes_its_socket() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener binds");
         let address = listener.local_addr().expect("listener has an address");
         let (accepted_tx, accepted_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("WebSocket connects");
+            let (stream, _) = listener.accept().await.expect("mux connects");
             let mut socket = tokio_tungstenite::accept_async(stream)
                 .await
-                .expect("WebSocket handshake succeeds");
+                .expect("mux handshake succeeds");
             let _ = accepted_tx.send(());
             tokio::time::timeout(Duration::from_secs(1), socket.next())
                 .await
                 .expect("dropping the client closes the socket")
         });
         let api = DshApiClient::new(format!("http://{address}")).expect("API client builds");
-        let downlink = open_dsh_event_downlink(&api, "/api/events.mux")
+        let mux = DshRemoteMux::connect(&api.base_url)
             .await
-            .expect("WebSocket downlink opens");
-        accepted_rx.await.expect("server accepted the WebSocket");
+            .expect("mux opens");
+        accepted_rx.await.expect("server accepted the mux");
 
-        drop(downlink);
+        drop(mux);
 
         let closed = server.await.expect("test server exits");
         assert!(closed.is_none() || closed.is_some_and(|result| result.is_err()));
@@ -3401,8 +3762,19 @@ mod tests {
         emit_session_event_output(
             &json!({
                 "event": {
-                    "type": "assistant/chunk",
-                    "data": { "chunk": "第一行\nsecond\r\n第三行\rlast" }
+                    "type": "assistant/message",
+                    "data": {
+                        "turn": 0,
+                        "step": 0,
+                        "message": { "role": "assistant", "content": [] },
+                        "stream": [{
+                            "type": "text-chunks",
+                            "time0": 0,
+                            "index": 0,
+                            "dt": [0],
+                            "texts": ["第一行\nsecond\r\n第三行\rlast"]
+                        }]
+                    }
                 }
             }),
             &channel,
@@ -3416,19 +3788,39 @@ mod tests {
         );
     }
 
+    /// 一条只带 reasoning 的持久 assistant message。
+    ///
+    /// 0.1.5 退役了 `assistant/chunk`,timed stream 内嵌进
+    /// `assistant/message.stream` 的紧凑 `AssistantStreamRecord`。折叠语义按事件
+    /// 边界仍然成立:只产出 reasoning 的 message 不占终端行,等下一条 message 的
+    /// 正文来把折叠行冲出去。
     fn reasoning_chunk(text: &str) -> Value {
         json!({
             "event": {
-                "type": "assistant/chunk",
-                "data": { "chunk": { "type": "reasoning-delta", "index": 0, "text": text } }
+                "type": "assistant/message",
+                "data": {
+                    "turn": 0,
+                    "step": 0,
+                    "message": { "role": "assistant", "content": [] },
+                    "stream": [
+                        { "type": "reasoning-chunks", "time0": 0, "index": 0, "dt": [0], "texts": [text] }
+                    ]
+                }
             }
         })
     }
     fn text_chunk(text: &str) -> Value {
         json!({
             "event": {
-                "type": "assistant/chunk",
-                "data": { "chunk": { "type": "text-delta", "index": 1, "text": text } }
+                "type": "assistant/message",
+                "data": {
+                    "turn": 0,
+                    "step": 0,
+                    "message": { "role": "assistant", "content": [] },
+                    "stream": [
+                        { "type": "text-chunks", "time0": 0, "index": 1, "dt": [0], "texts": [text] }
+                    ]
+                }
             }
         })
     }
@@ -3448,16 +3840,22 @@ mod tests {
         (channel, received)
     }
 
+    /// 持久事件整段到达,所以答案必须**当场**落地,不再攒行尾单词。
+    ///
+    /// 0.1.5 之前 `assistant/chunk` 是逐 token 的,行尾单词要留着等下一片增量,
+    /// 靠 `turn/end` 之类的非增量事件才冲出去。现在 `assistant/message.stream`
+    /// 一次带来整段答案,后面不会再有同一段的续片 —— 继续攒词会让最后一个词一直
+    /// 卡在换行状态里,直到下一个事件偶然到来才显示。
     #[test]
-    fn flushes_the_row_end_word_once_the_stream_stops() {
+    fn flushes_the_answer_as_soon_as_the_message_lands() {
         let (channel, received) = capture_terminal_channel();
         let mut fold = ReasoningFold::default();
         let mut wrap = TerminalWrap::default();
         wrap.set_cols(40);
         emit_session_event_output(&text_chunk("Answer"), &channel, &mut fold, &mut wrap);
-        // The trailing word is still open: a later delta may extend it.
-        assert!(received.lock().is_empty());
+        assert_eq!(*received.lock(), vec!["Answer".to_string()]);
 
+        // 随后的 turn/end 不该把同一段答案再冲一遍。
         emit_session_event_output(
             &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
             &channel,
@@ -3467,54 +3865,113 @@ mod tests {
         assert_eq!(*received.lock(), vec!["Answer".to_string()]);
     }
 
+    /// 一条 message 内部的 reasoning 折成一行,压在答案上方。
+    ///
+    /// 0.1.5 起 reasoning 与正文同属**一条** `assistant/message` 的 stream(一步
+    /// 一条 message、一条 message 一段完整 stream),所以折叠发生在 message 内部,
+    /// 而不是跨事件累积。多条 reasoning 记录仍会被拼成同一个块 —— 上游按 delta
+    /// 边界压缩,不合并 —— 折叠行只显示第一行,余下折起来。
     #[test]
     fn folds_a_reasoning_block_into_one_row_above_the_answer() {
         let mut fold = ReasoningFold::default();
-        // Nothing reaches the terminal while the model is still reasoning.
-        for delta in [
-            "Let me check the lint",
-            " configuration first.\nThe repo runs eslint",
-            " with --max-warnings 0.\n\nSo a warning fails the build.",
-        ] {
-            assert_eq!(
-                session_event_terminal_output(&reasoning_chunk(delta), &mut fold),
-                None
-            );
-        }
-
-        let rendered = session_event_terminal_output(&text_chunk("Done."), &mut fold)
-            .expect("the folded row is flushed by the answer");
+        let message = json!({
+            "event": {
+                "type": "assistant/message",
+                "data": {
+                    "turn": 0,
+                    "step": 0,
+                    "message": { "role": "assistant", "content": [] },
+                    "stream": [
+                        { "type": "reasoning-chunks", "time0": 0, "index": 0, "dt": [0, 1, 2], "texts": [
+                            "Let me check the lint",
+                            " configuration first.\nThe repo runs eslint",
+                            " with --max-warnings 0.\n\nSo a warning fails the build.",
+                        ] },
+                        { "type": "text-chunks", "time0": 3, "index": 1, "dt": [0], "texts": ["Done."] },
+                    ]
+                }
+            }
+        });
+        let rendered = session_event_terminal_output(&message, &mut fold)
+            .expect("the folded row is flushed by the answer in the same message");
         assert!(rendered.contains("✻ Thinking · Let me check the lint configuration first."));
         assert!(rendered.contains("3 lines"));
-        // Every later line of the block stays collapsed; the session record keeps
-        // the full text as a collapsible block.
+        // 块内后续行保持折起;完整文本留在会话记录里。
         assert!(!rendered.contains("eslint"));
         assert!(rendered.ends_with("Done."));
-        // A blank separator, the folded row, then the answer on its own line.
+        // 空行分隔、折叠行、答案各占一行。
         assert_eq!(rendered.matches("\r\n").count(), 2);
 
-        // The block is consumed, so the answer keeps streaming on its own.
+        // 块已消费,下一条 message 的正文独立成行。
         assert_eq!(
             session_event_terminal_output(&text_chunk(" Nothing to fix."), &mut fold),
             Some(" Nothing to fix.".to_string())
         );
     }
 
+    /// 只产出 reasoning、没有正文的 message(常见于工具调用步)当场结算成折叠行。
+    ///
+    /// 0.1.5 之前 reasoning 是逐 token 增量,块要留着等后续增量或非增量事件才能
+    /// 结算;现在整段随 message 到达,后面不会再有同一块的续片,留着只会让它卡到
+    /// 下一个事件偶然到来。
     #[test]
-    fn settles_a_reasoning_block_left_open_at_the_end_of_a_turn() {
+    fn settles_a_reasoning_only_message_on_arrival() {
         let mut fold = ReasoningFold::default();
+        let rendered = session_event_terminal_output(&reasoning_chunk("Only one line"), &mut fold)
+            .expect("a reasoning-only message settles its own block");
+        assert!(rendered.contains("✻ Thinking · Only one line"));
+        // 单行不需要尺寸提示。
+        assert!(!rendered.contains("lines"));
+
+        // 块已结算,随后的 turn/end 不该把它再冲一遍。
         assert_eq!(
-            session_event_terminal_output(&reasoning_chunk("Only one line"), &mut fold),
+            session_event_terminal_output(
+                &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
+                &mut fold,
+            ),
             None
         );
+    }
+
+    /// `tool-call-chunks` 是 `AssistantStreamRecord` 的第四个 arm,终端正文里一个
+    /// 字节都不该出现。
+    ///
+    /// 它带的是 `args`(工具参数的 JSON 碎片)而不是 `texts`,工具流量走 tool card
+    /// 路径。把它当正文追加会往助手的话里插进 `{"path":"/etc` 这种碎片 —— 不崩,
+    /// 但终端从此混着 JSON。这条测试专门钉住这个跳过是刻意的,不是漏写。
+    #[test]
+    fn never_splices_tool_call_argument_fragments_into_the_answer() {
+        let mut fold = ReasoningFold::default();
         let rendered = session_event_terminal_output(
-            &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
+            &json!({
+                "event": {
+                    "type": "assistant/message",
+                    "data": {
+                        "turn": 0,
+                        "step": 0,
+                        "message": { "role": "assistant", "content": [] },
+                        "stream": [
+                            { "type": "text-chunks", "time0": 0, "index": 0, "dt": [0], "texts": ["Reading the config."] },
+                            {
+                                "type": "tool-call-chunks",
+                                "time0": 1,
+                                "index": 1,
+                                "dt": [0, 1],
+                                "id": "call-1",
+                                "name": "read_file",
+                                "args": ["{\"path\":", "\"/etc/hosts\"}"],
+                            },
+                        ]
+                    }
+                }
+            }),
             &mut fold,
         )
-        .expect("the open block settles with the turn");
-        assert!(rendered.contains("✻ Thinking · Only one line"));
-        // A single line needs no size hint.
-        assert!(!rendered.contains("lines"));
+        .expect("the text record still renders");
+        assert_eq!(rendered, "Reading the config.");
+        assert!(!rendered.contains("path"));
+        assert!(!rendered.contains("/etc/hosts"));
+        assert!(!rendered.contains("read_file"));
     }
 
     #[test]

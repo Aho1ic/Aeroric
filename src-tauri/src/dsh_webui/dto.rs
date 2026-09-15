@@ -20,9 +20,30 @@ pub struct DshProtocolCapabilities {
     pub protocol_version: u32,
     pub rpc_methods: Vec<&'static str>,
     pub remote_methods: Vec<&'static str>,
-    pub remote_events: Vec<&'static str>,
-    pub mux_frames: Vec<&'static str>,
-    pub host_frames: Vec<&'static str>,
+    pub remote_events: Vec<DshRemoteEvent>,
+    pub stream_frames: DshStreamFrames,
+}
+
+/// One Typert remote event and how the Gateway dispatches it. `waterfall`
+/// events expect a reply from the client half (approval, questions); `emit`
+/// events are one-way notifications.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshRemoteEvent {
+    pub event: &'static str,
+    pub mode: &'static str,
+}
+
+/// Live stream vocabulary. `session_follow` / `session_control` are the
+/// logical streams Aeroric opens over the `/api/remote.mux` WebSocket;
+/// `remote_downlink` is that socket's own `$events` frame set. Replaced the
+/// `/api/events.mux` + `/api/events.host` firehose frames, retired with DSH-14.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshStreamFrames {
+    pub session_follow: Vec<&'static str>,
+    pub session_control: Vec<&'static str>,
+    pub remote_downlink: Vec<&'static str>,
 }
 
 impl DshProtocolCapabilities {
@@ -33,9 +54,16 @@ impl DshProtocolCapabilities {
             protocol_version: protocol_inventory::PROTOCOL_VERSION,
             rpc_methods: protocol_inventory::RPC_METHODS.to_vec(),
             remote_methods: protocol_inventory::REMOTE_METHODS.to_vec(),
-            remote_events: protocol_inventory::REMOTE_EVENTS.to_vec(),
-            mux_frames: protocol_inventory::MUX_FRAMES.to_vec(),
-            host_frames: protocol_inventory::HOST_FRAMES.to_vec(),
+            remote_events: protocol_inventory::REMOTE_EVENTS
+                .iter()
+                .zip(protocol_inventory::REMOTE_EVENT_MODES)
+                .map(|(event, mode)| DshRemoteEvent { event, mode })
+                .collect(),
+            stream_frames: DshStreamFrames {
+                session_follow: protocol_inventory::STREAM_FOLLOW_FRAMES.to_vec(),
+                session_control: protocol_inventory::STREAM_CONTROL_FRAMES.to_vec(),
+                remote_downlink: protocol_inventory::STREAM_DOWNLINK_FRAMES.to_vec(),
+            },
         }
     }
 }

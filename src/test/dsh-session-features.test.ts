@@ -19,27 +19,29 @@ describe("DSH advanced session projections", () => {
   it("folds Harness step/tool timing, usage, and produced paths", () => {
     const features = projectDshSessionEvents([
       event("step/start", 1, 100, { turn: 1, step: 1 }),
-      event("assistant/chunk", 2, 125, { turn: 1, step: 1, chunk: { type: "text", text: "hi" } }),
-      event("tool/call", 3, 140, {
+      event("tool/call", 2, 140, {
         turn: 1,
         step: 1,
         callId: "call-1",
         name: "fs_edit",
         arguments: JSON.stringify({ file_path: "src/main.ts" }),
       }),
-      event("tool/result", 4, 190, {
+      event("tool/result", 3, 190, {
         turn: 1,
         step: 1,
         message: { source: { callId: "call-1" }, content: [{ type: "text", text: "ok" }] },
         meta: { diffs: [{ path: "src/main.ts" }] },
       }),
-      event("assistant/message", 5, 220, {
+      event("assistant/message", 4, 220, {
         turn: 1,
         step: 1,
         message: { content: [{ type: "text", text: "done" }] },
+        // The reply carries its own timed stream, so the first token at 125 is
+        // stated by the reply rather than by an event delivered before it.
+        stream: [{ type: "text-chunks", time0: 125, index: 0, dt: [], texts: ["hi"] }],
         usage: { inputTokens: 30, outputTokens: 10, cacheReadTokens: 5 },
       }),
-      event("step/end", 6, 230, { turn: 1, step: 1 }),
+      event("step/end", 5, 230, { turn: 1, step: 1 }),
     ]);
     expect(features.stats).toMatchObject({
       turns: 1,
@@ -54,10 +56,9 @@ describe("DSH advanced session projections", () => {
       outputTokens: 10,
       cacheReadTokens: 5,
     });
-    expect(features.producedFiles).toEqual([{ path: "src/main.ts", seq: 4, turn: 1 }]);
+    expect(features.producedFiles).toEqual([{ path: "src/main.ts", seq: 3, turn: 1 }]);
     expect(features.trajectory.map((entry) => entry.type)).toEqual([
       "step/start",
-      "assistant/chunk",
       "tool/call",
       "tool/result",
       "assistant/message",

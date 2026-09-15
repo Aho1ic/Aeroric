@@ -4,7 +4,7 @@
 //! - `settings.yaml` 按需初始化,初始化后不再覆写;
 //! - Aeroric 受管的 patch 层单独放在 `aeroric.patch.yml`,启动 dsh 时以 `--patch` 注入
 //!   (dsh 的 `--patch` 覆盖层应用在 bundle/profile/home 层之后),固定两件事:
-//!   会话持久化为明文 JSONL 且不打包 chunk 行(供 Aeroric 直接解析),遥测行禁用;
+//!   会话持久化为明文 JSONL(供 Aeroric 直接解析),遥测行禁用;
 //! - home 层 `cordis.patch.yml` 归用户,但里面留一个标记界定的受管区块:`dsh web`
 //!   拒收父进程的 `--patch`,Web 会话只认 home 层,持久化设置必须从这里下去。
 //!   区块外的用户条目原样保留,且排在区块之后(后写覆盖前面的),用户改得回来;
@@ -16,11 +16,19 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// 受管 patch 内容版本;修改 `managed_patch_content` 后必须递增。
-const MANAGED_PATCH_VERSION: u32 = 1;
+///
+/// v2:去掉 `packChunks: false`。上游 master(c291e7961a)的
+/// `session-persistence-jsonl` schema 只剩 `root` + `compression`,`packChunks`
+/// 已从插件配置里删除,留着它对新版 harness 是未知配置键;而它原本要保证的
+/// "一个事件一行"现在是无条件行为(`format.ts::eventLines`:every event occupies
+/// one row),所以删掉不改变 Aeroric 的按行解析前提。
+const MANAGED_PATCH_VERSION: u32 = 2;
 const MANAGED_PATCH_MARKER_PREFIX: &str = "# AERORIC_DSH_PATCH_VERSION=";
 
 /// home 层受管区块的内容版本;修改 `home_patch_block` 后必须递增。
-const HOME_PATCH_BLOCK_VERSION: u32 = 1;
+///
+/// v2:同 `MANAGED_PATCH_VERSION` v2,去掉 `packChunks: false`。
+const HOME_PATCH_BLOCK_VERSION: u32 = 2;
 const HOME_PATCH_BEGIN: &str = "# >>> AERORIC MANAGED BLOCK";
 const HOME_PATCH_END: &str = "# <<< AERORIC MANAGED BLOCK";
 pub(crate) const MANAGED_PATCH_FILE_NAME: &str = "aeroric.patch.yml";
@@ -316,7 +324,6 @@ fn managed_patch_content(sessions_root: &Path) -> String {
          \x20 config:\n\
          \x20   root: {root}\n\
          \x20   compression: none\n\
-         \x20   packChunks: false\n\
          - id: session-telemetry-otel\n\
          \x20 disabled: true\n",
         root = yaml_quote(sessions_root.to_string_lossy().as_ref()),
@@ -340,7 +347,6 @@ fn home_patch_block(sessions_root: &Path) -> String {
          \x20 config:\n\
          \x20   root: {root}\n\
          \x20   compression: none\n\
-         \x20   packChunks: false\n\
          {HOME_PATCH_END} v{HOME_PATCH_BLOCK_VERSION} <<<\n",
         root = yaml_quote(sessions_root.to_string_lossy().as_ref()),
     )
@@ -625,7 +631,8 @@ mod tests {
         let managed = fs::read_to_string(home.join(MANAGED_PATCH_FILE_NAME)).unwrap();
         assert!(managed.starts_with(MANAGED_PATCH_MARKER_PREFIX));
         assert!(managed.contains("compression: none"));
-        assert!(managed.contains("packChunks: false"));
+        // 上游 master 的 schema 只剩 root+compression;写 packChunks 是未知配置键。
+        assert!(!managed.contains("packChunks"));
         assert!(managed.contains("session-telemetry-otel"));
 
         // 用户文件改动在重复初始化后保留。
@@ -655,7 +662,7 @@ mod tests {
         assert!(patch.contains(HOME_PATCH_BEGIN));
         assert!(patch.contains(HOME_PATCH_END));
         assert!(patch.contains("compression: none"));
-        assert!(patch.contains("packChunks: false"));
+        assert!(!patch.contains("packChunks"));
         // config 是整体替换,root 必须一起重述。
         assert!(patch.contains("root: "));
         assert!(!patch.contains("[]"));
@@ -740,6 +747,54 @@ mod tests {
             "{MANAGED_PATCH_MARKER_PREFIX}{MANAGED_PATCH_VERSION}"
         )));
         assert!(!content.contains("stale"));
+        cleanup_temp_home(&home);
+    }
+
+    /// v1 的两个受管文件都写着 `packChunks: false`,对上游 master 是未知配置键。
+    /// 升级路径必须把它从**两处**都剥掉:`aeroric.patch.yml` 靠版本标记整体重写,
+    /// `cordis.patch.yml` 的受管区块靠 `strip_home_patch_block` 的前缀匹配。
+    #[test]
+    fn upgrading_a_v1_home_strips_pack_chunks_from_both_managed_files() {
+        let home = temp_home("v1-packchunks");
+        crate::storage::ensure_private_dir(&home).unwrap();
+        let sessions_root = home.join("sessions");
+        let root = yaml_quote(sessions_root.to_string_lossy().as_ref());
+        fs::write(
+            home.join(MANAGED_PATCH_FILE_NAME),
+            format!(
+                "{MANAGED_PATCH_MARKER_PREFIX}1\n\
+                 - id: session-persistence-jsonl\n  config:\n    root: {root}\n\
+                 \x20   compression: none\n    packChunks: false\n\
+                 - id: session-telemetry-otel\n  disabled: true\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            home.join("cordis.patch.yml"),
+            format!(
+                "{HOME_PATCH_BEGIN} v1 >>>\n\
+                 - id: session-persistence-jsonl\n  config:\n    root: {root}\n\
+                 \x20   compression: none\n    packChunks: false\n\
+                 {HOME_PATCH_END} v1 <<<\n- id: tool-web\n  disabled: true\n"
+            ),
+        )
+        .unwrap();
+
+        ensure_dsh_home_at(&home).unwrap();
+
+        let managed = fs::read_to_string(home.join(MANAGED_PATCH_FILE_NAME)).unwrap();
+        assert!(managed.starts_with(&format!(
+            "{MANAGED_PATCH_MARKER_PREFIX}{MANAGED_PATCH_VERSION}"
+        )));
+        assert!(!managed.contains("packChunks"));
+        assert!(managed.contains("compression: none"));
+
+        let user_patch = fs::read_to_string(home.join("cordis.patch.yml")).unwrap();
+        assert!(!user_patch.contains("packChunks"));
+        assert!(user_patch.contains(&format!("{HOME_PATCH_BEGIN} v{HOME_PATCH_BLOCK_VERSION}")));
+        assert_eq!(user_patch.matches(HOME_PATCH_BEGIN).count(), 1);
+        // 用户自己的条目不能在升级里丢掉。
+        assert!(user_patch.contains("tool-web"));
         cleanup_temp_home(&home);
     }
 

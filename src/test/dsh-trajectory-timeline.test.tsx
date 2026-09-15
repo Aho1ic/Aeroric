@@ -15,25 +15,35 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const invokeMock = vi.mocked(invoke);
 
-/** A turn that thinks for 300 ms and then runs one 500 ms tool call. */
+/**
+ * A turn that thinks for 300 ms and then runs one 500 ms tool call.
+ *
+ * The reply carries its own timed stream: the Harness retired the per-token
+ * event, so the first token is stated by the reply rather than delivered before
+ * it (`packages/core/session/src/types.ts:325`).
+ */
 function turnEvents(): DshSessionEvent[] {
   return [
     { type: "user/message", seq: 1, time: 1_000, data: { turn: 1, content: "go" } },
     { type: "step/start", seq: 2, time: 1_100, data: { turn: 1, step: 1 } },
     {
-      type: "assistant/chunk",
+      type: "assistant/message",
       seq: 3,
-      time: 1_200,
-      data: { turn: 1, step: 1, chunk: { type: "text", text: "hi" } },
+      time: 1_400,
+      data: {
+        turn: 1,
+        step: 1,
+        content: "hi",
+        stream: [{ type: "text-chunks", time0: 1_200, index: 0, dt: [], texts: ["hi"] }],
+      },
     },
-    { type: "assistant/message", seq: 4, time: 1_400, data: { turn: 1, step: 1, content: "hi" } },
     {
       type: "tool/call",
-      seq: 5,
+      seq: 4,
       time: 1_500,
       data: { turn: 1, step: 1, callId: "c1", name: "write_file" },
     },
-    { type: "tool/result", seq: 6, time: 2_000, data: { turn: 1, step: 1, callId: "c1" } },
+    { type: "tool/result", seq: 5, time: 2_000, data: { turn: 1, step: 1, callId: "c1" } },
   ];
 }
 
@@ -44,7 +54,7 @@ function records(events = turnEvents()): DshTimelineRecord[] {
 describe("DSH timeline records", () => {
   it("measures a tool call from its call to its result and folds both rows into it", () => {
     const tool = records().find((record) => record.kind === "tool");
-    expect(tool).toMatchObject({ durationMs: 500, startedAt: 1_500, seqs: [5, 6] });
+    expect(tool).toMatchObject({ durationMs: 500, startedAt: 1_500, seqs: [4, 5] });
   });
 
   it("measures a reply from its step start and reports its first-token split", () => {
@@ -57,13 +67,13 @@ describe("DSH timeline records", () => {
     });
   });
 
-  it("leaves the streaming chunks and step boundaries out of the ledger", () => {
+  it("leaves the step boundaries out of the ledger", () => {
     expect(records().map((record) => record.kind)).toEqual(["user", "assistant", "tool"]);
   });
 
   it("keeps a still-open call at zero width instead of stretching it to now", () => {
-    const open = records(turnEvents().slice(0, 5)).find((record) => record.kind === "tool");
-    expect(open).toMatchObject({ durationMs: 0, seqs: [5] });
+    const open = records(turnEvents().slice(0, 4)).find((record) => record.kind === "tool");
+    expect(open).toMatchObject({ durationMs: 0, seqs: [4] });
   });
 
   it("marks a failed call so the overview can show it as an error", () => {
@@ -135,7 +145,7 @@ describe("dshTimelineFocus", () => {
   const model = deriveDshTimeline(records(), { actualDuration: false, actualTime: false });
 
   it("returns every ledger row an interval overlaps", () => {
-    expect([...dshTimelineFocus(model, { start: 2.2, end: 2.5 })]).toEqual([5, 6]);
+    expect([...dshTimelineFocus(model, { start: 2.2, end: 2.5 })]).toEqual([4, 5]);
   });
 
   it("reads a backwards drag the same as a forwards one", () => {
@@ -146,7 +156,7 @@ describe("dshTimelineFocus", () => {
 
   it("finds an operation wider than the selection inside it", () => {
     const timed = deriveDshTimeline(records(), { actualDuration: true, actualTime: true });
-    expect([...dshTimelineFocus(timed, { start: 1_700, end: 1_710 })]).toEqual([5, 6]);
+    expect([...dshTimelineFocus(timed, { start: 1_700, end: 1_710 })]).toEqual([4, 5]);
   });
 
   it("focuses nothing when the interval covers no operation", () => {
@@ -159,21 +169,21 @@ describe("dshTimelineLocate", () => {
   const model = deriveDshTimeline(records(), { actualDuration: false, actualTime: false });
 
   it("locates the operation the point falls inside", () => {
-    expect(dshTimelineLocate(model, 1.5)?.record.seqs).toEqual([4]);
-    expect(dshTimelineLocate(model, 2.5)?.record.seqs).toEqual([5, 6]);
+    expect(dshTimelineLocate(model, 1.5)?.record.seqs).toEqual([3]);
+    expect(dshTimelineLocate(model, 2.5)?.record.seqs).toEqual([4, 5]);
   });
 
   it("locates the nearest operation when the point falls outside every one", () => {
     // Equal-width slots leave no gaps, so the clock projection is where a point
     // can land between two operations.
     const timed = deriveDshTimeline(records(), { actualDuration: true, actualTime: true });
-    expect(dshTimelineLocate(timed, 1_450)?.record.seqs).toEqual([4]);
-    expect(dshTimelineLocate(timed, 1_480)?.record.seqs).toEqual([5, 6]);
+    expect(dshTimelineLocate(timed, 1_450)?.record.seqs).toEqual([3]);
+    expect(dshTimelineLocate(timed, 1_480)?.record.seqs).toEqual([4, 5]);
   });
 
   it("breaks a tie on a boundary toward the earlier operation, every time", () => {
-    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([4]);
-    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([4]);
+    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([3]);
+    expect(dshTimelineLocate(model, 2)?.record.seqs).toEqual([3]);
   });
 
   it("locates nothing in a session that recorded no operation", () => {
@@ -333,7 +343,7 @@ describe("DSH trajectory overview controls", () => {
     const track = mount({ onLocate });
     measureTrack(track);
     drag(track, 0.9, 0.9);
-    expect(onLocate).toHaveBeenCalledWith(5);
+    expect(onLocate).toHaveBeenCalledWith(4);
   });
 
   it("locates nothing when the gesture was wide enough to be a selection", () => {

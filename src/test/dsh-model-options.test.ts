@@ -9,8 +9,12 @@ import { agentSupportsReasoningEffort, type AgentOption } from "../agents";
 
 describe("dsh model options", () => {
   it("ships the DeepSeek catalog as the default dsh model list", () => {
+    // 首项即新会话默认模型;上游 agent-default-model 指向 deepseek-flash,
+    // 排错顺序会让新任务静默落回 v4-flash。
+    expect(DSH_DEFAULT_MODELS[0]).toBe("deepseek-flash");
     expect(DSH_DEFAULT_MODELS).toContain("deepseek-v4-flash");
     expect(DSH_DEFAULT_MODELS).toContain("deepseek-v4-pro");
+    expect(findModelIgnoreCase([...DSH_DEFAULT_MODELS], "DeepSeek-Flash")).toBe("deepseek-flash");
     expect(findModelIgnoreCase([...DSH_DEFAULT_MODELS], "DeepSeek-V4-Flash")).toBe(
       "deepseek-v4-flash",
     );

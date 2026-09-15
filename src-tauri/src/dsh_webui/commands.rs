@@ -2,7 +2,7 @@
 //!
 //! 这一批从 `dsh_webui.rs` 整块搬出来,内容一行没改。它们的共同形状是
 //! 「取 HTTP client → 转发一次 → 把结果原样返回」,没有自己的状态机;
-//! 真正的逻辑在 `DshApiClient` 的两个 impl 块和 `startup` / `event_stream` 里。
+//! 真正的逻辑在 `DshApiClient` 的两个 impl 块和 `startup` / `remote_mux` 里。
 //!
 //! 留在父模块的是**带自己逻辑的**那几个:会话流(`run_dsh_task` 等)、
 //! 进程生命周期(`start/stop/get_status`)、host 事件订阅、日志导出。
@@ -624,28 +624,37 @@ pub async fn remove_dsh_agent_preset(
     get_dsh_api(&state).await?.remove_preset(&preset).await
 }
 
-// ── Approval / Question responses ────────────────────────────────────────────
-
-/// Reply to a DSH `approval/requested` or `question/requested` server-request
-/// using POST /api/respond (client-response, echoes the rpcId from the frame).
+/// Reply to a DSH waterfall (`approval/request` / `user-questions/request`).
+///
+/// The retired POST /api/respond path echoed the frame's `rpcId`; the
+/// `/api/remote.mux` carrier replaces it with the unary `$events/result`
+/// Remote, which identifies the answer by `clientId` + `eventId`. The
+/// `clientId` is the id of the `$events` generation that raised the request —
+/// the frontend gets it from the `*_REQUESTED` frame, and the Host rejects a
+/// reply naming a dead generation.
 #[tauri::command]
-pub async fn respond_dsh_server_request(
+pub async fn respond_dsh_remote_event(
     state: State<'_, DshWebUiManager>,
-    rpc_id: String,
-    session_id: Option<String>,
-    result: Value,
+    client_id: String,
+    event_id: String,
+    outcome: Value,
 ) -> Result<(), String> {
-    if result.get("ok").and_then(Value::as_bool).is_none() {
-        return Err("DSH response result must be a full RPC result".to_string());
+    if outcome.get("kind").and_then(Value::as_str).is_none() {
+        return Err("DSH event outcome must carry a kind".to_string());
     }
-    let session_id = session_id.or_else(|| {
-        result
-            .get("value")
-            .and_then(|value| value.get("sessionId"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    });
-
+    let session_id = {
+        let mut registry = state.pending_waterfalls.lock();
+        match registry.remove(&event_id) {
+            Some(entry) => entry.session_id,
+            // The Host accepts answers for unknown-but-alive generations
+            // (idempotent replays); keep routing by an active pending entry.
+            None => registry
+                .all_pending()
+                .into_iter()
+                .next()
+                .and_then(|entry| entry.session_id.clone()),
+        }
+    };
     let api = match session_id {
         Some(session_id) => get_dsh_api_for_session(&state, &session_id).await?,
         None => {
@@ -661,40 +670,13 @@ pub async fn respond_dsh_server_request(
             }
         }
     };
-    let message = json!({
-        "type": "client-response",
-        "rpcId": rpc_id,
-        "result": result,
-    });
-    let response = api
-        .client
-        .post(format!("{}/api/respond", api.base_url))
-        .header("content-type", "application/json")
-        .json(&message)
-        .send()
-        .await
-        .map_err(|e| format!("DSH respond request failed: {e}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "DSH respond returned HTTP {status}: {}",
-            text.trim()
-        ));
-    }
-    let receipt: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("DSH respond receipt was invalid JSON: {error}"))?;
-    if receipt.get("accepted").and_then(Value::as_bool) == Some(true) {
-        Ok(())
-    } else {
-        let reason = receipt
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        Err(format!("DSH rejected the response: {reason}"))
-    }
+    let _ = api
+        .remote_call(
+            crate::dsh_webui::remote_mux::REMOTE_EVENT_RESULT_ENDPOINT,
+            crate::dsh_webui::remote_mux::remote_event_result_args(&client_id, &event_id, outcome),
+        )
+        .await?;
+    Ok(())
 }
 
 // ── Session attachment ────────────────────────────────────────────────────────
@@ -764,4 +746,4 @@ pub async fn update_dsh_settings(
         .await
 }
 
-// ── events.host downlink subscription ────────────────────────────────────────
+// ── host-wide remote.mux downlink subscription ───────────────────────────────

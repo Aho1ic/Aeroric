@@ -5,13 +5,22 @@ import { useI18n } from "../i18n";
 import { Button } from "./ui/Button";
 
 export interface DshApprovalRequest {
-  rpcId: string;
+  eventId: string;
+  clientId: string;
   sessionId: string;
-  approvalId: string;
   toolName: string;
   callId?: string;
   reason?: string;
 }
+
+/**
+ * waterfall 回包:outcome 就是结果本身,没有 apiproxy 那层 { ok, value } 信封。
+ * `next` = 用户没做决定就把框关了,交给下一个应答者(手机端等);没人接的话
+ * Host 自己 fail-close,所以这条路径不会让 agent 永远挂着。
+ */
+type DshApprovalOutcome =
+  | { kind: "result"; value: "allowed-once" | "rejected" }
+  | { kind: "next" };
 
 export function DshApprovalDialog({
   request,
@@ -33,23 +42,17 @@ export function DshApprovalDialog({
 
   if (!request) return null;
 
-  async function handleRespond(outcome: "allowed-once" | "rejected") {
+  async function respond(outcome: DshApprovalOutcome) {
     if (submitting || !request) return;
     setSubmitting(true);
     setError(null);
 
     try {
-      await invoke("respond_dsh_server_request", {
-        rpcId: request.rpcId,
+      await invoke("respond_dsh_remote_event", {
+        eventId: request.eventId,
+        clientId: request.clientId,
         sessionId: request.sessionId,
-        result: {
-          ok: true,
-          value: {
-            sessionId: request.sessionId,
-            approvalId: request.approvalId,
-            outcome,
-          },
-        },
+        outcome,
       });
       onClose();
     } catch (e) {
@@ -57,6 +60,8 @@ export function DshApprovalDialog({
       setSubmitting(false);
     }
   }
+
+  const decide = (value: "allowed-once" | "rejected") => respond({ kind: "result", value });
 
   return (
     <div
@@ -71,7 +76,7 @@ export function DshApprovalDialog({
         backdropFilter: "blur(12px)",
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget && !submitting) void handleRespond("rejected");
+        if (e.target === e.currentTarget && !submitting) void respond({ kind: "next" });
       }}
     >
       <div
@@ -200,7 +205,7 @@ export function DshApprovalDialog({
             size="sm"
             icon={X}
             disabled={submitting}
-            onClick={() => handleRespond("rejected")}
+            onClick={() => decide("rejected")}
           >
             {t("dsh.approvalReject")}
           </Button>
@@ -209,7 +214,7 @@ export function DshApprovalDialog({
             size="sm"
             icon={Check}
             disabled={submitting}
-            onClick={() => handleRespond("allowed-once")}
+            onClick={() => decide("allowed-once")}
           >
             {submitting ? t("dsh.approvalSubmitting") : t("dsh.approvalAllow")}
           </Button>

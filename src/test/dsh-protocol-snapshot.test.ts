@@ -29,12 +29,28 @@ function withoutLineComments(source: string): string {
 /** TS 快照里每份清单的下限条数,防"解析出空数组两边都空所以通过"。 */
 const MIN_ENTRIES = 5;
 
+/** 字符串清单的一一对应关系。`remoteEvents` 是对象数组,单独测。 */
 const PARITY_PAIRS = [
   ["rpcMethods", "RPC_METHODS"],
   ["remoteMethods", "REMOTE_METHODS"],
-  ["remoteEvents", "REMOTE_EVENTS"],
-  ["muxFrames", "MUX_FRAMES"],
-  ["hostFrames", "HOST_FRAMES"],
+] as const;
+
+/**
+ * Rust 侧那些不与某个顶层 TS 数组字段一一对应的清单。它们各有自己的断言:
+ * REMOTE_EVENTS/REMOTE_EVENT_MODES 组成 `remoteEvents` 的对象数组,
+ * STREAM_* 三份组成 `streamFrames` 的嵌套对象,
+ * RETIRED_* 三份只在 Rust 侧当"不许回归"的黑名单用(DSH-14 起,退役的
+ * `/api/events.mux` + `/api/events.host` 帧名也在里面)。
+ */
+const RUST_ONLY_SLICES = [
+  "REMOTE_EVENTS",
+  "REMOTE_EVENT_MODES",
+  "STREAM_FOLLOW_FRAMES",
+  "STREAM_CONTROL_FRAMES",
+  "STREAM_DOWNLINK_FRAMES",
+  "RETIRED_APIPROXY_METHODS",
+  "RETIRED_MUX_FRAMES",
+  "RETIRED_HOST_FRAMES",
 ] as const;
 
 function rustStrConst(name: string): string {
@@ -49,15 +65,17 @@ function rustU32Const(name: string): number {
   return Number(match[1]);
 }
 
-function rustStrSlice(name: string): string[] {
-  const match = new RegExp(`const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n\\];`).exec(
-    inventorySource,
-  );
+function rustStrSlice(name: string, min = MIN_ENTRIES): string[] {
+  // 同时认单行(`= &["a", "b"];`)与多行(`&[\n "a",\n];`)两种 rustfmt 排版。
+  // 单行时没有可选的换行前缀,`([\s\S]*?)` 会吃到行内内容。
+  const match = new RegExp(
+    `const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n?\\];`,
+  ).exec(inventorySource);
   if (!match) throw new Error(`missing Rust slice ${name} in ${INVENTORY_PATH}`);
   const entries = [...withoutLineComments(match[1]).matchAll(/"([^"]+)"/g)].map(
     (entry) => entry[1],
   );
-  if (entries.length < MIN_ENTRIES) {
+  if (entries.length < min) {
     // 正则读歪了(Rust 侧换了排版、或末尾 `\n];` 被提前匹配)时必须报错,而不是
     // 交出一个短清单让 toEqual 去比。
     throw new Error(
@@ -67,17 +85,24 @@ function rustStrSlice(name: string): string[] {
   return entries;
 }
 
-/** Rust 文件里所有 `&[&str]` 常量名,用来反查有没有清单没被配对。 */
+/**
+ * Rust 文件里所有 `&[&str]` 常量名,用来反查有没有清单没被配对。
+ *
+ * 单行 `= &["a", "b"];` 形式(STREAM_* 三份)与多行形式都要认,否则新加的清单
+ * 会从覆盖检查里漏掉。
+ */
 function allRustSliceNames(): string[] {
   return [
     ...withoutLineComments(inventorySource).matchAll(/const ([A-Z0-9_]+): &\[&str\] = &\[/g),
   ].map((entry) => entry[1]);
 }
 
-/** TS 快照里所有字符串数组字段名。 */
+/** TS 快照里所有字符串数组字段名(对象数组与嵌套对象各有专属断言)。 */
 function allSnapshotArrayKeys(): string[] {
   return Object.entries(DSH_PROTOCOL_SNAPSHOT)
-    .filter(([, value]) => Array.isArray(value))
+    .filter(
+      ([, value]) => Array.isArray(value) && value.every((entry) => typeof entry === "string"),
+    )
     .map(([key]) => key);
 }
 
@@ -103,10 +128,79 @@ describe("dsh protocol snapshot parity", () => {
     expect(DSH_PROTOCOL_SNAPSHOT.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it("agrees on remoteEvents including dispatch modes", () => {
+    const fromTs = DSH_PROTOCOL_SNAPSHOT.remoteEvents;
+    const events = rustStrSlice("REMOTE_EVENTS");
+    const modes = rustStrSlice("REMOTE_EVENT_MODES");
+    expect(events).toHaveLength(modes.length);
+    expect(fromTs.map((entry) => entry.event)).toEqual(events);
+    expect(fromTs.map((entry) => entry.mode)).toEqual(modes);
+    // 每条只能是两种派发模式之一;拼错会让前端把 waterfall 当通知,静默丢掉回复。
+    expect(modes.every((mode) => mode === "emit" || mode === "waterfall")).toBe(true);
+    expect(new Set(events).size).toBe(events.length);
+  });
+
+  it("agrees on the live stream frame vocabulary", () => {
+    const { streamFrames } = DSH_PROTOCOL_SNAPSHOT;
+    expect([...streamFrames.sessionFollow]).toEqual(rustStrSlice("STREAM_FOLLOW_FRAMES", 3));
+    expect([...streamFrames.sessionControl]).toEqual(rustStrSlice("STREAM_CONTROL_FRAMES", 3));
+    expect([...streamFrames.remoteDownlink]).toEqual(rustStrSlice("STREAM_DOWNLINK_FRAMES", 3));
+  });
+
+  it("keeps the retired apiproxy methods out of the snapshot", () => {
+    // 这一条是 DSH-4 的核心回归:apiproxy 整域在 ce3391e280 被删,旧方法名再出现
+    // 就意味着有人把上一个 pin 的清单粘回来了。
+    const retired = rustStrSlice("RETIRED_APIPROXY_METHODS");
+    const live = new Set<string>([
+      ...DSH_PROTOCOL_SNAPSHOT.rpcMethods,
+      ...DSH_PROTOCOL_SNAPSHOT.remoteMethods,
+    ]);
+    expect(retired.filter((method) => live.has(method))).toEqual([]);
+    // 反向:新的 Typert 方法必须在表里,否则 invoke_dsh_remote 会拒掉真实调用。
+    for (const method of [
+      "session.page",
+      "session.follow",
+      "session.control",
+      "workspaceFiles.list",
+      "fileUploads.upload",
+    ]) {
+      expect(live.has(method)).toBe(true);
+    }
+  });
+
+  it("keeps the retired events.mux / events.host frames out of the snapshot", () => {
+    // 这一条是 DSH-14 的核心回归:下行换成了 `/api/remote.mux`,两条 firehose 的帧名
+    // 只剩 Rust 侧的黑名单。它们再出现在活词表里,只意味着有人把上一个 pin 的表
+    // 粘了回来。
+    const retired = [
+      ...rustStrSlice("RETIRED_MUX_FRAMES"),
+      ...rustStrSlice("RETIRED_HOST_FRAMES"),
+    ];
+    // 黑名单本身被"顺手删空"时,下面的 filter 会变成永真断言,所以先钉两个哨兵。
+    expect(retired).toContain("session/event");
+    expect(retired).toContain("host/session-added");
+
+    const { streamFrames } = DSH_PROTOCOL_SNAPSHOT;
+    const live = new Set<string>([
+      ...streamFrames.sessionFollow,
+      ...streamFrames.sessionControl,
+      ...streamFrames.remoteDownlink,
+      ...DSH_PROTOCOL_SNAPSHOT.remoteEvents.map((entry) => entry.event),
+    ]);
+    expect(retired.filter((frame) => live.has(frame))).toEqual([]);
+
+    // 快照上也不该再有 muxFrames / hostFrames 两个字段:清单退役后它们只会让
+    // 兼容性诊断报一批任何 harness 都不会发的帧名。
+    expect(Object.keys(DSH_PROTOCOL_SNAPSHOT)).not.toContain("muxFrames");
+    expect(Object.keys(DSH_PROTOCOL_SNAPSHOT)).not.toContain("hostFrames");
+  });
+
   it("covers every inventory list on both sides", () => {
     // 新增一份清单(任一侧)却忘了加进 PARITY_PAIRS,上面的 it.each 会安静地不测它。
     const paired = PARITY_PAIRS.map(([, rustName]) => rustName);
-    expect([...allRustSliceNames()].sort()).toEqual([...paired].sort());
+    expect([...allRustSliceNames()].sort()).toEqual(
+      [...paired, ...RUST_ONLY_SLICES].sort(),
+    );
 
     const pairedTsKeys = PARITY_PAIRS.map(([tsKey]) => tsKey as string);
     expect([...allSnapshotArrayKeys()].sort()).toEqual([...pairedTsKeys].sort());

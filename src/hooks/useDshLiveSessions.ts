@@ -14,9 +14,10 @@ import type {
 } from "../types";
 
 /**
- * Consumes the four `dsh-session-*` push events the Rust backend already
- * forwards verbatim from the dsh web `events.mux` SSE
- * (`dispatch_mux_frame` in src-tauri/src/dsh_webui.rs):
+ * Consumes the four `dsh-session-*` push events the Rust backend forwards from
+ * the dsh web `/api/remote.mux` downlink — the `session/follow` and
+ * `session/control` logical streams (the mux client in
+ * src-tauri/src/dsh_webui/remote_mux.rs):
  *
  *  - `dsh-session-projection` — per-unit live view (title/goal/plan/todo/…)
  *  - `dsh-session-jobs`       — background job list for the session

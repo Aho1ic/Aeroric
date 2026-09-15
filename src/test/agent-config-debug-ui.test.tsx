@@ -219,6 +219,13 @@ function renderClaudeAgentConfigPanel() {
         custom_agents: [{ ...baseProfile, enable_1m_context: true }],
       });
     }
+    if (command === "update_custom_agent_artifact_tool") {
+      configContent += "# artifact disabled\n";
+      return Promise.resolve({
+        ...appSettings,
+        custom_agents: [{ ...baseProfile, disable_artifact_tool: true }],
+      });
+    }
     return Promise.resolve(undefined);
   });
   render(
@@ -709,6 +716,34 @@ describe("Agent config and debug panel UI", () => {
 
     await findConfigEditor("#!/bin/sh\n");
     expect(screen.queryByLabelText("Enable 1M context")).not.toBeInTheDocument();
+  });
+
+  it("disables the Artifact tool for an existing Claude agent", async () => {
+    const user = userEvent.setup();
+    renderClaudeAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=2\n");
+    await user.click(screen.getByLabelText("Disable the Artifact tool"));
+    await user.click(getEnabledSaveButton());
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_custom_agent_artifact_tool", {
+        id: "agentrouter",
+        disableArtifactTool: true,
+      }),
+    );
+    expect(
+      await findConfigEditor(
+        "#!/bin/bash\n# AERORIC_CLAUDE_WRAPPER_VERSION=2\n# artifact disabled\n",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the Artifact tool control for Codex agents", async () => {
+    renderModelManagedAgentConfigPanel();
+
+    await findConfigEditor("#!/bin/sh\n");
+    expect(screen.queryByLabelText("Disable the Artifact tool")).not.toBeInTheDocument();
   });
 
   it("saves only the proxy enabled checkbox for a custom Joverna agent", async () => {

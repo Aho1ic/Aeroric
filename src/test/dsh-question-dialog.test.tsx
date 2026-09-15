@@ -9,13 +9,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const { DshQuestionDialog } = await import("../components/DshQuestionDialog");
 
 /**
- * Agent 提问弹窗。它是 DSH RPC 的一端:提交/取消都要回 `respond_dsh_server_request`,
- * 回不成功就必须留在原地显示错误 —— 直接关掉会让对端永远等下去。
+ * Agent 提问弹窗。它是 DSH waterfall 的一端:提交/取消都要回
+ * `respond_dsh_remote_event`,回不成功就必须留在原地显示错误 —— 直接关掉会让对端
+ * 永远等下去。
  */
 
 function makeRequest(overrides: Partial<DshQuestionRequest> = {}): DshQuestionRequest {
   return {
-    rpcId: "rpc-1",
+    eventId: "evt-1",
+    clientId: "client-1",
     sessionId: "sess-1",
     questions: [
       {
@@ -67,17 +69,15 @@ function optionButton(label: string, questionText?: string) {
 function submittedAnswers() {
   const call = invoke.mock.calls.find(
     ([name, args]) =>
-      name === "respond_dsh_server_request" &&
-      (args as { result: { ok: boolean } }).result.ok === true,
+      name === "respond_dsh_remote_event" &&
+      (args as { outcome: { kind: string } }).outcome.kind === "result",
   );
   expect(call).toBeDefined();
   return (
     call![1] as {
-      result: {
-        value: { answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } };
-      };
+      outcome: { value: { answers: Array<{ id: string; selected: string[]; custom?: string }> } };
     }
-  ).result.value.answer.answers;
+  ).outcome.value.answers;
 }
 
 beforeEach(() => {
@@ -289,17 +289,22 @@ describe("DshQuestionDialog 自定义答案", () => {
   });
 });
 
-describe("RPC 契约:提交", () => {
-  it("提交带上 rpcId / sessionId,且 sessionId 在 value 里也重复一份", async () => {
-    renderDialog(makeRequest({ rpcId: "rpc-42", sessionId: "sess-42" }));
+describe("waterfall 契约:提交", () => {
+  it("提交带上 eventId / clientId / sessionId,outcome 就是答案本身", async () => {
+    renderDialog(makeRequest({ eventId: "evt-42", clientId: "client-42", sessionId: "sess-42" }));
     fireEvent.click(submitButton());
     await waitFor(() => expect(invoke).toHaveBeenCalled());
     const [name, args] = invoke.mock.calls[0] as [string, Record<string, unknown>];
-    expect(name).toBe("respond_dsh_server_request");
-    expect(args.rpcId).toBe("rpc-42");
+    expect(name).toBe("respond_dsh_remote_event");
+    // eventId + clientId 是 waterfall 的相关性二元组:少一个 Host 找不回这条事件。
+    expect(args.eventId).toBe("evt-42");
+    expect(args.clientId).toBe("client-42");
     expect(args.sessionId).toBe("sess-42");
-    // value.sessionId 是协议要求的第二份,漏了对端认不出这条回包
-    expect(args.result).toMatchObject({ ok: true, value: { sessionId: "sess-42" } });
+    // outcome 直接是 ApprovalOutcome/答案,不再套 apiproxy 那层 { ok, value } 信封。
+    expect(args.outcome).toEqual({
+      kind: "result",
+      value: { answers: [{ id: "q1", selected: [] }] },
+    });
   });
 
   it("提交成功才 onClose", async () => {
@@ -338,27 +343,24 @@ describe("RPC 契约:提交", () => {
   });
 });
 
-describe("RPC 契约:取消", () => {
-  /** 取消时发出去的 error 对象。 */
-  function cancelError() {
+describe("waterfall 契约:取消", () => {
+  /** 取消时发出去的 outcome。 */
+  function cancelOutcome() {
     const call = invoke.mock.calls.find(
       ([name, args]) =>
-        name === "respond_dsh_server_request" &&
-        (args as { result: { ok: boolean } }).result.ok === false,
+        name === "respond_dsh_remote_event" &&
+        (args as { outcome: { kind: string } }).outcome.kind === "next",
     );
     expect(call).toBeDefined();
-    return (call![1] as { result: { error: Record<string, unknown> } }).result.error;
+    return (call![1] as { outcome: Record<string, unknown> }).outcome;
   }
 
-  it("Cancel 也要回包,而且是 ok:false + code cancelled", async () => {
+  it("Cancel 也要回包,而且是 kind:next(不作答,往下传)", async () => {
     const { onClose } = renderDialog();
     fireEvent.click(cancelButton());
     await waitFor(() => expect(invoke).toHaveBeenCalled());
-    expect(cancelError()).toEqual({
-      code: "cancelled",
-      message: "the user closed this question request",
-      details: {},
-    });
+    // 静默关掉会让 waterfall 一直挂在这个客户端上;next 才是"我不答,交给下一个"。
+    expect(cancelOutcome()).toEqual({ kind: "next" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -375,7 +377,7 @@ describe("RPC 契约:取消", () => {
     const { onClose } = renderDialog();
     fireEvent.click(dialog().parentElement as HTMLElement);
     await waitFor(() => expect(invoke).toHaveBeenCalled());
-    expect(cancelError().code).toBe("cancelled");
+    expect(cancelOutcome()).toEqual({ kind: "next" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -409,7 +411,7 @@ describe("提交中:重复回包的闸门", () => {
     expect(cancelButton()).toBeDisabled();
   });
 
-  it("提交中再点提交不会发第二次(一个 rpcId 只能回一次)", async () => {
+  it("提交中再点提交不会发第二次(一个 eventId 只能回一次)", async () => {
     deferInvoke();
     renderDialog();
     fireEvent.click(submitButton());
@@ -420,8 +422,8 @@ describe("提交中:重复回包的闸门", () => {
   });
 
   it("提交中点遮罩不会再发一条取消", async () => {
-    // 遮罩点击是绕过按钮 disabled 的那条路径:同一个 rpcId 先收到 ok:true 再收到
-    // cancelled,对端状态直接错乱。
+    // 遮罩点击是绕过按钮 disabled 的那条路径:同一个 eventId 先收到答案再收到 next,
+    // 对端状态直接错乱。
     // 变异测试结论:这里有两道闸门 —— 遮罩 onClick 的 `!submitting`,和 handleCancel
     // 开头的 `if (submitting || ...) return`。单独摘掉任意一道本文件全绿(互相兜底),
     // 两道一起摘才被这条用例抓到。所以它守的是真实危险,只是钉不住具体哪一道。

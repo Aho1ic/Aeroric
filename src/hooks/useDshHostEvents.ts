@@ -1,8 +1,10 @@
 /**
- * DSH 宿主事件的 App 层订阅簇:审批 / 提问请求与它们的 resolved 清理,加上
- * events.host 失效通道到浏览器事件总线的转发。原来内联在 App.tsx 的挂载期
- * 大 effect 里;这批监听与其余监听(任务状态、设置变更、远端 RPC)互不耦合,
- * 只是共用同一个 effect,拆出来后注册时机还略早于原先(更不漏早期事件)。
+ * DSH 宿主事件的 App 层订阅簇:审批 / 提问请求与它们的 resolved 清理,加上宿主
+ * 失效通道到浏览器事件总线的转发。载体是 /api/remote.mux 上的 `$events` 流
+ * (events.host 已经没了),Rust 侧把 waterfall / emit 帧翻成下面这些 Tauri 事件名。
+ * 原来内联在 App.tsx 的挂载期大 effect 里;这批监听与其余监听(任务状态、设置
+ * 变更)互不耦合,只是共用同一个 effect,拆出来后注册时机还略早于原先(更不漏
+ * 早期事件)。
  *
  * "dsh-host-refresh" 的转发约定:App 不理解 payload,只加一层(eventName,
  * payload)原样重发,由各面板自己刷新自己的快照。
@@ -37,29 +39,30 @@ export function useDshHostEvents() {
   useEffect(() => {
     const p6 = listen<{
       type: string;
-      rpcId: string;
+      eventId: string;
+      clientId: string;
       sessionId: string;
-      approvalId: string;
       toolName: string;
       callId?: string;
       reason?: string;
     }>(DSH_APPROVAL_REQUESTED_EVENT, (e) => {
       setDshApprovalRequests((prev) => {
         const request = {
-          rpcId: e.payload.rpcId,
+          eventId: e.payload.eventId,
+          clientId: e.payload.clientId,
           sessionId: e.payload.sessionId,
-          approvalId: e.payload.approvalId,
           toolName: e.payload.toolName,
           callId: e.payload.callId,
           reason: e.payload.reason,
         } satisfies DshApprovalRequest;
-        const next = prev.filter((item) => item.rpcId !== request.rpcId);
+        const next = prev.filter((item) => item.eventId !== request.eventId);
         return [...next, request];
       });
     });
     const p7 = listen<{
       type: string;
-      rpcId: string;
+      eventId: string;
+      clientId: string;
       sessionId: string;
       questions: Array<{
         id: string;
@@ -72,36 +75,35 @@ export function useDshHostEvents() {
     }>(DSH_QUESTION_REQUESTED_EVENT, (e) => {
       setDshQuestionRequests((prev) => {
         const request = {
-          rpcId: e.payload.rpcId,
+          eventId: e.payload.eventId,
+          clientId: e.payload.clientId,
           sessionId: e.payload.sessionId,
           questions: e.payload.questions,
         } satisfies DshQuestionRequest;
-        const next = prev.filter((item) => item.rpcId !== request.rpcId);
+        const next = prev.filter((item) => item.eventId !== request.eventId);
         return [...next, request];
       });
     });
-    const p8 = listen<{ sessionId?: string; approvalId?: string }>(
+    // resolved 只按 eventId 匹配:waterfall 的 eventId 全局唯一,再叠 sessionId
+    // 不会更准,只会在 Rust 侧漏带 sessionId 时撤不掉框。
+    const p8 = listen<{ sessionId?: string; eventId?: string }>(
       DSH_APPROVAL_RESOLVED_EVENT,
       (e) => {
         setDshApprovalRequests((prev) =>
-          prev.filter(
-            (item) =>
-              !(item.sessionId === e.payload.sessionId && item.approvalId === e.payload.approvalId),
-          ),
+          prev.filter((item) => item.eventId !== e.payload.eventId),
         );
       },
     );
-    const p9 = listen<{ sessionId?: string; questionRpcId?: string }>(
+    const p9 = listen<{ sessionId?: string; eventId?: string }>(
       DSH_QUESTION_RESOLVED_EVENT,
       (e) => {
         setDshQuestionRequests((prev) =>
-          prev.filter((item) => item.rpcId !== e.payload.questionRpcId),
+          prev.filter((item) => item.eventId !== e.payload.eventId),
         );
       },
     );
-    // DSH events.host is the live invalidation channel for settings/session
-    // surfaces. Re-emit one browser event with the original payload so panels
-    // can refresh their own snapshot without coupling App to their state.
+    // 宿主失效帧(`$events` 的 emit)是设置 / 会话面板的实时失效通道。原样再发一条
+    // 浏览器事件,面板各自刷自己的快照,不用把 App 和它们的 state 绑在一起。
     const dispatchDshHostRefresh = (eventName: string, payload: unknown) => {
       window.dispatchEvent(new CustomEvent("dsh-host-refresh", { detail: { eventName, payload } }));
     };

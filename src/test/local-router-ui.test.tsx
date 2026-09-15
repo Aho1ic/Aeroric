@@ -3,10 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeLocalRouterToggle } from "../components/WelcomePage";
-import { LocalRouterPanel } from "../components/app-settings/LocalRouterPanel";
+import {
+  formatRequestThroughput,
+  LocalRouterPanel,
+} from "../components/app-settings/LocalRouterPanel";
 import {
   DEFAULT_LOCAL_ROUTER_SETTINGS,
   type AppSettings,
+  type LocalRouterRequestRecord,
   type LocalRouterSettings,
   type LocalRouterStatus,
   type LocalRouterTargetStatus,
@@ -452,6 +456,82 @@ describe("LocalRouterPanel", () => {
     await screen.findByRole("switch", { name: "Local router service" });
     expect(screen.queryByText(/Local router operation failed/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Cannot read properties of undefined/i)).not.toBeInTheDocument();
+  });
+
+  it("shows throughput and TTFT beside latency, and hides them at degenerate boundaries", async () => {
+    const streaming: LocalRouterRequestRecord = {
+      requestId: "request-streaming",
+      sessionId: null,
+      responseId: null,
+      agent: "claude",
+      targetId: "claude",
+      targetName: "Claude Code",
+      endpoint: "/v1/messages",
+      attemptCount: 1,
+      model: "claude-sonnet-4-5",
+      outboundModel: null,
+      inputTokens: 40,
+      outputTokens: 120,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      statusCode: 200,
+      latencyMs: 1500,
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_001_500,
+      isStreaming: true,
+      success: true,
+      errorSummary: null,
+      ttftMs: 240,
+    };
+    // 老记录/非流式没有 TTFT,且延迟与输出为 0 时吞吐无意义,两段都不能渲染。
+    const degenerate: LocalRouterRequestRecord = {
+      ...streaming,
+      requestId: "request-degenerate",
+      outputTokens: 0,
+      latencyMs: 0,
+      isStreaming: false,
+      completedAt: 1_700_000_000_100,
+      ttftMs: null,
+    };
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "load_app_settings") return Promise.resolve(appSettings());
+      if (command === "get_local_router_status") return Promise.resolve(runningStatus);
+      if (command === "get_local_router_requests") {
+        return Promise.resolve([streaming, degenerate]);
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+
+    renderWithI18n(<LocalRouterPanel />);
+
+    const rows = await screen.findAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+
+    const streamingRow = within(rows[0]);
+    expect(streamingRow.getByText(/1[\s,.]?500 ms/)).toBeInTheDocument();
+    expect(streamingRow.getByText("80 tok/s")).toBeInTheDocument();
+    expect(streamingRow.getByText("TTFT 240 ms")).toBeInTheDocument();
+
+    const degenerateRow = within(rows[1]);
+    expect(degenerateRow.getByText("0 ms")).toBeInTheDocument();
+    expect(degenerateRow.queryByText(/tok\/s/)).not.toBeInTheDocument();
+    expect(degenerateRow.queryByText(/TTFT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Infinity|NaN/)).not.toBeInTheDocument();
+  });
+});
+
+describe("formatRequestThroughput", () => {
+  it("derives tok/s from output tokens over total latency", () => {
+    expect(formatRequestThroughput(120, 1500)).toBe("80");
+    expect(formatRequestThroughput(1, 5000)).toMatch(/^0[.,]2$/);
+  });
+
+  it("returns null instead of Infinity or NaN at degenerate inputs", () => {
+    expect(formatRequestThroughput(120, 0)).toBeNull();
+    expect(formatRequestThroughput(0, 1500)).toBeNull();
+    expect(formatRequestThroughput(120, null)).toBeNull();
+    expect(formatRequestThroughput(undefined, 1500)).toBeNull();
+    expect(formatRequestThroughput(-5, 1500)).toBeNull();
   });
 });
 
