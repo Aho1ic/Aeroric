@@ -54,7 +54,7 @@ import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
-import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
+import { WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
   CLEANUP_COMMANDS,
   LOCAL_ROUTER_COMMANDS,
@@ -71,6 +71,10 @@ import {
 } from "./state/app/useAppShellHooks";
 import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
 import { useRemoteTaskRequests } from "./state/app/useRemoteTaskRequests";
+import {
+  useAppStartupLoad,
+  useDshHostEventsSubscription,
+} from "./state/app/useAppStartup";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -129,11 +133,8 @@ import {
   loadProjectRailWidth,
   loadCollapsedProjectGroups,
   saveCollapsedProjectGroups,
-  normalizeInterruptedTasksOnStartup,
-  normalizeSshProjectNames,
   persistProjects,
   persistProjectTasks,
-  persistProjectTasksQuietly,
   flushProjectTasks,
   PROJECT_RAIL_WIDTH_STORAGE_KEY,
   SELECTED_CONDA_ENV_KEY,
@@ -586,70 +587,17 @@ function AppShell() {
   // Keep the remote.mux downlink subscription alive while any DSH task is active.
   // The backend command is idempotent: calling start again while running
   // simply replaces the abort token, so it is safe to re-invoke.
-  useEffect(() => {
-    const hasDshActive = tasks.some(
-      (task) =>
-        isActiveTaskStatus(task.status) &&
-        agentFamily(task.agent, agentOptionsRef.current) === "dsh",
-    );
-    if (hasDshActive) {
-      invoke(DSH_TASK_COMMANDS.startHostEvents).catch(console.error);
-    } else {
-      invoke(DSH_TASK_COMMANDS.stopHostEvents).catch(console.error);
-    }
-  }, [tasks]);
+  useDshHostEventsSubscription(tasks, agentOptionsRef);
 
-  useEffect(() => {
-    async function init() {
-      // Load projects from ~/.aeroric/projects.json
-      const loadedProjects = await invoke<Project[]>("load_projects");
-      const loadedSshConnections = await invoke<SshConnection[]>("load_ssh_connections");
-      const normalizedProjects = normalizeProjectOrder(
-        normalizeSshProjectNames(loadedProjects, loadedSshConnections),
-      );
-      setProjects(normalizedProjects);
-      setSshConnections(loadedSshConnections);
-      if (normalizedProjects !== loadedProjects) {
-        persistProjects(
-          normalizedProjects,
-          showToastRef.current,
-          formatSaveProjectsErrorRef.current,
-        );
-      }
-
-      // Load tasks for all known projects
-      const chunks = await Promise.all(
-        normalizedProjects.map((p) => invoke<Task[]>("load_project_tasks", { projectId: p.id })),
-      );
-      const activeTaskIds = new Set(await invoke<string[]>("get_active_task_ids"));
-      const { tasks: loadedTasks, changedProjectIds } = normalizeInterruptedTasksOnStartup(
-        chunks.flat(),
-        activeTaskIds,
-      );
-      const dshSpeedCleanedProjectIds = new Set<string>();
-      const normalizedTasks = loadedTasks.map((task) => {
-        if (task.speed !== "fast" || agentFamily(task.agent, agentOptionsRef.current) !== "dsh") {
-          return task;
-        }
-        dshSpeedCleanedProjectIds.add(task.projectId);
-        return { ...task, speed: "standard" };
-      });
-      setTasks(normalizedTasks);
-      const projectsToPersist = new Set([...changedProjectIds, ...dshSpeedCleanedProjectIds]);
-      projectsToPersist.forEach((projectId) => {
-        persistProjectTasksQuietly(projectId, normalizedTasks);
-      });
-    }
-
-    const startup = init();
-    startupReadyRef.current = startup;
-    startup.catch((e: unknown) => {
-      console.error(e);
-      showToastRef.current(String(e), "error");
-    });
-    // Mount-only: callbacks are read through refs so a language switch never
-    // re-runs startup normalization. See the ref sync effect above.
-  }, [setProjects, setSshConnections, setTasks]);
+  useAppStartupLoad({
+    setProjects,
+    setSshConnections,
+    setTasks,
+    startupReadyRef,
+    agentOptionsRef,
+    showToastRef,
+    formatSaveProjectsErrorRef,
+  });
 
   /**
    * 定时自动物理删除超期的已结束任务。
