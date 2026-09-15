@@ -116,6 +116,7 @@ import {
   type ProjectPinnedChangedPayload,
 } from "./appRemoteEvents";
 import { disableTextInputAutoFeatures } from "./appThemeState";
+import { AppProviders } from "./state/app";
 import {
   getTaskSessionFieldsByFamily,
   resolveConfigSwitchSessionStrategy,
@@ -378,7 +379,8 @@ function applyResolvedTaskSession(
   };
 }
 
-function App() {
+/** 装配壳：挂 zustand ops providers。状态迁移完成后本函数应只保留路由与窗口事件。 */
+function AppShell() {
   const { showToast } = useToast();
   const { t } = useI18n();
   const agentOptions = useAgentOptions();
@@ -3040,6 +3042,14 @@ function App() {
       <DshApprovalDialog request={dshApprovalRequests[0] ?? null} onClose={dismissApproval} />
       <DshQuestionDialog request={dshQuestionRequests[0] ?? null} onClose={dismissQuestion} />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <AppProviders>
+      <AppShell />
+    </AppProviders>
   );
 }
 
