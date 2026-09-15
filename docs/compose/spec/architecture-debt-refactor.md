@@ -236,7 +236,7 @@ P1 可独立合入；P2 依赖 P1 以便新 API 类型直接挂 contracts；P3 �
 - [x] T4: contracts 抽出共享词表（Agent/Family/Permission/TaskStatus/Location/Avatar） — acceptance: contracts 导出 + parity 单测 (covers: S2.3)
 - [x] T5: 桌面 `types.ts` re-export 收敛 — acceptance: 根 typecheck 绿；wire 词表单一定义 (covers: S2.3; depends: T4)
 - [x] T6: 实现 projects/tasks/appearance stores + AppOpsProvider — acceptance: store 单测覆盖 CRUD (covers: S2.4)
-- [ ] T7: App 瘦身 — **进展**：App.tsx **3117 → 1859**。已外提 taskLaunch/status、project/task mutations、shell/tauri/remote/startup/maintenance hooks、worktreeOps、taskLifecycle。剩余 handleSwitchTaskConfig 等编排。 (covers: S2.4)
+- [ ] T7: App 瘦身 — **大幅推进**：App.tsx **3117 → 1272**。已外提全部任务生命周期/切换/删除/完成编排与启动/事件/维护 hooks。剩余 JSX 装配与部分 UI handler。 (covers: S2.4)
 - [ ] T8: ProjectPage 改为 store 驱动，props ≤15 — acceptance: ProjectPage 测试绿；手动冒烟通过 (covers: S2.4; depends: T7)
 - [x] T9: app_settings.rs 拆为 mod/schema/load_save/builtin/custom_agents/commands — acceptance: cargo 绿；commands/schema/load_save/builtin/custom_agents 均 <1500（mod.rs 1734 含集成测试，遗留项） (covers: S2.5)
 - [x] T10: 分阶段提交并准备合入 main — acceptance: lint/typecheck/targeted tests/app_settings tests 绿 (covers: S2.1; depends: T5,T9)
