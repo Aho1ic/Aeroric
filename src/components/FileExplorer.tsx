@@ -50,7 +50,12 @@ import {
   updateNode,
 } from "./file-explorer/treeUtils";
 import type { RemoteProjectTarget, SshConnection, ThemeVariant } from "../types";
-import { targetCommand, targetFileArgs, targetProjectArgs } from "../projectTarget";
+import {
+  FS_MIRRORS,
+  PROJECT_CONFIG_MIRRORS,
+} from "../lib/api/fs";
+import { fileArgs, projectArgs, resolveCommand } from "../lib/invokeFacade";
+import { resolveInvokeTarget } from "../lib/target";
 
 type RemoteFileContext = RemoteProjectTarget;
 
@@ -115,11 +120,25 @@ export function FileExplorer({
   onOpenDatabaseFile?: (path: string, name: string) => void;
 }) {
   const { t } = useI18n();
+  const isRemote = Boolean(remote);
+  const invokeTarget = useMemo(
+    () => resolveInvokeTarget(projectPath, remote),
+    [projectPath, remote],
+  );
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   // 面包屑点击祖先目录时把浏览根上移到该目录（本地模式）。后端 read_dir_entries 会把
   // 每个路径都限制在传入的 projectPath 之内，所以“跳到上级目录”必须换根，而不是仅换选中项。
   // 远程模式仍锁在 remote.projectPath 内，不放开越界浏览。
   const [browseRoot, setBrowseRoot] = useState(projectPath);
+
+  // 本地浏览可上移根目录；后端把路径锁在传入的 projectPath 内，因此文件操作
+  // 必须以 browseRoot 为约束根，而不是最初的 projectPath prop。
+  const fileOpTarget = useMemo(() => {
+    if (invokeTarget.kind === "local") {
+      return { kind: "local" as const, path: browseRoot };
+    }
+    return invokeTarget;
+  }, [invokeTarget, browseRoot]);
 
   // 切换项目(或远程上下文)时回到项目根,不保留上一个项目遗留的浏览根。
   useEffect(() => {
@@ -253,10 +272,8 @@ export function FileExplorer({
 
   useEffect(() => {
     let cancelled = false;
-    const command = remote
-      ? targetCommand(remote, "", "remote_read_project_config", "read_wsl_project_config")
-      : "read_project_config";
-    const args = remote ? targetProjectArgs(remote) : { projectPath };
+    const command = resolveCommand(PROJECT_CONFIG_MIRRORS.read, invokeTarget);
+    const args = projectArgs(invokeTarget);
 
     invoke<{ editor?: { file_browser_sort?: unknown } }>(command, args)
       .then((config) => {
@@ -272,18 +289,16 @@ export function FileExplorer({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, remote]);
+  }, [invokeTarget]);
 
   const readEntries = useCallback(
     (path: string) =>
-      remote
-        ? safeInvoke<FsEntry[]>(
-            targetCommand(remote, "", "remote_read_dir_entries", "wsl_read_dir_entries"),
-            targetFileArgs(remote, path),
-            remoteInvokeOptions(),
-          )
-        : safeInvoke<FsEntry[]>("read_dir_entries", { path, projectPath: browseRoot }),
-    [browseRoot, remote, safeInvoke],
+      safeInvoke<FsEntry[]>(
+        resolveCommand(FS_MIRRORS.readDir, fileOpTarget),
+        fileArgs(fileOpTarget, path),
+        isRemote ? remoteInvokeOptions() : undefined,
+      ),
+    [fileOpTarget, isRemote, safeInvoke],
   );
 
   const refresh = useCallback(
@@ -622,25 +637,17 @@ export function FileExplorer({
     const parentPath = creating.parentPath;
     try {
       if (kind === "file") {
-        if (remote) {
-          await safeInvoke(
-            targetCommand(remote, "", "remote_create_file", "wsl_create_file"),
-            targetFileArgs(remote, fullPath),
-            remoteInvokeOptions(),
-          );
-        } else {
-          await safeInvoke("create_file", { path: fullPath, projectPath: browseRoot });
-        }
+        await safeInvoke(
+          resolveCommand(FS_MIRRORS.createFile, fileOpTarget),
+          fileArgs(fileOpTarget, fullPath),
+          isRemote ? remoteInvokeOptions() : undefined,
+        );
       } else {
-        if (remote) {
-          await safeInvoke(
-            targetCommand(remote, "", "remote_create_directory", "wsl_create_directory"),
-            targetFileArgs(remote, fullPath),
-            remoteInvokeOptions(),
-          );
-        } else {
-          await safeInvoke("create_directory", { path: fullPath, projectPath: browseRoot });
-        }
+        await safeInvoke(
+          resolveCommand(FS_MIRRORS.createDirectory, fileOpTarget),
+          fileArgs(fileOpTarget, fullPath),
+          isRemote ? remoteInvokeOptions() : undefined,
+        );
       }
       if (isCancelled()) return;
       setCreating(null);
@@ -667,10 +674,11 @@ export function FileExplorer({
     creating,
     creatingValue,
     ensureExpanded,
+    fileOpTarget,
     isCancelled,
+    isRemote,
     onFileSelect,
     refresh,
-    remote,
     safeInvoke,
     showToast,
     t,
@@ -739,18 +747,11 @@ export function FileExplorer({
     const parentPath = parentPathOf(oldPath);
     const nextPath = joinPath(parentPath, name);
     try {
-      if (remote) {
-        await safeInvoke(
-          targetCommand(remote, "", "remote_rename_path", "wsl_rename_path"),
-          {
-            ...targetFileArgs(remote, oldPath),
-            newName: name,
-          },
-          remoteInvokeOptions(),
-        );
-      } else {
-        await safeInvoke("rename_path", { path: oldPath, newName: name, projectPath: browseRoot });
-      }
+      await safeInvoke(
+        resolveCommand(FS_MIRRORS.renamePath, fileOpTarget),
+        { ...fileArgs(fileOpTarget, oldPath), newName: name },
+        isRemote ? remoteInvokeOptions() : undefined,
+      );
       if (isCancelled()) return;
       cancelRename();
       await refresh();
@@ -767,12 +768,12 @@ export function FileExplorer({
       renameInFlightRef.current = false;
     }
   }, [
-    browseRoot,
     cancelRename,
+    fileOpTarget,
     isCancelled,
+    isRemote,
     onFileSelect,
     refresh,
-    remote,
     renamingPath,
     renamingPlacement,
     renamingValue,
@@ -882,15 +883,11 @@ export function FileExplorer({
 
       deleteInFlightRef.current = true;
       try {
-        if (remote) {
-          await safeInvoke(
-            targetCommand(remote, "", "remote_delete_path", "wsl_delete_path"),
-            targetFileArgs(remote, targetPath),
-            remoteInvokeOptions(),
-          );
-        } else {
-          await safeInvoke("delete_path", { path: targetPath, projectPath: browseRoot });
-        }
+        await safeInvoke(
+          resolveCommand(FS_MIRRORS.deletePath, fileOpTarget),
+          fileArgs(fileOpTarget, targetPath),
+          isRemote ? remoteInvokeOptions() : undefined,
+        );
         if (isCancelled()) return;
         const sep = pathSeparator(targetPath);
         const descendantPrefix = targetPath + sep;
@@ -909,7 +906,7 @@ export function FileExplorer({
         deleteInFlightRef.current = false;
       }
     },
-    [browseRoot, isCancelled, refresh, remote, safeInvoke, showToast, t],
+    [fileOpTarget, isCancelled, isRemote, refresh, safeInvoke, showToast, t],
   );
 
   const handleTreeKeyDown = useCallback(

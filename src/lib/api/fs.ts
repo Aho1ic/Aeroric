@@ -23,6 +23,35 @@ export const FS_MIRRORS = {
     ssh: "remote_read_image_preview",
     wsl: "wsl_read_image_preview",
   },
+  createFile: {
+    local: "create_file",
+    ssh: "remote_create_file",
+    wsl: "wsl_create_file",
+  },
+  createDirectory: {
+    local: "create_directory",
+    ssh: "remote_create_directory",
+    wsl: "wsl_create_directory",
+  },
+  renamePath: {
+    local: "rename_path",
+    ssh: "remote_rename_path",
+    wsl: "wsl_rename_path",
+  },
+  deletePath: {
+    local: "delete_path",
+    ssh: "remote_delete_path",
+    wsl: "wsl_delete_path",
+  },
+} as const satisfies Record<string, CommandMirror>;
+
+/** 项目配置读取。WSL 命令名历史为 `read_wsl_project_config`（无 `wsl_` 前缀）。 */
+export const PROJECT_CONFIG_MIRRORS = {
+  read: {
+    local: "read_project_config",
+    ssh: "remote_read_project_config",
+    wsl: "read_wsl_project_config",
+  },
 } as const satisfies Record<string, CommandMirror>;
 
 export type FsMirrorKey = keyof typeof FS_MIRRORS;
@@ -48,4 +77,24 @@ export async function readImagePreview<T = unknown>(
   path: string,
 ): Promise<T> {
   return invokeFileFor<T>(target, FS_MIRRORS.readImage, path);
+}
+
+export async function createFile(target: InvokeTarget, path: string): Promise<unknown> {
+  return invokeFileFor(target, FS_MIRRORS.createFile, path);
+}
+
+export async function createDirectory(target: InvokeTarget, path: string): Promise<unknown> {
+  return invokeFileFor(target, FS_MIRRORS.createDirectory, path);
+}
+
+export async function renamePath(
+  target: InvokeTarget,
+  path: string,
+  newName: string,
+): Promise<unknown> {
+  return invokeFileFor(target, FS_MIRRORS.renamePath, path, { newName });
+}
+
+export async function deletePath(target: InvokeTarget, path: string): Promise<unknown> {
+  return invokeFileFor(target, FS_MIRRORS.deletePath, path);
 }
