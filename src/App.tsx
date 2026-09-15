@@ -47,7 +47,6 @@ import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
-import { WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
   CLEANUP_COMMANDS,
   LOCAL_ROUTER_COMMANDS,
@@ -73,6 +72,11 @@ import {
   useSkillHubConfigSync,
   useStartupDegradationToasts,
 } from "./state/app/useAppMaintenance";
+import {
+  cleanupTaskWorktree,
+  discardTaskWorktree,
+  mergeTaskWorktree,
+} from "./state/app/worktreeOps";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -1088,60 +1092,32 @@ function AppShell() {
     return true;
   }
 
-  function markTaskWorktreeDiscarded(taskId: string) {
-    setTasks((prev) => {
-      const task = prev.find((x) => x.id === taskId);
-      if (!task) return prev;
-      const next = prev.map((x) => (x.id === taskId ? { ...x, worktreeDiscarded: true } : x));
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-  }
-
   async function handleMergeWorktree(taskId: string) {
-    const task = tasks.find((x) => x.id === taskId);
-    if (!task || !task.worktreePath || !task.worktreeBranch || !task.baseBranch) return;
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
-    try {
-      await invoke(WORKTREE_COMMANDS.merge, {
-        projectPath: project.path,
-        worktreePath: task.worktreePath,
-        branch: task.worktreeBranch,
-        baseBranch: task.baseBranch,
-      });
-      // 合并成功后顺手把 worktree 与分支清掉，避免遗留残留
-      await invoke(WORKTREE_COMMANDS.remove, {
-        projectPath: project.path,
-        worktreePath: task.worktreePath,
-        branch: task.worktreeBranch,
-      }).catch(console.error);
-      markTaskWorktreeDiscarded(taskId);
-    } catch (e) {
-      showToast(t("toast.worktreeMergeFailed", { error: String(e) }), "error");
-    }
+    await mergeTaskWorktree(
+      {
+        tasks,
+        projects,
+        setTasks,
+        showToast,
+        formatSaveTasksError,
+        translate: t,
+      },
+      taskId,
+    );
   }
 
   async function handleDiscardWorktree(taskId: string) {
-    const task = tasks.find((x) => x.id === taskId);
-    if (!task || !task.worktreePath || !task.worktreeBranch) return;
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
-    const ok = await confirm(t("task.discardWorktreePrompt", { branch: task.worktreeBranch }), {
-      title: t("task.discardWorktreeTitle"),
-      kind: "warning",
-    });
-    if (!ok) return;
-    try {
-      await invoke(WORKTREE_COMMANDS.remove, {
-        projectPath: project.path,
-        worktreePath: task.worktreePath,
-        branch: task.worktreeBranch,
-      });
-      markTaskWorktreeDiscarded(taskId);
-    } catch (e) {
-      showToast(t("toast.worktreeDiscardFailed", { error: String(e) }), "error");
-    }
+    await discardTaskWorktree(
+      {
+        tasks,
+        projects,
+        setTasks,
+        showToast,
+        formatSaveTasksError,
+        translate: t,
+      },
+      taskId,
+    );
   }
 
   function handleCancelTask(taskId: string) {
@@ -1677,17 +1653,6 @@ function AppShell() {
     scheduleForDoneTask(taskId);
   }
 
-  function cleanupTaskWorktree(task: Task, projectPath: string) {
-    if (!task.worktreePath || !task.worktreeBranch || task.worktreeDiscarded) return;
-    invoke(WORKTREE_COMMANDS.remove, {
-      projectPath,
-      worktreePath: task.worktreePath,
-      branch: task.worktreeBranch,
-    }).catch((e: unknown) => {
-      showToast(t("toast.worktreeDiscardFailed", { error: String(e) }), "warning");
-    });
-  }
-
   /**
    * 把 `changedTasks` 涉及的每个项目各落盘一次。
    * 一次批量操作常跨多个项目,而 tasks.json 是按项目分文件的:漏掉一个项目
@@ -1725,7 +1690,10 @@ function AppShell() {
             showToast(t("toast.cancelTaskFailed", { error: String(e) }));
           })
           .finally(() => {
-            if (proj) cleanupTaskWorktree(task, proj.path);
+            if (proj)
+              cleanupTaskWorktree(task, proj.path, (error) =>
+                showToast(t("toast.worktreeDiscardFailed", { error }), "warning"),
+              );
           });
       });
 
@@ -1733,7 +1701,10 @@ function AppShell() {
       .filter((task) => !isActiveTaskStatus(task.status))
       .forEach((task) => {
         const proj = projects.find((p) => p.id === task.projectId);
-        if (proj) cleanupTaskWorktree(task, proj.path);
+        if (proj)
+          cleanupTaskWorktree(task, proj.path, (error) =>
+            showToast(t("toast.worktreeDiscardFailed", { error }), "warning"),
+          );
       });
 
     setTasks((prev) => {
