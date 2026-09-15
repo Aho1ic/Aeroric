@@ -221,6 +221,8 @@ export interface LocalRouterRequestRecord {
   isStreaming: boolean;
   success: boolean;
   errorSummary: string | null;
+  /** 首字延迟(毫秒)。非流式请求与老记录为 null。 */
+  ttftMs: number | null;
 }
 
 export const DEFAULT_LOCAL_ROUTER_SETTINGS: LocalRouterSettings = {
@@ -499,6 +501,8 @@ export interface AgentSetupDraft {
   model: string;
   models: string[];
   enable_1m_context: boolean;
+  /** 严格校验 tool schema 的网关会拒绝 Artifact 工具的 schema;仅 Claude 族有效。 */
+  disable_artifact_tool?: boolean;
   enable_chat_completions_proxy: boolean;
   /** 空串表示自动探测(python3 → python → py);填了就固定用这一个,不回退。 */
   bridge_python_path?: string;

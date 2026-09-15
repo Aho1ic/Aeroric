@@ -18,7 +18,9 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
 
 /// `wsl_read_dir_entries` / `remote_read_dir_entries` 共用的目录项。
-/// 两边前端消费的 JSON 形状本就相同(下划线字段名,未做 camelCase 改写)。
+/// 逐字段镜像 `fs::FsEntry` 与前端 `src/components/file-explorer/types.ts` 的
+/// `FsEntry`:字段名一律下划线,结构体上没有 `rename_all`,serde 发出去的就是这里的名字。
+/// `posix_fs_entry_wire_field_names_match_the_frontend_type` 锁住这份键集。
 #[derive(Serialize)]
 pub(crate) struct PosixFsEntry {
     name: String,
@@ -27,6 +29,8 @@ pub(crate) struct PosixFsEntry {
     extension: Option<String>,
     modified_at_ms: Option<u64>,
     is_gitignored: bool,
+    /// 条目本身是符号链接。指向目录的链接 `is_dir` 与 `is_symlink` 同时为真。
+    is_symlink: bool,
 }
 
 /// `wsl_read_image_preview` / `remote_read_image_preview` 共用的预览负载。
@@ -65,7 +69,10 @@ impl PathFlavor {
 pub(crate) fn build_read_dir_command(path: &str) -> String {
     // 逐字保持 POSIX 兼容:`-printf` 是 GNU 扩展,`cd --` 在某些 sh 里不合法,
     // glob 必须在 sh 内展开(路径里可能有远端才会展开的通配符)。
-    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; mtime=$(stat -c %Y \"$p\" 2>/dev/null || stat -f %m \"$p\" 2>/dev/null || echo 0); printf '%s\\t%s\\t%s\\n' \"$name\" \"$type\" \"$mtime\"; done";
+    //
+    // 第四列是「本条目自身是不是符号链接」:`-d` / `-e` 都跟随链接,只有 `-h` 不跟随,
+    // 所以指向目录的链接会是 type=d 且 link=l,两个标记同时为真。
+    let script = "cd \"$1\" && for p in ./* ./.[!.]* ./..?*; do [ -e \"$p\" ] || [ -h \"$p\" ] || continue; name=${p#./}; if [ \"$name\" = \".\" ] || [ \"$name\" = \"..\" ]; then continue; fi; if [ -d \"$p\" ]; then type=d; else type=f; fi; if [ -h \"$p\" ]; then link=l; else link=-; fi; mtime=$(stat -c %Y \"$p\" 2>/dev/null || stat -f %m \"$p\" 2>/dev/null || echo 0); printf '%s\\t%s\\t%s\\t%s\\n' \"$name\" \"$type\" \"$mtime\" \"$link\"; done";
     format!(
         "sh -c {} sh {}",
         crate::ssh::shell_quote_posix(script),
@@ -386,6 +393,9 @@ pub(crate) fn parse_dir_entries(root: &str, raw: &str) -> Vec<PosixFsEntry> {
                 .next()
                 .and_then(|value| value.parse::<u64>().ok())
                 .map(|seconds| seconds.saturating_mul(1000));
+            // 第四列由较新的 `build_read_dir_command` 产出;缺列(老会话残留的输出)
+            // 读成「不是链接」,而不是丢掉整行。
+            let is_symlink = parts.next() == Some("l");
             let is_dir = kind == "d";
             let extension = if is_dir {
                 None
@@ -401,6 +411,7 @@ pub(crate) fn parse_dir_entries(root: &str, raw: &str) -> Vec<PosixFsEntry> {
                 extension,
                 modified_at_ms,
                 is_gitignored: false,
+                is_symlink,
             })
         })
         .collect()
@@ -440,7 +451,7 @@ mod tests {
         assert!(!command.contains("-printf"));
         assert!(!command.contains("cd --"));
         assert!(command.contains("printf"));
-        assert!(command.contains("%s\\t%s\\t%s\\n"));
+        assert!(command.contains("%s\\t%s\\t%s\\t%s\\n"));
     }
 
     #[test]
@@ -590,7 +601,7 @@ mod tests {
     fn dir_entries_parse_names_types_and_extensions() {
         let entries = parse_dir_entries(
             "/home/me/app/",
-            "src\td\t1700000000\nmain.rs\tf\t1700000001\n.env\tf\t0\nbroken-line\n",
+            "src\td\t1700000000\t-\nmain.rs\tf\t1700000001\t-\n.env\tf\t0\t-\nbroken-line\n",
         );
         assert_eq!(entries.len(), 3);
         assert!(entries[0].is_dir);
@@ -600,6 +611,51 @@ mod tests {
         assert_eq!(entries[1].modified_at_ms, Some(1_700_000_001_000));
         // 以点开头的隐藏文件不应被当作扩展名。
         assert_eq!(entries[2].extension, None);
+    }
+
+    #[test]
+    fn dir_entries_read_the_symlink_column_and_tolerate_its_absence() {
+        let entries = parse_dir_entries(
+            "/home/me/app",
+            // 指向目录的链接:type=d 且 link=l,两个标记同时为真。
+            "link-to-dir\td\t1700000000\tl\nlink-to-file\tf\t1700000000\tl\nplain.rs\tf\t1700000000\t-\nlegacy.rs\tf\t1700000000\n",
+        );
+        assert_eq!(entries.len(), 4);
+        assert!(entries[0].is_symlink && entries[0].is_dir);
+        assert!(entries[1].is_symlink && !entries[1].is_dir);
+        assert!(!entries[2].is_symlink);
+        // 老输出没有第四列:读成「不是链接」,整行仍然保留。
+        assert!(!entries[3].is_symlink);
+        assert_eq!(entries[3].name, "legacy.rs");
+    }
+
+    /// 前端 `src/components/file-explorer/types.ts` 的 `FsEntry` 逐字段消费这份 JSON。
+    /// 这里锁的是**线上键名**:改字段名或加字段而不同步 TS 侧,文件树会静默读到
+    /// `undefined`(历史上 `modified_at_ms` / `modifiedAtMs` 就这么错过一次,按修改
+    /// 时间排序恒等于按名字排序)。
+    #[test]
+    fn posix_fs_entry_wire_field_names_match_the_frontend_type() {
+        let entries = parse_dir_entries("/home/me/app", "main.rs\tf\t1700000000\t-\n");
+        let json = serde_json::to_value(&entries[0]).expect("serialize entry");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("entry serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "extension",
+                "is_dir",
+                "is_gitignored",
+                "is_symlink",
+                "modified_at_ms",
+                "name",
+                "path",
+            ]
+        );
     }
 
     #[cfg(unix)]

@@ -759,9 +759,23 @@ async fn send_request(
     url: &str,
     cancelled: &AtomicBool,
 ) -> InstallResult<reqwest::Response> {
+    send_request_with_timeout(client, url, None, cancelled).await
+}
+
+/// `timeout` 覆盖客户端的总超时(仅本次请求)。版本探测用它避免沿用下载用的 600s。
+async fn send_request_with_timeout(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Option<Duration>,
+    cancelled: &AtomicBool,
+) -> InstallResult<reqwest::Response> {
     ensure_not_cancelled(cancelled)?;
+    let mut request = client.get(url);
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
     tokio::select! {
-        result = client.get(url).send() => {
+        result = request.send() => {
             result.map_err(|error| classify_request_error(error, "Download failed", false))
         }
         _ = wait_until_cancelled(cancelled) => {
@@ -776,7 +790,17 @@ async fn download_small_bytes(
     max_bytes: u64,
     cancelled: &AtomicBool,
 ) -> InstallResult<Vec<u8>> {
-    let mut response = send_request(client, url, cancelled).await?;
+    download_small_bytes_with_timeout(client, url, max_bytes, None, cancelled).await
+}
+
+async fn download_small_bytes_with_timeout(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: u64,
+    timeout: Option<Duration>,
+    cancelled: &AtomicBool,
+) -> InstallResult<Vec<u8>> {
+    let mut response = send_request_with_timeout(client, url, timeout, cancelled).await?;
     check_response(&response, max_bytes)?;
     let mut bytes = Vec::new();
     loop {
@@ -2546,32 +2570,52 @@ async fn latest_codex_version(cancelled: &AtomicBool) -> InstallResult<String> {
     codex_version_from_tag(&release.tag_name)
 }
 
+/// npm 包 dist-tags 专用端点的 URL。
+///
+/// 响应体就是 dist-tags 对象本身(几十到几千字节),而 `/{package}/latest` 要服务端
+/// 先解析整个 packument 才能挑出一版;dist-tags 端点还能一次拿到 next/beta 等
+/// 预发布通道。scoped 包名的 `/` 按 registry 约定转义成 `%2f`。
+fn npm_dist_tags_url(package: &str) -> String {
+    format!(
+        "https://registry.npmjs.org/-/package/{}/dist-tags",
+        package.replace('/', "%2f")
+    )
+}
+
+/// 版本探测请求的请求级超时。
+///
+/// `http_client` 的总超时是给大文件下载用的(600s),探测 latest 沿用它会让
+/// registry 被阻断或握手后挂起时,设置页的版本卡片一直停在「加载中」。探测拿不到
+/// 就显示未知即可。
+const LATEST_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// npm registry 查询 dsh 最新版本(`@deepseek-ai/dsh`,dev preview 期版本形如
 /// 0.1.0-rc.6,保留完整预发布后缀用于"当前 vs 最新"比较)。
 async fn latest_dsh_version(cancelled: &AtomicBool) -> InstallResult<String> {
     let client = http_client(&["registry.npmjs.org"])?;
-    let bytes = download_small_bytes(
+    let bytes = download_small_bytes_with_timeout(
         &client,
-        "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
+        &npm_dist_tags_url("@deepseek-ai/dsh"),
         MAX_METADATA_BYTES,
+        Some(LATEST_PROBE_TIMEOUT),
         cancelled,
     )
     .await?;
-    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+    let dist_tags: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
         InstallError::new(
             AgentInstallErrorCode::DownloadFailed,
             format!("Invalid dsh registry metadata: {error}"),
         )
     })?;
-    let version = metadata
-        .get("version")
+    let version = dist_tags
+        .get("latest")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|version| !version.is_empty())
         .ok_or_else(|| {
             InstallError::new(
                 AgentInstallErrorCode::DownloadFailed,
-                "dsh registry metadata has no version",
+                "dsh registry metadata has no latest dist-tag",
             )
         })?;
     Ok(version.to_string())
@@ -2724,6 +2768,20 @@ pub fn cancel_agent_tool_install(operation_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// scoped 包名里的 `/` 不转义会打到 `/-/package/@deepseek-ai/dsh/dist-tags`,
+    /// registry 按两段路径解析直接 404,版本卡片永远显示未知。
+    #[test]
+    fn npm_dist_tags_url_escapes_scoped_package_names() {
+        assert_eq!(
+            npm_dist_tags_url("@deepseek-ai/dsh"),
+            "https://registry.npmjs.org/-/package/@deepseek-ai%2fdsh/dist-tags"
+        );
+        assert_eq!(
+            npm_dist_tags_url("openclaw"),
+            "https://registry.npmjs.org/-/package/openclaw/dist-tags"
+        );
+    }
 
     /// slug 直接拼进下载 URL,所以要钉住每一对映射:只断 `is_ok()` 的话,把
     /// aarch64 与 x86_64 两臂对调照样绿,而用户会装到跑不起来的异架构二进制。

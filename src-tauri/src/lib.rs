@@ -829,6 +829,7 @@ pub fn run() {
             app_settings::list_agent_models,
             app_settings::update_custom_agent_models,
             app_settings::update_custom_agent_context,
+            app_settings::update_custom_agent_artifact_tool,
             app_settings::update_custom_agent_chat_completions_proxy,
             app_settings::probe_chat_bridge_python,
             app_settings::delete_custom_agent_profile,
@@ -918,9 +919,9 @@ pub fn run() {
             dsh_webui::mutate_dsh_settings,
             dsh_webui::update_dsh_settings,
             // Approval / Question responses + attachment
-            dsh_webui::respond_dsh_server_request,
+            dsh_webui::respond_dsh_remote_event,
             dsh_webui::get_dsh_session_attachment,
-            // events.host subscription
+            // host-wide remote.mux subscription
             dsh_webui::start_dsh_host_events,
             dsh_webui::stop_dsh_host_events,
             // host.pickDirectory

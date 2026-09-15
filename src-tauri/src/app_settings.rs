@@ -86,7 +86,9 @@ static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new(
 static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static AGENT_UPGRADE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 const CLAUDE_BUILTIN_MODEL_ALIASES: &[&str] = &["fable", "opus", "sonnet"];
-const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=7";
+// v8:Claude wrapper 支持「禁用 Artifact 工具」开关(`CLAUDE_CODE_DISABLE_ARTIFACT`)。
+// bump 后启动期自动重刷存量脚本,否则老 wrapper 不会带上这个环境变量。
+const CLAUDE_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=8";
 const CLAUDE_AGENT_SCRIPT_MARKER_PREFIX: &str = "# AERORIC_CLAUDE_WRAPPER_VERSION=";
 const CLAUDE_CLI_RESOLUTION_MARKER: &str = "# AERORIC_CLAUDE_CLI_RESOLUTION=1";
 // v6:包装脚本追加 Aeroric 的 codex hook 片段(自定义 Agent 有隔离 CODEX_HOME,
@@ -133,6 +135,12 @@ pub struct CustomAgentProfile {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    /// 严格校验 tool JSON Schema 的第三方网关(如 DeepSeek)会因 Artifact 工具里的
+    /// `\p{Cc}` Unicode property escape 把每个请求判成 400,且与所选模型无关。
+    /// 打开后 wrapper 注入 `CLAUDE_CODE_DISABLE_ARTIFACT=1`,让 Claude Code 压根
+    /// 不把 Artifact 放进 tools 数组。仅对 Claude 族生效。
+    #[serde(default)]
+    pub disable_artifact_tool: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
     /// Chat Completions bridge 使用的 Python 解释器。为空表示自动探测
@@ -174,6 +182,9 @@ pub struct AgentSetupDraft {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    /// 见 `CustomAgentProfile::disable_artifact_tool`。
+    #[serde(default)]
+    pub disable_artifact_tool: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
     /// 见 `CustomAgentProfile::bridge_python_path`。
@@ -239,6 +250,9 @@ pub struct AgentConfigBundleAgent {
     pub models: Vec<String>,
     #[serde(default)]
     pub enable_1m_context: bool,
+    /// 见 `CustomAgentProfile::disable_artifact_tool`。导出/导入配置包时一并带走。
+    #[serde(default)]
+    pub disable_artifact_tool: bool,
     #[serde(default)]
     pub enable_chat_completions_proxy: bool,
     /// 见 `CustomAgentProfile::bridge_python_path`。导出/导入配置包时一并带走,
@@ -1823,8 +1837,12 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+/// 内建 DeepSeek 官方目录。首项就是各处取的默认模型(模型选择脚本、新档案草稿),
+/// 与上游 c291e7961a 的 `agent-default-model` 保持一致:`deepseek-flash`
+/// (DeepSeek-V41-Flash)排在 v4 系列之前。
 pub(crate) fn list_builtin_dsh_models() -> Vec<String> {
     vec![
+        "deepseek-flash".to_string(),
         "deepseek-v4-flash".to_string(),
         "deepseek-v4-pro".to_string(),
     ]
@@ -2088,6 +2106,7 @@ fn upsert_custom_agent_profile_unlocked(
                     || existing.api_key != profile.api_key
                     || existing.models != profile.models
                     || existing.enable_1m_context != profile.enable_1m_context
+                    || existing.disable_artifact_tool != profile.disable_artifact_tool
                     || existing.enable_chat_completions_proxy
                         != profile.enable_chat_completions_proxy
                     || existing.bridge_python_path != profile.bridge_python_path)
@@ -2109,6 +2128,7 @@ fn upsert_custom_agent_profile_unlocked(
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            disable_artifact_tool: profile.disable_artifact_tool,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
             bridge_python_path: profile.bridge_python_path.clone(),
             dsh_api_protocol: String::new(),
@@ -2238,6 +2258,7 @@ fn update_custom_agent_config_internal_with_policy(
     clear_api_key: bool,
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
+    disable_artifact_tool: Option<bool>,
     enable_chat_completions_proxy: Option<bool>,
     bridge_python_path: Option<String>,
     proxy_enabled: Option<bool>,
@@ -2298,6 +2319,15 @@ fn update_custom_agent_config_internal_with_policy(
             }
             profile.enable_1m_context = enabled;
         }
+        if let Some(disabled) = disable_artifact_tool {
+            if family != AgentFamily::Claude {
+                return Err(
+                    "Disabling the Artifact tool is only available for Claude Code agents"
+                        .to_string(),
+                );
+            }
+            profile.disable_artifact_tool = disabled;
+        }
         if let Some(enabled) = enable_chat_completions_proxy {
             if family != AgentFamily::Codex {
                 return Err(
@@ -2350,6 +2380,7 @@ pub(crate) fn update_custom_agent_config_internal(
     clear_api_key: bool,
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
+    disable_artifact_tool: Option<bool>,
     enable_chat_completions_proxy: Option<bool>,
     bridge_python_path: Option<String>,
     proxy_enabled: Option<bool>,
@@ -2361,6 +2392,7 @@ pub(crate) fn update_custom_agent_config_internal(
         clear_api_key,
         models,
         enable_1m_context,
+        disable_artifact_tool,
         enable_chat_completions_proxy,
         bridge_python_path,
         proxy_enabled,
@@ -2376,6 +2408,7 @@ pub(crate) fn update_custom_agent_config_remote_internal(
     clear_api_key: bool,
     models: Option<Vec<String>>,
     enable_1m_context: Option<bool>,
+    disable_artifact_tool: Option<bool>,
     enable_chat_completions_proxy: Option<bool>,
     bridge_python_path: Option<String>,
     proxy_enabled: Option<bool>,
@@ -2387,6 +2420,7 @@ pub(crate) fn update_custom_agent_config_remote_internal(
         clear_api_key,
         models,
         enable_1m_context,
+        disable_artifact_tool,
         enable_chat_completions_proxy,
         bridge_python_path,
         proxy_enabled,
@@ -2408,6 +2442,7 @@ pub async fn update_custom_agent_access(
             base_url,
             api_key,
             clear_api_key,
+            None,
             None,
             None,
             enable_chat_completions_proxy,
@@ -2497,6 +2532,7 @@ pub async fn setup_agent_profile(draft: AgentSetupDraft) -> Result<AppSettings, 
                 api_key: draft.api_key.trim().to_string(),
                 models,
                 enable_1m_context: draft.enable_1m_context,
+                disable_artifact_tool: draft.disable_artifact_tool,
                 enable_chat_completions_proxy: draft.enable_chat_completions_proxy,
                 bridge_python_path: draft.bridge_python_path.trim().to_string(),
                 username: String::new(),
@@ -2826,6 +2862,7 @@ pub async fn update_custom_agent_models(
             None,
             None,
             None,
+            None,
         )
     })
     .await
@@ -2928,6 +2965,7 @@ pub async fn update_custom_agent_chat_completions_proxy(
             false,
             None,
             None,
+            None,
             Some(enabled),
             bridge_python_path,
             None,
@@ -2952,6 +2990,34 @@ pub async fn update_custom_agent_context(
             false,
             None,
             Some(enable_1m_context),
+            None,
+            None,
+            None,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    clear_cached_versions();
+    Ok(normalized)
+}
+
+/// 开关「禁用 Artifact 工具」。仅 Claude 族可用,写进 profile 后 wrapper 会被重刷,
+/// 从而带上/去掉 `CLAUDE_CODE_DISABLE_ARTIFACT`。
+#[tauri::command]
+pub async fn update_custom_agent_artifact_tool(
+    id: String,
+    disable_artifact_tool: bool,
+) -> Result<AppSettings, String> {
+    let normalized = tokio::task::spawn_blocking(move || {
+        update_custom_agent_config_internal(
+            id,
+            None,
+            None,
+            false,
+            None,
+            None,
+            Some(disable_artifact_tool),
             None,
             None,
             None,
@@ -3921,6 +3987,7 @@ mod tests {
             model: "claude-old".to_string(),
             models: vec!["claude-old".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -3939,6 +4006,7 @@ mod tests {
             api_key: old_draft.api_key.clone(),
             models: old_draft.models.clone(),
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -3980,6 +4048,28 @@ mod tests {
         assert_eq!(dsh_reasoning_effort_in(&settings, "dsh"), "off");
         assert!(apply_dsh_reasoning_effort_update(&mut settings, "dsh", "low").is_err());
         assert!(apply_dsh_reasoning_effort_update(&mut settings, "codex", "max").is_err());
+    }
+
+    /// 内建 dsh 目录的首项是"默认模型"的唯一来源:模型选择脚本在
+    /// `AERORIC_AGENT_MODEL` 缺失时取它,新档案草稿也按同一顺序落默认值。
+    /// 顺序排错的表现是新任务静默跑在旧模型上,编译期看不出来。
+    #[test]
+    fn builtin_dsh_catalog_defaults_to_deepseek_flash() {
+        let models = list_builtin_dsh_models();
+        assert_eq!(models.first().map(String::as_str), Some("deepseek-flash"));
+        assert!(models.iter().any(|model| model == "deepseek-v4-flash"));
+        assert!(models.iter().any(|model| model == "deepseek-v4-pro"));
+    }
+
+    /// `model_picker_shell` 只在 POSIX 上编译;Windows 走 PowerShell 另一条路径。
+    #[cfg(not(windows))]
+    #[test]
+    fn dsh_model_picker_falls_back_to_the_catalog_head() {
+        let shell = super::agent_scripts::model_picker_shell(&list_builtin_dsh_models());
+        assert!(
+            shell.contains("selected_model='deepseek-flash'"),
+            "model picker must fall back to the catalog head: {shell}"
+        );
     }
 
     #[test]
@@ -4395,6 +4485,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             models: vec!["model".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -4473,6 +4564,7 @@ mod tests {
                 api_key: "sk-secret".to_string(),
                 models: vec!["demo-model".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -4528,6 +4620,7 @@ mod tests {
                 api_key: "sk-imported".to_string(),
                 models: vec!["claude-opus".to_string()],
                 enable_1m_context: true,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 reasoning_effort: None,
@@ -4624,6 +4717,7 @@ mod tests {
                     api_key: String::new(),
                     models: Vec::new(),
                     enable_1m_context: false,
+                    disable_artifact_tool: false,
                     enable_chat_completions_proxy: false,
                     bridge_python_path: String::new(),
                     username: String::new(),
@@ -4640,6 +4734,7 @@ mod tests {
                     api_key: String::new(),
                     models: Vec::new(),
                     enable_1m_context: false,
+                    disable_artifact_tool: false,
                     enable_chat_completions_proxy: false,
                     bridge_python_path: String::new(),
                     username: String::new(),
@@ -4676,6 +4771,7 @@ mod tests {
                 api_key: String::new(),
                 models: Vec::new(),
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: "alice".to_string(),
@@ -4723,6 +4819,7 @@ mod tests {
                 api_key: String::new(),
                 models: Vec::new(),
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: "alice".to_string(),

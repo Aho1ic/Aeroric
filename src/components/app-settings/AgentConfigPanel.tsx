@@ -18,7 +18,7 @@ import type { ThemeVariant } from "../../types";
 import { useTextInputIMEFix } from "../useTextInputIMEFix";
 import { Button } from "../ui/Button";
 import { BridgePythonField } from "./BridgePythonField";
-import type { CustomAgentProfile } from "../../agents";
+import { profileFamily, type CustomAgentProfile } from "../../agents";
 import {
   CODEX_REASONING_EFFORTS,
   CLAUDE_REASONING_EFFORTS,
@@ -103,6 +103,9 @@ export function AgentConfigPanel({
   const [enable1mContext, setEnable1mContext] = useState(false);
   const [originalEnable1mContext, setOriginalEnable1mContext] = useState(false);
   const [saving1mContext, setSaving1mContext] = useState(false);
+  const [disableArtifactTool, setDisableArtifactTool] = useState(false);
+  const [originalDisableArtifactTool, setOriginalDisableArtifactTool] = useState(false);
+  const [savingArtifactTool, setSavingArtifactTool] = useState(false);
   const [enableChatCompletionsProxy, setEnableChatCompletionsProxy] = useState(false);
   const [originalEnableChatCompletionsProxy, setOriginalEnableChatCompletionsProxy] =
     useState(false);
@@ -213,6 +216,9 @@ export function AgentConfigPanel({
         const contextEnabled = Boolean(profile?.enable_1m_context);
         setEnable1mContext(contextEnabled);
         setOriginalEnable1mContext(contextEnabled);
+        const artifactDisabled = Boolean(profile?.disable_artifact_tool);
+        setDisableArtifactTool(artifactDisabled);
+        setOriginalDisableArtifactTool(artifactDisabled);
         const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
         setEnableChatCompletionsProxy(proxyEnabled);
         setOriginalEnableChatCompletionsProxy(proxyEnabled);
@@ -322,6 +328,9 @@ export function AgentConfigPanel({
           const contextEnabled = Boolean(profile?.enable_1m_context);
           setEnable1mContext(contextEnabled);
           setOriginalEnable1mContext(contextEnabled);
+          const artifactDisabled = Boolean(profile?.disable_artifact_tool);
+          setDisableArtifactTool(artifactDisabled);
+          setOriginalDisableArtifactTool(artifactDisabled);
           const proxyEnabled = Boolean(profile?.enable_chat_completions_proxy);
           setEnableChatCompletionsProxy(proxyEnabled);
           setOriginalEnableChatCompletionsProxy(proxyEnabled);
@@ -517,6 +526,36 @@ export function AgentConfigPanel({
     }
   }
 
+  async function handleSaveArtifactTool() {
+    if (!customProfile || customProfile.codex_like || savingArtifactTool) return;
+    setSavingArtifactTool(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const next = await invoke<AppSettings>("update_custom_agent_artifact_tool", {
+        id: agentKey,
+        disableArtifactTool,
+      });
+      const profile = next.custom_agents?.find((item) => item.id === String(agentKey)) ?? null;
+      setCustomProfile(profile);
+      const artifactDisabled = Boolean(profile?.disable_artifact_tool);
+      setDisableArtifactTool(artifactDisabled);
+      setOriginalDisableArtifactTool(artifactDisabled);
+      const content = await invoke<string | null>("read_agent_config_file", { agent: agentKey });
+      if (content !== null) {
+        setFileState({ status: "loaded", content });
+        setOriginal(content);
+      }
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingArtifactTool(false);
+    }
+  }
+
   async function handleSaveChatCompletionsProxy() {
     if (!customProfile?.codex_like || savingChatCompletionsProxy) return;
     setSavingChatCompletionsProxy(true);
@@ -591,6 +630,11 @@ export function AgentConfigPanel({
   const canSave1mContext =
     Boolean(customProfile && !customProfile.codex_like) &&
     enable1mContext !== originalEnable1mContext;
+  // 只有 Claude 族的 wrapper 会注入 CLAUDE_CODE_DISABLE_ARTIFACT;dsh / omp 档案
+  // 同样满足 !codex_like,所以这里按协议族判断而不是复用 codex_like。
+  const isClaudeFamilyProfile = customProfile != null && profileFamily(customProfile) === "claude";
+  const canSaveArtifactTool =
+    isClaudeFamilyProfile && disableArtifactTool !== originalDisableArtifactTool;
   const canSaveChatCompletionsProxy =
     (Boolean(customProfile?.codex_like) &&
       enableChatCompletionsProxy !== originalEnableChatCompletionsProxy) ||
@@ -916,6 +960,59 @@ export function AgentConfigPanel({
               disabled={saving1mContext || !canSave1mContext}
             >
               {saving1mContext ? t("common.saving") : t("common.save")}
+            </Button>
+          </div>
+        )}
+
+        {deletable && isClaudeFamilyProfile && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 18,
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                minWidth: 0,
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label={t("appSettings.disableArtifactTool")}
+                checked={disableArtifactTool}
+                onChange={(event) => setDisableArtifactTool(event.target.checked)}
+              />
+              <span>
+                <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                  {t("appSettings.disableArtifactTool")}
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    marginTop: 3,
+                    fontSize: 11,
+                    color: "var(--text-hint)",
+                  }}
+                >
+                  {t("appSettings.disableArtifactToolHint")}
+                </span>
+              </span>
+            </label>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleSaveArtifactTool}
+              disabled={savingArtifactTool || !canSaveArtifactTool}
+            >
+              {savingArtifactTool ? t("common.saving") : t("common.save")}
             </Button>
           </div>
         )}

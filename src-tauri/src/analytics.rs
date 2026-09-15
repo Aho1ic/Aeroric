@@ -613,17 +613,6 @@ pub(crate) fn parse_dsh_usage_line(line: &str, current_model: &mut String) -> Op
     }
 }
 
-pub(crate) fn parse_dsh_usage_requests(content: &str) -> Vec<UsageRequest> {
-    let mut requests = Vec::new();
-    let mut current_model = String::new();
-    for line in content.lines() {
-        if let Some(request) = parse_dsh_usage_line(line, &mut current_model) {
-            requests.push(request);
-        }
-    }
-    requests
-}
-
 /// omp 会话 token 聚合:每条带 `usage` 的 assistant message entry 计一次请求。
 /// 模型直接取消息上的 `model`(omp 的 AssistantMessage 自带,无独立路由事件);
 /// usage 字段名为 omp catalog 的 `input/output/cacheRead/cacheWrite`;时间戳取
@@ -732,9 +721,20 @@ fn normalize_model(model: &str) -> String {
 ///
 /// 顺序敏感:更长的族名必须排在其前缀之前,否则 `opus-4-8` 会先被 `opus-4` 命中。
 /// 不单独公示 cache write 单价的供应商(GLM / Grok / Kimi / MiniMax)保守按 input
-/// 计价;OpenAI 不对 cache write 计费,故取 0。
+/// 计价;OpenAI 在 GPT-5.5 及更早系列不对 cache write 计费,故那些行取 0,5.6 家族
+/// 起以及 GPT-6 Astra 按 1.25x input 计。Gemini 显式缓存按存储时长收费,cache
+/// write 取 0。
 const MODEL_PRICES: &[(&str, ModelPricing)] = &[
     // Anthropic —— cache write = 1.25x input,cache read = 0.1x input。
+    //
+    // Fable / Mythos 5.1 必须排在 5 之前:`normalize_model` 把 `.` 换成 `-`,
+    // `claude-fable-5.1` → `claude-fable-5-1` 里含子串 `fable-5`,不单列会被 5 的行
+    // 先命中,cache read 按 1.0 计(实际是 0.25 = 0.025x input)。上游 cc-switch
+    // 460aa8c7 同样为这两个 id 单列。
+    ("claude-fable-5-1", price(10.0, 0.25, 12.5, 50.0)),
+    ("claude-mythos-5-1", price(10.0, 0.25, 12.5, 50.0)),
+    ("fable-5-1", price(10.0, 0.25, 12.5, 50.0)),
+    ("mythos-5-1", price(10.0, 0.25, 12.5, 50.0)),
     ("claude-mythos-5", price(10.0, 1.0, 12.5, 50.0)),
     ("mythos-5", price(10.0, 1.0, 12.5, 50.0)),
     ("fable-5", price(10.0, 1.0, 12.5, 50.0)),
@@ -752,9 +752,16 @@ const MODEL_PRICES: &[(&str, ModelPricing)] = &[
     ("haiku-4-5", price(1.0, 0.1, 1.25, 5.0)),
     ("haiku-3-5", price(0.8, 0.08, 1.0, 4.0)),
     // OpenAI
-    ("gpt-5-6-sol", price(5.0, 0.5, 6.25, 30.0)),
-    ("gpt-5-6-terra", price(2.5, 0.25, 3.125, 15.0)),
-    ("gpt-5-6-luna", price(1.0, 0.1, 1.25, 6.0)),
+    //
+    // GPT-6 Astra(2026-09-04 发布):cache write = 1.25x input,cache read = 0.1x
+    // input。>272K 的长上下文档(20/2/25/75)本表无法按 prompt 长度分档,与 gpt-5.5
+    // 一样只录基础档;effort 后缀由 `normalize_model` 剥掉后回落到这一行。
+    ("gpt-6-astra", price(10.0, 1.0, 12.5, 50.0)),
+    // 5.6 家族起 cache write 收 1.25x input(此前 GPT 免费,勿回填旧系列)。
+    // sol 现为促销价 4/20(官方价页"至少持续到 2026-11-21"),挂牌价 5/30。
+    ("gpt-5-6-sol", price(4.0, 0.4, 5.0, 20.0)),
+    ("gpt-5-6-terra", price(2.0, 0.2, 2.5, 12.0)),
+    ("gpt-5-6-luna", price(0.2, 0.02, 0.25, 1.2)),
     ("gpt-5-5-pro", price(30.0, 30.0, 0.0, 180.0)),
     ("gpt-5-5", price(5.0, 0.5, 0.0, 30.0)),
     ("gpt-5-4-pro", price(30.0, 30.0, 0.0, 180.0)),
@@ -762,11 +769,43 @@ const MODEL_PRICES: &[(&str, ModelPricing)] = &[
     ("gpt-5-4-nano", price(0.2, 0.02, 0.0, 1.25)),
     ("gpt-5-4", price(2.5, 0.25, 0.0, 15.0)),
     ("gpt-5-3-codex", price(1.75, 0.175, 0.0, 14.0)),
+    // Google Gemini —— 隐式缓存命中按 cache read 计价;显式缓存按存储时长(GiB·小时)
+    // 收费而不是按 token,故 cache write 取 0。图像/Live/机器人等非文本计费变体不入表,
+    // 由兜底估算覆盖 —— 例外是 `gemini-3-1-flash-lite-image`:它含子串
+    // `gemini-3-1-flash-lite`,不单列会被下面那行吞掉,输出价差 20 倍。
+    //
+    // 3.6/3.7/3.8 Flash 录的是介绍价 0.75/3.75/0.075:官方价页写明有效期至
+    // 2026-12-31,2027-01-01 起恢复挂牌价 1.5/7.5/0.15,届时这三行要一起改回。
+    ("gemini-3-8-flash", price(0.75, 0.075, 0.0, 3.75)),
+    ("gemini-3-7-flash", price(0.75, 0.075, 0.0, 3.75)),
+    ("gemini-3-6-flash", price(0.75, 0.075, 0.0, 3.75)),
+    ("gemini-3-5-flash-lite", price(0.3, 0.03, 0.0, 2.5)),
+    ("gemini-3-5-flash", price(1.5, 0.15, 0.0, 9.0)),
+    ("gemini-3-1-flash-lite-image", price(0.25, 0.0, 0.0, 30.0)),
+    ("gemini-3-1-flash-lite", price(0.25, 0.025, 0.0, 1.5)),
+    ("gemini-3-1-pro", price(2.0, 0.2, 0.0, 12.0)),
+    ("gemini-3-flash", price(0.5, 0.05, 0.0, 3.0)),
+    ("gemini-3-pro", price(2.0, 0.2, 0.0, 12.0)),
+    ("gemini-2-5-pro", price(1.25, 0.125, 0.0, 10.0)),
+    ("gemini-2-5-flash-lite", price(0.1, 0.01, 0.0, 0.4)),
+    ("gemini-2-5-flash", price(0.3, 0.03, 0.0, 2.5)),
+    ("gemini-2-0-flash-lite", price(0.075, 0.0, 0.0, 0.3)),
+    ("gemini-2-0-flash", price(0.1, 0.025, 0.0, 0.4)),
+    // 滚动别名,现指向 3.6/3.5 Flash 档(AI Studio 一方价)。
+    ("gemini-flash-lite-latest", price(0.3, 0.03, 0.0, 2.5)),
+    ("gemini-flash-latest", price(0.75, 0.075, 0.0, 3.75)),
     // DeepSeek —— 表内为非高峰价,高峰时段(UTC 01–04、06–10)乘 2,见
     // `deepseek_peak_multiplier`。cache write 按 cache miss 计价。
-    ("deepseek-v4-pro", price(0.66, 0.022, 0.66, 1.98)),
-    ("deepseek-v4-flash", price(0.22, 0.007, 0.22, 0.66)),
-    // Z.ai GLM
+    //
+    // 2026-09-11 起 V4 Flash 退役:`deepseek-v4-flash` / `-0731` /
+    // `-vision-exp` / `deepseek-v4-pro` 的请求全部由 V4.1 Flash 承接并按 Flash 价
+    // 计费,四个 id 同价(高峰 0.3/1.2/0.006 → 非高峰折半)。`deepseek-flash` 是官方
+    // 当前唯一推荐名,与 `deepseek-v4-flash` 互不为子串,必须单列,否则落进兜底估算。
+    ("deepseek-flash", price(0.15, 0.003, 0.15, 0.6)),
+    ("deepseek-v4-pro", price(0.15, 0.003, 0.15, 0.6)),
+    ("deepseek-v4-flash", price(0.15, 0.003, 0.15, 0.6)),
+    // Z.ai GLM —— `glm-5-3-flash` 含子串 `glm-5-3`,必须排在其之前。
+    ("glm-5-3-flash", price(0.15, 0.03, 0.15, 0.5)),
     ("glm-5-3", price(1.4, 0.26, 1.4, 4.4)),
     ("glm-5-2", price(1.4, 0.26, 1.4, 4.4)),
     ("glm-5-1", price(1.4, 0.26, 1.4, 4.4)),
@@ -1229,7 +1268,14 @@ mod session_metrics_tests {
         );
         assert!(is_dsh_session(content));
         assert!(!is_codex_session(content));
-        let requests = parse_dsh_usage_requests(content);
+        // 逐行解析(`parse_dsh_usage_line` + 调用方持有的跨行 model)是唯一的 dsh
+        // 用量解析路径:`usage_index` 的增量续扫需要在任意完整行边界封存 model,
+        // 整段包装函数拿不到这个状态,已随 CC-5 一起删除。
+        let mut current_model = String::new();
+        let requests: Vec<UsageRequest> = content
+            .lines()
+            .filter_map(|line| parse_dsh_usage_line(line, &mut current_model))
+            .collect();
         // 无 usage 的 assistant/message 不计请求。
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].agent, UsageAgent::Dsh);
@@ -1676,10 +1722,129 @@ mod usage_statistics_tests {
             cache_read_tokens: 0,
         });
 
-        assert_eq!(off_peak.0.input, 0.66);
-        assert_eq!(off_peak.0.output, 1.98);
-        assert_eq!(peak.0.input, 1.32);
-        assert_eq!(peak.0.output, 3.96);
+        // V4 Pro 自 2026-09-11 起由 V4.1 Flash 承接并按 Flash 价计费。
+        assert_eq!(off_peak.0.input, 0.15);
+        assert_eq!(off_peak.0.output, 0.6);
+        assert_eq!(peak.0.input, 0.3);
+        assert_eq!(peak.0.output, 1.2);
+    }
+
+    /// Gemini 全系必须命中价目表。`.` 归一化成 `-` 后 `gemini-3-5-flash-lite` 里含
+    /// `gemini-3-5-flash`,顺序错了 lite 会按 6 倍价计费。
+    #[test]
+    fn gemini_models_are_listed_and_lite_beats_its_flash_prefix() {
+        let (flash, source) = pricing_of("gemini-3.6-flash", UsageAgent::Omp);
+        assert_eq!(source, PricingSource::Listed);
+        assert_eq!(flash.input, 0.75);
+        assert_eq!(flash.cached_input, 0.075);
+        assert_eq!(flash.output, 3.75);
+        // 显式缓存按存储时长收费,不按 token。
+        assert_eq!(flash.cache_write, 0.0);
+
+        // 路由前缀与 `-preview` 后缀都不改变单价。
+        assert_eq!(
+            pricing_of("google/gemini-3.1-pro-preview", UsageAgent::Omp)
+                .0
+                .input,
+            2.0
+        );
+
+        let (lite, lite_source) = pricing_of("gemini-3.5-flash-lite", UsageAgent::Omp);
+        assert_eq!(lite_source, PricingSource::Listed);
+        assert_eq!(lite.input, 0.3);
+        assert_eq!(lite.output, 2.5);
+        // 同族非 lite 行价高 5 倍,证明上面命中的不是它。
+        assert_eq!(
+            pricing_of("gemini-3.5-flash", UsageAgent::Omp).0.output,
+            9.0
+        );
+
+        // 图像变体输出价是 lite 的 20 倍,必须自成一行。
+        assert_eq!(
+            pricing_of("gemini-3.1-flash-lite-image", UsageAgent::Omp)
+                .0
+                .output,
+            30.0
+        );
+    }
+
+    /// GPT-6 Astra:effort 后缀剥掉后回落到基础行,cache write 按 1.25x input 收费
+    /// (5.6 之前的 GPT 系列是免费,勿混)。
+    #[test]
+    fn gpt_6_astra_is_listed_and_charges_for_cache_writes() {
+        for model in ["gpt-6-astra", "gpt-6-astra-xhigh", "openai/gpt-6-astra"] {
+            let (pricing, source) = pricing_of(model, UsageAgent::Codex);
+            assert_eq!(source, PricingSource::Listed, "{model}");
+            assert_eq!(pricing.input, 10.0, "{model}");
+            assert_eq!(pricing.cached_input, 1.0, "{model}");
+            assert_eq!(pricing.cache_write, 12.5, "{model}");
+            assert_eq!(pricing.output, 50.0, "{model}");
+        }
+    }
+
+    /// `deepseek-flash` 与 `deepseek-v4-flash` 互不为子串:少一行就落进兜底估算。
+    /// 两者同价(都由 V4.1 Flash 承接),但仍要各自命中价目表。
+    #[test]
+    fn deepseek_flash_aliases_all_hit_the_v41_flash_tier() {
+        for model in [
+            "deepseek-flash",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "DeepSeek-V4-Flash-0731",
+            "deepseek-v4-pro",
+        ] {
+            let request = UsageRequest {
+                // 非高峰时段(UTC 00:30),不叠 2 倍。
+                timestamp: chrono::NaiveDate::from_ymd_opt(2026, 9, 14)
+                    .and_then(|day| day.and_hms_opt(0, 30, 0))
+                    .map(|naive| naive.and_utc().timestamp() as f64)
+                    .unwrap(),
+                date: date(2026, 9, 14),
+                agent: UsageAgent::Dsh,
+                model: model.to_owned(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+            };
+            let (pricing, source) = pricing_for_request(&request);
+            assert_eq!(source, PricingSource::Listed, "{model}");
+            assert_eq!(pricing.input, 0.15, "{model}");
+            assert_eq!(pricing.cached_input, 0.003, "{model}");
+            assert_eq!(pricing.output, 0.6, "{model}");
+        }
+    }
+
+    /// `5.1` 不能被归并进 `5`:两者只差 cache read(0.25 vs 1.0),归并会让 5.1 的
+    /// 缓存读数按 4 倍计价。`glm-5.3-flash` 同理不能被 `glm-5-3` 吞掉。
+    #[test]
+    fn point_one_revisions_are_not_merged_into_their_base_family() {
+        for model in ["claude-fable-5.1", "claude-mythos-5.1"] {
+            let (pricing, source) = pricing_of(model, UsageAgent::Claude);
+            assert_eq!(source, PricingSource::Listed, "{model}");
+            assert_eq!(pricing.cached_input, 0.25, "{model}");
+            assert_eq!(pricing.input, 10.0, "{model}");
+            assert_eq!(pricing.output, 50.0, "{model}");
+        }
+        // 基础族仍是 1.0,证明上面命中的确实是 5.1 的行。
+        assert_eq!(
+            pricing_of("claude-fable-5", UsageAgent::Claude)
+                .0
+                .cached_input,
+            1.0
+        );
+        assert_eq!(
+            pricing_of("claude-mythos-5", UsageAgent::Claude)
+                .0
+                .cached_input,
+            1.0
+        );
+
+        let (flash, flash_source) = pricing_of("glm-5.3-flash", UsageAgent::Codex);
+        assert_eq!(flash_source, PricingSource::Listed);
+        assert_eq!(flash.input, 0.15);
+        assert_eq!(flash.output, 0.5);
+        assert_eq!(pricing_of("glm-5.3", UsageAgent::Codex).0.input, 1.4);
     }
 
     #[test]

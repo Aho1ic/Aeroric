@@ -858,6 +858,13 @@ fi
     } else {
         ""
     };
+    // 严格校验 tool schema 的网关(DeepSeek 等)会因 Artifact 工具 schema 里的
+    // `\p{Cc}` 把每个请求判成 400。前缀换行让关闭时模板不留空行。
+    let artifact_setup = if draft.disable_artifact_tool {
+        "\nexport CLAUDE_CODE_DISABLE_ARTIFACT=\"1\""
+    } else {
+        ""
+    };
     format!(
         r#"#!/bin/bash
 set -euo pipefail
@@ -870,7 +877,7 @@ export CLAUDE_CONFIG_DIR="$AGENT_HOME"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"
 export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
 export CLAUDE_CODE_SESSION_ENV_DIR="$AGENT_HOME/session-env"
-export TMPDIR="$AGENT_HOME/tmp"
+export TMPDIR="$AGENT_HOME/tmp"{artifact_setup}
 
 unset ANTHROPIC_API_KEY
 unset ANTHROPIC_AUTH_TOKEN
@@ -908,6 +915,7 @@ exec claude --model "$selected_model" "$@"
         script_marker = CLAUDE_AGENT_SCRIPT_MARKER,
         picker = picker,
         context_setup = context_setup,
+        artifact_setup = artifact_setup,
         base_url = shell_quote(&normalize_base_url(&draft.base_url)),
     )
 }
@@ -1168,6 +1176,12 @@ if (-not $selectedModel.EndsWith('[1m]')) { $selectedModel += '[1m]' }
     } else {
         ""
     };
+    // 见 shell 模板同名变量。
+    let artifact_setup = if draft.disable_artifact_tool {
+        "\n$env:CLAUDE_CODE_DISABLE_ARTIFACT = '1'"
+    } else {
+        ""
+    };
     format!(
         r#"$ErrorActionPreference = 'Stop'
 {marker}
@@ -1179,7 +1193,7 @@ $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
 $env:CLAUDE_CODE_ATTRIBUTION_HEADER = '0'
 $env:CLAUDE_CODE_SESSION_ENV_DIR = Join-Path $agentHome 'session-env'
 $env:TMP = Join-Path $agentHome 'tmp'
-$env:TEMP = $env:TMP
+$env:TEMP = $env:TMP{artifact_setup}
 Remove-Item Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_AUTH_TOKEN, Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
 $selectedModel = if ($env:AERORIC_AGENT_MODEL) {{ $env:AERORIC_AGENT_MODEL }} else {{ {default_model} }}
 {context_setup}
@@ -1206,6 +1220,7 @@ exit $LASTEXITCODE
         relative_home = powershell_quote(&format!(".aeroric\\agent-homes\\{id}")),
         default_model = powershell_quote(&default_model),
         context_setup = context_setup,
+        artifact_setup = artifact_setup,
         api_key_file = powershell_quote(&format!(".aeroric\\agent-credentials\\{id}")),
         base_url = powershell_quote(&normalize_base_url(&draft.base_url)),
         cli_resolution = powershell_claude_resolution_block(&claude_bin),
@@ -2043,6 +2058,7 @@ pub(super) fn refresh_stale_codex_agent_scripts(settings: &mut AppSettings) {
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            disable_artifact_tool: profile.disable_artifact_tool,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2096,6 +2112,7 @@ pub(super) fn refresh_stale_claude_agent_scripts(settings: &mut AppSettings) {
             model: profile.models[0].clone(),
             models: profile.models.clone(),
             enable_1m_context: profile.enable_1m_context,
+            disable_artifact_tool: profile.disable_artifact_tool,
             enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2244,6 +2261,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2286,6 +2304,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy,
             bridge_python_path: bridge_python_path.to_string(),
             dsh_api_protocol: String::new(),
@@ -2585,6 +2604,7 @@ api_key = "sk-codex"
             model: "gpt-5.6-sol".to_string(),
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2633,6 +2653,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: true,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2663,6 +2684,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: true,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2688,6 +2710,7 @@ api_key = "sk-codex"
             model: "claude-opus-4-8".to_string(),
             models: vec!["claude-opus-4-8".to_string()],
             enable_1m_context: true,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2808,6 +2831,7 @@ api_key = "sk-codex"
             model: "claude-opus-4-8".to_string(),
             models: vec!["claude-opus-4-8".to_string(), "claude-opus-4-6".to_string()],
             enable_1m_context: true,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2837,6 +2861,7 @@ api_key = "sk-codex"
             model: "claude-opus-4-6".to_string(),
             models: vec!["claude-opus-4-6".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2851,6 +2876,60 @@ api_key = "sk-codex"
 
     #[cfg(not(windows))]
     #[test]
+    fn claude_shell_wrapper_exports_artifact_toggle_only_when_requested() {
+        let draft = |disable_artifact_tool: bool| AgentSetupDraft {
+            id: "agentrouter".to_string(),
+            label: "AgentRouter".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://agentrouter.org".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            models: vec!["claude-opus-4-6".to_string()],
+            enable_1m_context: false,
+            disable_artifact_tool,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+
+        let disabled = build_claude_code_agent_shell_script(&draft(false));
+        assert!(!disabled.contains("CLAUDE_CODE_DISABLE_ARTIFACT"));
+        // 关闭时不能在 TMPDIR 后留空行,否则模板每次都会生成不同的字节。
+        assert!(disabled.contains("export TMPDIR=\"$AGENT_HOME/tmp\"\n\nunset ANTHROPIC_API_KEY"));
+
+        let enabled = build_claude_code_agent_shell_script(&draft(true));
+        assert!(enabled.contains("export CLAUDE_CODE_DISABLE_ARTIFACT=\"1\""));
+    }
+
+    #[test]
+    fn claude_powershell_wrapper_exports_artifact_toggle_only_when_requested() {
+        let draft = |disable_artifact_tool: bool| AgentSetupDraft {
+            id: "agentrouter".to_string(),
+            label: "AgentRouter".to_string(),
+            kind: AgentSetupKind::ClaudeCode,
+            base_url: "https://agentrouter.org".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            models: vec!["claude-opus-4-6".to_string()],
+            enable_1m_context: false,
+            disable_artifact_tool,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            dsh_api_protocol: String::new(),
+            proxy_enabled: false,
+        };
+
+        let disabled = build_claude_code_agent_powershell_script(&draft(false));
+        assert!(!disabled.contains("CLAUDE_CODE_DISABLE_ARTIFACT"));
+        assert!(disabled.contains("$env:TEMP = $env:TMP\nRemove-Item Env:ANTHROPIC_API_KEY"));
+
+        let enabled = build_claude_code_agent_powershell_script(&draft(true));
+        assert!(enabled.contains("$env:CLAUDE_CODE_DISABLE_ARTIFACT = '1'"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
     fn custom_agent_script_model_selection_is_non_interactive() {
         let draft = AgentSetupDraft {
             id: "gpt55".to_string(),
@@ -2861,6 +2940,7 @@ api_key = "sk-codex"
             model: "gpt-5.6".to_string(),
             models: vec!["gpt-5.6".to_string(), "gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -2899,6 +2979,7 @@ api_key = "sk-codex"
             api_key: String::new(),
             models: Vec::new(),
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -2940,6 +3021,7 @@ fi
             api_key: String::new(),
             models: Vec::new(),
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -2976,6 +3058,7 @@ fi
             api_key: String::new(),
             models: vec!["gpt-5.6".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: true,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -3023,6 +3106,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["gpt-5.6-sol".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: true,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -3057,6 +3141,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             model: "gpt-5.6-sol".to_string(),
             models: vec!["gpt-5.6-sol".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: true,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -3075,6 +3160,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["gpt-5.6-sol".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -3116,6 +3202,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["gpt-5.6".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -3154,6 +3241,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["claude-opus-4-6".to_string()],
                 enable_1m_context: true,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -3235,6 +3323,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["claude-opus-4-6".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),
@@ -3271,6 +3360,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             model: "claude-sonnet".to_string(),
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -3310,6 +3400,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             model: "claude-sonnet".to_string(),
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),
@@ -3353,6 +3444,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
             model: "claude-sonnet".to_string(),
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             dsh_api_protocol: String::new(),

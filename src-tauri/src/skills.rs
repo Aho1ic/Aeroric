@@ -1166,6 +1166,7 @@ pub async fn set_skill_hub_path(path: String) -> Result<SetHubResult, String> {
                 group: None,
                 hidden_from_rail: false,
                 pinned: false,
+                avatar: None,
             },
             created_new_project: false,
             projects,

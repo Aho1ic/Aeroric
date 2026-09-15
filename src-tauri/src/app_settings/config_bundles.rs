@@ -245,6 +245,8 @@ pub(super) fn collect_agent_config_bundle_agent(
             api_key: credentials.api_key,
             models: credentials.models,
             enable_1m_context: credentials.enable_1m_context,
+            // 内置 Agent 的 wrapper 由 Aeroric 之外的安装器生成,没有这个开关。
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             // 内置 Agent 不走 bridge,没有解释器设置可带。
             bridge_python_path: String::new(),
@@ -286,6 +288,7 @@ pub(super) fn collect_agent_config_bundle_agent(
         api_key: profile.api_key.clone(),
         models: profile.models.clone(),
         enable_1m_context: profile.enable_1m_context,
+        disable_artifact_tool: profile.disable_artifact_tool,
         enable_chat_completions_proxy: profile.enable_chat_completions_proxy,
         bridge_python_path: profile.bridge_python_path.clone(),
         reasoning_effort: (family == AgentFamily::Dsh)
@@ -335,6 +338,7 @@ pub(super) fn custom_agent_setup_draft(agent: &AgentConfigBundleAgent) -> Option
         model: agent.models.first().cloned().unwrap_or_default(),
         models: agent.models.clone(),
         enable_1m_context: agent.enable_1m_context,
+        disable_artifact_tool: agent.disable_artifact_tool,
         enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
         bridge_python_path: usable_imported_bridge_python_path(&agent.bridge_python_path),
         dsh_api_protocol: String::new(),
@@ -494,6 +498,7 @@ pub(super) fn import_agent_config_entry(
                 api_key: agent.api_key,
                 models: agent.models,
                 enable_1m_context: agent.enable_1m_context,
+                disable_artifact_tool: agent.disable_artifact_tool,
                 enable_chat_completions_proxy: agent.enable_chat_completions_proxy,
                 bridge_python_path: usable_imported_bridge_python_path(&agent.bridge_python_path),
                 username: String::new(),
@@ -878,6 +883,7 @@ pub(super) fn parse_cc_switch_providers(sql: &str) -> Result<Vec<AgentConfigBund
             api_key,
             models,
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             reasoning_effort: None,
@@ -958,6 +964,7 @@ mod tests {
             api_key: String::new(),
             models: Vec::new(),
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             reasoning_effort: None,
@@ -1054,6 +1061,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             models: vec!["claude-sonnet".to_string()],
             enable_1m_context: true,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -1072,6 +1080,55 @@ mod tests {
         let script = build_agent_script(&draft);
         assert!(script.contains("$HOME/.aeroric/agent-homes/portable"));
         assert!(!script.contains("/Users/source/.aeroric"));
+    }
+
+    #[test]
+    fn portable_agent_bundle_round_trips_disable_artifact_tool() {
+        let mut settings = AppSettings::default();
+        settings.custom_agents.push(CustomAgentProfile {
+            id: "artifact".to_string(),
+            label: "Artifact Agent".to_string(),
+            path: "/Users/source/.aeroric/agents/artifact.sh".to_string(),
+            codex_like: false,
+            family: "claude".to_string(),
+            config_lang: "shellscript".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            models: vec!["claude-sonnet".to_string()],
+            enable_1m_context: false,
+            disable_artifact_tool: true,
+            enable_chat_completions_proxy: false,
+            bridge_python_path: String::new(),
+            username: String::new(),
+            password: String::new(),
+        });
+
+        let exported = collect_portable_agent_config_bundle_agent(&settings, "artifact").unwrap();
+        assert!(exported.disable_artifact_tool);
+
+        let raw = serde_json::to_string(&AgentConfigBundle {
+            format: AGENT_CONFIG_BUNDLE_FORMAT.to_string(),
+            version: AGENT_CONFIG_BUNDLE_VERSION,
+            exported_at: "2026-09-14T00:00:00Z".to_string(),
+            agent: exported,
+        })
+        .unwrap();
+        let parsed = parse_agent_config_bundle(&raw).unwrap();
+        assert!(parsed.agent.disable_artifact_tool);
+
+        let draft = custom_agent_setup_draft(&parsed.agent).unwrap();
+        assert!(draft.disable_artifact_tool);
+        let script = build_agent_script(&draft);
+        assert!(script.contains("CLAUDE_CODE_DISABLE_ARTIFACT"));
+
+        // 旧配置包没有这个字段时 serde default 必须落到 false,不能把导入当成打开。
+        let mut legacy: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        legacy["agent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("disable_artifact_tool");
+        let legacy_parsed = parse_agent_config_bundle(&legacy.to_string()).unwrap();
+        assert!(!legacy_parsed.agent.disable_artifact_tool);
     }
 
     #[test]
@@ -1155,6 +1212,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             models: vec!["deepseek-v4-pro".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             reasoning_effort: Some("off".to_string()),

@@ -93,6 +93,7 @@ pub(super) fn normalize_custom_agent_profile(
         models: normalize_model_list(profile.models),
         bridge_python_path: profile.bridge_python_path.trim().to_string(),
         enable_1m_context: family == AgentFamily::Claude && profile.enable_1m_context,
+        disable_artifact_tool: family == AgentFamily::Claude && profile.disable_artifact_tool,
         enable_chat_completions_proxy: family == AgentFamily::Codex
             && profile.enable_chat_completions_proxy,
         username: String::new(),

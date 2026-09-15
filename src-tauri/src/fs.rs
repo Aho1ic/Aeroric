@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
+/// 目录项。字段名一律下划线,前端 `src/components/file-explorer/types.ts` 的
+/// `FsEntry` 逐字段镜像这份形状 —— 结构体上没有 `rename_all`,所以 serde 发出去的
+/// 就是这里的名字。改名/加字段必须两边一起改,`fs_entry_wire_field_names_match_the_frontend_type`
+/// 会锁住这份键集。
 #[derive(serde::Serialize)]
 pub(crate) struct FsEntry {
     name: String,
@@ -12,6 +16,9 @@ pub(crate) struct FsEntry {
     extension: Option<String>,
     modified_at_ms: Option<u64>,
     is_gitignored: bool,
+    /// 条目本身是符号链接。`is_dir` 走的是跟随链接后的类型,所以指向目录的链接
+    /// 两个标记同时为真 —— 前端图标按「先看 is_symlink」判。
+    is_symlink: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -380,6 +387,12 @@ pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<
                     .and_then(|metadata| metadata.modified().ok())
                     .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
                     .map(|duration| duration.as_millis() as u64);
+                // `DirEntry::file_type` 不跟随链接,正是要判的那一层;
+                // 上面的 `metadata()` 跟随链接,所以两者不能互相替代。
+                let is_symlink = entry
+                    .file_type()
+                    .map(|file_type| file_type.is_symlink())
+                    .unwrap_or(false);
                 FsEntry {
                     name,
                     path: p.to_string_lossy().into_owned(),
@@ -387,6 +400,7 @@ pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<
                     extension,
                     modified_at_ms,
                     is_gitignored: false,
+                    is_symlink,
                 }
             })
             .collect();
@@ -966,6 +980,84 @@ mod tests {
             result,
             Err(error) if error == "Path is outside the allowed directory"
         ));
+    }
+
+    /// `is_dir` 跟随链接,`is_symlink` 不跟随 —— 指向目录的链接必须两个都为真,
+    /// 否则前端无法把「链接到目录」和「真目录」画成不同的图标。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_listing_flags_symlinks_without_losing_the_followed_kind() {
+        let root = unique_test_dir("directory-symlink-flags");
+        std::fs::create_dir_all(root.join("real-dir")).expect("create real directory");
+        std::fs::write(root.join("real.txt"), "data").expect("create real file");
+        std::os::unix::fs::symlink(root.join("real-dir"), root.join("link-dir"))
+            .expect("create directory symlink");
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt"))
+            .expect("create file symlink");
+
+        let entries = read_dir_entries(
+            root.to_string_lossy().into_owned(),
+            root.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("list directory");
+
+        let by_name = |name: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap_or_else(|| panic!("missing entry {name}"))
+        };
+        let real_dir = (by_name("real-dir").is_dir, by_name("real-dir").is_symlink);
+        let link_dir = (by_name("link-dir").is_dir, by_name("link-dir").is_symlink);
+        let real_file = (by_name("real.txt").is_dir, by_name("real.txt").is_symlink);
+        let link_file = (by_name("link.txt").is_dir, by_name("link.txt").is_symlink);
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(real_dir, (true, false));
+        assert_eq!(link_dir, (true, true));
+        assert_eq!(real_file, (false, false));
+        assert_eq!(link_file, (false, true));
+    }
+
+    /// 前端 `src/components/file-explorer/types.ts` 的 `FsEntry` 逐字段消费这份 JSON。
+    /// 这里锁的是**线上键名**:结构体没有 `rename_all`,改名/加字段而不同步 TS 侧,
+    /// 文件树会静默读到 `undefined`(`modified_at_ms` / `modifiedAtMs` 就这么错过一次,
+    /// 按修改时间排序恒等于按名字排序)。
+    #[tokio::test]
+    async fn fs_entry_wire_field_names_match_the_frontend_type() {
+        let root = unique_test_dir("fs-entry-wire-names");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::write(root.join("main.rs"), "fn main() {}").expect("create file");
+
+        let entries = read_dir_entries(
+            root.to_string_lossy().into_owned(),
+            root.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("list directory");
+        let json = serde_json::to_value(&entries[0]).expect("serialize entry");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("entry serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            keys,
+            [
+                "extension",
+                "is_dir",
+                "is_gitignored",
+                "is_symlink",
+                "modified_at_ms",
+                "name",
+                "path",
+            ]
+        );
     }
 }
 

@@ -865,6 +865,25 @@ function FailoverQueueEditor({
   );
 }
 
+/**
+ * 请求吞吐(tok/秒)= 输出 token / 总延迟。延迟或输出缺失、为 0 时这个比值没有意义,
+ * 返回 null 让调用方直接不渲染,而不是显示 Infinity / NaN。
+ */
+export function formatRequestThroughput(
+  outputTokens: number | null | undefined,
+  latencyMs: number | null | undefined,
+): string | null {
+  if (typeof outputTokens !== "number" || typeof latencyMs !== "number") return null;
+  if (!Number.isFinite(outputTokens) || !Number.isFinite(latencyMs)) return null;
+  if (outputTokens <= 0 || latencyMs <= 0) return null;
+  const rate = (outputTokens / latencyMs) * 1000;
+  // 极端量级(超大 token 数 / 亚毫秒延迟)算出来仍可能溢出成 Infinity,一并挡掉。
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  return rate >= 1
+    ? Math.round(rate).toLocaleString()
+    : rate.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
 function RequestRecordRow({
   request,
   locale,
@@ -892,6 +911,7 @@ function RequestRecordRow({
     minute: "2-digit",
     second: "2-digit",
   });
+  const throughput = formatRequestThroughput(request.outputTokens, request.latencyMs);
 
   return (
     <article
@@ -977,6 +997,18 @@ function RequestRecordRow({
             ms: request.latencyMs.toLocaleString(),
           })}
         </InlineBadge>
+        {throughput ? (
+          <InlineBadge>
+            {t("appSettings.localRouter.requestThroughput", { rate: throughput })}
+          </InlineBadge>
+        ) : null}
+        {request.ttftMs != null ? (
+          <InlineBadge>
+            {t("appSettings.localRouter.requestTtftMs", {
+              ms: request.ttftMs.toLocaleString(),
+            })}
+          </InlineBadge>
+        ) : null}
         {request.isStreaming ? (
           <InlineBadge>{t("appSettings.localRouter.requestStreaming")}</InlineBadge>
         ) : null}
