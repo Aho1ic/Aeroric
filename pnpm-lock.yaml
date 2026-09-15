@@ -29,6 +29,9 @@ importers:
 
   .:
     dependencies:
+      '@aeroric/remote-contracts':
+        specifier: workspace:*
+        version: link:packages/remote-contracts
       '@codemirror/lang-cpp':
         specifier: ^6.0.3
         version: 6.0.3

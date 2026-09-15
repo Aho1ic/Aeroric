@@ -18,23 +18,8 @@ export interface Project {
 
 /**
  * 项目头像的定制项。三个字段各自可缺省,缺的那项回落到自动值。
- *
- * `color` 存的是**调色板键名**而不是色值:换主题时调色板可以整体重调,
- * 已定制的项目跟着变,不会卡在一个和新主题不搭的旧十六进制上。
+ * 定义在 `@aeroric/remote-contracts`（wire 投影）。
  */
-export interface ProjectAvatarOverride {
-  /** `AVATAR_PALETTE` 的键。非法键在读取时被丢弃(等同未定制)。 */
-  color?: string;
-  /** 单个字素簇。设了它就不显示首字母。 */
-  emoji?: string;
-  /** 自定义首字母,显示宽度上限 3(拉丁算 1,CJK/全角算 1.5)。 */
-  label?: string;
-}
-
-export type ProjectLocation =
-  | { kind: "local"; path: string }
-  | { kind: "ssh"; connectionId: string; remotePath: string }
-  | { kind: "wsl"; distribution: string; linuxPath: string };
 
 export type LocalTarget = { kind: "local"; path: string };
 export type SshTarget = {
@@ -254,13 +239,28 @@ export type {
   TableChildObjectType,
 } from "./types/database";
 
-export type BuiltInAgentType = "claude" | "claude_gpt55" | "codex" | "dsh" | "omp";
-export type AgentType = BuiltInAgentType | (string & {});
-/** 协议族:决定启动参数、会话格式与配置文件形态;codexLike 布尔为其派生。 */
-export type ProtocolFamily = "claude" | "codex" | "dsh" | "omp";
+export type {
+  AgentType,
+  BuiltInAgentType,
+  PermissionMode,
+  ProjectAvatarOverride,
+  ProjectLocation,
+  ProtocolFamily,
+  TaskStatus,
+} from "@aeroric/remote-contracts";
+
+// Re-import for local structural use below (Task interface fields, helpers).
+import type {
+  AgentType,
+  PermissionMode,
+  ProjectAvatarOverride,
+  ProjectLocation,
+  ProtocolFamily,
+  TaskStatus,
+} from "@aeroric/remote-contracts";
+
 export type ThemeMode = "system" | "dark" | "light" | "eyecare";
 export type ThemeVariant = "dark" | "light" | "eyecare";
-export type PermissionMode = "ask" | "auto_edit" | "full_access";
 export type TaskDisplayWindow = 3 | 7 | 15 | 30 | "all";
 
 export const TASK_DISPLAY_WINDOW_VALUES = [3, 7, 15, 30, "all"] as const;
@@ -311,17 +311,6 @@ export const DEFAULT_MONO_FONT_BY_PLATFORM: Record<"windows" | "macos" | "linux"
     '"JetBrains Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", "DejaVu Sans Mono", "Noto Sans Mono", monospace',
 };
 export const DEFAULT_MONO_FONT: FontFamily = DEFAULT_MONO_FONT_BY_PLATFORM.macos;
-
-export type TaskStatus =
-  | "todo"
-  | "pending"
-  | "running"
-  | "input_required"
-  | "detached"
-  | "interrupted"
-  | "done"
-  | "failed"
-  | "cancelled";
 
 export interface Task {
   id: string;

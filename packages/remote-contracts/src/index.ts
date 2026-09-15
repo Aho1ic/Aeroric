@@ -1,3 +1,5 @@
+export * from "./shared";
+
 export const RPC_V2 = 2 as const;
 export const RPC_V3 = 3 as const;
 export const SUPPORTED_RPC_VERSIONS = [RPC_V3, RPC_V2] as const;
