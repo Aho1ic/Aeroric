@@ -85,3 +85,13 @@ export async function invokeFileFor<T>(
 ): Promise<T> {
   return invokeFor<T>(target, mirror, { ...fileArgs(target, path), ...extra });
 }
+
+/**
+ * 既有 `gitCommandName` / `lspCommandName` 习惯：
+ * local 用裸名，ssh 加 `remote_`，wsl 加 `wsl_`。
+ */
+export function prefixCommand(logicalLocalCommand: string, target: InvokeTarget): string {
+  if (target.kind === "ssh") return `remote_${logicalLocalCommand}`;
+  if (target.kind === "wsl") return `wsl_${logicalLocalCommand}`;
+  return logicalLocalCommand;
+}

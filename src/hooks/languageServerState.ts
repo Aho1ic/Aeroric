@@ -1,4 +1,6 @@
 import type { SshConnection } from "../types";
+import { prefixCommand } from "../lib/invokeFacade";
+import type { InvokeTarget } from "../lib/target";
 
 export type LspServerCommand = {
   program: string;
@@ -35,7 +37,14 @@ export type LspRemoteContext = {
 };
 
 export function lspCommandName(command: string, remote?: LspRemoteContext): string {
-  return remote ? `remote_${command}` : command;
+  const target: InvokeTarget = remote
+    ? {
+        kind: "ssh",
+        connection: remote.connection,
+        projectPath: remote.projectPath,
+      }
+    : { kind: "local", path: "" };
+  return prefixCommand(command, target);
 }
 
 export function lspInvokeArgs<T extends Record<string, unknown>>(

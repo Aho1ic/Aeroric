@@ -45,12 +45,16 @@ export const FS_MIRRORS = {
   },
 } as const satisfies Record<string, CommandMirror>;
 
-/** 项目配置读取。WSL 命令名历史为 `read_wsl_project_config`（无 `wsl_` 前缀）。 */
+/** 项目配置读写。WSL 读命令名历史为 `read_wsl_project_config`（无 `wsl_` 前缀）。 */
 export const PROJECT_CONFIG_MIRRORS = {
   read: {
     local: "read_project_config",
     ssh: "remote_read_project_config",
     wsl: "read_wsl_project_config",
+  },
+  init: {
+    local: "init_project_config",
+    // 远程/WSL 目前只在本地项目初始化配置；缺镜像时 requireCommand 会拦下。
   },
 } as const satisfies Record<string, CommandMirror>;
 

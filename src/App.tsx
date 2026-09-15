@@ -61,7 +61,10 @@ import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
-import { taskCommandName } from "./projectTarget";
+import { taskCommandByKind } from "./lib/api/session";
+import { localTarget, resolveInvokeTarget } from "./lib/target";
+import { projectArgs, resolveCommand } from "./lib/invokeFacade";
+import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
 import { flushPendingSavesBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
@@ -1169,7 +1172,9 @@ function AppShell() {
     setActiveProject(project);
     mountProject(project.id);
     updateProjectView(project.id, createDefaultProjectViewState());
-    invoke("init_project_config", { projectPath: path }).catch((e: unknown) => {
+    invoke(resolveCommand(PROJECT_CONFIG_MIRRORS.init, localTarget(path)), {
+      projectPath: path,
+    }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
   }
@@ -1241,15 +1246,21 @@ function AppShell() {
     const location = resolveProjectLocation(updated);
     if (location.kind === "ssh") return;
     if (location.kind === "wsl") {
-      invoke("read_wsl_project_config", {
+      const wslTarget = resolveInvokeTarget(updated.path, {
+        kind: "wsl",
         distribution: location.distribution,
-        linuxProjectPath: location.linuxPath,
-      }).catch((e: unknown) => {
-        showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
+        projectPath: location.linuxPath,
       });
+      invoke(resolveCommand(PROJECT_CONFIG_MIRRORS.read, wslTarget), projectArgs(wslTarget)).catch(
+        (e: unknown) => {
+          showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
+        },
+      );
       return;
     }
-    invoke("init_project_config", { projectPath: project.path }).catch((e: unknown) => {
+    invoke(resolveCommand(PROJECT_CONFIG_MIRRORS.init, localTarget(project.path)), {
+      projectPath: project.path,
+    }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
   }
@@ -1289,7 +1300,7 @@ function AppShell() {
       });
       return;
     }
-    invoke(taskCommandName("local", "run"), {
+    invoke(taskCommandByKind("local", "run"), {
       taskId: task.id,
       projectPath,
       prompt: promptOverride ?? task.prompt,
@@ -1319,7 +1330,7 @@ function AppShell() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    invoke(taskCommandName("ssh", "run"), {
+    invoke(taskCommandByKind("ssh", "run"), {
       taskId: task.id,
       connection,
       remoteProjectPath,
@@ -1347,7 +1358,7 @@ function AppShell() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    invoke(taskCommandName("wsl", "run"), {
+    invoke(taskCommandByKind("wsl", "run"), {
       taskId: task.id,
       distribution,
       linuxProjectPath,
@@ -1725,13 +1736,13 @@ function AppShell() {
     const project = projects.find((p) => p.id === task?.projectId);
     const projectLocation = project ? resolveProjectLocation(project) : null;
     if (projectLocation?.kind === "ssh") {
-      invoke(taskCommandName("ssh", "cancel"), { taskId }).catch((e: unknown) => {
+      invoke(taskCommandByKind("ssh", "cancel"), { taskId }).catch((e: unknown) => {
         showToast(t("toast.cancelTaskFailed", { error: String(e) }));
       });
       return;
     }
     if (projectLocation?.kind === "wsl") {
-      invoke(taskCommandName("wsl", "cancel"), { taskId }).catch((e: unknown) => {
+      invoke(taskCommandByKind("wsl", "cancel"), { taskId }).catch((e: unknown) => {
         showToast(t("toast.cancelTaskFailed", { error: String(e) }));
       });
       return;
@@ -1743,7 +1754,7 @@ function AppShell() {
       return;
     }
     const projectPath = task?.worktreePath ?? project?.path ?? "";
-    invoke(taskCommandName("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
+    invoke(taskCommandByKind("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
     });
   }
@@ -1781,7 +1792,7 @@ function AppShell() {
         updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
         return;
       }
-      invoke(taskCommandName("ssh", "resume"), {
+      invoke(taskCommandByKind("ssh", "resume"), {
         taskId: task.id,
         connection,
         remoteProjectPath: projectLocation.remotePath,
@@ -1802,7 +1813,7 @@ function AppShell() {
       return;
     }
     if (projectLocation.kind === "wsl") {
-      invoke(taskCommandName("wsl", "resume"), {
+      invoke(taskCommandByKind("wsl", "resume"), {
         taskId: task.id,
         distribution: projectLocation.distribution,
         linuxProjectPath: projectLocation.linuxPath,
@@ -1822,7 +1833,7 @@ function AppShell() {
       });
       return;
     }
-    invoke(taskCommandName("local", "resume"), {
+    invoke(taskCommandByKind("local", "resume"), {
       taskId: task.id,
       projectPath: task.worktreePath ?? project.path,
       agent: task.agent,
@@ -2843,7 +2854,9 @@ function AppShell() {
     setHubMode(true);
     setActiveProject(updated);
     mountProject(updated.id);
-    invoke("init_project_config", { projectPath: updated.path }).catch((e: unknown) => {
+    invoke(resolveCommand(PROJECT_CONFIG_MIRRORS.init, localTarget(updated.path)), {
+      projectPath: updated.path,
+    }).catch((e: unknown) => {
       showToast(t("toast.initProjectConfigFailed", { error: String(e) }), "warning");
     });
   }, [hubProjectId, projects, mountProject, setProjects, showToast, formatSaveProjectsError, t]);

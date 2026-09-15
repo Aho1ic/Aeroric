@@ -1,5 +1,5 @@
 import type { CommandMirror } from "../target";
-import { invokeFileFor, invokeProjectFor, requireCommand } from "../invokeFacade";
+import { invokeFileFor, invokeProjectFor, prefixCommand, requireCommand } from "../invokeFacade";
 import type { InvokeTarget } from "../target";
 
 /** Git 域镜像表。没有 wsl 变体的命令由调用方决定是否回退 local。 */
@@ -103,9 +103,7 @@ export function gitCommand(target: InvokeTarget, key: GitMirrorKey): string {
  * ssh/wsl 加 `remote_` / `wsl_` 前缀。与镜像表约定一致，供未建镜像键的命令使用。
  */
 export function prefixGitCommand(logicalLocalCommand: string, target: InvokeTarget): string {
-  if (target.kind === "ssh") return `remote_${logicalLocalCommand}`;
-  if (target.kind === "wsl") return `wsl_${logicalLocalCommand}`;
-  return logicalLocalCommand;
+  return prefixCommand(logicalLocalCommand, target);
 }
 
 export async function gitStatus(target: InvokeTarget) {
