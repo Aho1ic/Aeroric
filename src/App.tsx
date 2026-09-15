@@ -38,7 +38,6 @@ import {
 } from "./agents";
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
-import { recordAgentConfigUsage } from "./hooks/useAgentUsage";
 import { useAppAppearance } from "./hooks/useAppAppearance";
 import { useDshHostEvents } from "./hooks/useDshHostEvents";
 import { useRefState } from "./hooks/useRefState";
@@ -78,16 +77,12 @@ import {
   mergeTaskWorktree,
 } from "./state/app/worktreeOps";
 import {
+  createTaskLifecycleActions,
+} from "./state/app/taskLifecycle";
+import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
-  launchLocalTask,
-  launchSshTask,
-  launchWslTask,
   persistTaskStatusChange,
-  resumeDshTask,
-  resumeLocalTask,
-  resumeSshTask,
-  resumeWslTask,
   type TaskLaunchDeps,
 } from "./state/app";
 import {
@@ -111,8 +106,6 @@ import {
 } from "./state/app/projectMutations";
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
-import { createTaskId } from "./taskId";
-import { TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -125,7 +118,6 @@ import {
   projectRailWidthForProjects,
 } from "./components/project-page/viewMode";
 import s from "./styles";
-import { launchDshWebUi } from "./dshWebUi";
 import { DshApprovalDialog } from "./components/DshApprovalDialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import "./App.css";
@@ -179,18 +171,6 @@ interface ResetTaskProcessResult {
 interface ResolvedTaskSession {
   sessionId?: string;
   sessionPath?: string;
-}
-
-async function flushProjectTasksForRemoteLaunch(projectId: string): Promise<void> {
-  await withTimeout(
-    flushProjectTasks(projectId),
-    TASK_FLUSH_TIMEOUT_MS,
-    "Timed out while saving the task. The remote request was rejected.",
-  );
-}
-
-interface TaskLaunchOptions {
-  persistBeforeLaunch?: boolean;
 }
 
 function rollbackTaskMutation(current: Task, previous: Task, applied: Task): Task {
@@ -635,22 +615,6 @@ function AppShell() {
     isManuallyCompletedDsh: (taskId) => manuallyCompletedDshTasksRef.current.has(taskId),
   });
 
-  // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
-  // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
-  // 见 src-tauri/src/remote/tasks_rpc.rs)。latest-ref 避免闭包过期 state。
-  useRemoteTaskRequests({
-    projectsRef,
-    tasksRef,
-    sshConnectionsRef,
-    startupReadyRef,
-    remoteTaskMutationQueuesRef,
-    submit: handleSubmitTask as Parameters<typeof useRemoteTaskRequests>[0]["submit"],
-    resume: handleResumeTask,
-    runTodo: handleRunTodoTask,
-    showToast,
-    translate: t,
-  });
-
   async function handleOpen() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (!selected) return;
@@ -745,352 +709,59 @@ function AppShell() {
     };
   }
 
-  function invokeRunTask(
-    task: Task,
-    projectPath: string,
-    images: string[],
-    texts: string[] = [],
-    injectPromptIntoTerminal = false,
-    promptOverride?: string,
-  ) {
-    manuallyCompletedDshTasksRef.current.delete(task.id);
-    launchLocalTask(taskLaunchDeps(), {
-      task,
-      projectPath,
-      images,
-      texts,
-      injectPromptIntoTerminal,
-      promptOverride,
-      isDsh: agentFamily(task.agent, agentOptionsRef.current) === "dsh",
-    });
-  }
+  const taskLifecycle = useMemo(
+    () =>
+      createTaskLifecycleActions({
+        agentOptionsRef,
+        sshConnectionsRef,
+        tasksRef,
+        projectsRef,
+        pendingTaskStartsRef,
+        manuallyCompletedDshTasksRef,
+        showToastRef,
+        formatSaveTasksErrorRef,
+        translateRef: tRef,
+        setTasks,
+        setProjectViews,
+        setTaskRunCounts,
+        setActiveProject,
+        mountProject,
+        updateProjectView,
+        launchDeps: taskLaunchDeps,
+        updateTaskStatus,
+        resetTaskTerminal: tm.resetTaskTerminal,
+        removeTaskBuffers: tm.removeTaskBuffers,
+        sshConnections,
+      }),
+    // 渲染期重建：与原普通函数声明同一身份语义；调用方通过 taskLifecycle.xxx 拿最新闭包。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, projects, sshConnections, tm],
+  );
 
-  function invokeRemoteRunTask(
-    task: Task,
-    connection: SshConnection,
-    remoteProjectPath: string,
-    injectPromptIntoTerminal = false,
-    promptOverride?: string,
-  ) {
-    launchSshTask(taskLaunchDeps(), {
-      task,
-      connection,
-      remoteProjectPath,
-      injectPromptIntoTerminal,
-      promptOverride,
-    });
-  }
+  const handleSubmitTask = taskLifecycle.handleSubmitTask;
+  const handleRunTodoTask = taskLifecycle.handleRunTodoTask;
+  const handleResumeTask = taskLifecycle.handleResumeTask;
+  const invokeResumeTask = taskLifecycle.invokeResumeTask;
+  const invokeRunTask = taskLifecycle.invokeRunTask;
+  const invokeRemoteRunTask = taskLifecycle.invokeRemoteRunTask;
+  const invokeWslRunTask = taskLifecycle.invokeWslRunTask;
+  const resolveTaskSessionReference = taskLifecycle.resolveTaskSessionReference;
 
-  function invokeWslRunTask(
-    task: Task,
-    distribution: string,
-    linuxProjectPath: string,
-    injectPromptIntoTerminal = false,
-    promptOverride?: string,
-  ) {
-    launchWslTask(taskLaunchDeps(), {
-      task,
-      distribution,
-      linuxProjectPath,
-      injectPromptIntoTerminal,
-      promptOverride,
-    });
-  }
-
-  async function handleSubmitTask(
-    project: Project,
-    {
-      prompt,
-      agent,
-      permissionMode,
-      images,
-      texts,
-      immediate,
-      launchMode,
-      baseBranch,
-      selectedModel,
-      reasoningEffort,
-      speed,
-      dshAgentPreset,
-      injectPromptIntoTerminal,
-    }: {
-      prompt: string;
-      agent: AgentType;
-      images: string[];
-      texts: string[];
-      permissionMode: PermissionMode;
-      selectedModel?: string;
-      reasoningEffort?: string | null;
-      speed?: string;
-      dshAgentPreset?: string;
-      immediate: boolean;
-      launchMode: "local" | "worktree" | "webui";
-      baseBranch: string;
-      injectPromptIntoTerminal?: boolean;
-    },
-    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
-  ) {
-    const taskId = createTaskId();
-    const projectLocation = resolveProjectLocation(project);
-    const remoteConnection =
-      projectLocation.kind === "ssh"
-        ? sshConnectionsRef.current.find(
-            (connection) => connection.id === projectLocation.connectionId,
-          )
-        : null;
-
-    if (projectLocation.kind !== "local") {
-      if (projectLocation.kind === "ssh" && !remoteConnection) {
-        showToast(t("toast.remoteProjectMissingConnection"), "error");
-        return null;
-      }
-      if (launchMode === "worktree") {
-        showToast(t("toast.remoteProjectNoWorktree"), "warning");
-        return null;
-      }
-      if (images.length > 0 || texts.length > 0) {
-        showToast(t("toast.remoteProjectNoAttachments"), "warning");
-        return null;
-      }
-    }
-
-    if (launchMode === "worktree" && !baseBranch) {
-      showToast(t("toast.worktreeBaseRequired"), "warning");
-      return null;
-    }
-
-    if (launchMode === "webui") {
-      if (!immediate) {
-        showToast(t("newTask.webuiMustStart"), "warning");
-        return null;
-      }
-      // local / worktree / webui 三条路各计一次:记在这里,前面那几个校验失败的
-      // 早返回都不算「用过这个配置」。存为待办也算 —— 那同样是一次配置选择。
-      void recordAgentConfigUsage(agent);
-      try {
-        await launchDshWebUi(agent);
-      } catch (error) {
-        showToast(t("toast.dshWebUiStartFailed", { error: String(error) }), "error");
-      }
-      return null;
-    }
-
-    void recordAgentConfigUsage(agent);
-
-    // 1) 立即把任务推到 state 让 view 切到 RunningView。worktree 字段先留空，
-    //    避免 await create_task_worktree 期间用户停留在 NewTaskView，让人误以为没反应。
-    const baseTask: Task = {
-      id: taskId,
-      projectId: project.id,
-      prompt,
-      name: prompt.trim() ? undefined : agentDisplayLabel(agent, agentOptions),
-      agent,
-      selectedModel,
-      reasoningEffort: reasoningEffort ?? undefined,
-      speed,
-      dshAgentPreset:
-        agentFamily(agent, agentOptionsRef.current) === "dsh"
-          ? (dshAgentPreset ?? "standard")
-          : undefined,
-      permissionMode,
-      status: immediate ? "pending" : "todo",
-      createdAt: Date.now(),
-    };
-    setTasks((prev) => {
-      const next = [baseTask, ...prev];
-      persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-    setActiveProject(project);
-    mountProject(project.id);
-    updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
-
-    if (!immediate) return baseTask;
-
-    if (persistBeforeLaunch) {
-      try {
-        await flushProjectTasksForRemoteLaunch(baseTask.projectId);
-        if (tasksRef.current.find((task) => task.id === taskId) !== baseTask) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
-      } catch (error) {
-        setTasks((prev) => {
-          if (prev.find((task) => task.id === taskId) !== baseTask) return prev;
-          const next = prev.filter((task) => task.id !== taskId);
-          persistProjectTasks(
-            baseTask.projectId,
-            next,
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
-          );
-          return next;
-        });
-        setProjectViews((prev) => {
-          const view = prev[project.id];
-          if (view?.selectedTaskId !== taskId) return prev;
-          return {
-            ...prev,
-            [project.id]: { ...view, selectedTaskId: null, isNewTask: true },
-          };
-        });
-        throw error;
-      }
-    }
-
-    // 2) 终端 buffer 在 PTY 启动前就要建好，否则首批输出会进不来 buffer。
-    tm.resetTaskTerminal(taskId);
-
-    if (projectLocation.kind === "ssh") {
-      invokeRemoteRunTask(
-        baseTask,
-        remoteConnection!,
-        projectLocation.remotePath,
-        injectPromptIntoTerminal ?? false,
-      );
-      return baseTask;
-    }
-    if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(
-        baseTask,
-        projectLocation.distribution,
-        projectLocation.linuxPath,
-        injectPromptIntoTerminal ?? false,
-      );
-      return baseTask;
-    }
-
-    // 3) 如果是 worktree 模式，先创建 worktree，成功后把字段补回 task 再启动 PTY。
-    let worktreePath: string | undefined;
-    let worktreeBranch: string | undefined;
-    let resolvedBaseBranch: string | undefined;
-
-    if (launchMode === "worktree") {
-      try {
-        const created = await invoke<{
-          worktreePath: string;
-          worktreeBranch: string;
-          baseBranch: string;
-        }>("create_task_worktree", {
-          projectPath: project.path,
-          taskId,
-          baseBranch,
-        });
-        worktreePath = created.worktreePath;
-        worktreeBranch = created.worktreeBranch;
-        resolvedBaseBranch = created.baseBranch;
-
-        setTasks((prev) => {
-          const next = prev.map((tk) =>
-            tk.id === taskId
-              ? { ...tk, worktreePath, worktreeBranch, baseBranch: resolvedBaseBranch }
-              : tk,
-          );
-          persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
-          return next;
-        });
-      } catch (e) {
-        showToast(t("toast.worktreeCreateFailed", { error: String(e) }), "error");
-        // 回滚刚加的占位 task
-        setTasks((prev) => {
-          const next = prev.filter((tk) => tk.id !== taskId);
-          persistProjectTasks(baseTask.projectId, next, showToast, formatSaveTasksError);
-          return next;
-        });
-        tm.removeTaskBuffers([taskId]);
-        return null;
-      }
-    }
-
-    const launchedTask = {
-      ...baseTask,
-      worktreePath,
-      worktreeBranch,
-      baseBranch: resolvedBaseBranch,
-    };
-    invokeRunTask(
-      launchedTask,
-      worktreePath ?? project.path,
-      images,
-      texts,
-      // Built-in agents can accept the initial prompt as a CLI argument, but
-      // flows that need to type into the interactive composer explicitly opt
-      // into PTY injection so startup confirmations are handled first.
-      injectPromptIntoTerminal ?? false,
-    );
-    return launchedTask;
-  }
-
-  async function handleRunTodoTask(
-    task: Task,
-    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
-  ) {
-    const sourceTask = tasksRef.current.find((item) => item.id === task.id) ?? task;
-    const project = projectsRef.current.find((p) => p.id === sourceTask.projectId);
-    if (!project) return false;
-
-    const pendingTask: Task = {
-      ...sourceTask,
-      status: "pending",
-      attentionRequestedAt: undefined,
-    };
-    setTasks((prev) => {
-      const next = prev.map((item) => (item.id === sourceTask.id ? pendingTask : item));
-      persistProjectTasks(sourceTask.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-
-    if (persistBeforeLaunch) {
-      try {
-        await flushProjectTasksForRemoteLaunch(sourceTask.projectId);
-        if (tasksRef.current.find((item) => item.id === sourceTask.id) !== pendingTask) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
-      } catch (error) {
-        setTasks((prev) => {
-          const next = prev.map((current) =>
-            current.id === sourceTask.id
-              ? rollbackTaskMutation(current, sourceTask, pendingTask)
-              : current,
-          );
-          persistProjectTasks(
-            sourceTask.projectId,
-            next,
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
-          );
-          return next;
-        });
-        throw error;
-      }
-    }
-
-    tm.resetTaskTerminal(sourceTask.id);
-    updateProjectView(sourceTask.projectId, { selectedTaskId: sourceTask.id, isNewTask: false });
-    const projectLocation = resolveProjectLocation(project);
-    if (projectLocation.kind === "ssh") {
-      const connection = sshConnectionsRef.current.find(
-        (item) => item.id === projectLocation.connectionId,
-      );
-      if (!connection) {
-        showToast(t("toast.remoteProjectMissingConnection"), "error");
-        updateTaskStatus(
-          sourceTask.id,
-          "failed",
-          undefined,
-          t("toast.remoteProjectMissingConnection"),
-        );
-        return false;
-      }
-      invokeRemoteRunTask(pendingTask, connection, projectLocation.remotePath);
-      return true;
-    }
-    if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(pendingTask, projectLocation.distribution, projectLocation.linuxPath);
-      return true;
-    }
-    invokeRunTask(pendingTask, pendingTask.worktreePath ?? project.path, []);
-    return true;
-  }
+  // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
+  // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
+  // 见 src-tauri/src/remote/tasks_rpc.rs)。latest-ref 避免闭包过期 state。
+  useRemoteTaskRequests({
+    projectsRef,
+    tasksRef,
+    sshConnectionsRef,
+    startupReadyRef,
+    remoteTaskMutationQueuesRef,
+    submit: handleSubmitTask as Parameters<typeof useRemoteTaskRequests>[0]["submit"],
+    resume: handleResumeTask,
+    runTodo: handleRunTodoTask,
+    showToast,
+    translate: t,
+  });
 
   async function handleMergeWorktree(taskId: string) {
     await mergeTaskWorktree(
@@ -1139,195 +810,6 @@ function AppShell() {
     cancelTaskInvoke(taskId, target).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
     });
-  }
-
-  function invokeResumeTask(task: Task, project: Project, sessionId: string) {
-    manuallyCompletedDshTasksRef.current.delete(task.id);
-    const projectLocation = resolveProjectLocation(project);
-    const deps = taskLaunchDeps();
-    if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "dsh") {
-      resumeDshTask(deps, {
-        task,
-        projectPath: task.worktreePath ?? project.path,
-        sessionId,
-      });
-      return;
-    }
-    if (projectLocation.kind === "ssh") {
-      const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
-      if (!connection) {
-        showToast(t("toast.remoteProjectMissingConnection"), "error");
-        updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
-        return;
-      }
-      resumeSshTask(deps, {
-        task,
-        connection,
-        remoteProjectPath: projectLocation.remotePath,
-        sessionId,
-      });
-      return;
-    }
-    if (projectLocation.kind === "wsl") {
-      resumeWslTask(deps, {
-        task,
-        distribution: projectLocation.distribution,
-        linuxProjectPath: projectLocation.linuxPath,
-        sessionId,
-      });
-      return;
-    }
-    resumeLocalTask(deps, {
-      task,
-      projectPath: task.worktreePath ?? project.path,
-      sessionId,
-    });
-  }
-
-  async function resolveTaskSessionReference(
-    task: Task,
-    project: Project,
-  ): Promise<ResolvedTaskSession> {
-    const owner = resolveTaskSessionOwner(task, agentOptions);
-    const fields = getTaskSessionFieldsByFamily(task, owner.family);
-    const projectLocation = resolveProjectLocation(project);
-    const projectPath = task.worktreePath ?? project.path;
-    let sessionId = fields.sessionId;
-    let sessionPath = fields.sessionPath;
-
-    if (!sessionId && sessionPath && projectLocation.kind === "local") {
-      try {
-        sessionId =
-          (await invoke<string | null>("read_session_id", {
-            sessionPath,
-            projectPath,
-            isCodex: owner.codexLike,
-            family: owner.family,
-          })) ?? undefined;
-      } catch (error) {
-        console.warn("read_session_id failed", error);
-      }
-    }
-
-    // 旧版本曾把自定义 Agent 的会话写入另一侧字段。先兼容确定的 ID/path，
-    // 再退回 prompt/时间匹配，避免在同一项目中误恢复到别的任务。
-    if (!sessionId && fields.legacySessionId) {
-      sessionId = fields.legacySessionId;
-      sessionPath = fields.legacySessionPath ?? sessionPath;
-    }
-    if (!sessionId && fields.legacySessionPath && projectLocation.kind === "local") {
-      try {
-        sessionId =
-          (await invoke<string | null>("read_session_id", {
-            sessionPath: fields.legacySessionPath,
-            projectPath,
-            isCodex: owner.codexLike,
-            family: owner.family,
-          })) ?? undefined;
-        if (sessionId) sessionPath = fields.legacySessionPath;
-      } catch (error) {
-        console.warn("read legacy session_id failed", error);
-      }
-    }
-
-    if (!sessionId && projectLocation.kind === "local" && !task.worktreeDiscarded) {
-      try {
-        const recovered = await invoke<{ sessionId: string; sessionPath: string } | null>(
-          "recover_task_session",
-          {
-            projectPath,
-            family: owner.family,
-            agent: owner.agent,
-            prompt: task.prompt,
-            createdAt: task.createdAt,
-            isCodex: owner.codexLike,
-          },
-        );
-        if (recovered) {
-          sessionId = recovered.sessionId;
-          sessionPath = recovered.sessionPath;
-        }
-      } catch (error) {
-        console.warn("recover_task_session failed", error);
-      }
-    }
-
-    return { sessionId, sessionPath };
-  }
-
-  async function handleResumeTask(
-    taskId: string,
-    { persistBeforeLaunch = false }: TaskLaunchOptions = {},
-  ) {
-    const task = tasksRef.current.find((item) => item.id === taskId);
-    if (!task) return false;
-    const project = projectsRef.current.find((item) => item.id === task.projectId);
-    if (!project) return false;
-
-    const owner = resolveTaskSessionOwner(task, agentOptions);
-    const session = await resolveTaskSessionReference(task, project);
-    // Session lookup can involve IPC and recovery scans. Do not apply or launch
-    // a stale resume after the user edits or deletes this task while it waits.
-    if (tasksRef.current.find((item) => item.id === taskId) !== task) return false;
-    if (!session.sessionId) {
-      showToast(t("running.resumeUnavailable"), "warning");
-      return false;
-    }
-
-    const taskWithSession: Task = {
-      ...applyResolvedTaskSession(task, owner, session),
-      // A normal resume returns to the Agent home that owns the saved session.
-      // Manual switching remains available when the user wants a different home.
-      agent: owner.agent,
-      status: "pending",
-      attentionRequestedAt: undefined,
-      failureReason: undefined,
-    };
-    setTasks((prev) => {
-      const next = prev.map((item) => (item.id === taskId ? taskWithSession : item));
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-    setActiveProject(project);
-    mountProject(project.id);
-    updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
-
-    if (persistBeforeLaunch) {
-      try {
-        await flushProjectTasksForRemoteLaunch(task.projectId);
-        if (tasksRef.current.find((item) => item.id === taskId) !== taskWithSession) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
-      } catch (error) {
-        setTasks((prev) => {
-          const next = prev.map((current) =>
-            current.id === taskId ? rollbackTaskMutation(current, task, taskWithSession) : current,
-          );
-          persistProjectTasks(
-            task.projectId,
-            next,
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
-          );
-          return next;
-        });
-        throw error;
-      }
-    }
-
-    tm.resetTaskTerminal(taskId);
-    setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
-    if (persistBeforeLaunch) {
-      // The remote broker has a finite wait. Start immediately after the
-      // durable commit; the terminal manager buffers output until xterm is
-      // ready, just like the create/todo paths.
-      invokeResumeTask(taskWithSession, project, session.sessionId!);
-    } else {
-      pendingTaskStartsRef.current[taskId] = () => {
-        invokeResumeTask(taskWithSession, project, session.sessionId!);
-      };
-    }
-    return true;
   }
 
   async function handleSwitchTaskConfig(
