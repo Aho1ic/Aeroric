@@ -65,6 +65,20 @@ export interface WebSocketLike {
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
+/**
+ * 主机在 WebSocket close frame 上给出的 typed 关闭原因。
+ * 为什么用 close reason 而不是握手/推送里新增字段:hello 与 e2ee_ready 两端都
+ * 按固定字段集合严格校验,多一个键就是解析失败,已发布的旧端会直接断连;
+ * close reason 是旧端从不读取的槽位,因此是唯一向后兼容的附加通道。
+ *
+ * signed-out:桌面端自己退出了登录。重试节奏不变(登录回来即可自愈),
+ * 但只有主机侧的人能结束它,所以原因必须能说出口。
+ */
+export type HostCloseReason = "signed-out";
+
+/** close reason 是对端可控的自由文本:只认完全匹配的已知成员。 */
+const knownHostCloseReasons: Record<HostCloseReason, true> = { "signed-out": true };
+
 export type PairingFailureKind =
   | "network"
   | "host_identity"
@@ -198,6 +212,11 @@ const INITIAL_BACKOFF = 1_000;
 // foreground event more than a moment after this round started should replace
 // an in-flight dial instead of waiting out its remaining timeout/backoff.
 const STALE_FOREGROUND_DIAL_MS = 2_000;
+// error 事件通常紧跟一个 close,而只有 close 带 typed 关闭原因。先给 close 留
+// 一小段宽限,否则笼统的传输错误会抢先拆掉 socket 回调,把"宿主已登出"这类
+// 可解释的原因盖成一次普通断线。宽限到期仍无 close(半开 socket)才按传输
+// 失败收尾,不必空等整个拨号超时。
+const ERROR_CLOSE_GRACE_MS = 250;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -310,6 +329,8 @@ export class RemoteConnection {
   private generation = 0;
   /** 当前竞速拨号轮次开始时间;用于前台恢复时识别被系统挂起的半开连接。 */
   private dialStartedAt: number | null = null;
+  /** 主机最近一次 close frame 上的 typed 原因;有连接认证成功后退休。 */
+  private lastHostCloseReason: HostCloseReason | null = null;
 
   private statusListeners = new Set<(status: ConnectionStatus) => void>();
   private pushListeners = new Set<(push: string, data: unknown, seq?: number) => void>();
@@ -318,6 +339,7 @@ export class RemoteConnection {
   private identityListeners = new Set<
     (identity: HostIdentity, connectedEndpoint: string | null) => void
   >();
+  private hostCloseReasonListeners = new Set<(reason: HostCloseReason) => void>();
   /** 竞速胜出的地址(用于把有效地址排到候选列表最前) */
   private activeEndpoint: string | null = null;
   private lastAuthError: string | null = null;
@@ -362,6 +384,14 @@ export class RemoteConnection {
     return this.lastAuthError;
   }
 
+  /**
+   * 主机最近一次 close frame 上给出的 typed 关闭原因(如 signed-out)。
+   * 与 authError 分开:登出不是凭证失效,重试仍然正确,只是原因可以说清。
+   */
+  get hostCloseReason(): HostCloseReason | null {
+    return this.lastHostCloseReason;
+  }
+
   get negotiatedRpcVersion(): RpcVersion {
     return this.rpcVersion;
   }
@@ -400,6 +430,15 @@ export class RemoteConnection {
   ): () => void {
     this.identityListeners.add(listener);
     return () => this.identityListeners.delete(listener);
+  }
+
+  /**
+   * 主机 typed 关闭原因的订阅。与 onStatusChange 分开分发:status 只能表达
+   * "断了",而原因必须在同一次 close 上立刻交出去,不能等下一次状态跳变。
+   */
+  onHostCloseReason(listener: (reason: HostCloseReason) => void): () => void {
+    this.hostCloseReasonListeners.add(listener);
+    return () => this.hostCloseReasonListeners.delete(listener);
   }
 
   /**
@@ -518,6 +557,8 @@ export class RemoteConnection {
       handshakeTimer: unknown | null;
       /** Orca sends auth after the E2EE ready frame; that response has its own deadline. */
       authTimer: unknown | null;
+      /** error 事件到 close 之间的宽限计时器(见 ERROR_CLOSE_GRACE_MS)。 */
+      errorTimer: unknown | null;
       error: string | null;
       messageChain: Promise<void>;
     };
@@ -528,9 +569,11 @@ export class RemoteConnection {
       this.clearAttemptTimeout(candidate.dialTimer);
       this.clearAttemptTimeout(candidate.handshakeTimer);
       this.clearAttemptTimeout(candidate.authTimer);
+      this.clearAttemptTimeout(candidate.errorTimer);
       candidate.dialTimer = null;
       candidate.handshakeTimer = null;
       candidate.authTimer = null;
+      candidate.errorTimer = null;
       candidate.ws.onopen = null;
       candidate.ws.onmessage = null;
       candidate.ws.onclose = null;
@@ -601,6 +644,8 @@ export class RemoteConnection {
       }
       this.racers = [candidate.ws];
       this.activeEndpoint = candidate.endpoint;
+      // 这条连接已经认证成功,上一次 close 的结论(如"宿主已登出")就此过期。
+      this.lastHostCloseReason = null;
     };
 
     const activate = (candidate: Candidate) => {
@@ -633,6 +678,7 @@ export class RemoteConnection {
         dialTimer: null,
         handshakeTimer: null,
         authTimer: null,
+        errorTimer: null,
         error: null,
         messageChain: Promise.resolve(),
       };
@@ -683,16 +729,34 @@ export class RemoteConnection {
           )
           .catch(() => undefined);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (generation !== this.generation) return;
+        // close 是唯一带 typed 原因的帧,先记下它:紧随其后的
+        // handleDisconnect/failCandidate 只知道"断了",拿不到原因。
+        this.clearAttemptTimeout(candidate.errorTimer);
+        candidate.errorTimer = null;
+        this.noteHostCloseReason(event?.reason);
         if (candidate.phase === "online") {
           this.handleDisconnect();
           return;
         }
         failCandidate(candidate, "connection closed before authentication");
       };
-      ws.onerror = () => {
-        // onerror 后通常伴随 onclose;这里不重复调度
+      ws.onerror = (event) => {
+        if (generation !== this.generation || candidate.errorTimer !== null) return;
+        // 先等 close 把 typed 原因带来再收尾(见 ERROR_CLOSE_GRACE_MS)。
+        const message = event?.message
+          ? `WebSocket error: ${event.message}`
+          : "WebSocket transport error";
+        candidate.errorTimer = this.setAttemptTimeout(() => {
+          candidate.errorTimer = null;
+          if (candidate.phase === "failed") return;
+          if (candidate.phase === "online") {
+            this.handleDisconnect();
+            return;
+          }
+          failCandidate(candidate, message);
+        }, ERROR_CLOSE_GRACE_MS);
       };
       if (generation !== this.generation) return;
       // Install the remaining handlers before `onopen`: a native bridge may
@@ -1273,6 +1337,15 @@ export class RemoteConnection {
 
   private noteValidatedInboundTraffic(): void {
     this.inboundSequence += 1;
+  }
+
+  /** 只有完全匹配的已知原因才记录并分发;其它文本按"未说明"处理。 */
+  private noteHostCloseReason(reason: unknown): void {
+    if (typeof reason !== "string") return;
+    const known = reason as HostCloseReason;
+    if (knownHostCloseReasons[known] !== true) return;
+    this.lastHostCloseReason = known;
+    this.hostCloseReasonListeners.forEach((listener) => listener(known));
   }
 
   private setStatus(status: ConnectionStatus): void {

@@ -296,6 +296,16 @@ class FakeWebSocket implements WebSocketLike {
   dropped(): void {
     this.onclose?.();
   }
+
+  /** 带 typed 关闭原因的 close frame(桌面端登出等)。 */
+  droppedWith(reason: string, code = 1000): void {
+    this.onclose?.({ code, reason });
+  }
+
+  /** RN/浏览器在 close 之前常先派发一个不带原因的 error 事件。 */
+  errored(message?: string): void {
+    this.onerror?.(message === undefined ? {} : { message });
+  }
 }
 
 /** A native bridge can invoke an assigned `onopen` handler synchronously. */
@@ -794,6 +804,80 @@ describe("RemoteConnection", () => {
     winner.dropped();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.urls.length).toBe(8);
+  });
+
+  it("keeps the typed close reason when onerror fires before the close frame", async () => {
+    const h = createHarness();
+    const reasons: string[] = [];
+    h.conn.onHostCloseReason((reason) => reasons.push(reason));
+    const winner = await goOnline(h);
+    const socketsBefore = h.sockets.length;
+
+    // RN 先派发 error;它一旦立刻收尾就会拆掉 onclose,typed 原因永远到不了。
+    winner.errored();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(winner.closed).toBe(false);
+    expect(h.conn.status).toBe("online");
+    expect(reasons).toEqual([]);
+
+    winner.droppedWith("signed-out");
+    expect(reasons).toEqual(["signed-out"]);
+    expect(h.conn.hostCloseReason).toBe("signed-out");
+    expect(h.conn.status).toBe("reconnecting");
+
+    // 迟到的 onerror 不能把已经拿到的 typed 原因盖成一次笼统断线,
+    // 宽限计时器也已随 close 撤销:不会再补一次传输失败。
+    winner.errored("socket closed");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(reasons).toEqual(["signed-out"]);
+    expect(h.conn.hostCloseReason).toBe("signed-out");
+    expect(h.sockets.length).toBe(socketsBefore);
+  });
+
+  it("gives up on an errored socket that never closes without waiting out the dial timeout", async () => {
+    const h = createHarness({ dialTimeoutMs: 10_000 });
+    h.conn.start();
+    h.sockets[0].errored("connection refused");
+    h.sockets[1].errored("connection refused");
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(h.conn.status).toBe("connecting");
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.conn.status).toBe("reconnecting");
+    expect(h.conn.authError).toContain("connection refused");
+    expect(h.conn.hostCloseReason).toBeNull();
+  });
+
+  it("retires the host close reason once a later round authenticates", async () => {
+    const h = createHarness();
+    const winner = await goOnline(h);
+    winner.droppedWith("signed-out");
+    expect(h.conn.hostCloseReason).toBe("signed-out");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const replacement = h.sockets[2];
+    replacement.open();
+    await flush();
+    replacement.acceptHandshake(h.serverKeys);
+    await flush();
+    replacement.replyOk({ deviceId: "d1" });
+    await flush();
+
+    expect(h.conn.status).toBe("online");
+    expect(h.conn.hostCloseReason).toBeNull();
+  });
+
+  it("ignores close reasons outside the known set", async () => {
+    const h = createHarness();
+    const reasons: string[] = [];
+    h.conn.onHostCloseReason((reason) => reasons.push(reason));
+    const winner = await goOnline(h);
+
+    winner.droppedWith("Signed-Out; toString");
+    expect(reasons).toEqual([]);
+    expect(h.conn.hostCloseReason).toBeNull();
+    expect(h.conn.status).toBe("reconnecting");
   });
 
   it("ignores a delayed binary frame from an obsolete connection generation", async () => {

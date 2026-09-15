@@ -41,6 +41,7 @@ const zh = {
   "home.online": "已连接",
   "home.connecting": "连接中…",
   "home.reconnecting": "连接已断开,自动重连中…",
+  "home.hostSignedOut": "电脑端已退出登录,登录后会自动恢复连接",
   "home.authExpired": "授权已失效,请重新配对",
   "home.rePairAction": "重新配对",
   "home.rePair": "此主机是旧版本配对的(未启用加密),请删除后重新扫码配对",
@@ -317,6 +318,7 @@ const en: Record<MessageKey, string> = {
   "home.online": "Connected",
   "home.connecting": "Connecting…",
   "home.reconnecting": "Connection lost — reconnecting…",
+  "home.hostSignedOut": "Signed out on the computer — reconnects once you sign back in",
   "home.authExpired": "Authorization expired — pair again",
   "home.rePairAction": "Pair again",
   "home.rePair":

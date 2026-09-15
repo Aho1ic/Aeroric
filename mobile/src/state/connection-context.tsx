@@ -11,7 +11,11 @@ import {
 } from "react";
 import { AppState } from "react-native";
 import { t } from "../i18n";
-import { RemoteConnection, type ConnectionStatus } from "../transport/remote-connection";
+import {
+  RemoteConnection,
+  type ConnectionStatus,
+  type HostCloseReason,
+} from "../transport/remote-connection";
 import type { RpcCapability, RpcVersion } from "../transport/rpc-codec";
 import { subscribeForegroundConnectionRecovery } from "./foreground-recovery";
 import { useHosts } from "./hosts-context";
@@ -19,6 +23,11 @@ import { useHosts } from "./hosts-context";
 interface ConnectionContextValue {
   status: ConnectionStatus;
   authError: string | null;
+  /**
+   * 主机最近一次 close frame 上给出的 typed 原因(如 signed-out)。
+   * 与 authError 分开:登出不是凭证失效,自动重连仍然正确,只是停摆的原因在主机那头。
+   */
+  hostCloseReason: HostCloseReason | null;
   /** 当前主机实际协商的 RPC 版本与能力，离线时回到空能力。 */
   rpcVersion: RpcVersion;
   capabilities: readonly RpcCapability[];
@@ -39,6 +48,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const connRef = useRef<RemoteConnection | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [hostCloseReason, setHostCloseReason] = useState<HostCloseReason | null>(null);
   const [rpcVersion, setRpcVersion] = useState<RpcVersion>(2);
   const [capabilities, setCapabilities] = useState<readonly RpcCapability[]>([]);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -72,6 +82,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       connRef.current = null;
       setStatus("idle");
       setAuthError(null);
+      setHostCloseReason(null);
       setRpcVersion(2);
       setCapabilities([]);
       setCapabilitiesReady(false);
@@ -83,6 +94,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       connRef.current = null;
       setStatus("unauthorized");
       setAuthError(t("home.rePair"));
+      setHostCloseReason(null);
       setRpcVersion(2);
       setCapabilities([]);
       setCapabilitiesReady(false);
@@ -98,11 +110,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offStatus = conn.onStatusChange((next) => {
       setStatus(next);
       setAuthError(conn.authError);
+      // online 说明这一轮已认证成功,上一次 close 的结论就此过期。显式判断而不是
+      // 只读 getter:两条握手路径里「清位」与「状态分发」的先后顺序并不一致。
+      setHostCloseReason(next === "online" ? null : conn.hostCloseReason);
       if (next !== "online" && next !== "authenticating") {
         setRpcVersion(2);
         setCapabilities([]);
         setCapabilitiesReady(false);
       }
+    });
+    // 原因必须在同一次 close 上立刻透出:status 只能表达“断了”,说不出为什么。
+    const offCloseReason = conn.onHostCloseReason((reason) => {
+      setHostCloseReason(reason);
     });
     const offAuth = conn.onAuthSuccess((auth) => {
       setRpcVersion(conn.negotiatedRpcVersion);
@@ -134,10 +153,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       offPush();
       offBinary();
       offIdentity();
+      offCloseReason();
       conn.stop();
       setRpcVersion(2);
       setCapabilities([]);
       setCapabilitiesReady(false);
+      // 上一台主机的登出结论不能贴到下一台主机头上
+      setHostCloseReason(null);
       if (connRef.current === conn) connRef.current = null;
     };
   }, [hostKey]);
@@ -152,6 +174,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       authError,
+      hostCloseReason,
       rpcVersion,
       capabilities,
       capabilitiesReady,
@@ -171,7 +194,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         return () => binaryListeners.current.delete(listener);
       },
     }),
-    [authError, capabilities, capabilitiesReady, rpcVersion, status],
+    [authError, capabilities, capabilitiesReady, hostCloseReason, rpcVersion, status],
   );
 
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;

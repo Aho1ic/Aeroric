@@ -15,6 +15,7 @@ import { useHostStats } from "../src/state/use-host-stats";
 import { useHosts } from "../src/state/hosts-context";
 import { useHostTasks, type ProjectTasks } from "../src/state/use-host-tasks";
 import type { Task } from "../src/types";
+import { connectionBannerMeta } from "../src/ui/connection-banner";
 import { formatCount, formatDuration } from "../src/ui/format-duration";
 import {
   UNGROUPED_PROJECT_GROUP,
@@ -25,28 +26,17 @@ import { radii, spacing, theme, typography } from "../src/ui/theme";
 import { AnimatedPressable } from "../src/ui/AnimatedPressable";
 
 function ConnectionBanner() {
-  const { status, authError } = useConnection();
-  const meta = useMemo(() => {
-    switch (status) {
-      case "online":
-        return { text: t("home.online"), color: theme.success };
-      case "connecting":
-      case "authenticating":
-        return { text: t("home.connecting"), color: theme.accent };
-      case "reconnecting":
-        return { text: t("home.reconnecting"), color: theme.warning };
-      case "unauthorized":
-        return { text: authError ?? t("home.authExpired"), color: theme.danger };
-      default:
-        return null;
-    }
-  }, [authError, status]);
+  const { status, authError, hostCloseReason } = useConnection();
+  const meta = useMemo(
+    () => connectionBannerMeta({ status, authError, hostCloseReason }),
+    [authError, hostCloseReason, status],
+  );
   if (!meta) return null;
   return (
     <View style={styles.banner}>
       <View style={[styles.bannerDot, { backgroundColor: meta.color }]} />
       <Text style={[styles.bannerText, { color: meta.color }]}>{meta.text}</Text>
-      {status === "unauthorized" ? (
+      {meta.showRePair ? (
         <Link href="/pair" asChild>
           <AnimatedPressable hitSlop={8}>
             <Text style={styles.bannerAction}>{t("home.rePairAction")}</Text>
