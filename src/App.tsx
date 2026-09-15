@@ -26,7 +26,6 @@ import type {
 import {
   isActiveTaskStatus,
   isArchivableTaskStatus,
-  isTerminalTaskStatus,
   resolveProjectLocation,
   sshProjectPath,
 } from "./types";
@@ -61,7 +60,7 @@ import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
-import { taskCommandByKind } from "./lib/api/session";
+import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
   APP_SHELL_COMMANDS,
@@ -72,10 +71,22 @@ import {
   SSH_CONNECTION_COMMANDS,
   TASK_PROCESS_COMMANDS,
 } from "./lib/api/appCommands";
-import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
 import { useProjectsStore, useTasksStore } from "./state/app";
+import {
+  applyTaskStatusTransition,
+  cancelTaskInvoke,
+  launchLocalTask,
+  launchSshTask,
+  launchWslTask,
+  persistTaskStatusChange,
+  resumeDshTask,
+  resumeLocalTask,
+  resumeSshTask,
+  resumeWslTask,
+  type TaskLaunchDeps,
+} from "./state/app";
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
@@ -120,7 +131,6 @@ import {
   flushProjectTasks,
   PROJECT_RAIL_WIDTH_STORAGE_KEY,
   SELECTED_CONDA_ENV_KEY,
-  shouldIgnoreTaskStatusTransition,
   upsertWslProject,
   type ProjectViewState,
 } from "./appProjectState";
@@ -1294,6 +1304,15 @@ function AppShell() {
     setHubMode(false);
   }
 
+  function taskLaunchDeps(): TaskLaunchDeps {
+    return {
+      createOutputChannel: tm.createOutputChannel,
+      writeErrorToTerminal: tm.writeErrorToTerminal,
+      terminalSize: tm.terminalSizeRef.current,
+      onFailed: (taskId, message) => updateTaskStatus(taskId, "failed", undefined, message),
+    };
+  }
+
   function invokeRunTask(
     task: Task,
     projectPath: string,
@@ -1303,47 +1322,14 @@ function AppShell() {
     promptOverride?: string,
   ) {
     manuallyCompletedDshTasksRef.current.delete(task.id);
-    if (agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
-      invoke(DSH_TASK_COMMANDS.run, {
-        taskId: task.id,
-        agent: task.agent,
-        projectPath,
-        prompt: promptOverride ?? task.prompt,
-        sessionId: task.dshSessionId,
-        agentPreset: task.dshAgentPreset,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        permissionMode: task.permissionMode,
-        images,
-        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
-      });
-      return;
-    }
-    invoke(taskCommandByKind("local", "run"), {
-      taskId: task.id,
+    launchLocalTask(taskLaunchDeps(), {
+      task,
       projectPath,
-      prompt: promptOverride ?? task.prompt,
-      createdAt: task.createdAt,
-      agent: task.agent,
-      selectedModel: task.selectedModel,
-      reasoningEffort: task.reasoningEffort,
-      speed: task.speed,
-      permissionMode: task.permissionMode,
       images,
       texts,
-      forcePromptInjection: injectPromptIntoTerminal,
-      cols: tm.terminalSizeRef.current.cols,
-      rows: tm.terminalSizeRef.current.rows,
-      onOutput: tm.createOutputChannel(task.id),
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
+      injectPromptIntoTerminal,
+      promptOverride,
+      isDsh: agentFamily(task.agent, agentOptionsRef.current) === "dsh",
     });
   }
 
@@ -1354,24 +1340,12 @@ function AppShell() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    invoke(taskCommandByKind("ssh", "run"), {
-      taskId: task.id,
+    launchSshTask(taskLaunchDeps(), {
+      task,
       connection,
       remoteProjectPath,
-      prompt: promptOverride ?? task.prompt,
-      agent: task.agent,
-      selectedModel: task.selectedModel,
-      reasoningEffort: task.reasoningEffort,
-      speed: task.speed,
-      permissionMode: task.permissionMode,
-      forcePromptInjection: injectPromptIntoTerminal,
-      cols: tm.terminalSizeRef.current.cols,
-      rows: tm.terminalSizeRef.current.rows,
-      onOutput: tm.createOutputChannel(task.id),
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
+      injectPromptIntoTerminal,
+      promptOverride,
     });
   }
 
@@ -1382,24 +1356,12 @@ function AppShell() {
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    invoke(taskCommandByKind("wsl", "run"), {
-      taskId: task.id,
+    launchWslTask(taskLaunchDeps(), {
+      task,
       distribution,
       linuxProjectPath,
-      prompt: promptOverride ?? task.prompt,
-      agent: task.agent,
-      selectedModel: task.selectedModel,
-      reasoningEffort: task.reasoningEffort,
-      speed: task.speed,
-      permissionMode: task.permissionMode,
-      forcePromptInjection: injectPromptIntoTerminal,
-      cols: tm.terminalSizeRef.current.cols,
-      rows: tm.terminalSizeRef.current.rows,
-      onOutput: tm.createOutputChannel(task.id),
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
+      injectPromptIntoTerminal,
+      promptOverride,
     });
   }
 
@@ -1759,26 +1721,18 @@ function AppShell() {
     const task = tasks.find((t) => t.id === taskId);
     const project = projects.find((p) => p.id === task?.projectId);
     const projectLocation = project ? resolveProjectLocation(project) : null;
-    if (projectLocation?.kind === "ssh") {
-      invoke(taskCommandByKind("ssh", "cancel"), { taskId }).catch((e: unknown) => {
-        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-      });
-      return;
-    }
-    if (projectLocation?.kind === "wsl") {
-      invoke(taskCommandByKind("wsl", "cancel"), { taskId }).catch((e: unknown) => {
-        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-      });
-      return;
-    }
-    if (task && agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
-      invoke(DSH_TASK_COMMANDS.cancel, { taskId }).catch((e: unknown) => {
-        showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-      });
-      return;
-    }
-    const projectPath = task?.worktreePath ?? project?.path ?? "";
-    invoke(taskCommandByKind("local", "cancel"), { taskId, projectPath }).catch((e: unknown) => {
+    const target =
+      projectLocation?.kind === "ssh"
+        ? ({ kind: "ssh" } as const)
+        : projectLocation?.kind === "wsl"
+          ? ({ kind: "wsl" } as const)
+          : task && agentFamily(task.agent, agentOptionsRef.current) === "dsh"
+            ? ({ kind: "dsh" } as const)
+            : ({
+                kind: "local",
+                projectPath: task?.worktreePath ?? project?.path ?? "",
+              } as const);
+    cancelTaskInvoke(taskId, target).catch((e: unknown) => {
       showToast(t("toast.cancelTaskFailed", { error: String(e) }));
     });
   }
@@ -1786,26 +1740,12 @@ function AppShell() {
   function invokeResumeTask(task: Task, project: Project, sessionId: string) {
     manuallyCompletedDshTasksRef.current.delete(task.id);
     const projectLocation = resolveProjectLocation(project);
+    const deps = taskLaunchDeps();
     if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "dsh") {
-      invoke(DSH_TASK_COMMANDS.run, {
-        taskId: task.id,
-        agent: task.agent,
+      resumeDshTask(deps, {
+        task,
         projectPath: task.worktreePath ?? project.path,
-        // Reconnect the persistent DSH session without replaying the original
-        // user message; subsequent input goes through the DSH composer.
-        prompt: "",
         sessionId,
-        agentPreset: task.dshAgentPreset,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        permissionMode: task.permissionMode,
-        images: [],
-        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
       });
       return;
     }
@@ -1816,64 +1756,27 @@ function AppShell() {
         updateTaskStatus(task.id, "failed", undefined, t("toast.remoteProjectMissingConnection"));
         return;
       }
-      invoke(taskCommandByKind("ssh", "resume"), {
-        taskId: task.id,
+      resumeSshTask(deps, {
+        task,
         connection,
         remoteProjectPath: projectLocation.remotePath,
-        agent: task.agent,
         sessionId,
-        permissionMode: task.permissionMode,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        speed: task.speed,
-        cols: tm.terminalSizeRef.current.cols,
-        rows: tm.terminalSizeRef.current.rows,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
       });
       return;
     }
     if (projectLocation.kind === "wsl") {
-      invoke(taskCommandByKind("wsl", "resume"), {
-        taskId: task.id,
+      resumeWslTask(deps, {
+        task,
         distribution: projectLocation.distribution,
         linuxProjectPath: projectLocation.linuxPath,
-        agent: task.agent,
         sessionId,
-        permissionMode: task.permissionMode,
-        selectedModel: task.selectedModel,
-        reasoningEffort: task.reasoningEffort,
-        speed: task.speed,
-        cols: tm.terminalSizeRef.current.cols,
-        rows: tm.terminalSizeRef.current.rows,
-        onOutput: tm.createOutputChannel(task.id),
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-        updateTaskStatus(task.id, "failed", undefined, msg);
       });
       return;
     }
-    invoke(taskCommandByKind("local", "resume"), {
-      taskId: task.id,
+    resumeLocalTask(deps, {
+      task,
       projectPath: task.worktreePath ?? project.path,
-      agent: task.agent,
       sessionId,
-      prompt: task.prompt,
-      permissionMode: task.permissionMode,
-      selectedModel: task.selectedModel,
-      reasoningEffort: task.reasoningEffort,
-      speed: task.speed,
-      cols: tm.terminalSizeRef.current.cols,
-      rows: tm.terminalSizeRef.current.rows,
-      onOutput: tm.createOutputChannel(task.id),
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
     });
   }
 
@@ -2751,48 +2654,23 @@ function AppShell() {
     failureReason?: string,
   ) {
     setTasks((prev) => {
-      let changed = false;
-      const next = prev.map((task) => {
-        if (task.id !== taskId) return task;
-        if (shouldIgnoreTaskStatusTransition(task.status, status)) return task;
-
-        const attentionRequestedAt =
-          status === "input_required" ? (extra?.attentionRequestedAt ?? Date.now()) : undefined;
-
-        // 已有值不刷新:failed → cancelled 之类的二次跃迁不应改写结束时间。
-        // 离开终态(续跑)清空,否则续跑后的任务会被当成早已结束。
-        const completedAt = isTerminalTaskStatus(status)
-          ? (task.completedAt ?? Date.now())
-          : undefined;
-
-        if (
-          task.status === status &&
-          task.attentionRequestedAt === attentionRequestedAt &&
-          task.completedAt === completedAt
-        ) {
-          return task;
-        }
-
-        changed = true;
-        const updated: Task = { ...task, status, attentionRequestedAt, completedAt };
-        if (status === "failed" && failureReason) updated.failureReason = failureReason;
-        return updated;
-      });
-
-      if (changed) {
-        const task = next.find((t) => t.id === taskId);
-        if (task)
-          persistProjectTasks(
-            task.projectId,
-            next,
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
-          );
-        if (task && status === "done") {
-          void flushProjectTasks(task.projectId).catch((error: unknown) => {
-            console.error("Failed to flush completed task", error);
-          });
-        }
+      const { tasks: next, changed, task } = applyTaskStatusTransition(
+        prev,
+        taskId,
+        status,
+        extra,
+        failureReason,
+      );
+      if (changed && task) {
+        persistTaskStatusChange(
+          {
+            showToast: showToastRef.current,
+            formatSaveTasksError: formatSaveTasksErrorRef.current,
+          },
+          next,
+          taskId,
+          status,
+        );
       }
       return changed ? next : prev;
     });

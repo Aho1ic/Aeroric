@@ -4,3 +4,15 @@ export { useAppearanceStore } from "./appearanceStore";
 export { AppProviders } from "./AppProviders";
 export { AppOpsProvider, useProjectOps, useTaskOps } from "./AppOpsProvider";
 export type { ProjectOps, TaskOps } from "./AppOpsProvider";
+export {
+  launchLocalTask,
+  launchSshTask,
+  launchWslTask,
+  cancelTaskInvoke,
+  resumeDshTask,
+  resumeSshTask,
+  resumeWslTask,
+  resumeLocalTask,
+  type TaskLaunchDeps,
+} from "./taskLaunch";
+export { applyTaskStatusTransition, persistTaskStatusChange } from "./taskStatus";
