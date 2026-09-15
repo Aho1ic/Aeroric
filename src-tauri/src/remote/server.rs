@@ -22,7 +22,8 @@ use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
-use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message, WebSocketConfig};
 use tokio_tungstenite::WebSocketStream;
 
 use super::auth::AuthOutcome;
@@ -45,6 +46,18 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// 每连接出口队列上限。终端消费者持续落后时主动断连，重连后由快照恢复，
 /// 避免慢客户端无限占用桌面内存。
 const OUTBOUND_QUEUE_CAPACITY: usize = 256;
+/// Typed close reason for intentional host shutdown (user stops remote access
+/// or quits the desktop). Mobile surfaces this as "电脑端已退出登录" instead of
+/// a generic reconnect blurb. Device revoke and queue-full disconnects must
+/// keep using a reason-less Close — those are not a host sign-out.
+const HOST_SIGNED_OUT_CLOSE_REASON: &str = "signed-out";
+
+fn host_signed_out_close() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: CloseCode::Normal,
+        reason: HOST_SIGNED_OUT_CLOSE_REASON.into(),
+    }))
+}
 
 // ── 在线客户端注册表 ─────────────────────────────────────────────────────────
 
@@ -1013,14 +1026,18 @@ pub(crate) async fn serve_ws<R, S>(
     let mut last_inbound = Instant::now();
 
     loop {
-        if *shutdown.borrow() || *disconnect_rx.borrow() {
+        if *shutdown.borrow() {
+            let _ = sink.send(host_signed_out_close()).await;
+            break;
+        }
+        if *disconnect_rx.borrow() {
             let _ = sink.send(Message::Close(None)).await;
             break;
         }
         tokio::select! {
             biased;
             _ = shutdown.changed() => {
-                let _ = sink.send(Message::Close(None)).await;
+                let _ = sink.send(host_signed_out_close()).await;
                 break;
             }
             changed = disconnect_rx.changed() => {

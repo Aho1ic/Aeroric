@@ -21,6 +21,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::storage::{
@@ -70,22 +71,41 @@ pub struct StaticKeys {
 impl StaticKeys {
     /// 读取或首次生成静态密钥对;私钥文件 0600。
     pub fn load_or_create() -> Result<Self, String> {
-        let path = aeroric_dir()?.join("remote-keypair.json");
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            ensure_private_file_permissions(&path)?;
-            if let Ok(file) = serde_json::from_str::<KeypairFile>(&raw) {
-                if let Ok(bytes) = URL_SAFE_NO_PAD.decode(&file.secret) {
-                    if let Ok(arr) = <[u8; 32]>::try_from(bytes) {
-                        let secret = StaticSecret::from(arr);
-                        let public = PublicKey::from(&secret);
-                        return Ok(Self { secret, public });
+        Self::load_or_create_at(&aeroric_dir()?.join("remote-keypair.json"))
+    }
+
+    /// `load_or_create` 的可注入路径版本(单元测试用临时目录)。
+    fn load_or_create_at(path: &Path) -> Result<Self, String> {
+        match std::fs::read_to_string(path) {
+            Ok(raw) => {
+                ensure_private_file_permissions(path)?;
+                if let Ok(file) = serde_json::from_str::<KeypairFile>(&raw) {
+                    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(&file.secret) {
+                        if let Ok(arr) = <[u8; 32]>::try_from(bytes) {
+                            let secret = StaticSecret::from(arr);
+                            let public = PublicKey::from(&secret);
+                            return Ok(Self { secret, public });
+                        }
                     }
                 }
+                return Err(format!(
+                    "Corrupted remote keypair file: {} (delete it to re-pair all devices)",
+                    path.display()
+                ));
             }
-            return Err(format!(
-                "Corrupted remote keypair file: {} (delete it to re-pair all devices)",
-                path.display()
-            ));
+            // 只有"文件不存在"才允许生成新密钥对。读不到内容(权限被改、文件被
+            // 独占锁住、I/O 错误)说明文件可能仍在原地,而 atomic_write_private
+            // 是"临时文件 + rename",不需要读权限就能覆盖掉它。所有已配对设备的
+            // 共享密钥都从这把私钥派生,静默重建等于把它们全部解绑,而且旧密钥
+            // 无法找回。宁可启动失败让用户看到原因。
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(format!(
+                    "Cannot read the remote keypair file: {} ({error}). \
+                     Refusing to regenerate it, which would un-pair every device.",
+                    path.display()
+                ));
+            }
+            Err(_) => {}
         }
         let keys = Self::ephemeral()?;
         if let Some(parent) = path.parent() {
@@ -96,7 +116,7 @@ impl StaticKeys {
             public: keys.public_b64(),
         };
         let raw = serde_json::to_string(&file).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
+        atomic_write_private(path, &raw)?;
         Ok(keys)
     }
 
@@ -401,5 +421,123 @@ mod tests {
         let keys = StaticKeys::ephemeral().unwrap();
         assert_eq!(keys.host_id(), keys.host_id());
         assert_eq!(keys.host_id().len(), 22); // 16 bytes → 22 chars base64url
+    }
+
+    /// 项目里没有 `tempfile` dev-dependency,沿用 `path_guard` 等测试的
+    /// `temp_dir() + pid + thread id` 唯一目录约定。
+    struct ScopedDir(std::path::PathBuf);
+
+    impl ScopedDir {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "aeroric-keypair-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create scoped dir");
+            Self(path)
+        }
+
+        fn keypair_path(&self) -> std::path::PathBuf {
+            self.0.join("remote-keypair.json")
+        }
+    }
+
+    impl Drop for ScopedDir {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // chmod 000 的用例要先放开权限,否则整棵目录删不掉。
+                let _ = std::fs::set_permissions(
+                    self.keypair_path(),
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn missing_keypair_file_is_generated_and_then_reused() {
+        let dir = ScopedDir::new("create");
+        let path = dir.keypair_path();
+
+        let created = StaticKeys::load_or_create_at(&path).expect("generate keypair");
+        assert!(path.exists(), "首次调用必须落盘");
+        let persisted = std::fs::read_to_string(&path).expect("read keypair");
+
+        // 第二次调用读旧文件:公钥不变,文件字节也不能被重写。
+        let reloaded = StaticKeys::load_or_create_at(&path).expect("reload keypair");
+        assert_eq!(reloaded.public_b64(), created.public_b64());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), persisted);
+    }
+
+    /// 文件存在但读不出内容时必须报错,而不是生成新密钥对——
+    /// `atomic_write_private` 走"临时文件 + rename",不需要读权限就能覆盖掉
+    /// 唯一的私钥副本,把所有已配对设备解绑。
+    #[test]
+    fn unreadable_keypair_file_is_never_regenerated() {
+        let dir = ScopedDir::new("unreadable");
+        let path = dir.keypair_path();
+        let original = StaticKeys::load_or_create_at(&path).expect("seed keypair");
+        let before = std::fs::read(&path).expect("read seeded keypair");
+
+        // 造"不可读":Unix 用 chmod 000(真实的权限被改场景);root 会绕过
+        // 权限位,此时退回"目录占位"——两者对 read_to_string 都不是 NotFound,
+        // 表达的是同一个语义:文件在那儿,但内容拿不到。
+        #[cfg(unix)]
+        let blocked_by_mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+                .expect("chmod 000");
+            std::fs::read_to_string(&path).is_err()
+        };
+        #[cfg(not(unix))]
+        let blocked_by_mode = false;
+
+        if !blocked_by_mode {
+            std::fs::remove_file(&path).expect("clear seeded keypair");
+            std::fs::create_dir(&path).expect("place a directory where the file belongs");
+        }
+
+        // StaticKeys 故意不实现 Debug(私钥不能进日志),所以不能用 expect_err。
+        let Err(err) = StaticKeys::load_or_create_at(&path) else {
+            panic!("must refuse to regenerate an unreadable keypair");
+        };
+        assert!(
+            err.contains("Refusing to regenerate"),
+            "错误必须说明拒绝重建,实际:{err}"
+        );
+
+        if blocked_by_mode {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("restore mode");
+            }
+            assert_eq!(
+                std::fs::read(&path).expect("read keypair back"),
+                before,
+                "原私钥必须原样留在盘上"
+            );
+            assert_eq!(
+                StaticKeys::load_or_create_at(&path)
+                    .expect("reload after permissions are restored")
+                    .public_b64(),
+                original.public_b64(),
+                "权限修好后必须还是同一把密钥"
+            );
+        }
+
+        // 拒绝路径不能留下任何 `.remote-keypair.json.<pid>.tmp` 半成品。
+        let leftovers: Vec<_> = std::fs::read_dir(&dir.0)
+            .expect("list scoped dir")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name != "remote-keypair.json")
+            .collect();
+        assert!(leftovers.is_empty(), "拒绝路径留下了临时文件:{leftovers:?}");
     }
 }

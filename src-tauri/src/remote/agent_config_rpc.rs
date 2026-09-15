@@ -46,6 +46,7 @@ fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {
         "models": profile.models,
         "enable1mContext": profile.enable_1m_context,
         "enableChatCompletionsProxy": profile.enable_chat_completions_proxy,
+        "disableArtifactTool": profile.disable_artifact_tool,
         "proxyEnabled": proxy_enabled,
     })
 }
@@ -216,6 +217,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
     let enable_1m_context = bool_param(&params, "enable1mContext")?;
     let enable_chat_completions_proxy = bool_param(&params, "enableChatCompletionsProxy")?;
     let proxy_enabled = bool_param(&params, "proxyEnabled")?;
+    let disable_artifact_tool = bool_param(&params, "disableArtifactTool")?;
 
     if matches!(id.as_str(), "claude" | "codex" | "dsh") {
         let update_id = id.clone();
@@ -246,6 +248,7 @@ pub(crate) async fn agent_config_save<R: Runtime>(
             clear_api_key,
             models,
             enable_1m_context,
+            disable_artifact_tool,
             enable_chat_completions_proxy,
             None,
             proxy_enabled,
@@ -356,6 +359,7 @@ pub(crate) async fn agent_config_create<R: Runtime>(
         model: models[0].clone(),
         models,
         enable_1m_context: bool_param(&params, "enable1mContext")?.unwrap_or(false),
+        disable_artifact_tool: bool_param(&params, "disableArtifactTool")?.unwrap_or(false),
         enable_chat_completions_proxy: bool_param(&params, "enableChatCompletionsProxy")?
             .unwrap_or(false),
         bridge_python_path: text_param(&params, "bridgePythonPath", MAX_BRIDGE_PYTHON_PATH_LEN)?
@@ -424,6 +428,7 @@ mod tests {
             api_key: "secret-value".to_string(),
             models: vec!["model".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -448,6 +453,7 @@ mod tests {
             api_key: String::new(),
             models: vec!["deepseek-v4-pro".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
@@ -491,6 +497,7 @@ mod tests {
             api_key: String::new(),
             models: vec!["gpt-5.3-codex".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: false,
             bridge_python_path: String::new(),
             username: String::new(),
