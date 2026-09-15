@@ -2458,15 +2458,36 @@ mod tests {
             run_git_check(&repo_path, &["config", "user.name", "Aeroric Test"]).unwrap();
         }
 
+        /// Parent-process `GIT_AUTHOR_*` / `GIT_COMMITTER_*` override repo
+        /// `user.name`/`user.email`. Strip them so commits and blame assertions
+        /// stay deterministic on developer machines that export a global identity.
+        fn run_git_for_test(&self, args: &[&str]) {
+            let mut command = Command::new("git");
+            command
+                .current_dir(&self.path)
+                .env_remove("GIT_AUTHOR_NAME")
+                .env_remove("GIT_AUTHOR_EMAIL")
+                .env_remove("GIT_AUTHOR_DATE")
+                .env_remove("GIT_COMMITTER_NAME")
+                .env_remove("GIT_COMMITTER_EMAIL")
+                .env_remove("GIT_COMMITTER_DATE")
+                .args(args);
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
         fn commit_file(&self, file_path: &str, content: &str, message: &str) {
-            let repo_path = self.path_string();
             let path = self.path.join(file_path);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
             fs::write(path, content).unwrap();
-            run_git_check(&repo_path, &["add", file_path]).unwrap();
-            run_git_check(&repo_path, &["commit", "-m", message]).unwrap();
+            self.run_git_for_test(&["add", file_path]);
+            self.run_git_for_test(&["commit", "-m", message]);
         }
     }
 

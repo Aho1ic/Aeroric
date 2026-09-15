@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRef } from "react";
 import { I18nProvider } from "../i18n";
 import type { ShellTerminalPanelHandle, ShellSession } from "../components/ShellTerminalPanel";
@@ -144,6 +144,10 @@ beforeEach(() => {
   eventState.deferUnlisten = false;
   invoke.mockReset();
   invoke.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("deriveShellTerminalFontSize", () => {

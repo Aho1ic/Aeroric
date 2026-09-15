@@ -997,23 +997,30 @@ fn spawn_remote_task_pty(
     );
     if needs_initial_input {
         if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
-            let signals = Arc::clone(&task_manager.initial_input_signals);
-            let cleanup_id = task_id.to_string();
-            let cleanup_generation =
-                startup_generation.expect("initial input registration must exist");
-            crate::pty::spawn_initial_input_injection(
-                writer,
-                initial_prelude,
-                initial_prompt,
-                startup_rx,
-                Some(Box::new(move || {
-                    crate::pty::clear_initial_input_signal_if_current(
-                        &signals,
-                        &cleanup_id,
-                        cleanup_generation,
+            match startup_generation {
+                Some(cleanup_generation) => {
+                    let signals = Arc::clone(&task_manager.initial_input_signals);
+                    let cleanup_id = task_id.to_string();
+                    crate::pty::spawn_initial_input_injection(
+                        writer,
+                        initial_prelude,
+                        initial_prompt,
+                        startup_rx,
+                        Some(Box::new(move || {
+                            crate::pty::clear_initial_input_signal_if_current(
+                                &signals,
+                                &cleanup_id,
+                                cleanup_generation,
+                            );
+                        })),
                     );
-                })),
-            );
+                }
+                None => {
+                    // Registration should always succeed when needs_initial_input,
+                    // but a missing generation must not panic a live SSH session.
+                    crate::pty::cancel_initial_input_signal(task_manager, task_id);
+                }
+            }
         } else {
             crate::pty::cancel_initial_input_signal(task_manager, task_id);
         }

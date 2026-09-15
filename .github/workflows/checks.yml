@@ -225,6 +225,9 @@ jobs:
       - name: Check generated design tokens
         run: pnpm check:design-tokens
 
+      - name: Scan CSP hazards
+        run: pnpm check:csp-hazards
+
       - name: Run tests
         run: pnpm test
 

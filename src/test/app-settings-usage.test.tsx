@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppSettingsDialog } from "../components/AppSettingsDialog";
 import { I18nProvider } from "../i18n";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.clear();
+});
 
 vi.mock("../hooks/useAgentOptions", () => ({
   useAgentOptions: () => [],
@@ -62,13 +67,11 @@ describe("AppSettingsDialog usage statistics", () => {
   it("commits navigation selection before mounting the next settings page", async () => {
     localStorage.setItem("aeroric:language", "en");
     const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi
-      .spyOn(window, "requestAnimationFrame")
-      .mockImplementation((callback) => {
-        frames.push(callback);
-        return frames.length;
-      });
-    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
 
     render(
       <I18nProvider>
@@ -109,8 +112,5 @@ describe("AppSettingsDialog usage statistics", () => {
       for (const frame of frames.splice(0)) frame(performance.now());
     });
     expect(await screen.findByTestId("all-agent-configs")).toBeInTheDocument();
-
-    requestFrame.mockRestore();
-    cancelFrame.mockRestore();
   });
 });
