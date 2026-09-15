@@ -3,13 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   buildLspDocumentRequest,
   isLspSupportedFile,
-  lspCommandName,
-  lspInvokeArgs,
   languageServerStatusMessage,
   type LspRemoteContext,
   type LspDocumentRequest,
   type LspServerStatus,
 } from "./languageServerState";
+import { LSP_MIRRORS } from "../lib/api/lsp";
+import { projectArgs, resolveCommand } from "../lib/invokeFacade";
+import { localTarget, type InvokeTarget } from "../lib/target";
 
 type UseLanguageServerOptions = {
   projectPath: string;
@@ -39,6 +40,24 @@ type OpenLifecycleDocument = {
   version: number;
 };
 
+function lspInvokeTarget(
+  projectPath: string,
+  remote?: LspRemoteContext,
+): InvokeTarget {
+  if (!remote) return localTarget(projectPath);
+  return {
+    kind: "ssh",
+    connection: remote.connection,
+    projectPath: remote.projectPath,
+  };
+}
+
+/** LSP 请求体里的 `projectPath` 始终是「项目根路径」（SSH 时为远端路径）。 */
+function lspProjectPath(target: InvokeTarget, fallback: string): string {
+  if (target.kind === "local") return target.path || fallback;
+  return target.projectPath;
+}
+
 function lspLifecycleKey({
   projectPath,
   filePath,
@@ -53,13 +72,11 @@ function lspLifecycleKey({
 }
 
 function invokeLifecycleCommand(
-  command: string,
+  key: keyof typeof LSP_MIRRORS,
   args: Record<string, unknown>,
-  remote?: LspRemoteContext,
+  target: InvokeTarget,
 ) {
-  void Promise.resolve(invoke(lspCommandName(command, remote), lspInvokeArgs(args, remote))).catch(
-    () => {},
-  );
+  void Promise.resolve(invoke(resolveCommand(LSP_MIRRORS[key], target), args)).catch(() => {});
 }
 
 export function useLanguageServer({
@@ -76,6 +93,10 @@ export function useLanguageServer({
   const runIdRef = useRef(0);
   const lifecycleRef = useRef<OpenLifecycleDocument | null>(null);
   const supported = Boolean(enabled && filePath && isLspSupportedFile(filePath));
+  const invokeTarget = useMemo(
+    () => lspInvokeTarget(projectPath, remote),
+    [projectPath, remote],
+  );
 
   const request = useMemo(() => {
     if (!supported || !filePath || content === null) return null;
@@ -99,8 +120,12 @@ export function useLanguageServer({
     setLoading(true);
     try {
       const nextStatus = await invoke<LspServerStatus>(
-        lspCommandName("lsp_server_status", remote),
-        lspInvokeArgs({ projectPath, filePath }, remote),
+        resolveCommand(LSP_MIRRORS.serverStatus, invokeTarget),
+        {
+          ...projectArgs(invokeTarget),
+          projectPath: lspProjectPath(invokeTarget, projectPath),
+          filePath,
+        },
       );
       if (runId === runIdRef.current) {
         setStatus(nextStatus);
@@ -122,7 +147,7 @@ export function useLanguageServer({
         setLoading(false);
       }
     }
-  }, [filePath, projectPath, remote, supported]);
+  }, [filePath, invokeTarget, projectPath, remote, supported]);
 
   useEffect(() => {
     void refreshStatus();
@@ -132,13 +157,15 @@ export function useLanguageServer({
     const current = lifecycleRef.current;
     if (!current) return;
     lifecycleRef.current = null;
+    const target = lspInvokeTarget(current.projectPath, current.remote);
     invokeLifecycleCommand(
-      "lsp_close_document",
+      "closeDocument",
       {
-        projectPath: current.projectPath,
+        ...projectArgs(target),
+        projectPath: lspProjectPath(target, current.projectPath),
         filePath: current.filePath,
       },
-      current.remote,
+      target,
     );
   }, []);
 
@@ -164,16 +191,17 @@ export function useLanguageServer({
       version: 1,
     };
     invokeLifecycleCommand(
-      "lsp_open_document",
+      "openDocument",
       {
-        projectPath,
+        ...projectArgs(invokeTarget),
+        projectPath: lspProjectPath(invokeTarget, projectPath),
         filePath,
         content,
         version: 1,
       },
-      remote,
+      invokeTarget,
     );
-  }, [activeLifecycleKey, closeLifecycleDocument, content, filePath, projectPath, remote]);
+  }, [activeLifecycleKey, closeLifecycleDocument, content, filePath, invokeTarget, projectPath, remote]);
 
   useEffect(() => {
     const current = lifecycleRef.current;
@@ -188,15 +216,17 @@ export function useLanguageServer({
       content,
       version: nextVersion,
     };
+    const target = lspInvokeTarget(current.projectPath, current.remote);
     invokeLifecycleCommand(
-      "lsp_change_document",
+      "changeDocument",
       {
-        projectPath: current.projectPath,
+        ...projectArgs(target),
+        projectPath: lspProjectPath(target, current.projectPath),
         filePath: current.filePath,
         content,
         version: nextVersion,
       },
-      current.remote,
+      target,
     );
   }, [activeLifecycleKey, content]);
 

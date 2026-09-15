@@ -62,6 +62,7 @@ import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { taskCommandByKind } from "./lib/api/session";
+import { DSH_TASK_COMMANDS, WORKTREE_COMMANDS } from "./lib/api/worktree";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
@@ -666,9 +667,9 @@ function AppShell() {
         agentFamily(task.agent, agentOptionsRef.current) === "dsh",
     );
     if (hasDshActive) {
-      invoke("start_dsh_host_events").catch(console.error);
+      invoke(DSH_TASK_COMMANDS.startHostEvents).catch(console.error);
     } else {
-      invoke("stop_dsh_host_events").catch(console.error);
+      invoke(DSH_TASK_COMMANDS.stopHostEvents).catch(console.error);
     }
   }, [tasks]);
 
@@ -1280,7 +1281,7 @@ function AppShell() {
   ) {
     manuallyCompletedDshTasksRef.current.delete(task.id);
     if (agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
-      invoke("run_dsh_task", {
+      invoke(DSH_TASK_COMMANDS.run, {
         taskId: task.id,
         agent: task.agent,
         projectPath,
@@ -1690,14 +1691,14 @@ function AppShell() {
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
     try {
-      await invoke("merge_task_worktree", {
+      await invoke(WORKTREE_COMMANDS.merge, {
         projectPath: project.path,
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
         baseBranch: task.baseBranch,
       });
       // 合并成功后顺手把 worktree 与分支清掉，避免遗留残留
-      await invoke("remove_task_worktree", {
+      await invoke(WORKTREE_COMMANDS.remove, {
         projectPath: project.path,
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
@@ -1719,7 +1720,7 @@ function AppShell() {
     });
     if (!ok) return;
     try {
-      await invoke("remove_task_worktree", {
+      await invoke(WORKTREE_COMMANDS.remove, {
         projectPath: project.path,
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
@@ -1748,7 +1749,7 @@ function AppShell() {
       return;
     }
     if (task && agentFamily(task.agent, agentOptionsRef.current) === "dsh") {
-      invoke("cancel_dsh_task", { taskId }).catch((e: unknown) => {
+      invoke(DSH_TASK_COMMANDS.cancel, { taskId }).catch((e: unknown) => {
         showToast(t("toast.cancelTaskFailed", { error: String(e) }));
       });
       return;
@@ -1763,7 +1764,7 @@ function AppShell() {
     manuallyCompletedDshTasksRef.current.delete(task.id);
     const projectLocation = resolveProjectLocation(project);
     if (resolveTaskSessionOwner(task, agentOptionsRef.current).family === "dsh") {
-      invoke("run_dsh_task", {
+      invoke(DSH_TASK_COMMANDS.run, {
         taskId: task.id,
         agent: task.agent,
         projectPath: task.worktreePath ?? project.path,
@@ -2324,7 +2325,7 @@ function AppShell() {
 
   function cleanupTaskWorktree(task: Task, projectPath: string) {
     if (!task.worktreePath || !task.worktreeBranch || task.worktreeDiscarded) return;
-    invoke("remove_task_worktree", {
+    invoke(WORKTREE_COMMANDS.remove, {
       projectPath,
       worktreePath: task.worktreePath,
       branch: task.worktreeBranch,
