@@ -20,7 +20,6 @@ import type {
   LocalRouterStatus,
 } from "./components/app-settings/types";
 import {
-  isActiveTaskStatus,
   resolveProjectLocation,
 } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
@@ -47,9 +46,7 @@ import { useI18n } from "./i18n";
 import { applyProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import {
-  CLEANUP_COMMANDS,
   LOCAL_ROUTER_COMMANDS,
-  TASK_PROCESS_COMMANDS,
 } from "./lib/api/appCommands";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
@@ -72,13 +69,18 @@ import {
   useStartupDegradationToasts,
 } from "./state/app/useAppMaintenance";
 import {
-  cleanupTaskWorktree,
   discardTaskWorktree,
   mergeTaskWorktree,
 } from "./state/app/worktreeOps";
 import {
   createTaskLifecycleActions,
 } from "./state/app/taskLifecycle";
+import {
+  deleteTasks as deleteTasksImpl,
+  markTaskDone as markTaskDoneImpl,
+  reconnectTask as reconnectTaskImpl,
+  type TaskDeleteDoneDeps,
+} from "./state/app/taskDeleteDone";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -87,7 +89,6 @@ import {
 } from "./state/app";
 import {
   archiveTasksInList,
-  clearSelectedTasksInView,
   renameTaskInList,
   toggleTaskStarInList,
   unarchiveTasksInList,
@@ -105,7 +106,6 @@ import {
   upsertSshProject,
 } from "./state/app/projectMutations";
 import type { ProjectOps } from "./state/app";
-import { taskCompletionCommand } from "./taskCompletion";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -1084,55 +1084,34 @@ function AppShell() {
     return true;
   }
 
-  async function handleReconnectTask(taskId: string) {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
-
-    try {
-      await invoke(TASK_PROCESS_COMMANDS.reset, { taskId });
-    } catch (e: unknown) {
-      showToast(t("toast.resetTaskFailed", { error: String(e) }));
-      return;
-    }
-    await handleResumeTask(taskId);
+  function taskDeleteDoneDeps(): TaskDeleteDoneDeps {
+    return {
+      projects,
+      tasksRef,
+      pendingTaskStartsRef,
+      manuallyCompletedDshTasksRef,
+      agentOptionsRef,
+      showToast,
+      translate: t,
+      setTasks,
+      setProjectViews,
+      removeTaskBuffers: tm.removeTaskBuffers,
+      updateTaskStatus,
+      scheduleForDoneTask,
+      stopTaskOutput: tm.stopTaskOutput,
+      resumeTaskOutput: tm.resumeTaskOutput,
+      resumeTask: handleResumeTask,
+    };
   }
 
   function handleMarkTaskDone(taskId: string) {
-    delete pendingTaskStartsRef.current[taskId];
-    const task = tasks.find((t) => t.id === taskId);
+    const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
+    markTaskDoneImpl(taskDeleteDoneDeps(), task, projects.find((p) => p.id === task.projectId));
+  }
 
-    const project = projects.find((p) => p.id === task.projectId);
-    const projectPath = task.worktreePath ?? project?.path ?? "";
-    const completionCommand = taskCompletionCommand(task, agentOptionsRef.current);
-    if (completionCommand === "complete_dsh_task") {
-      manuallyCompletedDshTasksRef.current.add(taskId);
-      tm.stopTaskOutput(taskId);
-      invoke(completionCommand, { taskId, projectPath })
-        .then(() => {
-          scheduleForDoneTask(taskId);
-        })
-        .catch((e: unknown) => {
-          manuallyCompletedDshTasksRef.current.delete(taskId);
-          tm.resumeTaskOutput(taskId);
-          showToast(t("toast.completeTaskFailed", { error: String(e) }));
-        });
-      return;
-    }
-
-    if (completionCommand === "complete_task") {
-      invoke(completionCommand, { taskId, projectPath })
-        .then(() => {
-          scheduleForDoneTask(taskId);
-        })
-        .catch((e: unknown) => {
-          showToast(t("toast.completeTaskFailed", { error: String(e) }));
-        });
-      return;
-    }
-
-    updateTaskStatus(taskId, "done");
-    scheduleForDoneTask(taskId);
+  async function handleReconnectTask(taskId: string) {
+    await reconnectTaskImpl(taskDeleteDoneDeps(), taskId);
   }
 
   /**
@@ -1148,60 +1127,7 @@ function AppShell() {
   }
 
   function deleteTasks(taskIds: string[]) {
-    taskIds = taskIds.filter((id) => !tasksRef.current.find((task) => task.id === id)?.starred);
-    if (taskIds.length === 0) return;
-
-    const toDelete = new Set(taskIds);
-    const deletingTasks = tasksRef.current.filter((task) => toDelete.has(task.id));
-    if (deletingTasks.length === 0) return;
-
-    // 副作用不能放进 setTasks 的 updater:StrictMode 下 dev 会双调 updater,
-    // cancel_task 会被发两次。这里先在快照上算好删除集,副作用在外面做,
-    // updater 里只做数组过滤与落盘排队。
-    taskIds.forEach((taskId) => {
-      delete pendingTaskStartsRef.current[taskId];
-    });
-
-    deletingTasks
-      .filter((task) => isActiveTaskStatus(task.status))
-      .forEach((task) => {
-        const proj = projects.find((p) => p.id === task.projectId);
-        const projectPath = task.worktreePath ?? proj?.path ?? "";
-        invoke(TASK_PROCESS_COMMANDS.cancelLocal, { taskId: task.id, projectPath })
-          .catch((e: unknown) => {
-            showToast(t("toast.cancelTaskFailed", { error: String(e) }));
-          })
-          .finally(() => {
-            if (proj)
-              cleanupTaskWorktree(task, proj.path, (error) =>
-                showToast(t("toast.worktreeDiscardFailed", { error }), "warning"),
-              );
-          });
-      });
-
-    deletingTasks
-      .filter((task) => !isActiveTaskStatus(task.status))
-      .forEach((task) => {
-        const proj = projects.find((p) => p.id === task.projectId);
-        if (proj)
-          cleanupTaskWorktree(task, proj.path, (error) =>
-            showToast(t("toast.worktreeDiscardFailed", { error }), "warning"),
-          );
-      });
-
-    setTasks((prev) => {
-      const stillDeleting = prev.filter((task) => toDelete.has(task.id));
-      if (stillDeleting.length === 0) return prev;
-      const next = prev.filter((task) => !toDelete.has(task.id));
-      persistAffectedProjects(stillDeleting, next);
-      return next;
-    });
-
-    tm.removeTaskBuffers(taskIds);
-    invoke(CLEANUP_COMMANDS.deleteTaskTerminalHistories, { taskIds }).catch((e: unknown) => {
-      showToast(t("toast.deleteTaskHistoryFailed", { error: String(e) }), "warning");
-    });
-    setProjectViews((prev) => clearSelectedTasksInView(prev, toDelete));
+    deleteTasksImpl(taskDeleteDoneDeps(), taskIds);
   }
 
   /**
