@@ -87,6 +87,15 @@ import {
   resumeWslTask,
   type TaskLaunchDeps,
 } from "./state/app";
+import {
+  assignProjectGroup,
+  clearProjectGroupFromList,
+  renameProjectGroupInList,
+  renameProjectInList,
+  setProjectAvatarInList,
+  toggleProjectHiddenInList,
+  toggleProjectPinnedInList,
+} from "./state/app/projectMutations";
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
@@ -2536,7 +2545,7 @@ function AppShell() {
     const normalized = name.trim();
     if (!normalized) return;
     setProjects((prev) => {
-      const next = prev.map((p) => (p.id === projectId ? { ...p, name: normalized } : p));
+      const next = renameProjectInList(prev, projectId, normalized);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -2546,7 +2555,7 @@ function AppShell() {
   function handleSetProjectAvatar(projectId: string, avatar: ProjectAvatarOverride | undefined) {
     // `avatar: undefined` = 清除定制。Rust 侧 skip_serializing_if 会把这个键整块省掉。
     setProjects((prev) => {
-      const next = prev.map((p) => (p.id === projectId ? { ...p, avatar } : p));
+      const next = setProjectAvatarInList(prev, projectId, avatar);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -2555,9 +2564,7 @@ function AppShell() {
 
   function handleToggleProjectHidden(projectId: string) {
     setProjects((prev) => {
-      const next = prev.map((p) =>
-        p.id === projectId ? { ...p, hiddenFromRail: !p.hiddenFromRail } : p,
-      );
+      const next = toggleProjectHiddenInList(prev, projectId);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -2565,7 +2572,7 @@ function AppShell() {
 
   function handleToggleProjectPinned(projectId: string) {
     setProjects((prev) => {
-      const next = prev.map((p) => (p.id === projectId ? { ...p, pinned: !p.pinned } : p));
+      const next = toggleProjectPinnedInList(prev, projectId);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -2598,11 +2605,8 @@ function AppShell() {
   );
 
   function handleAssignProjectGroup(projectId: string, groupName: string | null) {
-    const normalized = normalizeProjectGroupName(groupName);
     setProjects((prev) => {
-      const next = prev.map((project) =>
-        project.id === projectId ? { ...project, group: normalized ?? undefined } : project,
-      );
+      const next = assignProjectGroup(prev, projectId, groupName);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -2617,24 +2621,25 @@ function AppShell() {
   }
 
   function handleRenameProjectGroup(oldName: string, nextName: string) {
+    const { projects: nextProjects, groupChanged } = renameProjectGroupInList(
+      projects,
+      oldName,
+      nextName,
+    );
+    if (!groupChanged) return;
     const normalized = normalizeProjectGroupName(nextName);
-    if (!normalized || normalized === oldName) return;
+    if (!normalized) return;
     setProjectGroups((current) => current.map((name) => (name === oldName ? normalized : name)));
-    setProjects((prev) => {
-      const next = prev.map((project) =>
-        project.group === oldName ? { ...project, group: normalized } : project,
-      );
-      persistProjects(next, showToast, formatSaveProjectsError);
-      return next;
+    setProjects(() => {
+      persistProjects(nextProjects, showToast, formatSaveProjectsError);
+      return nextProjects;
     });
   }
 
   function handleDeleteProjectGroup(groupName: string) {
     setProjectGroups((current) => current.filter((name) => name !== groupName));
     setProjects((prev) => {
-      const next = prev.map((project) =>
-        project.group === groupName ? { ...project, group: undefined } : project,
-      );
+      const next = clearProjectGroupFromList(prev, groupName);
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
