@@ -13,11 +13,9 @@ import type {
   SkillHubConfig,
   SshConnection,
   CondaEnvironment,
-  StartupDegradation,
 } from "./types";
 import type { AgentOption } from "./agents";
 import type {
-  AppSettings,
   LocalRouterAgent,
   LocalRouterStatus,
 } from "./components/app-settings/types";
@@ -31,11 +29,6 @@ import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
-import { expiredTaskIds, shouldRunCleanup } from "./taskCleanup";
-import {
-  SKILL_HUB_CHANGED_EVENT,
-  normalizeAutoCleanupSettings,
-} from "./components/app-settings/types";
 import { useToast } from "./components/Toast";
 import {
   agentDisplayLabel,
@@ -52,7 +45,7 @@ import { useRefState } from "./hooks/useRefState";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
-import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "./projectOrder";
+import { applyProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { WORKTREE_COMMANDS } from "./lib/api/worktree";
 import {
@@ -75,6 +68,11 @@ import {
   useAppStartupLoad,
   useDshHostEventsSubscription,
 } from "./state/app/useAppStartup";
+import {
+  useAutoCleanupTimer,
+  useSkillHubConfigSync,
+  useStartupDegradationToasts,
+} from "./state/app/useAppMaintenance";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -599,140 +597,20 @@ function AppShell() {
     formatSaveProjectsErrorRef,
   });
 
-  /**
-   * 定时自动物理删除超期的已结束任务。
-   *
-   * 跑在前端而不是 Rust 守护线程:`deleteTasks` 是所有删除的唯一收口(跳过收藏、
-   * cancel 活跃任务、清 worktree、重写 tasks.json、清终端缓冲、删 .log、修正选中项)。
-   * 后端另写一套的真正障碍不是重复劳动,而是前端内存里的 `tasks` 数组不知道后端删过
-   * 东西,下一次 persist 会把已删任务整份写回去。代价是应用不开就不清理 —— 与
-   * Claude Code 的 `cleanupPeriodDays`(启动时扫一遍)是同一种取舍。
-   */
-  useEffect(() => {
-    let cancelled = false;
+  useStartupDegradationToasts({
+    startupReadyRef,
+    tasksRef,
+    showToastRef,
+    formatSaveProjectsErrorRef,
+    translateRef: tRef,
+  });
 
-    const runCleanup = async () => {
-      // 必须等启动把 tasks 读进来:空数组时什么都删不到,却会把 lastRunAt 推到当下,
-      // 于是这一个周期被白白跳过。
-      await startupReadyRef.current?.catch(() => {});
-      if (cancelled) return;
-
-      const settings = await invoke<AppSettings>("load_app_settings").catch(() => null);
-      if (cancelled || !settings) return;
-
-      const cleanup = normalizeAutoCleanupSettings(settings.auto_cleanup_settings);
-      if (!cleanup.enabled) return;
-
-      const now = Date.now();
-      const persistLastRun = () =>
-        invoke(CLEANUP_COMMANDS.updateAutoCleanup, {
-          autoCleanupSettings: { ...cleanup, last_run_at: now },
-        }).catch((error: unknown) => {
-          console.error("Failed to record auto cleanup run", error);
-        });
-
-      // 刚打开开关:只记时间,一条都不删。否则用户勾上复选框的下一秒就丢半年记录。
-      if (cleanup.last_run_at == null) {
-        await persistLastRun();
-        return;
-      }
-      if (!shouldRunCleanup(cleanup, now)) return;
-
-      const expired = expiredTaskIds(tasksRef.current, cleanup, now);
-      if (expired.length > 0) {
-        deleteTasksRef.current(expired);
-        showToastRef.current(
-          tRef.current("toast.autoCleanupDone", { count: expired.length }),
-          "success",
-        );
-      }
-      // 删没删到都要更新:weekly 模式下不更新会在同一个时间槽内反复重算。
-      await persistLastRun();
-    };
-
-    void runCleanup();
-    // 半小时一次:weekly 模式最迟晚 30 分钟执行,而删除本身是低频维护动作。
-    const timer = window.setInterval(() => void runCleanup(), 30 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-    // 挂载一次。设置变更由下一次轮询自然读到 —— 用户改完配置不需要立刻触发一轮删除。
-    // (tasksRef / projectsRef / sshConnectionsRef 来自 useRefState,身份恒定,只为过 lint。)
-  }, [projectsRef, sshConnectionsRef, tasksRef]);
-
-  useEffect(() => {
-    // 后端启动时若数据目录不可写,会退到临时目录甚至内存库继续启动(而不是像以前
-    // 那样在窗口出现前 panic)。降级本身是静默的,必须在这里说出来:否则用户会在
-    // 下次启动发现连接配置全没了,却不知道发生过什么。
-    invoke<StartupDegradation[]>("list_startup_degradations")
-      .then((degradations) => {
-        // 非数组一律当"没有降级":老版本后端没有这条命令时会拿到 null,
-        // 直接迭代会抛 TypeError 并把真正的降级提示一起吞掉。
-        if (!Array.isArray(degradations)) return;
-        for (const degradation of degradations) {
-          const isMemory = degradation.fallback === ":memory:";
-          showToastRef.current(
-            isMemory
-              ? tRef.current("toast.startupDegradedMemory", { reason: degradation.reason })
-              : tRef.current("toast.startupDegradedFallbackDir", {
-                  fallback: degradation.fallback,
-                  reason: degradation.reason,
-                }),
-            "warning",
-          );
-        }
-      })
-      .catch((e: unknown) => {
-        // 查不到诊断本身不值得打扰用户,但要留痕:这条命令没注册会走到这里。
-        console.error("list_startup_degradations failed", e);
-      });
-  }, []);
-
-  useEffect(() => {
-    // Backend events may carry a snapshot captured before a recent frontend edit.
-    // Keep current entries for shared IDs and only add backend-only projects.
-    const mergeProjects = (incoming: Project[], persistMerged = false) => {
-      setProjects((prev) => {
-        const byId = new Map(incoming.map((project) => [project.id, project]));
-        prev.forEach((project) => byId.set(project.id, project));
-        const next = normalizeProjectOrder(Array.from(byId.values()));
-        if (persistMerged) {
-          persistProjects(next, showToastRef.current, formatSaveProjectsErrorRef.current);
-        }
-        return next;
-      });
-    };
-
-    const loadFromBackend = () => {
-      Promise.all([
-        invoke<SkillHubConfig>("get_skill_hub_config"),
-        invoke<Project[]>("load_projects"),
-      ])
-        .then(([cfg, loadedProjects]) => {
-          setSkillHubConfig(cfg ?? null);
-          mergeProjects(loadedProjects);
-        })
-        .catch(console.error);
-    };
-
-    const handleSkillHubChanged = (e: Event) => {
-      const detail = (e as CustomEvent<{ projects?: Project[] }>).detail;
-      if (detail?.projects && Array.isArray(detail.projects)) {
-        invoke<SkillHubConfig>("get_skill_hub_config")
-          .then((cfg) => setSkillHubConfig(cfg ?? null))
-          .catch(console.error);
-        mergeProjects(detail.projects, true);
-        return;
-      }
-      // clear_skill_hub 等场景没有 projects payload，退回到全量 reload
-      loadFromBackend();
-    };
-
-    loadFromBackend();
-    window.addEventListener(SKILL_HUB_CHANGED_EVENT, handleSkillHubChanged);
-    return () => window.removeEventListener(SKILL_HUB_CHANGED_EVENT, handleSkillHubChanged);
-  }, [setProjects]);
+  useSkillHubConfigSync({
+    setProjects,
+    setSkillHubConfig,
+    showToastRef,
+    formatSaveProjectsErrorRef,
+  });
 
   // Tauri event listeners (agent-output is handled inside useTerminalManager)
   useAppCoreTauriListeners({
@@ -1879,6 +1757,15 @@ function AppShell() {
    */
   const deleteTasksRef = useRef(deleteTasks);
   deleteTasksRef.current = deleteTasks;
+
+  useAutoCleanupTimer({
+    startupReadyRef,
+    tasksRef,
+    deleteTasksRef,
+    showToastRef,
+    formatSaveProjectsErrorRef,
+    translateRef: tRef,
+  });
 
   async function handleDeleteTask(taskId: string) {
     const task = tasks.find((item) => item.id === taskId);
