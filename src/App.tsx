@@ -75,6 +75,8 @@ import {
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
+import { useProjectsStore } from "./state/app";
+import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
 import { flushPendingSavesBeforeExit, TASK_FLUSH_TIMEOUT_MS, withTimeout } from "./taskFlush";
@@ -435,6 +437,15 @@ function AppShell() {
   const projectRailWidthCustomizedRef = useRef(loadProjectRailWidth() !== null);
   const [tasks, setTasks, tasksRef] = useRefState<Task[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  // App 仍是 projects 的权威源；store 只做只读镜像 + Ops 写回，避免双写盘。
+  useEffect(() => {
+    useProjectsStore.getState().syncFromHost(projects);
+  }, [projects]);
+  useEffect(() => {
+    useProjectsStore
+      .getState()
+      .setSelectedProjectId(activeProject?.id ?? null);
+  }, [activeProject]);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
@@ -2654,6 +2665,32 @@ function AppShell() {
     });
   }
 
+  /** 宿主 ProjectOps：把 App 的 persist/toast 路径接到 Ops context。 */
+  const projectOps = useMemo<ProjectOps>(
+    () => ({
+      removeProject: (projectId) => {
+        void handleDeleteProject(projectId);
+      },
+      renameProject: handleRenameProject,
+      setProjectAvatar: handleSetProjectAvatar,
+      togglePinned: (projectId, pinned) => {
+        setProjects((prev) => {
+          const next = prev.map((p) => (p.id === projectId ? { ...p, pinned } : p));
+          persistProjects(next, showToast, formatSaveProjectsError);
+          return next;
+        });
+      },
+      selectProject: (projectId) => {
+        const next = projects.find((p) => p.id === projectId) ?? null;
+        setActiveProject(next);
+        if (next) mountProject(next.id);
+      },
+    }),
+    // handle* 每帧新建，但 ops 只在关键依赖变化时重建即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projects, showToast, formatSaveProjectsError, mountProject],
+  );
+
   function handleAssignProjectGroup(projectId: string, groupName: string | null) {
     const normalized = normalizeProjectGroupName(groupName);
     setProjects((prev) => {
@@ -2888,16 +2925,17 @@ function AppShell() {
   }, []);
 
   return (
-    <div style={{ ...s.root, position: "relative" }}>
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          overflow: "hidden",
-        }}
-      >
-        <Suspense fallback={null}>
-          {mountedProjects.map((project) => {
+    <AppProviders projectOps={projectOps}>
+      <div style={{ ...s.root, position: "relative" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            overflow: "hidden",
+          }}
+        >
+          <Suspense fallback={null}>
+            {mountedProjects.map((project) => {
             const view = getProjectView(project.id);
             const isHubActive = hubMode && project.id === hubProjectId;
             const railProjectsFiltered = isHubActive
@@ -3064,16 +3102,13 @@ function AppShell() {
       {showReleasePage && <ReleasePage onClose={() => setShowReleasePage(false)} />}
       <DshApprovalDialog request={dshApprovalRequests[0] ?? null} onClose={dismissApproval} />
       <DshQuestionDialog request={dshQuestionRequests[0] ?? null} onClose={dismissQuestion} />
-    </div>
+      </div>
+    </AppProviders>
   );
 }
 
 function App() {
-  return (
-    <AppProviders>
-      <AppShell />
-    </AppProviders>
-  );
+  return <AppShell />;
 }
 
 export default App;

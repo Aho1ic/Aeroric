@@ -27,28 +27,42 @@ const TaskOpsContext = createContext<TaskOps | null>(null);
 ProjectOpsContext.displayName = "ProjectOpsContext";
 TaskOpsContext.displayName = "TaskOpsContext";
 
-export function AppOpsProvider({ children }: { children: ReactNode }) {
+/**
+ * 默认 ops 走 zustand store（store 自带 persist）。
+ * App 可注入宿主实现（App 的 persistProjects 带 toast），避免双写盘。
+ */
+export function AppOpsProvider({
+  children,
+  projectOps: projectOpsOverride,
+  taskOps: taskOpsOverride,
+}: {
+  children: ReactNode;
+  projectOps?: ProjectOps;
+  taskOps?: TaskOps;
+}) {
   const projectOps = useMemo<ProjectOps>(
-    () => ({
-      removeProject: (id) => useProjectsStore.getState().removeProject(id),
-      renameProject: (id, name) => useProjectsStore.getState().renameProject(id, name),
-      setProjectAvatar: (id, avatar) => useProjectsStore.getState().setProjectAvatar(id, avatar),
-      togglePinned: (id, pinned) => useProjectsStore.getState().toggleProjectPinned(id, pinned),
-      selectProject: (id) => useProjectsStore.getState().setSelectedProjectId(id),
-    }),
-    [],
+    () =>
+      projectOpsOverride ?? {
+        removeProject: (id) => useProjectsStore.getState().removeProject(id),
+        renameProject: (id, name) => useProjectsStore.getState().renameProject(id, name),
+        setProjectAvatar: (id, avatar) => useProjectsStore.getState().setProjectAvatar(id, avatar),
+        togglePinned: (id, pinned) => useProjectsStore.getState().toggleProjectPinned(id, pinned),
+        selectProject: (id) => useProjectsStore.getState().setSelectedProjectId(id),
+      },
+    [projectOpsOverride],
   );
 
   const taskOps = useMemo<TaskOps>(
-    () => ({
-      setProjectTasks: (projectId, tasks) =>
-        useTasksStore.getState().setProjectTasks(projectId, tasks),
-      upsertTask: (projectId, task) => useTasksStore.getState().upsertTask(projectId, task),
-      updateTask: (projectId, taskId, patch) =>
-        useTasksStore.getState().updateTask(projectId, taskId, patch),
-      removeTask: (projectId, taskId) => useTasksStore.getState().removeTask(projectId, taskId),
-    }),
-    [],
+    () =>
+      taskOpsOverride ?? {
+        setProjectTasks: (projectId, tasks) =>
+          useTasksStore.getState().setProjectTasks(projectId, tasks),
+        upsertTask: (projectId, task) => useTasksStore.getState().upsertTask(projectId, task),
+        updateTask: (projectId, taskId, patch) =>
+          useTasksStore.getState().updateTask(projectId, taskId, patch),
+        removeTask: (projectId, taskId) => useTasksStore.getState().removeTask(projectId, taskId),
+      },
+    [taskOpsOverride],
   );
 
   return (
