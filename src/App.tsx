@@ -81,6 +81,7 @@ import {
   reconnectTask as reconnectTaskImpl,
   type TaskDeleteDoneDeps,
 } from "./state/app/taskDeleteDone";
+import { generateTaskName, updateTodoTaskInList } from "./state/app/taskNaming";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -142,7 +143,6 @@ import {
 import { disableTextInputAutoFeatures } from "./appThemeState";
 import { AppProviders } from "./state/app";
 import {
-  getTaskSessionFieldsByFamily,
   resolveConfigSwitchSessionStrategy,
   resolveTaskSessionOwner,
 } from "./taskSession";
@@ -1239,50 +1239,20 @@ function AppShell() {
   }
 
   async function handleGenerateTaskName(taskId: string) {
-    const task = tasks.find((x) => x.id === taskId);
-    if (!task) return;
-    const project = projects.find((p) => p.id === task.projectId);
+    const project = projects.find((p) => p.id === tasks.find((x) => x.id === taskId)?.projectId);
     if (!project) return;
-    const sessionOwner = resolveTaskSessionOwner(task, agentOptions);
-    const sessionFields = getTaskSessionFieldsByFamily(task, sessionOwner.family);
-    const sessionPath = sessionFields.sessionPath ?? sessionFields.legacySessionPath ?? null;
-    // 点击瞬间的快照，用于 await 完成后的并发校验（防止用户期间 rerun/resume/手改名）
-    const expectedPriorName = task.name ?? "";
-    const expectedPrompt = task.prompt;
-    const expectedStatus = task.status;
-    const expectedSessionPath = sessionPath;
-    try {
-      const name = await invoke<string>("generate_task_name", {
-        projectPath: project.path,
-        agent: sessionOwner.agent,
-        sessionPath,
-        originalPrompt: task.prompt,
-      });
-      const trimmed = name.trim();
-      if (!trimmed) return;
-
-      // await 期间用户可能删除任务、改名、重跑、resume 进新 session → 在同一个
-      // setTasks updater 内完成校验和写入，避免依赖 React 对 updater 的同步调度。
-      setTasks((prev) => {
-        const current = prev.find((x) => x.id === taskId);
-        if (!current) return prev;
-        if ((current.name ?? "") !== expectedPriorName) return prev;
-        if (current.prompt !== expectedPrompt) return prev;
-        if (current.status !== expectedStatus) return prev;
-        const currentOwner = resolveTaskSessionOwner(current, agentOptions);
-        const currentFields = getTaskSessionFieldsByFamily(current, currentOwner.family);
-        const currentSessionPath =
-          currentFields.sessionPath ?? currentFields.legacySessionPath ?? null;
-        if (currentSessionPath !== expectedSessionPath) return prev;
-
-        const next = prev.map((x) => (x.id === taskId ? { ...x, name: trimmed || undefined } : x));
-        persistProjectTasks(current.projectId, next, showToast, formatSaveTasksError);
-        return next;
-      });
-    } catch (e) {
-      showToast(t("task.generateNameFailed", { error: String(e) }), "error");
-      throw e;
-    }
+    await generateTaskName(
+      {
+        tasks,
+        setTasks,
+        agentOptions,
+        showToast,
+        formatSaveTasksError,
+        translate: t,
+      },
+      taskId,
+      project.path,
+    );
   }
 
   function handleUpdateTodo(
@@ -1290,10 +1260,10 @@ function AppShell() {
     updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
   ) {
     setTasks((prev) => {
-      const task = prev.find((t) => t.id === taskId);
-      if (!task || task.status !== "todo") return prev;
-      const next = prev.map((t) => (t.id === taskId ? { ...t, ...updates } : t));
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      const next = updateTodoTaskInList(prev, taskId, updates);
+      if (next === prev) return prev;
+      const task = next.find((t) => t.id === taskId);
+      if (task) persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
   }
