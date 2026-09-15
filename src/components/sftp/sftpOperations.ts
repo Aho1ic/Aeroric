@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SshConnection } from "../../types";
 import type { SftpConflictStrategy, SftpEndpoint, SftpEntry, SftpTauriEndpoint } from "./sftpTypes";
+import { SFTP_COMMANDS } from "../../lib/api/sftpCommands";
 
 export interface SftpDirectorySummary {
   fileCount: number;
@@ -32,20 +33,20 @@ export async function readSftpDir(
   endpoint: SftpEndpoint,
   connections: SshConnection[],
 ): Promise<SftpEntry[]> {
-  return invoke<SftpEntry[]>("sftp_read_dir", {
+  return invoke<SftpEntry[]>(SFTP_COMMANDS.readDir, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
   });
 }
 
 export async function readSftpTextFile(endpoint: SftpEndpoint, connections: SshConnection[]) {
-  return invoke<string>("sftp_read_text_file", {
+  return invoke<string>(SFTP_COMMANDS.readTextFile, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
   });
 }
 
 export async function readSftpImagePreview(endpoint: SftpEndpoint, connections: SshConnection[]) {
   return invoke<{ dataUrl: string; mimeType: string; byteLength: number }>(
-    "sftp_read_image_preview",
+    SFTP_COMMANDS.readImagePreview,
     {
       endpoint: toTauriSftpEndpoint(endpoint, connections),
     },
@@ -56,7 +57,7 @@ export async function readSftpDirectorySummary(
   endpoint: SftpEndpoint,
   connections: SshConnection[],
 ) {
-  return invoke<SftpDirectorySummary>("sftp_read_directory_summary", {
+  return invoke<SftpDirectorySummary>(SFTP_COMMANDS.readDirectorySummary, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
   });
 }
@@ -66,7 +67,7 @@ export async function createSftpDirectory(
   connections: SshConnection[],
   name: string,
 ) {
-  return invoke("sftp_create_directory", {
+  return invoke(SFTP_COMMANDS.createDirectory, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
     name,
   });
@@ -77,7 +78,7 @@ export async function deleteSftpPaths(
   connections: SshConnection[],
   paths: string[],
 ) {
-  return invoke("sftp_delete_paths", {
+  return invoke(SFTP_COMMANDS.deletePaths, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
     paths,
   });
@@ -89,7 +90,7 @@ export async function renameSftpPath(
   path: string,
   newName: string,
 ) {
-  return invoke("sftp_rename_path", {
+  return invoke(SFTP_COMMANDS.renamePath, {
     endpoint: toTauriSftpEndpoint(endpoint, connections),
     path,
     newName,
@@ -104,7 +105,7 @@ export async function transferSftpPaths(
   connections: SshConnection[],
   conflictStrategy: SftpConflictStrategy = "fail",
 ) {
-  return invoke(operation === "copy" ? "sftp_copy_paths" : "sftp_move_paths", {
+  return invoke(operation === "copy" ? SFTP_COMMANDS.copyPaths : SFTP_COMMANDS.movePaths, {
     source: toTauriSftpEndpoint(source, connections),
     paths,
     target: toTauriSftpEndpoint(target, connections),

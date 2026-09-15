@@ -7,3 +7,4 @@ export * from "./worktree";
 export * from "./appCommands";
 export * from "./agentSettings";
 export * from "./runtimeCommands";
+export * from "./sftpCommands";

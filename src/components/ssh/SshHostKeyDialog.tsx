@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { SSH_HOST_KEY_COMMANDS } from "../../lib/api/sftpCommands";
 import { Check, ShieldQuestion, X } from "lucide-react";
 import type { SshConnection, SshHostKey } from "../../types";
 import { useI18n } from "../../i18n";
@@ -42,7 +43,7 @@ export function SshHostKeyDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await invoke("trust_ssh_host_key", {
+      await invoke(SSH_HOST_KEY_COMMANDS.trust, {
         connection,
         // 只确认用户真正看到的这几个指纹,后端会重新扫描比对。
         approvedFingerprints: keys.map((key) => key.fingerprint),

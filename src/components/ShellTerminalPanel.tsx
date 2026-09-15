@@ -2,6 +2,7 @@ import type React from "react";
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { TERMINAL_COMMANDS } from "../lib/api/runtimeCommands";
 import type { TerminalFontSize, FontFamily, ThemeVariant } from "../types";
 import { themeFor } from "./terminalShared";
 import { createTerminalRuntime, type TerminalRuntime } from "./terminalRuntime";
@@ -97,7 +98,7 @@ const ShellTerminalInstance = forwardRef<
     ref,
     () => ({
       sendCommand: (cmd: string) => {
-        invoke("send_input", { taskId: shellId, data: cmd }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellId, data: cmd }).catch(console.error);
       },
     }),
     [shellId],
@@ -121,10 +122,10 @@ const ShellTerminalInstance = forwardRef<
       monoFontFamily: monoFontFamilyRef.current,
       isActive: () => isActiveRef.current,
       onInput: (data) => {
-        invoke("send_input", { taskId: shellId, data }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellId, data }).catch(console.error);
       },
       onResize: ({ cols, rows }) => {
-        invoke("resize_pty", { taskId: shellId, cols, rows }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.resize, { taskId: shellId, cols, rows }).catch(console.error);
       },
     });
     runtimeRef.current = runtime;
@@ -264,7 +265,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
         if (closingIndex === -1) return;
 
         const nextShells = shells.filter((shell) => shell.id !== shellId);
-        invoke("kill_shell", { shellId }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.killShell, { shellId }).catch(console.error);
         setShells(nextShells);
         delete shellRefs.current[shellId];
 
@@ -308,7 +309,7 @@ export const ShellTerminalPanel = forwardRef<ShellTerminalPanelHandle, Props>(
 
     const handleCloseAll = useCallback(() => {
       for (const shell of shells) {
-        invoke("kill_shell", { shellId: shell.id }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.killShell, { shellId: shell.id }).catch(console.error);
         delete shellRefs.current[shell.id];
       }
       setShells([]);

@@ -1,5 +1,6 @@
 import { Fragment, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import { useI18n } from "../i18n";
 import { segmentDshProse } from "../dshDeliverables";
 
@@ -41,7 +42,7 @@ export function DshMentionProse({
             onClick={() => {
               // Opening is best-effort: the Host answers or it does not, and the
               // prose stays readable either way.
-              void invoke("open_dsh_host_path", { path: segment.path }).catch(() => {});
+              void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: segment.path }).catch(() => {});
             }}
           >
             {segment.token}

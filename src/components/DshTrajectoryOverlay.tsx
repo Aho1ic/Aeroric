@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import {
   Activity,
   CheckCircle2,
@@ -311,7 +312,7 @@ function FilesPanel({
           disabled={busy === file.path}
           onClick={() => {
             setBusy(file.path);
-            void invoke("open_dsh_host_path", { path: file.path }).finally(() => setBusy(null));
+            void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: file.path }).finally(() => setBusy(null));
           }}
         >
           {busy === file.path ? <Loader2 size={14} className="spin" /> : <FolderOpen size={14} />}

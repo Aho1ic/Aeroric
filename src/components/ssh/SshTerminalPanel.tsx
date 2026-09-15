@@ -8,6 +8,8 @@ import {
   useState,
 } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { SSH_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
+import { TERMINAL_COMMANDS } from "../../lib/api/runtimeCommands";
 import { Plug, Power, Server } from "lucide-react";
 import type {
   FontFamily,
@@ -110,7 +112,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       sendCommand: (cmd: string) => {
         const session = activeSession;
         if (!session) return;
-        invoke("send_input", { taskId: session.shellId, data: cmd }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: session.shellId, data: cmd }).catch(console.error);
       },
     }),
     [activeSession],
@@ -172,7 +174,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
   const handleDeleteConnection = useCallback(
     (connectionId: string) => {
       if (activeSession?.connection.id === connectionId) {
-        invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
+        invoke(SSH_SHELL_COMMANDS.kill, { shellId: activeSession.shellId }).catch(console.error);
         setActiveSession(null);
       }
       const next = connections.filter((connection) => connection.id !== connectionId);
@@ -208,7 +210,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
     (connection: SshConnection) => {
       if (!connection) return;
       if (activeSession) {
-        invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
+        invoke(SSH_SHELL_COMMANDS.kill, { shellId: activeSession.shellId }).catch(console.error);
       }
       setError(null);
       // 后端对每次 ssh 调用都强制 StrictHostKeyChecking=yes,未登记的主机必然
@@ -252,7 +254,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
 
   const handleDisconnect = useCallback(() => {
     if (activeSession) {
-      invoke("kill_ssh_shell", { shellId: activeSession.shellId }).catch(console.error);
+      invoke(SSH_SHELL_COMMANDS.kill, { shellId: activeSession.shellId }).catch(console.error);
     }
     setActiveSession(null);
   }, [activeSession]);
@@ -291,10 +293,10 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       monoFontFamily: monoFontFamilyRef.current,
       isActive: () => activeRef.current,
       onInput: (data) => {
-        invoke("send_input", { taskId: session.shellId, data }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: session.shellId, data }).catch(console.error);
       },
       onResize: ({ cols, rows }) => {
-        invoke("resize_pty", { taskId: session.shellId, cols, rows }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.resize, { taskId: session.shellId, cols, rows }).catch(console.error);
       },
     });
     runtimeRef.current = runtime;
@@ -334,7 +336,7 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       // 就在后端遗弃一个 ssh 进程 —— 长跑下来堆成一片,多标签会把它放大到标签数倍。
       // kill_ssh_shell 是幂等的(句柄不在表里也照样 remove_pty_handles 后返回 Ok),
       // 所以和 handleDisconnect / handleDeleteConnection 里的显式 kill 重复调用无害。
-      invoke("kill_ssh_shell", { shellId: session.shellId }).catch(console.error);
+      invoke(SSH_SHELL_COMMANDS.kill, { shellId: session.shellId }).catch(console.error);
     };
   }, [activeSession]);
 

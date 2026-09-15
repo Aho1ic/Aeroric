@@ -56,6 +56,7 @@ import {
 } from "../lib/api/fs";
 import { fileArgs, projectArgs, resolveCommand } from "../lib/invokeFacade";
 import { resolveInvokeTarget } from "../lib/target";
+import { OS_INTEGRATION_COMMANDS } from "../lib/api/sftpCommands";
 
 type RemoteFileContext = RemoteProjectTarget;
 
@@ -235,7 +236,7 @@ export function FileExplorer({
       setCtxMenu(null);
 
       try {
-        await invoke("open_in_system_file_manager", { path, projectPath: browseRoot });
+        await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, { path, projectPath: browseRoot });
       } catch (error) {
         console.error("Failed to open file in system folder", error);
         showToast(t("file.failedOpenSystemFolder", { error: formatInvokeError(error) }));

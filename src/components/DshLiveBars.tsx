@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import type { DshJobView, DshLiveSessionState, DshQueueItem, DshTodoItem } from "../types";
 import { useI18n } from "../i18n";
 import { DshSessionInsights } from "./DshSessionInsights";
@@ -241,7 +242,7 @@ function QueueRow({ sessionId, items }: { sessionId: string; items: DshQueueItem
       if (!itemId || busyId) return;
       setBusyId(itemId);
       try {
-        await invoke("update_dsh_session_queue", { sessionId, itemId, action });
+        await invoke(DSH_SESSION_COMMANDS.updateSessionQueue, { sessionId, itemId, action });
       } finally {
         setBusyId(null);
       }

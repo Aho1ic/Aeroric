@@ -12,6 +12,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { OS_INTEGRATION_COMMANDS } from "../../lib/api/sftpCommands";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback } from "react";
 
@@ -237,7 +238,7 @@ export function useConnectionContextMenuActions(
         const path = dbxConnectionLocalFilePath(dbx);
         if (!path) return;
         try {
-          await invoke("open_in_system_file_manager", { path, projectPath: projectRoot ?? path });
+          await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, { path, projectPath: projectRoot ?? path });
         } catch (err) {
           setError(String(err));
         }

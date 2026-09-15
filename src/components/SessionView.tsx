@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import {
   Brain,
   Check,
@@ -579,7 +580,7 @@ function ProseText({ text, mentionPaths }: { text: string; mentionPaths: readonl
         if (!path) return;
         // Opening is best-effort: the Host answers or it does not, and the
         // transcript stays readable either way.
-        void invoke("open_dsh_host_path", { path }).catch(() => {});
+        void invoke(DSH_SESSION_COMMANDS.openHostPath, { path }).catch(() => {});
       }}
     />
   );

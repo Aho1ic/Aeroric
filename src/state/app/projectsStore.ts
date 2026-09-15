@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, ProjectAvatarOverride } from "../../types";
 import { createProjectPersister } from "../../projectPersistence";
+import { PERSISTENCE_COMMANDS } from "../../lib/api/sftpCommands";
 import {
   applyProjectOrder,
   normalizeProjectOrder,
@@ -10,7 +11,7 @@ import {
 import { applyProjectPinnedChange } from "../../appRemoteEvents";
 
 const queuedProjectPersist = createProjectPersister((projects) =>
-  invoke("save_projects", { projects }),
+  invoke(PERSISTENCE_COMMANDS.saveProjects, { projects }),
 );
 
 type ProjectsState = {

@@ -1,5 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { TERMINAL_COMMANDS } from "../../lib/api/runtimeCommands";
+import { WSL_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
 import type { FontFamily, TerminalFontSize, ThemeVariant } from "../../types";
 import { createTerminalRuntime, type TerminalRuntime } from "../terminalRuntime";
 import "@xterm/xterm/css/xterm.css";
@@ -57,7 +59,7 @@ export const WslTerminalPanel = forwardRef<
     ref,
     () => ({
       sendCommand: (command) => {
-        invoke("send_input", { taskId: shellIdRef.current, data: command }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellIdRef.current, data: command }).catch(console.error);
       },
     }),
     [],
@@ -78,10 +80,10 @@ export const WslTerminalPanel = forwardRef<
       monoFontFamily: monoFontFamilyRef.current,
       isActive: () => activeRef.current,
       onInput: (data) => {
-        invoke("send_input", { taskId: shellId, data }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellId, data }).catch(console.error);
       },
       onResize: ({ cols, rows }) => {
-        invoke("resize_pty", { taskId: shellId, cols, rows }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.resize, { taskId: shellId, cols, rows }).catch(console.error);
       },
     });
     runtimeRef.current = runtime;
@@ -91,7 +93,7 @@ export const WslTerminalPanel = forwardRef<
     };
     startTimer = window.setTimeout(() => {
       runtime.fit();
-      invoke("open_wsl_shell", {
+      invoke(WSL_SHELL_COMMANDS.open, {
         shellId,
         distribution,
         linuxProjectPath,
@@ -116,7 +118,7 @@ export const WslTerminalPanel = forwardRef<
     return () => {
       cleaned = true;
       if (startTimer !== null) window.clearTimeout(startTimer);
-      invoke("kill_wsl_shell", { shellId }).catch(console.error);
+      invoke(WSL_SHELL_COMMANDS.kill, { shellId }).catch(console.error);
       runtime.dispose();
       runtimeRef.current = null;
     };

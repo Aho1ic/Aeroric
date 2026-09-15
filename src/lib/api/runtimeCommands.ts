@@ -2,6 +2,7 @@
 export const TERMINAL_COMMANDS = {
   sendInput: "send_input",
   resize: "resize_pty",
+  killShell: "kill_shell",
 } as const;
 
 /** 通知中心。 */

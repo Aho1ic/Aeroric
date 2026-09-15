@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { WSL_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
 import { FolderOpen, RefreshCw, X } from "lucide-react";
 import type { WslDistribution, WslDistributionProbe, WslSettings } from "../../types";
 import { useI18n } from "../../i18n";
@@ -100,7 +101,7 @@ export function WslProjectDialog({
     setLoading(true);
     setError(null);
     try {
-      await invoke("validate_wsl_project_path", {
+      await invoke(WSL_SHELL_COMMANDS.validateProjectPath, {
         distribution: selected,
         linuxPath: path,
       });

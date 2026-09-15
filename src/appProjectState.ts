@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Project, SshConnection, Task, TaskStatus } from "./types";
 import { isActiveTaskStatus, resolveProjectLocation, wslProjectPath } from "./types";
 import { createProjectPersister } from "./projectPersistence";
+import { PERSISTENCE_COMMANDS } from "./lib/api/sftpCommands";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { deriveRemoteProjectName } from "./components/ssh/sshProject";
 import { normalizeProjectOrder } from "./projectOrder";
@@ -121,7 +122,7 @@ export function normalizeSshProjectNames(
 }
 
 const queuedProjectPersist = createProjectPersister((projects) =>
-  invoke("save_projects", { projects }),
+  invoke(PERSISTENCE_COMMANDS.saveProjects, { projects }),
 );
 
 export function persistProjects(
@@ -138,7 +139,7 @@ export function flushProjects(): Promise<void> {
 }
 
 const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
-  invoke("save_project_tasks", { projectId, tasks }),
+  invoke(PERSISTENCE_COMMANDS.saveProjectTasks, { projectId, tasks }),
 );
 
 export function persistProjectTasks(

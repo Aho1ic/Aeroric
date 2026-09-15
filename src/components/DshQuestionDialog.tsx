@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import { Check, HelpCircle, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { Button } from "./ui/Button";
@@ -99,7 +100,7 @@ export function DshQuestionDialog({
     setError(null);
 
     try {
-      await invoke("respond_dsh_remote_event", {
+      await invoke(DSH_SESSION_COMMANDS.respondRemoteEvent, {
         eventId: target.eventId,
         clientId: target.clientId,
         sessionId: target.sessionId,

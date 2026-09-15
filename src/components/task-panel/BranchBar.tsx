@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Search, Plus, ChevronDown, X, Tag, Check, GitFork, GitBranch } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { GIT_MIRRORS } from "../../lib/api/git";
 import * as Popover from "@radix-ui/react-popover";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -60,7 +61,7 @@ function BranchDialog({
       setLoading(true);
       setError("");
       try {
-        await invoke("git_create_branch", {
+        await invoke(GIT_MIRRORS.createBranch.local, {
           projectPath,
           branchName: name,
           fromBranch,
@@ -387,7 +388,7 @@ export function BranchBar({
     setSwitching(branch.name);
     setSwitchError("");
     try {
-      await invoke("git_checkout_branch", {
+      await invoke(GIT_MIRRORS.checkoutBranch.local, {
         projectPath,
         branchName: branch.name,
         isRemote: branch.remote !== null,

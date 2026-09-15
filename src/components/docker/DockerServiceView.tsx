@@ -1,6 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { DOCKER_COMMANDS } from "../../lib/api/sftpCommands";
 import { confirm } from "../../lib/appDialog";
 import {
   AlertCircle,
@@ -614,7 +615,7 @@ export function DockerServiceView({
       setBusyKey(container.id);
       setError(null);
       try {
-        await invoke("docker_container_action", {
+        await invoke(DOCKER_COMMANDS.containerAction, {
           remote: actionRemote,
           action,
           containerId: container.id,
@@ -669,7 +670,7 @@ export function DockerServiceView({
       setBusyKey(ref);
       setError(null);
       try {
-        await invoke("docker_delete_image", { remote: actionRemote, image: ref });
+        await invoke(DOCKER_COMMANDS.deleteImage, { remote: actionRemote, image: ref });
         setResources((current) => removeDeletedImage(current, ref));
         await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
@@ -700,7 +701,7 @@ export function DockerServiceView({
       setBusyKey(source);
       setError(null);
       try {
-        await invoke("docker_tag_image", { remote: actionRemote, source, target });
+        await invoke(DOCKER_COMMANDS.tagImage, { remote: actionRemote, source, target });
         setTagDraft(null);
         await load({ preserveOnError: true, remote: actionRemote });
       } catch (err) {
