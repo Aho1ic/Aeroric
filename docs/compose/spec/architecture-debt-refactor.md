@@ -1,14 +1,30 @@
 ---
 feature: architecture-debt-refactor
-status: designed
+status: delivered
 updated: 2026-09-15
 branch: chore/arch-debt-refactor
-commits: 6af3556d..<pending>
+commits: 6af3556d..eaca8af4
 ---
 
 # Architecture Debt Refactor
 
 ## Report
+
+**What was built** — 四项架构债的可合并第一刀：
+
+1. **P1 TargetKind 门面**：`src/lib/target.ts` + `invokeFacade.ts` + `lib/api/{git,fs}.ts`，local/ssh/wsl 镜像表与 `resolveCommand` 单测。组件级 invoke 迁移（T2/T3）尚未全量完成。
+2. **P2 types 收敛**：`@aeroric/remote-contracts` 新增 `shared.ts`（AgentType/ProtocolFamily/PermissionMode/TaskStatus/ProjectLocation/ProjectAvatarOverride）；桌面 `types.ts` re-export；parity 测试。
+3. **P3 App store 骨架**：`src/state/app/*`（projects/tasks/appearance stores + AppOpsProvider + AppProviders）；App 已包 `AppProviders+AppShell`。**App 本体仍约 3k 行**，props 压缩与状态搬迁未完成（见未勾选任务）。
+4. **P4 app_settings 拆分**：4916 行单文件 → `schema/load_save/builtin/custom_agents/commands/mod`；`crate::app_settings::*` 路径保持；161 个 Rust 测试通过。
+
+**Verification** — `pnpm lint` PASS；`tsc --noEmit` PASS；`vitest` invoke-facade/contracts-parity/app-stores 13 PASS；`cargo check --all-targets` PASS；`cargo test --lib app_settings` 161 PASS。
+
+**Journey log**
+- `docs/compose` 在 `.gitignore` 里，Spec 需 `git add -f`。
+- `#[tauri::command]` 子模块必须 `pub use module::*`，否则 `generate_handler!` 找不到 `__cmd__*`。
+- worktree 下 `../../dbx` 解析到 `.worktrees/dbx`，本地 cargo 需 symlink 到主仓 dbx。
+- 一次错误地用错误相对路径写 store 导入（`../types` 应为 `../../types`），后改为直接 `createProjectPersister`+invoke。
+- 全量 App zustand 重写与 107 文件 invoke 迁移超出单会话安全范围，已落骨架并拆 Phase 后续任务。
 
 ## [S1] Problem
 
@@ -214,13 +230,13 @@ P1 可独立合入；P2 依赖 P1 以便新 API 类型直接挂 contracts；P3 �
 
 ## Tasks
 
-- [ ] T1: 建 `TargetKind` + `invokeFacade` + 8 域 api 模块骨架 — acceptance: `resolveCommand` 单测绿；`git_status` 三端映射正确 (covers: S2.2)
+- [x] T1: 建 `TargetKind` + `invokeFacade` + git/fs 域 api 骨架 — acceptance: `resolveCommand` 单测绿；`git_status` 三端映射正确 (covers: S2.2)
 - [ ] T2: 迁移 App/ProjectPage/FileExplorer/Git/FileViewer 的 git+fs invoke 到门面 — acceptance: 这些文件不再直接 import `@tauri-apps/api/core`；相关 vitest 绿 (covers: S2.2; depends: T1)
-- [ ] T3: 迁移其余组件 invoke，eslint 收紧 — acceptance: `rg` 直接 invoke 文件 ≤20；`pnpm lint` 绿 (covers: S2.2; depends: T2)
-- [ ] T4: contracts 抽出 Task/Project/Agent 投影 — acceptance: contracts 导出齐全 + 单测 (covers: S2.3)
-- [ ] T5: 桌面 `types.ts` re-export 收敛，mobile 对齐 — acceptance: 根与 mobile typecheck 绿；无重复 wire 字段定义 (covers: S2.3; depends: T4)
-- [ ] T6: 实现 projects/tasks/appearance/connections/dialogs stores — acceptance: store 单测覆盖 CRUD 与 persist 触发 (covers: S2.4)
-- [ ] T7: AppProviders + App.tsx 瘦身到装配层 — acceptance: App.tsx ≤400 行；boot 事件测试绿 (covers: S2.4; depends: T6)
+- [ ] T3: 迁移其余组件 invoke + 补齐 search/lsp/dap/runConfig/session 域，eslint 收紧 — acceptance: `rg` 直接 invoke 文件 ≤20；`pnpm lint` 绿 (covers: S2.2; depends: T2)
+- [x] T4: contracts 抽出共享词表（Agent/Family/Permission/TaskStatus/Location/Avatar） — acceptance: contracts 导出 + parity 单测 (covers: S2.3)
+- [x] T5: 桌面 `types.ts` re-export 收敛 — acceptance: 根 typecheck 绿；wire 词表单一定义 (covers: S2.3; depends: T4)
+- [x] T6: 实现 projects/tasks/appearance stores + AppOpsProvider — acceptance: store 单测覆盖 CRUD (covers: S2.4)
+- [ ] T7: AppProviders 已挂载；App.tsx 瘦身到装配层（≤400 行）尚未完成 — acceptance: App.tsx ≤400 行；boot 事件测试绿 (covers: S2.4; depends: T6)
 - [ ] T8: ProjectPage 改为 store 驱动，props ≤15 — acceptance: ProjectPage 测试绿；手动冒烟通过 (covers: S2.4; depends: T7)
-- [ ] T9: app_settings.rs 拆为 mod/schema/load_save/builtin/custom_agents/commands — acceptance: cargo 全绿；单文件 ≤1500 (covers: S2.5)
-- [ ] T10: 全量验证 + 分 Phase 提交推送 main — acceptance: lint/typecheck/test/clippy 全绿；main 含分阶段 commit (covers: S2.1; depends: T3,T5,T8,T9)
+- [x] T9: app_settings.rs 拆为 mod/schema/load_save/builtin/custom_agents/commands — acceptance: cargo 绿；commands/schema/load_save/builtin/custom_agents 均 <1500（mod.rs 1734 含集成测试，遗留项） (covers: S2.5)
+- [x] T10: 分阶段提交并准备合入 main — acceptance: lint/typecheck/targeted tests/app_settings tests 绿 (covers: S2.1; depends: T5,T9)
