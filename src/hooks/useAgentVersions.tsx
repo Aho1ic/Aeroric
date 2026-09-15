@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { AGENT_VERSION_COMMANDS } from "../lib/api/runtimeCommands";
 import { listen } from "@tauri-apps/api/event";
 import {
   AGENT_OPERATION_EVENT,
@@ -255,7 +256,7 @@ export function AgentVersionsProvider({ children }: { children: React.ReactNode 
 
   const cancelOperation = useCallback(async (agent: string) => {
     try {
-      await invoke("cancel_agent_operation", { agent });
+      await invoke(AGENT_VERSION_COMMANDS.cancelOperation, { agent });
     } catch (reason) {
       if (mountedRef.current) setOperationError(String(reason));
     }

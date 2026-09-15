@@ -6,3 +6,4 @@ export * from "./lsp";
 export * from "./worktree";
 export * from "./appCommands";
 export * from "./agentSettings";
+export * from "./runtimeCommands";

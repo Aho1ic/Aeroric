@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { NOTIFICATION_COMMANDS } from "../lib/api/runtimeCommands";
 import type { NotificationItem, NotificationResult } from "../types";
 import { useI18n } from "../i18n";
 
@@ -65,7 +66,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const markRead = useCallback(async (id: string) => {
     try {
-      await invoke("mark_notification_read", { id });
+      await invoke(NOTIFICATION_COMMANDS.markRead, { id });
       setResult((prev) => {
         if (!prev) return prev;
         const notifications = prev.notifications.map((n) =>
@@ -81,7 +82,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const markAllRead = useCallback(async () => {
     try {
-      await invoke("mark_all_notifications_read");
+      await invoke(NOTIFICATION_COMMANDS.markAllRead);
       setResult((prev) => {
         if (!prev) return prev;
         const notifications = prev.notifications.map((n) => ({ ...n, isRead: true }));

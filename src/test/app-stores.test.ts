@@ -63,4 +63,11 @@ describe("tasksStore", () => {
     useTasksStore.getState().removeTask("p1", "t1");
     expect(useTasksStore.getState().tasksByProject.p1).toHaveLength(0);
   });
+
+  it("syncFromHost groups a flat host list by projectId", () => {
+    useTasksStore.getState().syncFromHost([task("t1", "p1"), task("t2", "p2"), task("t3", "p1")]);
+    const state = useTasksStore.getState();
+    expect(state.tasksByProject.p1.map((t) => t.id)).toEqual(["t1", "t3"]);
+    expect(state.tasksByProject.p2.map((t) => t.id)).toEqual(["t2"]);
+  });
 });

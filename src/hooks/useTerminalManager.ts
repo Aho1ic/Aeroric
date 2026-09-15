@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { TERMINAL_COMMANDS } from "../lib/api/runtimeCommands";
 import {
   createTerminalRingBuffer,
   joinTerminalBuffer,
@@ -191,12 +192,12 @@ export function useTerminalManager() {
   }, []);
 
   const handleInput = useCallback((taskId: string, data: string) => {
-    invoke("send_input", { taskId, data }).catch(console.error);
+    invoke(TERMINAL_COMMANDS.sendInput, { taskId, data }).catch(console.error);
   }, []);
 
   const handleResize = useCallback((taskId: string, cols: number, rows: number) => {
     terminalSizeRef.current = { cols, rows };
-    invoke("resize_pty", { taskId, cols, rows }).catch(console.error);
+    invoke(TERMINAL_COMMANDS.resize, { taskId, cols, rows }).catch(console.error);
   }, []);
 
   // 远程手机调整的是共享 PTY。桌面端只同步本地 xterm 的逻辑网格，不能再调用

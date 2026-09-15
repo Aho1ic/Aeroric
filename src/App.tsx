@@ -75,7 +75,7 @@ import {
 import { localTarget, resolveInvokeTarget } from "./lib/target";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
-import { useProjectsStore } from "./state/app";
+import { useProjectsStore, useTasksStore } from "./state/app";
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
 import { createTaskId } from "./taskId";
@@ -437,10 +437,13 @@ function AppShell() {
   const projectRailWidthCustomizedRef = useRef(loadProjectRailWidth() !== null);
   const [tasks, setTasks, tasksRef] = useRefState<Task[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
-  // App 仍是 projects 的权威源；store 只做只读镜像 + Ops 写回，避免双写盘。
+  // App 仍是 projects/tasks 的权威源；store 只做只读镜像 + Ops 写回，避免双写盘。
   useEffect(() => {
     useProjectsStore.getState().syncFromHost(projects);
   }, [projects]);
+  useEffect(() => {
+    useTasksStore.getState().syncFromHost(tasks);
+  }, [tasks]);
   useEffect(() => {
     useProjectsStore
       .getState()

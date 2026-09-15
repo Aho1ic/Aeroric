@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { USAGE_COMMANDS } from "../lib/api/runtimeCommands";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UsageStatistics, UsageStatisticsAgent, UsageStatisticsRange } from "../types";
@@ -98,7 +99,7 @@ export function useUsageStatistics(rangeDays: UsageStatisticsRange, agent: Usage
   const refetch = useCallback(async () => {
     setRefreshing(true);
     try {
-      await invoke("refresh_usage_statistics_index");
+      await invoke(USAGE_COMMANDS.refreshIndex);
     } catch {
       // The cached database can still be read if a manual source scan fails.
     }

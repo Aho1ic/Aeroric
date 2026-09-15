@@ -8,6 +8,8 @@ type TasksState = {
   removeTask: (projectId: string, taskId: string) => void;
   updateTask: (projectId: string, taskId: string, patch: Partial<Task>) => void;
   hydrate: (tasksByProject: Record<string, Task[]>) => void;
+  /** App 宿主权威列表 → store 只读镜像（不触发 persist）。 */
+  syncFromHost: (tasks: Task[]) => void;
 };
 
 export const useTasksStore = create<TasksState>()((set, get) => ({
@@ -44,6 +46,15 @@ export const useTasksStore = create<TasksState>()((set, get) => ({
     });
   },
   hydrate: (tasksByProject) => set({ tasksByProject }),
+  syncFromHost: (tasks) => {
+    const next: Record<string, Task[]> = {};
+    for (const task of tasks) {
+      const list = next[task.projectId];
+      if (list) list.push(task);
+      else next[task.projectId] = [task];
+    }
+    set({ tasksByProject: next });
+  },
 }));
 
 export function projectTasksSelector(state: TasksState, projectId: string | null): Task[] {
