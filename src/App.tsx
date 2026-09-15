@@ -14,11 +14,6 @@ import type {
   SshConnection,
   CondaEnvironment,
 } from "./types";
-import type { AgentOption } from "./agents";
-import type {
-  LocalRouterAgent,
-  LocalRouterStatus,
-} from "./components/app-settings/types";
 import {
   resolveProjectLocation,
 } from "./types";
@@ -30,7 +25,6 @@ import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { useToast } from "./components/Toast";
 import {
-  agentDisplayLabel,
   agentFamily,
   familyFromCodexLike,
   normalizeProtocolFamily,
@@ -45,9 +39,6 @@ import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useI18n } from "./i18n";
 import { applyProjectOrder, sortProjectsForRail } from "./projectOrder";
 import { localTarget, resolveInvokeTarget } from "./lib/target";
-import {
-  LOCAL_ROUTER_COMMANDS,
-} from "./lib/api/appCommands";
 import { projectArgs, resolveCommand } from "./lib/invokeFacade";
 import { PROJECT_CONFIG_MIRRORS } from "./lib/api/fs";
 import {
@@ -82,6 +73,9 @@ import {
   type TaskDeleteDoneDeps,
 } from "./state/app/taskDeleteDone";
 import { generateTaskName, updateTodoTaskInList } from "./state/app/taskNaming";
+import {
+  handleSwitchTaskConfig as switchTaskConfigImpl,
+} from "./state/app/taskSwitch";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -138,244 +132,13 @@ import {
 } from "./appProjectState";
 import {
   applyProjectPinnedChange,
-  dispatchAppSettingsChanged,
 } from "./appRemoteEvents";
 import { disableTextInputAutoFeatures } from "./appThemeState";
 import { AppProviders } from "./state/app";
-import {
-  resolveConfigSwitchSessionStrategy,
-  resolveTaskSessionOwner,
-} from "./taskSession";
-import {
-  formatSessionHandoff,
-  hasStructuredSessionTranscript,
-  type SessionHandoffMessage,
-} from "./sessionHandoffPrompt";
 
 const ProjectPage = lazy(() =>
   import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
 );
-
-interface ResetTaskProcessResult {
-  hadLiveProcess: boolean;
-  claudeSessionId?: string;
-  claudeSessionPath?: string;
-  codexSessionId?: string;
-  codexSessionPath?: string;
-  dshSessionId?: string;
-  dshSessionPath?: string;
-  ompSessionId?: string;
-  ompSessionPath?: string;
-}
-
-interface ResolvedTaskSession {
-  sessionId?: string;
-  sessionPath?: string;
-}
-
-function rollbackTaskMutation(current: Task, previous: Task, applied: Task): Task {
-  const before = previous as unknown as Record<string, unknown>;
-  const after = applied as unknown as Record<string, unknown>;
-  const present = current as unknown as Record<string, unknown>;
-  const restored = { ...present };
-
-  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (Object.is(before[key], after[key]) || !Object.is(present[key], after[key])) continue;
-    if (Object.prototype.hasOwnProperty.call(before, key)) restored[key] = before[key];
-    else delete restored[key];
-  }
-
-  return restored as unknown as Task;
-}
-
-function mergeChangedTaskSessionFields(current: Task, previous: Task, source: Task): Task {
-  const next = { ...current };
-  if (!Object.is(source.claudeSessionId, previous.claudeSessionId)) {
-    next.claudeSessionId = source.claudeSessionId;
-  }
-  if (!Object.is(source.claudeSessionPath, previous.claudeSessionPath)) {
-    next.claudeSessionPath = source.claudeSessionPath;
-  }
-  if (!Object.is(source.codexSessionId, previous.codexSessionId)) {
-    next.codexSessionId = source.codexSessionId;
-  }
-  if (!Object.is(source.codexSessionPath, previous.codexSessionPath)) {
-    next.codexSessionPath = source.codexSessionPath;
-  }
-  if (!Object.is(source.dshSessionId, previous.dshSessionId)) {
-    next.dshSessionId = source.dshSessionId;
-  }
-  if (!Object.is(source.dshSessionPath, previous.dshSessionPath)) {
-    next.dshSessionPath = source.dshSessionPath;
-  }
-  if (!Object.is(source.ompSessionId, previous.ompSessionId)) {
-    next.ompSessionId = source.ompSessionId;
-  }
-  if (!Object.is(source.ompSessionPath, previous.ompSessionPath)) {
-    next.ompSessionPath = source.ompSessionPath;
-  }
-  if (!Object.is(source.sessionAgent, previous.sessionAgent)) {
-    next.sessionAgent = source.sessionAgent;
-  }
-  if (!Object.is(source.sessionCodexLike, previous.sessionCodexLike)) {
-    next.sessionCodexLike = source.sessionCodexLike;
-  }
-  if (!Object.is(source.sessionFamily, previous.sessionFamily)) {
-    next.sessionFamily = source.sessionFamily;
-  }
-  return next;
-}
-
-function localRouterAgentFor(agent: AgentType, options: AgentOption[]): LocalRouterAgent | null {
-  const family = agentFamily(agent, options);
-  return family === "claude" || family === "codex" ? family : null;
-}
-
-function localRouterTargetForTaskSwitch(
-  task: Task,
-  agent: AgentType,
-  locationKind: "local" | "ssh" | "wsl",
-  status: LocalRouterStatus,
-  options: AgentOption[],
-): { agent: LocalRouterAgent; targetId: string } | null {
-  if (locationKind !== "local" || !status.running) return null;
-
-  const currentAgent = localRouterAgentFor(task.agent, options);
-  const targetAgent = localRouterAgentFor(agent, options);
-  if (!currentAgent || currentAgent !== targetAgent) return null;
-
-  const target =
-    status.targets.find((item) => item.agent === targetAgent && item.active) ??
-    status.targets.find((item) => item.agent === targetAgent && item.healthy) ??
-    status.targets.find((item) => item.agent === targetAgent);
-  return target ? { agent: targetAgent, targetId: target.target_id } : null;
-}
-
-function mergeResetTaskSession(task: Task, snapshot: ResetTaskProcessResult): Task {
-  const hasCodexSnapshot = Boolean(snapshot.codexSessionId || snapshot.codexSessionPath);
-  const hasClaudeSnapshot = Boolean(snapshot.claudeSessionId || snapshot.claudeSessionPath);
-  const hasDshSnapshot = Boolean(snapshot.dshSessionId || snapshot.dshSessionPath);
-  const hasOmpSnapshot = Boolean(snapshot.ompSessionId || snapshot.ompSessionPath);
-  const next: Task = {
-    ...task,
-    codexSessionId: snapshot.codexSessionId ?? task.codexSessionId,
-    codexSessionPath: snapshot.codexSessionPath ?? task.codexSessionPath,
-    claudeSessionId: snapshot.claudeSessionId ?? task.claudeSessionId,
-    claudeSessionPath: snapshot.claudeSessionPath ?? task.claudeSessionPath,
-    dshSessionId: snapshot.dshSessionId ?? task.dshSessionId,
-    dshSessionPath: snapshot.dshSessionPath ?? task.dshSessionPath,
-    ompSessionId: snapshot.ompSessionId ?? task.ompSessionId,
-    ompSessionPath: snapshot.ompSessionPath ?? task.ompSessionPath,
-  };
-
-  const present = [hasCodexSnapshot, hasClaudeSnapshot, hasDshSnapshot, hasOmpSnapshot].filter(
-    Boolean,
-  ).length;
-  if (present !== 1) return next;
-  if (hasCodexSnapshot) {
-    return {
-      ...next,
-      claudeSessionId: undefined,
-      claudeSessionPath: undefined,
-      dshSessionId: undefined,
-      dshSessionPath: undefined,
-      ompSessionId: undefined,
-      ompSessionPath: undefined,
-      sessionAgent: task.agent,
-      sessionCodexLike: true,
-      sessionFamily: "codex",
-    };
-  }
-  if (hasClaudeSnapshot) {
-    return {
-      ...next,
-      codexSessionId: undefined,
-      codexSessionPath: undefined,
-      dshSessionId: undefined,
-      dshSessionPath: undefined,
-      ompSessionId: undefined,
-      ompSessionPath: undefined,
-      sessionAgent: task.agent,
-      sessionCodexLike: false,
-      sessionFamily: "claude",
-    };
-  }
-  if (hasDshSnapshot) {
-    return {
-      ...next,
-      codexSessionId: undefined,
-      codexSessionPath: undefined,
-      claudeSessionId: undefined,
-      claudeSessionPath: undefined,
-      ompSessionId: undefined,
-      ompSessionPath: undefined,
-      sessionAgent: task.agent,
-      sessionCodexLike: false,
-      sessionFamily: "dsh",
-    };
-  }
-  return {
-    ...next,
-    codexSessionId: undefined,
-    codexSessionPath: undefined,
-    claudeSessionId: undefined,
-    claudeSessionPath: undefined,
-    dshSessionId: undefined,
-    dshSessionPath: undefined,
-    sessionAgent: task.agent,
-    sessionCodexLike: false,
-    sessionFamily: "omp",
-  };
-}
-
-function applyResolvedTaskSession(
-  task: Task,
-  owner: { agent: AgentType; codexLike: boolean; family?: ProtocolFamily },
-  session: ResolvedTaskSession,
-): Task {
-  if (!session.sessionId && !session.sessionPath) return task;
-  const family: ProtocolFamily = owner.family ?? familyFromCodexLike(owner.codexLike);
-  const base: Task = {
-    ...task,
-    claudeSessionId: undefined,
-    claudeSessionPath: undefined,
-    codexSessionId: undefined,
-    codexSessionPath: undefined,
-    dshSessionId: undefined,
-    dshSessionPath: undefined,
-    ompSessionId: undefined,
-    ompSessionPath: undefined,
-    sessionAgent: owner.agent,
-    sessionCodexLike: family === "codex",
-    sessionFamily: family,
-  };
-  if (family === "codex") {
-    return {
-      ...base,
-      codexSessionId: session.sessionId ?? task.codexSessionId,
-      codexSessionPath: session.sessionPath ?? task.codexSessionPath,
-    };
-  }
-  if (family === "dsh") {
-    return {
-      ...base,
-      dshSessionId: session.sessionId ?? task.dshSessionId,
-      dshSessionPath: session.sessionPath ?? task.dshSessionPath,
-    };
-  }
-  if (family === "omp") {
-    return {
-      ...base,
-      ompSessionId: session.sessionId ?? task.ompSessionId,
-      ompSessionPath: session.sessionPath ?? task.ompSessionPath,
-    };
-  }
-  return {
-    ...base,
-    claudeSessionId: session.sessionId ?? task.claudeSessionId,
-    claudeSessionPath: session.sessionPath ?? task.claudeSessionPath,
-  };
-}
 
 /** 装配壳：挂 zustand ops providers。状态迁移完成后本函数应只保留路由与窗口事件。 */
 function AppShell() {
@@ -741,11 +504,6 @@ function AppShell() {
   const handleSubmitTask = taskLifecycle.handleSubmitTask;
   const handleRunTodoTask = taskLifecycle.handleRunTodoTask;
   const handleResumeTask = taskLifecycle.handleResumeTask;
-  const invokeResumeTask = taskLifecycle.invokeResumeTask;
-  const invokeRunTask = taskLifecycle.invokeRunTask;
-  const invokeRemoteRunTask = taskLifecycle.invokeRemoteRunTask;
-  const invokeWslRunTask = taskLifecycle.invokeWslRunTask;
-  const resolveTaskSessionReference = taskLifecycle.resolveTaskSessionReference;
 
   // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
   // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
@@ -816,272 +574,31 @@ function AppShell() {
     taskId: string,
     values: AgentConfigSwitchValues,
   ): Promise<boolean> {
-    const task = tasksRef.current.find((item) => item.id === taskId);
-    if (!task) return false;
-    const project = projects.find((item) => item.id === task.projectId);
-    if (!project) return false;
-
-    const projectLocation = resolveProjectLocation(project);
-    const sameProtocolFamily =
-      localRouterAgentFor(task.agent, agentOptions) ===
-      localRouterAgentFor(values.agent, agentOptions);
-
-    if (projectLocation.kind === "local") {
-      try {
-        // Validate with std::process before changing Router state or touching
-        // the current PTY. A missing/non-executable profile cannot disturb a
-        // healthy run or make the global target disagree with it.
-        await invoke(LOCAL_ROUTER_COMMANDS.validateAgentLaunch, {
-          agent: values.agent,
-          projectPath: task.worktreePath ?? project.path,
-        });
-      } catch (error) {
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return false;
-      }
-    }
-
-    // If this process family is routed through Local Router, update its target
-    // before replacing the process. This is only one part of applying a
-    // configuration: the Agent still has to restart so its executable/home,
-    // model, reasoning, speed and permission arguments all take effect.
-    if (sameProtocolFamily && projectLocation.kind === "local") {
-      let localRouterStatus: LocalRouterStatus;
-      try {
-        localRouterStatus = await invoke<LocalRouterStatus>("get_local_router_status");
-      } catch (error) {
-        showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-        return false;
-      }
-      const localRouterTarget = localRouterTargetForTaskSwitch(
-        task,
-        values.agent,
-        projectLocation.kind,
-        localRouterStatus,
+    return switchTaskConfigImpl(
+      {
+        projects,
+        tasksRef,
+        pendingTaskStartsRef,
         agentOptions,
-      );
-      if (localRouterTarget) {
-        try {
-          await invoke(LOCAL_ROUTER_COMMANDS.switchTarget, {
-            agent: localRouterTarget.agent,
-            targetId: localRouterTarget.targetId,
-          });
-          dispatchAppSettingsChanged(window);
-        } catch (error) {
-          // Do not kill a healthy process after a router switch failure.
-          showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-          return false;
-        }
-      }
-    }
-
-    let resetSnapshot: ResetTaskProcessResult;
-    try {
-      resetSnapshot = await invoke<ResetTaskProcessResult>("reset_task_process", { taskId });
-    } catch (error) {
-      showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-      return false;
-    }
-
-    const sourceBaseTask = tasksRef.current.find((item) => item.id === taskId) ?? task;
-    let sourceTask = mergeResetTaskSession(sourceBaseTask, resetSnapshot);
-    let sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
-    const sourceSession = await resolveTaskSessionReference(sourceTask, project);
-    sourceTask = applyResolvedTaskSession(sourceTask, sourceOwner, sourceSession);
-    sourceOwner = resolveTaskSessionOwner(sourceTask, agentOptions);
-
-    const sourceProjectPath = sourceTask.worktreePath ?? project.path;
-    let sessionStrategy = resolveConfigSwitchSessionStrategy(
-      sourceTask,
-      values.agent,
-      true,
-      agentOptions,
+        sshConnections,
+        showToast,
+        showToastRef,
+        formatSaveTasksError,
+        formatSaveTasksErrorRef,
+        translate: t,
+        setTasks,
+        setTaskRunCounts,
+        resetTaskTerminal: tm.resetTaskTerminal,
+        updateTaskStatus,
+        resolveTaskSessionReference: taskLifecycle.resolveTaskSessionReference,
+        invokeResumeTask: taskLifecycle.invokeResumeTask,
+        invokeRemoteRunTask: taskLifecycle.invokeRemoteRunTask,
+        invokeWslRunTask: taskLifecycle.invokeWslRunTask,
+        invokeRunTask: taskLifecycle.invokeRunTask,
+      },
+      taskId,
+      values,
     );
-    if (
-      sessionStrategy !== "handoff" &&
-      projectLocation.kind === "local" &&
-      sourceSession.sessionPath
-    ) {
-      let nativeResumeSupported = false;
-      try {
-        nativeResumeSupported = await invoke<boolean>("session_supports_native_resume", {
-          sessionPath: sourceSession.sessionPath,
-          projectPath: sourceProjectPath,
-          isCodex: sourceOwner.codexLike,
-          family: sourceOwner.family,
-        });
-      } catch (error) {
-        // A compatibility probe failure must not start a native resume that may
-        // fail after the healthy source PTY has already been replaced.
-        console.warn("session_supports_native_resume during agent switch failed", error);
-      }
-      sessionStrategy = resolveConfigSwitchSessionStrategy(
-        sourceTask,
-        values.agent,
-        nativeResumeSupported,
-        agentOptions,
-      );
-    }
-    let resumeSessionId = sessionStrategy === "resume" ? sourceSession.sessionId : undefined;
-
-    // Two different configurations of the same CLI keep separate homes
-    // (CODEX_HOME / CLAUDE_CONFIG_DIR), and `codex resume` / `claude --resume`
-    // only read their own home. Copying the transcript into the target home lets
-    // the new configuration replay the real conversation tree instead of being
-    // handed a flattened text summary.
-    if (
-      !resumeSessionId &&
-      projectLocation.kind === "local" &&
-      sourceSession.sessionId &&
-      sourceSession.sessionPath &&
-      sessionStrategy === "adopt"
-    ) {
-      try {
-        const adoptedPath = await invoke<string>("adopt_session_for_agent", {
-          sessionPath: sourceSession.sessionPath,
-          projectPath: sourceProjectPath,
-          isCodex: sourceOwner.codexLike,
-          targetAgent: values.agent,
-        });
-        resumeSessionId = sourceSession.sessionId;
-        sourceTask = applyResolvedTaskSession(
-          sourceTask,
-          { agent: values.agent, codexLike: sourceOwner.codexLike, family: sourceOwner.family },
-          { sessionId: sourceSession.sessionId, sessionPath: adoptedPath },
-        );
-      } catch (error) {
-        // Adoption is an optimization; fall back to the text handoff below.
-        console.warn("adopt_session_for_agent during agent switch failed", error);
-      }
-    }
-
-    let handoffPrompt: string | undefined;
-
-    if (!resumeSessionId) {
-      let messages: SessionHandoffMessage[] = [];
-      if (sourceSession.sessionPath && projectLocation.kind === "local") {
-        try {
-          messages = await invoke<SessionHandoffMessage[]>("read_session_messages", {
-            sessionPath: sourceSession.sessionPath,
-            projectPath: sourceProjectPath,
-            isCodex: sourceOwner.codexLike,
-            family: sourceOwner.family,
-          });
-        } catch (error) {
-          console.warn("read_session_messages during agent switch failed", error);
-        }
-      }
-
-      const hasStructuredMessages = hasStructuredSessionTranscript(messages);
-      let terminalHistory = "";
-      if (!hasStructuredMessages) {
-        try {
-          terminalHistory = await invoke<string>("read_task_terminal_history", { taskId });
-        } catch (error) {
-          console.warn("read_task_terminal_history during agent switch failed", error);
-        }
-      }
-      if (!hasStructuredMessages && !terminalHistory.trim() && !sourceTask.prompt.trim()) {
-        showToast(t("running.switchConfigNoContext"), "error");
-        return false;
-      }
-      handoffPrompt = formatSessionHandoff(
-        sourceTask,
-        agentDisplayLabel(sourceOwner.agent, agentOptions),
-        messages,
-        terminalHistory,
-      );
-    }
-
-    const latestTask = tasksRef.current.find((item) => item.id === taskId);
-    if (!latestTask) {
-      showToast(t("running.switchConfigFailed", { error: "Task no longer exists" }), "error");
-      return false;
-    }
-    const committedTask: Task = {
-      ...mergeChangedTaskSessionFields(latestTask, task, sourceTask),
-      agent: values.agent,
-      selectedModel: values.selectedModel,
-      reasoningEffort: values.reasoningEffort ?? undefined,
-      speed: values.speed,
-      permissionMode: values.permissionMode,
-      status: "pending",
-      attentionRequestedAt: undefined,
-      failureReason: undefined,
-    };
-    setTasks((prev) => {
-      const current = prev.find((item) => item.id === taskId);
-      if (!current) return prev;
-      const nextTasks = prev.map((item) => (item.id === taskId ? committedTask : item));
-      persistProjectTasks(task.projectId, nextTasks, showToast, formatSaveTasksError);
-      return nextTasks;
-    });
-    try {
-      await flushProjectTasks(task.projectId);
-    } catch (error) {
-      setTasks((prev) => {
-        const current = prev.find((item) => item.id === taskId);
-        if (!current) return prev;
-        const restoredTask = rollbackTaskMutation(current, task, committedTask);
-        const nextTasks = prev.map((item) => (item.id === taskId ? restoredTask : item));
-        persistProjectTasks(
-          task.projectId,
-          nextTasks,
-          showToastRef.current,
-          formatSaveTasksErrorRef.current,
-        );
-        return nextTasks;
-      });
-      showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
-      return false;
-    }
-
-    pendingTaskStartsRef.current[taskId] = () => {
-      if (resumeSessionId) {
-        invokeResumeTask(committedTask, project, resumeSessionId);
-        return;
-      }
-
-      const injectPrompt = true;
-      if (projectLocation.kind === "ssh") {
-        const connection = sshConnections.find((item) => item.id === projectLocation.connectionId);
-        if (!connection) {
-          const message = t("toast.remoteProjectMissingConnection");
-          updateTaskStatus(taskId, "failed", undefined, message);
-          showToast(message, "error");
-          return;
-        }
-        invokeRemoteRunTask(
-          committedTask,
-          connection,
-          projectLocation.remotePath,
-          injectPrompt,
-          handoffPrompt,
-        );
-        return;
-      }
-      if (projectLocation.kind === "wsl") {
-        invokeWslRunTask(
-          committedTask,
-          projectLocation.distribution,
-          projectLocation.linuxPath,
-          injectPrompt,
-          handoffPrompt,
-        );
-        return;
-      }
-      invokeRunTask(
-        committedTask,
-        committedTask.worktreePath ?? project.path,
-        [],
-        [],
-        injectPrompt,
-        handoffPrompt,
-      );
-    };
-    tm.resetTaskTerminal(taskId);
-    setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
-    return true;
   }
 
   function taskDeleteDoneDeps(): TaskDeleteDoneDeps {

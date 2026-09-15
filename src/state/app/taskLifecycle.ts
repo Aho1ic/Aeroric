@@ -39,7 +39,7 @@ export interface ResolvedTaskSession {
   sessionPath?: string;
 }
 
-function applyResolvedTaskSession(
+export function applyResolvedTaskSession(
   task: Task,
   owner: { agent: AgentType; codexLike: boolean; family?: ProtocolFamily },
   session: ResolvedTaskSession,
