@@ -231,7 +231,7 @@ P1 可独立合入；P2 依赖 P1 以便新 API 类型直接挂 contracts；P3 �
 ## Tasks
 
 - [x] T1: 建 `TargetKind` + `invokeFacade` + git/fs 域 api 骨架 — acceptance: `resolveCommand` 单测绿；`git_status` 三端映射正确 (covers: S2.2)
-- [ ] T2: 迁移 App/ProjectPage/FileExplorer/Git/FileViewer 的 git+fs invoke 到门面 — acceptance: 这些文件不再直接 import `@tauri-apps/api/core`；相关 vitest 绿 (covers: S2.2; depends: T1)
+- [x] T2: 迁移 GitChanges/GitDiffViewer/GitAdvancedPanel 与 FileViewer 读写到门面 — acceptance: 这些文件不再手写 `remote_`/`wsl_` 前缀字符串分派；git-remote/wsl/advanced 测试绿 (covers: S2.2; depends: T1)
 - [ ] T3: 迁移其余组件 invoke + 补齐 search/lsp/dap/runConfig/session 域，eslint 收紧 — acceptance: `rg` 直接 invoke 文件 ≤20；`pnpm lint` 绿 (covers: S2.2; depends: T2)
 - [x] T4: contracts 抽出共享词表（Agent/Family/Permission/TaskStatus/Location/Avatar） — acceptance: contracts 导出 + parity 单测 (covers: S2.3)
 - [x] T5: 桌面 `types.ts` re-export 收敛 — acceptance: 根 typecheck 绿；wire 词表单一定义 (covers: S2.3; depends: T4)
