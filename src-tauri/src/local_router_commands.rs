@@ -659,6 +659,7 @@ mod tests {
             api_key: "sk-test".to_string(),
             models: vec!["gpt-test".to_string()],
             enable_1m_context: false,
+            disable_artifact_tool: false,
             enable_chat_completions_proxy: true,
             bridge_python_path: String::new(),
             username: String::new(),

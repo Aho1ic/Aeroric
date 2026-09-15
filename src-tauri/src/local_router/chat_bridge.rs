@@ -155,32 +155,103 @@ fn response_role_to_chat(role: Option<&str>) -> &'static str {
     }
 }
 
+/// 把一条 Chat 消息接到列表末尾。
+///
+/// 顶层 `instructions` 已经合成了队首那条 system;messages 里后续的 system
+/// (Claude Code 每回合注入的 `<total_tokens>` 之类)必须原位保留。把它们并进
+/// 第一条会让 OpenAI 兼容上游的 radix 前缀缓存每回合都 miss(命中率 99%→20%)。
 fn append_message(messages: &mut Vec<Value>, message: Value) {
-    if message.get("role").and_then(Value::as_str) == Some("system")
-        && messages
-            .first()
-            .and_then(|message| message.get("role"))
-            .and_then(Value::as_str)
-            == Some("system")
-    {
-        let previous = messages[0]
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let current = message
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        messages[0]["content"] = Value::String(
-            [previous, current]
-                .into_iter()
-                .filter(|value| !value.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-        );
-    } else {
-        messages.push(message);
+    messages.push(message);
+}
+
+/// 把待发的 function_call 落成一条 assistant。
+///
+/// 一个 Responses 回合经常是 commentary 文本后紧跟 function_call;拆成两条
+/// 相邻 assistant 时,Chat 上游会把纯文本那条当成完整回合返回
+/// `finish_reason=stop`,长任务在第一次进度播报后就停。末条 assistant 还没有
+/// tool_calls 时并进去,其它边界(user/tool、已经带 tool_calls 的批次)仍走新消息。
+fn flush_pending_tool_calls(
+    messages: &mut Vec<Value>,
+    pending_tool_calls: &mut Vec<Value>,
+    pending_reasoning: &mut String,
+) {
+    if pending_tool_calls.is_empty() {
+        return;
     }
+    if merge_pending_tool_calls_into_adjacent_assistant(
+        messages,
+        pending_tool_calls,
+        pending_reasoning,
+    ) {
+        return;
+    }
+    let mut message = json!({
+        "role":"assistant",
+        "content":Value::Null,
+        "tool_calls":std::mem::take(pending_tool_calls)
+    });
+    attach_pending_reasoning_to_assistant(&mut message, pending_reasoning);
+    append_message(messages, message);
+}
+
+fn merge_pending_tool_calls_into_adjacent_assistant(
+    messages: &mut [Value],
+    pending_tool_calls: &mut Vec<Value>,
+    pending_reasoning: &mut String,
+) -> bool {
+    let Some(message) = messages.last_mut() else {
+        return false;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return false;
+    }
+    let has_tool_calls = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .is_some_and(|calls| !calls.is_empty());
+    if has_tool_calls {
+        return false;
+    }
+    message["tool_calls"] = Value::Array(std::mem::take(pending_tool_calls));
+    attach_pending_reasoning_to_assistant(message, pending_reasoning);
+    true
+}
+
+/// 把待发 reasoning 按 `\n\n` 分段并进 assistant,已有的段不重复。
+///
+/// 并行 function_call 经常带着同一段 summary;不按段去重会把同一思考贴两次。
+fn attach_pending_reasoning_to_assistant(message: &mut Value, pending_reasoning: &mut String) {
+    if pending_reasoning.is_empty() {
+        return;
+    }
+    let incoming = std::mem::take(pending_reasoning);
+    let existing_text = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let existing_segments: Vec<&str> = existing_text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let missing_segments: Vec<&str> = incoming
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty() && !existing_segments.contains(segment))
+        .collect();
+    if missing_segments.is_empty() {
+        return;
+    }
+    let merged = if existing_segments.is_empty() {
+        missing_segments.join("\n\n")
+    } else {
+        format!(
+            "{}\n\n{}",
+            existing_segments.join("\n\n"),
+            missing_segments.join("\n\n")
+        )
+    };
+    message["reasoning_content"] = Value::String(merged);
 }
 
 fn canonical_json(value: &Value) -> String {
@@ -202,23 +273,6 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
     let mut pending_tool_calls = Vec::new();
     let mut pending_reasoning = String::new();
 
-    let flush_tool_calls = |messages: &mut Vec<Value>,
-                            pending_tool_calls: &mut Vec<Value>,
-                            pending_reasoning: &mut String| {
-        if pending_tool_calls.is_empty() {
-            return;
-        }
-        let mut message = json!({
-            "role":"assistant",
-            "content":Value::Null,
-            "tool_calls":std::mem::take(pending_tool_calls)
-        });
-        if !pending_reasoning.is_empty() {
-            message["reasoning_content"] = Value::String(std::mem::take(pending_reasoning));
-        }
-        append_message(messages, message);
-    };
-
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
@@ -229,7 +283,14 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
                 for text in summary
                     .iter()
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
                 {
+                    // 段间用空行分隔:附着时按段去重(并行 function_call 常带同一段
+                    // summary),无分隔符时整块只能算一段。
+                    if !pending_reasoning.is_empty() {
+                        pending_reasoning.push_str("\n\n");
+                    }
                     pending_reasoning.push_str(text);
                 }
             }
@@ -273,7 +334,7 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
             item_type,
             Some("function_call_output" | "custom_tool_call_output" | "tool_search_output")
         ) {
-            flush_tool_calls(
+            flush_pending_tool_calls(
                 &mut messages,
                 &mut pending_tool_calls,
                 &mut pending_reasoning,
@@ -295,16 +356,15 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
 
         if item_type == Some("message") || item.contains_key("role") || item.contains_key("content")
         {
-            flush_tool_calls(
+            flush_pending_tool_calls(
                 &mut messages,
                 &mut pending_tool_calls,
                 &mut pending_reasoning,
             );
             let role = response_role_to_chat(item.get("role").and_then(Value::as_str));
             let mut message = json!({"role":role,"content":chat_content(item.get("content").unwrap_or(&Value::Null))});
-            if role == "assistant" && !pending_reasoning.is_empty() {
-                message["reasoning_content"] =
-                    Value::String(std::mem::take(&mut pending_reasoning));
+            if role == "assistant" {
+                attach_pending_reasoning_to_assistant(&mut message, &mut pending_reasoning);
             }
             append_message(&mut messages, message);
             continue;
@@ -314,7 +374,7 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
             item_type,
             Some("input_text" | "input_image" | "input_file" | "input_audio")
         ) {
-            flush_tool_calls(
+            flush_pending_tool_calls(
                 &mut messages,
                 &mut pending_tool_calls,
                 &mut pending_reasoning,
@@ -329,7 +389,7 @@ fn responses_input_to_chat(input: &Value) -> Vec<Value> {
         }
     }
 
-    flush_tool_calls(
+    flush_pending_tool_calls(
         &mut messages,
         &mut pending_tool_calls,
         &mut pending_reasoning,
@@ -983,6 +1043,132 @@ mod tests {
         );
         assert_eq!(converted["messages"][3]["role"], "tool");
         assert_eq!(converted["tools"][0]["function"]["name"], "read");
+    }
+
+    /// Claude Code 每回合注入 `<total_tokens>` 这类中段 system 消息。旧实现只要
+    /// `input` 的首条就是 system/developer,就把后面每条 system 并进它:前缀每回合
+    /// 都在变,OpenAI 兼容上游的 radix 前缀缓存直接失效;而两边 content 都是数组时
+    /// `as_str()` 双双取空,合并还会把首条正文和中段那条一起抹掉。
+    #[test]
+    fn keeps_mid_conversation_system_messages_in_place() {
+        let body = json!({
+            "model":"gpt-test",
+            "instructions":"You are Codex.",
+            "input":[
+                {"type":"message","role":"developer","content":[{"type":"input_text","text":"Follow the repo policy."}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]},
+                {"type":"message","role":"system","content":[{"type":"input_text","text":"<total_tokens>14963538</total_tokens>"}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"Continue"}]}
+            ]
+        });
+        let messages = responses_to_chat(&body)["messages"].clone();
+        let messages = messages.as_array().expect("messages is an array");
+        // 一条都不能少:顶层 instructions + input 的 5 条。
+        assert_eq!(messages.len(), 6);
+        // 顶层 instructions 仍然是队首那条 system。
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "You are Codex.");
+        // developer 映射成 system 后原位保留,正文不被合并抹掉。
+        assert_eq!(messages[1]["role"], "system");
+        assert_eq!(messages[1]["content"][0]["text"], "Follow the repo policy.");
+        // 中段 system 原位保留(第 5 条),不上提、不合并。
+        assert_eq!(messages[4]["role"], "system");
+        assert_eq!(
+            messages[4]["content"][0]["text"],
+            "<total_tokens>14963538</total_tokens>"
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .count(),
+            3
+        );
+    }
+
+    /// commentary 文本后紧跟 function_call 是同一个 Responses 回合。拆成两条相邻
+    /// assistant 时,Chat 上游把纯文本那条当完整回合返回 `finish_reason=stop`,
+    /// 长任务在第一次进度播报后就停(cc-switch#6529)。
+    #[test]
+    fn coalesces_commentary_with_the_following_tool_calls() {
+        let body = json!({
+            "model":"gpt-test",
+            "input":[
+                {"type":"reasoning","summary":[{"type":"summary_text","text":"need to edit the file"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Part 1 done. Appending 4-5."}]},
+                {"type":"function_call","call_id":"call_1","name":"apply_patch","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_1","output":"ok"}
+            ]
+        });
+        let messages = responses_to_chat(&body)["messages"].clone();
+        let messages = messages.as_array().expect("messages is an array");
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "tool"]);
+        assert_eq!(
+            messages[0]["content"][0]["text"],
+            "Part 1 done. Appending 4-5."
+        );
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[0]["reasoning_content"], "need to edit the file");
+        assert_eq!(messages[1]["tool_call_id"], "call_1");
+    }
+
+    /// 回合边界(user)之后的 function_call 仍然是独立的 assistant:并进上一条会把
+    /// 用户消息之前的回合和之后的调用揉成一条。
+    #[test]
+    fn keeps_a_user_boundary_before_a_tool_call_turn() {
+        let body = json!({
+            "model":"gpt-test",
+            "input":[
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done for now."}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"Next file"}]},
+                {"type":"function_call","call_id":"call_next","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_next","output":"ok"}
+            ]
+        });
+        let messages = responses_to_chat(&body)["messages"].clone();
+        let messages = messages.as_array().expect("messages is an array");
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "user", "assistant", "tool"]);
+        assert!(messages[0].get("tool_calls").is_none());
+        assert_eq!(messages[2]["content"], Value::Null);
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_next");
+    }
+
+    /// 并行调用共用同一段 reasoning summary,附着时按段去重,不能贴两遍。
+    #[test]
+    fn does_not_duplicate_reasoning_segments_across_parallel_calls() {
+        let body = json!({
+            "model":"gpt-test",
+            "input":[
+                {"type":"reasoning","summary":[{"type":"summary_text","text":"plan the edits"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Editing both files."}]},
+                {"type":"reasoning","summary":[{"type":"summary_text","text":"plan the edits"},{"type":"summary_text","text":"second section"}]},
+                {"type":"function_call","call_id":"call_1","name":"apply_patch","arguments":"{}"},
+                {"type":"function_call","call_id":"call_2","name":"apply_patch","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_1","output":"ok"},
+                {"type":"function_call_output","call_id":"call_2","output":"ok"}
+            ]
+        });
+        let messages = responses_to_chat(&body)["messages"].clone();
+        let messages = messages.as_array().expect("messages is an array");
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "tool", "tool"]);
+        assert_eq!(messages[0]["tool_calls"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            messages[0]["reasoning_content"],
+            "plan the edits\n\nsecond section"
+        );
     }
 
     #[test]

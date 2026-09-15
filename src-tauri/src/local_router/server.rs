@@ -2,6 +2,7 @@ use super::cache_injector;
 use super::chat_bridge::{chat_response_to_responses, responses_to_chat, ChatSseTransformer};
 use super::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry, CircuitPermit};
 use super::inline_tool_calls;
+use super::moonshot_schema;
 use super::session;
 use super::thinking_optimizer;
 use super::transforms::{self, PreparedRequest};
@@ -483,7 +484,7 @@ async fn attempt_target(
     };
 
     let mut current_json = prepared.json.clone();
-    let mut current_body = match request_body_for_target(&prepared, bridge) {
+    let mut current_body = match request_body_for_target(&prepared, bridge, target) {
         Ok(body) => body,
         Err(message) => {
             return AttemptResult::Return(AttemptResponse::local_error(
@@ -738,7 +739,11 @@ async fn attempt_target(
     }
 }
 
-fn request_body_for_target(prepared: &PreparedRequest, bridge: bool) -> Result<Vec<u8>, String> {
+fn request_body_for_target(
+    prepared: &PreparedRequest,
+    bridge: bool,
+    target: &UpstreamTarget,
+) -> Result<Vec<u8>, String> {
     if !bridge {
         return Ok(prepared.bytes.clone());
     }
@@ -746,7 +751,14 @@ fn request_body_for_target(prepared: &PreparedRequest, bridge: bool) -> Result<V
         .json
         .as_ref()
         .ok_or_else(|| "Codex Responses-to-Chat bridge requires a JSON request body".to_string())?;
-    serde_json::to_vec(&responses_to_chat(json))
+    let mut chat = responses_to_chat(json);
+    // Moonshot / Kimi 的 Chat Completions 拒收带兄弟键的 `$ref`,而 Codex 内置工具
+    // schema 正是这个形状。只对这个上游改写;其它供应商的工具 schema 字节不变,
+    // prompt 缓存前缀不受扰动。
+    if moonshot_schema::upstream_requires_ref_sibling_all_of(target.base_url().as_str()) {
+        moonshot_schema::wrap_ref_siblings_in_chat_tools(&mut chat);
+    }
+    serde_json::to_vec(&chat)
         .map_err(|error| format!("failed to convert Responses request: {error}"))
 }
 
@@ -1319,6 +1331,12 @@ struct StreamCompletion {
     used_half_open_permit: bool,
 }
 
+impl StreamCompletion {
+    fn request_started(&self) -> Option<Instant> {
+        self.completion.request_started()
+    }
+}
+
 fn streaming_response(
     status: StatusCode,
     mut headers: HeaderMap,
@@ -1326,6 +1344,12 @@ fn streaming_response(
     agent: RouterAgent,
 ) -> Response {
     headers.remove(CONTENT_LENGTH);
+    // 首字延迟要从请求发起时刻算起(而不是上游响应头到达时刻),所以把 completion 里的
+    // 计时基准借给捕获器。
+    let request_started = streaming
+        .stream_completion
+        .as_ref()
+        .and_then(StreamCompletion::request_started);
     let mut state = ProxyBodyState {
         upstream: streaming.rest,
         pending: VecDeque::new(),
@@ -1335,7 +1359,7 @@ fn streaming_response(
             .then(inline_tool_calls::InlineToolCallSseFilter::new),
         semantic_observer: streaming.semantic_protocol.map(SemanticStreamObserver::new),
         semantic_failure: None,
-        capture: Some(UsageCapture::new(agent, true, None)),
+        capture: Some(UsageCapture::new(agent, true, None).with_request_start(request_started)),
         stream_completion: streaming.stream_completion,
         status_code: status.as_u16(),
         idle_timeout: streaming.idle_timeout,
@@ -1619,6 +1643,11 @@ impl RequestCompletion {
         }
     }
 
+    /// 记账用的计时基准,供流式捕获算首字延迟;请求已收尾时为 None。
+    fn request_started(&self) -> Option<Instant> {
+        self.context.as_ref().map(|context| context.started)
+    }
+
     fn set_request_model(&mut self, model: String) {
         if let Some(context) = self.context.as_mut() {
             context.request_model = model;
@@ -1775,6 +1804,7 @@ async fn finalize_request(
         is_streaming: context.is_streaming,
         success,
         error_summary,
+        ttft_ms: usage.ttft_ms,
     };
     if let Err(error) = context.usage_store.insert(record).await {
         context.metrics.set_error(
@@ -2129,6 +2159,8 @@ mod tests {
         assert_eq!(recent[0].response_id.as_deref(), Some("resp_json_1"));
         assert!(recent[0].success);
         assert_eq!(recent[0].error_summary, None);
+        // 非流式请求没有首字概念,该列必须留空。
+        assert_eq!(recent[0].ttft_ms, None);
         router.stop().await.unwrap();
         upstream_task.abort();
         let _ = upstream_task.await;
@@ -2726,6 +2758,13 @@ mod tests {
         assert_eq!(recent[0].cache_read_tokens, 2);
         assert_eq!(recent[0].response_id.as_deref(), Some("msg_stream_1"));
         assert!(recent[0].is_streaming);
+        // 首字延迟必须真的从流式路径落到库里,并且不超过整段延迟。
+        let ttft_ms = recent[0].ttft_ms.expect("流式请求必须记下首字延迟");
+        assert!(
+            ttft_ms <= recent[0].latency_ms,
+            "首字延迟({ttft_ms})不能超过总延迟({})",
+            recent[0].latency_ms
+        );
 
         router.stop().await.unwrap();
         upstream_task.abort();
@@ -2797,6 +2836,168 @@ mod tests {
         upstream_task.abort();
         let _ = upstream_task.await;
         remove_database(&database_path);
+    }
+
+    /// CC-4:Codex 内置 ImageGen 的 Images 端点必须原样透传给上游——即使这个 target
+    /// 开了 Responses→Chat 桥接。桥接格式表达不了 Images 协议,一旦被桥接,data-URL
+    /// 图片会连同 `prompt` 一起被改写成 `messages`,上游必然 400。
+    #[tokio::test]
+    async fn codex_images_endpoint_passes_through_without_bridging() {
+        let captured = Arc::new(Mutex::new(Value::Null));
+        let captured_uri = Arc::new(Mutex::new(String::new()));
+        let mock_body = captured.clone();
+        let mock_uri = captured_uri.clone();
+        let upstream = Router::new().fallback(any(move |request: Request| {
+            let mock_body = mock_body.clone();
+            let mock_uri = mock_uri.clone();
+            async move {
+                *mock_uri.lock().await = request.uri().to_string();
+                let body = to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES)
+                    .await
+                    .unwrap();
+                *mock_body.lock().await = serde_json::from_slice(&body).unwrap();
+                Json(json!({
+                    "data": [{"b64_json": "aGVsbG8="}],
+                    "usage": {
+                        "input_tokens": 31,
+                        "output_tokens": 4,
+                        "input_tokens_details": {"cached_tokens": 6}
+                    }
+                }))
+            }
+        }));
+        let (upstream_address, upstream_task) = start_mock_upstream(upstream).await;
+        let target = UpstreamTarget::with_details(
+            "images",
+            "Images",
+            format!("http://{upstream_address}/v1"),
+            "images-secret",
+            vec!["gpt-image-test".to_string()],
+            false,
+            // 桥接开着也不能碰 Images 请求。
+            true,
+        )
+        .unwrap();
+        let database_path = temp_database_path();
+        let router = LocalRouterState::with_database_path(database_path.clone());
+        let info = router
+            .start(RouterRuntimeConfig::new(
+                "127.0.0.1",
+                unused_port(),
+                true,
+                runtime_with_target(
+                    RouterAgent::Codex,
+                    target,
+                    RouterAgentPolicy {
+                        active_target: "images".to_string(),
+                        ..RouterAgentPolicy::default()
+                    },
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let image_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/images/edits", info.base_url))
+            .json(&json!({
+                "model": "gpt-image-test",
+                "prompt": "make it blue",
+                "image": [image_data_url],
+                "n": 1
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = response.json().await.unwrap();
+        assert_eq!(payload["data"][0]["b64_json"], "aGVsbG8=");
+
+        // 路径按 Images 端点转发,不是 /v1/chat/completions。
+        assert_eq!(*captured_uri.lock().await, "/v1/images/edits");
+        // 请求体没被桥接改写:data-URL 图片与 prompt 原样到上游,没有 messages。
+        let forwarded = captured.lock().await.clone();
+        assert_eq!(forwarded["prompt"], "make it blue");
+        assert_eq!(forwarded["image"][0], image_data_url);
+        assert_eq!(forwarded["n"], 1);
+        assert_eq!(forwarded["model"], "gpt-image-test");
+        assert!(forwarded.get("messages").is_none());
+
+        // Images API 的 usage 形状照旧被 Codex 解析器记账。
+        let recent = router.recent_requests(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].endpoint, "/v1/images/edits");
+        assert_eq!(recent[0].input_tokens, 31);
+        assert_eq!(recent[0].output_tokens, 4);
+        assert_eq!(recent[0].cache_read_tokens, 6);
+
+        router.stop().await.unwrap();
+        upstream_task.abort();
+        let _ = upstream_task.await;
+        remove_database(&database_path);
+    }
+
+    /// CC-3 的接线点:桥接体在序列化前按 target host 分流。Kimi 上游要改写工具
+    /// schema,其它上游必须字节不变(否则 prompt 缓存前缀被扰动)。
+    #[test]
+    fn bridged_body_rewrites_ref_siblings_only_for_moonshot_targets() {
+        let responses = json!({
+            "model":"gpt-test",
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],
+            "tools":[{
+                "type":"function",
+                "name":"automation_update",
+                "parameters":{
+                    "type":"object",
+                    "properties":{
+                        "prompt":{"$ref":"#/$defs/__schema20","description":"Prompt to run"}
+                    },
+                    "$defs":{"__schema20":{"type":"string"}}
+                }
+            }]
+        });
+        let body = serde_json::to_vec(&responses).unwrap();
+        let policy = RouterAgentPolicy::default();
+        let target_for = |base_url: &str| {
+            UpstreamTarget::with_details(
+                "t",
+                "T",
+                base_url,
+                "",
+                vec!["gpt-test".to_string()],
+                false,
+                true,
+            )
+            .unwrap()
+        };
+
+        let kimi = target_for("https://api.kimi.com/coding/v1");
+        let prepared = transforms::prepare_request(&body, &kimi, &policy);
+        let converted: Value =
+            serde_json::from_slice(&request_body_for_target(&prepared, true, &kimi).unwrap())
+                .unwrap();
+        let parameters = &converted["tools"][0]["function"]["parameters"];
+        assert_eq!(
+            parameters["properties"]["prompt"],
+            json!({"description":"Prompt to run","allOf":[{"$ref":"#/$defs/__schema20"}]})
+        );
+
+        let openai = target_for("https://api.openai.com/v1");
+        let prepared = transforms::prepare_request(&body, &openai, &policy);
+        let converted: Value =
+            serde_json::from_slice(&request_body_for_target(&prepared, true, &openai).unwrap())
+                .unwrap();
+        assert_eq!(
+            converted["tools"][0]["function"]["parameters"]["properties"]["prompt"],
+            json!({"$ref":"#/$defs/__schema20","description":"Prompt to run"})
+        );
+
+        // 不桥接时请求体原样透传,不做任何 schema 改写。
+        let prepared = transforms::prepare_request(&body, &kimi, &policy);
+        assert_eq!(
+            request_body_for_target(&prepared, false, &kimi).unwrap(),
+            body
+        );
     }
 
     fn build_error_summary(encoding: &str, body: &[u8]) -> String {

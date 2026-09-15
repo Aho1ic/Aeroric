@@ -2,6 +2,7 @@ mod cache_injector;
 mod chat_bridge;
 mod circuit_breaker;
 mod inline_tool_calls;
+mod moonshot_schema;
 mod server;
 mod session;
 mod thinking_optimizer;

@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zstd::stream::Decoder as ZstdDecoder;
 
 const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
@@ -23,6 +23,8 @@ pub(crate) struct TokenUsage {
     pub cache_read_tokens: u64,
     pub model: Option<String>,
     pub response_id: Option<String>,
+    /// 首字延迟(毫秒)。只有流式响应且真的收到过 SSE 数据事件时才有值。
+    pub ttft_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -49,6 +51,8 @@ pub struct RouterRequestRecord {
     pub is_streaming: bool,
     pub success: bool,
     pub error_summary: Option<String>,
+    /// 首字延迟(毫秒)。非流式请求、以及没收到任何 SSE 数据事件的流式请求为 None。
+    pub ttft_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -113,11 +117,12 @@ impl UsageStore {
                         completed_at,
                         is_streaming,
                         success,
-                        error_summary
+                        error_summary,
+                        ttft_ms
                     ) VALUES (
                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                         ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                        ?16, ?17, ?18, ?19, ?20, ?21
+                        ?16, ?17, ?18, ?19, ?20, ?21, ?22
                     )
                     ON CONFLICT(request_id) DO NOTHING
                     ",
@@ -143,6 +148,7 @@ impl UsageStore {
                         i64::from(request.is_streaming),
                         i64::from(request.success),
                         request.error_summary,
+                        request.ttft_ms.map(as_sql_integer),
                     ],
                 )
                 .map_err(|error| RouterError::storage(error.to_string()))?;
@@ -222,7 +228,8 @@ impl UsageStore {
                         completed_at,
                         is_streaming,
                         success,
-                        error_summary
+                        error_summary,
+                        ttft_ms
                     FROM router_requests
                     ORDER BY completed_at DESC, rowid DESC
                     LIMIT ?1
@@ -257,6 +264,7 @@ impl UsageStore {
                         is_streaming: row.get::<_, i64>(18)? != 0,
                         success: row.get::<_, i64>(19)? != 0,
                         error_summary: row.get(20)?,
+                        ttft_ms: row.get::<_, Option<i64>>(21)?.map(nonnegative),
                     })
                 })
                 .map_err(|error| RouterError::storage(error.to_string()))?;
@@ -307,7 +315,8 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
                 completed_at INTEGER NOT NULL,
                 is_streaming INTEGER NOT NULL CHECK (is_streaming IN (0, 1)),
                 success INTEGER NOT NULL CHECK (success IN (0, 1)),
-                error_summary TEXT
+                error_summary TEXT,
+                ttft_ms INTEGER
             );
             CREATE INDEX IF NOT EXISTS router_requests_completed_at
                 ON router_requests (completed_at DESC);
@@ -325,6 +334,7 @@ fn open_database(path: &PathBuf) -> Result<Connection, RouterError> {
     ensure_column(&connection, "endpoint", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(&connection, "attempt_count", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&connection, "outbound_model", "TEXT")?;
+    ensure_column(&connection, "ttft_ms", "INTEGER")?;
     connection
         .execute_batch(
             "
@@ -368,6 +378,10 @@ fn as_sql_integer(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
 
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
 pub(crate) fn unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -401,6 +415,8 @@ enum CaptureMode {
         pending: Vec<u8>,
         usage: TokenUsage,
         discarding_oversized_event: bool,
+        /// 请求发起时刻。由 `with_request_start` 注入,缺失时不统计首字延迟。
+        request_start: Option<Instant>,
     },
 }
 
@@ -411,6 +427,7 @@ impl UsageCapture {
                 pending: Vec::new(),
                 usage: TokenUsage::default(),
                 discarding_oversized_event: false,
+                request_start: None,
             }
         } else {
             CaptureMode::Json {
@@ -420,6 +437,15 @@ impl UsageCapture {
             }
         };
         Self { agent, mode }
+    }
+
+    /// 注入请求发起时刻,让流式捕获能算出首字延迟。与 `latency_ms` 共用同一个
+    /// `Instant` 基准,因此 TTFT 必然不大于总延迟。非流式模式没有首字概念,忽略。
+    pub(crate) fn with_request_start(mut self, started: Option<Instant>) -> Self {
+        if let CaptureMode::Sse { request_start, .. } = &mut self.mode {
+            *request_start = started;
+        }
+        self
     }
 
     pub(crate) fn push(&mut self, chunk: &[u8]) {
@@ -441,9 +467,18 @@ impl UsageCapture {
                 pending,
                 usage,
                 discarding_oversized_event,
+                request_start,
             } => {
                 pending.extend_from_slice(chunk);
-                drain_sse_events(self.agent, pending, usage, discarding_oversized_event);
+                let parsed_data_event =
+                    drain_sse_events(self.agent, pending, usage, discarding_oversized_event);
+                // 首字延迟按"第一个真正带 JSON 数据的 SSE 事件抵达时"计,心跳注释和
+                // `[DONE]` 不算首字。
+                if parsed_data_event && usage.ttft_ms.is_none() {
+                    if let Some(started) = request_start {
+                        usage.ttft_ms = Some(elapsed_millis(*started));
+                    }
+                }
             }
         }
     }
@@ -471,6 +506,8 @@ impl UsageCapture {
             }
             CaptureMode::Sse { pending, usage, .. } => {
                 if !pending.is_empty() {
+                    // 收尾时补解析残留字节。这里的时间是流结束时刻而非事件抵达时刻,
+                    // 故意不用它标记首字延迟。
                     parse_sse_event(self.agent, pending, usage);
                 }
                 usage.clone()
@@ -521,28 +558,32 @@ pub(crate) fn decode_for_inspection(bytes: &[u8], encoding: Option<&str>) -> Opt
     (decoded.len() <= MAX_CAPTURE_BYTES).then_some(decoded)
 }
 
+/// 返回本次是否解析到过带 JSON 数据的事件,供调用方标记首字延迟。
 fn drain_sse_events(
     agent: RouterAgent,
     pending: &mut Vec<u8>,
     usage: &mut TokenUsage,
     discarding_oversized_event: &mut bool,
-) {
+) -> bool {
+    let mut parsed_data_event = false;
     while let Some((index, delimiter_len)) = find_sse_delimiter(pending) {
         let event = pending.drain(..index + delimiter_len).collect::<Vec<_>>();
         if *discarding_oversized_event {
             *discarding_oversized_event = false;
             continue;
         }
-        parse_sse_event(agent, &event[..index], usage);
+        parsed_data_event |= parse_sse_event(agent, &event[..index], usage);
     }
 
     if pending.len() > MAX_CAPTURE_BYTES {
         pending.clear();
         *discarding_oversized_event = true;
     }
+    parsed_data_event
 }
 
-fn parse_sse_event(agent: RouterAgent, bytes: &[u8], usage: &mut TokenUsage) {
+/// 返回事件里是否有可解析的 JSON 数据(注释/空事件/`[DONE]` 返回 false)。
+fn parse_sse_event(agent: RouterAgent, bytes: &[u8], usage: &mut TokenUsage) -> bool {
     let text = String::from_utf8_lossy(bytes);
     let data = text
         .lines()
@@ -551,10 +592,14 @@ fn parse_sse_event(agent: RouterAgent, bytes: &[u8], usage: &mut TokenUsage) {
         .collect::<Vec<_>>()
         .join("\n");
     if data.is_empty() || data.trim() == "[DONE]" {
-        return;
+        return false;
     }
-    if let Ok(value) = serde_json::from_str::<Value>(&data) {
-        absorb_value(agent, &value, usage);
+    match serde_json::from_str::<Value>(&data) {
+        Ok(value) => {
+            absorb_value(agent, &value, usage);
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -670,6 +715,7 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, 7);
         assert_eq!(usage.cache_creation_tokens, 3);
         assert_eq!(usage.response_id.as_deref(), Some("msg_123"));
+        assert_eq!(usage.ttft_ms, None);
     }
 
     #[test]
@@ -758,6 +804,7 @@ mod tests {
                 is_streaming: true,
                 success: true,
                 error_summary: None,
+                ttft_ms: Some(6),
             })
             .await
             .unwrap();
@@ -769,6 +816,7 @@ mod tests {
         let recent = store.recent_requests(10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].session_id.as_deref(), Some("session-1"));
+        assert_eq!(recent[0].ttft_ms, Some(6));
 
         let connection = Connection::open(&path).unwrap();
         let mut statement = connection
@@ -833,5 +881,164 @@ mod tests {
         let usage = compressed_json_usage(RouterAgent::Claude, "zstd", &payload);
         assert_eq!(usage.input_tokens, 99);
         assert_eq!(usage.output_tokens, 1);
+    }
+
+    fn streaming_record(
+        request_id: &str,
+        completed_at: i64,
+        ttft_ms: Option<u64>,
+    ) -> RouterRequestRecord {
+        RouterRequestRecord {
+            request_id: request_id.to_string(),
+            session_id: None,
+            response_id: None,
+            agent: RouterAgent::Claude,
+            target_id: Some("claude".to_string()),
+            target_name: Some("Claude".to_string()),
+            endpoint: "/v1/messages".to_string(),
+            attempt_count: 1,
+            model: "claude-sonnet-4-5".to_string(),
+            outbound_model: None,
+            input_tokens: 9,
+            output_tokens: 7,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            status_code: 200,
+            latency_ms: 80,
+            started_at: completed_at - 80,
+            completed_at,
+            is_streaming: true,
+            success: true,
+            error_summary: None,
+            ttft_ms,
+        }
+    }
+
+    #[test]
+    fn records_ttft_at_first_streaming_data_event() {
+        // 首字延迟从请求发起时刻起算,落在第一个带数据的事件上:心跳注释不算首字,
+        // 之后继续到达的事件也不能把它推后。
+        let started = Instant::now();
+        let mut capture =
+            UsageCapture::new(RouterAgent::Claude, true, None).with_request_start(Some(started));
+        std::thread::sleep(Duration::from_millis(20));
+        capture.push(b": ping\n\n");
+        std::thread::sleep(Duration::from_millis(20));
+        capture.push(
+            b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":9,\"output_tokens\":0}}}\n\n",
+        );
+        std::thread::sleep(Duration::from_millis(40));
+        capture.push(
+            b"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n",
+        );
+        let latency_ms = elapsed_millis(started);
+        let usage = capture.finish();
+
+        assert_eq!(usage.output_tokens, 7);
+        let ttft_ms = usage.ttft_ms.expect("流式响应必须记下首字延迟");
+        assert!(
+            ttft_ms >= 40,
+            "首字延迟不能早于第一个数据事件抵达时刻:{ttft_ms}"
+        );
+        assert!(
+            ttft_ms <= latency_ms,
+            "首字延迟({ttft_ms})不能超过总延迟({latency_ms})"
+        );
+        assert!(
+            ttft_ms < latency_ms,
+            "首字延迟被记成了整段延迟:ttft={ttft_ms} latency={latency_ms}"
+        );
+    }
+
+    #[test]
+    fn omits_ttft_for_non_streaming_capture() {
+        // 非流式响应一次性返回,没有首字概念,该列必须留空。
+        let mut capture = UsageCapture::new(RouterAgent::Claude, false, None)
+            .with_request_start(Some(Instant::now()));
+        capture.push(br#"{"usage":{"input_tokens":4,"output_tokens":2}}"#);
+        let usage = capture.finish();
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(usage.ttft_ms, None);
+    }
+
+    #[test]
+    fn omits_ttft_when_request_start_is_unknown() {
+        // 拿不到计时基准(请求已收尾)时不能凭空造一个首字延迟。
+        let mut capture = UsageCapture::new(RouterAgent::Claude, true, None);
+        capture.push(
+            b"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n",
+        );
+        let usage = capture.finish();
+        assert_eq!(usage.output_tokens, 3);
+        assert_eq!(usage.ttft_ms, None);
+    }
+
+    #[tokio::test]
+    async fn upgrades_legacy_database_without_ttft_column() {
+        // 老库没有 ttft_ms 列:升级后读写都要正常,老记录该字段为 None。
+        let path = temp_database_path();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE router_requests (
+                        request_id TEXT PRIMARY KEY,
+                        session_id TEXT,
+                        response_id TEXT,
+                        agent TEXT NOT NULL CHECK (agent IN ('claude', 'codex')),
+                        target_id TEXT,
+                        target_name TEXT,
+                        endpoint TEXT NOT NULL DEFAULT '',
+                        attempt_count INTEGER NOT NULL DEFAULT 0,
+                        model TEXT NOT NULL,
+                        outbound_model TEXT,
+                        input_tokens INTEGER NOT NULL DEFAULT 0,
+                        output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                        status_code INTEGER NOT NULL,
+                        latency_ms INTEGER NOT NULL,
+                        started_at INTEGER NOT NULL,
+                        completed_at INTEGER NOT NULL,
+                        is_streaming INTEGER NOT NULL CHECK (is_streaming IN (0, 1)),
+                        success INTEGER NOT NULL CHECK (success IN (0, 1)),
+                        error_summary TEXT
+                    );
+                    INSERT INTO router_requests (
+                        request_id, agent, endpoint, attempt_count, model,
+                        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                        status_code, latency_ms, started_at, completed_at, is_streaming, success
+                    ) VALUES (
+                        'legacy-1', 'claude', '/v1/messages', 1, 'claude-sonnet-4-5',
+                        5, 3, 0, 0, 200, 40, 1, 41, 1, 1
+                    );
+                    ",
+                )
+                .unwrap();
+        }
+
+        let store = UsageStore::new(path.clone());
+        store.initialize().await.unwrap();
+        store
+            .insert(streaming_record("upgraded-1", 200, Some(12)))
+            .await
+            .unwrap();
+
+        let recent = store.recent_requests(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        let legacy = recent
+            .iter()
+            .find(|record| record.request_id == "legacy-1")
+            .expect("老记录必须仍然读得出来");
+        assert_eq!(legacy.ttft_ms, None);
+        assert_eq!(legacy.output_tokens, 3);
+        let upgraded = recent
+            .iter()
+            .find(|record| record.request_id == "upgraded-1")
+            .expect("升级后必须能写入带首字延迟的新记录");
+        assert_eq!(upgraded.ttft_ms, Some(12));
+
+        remove_database(&path);
     }
 }
