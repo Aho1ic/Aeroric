@@ -26,7 +26,6 @@ import type {
 import {
   isActiveTaskStatus,
   resolveProjectLocation,
-  sshProjectPath,
 } from "./types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ReleasePage } from "./components/ReleasePage";
@@ -101,6 +100,9 @@ import {
   setProjectAvatarInList,
   toggleProjectHiddenInList,
   toggleProjectPinnedInList,
+  touchProjectInList,
+  upsertLocalProject,
+  upsertSshProject,
 } from "./state/app/projectMutations";
 import type { ProjectOps } from "./state/app";
 import { taskCompletionCommand } from "./taskCompletion";
@@ -133,12 +135,10 @@ import "./App.css";
 
 import {
   createDefaultProjectViewState,
-  deriveProjectName,
   loadProjectRailWidth,
   loadCollapsedProjectGroups,
   saveCollapsedProjectGroups,
   normalizeInterruptedTasksOnStartup,
-  normalizeRemotePath,
   normalizeSshProjectNames,
   persistProjects,
   persistProjectTasks,
@@ -1198,23 +1198,9 @@ function AppShell() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (!selected) return;
     const path = selected as string;
-    const existing = projects.find((p) => p.path === path);
-    const project: Project = existing
-      ? { ...existing, lastOpenedAt: Date.now() }
-      : {
-          id: `${Date.now()}`,
-          name: deriveProjectName(path),
-          path,
-          lastOpenedAt: Date.now(),
-          orderIndex: 0,
-        };
+    const { project } = upsertLocalProject(projects, path);
     setProjects((prev) => {
-      const next = existing
-        ? prev.map((p) => (p.path === path ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
-            ...p,
-            orderIndex: index,
-          }));
+      const next = upsertLocalProject(prev, path).projects;
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -1229,35 +1215,9 @@ function AppShell() {
   }
 
   function handleOpenSshProject(input: SshProjectInput) {
-    const remotePath = normalizeRemotePath(input.remotePath);
-    const path = sshProjectPath(input.connectionId, remotePath);
-    const now = Date.now();
-    const existing = projects.find((p) => {
-      const location = resolveProjectLocation(p);
-      return (
-        location.kind === "ssh" &&
-        location.connectionId === input.connectionId &&
-        location.remotePath === remotePath
-      );
-    });
-    const project: Project = existing
-      ? { ...existing, path, lastOpenedAt: now }
-      : {
-          id: `${now}`,
-          name: input.name,
-          path,
-          location: { kind: "ssh", connectionId: input.connectionId, remotePath },
-          lastOpenedAt: now,
-          orderIndex: 0,
-        };
-
+    const { project } = upsertSshProject(projects, input);
     setProjects((prev) => {
-      const next = existing
-        ? prev.map((p) => (p.id === project.id ? project : p))
-        : normalizeProjectOrder([project, ...prev]).map((p, index) => ({
-            ...p,
-            orderIndex: index,
-          }));
+      const next = upsertSshProject(prev, input).projects;
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -1282,9 +1242,9 @@ function AppShell() {
   }
 
   function handleProjectClick(project: Project) {
-    const updated = { ...project, lastOpenedAt: Date.now() };
+    const { project: updated } = touchProjectInList(projects, project.id);
     setProjects((prev) => {
-      const next = prev.map((p) => (p.id === project.id ? updated : p));
+      const next = touchProjectInList(prev, project.id).projects;
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
