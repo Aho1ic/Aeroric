@@ -1,7 +1,11 @@
-/* 周报生成入口。
+/* 周报生成入口按钮。
  *
- * 挂在首页 timeline 视图上方:那里已经有跨项目全量 `tasks` 与 `allProjects`,是唯一
- * 不需要额外取数的位置。
+ * 由首页 timeline 视图作为 `headerAction` 渲染在「时间线」标题行右侧:那里已经有跨项目
+ * 全量 `tasks` 与 `allProjects`,是唯一不需要额外取数的位置。
+ *
+ * **不自带外层容器。** 早前它是挂在面板外面的一条 bar,于是按钮贴着窗口内容区最右上角、
+ * 比面板内容右移一个 padding,视觉上读作窗口装饰而不是页面内容 —— 用户找不到它。位置与
+ * 内缩交给 `TimelineView` 的标题行,这里只渲染按钮本身。
  *
  * 组件自己 `invoke("load_app_settings")` 读区间与输出目录 —— 走 prop drilling 要串
  * 五层组件,而设置本来就在 Rust 侧。
@@ -74,7 +78,7 @@ function buildTaskPayload(task: Task, projects: Project[]): WeeklyReportTaskPayl
   };
 }
 
-export function WeeklyReportBar({ tasks, projects }: { tasks: Task[]; projects: Project[] }) {
+export function WeeklyReportButton({ tasks, projects }: { tasks: Task[]; projects: Project[] }) {
   const { language, t } = useI18n();
   const { showToast } = useToast();
   const [settings, setSettings] = useState<WeeklyReportSettings | null>(null);
@@ -168,43 +172,35 @@ export function WeeklyReportBar({ tasks, projects }: { tasks: Task[]; projects: 
     : t("report.generate");
 
   return (
-    <div
+    <button
+      type="button"
+      disabled={running || !settings}
+      title={t("report.generate")}
+      onClick={() => void generate()}
       style={{
-        display: "flex",
-        justifyContent: "flex-end",
+        display: "inline-flex",
         alignItems: "center",
-        padding: "0 4px 8px",
+        gap: 6,
+        height: 28,
+        padding: "0 12px",
+        border: "1px solid var(--border-medium)",
+        borderRadius: 6,
+        background: "var(--bg-card)",
+        color: "var(--text-primary)",
+        fontFamily: "var(--font-ui)",
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: running ? "default" : "pointer",
+        opacity: running ? 0.7 : 1,
+        flexShrink: 0,
       }}
     >
-      <button
-        type="button"
-        disabled={running || !settings}
-        title={t("report.generate")}
-        onClick={() => void generate()}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          height: 28,
-          padding: "0 12px",
-          border: "1px solid var(--border-medium)",
-          borderRadius: 6,
-          background: "var(--bg-card)",
-          color: "var(--text-primary)",
-          fontFamily: "var(--font-ui)",
-          fontSize: 11.5,
-          fontWeight: 600,
-          cursor: running ? "default" : "pointer",
-          opacity: running ? 0.7 : 1,
-        }}
-      >
-        {running ? (
-          <Loader2 size={12} strokeWidth={2.2} className="spin" />
-        ) : (
-          <FileText size={12} strokeWidth={2.2} />
-        )}
-        <span>{label}</span>
-      </button>
-    </div>
+      {running ? (
+        <Loader2 size={12} strokeWidth={2.2} className="spin" />
+      ) : (
+        <FileText size={12} strokeWidth={2.2} />
+      )}
+      <span>{label}</span>
+    </button>
   );
 }

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type React from "react";
 import { Clock } from "lucide-react";
 import type { Project, Task } from "../types";
 import { ProjectAvatar } from "./ProjectAvatar";
@@ -82,10 +83,13 @@ export function TimelineView({
   projects,
   tasks,
   onTaskClick,
+  headerAction,
 }: {
   projects: Project[];
   tasks: Task[];
   onTaskClick: (task: Task) => void;
+  /** 标题行右侧的操作。周报按钮走这里,才能吃到面板自己的 padding。 */
+  headerAction?: React.ReactNode;
 }) {
   const { t } = useI18n();
 
@@ -146,7 +150,10 @@ export function TimelineView({
 
   return (
     <div style={s.timelinePane}>
-      <div style={s.timelineHeader}>{t("timeline.title")}</div>
+      <div style={s.timelineTitleRow}>
+        <div style={s.timelineHeader}>{t("timeline.title")}</div>
+        {headerAction}
+      </div>
       <div style={s.timelineSubtitle}>{t("timeline.subtitle")}</div>
       {groups.length === 0 ? (
         <div style={s.timelineEmpty}>
@@ -169,7 +176,9 @@ export function TimelineView({
               return (
                 <div key={projectGroup.projectId} style={s.timelineProjectBlock}>
                   <div style={s.timelineProjectHeader}>
-                    {project ? <ProjectAvatar name={project.name} size={18} /> : null}
+                    {project ? (
+                      <ProjectAvatar name={project.name} avatar={project.avatar} size={18} />
+                    ) : null}
                     <span style={s.timelineProjectName}>
                       {project?.name ?? projectGroup.projectId}
                     </span>

@@ -9,11 +9,19 @@ export const timeline = {
     background: "var(--bg-panel)",
     padding: "28px 28px 32px",
   },
+  /* 标题与右侧操作(周报按钮)同排。按钮单独挂在面板外面时会贴着窗口右上角、
+     比面板内容右移一个 padding,视觉上读作窗口装饰而不是页面内容。 */
+  timelineTitleRow: {
+    display: "flex",
+    alignItems: "flex-start" as const,
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 4,
+  },
   timelineHeader: {
     fontSize: 14,
     fontWeight: 700,
     color: "var(--text-primary)",
-    marginBottom: 4,
   },
   timelineSubtitle: {
     fontSize: 12,
