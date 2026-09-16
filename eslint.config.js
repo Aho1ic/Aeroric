@@ -114,6 +114,26 @@ export default tseslint.config(
     },
   },
 
+  // 组件层禁止直接依赖 Tauri IPC：命令名必须走 lib/api 镜像表/常量。
+  {
+    files: ["src/components/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.ts", "**/*.test.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@tauri-apps/api/core",
+              message:
+                "组件请 import { invoke } from lib/api/invoke，并用 lib/api/* 的镜像表/常量拼命令，禁止直接依赖 @tauri-apps/api/core。",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // 关闭与 Prettier 冲突的格式化规则（必须放在最后）
   prettier,
 );

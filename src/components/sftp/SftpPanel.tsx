@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import * as Select from "@radix-ui/react-select";
 import { confirm, prompt } from "../../lib/appDialog";
 import {

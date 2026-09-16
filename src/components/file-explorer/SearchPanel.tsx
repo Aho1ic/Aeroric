@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import s from "../../styles";

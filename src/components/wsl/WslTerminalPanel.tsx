@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "../../lib/api/invoke";
 import { TERMINAL_COMMANDS } from "../../lib/api/runtimeCommands";
 import { WSL_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
 import type { FontFamily, TerminalFontSize, ThemeVariant } from "../../types";

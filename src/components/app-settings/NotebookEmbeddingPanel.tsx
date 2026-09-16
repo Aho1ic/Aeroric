@@ -19,7 +19,7 @@
  *    时测的是已保存的那个 —— 两种都是对的。
  */
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { Check, TriangleAlert } from "lucide-react";
 
 import { useI18n } from "../../i18n";

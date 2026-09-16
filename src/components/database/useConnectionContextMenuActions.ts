@@ -11,7 +11,7 @@
  * 不再认得它们是稳定引用,于是补进了依赖数组 —— 这些 setter 的身份本来就不变,行为不受影响。
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { OS_INTEGRATION_COMMANDS } from "../../lib/api/sftpCommands";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback } from "react";

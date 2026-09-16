@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { DiagnosticItem } from "../../types";
 import type { OpenFileSelection } from "../../hooks/projectPanelsState";
 import type { LanguageServerState } from "../../hooks/useLanguageServer";

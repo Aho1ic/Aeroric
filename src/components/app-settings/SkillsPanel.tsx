@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { SKILL_HUB_COMMANDS } from "../../lib/api/agentSettings";
 import { FolderOpen, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";

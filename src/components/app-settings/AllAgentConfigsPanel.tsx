@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import {

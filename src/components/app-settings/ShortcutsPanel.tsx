@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type React from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { Check, ChevronDown } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import { useI18n } from "../../i18n";

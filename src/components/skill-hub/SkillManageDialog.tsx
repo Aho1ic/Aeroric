@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { SKILL_HUB_COMMANDS } from "../../lib/api/agentSettings";
 import { X, Plus, Trash2, AlertTriangle } from "lucide-react";
 import claudeLogo from "../../assets/claude.svg";

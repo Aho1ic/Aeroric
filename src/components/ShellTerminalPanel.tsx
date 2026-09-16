@@ -1,6 +1,6 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import { TERMINAL_COMMANDS } from "../lib/api/runtimeCommands";
 import type { TerminalFontSize, FontFamily, ThemeVariant } from "../types";

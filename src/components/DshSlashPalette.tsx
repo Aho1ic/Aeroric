@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import type { PromptSkill } from "../types";
 import { useI18n } from "../i18n";
 import { DSH_SLASH_COMMANDS, type DshSlashCommand } from "../dshSlashCommands";

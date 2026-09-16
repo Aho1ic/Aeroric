@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Search, Plus, ChevronDown, X, Tag, Check, GitFork, GitBranch } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { GIT_MIRRORS } from "../../lib/api/git";
 import * as Popover from "@radix-ui/react-popover";
 import { useI18n } from "../../i18n";

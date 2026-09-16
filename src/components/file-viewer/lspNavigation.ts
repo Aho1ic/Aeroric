@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { EditorView } from "@uiw/react-codemirror";
 import type { Extension } from "@codemirror/state";
 import {

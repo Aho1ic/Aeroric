@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { WSL_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
 import { FolderOpen, RefreshCw, X } from "lucide-react";
 import type { WslDistribution, WslDistributionProbe, WslSettings } from "../../types";

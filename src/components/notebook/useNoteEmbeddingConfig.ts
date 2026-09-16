@@ -23,7 +23,7 @@
  *    (`notebook::rag::commands::resolve_key`)。
  */
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 
 import { APP_SETTINGS_CHANGED_EVENT, type AppSettings } from "../app-settings/types";
 import { DEFAULT_RAG_CONFIG, type EmbedProvider, type RagEmbedConfig } from "./noteRag";

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { X, Check, ChevronDown, Search } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import claudeLogo from "../../assets/claude.svg";

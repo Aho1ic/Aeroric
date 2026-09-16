@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { Check, Eye, Search, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";

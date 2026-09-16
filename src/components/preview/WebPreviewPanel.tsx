@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Copy, ExternalLink, Globe, Monitor, RefreshCw } from "lucide-react";
 import type React from "react";

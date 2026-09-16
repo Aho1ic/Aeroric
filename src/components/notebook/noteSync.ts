@@ -15,7 +15,7 @@
  *    多久)在进程内存里。后端故意分成两条命令 —— 状态栏高频轮询那一路不该每次开库。
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 
 /** 与 Rust 的 `store::RemoteTarget` 对齐。 */
 export type SyncRemoteTarget = {

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "../../lib/api/invoke";
 import { SSH_SHELL_COMMANDS } from "../../lib/api/sftpCommands";
 import { TERMINAL_COMMANDS } from "../../lib/api/runtimeCommands";
 import { Plug, Power, Server } from "lucide-react";

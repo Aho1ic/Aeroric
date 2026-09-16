@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { AGENT_SETTINGS_COMMANDS } from "../../lib/api/agentSettings";
 import { Check, Download, RefreshCw, Trash2, Upload, Zap } from "lucide-react";

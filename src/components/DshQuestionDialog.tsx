@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import { Check, HelpCircle, X } from "lucide-react";
 import { useI18n } from "../i18n";

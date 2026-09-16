@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { confirm } from "../lib/appDialog";
 import {
   RefreshCw,

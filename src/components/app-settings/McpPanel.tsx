@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { Check, Plus, Edit2, Trash2, TriangleAlert, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";

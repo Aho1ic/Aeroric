@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { RefreshCw, Sparkles } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { SKILL_HUB_CHANGED_EVENT } from "../app-settings/types";

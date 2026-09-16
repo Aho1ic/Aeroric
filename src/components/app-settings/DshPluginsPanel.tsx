@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { DSH_PLUGIN_COMMANDS } from "../../lib/api/agentSettings";
 import {
   Bot,

@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Download, Loader2 } from "lucide-react";
 import { useI18n } from "../i18n";

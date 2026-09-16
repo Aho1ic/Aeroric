@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import type { DshJobView, DshLiveSessionState, DshQueueItem, DshTodoItem } from "../types";
 import { useI18n } from "../i18n";

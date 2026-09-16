@@ -1,5 +1,5 @@
 import { Suspense, useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import type {
   Project,

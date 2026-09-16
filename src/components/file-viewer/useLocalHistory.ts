@@ -10,7 +10,7 @@
  *   reloadVersions 让编辑器重读,并清掉脏标记。
  */
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 
 import type { LocalHistoryEntry, LocalHistorySnapshot } from "../../types";
 import { confirm } from "../../lib/appDialog";

@@ -8,7 +8,7 @@
  * 不带基线时后端无法判断磁盘内容的来历,会一律报冲突(而不是覆盖)。
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { NoteLinkSource } from "./noteBacklinks";
 import type { NoteFieldSource } from "./noteFields";
 import type { NoteSearchRequestOptions } from "./noteGlobalSearch";

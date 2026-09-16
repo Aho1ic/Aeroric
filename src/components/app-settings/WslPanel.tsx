@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { WSL_SETTINGS_COMMANDS } from "../../lib/api/agentSettings";
 import { confirm } from "../../lib/appDialog";
 import { Download, Eye, EyeOff, RefreshCw, RotateCcw, Save } from "lucide-react";

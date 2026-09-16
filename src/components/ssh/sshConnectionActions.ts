@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { SshConnection } from "../../types";
 import { writeClipboardText } from "../../lib/clipboard";
 

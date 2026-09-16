@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import * as Select from "@radix-ui/react-select";
 import { Check, ChevronDown, Eye, EyeOff, Save, X } from "lucide-react";
 import type { SshConnection } from "../../types";

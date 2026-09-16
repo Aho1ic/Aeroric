@@ -4,7 +4,7 @@ import {
   remoteInvokeOptions,
   useCancellableInvoke,
 } from "../hooks/useCancellableInvoke";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { confirm } from "../lib/appDialog";
 import { ArrowDown, ArrowUp, ChevronRight, FolderOpen, RotateCcw, Search, X } from "lucide-react";
 import s from "../styles";

@@ -16,7 +16,7 @@
  *    保存的那几行。
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 
 export type EmbedProvider = "ollama" | "openAi";
 

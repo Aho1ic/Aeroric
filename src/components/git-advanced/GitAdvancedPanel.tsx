@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { confirm } from "../../lib/appDialog";
 import { Check, GitBranch, Loader2, RefreshCw, Search, X } from "lucide-react";
 import type React from "react";

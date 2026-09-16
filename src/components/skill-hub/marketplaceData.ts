@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { MarketplaceCategory, MarketplacePage, MarketplaceSort } from "../../types";
 
 export const MARKETPLACE_PAGE_SIZE = 12;

@@ -1,6 +1,6 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { DOCKER_COMMANDS } from "../../lib/api/sftpCommands";
 import { confirm } from "../../lib/appDialog";
 import {

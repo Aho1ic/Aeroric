@@ -1,6 +1,6 @@
 import type React from "react";
 import { createElement } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { LOCAL_ROUTER_STATUS_COMMANDS } from "../../lib/api/agentSettings";
 import { APP_PLATFORM } from "../../platform";
 import s from "../../styles";

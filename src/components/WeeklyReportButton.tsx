@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import { FileText, Loader2 } from "lucide-react";
 import type { Project, ProtocolFamily, Task } from "../types";

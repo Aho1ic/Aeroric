@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { Download, Sparkles, TriangleAlert } from "lucide-react";
 import type { Project, AgentType, PermissionMode, PromptSkill } from "../types";
 import { isRemoteProject } from "../types";

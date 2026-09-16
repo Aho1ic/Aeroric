@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { Check, ChevronDown, FolderOpen } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { pickExportDir } from "../notebook/noteExport";

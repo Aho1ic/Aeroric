@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { SSH_HOST_KEY_COMMANDS } from "../../lib/api/sftpCommands";
 import { Check, ShieldQuestion, X } from "lucide-react";
 import type { SshConnection, SshHostKey } from "../../types";

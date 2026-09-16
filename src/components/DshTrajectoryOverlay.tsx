@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/api/invoke";
 import { DSH_SESSION_COMMANDS } from "../lib/api/sftpCommands";
 import {
   Activity,
