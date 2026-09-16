@@ -31,6 +31,7 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
+import { useTaskActions } from "../state/app";
 import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
@@ -142,22 +143,7 @@ export function ProjectPage({
   isNewTask,
   onNewTask,
   onSelectTask,
-  onDeleteTask,
-  onDeleteTasks,
-  onArchiveTasks,
-  onUnarchiveTasks,
-  onToggleTaskStar,
-  onRenameTask,
-  onGenerateTaskName,
   onSubmitTask,
-  onRunTodoTask,
-  onUpdateTodo,
-  onCancelTask,
-  onResumeTask,
-  onMergeWorktree,
-  onDiscardWorktree,
-  onReconnectTask,
-  onMarkTaskDone,
   onSwitchTaskConfig,
   onInput,
   onResize,
@@ -202,14 +188,6 @@ export function ProjectPage({
   isNewTask: boolean;
   onNewTask: () => void;
   onSelectTask: (projectId: string, id: string) => void;
-  onDeleteTask: (id: string) => void;
-  onDeleteTasks: (ids: string[]) => void;
-  onArchiveTasks: (ids: string[]) => void;
-  onUnarchiveTasks: (ids: string[]) => void;
-  onDeleteAllTasks: () => void;
-  onToggleTaskStar: (id: string) => void;
-  onRenameTask: (id: string, name: string) => void;
-  onGenerateTaskName: (id: string) => Promise<void>;
   onSubmitTask: (t: {
     prompt: string;
     agent: AgentType;
@@ -224,17 +202,6 @@ export function ProjectPage({
     speed?: string;
     injectPromptIntoTerminal?: boolean;
   }) => void;
-  onRunTodoTask: (task: Task) => void;
-  onUpdateTodo: (
-    taskId: string,
-    updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
-  ) => void;
-  onCancelTask: (id: string) => void;
-  onResumeTask: (id: string) => void;
-  onMergeWorktree: (id: string) => Promise<void>;
-  onDiscardWorktree: (id: string) => Promise<void>;
-  onReconnectTask: (id: string) => void;
-  onMarkTaskDone: (id: string) => void;
   onSwitchTaskConfig?: (
     id: string,
     values: AgentConfigSwitchValues,
@@ -294,6 +261,22 @@ export function ProjectPage({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const taskActions = useTaskActions();
+  const onDeleteTask = taskActions.deleteTask;
+  const onDeleteTasks = taskActions.deleteTasks;
+  const onArchiveTasks = taskActions.archiveTasks;
+  const onUnarchiveTasks = taskActions.unarchiveTasks;
+  const onToggleTaskStar = taskActions.toggleTaskStar;
+  const onRenameTask = taskActions.renameTask;
+  const onGenerateTaskName = taskActions.generateTaskName;
+  const onRunTodoTask = (task: Task) => void taskActions.runTodoTask(task);
+  const onUpdateTodo = taskActions.updateTodo;
+  const onCancelTask = taskActions.cancelTask;
+  const onResumeTask = taskActions.resumeTask;
+  const onMergeWorktree = taskActions.mergeWorktree;
+  const onDiscardWorktree = taskActions.discardWorktree;
+  const onReconnectTask = (id: string) => void taskActions.reconnectTask(id);
+  const onMarkTaskDone = taskActions.markTaskDone;
   const agentOptions = useAgentOptions();
   const platformRuntime = usePlatformRuntimeInfo();
   // dsh live session state (goal/todo/plan/jobs/queue) consumed from the

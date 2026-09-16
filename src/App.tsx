@@ -100,7 +100,7 @@ import {
   upsertLocalProject,
   upsertSshProject,
 } from "./state/app/projectMutations";
-import type { ProjectOps } from "./state/app";
+import type { ProjectOps, TaskActions } from "./state/app";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -876,6 +876,29 @@ function AppShell() {
     [projects, showToast, formatSaveProjectsError, mountProject],
   );
 
+  const taskActions = useMemo<TaskActions>(
+    () => ({
+      deleteTask: (id) => void handleDeleteTask(id),
+      deleteTasks: (ids) => void handleDeleteTasks(ids),
+      archiveTasks: handleArchiveTasks,
+      unarchiveTasks: handleUnarchiveTasks,
+      deleteAllTasks: (project) => void handleDeleteAllTasks(project),
+      toggleTaskStar: handleToggleTaskStar,
+      renameTask: handleRenameTask,
+      generateTaskName: handleGenerateTaskName,
+      updateTodo: handleUpdateTodo,
+      cancelTask: handleCancelTask,
+      resumeTask: (id) => void handleResumeTask(id),
+      runTodoTask: (task) => void handleRunTodoTask(task),
+      mergeWorktree: handleMergeWorktree,
+      discardWorktree: handleDiscardWorktree,
+      reconnectTask: handleReconnectTask,
+      markTaskDone: handleMarkTaskDone,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, projects],
+  );
+
   function handleAssignProjectGroup(projectId: string, groupName: string | null) {
     setProjects((prev) => {
       const next = assignProjectGroup(prev, projectId, groupName);
@@ -1083,7 +1106,7 @@ function AppShell() {
   }, []);
 
   return (
-    <AppProviders projectOps={projectOps}>
+    <AppProviders projectOps={projectOps} taskActions={taskActions}>
       <div style={{ ...s.root, position: "relative" }}>
         <div
           style={{
@@ -1122,23 +1145,7 @@ function AppShell() {
                 onSelectTask={(targetProjectId, id) =>
                   updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
-                onDeleteTask={handleDeleteTask}
-                onDeleteTasks={handleDeleteTasks}
-                onArchiveTasks={handleArchiveTasks}
-                onUnarchiveTasks={handleUnarchiveTasks}
-                onDeleteAllTasks={() => handleDeleteAllTasks(project)}
-                onToggleTaskStar={handleToggleTaskStar}
-                onRenameTask={handleRenameTask}
-                onGenerateTaskName={handleGenerateTaskName}
                 onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
-                onRunTodoTask={handleRunTodoTask}
-                onUpdateTodo={handleUpdateTodo}
-                onCancelTask={handleCancelTask}
-                onResumeTask={handleResumeTask}
-                onMergeWorktree={handleMergeWorktree}
-                onDiscardWorktree={handleDiscardWorktree}
-                onReconnectTask={handleReconnectTask}
-                onMarkTaskDone={handleMarkTaskDone}
                 onSwitchTaskConfig={handleSwitchTaskConfig}
                 onInput={tm.handleInput}
                 onResize={tm.handleResize}

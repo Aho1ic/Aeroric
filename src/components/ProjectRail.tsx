@@ -498,11 +498,11 @@ export function ProjectRail({
   onBack: () => void;
   onNewTask: () => void;
   onSelectTask: (projectId: string, id: string) => void;
-  onDeleteTask: (id: string) => void;
+  onDeleteTask?: (id: string) => void;
   onDeleteTasks?: (ids: string[]) => void;
   onArchiveTasks?: (ids: string[]) => void;
   onUnarchiveTasks?: (ids: string[]) => void;
-  onToggleTaskStar: (id: string) => void;
+  onToggleTaskStar?: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
   onReorderProjects?: (orderedProjectIds: string[]) => void;
@@ -1496,8 +1496,8 @@ export function ProjectRail({
                                 multiSelected={selectedTaskIds.has(task.id)}
                                 isNewTask={isNewTask}
                                 onSelect={(event) => handleTaskClick(event, project, tasks, task)}
-                                onDelete={() => onDeleteTask(task.id)}
-                                onToggleStar={() => onToggleTaskStar(task.id)}
+                                onDelete={() => onDeleteTask?.(task.id)}
+                                onToggleStar={() => onToggleTaskStar?.(task.id)}
                                 onRunTodo={() => onRunTodo(task)}
                                 allowSessionRecovery={
                                   resolveProjectLocation(project).kind === "local"
@@ -1529,8 +1529,8 @@ export function ProjectRail({
                                 multiSelected={selectedTaskIds.has(task.id)}
                                 isNewTask={isNewTask}
                                 onSelect={(event) => handleTaskClick(event, project, tasks, task)}
-                                onDelete={() => onDeleteTask(task.id)}
-                                onToggleStar={() => onToggleTaskStar(task.id)}
+                                onDelete={() => onDeleteTask?.(task.id)}
+                                onToggleStar={() => onToggleTaskStar?.(task.id)}
                                 onRunTodo={() => onRunTodo(task)}
                                 allowSessionRecovery={
                                   resolveProjectLocation(project).kind === "local"

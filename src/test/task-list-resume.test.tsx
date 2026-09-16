@@ -34,12 +34,13 @@ describe("TaskList resume actions", () => {
           selectedId={null}
           isNewTask={false}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={onRunTodo}
           onResumeTask={onResumeTask}
-          onArchiveTasks={vi.fn()}
-          onUnarchiveTasks={vi.fn()}
+
+
+
         />
       </I18nProvider>,
     );

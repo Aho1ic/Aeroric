@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useProjectsStore } from "./projectsStore";
 import { useTasksStore } from "./tasksStore";
-import type { Project, Task } from "../../types";
+import type { AgentType, PermissionMode, Project, Task } from "../../types";
 
 /**
  * ProjectPage / WelcomePage 的 action 门面。
@@ -22,10 +22,61 @@ export type TaskOps = {
   removeTask: (projectId: string, taskId: string) => void;
 };
 
+/**
+ * ProjectPage 消费的任务操作面。由 App 注入宿主实现；
+ * 默认实现抛错，避免 silent no-op。
+ */
+export type TaskActions = {
+  deleteTask: (id: string) => void;
+  deleteTasks: (ids: string[]) => void;
+  archiveTasks: (ids: string[]) => void;
+  unarchiveTasks: (ids: string[]) => void;
+  deleteAllTasks: (project: Project) => void;
+  toggleTaskStar: (id: string) => void;
+  renameTask: (id: string, name: string) => void;
+  generateTaskName: (id: string) => Promise<void>;
+  updateTodo: (
+    taskId: string,
+    updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
+  ) => void;
+  cancelTask: (id: string) => void;
+  resumeTask: (id: string) => void;
+  runTodoTask: (task: Task) => void;
+  mergeWorktree: (id: string) => Promise<void>;
+  discardWorktree: (id: string) => Promise<void>;
+  reconnectTask: (id: string) => void;
+  markTaskDone: (id: string) => void;
+};
+
 const ProjectOpsContext = createContext<ProjectOps | null>(null);
 const TaskOpsContext = createContext<TaskOps | null>(null);
+const TaskActionsContext = createContext<TaskActions | null>(null);
 ProjectOpsContext.displayName = "ProjectOpsContext";
 TaskOpsContext.displayName = "TaskOpsContext";
+TaskActionsContext.displayName = "TaskActionsContext";
+
+function missingTaskAction(name: string): void {
+  console.warn(`TaskActions.${name} was not provided by AppProviders (no-op)`);
+}
+
+const defaultTaskActions: TaskActions = {
+  deleteTask: () => missingTaskAction("deleteTask"),
+  deleteTasks: () => missingTaskAction("deleteTasks"),
+  archiveTasks: () => missingTaskAction("archiveTasks"),
+  unarchiveTasks: () => missingTaskAction("unarchiveTasks"),
+  deleteAllTasks: () => missingTaskAction("deleteAllTasks"),
+  toggleTaskStar: () => missingTaskAction("toggleTaskStar"),
+  renameTask: () => missingTaskAction("renameTask"),
+  generateTaskName: async () => missingTaskAction("generateTaskName"),
+  updateTodo: () => missingTaskAction("updateTodo"),
+  cancelTask: () => missingTaskAction("cancelTask"),
+  resumeTask: () => missingTaskAction("resumeTask"),
+  runTodoTask: () => missingTaskAction("runTodoTask"),
+  mergeWorktree: async () => missingTaskAction("mergeWorktree"),
+  discardWorktree: async () => missingTaskAction("discardWorktree"),
+  reconnectTask: () => missingTaskAction("reconnectTask"),
+  markTaskDone: () => missingTaskAction("markTaskDone"),
+};
 
 /**
  * 默认 ops 走 zustand store（store 自带 persist）。
@@ -35,10 +86,12 @@ export function AppOpsProvider({
   children,
   projectOps: projectOpsOverride,
   taskOps: taskOpsOverride,
+  taskActions: taskActionsOverride,
 }: {
   children: ReactNode;
   projectOps?: ProjectOps;
   taskOps?: TaskOps;
+  taskActions?: TaskActions;
 }) {
   const projectOps = useMemo<ProjectOps>(
     () =>
@@ -65,9 +118,16 @@ export function AppOpsProvider({
     [taskOpsOverride],
   );
 
+  const taskActions = useMemo<TaskActions>(
+    () => taskActionsOverride ?? defaultTaskActions,
+    [taskActionsOverride],
+  );
+
   return (
     <ProjectOpsContext.Provider value={projectOps}>
-      <TaskOpsContext.Provider value={taskOps}>{children}</TaskOpsContext.Provider>
+      <TaskOpsContext.Provider value={taskOps}>
+        <TaskActionsContext.Provider value={taskActions}>{children}</TaskActionsContext.Provider>
+      </TaskOpsContext.Provider>
     </ProjectOpsContext.Provider>
   );
 }
@@ -82,4 +142,8 @@ export function useTaskOps(): TaskOps {
   const ops = useContext(TaskOpsContext);
   if (!ops) throw new Error("useTaskOps must be used within AppOpsProvider");
   return ops;
+}
+
+export function useTaskActions(): TaskActions {
+  return useContext(TaskActionsContext) ?? defaultTaskActions;
 }

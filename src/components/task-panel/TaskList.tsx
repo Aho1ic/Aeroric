@@ -14,6 +14,7 @@ import { isActiveTaskStatus, isArchivableTaskStatus } from "../../types";
 import { hasTaskSession } from "../../taskSession";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
+import { useTaskActions } from "../../state/app";
 import s from "../../styles";
 
 const GROUP_ROW_HEIGHT = 27;
@@ -56,12 +57,12 @@ export function TaskList({
   selectedId,
   isNewTask,
   onSelectTask,
-  onDeleteTask,
-  onToggleTaskStar,
+  onDeleteTask: onDeleteTaskProp,
+  onToggleTaskStar: onToggleTaskStarProp,
   onRunTodo,
   onResumeTask,
-  onArchiveTasks,
-  onUnarchiveTasks,
+  onArchiveTasks: onArchiveTasksProp,
+  onUnarchiveTasks: onUnarchiveTasksProp,
 }: {
   tasks: Task[];
   taskDisplayWindow: TaskDisplayWindow;
@@ -69,14 +70,19 @@ export function TaskList({
   selectedId: string | null;
   isNewTask: boolean;
   onSelectTask: (id: string) => void;
-  onDeleteTask: (id: string) => void;
-  onToggleTaskStar: (id: string) => void;
+  onDeleteTask?: (id: string) => void;
+  onToggleTaskStar?: (id: string) => void;
   onRunTodo: (task: Task) => void;
   onResumeTask?: (taskId: string) => void;
-  onArchiveTasks: (taskIds: string[]) => void;
-  onUnarchiveTasks: (taskIds: string[]) => void;
+  onArchiveTasks?: (taskIds: string[]) => void;
+  onUnarchiveTasks?: (taskIds: string[]) => void;
 }) {
   const { t } = useI18n();
+  const taskActions = useTaskActions();
+  const onDeleteTask = onDeleteTaskProp ?? taskActions.deleteTask;
+  const onToggleTaskStar = onToggleTaskStarProp ?? taskActions.toggleTaskStar;
+  const onArchiveTasks = onArchiveTasksProp ?? taskActions.archiveTasks;
+  const onUnarchiveTasks = onUnarchiveTasksProp ?? taskActions.unarchiveTasks;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);

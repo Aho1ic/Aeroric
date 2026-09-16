@@ -2,8 +2,8 @@ export { useProjectsStore, projectsSelector, selectedProjectSelector } from "./p
 export { useTasksStore, projectTasksSelector } from "./tasksStore";
 export { useAppearanceStore } from "./appearanceStore";
 export { AppProviders } from "./AppProviders";
-export { AppOpsProvider, useProjectOps, useTaskOps } from "./AppOpsProvider";
-export type { ProjectOps, TaskOps } from "./AppOpsProvider";
+export { AppOpsProvider, useProjectOps, useTaskOps, useTaskActions } from "./AppOpsProvider";
+export type { ProjectOps, TaskOps, TaskActions } from "./AppOpsProvider";
 export {
   launchLocalTask,
   launchSshTask,

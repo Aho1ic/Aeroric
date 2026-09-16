@@ -62,8 +62,8 @@ describe("ProjectRail project dragging", () => {
               onBack={vi.fn()}
               onNewTask={vi.fn()}
               onSelectTask={vi.fn()}
-              onDeleteTask={vi.fn()}
-              onToggleTaskStar={vi.fn()}
+
+
               onRunTodo={vi.fn()}
               themeVariant="light"
               onToggleTheme={vi.fn()}
@@ -105,8 +105,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -146,8 +146,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -191,8 +191,8 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-            onDeleteTask={vi.fn()}
-            onToggleTaskStar={vi.fn()}
+
+
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}
@@ -229,8 +229,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           projectRailWidth={252}
           onProjectRailWidthChange={onProjectRailWidthChange}
@@ -278,8 +278,8 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-            onDeleteTask={vi.fn()}
-            onToggleTaskStar={vi.fn()}
+
+
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}
@@ -320,8 +320,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           onReorderProjects={vi.fn()}
           themeVariant="light"
@@ -355,8 +355,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           onReorderProjects={onReorderProjects}
           themeVariant="light"
@@ -419,8 +419,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           onReorderProjects={onReorderProjects}
           themeVariant="light"
@@ -483,8 +483,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           onReorderProjects={vi.fn()}
           themeVariant="light"
@@ -515,8 +515,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={onSelectTask}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           onReorderProjects={vi.fn()}
           themeVariant="light"
@@ -607,8 +607,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-          onDeleteTask={vi.fn()}
-          onToggleTaskStar={vi.fn()}
+
+
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -646,8 +646,8 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-            onDeleteTask={vi.fn()}
-            onToggleTaskStar={vi.fn()}
+
+
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}

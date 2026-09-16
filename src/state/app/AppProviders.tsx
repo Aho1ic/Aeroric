@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
-import { AppOpsProvider, type ProjectOps, type TaskOps } from "./AppOpsProvider";
+import {
+  AppOpsProvider,
+  type ProjectOps,
+  type TaskActions,
+  type TaskOps,
+} from "./AppOpsProvider";
 
 /**
  * 应用级 zustand store 的组合 Provider。
@@ -9,13 +14,15 @@ export function AppProviders({
   children,
   projectOps,
   taskOps,
+  taskActions,
 }: {
   children: ReactNode;
   projectOps?: ProjectOps;
   taskOps?: TaskOps;
+  taskActions?: TaskActions;
 }) {
   return (
-    <AppOpsProvider projectOps={projectOps} taskOps={taskOps}>
+    <AppOpsProvider projectOps={projectOps} taskOps={taskOps} taskActions={taskActions}>
       {children}
     </AppOpsProvider>
   );
