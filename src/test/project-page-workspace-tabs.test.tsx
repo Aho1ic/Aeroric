@@ -208,22 +208,32 @@ function projectPageProps(
  * setState 报 act 警告。用 `await act(async () => {})` 而不是 waitFor:
  * 这里等的是一个已经 resolve 的 promise 落进 state，不是等某个条件变真。
  */
-async function renderProject(project: Project, overrides = {}) {
+async function renderProject(
+  project: Project,
+  overrides = {},
+  connections?: {
+    sshConnections?: unknown[];
+  },
+) {
+  const sshConnections =
+    connections?.sshConnections !== undefined
+      ? connections.sshConnections
+      : [
+          {
+            id: "conn-1",
+            name: "Prod",
+            host: "example.test",
+            port: 22,
+            username: "tester",
+            remotePath: "/srv/app",
+            createdAt: 1,
+          },
+        ];
   const result = render(
     <I18nProvider>
       <AppProviders
         connections={{
-          sshConnections: [
-            {
-              id: "conn-1",
-              name: "Prod",
-              host: "example.test",
-              port: 22,
-              username: "tester",
-              remotePath: "/srv/app",
-              createdAt: 1,
-            },
-          ],
+          sshConnections: sshConnections as never,
           onSshConnectionsChange: () => {},
           condaEnvironments: [],
           selectedCondaEnvPath: null,
@@ -390,7 +400,7 @@ describe("工作区标签条上的终端按钮", () => {
     it("SSH 项目没有可用连接时,连标签条都不出", async () => {
       // 终端页签那一支要求 `remoteConnection` 存在；查不到连接时
       // workspaceTerminalTabs 为空，标签条没有内容可显示。
-      await renderProject(sshProject(), { sshConnections: [] });
+      await renderProject(sshProject(), {}, { sshConnections: [] });
 
       expect(screen.queryByTestId("workspace-tabs")).not.toBeInTheDocument();
     });
