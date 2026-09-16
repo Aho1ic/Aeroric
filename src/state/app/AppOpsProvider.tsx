@@ -46,14 +46,56 @@ export type TaskActions = {
   discardWorktree: (id: string) => Promise<void>;
   reconnectTask: (id: string) => void;
   markTaskDone: (id: string) => void;
+  submitTask: (
+    project: Project,
+    input: {
+      prompt: string;
+      agent: AgentType;
+      permissionMode: PermissionMode;
+      images: string[];
+      texts: string[];
+      immediate: boolean;
+      launchMode: string;
+      baseBranch: string;
+      selectedModel?: string;
+      reasoningEffort?: string | null;
+      speed?: string;
+      injectPromptIntoTerminal?: boolean;
+    },
+  ) => Promise<Task | null> | Promise<void> | void;
+  switchTaskConfig: (
+    id: string,
+    values: {
+      agent: AgentType;
+      selectedModel?: string;
+      reasoningEffort?: string | null;
+      speed?: string;
+      permissionMode: PermissionMode;
+    },
+  ) => Promise<boolean | void> | boolean | void;
+};
+
+/** 终端 I/O 通道（由 App 的 useTerminalManager 注入）。 */
+export type TerminalActions = {
+  input: (taskId: string, data: string) => void;
+  resize: (taskId: string, cols: number, rows: number) => void;
+  register: (
+    taskId: string,
+    writeFn: ((data: string, callback?: () => void) => void) | null,
+    resizeFn?: (cols: number, rows: number) => void,
+  ) => number;
+  ready: (taskId: string, generation: number) => void;
+  snapshot: (taskId: string, snapshot: string) => void;
 };
 
 const ProjectOpsContext = createContext<ProjectOps | null>(null);
 const TaskOpsContext = createContext<TaskOps | null>(null);
 const TaskActionsContext = createContext<TaskActions | null>(null);
+const TerminalActionsContext = createContext<TerminalActions | null>(null);
 ProjectOpsContext.displayName = "ProjectOpsContext";
 TaskOpsContext.displayName = "TaskOpsContext";
 TaskActionsContext.displayName = "TaskActionsContext";
+TerminalActionsContext.displayName = "TerminalActionsContext";
 
 function missingTaskAction(name: string): void {
   console.warn(`TaskActions.${name} was not provided by AppProviders (no-op)`);
@@ -76,6 +118,16 @@ const defaultTaskActions: TaskActions = {
   discardWorktree: async () => missingTaskAction("discardWorktree"),
   reconnectTask: () => missingTaskAction("reconnectTask"),
   markTaskDone: () => missingTaskAction("markTaskDone"),
+  submitTask: () => missingTaskAction("submitTask"),
+  switchTaskConfig: () => missingTaskAction("switchTaskConfig"),
+};
+
+const defaultTerminalActions: TerminalActions = {
+  input: () => {},
+  resize: () => {},
+  register: () => 0,
+  ready: () => {},
+  snapshot: () => {},
 };
 
 /**
@@ -87,11 +139,13 @@ export function AppOpsProvider({
   projectOps: projectOpsOverride,
   taskOps: taskOpsOverride,
   taskActions: taskActionsOverride,
+  terminalActions: terminalActionsOverride,
 }: {
   children: ReactNode;
   projectOps?: ProjectOps;
   taskOps?: TaskOps;
   taskActions?: TaskActions;
+  terminalActions?: TerminalActions;
 }) {
   const projectOps = useMemo<ProjectOps>(
     () =>
@@ -123,10 +177,19 @@ export function AppOpsProvider({
     [taskActionsOverride],
   );
 
+  const terminalActions = useMemo<TerminalActions>(
+    () => terminalActionsOverride ?? defaultTerminalActions,
+    [terminalActionsOverride],
+  );
+
   return (
     <ProjectOpsContext.Provider value={projectOps}>
       <TaskOpsContext.Provider value={taskOps}>
-        <TaskActionsContext.Provider value={taskActions}>{children}</TaskActionsContext.Provider>
+        <TaskActionsContext.Provider value={taskActions}>
+          <TerminalActionsContext.Provider value={terminalActions}>
+            {children}
+          </TerminalActionsContext.Provider>
+        </TaskActionsContext.Provider>
       </TaskOpsContext.Provider>
     </ProjectOpsContext.Provider>
   );
@@ -146,4 +209,8 @@ export function useTaskOps(): TaskOps {
 
 export function useTaskActions(): TaskActions {
   return useContext(TaskActionsContext) ?? defaultTaskActions;
+}
+
+export function useTerminalActions(): TerminalActions {
+  return useContext(TerminalActionsContext) ?? defaultTerminalActions;
 }

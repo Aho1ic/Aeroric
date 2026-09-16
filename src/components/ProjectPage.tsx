@@ -4,8 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   Project,
   Task,
-  AgentType,
-  PermissionMode,
   TaskStatus,
   ProtocolFamily,
   SshConnection,
@@ -19,15 +17,12 @@ import { useEditorRunDebugState } from "../hooks/useEditorRunDebugState";
 import { useLocalShellSession } from "../hooks/useLocalShellSession";
 import { START_DSH_CREATOR_DRAFT_EVENT } from "./app-settings/types";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
-import type { LaunchMode } from "./new-task/LaunchModeSelector";
 import { RunningView } from "./RunningView";
-import type { AgentConfigSwitchValues } from "./AgentConfigSwitchDialog";
 import { CommandPalette, type CommandPaletteCommand } from "./command-palette/CommandPalette";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
-import { useTaskActions, useAppearance, useConnections } from "../state/app";
-import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
+import { useTaskActions, useAppearance, useConnections, useTerminalActions, type TaskActions } from "../state/app";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
@@ -138,13 +133,6 @@ export function ProjectPage({
   isNewTask,
   onNewTask,
   onSelectTask,
-  onSubmitTask,
-  onSwitchTaskConfig,
-  onInput,
-  onResize,
-  onRegisterTerminal,
-  onTerminalReady,
-  onSnapshot,
   onTaskSessionRecovered,
   onBack,
   onSwitchProject,
@@ -157,7 +145,6 @@ export function ProjectPage({
   onProjectRailWidthChange,
   onOpen,
   onToggleTheme,
-  sftpLocalDefaultPath,
   hubMode = false,
   onExitSkillHub,
   onShowReleasePage,
@@ -173,33 +160,6 @@ export function ProjectPage({
   isNewTask: boolean;
   onNewTask: () => void;
   onSelectTask: (projectId: string, id: string) => void;
-  onSubmitTask: (t: {
-    prompt: string;
-    agent: AgentType;
-    permissionMode: PermissionMode;
-    images: string[];
-    texts: string[];
-    immediate: boolean;
-    launchMode: LaunchMode;
-    baseBranch: string;
-    selectedModel?: string;
-    reasoningEffort?: string | null;
-    speed?: string;
-    injectPromptIntoTerminal?: boolean;
-  }) => void;
-  onSwitchTaskConfig?: (
-    id: string,
-    values: AgentConfigSwitchValues,
-  ) => Promise<boolean | void> | boolean | void;
-  onInput: (taskId: string, data: string) => void;
-  onResize: (taskId: string, cols: number, rows: number) => void;
-  onRegisterTerminal: (
-    taskId: string,
-    writeFn: TerminalWriteFn | null,
-    resizeFn?: TerminalResizeFn,
-  ) => number;
-  onTerminalReady: (taskId: string, generation: number) => void;
-  onSnapshot: (taskId: string, snapshot: string) => void;
   onTaskSessionRecovered?: (
     taskId: string,
     sessionId: string,
@@ -218,7 +178,6 @@ export function ProjectPage({
   onProjectRailWidthChange?: (width: number) => void;
   onOpen: () => void;
   onToggleTheme: () => void;
-  sftpLocalDefaultPath: string;
   hubMode?: boolean;
   onExitSkillHub?: () => void;
   onShowReleasePage?: () => void;
@@ -231,6 +190,7 @@ export function ProjectPage({
   const attentionBadge = appearance.attentionBadge;
   const monoFontFamily = appearance.monoFontFamily;
   const taskActions = useTaskActions();
+  const terminalActions = useTerminalActions();
   const {
     sshConnections,
     onSshConnectionsChange,
@@ -238,7 +198,16 @@ export function ProjectPage({
     condaEnvironments,
     selectedCondaEnvPath,
     onSelectedCondaEnvPathChange,
+    sftpLocalDefaultPath = "",
   } = useConnections();
+  const onInput = terminalActions.input;
+  const onResize = terminalActions.resize;
+  const onRegisterTerminal = terminalActions.register;
+  const onTerminalReady = terminalActions.ready;
+  const onSnapshot = terminalActions.snapshot;
+  const onSubmitTask = (input: Parameters<TaskActions["submitTask"]>[1]) =>
+    void taskActions.submitTask(project, input);
+  const onSwitchTaskConfig = taskActions.switchTaskConfig;
   const onDeleteTask = taskActions.deleteTask;
   const onDeleteTasks = taskActions.deleteTasks;
   const onArchiveTasks = taskActions.archiveTasks;

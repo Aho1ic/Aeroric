@@ -5,6 +5,7 @@ import {
   type ProjectOps,
   type TaskActions,
   type TaskOps,
+  type TerminalActions,
 } from "./AppOpsProvider";
 import { ConnectionsProvider } from "./ConnectionsProvider";
 
@@ -17,12 +18,14 @@ export function AppProviders({
   projectOps,
   taskOps,
   taskActions,
+  terminalActions,
   connections,
 }: {
   children: ReactNode;
   projectOps?: ProjectOps;
   taskOps?: TaskOps;
   taskActions?: TaskActions;
+  terminalActions?: TerminalActions;
   connections?: {
     sshConnections: SshConnection[];
     onSshConnectionsChange: (connections: SshConnection[]) => void;
@@ -30,10 +33,16 @@ export function AppProviders({
     condaEnvironments: CondaEnvironment[];
     selectedCondaEnvPath: string | null;
     onSelectedCondaEnvPathChange: (path: string | null) => void;
+    sftpLocalDefaultPath?: string;
   };
 }) {
   const inner = (
-    <AppOpsProvider projectOps={projectOps} taskOps={taskOps} taskActions={taskActions}>
+    <AppOpsProvider
+      projectOps={projectOps}
+      taskOps={taskOps}
+      taskActions={taskActions}
+      terminalActions={terminalActions}
+    >
       {children}
     </AppOpsProvider>
   );

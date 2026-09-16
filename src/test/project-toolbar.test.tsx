@@ -8,6 +8,7 @@ import { I18nProvider } from "../i18n";
 import type { DiagnosticItem, Project, Task } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
 import { AppProviders } from "../state/app";
+import { noopTaskActions } from "./wrapTaskActions";
 import { RightToolbar } from "../components/RightToolbar";
 import { ToastProvider } from "../components/Toast";
 import { FILE_VIEWER_COMMAND_EVENT } from "../components/file-viewer/editorCommandEvents";
@@ -423,18 +424,11 @@ function projectPageProps(
     isNewTask: true,
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
-    onSubmitTask: vi.fn(),
-    onInput: vi.fn(),
-    onResize: vi.fn(),
-    onRegisterTerminal: vi.fn(),
-    onTerminalReady: vi.fn(),
-    onSnapshot: vi.fn(),
     onBack: vi.fn(),
     onSwitchProject: vi.fn(),
     onReorderProjects: vi.fn(),
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
-    sftpLocalDefaultPath: "/Users/macbook/Downloads/同步空间",
   };
 }
 
@@ -1574,7 +1568,12 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPageProps()} onSubmitTask={onSubmitTask} />
+        <AppProviders
+          taskActions={{ ...noopTaskActions(), submitTask: onSubmitTask }}
+          connections={sshConnectionsForTest()}
+        >
+          <ProjectPage {...projectPageProps()} />
+        </AppProviders>
       </I18nProvider>,
     );
 
@@ -1582,6 +1581,7 @@ describe("ProjectPage right toolbar", () => {
 
     expect(screen.queryByTestId("shell-terminal")).not.toBeInTheDocument();
     expect(onSubmitTask).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         prompt: "",
         agent: "claude",
@@ -1596,7 +1596,12 @@ describe("ProjectPage right toolbar", () => {
 
     render(
       <I18nProvider>
-        <ProjectPage {...projectPageProps()} onSubmitTask={onSubmitTask} />
+        <AppProviders
+          taskActions={{ ...noopTaskActions(), submitTask: onSubmitTask }}
+          connections={sshConnectionsForTest()}
+        >
+          <ProjectPage {...projectPageProps()} />
+        </AppProviders>
       </I18nProvider>,
     );
 

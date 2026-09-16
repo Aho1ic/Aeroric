@@ -12,6 +12,8 @@ export type ConnectionsState = {
   condaEnvironments: CondaEnvironment[];
   selectedCondaEnvPath: string | null;
   onSelectedCondaEnvPathChange: (path: string | null) => void;
+  /** SFTP 面板默认本地路径（无 remote 时使用）。 */
+  sftpLocalDefaultPath?: string;
 };
 
 const ConnectionsContext = createContext<ConnectionsState | null>(null);
@@ -33,6 +35,7 @@ export function ConnectionsProvider({
       condaEnvironments: value.condaEnvironments,
       selectedCondaEnvPath: value.selectedCondaEnvPath,
       onSelectedCondaEnvPathChange: value.onSelectedCondaEnvPathChange,
+      sftpLocalDefaultPath: value.sftpLocalDefaultPath,
     }),
     [
       value.sshConnections,
@@ -41,6 +44,7 @@ export function ConnectionsProvider({
       value.condaEnvironments,
       value.selectedCondaEnvPath,
       value.onSelectedCondaEnvPathChange,
+      value.sftpLocalDefaultPath,
     ],
   );
   return <ConnectionsContext.Provider value={memo}>{children}</ConnectionsContext.Provider>;
@@ -52,6 +56,7 @@ const defaultConnections: ConnectionsState = {
   condaEnvironments: [],
   selectedCondaEnvPath: null,
   onSelectedCondaEnvPathChange: () => {},
+  sftpLocalDefaultPath: "",
 };
 
 export function useConnections(): ConnectionsState {

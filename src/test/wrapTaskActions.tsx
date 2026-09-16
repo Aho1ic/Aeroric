@@ -21,6 +21,8 @@ export function noopTaskActions(): TaskActions {
     discardWorktree: vi.fn(async () => {}),
     reconnectTask: vi.fn(),
     markTaskDone: vi.fn(),
+    submitTask: vi.fn(async () => null),
+    switchTaskConfig: vi.fn(async () => true),
   };
 }
 

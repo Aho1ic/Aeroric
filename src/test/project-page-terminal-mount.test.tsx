@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, SshConnection } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { AppProviders } from "../state/app";
 
 /**
  * 守的是「什么样的项目挂哪个终端面板」这条契约。
@@ -151,18 +152,11 @@ function projectPageProps(
     isNewTask: true,
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
-    onSubmitTask: vi.fn(),
-    onInput: vi.fn(),
-    onResize: vi.fn(),
-    onRegisterTerminal: vi.fn(),
-    onTerminalReady: vi.fn(),
-    onSnapshot: vi.fn(),
     onBack: vi.fn(),
     onSwitchProject: vi.fn(),
     onReorderProjects: vi.fn(),
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
-    sftpLocalDefaultPath: "/tmp",
     ...overrides,
   };
 }
@@ -170,7 +164,27 @@ function projectPageProps(
 function renderProject(project: Project, overrides = {}) {
   return render(
     <I18nProvider>
-      <ProjectPage {...projectPageProps(project, overrides)} />
+      <AppProviders
+        connections={{
+          sshConnections: [
+            {
+              id: "conn-1",
+              name: "Prod",
+              host: "example.test",
+              port: 22,
+              username: "tester",
+              remotePath: "/srv/app",
+              createdAt: 1,
+            },
+          ],
+          onSshConnectionsChange: () => {},
+          condaEnvironments: [],
+          selectedCondaEnvPath: null,
+          onSelectedCondaEnvPathChange: () => {},
+        }}
+      >
+        <ProjectPage {...projectPageProps(project, overrides)} />
+      </AppProviders>
     </I18nProvider>,
   );
 }

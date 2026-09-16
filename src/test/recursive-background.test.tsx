@@ -84,18 +84,11 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     isNewTask: true,
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
-    onSubmitTask: vi.fn(),
-    onInput: vi.fn(),
-    onResize: vi.fn(),
-    onRegisterTerminal: vi.fn(),
-    onTerminalReady: vi.fn(),
-    onSnapshot: vi.fn(),
     onBack: vi.fn(),
     onSwitchProject: vi.fn(),
     onReorderProjects: vi.fn(),
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
-    sftpLocalDefaultPath: "/Users/macbook/Downloads/同步空间",
   };
 }
 

@@ -101,7 +101,7 @@ import {
   upsertLocalProject,
   upsertSshProject,
 } from "./state/app/projectMutations";
-import type { ProjectOps, TaskActions } from "./state/app";
+import type { ProjectOps, TaskActions, TerminalActions } from "./state/app";
 import {
   loadProjectGroupNames,
   mergeProjectGroupNames,
@@ -902,6 +902,10 @@ function AppShell() {
       cancelTask: handleCancelTask,
       resumeTask: (id) => void handleResumeTask(id),
       runTodoTask: (task) => void handleRunTodoTask(task),
+      submitTask: (project, input) =>
+        handleSubmitTask(project, input as Parameters<typeof handleSubmitTask>[1]),
+      switchTaskConfig: (id, values) =>
+        handleSwitchTaskConfig(id, values as Parameters<typeof handleSwitchTaskConfig>[1]),
       mergeWorktree: handleMergeWorktree,
       discardWorktree: handleDiscardWorktree,
       reconnectTask: handleReconnectTask,
@@ -909,6 +913,19 @@ function AppShell() {
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tasks, projects],
+  );
+
+  const terminalActions = useMemo<TerminalActions>(
+    () => ({
+      input: tm.handleInput,
+      resize: tm.handleResize,
+      register: tm.handleRegisterTerminal as TerminalActions["register"],
+      ready: handleTerminalReady,
+      snapshot: tm.handleSnapshot,
+    }),
+    // handleTerminalReady 每帧新建；与 ProjectPage 调用约定一致。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tm],
   );
 
   function handleAssignProjectGroup(projectId: string, groupName: string | null) {
@@ -1121,6 +1138,7 @@ function AppShell() {
     <AppProviders
       projectOps={projectOps}
       taskActions={taskActions}
+      terminalActions={terminalActions}
       connections={{
         sshConnections,
         onSshConnectionsChange: handleSshConnectionsChange,
@@ -1128,6 +1146,7 @@ function AppShell() {
         condaEnvironments,
         selectedCondaEnvPath,
         onSelectedCondaEnvPathChange: setSelectedCondaEnvPath,
+        sftpLocalDefaultPath,
       }}
     >
       <div style={{ ...s.root, position: "relative" }}>
@@ -1168,13 +1187,6 @@ function AppShell() {
                 onSelectTask={(targetProjectId, id) =>
                   updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
-                onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
-                onSwitchTaskConfig={handleSwitchTaskConfig}
-                onInput={tm.handleInput}
-                onResize={tm.handleResize}
-                onRegisterTerminal={tm.handleRegisterTerminal}
-                onTerminalReady={handleTerminalReady}
-                onSnapshot={tm.handleSnapshot}
                 onTaskSessionRecovered={updateTaskSession}
                 onBack={handleBack}
                 onSwitchProject={handleProjectClick}
@@ -1187,7 +1199,6 @@ function AppShell() {
                 onProjectRailWidthChange={handleProjectRailWidthChange}
                 onOpen={handleOpen}
                 onToggleTheme={handleToggleTheme}
-                sftpLocalDefaultPath={sftpLocalDefaultPath}
                 onShowReleasePage={() => setShowReleasePage(true)}
               />
             );
