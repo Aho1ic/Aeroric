@@ -48,6 +48,7 @@ import {
   useSshConnectionPersistence,
   useDisableTextInputAutoFeatures,
   useHostAppearanceMirror,
+  useHostProjectViewsMirror,
 } from "./state/app/useAppShellHooks";
 import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
 import { useRemoteTaskRequests } from "./state/app/useRemoteTaskRequests";
@@ -213,6 +214,13 @@ function AppShell() {
     useDshHostEvents();
 
   const tm = useTerminalManager();
+
+  useHostProjectViewsMirror({
+    views: projectViews,
+    taskRunCounts,
+    getTaskRestoreState: tm.getTaskRestoreState,
+  });
+
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
   const remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>());
   const startupReadyRef = useRef<Promise<void>>(Promise.resolve());
@@ -310,10 +318,6 @@ function AppShell() {
       return next;
     });
   }, []);
-
-  function getProjectView(projectId: string): ProjectViewState {
-    return projectViews[projectId] ?? createDefaultProjectViewState();
-  }
 
   useHideWindowShortcut();
 
@@ -1128,6 +1132,9 @@ function AppShell() {
       reorderProjects: handleReorderProjects,
       setProjectRailWidth: handleProjectRailWidthChange,
       setCollapsedGroups: (groups) => setCollapsedProjectGroups(new Set(groups)),
+      selectTask: (projectId, taskId, isNewTask) => {
+        updateProjectView(projectId, { selectedTaskId: taskId, isNewTask });
+      },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -1147,6 +1154,7 @@ function AppShell() {
       handleSetProjectAvatar,
       setCollapsedProjectGroups,
       setShowReleasePage,
+      updateProjectView,
     ],
   );
 
@@ -1175,15 +1183,14 @@ function AppShell() {
         >
           <Suspense fallback={null}>
             {mountedProjects.map((project) => {
-            const view = getProjectView(project.id);
-            const isHubActive = hubMode && project.id === hubProjectId;
-            const railProjectsFiltered = isHubActive
-              ? [project]
-              : railProjects.filter((p) => p.id !== hubProjectId);
-            const otherProjectsFiltered = isHubActive
-              ? []
-              : sortedProjects.filter((p) => p.id !== project.id && p.id !== hubProjectId);
-            return (
+              const isHubActive = hubMode && project.id === hubProjectId;
+              const railProjectsFiltered = isHubActive
+                ? [project]
+                : railProjects.filter((p) => p.id !== hubProjectId);
+              const otherProjectsFiltered = isHubActive
+                ? []
+                : sortedProjects.filter((p) => p.id !== project.id && p.id !== hubProjectId);
+              return (
               <ProjectPage
                 key={project.id}
                 project={project}
@@ -1192,16 +1199,6 @@ function AppShell() {
                 otherProjects={otherProjectsFiltered}
                 hubMode={isHubActive}
                 tasks={tasks}
-                getTaskRestoreState={tm.getTaskRestoreState}
-                taskRunCounts={taskRunCounts}
-                selectedTaskId={view.selectedTaskId}
-                isNewTask={view.isNewTask}
-                onNewTask={() =>
-                  updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
-                }
-                onSelectTask={(targetProjectId, id) =>
-                  updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
-                }
                 onTaskSessionRecovered={updateTaskSession}
                 projectGroups={projectGroups}
                 collapsedProjectGroups={collapsedProjectGroups}

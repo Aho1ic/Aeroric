@@ -28,6 +28,10 @@ import {
   useConnections,
   useTerminalActions,
   useProjectOps,
+  useProjectSelectedTaskId,
+  useProjectIsNewTask,
+  useTaskRunCounts,
+  useGetTaskRestoreState,
   type TaskActions,
 } from "../state/app";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
@@ -134,29 +138,21 @@ export function ProjectPage({
   allProjects = [],
   otherProjects = [],
   tasks,
-  getTaskRestoreState,
-  taskRunCounts,
-  selectedTaskId,
-  isNewTask,
-  onNewTask,
-  onSelectTask,
-  onTaskSessionRecovered,
   projectGroups = [],
   collapsedProjectGroups,
   projectRailWidth,
   hubMode = false,
+  onTaskSessionRecovered,
 }: {
   project: Project;
   visible?: boolean;
   allProjects?: Project[];
   otherProjects?: Project[];
   tasks: Task[];
-  getTaskRestoreState: (taskId: string) => { initialData?: string; initialSnapshot?: string };
-  taskRunCounts: Record<string, number>;
-  selectedTaskId: string | null;
-  isNewTask: boolean;
-  onNewTask: () => void;
-  onSelectTask: (projectId: string, id: string) => void;
+  projectGroups?: string[];
+  collapsedProjectGroups?: ReadonlySet<string>;
+  projectRailWidth?: number;
+  hubMode?: boolean;
   onTaskSessionRecovered?: (
     taskId: string,
     sessionId: string,
@@ -164,10 +160,6 @@ export function ProjectPage({
     codexLike: boolean,
     family?: ProtocolFamily,
   ) => void;
-  projectGroups?: string[];
-  collapsedProjectGroups?: ReadonlySet<string>;
-  projectRailWidth?: number;
-  hubMode?: boolean;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -179,6 +171,18 @@ export function ProjectPage({
   const taskActions = useTaskActions();
   const terminalActions = useTerminalActions();
   const projectOps = useProjectOps();
+  const selectedTaskId = useProjectSelectedTaskId(project.id);
+  const isNewTask = useProjectIsNewTask(project.id);
+  const taskRunCounts = useTaskRunCounts();
+  const getTaskRestoreState = useGetTaskRestoreState();
+  const onNewTask = useCallback(
+    () => projectOps.selectTask(project.id, null, true),
+    [projectOps, project.id],
+  );
+  const onSelectTask = useCallback(
+    (projectId: string, id: string) => projectOps.selectTask(projectId, id, false),
+    [projectOps],
+  );
   const onBack = projectOps.back;
   const onSwitchProject = projectOps.switchProject;
   const onReorderProjects = projectOps.reorderProjects;

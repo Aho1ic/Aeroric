@@ -2,6 +2,13 @@ export { useProjectsStore, projectsSelector, selectedProjectSelector } from "./p
 export { useTasksStore, projectTasksSelector } from "./tasksStore";
 export { useAppearanceStore } from "./appearanceStore";
 export { useAppearance } from "./useAppearance";
+export {
+  useProjectViewsStore,
+  useProjectSelectedTaskId,
+  useProjectIsNewTask,
+  useTaskRunCounts,
+  useGetTaskRestoreState,
+} from "./projectViewsStore";
 export { AppProviders } from "./AppProviders";
 export { AppOpsProvider, useProjectOps, useTaskOps, useTaskActions, useTerminalActions } from "./AppOpsProvider";
 export type { ProjectOps, TaskOps, TaskActions, TerminalActions } from "./AppOpsProvider";

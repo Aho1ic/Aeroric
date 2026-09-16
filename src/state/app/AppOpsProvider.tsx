@@ -1,6 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useProjectsStore } from "./projectsStore";
 import { useTasksStore } from "./tasksStore";
+import { useProjectViewsStore } from "./projectViewsStore";
 import type { AgentType, PermissionMode, Project, Task } from "../../types";
 
 /**
@@ -22,6 +23,7 @@ export type ProjectOps = {
   reorderProjects: (orderedProjectIds: string[]) => void;
   setProjectRailWidth: (width: number) => void;
   setCollapsedGroups: (groups: ReadonlySet<string>) => void;
+  selectTask: (projectId: string, taskId: string | null, isNewTask: boolean) => void;
 };
 
 export type TaskOps = {
@@ -173,6 +175,8 @@ export function AppOpsProvider({
         reorderProjects: (ids) => useProjectsStore.getState().reorderProjects(ids),
         setProjectRailWidth: () => {},
         setCollapsedGroups: () => {},
+        selectTask: (projectId, taskId, isNewTask) =>
+          useProjectViewsStore.getState().selectTask(projectId, taskId, isNewTask),
       },
     [projectOpsOverride],
   );
@@ -232,6 +236,8 @@ const defaultProjectOps: ProjectOps = {
   reorderProjects: () => {},
   setProjectRailWidth: () => {},
   setCollapsedGroups: () => {},
+  selectTask: (projectId, taskId, isNewTask) =>
+    useProjectViewsStore.getState().selectTask(projectId, taskId, isNewTask),
 };
 
 export function useTaskOps(): TaskOps {

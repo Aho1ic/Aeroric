@@ -259,12 +259,6 @@ function projectPageProps(
     allProjects: [project],
     otherProjects: [],
     tasks: [],
-    getTaskRestoreState: () => ({}),
-    taskRunCounts: {},
-    selectedTaskId: null,
-    isNewTask: true,
-    onNewTask: vi.fn(),
-    onSelectTask: vi.fn(),
     ...overrides,
   };
 }

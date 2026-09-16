@@ -78,12 +78,6 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     allProjects: [localProject()],
     otherProjects: [],
     tasks: [],
-    getTaskRestoreState: () => ({}),
-    taskRunCounts: {},
-    selectedTaskId: null,
-    isNewTask: true,
-    onNewTask: vi.fn(),
-    onSelectTask: vi.fn(),
   };
 }
 
@@ -202,8 +196,6 @@ describe("recursive dynamic background", () => {
   it("does not render after starting a task terminal", () => {
     const props = {
       ...projectPageProps(),
-      isNewTask: false,
-      selectedTaskId: "task-1",
       tasks: [
         {
           id: "task-1",

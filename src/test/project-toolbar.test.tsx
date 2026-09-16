@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { DiagnosticItem, Project, Task } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
-import { AppProviders } from "../state/app";
+import { AppProviders, useProjectViewsStore } from "../state/app";
 import { noopTaskActions } from "./wrapTaskActions";
 import { RightToolbar } from "../components/RightToolbar";
 import { ToastProvider } from "../components/Toast";
@@ -418,12 +418,6 @@ function projectPageProps(
     allProjects: [project],
     otherProjects: [],
     tasks: [],
-    getTaskRestoreState: () => ({}),
-    taskRunCounts: {},
-    selectedTaskId: null,
-    isNewTask: true,
-    onNewTask: vi.fn(),
-    onSelectTask: vi.fn(),
   };
 }
 
@@ -488,11 +482,10 @@ function runningTask(projectId: string): Task {
 function projectPagePropsWithWorkspace(project: Project = localProject()) {
   const props = projectPageProps(project);
   const task = runningTask(project.id);
+  useProjectViewsStore.getState().selectTask(project.id, task.id, false);
   return {
     ...props,
     tasks: [task],
-    selectedTaskId: task.id,
-    isNewTask: false,
   };
 }
 

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project, Task } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { useProjectViewsStore } from "../state/app";
 
 /**
  * 守的是右侧 dock「哪个 rightPanel 值挂哪个面板、面板拿到哪条路径」这条契约。
@@ -170,12 +171,6 @@ function projectPageProps(
     allProjects: [project],
     otherProjects: [],
     tasks: [],
-    getTaskRestoreState: () => ({}),
-    taskRunCounts: {},
-    selectedTaskId: null,
-    isNewTask: true,
-    onNewTask: vi.fn(),
-    onSelectTask: vi.fn(),
     ...overrides,
   };
 }
@@ -195,10 +190,10 @@ function openPanel(panel: string) {
 
 /** 选中一个 worktree 任务，好让三种路径口径互不相同。 */
 function renderWithWorktreeTask() {
+  const task = worktreeTask();
+  useProjectViewsStore.getState().selectTask(task.projectId, task.id, false);
   return renderProject({
-    tasks: [worktreeTask()],
-    selectedTaskId: "task-1",
-    isNewTask: false,
+    tasks: [task],
   });
 }
 

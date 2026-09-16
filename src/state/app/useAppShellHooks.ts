@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "../../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
-import { useProjectsStore, useTasksStore, useAppearanceStore } from "./index";
+import { useProjectsStore, useTasksStore, useAppearanceStore, useProjectViewsStore } from "./index";
 import type { Project, SshConnection, Task } from "../../types";
 import type { ThemeMode, ThemeVariant, FontFamily } from "../../types";
 import { APP_SHELL_COMMANDS, SSH_CONNECTION_COMMANDS } from "../../lib/api/appCommands";
@@ -55,6 +55,18 @@ export function useHostAppearanceMirror(appearance: {
     appearance.attentionBadge,
     appearance.taskDisplayWindow,
   ]);
+}
+
+/** App projectViews / taskRunCounts / restore 回调 → store 只读镜像。 */
+export function useHostProjectViewsMirror(payload: {
+  views: Record<string, import("../../appProjectState").ProjectViewState>;
+  taskRunCounts: Record<string, number>;
+  getTaskRestoreState: (taskId: string) => { initialData?: string; initialSnapshot?: string };
+}): void {
+  const { views, taskRunCounts, getTaskRestoreState } = payload;
+  useEffect(() => {
+    useProjectViewsStore.getState().syncFromHost({ views, taskRunCounts, getTaskRestoreState });
+  }, [views, taskRunCounts, getTaskRestoreState]);
 }
 
 /** Cmd+W 隐藏窗口（仅 macOS）。 */
