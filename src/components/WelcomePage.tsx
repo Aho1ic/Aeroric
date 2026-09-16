@@ -39,7 +39,6 @@ import type {
   Project,
   Task,
   ThemeMode,
-  ThemeVariant,
   TerminalFontSize,
   TaskDisplayWindow,
   FontFamily,
@@ -73,6 +72,7 @@ import { ProjectGroupDialog } from "./ProjectGroupDialog";
 import { groupProjectsForRail, UNGROUPED_PROJECT_GROUP } from "../projectGroups";
 import { AnimatedSelectionTrack } from "./ui/AnimatedSelection";
 import { useI18n, pluralKey } from "../i18n";
+import { useAppearance } from "../state/app";
 import { APP_PLATFORM } from "../platform";
 import type { WslProjectInput } from "./wsl/WslProjectDialog";
 import appLogo from "../assets/app-logo.png";
@@ -372,22 +372,13 @@ export function WelcomePage({
   onCreateProjectGroup = () => {},
   onRenameProjectGroup = () => {},
   onDeleteProjectGroup = () => {},
-  themeVariant,
-  themeMode,
-  systemPrefersDark,
-  onThemeModeChange,
   onToggleTheme,
-  terminalFontSize,
   onTerminalFontSizeChange,
-  taskDisplayWindow,
   onTaskDisplayWindowChange,
-  attentionBadge,
   onAttentionBadgeChange,
   sftpLocalDefaultPath,
   onSftpLocalDefaultPathChange,
-  uiFontFamily,
   onUiFontFamilyChange,
-  monoFontFamily,
   onMonoFontFamilyChange,
   skillHubConfig,
   onEnterSkillHub,
@@ -413,23 +404,17 @@ export function WelcomePage({
   onCreateProjectGroup?: (groupName: string) => void;
   onRenameProjectGroup?: (oldName: string, nextName: string) => void;
   onDeleteProjectGroup?: (groupName: string) => void;
-  themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
+  themeMode?: ThemeMode;
+  systemPrefersDark?: boolean;
+  onThemeModeChange?: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
-  taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
-  sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
+  onTerminalFontSizeChange?: (size: TerminalFontSize) => void;
+  onTaskDisplayWindowChange?: (window: TaskDisplayWindow) => void;
+  onAttentionBadgeChange?: (enabled: boolean) => void;
+  sftpLocalDefaultPath?: string;
+  onSftpLocalDefaultPathChange?: (path: string) => void;
+  onUiFontFamilyChange?: (family: FontFamily) => void;
+  onMonoFontFamilyChange?: (family: FontFamily) => void;
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
   sshConnections: SshConnection[];
@@ -439,6 +424,16 @@ export function WelcomePage({
   onOpenWslProject: (input: WslProjectInput) => void;
 }) {
   const { t } = useI18n();
+  const appearance = useAppearance();
+  const themeVariant = appearance.themeVariant;
+  const themeMode = appearance.themeMode;
+  const systemPrefersDark = false;
+  const terminalFontSize = appearance.terminalFontSize;
+  const taskDisplayWindow = appearance.taskDisplayWindow;
+  const attentionBadge = appearance.attentionBadge;
+  const uiFontFamily = appearance.uiFontFamily;
+  const monoFontFamily = appearance.monoFontFamily;
+  const onThemeModeChange = () => {};
   const [query, setQuery] = useState("");
   const [hov, setHov] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
@@ -695,17 +690,17 @@ export function WelcomePage({
               onThemeModeChange={onThemeModeChange}
               onToggleTheme={onToggleTheme}
               terminalFontSize={terminalFontSize}
-              onTerminalFontSizeChange={onTerminalFontSizeChange}
+              onTerminalFontSizeChange={onTerminalFontSizeChange ?? (() => {})}
               taskDisplayWindow={taskDisplayWindow}
-              onTaskDisplayWindowChange={onTaskDisplayWindowChange}
+              onTaskDisplayWindowChange={onTaskDisplayWindowChange ?? (() => {})}
               attentionBadge={attentionBadge}
-              onAttentionBadgeChange={onAttentionBadgeChange}
-              sftpLocalDefaultPath={sftpLocalDefaultPath}
-              onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange}
+              onAttentionBadgeChange={onAttentionBadgeChange ?? (() => {})}
+              sftpLocalDefaultPath={sftpLocalDefaultPath ?? ""}
+              onSftpLocalDefaultPathChange={onSftpLocalDefaultPathChange ?? (() => {})}
               uiFontFamily={uiFontFamily}
-              onUiFontFamilyChange={onUiFontFamilyChange}
+              onUiFontFamilyChange={onUiFontFamilyChange ?? (() => {})}
               monoFontFamily={monoFontFamily}
-              onMonoFontFamilyChange={onMonoFontFamilyChange}
+              onMonoFontFamilyChange={onMonoFontFamilyChange ?? (() => {})}
             />
           </div>
         </div>
@@ -737,7 +732,7 @@ export function WelcomePage({
               key={sftpConnectionId ?? sftpStorageConnectionId ?? "default"}
               sshConnections={sshConnections}
               storageConnections={storageConnections}
-              localDefaultPath={sftpLocalDefaultPath}
+              localDefaultPath={sftpLocalDefaultPath ?? ""}
               active={sftpOpen}
               width="100%"
               themeVariant={themeVariant}

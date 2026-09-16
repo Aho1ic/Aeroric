@@ -1241,21 +1241,15 @@ function AppShell() {
             onSshConnectionsChange={handleSshConnectionsChange}
             onDeleteSshConnection={handleDeleteSshConnection}
             themeMode={themeMode}
-            themeVariant={themeVariant}
             systemPrefersDark={systemPrefersDark}
             onThemeModeChange={setThemeMode}
             onToggleTheme={handleToggleTheme}
-            terminalFontSize={terminalFontSize}
             onTerminalFontSizeChange={setTerminalFontSize}
-            taskDisplayWindow={taskDisplayWindow}
             onTaskDisplayWindowChange={setTaskDisplayWindow}
-            attentionBadge={attentionBadge}
             onAttentionBadgeChange={setAttentionBadge}
             sftpLocalDefaultPath={sftpLocalDefaultPath}
             onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
-            uiFontFamily={uiFontFamily}
             onUiFontFamilyChange={setUiFontFamily}
-            monoFontFamily={monoFontFamily}
             onMonoFontFamilyChange={setMonoFontFamily}
           />
         </div>

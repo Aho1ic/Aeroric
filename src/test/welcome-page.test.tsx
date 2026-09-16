@@ -67,22 +67,16 @@ function renderWelcome(overrides: Partial<React.ComponentProps<typeof WelcomePag
     onCreateProjectGroup: overrides.onCreateProjectGroup ?? vi.fn(),
     onRenameProjectGroup: overrides.onRenameProjectGroup ?? vi.fn(),
     onDeleteProjectGroup: overrides.onDeleteProjectGroup ?? vi.fn(),
-    themeVariant: overrides.themeVariant ?? "light",
     themeMode: overrides.themeMode ?? "light",
     systemPrefersDark: overrides.systemPrefersDark ?? false,
     onThemeModeChange: overrides.onThemeModeChange ?? vi.fn(),
     onToggleTheme: overrides.onToggleTheme ?? vi.fn(),
-    terminalFontSize: overrides.terminalFontSize ?? 11,
     onTerminalFontSizeChange: overrides.onTerminalFontSizeChange ?? vi.fn(),
-    taskDisplayWindow: overrides.taskDisplayWindow ?? 3,
     onTaskDisplayWindowChange: overrides.onTaskDisplayWindowChange ?? vi.fn(),
-    attentionBadge: overrides.attentionBadge ?? true,
     onAttentionBadgeChange: overrides.onAttentionBadgeChange ?? vi.fn(),
     sftpLocalDefaultPath: overrides.sftpLocalDefaultPath ?? "/Users/macbook/Downloads/同步空间",
     onSftpLocalDefaultPathChange: overrides.onSftpLocalDefaultPathChange ?? vi.fn(),
-    uiFontFamily: overrides.uiFontFamily ?? "sans-serif",
     onUiFontFamilyChange: overrides.onUiFontFamilyChange ?? vi.fn(),
-    monoFontFamily: overrides.monoFontFamily ?? "monospace",
     onMonoFontFamilyChange: overrides.onMonoFontFamilyChange ?? vi.fn(),
     skillHubConfig: overrides.skillHubConfig ?? null,
     onEnterSkillHub: overrides.onEnterSkillHub ?? vi.fn(),
@@ -170,7 +164,7 @@ describe("WelcomePage project cards", () => {
   it("keeps the recursive animation mounted when switching home sections", async () => {
     const user = userEvent.setup();
 
-    renderWelcome({ themeVariant: "light" });
+    renderWelcome({});
 
     expect(screen.getByTestId("welcome-recursive-background")).toBeInTheDocument();
 

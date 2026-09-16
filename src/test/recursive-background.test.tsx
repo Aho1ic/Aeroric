@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { useAppearanceStore } from "../state/app";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { WelcomePage } from "../components/WelcomePage";
 import { shouldRestartRecursiveHeroLoop } from "../components/recursive-hero-effect/recursive-hero-effect";
@@ -95,14 +96,8 @@ function welcomePageProps(
     onToggleProjectHidden: vi.fn(),
     onToggleTheme: vi.fn(),
     onOpen: vi.fn(),
-    themeVariant: "light",
     themeMode: "light",
     systemPrefersDark: false,
-    terminalFontSize: 11,
-    uiFontFamily: "system",
-    monoFontFamily: "system",
-    taskDisplayWindow: 7,
-    attentionBadge: true,
     onThemeModeChange: vi.fn(),
     onTerminalFontSizeChange: vi.fn(),
     onTaskDisplayWindowChange: vi.fn(),
@@ -167,6 +162,7 @@ describe("recursive dynamic background", () => {
   });
 
   it("renders behind the home page in light mode", () => {
+    useAppearanceStore.getState().hydrate({ themeVariant: "light" });
     renderWithI18n(<WelcomePage {...welcomePageProps()} />);
 
     expect(screen.getByTestId("welcome-recursive-background")).toBeInTheDocument();
@@ -176,13 +172,8 @@ describe("recursive dynamic background", () => {
   });
 
   it("does not render behind the home page in dark mode", () => {
-    renderWithI18n(
-      <WelcomePage
-        {...welcomePageProps({
-          themeVariant: "dark",
-        })}
-      />,
-    );
+    useAppearanceStore.getState().hydrate({ themeVariant: "dark" });
+    renderWithI18n(<WelcomePage {...welcomePageProps()} />);
 
     expect(screen.queryByTestId("welcome-recursive-background")).not.toBeInTheDocument();
   });
