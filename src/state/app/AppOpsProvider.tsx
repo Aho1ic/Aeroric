@@ -13,6 +13,15 @@ export type ProjectOps = {
   setProjectAvatar: (projectId: string, avatar: Project["avatar"]) => void;
   togglePinned: (projectId: string, pinned: boolean) => void;
   selectProject: (projectId: string | null) => void;
+  back: () => void;
+  openLocal: () => void;
+  toggleTheme: () => void;
+  showReleasePage: () => void;
+  exitSkillHub: () => void;
+  switchProject: (project: Project) => void;
+  reorderProjects: (orderedProjectIds: string[]) => void;
+  setProjectRailWidth: (width: number) => void;
+  setCollapsedGroups: (groups: ReadonlySet<string>) => void;
 };
 
 export type TaskOps = {
@@ -155,6 +164,15 @@ export function AppOpsProvider({
         setProjectAvatar: (id, avatar) => useProjectsStore.getState().setProjectAvatar(id, avatar),
         togglePinned: (id, pinned) => useProjectsStore.getState().toggleProjectPinned(id, pinned),
         selectProject: (id) => useProjectsStore.getState().setSelectedProjectId(id),
+        back: () => {},
+        openLocal: () => {},
+        toggleTheme: () => {},
+        showReleasePage: () => {},
+        exitSkillHub: () => {},
+        switchProject: (p) => useProjectsStore.getState().setSelectedProjectId(p.id),
+        reorderProjects: (ids) => useProjectsStore.getState().reorderProjects(ids),
+        setProjectRailWidth: () => {},
+        setCollapsedGroups: () => {},
       },
     [projectOpsOverride],
   );
@@ -196,10 +214,25 @@ export function AppOpsProvider({
 }
 
 export function useProjectOps(): ProjectOps {
-  const ops = useContext(ProjectOpsContext);
-  if (!ops) throw new Error("useProjectOps must be used within AppOpsProvider");
-  return ops;
+  return useContext(ProjectOpsContext) ?? defaultProjectOps;
 }
+
+const defaultProjectOps: ProjectOps = {
+  removeProject: () => {},
+  renameProject: () => {},
+  setProjectAvatar: () => {},
+  togglePinned: () => {},
+  selectProject: () => {},
+  back: () => {},
+  openLocal: () => {},
+  toggleTheme: () => {},
+  showReleasePage: () => {},
+  exitSkillHub: () => {},
+  switchProject: () => {},
+  reorderProjects: () => {},
+  setProjectRailWidth: () => {},
+  setCollapsedGroups: () => {},
+};
 
 export function useTaskOps(): TaskOps {
   const ops = useContext(TaskOpsContext);

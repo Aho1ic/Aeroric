@@ -22,7 +22,14 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
-import { useTaskActions, useAppearance, useConnections, useTerminalActions, type TaskActions } from "../state/app";
+import {
+  useTaskActions,
+  useAppearance,
+  useConnections,
+  useTerminalActions,
+  useProjectOps,
+  type TaskActions,
+} from "../state/app";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
 import { TodoTaskView } from "./TodoTaskView";
@@ -134,20 +141,10 @@ export function ProjectPage({
   onNewTask,
   onSelectTask,
   onTaskSessionRecovered,
-  onBack,
-  onSwitchProject,
-  onReorderProjects,
-  onToggleProjectPinned,
   projectGroups = [],
   collapsedProjectGroups,
-  onCollapsedProjectGroupsChange,
   projectRailWidth,
-  onProjectRailWidthChange,
-  onOpen,
-  onToggleTheme,
   hubMode = false,
-  onExitSkillHub,
-  onShowReleasePage,
 }: {
   project: Project;
   visible?: boolean;
@@ -167,20 +164,10 @@ export function ProjectPage({
     codexLike: boolean,
     family?: ProtocolFamily,
   ) => void;
-  onBack: () => void;
-  onSwitchProject: (project: Project) => void;
-  onReorderProjects: (orderedProjectIds: string[]) => void;
-  onToggleProjectPinned?: (projectId: string) => void;
   projectGroups?: string[];
   collapsedProjectGroups?: ReadonlySet<string>;
-  onCollapsedProjectGroupsChange?: (groups: Set<string>) => void;
   projectRailWidth?: number;
-  onProjectRailWidthChange?: (width: number) => void;
-  onOpen: () => void;
-  onToggleTheme: () => void;
   hubMode?: boolean;
-  onExitSkillHub?: () => void;
-  onShowReleasePage?: () => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -191,6 +178,18 @@ export function ProjectPage({
   const monoFontFamily = appearance.monoFontFamily;
   const taskActions = useTaskActions();
   const terminalActions = useTerminalActions();
+  const projectOps = useProjectOps();
+  const onBack = projectOps.back;
+  const onSwitchProject = projectOps.switchProject;
+  const onReorderProjects = projectOps.reorderProjects;
+  const onToggleProjectPinned = (projectId: string) =>
+    projectOps.togglePinned(projectId, true);
+  const onCollapsedProjectGroupsChange = projectOps.setCollapsedGroups;
+  const onProjectRailWidthChange = projectOps.setProjectRailWidth;
+  const onOpen = projectOps.openLocal;
+  const onToggleTheme = projectOps.toggleTheme;
+  const onExitSkillHub = projectOps.exitSkillHub;
+  const onShowReleasePage = projectOps.showReleasePage;
   const {
     sshConnections,
     onSshConnectionsChange,

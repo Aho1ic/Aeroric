@@ -176,11 +176,6 @@ function projectPageProps(
     isNewTask: true,
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
-    onBack: vi.fn(),
-    onSwitchProject: vi.fn(),
-    onReorderProjects: vi.fn(),
-    onOpen: vi.fn(),
-    onToggleTheme: vi.fn(),
     ...overrides,
   };
 }

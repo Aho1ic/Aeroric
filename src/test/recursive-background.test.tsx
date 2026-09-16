@@ -84,11 +84,6 @@ function projectPageProps(): React.ComponentProps<typeof ProjectPage> {
     isNewTask: true,
     onNewTask: vi.fn(),
     onSelectTask: vi.fn(),
-    onBack: vi.fn(),
-    onSwitchProject: vi.fn(),
-    onReorderProjects: vi.fn(),
-    onOpen: vi.fn(),
-    onToggleTheme: vi.fn(),
   };
 }
 
@@ -100,11 +95,12 @@ function welcomePageProps(
     projects: [project],
     allProjects: [project],
     tasks: [],
-    onOpen: vi.fn(),
     onProjectClick: vi.fn(),
     onDeleteProject: vi.fn(),
     onRenameProject: vi.fn(),
     onToggleProjectHidden: vi.fn(),
+    onToggleTheme: vi.fn(),
+    onOpen: vi.fn(),
     themeVariant: "light",
     themeMode: "light",
     systemPrefersDark: false,
@@ -114,7 +110,6 @@ function welcomePageProps(
     taskDisplayWindow: 7,
     attentionBadge: true,
     onThemeModeChange: vi.fn(),
-    onToggleTheme: vi.fn(),
     onTerminalFontSizeChange: vi.fn(),
     onTaskDisplayWindowChange: vi.fn(),
     onAttentionBadgeChange: vi.fn(),

@@ -96,7 +96,6 @@ import {
   renameProjectInList,
   setProjectAvatarInList,
   toggleProjectHiddenInList,
-  toggleProjectPinnedInList,
   touchProjectInList,
   upsertLocalProject,
   upsertSshProject,
@@ -854,39 +853,10 @@ function AppShell() {
     });
   }
 
-  function handleToggleProjectPinned(projectId: string) {
-    setProjects((prev) => {
-      const next = toggleProjectPinnedInList(prev, projectId);
-      persistProjects(next, showToast, formatSaveProjectsError);
-      return next;
-    });
-  }
-
-  /** 宿主 ProjectOps：把 App 的 persist/toast 路径接到 Ops context。 */
-  const projectOps = useMemo<ProjectOps>(
-    () => ({
-      removeProject: (projectId) => {
-        void handleDeleteProject(projectId);
-      },
-      renameProject: handleRenameProject,
-      setProjectAvatar: handleSetProjectAvatar,
-      togglePinned: (projectId, pinned) => {
-        setProjects((prev) => {
-          const next = prev.map((p) => (p.id === projectId ? { ...p, pinned } : p));
-          persistProjects(next, showToast, formatSaveProjectsError);
-          return next;
-        });
-      },
-      selectProject: (projectId) => {
-        const next = projects.find((p) => p.id === projectId) ?? null;
-        setActiveProject(next);
-        if (next) mountProject(next.id);
-      },
-    }),
-    // handle* 每帧新建，但 ops 只在关键依赖变化时重建即可。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projects, showToast, formatSaveProjectsError, mountProject],
-  );
+  const handleExitSkillHub = useCallback(() => {
+    setHubMode(false);
+    setActiveProject(null);
+  }, []);
 
   const taskActions = useMemo<TaskActions>(
     () => ({
@@ -1129,10 +1099,56 @@ function AppShell() {
     [formatSaveProjectsError, setProjects, showToast],
   );
 
-  const handleExitSkillHub = useCallback(() => {
-    setHubMode(false);
-    setActiveProject(null);
-  }, []);
+  /** 宿主 ProjectOps：把 App 的 persist/toast 路径接到 Ops context。 */
+  const projectOps = useMemo<ProjectOps>(
+    () => ({
+      removeProject: (projectId) => {
+        void handleDeleteProject(projectId);
+      },
+      renameProject: handleRenameProject,
+      setProjectAvatar: handleSetProjectAvatar,
+      togglePinned: (projectId, pinned) => {
+        setProjects((prev) => {
+          const next = prev.map((p) => (p.id === projectId ? { ...p, pinned } : p));
+          persistProjects(next, showToast, formatSaveProjectsError);
+          return next;
+        });
+      },
+      selectProject: (projectId) => {
+        const next = projects.find((p) => p.id === projectId) ?? null;
+        setActiveProject(next);
+        if (next) mountProject(next.id);
+      },
+      back: handleBack,
+      openLocal: handleOpen,
+      toggleTheme: handleToggleTheme,
+      showReleasePage: () => setShowReleasePage(true),
+      exitSkillHub: handleExitSkillHub,
+      switchProject: handleProjectClick,
+      reorderProjects: handleReorderProjects,
+      setProjectRailWidth: handleProjectRailWidthChange,
+      setCollapsedGroups: (groups) => setCollapsedProjectGroups(new Set(groups)),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      projects,
+      showToast,
+      formatSaveProjectsError,
+      mountProject,
+      handleExitSkillHub,
+      handleReorderProjects,
+      handleProjectRailWidthChange,
+      handleToggleTheme,
+      handleOpen,
+      handleBack,
+      handleProjectClick,
+      handleDeleteProject,
+      handleRenameProject,
+      handleSetProjectAvatar,
+      setCollapsedProjectGroups,
+      setShowReleasePage,
+    ],
+  );
 
   return (
     <AppProviders
@@ -1175,7 +1191,6 @@ function AppShell() {
                 allProjects={railProjectsFiltered}
                 otherProjects={otherProjectsFiltered}
                 hubMode={isHubActive}
-                onExitSkillHub={handleExitSkillHub}
                 tasks={tasks}
                 getTaskRestoreState={tm.getTaskRestoreState}
                 taskRunCounts={taskRunCounts}
@@ -1188,18 +1203,9 @@ function AppShell() {
                   updateProjectView(targetProjectId, { selectedTaskId: id, isNewTask: false })
                 }
                 onTaskSessionRecovered={updateTaskSession}
-                onBack={handleBack}
-                onSwitchProject={handleProjectClick}
-                onReorderProjects={handleReorderProjects}
-                onToggleProjectPinned={handleToggleProjectPinned}
                 projectGroups={projectGroups}
                 collapsedProjectGroups={collapsedProjectGroups}
-                onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
                 projectRailWidth={projectRailWidth}
-                onProjectRailWidthChange={handleProjectRailWidthChange}
-                onOpen={handleOpen}
-                onToggleTheme={handleToggleTheme}
-                onShowReleasePage={() => setShowReleasePage(true)}
               />
             );
           })}
