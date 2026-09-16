@@ -161,22 +161,26 @@ function projectPageProps(
   };
 }
 
-function renderProject(project: Project, overrides = {}) {
+function renderProject(project: Project, overrides = {}, sshConnections?: unknown[]) {
+  const connections =
+    sshConnections !== undefined
+      ? sshConnections
+      : [
+          {
+            id: "conn-1",
+            name: "Prod",
+            host: "example.test",
+            port: 22,
+            username: "tester",
+            remotePath: "/srv/app",
+            createdAt: 1,
+          },
+        ];
   return render(
     <I18nProvider>
       <AppProviders
         connections={{
-          sshConnections: [
-            {
-              id: "conn-1",
-              name: "Prod",
-              host: "example.test",
-              port: 22,
-              username: "tester",
-              remotePath: "/srv/app",
-              createdAt: 1,
-            },
-          ],
+          sshConnections: connections as never,
           onSshConnectionsChange: () => {},
           condaEnvironments: [],
           selectedCondaEnvPath: null,
@@ -290,7 +294,7 @@ describe("ProjectPage 终端面板的挂载契约", () => {
     it("连接列表里没有对应连接时不挂 SSH 面板", () => {
       // `remoteConnection` 是按 connectionId 去 sshConnections 里查的;查不到就是 undefined,
       // 这时候挂面板会拿着 undefined 的连接去连。
-      renderProject(sshProject(), { sshConnections: [] });
+      renderProject(sshProject(), {}, []);
       expect(screen.queryByTestId("ssh-panel")).not.toBeInTheDocument();
     });
   });
