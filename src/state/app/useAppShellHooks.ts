@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "../../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
-import { useProjectsStore, useTasksStore } from "./index";
+import { useProjectsStore, useTasksStore, useAppearanceStore } from "./index";
 import type { Project, SshConnection, Task } from "../../types";
+import type { ThemeMode, ThemeVariant, FontFamily } from "../../types";
 import { APP_SHELL_COMMANDS, SSH_CONNECTION_COMMANDS } from "../../lib/api/appCommands";
 import { APP_PLATFORM } from "../../platform";
 import { isHideWindowShortcut } from "../../shortcuts";
@@ -29,6 +30,31 @@ export function useHostStateMirrors(
   useEffect(() => {
     useProjectsStore.getState().setSelectedProjectId(activeProjectId);
   }, [activeProjectId]);
+}
+
+/** App 宿主权威外观 → store 只读镜像。 */
+export function useHostAppearanceMirror(appearance: {
+  themeMode: ThemeMode;
+  themeVariant: ThemeVariant;
+  terminalFontSize: number;
+  uiFontFamily: FontFamily;
+  monoFontFamily: FontFamily;
+  attentionBadge: boolean;
+  taskDisplayWindow: 3 | 7 | 15 | 30 | "all";
+}): void {
+  useEffect(() => {
+    useAppearanceStore.getState().hydrate(appearance);
+    // 依赖拆到字段，避免 appearance 对象字面量每次渲染都是新引用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    appearance.themeMode,
+    appearance.themeVariant,
+    appearance.terminalFontSize,
+    appearance.uiFontFamily,
+    appearance.monoFontFamily,
+    appearance.attentionBadge,
+    appearance.taskDisplayWindow,
+  ]);
 }
 
 /** Cmd+W 隐藏窗口（仅 macOS）。 */

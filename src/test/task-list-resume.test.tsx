@@ -37,7 +37,6 @@ describe("TaskList resume actions", () => {
 
 
           onRunTodo={onRunTodo}
-          onResumeTask={onResumeTask}
 
 
 

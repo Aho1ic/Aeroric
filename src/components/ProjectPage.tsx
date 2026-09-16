@@ -7,11 +7,6 @@ import type {
   AgentType,
   PermissionMode,
   TaskStatus,
-  ThemeMode,
-  ThemeVariant,
-  TerminalFontSize,
-  TaskDisplayWindow,
-  FontFamily,
   ProtocolFamily,
   SshConnection,
   CondaEnvironment,
@@ -32,6 +27,7 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
 import { useTaskActions } from "../state/app";
+import { useAppearance } from "../state/app";
 import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
@@ -161,12 +157,8 @@ export function ProjectPage({
   projectRailWidth,
   onProjectRailWidthChange,
   onOpen,
-  themeVariant,
   onToggleTheme,
-  terminalFontSize,
-  attentionBadge,
   sftpLocalDefaultPath,
-  monoFontFamily,
   hubMode = false,
   onExitSkillHub,
   sshConnections,
@@ -232,23 +224,8 @@ export function ProjectPage({
   projectRailWidth?: number;
   onProjectRailWidthChange?: (width: number) => void;
   onOpen: () => void;
-  themeVariant: ThemeVariant;
-  themeMode: ThemeMode;
-  systemPrefersDark: boolean;
-  onThemeModeChange: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
-  terminalFontSize: TerminalFontSize;
-  onTerminalFontSizeChange: (size: TerminalFontSize) => void;
-  taskDisplayWindow: TaskDisplayWindow;
-  onTaskDisplayWindowChange: (window: TaskDisplayWindow) => void;
-  attentionBadge: boolean;
-  onAttentionBadgeChange: (enabled: boolean) => void;
   sftpLocalDefaultPath: string;
-  onSftpLocalDefaultPathChange: (path: string) => void;
-  uiFontFamily: FontFamily;
-  onUiFontFamilyChange: (family: FontFamily) => void;
-  monoFontFamily: FontFamily;
-  onMonoFontFamilyChange: (family: FontFamily) => void;
   hubMode?: boolean;
   onExitSkillHub?: () => void;
   sshConnections: SshConnection[];
@@ -261,6 +238,11 @@ export function ProjectPage({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
+  const appearance = useAppearance();
+  const themeVariant = appearance.themeVariant;
+  const terminalFontSize = appearance.terminalFontSize;
+  const attentionBadge = appearance.attentionBadge;
+  const monoFontFamily = appearance.monoFontFamily;
   const taskActions = useTaskActions();
   const onDeleteTask = taskActions.deleteTask;
   const onDeleteTasks = taskActions.deleteTasks;

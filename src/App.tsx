@@ -47,6 +47,7 @@ import {
   useHideWindowShortcut,
   useSshConnectionPersistence,
   useDisableTextInputAutoFeatures,
+  useHostAppearanceMirror,
 } from "./state/app/useAppShellHooks";
 import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
 import { useRemoteTaskRequests } from "./state/app/useRemoteTaskRequests";
@@ -167,6 +168,17 @@ function AppShell() {
     setDshWebSearchEnabled,
     handleToggleTheme,
   } = useAppAppearance();
+
+  useHostAppearanceMirror({
+    themeMode,
+    themeVariant,
+    terminalFontSize,
+    uiFontFamily,
+    monoFontFamily,
+    attentionBadge,
+    taskDisplayWindow,
+  });
+
   const [projects, setProjects, projectsRef] = useRefState<Project[]>([]);
   const [projectGroups, setProjectGroups] = useState<string[]>(loadProjectGroupNames);
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => {
@@ -1163,23 +1175,8 @@ function AppShell() {
                 projectRailWidth={projectRailWidth}
                 onProjectRailWidthChange={handleProjectRailWidthChange}
                 onOpen={handleOpen}
-                themeVariant={themeVariant}
-                themeMode={themeMode}
-                systemPrefersDark={systemPrefersDark}
-                onThemeModeChange={setThemeMode}
                 onToggleTheme={handleToggleTheme}
-                terminalFontSize={terminalFontSize}
-                onTerminalFontSizeChange={setTerminalFontSize}
-                taskDisplayWindow={taskDisplayWindow}
-                onTaskDisplayWindowChange={setTaskDisplayWindow}
-                attentionBadge={attentionBadge}
-                onAttentionBadgeChange={setAttentionBadge}
                 sftpLocalDefaultPath={sftpLocalDefaultPath}
-                onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
-                uiFontFamily={uiFontFamily}
-                onUiFontFamilyChange={setUiFontFamily}
-                monoFontFamily={monoFontFamily}
-                onMonoFontFamilyChange={setMonoFontFamily}
                 sshConnections={sshConnections}
                 onSshConnectionsChange={handleSshConnectionsChange}
                 onDeleteSshConnection={handleDeleteSshConnection}
@@ -1224,8 +1221,8 @@ function AppShell() {
             sshConnections={sshConnections}
             onSshConnectionsChange={handleSshConnectionsChange}
             onDeleteSshConnection={handleDeleteSshConnection}
-            themeVariant={themeVariant}
             themeMode={themeMode}
+            themeVariant={themeVariant}
             systemPrefersDark={systemPrefersDark}
             onThemeModeChange={setThemeMode}
             onToggleTheme={handleToggleTheme}
@@ -1245,8 +1242,8 @@ function AppShell() {
         </div>
       )}
       <AppSettingsEventHost
-        themeVariant={themeVariant}
         themeMode={themeMode}
+        themeVariant={themeVariant}
         systemPrefersDark={systemPrefersDark}
         onThemeModeChange={setThemeMode}
         terminalFontSize={terminalFontSize}
