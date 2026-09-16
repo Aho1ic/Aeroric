@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { Project, Task } from "../../types";
 import { WORKTREE_COMMANDS } from "../../lib/api/worktree";
 import { confirm } from "../../lib/appDialog";

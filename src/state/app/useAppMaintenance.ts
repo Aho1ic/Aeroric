@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { Project, SkillHubConfig, StartupDegradation, Task } from "../../types";
 import type { AppSettings } from "../../components/app-settings/types";
 import { normalizeProjectOrder } from "../../projectOrder";

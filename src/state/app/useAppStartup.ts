@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { Project, SshConnection, Task } from "../../types";
 import { agentFamily } from "../../agents";
 import { isActiveTaskStatus } from "../../types";

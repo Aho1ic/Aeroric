@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { SshConnection, Task } from "../../types";
 import { taskCommandByKind } from "../../lib/api/session";
 import { DSH_TASK_COMMANDS } from "../../lib/api/worktree";

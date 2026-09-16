@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import type { AgentType, PermissionMode, Project, SshConnection, Task } from "../../types";
 import { resolveProjectLocation } from "../../types";

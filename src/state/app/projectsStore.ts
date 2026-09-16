@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/api/invoke";
 import type { Project, ProjectAvatarOverride } from "../../types";
 import { createProjectPersister } from "../../projectPersistence";
 import { PERSISTENCE_COMMANDS } from "../../lib/api/sftpCommands";

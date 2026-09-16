@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "../../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import { useProjectsStore, useTasksStore } from "./index";
 import type { Project, SshConnection, Task } from "../../types";
