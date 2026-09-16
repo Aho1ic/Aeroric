@@ -24,21 +24,36 @@ export function ConnectionsProvider({
   children: ReactNode;
   value: ConnectionsState;
 }) {
-  const memo = useMemo(() => value, [
-    value.sshConnections,
-    value.onSshConnectionsChange,
-    value.onDeleteSshConnection,
-    value.condaEnvironments,
-    value.selectedCondaEnvPath,
-    value.onSelectedCondaEnvPathChange,
-    // value 对象本身每帧新建，只依赖字段。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ]);
+  // 只依赖字段，避免 value 对象字面量每帧新建导致重渲染。
+  const memo = useMemo(
+    () => ({
+      sshConnections: value.sshConnections,
+      onSshConnectionsChange: value.onSshConnectionsChange,
+      onDeleteSshConnection: value.onDeleteSshConnection,
+      condaEnvironments: value.condaEnvironments,
+      selectedCondaEnvPath: value.selectedCondaEnvPath,
+      onSelectedCondaEnvPathChange: value.onSelectedCondaEnvPathChange,
+    }),
+    [
+      value.sshConnections,
+      value.onSshConnectionsChange,
+      value.onDeleteSshConnection,
+      value.condaEnvironments,
+      value.selectedCondaEnvPath,
+      value.onSelectedCondaEnvPathChange,
+    ],
+  );
   return <ConnectionsContext.Provider value={memo}>{children}</ConnectionsContext.Provider>;
 }
 
+const defaultConnections: ConnectionsState = {
+  sshConnections: [],
+  onSshConnectionsChange: () => {},
+  condaEnvironments: [],
+  selectedCondaEnvPath: null,
+  onSelectedCondaEnvPathChange: () => {},
+};
+
 export function useConnections(): ConnectionsState {
-  const ctx = useContext(ConnectionsContext);
-  if (!ctx) throw new Error("useConnections must be used within ConnectionsProvider");
-  return ctx;
+  return useContext(ConnectionsContext) ?? defaultConnections;
 }

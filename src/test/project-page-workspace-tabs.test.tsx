@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { Project } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { AppProviders } from "../state/app";
 
 /**
  * 守的是工作区标签条上「按钮打到 ShellTerminalPanel 的哪个 ref 方法」这条契约。
@@ -210,7 +211,27 @@ function projectPageProps(
 async function renderProject(project: Project, overrides = {}) {
   const result = render(
     <I18nProvider>
-      <ProjectPage {...projectPageProps(project, overrides)} />
+      <AppProviders
+        connections={{
+          sshConnections: [
+            {
+              id: "conn-1",
+              name: "Prod",
+              host: "example.test",
+              port: 22,
+              username: "tester",
+              remotePath: "/srv/app",
+              createdAt: 1,
+            },
+          ],
+          onSshConnectionsChange: () => {},
+          condaEnvironments: [],
+          selectedCondaEnvPath: null,
+          onSelectedCondaEnvPathChange: () => {},
+        }}
+      >
+        <ProjectPage {...projectPageProps(project, overrides)} />
+      </AppProviders>
     </I18nProvider>,
   );
   await act(async () => {});

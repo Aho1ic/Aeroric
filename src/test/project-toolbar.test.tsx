@@ -438,6 +438,52 @@ function projectPageProps(
   };
 }
 
+function sshConnectionsForTest() {
+  return {
+    sshConnections: [
+      {
+        id: "conn-1",
+        name: "Staging",
+        host: "staging.example.com",
+        port: 22,
+        username: "deploy",
+        createdAt: 1,
+      },
+      {
+        id: "conn-2",
+        name: "Production",
+        host: "prod.example.com",
+        port: 22,
+        username: "deploy",
+        remotePath: "/srv/app",
+        createdAt: 2,
+      },
+      {
+        id: "1781590902568",
+        name: "lianyun",
+        host: "192.168.0.182",
+        port: 22,
+        username: "root",
+        createdAt: 3,
+      },
+    ],
+    onSshConnectionsChange: vi.fn(),
+    condaEnvironments: [],
+    selectedCondaEnvPath: null,
+    onSelectedCondaEnvPathChange: vi.fn(),
+  };
+}
+
+function renderProjectPage(props: React.ComponentProps<typeof ProjectPage>) {
+  return render(
+    <I18nProvider>
+      <AppProviders connections={sshConnectionsForTest()}>
+        <ProjectPage {...props} />
+      </AppProviders>
+    </I18nProvider>,
+  );
+}
+
 function runningTask(projectId: string): Task {
   return {
     id: `${projectId}-task-1`,
@@ -470,11 +516,7 @@ describe("ProjectPage right toolbar", () => {
   it("uses shadcn-like selected icon button styling for the active toolbar item", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     const sshButton = screen.getByTitle("SSH");
     await user.click(sshButton);
@@ -535,11 +577,7 @@ describe("ProjectPage right toolbar", () => {
 
   it("renders run and debug tools only when a project workspace context is visible", async () => {
     const user = userEvent.setup();
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     expect(screen.queryByRole("toolbar", { name: "Run and debug tools" })).not.toBeInTheDocument();
 
@@ -562,11 +600,7 @@ describe("ProjectPage right toolbar", () => {
   });
 
   it("hides top-right IDE tools while the running terminal workspace is visible", () => {
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     expect(screen.queryByRole("toolbar", { name: "Run and debug tools" })).not.toBeInTheDocument();
     expect(screen.getByText("running task")).toBeInTheDocument();
@@ -575,11 +609,7 @@ describe("ProjectPage right toolbar", () => {
   it("opens every right toolbar target when clicked", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     const expectations = [
       ["File Explorer", "run.py"],
@@ -609,11 +639,7 @@ describe("ProjectPage right toolbar", () => {
   it("hides the database workspace without losing its current state", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     const databaseButton = screen.getByTitle("Database");
     await user.click(databaseButton);
@@ -632,11 +658,7 @@ describe("ProjectPage right toolbar", () => {
   it("merges file and terminal tabs and keeps file tabs after the terminal closes", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(await screen.findByText("run.py"));
@@ -681,11 +703,7 @@ describe("ProjectPage right toolbar", () => {
   it("hides SFTP without unmounting it and restores the existing session state", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     const sftpButton = screen.getByTitle("SFTP");
     await user.click(sftpButton);
@@ -714,11 +732,7 @@ describe("ProjectPage right toolbar", () => {
     window.addEventListener(FILE_VIEWER_COMMAND_EVENT, onEditorCommand);
 
     try {
-      render(
-        <I18nProvider>
-          <ProjectPage {...projectPageProps()} />
-        </I18nProvider>,
-      );
+      renderProjectPage(projectPageProps());
 
       for (const [title, command] of [
         ["Find References", "findReferences"],
@@ -737,11 +751,7 @@ describe("ProjectPage right toolbar", () => {
   it("announces toolbar actions through a shared project feedback status", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("Git Changes"));
     const openedFeedback = await screen.findByTestId("project-action-feedback");
@@ -803,11 +813,7 @@ describe("ProjectPage right toolbar", () => {
       ]),
     );
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     expect(screen.queryByTestId("project-action-log-summary")).not.toBeInTheDocument();
     expect(screen.queryByTestId("project-action-log-details")).not.toBeInTheDocument();
@@ -844,11 +850,7 @@ describe("ProjectPage right toolbar", () => {
   it("opens each project top-right IDE panel when clicked", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(await screen.findByText("run.py"));
@@ -886,11 +888,7 @@ describe("ProjectPage right toolbar", () => {
       return Promise.resolve(() => {});
     });
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -937,11 +935,7 @@ describe("ProjectPage right toolbar", () => {
       return Promise.resolve(() => {});
     });
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -973,11 +967,7 @@ describe("ProjectPage right toolbar", () => {
   it("enables remote-capable SSH project IDE buttons", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(await screen.findByText("run.py"));
@@ -1002,11 +992,7 @@ describe("ProjectPage right toolbar", () => {
   it("opens SSH project IDE targets with the remote project context", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(await screen.findByText("run.py"));
@@ -1066,11 +1052,7 @@ describe("ProjectPage right toolbar", () => {
   it("keeps saved SSH projects with numeric-string ids enabled across IDE toolbars", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(savedLianyunProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(savedLianyunProject()));
 
     expect(screen.queryByTestId("ssh-connection-missing")).not.toBeInTheDocument();
     for (const title of [
@@ -1217,11 +1199,7 @@ describe("ProjectPage right toolbar", () => {
   });
 
   it("uses a drawn Docker toolbar icon instead of an emoji glyph", () => {
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     expect(screen.getByTitle("Docker")).not.toHaveTextContent("🐳");
     expect(screen.getByTestId("docker-logo-icon")).toBeInTheDocument();
@@ -1230,11 +1208,7 @@ describe("ProjectPage right toolbar", () => {
   it("keeps the Docker toolbar icon monochrome until Docker is selected", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     const dockerButton = screen.getByTitle("Docker");
     const dockerIcon = screen.getByTestId("docker-logo-icon");
@@ -1288,11 +1262,7 @@ describe("ProjectPage right toolbar", () => {
   it("hides the SSH workspace when Terminal is opened next", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("SSH"));
     expect(screen.getByTestId("ssh-workspace")).toBeVisible();
@@ -1305,11 +1275,7 @@ describe("ProjectPage right toolbar", () => {
   it("hides the SSH workspace without losing its current state", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     const sshButton = screen.getByTitle("SSH");
     await user.click(sshButton);
@@ -1328,11 +1294,7 @@ describe("ProjectPage right toolbar", () => {
   it("shows only the latest right-toolbar workspace", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("SSH"));
     expect(screen.getByTestId("ssh-workspace")).toBeVisible();
@@ -1364,11 +1326,7 @@ describe("ProjectPage right toolbar", () => {
   it("面板隐藏后再显示是同一个实例,不重新挂载", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("Quick Notes"));
     // 面板是 lazy 的,首次要等 Suspense 落地
@@ -1390,11 +1348,7 @@ describe("ProjectPage right toolbar", () => {
   it("SSH 分屏的栅格与两侧尺寸", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("Terminal"));
     await user.click(screen.getByTitle("SSH"));
@@ -1424,11 +1378,7 @@ describe("ProjectPage right toolbar", () => {
   it("gives SSH the whole center on the project home so the composer cannot show through", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     expect(screen.getByTestId("project-center-primary")).toBeVisible();
 
@@ -1447,11 +1397,7 @@ describe("ProjectPage right toolbar", () => {
   it("keeps the Agent on the left and preserves the file workspace while SSH is split", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -1479,11 +1425,7 @@ describe("ProjectPage right toolbar", () => {
 
   it("defaults terminal and file details to independent Agent splits and remembers full mode", async () => {
     const user = userEvent.setup();
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPagePropsWithWorkspace()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPagePropsWithWorkspace());
 
     await user.click(screen.getByTitle("Terminal"));
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute(
@@ -1524,11 +1466,7 @@ describe("ProjectPage right toolbar", () => {
 
   it("keeps auxiliary workspaces full-width when no Agent conversation is selected", async () => {
     const user = userEvent.setup();
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("SSH"));
     expect(screen.getByTestId("project-center-stack")).toHaveAttribute("data-ssh-layout", "full");
@@ -1538,11 +1476,7 @@ describe("ProjectPage right toolbar", () => {
   it("runs a remote file in the SSH terminal without opening the SSH workspace", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -1555,11 +1489,7 @@ describe("ProjectPage right toolbar", () => {
   it("opens the SSH project terminal from the right toolbar Terminal button", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -1575,11 +1505,7 @@ describe("ProjectPage right toolbar", () => {
   it("opens remote Test Explorer from an editor test gutter request", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -1592,11 +1518,7 @@ describe("ProjectPage right toolbar", () => {
   it("starts a Vitest debug session from an editor test gutter request", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps()} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps());
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
@@ -1618,11 +1540,7 @@ describe("ProjectPage right toolbar", () => {
   it("starts a remote Vitest debug session from an editor test gutter request", async () => {
     const user = userEvent.setup();
 
-    render(
-      <I18nProvider>
-        <ProjectPage {...projectPageProps(sshProject())} />
-      </I18nProvider>,
-    );
+    renderProjectPage(projectPageProps(sshProject()));
 
     await user.click(screen.getByTitle("File Explorer"));
     await user.click(screen.getByText("run.py"));
