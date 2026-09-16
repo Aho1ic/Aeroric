@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { confirm } from "./lib/appDialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,9 +17,6 @@ import type {
 import {
   resolveProjectLocation,
 } from "./types";
-import { WelcomePage } from "./components/WelcomePage";
-import { ReleasePage } from "./components/ReleasePage";
-import { AppSettingsEventHost } from "./components/AppSettingsEventHost";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
@@ -113,9 +110,6 @@ import {
   PROJECT_RAIL_EXPANDED_WIDTH,
   projectRailWidthForProjects,
 } from "./components/project-page/viewMode";
-import s from "./styles";
-import { DshApprovalDialog } from "./components/DshApprovalDialog";
-import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import "./App.css";
 
 import {
@@ -136,10 +130,12 @@ import {
 } from "./appRemoteEvents";
 import { disableTextInputAutoFeatures } from "./appThemeState";
 import { AppProviders } from "./state/app";
-
-const ProjectPage = lazy(() =>
-  import("./components/ProjectPage").then((module) => ({ default: module.ProjectPage })),
-);
+import {
+  AppWorkspaceShell,
+  MountedProjectPages,
+  WelcomeOverlay,
+  AppShellOverlays,
+} from "./components/app/AppWorkspace";
 
 /** 装配壳：挂 zustand ops providers。状态迁移完成后本函数应只保留路由与窗口事件。 */
 function AppShell() {
@@ -1173,88 +1169,59 @@ function AppShell() {
         sftpLocalDefaultPath,
       }}
     >
-      <div style={{ ...s.root, position: "relative" }}>
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            overflow: "hidden",
-          }}
-        >
-          <Suspense fallback={null}>
-            {mountedProjects.map((project) => {
-              const isHubActive = hubMode && project.id === hubProjectId;
-              const railProjectsFiltered = isHubActive
-                ? [project]
-                : railProjects.filter((p) => p.id !== hubProjectId);
-              const otherProjectsFiltered = isHubActive
-                ? []
-                : sortedProjects.filter((p) => p.id !== project.id && p.id !== hubProjectId);
-              return (
-              <ProjectPage
-                key={project.id}
-                project={project}
-                visible={activeProject?.id === project.id}
-                allProjects={railProjectsFiltered}
-                otherProjects={otherProjectsFiltered}
-                hubMode={isHubActive}
-                tasks={tasks}
-                onTaskSessionRecovered={updateTaskSession}
-                projectGroups={projectGroups}
-                collapsedProjectGroups={collapsedProjectGroups}
-                projectRailWidth={projectRailWidth}
-              />
-            );
-          })}
-        </Suspense>
-      </div>
-      {!activeProject && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 5,
-          }}
-        >
-          <WelcomePage
-            projects={visibleProjectsForWelcome}
-            allProjects={sortedProjects}
-            tasks={tasks}
-            onOpen={handleOpen}
-            onOpenSshProject={handleOpenSshProject}
-            onOpenWslProject={handleOpenWslProject}
-            onProjectClick={handleProjectClick}
-            onDeleteProject={handleDeleteProject}
-            onRenameProject={handleRenameProject}
-            onSetProjectAvatar={handleSetProjectAvatar}
-            onToggleProjectHidden={handleToggleProjectHidden}
-            projectGroups={projectGroups}
-            collapsedProjectGroups={collapsedProjectGroups}
-            onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
-            onAssignProjectGroup={handleAssignProjectGroup}
-            onCreateProjectGroup={handleCreateProjectGroup}
-            onRenameProjectGroup={handleRenameProjectGroup}
-            onDeleteProjectGroup={handleDeleteProjectGroup}
-            skillHubConfig={skillHubConfig}
-            onEnterSkillHub={handleEnterSkillHub}
-            sshConnections={sshConnections}
-            onSshConnectionsChange={handleSshConnectionsChange}
-            onDeleteSshConnection={handleDeleteSshConnection}
-            themeMode={themeMode}
-            systemPrefersDark={systemPrefersDark}
-            onThemeModeChange={setThemeMode}
-            onToggleTheme={handleToggleTheme}
-            onTerminalFontSizeChange={setTerminalFontSize}
-            onTaskDisplayWindowChange={setTaskDisplayWindow}
-            onAttentionBadgeChange={setAttentionBadge}
-            sftpLocalDefaultPath={sftpLocalDefaultPath}
-            onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
-            onUiFontFamilyChange={setUiFontFamily}
-            onMonoFontFamilyChange={setMonoFontFamily}
-          />
-        </div>
-      )}
-      <AppSettingsEventHost
+      <AppWorkspaceShell>
+        <MountedProjectPages
+          mountedProjects={mountedProjects}
+          activeProjectId={activeProject?.id ?? null}
+          hubProjectId={hubProjectId}
+          hubMode={hubMode}
+          railProjects={railProjects}
+          sortedProjects={sortedProjects}
+          tasks={tasks}
+          onTaskSessionRecovered={updateTaskSession}
+          projectGroups={projectGroups}
+          collapsedProjectGroups={collapsedProjectGroups}
+          projectRailWidth={projectRailWidth}
+        />
+      </AppWorkspaceShell>
+      <WelcomeOverlay
+        visible={!activeProject}
+        projects={visibleProjectsForWelcome}
+        allProjects={sortedProjects}
+        tasks={tasks}
+        onOpen={handleOpen}
+        onOpenSshProject={handleOpenSshProject}
+        onOpenWslProject={handleOpenWslProject}
+        onProjectClick={handleProjectClick}
+        onDeleteProject={handleDeleteProject}
+        onRenameProject={handleRenameProject}
+        onSetProjectAvatar={handleSetProjectAvatar}
+        onToggleProjectHidden={handleToggleProjectHidden}
+        projectGroups={projectGroups}
+        collapsedProjectGroups={collapsedProjectGroups}
+        onCollapsedProjectGroupsChange={setCollapsedProjectGroups}
+        onAssignProjectGroup={handleAssignProjectGroup}
+        onCreateProjectGroup={handleCreateProjectGroup}
+        onRenameProjectGroup={handleRenameProjectGroup}
+        onDeleteProjectGroup={handleDeleteProjectGroup}
+        skillHubConfig={skillHubConfig}
+        onEnterSkillHub={handleEnterSkillHub}
+        sshConnections={sshConnections}
+        onSshConnectionsChange={handleSshConnectionsChange}
+        onDeleteSshConnection={handleDeleteSshConnection}
+        themeMode={themeMode}
+        systemPrefersDark={systemPrefersDark}
+        onThemeModeChange={setThemeMode}
+        onToggleTheme={handleToggleTheme}
+        onTerminalFontSizeChange={setTerminalFontSize}
+        onTaskDisplayWindowChange={setTaskDisplayWindow}
+        onAttentionBadgeChange={setAttentionBadge}
+        sftpLocalDefaultPath={sftpLocalDefaultPath}
+        onSftpLocalDefaultPathChange={setSftpLocalDefaultPath}
+        onUiFontFamilyChange={setUiFontFamily}
+        onMonoFontFamilyChange={setMonoFontFamily}
+      />
+      <AppShellOverlays
         themeMode={themeMode}
         themeVariant={themeVariant}
         systemPrefersDark={systemPrefersDark}
@@ -1273,11 +1240,13 @@ function AppShell() {
         onMonoFontFamilyChange={setMonoFontFamily}
         dshWebSearchEnabled={dshWebSearchEnabled}
         onDshWebSearchEnabledChange={setDshWebSearchEnabled}
+        showReleasePage={showReleasePage}
+        onCloseReleasePage={() => setShowReleasePage(false)}
+        dshApprovalRequest={dshApprovalRequests[0] ?? null}
+        onCloseApproval={dismissApproval}
+        dshQuestionRequest={dshQuestionRequests[0] ?? null}
+        onCloseQuestion={dismissQuestion}
       />
-      {showReleasePage && <ReleasePage onClose={() => setShowReleasePage(false)} />}
-      <DshApprovalDialog request={dshApprovalRequests[0] ?? null} onClose={dismissApproval} />
-      <DshQuestionDialog request={dshQuestionRequests[0] ?? null} onClose={dismissQuestion} />
-      </div>
     </AppProviders>
   );
 }
