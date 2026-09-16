@@ -3,7 +3,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "../i18n";
-import type { Project, SshConnection } from "../types";
+import type { Project } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
 
 /**
@@ -144,20 +144,6 @@ vi.mock("../components/wsl/WslTerminalPanel", () => ({
   WslTerminalPanel: () => <div data-testid="wsl-panel" />,
 }));
 
-function sshConnection(): SshConnection {
-  return {
-    id: "conn-1",
-    name: "Prod",
-    host: "example.test",
-    port: 22,
-    username: "tester",
-    remotePath: "/srv/app",
-    autoSudoWithPassword: false,
-    useProxy: false,
-    createdAt: 0,
-  } as SshConnection;
-}
-
 function localProject(): Project {
   return { id: "project-1", name: "Aeroric", path: "/tmp/aeroric", lastOpenedAt: 1 };
 }
@@ -210,11 +196,6 @@ function projectPageProps(
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
     sftpLocalDefaultPath: "/tmp",
-    sshConnections: [sshConnection()],
-    onSshConnectionsChange: vi.fn(),
-    condaEnvironments: [],
-    selectedCondaEnvPath: null,
-    onSelectedCondaEnvPathChange: vi.fn(),
     ...overrides,
   };
 }

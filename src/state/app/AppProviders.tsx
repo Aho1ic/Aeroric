@@ -1,3 +1,4 @@
+import type { CondaEnvironment, SshConnection } from "../../types";
 import type { ReactNode } from "react";
 import {
   AppOpsProvider,
@@ -5,6 +6,7 @@ import {
   type TaskActions,
   type TaskOps,
 } from "./AppOpsProvider";
+import { ConnectionsProvider } from "./ConnectionsProvider";
 
 /**
  * 应用级 zustand store 的组合 Provider。
@@ -15,15 +17,26 @@ export function AppProviders({
   projectOps,
   taskOps,
   taskActions,
+  connections,
 }: {
   children: ReactNode;
   projectOps?: ProjectOps;
   taskOps?: TaskOps;
   taskActions?: TaskActions;
+  connections?: {
+    sshConnections: SshConnection[];
+    onSshConnectionsChange: (connections: SshConnection[]) => void;
+    onDeleteSshConnection?: (connectionId: string) => void | Promise<void>;
+    condaEnvironments: CondaEnvironment[];
+    selectedCondaEnvPath: string | null;
+    onSelectedCondaEnvPathChange: (path: string | null) => void;
+  };
 }) {
-  return (
+  const inner = (
     <AppOpsProvider projectOps={projectOps} taskOps={taskOps} taskActions={taskActions}>
       {children}
     </AppOpsProvider>
   );
+  if (!connections) return inner;
+  return <ConnectionsProvider value={connections}>{inner}</ConnectionsProvider>;
 }

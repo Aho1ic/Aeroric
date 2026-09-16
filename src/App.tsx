@@ -1118,7 +1118,18 @@ function AppShell() {
   }, []);
 
   return (
-    <AppProviders projectOps={projectOps} taskActions={taskActions}>
+    <AppProviders
+      projectOps={projectOps}
+      taskActions={taskActions}
+      connections={{
+        sshConnections,
+        onSshConnectionsChange: handleSshConnectionsChange,
+        onDeleteSshConnection: handleDeleteSshConnection,
+        condaEnvironments,
+        selectedCondaEnvPath,
+        onSelectedCondaEnvPathChange: setSelectedCondaEnvPath,
+      }}
+    >
       <div style={{ ...s.root, position: "relative" }}>
         <div
           style={{
@@ -1177,12 +1188,6 @@ function AppShell() {
                 onOpen={handleOpen}
                 onToggleTheme={handleToggleTheme}
                 sftpLocalDefaultPath={sftpLocalDefaultPath}
-                sshConnections={sshConnections}
-                onSshConnectionsChange={handleSshConnectionsChange}
-                onDeleteSshConnection={handleDeleteSshConnection}
-                condaEnvironments={condaEnvironments}
-                selectedCondaEnvPath={selectedCondaEnvPath}
-                onSelectedCondaEnvPathChange={setSelectedCondaEnvPath}
                 onShowReleasePage={() => setShowReleasePage(true)}
               />
             );

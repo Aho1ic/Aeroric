@@ -188,11 +188,6 @@ function projectPageProps(
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
     sftpLocalDefaultPath: "/tmp",
-    sshConnections: [],
-    onSshConnectionsChange: vi.fn(),
-    condaEnvironments: [],
-    selectedCondaEnvPath: null,
-    onSelectedCondaEnvPathChange: vi.fn(),
     ...overrides,
   };
 }

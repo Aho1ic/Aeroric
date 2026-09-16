@@ -5,6 +5,8 @@ export { useAppearance } from "./useAppearance";
 export { AppProviders } from "./AppProviders";
 export { AppOpsProvider, useProjectOps, useTaskOps, useTaskActions } from "./AppOpsProvider";
 export type { ProjectOps, TaskOps, TaskActions } from "./AppOpsProvider";
+export { ConnectionsProvider, useConnections } from "./ConnectionsProvider";
+export type { ConnectionsState } from "./ConnectionsProvider";
 export {
   launchLocalTask,
   launchSshTask,

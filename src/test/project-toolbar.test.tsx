@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { DiagnosticItem, Project, Task } from "../types";
 import { ProjectPage } from "../components/ProjectPage";
+import { AppProviders } from "../state/app";
 import { RightToolbar } from "../components/RightToolbar";
 import { ToastProvider } from "../components/Toast";
 import { FILE_VIEWER_COMMAND_EVENT } from "../components/file-viewer/editorCommandEvents";
@@ -434,39 +435,6 @@ function projectPageProps(
     onOpen: vi.fn(),
     onToggleTheme: vi.fn(),
     sftpLocalDefaultPath: "/Users/macbook/Downloads/同步空间",
-    sshConnections: [
-      {
-        id: "conn-1",
-        name: "Staging",
-        host: "staging.example.com",
-        port: 22,
-        username: "deploy",
-        createdAt: 1,
-      },
-      {
-        id: "conn-2",
-        name: "Production",
-        host: "prod.example.com",
-        port: 22,
-        username: "deploy",
-        remotePath: "/srv/app",
-        createdAt: 2,
-      },
-      {
-        id: "1781590902568",
-        name: "lianyun",
-        host: "192.168.0.182",
-        port: 22,
-        username: "root",
-        remotePath: "/home",
-        createdAt: 1781590902568,
-        lastConnectedAt: 1782717435401,
-      },
-    ],
-    onSshConnectionsChange: vi.fn(),
-    condaEnvironments: [],
-    selectedCondaEnvPath: null,
-    onSelectedCondaEnvPathChange: vi.fn(),
   };
 }
 
@@ -1214,11 +1182,19 @@ describe("ProjectPage right toolbar", () => {
   it("shows a reconnect state when an SSH project connection is missing", async () => {
     const user = userEvent.setup();
     const props = projectPageProps(sshProject());
-    props.sshConnections = props.sshConnections.filter((connection) => connection.id !== "conn-2");
+    const connections = {
+      sshConnections: [],
+      onSshConnectionsChange: vi.fn(),
+      condaEnvironments: [],
+      selectedCondaEnvPath: null,
+      onSelectedCondaEnvPathChange: vi.fn(),
+    };
 
     render(
       <I18nProvider>
-        <ProjectPage {...props} />
+        <AppProviders connections={connections}>
+          <ProjectPage {...props} />
+        </AppProviders>
       </I18nProvider>,
     );
 

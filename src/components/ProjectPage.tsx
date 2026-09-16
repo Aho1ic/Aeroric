@@ -26,8 +26,7 @@ import { CommandPalette, type CommandPaletteCommand } from "./command-palette/Co
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { useToast } from "./Toast";
-import { useTaskActions } from "../state/app";
-import { useAppearance } from "../state/app";
+import { useTaskActions, useAppearance, useConnections } from "../state/app";
 import type { TerminalResizeFn, TerminalWriteFn } from "../hooks/useTerminalManager";
 import { renderIdeToolIcon, RightToolbar } from "./RightToolbar";
 import { IconButton } from "./IconButton";
@@ -161,12 +160,6 @@ export function ProjectPage({
   sftpLocalDefaultPath,
   hubMode = false,
   onExitSkillHub,
-  sshConnections,
-  onSshConnectionsChange,
-  onDeleteSshConnection,
-  condaEnvironments,
-  selectedCondaEnvPath,
-  onSelectedCondaEnvPathChange,
   onShowReleasePage,
 }: {
   project: Project;
@@ -228,12 +221,6 @@ export function ProjectPage({
   sftpLocalDefaultPath: string;
   hubMode?: boolean;
   onExitSkillHub?: () => void;
-  sshConnections: SshConnection[];
-  onSshConnectionsChange: (connections: SshConnection[]) => void;
-  onDeleteSshConnection?: (connectionId: string) => void | Promise<void>;
-  condaEnvironments: CondaEnvironment[];
-  selectedCondaEnvPath: string | null;
-  onSelectedCondaEnvPathChange: (path: string | null) => void;
   onShowReleasePage?: () => void;
 }) {
   const { t } = useI18n();
@@ -244,6 +231,14 @@ export function ProjectPage({
   const attentionBadge = appearance.attentionBadge;
   const monoFontFamily = appearance.monoFontFamily;
   const taskActions = useTaskActions();
+  const {
+    sshConnections,
+    onSshConnectionsChange,
+    onDeleteSshConnection,
+    condaEnvironments,
+    selectedCondaEnvPath,
+    onSelectedCondaEnvPathChange,
+  } = useConnections();
   const onDeleteTask = taskActions.deleteTask;
   const onDeleteTasks = taskActions.deleteTasks;
   const onArchiveTasks = taskActions.archiveTasks;
