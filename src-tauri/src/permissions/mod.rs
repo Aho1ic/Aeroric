@@ -820,7 +820,14 @@ mod tests {
         unsafe { std::env::set_var(PROBE_GUARD_ENV, "1") };
         let result = fresh_probe(&["accessibility"]);
         match guard {
+            // SAFETY: 与上面那次 `set_var` 成对 —— 把先前读到的值原样写回,恢复原状。
+            // std 把 `set_var` / `remove_var` 标为 unsafe 是因为**并发**读写环境变量才构成
+            // 数据竞争,所以这里依赖的约定是「除本测试外没有别的测试读写
+            // `AERORIC_PERMISSION_PROBE`」:全仓只有 `fresh_probe` 读它,而测试里只有本用例
+            // 传非空 id(传空列表的 `empty_probe_list_skips_the_subprocess` 在读它之前
+            // 就因 `ids.is_empty()` 返回了)。
             Some(value) => unsafe { std::env::set_var(PROBE_GUARD_ENV, value) },
+            // SAFETY: 同上,只是先前本来就没有这个变量,于是移除它而不是写回。
             None => unsafe { std::env::remove_var(PROBE_GUARD_ENV) },
         }
         assert!(result.is_err());

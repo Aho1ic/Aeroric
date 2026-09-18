@@ -83,6 +83,8 @@ pub(crate) fn signal_process_group(pid: u32, signal: i32) -> bool {
     if group_result == 0 {
         return true;
     }
+    // SAFETY: 同上面那次 kill —— 不触碰本进程内存。这里退回只发给 `pid` 本身:
+    // 组发送失败说明该组可能已不存在,单 pid 发送是**弱化**而非加强,不会波及别的进程。
     unsafe { libc::kill(pid as i32, signal) == 0 }
 }
 
@@ -235,6 +237,9 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn process_exists(pid: i32) -> bool {
+        // SAFETY: `kill(pid, 0)` 不投递任何信号、不修改目标进程状态,只做存在性与
+        // 权限检查(EPERM 表示进程存在但不属于当前用户)。它不触碰本进程内存,
+        // 传入一个已经消失的 pid 也是定义良好的失败。
         let result = unsafe { libc::kill(pid, 0) };
         result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }

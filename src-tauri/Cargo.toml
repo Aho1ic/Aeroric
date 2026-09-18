@@ -173,3 +173,7 @@ too_many_arguments = "allow"
 large_enum_variant = "allow"
 # Tauri State/Mutex type stacks are inherently nested.
 type_complexity = "allow"
+# 每个 unsafe 块都要有 `// SAFETY:` 说明它为何安全。本仓库的 unsafe 全部集中在
+# src-tauri/src（permissions/macos.rs 的 FFI、storage.rs 的 Win32 ACL、subprocess.rs
+# 的信号发送等），remote-protocol / remote-relay 为零。
+undocumented_unsafe_blocks = "deny"

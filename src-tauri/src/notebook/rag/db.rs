@@ -95,14 +95,19 @@ impl DocStatus {
 fn register_vec_extension() {
     static VEC_INIT: Once = Once::new();
     VEC_INIT.call_once(|| {
-        // sqlite-vec 暴露的是 `unsafe extern "C" fn()`,而 `sqlite3_auto_extension`
+        // SAFETY: sqlite-vec 暴露的是 `unsafe extern "C" fn()`,而 `sqlite3_auto_extension`
         // 要的是带三个参数的入口签名。两者 ABI 兼容(SQLite 就是这么调的),
         // 但类型上对不上,只能 transmute —— 这也是 sqlite-vec 自己文档里的用法。
+        // `sqlite3_vec_init` 是链接进本二进制的 `extern "C"` 符号,地址在进程生命周期内
+        // 一直有效,不会被卸载或替换。
         type ExtensionInit = unsafe extern "C" fn(
             *mut rusqlite::ffi::sqlite3,
             *mut *mut c_char,
             *const rusqlite::ffi::sqlite3_api_routines,
         ) -> c_int;
+        // SAFETY: 转换出的函数指针交给 `sqlite3_auto_extension` 登记,SQLite 之后会按
+        // 上面那个三参数签名调用它 —— 这与 sqlite-vec 自身的入口 ABI 一致。
+        // 外层 `Once` 保证只登记一次,避免重复调用。
         unsafe {
             let init = std::mem::transmute::<*const (), ExtensionInit>(
                 sqlite_vec::sqlite3_vec_init as *const (),

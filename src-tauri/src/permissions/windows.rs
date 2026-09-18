@@ -72,6 +72,9 @@ fn read_string(subkey: &str, value_name: &str) -> Option<String> {
     let name = wide(value_name);
     let mut size: u32 = 0;
     // 先问长度:0 长度调用只填 size,不写 buffer。
+    // SAFETY: `subkey` / `name` 都是 `wide()` 产出的 NUL 结尾 UTF-16 缓冲,`as_ptr()`
+    // 在调用期间一直有效;buffer 传 null、长度传 0 是文档规定的「先问需要多大」形式,
+    // 此时被调方只回填 `size`,不写任何缓冲区。`&mut size` 是栈上唯一的活动可写引用。
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
@@ -88,6 +91,9 @@ fn read_string(subkey: &str, value_name: &str) -> Option<String> {
     }
     let mut buffer = vec![0_u16; size as usize / 2 + 1];
     let mut byte_len = (buffer.len() * 2) as u32;
+    // SAFETY: 同上面那次调用;`buffer` 的元素个数不少于 `size` 字节所需的 u16 数
+    // (`size/2 + 1`),`as_mut_ptr()` 可写,`byte_len` 与它的容量自洽 —— 被调方最多
+    // 写 `byte_len` 字节并把它改成实际写入的长度。
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,

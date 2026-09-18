@@ -212,13 +212,19 @@ const fn four_cc(code: [u8; 4]) -> u32 {
 pub(crate) fn check(id: &str) -> PermissionProbe {
     match id {
         SCREEN_RECORDING => {
+            // SAFETY: 无参数、无指针的只读查询,只回读系统当前记的授权状态,不弹框,
+            // 也不触碰本进程内存。
             PermissionProbe::plain(bool_status(unsafe { CGPreflightScreenCaptureAccess() }))
         }
+        // SAFETY: 同上,无参数无指针的只读查询。
         ACCESSIBILITY => PermissionProbe::plain(bool_status(unsafe { AXIsProcessTrusted() } != 0)),
         INPUT_MONITORING => PermissionProbe::plain(input_monitoring_status()),
         AUTOMATION => automation_probe(false),
         FULL_DISK_ACCESS => PermissionProbe::plain(full_disk_access_status()),
+        // SAFETY: `AVMediaTypeAudio` 是 AVFoundation 暴露的全局常量指针,由系统在进程
+        // 启动时初始化。这里只读该指针本身,不解引用、不写、不释放。
         MICROPHONE => media_probe(unsafe { AVMediaTypeAudio }),
+        // SAFETY: 同上,`AVMediaTypeVideo` 也是只读的全局常量。
         CAMERA => media_probe(unsafe { AVMediaTypeVideo }),
         // 本地网络没有公开查询接口(macOS 15 起才有这个开关),只能给设置入口。
         LOCAL_NETWORK => PermissionProbe::plain(PermissionStatus::Unknown),
@@ -238,6 +244,7 @@ fn bool_status(granted: bool) -> PermissionStatus {
 }
 
 fn input_monitoring_status() -> PermissionStatus {
+    // SAFETY: 只传一个 u32 常量,没有任何指针参数;被调方只读系统记录的状态。
     match unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) } {
         K_IOHID_ACCESS_TYPE_GRANTED => PermissionStatus::Granted,
         // denied(1) 与 unknown(2,= 没问过)对用户都是同一个动作:去授权。
@@ -253,6 +260,9 @@ fn automation_probe(ask_user: bool) -> PermissionProbe {
         descriptor_type: 0,
         data_handle: std::ptr::null_mut(),
     };
+    // SAFETY: `target` 是 `&'static` 字节串,指针与 `target.len()` 自洽且在调用期间
+    // 一直有效;`&mut desc` 指向本函数栈上刚初始化的 `AEDesc`,是它唯一的活动可写引用。
+    // 返回非 0 时 `desc` 未被填充,下面会直接返回、不再使用它。
     let created = unsafe {
         AECreateDesc(
             TYPE_APPLICATION_BUNDLE_ID,
@@ -264,9 +274,13 @@ fn automation_probe(ask_user: bool) -> PermissionProbe {
     if created != 0 {
         return PermissionProbe::unknown(format!("AECreateDesc failed ({created})"));
     }
+    // SAFETY: `desc` 刚由上面成功的 `AECreateDesc` 填充,仍是本函数独占的栈变量,
+    // 在紧随其后的 `AEDisposeDesc` 之前不会失效。
     let status = unsafe {
         AEDeterminePermissionToAutomateTarget(&desc, TYPE_WILDCARD, TYPE_WILDCARD, ask_user)
     };
+    // SAFETY: 与上面成功的 `AECreateDesc` 一一配对,只调用一次;`desc` 是栈变量,
+    // 释放后本函数不再使用它。
     unsafe { AEDisposeDesc(&mut desc) };
 
     match status {
@@ -306,17 +320,26 @@ fn media_authorization_status(media_type: *const c_void) -> Option<i64> {
     if media_type.is_null() {
         return None;
     }
+    // SAFETY: `c"..."` 是编译期生成的 NUL 结尾静态 C 字符串,满足 `objc_getClass`
+    // 对「以 NUL 结尾的类名」的要求;返回值随即判空。
     let class = unsafe { objc_getClass(c"AVCaptureDevice".as_ptr()) };
     if class.is_null() {
         return None;
     }
+    // SAFETY: 同上,`c"..."` 是 NUL 结尾的静态 C 字符串。
     let selector = unsafe { sel_registerName(c"authorizationStatusForMediaType:".as_ptr()) };
     if selector.is_null() {
         return None;
     }
     // objc_msgSend 的真实签名由调用点决定,必须先转成具体函数指针再调。
+    // SAFETY: `objc_msgSend` 的 ABI 完全由调用点给出的签名决定,所以这里的类型必须是
+    // 被调 selector 的真实签名:`authorizationStatusForMediaType:` 接受一个对象参数
+    // (AVMediaType,即 CFStringRef)并返回 NSInteger,在 64 位 macOS 上是 `i64` —— 与
+    // 下面的函数指针类型逐项一致。转换出的指针只在下一行立即使用,不会被存储或跨调用复用。
     let send: unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) -> i64 =
         unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    // SAFETY: `class` 与 `selector` 上面都已判非空;`media_type` 由调用方传入且本函数
+    // 开头已判非空,三者都指向各自类型要求的有效对象。
     Some(unsafe { send(class, selector, media_type) })
 }
 
@@ -352,10 +375,12 @@ pub(crate) fn request(id: &str) -> PermissionProbe {
     match id {
         SCREEN_RECORDING => {
             // 只在"从未询问"时弹框;拒绝过则原样返回 false,此时用户得走系统设置。
+            // SAFETY: 无参数、无指针的调用,弹框与状态记账都由系统负责。
             PermissionProbe::plain(bool_status(unsafe { CGRequestScreenCaptureAccess() }))
         }
         ACCESSIBILITY => PermissionProbe::plain(bool_status(request_accessibility())),
         INPUT_MONITORING => {
+            // SAFETY: 只传一个 u32 常量,没有任何指针参数。
             let granted = unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
             if granted {
                 PermissionProbe::plain(PermissionStatus::Granted)
@@ -374,11 +399,18 @@ pub(crate) fn request(id: &str) -> PermissionProbe {
 
 /// 带 prompt 选项的辅助功能检查:未授权时弹出"打开系统设置"的系统提示。
 fn request_accessibility() -> bool {
+    // SAFETY: `kAXTrustedCheckOptionPrompt` 是 ApplicationServices 提供的全局常量,
+    // 与进程同生命周期。这里只读该指针本身,不解引用、不写、不释放。
     let key = unsafe { kAXTrustedCheckOptionPrompt };
+    // SAFETY: 同上,`kCFBooleanTrue` 是 CoreFoundation 提供的全局常量。
     let value = unsafe { kCFBooleanTrue };
     if key.is_null() {
+        // SAFETY: 传 null 是文档允许的"不带任何选项"形式,被调方会走默认行为。
         return unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) } != 0;
     }
+    // SAFETY: `keys`/`values` 各指向 1 个元素(`num_values` = 1),两个指针都有效。
+    // 传 null 的 callbacks 表示集合不对元素做 retain/release —— 这正是这里的意图:
+    // 两个元素都是与进程同生命周期的全局常量,不需要被管理,按键指针比较即可命中。
     let options = unsafe {
         CFDictionaryCreate(
             std::ptr::null(),
@@ -389,8 +421,12 @@ fn request_accessibility() -> bool {
             std::ptr::null(),
         )
     };
+    // SAFETY: `options` 要么是上面 `CFDictionaryCreate` 返回的合法字典,要么是 null;
+    // 两种取值都被该 API 接受。
     let trusted = unsafe { AXIsProcessTrustedWithOptions(options) } != 0;
     if !options.is_null() {
+        // SAFETY: 按 CF 的 Create 规则,`options` 的引用由本函数持有,这里归还一次;
+        // 判空在前,且此后不再使用它。
         unsafe { CFRelease(options) };
     }
     trusted
@@ -403,6 +439,8 @@ fn cf_string_to_rust(value: CFTypeRef) -> Option<String> {
         return None;
     }
     let mut buffer = [0_i8; 512];
+    // SAFETY: `buffer` 是栈上 512 字节的可写数组,`as_mut_ptr()` 与 `buffer.len()` 自洽,
+    // 被调方最多写满这些字节;`value` 在本函数开头已判非空,按调用方约定是 CFStringRef。
     let ok = unsafe {
         CFStringGetCString(
             value,
@@ -425,30 +463,38 @@ fn cf_string_to_rust(value: CFTypeRef) -> Option<String> {
 /// 以 `CFStringRef` 取字典键。这些键的值就是文档写明的字面量("identifier" 等),
 /// 直接建字符串比把一堆 extern static 拉进来更省事。
 fn dictionary_string(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<String> {
+    // SAFETY: `key` 是 `CStr`,保证以 NUL 结尾,满足 `CFStringCreateWithCString` 的要求。
     let key_ref = unsafe {
         CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8)
     };
     if key_ref.is_null() {
         return None;
     }
+    // SAFETY: `key_ref` 刚由上面成功的 `CFStringCreateWithCString` 得到且已判非空;
+    // `dict` 由调用方保证是 CFDictionary(取自签名信息字典)。
     let value = unsafe { CFDictionaryGetValue(dict, key_ref) };
     let result = cf_string_to_rust(value);
+    // SAFETY: 按 CF 的 Create 规则归还 `key_ref` 的引用,只归还一次;之后不再使用它。
     unsafe { CFRelease(key_ref) };
     result
 }
 
 fn dictionary_i64(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<i64> {
+    // SAFETY: 同 `dictionary_string` —— `key` 是 NUL 结尾的 `CStr`。
     let key_ref = unsafe {
         CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8)
     };
     if key_ref.is_null() {
         return None;
     }
+    // SAFETY: 同 `dictionary_string` —— `key_ref` 已判非空,`dict` 由调用方保证是字典。
     let value = unsafe { CFDictionaryGetValue(dict, key_ref) };
     let mut number: i64 = 0;
     let ok = if value.is_null() {
         0
     } else {
+        // SAFETY: `value` 已判非空;`K_CF_NUMBER_SINT64_TYPE` 与目标变量 `number` 的
+        // 类型 `i64` 一致,`&mut number` 指向一个已初始化的可写 i64,恰好容纳 SInt64。
         unsafe {
             CFNumberGetValue(
                 value,
@@ -457,6 +503,7 @@ fn dictionary_i64(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<i64> {
             )
         }
     };
+    // SAFETY: 按 CF 的 Create 规则归还 `key_ref`,只归还一次;之后不再使用它。
     unsafe { CFRelease(key_ref) };
     (ok != 0).then_some(number)
 }
@@ -464,22 +511,32 @@ fn dictionary_i64(dict: CFTypeRef, key: &std::ffi::CStr) -> Option<i64> {
 /// 只有以 app bundle 运行时才有 bundle id。`tauri dev` 跑的裸二进制拿不到,而那正是
 /// "授权记在终端/IDE 身上"的情形,值得区分。
 fn bundle_identifier() -> Option<String> {
+    // SAFETY: 无参数调用,只取主 bundle 的引用;该引用是 CF 的 Get 规则返回的,
+    // 由框架持有,调用方不需要也不应该释放。
     let bundle = unsafe { CFBundleGetMainBundle() };
     if bundle.is_null() {
         return None;
     }
+    // SAFETY: `bundle` 已判非空,且来自上面的 `CFBundleGetMainBundle`。
+    // `CFBundleGetIdentifier` 同样走 Get 规则,返回值不需要释放。
     cf_string_to_rust(unsafe { CFBundleGetIdentifier(bundle) })
 }
 
 /// 本进程自己的签名信息:(签名 identifier, csflags, team id)。
 fn signing_information() -> Option<(Option<String>, i64, Option<String>)> {
     let mut code: CFTypeRef = std::ptr::null();
+    // SAFETY: 输出参数指向本函数栈上已初始化的 `CFTypeRef`;`flags` = 0 是文档允许的
+    // 默认取值。返回非 0 时该输出不会被回填,`code` 仍是 null,下面的判空会接住。
     if unsafe { SecCodeCopySelf(0, &mut code) } != 0 || code.is_null() {
         return None;
     }
     let mut info: CFTypeRef = std::ptr::null();
+    // SAFETY: `code` 刚由上面成功的 `SecCodeCopySelf` 得到(本函数持有其引用,见下面的
+    // `CFRelease`);`&mut info` 指向本函数栈上已初始化的 `CFTypeRef`,返回非 0 时不会被回填。
     let status =
         unsafe { SecCodeCopySigningInformation(code, K_SEC_CS_SIGNING_INFORMATION, &mut info) };
+    // SAFETY: 按 CF 的 Copy/Create 规则归还 `code` 的引用,只归还一次;`code` 此后不再使用
+    // (`info` 是另一个独立引用,不受影响)。
     unsafe { CFRelease(code) };
     if status != 0 || info.is_null() {
         return None;
@@ -487,6 +544,8 @@ fn signing_information() -> Option<(Option<String>, i64, Option<String>)> {
     let identifier = dictionary_string(info, c"identifier");
     let flags = dictionary_i64(info, c"flags").unwrap_or(0);
     let team = dictionary_string(info, c"teamid");
+    // SAFETY: 按 CF 的 Copy/Create 规则归还 `info` 的引用,只归还一次;上面三个字典查询
+    // 都已返回,此后不再使用它。
     unsafe { CFRelease(info) };
     Some((identifier, flags, team))
 }
