@@ -22,6 +22,22 @@ use crate::posix_fs::{
 };
 use crate::ssh::SshConnection;
 
+/// 把连接记录在盘上存的明文密码回填进来。
+///
+/// 与 `sftp.rs::hydrate_endpoint_credentials` 同一动机:连接记录里的 `password` 带
+/// `skip_serializing`,前端手里的对象恒为 `None`,所以这条链路原先只能靠公钥认证 ——
+/// 对"只有密码"的主机,每次目录刷新都要先拿本机默认密钥(`~/.ssh/id_rsa`、
+/// `id_ed25519`、agent 里的身份)去撞一遍服务端,直到 `MaxAuthTries` 耗尽,报
+/// `Too many authentication failures`。终端那条链路一直有回填,这里补齐是为了让同一个
+/// 连接在两条链路上走同一种认证方式,而不是"刚编辑过连接时能用、重启后就失效"。
+///
+/// 回填出密码后 [`crate::ssh::ssh_command_spec_from_args`] 会追加
+/// `PubkeyAuthentication=no` —— 这正是想要的:不让公钥探测抢在密码之前把重试次数用光。
+fn hydrate_connection(mut connection: SshConnection) -> Result<SshConnection, String> {
+    crate::ssh::hydrate_ssh_password(&mut connection)?;
+    Ok(connection)
+}
+
 fn run_ssh_output(connection: &SshConnection, remote_command: String) -> Result<Vec<u8>, String> {
     let mut cmd = crate::ssh::std_ssh_command_for_remote_command(connection, remote_command);
     crate::subprocess::configure_background_command(&mut cmd);
@@ -146,6 +162,7 @@ pub async fn remote_read_dir_entries(
     remote_project_path: Option<String>,
 ) -> Result<Vec<PosixFsEntry>, String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -167,6 +184,7 @@ pub async fn remote_read_file_content(
     remote_project_path: Option<String>,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -188,6 +206,7 @@ pub async fn remote_write_file_content(
     content: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -234,6 +253,7 @@ pub async fn remote_read_image_preview(
     remote_project_path: Option<String>,
 ) -> Result<PosixImagePreviewData, String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -271,6 +291,7 @@ pub async fn remote_create_file(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -290,6 +311,7 @@ pub async fn remote_create_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -309,6 +331,7 @@ pub async fn remote_delete_path(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -329,6 +352,7 @@ pub async fn remote_rename_path(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_path = resolve_remote_path_allowed(
             &connection,
             &remote_path,
@@ -350,6 +374,7 @@ pub async fn remote_copy_paths_to_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_target = resolve_remote_path_allowed(
             &connection,
             &target_directory,
@@ -382,6 +407,7 @@ pub async fn remote_upload_local_paths_to_directory(
     remote_project_path: Option<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let connection = hydrate_connection(connection)?;
         let resolved_target = resolve_remote_path_allowed(
             &connection,
             &target_directory,
@@ -429,6 +455,41 @@ pub async fn remote_upload_local_paths_to_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_connection() -> SshConnection {
+        SshConnection {
+            id: "conn-win-laptop".to_string(),
+            name: "Windows笔记本".to_string(),
+            group: None,
+            host: "192.168.0.106".to_string(),
+            port: 22,
+            username: "administrator".to_string(),
+            identity_file: None,
+            password: None,
+            has_password: true,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        }
+    }
+
+    /// 回填对"已经带着明文"的连接是恒等变换 —— 新建/编辑对话框里「测试连接」用的就是
+    /// 这种入参,用户刚敲进去的密码必须赢过盘上存的那份。
+    ///
+    /// 断言刻意只覆盖这条提前返回的路径:走到读盘分支的用例会依赖真实的
+    /// `~/.aeroric/ssh-passwords.json`,在同一台机器上跑就成了不可复现的测试。
+    #[test]
+    fn hydrate_connection_keeps_an_already_supplied_password() {
+        let connection = hydrate_connection(SshConnection {
+            password: Some("typed-just-now".to_string()),
+            ..test_connection()
+        })
+        .expect("hydrate");
+
+        assert_eq!(connection.password.as_deref(), Some("typed-just-now"));
+    }
 
     #[test]
     fn upload_conflict_command_checks_local_basenames_on_remote_target() {

@@ -238,7 +238,10 @@ export function useConnectionContextMenuActions(
         const path = dbxConnectionLocalFilePath(dbx);
         if (!path) return;
         try {
-          await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, { path, projectPath: projectRoot ?? path });
+          await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, {
+            path,
+            projectPath: projectRoot ?? path,
+          });
         } catch (err) {
           setError(String(err));
         }

@@ -68,9 +68,9 @@ function rustU32Const(name: string): number {
 function rustStrSlice(name: string, min = MIN_ENTRIES): string[] {
   // 同时认单行(`= &["a", "b"];`)与多行(`&[\n "a",\n];`)两种 rustfmt 排版。
   // 单行时没有可选的换行前缀,`([\s\S]*?)` 会吃到行内内容。
-  const match = new RegExp(
-    `const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n?\\];`,
-  ).exec(inventorySource);
+  const match = new RegExp(`const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n?\\];`).exec(
+    inventorySource,
+  );
   if (!match) throw new Error(`missing Rust slice ${name} in ${INVENTORY_PATH}`);
   const entries = [...withoutLineComments(match[1]).matchAll(/"([^"]+)"/g)].map(
     (entry) => entry[1],
@@ -172,10 +172,7 @@ describe("dsh protocol snapshot parity", () => {
     // 这一条是 DSH-14 的核心回归:下行换成了 `/api/remote.mux`,两条 firehose 的帧名
     // 只剩 Rust 侧的黑名单。它们再出现在活词表里,只意味着有人把上一个 pin 的表
     // 粘了回来。
-    const retired = [
-      ...rustStrSlice("RETIRED_MUX_FRAMES"),
-      ...rustStrSlice("RETIRED_HOST_FRAMES"),
-    ];
+    const retired = [...rustStrSlice("RETIRED_MUX_FRAMES"), ...rustStrSlice("RETIRED_HOST_FRAMES")];
     // 黑名单本身被"顺手删空"时,下面的 filter 会变成永真断言,所以先钉两个哨兵。
     expect(retired).toContain("session/event");
     expect(retired).toContain("host/session-added");
@@ -198,9 +195,7 @@ describe("dsh protocol snapshot parity", () => {
   it("covers every inventory list on both sides", () => {
     // 新增一份清单(任一侧)却忘了加进 PARITY_PAIRS,上面的 it.each 会安静地不测它。
     const paired = PARITY_PAIRS.map(([, rustName]) => rustName);
-    expect([...allRustSliceNames()].sort()).toEqual(
-      [...paired, ...RUST_ONLY_SLICES].sort(),
-    );
+    expect([...allRustSliceNames()].sort()).toEqual([...paired, ...RUST_ONLY_SLICES].sort());
 
     const pairedTsKeys = PARITY_PAIRS.map(([tsKey]) => tsKey as string);
     expect([...allSnapshotArrayKeys()].sort()).toEqual([...pairedTsKeys].sort());

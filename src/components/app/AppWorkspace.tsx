@@ -303,10 +303,7 @@ export function AppShellOverlays({
         onDshWebSearchEnabledChange={onDshWebSearchEnabledChange}
       />
       {showReleasePage && <ReleasePage onClose={onCloseReleasePage} />}
-      <DshApprovalDialog
-        request={dshApprovalRequest as never}
-        onClose={onCloseApproval}
-      />
+      <DshApprovalDialog request={dshApprovalRequest as never} onClose={onCloseApproval} />
       <DshQuestionDialog request={dshQuestionRequest as never} onClose={onCloseQuestion} />
     </>
   );

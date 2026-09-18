@@ -6,9 +6,28 @@ Aeroric is a local desktop workspace. Connection secrets are optimized for devel
 
 | Secret | Location | Format | File mode (Unix) |
 | --- | --- | --- | --- |
-| SSH passwords | `~/.aeroric/ssh-connections.json` (via `aeroric_dir`) | JSON plaintext fields | `0600` via `atomic_write_private` |
+| SSH passwords | `~/.aeroric/ssh-passwords.json` (via `aeroric_dir`) | JSON map of connection id → plaintext password | `0600` via `atomic_write_private` |
+| SSH connections (no secrets) | `~/.aeroric/ssh-connections.json` | JSON; `password` carries `skip_serializing` and `has_password` is never written out | `0600` via `atomic_write_private` |
 | Database passwords / transport secrets | DBX connections v2 JSON under aeroric data dir | JSON plaintext on disk; API responses sanitize password fields | `0600` via `atomic_write_private` |
 | Agent proxy / optional env credentials | App settings store | Config JSON | owner-private where applicable |
+
+The two SSH files are written together by `ssh.rs::write_ssh_connections_storage`, but
+they are split on purpose: `load_ssh_connections` never hands plaintext to the
+renderer, so the frontend holds connections whose `password` is always `None` and
+learns only `hasPassword`. Anything that needs the secret asks the backend by
+connection id (`get_ssh_connection_password`), and the SSH terminal / SFTP / remote
+file-browsing paths hydrate it back in-process (`ssh::hydrate_ssh_password`).
+
+Two behaviours worth knowing when debugging:
+
+- **Old files are migrated on write.** `ssh-connections.json` used to inline the
+  password. `prepare_ssh_connections_for_storage` splits the public record from the
+  password map on the next save. A connection arriving with an empty password keeps
+  its stored entry instead of clearing it — otherwise editing a note would wipe every
+  host's password.
+- **Permissions self-heal on read.** `load_ssh_passwords` re-asserts `0600` via
+  `ensure_private_file_permissions` before parsing, so a mode loosened by an external
+  tool is corrected on the next read rather than silently trusted.
 
 Windows inherits the private write path without Unix mode bits; rely on user profile ACLs.
 

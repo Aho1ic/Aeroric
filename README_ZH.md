@@ -9,6 +9,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Aho1ic/Aeroric/actions/workflows/checks.yml"><img src="https://github.com/Aho1ic/Aeroric/actions/workflows/checks.yml/badge.svg?branch=main" alt="Checks" /></a>
+  <a href="https://github.com/Aho1ic/Aeroric/actions/workflows/release-desktop.yml"><img src="https://github.com/Aho1ic/Aeroric/actions/workflows/release-desktop.yml/badge.svg" alt="Release Desktop Builds" /></a>
+  <a href="https://github.com/Aho1ic/Aeroric/releases"><img src="https://img.shields.io/github/v/release/Aho1ic/Aeroric" alt="Latest release" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0" /></a>
+</p>
+
+<p align="center">
   <a href="./README.md">English README</a>
 </p>
 

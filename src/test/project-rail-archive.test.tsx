@@ -46,8 +46,6 @@ function renderRail(tasks: Task[], handlers: Partial<Parameters<typeof ProjectRa
         onBack={vi.fn()}
         onNewTask={vi.fn()}
         onSelectTask={vi.fn()}
-
-
         onRunTodo={vi.fn()}
         themeVariant="light"
         onToggleTheme={vi.fn()}

@@ -55,7 +55,13 @@ describe("NotebookPanel", () => {
       renderNotebook();
       fireEvent.click(await screen.findByRole("button", { name: "Doc" }));
       const content = await screen.findByRole("textbox", { name: "Quick note content" });
-      await waitFor(() => expect(editorValue()).toBe(body));
+      /* 预算是显式抬高的,不吃默认的 3000ms:这个 helper 是本文件几十条用例的公共入口,
+         每次都要真挂一遍 CodeMirror 并把磁盘正文种进文档,前面还有「列笔记 → 点开」。
+         `test:coverage` 那一遍(全量文件并行 + v8 插桩,整体比裸跑慢 ~1.7x)会把 3000ms
+         吃穿 —— 同仓库 notebook-panel-tags.test.tsx:367 放宽到 10000ms、以及
+         file-viewer-outline.test.tsx:175 放宽到 5000ms 都是同一个理由,那两处的注释里
+         有实测记录。通过路径一满足就返回,所以放宽不拖慢任何正常用例。 */
+      await waitFor(() => expect(editorValue()).toBe(body), { timeout: 10_000 });
       fireEvent.keyDown(content, { key: "h", metaKey: true });
       return { content };
     }

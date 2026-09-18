@@ -59,7 +59,9 @@ export const WslTerminalPanel = forwardRef<
     ref,
     () => ({
       sendCommand: (command) => {
-        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellIdRef.current, data: command }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: shellIdRef.current, data: command }).catch(
+          console.error,
+        );
       },
     }),
     [],

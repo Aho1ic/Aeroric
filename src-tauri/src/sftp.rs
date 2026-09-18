@@ -29,6 +29,33 @@ pub(crate) enum SftpEndpoint {
     },
 }
 
+/// 把这条连接在盘上存的明文密码回填进 endpoint。语义与 `ssh.rs::hydrate_ssh_password`
+/// 完全一致:已有明文时不覆盖,空串视为没有。
+///
+/// 为什么 SFTP / 远程文件浏览也必须回填:连接记录里的 `password` 带 `skip_serializing`,
+/// 前端手里的对象恒为 `None`,所以这条链路原先只能靠公钥认证 —— 对"只有密码"的主机,
+/// 每次目录跳转都拿本机默认密钥去撞服务端的 `MaxAuthTries`,直到
+/// `Too many authentication failures`。终端那条链路一直有回填,这里补齐是为了让同一个
+/// 连接在两条链路上走同一种认证方式,而不是"刚编辑过连接时能用、重启后就失效"。
+fn hydrate_endpoint_credentials(endpoint: SftpEndpoint) -> Result<SftpEndpoint, String> {
+    hydrate_endpoint_credentials_with(endpoint, crate::ssh::hydrate_ssh_password)
+}
+
+/// 只给测试用:把回填动作换成可注入的闭包,断言才不必去读真实的
+/// `~/.aeroric/ssh-passwords.json`。
+fn hydrate_endpoint_credentials_with<F>(
+    mut endpoint: SftpEndpoint,
+    hydrate: F,
+) -> Result<SftpEndpoint, String>
+where
+    F: FnOnce(&mut SshConnection) -> Result<(), String>,
+{
+    if let SftpEndpoint::Ssh { connection, .. } = &mut endpoint {
+        hydrate(connection)?;
+    }
+    Ok(endpoint)
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -999,7 +1026,7 @@ fn move_local_paths_to_directory(
 
 #[tauri::command]
 pub async fn sftp_read_dir(endpoint: SftpEndpoint) -> Result<Vec<SftpEntry>, String> {
-    tokio::task::spawn_blocking(move || match endpoint {
+    tokio::task::spawn_blocking(move || match hydrate_endpoint_credentials(endpoint)? {
         SftpEndpoint::Local { path } => read_local_dir(path),
         SftpEndpoint::Ssh { connection, path } => {
             let shell = RemoteShell::detect(&connection)?;
@@ -1029,7 +1056,7 @@ pub async fn sftp_read_dir(endpoint: SftpEndpoint) -> Result<Vec<SftpEntry>, Str
 
 #[tauri::command]
 pub async fn sftp_read_text_file(endpoint: SftpEndpoint) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || match endpoint {
+    tokio::task::spawn_blocking(move || match hydrate_endpoint_credentials(endpoint)? {
         SftpEndpoint::Local { path } => {
             let path = validate_sftp_local_path(&path)?;
             let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -1079,7 +1106,7 @@ pub async fn sftp_read_text_file(endpoint: SftpEndpoint) -> Result<String, Strin
 pub async fn sftp_read_image_preview(
     endpoint: SftpEndpoint,
 ) -> Result<SftpImagePreviewData, String> {
-    tokio::task::spawn_blocking(move || match endpoint {
+    tokio::task::spawn_blocking(move || match hydrate_endpoint_credentials(endpoint)? {
         SftpEndpoint::Local { path } => {
             let path = validate_sftp_local_path(&path)?;
             let mime_type = local_image_mime_type(&path)
@@ -1166,7 +1193,7 @@ pub async fn sftp_read_image_preview(
 pub async fn sftp_read_directory_summary(
     endpoint: SftpEndpoint,
 ) -> Result<SftpDirectorySummary, String> {
-    tokio::task::spawn_blocking(move || match endpoint {
+    tokio::task::spawn_blocking(move || match hydrate_endpoint_credentials(endpoint)? {
         SftpEndpoint::Local { path } => {
             let path = validate_sftp_local_path(&path)?;
             read_local_directory_summary(&path)
@@ -1194,6 +1221,7 @@ pub async fn sftp_create_directory(endpoint: SftpEndpoint, name: String) -> Resu
     tokio::task::spawn_blocking(move || {
         let name = name.trim();
         validate_entry_name(name)?;
+        let endpoint = hydrate_endpoint_credentials(endpoint)?;
         match endpoint {
             SftpEndpoint::Local { path } => {
                 let target = validate_sftp_local_path(&path)?.join(name);
@@ -1224,7 +1252,7 @@ pub async fn sftp_create_directory(endpoint: SftpEndpoint, name: String) -> Resu
 
 #[tauri::command]
 pub async fn sftp_delete_paths(endpoint: SftpEndpoint, paths: Vec<String>) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || match endpoint {
+    tokio::task::spawn_blocking(move || match hydrate_endpoint_credentials(endpoint)? {
         SftpEndpoint::Local { .. } => {
             for path in paths {
                 let path = validate_sftp_local_path(&path)?;
@@ -1263,6 +1291,7 @@ pub async fn sftp_rename_path(
     tokio::task::spawn_blocking(move || {
         let new_name = new_name.trim();
         validate_entry_name(new_name)?;
+        let endpoint = hydrate_endpoint_credentials(endpoint)?;
         match endpoint {
             SftpEndpoint::Local { .. } => {
                 let source = validate_sftp_local_path(&path)?;
@@ -1523,6 +1552,10 @@ fn copy_or_move_paths(
     if paths.is_empty() {
         return Ok(());
     }
+    // 两端都可能是 Ssh,所以都要回填;`Local` / `Storage` 变体在回填里是恒等变换。
+    // 放在 storage 分支**之前**:storage 与 ssh 的组合同样要走这条回填。
+    let source = hydrate_endpoint_credentials(source)?;
+    let target = hydrate_endpoint_credentials(target)?;
     // storage endpoint 参与的组合单独处理,保持下面 local/ssh 的原有逻辑不变。
     if matches!(source, SftpEndpoint::Storage { .. })
         || matches!(target, SftpEndpoint::Storage { .. })
@@ -2433,5 +2466,85 @@ mod tests {
                 "copy /notes/same.txt -> /archive/same.txt".to_string(),
             ]
         );
+    }
+
+    /// 前端手里的连接对象:`password` 恒为 `None`(带 `skip_serializing`,后端从不外发
+    /// 明文),`has_password` 才是前端能看见的那个布尔值。
+    fn test_connection() -> SshConnection {
+        SshConnection {
+            id: "conn-win-laptop".to_string(),
+            name: "Windows笔记本".to_string(),
+            group: None,
+            host: "192.168.0.106".to_string(),
+            port: 22,
+            username: "administrator".to_string(),
+            identity_file: None,
+            password: None,
+            has_password: true,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        }
+    }
+
+    /// 回归:SFTP 链路原先完全不回填,于是"只有密码"的主机每次目录跳转都退回公钥认证。
+    #[test]
+    fn ssh_endpoint_gets_its_stored_password_back() {
+        let endpoint = super::hydrate_endpoint_credentials_with(
+            super::SftpEndpoint::Ssh {
+                connection: test_connection(),
+                path: "/srv".to_string(),
+            },
+            |connection| {
+                connection.password = Some("123".to_string());
+                Ok(())
+            },
+        )
+        .expect("hydrate");
+
+        let super::SftpEndpoint::Ssh { connection, .. } = endpoint else {
+            panic!("expected an ssh endpoint");
+        };
+        assert_eq!(connection.password.as_deref(), Some("123"));
+    }
+
+    /// `Local` / `Storage` 没有密码可回填。这里除了省一次读盘,更要紧的是**不能让回填
+    /// 失败连带打断**:本地两栏之间的复制、网盘里的搬移根本用不到 SSH 凭据。
+    #[test]
+    fn non_ssh_endpoints_skip_hydration_entirely() {
+        let endpoints = [
+            super::SftpEndpoint::Local {
+                path: "/tmp".to_string(),
+            },
+            super::SftpEndpoint::Storage {
+                connection_id: "drive-1".to_string(),
+                path: "/".to_string(),
+            },
+        ];
+
+        for endpoint in endpoints {
+            let endpoint = super::hydrate_endpoint_credentials_with(endpoint, |_| {
+                panic!("a non-ssh endpoint must not be hydrated")
+            })
+            .expect("hydrate");
+            assert!(!matches!(endpoint, super::SftpEndpoint::Ssh { .. }));
+        }
+    }
+
+    /// 密码表读不出来时原样冒错,而不是静默退回公钥认证 —— 后者在只有密码的主机上
+    /// 只会以 `Too many authentication failures` 的形式出现,把真正的原因藏起来。
+    #[test]
+    fn hydration_failure_propagates() {
+        let result = super::hydrate_endpoint_credentials_with(
+            super::SftpEndpoint::Ssh {
+                connection: test_connection(),
+                path: "/srv".to_string(),
+            },
+            |_| Err("ssh-passwords.json is unreadable".to_string()),
+        );
+
+        assert_eq!(result.unwrap_err(), "ssh-passwords.json is unreadable");
     }
 }

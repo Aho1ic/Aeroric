@@ -29,10 +29,7 @@ export function taskCommand(target: InvokeTarget, key: TaskMirrorKey): string {
 }
 
 /** 按 location kind 解析，供只有 kind、没有完整 target 的调用点使用。 */
-export function taskCommandByKind(
-  kind: InvokeTarget["kind"],
-  action: TaskMirrorKey,
-): string {
+export function taskCommandByKind(kind: InvokeTarget["kind"], action: TaskMirrorKey): string {
   const placeholder: InvokeTarget =
     kind === "local"
       ? { kind: "local", path: "" }

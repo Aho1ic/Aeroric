@@ -12,6 +12,7 @@ import { registerAppDialogHandler, resetAppDialogHandlerForTests } from "../lib/
 import { triggerResize } from "./resizeObserverStub";
 import { I18nProvider } from "../i18n";
 import { NotebookPanel } from "../components/notebook/NotebookPanel";
+import { getKatex } from "../components/notebook/noteVisuals";
 import {
   createNote,
   editorValue,
@@ -20,6 +21,21 @@ import {
   selectEditorRange,
   setEditorValue,
 } from "./notebookPanelKit";
+
+/* 预热两条重依赖的懒加载。
+ *
+ * getKatex() 里的 promise 是模块级单例,这里在**文件加载期**就把它踢出去;mermaid 走
+ * 同一份模块缓存的裸动态 import(getMermaid 未导出)。这样冷导入那笔成本(katex ~270KB
+ * CJS + mermaid 数 MB,几乎全花在 Vite 解析/转换 + v8 插桩上)落在模块加载阶段 ——
+ * 那个阶段不受 testTimeout 约束。
+ *
+ * 不预热的话这笔成本全部压在下面 "renders math and mermaid placeholders in reading
+ * mode" 那一条的预算里:实测单跑该用例要 12,786ms;全量并行(367 文件 / 9 fork)时 CPU
+ * 超订会把它推过全局 30000ms 的 testTimeout,而单跑整个文件 70/70 通过 —— 正是
+ * `.review-findings/flaky.md` 第 1 条描述的「红一次、再跑两次全绿」。
+ * 预热不改变任何断言:KaTeX / mermaid 仍必须真的渲染进 DOM 才算过。 */
+void getKatex();
+void import("mermaid");
 
 /* 注意 `async` 不是可以省的:harness 的失败分支是同步 `throw`,而真实 `invoke`
  * 只会以 rejection 的形式报错。写成 `Promise.resolve(harness.handle(...))` 的话

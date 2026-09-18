@@ -17,6 +17,7 @@ use crate::agent_family_maps::{
     claude_permission_args, codex_permission_args, dsh_permission_mode, omp_permission_flag,
     omp_thinking_level,
 };
+use crate::remote_os::RemoteOs;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SshConnection {
@@ -133,13 +134,13 @@ fn write_ssh_connections_storage(connections: Vec<SshConnection>) -> Result<(), 
 
 /// 把盘上存的密码补回一条从前端传来的连接。
 ///
-/// 连接动作(`open_ssh_shell` / `run_remote_task` / `resume_remote_task`)的入参是前端
-/// 手里的连接对象,而那个对象的 `password` 现在恒为 `None`。明文由后端按 id 自己取,
-/// 不再往渲染进程走一趟再回来。
+/// 连接动作(`open_ssh_shell` / `run_remote_task` / `resume_remote_task`,以及 SFTP /
+/// 远程文件浏览那条链路)的入参是前端手里的连接对象,而那个对象的 `password` 现在恒为
+/// `None`。明文由后端按 id 自己取,不再往渲染进程走一趟再回来。
 ///
 /// **已有明文时不覆盖**:新建/编辑对话框里"测试连接"用的是用户刚敲进去、还没保存的
 /// 密码,那一条必须优先。
-fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(), String> {
+pub(crate) fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(), String> {
     if connection
         .password
         .as_deref()
@@ -208,6 +209,38 @@ fn build_remote_start_command(remote_path: &str) -> String {
         "cd -- {} && exec \"${{SHELL:-/bin/sh}}\" -l",
         shell_quote_posix(remote_path)
     )
+}
+
+/// Windows 上的远端起始命令。
+///
+/// POSIX 那一套 `cd -- '...' && exec $SHELL -l` 在 cmd.exe 下必然失败:`--` 不是路径、
+/// 单引号也不是引用字符,cmd 会把 `'C:\Users\...'` 连引号一起当成目录名,报
+/// 「文件名、目录名或卷标语法不正确。」然后 sshd 立刻结束会话(本地表现为
+/// `Connection to <host> closed.`)。远端默认 shell 就是 cmd.exe 的 Windows 机器上,
+/// 这条命令没有任何一个字符能被正确解释。
+///
+/// 路径经 `-EncodedCommand`(base64 UTF-16LE)送进去,理由与 `remote_os` 里那套文件操作
+/// 一致:命令串要先过本地 ssh、远端 sshd、再落到 cmd.exe 或 PowerShell,base64 字符集里
+/// 没有任何一层会特殊对待的字符,路径里的空格、单引号、`&` 都不需要转义。
+fn build_windows_remote_start_command(remote_path: &str) -> String {
+    let native_path = crate::remote_os::to_windows_native_path(remote_path);
+    crate::remote_os::build_interactive_powershell_command(&format!(
+        "Set-Location -LiteralPath {}",
+        crate::remote_os::powershell_quote(&native_path)
+    ))
+}
+
+/// 起始命令按远端 OS 分流。
+///
+/// Windows 分支不参与 `auto_sudo_with_password`:那个开关的语义是"登录后进 root shell",
+/// 而 Windows 没有 sudo,也没有 root。勾了它的 Windows 连接只应该得到一个普通会话,
+/// 而不是一条注定失败的命令。
+fn build_remote_start_command_for(os: RemoteOs, remote_path: &str, auto_sudo: bool) -> String {
+    match os {
+        RemoteOs::Windows => build_windows_remote_start_command(remote_path),
+        RemoteOs::Posix if auto_sudo => build_remote_start_command_with_sudo(remote_path),
+        RemoteOs::Posix => build_remote_start_command(remote_path),
+    }
 }
 
 const SUDO_PASSWORD_READY_MARKER: &str = "__AERORIC_SUDO_PASSWORD_READY__";
@@ -279,11 +312,23 @@ fn validate_remote_agent_id(agent: &str) -> Result<&str, String> {
     Ok(trimmed)
 }
 
-fn remote_agent_program_word(agent: &str) -> Result<String, String> {
+/// 远端 agent 的可执行文件字,已按远端 OS 引用好。
+///
+/// `claude_gpt55` 是个例外:它不是 PATH 上的程序,而是本机历史兼容的启动脚本
+/// `~/.claude/start-gpt55.sh`。那个脚本在 Windows 主机上不存在,所以宁可明确报错,
+/// 也不要发一条注定 `not recognized` 的命令让用户去猜。
+fn remote_agent_program_word_for(os: RemoteOs, agent: &str) -> Result<String, String> {
     let agent = validate_remote_agent_id(agent)?;
-    Ok(match agent {
-        "claude_gpt55" => "\"$HOME/.claude/start-gpt55.sh\"".to_string(),
-        _ => shell_quote_posix(agent),
+    Ok(match (os, agent) {
+        (RemoteOs::Posix, "claude_gpt55") => "\"$HOME/.claude/start-gpt55.sh\"".to_string(),
+        (RemoteOs::Windows, "claude_gpt55") => {
+            return Err(
+                "The claude_gpt55 profile is a POSIX shell script and cannot run on a Windows remote host"
+                    .to_string(),
+            )
+        }
+        (RemoteOs::Posix, _) => shell_quote_posix(agent),
+        (RemoteOs::Windows, _) => crate::remote_os::powershell_quote(agent),
     })
 }
 
@@ -394,32 +439,98 @@ fn remote_omp_args(
     args
 }
 
+/// 远端 agent 的启动串,按远端 OS 拼装。
+///
+/// 两侧不只是引号不同,语法结构也不同:
+/// - POSIX:环境变量是**命令前缀**,`NAME='v' prog 'a' 'b'` 整体是一个 `sh` 语句。
+/// - PowerShell:`$env:NAME = 'v'` 是**独立语句**,必须用 `;` 分隔;而且可执行文件要经
+///   调用运算符 `&` 启动 —— 直接写 `'claude' --flag`,PowerShell 只会把那个字符串
+///   原样输出到 stdout,agent 根本不会启动。
+///
+/// `program_word` 已由 [`remote_agent_program_word_for`] 按同一 OS 引用好,这里只管参数。
 fn build_remote_command(
+    os: RemoteOs,
     agent: &str,
     permission_mode: &str,
     program_word: String,
     args: &[String],
     selected_model: Option<&str>,
 ) -> String {
-    let mut environment = Vec::new();
+    let mut environment: Vec<(String, String)> = Vec::new();
     if let Some(model) = selected_model {
-        environment.push(format!("AERORIC_AGENT_MODEL={}", shell_word_posix(model)));
+        environment.push(("AERORIC_AGENT_MODEL".to_string(), model.to_string()));
     }
     if is_remote_dsh_agent(agent) {
         if let Some(mode) = dsh_permission_mode(permission_mode) {
-            environment.push(format!("DSH_PERMISSION_MODE={}", shell_word_posix(mode)));
+            environment.push(("DSH_PERMISSION_MODE".to_string(), mode.to_string()));
         }
-        environment.push("DSH_TELEMETRY_DISABLED=1".to_string());
+        environment.push(("DSH_TELEMETRY_DISABLED".to_string(), "1".to_string()));
     }
-    environment
-        .into_iter()
-        .chain(std::iter::once(program_word))
-        .chain(args.iter().map(|arg| shell_word_posix(arg)))
+    let invocation = std::iter::once(program_word)
+        .chain(args.iter().map(|arg| match os {
+            RemoteOs::Posix => shell_word_posix(arg),
+            RemoteOs::Windows => crate::remote_os::powershell_quote(arg),
+        }))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    match os {
+        RemoteOs::Posix => environment
+            .into_iter()
+            .map(|(name, value)| format!("{name}={}", shell_word_posix(&value)))
+            .chain(std::iter::once(invocation))
+            .collect::<Vec<_>>()
+            .join(" "),
+        RemoteOs::Windows => environment
+            .into_iter()
+            .map(|(name, value)| {
+                format!(
+                    "$env:{name} = {}",
+                    crate::remote_os::powershell_quote(&value)
+                )
+            })
+            .chain(std::iter::once(format!("& {invocation}")))
+            .collect::<Vec<_>>()
+            .join("; "),
+    }
 }
 
+/// 「先进入项目目录,再启动 agent」的远端命令。
+///
+/// POSIX 是 `cd -- '<path>' && <cmd>`;Windows 的默认 shell 是 cmd.exe,既不认 `--`
+/// 也不认单引号(与终端起始命令同一个坑),所以整串改走 PowerShell:
+/// `Set-Location -LiteralPath '<native>'; <cmd>`,再经 `-EncodedCommand` 下发。
+///
+/// 用 `-NonInteractive` 那一版而不是 `-NoExit` 那版:agent 跑完就该退出,留着 PowerShell
+/// 的提示符会让任务永远停在 running。`-NonInteractive` 只约束 PowerShell 自己要不要
+/// 提问,agent 作为子进程仍然继承 PTY 的 stdin,交互界面照常。
+fn build_remote_project_command(
+    os: RemoteOs,
+    remote_project_path: &str,
+    command: String,
+) -> String {
+    match os {
+        RemoteOs::Posix => format!(
+            "cd -- {} && {}",
+            shell_quote_posix(remote_project_path),
+            command
+        ),
+        RemoteOs::Windows => crate::remote_os::build_powershell_command(&format!(
+            "Set-Location -LiteralPath {}; {}",
+            crate::remote_os::powershell_quote(&crate::remote_os::to_windows_native_path(
+                remote_project_path
+            )),
+            command
+        )),
+    }
+}
+
+/// 远端 Agent 任务的启动命令,按远端 OS 分流。
+///
+/// 与交互式终端同一个坑:Windows 主机的默认 shell 是 cmd.exe,`cd -- '<path>'` 会被它
+/// 当成目录名(见 [`build_remote_project_command`])。所以 `os` 必须由调用方探测后传进来,
+/// 不能在这里按 `cfg!(windows)` 猜 —— 那是**本机**平台,与远端平台无关。
 fn build_remote_task_command(
+    os: RemoteOs,
     agent: &str,
     permission_mode: &str,
     remote_project_path: &str,
@@ -428,7 +539,7 @@ fn build_remote_task_command(
     reasoning_effort: Option<&str>,
     speed: Option<&str>,
 ) -> Result<String, String> {
-    let program_word = remote_agent_program_word(agent)?;
+    let program_word = remote_agent_program_word_for(os, agent)?;
     let mut args = remote_agent_args(
         agent,
         permission_mode,
@@ -451,14 +562,16 @@ fn build_remote_task_command(
         }
         args.push(prompt.to_string());
     }
-    Ok(format!(
-        "cd -- {} && {}",
-        shell_quote_posix(remote_project_path),
-        build_remote_command(agent, permission_mode, program_word, &args, selected_model)
+    Ok(build_remote_project_command(
+        os,
+        remote_project_path,
+        build_remote_command(os, agent, permission_mode, program_word, &args, selected_model),
     ))
 }
 
+/// 远端会话恢复,按远端 OS 分流。`os` 的由来见 [`build_remote_task_command`]。
 fn build_remote_resume_command(
+    os: RemoteOs,
     agent: &str,
     permission_mode: &str,
     remote_project_path: &str,
@@ -470,7 +583,7 @@ fn build_remote_resume_command(
     if is_remote_dsh_agent(agent) {
         return Err("DeepSeek Harness remote sessions do not support native resume".to_string());
     }
-    let program_word = remote_agent_program_word(agent)?;
+    let program_word = remote_agent_program_word_for(os, agent)?;
     let mut args = remote_agent_args(
         agent,
         permission_mode,
@@ -485,10 +598,10 @@ fn build_remote_resume_command(
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     }
-    Ok(format!(
-        "cd -- {} && {}",
-        shell_quote_posix(remote_project_path),
-        build_remote_command(agent, permission_mode, program_word, &args, selected_model)
+    Ok(build_remote_project_command(
+        os,
+        remote_project_path,
+        build_remote_command(os, agent, permission_mode, program_word, &args, selected_model),
     ))
 }
 
@@ -642,7 +755,18 @@ pub(crate) fn proxy_command_arg() -> Option<String> {
     ))
 }
 
+/// `os` 只影响远端起始命令。除交互式终端以外的调用点(`scp`、端口转发、一次性远端
+/// 命令)都会把 `remote_path` 清空,根本拿不到起始命令,所以它们继续用 POSIX 默认值 ——
+/// 唯一需要真实 OS 的路径是 [`build_ssh_command`],它由调用方先探测再传进来。
 fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
+    build_ssh_args_for_os(connection, force_tty, RemoteOs::Posix)
+}
+
+fn build_ssh_args_for_os(
+    connection: &SshConnection,
+    force_tty: bool,
+    os: RemoteOs,
+) -> Vec<String> {
     let mut args = vec![if force_tty { "-tt" } else { "-T" }.to_string()];
     // Never silently trust a changed or previously unseen host key. Users can
     // provision the host key in their normal SSH known_hosts file first.
@@ -672,19 +796,26 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
         args.push(identity_file.to_string());
     }
     args.push(format!("{}@{}", connection.username, connection.host));
-    if let Some(remote_path) = connection
-        .remote_path
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        args.push(if connection_can_auto_sudo(connection) {
-            build_remote_start_command_with_sudo(remote_path)
-        } else {
-            build_remote_start_command(remote_path)
-        });
+    if let Some(remote_path) = remote_start_path(connection) {
+        args.push(build_remote_start_command_for(
+            os,
+            remote_path,
+            connection_can_auto_sudo(connection),
+        ));
     }
     args
+}
+
+/// 连接上配置的远端起始目录。空白串与 `None` 等价 —— 两者都表示"不指定"。
+///
+/// 抽出来是因为它同时决定两件事:要不要发起始命令,以及要不要为起始命令去探测远端 OS。
+/// 两处各写一遍 `trim().filter(!is_empty())`,迟早会分叉成"探测了却不发命令"这种白跑。
+fn remote_start_path(connection: &SshConnection) -> Option<&str> {
+    connection
+        .remote_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -708,7 +839,16 @@ fn ssh_command_spec(
     remote_command: Option<String>,
     force_tty: bool,
 ) -> SshCommandSpec {
-    let mut ssh_args = build_ssh_args(connection, force_tty);
+    ssh_command_spec_for_os(connection, remote_command, force_tty, RemoteOs::Posix)
+}
+
+fn ssh_command_spec_for_os(
+    connection: &SshConnection,
+    remote_command: Option<String>,
+    force_tty: bool,
+    os: RemoteOs,
+) -> SshCommandSpec {
+    let mut ssh_args = build_ssh_args_for_os(connection, force_tty, os);
     if let Some(remote_command) = remote_command {
         ssh_args.push(remote_command);
     }
@@ -808,8 +948,82 @@ fn command_builder_from_spec(spec: SshCommandSpec) -> CommandBuilder {
     cmd
 }
 
-fn build_ssh_command(connection: &SshConnection) -> CommandBuilder {
-    command_builder_from_spec(ssh_command_spec(connection, None, true))
+/// 交互式远端终端。`os` 决定起始命令是 POSIX 还是 PowerShell,由调用方探测后传入。
+fn build_ssh_command(connection: &SshConnection, os: RemoteOs) -> CommandBuilder {
+    command_builder_from_spec(ssh_command_spec_for_os(connection, None, true, os))
+}
+
+/// 同步跑一条远端命令并取回 stdout。给远端 OS 探测用。
+///
+/// 探测结果由 `remote_os::detect_remote_os_with` 按 `user@host:port` 缓存,所以整条链路
+/// 只为"第一次遇到这台机器"付一次往返;SFTP 面板通常已经先探过了。
+fn run_remote_command_capture(
+    connection: &SshConnection,
+    remote_command: String,
+) -> Result<Vec<u8>, String> {
+    let mut cmd = std_ssh_command_for_remote_command(connection, remote_command);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+/// 远端该发哪一套命令 —— 交互式终端的起始命令、远端 Agent 任务的启动命令都问它。
+///
+/// 探测失败(凭据拿不到、`sshpass` 缺失、host key 还没确认、对端只允许交互式登录等)时
+/// **不能**一律按 POSIX 处理:配置里写的是 `C:\Users\...` 的 Windows 主机,发 POSIX 命令
+/// 只会换来 cmd.exe 那句「文件名、目录名或卷标语法不正确」。所以兜底看路径形态。
+///
+/// 反过来,探测成功时一律以探测结果为准、不再看路径:MSYS / Cygwin 的 `uname -s` 会命中
+/// POSIX 列表,而它们确实吃 `sh` 语法,此时按 `C:/...` 的形态改发 PowerShell 反而会错。
+///
+/// `fallback_path` 由调用方给,而不是固定读 `connection.remote_path`:远端 Agent 任务用的是
+/// 它自己的 `remote_project_path`,两者未必是同一个值。
+fn resolve_remote_shell_os_for<F>(
+    connection: &SshConnection,
+    fallback_path: Option<&str>,
+    run: F,
+) -> RemoteOs
+where
+    F: FnMut(&SshConnection, String) -> Result<Vec<u8>, String>,
+{
+    if let Ok(os) = crate::remote_os::detect_remote_os_with(connection, run) {
+        return os;
+    }
+    match fallback_path {
+        Some(path) if crate::remote_os::is_windows_remote_path(path) => RemoteOs::Windows,
+        _ => RemoteOs::Posix,
+    }
+}
+
+fn resolve_remote_shell_os(connection: &SshConnection) -> RemoteOs {
+    resolve_remote_shell_os_for(
+        connection,
+        connection.remote_path.as_deref(),
+        run_remote_command_capture,
+    )
+}
+
+/// 远端 Agent 任务的远端 shell 判定。与终端同源,只是兜底路径换成任务自己的项目路径。
+///
+/// 调用点必须**先** `ensure_host_key_known`:探测本身就是一次 ssh 往返,host key 还没确认
+/// 时它必然失败,判定就只会退化成路径形态 —— 放在确认之后才可能真的探到。
+async fn resolve_remote_task_shell_os(
+    connection: &SshConnection,
+    remote_project_path: &str,
+) -> RemoteOs {
+    let probe_connection = connection.clone();
+    let fallback_path = remote_project_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        resolve_remote_shell_os_for(
+            &probe_connection,
+            Some(fallback_path.as_str()),
+            run_remote_command_capture,
+        )
+    })
+    .await
+    .unwrap_or(RemoteOs::Posix)
 }
 
 fn build_ssh_remote_command(connection: &SshConnection, remote_command: String) -> CommandBuilder {
@@ -1126,6 +1340,19 @@ pub async fn open_ssh_shell(
     }
     task_manager.remove_pty_handles(&shell_id);
 
+    // 起始命令要按远端 OS 分流,而探测是一次同步的 ssh 往返 —— 所以只在真的会用到起始
+    // 命令(连接配了远端路径)时才探。没配路径的连接照旧直接开终端,不多付这一次往返;
+    // 对端不可达时也就不会出现"终端空着等超时"的假死观感。
+    // 探测失败会退化成按路径形态判断,不会拦住终端。
+    let shell_os = if remote_start_path(&connection).is_none() {
+        RemoteOs::Posix
+    } else {
+        let probe_connection = connection.clone();
+        tokio::task::spawn_blocking(move || resolve_remote_shell_os(&probe_connection))
+            .await
+            .unwrap_or(RemoteOs::Posix)
+    };
+
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: rows.unwrap_or(24),
@@ -1137,7 +1364,7 @@ pub async fn open_ssh_shell(
 
     let child = pair
         .slave
-        .spawn_command(build_ssh_command(&connection))
+        .spawn_command(build_ssh_command(&connection, shell_os))
         .map_err(|e| e.to_string())?;
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -1239,15 +1466,6 @@ pub async fn run_remote_task(
     let force_prompt_injection =
         !is_dsh && crate::pty::should_force_prompt_injection(is_codex, force_prompt_injection);
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
-    let remote_command = build_remote_task_command(
-        &agent,
-        &permission_mode,
-        &remote_project_path,
-        (!uses_ultracode && !force_prompt_injection).then_some(prompt.as_str()),
-        selected_model.as_deref(),
-        reasoning_effort.as_deref(),
-        speed.as_deref(),
-    )?;
     let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
     let initial_prompt = (uses_ultracode || force_prompt_injection)
         .then(|| crate::pty::initial_prompt_input_chunks(&prompt))
@@ -1261,6 +1479,20 @@ pub async fn run_remote_task(
     // 历史清零 → 远程终端流水位换代,已订阅的手机端自动重新快照
     crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
     ensure_host_key_known(&connection)?;
+    // 启动命令要按远端 OS 分流,所以这里多一次探测(结果按 `user@host:port` 缓存,
+    // 同一台机器在一个 App 生命周期里只探一次)。顺序不能提到 `ensure_host_key_known`
+    // 之前:host key 没确认时探测必然失败,判定会退化成纯路径形态。
+    let task_os = resolve_remote_task_shell_os(&connection, &remote_project_path).await;
+    let remote_command = build_remote_task_command(
+        task_os,
+        &agent,
+        &permission_mode,
+        &remote_project_path,
+        (!uses_ultracode && !force_prompt_injection).then_some(prompt.as_str()),
+        selected_model.as_deref(),
+        reasoning_effort.as_deref(),
+        speed.as_deref(),
+    )?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
     let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
@@ -1306,7 +1538,17 @@ pub async fn resume_remote_task(
     )?;
     let speed = crate::pty::normalized_speed(speed.as_deref())?;
     let uses_ultracode = !is_codex && reasoning_effort.as_deref() == Some("ultracode");
+    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
+    task_manager.cancelled_tasks.lock().remove(&task_id);
+    task_manager
+        .manually_completed_tasks
+        .lock()
+        .remove(&task_id);
+    ensure_host_key_known(&connection)?;
+    // 见 `run_remote_task`:恢复命令同样按远端 OS 分流。
+    let task_os = resolve_remote_task_shell_os(&connection, &remote_project_path).await;
     let remote_command = build_remote_resume_command(
+        task_os,
         &agent,
         &permission_mode,
         &remote_project_path,
@@ -1315,13 +1557,6 @@ pub async fn resume_remote_task(
         reasoning_effort.as_deref(),
         speed.as_deref(),
     )?;
-    let initial_prelude = uses_ultracode.then(crate::pty::initial_ultracode_command);
-    task_manager.cancelled_tasks.lock().remove(&task_id);
-    task_manager
-        .manually_completed_tasks
-        .lock()
-        .remove(&task_id);
-    ensure_host_key_known(&connection)?;
     let cmd = build_ssh_remote_command(&connection, remote_command);
     let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
@@ -1694,6 +1929,205 @@ mod tests {
         );
     }
 
+    /// 断言落在解出来的 PowerShell 正文上,而不是 base64 串上:base64 让"内容对不对"
+    /// 这件事在 diff 里完全不可读。规则与 `remote_os` 里那条同名意图的测试一致。
+    fn decode_powershell_payload(command: &str) -> String {
+        decode_powershell_script(command, "powershell -NoProfile -NoExit -EncodedCommand ")
+    }
+
+    /// 一次性脚本那一版(`-NonInteractive`):远端 Agent 任务用它。
+    fn decode_task_powershell_payload(command: &str) -> String {
+        decode_powershell_script(
+            command,
+            "powershell -NoProfile -NonInteractive -EncodedCommand ",
+        )
+    }
+
+    fn decode_powershell_script(command: &str, prefix: &str) -> String {
+        let payload = command
+            .strip_prefix(prefix)
+            .unwrap_or_else(|| panic!("expected {prefix:?} to lead the command"));
+        let bytes = crate::remote_os::tests_decode_base64(payload);
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16(&units).expect("utf16 payload")
+    }
+
+    fn windows_connection(host: &str, remote_path: &str) -> SshConnection {
+        SshConnection {
+            id: format!("conn-{host}"),
+            name: "win".to_string(),
+            group: None,
+            host: host.to_string(),
+            port: 22,
+            username: "administrator".to_string(),
+            identity_file: None,
+            password: Some("123".to_string()),
+            has_password: true,
+            remote_path: Some(remote_path.to_string()),
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        }
+    }
+
+    #[test]
+    fn windows_remote_start_command_uses_encoded_powershell() {
+        let command = build_windows_remote_start_command("C:\\Users\\Administrator\\Documents");
+
+        assert_eq!(
+            decode_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\Users\\Administrator\\Documents'"
+        );
+    }
+
+    /// 回归:cmd.exe 不认 `--`、也不认单引号,路径里再出现空格或引号时更没有出路。
+    /// base64 之后命令行里只剩字母数字,这些字符一个都不会到达 shell 解析层。
+    #[test]
+    fn windows_remote_start_command_survives_paths_cmd_cannot_parse() {
+        let command = build_windows_remote_start_command("C:\\Program Files\\it's here");
+
+        assert!(!command.contains('"'));
+        assert!(!command.contains('\''));
+        assert_eq!(
+            decode_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\Program Files\\it''s here'"
+        );
+    }
+
+    #[test]
+    fn windows_start_command_ignores_auto_sudo() {
+        let windows = build_remote_start_command_for(RemoteOs::Windows, "C:\\srv\\app", true);
+        assert!(windows.starts_with("powershell -NoProfile -NoExit -EncodedCommand "));
+        assert!(!windows.contains("sudo"));
+
+        let posix = build_remote_start_command_for(RemoteOs::Posix, "/srv/app", true);
+        assert!(posix.starts_with("cd -- '/srv/app'"));
+        assert!(posix.contains("sudo -S"));
+    }
+
+    #[test]
+    fn windows_connection_ssh_args_carry_powershell_start_command() {
+        let connection =
+            windows_connection("win.example.com", "C:\\Users\\Administrator\\Documents");
+
+        let args = build_ssh_args_for_os(&connection, true, RemoteOs::Windows);
+        let start = args.last().expect("start command");
+        assert!(start.starts_with("powershell -NoProfile -NoExit -EncodedCommand "));
+        assert!(!args.iter().any(|arg| arg.contains("cd --")));
+
+        // 同一份连接在 POSIX 判定下仍是原来那条命令:分流没有污染默认路径。
+        let posix_args = build_ssh_args_for_os(&connection, true, RemoteOs::Posix);
+        assert_eq!(
+            posix_args.last().unwrap(),
+            "cd -- 'C:\\Users\\Administrator\\Documents' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
+    }
+
+    /// 探测失败时兜底看路径形态。每个用例传自己的 `host`:探测结果按 `user@host:port`
+    /// 缓存,共用一个 host 会让并行跑的用例互相看见对方的缓存条目。
+    #[test]
+    fn failed_probe_falls_back_to_path_shape() {
+        let windows = windows_connection("probe-fallback-win.test", "C:\\Users\\Administrator");
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &windows,
+                windows.remote_path.as_deref(),
+                |_, _| Err("boom".to_string())
+            ),
+            RemoteOs::Windows
+        );
+
+        let posix = windows_connection("probe-fallback-posix.test", "/srv/app");
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &posix,
+                posix.remote_path.as_deref(),
+                |_, _| Err("boom".to_string())
+            ),
+            RemoteOs::Posix
+        );
+
+        let no_path = SshConnection {
+            remote_path: None,
+            ..windows_connection("probe-fallback-none.test", "/srv/app")
+        };
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &no_path,
+                no_path.remote_path.as_deref(),
+                |_, _| Err("boom".to_string())
+            ),
+            RemoteOs::Posix
+        );
+    }
+
+    /// 兜底路径是调用方给的,不是固定读 `connection.remote_path`:远端 Agent 任务用的是它
+    /// 自己的 `remote_project_path`。连接没配远端路径、而任务给了 `C:\...` 时,探测失败
+    /// 仍必须判 Windows —— 否则任务会照发 POSIX 的 `cd -- 'C:\...'`。
+    #[test]
+    fn fallback_uses_the_path_the_caller_supplied() {
+        let connection = SshConnection {
+            remote_path: None,
+            ..windows_connection("probe-fallback-caller.test", "/srv/app")
+        };
+
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &connection,
+                Some("C:\\Users\\Administrator\\repo"),
+                |_, _| Err("boom".to_string())
+            ),
+            RemoteOs::Windows
+        );
+        // 对照:改用连接自己的路径(没配)时落回 POSIX。
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &connection,
+                connection.remote_path.as_deref(),
+                |_, _| Err("boom".to_string())
+            ),
+            RemoteOs::Posix
+        );
+    }
+
+    /// 探测成功时以探测结果为准:MSYS / Cygwin 的 `uname -s` 命中 POSIX 列表,
+    /// 即便配置里写的是 `C:\...` 也应该继续发 `sh` 语法。
+    #[test]
+    fn successful_probe_overrides_path_shape() {
+        let connection = windows_connection("probe-wins.test", "C:\\Users\\Administrator");
+        assert_eq!(
+            resolve_remote_shell_os_for(
+                &connection,
+                connection.remote_path.as_deref(),
+                |_, _| Ok(b"Linux\n".to_vec())
+            ),
+            RemoteOs::Posix
+        );
+    }
+
+    /// 空白远端路径与"没配路径"等价:两者都不该发起始命令,也不该为它去探测 OS。
+    #[test]
+    fn blank_remote_path_means_no_start_command() {
+        let connection = windows_connection("blank-path.test", "   ");
+        assert_eq!(remote_start_path(&connection), None);
+
+        let args = build_ssh_args_for_os(&connection, true, RemoteOs::Windows);
+        assert_eq!(args.last().unwrap(), "administrator@blank-path.test");
+    }
+
+    #[test]
+    fn remote_start_path_trims_surrounding_whitespace() {
+        let connection = windows_connection("trim-path.test", "  C:\\Users\\Administrator  ");
+        assert_eq!(
+            remote_start_path(&connection),
+            Some("C:\\Users\\Administrator")
+        );
+    }
+
     #[test]
     fn remote_start_command_can_enter_sudo_shell_with_saved_password() {
         assert_eq!(
@@ -1881,6 +2315,7 @@ mod tests {
     fn remote_claude_task_command_maps_permission_and_quotes_prompt() {
         assert_eq!(
             build_remote_task_command(
+                RemoteOs::Posix,
                 "claude",
                 "auto_edit",
                 "/srv/app's repo",
@@ -1898,6 +2333,7 @@ mod tests {
     fn remote_codex_task_command_uses_sandbox_flags_and_separator() {
         assert_eq!(
             build_remote_task_command(
+                RemoteOs::Posix,
                 "codex",
                 "auto_edit",
                 "/srv/app",
@@ -1917,6 +2353,7 @@ mod tests {
     fn remote_omp_task_command_uses_omp_flags_and_separator() {
         assert_eq!(
             build_remote_task_command(
+                RemoteOs::Posix,
                 "omp",
                 "auto_edit",
                 "/srv/app",
@@ -1984,6 +2421,7 @@ mod tests {
     fn remote_claude_gpt55_uses_script_with_codex_compatible_args() {
         assert_eq!(
             build_remote_task_command(
+                RemoteOs::Posix,
                 "claude_gpt55",
                 "full_access",
                 "/srv/app",
@@ -2001,6 +2439,7 @@ mod tests {
     fn remote_dsh_uses_headless_only_when_a_prompt_is_present() {
         assert_eq!(
             build_remote_task_command(
+                RemoteOs::Posix,
                 "dsh",
                 "auto_edit",
                 "/srv/app",
@@ -2013,7 +2452,7 @@ mod tests {
             "cd -- '/srv/app' && DSH_PERMISSION_MODE=workspace-write DSH_TELEMETRY_DISABLED=1 'dsh' --profile headless -- 'inspect status'"
         );
         assert_eq!(
-            build_remote_task_command("dsh", "ask", "/srv/app", Some("   "), None, None, None,)
+            build_remote_task_command(RemoteOs::Posix, "dsh", "ask", "/srv/app", Some("   "), None, None, None,)
                 .unwrap(),
             "cd -- '/srv/app' && DSH_PERMISSION_MODE=read-only DSH_TELEMETRY_DISABLED=1 'dsh'"
         );
@@ -2023,6 +2462,7 @@ mod tests {
     fn remote_resume_command_uses_agent_specific_session_flags() {
         assert_eq!(
             build_remote_resume_command(
+                RemoteOs::Posix,
                 "claude",
                 "ask",
                 "/srv/app",
@@ -2036,6 +2476,7 @@ mod tests {
         );
         assert_eq!(
             build_remote_resume_command(
+                RemoteOs::Posix,
                 "codex",
                 "full_access",
                 "/srv/app",
@@ -2048,6 +2489,7 @@ mod tests {
             "cd -- '/srv/app' && 'codex' --dangerously-bypass-approvals-and-sandbox resume codex-session"
         );
         assert!(build_remote_resume_command(
+            RemoteOs::Posix,
             "dsh",
             "ask",
             "/srv/app",
@@ -2059,10 +2501,132 @@ mod tests {
         .is_err());
     }
 
+    /// Windows 远端上的 Agent 任务:整串必须走 PowerShell。
+    ///
+    /// 回归:cmd.exe 不认 `--`、也不认单引号,`cd -- 'C:\...' && 'claude' ...` 只会换来
+    /// 「文件名、目录名或卷标语法不正确。」,sshd 随即结束会话。
+    #[test]
+    fn windows_remote_task_command_runs_through_powershell() {
+        let command = build_remote_task_command(
+            RemoteOs::Windows,
+            "claude",
+            "auto_edit",
+            "C:\\Users\\Administrator\\my repo",
+            Some("fix Bob's bug"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(command.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand "));
+        assert!(!command.contains("cd --"));
+        assert_eq!(
+            decode_task_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\Users\\Administrator\\my repo'; & 'claude' '--permission-mode' 'acceptEdits' '--' 'fix Bob''s bug'"
+        );
+    }
+
+    /// Windows 上环境变量是**独立语句**(`$env:X = 'v'`),必须用 `;` 分隔;而且可执行文件
+    /// 要用调用运算符 `&` 启动 —— 少了 `&`,PowerShell 只会把 `'dsh'` 这个字符串原样输出
+    /// 到 stdout,任务看起来"启动了"却什么都没做。
+    #[test]
+    fn windows_remote_task_command_separates_env_assignments() {
+        let command = build_remote_task_command(
+            RemoteOs::Windows,
+            "dsh",
+            "auto_edit",
+            "C:\\srv\\app",
+            Some("inspect status"),
+            None,
+            Some("high"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_task_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\srv\\app'; $env:DSH_PERMISSION_MODE = 'workspace-write'; $env:DSH_TELEMETRY_DISABLED = '1'; & 'dsh' '--profile' 'headless' '--' 'inspect status'"
+        );
+    }
+
+    /// `AERORIC_AGENT_MODEL` 对所有家族统一前置:POSIX 上是命令前缀,Windows 上是独立语句。
+    #[test]
+    fn windows_remote_task_command_prefixes_the_model_env_var() {
+        let command = build_remote_task_command(
+            RemoteOs::Windows,
+            "omp",
+            "auto_edit",
+            "C:\\srv\\app",
+            Some("inspect status"),
+            Some("gpt-5"),
+            Some("minimal"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_task_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\srv\\app'; $env:AERORIC_AGENT_MODEL = 'gpt-5'; & 'omp' '--approval-mode' 'write' '--model' 'gpt-5' '--thinking' 'minimal' '--' 'inspect status'"
+        );
+    }
+
+    /// 恢复命令与启动命令走同一套 OS 分流。
+    #[test]
+    fn windows_remote_resume_command_runs_through_powershell() {
+        let command = build_remote_resume_command(
+            RemoteOs::Windows,
+            "codex",
+            "full_access",
+            "C:\\srv\\app",
+            "codex-session",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_task_powershell_payload(&command),
+            "Set-Location -LiteralPath 'C:\\srv\\app'; & 'codex' '--dangerously-bypass-approvals-and-sandbox' 'resume' 'codex-session'"
+        );
+    }
+
+    /// `claude_gpt55` 是本机的 POSIX 启动脚本,Windows 远端上不存在。明确报错好过发一条
+    /// 注定 `not recognized` 的命令让用户去猜。同一份输入在 POSIX 上仍照发脚本。
+    #[test]
+    fn windows_remote_task_rejects_the_posix_only_gpt55_profile() {
+        let error = build_remote_task_command(
+            RemoteOs::Windows,
+            "claude_gpt55",
+            "ask",
+            "C:\\srv\\app",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("claude_gpt55"));
+        assert!(build_remote_task_command(
+            RemoteOs::Posix,
+            "claude_gpt55",
+            "ask",
+            "/srv/app",
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_ok());
+    }
+
     #[test]
     fn remote_agent_id_rejects_shell_metacharacters() {
         assert!(validate_remote_agent_id("claude; touch /tmp/pwn").is_err());
         assert!(build_remote_task_command(
+            RemoteOs::Posix,
             "custom_agent",
             "ask",
             "/srv/app",
@@ -2077,6 +2641,7 @@ mod tests {
     #[test]
     fn remote_task_command_forwards_model_reasoning_and_speed() {
         let command = build_remote_task_command(
+            RemoteOs::Posix,
             "codex",
             "auto_edit",
             "/srv/app",
@@ -2096,7 +2661,9 @@ mod tests {
     #[test]
     fn remote_claude_fast_mode_uses_settings_json() {
         let command =
-            build_remote_task_command("claude", "ask", "/srv/app", None, None, None, Some("fast"))
+            build_remote_task_command(
+                RemoteOs::Posix, "claude", "ask", "/srv/app", None, None, None, Some("fast")
+            )
                 .unwrap();
         let unsupported_fast_flag = ["--", "fast"].concat();
 

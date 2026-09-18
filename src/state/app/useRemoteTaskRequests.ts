@@ -57,13 +57,13 @@ export type RemoteTaskRequestDeps = {
 function taskHasResumableSession(task: Task): boolean {
   return Boolean(
     task.claudeSessionId ||
-      task.codexSessionId ||
-      task.claudeSessionPath ||
-      task.codexSessionPath ||
-      task.dshSessionId ||
-      task.dshSessionPath ||
-      task.ompSessionId ||
-      task.ompSessionPath,
+    task.codexSessionId ||
+    task.claudeSessionPath ||
+    task.codexSessionPath ||
+    task.dshSessionId ||
+    task.dshSessionPath ||
+    task.ompSessionId ||
+    task.ompSessionPath,
   );
 }
 

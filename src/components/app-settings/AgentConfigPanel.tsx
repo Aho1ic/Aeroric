@@ -241,7 +241,10 @@ export function AgentConfigPanel({
     setError(null);
     setSaved(false);
     try {
-      await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: fileState.content });
+      await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, {
+        agent: agentKey,
+        content: fileState.content,
+      });
       setOriginal(fileState.content);
       const effort = readModelReasoningEffort(fileState.content);
       setReasoningEffort(effort);

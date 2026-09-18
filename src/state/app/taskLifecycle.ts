@@ -1,11 +1,5 @@
 import { invoke } from "../../lib/api/invoke";
-import type {
-  AgentType,
-  PermissionMode,
-  Project,
-  SshConnection,
-  Task,
-} from "../../types";
+import type { AgentType, PermissionMode, Project, SshConnection, Task } from "../../types";
 import type { ProjectViewState } from "../../appProjectState";
 import { resolveProjectLocation } from "../../types";
 import type { ProtocolFamily } from "../../types";
@@ -15,10 +9,7 @@ import { withTimeout, TASK_FLUSH_TIMEOUT_MS } from "../../taskFlush";
 import { createTaskId } from "../../taskId";
 import { recordAgentConfigUsage } from "../../hooks/useAgentUsage";
 import { launchDshWebUi } from "../../dshWebUi";
-import {
-  getTaskSessionFieldsByFamily,
-  resolveTaskSessionOwner,
-} from "../../taskSession";
+import { getTaskSessionFieldsByFamily, resolveTaskSessionOwner } from "../../taskSession";
 import {
   launchLocalTask,
   launchSshTask,
@@ -502,9 +493,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     if (persistBeforeLaunch) {
       try {
         await flushProjectTasksForRemoteLaunch(sourceTask.projectId);
-        if (
-          deps.tasksRef.current.find((item) => item.id === sourceTask.id) !== pendingTask
-        ) {
+        if (deps.tasksRef.current.find((item) => item.id === sourceTask.id) !== pendingTask) {
           throw new Error("Task changed while saving; the remote request was rejected.");
         }
       } catch (error) {
@@ -667,9 +656,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     if (persistBeforeLaunch) {
       try {
         await flushProjectTasksForRemoteLaunch(task.projectId);
-        if (
-          deps.tasksRef.current.find((item) => item.id === taskId) !== taskWithSession
-        ) {
+        if (deps.tasksRef.current.find((item) => item.id === taskId) !== taskWithSession) {
           throw new Error("Task changed while saving; the remote request was rejected.");
         }
       } catch (error) {

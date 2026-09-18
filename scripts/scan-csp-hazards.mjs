@@ -10,10 +10,11 @@
  * 用法:node scripts/scan-csp-hazards.mjs <包名> [包名...]
  *
  * 状态:经根 package.json 的 `check:csp-hazards` 接线(显式传参与渲染管线对齐),
- * 仅手动审查工具,未接 CI。已知发现项:dompurify 的命中全部位于 istanbul
- * 覆盖率插桩产物 `dist/purify.cov.cjs.js`(`new Function("return this")` 来自
- * 插桩代码,不是 purify 本体);应用实际加载的入口是 `dist/purify.es.mjs` /
- * `dist/purify.cjs.js`,不受影响。
+ * 仅手动审查工具,未接 CI。dompurify 的 5 处历史命中全部位于 istanbul 覆盖率
+ * 插桩产物 `dist/purify.cov.cjs.js`(`new Function("return this")` 来自插桩代码,
+ * 不是 purify 本体);应用实际加载的入口是 `dist/purify.es.mjs` /
+ * `dist/purify.cjs.js`,不受影响。此类 `*.cov.*` 产物已在 walkJs 中跳过,跳过
+ * 数量会打印出来 —— 跳过是显式的,不是静默的。
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -39,7 +40,18 @@ const HAZARDS = [
   },
 ];
 
-function walkJs(dir, out = []) {
+/**
+ * istanbul 覆盖率插桩产物(如 `dist/purify.cov.cjs.js`)。
+ *
+ * 这类文件不是包的真实发布入口:插桩器自己会注入 `new Function("return this")`
+ * 之类的构造,扫出来的命中全部属于插桩代码而非库本体。应用实际加载的是
+ * `dist/purify.es.mjs` / `dist/purify.cjs.js` 这类未插桩入口。
+ */
+function isCoverageArtifact(name) {
+  return /\.cov\./.test(name);
+}
+
+function walkJs(dir, out = [], skipped = []) {
   let entries;
   try {
     entries = readdirSync(dir);
@@ -57,8 +69,13 @@ function walkJs(dir, out = []) {
     if (st.isDirectory()) {
       // 不进 node_modules 的嵌套依赖:那些包各自单独扫。
       if (entry === "node_modules") continue;
-      walkJs(full, out);
+      walkJs(full, out, skipped);
     } else if (/\.(?:js|mjs|cjs)$/.test(entry)) {
+      if (isCoverageArtifact(entry)) {
+        // 跳过而非忽略:调用方会把数量打印出来,避免「少扫了」长得像「扫过了没问题」。
+        skipped.push(full);
+        continue;
+      }
       out.push({ path: full, size: st.size });
     }
   }
@@ -133,8 +150,13 @@ for (const pkg of packages) {
     console.log("  ❌ 找不到该包 —— 未扫描(不是「没问题」)");
     continue;
   }
-  const files = dirs.flatMap((dir) => walkJs(dir));
-  console.log(`\n=== ${pkg} — ${files.length} 个 JS 文件(${dirs.length} 个位置)===`);
+  const skipped = [];
+  const files = dirs.flatMap((dir) => walkJs(dir, [], skipped));
+  const skippedNote =
+    skipped.length > 0 ? `,已跳过 ${skipped.length} 个覆盖率插桩产物` : "";
+  console.log(
+    `\n=== ${pkg} — ${files.length} 个 JS 文件(${dirs.length} 个位置)${skippedNote} ===`,
+  );
 
   const findings = new Map();
   for (const file of files) {

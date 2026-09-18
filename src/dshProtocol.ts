@@ -236,4 +236,3 @@ export const DSH_PROTOCOL_SNAPSHOT = {
 
 export type DshProtocolSnapshot = typeof DSH_PROTOCOL_SNAPSHOT;
 export type DshRemoteEventMode = (typeof DSH_PROTOCOL_SNAPSHOT.remoteEvents)[number]["mode"];
-

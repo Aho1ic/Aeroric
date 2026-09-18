@@ -39,7 +39,11 @@ import type {
   TestCoverageSummary,
   ThemeVariant,
 } from "../types";
-import { FS_MIRRORS, readFileContent as fsReadFileContent, writeFileContent as fsWriteFileContent } from "../lib/api/fs";
+import {
+  FS_MIRRORS,
+  readFileContent as fsReadFileContent,
+  writeFileContent as fsWriteFileContent,
+} from "../lib/api/fs";
 import { invokeFileFor } from "../lib/invokeFacade";
 import { resolveInvokeTarget } from "../lib/target";
 import { useI18n } from "../i18n";

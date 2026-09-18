@@ -255,13 +255,24 @@ function firePasteEvent(target: HTMLElement, files: FileList) {
  * `expect(x).not.toHaveBeenCalled()` 上完全同构。凡是断言「什么都没发生」的用例,
  * 都得同时确认没崩。
  */
+/**
+ * 监听 window 的 error 事件,供「断言什么都没发生」的用例同时确认没崩。
+ *
+ * stop 除了原样返回给调用方,还会登记进 activeErrorWatchers,由文件级 afterEach
+ * 统一兜底摘除:调用点原来把 stop() 放在断言之后,断言一抛出就漏掉监听器,继续往
+ * 一个已经没人读的数组里 push。惰性泄漏,但把 stop 挪进 afterEach 是顺手的事。
+ */
+const activeErrorWatchers: Array<() => void> = [];
+
 function watchErrors() {
   const errors: string[] = [];
   const onError = (e: ErrorEvent) => {
     errors.push(e.message || String(e.error));
   };
   window.addEventListener("error", onError);
-  return { errors, stop: () => window.removeEventListener("error", onError) };
+  const stop = () => window.removeEventListener("error", onError);
+  activeErrorWatchers.push(stop);
+  return { errors, stop };
 }
 
 beforeEach(() => {
@@ -281,6 +292,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  /* watchErrors() 的 error 监听器一律在这里摘掉,不依赖调用点把 stop() 放在断言之后 ——
+     断言抛出时那段代码根本走不到。重复 removeEventListener 是幂等的。 */
+  for (const stop of activeErrorWatchers.splice(0)) stop();
   /* jsdom 没有 document.execCommand。:1415 / :2342 用 defineProperty 装了一个恒返回
      false 的 vi.fn,不删的话对该文件剩下约 60 个用例都是「恒失败的剪贴板兜底」。
      当前后续用例走 clipboard 成功路径所以没红,但任何新增的「execCommand 兜底成功」
@@ -2342,23 +2356,30 @@ describe("预览弹窗", () => {
 
 describe("零散分支", () => {
   it("右键菜单里复制路径失败时只记日志,不弹提示", async () => {
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.error 会对
+       本文件**剩下的所有用例**永久静音(本文件的 afterEach 只 useRealTimers +
+       删 execCommand,没有 restoreAllMocks)。静音之后 React 的 "not wrapped in act"、
+       effect 抛错这类回归在 CI 里彻底看不见 —— 一处失败放大成整文件失明。 */
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error("denied"));
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: vi.fn().mockReturnValue(false),
-    });
-    renderExplorer();
-    await screen.findByText("README.md");
+    try {
+      vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error("denied"));
+      Object.defineProperty(document, "execCommand", {
+        configurable: true,
+        value: vi.fn().mockReturnValue(false),
+      });
+      renderExplorer();
+      await screen.findByText("README.md");
 
-    openContextMenu("README.md");
-    fireEvent.click(menuItem("Copy full path"));
+      openContextMenu("README.md");
+      fireEvent.click(menuItem("Copy full path"));
 
-    // 菜单照样关掉(finally 里做的),失败只写 console。
-    await waitFor(() => expect(queryMenuItem("Copy full path")).not.toBeInTheDocument());
-    expect(consoleError).toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalled();
-    consoleError.mockRestore();
+      // 菜单照样关掉(finally 里做的),失败只写 console。
+      await waitFor(() => expect(queryMenuItem("Copy full path")).not.toBeInTheDocument());
+      expect(consoleError).toHaveBeenCalled();
+      expect(showToast).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("标签页切回前台(visibilitychange)会刷新", async () => {

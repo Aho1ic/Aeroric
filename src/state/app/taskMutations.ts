@@ -17,9 +17,7 @@ export function unarchiveTasksInList(tasks: Task[], taskIds: string[]): Task[] {
   const changed = tasks.filter((task) => ids.has(task.id) && task.archivedAt);
   if (changed.length === 0) return tasks;
   const changedIds = new Set(changed.map((task) => task.id));
-  return tasks.map((task) =>
-    changedIds.has(task.id) ? { ...task, archivedAt: undefined } : task,
-  );
+  return tasks.map((task) => (changedIds.has(task.id) ? { ...task, archivedAt: undefined } : task));
 }
 
 export function toggleTaskStarInList(tasks: Task[], taskId: string): Task[] {

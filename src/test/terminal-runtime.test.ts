@@ -83,6 +83,7 @@ class ResizeObserverMock {
 
 describe("createTerminalRuntime", () => {
   let animationFrames: FrameRequestCallback[];
+  let rafSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,7 +92,7 @@ describe("createTerminalRuntime", () => {
     ResizeObserverMock.instances = [];
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     animationFrames = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
@@ -99,6 +100,13 @@ describe("createTerminalRuntime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    /* 必须显式还原,否则 window.requestAnimationFrame 永远回不到真实实现:每个用例的
+       beforeEach 都在上一个 spy 之上再套一层,层数随用例数线性增长,单个 mockRestore
+       只剥一层。用精确引用还原而不是 vi.restoreAllMocks(),后者会连带把模块级 vi.fn()
+       的实现一起抹掉,那些 mock 由 vi.mock 工厂建立、不保证每个用例都重设。
+       unstubAllGlobals() 负责把 ResizeObserver 的替身摘掉。 */
+    rafSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("shares initialization, appearance updates, resize, visibility, and cleanup", () => {

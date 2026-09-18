@@ -920,8 +920,13 @@ describe("NotebookPanel", () => {
       await waitFor(() => expect(tags()).toContain("#quick"));
 
       harness.releaseTagScan(0);
-      // Slow 那次回来了,但它不是当前看的那条 —— 不能把 Quick 的那一组换掉。
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      /* Slow 那次回来了,但它不是当前看的那条 —— 不能把 Quick 的那一组换掉。
+         原来是真睡 20ms 再断言:负载下这 20ms 里 setState + 重渲染可能还没发生,
+         于是把 noteId 守卫删掉也照绿(假绿)。放行到落库整条链全是微任务(harness
+         的 resolve → mock invoke 的 await → 组件的 await → setState),而
+         await act(async () => {}) 内部跨一个宏任务边界 —— 宏任务开跑前微任务队列
+         必然排空,所以「迟到的响应已经处理完」是确定的。 */
+      await act(async () => {});
       expect(tags()).toContain("#quick");
       expect(tags()).not.toContain("#slow");
     });

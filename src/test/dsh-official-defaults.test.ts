@@ -48,7 +48,10 @@ describe("official dsh web plugin manifest", () => {
     ["plugin-package-inventory-deepseek", "@deepseek-ai/dsh-plugin-package-inventory-deepseek"],
     ["web-fetch-http", "@deepseek-ai/dsh-web-fetch-http"],
     // web-app 层新增:controller 族、上传、资源模型与新的 ui 行
-    ["subagent-model-selection-settings", "@deepseek-ai/dsh-tool-subagent/model-selection-settings"],
+    [
+      "subagent-model-selection-settings",
+      "@deepseek-ai/dsh-tool-subagent/model-selection-settings",
+    ],
     ["open-in-app", "@deepseek-ai/dsh-host-open-in-app"],
     ["ui-open-in-app", "@deepseek-ai/dsh-client-ui-open-in-app"],
     ["session-turn-outline", "@deepseek-ai/dsh-session-turn-outline"],

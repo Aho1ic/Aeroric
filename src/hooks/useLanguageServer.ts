@@ -40,10 +40,7 @@ type OpenLifecycleDocument = {
   version: number;
 };
 
-function lspInvokeTarget(
-  projectPath: string,
-  remote?: LspRemoteContext,
-): InvokeTarget {
+function lspInvokeTarget(projectPath: string, remote?: LspRemoteContext): InvokeTarget {
   if (!remote) return localTarget(projectPath);
   return {
     kind: "ssh",
@@ -93,10 +90,7 @@ export function useLanguageServer({
   const runIdRef = useRef(0);
   const lifecycleRef = useRef<OpenLifecycleDocument | null>(null);
   const supported = Boolean(enabled && filePath && isLspSupportedFile(filePath));
-  const invokeTarget = useMemo(
-    () => lspInvokeTarget(projectPath, remote),
-    [projectPath, remote],
-  );
+  const invokeTarget = useMemo(() => lspInvokeTarget(projectPath, remote), [projectPath, remote]);
 
   const request = useMemo(() => {
     if (!supported || !filePath || content === null) return null;
@@ -201,7 +195,15 @@ export function useLanguageServer({
       },
       invokeTarget,
     );
-  }, [activeLifecycleKey, closeLifecycleDocument, content, filePath, invokeTarget, projectPath, remote]);
+  }, [
+    activeLifecycleKey,
+    closeLifecycleDocument,
+    content,
+    filePath,
+    invokeTarget,
+    projectPath,
+    remote,
+  ]);
 
   useEffect(() => {
     const current = lifecycleRef.current;

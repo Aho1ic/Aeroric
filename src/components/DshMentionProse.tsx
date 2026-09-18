@@ -42,7 +42,9 @@ export function DshMentionProse({
             onClick={() => {
               // Opening is best-effort: the Host answers or it does not, and the
               // prose stays readable either way.
-              void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: segment.path }).catch(() => {});
+              void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: segment.path }).catch(
+                () => {},
+              );
             }}
           >
             {segment.token}

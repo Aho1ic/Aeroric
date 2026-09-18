@@ -10,7 +10,13 @@ export {
   useGetTaskRestoreState,
 } from "./projectViewsStore";
 export { AppProviders } from "./AppProviders";
-export { AppOpsProvider, useProjectOps, useTaskOps, useTaskActions, useTerminalActions } from "./AppOpsProvider";
+export {
+  AppOpsProvider,
+  useProjectOps,
+  useTaskOps,
+  useTaskActions,
+  useTerminalActions,
+} from "./AppOpsProvider";
 export type { ProjectOps, TaskOps, TaskActions, TerminalActions } from "./AppOpsProvider";
 export { ConnectionsProvider, useConnections } from "./ConnectionsProvider";
 export type { ConnectionsState } from "./ConnectionsProvider";

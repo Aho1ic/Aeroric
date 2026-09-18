@@ -10,10 +10,7 @@ import { APP_PLATFORM } from "../../platform";
 import { isHideWindowShortcut } from "../../shortcuts";
 import { flushPendingSavesBeforeExit } from "../../taskFlush";
 import { SELECTED_CONDA_ENV_KEY } from "../../appProjectState";
-import {
-  APP_EXIT_REQUESTED_EVENT,
-  APP_RESTART_REQUESTED_EVENT,
-} from "../../tauriEvents";
+import { APP_EXIT_REQUESTED_EVENT, APP_RESTART_REQUESTED_EVENT } from "../../tauriEvents";
 
 /** App 宿主权威列表 → zustand 只读镜像。 */
 export function useHostStateMirrors(

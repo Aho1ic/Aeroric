@@ -19,9 +19,7 @@ export interface DshApprovalRequest {
  * `next` = 用户没做决定就把框关了,交给下一个应答者(手机端等);没人接的话
  * Host 自己 fail-close,所以这条路径不会让 agent 永远挂着。
  */
-type DshApprovalOutcome =
-  | { kind: "result"; value: "allowed-once" | "rejected" }
-  | { kind: "next" };
+type DshApprovalOutcome = { kind: "result"; value: "allowed-once" | "rejected" } | { kind: "next" };
 
 export function DshApprovalDialog({
   request,

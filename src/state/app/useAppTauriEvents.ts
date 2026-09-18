@@ -2,10 +2,7 @@ import { useEffect, useRef } from "react";
 import { invoke } from "../../lib/api/invoke";
 import { listen } from "@tauri-apps/api/event";
 import type { TaskStatus } from "../../types";
-import {
-  PROJECT_PINNED_CHANGED_EVENT,
-  dispatchAppSettingsChanged,
-} from "../../appRemoteEvents";
+import { PROJECT_PINNED_CHANGED_EVENT, dispatchAppSettingsChanged } from "../../appRemoteEvents";
 import { APP_SETTINGS_CHANGED_EVENT } from "../../components/app-settings/types";
 import {
   REMOTE_TERMINAL_RESIZED_EVENT,

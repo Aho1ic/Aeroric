@@ -341,7 +341,8 @@ describe("ShellTerminalPanel 关闭会话", () => {
       return Promise.resolve(undefined);
     });
     /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.error 会对
-       本文件**剩下的所有用例**永久静音(全文没有 afterEach,配置也没开 restoreMocks)。
+       本文件**剩下的所有用例**持续静音(文件级 afterEach 的 restoreAllMocks 要等本条
+       用例结束才执行,救不了本条之后、本文件之内的其余用例)。
        这个文件测的正是终端面板的挂载/销毁/dispose —— React 的 "not wrapped in act"、
        重复 key、effect 抛错全走 console.error,静音之后这些回归在 CI 里彻底看不见。 */
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -1,10 +1,7 @@
 import { invoke } from "../../lib/api/invoke";
 import type { AgentType, PermissionMode, Task } from "../../types";
 import { persistProjectTasks } from "../../appProjectState";
-import {
-  getTaskSessionFieldsByFamily,
-  resolveTaskSessionOwner,
-} from "../../taskSession";
+import { getTaskSessionFieldsByFamily, resolveTaskSessionOwner } from "../../taskSession";
 import type { AgentOption } from "../../agents";
 
 export function updateTodoTaskInList(
@@ -63,12 +60,7 @@ export async function generateTaskName(
       if (currentSessionPath !== expectedSessionPath) return prev;
 
       const next = prev.map((x) => (x.id === taskId ? { ...x, name: trimmed || undefined } : x));
-      persistProjectTasks(
-        current.projectId,
-        next,
-        deps.showToast,
-        deps.formatSaveTasksError,
-      );
+      persistProjectTasks(current.projectId, next, deps.showToast, deps.formatSaveTasksError);
       return next;
     });
   } catch (e) {

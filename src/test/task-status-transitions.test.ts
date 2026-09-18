@@ -22,14 +22,11 @@ const task = (id: string, patch: Partial<Task> = {}): Task => ({
 describe("applyTaskStatusTransition", () => {
   it("sets completedAt once when entering a terminal status", () => {
     const now = 1000;
-    const { tasks, changed, task: next } = applyTaskStatusTransition(
-      [task("t1")],
-      "t1",
-      "done",
-      undefined,
-      undefined,
-      now,
-    );
+    const {
+      tasks,
+      changed,
+      task: next,
+    } = applyTaskStatusTransition([task("t1")], "t1", "done", undefined, undefined, now);
     expect(changed).toBe(true);
     expect(next?.status).toBe("done");
     expect(next?.completedAt).toBe(now);

@@ -20,7 +20,10 @@ vi.mock("../components/DshComposer", () => ({
   DshComposer: () => <div data-testid="dsh-composer" />,
 }));
 
-// Locating a row scrolls it into view, which jsdom does not implement.
+/* 定位一条轨迹行会把它滚进视野,jsdom 不实现 scrollIntoView。DshTrajectoryLedger.tsx:192
+   是无保护的 `?.scrollIntoView(...)`,属性不存在就抛。测试文件各自独占环境,补丁不跨
+   文件:同样渲染这条链路的 dsh-deliverables / dsh-image-attachments /
+   dsh-trajectory-timeline 三个文件各自装了一份同名补丁,改这里时记得一起看。 */
 Element.prototype.scrollIntoView ??= () => {};
 
 /** One turn: a prompt, a reply, and the tool call the reply ordered. */

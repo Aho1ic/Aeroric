@@ -312,7 +312,9 @@ function FilesPanel({
           disabled={busy === file.path}
           onClick={() => {
             setBusy(file.path);
-            void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: file.path }).finally(() => setBusy(null));
+            void invoke(DSH_SESSION_COMMANDS.openHostPath, { path: file.path }).finally(() =>
+              setBusy(null),
+            );
           }}
         >
           {busy === file.path ? <Loader2 size={14} className="spin" /> : <FolderOpen size={14} />}

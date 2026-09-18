@@ -13,10 +13,7 @@ export type WorktreeOpsDeps = {
   translate: (key: string, params?: Record<string, string>) => string;
 };
 
-function markDiscarded(
-  deps: WorktreeOpsDeps,
-  taskId: string,
-): void {
+function markDiscarded(deps: WorktreeOpsDeps, taskId: string): void {
   deps.setTasks((prev) => {
     const task = prev.find((x) => x.id === taskId);
     if (!task) return prev;

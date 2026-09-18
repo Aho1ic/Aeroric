@@ -112,7 +112,9 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
       sendCommand: (cmd: string) => {
         const session = activeSession;
         if (!session) return;
-        invoke(TERMINAL_COMMANDS.sendInput, { taskId: session.shellId, data: cmd }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.sendInput, { taskId: session.shellId, data: cmd }).catch(
+          console.error,
+        );
       },
     }),
     [activeSession],
@@ -296,7 +298,9 @@ export const SshTerminalPanel = forwardRef<SshTerminalPanelHandle, Props>(functi
         invoke(TERMINAL_COMMANDS.sendInput, { taskId: session.shellId, data }).catch(console.error);
       },
       onResize: ({ cols, rows }) => {
-        invoke(TERMINAL_COMMANDS.resize, { taskId: session.shellId, cols, rows }).catch(console.error);
+        invoke(TERMINAL_COMMANDS.resize, { taskId: session.shellId, cols, rows }).catch(
+          console.error,
+        );
       },
     });
     runtimeRef.current = runtime;

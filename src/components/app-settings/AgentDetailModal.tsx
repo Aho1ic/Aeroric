@@ -642,7 +642,10 @@ export function AgentDetailModal({
         latestContent = updatedContent;
         setFileState({ status: "loaded", content: updatedContent });
         if (!isDirty) {
-          await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: updatedContent });
+          await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, {
+            agent: agentKey,
+            content: updatedContent,
+          });
           setOriginal(updatedContent);
           setOriginalReasoningEffort(reasoningEffort);
           setOriginalReasoningSpeed(reasoningSpeed);
@@ -660,7 +663,10 @@ export function AgentDetailModal({
         if (!agentIsDsh && !agentIsOmp && canSaveReasoningSpeed) {
           contentToSave = setModelReasoningSpeed(contentToSave, reasoningSpeed);
         }
-        await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, { agent: agentKey, content: contentToSave });
+        await invoke(AGENT_SETTINGS_COMMANDS.writeConfigFile, {
+          agent: agentKey,
+          content: contentToSave,
+        });
         setFileState({ status: "loaded", content: contentToSave });
         setOriginal(contentToSave);
         if (!agentIsDsh) {

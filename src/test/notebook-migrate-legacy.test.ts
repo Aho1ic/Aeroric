@@ -110,15 +110,20 @@ describe("runLegacyMigration", () => {
     storage.setItem = () => {
       throw new Error("quota exceeded");
     };
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.warn 会对
+       本文件**剩下的所有用例**永久静音(本文件没有 afterEach,配置也没开 restoreMocks)。 */
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const migrate = vi.fn(async () => report({ totalInput: 1 }));
+    try {
+      const migrate = vi.fn(async () => report({ totalInput: 1 }));
 
-    const outcome = await runLegacyMigration({ storage, migrate });
+      const outcome = await runLegacyMigration({ storage, migrate });
 
-    // 数据在磁盘上了,不能报失败 —— 报失败会让调用方以为笔记没迁过去。
-    expect(outcome.status).toBe("migrated");
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+      // 数据在磁盘上了,不能报失败 —— 报失败会让调用方以为笔记没迁过去。
+      expect(outcome.status).toBe("migrated");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries on the next launch after a failure, relying on backend idempotency", async () => {

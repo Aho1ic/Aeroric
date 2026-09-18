@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const terminalState = vi.hoisted(() => ({
   deferWrites: false,
@@ -124,6 +124,13 @@ describe("TerminalView theme replay", () => {
         disconnect() {}
       },
     );
+  });
+
+  /* 只还 stubGlobal,刻意不调 vi.restoreAllMocks():terminalState 里的 vi.fn() 是在
+     vi.hoisted 工厂里**带实现**创建的,restoreAllMocks 会把那份实现一起抹掉,后续用例
+     拿到的 attachTerminalWheelScroll() 会返回 undefined。 */
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("keeps restored history hidden until it is positioned at the bottom", async () => {

@@ -27,8 +27,15 @@ export type LocalRunInput = {
 };
 
 export function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
-  const { task, projectPath, images, texts = [], injectPromptIntoTerminal = false, promptOverride, isDsh } =
-    input;
+  const {
+    task,
+    projectPath,
+    images,
+    texts = [],
+    injectPromptIntoTerminal = false,
+    promptOverride,
+    isDsh,
+  } = input;
   if (isDsh) {
     invoke(DSH_TASK_COMMANDS.run, {
       taskId: task.id,
@@ -75,8 +82,13 @@ export function launchSshTask(
     promptOverride?: string;
   },
 ) {
-  const { task, connection, remoteProjectPath, injectPromptIntoTerminal = false, promptOverride } =
-    input;
+  const {
+    task,
+    connection,
+    remoteProjectPath,
+    injectPromptIntoTerminal = false,
+    promptOverride,
+  } = input;
   invoke(taskCommandByKind("ssh", "run"), {
     taskId: task.id,
     connection,
@@ -104,8 +116,13 @@ export function launchWslTask(
     promptOverride?: string;
   },
 ) {
-  const { task, distribution, linuxProjectPath, injectPromptIntoTerminal = false, promptOverride } =
-    input;
+  const {
+    task,
+    distribution,
+    linuxProjectPath,
+    injectPromptIntoTerminal = false,
+    promptOverride,
+  } = input;
   invoke(taskCommandByKind("wsl", "run"), {
     taskId: task.id,
     distribution,

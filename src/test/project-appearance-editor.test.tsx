@@ -9,12 +9,7 @@ function renderEditor(props: Partial<React.ComponentProps<typeof ProjectAppearan
   const onCancel = vi.fn();
   const { container } = render(
     <I18nProvider>
-      <ProjectAppearanceEditor
-        name="agent-config"
-        onSave={onSave}
-        onCancel={onCancel}
-        {...props}
-      />
+      <ProjectAppearanceEditor name="agent-config" onSave={onSave} onCancel={onCancel} {...props} />
     </I18nProvider>,
   );
   return { onSave, onCancel, container };

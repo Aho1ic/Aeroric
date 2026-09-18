@@ -43,7 +43,10 @@ export function localTarget(projectPath: string): LocalInvokeTarget {
 }
 
 /** `remote ? toInvokeTarget(remote) : localTarget(projectPath)`。 */
-export function resolveInvokeTarget(projectPath: string, remote?: RemoteTargetLike | null): InvokeTarget {
+export function resolveInvokeTarget(
+  projectPath: string,
+  remote?: RemoteTargetLike | null,
+): InvokeTarget {
   if (!remote) return localTarget(projectPath);
   if (remote.kind === "ssh") {
     if (!remote.connection) throw new Error("ssh target requires connection");

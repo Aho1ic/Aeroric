@@ -3286,6 +3286,7 @@ printf 'model_catalog_json = "model-catalog.json"\n'
                 api_key: "sk-test".to_string(),
                 models: vec!["claude-sonnet".to_string()],
                 enable_1m_context: false,
+                disable_artifact_tool: false,
                 enable_chat_completions_proxy: false,
                 bridge_python_path: String::new(),
                 username: String::new(),

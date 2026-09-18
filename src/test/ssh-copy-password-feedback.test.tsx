@@ -78,15 +78,21 @@ describe("SSH copy password click feedback", () => {
       value: { writeText },
       configurable: true,
     });
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.warn 会对
+       本文件**剩下的所有用例**永久静音(本文件没有 afterEach,配置也没开 restoreMocks)。
+       静音之后 React 的 act 告警、effect 抛错这类回归在 CI 里彻底看不见。 */
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    renderList();
+    try {
+      renderList();
 
-    await user.click(screen.getByRole("button", { name: "Copy password" }));
+      await user.click(screen.getByRole("button", { name: "Copy password" }));
 
-    await waitFor(() => expect(warn).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: "Copy password" })).not.toHaveAttribute(
-      "data-copied",
-    );
-    warn.mockRestore();
+      await waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: "Copy password" })).not.toHaveAttribute(
+        "data-copied",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

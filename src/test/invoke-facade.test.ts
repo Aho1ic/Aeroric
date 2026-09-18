@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  fileArgs,
-  projectArgs,
-  requireCommand,
-  resolveCommand,
-} from "../lib/invokeFacade";
+import { fileArgs, projectArgs, requireCommand, resolveCommand } from "../lib/invokeFacade";
 import { GIT_MIRRORS } from "../lib/api/git";
 import { FS_MIRRORS } from "../lib/api/fs";
 import type { InvokeTarget } from "../lib/target";

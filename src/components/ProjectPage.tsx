@@ -186,8 +186,7 @@ export function ProjectPage({
   const onBack = projectOps.back;
   const onSwitchProject = projectOps.switchProject;
   const onReorderProjects = projectOps.reorderProjects;
-  const onToggleProjectPinned = (projectId: string) =>
-    projectOps.togglePinned(projectId, true);
+  const onToggleProjectPinned = (projectId: string) => projectOps.togglePinned(projectId, true);
   const onCollapsedProjectGroupsChange = projectOps.setCollapsedGroups;
   const onProjectRailWidthChange = projectOps.setProjectRailWidth;
   const onOpen = projectOps.openLocal;

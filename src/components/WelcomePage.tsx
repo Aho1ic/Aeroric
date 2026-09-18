@@ -1,13 +1,4 @@
-import {
-  Fragment,
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-} from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { invoke } from "../lib/api/invoke";
 import {
   Search,
@@ -993,236 +984,240 @@ export function WelcomePage({
                           const isEditingAvatar = avatarEditingProjectId === p.id;
                           return (
                             <Fragment key={p.id}>
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              style={{
-                                ...s.projectItem,
-                                background: "transparent",
-                                borderColor: hov === p.id ? "var(--border-medium)" : "transparent",
-                                boxShadow:
-                                  hov === p.id ? "inset 0 0 0 1px var(--border-dim)" : "none",
-                              }}
-                              onMouseDown={(event) => {
-                                if (!isEditingProject) return;
-                                if (event.target === editingProjectInputRef.current) return;
-                                suppressProjectClickRef.current = p.id;
-                              }}
-                              onMouseEnter={() => setHov(p.id)}
-                              onMouseLeave={() => setHov(null)}
-                              onClick={(event) => {
-                                if (isEditingProject || suppressProjectClickRef.current === p.id) {
-                                  suppressProjectClickRef.current = null;
-                                  event.preventDefault();
-                                  return;
-                                }
-                                onProjectClick(p);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key !== "Enter" && e.key !== " ") return;
-                                e.preventDefault();
-                                if (isEditingProject) return;
-                                onProjectClick(p);
-                              }}
-                            >
-                              <button
-                                type="button"
-                                aria-label={t("projectAvatar.edit")}
-                                title={t("projectAvatar.edit")}
-                                aria-expanded={isEditingAvatar}
-                                style={{
-                                  padding: 0,
-                                  border: "none",
-                                  background: "none",
-                                  cursor: "pointer",
-                                  borderRadius: 10,
-                                  lineHeight: 0,
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setAvatarEditingProjectId(isEditingAvatar ? null : p.id);
-                                }}
-                              >
-                                <ProjectAvatar
-                                  name={p.name}
-                                  avatar={p.avatar}
-                                  size={34}
-                                  style={{
-                                    boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none",
-                                  }}
-                                />
-                              </button>
-
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                {isEditingProject ? (
-                                  <input
-                                    aria-label={t("welcome.renameProject")}
-                                    ref={editingProjectInputRef}
-                                    value={editingProjectName}
-                                    autoCapitalize="off"
-                                    autoCorrect="off"
-                                    spellCheck={false}
-                                    style={s.projectNameInput}
-                                    onChange={(event) => {
-                                      const nextName = event.currentTarget.value;
-                                      setEditingProjectName(nextName);
-                                      editingProjectNameRef.current = nextName;
-                                    }}
-                                    onBlur={() => commitProjectRename(p.id)}
-                                    onKeyDown={(event) => {
-                                      event.stopPropagation();
-                                      if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        commitProjectRename(p.id);
-                                      } else if (event.key === "Escape") {
-                                        event.preventDefault();
-                                        cancelProjectRename();
-                                      }
-                                    }}
-                                  />
-                                ) : (
-                                  <div style={s.projectName}>{p.name}</div>
-                                )}
-                                <div style={s.projectMeta}>
-                                  {projectMetaLabel(p, sshConnections)}
-                                </div>
-                              </div>
-
-                              {isRemoteProject(p) ? (
-                                <span style={s.projectTag}>{t("welcome.ssh")}</span>
-                              ) : p.branch ? (
-                                <span style={s.branchBadge}>
-                                  <GitBranch size={10} strokeWidth={2} />
-                                  {p.branch}
-                                </span>
-                              ) : (
-                                <span style={s.projectTag}>{t("welcome.local")}</span>
-                              )}
-
-                              <span
+                              <div
                                 role="button"
                                 tabIndex={0}
                                 style={{
-                                  ...s.projectPinBtn,
-                                  ...(p.hiddenFromRail
-                                    ? s.projectPinBtnHidden
-                                    : s.projectPinBtnPinned),
+                                  ...s.projectItem,
+                                  background: "transparent",
+                                  borderColor:
+                                    hov === p.id ? "var(--border-medium)" : "transparent",
+                                  boxShadow:
+                                    hov === p.id ? "inset 0 0 0 1px var(--border-dim)" : "none",
                                 }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleProjectHidden(p.id);
+                                onMouseDown={(event) => {
+                                  if (!isEditingProject) return;
+                                  if (event.target === editingProjectInputRef.current) return;
+                                  suppressProjectClickRef.current = p.id;
+                                }}
+                                onMouseEnter={() => setHov(p.id)}
+                                onMouseLeave={() => setHov(null)}
+                                onClick={(event) => {
+                                  if (
+                                    isEditingProject ||
+                                    suppressProjectClickRef.current === p.id
+                                  ) {
+                                    suppressProjectClickRef.current = null;
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  onProjectClick(p);
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key !== "Enter" && e.key !== " ") return;
                                   e.preventDefault();
-                                  e.stopPropagation();
-                                  onToggleProjectHidden(p.id);
+                                  if (isEditingProject) return;
+                                  onProjectClick(p);
                                 }}
-                                title={
-                                  p.hiddenFromRail
-                                    ? t("welcome.pinToRail")
-                                    : t("welcome.unpinFromRail")
-                                }
                               >
-                                {p.hiddenFromRail ? (
-                                  <PinOff size={11} strokeWidth={2} />
-                                ) : (
-                                  <Pin size={11} strokeWidth={2} />
-                                )}
-                                {p.hiddenFromRail
-                                  ? t("welcome.notPinnedToRail")
-                                  : t("welcome.pinnedToRail")}
-                              </span>
-
-                              <button
-                                type="button"
-                                style={{
-                                  marginLeft: 8,
-                                  padding: "4px 6px",
-                                  background: "transparent",
-                                  border: "none",
-                                  borderRadius: 6,
-                                  cursor: "pointer",
-                                  color: "var(--text-muted)",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  opacity: hov === p.id ? 1 : 0,
-                                  transition: "opacity 0.15s, color 0.15s",
-                                }}
-                                onMouseEnter={(e) => {
-                                  (e.currentTarget as HTMLButtonElement).style.color =
-                                    "var(--text-primary)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  (e.currentTarget as HTMLButtonElement).style.color =
-                                    "var(--text-muted)";
-                                }}
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  startProjectRename(p);
-                                }}
-                                title={t("welcome.renameProject")}
-                              >
-                                <Pencil size={14} strokeWidth={1.8} />
-                              </button>
-
-                              <button
-                                style={{
-                                  marginLeft: 8,
-                                  padding: "4px 6px",
-                                  background: "transparent",
-                                  border: "none",
-                                  borderRadius: 6,
-                                  cursor: "pointer",
-                                  color: "var(--text-muted)",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  opacity: hov === p.id ? 1 : 0,
-                                  transition: "opacity 0.15s, color 0.15s",
-                                }}
-                                onMouseEnter={(e) => {
-                                  (e.currentTarget as HTMLButtonElement).style.color =
-                                    "var(--danger)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  (e.currentTarget as HTMLButtonElement).style.color =
-                                    "var(--text-muted)";
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onDeleteProject(p.id);
-                                }}
-                                title={t("welcome.deleteProject")}
-                              >
-                                <Trash2 size={14} strokeWidth={1.8} />
-                              </button>
-                            </div>
-                            {isEditingAvatar && (
-                              <div
-                                style={{
-                                  padding: "12px 14px",
-                                  margin: "-4px 0 8px 0",
-                                  borderRadius: 10,
-                                  border: "1px solid var(--border-dim)",
-                                  background: "var(--bg-elevated)",
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <ProjectAppearanceEditor
-                                  name={p.name}
-                                  avatar={p.avatar}
-                                  onCancel={() => setAvatarEditingProjectId(null)}
-                                  onSave={(next) => {
-                                    onSetProjectAvatar(p.id, next);
-                                    setAvatarEditingProjectId(null);
+                                <button
+                                  type="button"
+                                  aria-label={t("projectAvatar.edit")}
+                                  title={t("projectAvatar.edit")}
+                                  aria-expanded={isEditingAvatar}
+                                  style={{
+                                    padding: 0,
+                                    border: "none",
+                                    background: "none",
+                                    cursor: "pointer",
+                                    borderRadius: 10,
+                                    lineHeight: 0,
                                   }}
-                                />
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setAvatarEditingProjectId(isEditingAvatar ? null : p.id);
+                                  }}
+                                >
+                                  <ProjectAvatar
+                                    name={p.name}
+                                    avatar={p.avatar}
+                                    size={34}
+                                    style={{
+                                      boxShadow: hov === p.id ? `0 10px 18px ${from}26` : "none",
+                                    }}
+                                  />
+                                </button>
+
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  {isEditingProject ? (
+                                    <input
+                                      aria-label={t("welcome.renameProject")}
+                                      ref={editingProjectInputRef}
+                                      value={editingProjectName}
+                                      autoCapitalize="off"
+                                      autoCorrect="off"
+                                      spellCheck={false}
+                                      style={s.projectNameInput}
+                                      onChange={(event) => {
+                                        const nextName = event.currentTarget.value;
+                                        setEditingProjectName(nextName);
+                                        editingProjectNameRef.current = nextName;
+                                      }}
+                                      onBlur={() => commitProjectRename(p.id)}
+                                      onKeyDown={(event) => {
+                                        event.stopPropagation();
+                                        if (event.key === "Enter") {
+                                          event.preventDefault();
+                                          commitProjectRename(p.id);
+                                        } else if (event.key === "Escape") {
+                                          event.preventDefault();
+                                          cancelProjectRename();
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <div style={s.projectName}>{p.name}</div>
+                                  )}
+                                  <div style={s.projectMeta}>
+                                    {projectMetaLabel(p, sshConnections)}
+                                  </div>
+                                </div>
+
+                                {isRemoteProject(p) ? (
+                                  <span style={s.projectTag}>{t("welcome.ssh")}</span>
+                                ) : p.branch ? (
+                                  <span style={s.branchBadge}>
+                                    <GitBranch size={10} strokeWidth={2} />
+                                    {p.branch}
+                                  </span>
+                                ) : (
+                                  <span style={s.projectTag}>{t("welcome.local")}</span>
+                                )}
+
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  style={{
+                                    ...s.projectPinBtn,
+                                    ...(p.hiddenFromRail
+                                      ? s.projectPinBtnHidden
+                                      : s.projectPinBtnPinned),
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleProjectHidden(p.id);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key !== "Enter" && e.key !== " ") return;
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onToggleProjectHidden(p.id);
+                                  }}
+                                  title={
+                                    p.hiddenFromRail
+                                      ? t("welcome.pinToRail")
+                                      : t("welcome.unpinFromRail")
+                                  }
+                                >
+                                  {p.hiddenFromRail ? (
+                                    <PinOff size={11} strokeWidth={2} />
+                                  ) : (
+                                    <Pin size={11} strokeWidth={2} />
+                                  )}
+                                  {p.hiddenFromRail
+                                    ? t("welcome.notPinnedToRail")
+                                    : t("welcome.pinnedToRail")}
+                                </span>
+
+                                <button
+                                  type="button"
+                                  style={{
+                                    marginLeft: 8,
+                                    padding: "4px 6px",
+                                    background: "transparent",
+                                    border: "none",
+                                    borderRadius: 6,
+                                    cursor: "pointer",
+                                    color: "var(--text-muted)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    opacity: hov === p.id ? 1 : 0,
+                                    transition: "opacity 0.15s, color 0.15s",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.color =
+                                      "var(--text-primary)";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.color =
+                                      "var(--text-muted)";
+                                  }}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startProjectRename(p);
+                                  }}
+                                  title={t("welcome.renameProject")}
+                                >
+                                  <Pencil size={14} strokeWidth={1.8} />
+                                </button>
+
+                                <button
+                                  style={{
+                                    marginLeft: 8,
+                                    padding: "4px 6px",
+                                    background: "transparent",
+                                    border: "none",
+                                    borderRadius: 6,
+                                    cursor: "pointer",
+                                    color: "var(--text-muted)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    opacity: hov === p.id ? 1 : 0,
+                                    transition: "opacity 0.15s, color 0.15s",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.color =
+                                      "var(--danger)";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    (e.currentTarget as HTMLButtonElement).style.color =
+                                      "var(--text-muted)";
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteProject(p.id);
+                                  }}
+                                  title={t("welcome.deleteProject")}
+                                >
+                                  <Trash2 size={14} strokeWidth={1.8} />
+                                </button>
                               </div>
-                            )}
+                              {isEditingAvatar && (
+                                <div
+                                  style={{
+                                    padding: "12px 14px",
+                                    margin: "-4px 0 8px 0",
+                                    borderRadius: 10,
+                                    border: "1px solid var(--border-dim)",
+                                    background: "var(--bg-elevated)",
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <ProjectAppearanceEditor
+                                    name={p.name}
+                                    avatar={p.avatar}
+                                    onCancel={() => setAvatarEditingProjectId(null)}
+                                    onSave={(next) => {
+                                      onSetProjectAvatar(p.id, next);
+                                      setAvatarEditingProjectId(null);
+                                    }}
+                                  />
+                                </div>
+                              )}
                             </Fragment>
                           );
                         })}

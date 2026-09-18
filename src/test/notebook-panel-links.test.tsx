@@ -7,6 +7,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NotebookVaultHarness } from "./notebookVaultHarness";
 import { editorView, renderNotebook } from "./notebookPanelKit";
+import { HOVER_SHOW_DELAY } from "../components/notebook/hoverPreview";
 
 /* 注意 `async` 不是可以省的:harness 的失败分支是同步 `throw`,而真实 `invoke`
  * 只会以 rejection 的形式报错。写成 `Promise.resolve(harness.handle(...))` 的话
@@ -255,12 +256,13 @@ describe("NotebookPanel", () => {
         // 跳转后正文要先渲染出来,滚动才发生在下一帧。
         await waitFor(() => expect(scrolled).toContain("第二节"));
       } finally {
-        /* jsdom 不实现 scrollIntoView,所以 `original` 是 undefined —— 赋值回去会在
+        /* jsdom 不实现 scrollIntoView,所以 `original` 通常是 undefined —— 赋值回去会在
            Element.prototype 上留下一个值为 undefined 的**自有属性**,而原先根本没有
            这个属性(`"scrollIntoView" in Element.prototype` 由 false 翻成 true)。
            多数调用点用 `typeof x === "function"` 判定,对两者一致;但
            DshTrajectoryLedger.tsx:192 是无保护的 `?.scrollIntoView(...)`,会因为
-           「属性存在但不是函数」而抛。原本没有就删掉,原本有才还原。 */
+           「属性存在但不是函数」而抛。所以按 `original` 是否存在分两种还原:本来有就
+           还回去(某些文件会自己装补丁),本来没有就删干净、不留自有属性。 */
         if (original) Element.prototype.scrollIntoView = original;
         else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
       }
@@ -585,12 +587,21 @@ describe("NotebookPanel", () => {
         return found;
       });
       expect(link.dataset.wikiPath).toBeUndefined();
-      fireEvent.mouseOver(link);
 
-      // 等过出卡延迟(380ms)才有意义 —— 提前查等于什么都没查。
-      await new Promise((resolve) => setTimeout(resolve, 450));
-      expect(hoverCard()).toBeNull();
-      expect(harness.callCount("notebook_peek_note")).toBe(0);
+      /* 出卡延迟必须**确定地**推过去,不能真睡 450ms:真睡只有 70ms 余量,负载一高
+         卡片本该弹出却还没弹,断言就在「什么都没发生」的状态下通过 —— 把
+         hoverTargetFrom 里那句 `!path` 的守卫删掉也照绿(假绿),同时还净烧挂钟。
+         只伪造 setTimeout/clearTimeout 两个:出卡链只靠它们(view.setTimeout),
+         不动 rAF / Date,免得牵动别的调度。 */
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        fireEvent.mouseOver(link);
+        await vi.advanceTimersByTimeAsync(HOVER_SHOW_DELAY + 50);
+        expect(hoverCard()).toBeNull();
+        expect(harness.callCount("notebook_peek_note")).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("嵌入块的头部不弹卡", async () => {
@@ -605,10 +616,17 @@ describe("NotebookPanel", () => {
       );
 
       const head = document.querySelector<HTMLElement>(".notebook-embed-head")!;
+      // 头部是**已解析**的(路径在),被挡掉靠的是选择器里的 :not(.notebook-embed-head)。
+      // 所以这条必须用确定性的延迟推进,否则「没弹卡」可能只是还没轮到弹。
       expect(head.dataset.wikiPath).toBeTruthy();
-      fireEvent.mouseOver(head);
-      await new Promise((resolve) => setTimeout(resolve, 450));
-      expect(hoverCard()).toBeNull();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        fireEvent.mouseOver(head);
+        await vi.advanceTimersByTimeAsync(HOVER_SHOW_DELAY + 50);
+        expect(hoverCard()).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("离开阅读态之后卡片不留在界面上", async () => {

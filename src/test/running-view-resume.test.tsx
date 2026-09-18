@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { RunningView } from "../components/RunningView";
 import type { Task } from "../types";
@@ -73,6 +73,13 @@ describe("RunningView resume affordance", () => {
         disconnect() {}
       },
     );
+  });
+
+  /* 只还 stubGlobal,不调 vi.restoreAllMocks():invoke 是 vi.mock 工厂里的模块级
+     vi.fn(),它的实现由各用例的 beforeEach 设定,restoreAllMocks 会在用例之间把它
+     抹成 undefined,反而制造出新的顺序依赖。 */
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("shows resume for a completed task that only has a saved session path", () => {

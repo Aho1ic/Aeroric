@@ -1,25 +1,13 @@
 import { invoke } from "../../lib/api/invoke";
 import type { AgentType, PermissionMode, Project, Task } from "../../types";
 import { resolveProjectLocation } from "../../types";
-import {
-  agentDisplayLabel,
-  agentFamily,
-  type AgentOption,
-} from "../../agents";
-import type {
-  AgentConfigSwitchValues,
-} from "../../components/AgentConfigSwitchDialog";
-import type {
-  LocalRouterAgent,
-  LocalRouterStatus,
-} from "../../components/app-settings/types";
+import { agentDisplayLabel, agentFamily, type AgentOption } from "../../agents";
+import type { AgentConfigSwitchValues } from "../../components/AgentConfigSwitchDialog";
+import type { LocalRouterAgent, LocalRouterStatus } from "../../components/app-settings/types";
 import { persistProjectTasks, flushProjectTasks } from "../../appProjectState";
 import { dispatchAppSettingsChanged } from "../../appRemoteEvents";
 import { LOCAL_ROUTER_COMMANDS } from "../../lib/api/appCommands";
-import {
-  resolveConfigSwitchSessionStrategy,
-  resolveTaskSessionOwner,
-} from "../../taskSession";
+import { resolveConfigSwitchSessionStrategy, resolveTaskSessionOwner } from "../../taskSession";
 import {
   formatSessionHandoff,
   hasStructuredSessionTranscript,

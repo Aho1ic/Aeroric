@@ -1,5 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTerminalTheme,
   attachCursorLineHighlight,
@@ -13,6 +13,15 @@ import {
   splitTerminalWriteChunk,
   TERMINAL_WRITE_CHUNK_SIZE,
 } from "../components/terminalShared";
+
+/* 文件级兜底:本文件有十处 vi.useFakeTimers(),绝大多数把 useRealTimers() 写在用例
+   末尾而不是 finally 里 —— 断言一抛出就还不回真实时钟,后续用例全在冻结时钟下跑,
+   失败会连片出现且指向无辜的用例。同理清掉 navigator.scheduling(见 :264 那条用例)。
+   用例内已经显式还原的地方重复调用是幂等的。 */
+afterEach(() => {
+  vi.useRealTimers();
+  Reflect.deleteProperty(navigator, "scheduling");
+});
 
 describe("terminal output highlighting", () => {
   it("raises contrast only for the light terminal while keeping ANSI hues distinct", () => {

@@ -89,17 +89,13 @@ export function useDshHostEvents() {
     const p8 = listen<{ sessionId?: string; eventId?: string }>(
       DSH_APPROVAL_RESOLVED_EVENT,
       (e) => {
-        setDshApprovalRequests((prev) =>
-          prev.filter((item) => item.eventId !== e.payload.eventId),
-        );
+        setDshApprovalRequests((prev) => prev.filter((item) => item.eventId !== e.payload.eventId));
       },
     );
     const p9 = listen<{ sessionId?: string; eventId?: string }>(
       DSH_QUESTION_RESOLVED_EVENT,
       (e) => {
-        setDshQuestionRequests((prev) =>
-          prev.filter((item) => item.eventId !== e.payload.eventId),
-        );
+        setDshQuestionRequests((prev) => prev.filter((item) => item.eventId !== e.payload.eventId));
       },
     );
     // 宿主失效帧(`$events` 的 emit)是设置 / 会话面板的实时失效通道。原样再发一条

@@ -537,6 +537,9 @@ export function NewTaskView({
       .catch((error) => {
         if (projectConfigRequestIdRef.current === requestId) console.error(error);
       });
+    // 依赖有意收窄,不列入 initialDraft 与 project.path:本 effect 的职责是「换项目时载入
+    // 默认 agent / 权限模式」,项目身份由 project.id 锚定(path 随 id 固定);initialDraft
+    // 只在挂载时决定是否跳过拉取。列入二者会让每次编辑草稿都重打一次 read_project_config。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentOptions, project.id, remoteProject]);
 
@@ -704,6 +707,8 @@ export function NewTaskView({
         showToast(t("toast.loadProjectFilesFailed", { error: String(e) }), "warning");
       })
       .finally(() => setFilesLoading(false));
+    // 依赖有意收窄,不列入 showToast 与 t:本 effect 的职责是「路径变化时重载文件列表」,
+    // 提示实现与文案本地化不改变加载语义 —— 列入会在切换语言时白重载一次整份文件列表。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.path, remoteProject]);
 

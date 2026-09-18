@@ -141,20 +141,28 @@ describe("agent usage store", () => {
   });
 
   it("keeps the previous stats when reading the ledger fails", async () => {
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.error 会对
+       本条用例之后的部分持续静音。文件级 afterEach(:42)确实有 restoreAllMocks 兜底,
+       但那只在**本条用例结束后**执行,救不了「本条断言抛出 → 本条剩余步骤仍在跑」这段
+       窗口;显式 finally 让还原点就近、可读。静音之后 React 的 "not wrapped in act"、
+       effect 抛错这类回归在 CI 里看不见 —— 一处失败放大成整文件失明。 */
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    invokeMock.mockResolvedValueOnce(snapshot({ claude: stats(2, 2, 3_000) }));
-    const { getByTestId } = render(<StatsProbe />);
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    try {
+      invokeMock.mockResolvedValueOnce(snapshot({ claude: stats(2, 2, 3_000) }));
+      const { getByTestId } = render(<StatsProbe />);
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
 
-    invokeMock.mockRejectedValueOnce(new Error("ledger unreadable"));
-    await act(async () => {
-      window.dispatchEvent(new Event(AGENT_USAGE_CHANGED_EVENT));
-    });
+      invokeMock.mockRejectedValueOnce(new Error("ledger unreadable"));
+      await act(async () => {
+        window.dispatchEvent(new Event(AGENT_USAGE_CHANGED_EVENT));
+      });
 
-    expect(JSON.parse(getByTestId("probe").textContent ?? "{}")).toEqual({
-      claude: stats(2, 2, 3_000),
-    });
-    consoleError.mockRestore();
+      expect(JSON.parse(getByTestId("probe").textContent ?? "{}")).toEqual({
+        claude: stats(2, 2, 3_000),
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("does not record a blank agent id", async () => {

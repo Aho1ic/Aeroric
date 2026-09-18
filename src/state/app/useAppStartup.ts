@@ -55,10 +55,7 @@ export function useAppStartupLoad(deps: AppStartupDeps): void {
       );
       const dshSpeedCleanedProjectIds = new Set<string>();
       const normalizedTasks = loadedTasks.map((task) => {
-        if (
-          task.speed !== "fast" ||
-          agentFamily(task.agent, d.agentOptionsRef.current) !== "dsh"
-        ) {
+        if (task.speed !== "fast" || agentFamily(task.agent, d.agentOptionsRef.current) !== "dsh") {
           return task;
         }
         dshSpeedCleanedProjectIds.add(task.projectId);

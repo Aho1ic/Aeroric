@@ -14,18 +14,12 @@ import type {
   SshConnection,
   CondaEnvironment,
 } from "./types";
-import {
-  resolveProjectLocation,
-} from "./types";
+import { resolveProjectLocation } from "./types";
 import type { SshProjectInput } from "./components/ssh/sshProject";
 import type { WslProjectInput } from "./components/wsl/WslProjectDialog";
 import { selectDefaultCondaEnvironment } from "./components/file-viewer/run";
 import { useToast } from "./components/Toast";
-import {
-  agentFamily,
-  familyFromCodexLike,
-  normalizeProtocolFamily,
-} from "./agents";
+import { agentFamily, familyFromCodexLike, normalizeProtocolFamily } from "./agents";
 import type { AgentConfigSwitchValues } from "./components/AgentConfigSwitchDialog";
 import { useAgentOptions } from "./hooks/useAgentOptions";
 import { useAppAppearance } from "./hooks/useAppAppearance";
@@ -49,22 +43,14 @@ import {
 } from "./state/app/useAppShellHooks";
 import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
 import { useRemoteTaskRequests } from "./state/app/useRemoteTaskRequests";
-import {
-  useAppStartupLoad,
-  useDshHostEventsSubscription,
-} from "./state/app/useAppStartup";
+import { useAppStartupLoad, useDshHostEventsSubscription } from "./state/app/useAppStartup";
 import {
   useAutoCleanupTimer,
   useSkillHubConfigSync,
   useStartupDegradationToasts,
 } from "./state/app/useAppMaintenance";
-import {
-  discardTaskWorktree,
-  mergeTaskWorktree,
-} from "./state/app/worktreeOps";
-import {
-  createTaskLifecycleActions,
-} from "./state/app/taskLifecycle";
+import { discardTaskWorktree, mergeTaskWorktree } from "./state/app/worktreeOps";
+import { createTaskLifecycleActions } from "./state/app/taskLifecycle";
 import {
   deleteTasks as deleteTasksImpl,
   markTaskDone as markTaskDoneImpl,
@@ -72,9 +58,7 @@ import {
   type TaskDeleteDoneDeps,
 } from "./state/app/taskDeleteDone";
 import { generateTaskName, updateTodoTaskInList } from "./state/app/taskNaming";
-import {
-  handleSwitchTaskConfig as switchTaskConfigImpl,
-} from "./state/app/taskSwitch";
+import { handleSwitchTaskConfig as switchTaskConfigImpl } from "./state/app/taskSwitch";
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
@@ -125,9 +109,7 @@ import {
   upsertWslProject,
   type ProjectViewState,
 } from "./appProjectState";
-import {
-  applyProjectPinnedChange,
-} from "./appRemoteEvents";
+import { applyProjectPinnedChange } from "./appRemoteEvents";
 import { disableTextInputAutoFeatures } from "./appThemeState";
 import { AppProviders } from "./state/app";
 import {
@@ -317,10 +299,7 @@ function AppShell() {
 
   useHideWindowShortcut();
 
-  useAppLifecycle(
-    showToast,
-    (error) => t("toast.exitSaveFailed", { error }),
-  );
+  useAppLifecycle(showToast, (error) => t("toast.exitSaveFailed", { error }));
 
   useDisableTextInputAutoFeatures(disableTextInputAutoFeatures);
 
@@ -635,7 +614,11 @@ function AppShell() {
   function handleMarkTaskDone(taskId: string) {
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
-    markTaskDoneImpl(taskDeleteDoneDeps(), task, projects.find((p) => p.id === task.projectId));
+    markTaskDoneImpl(
+      taskDeleteDoneDeps(),
+      task,
+      projects.find((p) => p.id === task.projectId),
+    );
   }
 
   async function handleReconnectTask(taskId: string) {
@@ -881,6 +864,10 @@ function AppShell() {
       reconnectTask: handleReconnectTask,
       markTaskDone: handleMarkTaskDone,
     }),
+    // 依赖刻意收窄到 [tasks, projects],不列入这 18 个 handleXxx:它们都是普通函数声明
+    // (每帧新建新引用),而 taskActions 里真正被读的 state 恰好就是 tasks 与 projects
+    // (如 handleMarkTaskDone 直接查这两份),二者一变即重建,故不存在陈旧闭包。
+    // 反过来说,把它们列全会让 taskActions 每帧换身份,下游 memo 全部失效。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tasks, projects],
   );
@@ -953,13 +940,11 @@ function AppShell() {
     failureReason?: string,
   ) {
     setTasks((prev) => {
-      const { tasks: next, changed, task } = applyTaskStatusTransition(
-        prev,
-        taskId,
-        status,
-        extra,
-        failureReason,
-      );
+      const {
+        tasks: next,
+        changed,
+        task,
+      } = applyTaskStatusTransition(prev, taskId, status, extra, failureReason);
       if (changed && task) {
         persistTaskStatusChange(
           {
@@ -1132,6 +1117,9 @@ function AppShell() {
         updateProjectView(projectId, { selectedTaskId: taskId, isNewTask });
       },
     }),
+    // 依赖逐个列出 body 真正读到的非稳定引用;唯一被规则点名却有意省略的是 setProjects ——
+    // 它来自 useRefState(见文件上方),与 useState 的 setter 同为稳定身份,规则认不出
+    // 自定义 hook 才报它。列入不会更安全,只会让 railActions 每帧换身份。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       projects,

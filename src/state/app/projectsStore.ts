@@ -3,11 +3,7 @@ import { invoke } from "../../lib/api/invoke";
 import type { Project, ProjectAvatarOverride } from "../../types";
 import { createProjectPersister } from "../../projectPersistence";
 import { PERSISTENCE_COMMANDS } from "../../lib/api/sftpCommands";
-import {
-  applyProjectOrder,
-  normalizeProjectOrder,
-  sortProjectsForRail,
-} from "../../projectOrder";
+import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "../../projectOrder";
 import { applyProjectPinnedChange } from "../../appRemoteEvents";
 
 const queuedProjectPersist = createProjectPersister((projects) =>

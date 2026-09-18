@@ -34,12 +34,8 @@ describe("TaskList resume actions", () => {
           selectedId={null}
           isNewTask={false}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={onRunTodo}
-
-
-
+          onResumeTask={onResumeTask}
         />
       </I18nProvider>,
     );

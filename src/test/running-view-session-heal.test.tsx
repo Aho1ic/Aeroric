@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { RunningView } from "../components/RunningView";
 import type { Task } from "../types";
@@ -102,6 +102,12 @@ describe("RunningView broken session path self-heal", () => {
       if (command === "read_task_terminal_history") return Promise.resolve("");
       return Promise.resolve({});
     });
+  });
+
+  /* 只还 stubGlobal,不调 vi.restoreAllMocks():invoke 是 vi.mock 工厂里的模块级
+     vi.fn(),其实现由每个用例的 beforeEach 重设,restoreAllMocks 会在用例之间抹掉它。 */
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("re-discovers the session when the persisted path cannot be read", async () => {

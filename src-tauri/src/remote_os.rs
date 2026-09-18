@@ -105,6 +105,19 @@ pub(crate) fn build_powershell_command(script: &str) -> String {
     )
 }
 
+/// 交互式 PowerShell:与 [`build_powershell_command`] 同一套 `-EncodedCommand` 转义,
+/// 但去掉了 `-NonInteractive`、加上 `-NoExit`。
+///
+/// 两者的用途不同:文件操作要的是"跑完就退、只看 stdout"的一次性脚本,而远端终端要的是
+/// 执行完起始脚本后**留在提示符上**的会话。`-NonInteractive` 会让 PowerShell 不读标准
+/// 输入,接进 PTY 之后就是一个敲什么都没反应的死终端。
+pub(crate) fn build_interactive_powershell_command(script: &str) -> String {
+    format!(
+        "powershell -NoProfile -NoExit -EncodedCommand {}",
+        encode_powershell_command(script)
+    )
+}
+
 pub(crate) const WINDOWS_PROBE_MARKER: &str = "AERORIC_REMOTE_IS_WINDOWS";
 
 pub(crate) fn build_windows_probe_command() -> String {

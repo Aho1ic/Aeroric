@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AllAgentConfigsPanel } from "../components/app-settings/AllAgentConfigsPanel";
 import { APP_SETTINGS_CHANGED_EVENT } from "../components/app-settings/types";
 import { AgentVersionsProvider } from "../hooks/useAgentVersions";
@@ -72,12 +72,31 @@ vi.mock("../hooks/useAgentOptions", () => ({
   }),
 }));
 
+/**
+ * APP_SETTINGS_CHANGED_EVENT 的监听器登记处。
+ *
+ * 调用点原来把 removeEventListener 写在断言之后,断言一抛出就漏掉监听器、泄漏给同文件
+ * 后续用例。改成登记 + 文件级 afterEach 统一摘除,还原点不再依赖「代码能走到最后一行」。
+ */
+const trackedAppSettingsListeners: Array<() => void> = [];
+
+function trackAppSettingsChanged(listener: () => void): void {
+  window.addEventListener(APP_SETTINGS_CHANGED_EVENT, listener);
+  trackedAppSettingsListeners.push(() =>
+    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, listener),
+  );
+}
+
 describe("AllAgentConfigsPanel", () => {
   beforeEach(() => {
     localStorage.setItem("aeroric:language", "en");
     invokeMock.mockReset();
     openMock.mockReset();
     saveMock.mockReset();
+  });
+
+  afterEach(() => {
+    for (const remove of trackedAppSettingsListeners.splice(0)) remove();
   });
 
   /** 打开 agent 详情弹窗的用例要额外带 AgentVersionsProvider:AgentPathSection 取升级状态。 */
@@ -105,7 +124,7 @@ describe("AllAgentConfigsPanel", () => {
       return Promise.resolve(undefined);
     });
     const changed = vi.fn();
-    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+    trackAppSettingsChanged(changed);
 
     render(
       <I18nProvider>
@@ -129,7 +148,7 @@ describe("AllAgentConfigsPanel", () => {
       }),
     );
     expect(changed).toHaveBeenCalledTimes(1);
-    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+    // 摘除交给 afterEach 的 trackedAppSettingsListeners,不再写在这里。
   });
 
   it("imports a single Agent bundle from the Aeroric import menu", async () => {
@@ -145,7 +164,7 @@ describe("AllAgentConfigsPanel", () => {
       return Promise.resolve(undefined);
     });
     const changed = vi.fn();
-    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+    trackAppSettingsChanged(changed);
 
     render(
       <I18nProvider>
@@ -161,7 +180,7 @@ describe("AllAgentConfigsPanel", () => {
       }),
     );
     expect(changed).toHaveBeenCalledTimes(1);
-    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, changed);
+    // 摘除交给 afterEach 的 trackedAppSettingsListeners,不再写在这里。
   });
 
   it("groups built-in and custom DSH agents under DeepSeek Harness", async () => {

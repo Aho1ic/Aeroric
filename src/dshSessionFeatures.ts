@@ -743,8 +743,7 @@ function updateTimeline(events: DshSessionEvent[], titles: ReadonlyMap<number, s
         // Only a committed reply closes the step: a retried attempt leaves it
         // open so the reply that finally settles it is still measured from the
         // request, rather than from the moment the failed attempt gave up.
-        if (event.type === "assistant/message" && stepKey !== undefined)
-          openSteps.delete(stepKey);
+        if (event.type === "assistant/message" && stepKey !== undefined) openSteps.delete(stepKey);
       }
       // An attempt committed nothing, so there is no reply to blame for it.
       if (event.type === "assistant/attempt") record.isError = true;

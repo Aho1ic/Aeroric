@@ -62,8 +62,6 @@ describe("ProjectRail project dragging", () => {
               onBack={vi.fn()}
               onNewTask={vi.fn()}
               onSelectTask={vi.fn()}
-
-
               onRunTodo={vi.fn()}
               themeVariant="light"
               onToggleTheme={vi.fn()}
@@ -105,8 +103,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -146,8 +142,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -191,8 +185,6 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-
-
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}
@@ -229,8 +221,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           projectRailWidth={252}
           onProjectRailWidthChange={onProjectRailWidthChange}
@@ -278,8 +268,6 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-
-
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}
@@ -307,37 +295,39 @@ describe("ProjectRail project dragging", () => {
     const listener = vi.fn();
     window.addEventListener("aeroric:open-app-settings", listener);
 
-    render(
-      <I18nProvider>
-        <ProjectRail
-          projects={[project("p1", "Alpha", 0)]}
-          allTasks={[] as Task[]}
-          activeProjectId="p1"
-          selectedTaskId={null}
-          isNewTask={false}
-          onSwitch={vi.fn()}
-          onOpen={vi.fn()}
-          onBack={vi.fn()}
-          onNewTask={vi.fn()}
-          onSelectTask={vi.fn()}
+    try {
+      render(
+        <I18nProvider>
+          <ProjectRail
+            projects={[project("p1", "Alpha", 0)]}
+            allTasks={[] as Task[]}
+            activeProjectId="p1"
+            selectedTaskId={null}
+            isNewTask={false}
+            onSwitch={vi.fn()}
+            onOpen={vi.fn()}
+            onBack={vi.fn()}
+            onNewTask={vi.fn()}
+            onSelectTask={vi.fn()}
+            onRunTodo={vi.fn()}
+            onReorderProjects={vi.fn()}
+            themeVariant="light"
+            onToggleTheme={vi.fn()}
+          />
+        </I18nProvider>,
+      );
 
+      fireEvent.click(screen.getByRole("button", { name: "Agent settings" }));
 
-          onRunTodo={vi.fn()}
-          onReorderProjects={vi.fn()}
-          themeVariant="light"
-          onToggleTheme={vi.fn()}
-        />
-      </I18nProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Agent settings" }));
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener.mock.calls[0][0]).toMatchObject({
-      detail: { initialNav: "__all_agent_configs__" },
-    });
-
-    window.removeEventListener("aeroric:open-app-settings", listener);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][0]).toMatchObject({
+        detail: { initialNav: "__all_agent_configs__" },
+      });
+    } finally {
+      // 监听器必须摘在 finally 里:断言抛出时原来的写法走不到这一句,空 vi.fn() 会
+      // 泄漏给同文件后续用例(惰性,但让「一次失败」污染后面的诊断面)。
+      window.removeEventListener("aeroric:open-app-settings", listener);
+    }
   });
 
   it("does not reorder projects when dragging from the project name area", () => {
@@ -355,8 +345,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           onReorderProjects={onReorderProjects}
           themeVariant="light"
@@ -419,8 +407,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           onReorderProjects={onReorderProjects}
           themeVariant="light"
@@ -483,8 +469,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           onReorderProjects={vi.fn()}
           themeVariant="light"
@@ -515,8 +499,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={onSelectTask}
-
-
           onRunTodo={vi.fn()}
           onReorderProjects={vi.fn()}
           themeVariant="light"
@@ -557,6 +539,8 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={onSelectTask}
+          onDeleteTask={onDeleteTask}
+          onDeleteTasks={onDeleteTasks}
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -604,8 +588,6 @@ describe("ProjectRail project dragging", () => {
           onBack={vi.fn()}
           onNewTask={vi.fn()}
           onSelectTask={vi.fn()}
-
-
           onRunTodo={vi.fn()}
           themeVariant="light"
           onToggleTheme={vi.fn()}
@@ -643,8 +625,6 @@ describe("ProjectRail project dragging", () => {
             onBack={vi.fn()}
             onNewTask={vi.fn()}
             onSelectTask={vi.fn()}
-
-
             onRunTodo={vi.fn()}
             themeVariant="light"
             onToggleTheme={vi.fn()}

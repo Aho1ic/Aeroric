@@ -376,20 +376,26 @@ describe("换远端", () => {
 
 describe("失败的去处", () => {
   it("状态轮询失败不写进 error", async () => {
+    /* mockRestore 必须在 finally 里:下面任一断言抛出就走不到还原,console.warn 会对
+       本条用例之后的部分持续静音。文件级 afterEach(:98)确实有 restoreAllMocks 兜底,
+       但那只在**本条用例结束后**执行;显式 finally 让还原点就近、可读。 */
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === "notebook_sync_remotes") return remotes;
-      if (command === "notebook_sync_resolutions") return [];
-      if (command === "notebook_sync_status") throw new Error("poll boom");
-      throw new Error(`unexpected command ${command}`);
-    });
+    try {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === "notebook_sync_remotes") return remotes;
+        if (command === "notebook_sync_resolutions") return [];
+        if (command === "notebook_sync_status") throw new Error("poll boom");
+        throw new Error(`unexpected command ${command}`);
+      });
 
-    const { result } = renderHook(() => useNoteSync("/v", true));
-    await waitFor(() => expect(warn).toHaveBeenCalled());
-    /* 那个位置是给用户动作的失败留的。被一次瞬时的查询失败占住之后,真正的失败原因会被
-       后面的轮询覆盖掉。 */
-    expect(result.current.error).toBeNull();
-    warn.mockRestore();
+      const { result } = renderHook(() => useNoteSync("/v", true));
+      await waitFor(() => expect(warn).toHaveBeenCalled());
+      /* 那个位置是给用户动作的失败留的。被一次瞬时的查询失败占住之后,真正的失败原因会被
+         后面的轮询覆盖掉。 */
+      expect(result.current.error).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("跑一轮失败时报出来", async () => {

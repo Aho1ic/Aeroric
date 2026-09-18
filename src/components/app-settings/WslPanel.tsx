@@ -151,7 +151,11 @@ export function WslPanel() {
         });
         await Promise.all(
           Object.entries(agentConfigs).map(([agent, content]) =>
-            invoke(WSL_SETTINGS_COMMANDS.writeAgentConfig, { distribution: selected, agent, content }),
+            invoke(WSL_SETTINGS_COMMANDS.writeAgentConfig, {
+              distribution: selected,
+              agent,
+              content,
+            }),
           ),
         );
       }

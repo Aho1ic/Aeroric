@@ -42,3 +42,20 @@ export function installResizeObserverStub(): void {
     }
   };
 }
+
+/**
+ * 清空已登记的观察目标,由 setup.ts 的 afterEach 在**每个用例之后**调用。
+ *
+ * 为什么需要:entries 是模块级可变单例,正常路径靠组件 unmount 时 disconnect() 自摘。
+ * 但只要有组件漏了 disconnect,它的 entry 就会留到下一个用例 —— 那时 `triggerResize()`
+ * 会去调**已卸载树**的回调(对已卸载组件 setState / 读已摘掉的 DOM),表现为「单跑绿、
+ * 整文件跑红」的顺序相关偶发失败。notebook-layout-tier-hook.test.tsx 那条「卸载后断开
+ * 观察」正是靠 measureCount 不涨来判定的,前面漏下的 entry 会让它误判。
+ *
+ * 另:替身对同一 target 重复 observe() 不去重(每次都 entries.add 一个新对象),真实
+ * ResizeObserver 按 target 去重,语义上略有偏差 —— 每个用例开头清一次能把这条差异
+ * 限制在单个用例内部。
+ */
+export function resetResizeObserverStub(): void {
+  entries.clear();
+}

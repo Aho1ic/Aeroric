@@ -6,6 +6,7 @@
 // DOM 实现。注意:那条环境指令即使写在注释里也会被 vitest 的文本扫描认出来,
 // 所以这里刻意不复述它的字面写法。
 
+import { waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scheduleVisualBlocks } from "../components/notebook/visualScheduler";
 
@@ -114,6 +115,7 @@ describe("scheduleVisualBlocks — correctness", () => {
     stubLayout(root);
     let inFlight = 0;
     let maxInFlight = 0;
+    let done = 0;
     const handle = scheduleVisualBlocks<HTMLElement>(
       root,
       "div.viz-block",
@@ -122,12 +124,19 @@ describe("scheduleVisualBlocks — correctness", () => {
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((r) => setTimeout(r, 1));
         inFlight--;
+        done++;
       },
       { viewportHeight: 50, visibilityMargin: 0, yieldFn: instantYield },
     );
-    await new Promise((r) => setTimeout(r, 30));
+    /* 原来这里是 30ms / 100ms 两个魔法毫秒数:maxInFlight 要等于 1,前提是「至少跑过
+       一块」且「从未并发」。30ms 只是"大概够第一块跑完",负载一高就不够 —— 那样
+       maxInFlight 会是 0,`toBe(1)` 变成一条与串行性无关的挂钟断言。改成等两个正向
+       信号:先等到至少完成一块(此刻 maxInFlight 必然 ≥1),放行 IO 后再等到十块全部
+       完成。剩下唯一能翻红的原因就只剩「真的并发了」。 */
+    await waitFor(() => expect(done).toBeGreaterThanOrEqual(1));
+    expect(maxInFlight).toBe(1);
     FakeIntersectionObserver.instances[0]!.fireAll();
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => expect(done).toBe(10));
     expect(maxInFlight).toBe(1);
     handle.disconnect();
   });

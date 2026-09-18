@@ -50,10 +50,7 @@ import {
   updateNode,
 } from "./file-explorer/treeUtils";
 import type { RemoteProjectTarget, SshConnection, ThemeVariant } from "../types";
-import {
-  FS_MIRRORS,
-  PROJECT_CONFIG_MIRRORS,
-} from "../lib/api/fs";
+import { FS_MIRRORS, PROJECT_CONFIG_MIRRORS } from "../lib/api/fs";
 import { fileArgs, projectArgs, resolveCommand } from "../lib/invokeFacade";
 import { resolveInvokeTarget } from "../lib/target";
 import { OS_INTEGRATION_COMMANDS } from "../lib/api/sftpCommands";
@@ -236,7 +233,10 @@ export function FileExplorer({
       setCtxMenu(null);
 
       try {
-        await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, { path, projectPath: browseRoot });
+        await invoke(OS_INTEGRATION_COMMANDS.openInSystemFileManager, {
+          path,
+          projectPath: browseRoot,
+        });
       } catch (error) {
         console.error("Failed to open file in system folder", error);
         showToast(t("file.failedOpenSystemFolder", { error: formatInvokeError(error) }));

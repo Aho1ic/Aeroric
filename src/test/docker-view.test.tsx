@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,7 +208,11 @@ describe("DockerServiceView image deletion", () => {
       ),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    /* 原来是真睡 20ms 再断言「还是只调了一次」:那是个负向断言 + 挂钟窗口,机器一忙
+       多余的 effect 还没跑完就断言了(假绿),而 invoke 是立即 resolve 的 mock ——
+       整条链全在微任务里。await act(async () => {}) 内部会跨一个宏任务边界,而宏任务
+       开跑前微任务队列必然已排空,所以「该跑的都跑完了」是确定的,也不再白等 20ms。 */
+    await act(async () => {});
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 

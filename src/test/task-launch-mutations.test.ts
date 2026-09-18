@@ -70,7 +70,10 @@ describe("launchLocalTask", () => {
 
 describe("taskMutations", () => {
   it("archives archivable tasks only", () => {
-    const list = [task("a", { status: "done", archivedAt: undefined }), task("b", { status: "running" })];
+    const list = [
+      task("a", { status: "done", archivedAt: undefined }),
+      task("b", { status: "running" }),
+    ];
     const next = archiveTasksInList(list, ["a", "b"], 42);
     expect(next.find((t) => t.id === "a")?.archivedAt).toBe(42);
     expect(next.find((t) => t.id === "b")?.archivedAt).toBeUndefined();

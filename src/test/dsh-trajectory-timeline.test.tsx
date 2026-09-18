@@ -13,6 +13,11 @@ import { DshTrajectoryTimeline } from "../components/DshTrajectoryTimeline";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+/* 定位一条轨迹行会把它滚进视野,jsdom 不实现 scrollIntoView。DshTrajectoryLedger.tsx:192
+   是**无保护**的 rowNodes.current.get(seq)?.scrollIntoView(...),属性不存在就抛;而每个
+   测试文件独占环境,补丁不跨文件 —— 凡是渲染这条链路的文件都得自己装一遍。 */
+Element.prototype.scrollIntoView ??= () => {};
+
 const invokeMock = vi.mocked(invoke);
 
 /**
