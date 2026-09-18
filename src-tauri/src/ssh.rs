@@ -565,7 +565,14 @@ fn build_remote_task_command(
     Ok(build_remote_project_command(
         os,
         remote_project_path,
-        build_remote_command(os, agent, permission_mode, program_word, &args, selected_model),
+        build_remote_command(
+            os,
+            agent,
+            permission_mode,
+            program_word,
+            &args,
+            selected_model,
+        ),
     ))
 }
 
@@ -601,7 +608,14 @@ fn build_remote_resume_command(
     Ok(build_remote_project_command(
         os,
         remote_project_path,
-        build_remote_command(os, agent, permission_mode, program_word, &args, selected_model),
+        build_remote_command(
+            os,
+            agent,
+            permission_mode,
+            program_word,
+            &args,
+            selected_model,
+        ),
     ))
 }
 
@@ -762,11 +776,7 @@ fn build_ssh_args(connection: &SshConnection, force_tty: bool) -> Vec<String> {
     build_ssh_args_for_os(connection, force_tty, RemoteOs::Posix)
 }
 
-fn build_ssh_args_for_os(
-    connection: &SshConnection,
-    force_tty: bool,
-    os: RemoteOs,
-) -> Vec<String> {
+fn build_ssh_args_for_os(connection: &SshConnection, force_tty: bool, os: RemoteOs) -> Vec<String> {
     let mut args = vec![if force_tty { "-tt" } else { "-T" }.to_string()];
     // Never silently trust a changed or previously unseen host key. Users can
     // provision the host key in their normal SSH known_hosts file first.
@@ -2033,21 +2043,17 @@ mod tests {
     fn failed_probe_falls_back_to_path_shape() {
         let windows = windows_connection("probe-fallback-win.test", "C:\\Users\\Administrator");
         assert_eq!(
-            resolve_remote_shell_os_for(
-                &windows,
-                windows.remote_path.as_deref(),
-                |_, _| Err("boom".to_string())
-            ),
+            resolve_remote_shell_os_for(&windows, windows.remote_path.as_deref(), |_, _| Err(
+                "boom".to_string()
+            )),
             RemoteOs::Windows
         );
 
         let posix = windows_connection("probe-fallback-posix.test", "/srv/app");
         assert_eq!(
-            resolve_remote_shell_os_for(
-                &posix,
-                posix.remote_path.as_deref(),
-                |_, _| Err("boom".to_string())
-            ),
+            resolve_remote_shell_os_for(&posix, posix.remote_path.as_deref(), |_, _| Err(
+                "boom".to_string()
+            )),
             RemoteOs::Posix
         );
 
@@ -2056,11 +2062,9 @@ mod tests {
             ..windows_connection("probe-fallback-none.test", "/srv/app")
         };
         assert_eq!(
-            resolve_remote_shell_os_for(
-                &no_path,
-                no_path.remote_path.as_deref(),
-                |_, _| Err("boom".to_string())
-            ),
+            resolve_remote_shell_os_for(&no_path, no_path.remote_path.as_deref(), |_, _| Err(
+                "boom".to_string()
+            )),
             RemoteOs::Posix
         );
     }
@@ -2100,11 +2104,9 @@ mod tests {
     fn successful_probe_overrides_path_shape() {
         let connection = windows_connection("probe-wins.test", "C:\\Users\\Administrator");
         assert_eq!(
-            resolve_remote_shell_os_for(
-                &connection,
-                connection.remote_path.as_deref(),
-                |_, _| Ok(b"Linux\n".to_vec())
-            ),
+            resolve_remote_shell_os_for(&connection, connection.remote_path.as_deref(), |_, _| Ok(
+                b"Linux\n".to_vec()
+            )),
             RemoteOs::Posix
         );
     }
@@ -2452,8 +2454,17 @@ mod tests {
             "cd -- '/srv/app' && DSH_PERMISSION_MODE=workspace-write DSH_TELEMETRY_DISABLED=1 'dsh' --profile headless -- 'inspect status'"
         );
         assert_eq!(
-            build_remote_task_command(RemoteOs::Posix, "dsh", "ask", "/srv/app", Some("   "), None, None, None,)
-                .unwrap(),
+            build_remote_task_command(
+                RemoteOs::Posix,
+                "dsh",
+                "ask",
+                "/srv/app",
+                Some("   "),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             "cd -- '/srv/app' && DSH_PERMISSION_MODE=read-only DSH_TELEMETRY_DISABLED=1 'dsh'"
         );
     }
@@ -2660,11 +2671,17 @@ mod tests {
 
     #[test]
     fn remote_claude_fast_mode_uses_settings_json() {
-        let command =
-            build_remote_task_command(
-                RemoteOs::Posix, "claude", "ask", "/srv/app", None, None, None, Some("fast")
-            )
-                .unwrap();
+        let command = build_remote_task_command(
+            RemoteOs::Posix,
+            "claude",
+            "ask",
+            "/srv/app",
+            None,
+            None,
+            None,
+            Some("fast"),
+        )
+        .unwrap();
         let unsupported_fast_flag = ["--", "fast"].concat();
 
         assert!(command.contains("--settings '{\"fastMode\":true}'"));
