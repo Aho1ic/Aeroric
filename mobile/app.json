@@ -2,7 +2,7 @@
   "expo": {
     "name": "Aeroric",
     "slug": "aeroric-mobile",
-    "version": "1.4.8",
+    "version": "1.4.9",
     "scheme": "aeroric",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

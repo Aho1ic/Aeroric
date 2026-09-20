@@ -20,7 +20,7 @@ Run Claude Code, Codex, DeepSeek Harness, and oh-my-pi — plus custom agents �
 </p>
 
 <p align="center">
-  <strong>Current release:</strong> v1.4.8 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
+  <strong>Current release:</strong> v1.4.9 · <strong>Stack:</strong> React 19 / Tauri 2 / Rust · <strong>Platforms:</strong> macOS / Windows / Linux
 </p>
 
 <p align="center">
