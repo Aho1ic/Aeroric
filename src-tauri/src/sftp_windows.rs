@@ -286,7 +286,14 @@ pub(crate) fn build_windows_rename_command(
 /// `cp -R src target/` 在 `target/src` 已存在且同为目录时**递归合并**,而
 /// `Copy-Item src -Destination target -Recurse` 会把 src 塞进去变成 `target/src/src`。
 /// 所以目录+目录这一种情况必须自己按子项递归下去,其余情况才交给 `Copy-Item`/`Move-Item`。
-/// (?) 合并语义未在真机验证,这是首次接真机时要复核的第一条。
+///
+/// 与 POSIX 侧的已知分叉(2026-09-20 静态复核,报告 §11.14),接真机时要先复核这两条:
+/// 1. `Merge` + 源是**文件** + 目标有同名目录 —— 本文件的 preflight 会放行(目标是容器),
+///    随后落到 `Copy-Item <文件> -Destination <已存在目录> -Recurse -Force`,它会**复制进**
+///    那个目录、产出 `x/x` 嵌套;而 POSIX 的 `cp -R` 在同一场景下**报错**。
+/// 2. `Move` + `Merge` + 目标有同名目录 —— 这里递归搬子项 + drain 是**真合并**;
+///    POSIX 原先把它交给 `mv`,而 `mv` 没有合并能力,故永不真合并。该缺陷已修
+///    (POSIX 改为 `cp -R` 后 `&& rm -rf` 源),两侧现在语义一致。
 pub(crate) fn build_windows_copy_or_move_command(
     source_paths: &[String],
     target_directory: &str,

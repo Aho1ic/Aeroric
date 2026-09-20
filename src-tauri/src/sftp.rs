@@ -353,7 +353,15 @@ fn build_remote_copy_or_move_command(
             Ok(crate::ssh::shell_quote_posix(source))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let tool = if move_paths { "mv" } else { "cp -R" };
+    // `mv` 没有合并能力:目标同名目录非空时直接 `ENOTEMPTY` 失败,空目录时退化成
+    // rename 覆盖(= Replace 语义)。所以「移动 + 合并」必须先 `cp -R` 复刻合并,再删源。
+    // 用 `&&` 串联:复制失败时绝不删源,宁可留下重复也不丢数据。
+    let merge_by_copy = move_paths && conflict_strategy == SftpConflictStrategy::Merge;
+    let tool = if move_paths && !merge_by_copy {
+        "mv"
+    } else {
+        "cp -R"
+    };
     let sources = sources.join(" ");
     let preflight = match conflict_strategy {
         SftpConflictStrategy::Fail => format!(
@@ -366,8 +374,13 @@ fn build_remote_copy_or_move_command(
             "for src in {sources}; do name=${{src##*/}}; rm -rf -- \"$target/$name\"; done && "
         ),
     };
+    let cleanup = if merge_by_copy {
+        format!(" && rm -rf -- {sources}")
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "target={target}; [ -d \"$target\" ] && {preflight}{tool} -- {sources} \"$target/\"",
+        "target={target}; [ -d \"$target\" ] && {preflight}{tool} -- {sources} \"$target/\"{cleanup}",
     ))
 }
 
@@ -2177,6 +2190,54 @@ mod tests {
         assert!(command.contains("cp -R --"));
         assert!(command.contains("/srv/source/same.txt"));
         assert!(command.contains("\"$target/\""));
+    }
+
+    #[test]
+    fn remote_move_merge_copies_then_removes_the_source() {
+        let command = super::build_remote_copy_or_move_command(
+            &["/srv/source/dir".to_string()],
+            "/srv/target",
+            true,
+            super::SftpConflictStrategy::Merge,
+        )
+        .expect("build command");
+
+        assert!(command.contains("cp -R --"));
+        assert!(command.contains("\"$target/\" && rm -rf --"));
+        assert!(!command.contains("mv --"));
+    }
+
+    #[test]
+    fn remote_copy_merge_leaves_the_source_in_place() {
+        let command = super::build_remote_copy_or_move_command(
+            &["/srv/source/dir".to_string()],
+            "/srv/target",
+            false,
+            super::SftpConflictStrategy::Merge,
+        )
+        .expect("build command");
+
+        assert!(command.contains("cp -R --"));
+        assert!(!command.contains("rm -rf --"));
+    }
+
+    #[test]
+    fn remote_move_without_merge_still_uses_rename() {
+        for strategy in [
+            super::SftpConflictStrategy::Fail,
+            super::SftpConflictStrategy::Replace,
+        ] {
+            let command = super::build_remote_copy_or_move_command(
+                &["/srv/source/dir".to_string()],
+                "/srv/target",
+                true,
+                strategy,
+            )
+            .expect("build command");
+
+            assert!(command.contains("mv --"));
+            assert!(!command.contains("\"$target/\" && rm -rf"));
+        }
     }
 
     #[test]
