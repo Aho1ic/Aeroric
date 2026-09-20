@@ -209,6 +209,7 @@ impl StorageRemote<'_> {
             .get_or_init(|| load_manifest(self.backend, &self.root))
     }
 
+    #[allow(clippy::expect_used, reason = "上文刚 set 初始化过，必为 Some")]
     fn manifest_mut(&mut self) -> &mut Manifest {
         if self.manifest.get().is_none() {
             let manifest = load_manifest(self.backend, &self.root);

@@ -43,6 +43,8 @@ impl DbxState {
         let _ = std::fs::create_dir_all(&agent_dir);
 
         let db_path = data_dir.path.join("dbx-core.db");
+        // 挂在整条 `let` 上：`panic!` 是下面 `Err` 分支里闭包的尾表达式，属性只能上提到这里。
+        #[allow(clippy::panic, reason = "内存库都起不来，刻意 fail-fast")]
         let storage = match tauri::async_runtime::block_on(Storage::open(&db_path)) {
             Ok(storage) => storage,
             Err(disk_error) => {

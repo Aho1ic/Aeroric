@@ -229,6 +229,7 @@ fn parse_tag(inner: &str) -> Option<Token> {
         .find(|c: char| c.is_whitespace() || c == '/')
         .unwrap_or(rest.len());
     let name = rest[..name_end].to_ascii_lowercase();
+    #[allow(clippy::unwrap_used, reason = "is_empty() 先短路，必为 Some")]
     if name.is_empty() || !name.chars().next().unwrap().is_ascii_alphabetic() {
         // 标签名必须以字母开头，否则当作非标签
         return None;

@@ -381,6 +381,7 @@ impl RouterRuntimeConfig {
         record_usage: bool,
         upstreams: RouterUpstreams,
     ) -> Self {
+        #[allow(clippy::expect_used, reason = "None 即内置默认配置，构造不会失败")]
         let client = build_http_client(None).expect("direct reqwest client configuration is valid");
         Self {
             listen_address: listen_address.into(),

@@ -171,6 +171,7 @@ pub fn build_authorize_url(
     state: &str,
     pkce: Option<&PkcePair>,
 ) -> String {
+    #[allow(clippy::expect_used, reason = "authorize_url 是硬编码端点")]
     let mut url = url::Url::parse(provider.authorize_url).expect("provider URL must be valid");
     {
         let mut query = url.query_pairs_mut();

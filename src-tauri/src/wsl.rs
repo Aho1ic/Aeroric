@@ -1033,6 +1033,7 @@ fn spawn_wsl_task_pty(
         if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.to_string();
+            #[allow(clippy::expect_used, reason = "与 pty::run_task 同一约定")]
             let cleanup_generation =
                 startup_generation.expect("initial input registration must exist");
             crate::pty::spawn_initial_input_injection(

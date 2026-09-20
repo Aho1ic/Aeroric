@@ -228,12 +228,15 @@ where
     let desktop_nonce = random(32)?;
     let server_secret = StaticSecret::from(static_keys.secret_bytes());
     let server_public = PublicKey::from(&server_secret);
+    #[allow(clippy::unwrap_used, reason = "decode_standard_exact 已校验长度 32")]
     let client_public = PublicKey::from(<[u8; 32]>::try_from(client_public).unwrap());
     let shared = server_secret.diffie_hellman(&client_public);
     if !shared.was_contributory() {
         return Err("Low-order Orca E2EE client key rejected".to_string());
     }
 
+    // 挂在整条 `let` 上：`expect` 在 `json!` 的参数里，属性只能上提到这里。
+    #[allow(clippy::expect_used, reason = "validate_hello 已保证 context 存在")]
     let ready = json!({
         "type": "e2ee_ready",
         "v": VERSION,
@@ -259,8 +262,11 @@ where
         &client_nonce,
         &desktop_nonce,
     );
+    #[allow(clippy::expect_used, reason = "schedule 定长 96，前 32 字节")]
     let client_to_desktop = schedule[..32].try_into().expect("key length");
+    #[allow(clippy::expect_used, reason = "schedule 定长 96，32..64")]
     let desktop_to_client = schedule[32..64].try_into().expect("key length");
+    #[allow(clippy::expect_used, reason = "schedule 定长 96，64..")]
     let session_id = schedule[64..].try_into().expect("session length");
     let session = SessionCrypto {
         send: DirectionCipher::new(desktop_to_client, session_id, 1),
@@ -532,6 +538,7 @@ fn derive_schedule(
     info.extend_from_slice(&transcript_hash);
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
     let mut expanded = [0u8; 96];
+    #[allow(clippy::expect_used, reason = "expanded 定长 96，HKDF 上限远大于此")]
     hk.expand(&info, &mut expanded)
         .expect("HKDF output length is valid");
     expanded

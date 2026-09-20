@@ -219,6 +219,7 @@ impl SessionCrypto {
             return Err("frame too short".to_string());
         }
         let kind = frame[0];
+        #[allow(clippy::expect_used, reason = "上文已校验帧长，切片定长 8")]
         let seq = u64::from_be_bytes(frame[1..FRAME_HEADER_BYTES].try_into().expect("8 bytes"));
         let plain = self.recv.open(seq, &[kind], &frame[FRAME_HEADER_BYTES..])?;
         Ok((kind, plain))
@@ -241,9 +242,12 @@ fn derive_keys(
     info.extend_from_slice(server_eph.as_bytes());
     info.extend_from_slice(server_static.as_bytes());
     let mut okm = [0u8; 64];
+    #[allow(clippy::expect_used, reason = "okm 定长 64，HKDF 上限远大于此")]
     hk.expand(&info, &mut okm)
         .expect("64 bytes is a valid HKDF-SHA256 length");
+    #[allow(clippy::expect_used, reason = "okm 定长 64，前 32 字节")]
     let client_to_server: [u8; 32] = okm[..32].try_into().expect("32 bytes");
+    #[allow(clippy::expect_used, reason = "okm 定长 64，后 32 字节")]
     let server_to_client: [u8; 32] = okm[32..].try_into().expect("32 bytes");
     (client_to_server, server_to_client)
 }

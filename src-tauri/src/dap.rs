@@ -361,6 +361,7 @@ fn spawn_stderr_reader<R>(
 {
     thread::spawn(move || {
         let mut reader = BufReader::new(reader);
+        #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
         let ws_regex = Regex::new(r"ws://[^\s]+").expect("valid websocket regex");
         let mut line = String::new();
         let mut sent_url = false;
@@ -398,6 +399,7 @@ fn spawn_debugpy_port_reader<R>(
 {
     thread::spawn(move || {
         let mut reader = BufReader::new(reader);
+        #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
         let port_regex = Regex::new(r"AERORIC_DEBUGPY_PORT=(\d+)").expect("valid port regex");
         let mut line = String::new();
         let mut sent_port = false;

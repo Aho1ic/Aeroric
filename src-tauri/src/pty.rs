@@ -1998,6 +1998,7 @@ pub async fn run_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
+            #[allow(clippy::expect_used, reason = "有 pty_writers 条目即有登记")]
             let cleanup_generation =
                 startup_generation.expect("initial input registration must exist");
             spawn_initial_input_injection(
@@ -2598,6 +2599,7 @@ pub async fn resume_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
+            #[allow(clippy::expect_used, reason = "有 pty_writers 条目即有登记")]
             let cleanup_generation =
                 startup_generation.expect("initial input registration must exist");
             spawn_initial_input_injection(

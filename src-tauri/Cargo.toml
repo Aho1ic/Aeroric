@@ -177,3 +177,27 @@ type_complexity = "allow"
 # src-tauri/src（permissions/macos.rs 的 FFI、storage.rs 的 Win32 ACL、subprocess.rs
 # 的信号发送等），remote-protocol / remote-relay 为零。
 undocumented_unsafe_blocks = "deny"
+
+# 生产代码里不许出现裸 `unwrap()` / `expect()` / `panic!`。这三条都是 allow-by-default
+# 的限制类 lint，CI 那句 `clippy -- -D warnings` 本来管不到 —— 也就是说在写这几行之前，
+# 新增一个 `unwrap()` 不会被任何门禁拦下。
+#
+# 为什么是 warn 而不是 deny：本仓生产侧现有 31 处（2026-09-20 实测，逐处 triage 见
+# docs/history/PROJECT_REVIEW_2026-09-18.md §4.3），全部属于「不变量已由前置校验保证」
+# 或「刻意的 fail-fast」，已逐处加 `#[allow(..., reason = ...)]`。用 warn 的效果是：
+# 那 31 处静默，而**新增**的裸 unwrap 会作为 warning 冒出来 —— CI 跑 `-D warnings`，
+# warning 即失败，门禁成立。
+#
+# 测试代码不用逐个标注：src-tauri/clippy.toml 的 allow-*-in-tests 让 clippy 自己判定
+# 「什么算测试代码」。那里实测约 3,600 处 unwrap/expect，是本条能成立的前提。
+#
+# 注意：**不要**顺手把 `unreachable` 也加进来。它在 `#[tauri::command]` 的宏展开上会
+# 误报 —— 实测 226 处（去重后）的 primary span 全部落在函数签名的返回类型上（`) -> Result<…>`
+# 的 `Result` 处），而本仓手写的 `unreachable!()` 是 0 处。开了它等于给每个返回 Result
+# 的命令函数挂一条永远清不掉的 warning。
+#
+# 覆盖范围：只覆盖本 crate。remote-protocol（生产侧 0 处）与 remote-relay（生产侧 11 处）
+# 是独立 crate，各自需要一份 clippy.toml 才能开同一道门。
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"

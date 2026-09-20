@@ -370,6 +370,7 @@ pub fn parse_ruff_json(root: &Path, output: &str) -> Vec<DiagnosticItem> {
 }
 
 pub fn parse_mypy_output(root: &Path, output: &str) -> Vec<DiagnosticItem> {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let pattern = regex::Regex::new(
         r"^(?P<file>.*?):(?P<line>\d+)(?::(?P<column>\d+))?: (?P<level>error|warning|note): (?P<message>.*?)(?:\s+\[(?P<code>[^\]]+)\])?$",
     )

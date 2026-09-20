@@ -760,6 +760,7 @@ fn location_from_message(
     fallback_file: &str,
     message: &str,
 ) -> (String, usize, usize) {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let pattern = regex::Regex::new(
         r"(?m)(?P<file>(?:[A-Za-z]:)?[/\\]?[A-Za-z0-9_./\\-][^:\n]*?):(?P<line>\d+):(?P<column>\d+)",
     )
@@ -886,14 +887,18 @@ pub fn parse_vitest_json(root: &Path, output: &str) -> TestRunResult {
 }
 
 pub fn parse_cargo_test_output(root: &Path, output: &str) -> TestRunResult {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let test_line = regex::Regex::new(r"^test (?P<name>.+?) \.\.\. (?P<status>ok|FAILED|ignored)")
         .expect("valid cargo test line regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let summary = regex::Regex::new(
         r"test result: (?P<status>ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed;",
     )
     .expect("valid cargo summary regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let section = regex::Regex::new(r"^---- (?P<name>.+?) stdout ----$")
         .expect("valid cargo failure section regex");
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let panic = regex::Regex::new(r"panicked at (?P<file>.*?):(?P<line>\d+):(?P<column>\d+):")
         .expect("valid cargo panic regex");
 
@@ -1010,6 +1015,7 @@ pub fn parse_cargo_test_output(root: &Path, output: &str) -> TestRunResult {
 }
 
 fn pytest_summary_count(output: &str, label: &str) -> usize {
+    #[allow(clippy::expect_used, reason = "字面量正则拼接，不可能失败")]
     let pattern =
         regex::Regex::new(&format!(r"(?P<count>\d+)\s+{label}")).expect("valid pytest regex");
     pattern
@@ -1023,6 +1029,7 @@ fn pytest_summary_count(output: &str, label: &str) -> usize {
 }
 
 pub fn parse_pytest_output(root: &Path, output: &str) -> TestRunResult {
+    #[allow(clippy::expect_used, reason = "字面量正则，不可能失败")]
     let failed_line = regex::Regex::new(r"^FAILED\s+(?P<node>\S+)(?:\s+-\s+(?P<message>.*))?$")
         .expect("valid pytest failed line regex");
     let mut failures = Vec::new();

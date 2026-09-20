@@ -210,6 +210,8 @@ pub struct RemoteState {
 
 impl RemoteState {
     pub fn new() -> Self {
+        // 挂在整条 `let` 上：`expect` 是下面闭包的尾表达式，属性只能上提到这里。
+        #[allow(clippy::expect_used, reason = "CSPRNG 不可用属不可恢复")]
         let keys = crypto::StaticKeys::load_or_create().unwrap_or_else(|err| {
             eprintln!("[remote] keypair load failed, using in-memory keys: {err}");
             crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable")
@@ -817,6 +819,7 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
             return Err("Remote server is not running".to_string());
         }
 
+        #[allow(clippy::expect_used, reason = "上文已对 endpoints.is_empty() 早返回")]
         let primary = pairing_endpoints
             .endpoints
             .first()
@@ -859,6 +862,7 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
             .ensure_listener_scope(app.clone(), required_scope)
             .await
         {
+            #[allow(clippy::expect_used, reason = "上一行 if result.is_err() 已保证")]
             let original_error = result.expect_err("checked invite creation failure");
             handle.shutdown_and_wait(app).await;
             return Err(format!(
