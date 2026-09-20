@@ -281,12 +281,35 @@ fn remember_probe(id: &str, probe: &PermissionProbe) {
 /// 本进程再查还是旧答案。子进程由本应用拉起,TCC 的 responsible process 仍是本应用
 /// bundle,所以问到的是同一个主体的授权,只是没有那份缓存。
 fn fresh_probe(ids: &[&str]) -> Result<HashMap<String, PermissionProbe>, String> {
+    fresh_probe_inner(ids, std::env::var_os(PROBE_GUARD_ENV).is_some())
+}
+
+/// 探测必须单层:子进程里若再调 `fresh_probe` 就拒绝。
+///
+/// 守卫的判定依据由调用方以 `bool` 传入,而不是在本函数里直接读环境变量 —— 这样
+/// 测试可以用真实代码路径验证守卫,而**不必去改自己的环境变量**。lib 测试二进制默认
+/// 多线程,`std::env::set_var` 正是因此被 std 标为 `unsafe`;把它从测试里去掉,
+/// 这条隐含约定也就随之消失。
+fn nested_probe_guard(guard_env_present: bool) -> Result<(), String> {
+    if guard_env_present {
+        Err("refusing to nest permission probe processes".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// `fresh_probe` 的本体,守卫依据由参数给出(见 `nested_probe_guard`)。
+///
+/// 空列表的提前返回**先于**守卫:没有任何 id 要查时压根不会 spawn 子进程,
+/// 也就不存在"嵌套"这回事,此时即使处于子进程里也应该正常返回空表。
+fn fresh_probe_inner(
+    ids: &[&str],
+    guard_env_present: bool,
+) -> Result<HashMap<String, PermissionProbe>, String> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    if std::env::var_os(PROBE_GUARD_ENV).is_some() {
-        return Err("refusing to nest permission probe processes".to_string());
-    }
+    nested_probe_guard(guard_env_present)?;
     let exe = std::env::current_exe()
         .map_err(|error| format!("Cannot locate own executable: {error}"))?;
 
@@ -813,29 +836,32 @@ mod tests {
     }
 
     /// 探测子进程绝不能再 spawn 探测子进程。
+    ///
+    /// 断言的是**具体错误信息**而非"有错就行":后者在守卫被删掉、子进程因别的
+    /// 原因失败时同样会通过。
     #[test]
     fn nested_probe_is_refused() {
-        let guard = std::env::var_os(PROBE_GUARD_ENV);
-        // SAFETY: 单线程测试内改环境变量,结束前还原。
-        unsafe { std::env::set_var(PROBE_GUARD_ENV, "1") };
-        let result = fresh_probe(&["accessibility"]);
-        match guard {
-            // SAFETY: 与上面那次 `set_var` 成对 —— 把先前读到的值原样写回,恢复原状。
-            // std 把 `set_var` / `remove_var` 标为 unsafe 是因为**并发**读写环境变量才构成
-            // 数据竞争,所以这里依赖的约定是「除本测试外没有别的测试读写
-            // `AERORIC_PERMISSION_PROBE`」:全仓只有 `fresh_probe` 读它,而测试里只有本用例
-            // 传非空 id(传空列表的 `empty_probe_list_skips_the_subprocess` 在读它之前
-            // 就因 `ids.is_empty()` 返回了)。
-            Some(value) => unsafe { std::env::set_var(PROBE_GUARD_ENV, value) },
-            // SAFETY: 同上,只是先前本来就没有这个变量,于是移除它而不是写回。
-            None => unsafe { std::env::remove_var(PROBE_GUARD_ENV) },
-        }
-        assert!(result.is_err());
+        let result = fresh_probe_inner(&["accessibility"], true);
+        assert_eq!(
+            result.unwrap_err(),
+            "refusing to nest permission probe processes"
+        );
     }
 
+    /// 守卫的纯函数形态:置位时拒绝,未置位时放行。
+    #[test]
+    fn nested_probe_guard_tracks_its_flag() {
+        assert!(nested_probe_guard(true).is_err());
+        assert!(nested_probe_guard(false).is_ok());
+    }
+
+    /// 空列表的提前返回先于守卫 —— 没有 id 要查时不 spawn,也就无所谓嵌套。
     #[test]
     fn empty_probe_list_skips_the_subprocess() {
         assert!(fresh_probe(&[]).expect("no-op succeeds").is_empty());
+        assert!(fresh_probe_inner(&[], true)
+            .expect("empty list never reaches the guard")
+            .is_empty());
     }
 
     #[test]
