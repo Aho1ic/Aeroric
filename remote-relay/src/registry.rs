@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
 
+use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
@@ -28,7 +28,7 @@ pub(crate) fn try_register_host(
     host_id: &str,
     sender: mpsc::Sender<Message>,
 ) -> bool {
-    let mut hosts = registry.hosts.lock().unwrap();
+    let mut hosts = registry.hosts.lock();
     if hosts.contains_key(host_id) {
         return false;
     }
@@ -37,7 +37,7 @@ pub(crate) fn try_register_host(
 }
 
 pub(crate) fn cleanup_host(registry: &Registry, host_id: &str, sender: &mpsc::Sender<Message>) {
-    let mut hosts = registry.hosts.lock().unwrap();
+    let mut hosts = registry.hosts.lock();
     if hosts
         .get(host_id)
         .is_some_and(|current| current.same_channel(sender))
@@ -52,7 +52,7 @@ pub(crate) fn try_insert_pending(
     conn_id: &str,
     sender: oneshot::Sender<Ws>,
 ) -> bool {
-    let mut pending = registry.pending.lock().unwrap();
+    let mut pending = registry.pending.lock();
     if pending.len() >= MAX_PENDING_CONNECTIONS
         || pending
             .values()

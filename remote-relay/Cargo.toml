@@ -14,7 +14,25 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+# 与 src-tauri 同版本。用它替代 std 的 Mutex,理由见下方 [lints.clippy]。
+parking_lot = "0.12"
 remote-protocol = { path = "../remote-protocol" }
+
+[lints.clippy]
+# 生产代码里不许出现裸 `unwrap()` / `expect()` / `panic!`。这三条都是 allow-by-default
+# 的限制类 lint,CI 那句 `clippy -- -D warnings` 本来管不到 —— 不加这几行,新增一个
+# `unwrap()` 不会被任何门禁拦下。
+#
+# 本 crate 原先生产侧 11 处,其中 8 处是 `std::sync::Mutex::lock().unwrap()`。
+# 这里没有机械挂 8 条 `#[allow]`,而是改用 `parking_lot::Mutex` —— 它的 `lock()`
+# 不返回 `Result`(不做锁中毒判定),8 处 unwrap 直接消失;这与 `src-tauri` 的做法一致
+# (所以那边一处锁 unwrap 都没有)。剩下 3 处:2 处启动期失败改为「打印 + exit(1)」
+# (见 `main.rs::main`),1 处 `expect` 挂了带 reason 的 `#[allow]`(见 `main.rs::control_text`)。
+#
+# 口径与 `src-tauri/Cargo.toml`、`remote-protocol/Cargo.toml` 一致。
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
 
 [profile.release]
 strip = true

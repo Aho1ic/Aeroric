@@ -42,10 +42,22 @@ type Ws = WebSocketStream<TcpStream>;
 
 #[tokio::main]
 async fn main() {
-    let (port, config) = RelayConfig::from_env().unwrap_or_else(|error| panic!("{error}"));
-    let listener = TcpListener::bind(("0.0.0.0", port))
-        .await
-        .unwrap_or_else(|e| panic!("failed to bind 0.0.0.0:{port}: {e}"));
+    // 启动期的两类失败都用「打印 + 退出 1」而不是 panic:这是二进制入口,
+    // 用户需要的是可读的一行原因,不是 backtrace。
+    let (port, config) = match RelayConfig::from_env() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("[relay] {error}");
+            std::process::exit(1);
+        }
+    };
+    let listener = match TcpListener::bind(("0.0.0.0", port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("[relay] failed to bind 0.0.0.0:{port}: {error}");
+            std::process::exit(1);
+        }
+    };
     eprintln!("[relay] listening on 0.0.0.0:{port} (host auth: token)");
     serve(listener, config).await;
 }
@@ -111,6 +123,9 @@ async fn handle_connection(
     }
 }
 
+/// 序列化一条控制消息。`RelayToHost` 只含 `String` / `u64` 字段,没有 map 非字符串键、
+/// 也没有自定义 `Serialize`,所以 `serde_json` 对它不会失败 —— 此处的 `expect` 不可达。
+#[allow(clippy::expect_used, reason = "RelayToHost 全为 String/u64")]
 fn control_text(msg: &RelayToHost) -> Message {
     Message::Text(serde_json::to_string(msg).expect("relay control message serializes"))
 }
@@ -247,7 +262,7 @@ async fn client_connect(
         let _ = ws.close(None).await;
         return;
     }
-    let Some(host_tx) = registry.hosts.lock().unwrap().get(&host_id).cloned() else {
+    let Some(host_tx) = registry.hosts.lock().get(&host_id).cloned() else {
         let mut ws = ws;
         let _ = ws.close(None).await;
         return;
@@ -264,7 +279,7 @@ async fn client_connect(
         peer: Some(peer.to_string()),
     });
     if host_tx.try_send(notify).is_err() {
-        registry.pending.lock().unwrap().remove(&conn_id);
+        registry.pending.lock().remove(&conn_id);
         let mut ws = ws;
         let _ = ws.close(None).await;
         return;
@@ -272,7 +287,7 @@ async fn client_connect(
     match tokio::time::timeout(DIAL_TIMEOUT, rx).await {
         Ok(Ok(host_ws)) => splice(ws, host_ws).await,
         _ => {
-            registry.pending.lock().unwrap().remove(&conn_id);
+            registry.pending.lock().remove(&conn_id);
             let mut ws = ws;
             let _ = ws.close(None).await;
         }
@@ -281,7 +296,7 @@ async fn client_connect(
 
 /// 桌面数据连接:交给等待中的手机接入任务(由它执行 splice)。
 fn host_data(ws: Ws, conn_id: String, registry: Arc<Registry>) {
-    let Some(pending) = registry.pending.lock().unwrap().remove(&conn_id) else {
+    let Some(pending) = registry.pending.lock().remove(&conn_id) else {
         // 无人等待(超时/伪造 connId):直接丢弃连接
         return;
     };

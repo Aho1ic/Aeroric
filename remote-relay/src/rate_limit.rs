@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 
 pub(crate) const CLIENT_CONNECT_RATE_LIMIT: u32 = 12;
@@ -34,7 +34,7 @@ pub(crate) fn try_acquire(
     peer: IpAddr,
     now: Instant,
 ) -> bool {
-    let mut limits = rate_limits.lock().unwrap();
+    let mut limits = rate_limits.lock();
     if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES {
         limits.retain(|_, entry| now.duration_since(entry.last_seen) < CLIENT_RATE_LIMIT_RETENTION);
         if limits.len() >= MAX_CLIENT_RATE_LIMIT_ENTRIES && !limits.contains_key(&peer) {
@@ -171,7 +171,7 @@ mod stress_tests {
             try_acquire(&limits, ip(10_000 + index), fresh_at);
         }
 
-        let table = limits.lock().unwrap();
+        let table = limits.lock();
         assert!(
             table.len() <= MAX_CLIENT_RATE_LIMIT_ENTRIES,
             "限流表必须保持有界,实际 {} 条",
