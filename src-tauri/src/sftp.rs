@@ -1025,6 +1025,17 @@ fn move_local_paths_to_directory(
         if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
             delete_local_path(&destination)?;
         }
+        // `Merge` 只允许「目录并入目录」。这条检查不能省:下面的 `std::fs::rename`
+        // 覆盖同名文件是**成功**操作,它会绕过 `copy_path_recursive` 里那条 Merge 检查,
+        // 于是用户选了「合并」却被静默覆盖。两处文案与 `copy_path_recursive` 对齐。
+        if destination.exists() && conflict_strategy == SftpConflictStrategy::Merge {
+            if !source.is_dir() {
+                return Err("Cannot merge a file into an existing file".to_string());
+            }
+            if !destination.is_dir() {
+                return Err("Cannot merge a directory into a file".to_string());
+            }
+        }
         std::fs::rename(&source, &destination).or_else(|_| {
             copy_path_recursive(&source, &destination, conflict_strategy)?;
             if source.is_dir() {
@@ -2320,6 +2331,35 @@ mod tests {
             "target"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 与 `local_copy_merge_rejects_file_overwrite` 同一条规则,但走**移动**路径。
+    /// `move_local_paths_to_directory` 先试 `std::fs::rename`,而 rename 覆盖同名文件是
+    /// 成功操作 —— 它会绕过 `copy_path_recursive` 里那条 Merge 检查。
+    #[test]
+    fn local_move_merge_rejects_file_overwrite() {
+        let root = unique_test_dir("move-merge-file-conflict");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create source");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("same.txt"), "target").expect("write target");
+
+        let result = super::move_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let target_content =
+            std::fs::read_to_string(target_dir.join("same.txt")).expect("read target");
+        let source_alive = source_dir.join("same.txt").exists();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(result.is_err(), "Merge 不该静默覆盖同名文件");
+        assert_eq!(target_content, "target", "目标文件必须保持原样");
+        assert!(source_alive, "失败时源文件必须保住");
     }
 
     #[test]
