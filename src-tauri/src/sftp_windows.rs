@@ -252,8 +252,8 @@ pub(crate) fn build_windows_merge_conflict_check_command(
     }
     let target = powershell_quote(&to_windows_native_path(target_directory));
     let names = name_array(names)?;
-    // 仅名字时无法拿到远端源树,退化成顶层检查;完整源路径走
-    // `build_windows_merge_conflict_check_from_sources`。
+    // 仅名字时无法拿到远端源树,退化成顶层检查;完整源路径的递归预检内联在
+    // `build_windows_copy_or_move_command` 的 `Test-AeroricMerge` 里。
     Ok(script(&format!(
         r#"  if (-not (Test-Path -LiteralPath {target} -PathType Container)) {{ throw 'Target directory does not exist' }}
   foreach ($name in {names}) {{
@@ -280,35 +280,6 @@ const WINDOWS_MERGE_CHECK_FN: &str = r#"  function Test-AeroricMerge([string]$So
     }
   }
 "#;
-
-/// 生产路径在 `build_windows_merge_conflict_check_command` 里做顶层预检;
-/// 完整源路径的递归检查由本函数承载,目前仅测试消费(形状回归)。
-#[cfg(test)]
-pub(crate) fn build_windows_merge_conflict_check_from_sources(
-    source_paths: &[String],
-    target_directory: &str,
-) -> Result<String, String> {
-    if source_paths.is_empty() {
-        return Ok(noop());
-    }
-    for source in source_paths {
-        let name = source
-            .rsplit_once('/')
-            .map(|(_, name)| name)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| "Invalid file name".to_string())?;
-        validate_entry_name(name)?;
-    }
-    let target = powershell_quote(&to_windows_native_path(target_directory));
-    let sources = native_array(source_paths);
-    Ok(script(&format!(
-        r#"  if (-not (Test-Path -LiteralPath {target} -PathType Container)) {{ throw 'Target directory does not exist' }}
-{WINDOWS_MERGE_CHECK_FN}  foreach ($source in {sources}) {{
-    $destination = [IO.Path]::Combine({target}, [IO.Path]::GetFileName($source))
-    Test-AeroricMerge $source $destination
-  }}"#
-    )))
-}
 
 /// 复刻 `build_remote_rename_command`。目标路径在 Rust 侧算好,用的是
 /// `remote_os::remote_parent_of` 而不是 `sftp.rs::remote_parent` —— 后者按 `/` 切分,
