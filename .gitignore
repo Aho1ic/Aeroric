@@ -48,6 +48,9 @@ docs/*
 # remote-access 说明、remote-relay/src/main.rs），所以它必须随仓库分发 ——
 # 否则照提示找文档的用户和克隆仓库的人都会撞空。新增被引用的文档时一并放行。
 !docs/remote-public-access.md
+# Review follow-up: human rationale for pnpm.auditConfig.ignoreGhsas + opener scope
+# (package.json / capabilities JSON cannot carry comments).
+!docs/dependency-audit-ignores.md
 Trellis/
 trellis/
 .trellis/

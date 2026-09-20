@@ -153,6 +153,14 @@ pub(crate) struct DbExecuteResult {
     message: String,
 }
 
+/// Legacy (v1) connection file path.
+///
+/// This file stores `DbConnectionConfig` endpoints only — no dbx passwords.
+/// Nested `SshConnection.password` is `skip_serializing` and lives in the SSH
+/// keyring (`crate::ssh`); reconnect/scp paths must call
+/// `crate::ssh::hydrate_ssh_password` before use. Modern dbx secrets are
+/// handled by `database::connection_secrets` against
+/// `database-connections-v2.json`.
 fn database_connections_path() -> Result<PathBuf, String> {
     Ok(crate::storage::aeroric_dir()?.join("database-connections.json"))
 }
@@ -1194,6 +1202,10 @@ pub async fn db_load_connections() -> Result<Vec<DbConnectionConfig>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Persist legacy connection list. `SshConnection.password` never serializes
+/// (`skip_serializing`); SSH secrets stay in the SSH keyring. Do not add
+/// plaintext credential fields here — route new secrets through
+/// `database::connection_secrets` instead.
 #[tauri::command]
 pub async fn db_save_connections(connections: Vec<DbConnectionConfig>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {

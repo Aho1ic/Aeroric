@@ -56,9 +56,8 @@ where
     Ok(endpoint)
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
 pub(crate) enum SftpConflictStrategy {
     #[default]
     Fail,
@@ -302,10 +301,20 @@ fn build_remote_delete_target_names_command(
     ))
 }
 
+/// POSIX 递归 Merge 预检。语义与本地 `copy_path_recursive` / move Merge 对齐:
+/// - 目标不存在 → 放行
+/// - 目标是符号链接 → 拒绝(避免写穿链接逃出目标树)
+/// - 文件→已存在文件 / 目录→文件 / 文件→已存在目录 / 任一侧链接 → 拒绝
+/// - 目录+目录 → 逐子项递归,嵌套同名文件同样拒绝
+const POSIX_MERGE_CHECK_FN: &str = r#"merge_ck(){ s=$1; d=$2; if [ ! -e "$d" ] && [ ! -L "$d" ]; then return 0; fi; if [ -L "$d" ]; then echo 'Cannot merge into a symlink destination' >&2; exit 1; fi; if [ ! -d "$d" ]; then if [ -d "$s" ] && [ ! -L "$s" ]; then echo 'Cannot merge a directory into a file' >&2; else echo 'Cannot merge a file into an existing file' >&2; fi; exit 1; fi; if [ -L "$s" ] || [ ! -d "$s" ]; then echo 'Cannot merge a file into an existing directory' >&2; exit 1; fi; for c in "$s"/*; do [ -e "$c" ] || [ -L "$c" ] || continue; merge_ck "$c" "$d/${c##*/}"; done; }; "#;
+
 fn build_remote_merge_conflict_check_command(
     names: &[String],
     target_directory: &str,
 ) -> Result<String, String> {
+    // 仅名字时无法走远端源树(上传预检场景)。退化成顶层检查 + 明确拒绝
+    // 「目标同名已是目录」以外的顶层文件冲突;真正的递归检查走带完整源路径的
+    // `build_remote_merge_conflict_check_from_sources`。
     if names.is_empty() {
         return Ok(":".to_string());
     }
@@ -320,6 +329,32 @@ fn build_remote_merge_conflict_check_command(
     Ok(format!(
         "target={target}; [ -d \"$target\" ] && for name in {names}; do [ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ] || {{ echo \"Cannot merge a file into an existing file\" >&2; exit 1; }}; done",
         names = names.join(" ")
+    ))
+}
+
+/// 用完整远端源路径做递归 Merge 预检(同机移动/复制)。
+///
+/// 生产路径已在 `build_remote_copy_or_move_command` 里内联同一套 `POSIX_MERGE_CHECK_FN`;
+/// 这里抽出成函数只为测试能钉住递归预检的命令形状。
+#[cfg(test)]
+fn build_remote_merge_conflict_check_from_sources(
+    source_paths: &[String],
+    target_directory: &str,
+) -> Result<String, String> {
+    if source_paths.is_empty() {
+        return Ok(":".to_string());
+    }
+    let target = crate::ssh::shell_quote_posix(target_directory);
+    let sources = source_paths
+        .iter()
+        .map(|source| {
+            validate_entry_name(basename(source)?)?;
+            Ok(crate::ssh::shell_quote_posix(source))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(format!(
+        "target={target}; [ -d \"$target\" ] && {POSIX_MERGE_CHECK_FN}for src in {sources}; do name=${{src##*/}}; merge_ck \"$src\" \"$target/$name\"; done",
+        sources = sources.join(" ")
     ))
 }
 
@@ -368,7 +403,7 @@ fn build_remote_copy_or_move_command(
             "for src in {sources}; do name=${{src##*/}}; [ ! -e \"$target/$name\" ] || {{ echo \"A file or folder with that name already exists\" >&2; exit 1; }}; done && "
         ),
         SftpConflictStrategy::Merge => format!(
-            "for src in {sources}; do name=${{src##*/}}; [ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ] || {{ echo \"Cannot merge a file into an existing file\" >&2; exit 1; }}; done && "
+            "{POSIX_MERGE_CHECK_FN}for src in {sources}; do name=${{src##*/}}; merge_ck \"$src\" \"$target/$name\"; done && "
         ),
         SftpConflictStrategy::Replace => format!(
             "for src in {sources}; do name=${{src##*/}}; rm -rf -- \"$target/$name\"; done && "
@@ -837,13 +872,48 @@ fn parse_remote_directory_summary(raw: &[u8]) -> Result<SftpDirectorySummary, St
     })
 }
 
+/// Merge 冲突分类必须用 `symlink_metadata`:`exists`/`is_dir` 会跟随链接,
+/// 把「目标是符号链接」误判成「目标是目录」,复制会写穿链接逃出目标树。
+fn local_path_entry_kind(path: &Path) -> Result<Option<std::fs::FileType>, String> {
+    match path.symlink_metadata() {
+        Ok(meta) => Ok(Some(meta.file_type())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn reject_local_merge_into(
+    source: &Path,
+    destination: &Path,
+    source_meta: &std::fs::Metadata,
+    dest_meta: &std::fs::Metadata,
+) -> Result<(), String> {
+    if dest_meta.file_type().is_symlink() || source_meta.file_type().is_symlink() {
+        return Err("Cannot merge into a symlink destination".to_string());
+    }
+    let source_is_dir = source_meta.is_dir();
+    let dest_is_dir = dest_meta.is_dir();
+    if dest_is_dir && !source_is_dir {
+        return Err("Cannot merge a file into an existing directory".to_string());
+    }
+    if !dest_is_dir && source_is_dir {
+        return Err("Cannot merge a directory into a file".to_string());
+    }
+    if !dest_is_dir && !source_is_dir {
+        return Err("Cannot merge a file into an existing file".to_string());
+    }
+    let _ = (source, destination);
+    Ok(())
+}
+
 fn copy_path_recursive(
     source: &Path,
     destination: &Path,
     conflict_strategy: SftpConflictStrategy,
 ) -> Result<(), String> {
     let metadata = source.symlink_metadata().map_err(|e| e.to_string())?;
-    if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+    let dest_kind = local_path_entry_kind(destination)?;
+    if dest_kind.is_some() && conflict_strategy == SftpConflictStrategy::Replace {
         delete_local_path(destination)?;
     }
     if metadata.file_type().is_symlink() {
@@ -863,10 +933,18 @@ fn copy_path_recursive(
         return Ok(());
     }
     if metadata.is_dir() {
-        if !destination.exists() {
-            std::fs::create_dir(destination).map_err(|e| e.to_string())?;
-        } else if !destination.is_dir() {
-            return Err("Cannot merge a directory into a file".to_string());
+        match local_path_entry_kind(destination)? {
+            None => {
+                std::fs::create_dir(destination).map_err(|e| e.to_string())?;
+            }
+            Some(dest_kind) => {
+                if conflict_strategy == SftpConflictStrategy::Merge {
+                    let dest_meta = destination.symlink_metadata().map_err(|e| e.to_string())?;
+                    reject_local_merge_into(source, destination, &metadata, &dest_meta)?;
+                } else if dest_kind.is_symlink() || !destination.is_dir() {
+                    return Err("Cannot merge a directory into a file".to_string());
+                }
+            }
         }
         for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -878,8 +956,16 @@ fn copy_path_recursive(
         }
         return Ok(());
     }
-    if destination.exists() && conflict_strategy == SftpConflictStrategy::Merge {
-        return Err("Cannot merge a file into an existing file".to_string());
+    if dest_kind.is_some() && conflict_strategy == SftpConflictStrategy::Merge {
+        let dest_meta = destination.symlink_metadata().map_err(|e| e.to_string())?;
+        reject_local_merge_into(source, destination, &metadata, &dest_meta)?;
+    }
+    if dest_kind.is_some()
+        && dest_kind.map(|kind| kind.is_symlink()).unwrap_or(false)
+        && conflict_strategy != SftpConflictStrategy::Replace
+        && conflict_strategy != SftpConflictStrategy::Merge
+    {
+        return Err("A file or folder with that name already exists".to_string());
     }
     std::fs::copy(source, destination)
         .map(|_| ())
@@ -906,11 +992,18 @@ fn copy_local_paths_to_directory(
         if source == destination {
             return Err("Cannot replace a file or folder with itself".to_string());
         }
-        if destination.exists() && conflict_strategy == SftpConflictStrategy::Fail {
+        let dest_exists = destination.exists();
+        let ci_hit = target_dir_has_ci_basename(&target, name);
+        let case_variant = target_dir_has_case_variant_basename(&target, name);
+        if conflict_strategy == SftpConflictStrategy::Fail && (dest_exists || ci_hit) {
             return Err("A file or folder with that name already exists".to_string());
         }
-        if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+        if conflict_strategy == SftpConflictStrategy::Replace && dest_exists {
             delete_local_path(&destination)?;
+        }
+        // Case-fold precheck for Merge (APFS/NTFS): `Same.txt` vs `same.txt`.
+        if conflict_strategy == SftpConflictStrategy::Merge && case_variant {
+            return Err("A file or folder with that name already exists".to_string());
         }
         copy_path_recursive(&source, &destination, conflict_strategy)?;
     }
@@ -943,6 +1036,53 @@ fn remote_basenames(paths: &[String]) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// Case-folding basename compare used when classifying **local** Merge/Fail conflicts.
+///
+/// APFS (default) and NTFS treat `Same.txt` and `same.txt` as the same directory
+/// entry. Remote POSIX stays case-sensitive and is intentionally not folded.
+fn basenames_conflict_ci(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// True when `target` already has a child whose name equals `name` under
+/// ASCII case folding.
+///
+/// `path.exists()` on the joined destination already covers CI filesystems
+/// (the FS lookup folds case). Scanning `read_dir` additionally treats a
+/// case-variant child as present so Merge/Fail cannot proceed as "missing"
+/// — the common APFS/NTFS footgun where a case-sensitive listing later
+/// collides on rename. Final rename/copy remains racy under concurrent
+/// writers; this precheck only closes the case-fold collision class, not
+/// full O_EXCL TOCTOU.
+fn target_dir_has_ci_basename(target: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(target) else {
+        return false;
+    };
+    entries.filter_map(|entry| entry.ok()).any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .map(|existing| basenames_conflict_ci(existing, name))
+            .unwrap_or(false)
+    })
+}
+
+/// True when a target-dir child case-folds to `name` but is a **different string**
+/// (`Same.txt` vs `same.txt`). Exact-name hits are handled by `path.exists()` /
+/// the existing Merge type checks and must not be reclassified here.
+fn target_dir_has_case_variant_basename(target: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(target) else {
+        return false;
+    };
+    entries.filter_map(|entry| entry.ok()).any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .map(|existing| basenames_conflict_ci(existing, name) && existing != name)
+            .unwrap_or(false)
+    })
+}
+
 fn ensure_local_target_names_available(
     names: &[String],
     target_directory: &str,
@@ -954,21 +1094,32 @@ fn ensure_local_target_names_available(
     }
     for name in names {
         validate_entry_name(name)?;
-        if target.join(name).exists() && conflict_strategy == SftpConflictStrategy::Fail {
+        let destination = target.join(name);
+        let dest_exists = destination.exists();
+        let ci_hit = target_dir_has_ci_basename(&target, name);
+        let case_variant = target_dir_has_case_variant_basename(&target, name);
+        if conflict_strategy == SftpConflictStrategy::Fail && (dest_exists || ci_hit) {
             return Err("A file or folder with that name already exists".to_string());
         }
-        if target.join(name).exists() && conflict_strategy == SftpConflictStrategy::Replace {
-            delete_local_path(&target.join(name))?;
+        if conflict_strategy == SftpConflictStrategy::Replace && dest_exists {
+            delete_local_path(&destination)?;
+        }
+        // Merge: a case-only twin must not be treated as "missing" — on APFS/NTFS
+        // rename/copy would clobber it; on a CS volume both names can coexist and
+        // must not be silently conflated.
+        if conflict_strategy == SftpConflictStrategy::Merge && case_variant {
+            return Err("A file or folder with that name already exists".to_string());
         }
     }
     Ok(())
 }
 
 fn delete_local_path(path: &Path) -> Result<(), String> {
-    if path.is_dir() {
-        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
-    } else {
+    let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
         std::fs::remove_file(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
     }
 }
 
@@ -1019,22 +1170,29 @@ fn move_local_paths_to_directory(
         if source == destination {
             return Err("Cannot replace a file or folder with itself".to_string());
         }
-        if destination.exists() && conflict_strategy == SftpConflictStrategy::Fail {
+        let dest_exists = destination.exists();
+        let ci_hit = target_dir_has_ci_basename(&target, name);
+        let case_variant = target_dir_has_case_variant_basename(&target, name);
+        if conflict_strategy == SftpConflictStrategy::Fail && (dest_exists || ci_hit) {
             return Err("A file or folder with that name already exists".to_string());
         }
-        if destination.exists() && conflict_strategy == SftpConflictStrategy::Replace {
+        if conflict_strategy == SftpConflictStrategy::Replace && dest_exists {
             delete_local_path(&destination)?;
+        }
+        // Case-fold precheck for Merge (APFS/NTFS): `Same.txt` vs `same.txt`.
+        // Exact-path hit falls through to the dir/file merge rules below.
+        if conflict_strategy == SftpConflictStrategy::Merge && case_variant {
+            return Err("A file or folder with that name already exists".to_string());
         }
         // `Merge` 只允许「目录并入目录」。这条检查不能省:下面的 `std::fs::rename`
         // 覆盖同名文件是**成功**操作,它会绕过 `copy_path_recursive` 里那条 Merge 检查,
-        // 于是用户选了「合并」却被静默覆盖。两处文案与 `copy_path_recursive` 对齐。
-        if destination.exists() && conflict_strategy == SftpConflictStrategy::Merge {
-            if !source.is_dir() {
-                return Err("Cannot merge a file into an existing file".to_string());
-            }
-            if !destination.is_dir() {
-                return Err("Cannot merge a directory into a file".to_string());
-            }
+        // 于是用户选了「合并」却被静默覆盖。冲突分类用 symlink_metadata,避免写穿链接。
+        if local_path_entry_kind(&destination)?.is_some()
+            && conflict_strategy == SftpConflictStrategy::Merge
+        {
+            let source_meta = source.symlink_metadata().map_err(|e| e.to_string())?;
+            let dest_meta = destination.symlink_metadata().map_err(|e| e.to_string())?;
+            reject_local_merge_into(&source, &destination, &source_meta, &dest_meta)?;
         }
         std::fs::rename(&source, &destination).or_else(|_| {
             copy_path_recursive(&source, &destination, conflict_strategy)?;
@@ -1502,6 +1660,57 @@ fn upload_storage_path(
 }
 
 /// 冲突检查:目标目录里是否已有同名条目。
+/// 存储路径是否存在。优先用父目录 `read_dir`(与 Fail/Replace 预检同口径),
+/// 避免依赖各后端对 `stat` 未命中时的错误文案。
+fn storage_entry_exists(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    path: &str,
+) -> Result<Option<crate::storage_backend::StorageEntry>, String> {
+    let parent = crate::storage_backend::path_parent(path);
+    let name = crate::storage_backend::path_basename(path);
+    Ok(backend
+        .read_dir(&parent)?
+        .into_iter()
+        .find(|entry| entry.name == name))
+}
+
+/// 存储后端递归 Merge:目标不存在则 copy/rename;目标存在时按类型拒绝或逐子项合并。
+/// 语义与本地/POSIX 对齐,不再把 `Merge` 交给各后端各自覆盖。
+fn merge_storage_path(
+    backend: &dyn crate::storage_backend::StorageBackend,
+    source: &str,
+    destination: &str,
+    move_paths: bool,
+) -> Result<(), String> {
+    let dest_entry = storage_entry_exists(backend, destination)?;
+    if dest_entry.is_none() {
+        if move_paths {
+            return backend.rename(source, destination);
+        }
+        return backend.copy(source, destination);
+    }
+    let dest_entry = dest_entry.ok_or_else(|| "Destination disappeared".to_string())?;
+    let source_entry = storage_entry_exists(backend, source)?
+        .ok_or_else(|| "Source disappeared".to_string())?;
+    if dest_entry.is_dir && !source_entry.is_dir {
+        return Err("Cannot merge a file into an existing directory".to_string());
+    }
+    if !dest_entry.is_dir && source_entry.is_dir {
+        return Err("Cannot merge a directory into a file".to_string());
+    }
+    if !dest_entry.is_dir && !source_entry.is_dir {
+        return Err("Cannot merge a file into an existing file".to_string());
+    }
+    for child in backend.read_dir(source)? {
+        let child_destination = crate::storage_backend::join_storage_path(destination, &child.name);
+        merge_storage_path(backend, &child.path, &child_destination, move_paths)?;
+    }
+    if move_paths {
+        backend.delete(source)?;
+    }
+    Ok(())
+}
+
 fn ensure_storage_names_available(
     backend: &dyn crate::storage_backend::StorageBackend,
     names: &[String],
@@ -1726,6 +1935,16 @@ fn copy_or_move_within_storage(
         .map(|path| validate_storage_path(path))
         .collect::<Result<Vec<_>, String>>()?;
     reject_storage_self_targets(&sources, &target_dir)?;
+    if conflict_strategy == SftpConflictStrategy::Merge {
+        for path in &sources {
+            let destination = crate::storage_backend::join_storage_path(
+                &target_dir,
+                &crate::storage_backend::path_basename(path),
+            );
+            merge_storage_path(backend, path, &destination, move_paths)?;
+        }
+        return Ok(());
+    }
     let names = sources
         .iter()
         .map(|path| crate::storage_backend::path_basename(path))
@@ -2187,20 +2406,38 @@ mod tests {
     }
 
     #[test]
-    fn remote_copy_merge_checks_file_conflicts_before_copy() {
+    fn remote_copy_merge_checks_nested_file_conflicts_before_copy() {
         let command = super::build_remote_copy_or_move_command(
-            &["/srv/source/same.txt".to_string()],
+            &["/srv/source/dir".to_string()],
             "/srv/target",
             false,
             super::SftpConflictStrategy::Merge,
         )
         .expect("build command");
 
-        assert!(command.contains("[ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ]"));
+        assert!(command.contains("merge_ck"));
         assert!(command.contains("Cannot merge a file into an existing file"));
+        assert!(command.contains("Cannot merge a directory into a file"));
+        assert!(command.contains("Cannot merge a file into an existing directory"));
         assert!(command.contains("cp -R --"));
-        assert!(command.contains("/srv/source/same.txt"));
+        assert!(command.contains("/srv/source/dir"));
         assert!(command.contains("\"$target/\""));
+        // 递归预检必须在复制命令之前。
+        let check_at = command.find("merge_ck").expect("merge_ck present");
+        let copy_at = command.find("cp -R --").expect("cp present");
+        assert!(check_at < copy_at);
+    }
+
+    #[test]
+    fn remote_merge_conflict_check_from_sources_walks_the_tree() {
+        let command = super::build_remote_merge_conflict_check_from_sources(
+            &["/srv/source/dir".to_string()],
+            "/srv/target",
+        )
+        .expect("build command");
+        assert!(command.contains("merge_ck"));
+        assert!(command.contains("/srv/source/dir"));
+        assert!(command.contains("Cannot merge a file into an existing directory"));
     }
 
     #[test]
@@ -2216,6 +2453,7 @@ mod tests {
         assert!(command.contains("cp -R --"));
         assert!(command.contains("\"$target/\" && rm -rf --"));
         assert!(!command.contains("mv --"));
+        assert!(command.contains("merge_ck"));
     }
 
     #[test]
@@ -2363,6 +2601,132 @@ mod tests {
     }
 
     #[test]
+    fn basenames_conflict_ci_folds_ascii_case() {
+        assert!(super::basenames_conflict_ci("Same.txt", "same.txt"));
+        assert!(super::basenames_conflict_ci("README.md", "readme.md"));
+        assert!(!super::basenames_conflict_ci("same.txt", "other.txt"));
+        assert!(super::basenames_conflict_ci("same.txt", "same.txt"));
+    }
+
+    /// APFS/NTFS footgun: target has `Same.txt`, source basename is `same.txt`.
+    /// Fail must reject rather than treat the name as missing.
+    #[test]
+    fn local_fail_rejects_case_variant_basename() {
+        let root = unique_test_dir("fail-case-variant");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create source");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("Same.txt"), "target").expect("write target");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Fail,
+        );
+
+        let target_content = std::fs::read_to_string(target_dir.join("Same.txt")).ok();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err(), "Fail 该把仅大小写不同的名字当成冲突");
+        assert_eq!(target_content.as_deref(), Some("target"));
+    }
+
+    /// Same case-variant collision on the Merge path — must reject, not proceed.
+    #[test]
+    fn local_merge_rejects_case_variant_basename() {
+        let root = unique_test_dir("merge-case-variant");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&source_dir).expect("create source");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("Same.txt"), "target").expect("write target");
+
+        let copy_result = super::copy_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+        let copy_target_content = std::fs::read_to_string(target_dir.join("Same.txt")).ok();
+        let copy_source_alive = source_dir.join("same.txt").exists();
+
+        // Reset target for the move leg (CI filesystems may have collapsed the names).
+        let _ = std::fs::remove_dir_all(&target_dir);
+        std::fs::create_dir_all(&target_dir).expect("recreate target");
+        std::fs::write(target_dir.join("Same.txt"), "target").expect("rewrite target");
+
+        let move_result = super::move_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+        let move_target_content = std::fs::read_to_string(target_dir.join("Same.txt")).ok();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(copy_result.is_err(), "Merge copy 该拒绝仅大小写不同的名字");
+        assert_eq!(copy_target_content.as_deref(), Some("target"));
+        assert!(copy_source_alive, "copy 失败时源必须保留");
+        assert!(move_result.is_err(), "Merge move 该拒绝仅大小写不同的名字");
+        assert_eq!(move_target_content.as_deref(), Some("target"));
+    }
+
+    /// `ensure_local_target_names_available` is the SSH/storage → local precheck.
+    #[test]
+    fn ensure_local_target_names_rejects_case_variant_for_fail_and_merge() {
+        let root = unique_test_dir("ensure-ci-basename");
+        let target_dir = root.join("target");
+        std::fs::create_dir_all(&target_dir).expect("create target");
+        std::fs::write(target_dir.join("Same.txt"), "target").expect("write target");
+        let target = target_dir.to_string_lossy().into_owned();
+        let names = vec!["same.txt".to_string()];
+
+        let fail = super::ensure_local_target_names_available(
+            &names,
+            &target,
+            super::SftpConflictStrategy::Fail,
+        );
+        let merge = super::ensure_local_target_names_available(
+            &names,
+            &target,
+            super::SftpConflictStrategy::Merge,
+        );
+        // Rebuild target — Replace on a CI FS may have deleted the joined path.
+        let _ = std::fs::remove_dir_all(&target_dir);
+        std::fs::create_dir_all(&target_dir).expect("recreate target");
+        std::fs::write(target_dir.join("Same.txt"), "target").expect("rewrite target");
+        let replace = super::ensure_local_target_names_available(
+            &names,
+            &target,
+            super::SftpConflictStrategy::Replace,
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(fail.is_err(), "Fail 该拒绝仅大小写不同的目标名");
+        assert!(merge.is_err(), "Merge 该拒绝仅大小写不同的目标名");
+        // Replace only deletes the exact joined path when it exists; a case-only
+        // sibling must not make Replace fail by itself.
+        assert!(replace.is_ok(), "Replace 不因大小写变体单独失败: {replace:?}");
+    }
+
+    /// Remote POSIX precheck stays case-sensitive — `Same.txt` and `same.txt`
+    /// are distinct directory entries; no case-fold is applied in the shell check.
+    #[test]
+    fn remote_merge_precheck_stays_case_sensitive() {
+        let command = super::build_remote_merge_conflict_check_command(
+            &["same.txt".to_string()],
+            "/srv/target",
+        )
+        .expect("build command");
+
+        assert!(command.contains("[ ! -e \"$target/$name\" ] || [ -d \"$target/$name\" ]"));
+        assert!(
+            !command.contains("nocase") && !command.contains("shopt -s nocasematch"),
+            "remote POSIX precheck must not enable case-insensitive matching"
+        );
+    }
+
+    #[test]
     fn local_copy_rejects_replacing_source_with_itself() {
         let root = unique_test_dir("copy-replace-self");
         std::fs::create_dir_all(&root).expect("create root");
@@ -2409,6 +2773,7 @@ mod tests {
     }
 
     /// 记录每一次后端调用的假后端。回归要断言的是"零破坏性调用",不是错误文案。
+    /// 条目按父目录分组,`read_dir` 只返回该父目录下的直接子项。
     #[derive(Default)]
     struct RecordingBackend {
         entries: Vec<crate::storage_backend::StorageEntry>,
@@ -2416,17 +2781,21 @@ mod tests {
     }
 
     impl RecordingBackend {
-        fn with_file(dir: &str, name: &str) -> Self {
+        fn with_entries(entries: Vec<crate::storage_backend::StorageEntry>) -> Self {
             Self {
-                entries: vec![crate::storage_backend::StorageEntry {
-                    name: name.to_string(),
-                    path: crate::storage_backend::join_storage_path(dir, name),
-                    is_dir: false,
-                    size: Some(4),
-                    modified_at_ms: None,
-                }],
+                entries,
                 calls: std::sync::Mutex::new(Vec::new()),
             }
+        }
+
+        fn with_file(dir: &str, name: &str) -> Self {
+            Self::with_entries(vec![crate::storage_backend::StorageEntry {
+                name: name.to_string(),
+                path: crate::storage_backend::join_storage_path(dir, name),
+                is_dir: false,
+                size: Some(4),
+                modified_at_ms: None,
+            }])
         }
 
         fn calls(&self) -> Vec<String> {
@@ -2448,7 +2817,12 @@ mod tests {
             path: &str,
         ) -> Result<Vec<crate::storage_backend::StorageEntry>, String> {
             self.record(format!("read_dir {path}"));
-            Ok(self.entries.clone())
+            Ok(self
+                .entries
+                .iter()
+                .filter(|entry| crate::storage_backend::path_parent(&entry.path) == path)
+                .cloned()
+                .collect())
         }
 
         fn read(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -2558,15 +2932,199 @@ mod tests {
             super::SftpConflictStrategy::Replace,
         );
 
-        assert!(result.is_ok());
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "read_dir /archive".to_string(),
-                "delete /archive/same.txt".to_string(),
-                "copy /notes/same.txt -> /archive/same.txt".to_string(),
-            ]
+        // Replace 预检会 read_dir 目标目录;源目录的 read_dir 不该在预检里被要求。
+        // 这里目标已存在同名文件 → delete + copy。
+        let calls = backend.calls();
+        assert!(result.is_ok(), "{calls:?}");
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "delete /archive/same.txt"),
+            "{calls:?}"
         );
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "copy /notes/same.txt -> /archive/same.txt"),
+            "{calls:?}"
+        );
+    }
+
+    /// Merge 不得再走 blind rename:目标已存在同名文件时必须失败且零破坏性调用。
+    #[test]
+    fn storage_merge_refuses_file_into_existing_file() {
+        let backend = RecordingBackend::with_entries(vec![
+            crate::storage_backend::StorageEntry {
+                name: "same.txt".to_string(),
+                path: "/notes/same.txt".to_string(),
+                is_dir: false,
+                size: Some(4),
+                modified_at_ms: None,
+            },
+            crate::storage_backend::StorageEntry {
+                name: "same.txt".to_string(),
+                path: "/archive/same.txt".to_string(),
+                is_dir: false,
+                size: Some(9),
+                modified_at_ms: None,
+            },
+        ]);
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/same.txt".to_string()],
+            "/archive",
+            false,
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let calls = backend.calls();
+        assert_eq!(
+            result,
+            Err("Cannot merge a file into an existing file".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("copy ")
+                || call.starts_with("rename ")
+                || call.starts_with("delete ")),
+            "{calls:?}"
+        );
+    }
+
+    /// 目录+目录且嵌套同名文件:必须在任何 copy/rename 之前失败。
+    #[test]
+    fn storage_merge_refuses_nested_file_overwrite() {
+        let backend = RecordingBackend::with_entries(vec![
+            crate::storage_backend::StorageEntry {
+                name: "dir".to_string(),
+                path: "/notes/dir".to_string(),
+                is_dir: true,
+                size: None,
+                modified_at_ms: None,
+            },
+            crate::storage_backend::StorageEntry {
+                name: "a.txt".to_string(),
+                path: "/notes/dir/a.txt".to_string(),
+                is_dir: false,
+                size: Some(4),
+                modified_at_ms: None,
+            },
+            crate::storage_backend::StorageEntry {
+                name: "dir".to_string(),
+                path: "/archive/dir".to_string(),
+                is_dir: true,
+                size: None,
+                modified_at_ms: None,
+            },
+            crate::storage_backend::StorageEntry {
+                name: "a.txt".to_string(),
+                path: "/archive/dir/a.txt".to_string(),
+                is_dir: false,
+                size: Some(9),
+                modified_at_ms: None,
+            },
+        ]);
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/dir".to_string()],
+            "/archive",
+            true,
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let calls = backend.calls();
+        assert_eq!(
+            result,
+            Err("Cannot merge a file into an existing file".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("copy ")
+                || call.starts_with("rename ")
+                || call.starts_with("delete ")),
+            "{calls:?}"
+        );
+    }
+
+    /// Merge + 目标不存在:允许 copy/rename,这是真合并的正常路径。
+    #[test]
+    fn storage_merge_copies_when_destination_is_missing() {
+        let backend = RecordingBackend::with_file("/notes", "fresh.txt");
+
+        let result = super::copy_or_move_within_storage(
+            &backend,
+            &["/notes/fresh.txt".to_string()],
+            "/archive",
+            false,
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let calls = backend.calls();
+        assert!(result.is_ok(), "{calls:?}");
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "copy /notes/fresh.txt -> /archive/fresh.txt"),
+            "{calls:?}"
+        );
+    }
+
+    /// 本地 Merge:目标是符号链接时拒绝,避免 copy/rename 写穿链接。
+    #[cfg(unix)]
+    #[test]
+    fn local_merge_rejects_symlink_destination() {
+        let root = unique_test_dir("merge-symlink-dest");
+        let source_dir = root.join("source");
+        let target_dir = root.join("target");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&source_dir).expect("source");
+        std::fs::create_dir_all(&target_dir).expect("target");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("same.txt"), "outside").expect("write outside");
+        std::fs::write(source_dir.join("same.txt"), "source").expect("write source");
+        std::os::unix::fs::symlink(outside.join("same.txt"), target_dir.join("same.txt"))
+            .expect("symlink");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![source_dir.join("same.txt").to_string_lossy().into_owned()],
+            target_dir.to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let outside_content =
+            std::fs::read_to_string(outside.join("same.txt")).expect("outside intact");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err(), "Merge 不该写穿符号链接目标");
+        assert_eq!(outside_content, "outside");
+    }
+
+    /// 嵌套同名文件:本地 Merge 也必须拒绝,且目标侧内容保持不变。
+    #[test]
+    fn local_merge_rejects_nested_file_overwrite() {
+        let root = unique_test_dir("merge-nested");
+        let source_dir = root.join("source/dir");
+        let target_dir = root.join("target/dir");
+        std::fs::create_dir_all(&source_dir).expect("source");
+        std::fs::create_dir_all(&target_dir).expect("target");
+        std::fs::write(source_dir.join("a.txt"), "source").expect("write source");
+        std::fs::write(target_dir.join("a.txt"), "target").expect("write target");
+
+        let result = super::copy_local_paths_to_directory(
+            vec![root
+                .join("source/dir")
+                .to_string_lossy()
+                .into_owned()],
+            root.join("target").to_string_lossy().into_owned(),
+            super::SftpConflictStrategy::Merge,
+        );
+
+        let nested =
+            std::fs::read_to_string(root.join("target/dir/a.txt")).expect("read nested");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err(), "嵌套同名文件必须拒绝");
+        assert_eq!(nested, "target");
     }
 
     /// 前端手里的连接对象:`password` 恒为 `None`(带 `skip_serializing`,后端从不外发

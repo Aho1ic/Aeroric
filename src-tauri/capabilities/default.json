@@ -11,7 +11,20 @@
     "core:window:allow-hide",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+      "allow": [
+        { "url": "https://github.com/*" },
+        { "url": "https://*.github.com/*" },
+        { "url": "https://githubusercontent.com/*" },
+        { "url": "https://*.githubusercontent.com/*" },
+        { "url": "https://openssl-library.org/*" },
+        { "url": "http://localhost/*" },
+        { "url": "http://localhost:*/*" },
+        { "url": "http://127.0.0.1/*" },
+        { "url": "http://127.0.0.1:*/*" },
+        { "url": "http://[::1]/*" },
+        { "url": "http://[::1]:*/*" },
+        { "url": "https://*" }
+      ]
     },
     "opener:allow-reveal-item-in-dir",
     "dialog:default",

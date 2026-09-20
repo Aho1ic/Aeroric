@@ -1236,6 +1236,18 @@ pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &
     }
 }
 
+/// 热启动路径上「登记必须存在」的闸门。
+///
+/// `needs_initial_input` 为 true 时 generation 按构造必然是 `Some`,但条件一旦在
+/// 将来分叉(或登记被提前清掉),`expect` 会把整个进程打死 —— 而此时 PTY 子进程
+/// 已经起来了。改成类型化 `Err`,调用方至少还能把失败原因送到前端。
+pub(crate) fn require_initial_input_generation(
+    startup_generation: Option<u64>,
+) -> Result<u64, String> {
+    startup_generation
+        .ok_or_else(|| "initial input registration must exist".to_string())
+}
+
 pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
     let sender = task_manager
         .initial_input_signals
@@ -1998,9 +2010,7 @@ pub async fn run_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
-            #[allow(clippy::expect_used, reason = "有 pty_writers 条目即有登记")]
-            let cleanup_generation =
-                startup_generation.expect("initial input registration must exist");
+            let cleanup_generation = require_initial_input_generation(startup_generation)?;
             spawn_initial_input_injection(
                 writer,
                 initial_prelude,
@@ -2599,9 +2609,7 @@ pub async fn resume_task(
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
-            #[allow(clippy::expect_used, reason = "有 pty_writers 条目即有登记")]
-            let cleanup_generation =
-                startup_generation.expect("initial input registration must exist");
+            let cleanup_generation = require_initial_input_generation(startup_generation)?;
             spawn_initial_input_injection(
                 writer,
                 Some(initial_ultracode_command()),
@@ -3323,6 +3331,26 @@ mod tests {
         assert_eq!(
             initial_prompt_input_chunks("hello\nworld").unwrap(),
             (b"\x1b[200~hello\nworld\x1b[201~".to_vec(), b"\r".to_vec())
+        );
+    }
+
+    /// 热启动路径上缺登记必须返回类型化 Err,而不是 expect 把进程打死。
+    #[test]
+    fn missing_initial_input_registration_is_a_typed_error_not_a_panic() {
+        assert_eq!(require_initial_input_generation(Some(7)), Ok(7));
+        let error = require_initial_input_generation(None).expect_err("None 必须是 Err");
+        assert!(
+            error.contains("initial input registration"),
+            "错误文案要能定位到 initial input 登记:{error}"
+        );
+        // 生产代码不得再对 generation 用 expect —— 源码级守卫。
+        let source = include_str!("pty.rs");
+        let production = source.split("#[cfg(test)]").next().expect("test marker");
+        assert!(
+            !production.contains(
+                "startup_generation.expect(\"initial input registration must exist\")"
+            ),
+            "pty 生产路径不得再 expect startup_generation"
         );
     }
 

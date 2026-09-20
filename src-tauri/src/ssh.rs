@@ -38,12 +38,13 @@ pub struct SshConnection {
     /// 前端要判断有没有密码看 `hasPassword`,要取明文走 `get_ssh_connection_password`。
     #[serde(default, skip_serializing)]
     pub password: Option<String>,
-    /// 这条连接在 `ssh-passwords.json` 里存了密码。
+    /// 这条连接存了密码(keyring 或 legacy `ssh-passwords.json` 任一来源)。
     ///
-    /// 为什么需要它:落盘侧刻意把密码摘出去单独存 0o600 文件,而读取侧原先又把明文合并
-    /// 回连接对象整体交给渲染进程 —— 拆分的意义被抵消,全部主机的登录凭据常驻 WebView
-    /// 堆。前端真正需要的只是"有没有密码"(决定禁不禁用「复制密码」、编辑框显不显示
-    /// "已保存"),而不是密码本身。取明文走 `get_ssh_connection_password`,一次操作一条。
+    /// 为什么需要它:落盘侧刻意把密码摘出去单独存 keyring / 0o600 文件,而读取侧原先又
+    /// 把明文合并回连接对象整体交给渲染进程 —— 拆分的意义被抵消,全部主机的登录凭据
+    /// 常驻 WebView 堆。前端真正需要的只是"有没有密码"(决定禁不禁用「复制密码」、
+    /// 编辑框显不显示"已保存"),而不是密码本身。取明文走 `get_ssh_connection_password`,
+    /// 一次操作一条。
     #[serde(rename = "hasPassword", default, skip_serializing_if = "is_false")]
     pub has_password: bool,
     #[serde(rename = "remotePath", skip_serializing_if = "Option::is_none")]
@@ -77,10 +78,53 @@ fn ssh_passwords_path() -> Result<PathBuf, String> {
 
 static SSH_CONNECTIONS_STORAGE_LOCK: Mutex<()> = Mutex::new(());
 
+/// SSH 密码后端。
+///
+/// 生产实现走 OS keyring(`crate::secrets` 的 `ssh-password:{id}` account)。
+/// 测试注入内存实现 —— secrets.rs 自己也测不了真钥匙串往返(见该模块注释)。
+///
+/// 读取顺序固定:keyring 优先;miss 时回落 legacy `ssh-passwords.json`,
+/// 并把条目 **migrate-on-read** 进 keyring。legacy 文件在读路径上保留不动
+/// (避免迁移半途丢数据);写路径上,一旦 keyring 写成功就不再把该密码写回 JSON。
+pub(crate) trait SshPasswordStore: Send + Sync {
+    /// keyring 读。`Ok(None)` / 空串都表示「没设过」。
+    fn keyring_read(&self, connection_id: &str) -> Result<Option<String>, String>;
+    fn keyring_write(&self, connection_id: &str, password: &str) -> Result<(), String>;
+    fn keyring_has(&self, connection_id: &str) -> bool;
+    fn keyring_delete(&self, connection_id: &str) -> Result<(), String>;
+}
+
+/// 生产后端:OS keyring。SSH 不得开任意 account 的 Tauri 读命令,
+/// 只经 `crate::secrets` 的 SSH 包装进出。
+pub(crate) struct KeyringSshPasswordStore;
+
+impl SshPasswordStore for KeyringSshPasswordStore {
+    fn keyring_read(&self, connection_id: &str) -> Result<Option<String>, String> {
+        crate::secrets::read_ssh_password(connection_id)
+    }
+
+    fn keyring_write(&self, connection_id: &str, password: &str) -> Result<(), String> {
+        crate::secrets::store_ssh_password(connection_id, password)
+    }
+
+    fn keyring_has(&self, connection_id: &str) -> bool {
+        crate::secrets::ssh_password_stored(connection_id)
+    }
+
+    fn keyring_delete(&self, connection_id: &str) -> Result<(), String> {
+        crate::secrets::delete_ssh_password(connection_id)
+    }
+}
+
+fn non_empty_password(value: Option<String>) -> Option<String> {
+    value.filter(|password| !password.trim().is_empty())
+}
+
 /// 拆出公共信息与密码表。
 ///
-/// `existing` 是盘上已存的密码表。传入连接的 `password` 为 `None`/空串时**保留** `existing`
-/// 里那一条 —— 这是"留空不改密码"的语义,而且现在它必须在后端兑现:`load_ssh_connections`
+/// `existing` 是合并视图:「该保留的密码」(keyring 与 legacy 的并集,keyring 优先)。
+/// 传入连接的 `password` 为 `None`/空串时**保留** `existing` 里那一条 —— 这是
+/// "留空不改密码"的语义,而且现在它必须在后端兑现:`load_ssh_connections`
 /// 不再把明文交给前端,前端手里的连接对象 `password` 恒为 `None`,若这里照旧从零重建
 /// 密码表,用户改一次备注就会把**所有**主机的密码抹掉。
 fn prepare_ssh_connections_for_storage(
@@ -101,35 +145,125 @@ fn prepare_ssh_connections_for_storage(
             }
         }
         // `has_password` 是从密码表派生的,不落盘 —— 落了就成了第二个事实来源,而它会与
-        // 密码文件独立变化(比如手工删 ssh-passwords.json),之后前端会看见一个说"有密码"
-        // 的连接却取不到明文。`skip_serializing_if = "is_false"` 让 false 根本不写出去。
+        // 密码后端独立变化(比如手工删 ssh-passwords.json 或钥匙串条目),之后前端会看见
+        // 一个说"有密码"的连接却取不到明文。`skip_serializing_if = "is_false"` 让 false
+        // 根本不写出去。
         connection.has_password = false;
         public_connections.push(connection);
     }
     (public_connections, passwords)
 }
 
-fn load_ssh_passwords() -> Result<BTreeMap<String, String>, String> {
-    let path = ssh_passwords_path()?;
+fn load_legacy_ssh_passwords_from(path: &std::path::Path) -> Result<BTreeMap<String, String>, String> {
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
-    crate::storage::ensure_private_file_permissions(&path)?;
+    crate::storage::ensure_private_file_permissions(path)?;
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-fn write_ssh_connections_storage(connections: Vec<SshConnection>) -> Result<(), String> {
-    crate::storage::ensure_aeroric_dirs()?;
-    // 先读盘上已存的密码表:传入连接密码为空时要保留它,否则"留空不改"变成"留空清空"。
-    let existing = load_ssh_passwords()?;
+/// 读一条连接的密码:keyring 优先;miss 时回落 legacy JSON 并 migrate-on-read。
+///
+/// migrate-on-read:keyring 写失败不挡读取 —— 调用方仍能拿到密码,下次再迁。
+/// legacy 文件在读路径上保留。
+fn load_ssh_password_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: &std::path::Path,
+    connection_id: &str,
+) -> Result<Option<String>, String> {
+    if let Some(password) = non_empty_password(store.keyring_read(connection_id)?) {
+        return Ok(Some(password));
+    }
+    let legacy = load_legacy_ssh_passwords_from(legacy_path)?;
+    let Some(password) = non_empty_password(legacy.get(connection_id).cloned()) else {
+        return Ok(None);
+    };
+    let _ = store.keyring_write(connection_id, &password);
+    Ok(Some(password))
+}
+
+fn load_ssh_password(connection_id: &str) -> Result<Option<String>, String> {
+    load_ssh_password_with(
+        &KeyringSshPasswordStore,
+        &ssh_passwords_path()?,
+        connection_id,
+    )
+}
+
+/// `has_password` 必须在 keyring **或** legacy 任一来源有密码时为 true。
+fn ssh_password_stored_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: &std::path::Path,
+    connection_id: &str,
+) -> bool {
+    if store.keyring_has(connection_id) {
+        return true;
+    }
+    load_legacy_ssh_passwords_from(legacy_path)
+        .map(|legacy| non_empty_password(legacy.get(connection_id).cloned()).is_some())
+        .unwrap_or(false)
+}
+
+/// 把密码表落到后端。返回仍需写进 legacy JSON 的条目。
+///
+/// keyring 写成功的条目**不再**写进 `ssh-passwords.json`;keyring 失败时回落
+/// legacy,保证「至少有一个地方能读回来」。
+fn persist_ssh_passwords_with(
+    store: &dyn SshPasswordStore,
+    passwords: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut legacy = BTreeMap::new();
+    for (connection_id, password) in passwords {
+        let Some(password) = non_empty_password(Some(password.clone())) else {
+            continue;
+        };
+        match store.keyring_write(connection_id, &password) {
+            Ok(()) => {}
+            Err(_) => {
+                legacy.insert(connection_id.clone(), password);
+            }
+        }
+    }
+    Ok(legacy)
+}
+
+/// 为即将保存的连接收集「该保留的密码」:keyring 优先,miss 回落 legacy。
+fn existing_passwords_for(
+    store: &dyn SshPasswordStore,
+    legacy_path: &std::path::Path,
+    connections: &[SshConnection],
+) -> Result<BTreeMap<String, String>, String> {
+    let mut existing = BTreeMap::new();
+    for connection in connections {
+        if let Some(password) = load_ssh_password_with(store, legacy_path, &connection.id)? {
+            existing.insert(connection.id.clone(), password);
+        }
+    }
+    Ok(existing)
+}
+
+fn write_ssh_connections_storage_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: std::path::PathBuf,
+    connections_path: std::path::PathBuf,
+    connections: Vec<SshConnection>,
+) -> Result<(), String> {
+    // 先读已存的密码(keyring + legacy):传入连接密码为空时要保留它,
+    // 否则"留空不改"变成"留空清空"。
+    let existing = existing_passwords_for(store, &legacy_path, &connections)?;
     let (public_connections, passwords) =
         prepare_ssh_connections_for_storage(connections, &existing);
+    let legacy_passwords = persist_ssh_passwords_with(store, &passwords)?;
     let public_raw =
         serde_json::to_string_pretty(&public_connections).map_err(|e| e.to_string())?;
-    let password_raw = serde_json::to_string_pretty(&passwords).map_err(|e| e.to_string())?;
-    crate::storage::atomic_write_private(&ssh_passwords_path()?, &format!("{password_raw}\n"))?;
-    crate::storage::atomic_write_private(&ssh_connections_path()?, &format!("{public_raw}\n"))
+    let password_raw =
+        serde_json::to_string_pretty(&legacy_passwords).map_err(|e| e.to_string())?;
+    if let Some(parent) = connections_path.parent() {
+        crate::storage::ensure_private_dir(parent)?;
+    }
+    crate::storage::atomic_write_private(&legacy_path, &format!("{password_raw}\n"))?;
+    crate::storage::atomic_write_private(&connections_path, &format!("{public_raw}\n"))
 }
 
 /// 把盘上存的密码补回一条从前端传来的连接。
@@ -141,6 +275,18 @@ fn write_ssh_connections_storage(connections: Vec<SshConnection>) -> Result<(), 
 /// **已有明文时不覆盖**:新建/编辑对话框里"测试连接"用的是用户刚敲进去、还没保存的
 /// 密码,那一条必须优先。
 pub(crate) fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(), String> {
+    hydrate_ssh_password_with(
+        &KeyringSshPasswordStore,
+        &ssh_passwords_path()?,
+        connection,
+    )
+}
+
+fn hydrate_ssh_password_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: &std::path::Path,
+    connection: &mut SshConnection,
+) -> Result<(), String> {
     if connection
         .password
         .as_deref()
@@ -148,15 +294,36 @@ pub(crate) fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(),
     {
         return Ok(());
     }
-    let passwords = load_ssh_passwords()?;
-    connection.password = passwords.get(&connection.id).cloned();
-    connection.has_password = connection.password.is_some();
+    connection.password = load_ssh_password_with(store, legacy_path, &connection.id)?;
+    connection.has_password = connection.password.is_some()
+        || ssh_password_stored_with(store, legacy_path, &connection.id);
     Ok(())
 }
 
-fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
+fn save_ssh_connections_sync_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: std::path::PathBuf,
+    connections_path: std::path::PathBuf,
+    connections: Vec<SshConnection>,
+) -> Result<(), String> {
+    crate::storage::ensure_private_dir(
+        &connections_path
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or_else(|| connections_path.clone()),
+    )?;
     let _guard = SSH_CONNECTIONS_STORAGE_LOCK.lock();
-    write_ssh_connections_storage(connections)
+    write_ssh_connections_storage_with(store, legacy_path, connections_path, connections)
+}
+
+fn save_ssh_connections_sync(connections: Vec<SshConnection>) -> Result<(), String> {
+    crate::storage::ensure_aeroric_dirs()?;
+    save_ssh_connections_sync_with(
+        &KeyringSshPasswordStore,
+        ssh_passwords_path()?,
+        ssh_connections_path()?,
+        connections,
+    )
 }
 
 fn remove_ssh_connection(
@@ -167,25 +334,38 @@ fn remove_ssh_connection(
     connections
 }
 
-fn delete_ssh_connection_sync(connection_id: &str) -> Result<Vec<SshConnection>, String> {
+fn delete_ssh_connection_sync_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: std::path::PathBuf,
+    connections_path: std::path::PathBuf,
+    connection_id: &str,
+) -> Result<Vec<SshConnection>, String> {
     let _guard = SSH_CONNECTIONS_STORAGE_LOCK.lock();
-    let path = ssh_connections_path()?;
-    let mut connections = if path.exists() {
-        crate::storage::ensure_private_file_permissions(&path)?;
-        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut connections = if connections_path.exists() {
+        crate::storage::ensure_private_file_permissions(&connections_path)?;
+        let raw = fs::read_to_string(&connections_path).map_err(|e| e.to_string())?;
         serde_json::from_str::<Vec<SshConnection>>(&raw).map_err(|e| e.to_string())?
     } else {
         Vec::new()
     };
-    let passwords = load_ssh_passwords()?;
     for connection in &mut connections {
-        if let Some(password) = passwords.get(&connection.id) {
-            connection.password = Some(password.clone());
-        }
+        connection.password =
+            load_ssh_password_with(store, &legacy_path, &connection.id).ok().flatten();
     }
     let remaining = remove_ssh_connection(connections, connection_id);
-    write_ssh_connections_storage(remaining.clone())?;
+    // 删连接时同步丢掉它的钥匙串条目;没设过也算成功。
+    let _ = store.keyring_delete(connection_id);
+    write_ssh_connections_storage_with(store, legacy_path, connections_path, remaining.clone())?;
     Ok(remaining)
+}
+
+fn delete_ssh_connection_sync(connection_id: &str) -> Result<Vec<SshConnection>, String> {
+    delete_ssh_connection_sync_with(
+        &KeyringSshPasswordStore,
+        ssh_passwords_path()?,
+        ssh_connections_path()?,
+        connection_id,
+    )
 }
 
 pub(crate) fn shell_quote_posix(value: &str) -> String {
@@ -1257,48 +1437,69 @@ fn spawn_remote_task_pty(
 ///
 /// 连接动作需要明文(`ssh_command_spec_from_args` 要把它塞进 `sshpass`,sudo 过滤器要
 /// 拿它应答提示),但那是后端自己的事 —— 明文没有理由往渲染进程走一趟再回来。
-fn load_ssh_connections_with_passwords() -> Result<Vec<SshConnection>, String> {
-    let path = ssh_connections_path()?;
-    if !path.exists() {
+fn load_ssh_connections_with_passwords_with(
+    store: &dyn SshPasswordStore,
+    legacy_path: &std::path::Path,
+    connections_path: &std::path::Path,
+) -> Result<Vec<SshConnection>, String> {
+    if !connections_path.exists() {
         return Ok(vec![]);
     }
-    crate::storage::ensure_private_file_permissions(&path)?;
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    crate::storage::ensure_private_file_permissions(connections_path)?;
+    let raw = fs::read_to_string(connections_path).map_err(|e| e.to_string())?;
     let mut connections: Vec<SshConnection> =
         serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let passwords = load_ssh_passwords()?;
-    let mut has_legacy_password = false;
+    let mut has_legacy_inline_password = false;
     for connection in &mut connections {
-        if let Some(password) = passwords.get(&connection.id) {
-            connection.password = Some(password.clone());
+        if let Some(password) = load_ssh_password_with(store, legacy_path, &connection.id)? {
+            connection.password = Some(password);
         } else if connection.password.is_some() {
             // 老格式把密码内联在 ssh-connections.json 里。下一次写入会把它迁到
-            // ssh-passwords.json。
-            has_legacy_password = true;
+            // keyring / ssh-passwords.json。
+            has_legacy_inline_password = true;
         }
         connection.has_password = connection
             .password
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+            .is_some_and(|value| !value.trim().is_empty())
+            || ssh_password_stored_with(store, legacy_path, &connection.id);
     }
-    if has_legacy_password {
-        save_ssh_connections_sync(connections.clone())?;
+    if has_legacy_inline_password {
+        save_ssh_connections_sync_with(
+            store,
+            legacy_path.to_path_buf(),
+            connections_path.to_path_buf(),
+            connections.clone(),
+        )?;
     }
     Ok(connections)
+}
+
+/// 带明文密码的连接列表。**进程内用**,不经 IPC。
+///
+/// 连接动作需要明文(`ssh_command_spec_from_args` 要把它塞进 `sshpass`,sudo 过滤器要
+/// 拿它应答提示),但那是后端自己的事 —— 明文没有理由往渲染进程走一趟再回来。
+fn load_ssh_connections_with_passwords() -> Result<Vec<SshConnection>, String> {
+    load_ssh_connections_with_passwords_with(
+        &KeyringSshPasswordStore,
+        &ssh_passwords_path()?,
+        &ssh_connections_path()?,
+    )
 }
 
 /// 按 id 取一条连接的明文密码。
 ///
 /// 单独一条命令而不是让 `load_ssh_connections` 带上明文:暴露窗口从"列表加载后常驻"
 /// 缩到"用户点复制密码的那一刻",泄漏面从全部连接缩到一条。
+///
+/// 读取顺序与后端其它路径一致:keyring 优先,miss 回落 legacy JSON(migrate-on-read)。
+/// 这条命令**仍然**不能用来 dump 任意钥匙串 account —— 它只接受 connection id,
+/// account 由 `crate::secrets::ssh_password_account` 拼装。
 #[tauri::command]
 pub async fn get_ssh_connection_password(connection_id: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        let passwords = load_ssh_passwords()?;
-        Ok(passwords.get(&connection_id).cloned())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || load_ssh_password(&connection_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 连接列表。**返回值里 `password` 恒为 `None`**,只用 `hasPassword` 表示存过密码。
@@ -2947,5 +3148,321 @@ mod tests {
         } else {
             assert!(path_part.starts_with('\'') && path_part.ends_with('\''));
         }
+    }
+
+    // ---- SSH password keyring store ----
+
+    #[derive(Default)]
+    struct MemorySshPasswordStore {
+        entries: parking_lot::Mutex<BTreeMap<String, String>>,
+        fail_writes: parking_lot::Mutex<bool>,
+    }
+
+    impl MemorySshPasswordStore {
+        fn with_password(connection_id: &str, password: &str) -> Self {
+            let store = Self::default();
+            store
+                .entries
+                .lock()
+                .insert(connection_id.to_string(), password.to_string());
+            store
+        }
+
+        fn fail_writes(&self, fail: bool) {
+            *self.fail_writes.lock() = fail;
+        }
+    }
+
+    impl SshPasswordStore for MemorySshPasswordStore {
+        fn keyring_read(&self, connection_id: &str) -> Result<Option<String>, String> {
+            Ok(self
+                .entries
+                .lock()
+                .get(connection_id)
+                .cloned()
+                .filter(|value| !value.is_empty()))
+        }
+
+        fn keyring_write(&self, connection_id: &str, password: &str) -> Result<(), String> {
+            if *self.fail_writes.lock() {
+                return Err("keyring unavailable".to_string());
+            }
+            if password.is_empty() {
+                self.entries.lock().remove(connection_id);
+            } else {
+                self.entries
+                    .lock()
+                    .insert(connection_id.to_string(), password.to_string());
+            }
+            Ok(())
+        }
+
+        fn keyring_has(&self, connection_id: &str) -> bool {
+            self.entries
+                .lock()
+                .get(connection_id)
+                .is_some_and(|value| !value.is_empty())
+        }
+
+        fn keyring_delete(&self, connection_id: &str) -> Result<(), String> {
+            self.entries.lock().remove(connection_id);
+            Ok(())
+        }
+    }
+
+    fn temp_ssh_password_paths(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "aeroric-ssh-pw-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        (
+            root.join("ssh-passwords.json"),
+            root.join("ssh-connections.json"),
+        )
+    }
+
+    fn write_legacy_password_file(path: &std::path::Path, passwords: &BTreeMap<String, String>) {
+        let raw = serde_json::to_string_pretty(passwords).expect("serialize passwords");
+        std::fs::write(path, format!("{raw}\n")).expect("write legacy passwords");
+    }
+
+    fn connection_with_id(id: &str, password: Option<&str>) -> SshConnection {
+        SshConnection {
+            id: id.to_string(),
+            name: "prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            identity_file: None,
+            password: password.map(str::to_string),
+            has_password: false,
+            remote_path: None,
+            auto_sudo_with_password: false,
+            use_proxy: false,
+            created_at: 1,
+            last_connected_at: None,
+        }
+    }
+
+    /// keyring 优先:两边都有密码时读 keyring,不回落 legacy。
+    #[test]
+    fn ssh_password_load_prefers_keyring_over_legacy_json() {
+        let (legacy_path, _) = temp_ssh_password_paths("prefer-keyring");
+        write_legacy_password_file(
+            &legacy_path,
+            &BTreeMap::from([("conn-1".to_string(), "legacy-secret".to_string())]),
+        );
+        let store = MemorySshPasswordStore::with_password("conn-1", "keyring-secret");
+
+        let loaded = load_ssh_password_with(&store, &legacy_path, "conn-1").expect("load");
+        assert_eq!(loaded.as_deref(), Some("keyring-secret"));
+        // keyring 命中时不该改写 legacy。
+        let legacy = load_legacy_ssh_passwords_from(&legacy_path).expect("legacy");
+        assert_eq!(legacy.get("conn-1"), Some(&"legacy-secret".to_string()));
+
+        let _ = std::fs::remove_file(&legacy_path);
+    }
+
+    /// migrate-on-read:keyring miss 时回落 legacy,并把条目写进 keyring。
+    #[test]
+    fn ssh_password_load_migrates_legacy_json_into_keyring() {
+        let (legacy_path, _) = temp_ssh_password_paths("migrate-on-read");
+        write_legacy_password_file(
+            &legacy_path,
+            &BTreeMap::from([("conn-1".to_string(), "legacy-only".to_string())]),
+        );
+        let store = MemorySshPasswordStore::default();
+
+        let loaded = load_ssh_password_with(&store, &legacy_path, "conn-1").expect("load");
+        assert_eq!(loaded.as_deref(), Some("legacy-only"));
+        assert_eq!(
+            store.keyring_read("conn-1").expect("keyring read").as_deref(),
+            Some("legacy-only"),
+            "migrate-on-read 必须把 legacy 条目写进 keyring"
+        );
+        // 读路径刻意保留 legacy 文件,避免迁移半途丢数据。
+        let legacy = load_legacy_ssh_passwords_from(&legacy_path).expect("legacy");
+        assert_eq!(legacy.get("conn-1"), Some(&"legacy-only".to_string()));
+
+        let _ = std::fs::remove_file(&legacy_path);
+    }
+
+    /// keyring 写失败不挡读取:migrate 可以失败,密码仍要能拿到。
+    #[test]
+    fn ssh_password_load_still_serves_legacy_when_keyring_write_fails() {
+        let (legacy_path, _) = temp_ssh_password_paths("migrate-write-fail");
+        write_legacy_password_file(
+            &legacy_path,
+            &BTreeMap::from([("conn-1".to_string(), "legacy-only".to_string())]),
+        );
+        let store = MemorySshPasswordStore::default();
+        store.fail_writes(true);
+
+        let loaded = load_ssh_password_with(&store, &legacy_path, "conn-1").expect("load");
+        assert_eq!(loaded.as_deref(), Some("legacy-only"));
+        assert!(store.keyring_read("conn-1").expect("read").is_none());
+
+        let _ = std::fs::remove_file(&legacy_path);
+    }
+
+    /// has_password:keyring **或** legacy 任一有密码即为 true。
+    #[test]
+    fn ssh_password_has_flag_is_true_from_either_backend() {
+        let (legacy_path, _) = temp_ssh_password_paths("has-flag");
+        write_legacy_password_file(
+            &legacy_path,
+            &BTreeMap::from([
+                ("only-legacy".to_string(), "from-legacy".to_string()),
+                ("both".to_string(), "legacy-both".to_string()),
+            ]),
+        );
+        let store = MemorySshPasswordStore::with_password("only-keyring", "from-keyring");
+        store
+            .entries
+            .lock()
+            .insert("both".to_string(), "keyring-both".to_string());
+
+        assert!(ssh_password_stored_with(&store, &legacy_path, "only-keyring"));
+        assert!(ssh_password_stored_with(&store, &legacy_path, "only-legacy"));
+        assert!(ssh_password_stored_with(&store, &legacy_path, "both"));
+        assert!(!ssh_password_stored_with(&store, &legacy_path, "missing"));
+
+        // hydrate 的 has_password 与 load 顺序一致。
+        let mut connection = connection_with_id("only-legacy", None);
+        hydrate_ssh_password_with(&store, &legacy_path, &mut connection).expect("hydrate");
+        assert_eq!(connection.password.as_deref(), Some("from-legacy"));
+        assert!(connection.has_password);
+
+        let _ = std::fs::remove_file(&legacy_path);
+    }
+
+    /// keyring 写成功后不再把新密码写进 legacy JSON;失败时回落 legacy。
+    #[test]
+    fn ssh_password_save_stops_writing_legacy_once_keyring_succeeds() {
+        let store = MemorySshPasswordStore::default();
+        let passwords = BTreeMap::from([
+            ("conn-a".to_string(), "secret-a".to_string()),
+            ("conn-b".to_string(), "secret-b".to_string()),
+        ]);
+
+        // keyring 可用:全部进 keyring,legacy 映射为空。
+        let legacy = persist_ssh_passwords_with(&store, &passwords).expect("persist all");
+        assert!(
+            legacy.is_empty(),
+            "keyring 写成功时不该把密码回落 legacy:{legacy:?}"
+        );
+        assert!(store.keyring_has("conn-a"));
+        assert!(store.keyring_has("conn-b"));
+
+        // keyring 不可用:回落 legacy,保证至少有一个地方能读回来。
+        store.fail_writes(true);
+        let legacy = persist_ssh_passwords_with(&store, &passwords).expect("persist failing");
+        assert_eq!(legacy.len(), 2, "keyring 整体不可用时全部回落 legacy");
+        assert_eq!(legacy.get("conn-a"), Some(&"secret-a".to_string()));
+    }
+
+    /// 端到端:保存新连接时密码进 keyring,公共 JSON 不含明文,legacy 不含新密码。
+    #[test]
+    fn ssh_password_write_path_persists_to_keyring_and_skips_legacy() {
+        let (legacy_path, connections_path) = temp_ssh_password_paths("write-path");
+        let store = MemorySshPasswordStore::default();
+
+        write_ssh_connections_storage_with(
+            &store,
+            legacy_path.clone(),
+            connections_path.clone(),
+            vec![connection_with_id("conn-1", Some("fresh-secret"))],
+        )
+        .expect("write connections");
+
+        assert_eq!(
+            store
+                .keyring_read("conn-1")
+                .expect("keyring")
+                .as_deref(),
+            Some("fresh-secret")
+        );
+        let legacy = load_legacy_ssh_passwords_from(&legacy_path).expect("legacy");
+        assert!(
+            !legacy.contains_key("conn-1"),
+            "keyring 写成功后不得再把密码写进 ssh-passwords.json:{legacy:?}"
+        );
+        let public = std::fs::read_to_string(&connections_path).expect("read public");
+        assert!(!public.contains("fresh-secret"), "公共 JSON 不得含明文");
+        assert!(!public.contains("hasPassword"), "派生标记不该落盘");
+
+        // 再保存一次不带密码:keyring 里的必须保住(留空不改)。
+        write_ssh_connections_storage_with(
+            &store,
+            legacy_path.clone(),
+            connections_path.clone(),
+            vec![connection_with_id("conn-1", None)],
+        )
+        .expect("rewrite connections");
+        assert_eq!(
+            store
+                .keyring_read("conn-1")
+                .expect("keyring after rewrite")
+                .as_deref(),
+            Some("fresh-secret"),
+            "改备注/重存连接不得清掉 keyring 密码"
+        );
+
+        let root = connections_path.parent().expect("parent");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 删连接必须同时丢掉 keyring 条目。
+    #[test]
+    fn ssh_connection_delete_clears_the_keyring_entry() {
+        let (legacy_path, connections_path) = temp_ssh_password_paths("delete");
+        let store = MemorySshPasswordStore::default();
+        write_ssh_connections_storage_with(
+            &store,
+            legacy_path.clone(),
+            connections_path.clone(),
+            vec![
+                connection_with_id("conn-1", Some("secret-1")),
+                connection_with_id("conn-2", Some("secret-2")),
+            ],
+        )
+        .expect("seed");
+        assert!(store.keyring_has("conn-1"));
+
+        let remaining = delete_ssh_connection_sync_with(
+            &store,
+            legacy_path.clone(),
+            connections_path.clone(),
+            "conn-1",
+        )
+        .expect("delete");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "conn-2");
+        assert!(!store.keyring_has("conn-1"), "删除的连接不得残留钥匙串条目");
+        assert!(store.keyring_has("conn-2"));
+
+        let root = connections_path.parent().expect("parent");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 公开行为不变:hydrate 仍填 connection.password / has_password,且不覆盖已输入密码。
+    #[test]
+    fn hydrate_ssh_password_public_behavior_is_unchanged() {
+        let (legacy_path, _) = temp_ssh_password_paths("hydrate-public");
+        let store = MemorySshPasswordStore::with_password("conn-1", "stored");
+
+        let mut typed = connection_with_id("conn-1", Some("typed-just-now"));
+        hydrate_ssh_password_with(&store, &legacy_path, &mut typed).expect("hydrate");
+        assert_eq!(typed.password.as_deref(), Some("typed-just-now"));
+
+        let mut empty = connection_with_id("conn-1", None);
+        hydrate_ssh_password_with(&store, &legacy_path, &mut empty).expect("hydrate");
+        assert_eq!(empty.password.as_deref(), Some("stored"));
+        assert!(empty.has_password);
+
+        let _ = std::fs::remove_file(&legacy_path);
     }
 }

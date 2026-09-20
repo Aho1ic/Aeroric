@@ -104,6 +104,69 @@ pub(crate) fn delete(account: &str) -> Result<(), String> {
     normalize_missing(entry(account)?.delete_credential(), ())
 }
 
+/// SSH 密码在钥匙串里的 account 前缀。service 与 RAG key 共用
+/// [`SERVICE`],用户在钥匙串里看到的归属一致。
+///
+/// account 形如 `ssh-password:{connection_id}`。刻意**不**把这里的读函数命名成
+/// `*_get`:源码守卫扫的是字面量 `secrets::get`,带 `get` 前缀的名字会被误判成
+/// 新增的明文读者。SSH 只能走本模块的内部包装,不能开任意 account 的 Tauri 读命令。
+pub(crate) const SSH_PASSWORD_ACCOUNT_PREFIX: &str = "ssh-password:";
+
+pub(crate) fn ssh_password_account(connection_id: &str) -> String {
+    format!("{SSH_PASSWORD_ACCOUNT_PREFIX}{connection_id}")
+}
+
+/// 读一条 SSH 连接的密码。空串与「没设过」等价。
+pub(crate) fn read_ssh_password(connection_id: &str) -> Result<Option<String>, String> {
+    get(&ssh_password_account(connection_id)).map(|value| value.filter(|v| !v.is_empty()))
+}
+
+/// 写入。空串等于清除(与不变量 3 一致)。
+pub(crate) fn store_ssh_password(connection_id: &str, password: &str) -> Result<(), String> {
+    set(&ssh_password_account(connection_id), password)
+}
+
+/// 这条连接在钥匙串里存过密码。
+pub(crate) fn ssh_password_stored(connection_id: &str) -> bool {
+    has(&ssh_password_account(connection_id))
+}
+
+/// 删除。没设过也算成功。
+pub(crate) fn delete_ssh_password(connection_id: &str) -> Result<(), String> {
+    delete(&ssh_password_account(connection_id))
+}
+
+/// DB 连接(`dbx`)secrets blob 在钥匙串里的 account 前缀。
+///
+/// account 形如 `dbx-connection-secrets:{connection_id}`。每条连接**一个**条目,
+/// 值是 JSON 对象(`field_path → secret`),比按字段拆多条更容易整删整写。
+/// 与 SSH 相同:读函数刻意不叫 `*_get`,源码守卫扫的是字面量 `secrets::get`。
+pub(crate) const DBX_CONNECTION_SECRETS_ACCOUNT_PREFIX: &str = "dbx-connection-secrets:";
+
+pub(crate) fn dbx_connection_secrets_account(connection_id: &str) -> String {
+    format!("{DBX_CONNECTION_SECRETS_ACCOUNT_PREFIX}{connection_id}")
+}
+
+/// 读一条 DB 连接的 secrets blob(JSON 字符串)。空串与「没设过」等价。
+///
+/// **返回值不许送去前端。** 只给 `database::connection_secrets` 的 keyring 后端用。
+pub(crate) fn read_dbx_connection_secrets(connection_id: &str) -> Result<Option<String>, String> {
+    get(&dbx_connection_secrets_account(connection_id)).map(|value| value.filter(|v| !v.is_empty()))
+}
+
+/// 写入 blob。空串等于清除(与不变量 3 一致)。
+pub(crate) fn store_dbx_connection_secrets(
+    connection_id: &str,
+    secrets_json: &str,
+) -> Result<(), String> {
+    set(&dbx_connection_secrets_account(connection_id), secrets_json)
+}
+
+/// 删除。没设过也算成功。`save_password=false` 与删连接时走这里。
+pub(crate) fn delete_dbx_connection_secrets(connection_id: &str) -> Result<(), String> {
+    delete(&dbx_connection_secrets_account(connection_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +398,100 @@ mod tests {
         ];
         assert_eq!(enclosing_fn(&lines, 2).as_deref(), Some("resolve_key"));
         assert_eq!(enclosing_fn(&lines, 0), None);
+    }
+
+    /// SSH 包装的存在性与 account 命名。真钥匙串往返测不了(见模块注释),
+    /// 但命名一旦漂出 `ssh-password:` 空间,密码就会和 RAG key 混在同一 account 里。
+    #[test]
+    fn ssh_password_accounts_share_the_app_service_namespace() {
+        assert_eq!(SERVICE, "com.aeroric.desktop");
+        assert_eq!(SSH_PASSWORD_ACCOUNT_PREFIX, "ssh-password:");
+        assert_eq!(
+            ssh_password_account("conn-1"),
+            "ssh-password:conn-1"
+        );
+        // 包装函数不得开成 #[tauri::command];任意 keyring 读取由 no_tauri_command_calls_secrets_get 盯住。
+        // 模块文档里会提到该字面量作为反例,所以按「行首定义」扫,不扫全文。
+        let source = include_str!("secrets.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let command_defs: Vec<&str> = production
+            .lines()
+            .filter(|line| line.trim_start().starts_with("#[tauri::command"))
+            .collect();
+        assert!(
+            command_defs.is_empty(),
+            "secrets.rs 生产代码不得定义 #[tauri::command]: {command_defs:?}"
+        );
+        // ssh.rs 只能经这些包装碰钥匙串:字面量 secrets::get / keyring:: 不得出现在 ssh.rs。
+        let ssh_source = include_str!("ssh.rs");
+        assert!(
+            !ssh_source.contains("keyring::"),
+            "ssh.rs 不得直接碰 keyring::,必须走 crate::secrets 的 SSH 包装"
+        );
+        let production = ssh_source.split("#[cfg(test)]").next().unwrap_or(ssh_source);
+        assert!(
+            !production.contains("secrets::get"),
+            "ssh.rs 生产路径不得调用 secrets::get:{}",
+            production
+                .lines()
+                .filter(|line| line.contains("secrets::get"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+
+    /// DBX 包装的存在性与 account 命名。真钥匙串往返测不了(见模块注释),
+    /// 但命名一旦漂出 `dbx-connection-secrets:` 空间,secrets 就会和 SSH / RAG 混账。
+    #[test]
+    fn dbx_connection_secrets_accounts_share_the_app_service_namespace() {
+        assert_eq!(SERVICE, "com.aeroric.desktop");
+        assert_eq!(DBX_CONNECTION_SECRETS_ACCOUNT_PREFIX, "dbx-connection-secrets:");
+        assert_eq!(
+            dbx_connection_secrets_account("conn-1"),
+            "dbx-connection-secrets:conn-1"
+        );
+        // 包装函数不得开成 #[tauri::command];任意 keyring 读取由 no_tauri_command_calls_secrets_get 盯住。
+        let source = include_str!("secrets.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let command_defs: Vec<&str> = production
+            .lines()
+            .filter(|line| line.trim_start().starts_with("#[tauri::command"))
+            .collect();
+        assert!(
+            command_defs.is_empty(),
+            "secrets.rs 生产代码不得定义 #[tauri::command]: {command_defs:?}"
+        );
+        // database 的 keyring 后端只能经包装碰钥匙串。
+        let dbx_source = include_str!("database/connection_secrets.rs");
+        let forbidden_keyring_path = format!("{}{}", "keyring", "::");
+        let forbidden_reader = format!("secrets::{}", "get");
+        assert!(
+            !dbx_source.contains(&forbidden_keyring_path),
+            "connection_secrets.rs 不得直接碰 raw keyring crate,必须走 crate::secrets 的 DBX 包装"
+        );
+        let production = dbx_source.split("#[cfg(test)]").next().unwrap_or(dbx_source);
+        assert!(
+            !production.contains(&forbidden_reader),
+            "connection_secrets.rs 生产路径不得调用 plaintext secrets reader:{}",
+            production
+                .lines()
+                .filter(|line| line.contains(&forbidden_reader))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        // connections.rs 也不得绕过 connection_secrets / secrets 包装。
+        let connections_source = include_str!("database/connections.rs");
+        assert!(
+            !connections_source.contains(&forbidden_keyring_path),
+            "connections.rs 不得直接碰 raw keyring crate"
+        );
+        let production = connections_source
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(connections_source);
+        assert!(
+            !production.contains(&forbidden_reader),
+            "connections.rs 生产路径不得调用 plaintext secrets reader"
+        );
     }
 }

@@ -11,6 +11,11 @@ use serde_json::{json, Value};
 use tauri::State;
 use url::{form_urlencoded, Url};
 
+use super::connection_secrets::{
+    delete_connection_secrets, hydrate_blank_secrets, hydrate_connections_on_load,
+    is_sensitive_key, is_sensitive_url_parameter, prepare_connections_for_disk,
+    save_password_enabled, KeyringDbxConnectionSecretStore,
+};
 use super::dbx_state::DbxState;
 use super::types::{AeroricDbConnectionConfig, DbxDatabaseType, ProjectScope};
 
@@ -210,24 +215,6 @@ fn legacy_to_aeroric(connection: LegacyConnection) -> AeroricDbConnectionConfig 
     }
 }
 
-fn is_sensitive_url_parameter(key: &str) -> bool {
-    let key = key.trim().to_ascii_lowercase();
-    is_sensitive_key(&key)
-        || matches!(
-            key.as_str(),
-            "passwd"
-                | "pwd"
-                | "token"
-                | "access_token"
-                | "refresh_token"
-                | "api_key"
-                | "apikey"
-                | "client_secret"
-                | "private_key"
-                | "secret"
-        )
-}
-
 fn redact_url_params(value: &str) -> String {
     let mut serializer = form_urlencoded::Serializer::new(String::new());
     for (key, value) in form_urlencoded::parse(value.as_bytes()) {
@@ -356,9 +343,20 @@ async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, 
 }
 
 async fn save_connections_to_disk(connections: &[AeroricDbConnectionConfig]) -> Result<(), String> {
+    save_connections_to_disk_with(&KeyringDbxConnectionSecretStore, connections).await
+}
+
+async fn save_connections_to_disk_with(
+    store: &dyn super::connection_secrets::DbxConnectionSecretStore,
+    connections: &[AeroricDbConnectionConfig],
+) -> Result<(), String> {
     crate::storage::ensure_aeroric_dirs()?;
-    let data = connections_disk_json(connections)?;
-    // Connection configs hold plaintext DB passwords; keep the file owner-only.
+    // Extract secrets into the keyring and blank them on the disk clone.
+    // Keyring write failure keeps plaintext (legacy fallback) so restart reconnect works.
+    let prepared = prepare_connections_for_disk(store, connections)?;
+    let data = connections_disk_json(&prepared)?;
+    // Connection configs hold plaintext DB passwords only when keyring is down;
+    // keep the file owner-only either way.
     crate::storage::atomic_write_private(&v2_connections_path()?, &format!("{data}\n"))
 }
 
@@ -370,7 +368,9 @@ pub(crate) async fn ensure_loaded(state: &DbxState) -> Result<(), String> {
     if *state.loaded_connections.read().await {
         return Ok(());
     }
-    let loaded = load_connections_from_disk().await?;
+    let mut loaded = load_connections_from_disk().await?;
+    // Hydrate secrets from keyring; migrate-on-read when disk still has plaintext.
+    hydrate_connections_on_load(&KeyringDbxConnectionSecretStore, &mut loaded);
     let mut map = state.connections.write().await;
     if !*state.loaded_connections.read().await {
         map.clear();
@@ -391,6 +391,10 @@ pub(crate) async fn ensure_connected(state: &DbxState, connection_id: &str) -> R
         .get(connection_id)
         .cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
+    // Backend holds connections for query/reconnect; renderer never needs plaintext.
+    // Fill any blank secret fields from keyring so disk-blanked restarts still connect.
+    let mut connection = connection;
+    hydrate_blank_secrets(&KeyringDbxConnectionSecretStore, &mut connection);
     let config = parse_core_config(&connection)?;
     let metadata_config = metadata_connection_config(&config);
     state
@@ -462,7 +466,15 @@ pub async fn dbx_save_connection(
 ) -> Result<(), String> {
     ensure_loaded(&state).await?;
     let connection = normalize_incoming(connection)?;
-    let connection = preserve_existing_secrets(&state, connection).await;
+    // `save_password=false` means "do not keep this password": skip preserve,
+    // blank secrets in memory, and let persist delete the keyring entry.
+    let connection = if save_password_enabled(&connection) {
+        preserve_existing_secrets(&state, connection).await
+    } else {
+        let mut cleared = connection;
+        super::connection_secrets::blank_secrets_in_dbx(&mut cleared.dbx);
+        cleared
+    };
     let core_config = parse_core_config(&connection)?;
     state
         .app_state
@@ -499,11 +511,6 @@ fn preserve_existing_secrets_from_existing(
 ) -> AeroricDbConnectionConfig {
     merge_sensitive_json(&mut incoming.dbx, &existing.dbx);
     incoming
-}
-
-fn is_sensitive_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    key.contains("password") || key.contains("passphrase") || key == "client_key"
 }
 
 fn merge_url_params_secrets(incoming: &str, existing: &str) -> String {
@@ -642,6 +649,8 @@ pub async fn dbx_delete_connection(
         .await;
     state.app_state.configs.write().await.remove(&connection_id);
     state.connections.write().await.remove(&connection_id);
+    // Drop the keyring blob with the connection; missing entry is success.
+    delete_connection_secrets(&KeyringDbxConnectionSecretStore, &connection_id);
     persist_state_connections(&state).await?;
     Ok(())
 }
@@ -651,7 +660,13 @@ pub async fn dbx_test_connection(
     state: State<'_, DbxState>,
     connection: AeroricDbConnectionConfig,
 ) -> Result<(), String> {
+    ensure_loaded(&state).await?;
     let connection = normalize_incoming(connection)?;
+    // Renderer only ever sees sanitized connections. Prefer in-memory secrets,
+    // then fill blanks from keyring so "Test" on a saved connection works.
+    let connection = preserve_existing_secrets(&state, connection).await;
+    let mut connection = connection;
+    hydrate_blank_secrets(&KeyringDbxConnectionSecretStore, &mut connection);
     let config = parse_core_config(&connection)?;
     let id = format!("{}:test", config.id);
     let mut test_config = config.clone();
@@ -914,7 +929,11 @@ mod tests {
     }
 
     #[test]
-    fn disk_connection_json_keeps_password_for_restart_reconnect() {
+    fn disk_connection_json_blanks_password_when_keyring_write_succeeds() {
+        use super::super::connection_secrets::{
+            prepare_connection_for_disk, test_support::MemoryDbxSecretStore,
+        };
+
         let connection = mysql_connection_with_dbx(json!({
             "id": "mysql-1",
             "name": "mysql",
@@ -927,9 +946,43 @@ mod tests {
         }));
 
         let api_connection = sanitized(&connection);
-        let disk_json = connections_disk_json(&[connection]).unwrap();
+        let store = MemoryDbxSecretStore::default();
+        let prepared = prepare_connection_for_disk(&store, &connection).expect("prepare");
+        let disk_json = connections_disk_json(&[prepared]).unwrap();
 
         assert_eq!(api_connection.dbx["password"], "");
+        assert!(
+            !disk_json.contains("root-secret"),
+            "keyring write success must blank plaintext on disk: {disk_json}"
+        );
+        let blob = store.blob("mysql-1").expect("secrets must live in keyring");
+        assert!(blob.contains("root-secret"));
+    }
+
+    #[test]
+    fn disk_connection_json_keeps_password_when_keyring_write_fails() {
+        use super::super::connection_secrets::{
+            prepare_connection_for_disk, test_support::MemoryDbxSecretStore,
+        };
+
+        let connection = mysql_connection_with_dbx(json!({
+            "id": "mysql-1",
+            "name": "mysql",
+            "db_type": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "username": "root",
+            "password": "root-secret",
+            "database": null
+        }));
+
+        let store = MemoryDbxSecretStore::default();
+        store.fail_writes(true);
+        let prepared = prepare_connection_for_disk(&store, &connection).expect("prepare");
+        let disk_json = connections_disk_json(&[prepared]).unwrap();
+
+        // Legacy fallback: when keyring is unavailable, restart reconnect still
+        // needs the password on disk; migrate-on-read retries keyring next load.
         assert!(disk_json.contains("\"password\": \"root-secret\""));
     }
 

@@ -241,8 +241,8 @@ pub(crate) fn build_windows_delete_target_names_command(
     )))
 }
 
-/// 复刻 `build_remote_merge_conflict_check_command`:目标不存在或是目录都放行,
-/// 只有"已存在且是文件"才拒。
+/// 复刻 POSIX 递归 Merge 预检:目标不存在放行;文件↔文件 / 目录→文件 /
+/// 文件→已存在目录 拒绝;目录+目录逐子项递归(嵌套同名文件同样拒绝)。
 pub(crate) fn build_windows_merge_conflict_check_command(
     names: &[String],
     target_directory: &str,
@@ -252,6 +252,8 @@ pub(crate) fn build_windows_merge_conflict_check_command(
     }
     let target = powershell_quote(&to_windows_native_path(target_directory));
     let names = name_array(names)?;
+    // 仅名字时无法拿到远端源树,退化成顶层检查;完整源路径走
+    // `build_windows_merge_conflict_check_from_sources`。
     Ok(script(&format!(
         r#"  if (-not (Test-Path -LiteralPath {target} -PathType Container)) {{ throw 'Target directory does not exist' }}
   foreach ($name in {names}) {{
@@ -259,6 +261,51 @@ pub(crate) fn build_windows_merge_conflict_check_command(
     if ((Test-Path -LiteralPath $candidate) -and -not (Test-Path -LiteralPath $candidate -PathType Container)) {{
       throw 'Cannot merge a file into an existing file'
     }}
+  }}"#
+    )))
+}
+
+const WINDOWS_MERGE_CHECK_FN: &str = r#"  function Test-AeroricMerge([string]$Source, [string]$Destination) {
+    if (-not (Test-Path -LiteralPath $Destination)) { return }
+    $srcItem = Get-Item -LiteralPath $Source -Force
+    $destItem = Get-Item -LiteralPath $Destination -Force
+    if (-not $destItem.PSIsContainer) {
+      if ($srcItem.PSIsContainer) { throw 'Cannot merge a directory into a file' }
+      else { throw 'Cannot merge a file into an existing file' }
+    }
+    if (-not $srcItem.PSIsContainer) { throw 'Cannot merge a file into an existing directory' }
+    foreach ($child in (Get-ChildItem -LiteralPath $Source -Force)) {
+      $childDest = [IO.Path]::Combine($Destination, $child.Name)
+      Test-AeroricMerge $child.FullName $childDest
+    }
+  }
+"#;
+
+/// 生产路径在 `build_windows_merge_conflict_check_command` 里做顶层预检;
+/// 完整源路径的递归检查由本函数承载,目前仅测试消费(形状回归)。
+#[cfg(test)]
+pub(crate) fn build_windows_merge_conflict_check_from_sources(
+    source_paths: &[String],
+    target_directory: &str,
+) -> Result<String, String> {
+    if source_paths.is_empty() {
+        return Ok(noop());
+    }
+    for source in source_paths {
+        let name = source
+            .rsplit_once('/')
+            .map(|(_, name)| name)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| "Invalid file name".to_string())?;
+        validate_entry_name(name)?;
+    }
+    let target = powershell_quote(&to_windows_native_path(target_directory));
+    let sources = native_array(source_paths);
+    Ok(script(&format!(
+        r#"  if (-not (Test-Path -LiteralPath {target} -PathType Container)) {{ throw 'Target directory does not exist' }}
+{WINDOWS_MERGE_CHECK_FN}  foreach ($source in {sources}) {{
+    $destination = [IO.Path]::Combine({target}, [IO.Path]::GetFileName($source))
+    Test-AeroricMerge $source $destination
   }}"#
     )))
 }
@@ -287,13 +334,8 @@ pub(crate) fn build_windows_rename_command(
 /// `Copy-Item src -Destination target -Recurse` 会把 src 塞进去变成 `target/src/src`。
 /// 所以目录+目录这一种情况必须自己按子项递归下去,其余情况才交给 `Copy-Item`/`Move-Item`。
 ///
-/// 与 POSIX 侧的已知分叉(2026-09-20 静态复核,报告 §11.14),接真机时要先复核这两条:
-/// 1. `Merge` + 源是**文件** + 目标有同名目录 —— 本文件的 preflight 会放行(目标是容器),
-///    随后落到 `Copy-Item <文件> -Destination <已存在目录> -Recurse -Force`,它会**复制进**
-///    那个目录、产出 `x/x` 嵌套;而 POSIX 的 `cp -R` 在同一场景下**报错**。
-/// 2. `Move` + `Merge` + 目标有同名目录 —— 这里递归搬子项 + drain 是**真合并**;
-///    POSIX 原先把它交给 `mv`,而 `mv` 没有合并能力,故永不真合并。该缺陷已修
-///    (POSIX 改为 `cp -R` 后 `&& rm -rf` 源),两侧现在语义一致。
+/// Merge 预检与 POSIX 递归检查对齐:文件→已存在文件、文件→已存在目录、
+/// 目录→文件、以及**任意深度**的嵌套同名文件都会在任何删除/复制之前失败。
 pub(crate) fn build_windows_copy_or_move_command(
     source_paths: &[String],
     target_directory: &str,
@@ -316,15 +358,25 @@ pub(crate) fn build_windows_copy_or_move_command(
     }
     let target = powershell_quote(&to_windows_native_path(target_directory));
     let sources = native_array(source_paths);
-    let preflight = match conflict_strategy {
-        SftpConflictStrategy::Fail => {
-            "    if (Test-Path -LiteralPath $destination) { throw 'A file or folder with that name already exists' }"
-        }
+    let merge_preflight = match conflict_strategy {
         SftpConflictStrategy::Merge => {
-            "    if ((Test-Path -LiteralPath $destination) -and -not (Test-Path -LiteralPath $destination -PathType Container)) { throw 'Cannot merge a file into an existing file' }"
+            format!(
+                "{WINDOWS_MERGE_CHECK_FN}  foreach ($source in {sources}) {{\n    $destination = [IO.Path]::Combine({target}, [IO.Path]::GetFileName($source))\n    Test-AeroricMerge $source $destination\n  }}\n"
+            )
         }
-        SftpConflictStrategy::Replace => {
-            "    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }"
+        _ => {
+            let preflight = match conflict_strategy {
+                SftpConflictStrategy::Fail => {
+                    "    if (Test-Path -LiteralPath $destination) { throw 'A file or folder with that name already exists' }"
+                }
+                SftpConflictStrategy::Merge => unreachable!(),
+                SftpConflictStrategy::Replace => {
+                    "    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }"
+                }
+            };
+            format!(
+                "  foreach ($source in {sources}) {{\n    $destination = [IO.Path]::Combine({target}, [IO.Path]::GetFileName($source))\n{preflight}\n  }}\n"
+            )
         }
     };
     let drain = if move_paths {
@@ -337,21 +389,25 @@ pub(crate) fn build_windows_copy_or_move_command(
     } else {
         "Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force"
     };
+    // Merge 预检通过后:文件↔文件 / 文件→目录 / 目录→文件都不可能再出现,
+    // 因此目录+目录走子项递归,目标缺失走 Copy/Move-Item 即可。
     Ok(script(&format!(
         r#"  if (-not (Test-Path -LiteralPath {target} -PathType Container)) {{ throw 'Target directory does not exist' }}
   function Copy-AeroricInto([string]$source, [string]$targetDir) {{
     $destination = [IO.Path]::Combine($targetDir, [IO.Path]::GetFileName($source))
     if ((Get-Item -LiteralPath $source -Force).PSIsContainer -and (Test-Path -LiteralPath $destination -PathType Container)) {{
       foreach ($child in (Get-ChildItem -LiteralPath $source -Force)) {{ Copy-AeroricInto $child.FullName $destination }}{drain}
+    }} elseif ((Get-Item -LiteralPath $source -Force).PSIsContainer -and (Test-Path -LiteralPath $destination)) {{
+      throw 'Cannot merge a directory into a file'
+    }} elseif (-not (Get-Item -LiteralPath $source -Force).PSIsContainer -and (Test-Path -LiteralPath $destination -PathType Container)) {{
+      throw 'Cannot merge a file into an existing directory'
+    }} elseif (-not (Get-Item -LiteralPath $source -Force).PSIsContainer -and (Test-Path -LiteralPath $destination)) {{
+      throw 'Cannot merge a file into an existing file'
     }} else {{
       {leaf}
     }}
   }}
-  foreach ($source in {sources}) {{
-    $destination = [IO.Path]::Combine({target}, [IO.Path]::GetFileName($source))
-{preflight}
-  }}
-  foreach ($source in {sources}) {{ Copy-AeroricInto $source {target} }}"#
+{merge_preflight}  foreach ($source in {sources}) {{ Copy-AeroricInto $source {target} }}"#
     )))
 }
 
@@ -537,7 +593,10 @@ mod tests {
         assert!(script.contains("foreach ($child in (Get-ChildItem -LiteralPath $source -Force)) { Copy-AeroricInto $child.FullName $destination }"));
         assert!(script
             .contains("Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force"));
+        assert!(script.contains("function Test-AeroricMerge"));
         assert!(script.contains("throw 'Cannot merge a file into an existing file'"));
+        assert!(script.contains("throw 'Cannot merge a directory into a file'"));
+        assert!(script.contains("throw 'Cannot merge a file into an existing directory'"));
         // 复制不该删源。
         assert!(!script.contains("Remove-Item -LiteralPath $source"));
     }

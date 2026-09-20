@@ -79,9 +79,19 @@ fn config_version_marker(content: &str) -> Option<u32> {
 /// (重新)生成;版本相等或更高时保留用户在受管文件里的后续改动。hook 脚本没有
 /// 版本标记可放(它是 omp 要 import 的 ESM 模块),改为内容比对后按需重写 ——
 /// 用户没有理由手改 Aeroric 托管的 hook,而漏更新会让状态机静默失效。
+/// 托管 home 与 hook 目录必须走与 Unix 凭据目录同一套 owner-only 策略
+/// (`storage::ensure_private_dir`:0700 / 当前用户 ACL)。裸 `create_dir_all`
+/// 在 umask 宽松时会留下同机其它用户可进的 agent home。
+fn ensure_managed_home_dirs(home: &std::path::Path) -> Result<PathBuf, String> {
+    crate::storage::ensure_private_dir(home)?;
+    let hook_dir = home.join("hooks").join("post");
+    crate::storage::ensure_private_dir(&hook_dir)?;
+    Ok(hook_dir)
+}
+
 pub(crate) fn ensure_omp_home_for(agent: &str) -> Result<OmpHomePaths, String> {
     let home = omp_home_for(agent)?;
-    fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+    let hook_dir = ensure_managed_home_dirs(&home)?;
     let config_path = home.join("config.yml");
     if !config_path.is_file() {
         crate::storage::atomic_write_private(&config_path, &managed_config_content())?;
@@ -103,8 +113,7 @@ pub(crate) fn ensure_omp_home_for(agent: &str) -> Result<OmpHomePaths, String> {
     // omp 的 hook 发现路径:`<PI_CODING_AGENT_DIR>/hooks/{pre,post}/`
     // (`discovery/builtin.ts::loadHooks`)。装在 post/ 下,文件名 `*` 表示对所有
     // tool 生效;真正的事件订阅在脚本里用 `pi.on` 完成。
-    let hook_dir = home.join("hooks").join("post");
-    fs::create_dir_all(&hook_dir).map_err(|error| error.to_string())?;
+    // hook_dir 已由 ensure_managed_home_dirs 以 owner-only 权限建好。
     let hook_path = hook_dir.join("*.js");
     let hook_current = fs::read_to_string(&hook_path).ok();
     if hook_current.as_deref() != Some(OMP_HOOK_SCRIPT) {
@@ -482,5 +491,47 @@ mod tests {
         assert_eq!(get("PI_CODING_AGENT_DIR").as_deref(), Some("/tmp/omp-home"));
         assert_eq!(get("OMP_APP_NAME").as_deref(), Some("aeroric"));
         assert!(get("OMP_SKIP_SETUP").is_some());
+    }
+
+    /// 托管 home / hook 目录与 Unix 凭据目录同策略:owner-only(0700)。
+    #[cfg(not(windows))]
+    #[test]
+    fn managed_home_and_hook_dirs_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("aeroric-omp-home-{}", uuid::Uuid::new_v4()));
+        let hook_dir = ensure_managed_home_dirs(&home).expect("managed dirs");
+        assert_eq!(
+            fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "托管 home 必须 0700"
+        );
+        assert_eq!(
+            fs::metadata(&hook_dir).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "hook 目录必须 0700"
+        );
+        assert!(hook_dir.ends_with(std::path::Path::new("hooks").join("post")));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    /// 源码守卫:生产代码不得退回裸 create_dir_all。
+    #[test]
+    fn production_managed_dirs_use_ensure_private_dir() {
+        let source = include_str!("omp_home.rs");
+        let production = source.split("#[cfg(test)]").next().expect("test marker");
+        assert!(
+            production.contains("ensure_private_dir"),
+            "omp_home 生产路径必须经 ensure_private_dir 收紧目录"
+        );
+        let offenders: Vec<String> = production
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("fs::create_dir_all"))
+            .map(|(index, line)| format!("{}: {}", index + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "omp_home 生产路径不得再用裸 fs::create_dir_all: {offenders:?}"
+        );
     }
 }

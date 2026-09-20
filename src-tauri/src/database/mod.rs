@@ -1,3 +1,4 @@
+pub(crate) mod connection_secrets;
 pub(crate) mod connections;
 pub(crate) mod dbx_state;
 pub(crate) mod drivers;
