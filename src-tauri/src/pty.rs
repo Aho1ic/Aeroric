@@ -1244,8 +1244,7 @@ pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &
 pub(crate) fn require_initial_input_generation(
     startup_generation: Option<u64>,
 ) -> Result<u64, String> {
-    startup_generation
-        .ok_or_else(|| "initial input registration must exist".to_string())
+    startup_generation.ok_or_else(|| "initial input registration must exist".to_string())
 }
 
 pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
@@ -3347,9 +3346,8 @@ mod tests {
         let source = include_str!("pty.rs");
         let production = source.split("#[cfg(test)]").next().expect("test marker");
         assert!(
-            !production.contains(
-                "startup_generation.expect(\"initial input registration must exist\")"
-            ),
+            !production
+                .contains("startup_generation.expect(\"initial input registration must exist\")"),
             "pty 生产路径不得再 expect startup_generation"
         );
     }

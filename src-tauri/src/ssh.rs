@@ -154,7 +154,9 @@ fn prepare_ssh_connections_for_storage(
     (public_connections, passwords)
 }
 
-fn load_legacy_ssh_passwords_from(path: &std::path::Path) -> Result<BTreeMap<String, String>, String> {
+fn load_legacy_ssh_passwords_from(
+    path: &std::path::Path,
+) -> Result<BTreeMap<String, String>, String> {
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
@@ -275,11 +277,7 @@ fn write_ssh_connections_storage_with(
 /// **已有明文时不覆盖**:新建/编辑对话框里"测试连接"用的是用户刚敲进去、还没保存的
 /// 密码,那一条必须优先。
 pub(crate) fn hydrate_ssh_password(connection: &mut SshConnection) -> Result<(), String> {
-    hydrate_ssh_password_with(
-        &KeyringSshPasswordStore,
-        &ssh_passwords_path()?,
-        connection,
-    )
+    hydrate_ssh_password_with(&KeyringSshPasswordStore, &ssh_passwords_path()?, connection)
 }
 
 fn hydrate_ssh_password_with(
@@ -349,8 +347,9 @@ fn delete_ssh_connection_sync_with(
         Vec::new()
     };
     for connection in &mut connections {
-        connection.password =
-            load_ssh_password_with(store, &legacy_path, &connection.id).ok().flatten();
+        connection.password = load_ssh_password_with(store, &legacy_path, &connection.id)
+            .ok()
+            .flatten();
     }
     let remaining = remove_ssh_connection(connections, connection_id);
     // 删连接时同步丢掉它的钥匙串条目;没设过也算成功。
@@ -3279,7 +3278,10 @@ mod tests {
         let loaded = load_ssh_password_with(&store, &legacy_path, "conn-1").expect("load");
         assert_eq!(loaded.as_deref(), Some("legacy-only"));
         assert_eq!(
-            store.keyring_read("conn-1").expect("keyring read").as_deref(),
+            store
+                .keyring_read("conn-1")
+                .expect("keyring read")
+                .as_deref(),
             Some("legacy-only"),
             "migrate-on-read 必须把 legacy 条目写进 keyring"
         );
@@ -3325,8 +3327,16 @@ mod tests {
             .lock()
             .insert("both".to_string(), "keyring-both".to_string());
 
-        assert!(ssh_password_stored_with(&store, &legacy_path, "only-keyring"));
-        assert!(ssh_password_stored_with(&store, &legacy_path, "only-legacy"));
+        assert!(ssh_password_stored_with(
+            &store,
+            &legacy_path,
+            "only-keyring"
+        ));
+        assert!(ssh_password_stored_with(
+            &store,
+            &legacy_path,
+            "only-legacy"
+        ));
         assert!(ssh_password_stored_with(&store, &legacy_path, "both"));
         assert!(!ssh_password_stored_with(&store, &legacy_path, "missing"));
 
@@ -3379,10 +3389,7 @@ mod tests {
         .expect("write connections");
 
         assert_eq!(
-            store
-                .keyring_read("conn-1")
-                .expect("keyring")
-                .as_deref(),
+            store.keyring_read("conn-1").expect("keyring").as_deref(),
             Some("fresh-secret")
         );
         let legacy = load_legacy_ssh_passwords_from(&legacy_path).expect("legacy");

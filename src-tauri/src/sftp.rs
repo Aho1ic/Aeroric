@@ -1690,8 +1690,8 @@ fn merge_storage_path(
         return backend.copy(source, destination);
     }
     let dest_entry = dest_entry.ok_or_else(|| "Destination disappeared".to_string())?;
-    let source_entry = storage_entry_exists(backend, source)?
-        .ok_or_else(|| "Source disappeared".to_string())?;
+    let source_entry =
+        storage_entry_exists(backend, source)?.ok_or_else(|| "Source disappeared".to_string())?;
     if dest_entry.is_dir && !source_entry.is_dir {
         return Err("Cannot merge a file into an existing directory".to_string());
     }
@@ -2706,7 +2706,10 @@ mod tests {
         assert!(merge.is_err(), "Merge 该拒绝仅大小写不同的目标名");
         // Replace only deletes the exact joined path when it exists; a case-only
         // sibling must not make Replace fail by itself.
-        assert!(replace.is_ok(), "Replace 不因大小写变体单独失败: {replace:?}");
+        assert!(
+            replace.is_ok(),
+            "Replace 不因大小写变体单独失败: {replace:?}"
+        );
     }
 
     /// Remote POSIX precheck stays case-sensitive — `Same.txt` and `same.txt`
@@ -2937,9 +2940,7 @@ mod tests {
         let calls = backend.calls();
         assert!(result.is_ok(), "{calls:?}");
         assert!(
-            calls
-                .iter()
-                .any(|call| call == "delete /archive/same.txt"),
+            calls.iter().any(|call| call == "delete /archive/same.txt"),
             "{calls:?}"
         );
         assert!(
@@ -3112,16 +3113,12 @@ mod tests {
         std::fs::write(target_dir.join("a.txt"), "target").expect("write target");
 
         let result = super::copy_local_paths_to_directory(
-            vec![root
-                .join("source/dir")
-                .to_string_lossy()
-                .into_owned()],
+            vec![root.join("source/dir").to_string_lossy().into_owned()],
             root.join("target").to_string_lossy().into_owned(),
             super::SftpConflictStrategy::Merge,
         );
 
-        let nested =
-            std::fs::read_to_string(root.join("target/dir/a.txt")).expect("read nested");
+        let nested = std::fs::read_to_string(root.join("target/dir/a.txt")).expect("read nested");
         let _ = std::fs::remove_dir_all(&root);
         assert!(result.is_err(), "嵌套同名文件必须拒绝");
         assert_eq!(nested, "target");

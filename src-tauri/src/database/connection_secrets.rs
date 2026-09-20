@@ -365,10 +365,7 @@ pub(crate) fn hydrate_blank_secrets(
     fill_blank_secrets_in_dbx(&mut connection.dbx, &secrets);
 }
 
-pub(crate) fn delete_connection_secrets(
-    store: &dyn DbxConnectionSecretStore,
-    connection_id: &str,
-) {
+pub(crate) fn delete_connection_secrets(store: &dyn DbxConnectionSecretStore, connection_id: &str) {
     let _ = store.keyring_delete(connection_id);
 }
 
@@ -477,22 +474,31 @@ mod tests {
     #[test]
     fn extract_uses_stable_paths_and_prefers_layer_ids() {
         let secrets = extract_secrets_from_dbx(&rich_dbx());
-        assert_eq!(secrets.get("password").map(String::as_str), Some("root-secret"));
+        assert_eq!(
+            secrets.get("password").map(String::as_str),
+            Some("root-secret")
+        );
         assert_eq!(
             secrets.get("redis_sentinel_password").map(String::as_str),
             Some("sentinel-secret")
         );
         assert_eq!(
-            secrets.get("transport_layers:transport-a:password").map(String::as_str),
+            secrets
+                .get("transport_layers:transport-a:password")
+                .map(String::as_str),
             Some("secret-a")
         );
         assert_eq!(
-            secrets.get("transport_layers:transport-a:key_passphrase").map(String::as_str),
+            secrets
+                .get("transport_layers:transport-a:key_passphrase")
+                .map(String::as_str),
             Some("pass-a")
         );
         // Layer without id falls back to index.
         assert_eq!(
-            secrets.get("transport_layers:1:password").map(String::as_str),
+            secrets
+                .get("transport_layers:1:password")
+                .map(String::as_str),
             Some("secret-1")
         );
     }
@@ -505,7 +511,10 @@ mod tests {
         let prepared = prepare_connection_for_disk(&store, &connection).expect("prepare");
         let disk = serde_json::to_string(&prepared.dbx).expect("serialize");
 
-        assert!(!disk.contains("root-secret"), "disk must not keep plaintext: {disk}");
+        assert!(
+            !disk.contains("root-secret"),
+            "disk must not keep plaintext: {disk}"
+        );
         assert!(!disk.contains("sentinel-secret"));
         assert!(!disk.contains("secret-a"));
         assert_eq!(prepared.dbx["password"], "");
@@ -536,10 +545,7 @@ mod tests {
 
     #[test]
     fn load_prefers_keyring_over_legacy_disk_plaintext() {
-        let store = MemoryDbxSecretStore::with_blob(
-            "mysql-1",
-            r#"{"password":"keyring-secret"}"#,
-        );
+        let store = MemoryDbxSecretStore::with_blob("mysql-1", r#"{"password":"keyring-secret"}"#);
         // Disk still has older plaintext (migration not yet saved).
         let mut connection = mysql_connection(
             "mysql-1",
@@ -567,7 +573,9 @@ mod tests {
 
         // Memory keeps the secrets so reconnect works this session.
         assert_eq!(connection.dbx["password"], "disk-secret");
-        let blob = store.blob("mysql-1").expect("migrate-on-read must write keyring");
+        let blob = store
+            .blob("mysql-1")
+            .expect("migrate-on-read must write keyring");
         assert!(blob.contains("disk-secret"));
         assert!(blob.contains("sentinel"));
     }
@@ -575,10 +583,8 @@ mod tests {
     #[test]
     fn save_password_false_clears_keyring_and_blanks_disk() {
         let secrets = extract_secrets_from_dbx(&rich_dbx());
-        let store = MemoryDbxSecretStore::with_blob(
-            "mysql-1",
-            &secrets_blob(&secrets).expect("blob"),
-        );
+        let store =
+            MemoryDbxSecretStore::with_blob("mysql-1", &secrets_blob(&secrets).expect("blob"));
         let mut connection = mysql_connection("mysql-1", rich_dbx());
         connection.dbx["save_password"] = Value::Bool(false);
 
@@ -592,10 +598,8 @@ mod tests {
 
     #[test]
     fn reconnect_path_fills_blank_password_from_keyring() {
-        let store = MemoryDbxSecretStore::with_blob(
-            "mysql-1",
-            r#"{"password":"reconnect-secret"}"#,
-        );
+        let store =
+            MemoryDbxSecretStore::with_blob("mysql-1", r#"{"password":"reconnect-secret"}"#);
         // Disk-shaped connection: secrets blanked after a successful keyring save.
         let mut connection = mysql_connection(
             "mysql-1",
@@ -617,10 +621,7 @@ mod tests {
 
     #[test]
     fn hydrate_blank_does_not_overwrite_live_values() {
-        let store = MemoryDbxSecretStore::with_blob(
-            "mysql-1",
-            r#"{"password":"stored"}"#,
-        );
+        let store = MemoryDbxSecretStore::with_blob("mysql-1", r#"{"password":"stored"}"#);
         let mut connection = mysql_connection(
             "mysql-1",
             json!({ "id": "mysql-1", "password": "just-typed" }),

@@ -406,10 +406,7 @@ mod tests {
     fn ssh_password_accounts_share_the_app_service_namespace() {
         assert_eq!(SERVICE, "com.aeroric.desktop");
         assert_eq!(SSH_PASSWORD_ACCOUNT_PREFIX, "ssh-password:");
-        assert_eq!(
-            ssh_password_account("conn-1"),
-            "ssh-password:conn-1"
-        );
+        assert_eq!(ssh_password_account("conn-1"), "ssh-password:conn-1");
         // 包装函数不得开成 #[tauri::command];任意 keyring 读取由 no_tauri_command_calls_secrets_get 盯住。
         // 模块文档里会提到该字面量作为反例,所以按「行首定义」扫,不扫全文。
         let source = include_str!("secrets.rs");
@@ -428,7 +425,10 @@ mod tests {
             !ssh_source.contains("keyring::"),
             "ssh.rs 不得直接碰 keyring::,必须走 crate::secrets 的 SSH 包装"
         );
-        let production = ssh_source.split("#[cfg(test)]").next().unwrap_or(ssh_source);
+        let production = ssh_source
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(ssh_source);
         assert!(
             !production.contains("secrets::get"),
             "ssh.rs 生产路径不得调用 secrets::get:{}",
@@ -445,7 +445,10 @@ mod tests {
     #[test]
     fn dbx_connection_secrets_accounts_share_the_app_service_namespace() {
         assert_eq!(SERVICE, "com.aeroric.desktop");
-        assert_eq!(DBX_CONNECTION_SECRETS_ACCOUNT_PREFIX, "dbx-connection-secrets:");
+        assert_eq!(
+            DBX_CONNECTION_SECRETS_ACCOUNT_PREFIX,
+            "dbx-connection-secrets:"
+        );
         assert_eq!(
             dbx_connection_secrets_account("conn-1"),
             "dbx-connection-secrets:conn-1"
@@ -469,7 +472,10 @@ mod tests {
             !dbx_source.contains(&forbidden_keyring_path),
             "connection_secrets.rs 不得直接碰 raw keyring crate,必须走 crate::secrets 的 DBX 包装"
         );
-        let production = dbx_source.split("#[cfg(test)]").next().unwrap_or(dbx_source);
+        let production = dbx_source
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(dbx_source);
         assert!(
             !production.contains(&forbidden_reader),
             "connection_secrets.rs 生产路径不得调用 plaintext secrets reader:{}",
