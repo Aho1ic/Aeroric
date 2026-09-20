@@ -9,3 +9,18 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1"
+
+[lints.clippy]
+# 生产代码里不许出现裸 `unwrap()` / `expect()` / `panic!`。这三条都是 allow-by-default
+# 的限制类 lint，CI 那句 `clippy -- -D warnings` 本来管不到 —— 不加这几行，新增一个
+# `unwrap()` 不会被任何门禁拦下。
+#
+# 本 crate 生产侧当前是 **0 处**（2026-09-20 实测），所以开这道门**不需要任何逐处豁免**：
+# 唯一会被报的是 `src/lib.rs` 测试模块里的 3 处 `unwrap()`，由 clippy.toml 的
+# allow-*-in-tests 豁免。这道门是为**将来**加的 —— 这个 crate 同时被桌面端与
+# remote-relay 依赖，是协议类型的共同来源，在这里漏一个 `unwrap()` 会同时影响两侧。
+#
+# 口径与 src-tauri/Cargo.toml 一致（那里生产侧 31 处，已逐处加 `#[allow(..., reason)]`）。
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
