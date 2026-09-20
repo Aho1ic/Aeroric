@@ -34,7 +34,9 @@ export default tseslint.config(
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
 
-      // TypeScript 调整：已有代码存在少量 any，初期用 warn 而非 error
+      // TypeScript 调整：本仓实测 0 处 any（2026-09-20 复核）。
+      // 级别保留 warn 而非 error 对 CI 门禁没有区别 —— `pnpm lint` 带 `--max-warnings 0`，
+      // 任何 warning 都会让它失败。所以新增一处 any 会直接让 CI 红，不是「只是警告」。
       "@typescript-eslint/no-explicit-any": "warn",
       // 允许未使用变量以 _ 开头的命名惯例
       "@typescript-eslint/no-unused-vars": [
@@ -42,7 +44,7 @@ export default tseslint.config(
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
 
-      // 禁止 console.log 遗留（warn 级别，生产前清理）
+      // 禁止 console.log 遗留。与上面同理：`--max-warnings 0` 让 warn 等同于 error。
       "no-console": ["warn", { allow: ["warn", "error"] }],
     },
   },
