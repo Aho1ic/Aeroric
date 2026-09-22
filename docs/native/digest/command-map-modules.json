@@ -1,0 +1,554 @@
+{
+  "shard": "command-map-modules.json",
+  "from": "docs/native/command-map.summary.json",
+  "sourceSha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+  "capBytes": 32768,
+  "payload": {
+    "modules": {
+      "(crate_root)": {
+        "category": "host_local_os_ui",
+        "core_service": "platform(window/exit lifecycle)",
+        "rpc_namespace": "host",
+        "feature_ids": [
+          "F25"
+        ],
+        "swift_scene": "AeroricApp/Sources",
+        "check_module": "shell"
+      },
+      "pty": {
+        "category": "domain_rpc",
+        "core_service": "runtime+terminal",
+        "rpc_namespace": "task/terminal",
+        "feature_ids": [
+          "F04",
+          "F26"
+        ],
+        "swift_scene": "AeroricUI/Terminal",
+        "check_module": "terminal-core"
+      },
+      "dsh_webui": {
+        "category": "domain_rpc",
+        "core_service": "agents::dsh_host",
+        "rpc_namespace": "dsh",
+        "feature_ids": [
+          "F06"
+        ],
+        "swift_scene": "AeroricUI/DSH",
+        "check_module": "dsh"
+      },
+      "notebook": {
+        "category": "domain_rpc",
+        "core_service": "notebook",
+        "rpc_namespace": "notebook",
+        "feature_ids": [
+          "F15",
+          "F16"
+        ],
+        "swift_scene": "AeroricUI/Notebook",
+        "check_module": "notebook"
+      },
+      "git": {
+        "category": "domain_rpc",
+        "core_service": "git",
+        "rpc_namespace": "git",
+        "feature_ids": [
+          "F09"
+        ],
+        "swift_scene": "AeroricUI/Git",
+        "check_module": "git"
+      },
+      "remote_git": {
+        "category": "domain_rpc",
+        "core_service": "git(ssh target)",
+        "rpc_namespace": "git",
+        "feature_ids": [
+          "F09",
+          "F11"
+        ],
+        "swift_scene": "AeroricUI/Git",
+        "check_module": "connections"
+      },
+      "wsl_git": {
+        "category": "platform_specific",
+        "core_service": "git(wsl target)",
+        "rpc_namespace": "git",
+        "feature_ids": [
+          "F09",
+          "F12"
+        ],
+        "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+        "check_module": "platforms"
+      },
+      "app_settings": {
+        "category": "domain_rpc",
+        "core_service": "settings",
+        "rpc_namespace": "settings",
+        "feature_ids": [
+          "F03",
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "settings"
+      },
+      "config": {
+        "category": "domain_rpc",
+        "core_service": "settings",
+        "rpc_namespace": "settings",
+        "feature_ids": [
+          "F03"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "settings"
+      },
+      "lsp": {
+        "category": "domain_rpc",
+        "core_service": "ide::lsp",
+        "rpc_namespace": "ide",
+        "feature_ids": [
+          "F08"
+        ],
+        "swift_scene": "AeroricUI/IDE",
+        "check_module": "ide"
+      },
+      "dap": {
+        "category": "domain_rpc",
+        "core_service": "ide::dap",
+        "rpc_namespace": "ide",
+        "feature_ids": [
+          "F08"
+        ],
+        "swift_scene": "AeroricUI/IDE",
+        "check_module": "ide"
+      },
+      "run_config": {
+        "category": "domain_rpc",
+        "core_service": "ide::run_config",
+        "rpc_namespace": "ide",
+        "feature_ids": [
+          "F08"
+        ],
+        "swift_scene": "AeroricUI/IDE",
+        "check_module": "ide"
+      },
+      "diagnostics": {
+        "category": "domain_rpc",
+        "core_service": "ide::diagnostics",
+        "rpc_namespace": "ide",
+        "feature_ids": [
+          "F08"
+        ],
+        "swift_scene": "AeroricUI/IDE",
+        "check_module": "ide"
+      },
+      "formatter": {
+        "category": "domain_rpc",
+        "core_service": "files::format",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07"
+        ],
+        "swift_scene": "AeroricUI/Editor",
+        "check_module": "editor"
+      },
+      "database": {
+        "category": "domain_rpc",
+        "core_service": "database",
+        "rpc_namespace": "database",
+        "feature_ids": [
+          "F14"
+        ],
+        "swift_scene": "AeroricUI/Database",
+        "check_module": "database"
+      },
+      "skills": {
+        "category": "domain_rpc",
+        "core_service": "extensions::skills",
+        "rpc_namespace": "extensions",
+        "feature_ids": [
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Extensions",
+        "check_module": "extensions"
+      },
+      "mcp": {
+        "category": "domain_rpc",
+        "core_service": "extensions::mcp",
+        "rpc_namespace": "extensions",
+        "feature_ids": [
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Extensions",
+        "check_module": "extensions"
+      },
+      "hooks": {
+        "category": "domain_rpc",
+        "core_service": "extensions::hooks",
+        "rpc_namespace": "extensions",
+        "feature_ids": [
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Extensions",
+        "check_module": "extensions"
+      },
+      "dsh_plugins": {
+        "category": "domain_rpc",
+        "core_service": "extensions::plugins",
+        "rpc_namespace": "extensions",
+        "feature_ids": [
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Extensions",
+        "check_module": "extensions"
+      },
+      "local_router_commands": {
+        "category": "domain_rpc",
+        "core_service": "local_router",
+        "rpc_namespace": "router",
+        "feature_ids": [
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "provider-services"
+      },
+      "sftp": {
+        "category": "domain_rpc",
+        "core_service": "connections::sftp",
+        "rpc_namespace": "connections",
+        "feature_ids": [
+          "F11"
+        ],
+        "swift_scene": "AeroricUI/Connections",
+        "check_module": "connections"
+      },
+      "ssh": {
+        "category": "domain_rpc",
+        "core_service": "connections::ssh",
+        "rpc_namespace": "connections",
+        "feature_ids": [
+          "F11"
+        ],
+        "swift_scene": "AeroricUI/Connections",
+        "check_module": "connections"
+      },
+      "ssh_hostkey": {
+        "category": "domain_rpc",
+        "core_service": "connections::host_key",
+        "rpc_namespace": "connections",
+        "feature_ids": [
+          "F11"
+        ],
+        "swift_scene": "AeroricUI/Connections/HostKeyPrompt",
+        "check_module": "connections"
+      },
+      "remote_fs": {
+        "category": "domain_rpc",
+        "core_service": "connections::remote_files",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07",
+          "F11"
+        ],
+        "swift_scene": "AeroricUI/Connections",
+        "check_module": "connections"
+      },
+      "wsl": {
+        "category": "platform_specific",
+        "core_service": "connections::wsl",
+        "rpc_namespace": "wsl",
+        "feature_ids": [
+          "F12"
+        ],
+        "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+        "check_module": "platforms"
+      },
+      "wsl_fs": {
+        "category": "platform_specific",
+        "core_service": "connections::wsl_files",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07",
+          "F12"
+        ],
+        "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+        "check_module": "platforms"
+      },
+      "fs": {
+        "category": "domain_rpc",
+        "core_service": "files",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07"
+        ],
+        "swift_scene": "AeroricUI/Files",
+        "check_module": "files"
+      },
+      "search": {
+        "category": "domain_rpc",
+        "core_service": "files::search",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07"
+        ],
+        "swift_scene": "AeroricUI/Files",
+        "check_module": "files"
+      },
+      "local_history": {
+        "category": "domain_rpc",
+        "core_service": "files::local_history",
+        "rpc_namespace": "files",
+        "feature_ids": [
+          "F07"
+        ],
+        "swift_scene": "AeroricUI/Editor",
+        "check_module": "editor"
+      },
+      "session": {
+        "category": "domain_rpc",
+        "core_service": "sessions",
+        "rpc_namespace": "session",
+        "feature_ids": [
+          "F05"
+        ],
+        "swift_scene": "AeroricUI/Sessions",
+        "check_module": "sessions"
+      },
+      "storage": {
+        "category": "domain_rpc",
+        "core_service": "storage+projects",
+        "rpc_namespace": "project",
+        "feature_ids": [
+          "F01",
+          "F02"
+        ],
+        "swift_scene": "AeroricUI/Projects",
+        "check_module": "projects"
+      },
+      "remote": {
+        "category": "domain_rpc",
+        "core_service": "remote",
+        "rpc_namespace": "remote",
+        "feature_ids": [
+          "F18"
+        ],
+        "swift_scene": "AeroricUI/Remote",
+        "check_module": "remote"
+      },
+      "notification": {
+        "category": "domain_rpc",
+        "core_service": "maintenance::notifications",
+        "rpc_namespace": "maintenance",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "report": {
+        "category": "domain_rpc",
+        "core_service": "maintenance::reports",
+        "rpc_namespace": "maintenance",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "analytics": {
+        "category": "domain_rpc",
+        "core_service": "metrics::analytics",
+        "rpc_namespace": "usage",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "usage": {
+        "category": "domain_rpc",
+        "core_service": "metrics::usage",
+        "rpc_namespace": "usage",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "usage_index": {
+        "category": "domain_rpc",
+        "core_service": "metrics::index",
+        "rpc_namespace": "usage",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "agent_usage": {
+        "category": "domain_rpc",
+        "core_service": "metrics::agent_usage",
+        "rpc_namespace": "usage",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "startup_diagnostics": {
+        "category": "domain_rpc",
+        "core_service": "maintenance::diagnostics",
+        "rpc_namespace": "diagnostics",
+        "feature_ids": [
+          "F19"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "permissions": {
+        "category": "host_local_os_ui",
+        "core_service": "platform(adapter)",
+        "rpc_namespace": "permission",
+        "feature_ids": [
+          "F19",
+          "F25"
+        ],
+        "swift_scene": "AeroricUI/Operations",
+        "check_module": "maintenance"
+      },
+      "platform": {
+        "category": "platform_specific",
+        "core_service": "platform",
+        "rpc_namespace": "platform",
+        "feature_ids": [
+          "F12",
+          "F25"
+        ],
+        "swift_scene": "AeroricApp/Sources",
+        "check_module": "platforms"
+      },
+      "storage_conn": {
+        "category": "domain_rpc",
+        "core_service": "storage_backends",
+        "rpc_namespace": "storage_backend",
+        "feature_ids": [
+          "F16"
+        ],
+        "swift_scene": "AeroricUI/Notebook",
+        "check_module": "notebook-services"
+      },
+      "storage_oauth": {
+        "category": "domain_rpc",
+        "core_service": "storage_backends::oauth",
+        "rpc_namespace": "storage_backend",
+        "feature_ids": [
+          "F16"
+        ],
+        "swift_scene": "AeroricUI/Notebook",
+        "check_module": "notebook-services"
+      },
+      "docker": {
+        "category": "domain_rpc",
+        "core_service": "infrastructure::docker",
+        "rpc_namespace": "infra",
+        "feature_ids": [
+          "F13"
+        ],
+        "swift_scene": "AeroricUI/Infrastructure",
+        "check_module": "infrastructure"
+      },
+      "ports": {
+        "category": "domain_rpc",
+        "core_service": "infrastructure::ports",
+        "rpc_namespace": "infra",
+        "feature_ids": [
+          "F13"
+        ],
+        "swift_scene": "AeroricUI/Infrastructure",
+        "check_module": "infrastructure"
+      },
+      "conda": {
+        "category": "domain_rpc",
+        "core_service": "infrastructure::conda",
+        "rpc_namespace": "infra",
+        "feature_ids": [
+          "F13"
+        ],
+        "swift_scene": "AeroricUI/Infrastructure",
+        "check_module": "infrastructure"
+      },
+      "custom_themes": {
+        "category": "host_local_os_ui",
+        "core_service": "appearance(client)",
+        "rpc_namespace": "theme",
+        "feature_ids": [
+          "F25"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "settings"
+      },
+      "agent_tools": {
+        "category": "domain_rpc",
+        "core_service": "agents::managed_install",
+        "rpc_namespace": "agent_tools",
+        "feature_ids": [
+          "F03"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "agents"
+      },
+      "agent_ops": {
+        "category": "domain_rpc",
+        "core_service": "operations",
+        "rpc_namespace": "operations",
+        "feature_ids": [
+          "F03"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "agents"
+      },
+      "agent_assist": {
+        "category": "domain_rpc",
+        "core_service": "agents::assist",
+        "rpc_namespace": "agent_tools",
+        "feature_ids": [
+          "F03",
+          "F20"
+        ],
+        "swift_scene": "AeroricUI/Sessions",
+        "check_module": "agents"
+      },
+      "omp_home": {
+        "category": "domain_rpc",
+        "core_service": "agents::managed_home::omp",
+        "rpc_namespace": "agent_tools",
+        "feature_ids": [
+          "F03",
+          "INV-06"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "agents"
+      },
+      "node_runtime": {
+        "category": "domain_rpc",
+        "core_service": "providers::node_runtime",
+        "rpc_namespace": "providers",
+        "feature_ids": [
+          "F03",
+          "F17"
+        ],
+        "swift_scene": "AeroricUI/Settings",
+        "check_module": "provider-services"
+      },
+      "tests": {
+        "category": "domain_rpc",
+        "core_service": "ide::test_runner",
+        "rpc_namespace": "ide",
+        "feature_ids": [
+          "F08"
+        ],
+        "swift_scene": "AeroricUI/IDE",
+        "check_module": "ide",
+        "correction": "2026-09-21 复核：discover_tests/run_tests/remote_* 是「运行/测试」产品能力（F08），初版误判为 internal 测试夹具"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "aeroric-cli"
+description = "Headless Aeroric CLI: serve/run/task/project/session/approval/rpc/events/attach"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aeroric-host = { workspace = true }
+aeroric-core = { workspace = true }
+aeroric-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

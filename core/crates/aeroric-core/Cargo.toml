@@ -1,0 +1,18 @@
+[package]
+name = "aeroric-core"
+description = "Business services, persistence, PTY runtime and external-agent adapters (no Tauri, no GUI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aeroric-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

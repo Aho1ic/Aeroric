@@ -1,0 +1,48 @@
+{
+  "generatedBy": "scripts/native/digest.mjs",
+  "capBytes": 32768,
+  "sources": [
+    {
+      "path": "docs/native/command-map.summary.json",
+      "bytes": 32694,
+      "sha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+      "shards": [
+        {
+          "file": "docs/native/digest/command-map-head.json",
+          "bytes": 5848
+        },
+        {
+          "file": "docs/native/digest/command-map-modules.json",
+          "bytes": 15405
+        },
+        {
+          "file": "docs/native/digest/command-map-surfaces.json",
+          "bytes": 3913
+        },
+        {
+          "file": "docs/native/digest/command-map-unreachable.json",
+          "bytes": 9471
+        }
+      ]
+    },
+    {
+      "path": "docs/native/feature-matrix.json",
+      "bytes": 31560,
+      "sha256": "32789919b7c85f69d6784eaac6ee27b70ccbd8d82bdfbc02879b165c32a0a255",
+      "shards": [
+        {
+          "file": "docs/native/digest/feature-matrix-head.json",
+          "bytes": 2612
+        },
+        {
+          "file": "docs/native/digest/feature-matrix-features.json",
+          "bytes": 16769
+        },
+        {
+          "file": "docs/native/digest/feature-matrix-gaps.json",
+          "bytes": 13939
+        }
+      ]
+    }
+  ]
+}

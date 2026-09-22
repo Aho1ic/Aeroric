@@ -1,0 +1,139 @@
+{
+  "shard": "command-map-surfaces.json",
+  "from": "docs/native/command-map.summary.json",
+  "sourceSha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+  "capBytes": 32768,
+  "payload": {
+    "event_dispositions": {
+      "agent-tool-install-progress": "redundant-channel",
+      "app-exit-requested": "emitted-dynamically",
+      "app-restart-requested": "emitted-dynamically",
+      "dsh-host-agent-error": "emitted-dynamically",
+      "dsh-host-archived-sessions-changed": "emitted-dynamically",
+      "dsh-host-remote-event": "needs-native-consumer",
+      "dsh-host-session-added": "emitted-dynamically",
+      "dsh-host-session-removed": "emitted-dynamically",
+      "dsh-host-session-status": "emitted-dynamically",
+      "dsh-host-stream-error": "needs-native-consumer",
+      "dsh-host-workspace-changed": "emitted-dynamically",
+      "dsh-host-workspace-order-changed": "emitted-dynamically",
+      "dsh-host-workspace-removed": "emitted-dynamically",
+      "shell-output": "emitted-dynamically"
+    },
+    "panel_targets": {
+      "general": [
+        "AeroricUI/Settings/GeneralSettingsView",
+        "P5-02, P5-05"
+      ],
+      "theme": [
+        "AeroricUI/Settings/AppearanceSettingsView",
+        "P5-05"
+      ],
+      "fonts": [
+        "AeroricUI/Settings/AppearanceSettingsView",
+        "P5-05"
+      ],
+      "shortcuts": [
+        "AeroricUI/Settings/ShortcutSettingsView",
+        "P5-05"
+      ],
+      "proxy": [
+        "AeroricUI/Settings/ProxySettingsView",
+        "P8-02"
+      ],
+      "local-router": [
+        "AeroricUI/Settings/LocalRouterSettingsView",
+        "P8-02"
+      ],
+      "remote": [
+        "AeroricUI/Remote/RemoteAccessSettingsView",
+        "P8-03"
+      ],
+      "mcp": [
+        "AeroricUI/Extensions/MCPSettingsView",
+        "P8-01"
+      ],
+      "notebook-embedding": [
+        "AeroricUI/Notebook/EmbeddingSettingsView",
+        "P7-06"
+      ],
+      "cleanup-report": [
+        "AeroricUI/Operations/{CleanupSettingsView,WeeklyReportView}",
+        "P8-04"
+      ],
+      "wsl": [
+        "AeroricUI/Connections/UnsupportedTargetView",
+        "P7-02"
+      ],
+      "permissions": [
+        "AeroricUI/Operations/PermissionSettingsView",
+        "P8-04"
+      ],
+      "__all_agent_configs__": [
+        "AeroricUI/Settings/{AgentSettingsView,CustomAgentEditor}",
+        "P3-02, P5-05"
+      ],
+      "usage": [
+        "AeroricUI/Operations/UsageDashboard",
+        "P8-04"
+      ],
+      "agent-updates": [
+        "AeroricUI/Settings/{AgentUpdateView,AgentOperationPanel}",
+        "P5-05, P8-02"
+      ],
+      "hooks": [
+        "AeroricUI/Extensions/HookStatusView",
+        "P8-01"
+      ],
+      "skills": [
+        "AeroricUI/Extensions/SkillHubView",
+        "P8-01"
+      ],
+      "dsh-plugins": [
+        "AeroricUI/Extensions/PluginManagerView",
+        "P8-01"
+      ],
+      "about": [
+        "AeroricUI/Operations/{DiagnosticsView,ReleaseView}",
+        "P8-04"
+      ]
+    },
+    "dynamic_sites": [
+      {
+        "file": "src/lib/api/git.ts",
+        "line": 105,
+        "names": 69,
+        "known_unregistered": [
+          "remote_git_checkout_branch",
+          "remote_git_create_branch",
+          "wsl_git_checkout_branch",
+          "wsl_git_create_branch"
+        ]
+      },
+      {
+        "file": "src/lib/api/lsp.ts",
+        "line": 15,
+        "names": 8,
+        "known_unregistered": []
+      },
+      {
+        "file": "src/components/app-settings/ShortcutsPanel.tsx",
+        "line": 129,
+        "names": 2,
+        "known_unregistered": []
+      },
+      {
+        "file": "src/components/app-settings/CleanupReportPanel.tsx",
+        "line": 94,
+        "names": 2,
+        "known_unregistered": []
+      },
+      {
+        "file": "src/components/app-settings/RemoteAccessPanel.tsx",
+        "line": 433,
+        "names": 2,
+        "known_unregistered": []
+      }
+    ]
+  }
+}

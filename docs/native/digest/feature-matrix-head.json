@@ -1,0 +1,56 @@
+{
+  "shard": "feature-matrix-head.json",
+  "from": "docs/native/feature-matrix.json",
+  "sourceSha256": "32789919b7c85f69d6784eaac6ee27b70ccbd8d82bdfbc02879b165c32a0a255",
+  "capBytes": 32768,
+  "payload": {
+    "meta": {
+      "generated": "2026-09-21",
+      "task": "P1-02",
+      "repo_commit": "ca69a4b",
+      "sources": {
+        "command_registry": "src-tauri/src/lib.rs:487-1162",
+        "settings_panels": "src/components/app-settings/panelRegistry.tsx:183-324 (19 entries)",
+        "frontend_api": "src/lib/api/ (12 files, 197 mirrored command strings ≈193 distinct, 21 exported wrappers)",
+        "react_state": "src/state/app/ (24 files) + 12 named root modules",
+        "events": "docs/native/command-map.json events[] — 38 条，由 scripts/native/inventory.mjs --freeze 复现生成，与 §1.1 人工检视结果一致",
+        "background_services": "见 docs/native/command-map.json 与 P1-02 研究记录",
+        "panels": "docs/native/command-map.json panels[] — 19 条，含 via=literal/const 与 registry 行号",
+        "reachability": "docs/native/reachability-triage.md + command-map.json meta.reachability"
+      },
+      "marker_legend": "N=原生界面 C=核心/CLI A=外部 Agent 能力适配 K=保留跨平台实现",
+      "counts": {
+        "feature_groups": 26,
+        "gap_entries": 17,
+        "commands_total": 660,
+        "features_with_zero_existing_commands": [
+          "F21",
+          "F22",
+          "F23",
+          "F24"
+        ],
+        "events_frozen": 38,
+        "panels_frozen": 19,
+        "definitions_resolved": 660,
+        "dynamic_sites": 5,
+        "reachable_commands": 567,
+        "unreachable_commands": 93,
+        "frontend_invoke_literals": 422,
+        "reachability_buckets": {
+          "prefix_derived_only": 28,
+          "prefix_derived_plus_test": 6,
+          "test_only": 6,
+          "no_evidence": 53,
+          "no_evidence_dsh_webui": 41
+        },
+        "names_globally_unique": true
+      },
+      "caveats": [
+        "commands_mapped 只是命令维度的归属计数；能力组的完整覆盖还必须由 gaps 与页面/事件/后台服务行证明（§1.2 末段要求）",
+        "F21~F24 现有命令数为 0 是**预期结果**（外部能力与新增模式开关），不得当作迁移遗漏，也不得据此声称已支持",
+        "status 只有 accepted 才可关闭条目；§1.2 明令不得以『以后迁移』关闭条目",
+        "本文件为 P1-02 规划工件；P1-04 的 inventory.mjs 必须把它当作可比对的已提交清单，而非运行时重新推导"
+      ]
+    }
+  }
+}

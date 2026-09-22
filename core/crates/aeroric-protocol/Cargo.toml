@@ -1,0 +1,16 @@
+[package]
+name = "aeroric-protocol"
+description = "Stable local-protocol DTOs, capability model, errors and events for Aeroric's headless core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

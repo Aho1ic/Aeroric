@@ -51,6 +51,24 @@ docs/*
 # Review follow-up: human rationale for pnpm.auditConfig.ignoreGhsas + opener scope
 # (package.json / capabilities JSON cannot carry comments).
 !docs/dependency-audit-ignores.md
+# 原生迁移的规划工件（矩阵/命令清单/ADR/评审证据）必须随仓库分发：
+# MIGRATION_PLAN 的每个 Phase Gate 都拿它们当可比对的已提交清单，
+# 被忽略就等于清单只存在于某一台机器上，Gate 无法复核。
+!docs/native/
+docs/native/**
+# 按扩展名放行而不是枚举子目录：`extraction/` 曾被漏掉一次，让一份 28 KB 的
+# 规划工件只存在于本机。Phase 4+ 还会新建工件目录，不该再依赖手动枚举。
+# 末尾带 `/` 的规则必须先解除目录本身的忽略，git 才会进入该目录找被放行的文件。
+!docs/native/**/
+!docs/native/**/*.md
+!docs/native/**/*.json
+# Native migration build output and generated Xcode project. `project.yml` and
+# the shared scheme are the committed sources; the .xcodeproj is derived.
+.artifacts/native/
+core/target/
+macos/AeroricKit/.build/
+macos/DerivedData/
+macos/AeroricNative.xcodeproj/
 Trellis/
 trellis/
 .trellis/

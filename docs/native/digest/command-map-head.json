@@ -1,0 +1,148 @@
+{
+  "shard": "command-map-head.json",
+  "from": "docs/native/command-map.summary.json",
+  "sourceSha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+  "capBytes": 32768,
+  "payload": {
+    "generated": "2026-09-21",
+    "task": "P1-02",
+    "repo_commit": "ca69a4b",
+    "authoritative_source": "src-tauri/src/lib.rs:487-1162 tauri::generate_handler![...] (single registration site, 656 module-qualified + 4 crate-root entries)",
+    "counts": {
+      "registered_entries": 660,
+      "by_category": {
+        "host_local_os_ui": 19,
+        "domain_rpc": 579,
+        "platform_specific": 62
+      },
+      "by_check_module": {
+        "shell": 4,
+        "terminal-core": 11,
+        "files": 21,
+        "editor": 4,
+        "ide": 62,
+        "connections": 66,
+        "notebook-services": 7,
+        "git": 36,
+        "agents": 10,
+        "maintenance": 21,
+        "infrastructure": 10,
+        "worktree": 4,
+        "sessions": 7,
+        "settings": 50,
+        "projects": 6,
+        "remote": 9,
+        "platforms": 62,
+        "provider-services": 7,
+        "extensions": 29,
+        "dsh": 66,
+        "database": 95,
+        "notebook": 73
+      },
+      "by_feature": {
+        "F25": 17,
+        "F04": 11,
+        "F26": 11,
+        "F07": 44,
+        "F08": 62,
+        "F11": 66,
+        "F16": 80,
+        "F09": 104,
+        "F03": 56,
+        "F20": 1,
+        "F19": 56,
+        "F13": 10,
+        "F10": 4,
+        "F05": 7,
+        "F01": 6,
+        "F02": 6,
+        "F18": 9,
+        "F12": 62,
+        "F17": 36,
+        "F06": 66,
+        "INV-06": 2,
+        "F14": 95,
+        "F15": 73
+      },
+      "events": 38,
+      "panels": 19,
+      "dynamic_invoke_sites": 5,
+      "dynamic_command_names_enumerated": 83,
+      "definition_by_resolution": {
+        "module-subtree-unique": 660
+      },
+      "reachable": 567,
+      "unreachable": 93
+    },
+    "method": "机械解析注册表条目 → 56 模块级分类默认值 + 4 条命令级例外（见 command-map.json 的 meta.category_resolution） → 命令名级 host-local override；definition_candidates 由全量 fn 声明索引得出",
+    "caveats": [
+      "definition_candidates 长度 >1 = 同名 fn 出现在多个文件，P1-04 的 inventory.mjs 必须按 rust_path 精确消歧，不得取第一个",
+      "rpc_method 为提案值，须在 P2-01 冻结进 contracts/native/v1/methods.schema.json 后才算定稿",
+      "category 为 host_local_os_ui / platform_specific / internal 的条目不得进入 host 的 mutation allow-list",
+      "tests 模块注册的 4 个命令按 internal 处理，P1-04 判定是否只是测试夹具",
+      "本文件由一次性解析产生（P1-02 不交付检查脚本）；P1-04 的 scripts/native/inventory.mjs 须独立重算出同样的 660 与同样的分类分布，否则视为漂移",
+      "by_feature 中缺失的 Fxx 表示该能力组在本表里没有对应命令模块，必须由 feature-matrix.json 的页面/服务行覆盖，不得当作空组关闭"
+    ],
+    "revisions": [
+      {
+        "date": "2026-09-21",
+        "task": "P1-02",
+        "changes": [
+          "tests 模块 4 命令 internal → domain_rpc / ide::test_runner / F08",
+          "git 的 4 个 worktree 命令追加 F10 并拆出 check 模块 worktree",
+          "worktree override 命中 4 条"
+        ]
+      }
+    ],
+    "known_ambiguities": [
+      {
+        "rust_path": "skills::list_skills",
+        "candidates": [
+          "src-tauri/src/dsh_webui.rs:2711",
+          "src-tauri/src/skills.rs:1190"
+        ],
+        "resolution_required_before": "P2-01",
+        "risk": "P1-04 的 inventory.mjs 若按名取首个匹配，会把源文件记错，导致 §5.1 的一文件一条展开落错目标"
+      }
+    ],
+    "definition_resolution": {
+      "rule": "rust_path 的模块段展开为目录前缀 src-tauri/src/<mod>/ 或文件 src-tauri/src/<mod>.rs；在该模块子树内 fn 声明唯一才算确定。用子树而不是 <mod>.rs/<mod>/mod.rs 两点，是因为 mod.rs 以 glob pub use 重导出子文件里的 #[tauri::command]（app_settings/mod.rs:63 的注释就是讲这件事）",
+      "resolved_by_module_path": 660,
+      "needs_human_resolution": [],
+      "why": "同名 fn 在别的模块存在时按名字取首个会把源文件记错，§5.1 的『一文件一条』展开会落到错误目标（G10）"
+    },
+    "category_resolution": {
+      "rule": "category = override[rust_path] ?? moduleDefault[首段模块]，由 inventory --check 强制",
+      "modules": 56,
+      "overrides": 4
+    },
+    "reachability": {
+      "rule": "reachable = 名字以字符串字面量出现在 src/ 或 mobile//packages/，或在 src-tauri/src 内除自身 fn 声明行与 lib.rs 注册之外仍被按行引用。计数单位为引用行数。",
+      "excluded_dirs": [
+        "node_modules",
+        ".git",
+        ".worktrees",
+        ".artifacts",
+        "dist"
+      ],
+      "unreachable_by_module": {
+        "lsp": 12,
+        "tests": 4,
+        "remote_fs": 1,
+        "remote_git": 10,
+        "wsl": 1,
+        "config": 1,
+        "wsl_fs": 1,
+        "wsl_git": 10,
+        "app_settings": 3,
+        "dsh_plugins": 3,
+        "dsh_webui": 42,
+        "notification": 1,
+        "skills": 1,
+        "notebook": 3
+      },
+      "note": "不可达不等于可删：remote_/wsl_ 镜像变体可能由 prefixCommand 运行时拼接，也可能只被外部客户端使用。删除任何一条之前必须先完成 G16 的逐项定性。"
+    },
+    "note": "compact digest for context injection; the frozen per-command/event/panel/dynamic-site/reachability checklist is docs/native/command-map.json — read on demand or via scripts/native/inventory.mjs. This digest does NOT replace a checklist row and must not be treated as one."
+  }
+}

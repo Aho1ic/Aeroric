@@ -1,0 +1,19 @@
+[package]
+name = "aeroric-host"
+description = "Authenticated Unix-domain-socket host: startup ordering, framing, dispatch and subscriptions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aeroric-core = { workspace = true }
+aeroric-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

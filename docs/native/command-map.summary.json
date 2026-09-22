@@ -1,0 +1,1286 @@
+{
+  "generated": "2026-09-21",
+  "task": "P1-02",
+  "repo_commit": "ca69a4b",
+  "authoritative_source": "src-tauri/src/lib.rs:487-1162 tauri::generate_handler![...] (single registration site, 656 module-qualified + 4 crate-root entries)",
+  "counts": {
+    "registered_entries": 660,
+    "by_category": {
+      "host_local_os_ui": 19,
+      "domain_rpc": 579,
+      "platform_specific": 62
+    },
+    "by_check_module": {
+      "shell": 4,
+      "terminal-core": 11,
+      "files": 21,
+      "editor": 4,
+      "ide": 62,
+      "connections": 66,
+      "notebook-services": 7,
+      "git": 36,
+      "agents": 10,
+      "maintenance": 21,
+      "infrastructure": 10,
+      "worktree": 4,
+      "sessions": 7,
+      "settings": 50,
+      "projects": 6,
+      "remote": 9,
+      "platforms": 62,
+      "provider-services": 7,
+      "extensions": 29,
+      "dsh": 66,
+      "database": 95,
+      "notebook": 73
+    },
+    "by_feature": {
+      "F25": 17,
+      "F04": 11,
+      "F26": 11,
+      "F07": 44,
+      "F08": 62,
+      "F11": 66,
+      "F16": 80,
+      "F09": 104,
+      "F03": 56,
+      "F20": 1,
+      "F19": 56,
+      "F13": 10,
+      "F10": 4,
+      "F05": 7,
+      "F01": 6,
+      "F02": 6,
+      "F18": 9,
+      "F12": 62,
+      "F17": 36,
+      "F06": 66,
+      "INV-06": 2,
+      "F14": 95,
+      "F15": 73
+    },
+    "events": 38,
+    "panels": 19,
+    "dynamic_invoke_sites": 5,
+    "dynamic_command_names_enumerated": 83,
+    "definition_by_resolution": {
+      "module-subtree-unique": 660
+    },
+    "reachable": 567,
+    "unreachable": 93
+  },
+  "method": "\u673a\u68b0\u89e3\u6790\u6ce8\u518c\u8868\u6761\u76ee \u2192 56 \u6a21\u5757\u7ea7\u5206\u7c7b\u9ed8\u8ba4\u503c + 4 \u6761\u547d\u4ee4\u7ea7\u4f8b\u5916\uff08\u89c1 command-map.json \u7684 meta.category_resolution\uff09 \u2192 \u547d\u4ee4\u540d\u7ea7 host-local override\uff1bdefinition_candidates \u7531\u5168\u91cf fn \u58f0\u660e\u7d22\u5f15\u5f97\u51fa",
+  "caveats": [
+    "definition_candidates \u957f\u5ea6 >1 = \u540c\u540d fn \u51fa\u73b0\u5728\u591a\u4e2a\u6587\u4ef6\uff0cP1-04 \u7684 inventory.mjs \u5fc5\u987b\u6309 rust_path \u7cbe\u786e\u6d88\u6b67\uff0c\u4e0d\u5f97\u53d6\u7b2c\u4e00\u4e2a",
+    "rpc_method \u4e3a\u63d0\u6848\u503c\uff0c\u987b\u5728 P2-01 \u51bb\u7ed3\u8fdb contracts/native/v1/methods.schema.json \u540e\u624d\u7b97\u5b9a\u7a3f",
+    "category \u4e3a host_local_os_ui / platform_specific / internal \u7684\u6761\u76ee\u4e0d\u5f97\u8fdb\u5165 host \u7684 mutation allow-list",
+    "tests \u6a21\u5757\u6ce8\u518c\u7684 4 \u4e2a\u547d\u4ee4\u6309 internal \u5904\u7406\uff0cP1-04 \u5224\u5b9a\u662f\u5426\u53ea\u662f\u6d4b\u8bd5\u5939\u5177",
+    "\u672c\u6587\u4ef6\u7531\u4e00\u6b21\u6027\u89e3\u6790\u4ea7\u751f\uff08P1-02 \u4e0d\u4ea4\u4ed8\u68c0\u67e5\u811a\u672c\uff09\uff1bP1-04 \u7684 scripts/native/inventory.mjs \u987b\u72ec\u7acb\u91cd\u7b97\u51fa\u540c\u6837\u7684 660 \u4e0e\u540c\u6837\u7684\u5206\u7c7b\u5206\u5e03\uff0c\u5426\u5219\u89c6\u4e3a\u6f02\u79fb",
+    "by_feature \u4e2d\u7f3a\u5931\u7684 Fxx \u8868\u793a\u8be5\u80fd\u529b\u7ec4\u5728\u672c\u8868\u91cc\u6ca1\u6709\u5bf9\u5e94\u547d\u4ee4\u6a21\u5757\uff0c\u5fc5\u987b\u7531 feature-matrix.json \u7684\u9875\u9762/\u670d\u52a1\u884c\u8986\u76d6\uff0c\u4e0d\u5f97\u5f53\u4f5c\u7a7a\u7ec4\u5173\u95ed"
+  ],
+  "revisions": [
+    {
+      "date": "2026-09-21",
+      "task": "P1-02",
+      "changes": [
+        "tests \u6a21\u5757 4 \u547d\u4ee4 internal \u2192 domain_rpc / ide::test_runner / F08",
+        "git \u7684 4 \u4e2a worktree \u547d\u4ee4\u8ffd\u52a0 F10 \u5e76\u62c6\u51fa check \u6a21\u5757 worktree",
+        "worktree override \u547d\u4e2d 4 \u6761"
+      ]
+    }
+  ],
+  "known_ambiguities": [
+    {
+      "rust_path": "skills::list_skills",
+      "candidates": [
+        "src-tauri/src/dsh_webui.rs:2711",
+        "src-tauri/src/skills.rs:1190"
+      ],
+      "resolution_required_before": "P2-01",
+      "risk": "P1-04 \u7684 inventory.mjs \u82e5\u6309\u540d\u53d6\u9996\u4e2a\u5339\u914d\uff0c\u4f1a\u628a\u6e90\u6587\u4ef6\u8bb0\u9519\uff0c\u5bfc\u81f4 \u00a75.1 \u7684\u4e00\u6587\u4ef6\u4e00\u6761\u5c55\u5f00\u843d\u9519\u76ee\u6807"
+    }
+  ],
+  "definition_resolution": {
+    "rule": "rust_path \u7684\u6a21\u5757\u6bb5\u5c55\u5f00\u4e3a\u76ee\u5f55\u524d\u7f00 src-tauri/src/<mod>/ \u6216\u6587\u4ef6 src-tauri/src/<mod>.rs\uff1b\u5728\u8be5\u6a21\u5757\u5b50\u6811\u5185 fn \u58f0\u660e\u552f\u4e00\u624d\u7b97\u786e\u5b9a\u3002\u7528\u5b50\u6811\u800c\u4e0d\u662f <mod>.rs/<mod>/mod.rs \u4e24\u70b9\uff0c\u662f\u56e0\u4e3a mod.rs \u4ee5 glob pub use \u91cd\u5bfc\u51fa\u5b50\u6587\u4ef6\u91cc\u7684 #[tauri::command]\uff08app_settings/mod.rs:63 \u7684\u6ce8\u91ca\u5c31\u662f\u8bb2\u8fd9\u4ef6\u4e8b\uff09",
+    "resolved_by_module_path": 660,
+    "needs_human_resolution": [],
+    "why": "\u540c\u540d fn \u5728\u522b\u7684\u6a21\u5757\u5b58\u5728\u65f6\u6309\u540d\u5b57\u53d6\u9996\u4e2a\u4f1a\u628a\u6e90\u6587\u4ef6\u8bb0\u9519\uff0c\u00a75.1 \u7684\u300e\u4e00\u6587\u4ef6\u4e00\u6761\u300f\u5c55\u5f00\u4f1a\u843d\u5230\u9519\u8bef\u76ee\u6807\uff08G10\uff09"
+  },
+  "reachability": {
+    "rule": "reachable = \u540d\u5b57\u4ee5\u5b57\u7b26\u4e32\u5b57\u9762\u91cf\u51fa\u73b0\u5728 src/ \u6216 mobile//packages/\uff0c\u6216\u5728 src-tauri/src \u5185\u9664\u81ea\u8eab fn \u58f0\u660e\u884c\u4e0e lib.rs \u6ce8\u518c\u4e4b\u5916\u4ecd\u88ab\u6309\u884c\u5f15\u7528\u3002\u8ba1\u6570\u5355\u4f4d\u4e3a\u5f15\u7528\u884c\u6570\u3002",
+    "excluded_dirs": [
+      "node_modules",
+      ".git",
+      ".worktrees",
+      ".artifacts",
+      "dist"
+    ],
+    "unreachable_by_module": {
+      "lsp": 12,
+      "tests": 4,
+      "remote_fs": 1,
+      "remote_git": 10,
+      "wsl": 1,
+      "config": 1,
+      "wsl_fs": 1,
+      "wsl_git": 10,
+      "app_settings": 3,
+      "dsh_plugins": 3,
+      "dsh_webui": 42,
+      "notification": 1,
+      "skills": 1,
+      "notebook": 3
+    },
+    "note": "\u4e0d\u53ef\u8fbe\u4e0d\u7b49\u4e8e\u53ef\u5220\uff1aremote_/wsl_ \u955c\u50cf\u53d8\u4f53\u53ef\u80fd\u7531 prefixCommand \u8fd0\u884c\u65f6\u62fc\u63a5\uff0c\u4e5f\u53ef\u80fd\u53ea\u88ab\u5916\u90e8\u5ba2\u6237\u7aef\u4f7f\u7528\u3002\u5220\u9664\u4efb\u4f55\u4e00\u6761\u4e4b\u524d\u5fc5\u987b\u5148\u5b8c\u6210 G16 \u7684\u9010\u9879\u5b9a\u6027\u3002"
+  },
+  "note": "compact digest for context injection; the frozen per-command/event/panel/dynamic-site/reachability checklist is docs/native/command-map.json \u2014 read on demand or via scripts/native/inventory.mjs. This digest does NOT replace a checklist row and must not be treated as one.",
+  "modules": {
+    "(crate_root)": {
+      "category": "host_local_os_ui",
+      "core_service": "platform(window/exit lifecycle)",
+      "rpc_namespace": "host",
+      "feature_ids": [
+        "F25"
+      ],
+      "swift_scene": "AeroricApp/Sources",
+      "check_module": "shell"
+    },
+    "pty": {
+      "category": "domain_rpc",
+      "core_service": "runtime+terminal",
+      "rpc_namespace": "task/terminal",
+      "feature_ids": [
+        "F04",
+        "F26"
+      ],
+      "swift_scene": "AeroricUI/Terminal",
+      "check_module": "terminal-core"
+    },
+    "dsh_webui": {
+      "category": "domain_rpc",
+      "core_service": "agents::dsh_host",
+      "rpc_namespace": "dsh",
+      "feature_ids": [
+        "F06"
+      ],
+      "swift_scene": "AeroricUI/DSH",
+      "check_module": "dsh"
+    },
+    "notebook": {
+      "category": "domain_rpc",
+      "core_service": "notebook",
+      "rpc_namespace": "notebook",
+      "feature_ids": [
+        "F15",
+        "F16"
+      ],
+      "swift_scene": "AeroricUI/Notebook",
+      "check_module": "notebook"
+    },
+    "git": {
+      "category": "domain_rpc",
+      "core_service": "git",
+      "rpc_namespace": "git",
+      "feature_ids": [
+        "F09"
+      ],
+      "swift_scene": "AeroricUI/Git",
+      "check_module": "git"
+    },
+    "remote_git": {
+      "category": "domain_rpc",
+      "core_service": "git(ssh target)",
+      "rpc_namespace": "git",
+      "feature_ids": [
+        "F09",
+        "F11"
+      ],
+      "swift_scene": "AeroricUI/Git",
+      "check_module": "connections"
+    },
+    "wsl_git": {
+      "category": "platform_specific",
+      "core_service": "git(wsl target)",
+      "rpc_namespace": "git",
+      "feature_ids": [
+        "F09",
+        "F12"
+      ],
+      "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+      "check_module": "platforms"
+    },
+    "app_settings": {
+      "category": "domain_rpc",
+      "core_service": "settings",
+      "rpc_namespace": "settings",
+      "feature_ids": [
+        "F03",
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "settings"
+    },
+    "config": {
+      "category": "domain_rpc",
+      "core_service": "settings",
+      "rpc_namespace": "settings",
+      "feature_ids": [
+        "F03"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "settings"
+    },
+    "lsp": {
+      "category": "domain_rpc",
+      "core_service": "ide::lsp",
+      "rpc_namespace": "ide",
+      "feature_ids": [
+        "F08"
+      ],
+      "swift_scene": "AeroricUI/IDE",
+      "check_module": "ide"
+    },
+    "dap": {
+      "category": "domain_rpc",
+      "core_service": "ide::dap",
+      "rpc_namespace": "ide",
+      "feature_ids": [
+        "F08"
+      ],
+      "swift_scene": "AeroricUI/IDE",
+      "check_module": "ide"
+    },
+    "run_config": {
+      "category": "domain_rpc",
+      "core_service": "ide::run_config",
+      "rpc_namespace": "ide",
+      "feature_ids": [
+        "F08"
+      ],
+      "swift_scene": "AeroricUI/IDE",
+      "check_module": "ide"
+    },
+    "diagnostics": {
+      "category": "domain_rpc",
+      "core_service": "ide::diagnostics",
+      "rpc_namespace": "ide",
+      "feature_ids": [
+        "F08"
+      ],
+      "swift_scene": "AeroricUI/IDE",
+      "check_module": "ide"
+    },
+    "formatter": {
+      "category": "domain_rpc",
+      "core_service": "files::format",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07"
+      ],
+      "swift_scene": "AeroricUI/Editor",
+      "check_module": "editor"
+    },
+    "database": {
+      "category": "domain_rpc",
+      "core_service": "database",
+      "rpc_namespace": "database",
+      "feature_ids": [
+        "F14"
+      ],
+      "swift_scene": "AeroricUI/Database",
+      "check_module": "database"
+    },
+    "skills": {
+      "category": "domain_rpc",
+      "core_service": "extensions::skills",
+      "rpc_namespace": "extensions",
+      "feature_ids": [
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Extensions",
+      "check_module": "extensions"
+    },
+    "mcp": {
+      "category": "domain_rpc",
+      "core_service": "extensions::mcp",
+      "rpc_namespace": "extensions",
+      "feature_ids": [
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Extensions",
+      "check_module": "extensions"
+    },
+    "hooks": {
+      "category": "domain_rpc",
+      "core_service": "extensions::hooks",
+      "rpc_namespace": "extensions",
+      "feature_ids": [
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Extensions",
+      "check_module": "extensions"
+    },
+    "dsh_plugins": {
+      "category": "domain_rpc",
+      "core_service": "extensions::plugins",
+      "rpc_namespace": "extensions",
+      "feature_ids": [
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Extensions",
+      "check_module": "extensions"
+    },
+    "local_router_commands": {
+      "category": "domain_rpc",
+      "core_service": "local_router",
+      "rpc_namespace": "router",
+      "feature_ids": [
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "provider-services"
+    },
+    "sftp": {
+      "category": "domain_rpc",
+      "core_service": "connections::sftp",
+      "rpc_namespace": "connections",
+      "feature_ids": [
+        "F11"
+      ],
+      "swift_scene": "AeroricUI/Connections",
+      "check_module": "connections"
+    },
+    "ssh": {
+      "category": "domain_rpc",
+      "core_service": "connections::ssh",
+      "rpc_namespace": "connections",
+      "feature_ids": [
+        "F11"
+      ],
+      "swift_scene": "AeroricUI/Connections",
+      "check_module": "connections"
+    },
+    "ssh_hostkey": {
+      "category": "domain_rpc",
+      "core_service": "connections::host_key",
+      "rpc_namespace": "connections",
+      "feature_ids": [
+        "F11"
+      ],
+      "swift_scene": "AeroricUI/Connections/HostKeyPrompt",
+      "check_module": "connections"
+    },
+    "remote_fs": {
+      "category": "domain_rpc",
+      "core_service": "connections::remote_files",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07",
+        "F11"
+      ],
+      "swift_scene": "AeroricUI/Connections",
+      "check_module": "connections"
+    },
+    "wsl": {
+      "category": "platform_specific",
+      "core_service": "connections::wsl",
+      "rpc_namespace": "wsl",
+      "feature_ids": [
+        "F12"
+      ],
+      "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+      "check_module": "platforms"
+    },
+    "wsl_fs": {
+      "category": "platform_specific",
+      "core_service": "connections::wsl_files",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07",
+        "F12"
+      ],
+      "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+      "check_module": "platforms"
+    },
+    "fs": {
+      "category": "domain_rpc",
+      "core_service": "files",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07"
+      ],
+      "swift_scene": "AeroricUI/Files",
+      "check_module": "files"
+    },
+    "search": {
+      "category": "domain_rpc",
+      "core_service": "files::search",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07"
+      ],
+      "swift_scene": "AeroricUI/Files",
+      "check_module": "files"
+    },
+    "local_history": {
+      "category": "domain_rpc",
+      "core_service": "files::local_history",
+      "rpc_namespace": "files",
+      "feature_ids": [
+        "F07"
+      ],
+      "swift_scene": "AeroricUI/Editor",
+      "check_module": "editor"
+    },
+    "session": {
+      "category": "domain_rpc",
+      "core_service": "sessions",
+      "rpc_namespace": "session",
+      "feature_ids": [
+        "F05"
+      ],
+      "swift_scene": "AeroricUI/Sessions",
+      "check_module": "sessions"
+    },
+    "storage": {
+      "category": "domain_rpc",
+      "core_service": "storage+projects",
+      "rpc_namespace": "project",
+      "feature_ids": [
+        "F01",
+        "F02"
+      ],
+      "swift_scene": "AeroricUI/Projects",
+      "check_module": "projects"
+    },
+    "remote": {
+      "category": "domain_rpc",
+      "core_service": "remote",
+      "rpc_namespace": "remote",
+      "feature_ids": [
+        "F18"
+      ],
+      "swift_scene": "AeroricUI/Remote",
+      "check_module": "remote"
+    },
+    "notification": {
+      "category": "domain_rpc",
+      "core_service": "maintenance::notifications",
+      "rpc_namespace": "maintenance",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "report": {
+      "category": "domain_rpc",
+      "core_service": "maintenance::reports",
+      "rpc_namespace": "maintenance",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "analytics": {
+      "category": "domain_rpc",
+      "core_service": "metrics::analytics",
+      "rpc_namespace": "usage",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "usage": {
+      "category": "domain_rpc",
+      "core_service": "metrics::usage",
+      "rpc_namespace": "usage",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "usage_index": {
+      "category": "domain_rpc",
+      "core_service": "metrics::index",
+      "rpc_namespace": "usage",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "agent_usage": {
+      "category": "domain_rpc",
+      "core_service": "metrics::agent_usage",
+      "rpc_namespace": "usage",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "startup_diagnostics": {
+      "category": "domain_rpc",
+      "core_service": "maintenance::diagnostics",
+      "rpc_namespace": "diagnostics",
+      "feature_ids": [
+        "F19"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "permissions": {
+      "category": "host_local_os_ui",
+      "core_service": "platform(adapter)",
+      "rpc_namespace": "permission",
+      "feature_ids": [
+        "F19",
+        "F25"
+      ],
+      "swift_scene": "AeroricUI/Operations",
+      "check_module": "maintenance"
+    },
+    "platform": {
+      "category": "platform_specific",
+      "core_service": "platform",
+      "rpc_namespace": "platform",
+      "feature_ids": [
+        "F12",
+        "F25"
+      ],
+      "swift_scene": "AeroricApp/Sources",
+      "check_module": "platforms"
+    },
+    "storage_conn": {
+      "category": "domain_rpc",
+      "core_service": "storage_backends",
+      "rpc_namespace": "storage_backend",
+      "feature_ids": [
+        "F16"
+      ],
+      "swift_scene": "AeroricUI/Notebook",
+      "check_module": "notebook-services"
+    },
+    "storage_oauth": {
+      "category": "domain_rpc",
+      "core_service": "storage_backends::oauth",
+      "rpc_namespace": "storage_backend",
+      "feature_ids": [
+        "F16"
+      ],
+      "swift_scene": "AeroricUI/Notebook",
+      "check_module": "notebook-services"
+    },
+    "docker": {
+      "category": "domain_rpc",
+      "core_service": "infrastructure::docker",
+      "rpc_namespace": "infra",
+      "feature_ids": [
+        "F13"
+      ],
+      "swift_scene": "AeroricUI/Infrastructure",
+      "check_module": "infrastructure"
+    },
+    "ports": {
+      "category": "domain_rpc",
+      "core_service": "infrastructure::ports",
+      "rpc_namespace": "infra",
+      "feature_ids": [
+        "F13"
+      ],
+      "swift_scene": "AeroricUI/Infrastructure",
+      "check_module": "infrastructure"
+    },
+    "conda": {
+      "category": "domain_rpc",
+      "core_service": "infrastructure::conda",
+      "rpc_namespace": "infra",
+      "feature_ids": [
+        "F13"
+      ],
+      "swift_scene": "AeroricUI/Infrastructure",
+      "check_module": "infrastructure"
+    },
+    "custom_themes": {
+      "category": "host_local_os_ui",
+      "core_service": "appearance(client)",
+      "rpc_namespace": "theme",
+      "feature_ids": [
+        "F25"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "settings"
+    },
+    "agent_tools": {
+      "category": "domain_rpc",
+      "core_service": "agents::managed_install",
+      "rpc_namespace": "agent_tools",
+      "feature_ids": [
+        "F03"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "agents"
+    },
+    "agent_ops": {
+      "category": "domain_rpc",
+      "core_service": "operations",
+      "rpc_namespace": "operations",
+      "feature_ids": [
+        "F03"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "agents"
+    },
+    "agent_assist": {
+      "category": "domain_rpc",
+      "core_service": "agents::assist",
+      "rpc_namespace": "agent_tools",
+      "feature_ids": [
+        "F03",
+        "F20"
+      ],
+      "swift_scene": "AeroricUI/Sessions",
+      "check_module": "agents"
+    },
+    "omp_home": {
+      "category": "domain_rpc",
+      "core_service": "agents::managed_home::omp",
+      "rpc_namespace": "agent_tools",
+      "feature_ids": [
+        "F03",
+        "INV-06"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "agents"
+    },
+    "node_runtime": {
+      "category": "domain_rpc",
+      "core_service": "providers::node_runtime",
+      "rpc_namespace": "providers",
+      "feature_ids": [
+        "F03",
+        "F17"
+      ],
+      "swift_scene": "AeroricUI/Settings",
+      "check_module": "provider-services"
+    },
+    "tests": {
+      "category": "domain_rpc",
+      "core_service": "ide::test_runner",
+      "rpc_namespace": "ide",
+      "feature_ids": [
+        "F08"
+      ],
+      "swift_scene": "AeroricUI/IDE",
+      "check_module": "ide",
+      "correction": "2026-09-21 \u590d\u6838\uff1adiscover_tests/run_tests/remote_* \u662f\u300c\u8fd0\u884c/\u6d4b\u8bd5\u300d\u4ea7\u54c1\u80fd\u529b\uff08F08\uff09\uff0c\u521d\u7248\u8bef\u5224\u4e3a internal \u6d4b\u8bd5\u5939\u5177"
+    }
+  },
+  "event_dispositions": {
+    "agent-tool-install-progress": "redundant-channel",
+    "app-exit-requested": "emitted-dynamically",
+    "app-restart-requested": "emitted-dynamically",
+    "dsh-host-agent-error": "emitted-dynamically",
+    "dsh-host-archived-sessions-changed": "emitted-dynamically",
+    "dsh-host-remote-event": "needs-native-consumer",
+    "dsh-host-session-added": "emitted-dynamically",
+    "dsh-host-session-removed": "emitted-dynamically",
+    "dsh-host-session-status": "emitted-dynamically",
+    "dsh-host-stream-error": "needs-native-consumer",
+    "dsh-host-workspace-changed": "emitted-dynamically",
+    "dsh-host-workspace-order-changed": "emitted-dynamically",
+    "dsh-host-workspace-removed": "emitted-dynamically",
+    "shell-output": "emitted-dynamically"
+  },
+  "panel_targets": {
+    "general": [
+      "AeroricUI/Settings/GeneralSettingsView",
+      "P5-02, P5-05"
+    ],
+    "theme": [
+      "AeroricUI/Settings/AppearanceSettingsView",
+      "P5-05"
+    ],
+    "fonts": [
+      "AeroricUI/Settings/AppearanceSettingsView",
+      "P5-05"
+    ],
+    "shortcuts": [
+      "AeroricUI/Settings/ShortcutSettingsView",
+      "P5-05"
+    ],
+    "proxy": [
+      "AeroricUI/Settings/ProxySettingsView",
+      "P8-02"
+    ],
+    "local-router": [
+      "AeroricUI/Settings/LocalRouterSettingsView",
+      "P8-02"
+    ],
+    "remote": [
+      "AeroricUI/Remote/RemoteAccessSettingsView",
+      "P8-03"
+    ],
+    "mcp": [
+      "AeroricUI/Extensions/MCPSettingsView",
+      "P8-01"
+    ],
+    "notebook-embedding": [
+      "AeroricUI/Notebook/EmbeddingSettingsView",
+      "P7-06"
+    ],
+    "cleanup-report": [
+      "AeroricUI/Operations/{CleanupSettingsView,WeeklyReportView}",
+      "P8-04"
+    ],
+    "wsl": [
+      "AeroricUI/Connections/UnsupportedTargetView",
+      "P7-02"
+    ],
+    "permissions": [
+      "AeroricUI/Operations/PermissionSettingsView",
+      "P8-04"
+    ],
+    "__all_agent_configs__": [
+      "AeroricUI/Settings/{AgentSettingsView,CustomAgentEditor}",
+      "P3-02, P5-05"
+    ],
+    "usage": [
+      "AeroricUI/Operations/UsageDashboard",
+      "P8-04"
+    ],
+    "agent-updates": [
+      "AeroricUI/Settings/{AgentUpdateView,AgentOperationPanel}",
+      "P5-05, P8-02"
+    ],
+    "hooks": [
+      "AeroricUI/Extensions/HookStatusView",
+      "P8-01"
+    ],
+    "skills": [
+      "AeroricUI/Extensions/SkillHubView",
+      "P8-01"
+    ],
+    "dsh-plugins": [
+      "AeroricUI/Extensions/PluginManagerView",
+      "P8-01"
+    ],
+    "about": [
+      "AeroricUI/Operations/{DiagnosticsView,ReleaseView}",
+      "P8-04"
+    ]
+  },
+  "dynamic_sites": [
+    {
+      "file": "src/lib/api/git.ts",
+      "line": 105,
+      "names": 69,
+      "known_unregistered": [
+        "remote_git_checkout_branch",
+        "remote_git_create_branch",
+        "wsl_git_checkout_branch",
+        "wsl_git_create_branch"
+      ]
+    },
+    {
+      "file": "src/lib/api/lsp.ts",
+      "line": 15,
+      "names": 8,
+      "known_unregistered": []
+    },
+    {
+      "file": "src/components/app-settings/ShortcutsPanel.tsx",
+      "line": 129,
+      "names": 2,
+      "known_unregistered": []
+    },
+    {
+      "file": "src/components/app-settings/CleanupReportPanel.tsx",
+      "line": 94,
+      "names": 2,
+      "known_unregistered": []
+    },
+    {
+      "file": "src/components/app-settings/RemoteAccessPanel.tsx",
+      "line": 433,
+      "names": 2,
+      "known_unregistered": []
+    }
+  ],
+  "unreachable_commands": [
+    [
+      "lsp::remote_lsp_hover",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_definition",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_references",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_rename",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_apply_workspace_edit",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_completion",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_signature_help",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_code_actions",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_execute_command",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_document_symbols",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_inlay_hints",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "lsp::remote_lsp_workspace_symbols",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "tests::discover_tests",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "tests::run_tests",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "tests::remote_discover_tests",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "tests::remote_run_tests",
+      "domain_rpc",
+      "ide"
+    ],
+    [
+      "remote_fs::remote_copy_paths_to_directory",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_commit_detail",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_show_diff",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_stage_files",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_unstage_files",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_stage_all",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_unstage_all",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_discard_files",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_discard_all",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_blame_file",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "remote_git::remote_git_stash_drop",
+      "domain_rpc",
+      "connections"
+    ],
+    [
+      "wsl::get_wsl_agent_status",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "config::write_wsl_project_config",
+      "domain_rpc",
+      "settings"
+    ],
+    [
+      "wsl_fs::wsl_copy_paths_to_directory",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_commit_detail",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_show_diff",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_stage_files",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_unstage_files",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_stage_all",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_unstage_all",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_discard_files",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_discard_all",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_blame_file",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "wsl_git::wsl_git_stash_drop",
+      "platform_specific",
+      "platforms"
+    ],
+    [
+      "app_settings::save_agent_paths",
+      "domain_rpc",
+      "settings"
+    ],
+    [
+      "app_settings::save_custom_agent_profile",
+      "domain_rpc",
+      "settings"
+    ],
+    [
+      "dsh_plugins::install_dsh_plugin",
+      "domain_rpc",
+      "extensions"
+    ],
+    [
+      "dsh_plugins::uninstall_dsh_plugin",
+      "domain_rpc",
+      "extensions"
+    ],
+    [
+      "dsh_plugins::toggle_dsh_plugin",
+      "domain_rpc",
+      "extensions"
+    ],
+    [
+      "dsh_webui::stop_dsh_webui",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::get_dsh_webui_status",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::get_dsh_protocol_capabilities",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::invoke_dsh_remote",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_agent_presets",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_agent_preset_details",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::set_dsh_web_default_preset",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_sessions",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::rename_dsh_session",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::fork_dsh_session",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::search_dsh_sessions",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_workspaces",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::create_dsh_workspace",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::rename_dsh_workspace",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::delete_dsh_workspace",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::reorder_dsh_workspaces",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::move_dsh_session_in_workspace",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::archive_dsh_session",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::describe_dsh_credentials",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::set_dsh_credential",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::unset_dsh_credential",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_llm_providers",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::discover_dsh_llm_models",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::get_dsh_subagent_history",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::prompt_dsh_subagent",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::interrupt_dsh_subagent",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::create_dsh_goal",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::edit_dsh_goal",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::pause_dsh_goal",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::resume_dsh_goal",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::complete_dsh_goal",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::clear_dsh_goals",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::describe_dsh_host",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::list_dsh_host_directory",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::create_dsh_host_directory",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::select_dsh_session_preset",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::read_dsh_agent_preset",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::open_dsh_settings_document",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::replace_dsh_settings",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::mutate_dsh_settings",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::update_dsh_settings",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "dsh_webui::pick_dsh_host_directory",
+      "domain_rpc",
+      "dsh"
+    ],
+    [
+      "app_settings::upgrade_agent_versions",
+      "domain_rpc",
+      "settings"
+    ],
+    [
+      "notification::install_release_update",
+      "domain_rpc",
+      "maintenance"
+    ],
+    [
+      "skills::get_marketplace_skill_details",
+      "domain_rpc",
+      "extensions"
+    ],
+    [
+      "notebook::notebook_git_sync",
+      "domain_rpc",
+      "notebook"
+    ],
+    [
+      "notebook::notebook_sync_bind",
+      "domain_rpc",
+      "notebook"
+    ],
+    [
+      "notebook::notebook_sync_unbind",
+      "domain_rpc",
+      "notebook"
+    ]
+  ],
+  "category_resolution": {
+    "rule": "category = override[rust_path] ?? moduleDefault[\u9996\u6bb5\u6a21\u5757]\uff0c\u7531 inventory --check \u5f3a\u5236",
+    "modules": 56,
+    "overrides": 4
+  }
+}

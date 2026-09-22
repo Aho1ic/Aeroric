@@ -22,7 +22,16 @@
     "generate:design-tokens": "node scripts/generate-design-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "native:doctor": "node scripts/native/doctor.mjs",
+    "native:generate": "node scripts/native/generate.mjs",
+    "native:build": "node scripts/native/build.mjs",
+    "native:dev": "node scripts/native/dev.mjs",
+    "native:check": "node scripts/native/check.mjs",
+    "native:inventory": "node scripts/native/inventory.mjs",
+    "native:digest": "node scripts/native/digest.mjs --write",
+    "native:contracts": "node scripts/native/contracts.mjs",
+    "native:ui-test": "node scripts/native/ui-test.mjs"
   },
   "pnpm": {
     "overrides": {

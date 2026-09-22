@@ -1,0 +1,47 @@
+[workspace]
+# Independent Rust workspace: src-tauri/, remote-protocol/ and remote-relay/ keep
+# their own manifests and lock files on purpose, so release output paths under
+# src-tauri/target/ do not shift.
+resolver = "2"
+members = ["crates/aeroric-protocol", "crates/aeroric-core", "crates/aeroric-host", "crates/aeroric-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+authors = ["Aeroric"]
+license = "MIT"
+repository = "https://github.com/Aeroric/Aeroric"
+
+[workspace.dependencies]
+aeroric-protocol = { path = "crates/aeroric-protocol" }
+aeroric-core = { path = "crates/aeroric-core" }
+aeroric-host = { path = "crates/aeroric-host" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "process", "io-util", "net", "fs"] }
+base64 = "0.22"
+
+# This workspace root is the patch owner for everything it resolves; patches
+# declared in a member crate are silently ignored by Cargo, so the mapping lives
+# here and scripts/native/check-patches.mjs keeps it in sync with src-tauri.
+# Paths are relative to core/, hence ../src-tauri/... and ../../dbx/...
+[patch.crates-io]
+portable-pty = { path = "../src-tauri/vendor/portable-pty" }
+ssfmt = { path = "../src-tauri/vendor/ssfmt" }
+notify-types = { path = "../src-tauri/vendor/notify-types" }
+mysql_async = { git = "https://github.com/zipg/mysql_async.git", rev = "4a9e60a62f5a48e35ef9ccc9fc8277d5012b19dd" }
+tokio-postgres = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+postgres-types = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+postgres-protocol = { git = "https://github.com/t8y2/tokio-postgres-gaussdb.git", rev = "ac8ad476de59093d33ab9f294531c956e0c6a724" }
+tiberius = { path = "../../dbx/vendor/tiberius" }
+pageant = { path = "../../dbx/vendor/pageant" }
+
+[profile.dev]
+debug = 0
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+large_enum_variant = "allow"
+type_complexity = "allow"
