@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": {
+    "controlQueue": "control events are never dropped to make room; a slow terminal subscriber loses its subscription first",
+    "seq": "assigned at one ordered publish point; a gap is reported, never absorbed",
+    "unknownEvent": "clients keep the frame and must not fail the stream on an unrecognised topic"
+  },
+  "count": 38,
+  "events": [
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "aeroric:app-settings-changed",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "agent-operation-changed",
+      "orphan": null
+    },
+    {
+      "disposition": "redundant-channel",
+      "emitters": 1,
+      "listeners": 0,
+      "name": "agent-tool-install-progress",
+      "orphan": "emitted-without-listener"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "app-exit-requested",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "app-restart-requested",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dbx-production-confirm-requested",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dbx-transfer-progress",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-approval-requested",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-approval-resolved",
+      "orphan": null
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-agent-error",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-archived-sessions-changed",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "needs-native-consumer",
+      "emitters": 1,
+      "listeners": 0,
+      "name": "dsh-host-remote-event",
+      "orphan": "emitted-without-listener"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-session-added",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-session-removed",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-session-status",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "needs-native-consumer",
+      "emitters": 4,
+      "listeners": 0,
+      "name": "dsh-host-stream-error",
+      "orphan": "emitted-without-listener"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-workspace-changed",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-workspace-order-changed",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "dsh-host-workspace-removed",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-question-requested",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-question-resolved",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-session-event",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-session-jobs",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 2,
+      "listeners": 1,
+      "name": "dsh-session-projection",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-session-queue",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "dsh-session-subscribed",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "lsp://diagnostics",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "notebook-rag-index-progress",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "notebook-sync-updated",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "project-pinned-changed",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "remote-device-paired",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "remote-task-request",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 2,
+      "listeners": 1,
+      "name": "remote-terminal-resized",
+      "orphan": null
+    },
+    {
+      "disposition": "emitted-dynamically",
+      "emitters": 0,
+      "listeners": 1,
+      "name": "shell-output",
+      "orphan": "listened-without-emitter"
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 6,
+      "listeners": 1,
+      "name": "task-session",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 22,
+      "listeners": 1,
+      "name": "task-status",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 1,
+      "listeners": 1,
+      "name": "usage-statistics-updated",
+      "orphan": null
+    },
+    {
+      "disposition": "in-use",
+      "emitters": 2,
+      "listeners": 1,
+      "name": "weekly-report-progress",
+      "orphan": null
+    }
+  ],
+  "title": "aeroric-local-protocol-v1-events"
+}

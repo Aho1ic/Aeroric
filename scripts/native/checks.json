@@ -14,9 +14,12 @@
       "swift-package-smoke@skeleton": 12,
       "inventory-unit@skeleton": 33,
       "digest-unit@skeleton": 10,
-      "gate-runner-unit@skeleton": 18,
+      "gate-runner-unit@skeleton": 24,
       "invariants-unit@skeleton": 13,
-      "extraction-unit@skeleton": 9
+      "extraction-unit@skeleton": 9,
+      "protocol-rust@protocol": 47,
+      "protocol-swift-golden@protocol": 16,
+      "protocol-ts-golden@protocol": 17
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -27,13 +30,29 @@
         {
           "name": "core-cargo-check-locked",
           "kind": "gate",
-          "argv": ["cargo", "check", "--manifest-path", "core/Cargo.toml", "--locked"],
+          "argv": [
+            "cargo",
+            "check",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked"
+          ],
           "timeoutMs": 900000
         },
         {
           "name": "core-rust-skeleton",
           "kind": "test",
-          "argv": ["cargo", "test", "--manifest-path", "core/Cargo.toml", "--locked", "-p", "aeroric-protocol", "--test", "skeleton"],
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-protocol",
+            "--test",
+            "skeleton"
+          ],
           "parse": "rust",
           "minCases": 5,
           "timeoutMs": 900000
@@ -41,76 +60,186 @@
         {
           "name": "inv02-core-source-scan",
           "kind": "absent",
-          "argv": ["rg", "-n", "--no-ignore", "tauri::|AppHandle|tauri::State|WebviewWindow", "core/crates/aeroric-core/src", "core/crates/aeroric-protocol/src", "core/crates/aeroric-host/src"],
-          "controls": [["rg", "-q", "--no-ignore", "pub", "core/crates/aeroric-core/src"], ["rg", "-q", "--no-ignore", "pub", "core/crates/aeroric-protocol/src"], ["rg", "-q", "--no-ignore", "pub", "core/crates/aeroric-host/src"]],
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|AppHandle|tauri::State|WebviewWindow",
+            "core/crates/aeroric-core/src",
+            "core/crates/aeroric-protocol/src",
+            "core/crates/aeroric-host/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-core/src"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-protocol/src"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-host/src"
+            ]
+          ],
           "$note": "INV-02 的真实守卫。cargo tree 的依赖图扫描在骨架期近乎恒真（图里没有可引入 tauri 的依赖），所以在 P3-01 之前必须由源码扫描顶上来。",
           "timeoutMs": 120000
         },
         {
           "name": "inv02-core-manifest-denylist",
           "kind": "absent",
-          "argv": ["rg", "-n", "--no-ignore", "^(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)\\s*=", "core/Cargo.toml", "core/crates"],
-          "controls": [["rg", "-q", "--no-ignore", "^\\[", "core/Cargo.toml"], ["rg", "-q", "--no-ignore", "^\\[", "core/crates"]],
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "^(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)\\s*=",
+            "core/Cargo.toml",
+            "core/crates"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "^\\[",
+              "core/Cargo.toml"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "^\\[",
+              "core/crates"
+            ]
+          ],
           "$note": "依赖图未展开或被 feature 门控隐藏时的早失败兜底：core 的任何 manifest 出现这些依赖名即失败。",
           "timeoutMs": 120000
         },
         {
           "name": "core-no-tauri-deps",
           "kind": "forbid",
-          "argv": ["cargo", "tree", "--manifest-path", "core/Cargo.toml", "--locked"],
-          "forbid": ["tauri", "wry", "webview", "webkit2gtk", "cocoa", "objc2"],
+          "argv": [
+            "cargo",
+            "tree",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked"
+          ],
+          "forbid": [
+            "tauri",
+            "wry",
+            "webview",
+            "webkit2gtk",
+            "cocoa",
+            "objc2"
+          ],
           "stream": "stdout",
-          "mustContain": ["aeroric-core", "aeroric-protocol", "aeroric-host", "aeroric-cli"],
+          "mustContain": [
+            "aeroric-core",
+            "aeroric-protocol",
+            "aeroric-host",
+            "aeroric-cli"
+          ],
           "$note": "stdout only: Cargo prints 'patch ... not used' warnings on stderr and those lines contain the literal path ../src-tauri/vendor/..., which would make an all-output grep fail on a perfectly clean tree.",
           "timeoutMs": 300000
         },
         {
           "name": "swift-package-smoke",
           "kind": "test",
-          "argv": ["swift", "test", "--package-path", "macos/AeroricKit"],
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "PackageSmokeTests"
+          ],
           "parse": "swift",
           "minCases": 12,
-          "$note": "用例数只能数 `Test Case '…' passed|failed` 行：SwiftPM 6.4 的 `Executed N tests` 每个 bundle 重复输出，求和会把 12 读成 36。",
+          "$note": "SwiftPM 6.4 的 `Executed N tests` 每个 bundle 重复输出，求和会把 12 读成 36；只能数 `Test Case '…' passed|failed` 行。 加 `--filter` 是让地板互相独立：P2 之后新增的原生套件不得抬高或掩盖 P1 冒烟套件的数字。",
           "timeoutMs": 900000
         },
         {
           "name": "patches-match-src-tauri",
           "kind": "gate",
-          "argv": ["node", "scripts/native/check-patches.mjs", "--min-entries", "9"],
+          "argv": [
+            "node",
+            "scripts/native/check-patches.mjs",
+            "--min-entries",
+            "9"
+          ],
           "$note": "正控：两侧都必须解析出 ≥9 条 patch。空表比对曾经输出「0 patch entries identical」并 exit 0——删掉或改名的 patch 表就是这样悄悄让 core 与出货客户端解析不同源码的。现也识别 `[patch.\"...\"]` 引号注册表。",
           "timeoutMs": 120000
         },
         {
           "name": "inventory-consistency",
           "kind": "gate",
-          "argv": ["node", "scripts/native/inventory.mjs", "--check"],
+          "argv": [
+            "node",
+            "scripts/native/inventory.mjs",
+            "--check"
+          ],
           "timeoutMs": 300000
         },
         {
           "name": "extraction-docs-current",
           "kind": "gate",
-          "argv": ["node", "scripts/native/extraction.mjs", "--module=database", "--module=notebook", "--check", "docs/native/extraction/database-notebook.md"],
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=database",
+            "--module=notebook",
+            "--check",
+            "docs/native/extraction/database-notebook.md"
+          ],
           "$note": "§5.1 展开表必须能从源码重导：行数/落点/每文件 wrapper 数与 command-map.json 不一致就失败。首次实跑就暴露本文档两列历史数字是错的（914→782、586→650），因为原来生成它的是一次性代码、无法复现。",
           "timeoutMs": 300000
         },
         {
           "name": "extraction-docs-current-dsh-webui",
           "kind": "gate",
-          "argv": ["node", "scripts/native/extraction.mjs", "--module=dsh_webui", "--check", "docs/native/extraction/dsh-webui.md"],
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=dsh_webui",
+            "--check",
+            "docs/native/extraction/dsh-webui.md"
+          ],
           "$note": "第 4 块 §5.1 展开，同时证明延后它的理由是假的：dsh_webui 是 9 个文件 / 66 个 wrapper（14 条在同名兄弟文件 + 52 条在 commands.rs），不是「66 个文件」。为它给生成器加了「模块 = 目录 + 兄弟 .rs」的走法。",
           "timeoutMs": 300000
         },
         {
           "name": "extraction-docs-current-remote",
           "kind": "gate",
-          "argv": ["node", "scripts/native/extraction.mjs", "--module=remote", "--check", "docs/native/extraction/remote.md"],
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=remote",
+            "--check",
+            "docs/native/extraction/remote.md"
+          ],
           "$note": "remote/ 的 §5.1 展开（第 3 个模块，本轮解除阻塞：mobile 经 remote RPC 而非 Tauri invoke，0 处 @tauri-apps 引用）。dsh_webui/ 仍等 Q7/G17。",
           "timeoutMs": 300000
         },
         {
           "name": "extraction-unit",
           "kind": "test",
-          "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/extraction.test.mjs"],
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/extraction.test.mjs"
+          ],
           "parse": "node-test",
           "minCases": 9,
           "$note": "计数语义本身的负例：`#[cfg(test)]` 与 `mod tests {` 分行、字段级 cfg(test) 不得开测试块、带参数的 `#[tokio::test(...)]` 要算、impl 方法不得当顶层导出、漂移检测四种、空模块必须报错而不是产出空表。",
@@ -119,14 +248,22 @@
         {
           "name": "inv09-signing-baseline",
           "kind": "gate",
-          "argv": ["node", "scripts/native/check-signing-baseline.mjs"],
+          "argv": [
+            "node",
+            "scripts/native/check-signing-baseline.mjs"
+          ],
           "$note": "INV-09 此前没有任何守卫：基线 signingIdentity=\"-\" / hardenedRuntime=false 是刻意选择（链接器签名会让 TCC 授权每次重建作废），签名 CI 路径靠 release workflow 现场生成 tauri.macos-signed.json 覆盖回 true。缺键也算违规——Tauri 默认 hardenedRuntime=true，删键等于静默改基线。",
           "timeoutMs": 120000
         },
         {
           "name": "invariants-unit",
           "kind": "test",
-          "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/invariants.test.mjs"],
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/invariants.test.mjs"
+          ],
           "parse": "node-test",
           "minCases": 13,
           "$note": "两条「不得静默改变」的不变量的负例：签名字段被翻转/被删、workflow 不再开回 hardenedRuntime、patch 表被删空、只删一侧、rev 漂移。",
@@ -135,14 +272,23 @@
         {
           "name": "inventory-freeze-is-noop",
           "kind": "gate",
-          "argv": ["node", "scripts/native/inventory.mjs", "--freeze-check"],
+          "argv": [
+            "node",
+            "scripts/native/inventory.mjs",
+            "--freeze-check"
+          ],
           "$note": "『冻结清单』必须真的可复现：--freeze 重写 events/panels 后的字节必须与已提交工件一致。实测反例：修复前跑一次 --freeze 会删掉全部 14 条人工 event note 并把 disposition 从 emitted-dynamically/redundant-channel 重置成 untriaged（714 866 → 713 046 B），而 --check 当时仍报 consistent。合并现在按『只覆盖源派生键』工作，人写的键（含未来新增的）一律保留。",
           "timeoutMs": 300000
         },
         {
           "name": "inventory-unit",
           "kind": "test",
-          "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/inventory.test.mjs"],
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/inventory.test.mjs"
+          ],
           "parse": "node-test",
           "minCases": 33,
           "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
@@ -151,51 +297,199 @@
         {
           "name": "log-redaction-selftest",
           "kind": "gate",
-          "argv": ["node", "scripts/native/check.mjs", "--redact-selftest"],
+          "argv": [
+            "node",
+            "scripts/native/check.mjs",
+            "--redact-selftest"
+          ],
           "$note": "Q4：日志写入前脱敏。断言 8 类真实形态确实被洗掉——首次运行就抓出两处泄漏（kv 规则吞掉 'Bearer' 却留下 token；带引号的值完全不洗）。",
           "timeoutMs": 120000
         },
         {
           "name": "digest-shards-current",
           "kind": "gate",
-          "argv": ["node", "scripts/native/digest.mjs", "--check"],
+          "argv": [
+            "node",
+            "scripts/native/digest.mjs",
+            "--check"
+          ],
           "$note": "防 D8 重演：Trellis 注入在 32 768 B 处静默截断。摘要分片后每个分片必须能无损还原 canonical（漏 key / 过期 / 被手改 / 超限都算失败），所以分片不能变成丢行的借口。",
           "timeoutMs": 120000
         },
         {
           "name": "gate-runner-unit",
           "kind": "test",
-          "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/check-runner.test.mjs"],
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/check-runner.test.mjs"
+          ],
           "parse": "node-test",
-          "minCases": 18,
+          "minCases": 24,
           "$note": "门禁自己也要被测过：实测反例是注册了 `cases: []` 的模块会打印「0 case(s) passed」并 exit 0（P2-01 一旦注册 protocol 就会踩到），且 `all` 只看模块键存不存在、不看有没有 case——而它的报错文字恰恰声称在查后者。规则抽到 gate-config.mjs，因为 check.mjs 是带顶层副作用的脚本、import 即执行。",
           "timeoutMs": 300000
         },
         {
           "name": "digest-unit",
           "kind": "test",
-          "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/digest.test.mjs"],
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/digest.test.mjs"
+          ],
           "parse": "node-test",
           "minCases": 10,
           "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。",
           "timeoutMs": 300000
         }
       ]
+    },
+    "protocol": {
+      "registeredBy": "P2-01",
+      "cases": [
+        {
+          "name": "contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "Rust 是线协议的唯一来源：本 case 把 export-schema 生成到临时目录并与 contracts/native/v1 逐字节比对。--check 永不写仓库；漂移 = 非零退出。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-protocol"
+          ],
+          "minCases": 47,
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-swift-golden",
+          "kind": "test",
+          "parse": "swift",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ProtocolGoldenTests"
+          ],
+          "minCases": 16,
+          "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-ts-golden",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/native-host-protocol.test.ts"
+          ],
+          "minCases": 17,
+          "timeoutMs": 900000
+        },
+        {
+          "name": "contracts-free-of-local-state",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "/Users/|/private/var/|/var/folders/",
+            "contracts"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "protocolVersion",
+              "contracts/native/v1/envelope.schema.json"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "\"legacyCommand\"",
+              "contracts/native/v1/methods.schema.json"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "bytesBase64",
+              "contracts/native/v1/fixtures/terminal.json"
+            ]
+          ],
+          "$note": "契约产物要被三种语言读取：出现本机路径说明它是在某台机器上被就地生成的，换台机器就不可复现。正控保证 rg 不是因为读不到文件才返回 1。",
+          "timeoutMs": 120000
+        }
+      ]
     }
   },
   "plannedModules": {
     "$comment": "Registered by the task that creates the suite, per §3.2. Listed here only so the mapping is visible and auditable; check.mjs must fail on any of these until it exists.",
-    "protocol": "P2-01", "storage": "P2-02", "projects": "P2-03", "tasks": "P2-04",
-    "tauri-adapter": "P2-05", "runtime": "P3-01", "agents": "P3-02", "terminal-core": "P3-03",
-    "sessions": "P3-04", "dsh": "P3-05", "host": "P3-06", "cli": "P3-07",
-    "native-bootstrap": "P4-01", "swift-client": "P4-02", "native-design": "P4-03", "shell": "P4-04",
-    "native-terminal": "P5-01", "mode-switch": "P5-02", "tasks-ui": "P5-03", "sessions-ui": "P5-04",
-    "settings": "P5-05", "files": "P6-01", "editor": "P6-02", "ide": "P6-03", "git": "P6-04",
-    "worktree": "P6-05", "connections": "P7-01", "platforms": "P7-02", "infrastructure": "P7-03",
-    "database": "P7-04", "notebook": "P7-05", "notebook-services": "P7-06", "extensions": "P8-01",
-    "provider-services": "P8-02", "remote": "P8-03", "maintenance": "P8-04", "cutover": "P8-05",
-    "session-controls": "P9-01", "agent-work-graph": "P9-02", "workflows": "P9-03",
-    "external-protocols": "P9-04", "system-parity": "P10-01", "accessibility": "P10-02",
-    "signing-local": "P10-03", "release-contract": "P10-04", "all": "P10-05"
+    "storage": "P2-02",
+    "projects": "P2-03",
+    "tasks": "P2-04",
+    "tauri-adapter": "P2-05",
+    "runtime": "P3-01",
+    "agents": "P3-02",
+    "terminal-core": "P3-03",
+    "sessions": "P3-04",
+    "dsh": "P3-05",
+    "host": "P3-06",
+    "cli": "P3-07",
+    "native-bootstrap": "P4-01",
+    "swift-client": "P4-02",
+    "native-design": "P4-03",
+    "shell": "P4-04",
+    "native-terminal": "P5-01",
+    "mode-switch": "P5-02",
+    "tasks-ui": "P5-03",
+    "sessions-ui": "P5-04",
+    "settings": "P5-05",
+    "files": "P6-01",
+    "editor": "P6-02",
+    "ide": "P6-03",
+    "git": "P6-04",
+    "worktree": "P6-05",
+    "connections": "P7-01",
+    "platforms": "P7-02",
+    "infrastructure": "P7-03",
+    "database": "P7-04",
+    "notebook": "P7-05",
+    "notebook-services": "P7-06",
+    "extensions": "P8-01",
+    "provider-services": "P8-02",
+    "remote": "P8-03",
+    "maintenance": "P8-04",
+    "cutover": "P8-05",
+    "session-controls": "P9-01",
+    "agent-work-graph": "P9-02",
+    "workflows": "P9-03",
+    "external-protocols": "P9-04",
+    "system-parity": "P10-01",
+    "accessibility": "P10-02",
+    "signing-local": "P10-03",
+    "release-contract": "P10-04",
+    "all": "P10-05"
   }
 }

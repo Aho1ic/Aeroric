@@ -59,3 +59,42 @@ export function moduleGateProblem(name, entry) {
   }
   return null;
 }
+
+/**
+ * How many cases a test-kind run actually executed, per reporter.
+ *
+ * This used to live inline in `check.mjs`, where nothing could assert against it —
+ * and a wrong count is a wrong floor: SwiftPM 6.4 repeats `Executed N tests` per
+ * bundle (summing reads 12 as 36), and a reporter that changes its summary line
+ * would silently report zero, which the runner treats as a failure only because
+ * `minCases` says so. Keep every branch here pinned by `check-runner.test.mjs`.
+ */
+export function countCases(kind, raw) {
+  // Colours survive a pipe (vitest emits them even when captured), and an escape
+  // sequence inside `Tests  17 passed` reads as zero executed cases — which this
+  // runner treats as a failure, so the noise has to go before any matching.
+  const text = String(raw).replace(/\u001b\[[0-9;]*m/g, "");
+  if (kind === "rust") {
+    return [...text.matchAll(/^test result: \w+\. (\d+) passed/gm)].reduce((sum, m) => sum + Number(m[1]), 0);
+  }
+  if (kind === "swift") {
+    // Per-case lines are the only exact source; the totals line is a fallback for a
+    // reporter that prints only summaries, and then only its maximum is trustworthy.
+    const cases = [...text.matchAll(/^Test Case '.*' (passed|failed)/gm)].length;
+    if (cases > 0) return cases;
+    const totals = [...text.matchAll(/Executed (\d+) tests/g)];
+    return totals.length ? Math.max(...totals.map((m) => Number(m[1]))) : 0;
+  }
+  if (kind === "vitest") {
+    // `Tests  17 passed (17)` — and never `Test Files  1 passed (1)`, which would
+    // report one case for a suite of hundreds.
+    const summary = text.match(/^\s*Tests\s+(\d+) passed/m);
+    if (summary) return Number(summary[1]);
+    return [...text.matchAll(/^\s*[✓√]\s+\S+.*\((\d+) tests?\)/gm)].reduce((sum, m) => sum + Number(m[1]), 0);
+  }
+  if (kind === "node-test") {
+    const m = text.match(/^# pass (\d+)$/m);
+    return m ? Number(m[1]) : [...text.matchAll(/^ok \d+ - /gm)].length;
+  }
+  return 0;
+}

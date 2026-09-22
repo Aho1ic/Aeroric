@@ -37,8 +37,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P1-02 | **accepted**（三份规划工件落盘；未写脚本、未改运行时代码） | 后续增量：G08/G10 已由工具闭环、新发现 G15，见 P1-05 补记 | 2026-09-21 |
 | P1-03 | **accepted**（父+10 子任务建立，validate 双通过且无截断告警；仅 start Phase 1 子任务） | 新发现 D8 注入上限已处理 | 2026-09-21 |
 | P1-04 | **accepted，但一条自述已被推翻**（11 项验收命令当时全绿；骨架可构建、check 入口统一。**其中「`--freeze` 可复现地重生成冻结清单并保留人工字段」当时并不成立，见 P1-05 第七次补记**） | 无（`AGENTS.md` 不被跟踪的口径问题转入 P1-05） | 2026-09-21 |
-| P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁现为 20 case／100 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
-| P2-01 ~ P2-05 | pending | Phase 1 Gate | — |
+| P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁 20 case／106 用例；第十五次补记后另立 `protocol` 模块 5 case／80 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
+| P2-01 | **in_progress（门禁未闭合）**：契约层已落成且三方绿——`aeroric-protocol` 8 个 DTO 模块 + `export-schema` + `contracts/native/v1/`（3 schema + 6 fixture）+ TS/Swift 读侧 + `native:check protocol` 5 case／80 用例。**未完成**：ADR-006 的 109 条孪生收敛（641→532 + `twinAliases` + 签名核实）、ADR-007 的事件 topic 映射表、G16 剩余 **17 条方法的逐条定性**（用户已选"逐条现在定性"）。证据与缺口逐条见 `docs/native/reviews/protocol.md` | ADR-006/007 的实现 + 17 条定性 + 门禁第二轮（Q12 密钥投影、Q13 版本边界） | 2026-09-22 |
+| P2-02 ~ P2-05 | pending | P2-01 | — |
 | P3-01 ~ P3-07 | pending | Phase 2 Gate | — |
 | P4-01 ~ P4-04 | pending | Phase 3 Gate | — |
 | P5-01 ~ P5-05 | pending | Phase 4 Gate | — |
@@ -50,19 +51,19 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-22）：Phase 1 全部 accepted，Gate 已通过；下一步是 P2-01。** 旧的续跑说明保留在下方。P1-05 的交付文档、基线与回滚记录均已完成，`grill-me` 链路也已真实调用并完成第一轮 frontier 追问；第六～九轮（忽略白名单漏洞、空白卫生、注入分片；`--freeze` 会静默删人工字段 → `inventory-freeze-is-noop`；注册 0 条 case 的模块曾让门禁假绿 → `gate-runner-unit`；**INV-02 源码守卫曾被一个 `.gitignore` 完全绕过 → `--no-ignore` + 每个被扫路径一条正控探针**；第十轮（INV-09 签名基线此前无守卫 → 新增 `inv09-signing-baseline`；`check-patches` 空表恒绿 → 要求 ≥9 条且识别引号注册表）也已做完 —— 现在只剩等用户回答 Q1／Q5／Q6／Q7。**
+**当前状态（2026-09-22）：P2-01 进行中——契约层与三方解码器已落成并全绿，但 P2-01 尚未 accepted。** Phase 1 全部 accepted、Gate 已过（`3091c8f` + `e2d111c`，`main`，未 push）；Q1／Q5／Q6／Q7 已落成 ADR-002～005。P2-01 的门禁拷问（`grillme-matt:grill-with-docs`）已真实跑过一轮，Q8～Q11 有答案并落成 **ADR-006（109 条孪生并入父方法 + `params.target`）**、**ADR-007（v1 事件 topic 自成一集 + 38 条旧通道映射表）** 与 §2.3 的出处补记；剩 **Q12／Q13** 待问。
+
+**恢复执行时先做这三件事，顺序不能换（细节与实测数字全在 `docs/native/reviews/protocol.md`）：**
+
+1. **ADR-006 落地**：`inventory.mjs` 目前**不记录命令签名**，先加参数表抽取（定义点 `async fn xxx(...)`），逐条比对 109 条孪生与其 70 个父方法；只有参数差异确属"目标参数"的才能收敛。然后 `export-schema` 发布 **532 方法 + `twinAliases`**（每条带 `paramMapping` 状态与 `requiresCapability`：60 条 wsl 门控里有 **39 条本身是孪生、其父方法是 `domain_rpc`**，若按方法门控会把 macOS 本地的 `fs.read_dir_entries` 一起禁掉），并把 641→532／62→23／60→21 全部 pin 死。
+2. **G16 的 17 条逐条定性**：`discover_tests`／`run_tests`／`remote_*` 双条、`get_wsl_agent_status`、`write_wsl_project_config`、`save_agent_paths`、`save_custom_agent_profile`、`install|uninstall|toggle_dsh_plugin`、`upgrade_agent_versions`、`install_release_update`、`get_marketplace_skill_details`、`notebook_git_sync`、`notebook_sync_bind|unbind`。每条落成 `proven: <证据>` 或 `pending: <既有 Task>`，与 ADR-005 同一口径、同一强制方式；**不得留成"看起来通过"**（§5.4）。
+3. **ADR-007 映射表**：`docs/native/event-topics.json`（人工维护）→ 生成 `contracts/native/v1/event-topics.schema.json`，38 条旧通道每条恰好被一条 topic 覆盖或明确 `not-forwarded` + 原因；纳入 `native:contracts --check`。
+
+做完再跑门禁第二轮（Q12 `RpcError.detail` 的密钥投影：目前 `mustNotContain` 只是契约上的书面禁止 + 三方断言，宿主是否主动剥离未决；Q13 本地/远程版本边界：`protocolVersion` 只有常量与握手字段，跨版本策略未成文），把 P2-01 标 accepted，才进 P2-02（数据目录发现与 runtime metadata）。
 
 ⚠ **不需要重启会话**（本文件与 `tooling.md` 早前都写错过，已各自更正）：本 CLI 读取的技能根是 `~/.mirasim/skills`（`~/.claude/skills` 与 `~/.agents/skills` 都是指向它的符号链接），项目内的 `.claude/skills/` **完全不被读取**——反证是同目录里 frontmatter 合法的 `trellis-check` 同样不在注册表中。已按用户批准把固定 revision 的 `grill-me`/`grilling` 拷入该全局根（四个文件 sha256 与 `docs/native/tooling.md` §2 逐字一致，原有 6 个技能未受影响），注册表**当场热加载**，`Skill(grilling)` 随即成功。
 
-**下一步按顺序：**
-
-1. 用户回答 `docs/native/reviews/skeleton.md` 末尾的 **Q1／Q5／Q6／Q7**：RPC 命名（三方案实测零碰撞，660 名本就全局唯一）／Phase 1 是否提交到 main（不 push）／远程与 WSL 的 git 语义归属哪个 check 模块／DSH 取「42 条具名 core 方法」还是「一个 mux 网关服务」。
-   （**Q2／Q3／Q4 已实施并复验，不需再答**：地板只升不降＋孤儿检测、INV-02 源码与 manifest 双守卫、日志写入前脱敏并有自测。Q3 的守卫在第九轮被证过一个可绕过路径，现已加正控，勿当作免检项。）
-2. 按答案实施，重跑 `pnpm native:check skeleton`（当前 **20 cases / 100 用例**，实测 ~6 s），把复验结果与问题级别写回 `reviews/skeleton.md`，再把 P1-05 与 Phase 1 Gate 标 `accepted`。
-3. 才开始 **P2-01**（`aeroric-protocol` 的 envelope/DTO/schema/fixtures + Rust/TS/Swift 三方 decoder 共用**同一份** fixtures）。Phase 2 的产物、输入与验收见本文件 §Phase 2。
-4. **Phase 1 内不依赖门禁的收尾已全部做完**，包括 G16 的定性：93 条不可达命令已全部归入四个桶并落成 `docs/native/reachability-triage.md`（A 34 条 `prefixCommand` 运行时拼接、B 4 条 `tests::*` 整簇未接线、C 42 条 `dsh_webui::*` 被 `/api/remote.mux` 旁路、D 15 条逐项待判）。**下一步只剩回答待决问题。**
-5. **待你决策的问题清单：Q1～Q6（`docs/native/reviews/skeleton.md` 末尾）+ Q7 = G17（DSH 能力形态。**第十二次补记按实测重新定标**：真正待定的是 66 个 typed wrapper 中 41 个零证据者如何在 core 暴露，而 `protocol_inventory.rs` 把上游 dsh `c291e796…` / `0.1.5-rc.2` / protocol v2 钉住，所以选择题其实是「谁承担与上游的版本偏移」；证据在 `docs/native/extraction/dsh-webui.md`。旧述：42 个 typed core 方法 vs 一个 mux/gateway core service + 钉死的 `protocol_inventory` 清单（实测 10 张表 246 项：62 本地 RPC + 87 remote 方法 + 19 事件 + 19 事件模式 + 11 流帧 + 48 项已退役；live 198））**。这些都属于"中低风险由谁接受"与产品形态选择，Agent 不能替你把风险归零。
-6. 答复之后 P2-01 才可开工，且它的第一步就是把 93 条按 `reachability-triage.md` 的桶落实进 `methods.schema.json`（A 桶收敛成 target 参数化，C 桶按 Q7 的答案处理，D 桶逐条定性）——**不得把 81 条无人调用的名字原样提升进契约**。
+（原 1～6 步的 Phase 1 收尾清单已完成，保留在第十四次补记与 `reviews/skeleton.md`；Phase 1 期间的技能加载口径结论见下方 ⚠ 段。）
 
 **续跑时必须记住的硬约束（本轮实测踩出来的，不看就会重复踩）：**
 
@@ -533,6 +534,11 @@ Swift AeroricProtocol ← AeroricClient ← AeroricUI ← AeroricApp
 {"v":1,"event":"terminal.output","epoch":"host-uuid","seq":"19","data":{"taskId":"t","generation":"2","offset":"0","nextOffset":"3","bytesBase64":"YWJj"}}
 ```
 
+> **【P2-01 补记 @ 2026-09-22】上面 5 行示例里的 `task.start` / `task.complete` / `task.cancel` 不是 v1 的方法名。**
+> ADR-002 从冻结清单推导出来的是 `terminal.run_task` / `terminal.complete_task` / `terminal.cancel_task`（服务面 `pty → terminal`，叶子=旧命令名），`task.start` 这个命令在 660 条里根本不存在。用户在 P2-01 门禁中拍板：**产物与 ADR-002 为准，示例段保留原样但以此注为界**。
+> 这条不是文字问题：`contracts/native/v1/fixtures/` 是 Rust／Swift／TS 三方解码器**实际执行**的输入，教客户端发一个必然被拒的调用就是缺陷。生成器现在用 `fixtures_are_sourced` 强制 fixture 里每个 `method`/`event` 要么在发布面上、要么写明出处（`PLAN_SOURCED_EVENTS`，指向本节行号）、要么确属负例名单，且三份名单里不得有"没人用到"的条目。
+> 同一段里的 `task.updated` / `terminal.output` 则**保留为 v1 事件 topic**（ADR-007：v1 topic 自成一集，38 条旧通道经映射表桥接，不直接当 topic 名用）。
+
 这些是 envelope 示例，不是完整 Task DTO。协议 schema 中必须逐方法固定必填字段：
 
 - `v` 是 **本地协议版本**；握手协商版本交集、server build、数据格式、功能列表。不能因为版本等于 1 就推断所有 capability 都有。
@@ -995,6 +1001,17 @@ grill-me
 > 7. `feature-matrix.json` 因加入决策记录涨到 **41 793 B = 上限的 127%**——正因为第六轮把注入改成 7 个分片，这事才不再是问题：canonical 不再被注入，被注入的分片最大仍是 16 769 B（51%）。
 > 9. 收尾前最后一道口径也定了：11 条 `task/terminal.*` 归一为 **`terminal.*`**（与 check 模块 `terminal-core` 对齐；23 个服务面、641 个方法名实测仍全局唯一、零斜杠名）。因发生在 `methods.schema.json` 冻结之前，属提案修订而非协议变更，已记入 ADR-002 追加节与 `meta.rpc_resolution.module_to_service.pty`。
 > 8. 门禁现为 **20 case／100 用例**。§5.1 四块展开表全部由生成器可重导；ADR-001 的两条过期"阻塞"已更正；`CONTEXT.md`（术语表，未被忽略、可提交）与 ADR-002～005 落盘。
+
+> **【第十五次补记 @ 2026-09-22】P2-01 契约层落成：三方读同一份 fixtures，比对本身抓出 10 处不一致——其中 4 处是我的实现缺陷，1 处是我写下的假注释。**
+>
+> 1. **交付**：`core/crates/aeroric-protocol/src/` 八个 DTO 模块 + `bin/export-schema.rs`（线协议唯一来源，不写 `--out` 退 78）+ `contracts/native/v1/`（`envelope`/`methods`/`events` 三份 schema、6 份 fixture，312 KB 的 `methods.schema.json` 属提交工件、不进注入路径）+ `scripts/native/contracts.mjs`（`--check` 逐字节比对、**永不误写**；`--write` 才落盘；拒绝含本机路径的产物）+ TS 读侧 `src/lib/nativeHostProtocol.ts` + Swift 读侧 `Sources/AeroricProtocol/{ProtocolV1,ProtocolModels}.swift`。
+> 2. **门禁**：新增 `protocol` 模块 **5 case／80 用例**（rust 47 / swift 16 / ts 17 + `contracts-current` + `contracts-free-of-local-state` 带 3 条正控）；`skeleton` 20 case／**106** 用例（`gate-runner-unit` 18→24，新增 `countCases` 五类报告器断言）；`swift-package-smoke` 加 `--filter PackageSmokeTests`，让 P1 冒烟地板不被 P2 套件涨跌掩盖。写者幂等性按既有教训验过：连跑两次 `--write`，9 文件 sha256 全等；尾部加一个换行 → `--check` exit 1 并指到行号。
+> 3. **三方比对抓到的缺陷**（详表在 `reviews/protocol.md`）：① `Request` 漏 `rename_all = "camelCase"` → `idempotencyKey` 掉进 `extra`，**重试去重主键在读侧静默失效**（`extra` 兜底所以没有解析错误，只有绑定断言能抓）；② `can_resume` 与线上客户端不一致 → 按 `TaskList.tsx:184` + `taskSession.ts:41` 重写（`!todo && !active && !discarded && 有 transcript`），判定表放进 fixture 三方共用；③ **空白超长行**三方裁决不一致（TS 先判尺寸、Rust/Swift 先判空白）→ 统一为**先判尺寸**，这条是 Swift 测试替我抓出来的；④ TS 首版 `YQ==` 解成空数组，`atob` 会把 `"Y WJj"` 的空格吃掉——base64 向量从此也放进 fixture。
+> 4. **我写下的假注释**：`ErrorCode` 用 `#[serde(other)]` 降解为 `Unknown`，注释却写"原文保留供展示"。改成 `Other(String)` + 手写编解码，文本真的留下了；`known_name()` 的穷尽 match 顺带成了"新增码必须同步词表与契约"的编译期绊线。
+> 5. **fixture 里出现不存在的方法名**（`task.start` 出自 §2.3 示例）→ 生成器新增 `fixtures_are_sourced`：fixture 的每个 `method`/`event` 必须在发布面／注明出处／确属负例三者之一，且三份名单不得有死条目。上线第一件事就拒掉一个我随口写的 `"event":"e"`。同题引出 **Q8**（谁为权威）与 **ADR-006/007** 的口径。
+> 6. **分类与门控的可核对化**：`READ_VERBS` 里 **12 个动词一个命令都不匹配**（装饰性规则），改成"第一个动作 token 决定"+ 死动词直接失败 + 读方法数 **138/503** 钉死；62 条平台命令里 **2 条是跨平台**（`platform.get_platform_runtime_info`、`build_runnable_file_command`），照 category 一刀切挂 `wsl` 会在 macOS 上禁掉本来能用的调用，故按旧名是否含 `wsl` 判定并 pin 60/19。
+> 7. **G16 的账终于能对上了**：641 条方法每条带 `promotion`（caller-literal 450 / 前缀孪生 109 / ADR-005 typed 65 / 无证据 17）与 `requiresTriageDecision`（58），生成期 pin 死且三方各断言一次；这 4 组恰好划分 641，是"不得把无人调用的名字原样提升进契约"这条要求第一次变成可核对的东西。
+> 8. **门禁拷问的答案**（`grillme-matt:grill-with-docs`，四问四答）：Q8 产物为准 §2.3 加注；Q9 **109 条孪生并入父方法 + `params.target`**（→ ADR-006，实测面 641→532、父方法 70 个、孪生父命令缺失 0 条）；Q10 **17 条逐条现在定性**（尚未做完，P2-01 因此不 accepted）；Q11 **v1 事件 topic 自成一集 + 38 条映射表**（→ ADR-007）。
 
 - **Input**：§4、工具探测结果、`scripts/native/checks.json`、现有 `.github/workflows/checks.yml`。
 - **Action**：

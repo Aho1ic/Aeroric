@@ -1,0 +1,24 @@
+{
+  "comment": "mutating request then authoritative snapshot response: revision 7 -> 8, generation created",
+  "request": {
+    "id": "req-1",
+    "idempotencyKey": "op-1",
+    "method": "terminal.run_task",
+    "params": {
+      "expectedRevision": "7",
+      "projectId": "p",
+      "taskId": "t"
+    },
+    "v": 1
+  },
+  "response": {
+    "id": "req-1",
+    "ok": true,
+    "result": {
+      "generation": "2",
+      "revision": "8",
+      "taskId": "t"
+    },
+    "v": 1
+  }
+}

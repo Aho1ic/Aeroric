@@ -9,7 +9,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { absenceControlFailure, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
+import { absenceControlFailure, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
 
 // Secrets will start flowing past this point at P7-04 (DBX connection strings),
 // P8-02 (provider keys) and P8-03 (pairing material). "It is gitignored" is not a
@@ -102,25 +102,6 @@ if (entryProblem) {
   process.exit(1);
 }
 
-
-function countCases(kind, text) {
-  if (kind === "rust") {
-    return [...text.matchAll(/^test result: \w+\. (\d+) passed/gm)].reduce((sum, m) => sum + Number(m[1]), 0);
-  }
-  if (kind === "swift") {
-    // SwiftPM 6.4 repeats `Executed N tests` per bundle, so summing it inflates the
-    // count; per-case lines are the only exact source.
-    const cases = [...text.matchAll(/^Test Case '.*' (passed|failed)/gm)].length;
-    if (cases > 0) return cases;
-    const totals = [...text.matchAll(/Executed (\d+) tests/g)];
-    return totals.length ? Math.max(...totals.map((m) => Number(m[1]))) : 0;
-  }
-  if (kind === "node-test") {
-    const m = text.match(/^# pass (\d+)$/m);
-    return m ? Number(m[1]) : [...text.matchAll(/^ok \d+ - /gm)].length;
-  }
-  return 0;
-}
 
 function run(argv, timeoutMs) {
   return new Promise((resolve) => {

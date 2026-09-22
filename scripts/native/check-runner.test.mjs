@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { absenceControlFailure, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
+import { absenceControlFailure, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const goodCase = { name: "does-something", kind: "gate", argv: ["node", "-e", "0"] };
@@ -166,4 +166,51 @@ test("a forbid case with an empty output fails its positive control", () => {
   });
   assert.equal(result.status, 1, "an empty dependency listing must not certify purity");
   assert.match(result.stdout, /positive control/);
+});
+
+// The floor is only as honest as the counter. Every branch below pins a reporter
+// quirk that has already produced a wrong number once in this repository.
+test("countCases sums rust results across targets without double-counting", () => {
+  assert.equal(countCases("rust", "test result: ok. 28 passed; 0 failed\ntest result: ok. 10 passed; 0 failed"), 38);
+  assert.equal(countCases("rust", "test result: FAILED. 1 passed; 2 failed"), 1);
+  assert.equal(countCases("rust", ""), 0);
+});
+
+test("countCases reads swift per-case lines instead of the repeated totals", () => {
+  const perCase = "Test Case '-[a.B testOne]' passed (0.1)\nTest Case '-[a.B testTwo]' failed (0.1)\n";
+  assert.equal(countCases("swift", `${perCase}\t Executed 2 tests, with 1 failure`), 2);
+  // SwiftPM prints one `Executed N tests` block per bundle: summing 12+12+12 read 36.
+  assert.equal(countCases("swift", "Executed 12 tests\nExecuted 4 tests\nExecuted 4 tests"), 12);
+  assert.equal(countCases("swift", "nothing matched"), 0);
+});
+
+test("countCases takes the vitest summary and never the file count", () => {
+  const output = " Test Files  1 passed (1)\n      Tests  17 passed (17)";
+  assert.equal(countCases("vitest", output), 17);
+  assert.equal(countCases("vitest", " ✓ src/test/a.test.ts (12 tests) 3ms\n ✓ src/test/b.test.ts (5 tests) 1ms"), 17);
+  assert.equal(countCases("vitest", " Test Files  0 passed (0)"), 0);
+});
+
+test("colour codes never turn a passing suite into zero executed cases", () => {
+  const coloured = "\u001b[2m      Tests \u001b[22m \u001b[1m\u001b[32m17 passed\u001b[39m\u001b[22m\u001b[90m (1)\u001b[39m";
+  assert.equal(countCases("vitest", coloured), 17, "this is the byte stream a piped vitest emits");
+  assert.equal(countCases("vitest", "\u001b[2m Test Files \u001b[22m \u001b[1m\u001b[32m1 passed\u001b[39m"), 0);
+});
+
+test("an unknown reporter counts zero rather than guessing", () => {
+  assert.equal(countCases("vitest-ish", " Tests  17 passed (17)"), 0);
+  assert.equal(countCases(undefined, " Tests  17 passed (17)"), 0);
+});
+
+test("every registered test case declares a reporter the runner can read", () => {
+  for (const [name, entry] of Object.entries(committed.modules)) {
+    for (const testCase of entry.cases) {
+      if (testCase.kind !== "test") continue;
+      assert.ok(["rust", "swift", "vitest", "node-test"].includes(testCase.parse),
+        `${name}/${testCase.name}: kind=test without a known parse reporter`);
+      const floor = committed.runner.floors[`${testCase.name}@${name}`];
+      assert.equal(floor, testCase.minCases,
+        `${name}/${testCase.name}: minCases ${testCase.minCases} != floor ${floor}`);
+    }
+  }
 });

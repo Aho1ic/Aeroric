@@ -1,0 +1,39 @@
+{
+  "comment": "a task written before sessionFamily existed: absent optionals are not null, and no transcript means no resume",
+  "expectations": {
+    "canResume": false,
+    "familyFromAgent": "codex",
+    "unknownFieldSurvives": true
+  },
+  "resumeRule": {
+    "comment": "mirrors canResumeTask in src/components/task-panel/TaskList.tsx; Rust and TypeScript both assert their predicate against this table",
+    "discardedWorktreeWithTranscript": false,
+    "withTranscript": {
+      "cancelled": true,
+      "detached": false,
+      "done": true,
+      "failed": true,
+      "input_required": false,
+      "interrupted": true,
+      "pending": false,
+      "running": false,
+      "todo": false
+    },
+    "withoutTranscript": {
+      "cancelled": false,
+      "done": false,
+      "failed": false,
+      "interrupted": false
+    }
+  },
+  "stored": {
+    "agent": {
+      "builtIn": "codex"
+    },
+    "createdAt": 1700000000000,
+    "id": "old-1",
+    "projectId": "p",
+    "sessionCodexLike": true,
+    "status": "interrupted"
+  }
+}

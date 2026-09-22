@@ -1,0 +1,42 @@
+{
+  "comment": "the owner of a session is the recorded agent, not the UI selection; unknown content stays opaque with its source id",
+  "handoff": {
+    "family": "codex",
+    "originSessionId": "s1",
+    "sessionId": "s2",
+    "source": "handoff"
+  },
+  "owner": {
+    "family": "omp",
+    "path": "/home/dev/.aeroric/agent-homes/omp/sessions/-home-dev-app/s.jsonl",
+    "recordedBy": "my-codex-like-profile",
+    "sessionId": "s1",
+    "source": "native"
+  },
+  "page": {
+    "family": "omp",
+    "hasMore": true,
+    "messages": [
+      {
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "kept verbatim"
+          },
+          {
+            "kind": "mystery_tool",
+            "originFamily": "claude",
+            "payload": {
+              "raw": 1
+            },
+            "sourceId": "b7"
+          }
+        ],
+        "id": "m1",
+        "role": "assistant"
+      }
+    ],
+    "nextCursor": "opaque-cursor-2",
+    "sessionId": "s1"
+  }
+}

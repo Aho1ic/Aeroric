@@ -1,0 +1,27 @@
+{
+  "comment": "revision conflict: the second writer is refused rather than overwriting; retryable is false",
+  "request": {
+    "id": "req-2",
+    "idempotencyKey": "op-2",
+    "method": "terminal.complete_task",
+    "params": {
+      "expectedRevision": "8",
+      "taskId": "t"
+    },
+    "v": 1
+  },
+  "response": {
+    "error": {
+      "code": "REVISION_CONFLICT",
+      "detail": {
+        "actualRevision": "9",
+        "expectedRevision": "8"
+      },
+      "message": "State changed",
+      "retryable": false
+    },
+    "id": "req-2",
+    "ok": false,
+    "v": 1
+  }
+}

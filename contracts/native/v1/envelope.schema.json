@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "cancellation": {
+    "disconnect": "a socket close is not a task end",
+    "rpcCancel": "abandons the local wait only",
+    "taskCancel": "terminal.cancel_task is what stops an agent"
+  },
+  "constants": {
+    "builtInAgents": [
+      "claude",
+      "claude_gpt55",
+      "codex",
+      "dsh",
+      "omp"
+    ],
+    "errorCodes": [
+      "INVALID_ARGUMENT",
+      "UNAUTHENTICATED",
+      "UNSUPPORTED_CAPABILITY",
+      "REVISION_CONFLICT",
+      "NOT_FOUND",
+      "BUSY",
+      "STREAM_GAP",
+      "SNAPSHOT_REQUIRED",
+      "HOST_RESTARTED",
+      "INTERACTIVE_UI_REQUIRED",
+      "IO_ERROR"
+    ],
+    "limits": {
+      "maxFrameBytes": 1048576,
+      "maxTerminalChunkRawBytes": 65536,
+      "replay": {
+        "maxBytes": 8388608,
+        "maxEvents": 4096
+      }
+    },
+    "permissionModes": [
+      "ask",
+      "auto_edit",
+      "full_access"
+    ],
+    "protocolFamilies": [
+      "claude",
+      "codex",
+      "dsh",
+      "omp"
+    ],
+    "protocolVersion": 1,
+    "taskStatuses": [
+      "todo",
+      "pending",
+      "running",
+      "input_required",
+      "detached",
+      "interrupted",
+      "done",
+      "failed",
+      "cancelled"
+    ]
+  },
+  "frameKinds": {
+    "event": {
+      "openContent": "Carried forward unchanged: an addition by a newer host must not fail to parse here.",
+      "properties": {
+        "data": {
+          "type": "object"
+        },
+        "epoch": {
+          "note": "changes on host restart; seq never carries over",
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "seq": {
+          "pattern": "^[0-9]+$",
+          "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss",
+          "type": "string"
+        }
+      },
+      "required": [
+        "v",
+        "event",
+        "epoch",
+        "seq",
+        "data"
+      ]
+    },
+    "failure": {
+      "openContent": "Carried forward unchanged: an addition by a newer host must not fail to parse here.",
+      "properties": {
+        "error": {
+          "properties": {
+            "code": {
+              "enum": [
+                "INVALID_ARGUMENT",
+                "UNAUTHENTICATED",
+                "UNSUPPORTED_CAPABILITY",
+                "REVISION_CONFLICT",
+                "NOT_FOUND",
+                "BUSY",
+                "STREAM_GAP",
+                "SNAPSHOT_REQUIRED",
+                "HOST_RESTARTED",
+                "INTERACTIVE_UI_REQUIRED",
+                "IO_ERROR"
+              ],
+              "unknownFallback": "UNKNOWN"
+            },
+            "detail": {
+              "mustNotContain": [
+                "token",
+                "password",
+                "passphrase",
+                "api key",
+                "connection string",
+                "raw session content"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ]
+        },
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "ok",
+        "error"
+      ]
+    },
+    "request": {
+      "openContent": "Carried forward unchanged: an addition by a newer host must not fail to parse here.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "purpose": "retry deduplication",
+          "requiredFor": "mutating",
+          "type": "string"
+        },
+        "method": {
+          "pattern": "^[a-z0-9_]+\\.[A-Za-z0-9_]+$",
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "v": {
+          "const": 1
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "success": {
+      "openContent": "Carried forward unchanged: an addition by a newer host must not fail to parse here.",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "ok",
+        "result"
+      ]
+    }
+  },
+  "ownership": {
+    "alreadyInUse": "must report the lock holder and a safe exit; never kill a PID automatically",
+    "singleWriter": "one data directory has exactly one business writer (INV-03)"
+  },
+  "quantities": {
+    "byteOffset": {
+      "pattern": "^[0-9]+$",
+      "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss",
+      "type": "string"
+    },
+    "generation": {
+      "pattern": "^[0-9]+$",
+      "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss",
+      "type": "string"
+    },
+    "revision": {
+      "pattern": "^[0-9]+$",
+      "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss",
+      "type": "string"
+    },
+    "seq": {
+      "pattern": "^[0-9]+$",
+      "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss",
+      "type": "string"
+    },
+    "timestamps": {
+      "type": "integer",
+      "unit": "epoch milliseconds"
+    }
+  },
+  "resync": {
+    "bufferTruncation": "emit an explicit reset plus truncated flag; do not resume feeding bytes mid escape sequence",
+    "startAfterCrash": "an uncertain terminal.run_task is reconciled by querying the task's generation, never replayed blindly"
+  },
+  "terminal": {
+    "bytesField": "bytesBase64",
+    "identity": [
+      "taskId",
+      "generation"
+    ],
+    "note": "raw PTY bytes travel as base64 inside JSON; remote/mobile keep their own binary framing behind an explicit adapter"
+  },
+  "title": "aeroric-local-protocol-v1-envelope",
+  "transport": {
+    "controlQueue": {
+      "maxBytes": 4194304,
+      "maxItems": 256
+    },
+    "framing": "UTF-8 JSONL, one frame per line",
+    "maxFrameBytes": 1048576,
+    "maxTerminalChunkRawBytes": 65536,
+    "replay": {
+      "beyond": "SNAPSHOT_REQUIRED",
+      "maxBytes": 8388608,
+      "maxEvents": 4096
+    },
+    "socket": "unix domain socket"
+  }
+}

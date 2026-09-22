@@ -1,0 +1,132 @@
+{
+  "base64": {
+    "comment": "one vector list, three decoders: a lenient base64 reader turns a mangled PTY chunk into bytes nobody can see, so accepting where another language refuses is a failure",
+    "invalid": [
+      "!!!",
+      "YWJ",
+      "YWJj=",
+      "a=bc",
+      "YWJj==",
+      "====",
+      "YWJjZGU",
+      "YWJjYWJ",
+      "Y WJj",
+      "YWJjYWJj="
+    ],
+    "valid": [
+      {
+        "bytes": [],
+        "text": ""
+      },
+      {
+        "bytes": [
+          97
+        ],
+        "text": "YQ=="
+      },
+      {
+        "bytes": [
+          97,
+          98,
+          99
+        ],
+        "text": "YWJj"
+      },
+      {
+        "bytes": [
+          97,
+          98,
+          99,
+          100,
+          101
+        ],
+        "text": "YWJjZGU="
+      },
+      {
+        "bytes": [
+          248,
+          254
+        ],
+        "text": "+P4="
+      },
+      {
+        "bytes": [
+          255,
+          224
+        ],
+        "text": "/+A="
+      }
+    ]
+  },
+  "comment": "raw bytes as base64 with per-stream offset/generation; truncation is explicit",
+  "frameVectors": {
+    "accepted": {
+      "maxU64Seq": {
+        "data": {},
+        "epoch": "e",
+        "event": "task.updated",
+        "seq": "18446744073709551615",
+        "v": 1
+      }
+    },
+    "comment": "shared strictness table, next to the base64 table: both exist so a fourth reader can check that all three decoders reach the same verdict. Limits come from transport.maxFrameBytes.",
+    "rejected": {
+      "empty": "   ",
+      "noMethod": {
+        "id": "x",
+        "v": 1
+      },
+      "noVersion": {
+        "id": "x",
+        "ok": true
+      },
+      "numericSeq": {
+        "data": {},
+        "epoch": "x",
+        "event": "terminal.output",
+        "seq": 9007199254740993,
+        "v": 1
+      },
+      "unknownStatus": {
+        "id": "x",
+        "ok": true,
+        "result": {
+          "status": "vibrating"
+        },
+        "v": 1
+      }
+    }
+  },
+  "gap": {
+    "data": {
+      "generation": "2",
+      "reason": "SNAPSHOT_REQUIRED",
+      "reset": true,
+      "taskId": "t",
+      "truncated": true
+    },
+    "epoch": "11111111-1111-4111-8111-111111111111",
+    "event": "terminal.gap",
+    "seq": "25",
+    "v": 1
+  },
+  "lease": {
+    "acquiredAt": 1760000000000,
+    "generation": "2",
+    "holder": "swiftui-window-3",
+    "taskId": "t"
+  },
+  "output": {
+    "data": {
+      "bytesBase64": "YWJj",
+      "generation": "2",
+      "nextOffset": "3",
+      "offset": "0",
+      "taskId": "t"
+    },
+    "epoch": "11111111-1111-4111-8111-111111111111",
+    "event": "terminal.output",
+    "seq": "19",
+    "v": 1
+  }
+}

@@ -1,0 +1,762 @@
+//! Generates `contracts/native/v1/` from the Rust DTOs plus the frozen command
+//! inventory (P2-01 Action 3/6). Rust is the source: the Swift and TypeScript
+//! decoders read what this prints, and `scripts/native/contracts.mjs --check`
+//! fails on drift without ever writing into the repository.
+//!
+//! The naming rule is re-implemented here on purpose. `meta.rpc_resolution` is
+//! derived by `inventory.mjs`; if the two derivations disagree, generation fails
+//! rather than publishing a schema that quietly renames or drops methods.
+//!
+//! Unknown verbs classify as *mutating*: a wrong guess there refuses a call, while
+//! the opposite mistake would let an unrecognised mutation be replayed.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES;
+use aeroric_protocol::{
+    built_in_agents, error_codes, permission_modes, protocol_families, task_statuses,
+    MAX_FRAME_BYTES, PROTOCOL_VERSION,
+};
+use serde_json::{json, Value};
+
+/// Verbs that only observe state. The generator refuses a verb no method uses.
+const READ_VERBS: &[&str] = &[
+    "get", "list", "read", "describe", "search", "query", "inspect", "preview", "assess",
+    "validate",
+];
+
+/// Verbs that change state. Only used to decide which verb *leads* a command name:
+/// a legacy name may stack a subsystem prefix in front of the action
+/// (`remote_git_list_branches`), and a plain first-token test would call that a
+/// read. Anything neither list knows stays mutating — the safe default, because an
+/// unrecognised mutation must be refused when unknown rather than replayed, while a
+/// read misread as mutating only costs the caller an idempotency key. Entries are
+/// today's inventory, not a guess: a verb that stops matching is a dead rule.
+const WRITE_VERBS: &[&str] = &[
+    "create",
+    "add",
+    "set",
+    "update",
+    "replace",
+    "write",
+    "save",
+    "delete",
+    "remove",
+    "rename",
+    "move",
+    "copy",
+    "insert",
+    "clear",
+    "reset",
+    "migrate",
+    "apply",
+    "commit",
+    "merge",
+    "checkout",
+    "switch",
+    "stage",
+    "push",
+    "pull",
+    "fetch",
+    "sync",
+    "upload",
+    "install",
+    "uninstall",
+    "upgrade",
+    "register",
+    "unregister",
+    "start",
+    "stop",
+    "restart",
+    "kill",
+    "run",
+    "launch",
+    "execute",
+    "send",
+    "resume",
+    "cancel",
+    "interrupt",
+    "archive",
+    "restore",
+    "discard",
+    "fork",
+    "attach",
+    "mark",
+    "import",
+    "open",
+];
+
+/// Names where a read verb is really a *noun*: Redis has list/stream key types, so
+/// `dbx_redis_list_remove` mutates a value despite leading with `list`. The
+/// generator insists each entry would otherwise classify as read, so this list
+/// cannot accumulate entries that no longer do anything.
+const READ_VERB_IS_A_NOUN: &[&str] = &[
+    "dbx_redis_list_remove",
+    "dbx_redis_list_push",
+    "dbx_redis_list_set",
+];
+
+/// First token that is an action, deciding read vs mutating; `None` when the name
+/// leads with something neither list knows.
+fn leading_action(command: &str) -> Option<bool> {
+    for token in command.split('_') {
+        if READ_VERBS.contains(&token) {
+            return Some(false);
+        }
+        if WRITE_VERBS.contains(&token) {
+            return Some(true);
+        }
+    }
+    None
+}
+
+fn is_mutating(command: &str) -> bool {
+    READ_VERB_IS_A_NOUN.contains(&command) || leading_action(command).unwrap_or(true)
+}
+
+/// Event topics the fixtures use that the 38-channel inventory does not name yet.
+/// Each one is quoted from `MIGRATION_PLAN.md` §2.3 (the frame examples at lines 529
+/// and 532-533), which prescribes v1's own topic spelling; the inventory lists the
+/// legacy listen channels the bridge republishes. Naming the rest of the v1 topic
+/// plane is still an open question (Q9 in `docs/native/reviews/protocol.md`), so
+/// this list is deliberately short and each entry has to be used by a fixture.
+const PLAN_SOURCED_EVENTS: &[&str] = &["task.updated", "terminal.output", "terminal.gap"];
+
+/// Names a fixture uses *because* no host knows them: the forward-compatibility
+/// cases. The generator refuses one that turns out to be published, and refuses one
+/// no fixture uses.
+const NEGATIVE_NAMES: &[&str] = &["some.newer.topic", "terminal.frobnicate_task"];
+
+/// Collect every `"method"` and `"event"` string in a document tree.
+fn collect_names(value: &Value, found: &mut BTreeMap<String, Vec<String>>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "method" || key == "event" {
+                    if let Some(name) = child.as_str() {
+                        found.entry(key.clone()).or_default().push(name.to_string());
+                    }
+                }
+                collect_names(child, found);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_names(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A fixture is executable input for three decoders, not prose: a name in it that
+/// nothing publishes is a client being taught to send a call that gets refused.
+fn fixtures_are_sourced(
+    documents: &[(String, Value)],
+    methods: &[Value],
+    events: &[Value],
+) -> Result<(), String> {
+    let published_methods: Vec<&str> = methods.iter().filter_map(|m| m["name"].as_str()).collect();
+    let published_events: Vec<&str> = events.iter().filter_map(|e| e["name"].as_str()).collect();
+    let mut used: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, document) in documents {
+        if !name.contains("fixtures/") {
+            continue;
+        }
+        collect_names(document, &mut used);
+    }
+    let mut seen = Vec::new();
+    for (key, names) in &used {
+        for name in names {
+            seen.push(name.as_str());
+            let allowed = if key == "method" {
+                published_methods.contains(&name.as_str())
+            } else {
+                published_events.contains(&name.as_str())
+                    || PLAN_SOURCED_EVENTS.contains(&name.as_str())
+            } || NEGATIVE_NAMES.contains(&name.as_str());
+            if !allowed {
+                return Err(format!(
+                    "fixture {key} {name:?} is published by nothing and sourced from nowhere: add the real name, or name its provenance in the const above"
+                ));
+            }
+            if NEGATIVE_NAMES.contains(&name.as_str()) && published_events.contains(&name.as_str())
+            {
+                return Err(format!("{name:?} is declared negative but now published"));
+            }
+        }
+    }
+    for name in NEGATIVE_NAMES
+        .iter()
+        .copied()
+        .chain(PLAN_SOURCED_EVENTS.iter().copied())
+    {
+        if !seen.contains(&name) {
+            return Err(format!("{name:?} is declared but no fixture uses it"));
+        }
+    }
+    Ok(())
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
+pub fn constants() -> Value {
+    json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "taskStatuses": task_statuses(),
+        "protocolFamilies": protocol_families(),
+        "permissionModes": permission_modes(),
+        "builtInAgents": built_in_agents(),
+        "errorCodes": error_codes(),
+        "limits": { "maxFrameBytes": MAX_FRAME_BYTES, "maxTerminalChunkRawBytes": MAX_TERMINAL_CHUNK_BYTES,
+                    "replay": { "maxEvents": 4096, "maxBytes": 8388608 } }
+    })
+}
+
+fn quantity() -> Value {
+    json!({
+        "type": "string",
+        "pattern": "^[0-9]+$",
+        "reason": "decimal string: JS numbers lose precision past 2^53-1, and a wrapped seq or revision is silent data loss"
+    })
+}
+
+/// One record per wire method, cross-checked against the derivation table.
+fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
+    let table = map["meta"]["rpc_resolution"]["module_to_service"]
+        .as_object()
+        .ok_or("meta.rpc_resolution.module_to_service is absent")?;
+    let commands = map["commands"]
+        .as_array()
+        .ok_or("`commands` is not an array")?;
+    let mut out = Vec::with_capacity(commands.len());
+    let mut skipped_unnamed = 0usize;
+    for command in commands {
+        let rust_path = command["rust_path"]
+            .as_str()
+            .ok_or("command without rust_path")?;
+        let wire = match command["rpc_method"].as_str() {
+            Some(name) => name,
+            // 19 host_local_os_ui commands have no wire name by design (ADR-003).
+            None => {
+                if command["category"].as_str() != Some("host_local_os_ui") {
+                    return Err(format!(
+                        "{rust_path}: no rpc_method and is not host_local_os_ui"
+                    ));
+                }
+                skipped_unnamed += 1;
+                continue;
+            }
+        };
+        let module = rust_path.split("::").next().unwrap_or_default();
+        let leaf = rust_path.rsplit("::").next().unwrap_or_default();
+        let service = table.get(module).and_then(Value::as_str).ok_or_else(|| {
+            format!("{rust_path}: module {module:?} has no service mapping in meta.rpc_resolution")
+        })?;
+        let derived = format!("{service}.{leaf}");
+        if wire != derived {
+            return Err(format!(
+                "{rust_path}: rpc_method {wire:?} != derived {derived:?}"
+            ));
+        }
+        let legacy = command["command"]
+            .as_str()
+            .ok_or("command without `command`")?;
+        if legacy != leaf {
+            return Err(format!("{rust_path}: wire leaf {legacy:?} != rust leaf {leaf:?} (ADR-002 keeps them equal)"));
+        }
+        let category = command["category"].as_str().unwrap_or("domain_rpc");
+        // G16 triage, carried into the contract instead of being resolved by it. The
+        // plan forbids promoting names nobody calls; three of these four groups are
+        // live for a *documented* reason (a literal caller, a runtime-prefixed twin of
+        // a live parent, or ADR-005's typed surface with per-row evidence). The
+        // fourth has no evidence at all, so it is flagged rather than blessed —
+        // collapsing or dropping one is a protocol decision, not a migration detail.
+        let reachability = &command["reachability"];
+        let derived_of = reachability["prefix_derived_of"].as_str();
+        let parent_live = reachability["prefix_derived_parent_reachable"].as_bool() == Some(true);
+        let live = command["reachable"].as_bool() == Some(true);
+        let evidence = command["caller_evidence"].as_str().unwrap_or("");
+        let (promotion, requires_decision) = if !evidence.is_empty() {
+            (
+                "adr-005-typed-surface".to_string(),
+                !evidence.starts_with("proven"),
+            )
+        } else if live && derived_of.is_some() && parent_live {
+            ("prefix-derived-twin-of-live-parent".to_string(), false)
+        } else if live {
+            ("caller-literal".to_string(), false)
+        } else if derived_of.is_some() && parent_live {
+            ("prefix-derived-twin-of-live-parent".to_string(), false)
+        } else {
+            ("uncalled-no-evidence".to_string(), true)
+        };
+        // ADR-003: the platform plane is capability-gated, and the capability is
+        // named after the platform the legacy command actually needs. Only 60 of
+        // the 62 mention WSL; the two cross-platform ones (`get_platform_runtime_info`,
+        // `build_runnable_file_command`) must stay callable on every host, so a
+        // blanket "wsl" would refuse calls that work everywhere.
+        let capability = if category == "platform_specific" && legacy.contains("wsl") {
+            Value::String("wsl".into())
+        } else {
+            Value::Null
+        };
+        out.push(json!({
+            "name": wire,
+            "service": service,
+            "legacyCommand": legacy,
+            "category": category,
+            "mutating": is_mutating(legacy),
+            "requiresCapability": capability,
+            "coreService": command["core_service"],
+            "checkModule": command["check_module"],
+            "featureIds": command["feature_ids"],
+            "promotion": promotion,
+            "requiresTriageDecision": requires_decision,
+            "derivedOf": derived_of.map(Value::from).unwrap_or(Value::Null),
+            "callerEvidence": command["caller_evidence"].clone()
+        }));
+    }
+    if skipped_unnamed != 19 {
+        return Err(format!(
+            "expected 19 unnamed host_local_os_ui commands, saw {skipped_unnamed}"
+        ));
+    }
+    let gated = out
+        .iter()
+        .filter(|m| m["requiresCapability"] != Value::Null)
+        .count();
+    if gated != 60 {
+        return Err(format!(
+            "expected 60 wsl-gated methods (ADR-003), saw {gated}"
+        ));
+    }
+    // A verb no method uses is a claim about the vocabulary that nothing checks,
+    // so an unreadable list would rot silently. Both lists must earn their place.
+    let names: Vec<&str> = out
+        .iter()
+        .filter_map(|m| m["legacyCommand"].as_str())
+        .collect();
+    for verb in READ_VERBS.iter().chain(WRITE_VERBS) {
+        if !names.iter().any(|n| n.split('_').any(|t| t == *verb)) {
+            return Err(format!(
+                "classification verb {verb:?} matches no method: dead rule"
+            ));
+        }
+    }
+    for name in READ_VERB_IS_A_NOUN {
+        if leading_action(name) != Some(false) {
+            return Err(format!("override {name:?} no longer needs overriding"));
+        }
+    }
+    let reads = out.iter().filter(|m| m["mutating"] == json!(false)).count();
+    if reads != 138 {
+        return Err(format!(
+            "read-classified methods moved to {reads} (pinned 138): re-review the classification, then re-pin it here"
+        ));
+    }
+    // G16: how the 641 names were earned. Pinned so a change in the inventory's
+    // reachability evidence cannot quietly resize the promoted surface — re-run
+    // `native:inventory`, re-review the buckets, and move these numbers in the same
+    // change that re-publishes the contract.
+    let counted = |want: &str| out.iter().filter(|m| m["promotion"] == json!(want)).count();
+    let flagged = out
+        .iter()
+        .filter(|m| m["requiresTriageDecision"] == json!(true))
+        .count();
+    for (want, promotion) in [
+        (450usize, "caller-literal"),
+        (109, "prefix-derived-twin-of-live-parent"),
+        (65, "adr-005-typed-surface"),
+        (17, "uncalled-no-evidence"),
+    ] {
+        if counted(promotion) != want {
+            return Err(format!(
+                "promotion {promotion:?} holds {} method(s), pinned at {want}: re-triage G16 before publishing",
+                counted(promotion)
+            ));
+        }
+    }
+    if out.len() != 641 || flagged != 58 {
+        return Err(format!(
+            "surface moved: {} methods, {flagged} flagged for a decision",
+            out.len()
+        ));
+    }
+    Ok(out)
+}
+
+fn events_from_inventory(map: &Value) -> Vec<Value> {
+    map["events"]
+        .as_array()
+        .map(|events| {
+            events
+                .iter()
+                .map(|event| {
+                    let count = |field: &str| event[field].as_array().map(Vec::len).unwrap_or(0);
+                    json!({
+                        "name": event["name"],
+                        "disposition": event["disposition"],
+                        "orphan": event["orphan"],
+                        "emitters": count("emitters"),
+                        "listeners": count("listeners")
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn envelope_schema() -> Value {
+    let open =
+        "Carried forward unchanged: an addition by a newer host must not fail to parse here.";
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "aeroric-local-protocol-v1-envelope",
+        "constants": constants(),
+        "transport": {
+            "socket": "unix domain socket",
+            "framing": "UTF-8 JSONL, one frame per line",
+            "maxFrameBytes": MAX_FRAME_BYTES,
+            "maxTerminalChunkRawBytes": MAX_TERMINAL_CHUNK_BYTES,
+            "controlQueue": { "maxItems": 256, "maxBytes": 4194304 },
+            "replay": { "maxEvents": 4096, "maxBytes": 8388608, "beyond": "SNAPSHOT_REQUIRED" }
+        },
+        "frameKinds": {
+            "request": {
+                "required": ["v", "id", "method", "params"],
+                "properties": {
+                    "v": { "const": PROTOCOL_VERSION },
+                    "id": { "type": "string" },
+                    "method": { "type": "string", "pattern": "^[a-z0-9_]+\\.[A-Za-z0-9_]+$" },
+                    "params": { "type": "object" },
+                    "idempotencyKey": { "type": "string", "requiredFor": "mutating", "purpose": "retry deduplication" }
+                },
+                "openContent": open
+            },
+            "success": {
+                "required": ["v", "id", "ok", "result"],
+                "properties": { "ok": { "const": true }, "result": { "type": "object" } },
+                "openContent": open
+            },
+            "failure": {
+                "required": ["v", "id", "ok", "error"],
+                "properties": {
+                    "ok": { "const": false },
+                    "error": {
+                        "required": ["code", "message", "retryable"],
+                        "properties": {
+                            "code": { "enum": error_codes(), "unknownFallback": "UNKNOWN" },
+                            "retryable": { "type": "boolean" },
+                            "detail": {
+                                "type": "object",
+                                "mustNotContain": ["token", "password", "passphrase", "api key", "connection string", "raw session content"]
+                            }
+                        }
+                    }
+                },
+                "openContent": open
+            },
+            "event": {
+                "required": ["v", "event", "epoch", "seq", "data"],
+                "properties": {
+                    "event": { "type": "string" },
+                    "epoch": { "type": "string", "note": "changes on host restart; seq never carries over" },
+                    "seq": quantity(),
+                    "data": { "type": "object" }
+                },
+                "openContent": open
+            }
+        },
+        "quantities": {
+            "seq": quantity(),
+            "revision": quantity(),
+            "generation": quantity(),
+            "byteOffset": quantity(),
+            "timestamps": { "type": "integer", "unit": "epoch milliseconds" }
+        },
+        "terminal": {
+            "identity": ["taskId", "generation"],
+            "bytesField": "bytesBase64",
+            "note": "raw PTY bytes travel as base64 inside JSON; remote/mobile keep their own binary framing behind an explicit adapter"
+        },
+        "ownership": {
+            "singleWriter": "one data directory has exactly one business writer (INV-03)",
+            "alreadyInUse": "must report the lock holder and a safe exit; never kill a PID automatically"
+        },
+        "cancellation": {
+            "rpcCancel": "abandons the local wait only",
+            "taskCancel": "terminal.cancel_task is what stops an agent",
+            "disconnect": "a socket close is not a task end"
+        },
+        "resync": {
+            "startAfterCrash": "an uncertain terminal.run_task is reconciled by querying the task's generation, never replayed blindly",
+            "bufferTruncation": "emit an explicit reset plus truncated flag; do not resume feeding bytes mid escape sequence"
+        }
+    })
+}
+
+fn methods_schema(methods: &[Value]) -> Value {
+    let mutating = methods
+        .iter()
+        .filter(|m| m["mutating"] == json!(true))
+        .count();
+    let gated = methods
+        .iter()
+        .filter(|m| m["requiresCapability"] != Value::Null)
+        .count();
+    let mut by_service: BTreeMap<String, usize> = BTreeMap::new();
+    for method in methods {
+        *by_service
+            .entry(method["service"].as_str().unwrap_or_default().to_string())
+            .or_default() += 1;
+    }
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "aeroric-local-protocol-v1-methods",
+        "protocolVersion": PROTOCOL_VERSION,
+        "source": "docs/native/command-map.json + meta.rpc_resolution (ADR-002), re-derived independently by export-schema",
+        "count": methods.len(),
+        "mutatingCount": mutating,
+        "readCount": methods.len() - mutating,
+        "capabilityGatedCount": gated,
+        "classificationRule": {
+            "readVerbs": READ_VERBS,
+            "writeVerbs": WRITE_VERBS,
+            "readVerbIsANoun": READ_VERB_IS_A_NOUN,
+            "how": "the first token that is an action decides; a subsystem prefix in front of it is skipped",
+            "default": "mutating",
+            "why": "an unrecognised verb is treated as a mutation so it is refused when unknown instead of being replayed; a read misclassified as mutating only costs an idempotency key",
+            "advisory": "says which calls must carry an idempotencyKey, nothing more: a client must never decide that a retry is safe from this field"
+        },
+        "byService": by_service,
+        "surfaceProvenance": {
+            "how": "each row carries `promotion`: how its name was earned in the G16 triage",
+            "caller-literal": methods.iter().filter(|m| m["promotion"] == json!("caller-literal")).count(),
+            "prefix-derived-twin-of-live-parent": methods.iter().filter(|m| m["promotion"] == json!("prefix-derived-twin-of-live-parent")).count(),
+            "adr-005-typed-surface": methods.iter().filter(|m| m["promotion"] == json!("adr-005-typed-surface")).count(),
+            "uncalled-no-evidence": methods.iter().filter(|m| m["promotion"] == json!("uncalled-no-evidence")).count(),
+            "requiresTriageDecision": methods.iter().filter(|m| m["requiresTriageDecision"] == json!(true)).count(),
+            "collapseCandidates": {
+                "note": "A prefix-derived twin is the same behaviour as its parent with a different transport target; publishing both names duplicates one behaviour in the contract. Collapsing them onto `target` is Q9, not a migration detail.",
+                "distinctParents": 70
+            }
+        },
+        "excluded": {
+            "hostLocalOsUi": "19 client-adapter commands carry no wire name; CLI answers INTERACTIVE_UI_REQUIRED (ADR-003)"
+        },
+        "methods": methods
+    })
+}
+
+fn events_schema(events: &[Value]) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "aeroric-local-protocol-v1-events",
+        "count": events.len(),
+        "contract": {
+            "seq": "assigned at one ordered publish point; a gap is reported, never absorbed",
+            "unknownEvent": "clients keep the frame and must not fail the stream on an unrecognised topic",
+            "controlQueue": "control events are never dropped to make room; a slow terminal subscriber loses its subscription first"
+        },
+        "events": events
+    })
+}
+
+fn fixtures() -> Vec<(&'static str, Value)> {
+    let epoch = "11111111-1111-4111-8111-111111111111";
+    vec![
+        (
+            "success.json",
+            json!({
+                "comment": "mutating request then authoritative snapshot response: revision 7 -> 8, generation created",
+                "request": { "v": 1, "id": "req-1", "method": "terminal.run_task", "idempotencyKey": "op-1",
+                             "params": { "projectId": "p", "taskId": "t", "expectedRevision": "7" } },
+                "response": { "v": 1, "id": "req-1", "ok": true,
+                              "result": { "taskId": "t", "generation": "2", "revision": "8" } }
+            }),
+        ),
+        (
+            "error.json",
+            json!({
+                "comment": "revision conflict: the second writer is refused rather than overwriting; retryable is false",
+                "request": { "v": 1, "id": "req-2", "method": "terminal.complete_task", "idempotencyKey": "op-2",
+                             "params": { "taskId": "t", "expectedRevision": "8" } },
+                "response": { "v": 1, "id": "req-2", "ok": false,
+                              "error": { "code": "REVISION_CONFLICT", "message": "State changed", "retryable": false,
+                                         "detail": { "expectedRevision": "8", "actualRevision": "9" } } }
+            }),
+        ),
+        (
+            "unknown.json",
+            json!({
+                "comment": "forward compatibility: unknown fields and an unknown wire code degrade; an unknown mutating method is refused, not executed",
+                "frameWithUnknownFields": { "v": 1, "id": "req-3", "ok": true, "result": {}, "hostFeature": { "enabled": true } },
+                "unknownCode": { "code": "QUOTA_EXHAUSTED", "message": "from a newer host", "retryable": true },
+                "unknownEvent": { "v": 1, "event": "some.newer.topic", "epoch": epoch, "seq": "42", "data": { "kept": 1 } },
+                "refusedUnknownMutating": { "method": "terminal.frobnicate_task",
+                                            "error": { "code": "INVALID_ARGUMENT", "message": "unknown mutating method", "retryable": false } }
+            }),
+        ),
+        (
+            "terminal.json",
+            json!({
+                "comment": "raw bytes as base64 with per-stream offset/generation; truncation is explicit",
+                "output": { "v": 1, "event": "terminal.output", "epoch": epoch, "seq": "19",
+                            "data": { "taskId": "t", "generation": "2", "offset": "0", "nextOffset": "3", "bytesBase64": "YWJj" } },
+                "gap": { "v": 1, "event": "terminal.gap", "epoch": epoch, "seq": "25",
+                         "data": { "taskId": "t", "generation": "2", "reason": "SNAPSHOT_REQUIRED", "reset": true, "truncated": true } },
+                "lease": { "taskId": "t", "generation": "2", "holder": "swiftui-window-3", "acquiredAt": 1_760_000_000_000_u64 },
+                "base64": {
+                    "comment": "one vector list, three decoders: a lenient base64 reader turns a mangled PTY chunk into bytes nobody can see, so accepting where another language refuses is a failure",
+                    "valid": [
+                        { "text": "", "bytes": [] },
+                        { "text": "YQ==", "bytes": [97] },
+                        { "text": "YWJj", "bytes": [97, 98, 99] },
+                        { "text": "YWJjZGU=", "bytes": [97, 98, 99, 100, 101] },
+                        { "text": "+P4=", "bytes": [248, 254] },
+                        { "text": "/+A=", "bytes": [255, 224] }
+                    ],
+                    "invalid": ["!!!", "YWJ", "YWJj=", "a=bc", "YWJj==", "====", "YWJjZGU", "YWJjYWJ", "Y WJj", "YWJjYWJj="]
+                },
+                "frameVectors": {
+                    "comment": "shared strictness table, next to the base64 table: both exist so a fourth reader can check that all three decoders reach the same verdict. Limits come from transport.maxFrameBytes.",
+                    "rejected": {
+                        "empty": "   ",
+                        "noMethod": { "v": 1, "id": "x" },
+                        "noVersion": { "id": "x", "ok": true },
+                        "numericSeq": { "v": 1, "event": "terminal.output", "epoch": "x", "seq": 9007199254740993_i64, "data": {} },
+                        "unknownStatus": { "v": 1, "id": "x", "ok": true, "result": { "status": "vibrating" } }
+                    },
+                    "accepted": {
+                        "maxU64Seq": { "v": 1, "event": "task.updated", "epoch": "e", "seq": "18446744073709551615", "data": {} }
+                    }
+                }
+            }),
+        ),
+        (
+            "session.json",
+            json!({
+                "comment": "the owner of a session is the recorded agent, not the UI selection; unknown content stays opaque with its source id",
+                "owner": { "family": "omp", "sessionId": "s1",
+                           "path": "/home/dev/.aeroric/agent-homes/omp/sessions/-home-dev-app/s.jsonl",
+                           "source": "native", "recordedBy": "my-codex-like-profile" },
+                "handoff": { "family": "codex", "sessionId": "s2", "source": "handoff", "originSessionId": "s1" },
+                "page": { "sessionId": "s1", "family": "omp", "hasMore": true, "nextCursor": "opaque-cursor-2",
+                          "messages": [ { "id": "m1", "role": "assistant", "blocks": [
+                              { "kind": "text", "text": "kept verbatim" },
+                              { "kind": "mystery_tool", "sourceId": "b7", "payload": { "raw": 1 }, "originFamily": "claude" } ] } ] }
+            }),
+        ),
+        (
+            "legacy-task.json",
+            json!({
+                "comment": "a task written before sessionFamily existed: absent optionals are not null, and no transcript means no resume",
+                "stored": { "id": "old-1", "projectId": "p", "status": "interrupted", "agent": { "builtIn": "codex" },
+                           "createdAt": 1_700_000_000_000_u64, "sessionCodexLike": true },
+                "expectations": { "canResume": false, "familyFromAgent": "codex", "unknownFieldSurvives": true },
+                "resumeRule": {
+                    "comment": "mirrors canResumeTask in src/components/task-panel/TaskList.tsx; Rust and TypeScript both assert their predicate against this table",
+                    "withTranscript": {
+                        "todo": false, "pending": false, "running": false, "input_required": false,
+                        "detached": false, "done": true, "failed": true, "cancelled": true, "interrupted": true
+                    },
+                    "withoutTranscript": { "done": false, "failed": false, "cancelled": false, "interrupted": false },
+                    "discardedWorktreeWithTranscript": false
+                }
+            }),
+        ),
+    ]
+}
+
+fn main() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().collect();
+    let Some(index) = args.iter().position(|a| a == "--out") else {
+        eprintln!(
+            "usage: export-schema --out ROOT  (writes ROOT/contracts/native/v1/**; a repository root, so the tree layout is not duplicated here)\n\
+             refusing to write: use `node scripts/native/contracts.mjs --write` to update the committed contract"
+        );
+        std::process::exit(78);
+    };
+    let Some(dir) = args.get(index + 1) else {
+        eprintln!("export-schema: --out needs a directory");
+        std::process::exit(78);
+    };
+    let base = PathBuf::from(dir);
+
+    let root = repo_root();
+    let raw = std::fs::read_to_string(root.join("docs/native/command-map.json"))
+        .map_err(|e| format!("cannot read docs/native/command-map.json: {e}"))?;
+    let map: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("command-map.json is unparseable: {e}"))?;
+
+    let methods = methods_from_inventory(&map)?;
+    let events = events_from_inventory(&map);
+    let mut documents: Vec<(String, Value)> = vec![
+        ("v1/envelope.schema.json".into(), envelope_schema()),
+        ("v1/methods.schema.json".into(), methods_schema(&methods)),
+        ("v1/events.schema.json".into(), events_schema(&events)),
+    ];
+    for (name, value) in fixtures() {
+        documents.push((format!("v1/fixtures/{name}"), value));
+    }
+    documents.sort_by(|a, b| a.0.cmp(&b.0));
+    fixtures_are_sourced(&documents, &methods, &events)?;
+
+    for (name, value) in &documents {
+        let path = base.join("contracts/native").join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{parent:?}: {e}"))?;
+        }
+        let text = serde_json::to_string_pretty(value).map_err(|e| format!("{name}: {e}"))? + "\n";
+        std::fs::write(&path, text).map_err(|e| format!("{path:?}: {e}"))?;
+    }
+    println!(
+        "export-schema: wrote {} documents to {} — {} methods ({} mutating, {} capability-gated), {} events",
+        documents.len(),
+        base.display(),
+        methods.len(),
+        methods.iter().filter(|m| m["mutating"] == json!(true)).count(),
+        methods.iter().filter(|m| m["requiresCapability"] != Value::Null).count(),
+        events.len()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_subsystem_prefix_does_not_hide_the_action() {
+        assert!(!is_mutating("remote_git_list_branches"));
+        assert!(!is_mutating("wsl_read_file_content"));
+        assert!(is_mutating("remote_git_stash_apply"));
+        assert!(is_mutating("notebook_export_site_write"));
+    }
+
+    #[test]
+    fn an_unknown_verb_defaults_to_mutating() {
+        assert!(is_mutating("task_frobnicate"));
+        assert!(leading_action("task_frobnicate").is_none());
+    }
+
+    /// The three Redis key-type names are the reason the override exists; if the
+    /// rule ever stops calling them reads the override has to go, not linger.
+    #[test]
+    fn a_read_verb_that_is_a_noun_still_mutates() {
+        for name in READ_VERB_IS_A_NOUN {
+            assert_eq!(leading_action(name), Some(false), "{name}");
+            assert!(is_mutating(name), "{name} must be gated by the override");
+        }
+    }
+
+    #[test]
+    fn executing_sql_is_never_a_read() {
+        assert!(is_mutating("dbx_execute_query"));
+        assert!(is_mutating("db_execute_sql"));
+    }
+}
