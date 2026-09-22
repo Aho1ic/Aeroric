@@ -303,4 +303,37 @@ describe("the rules every client shares", () => {
     expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("task-status");
   });
+
+  it("bridges every legacy channel to exactly one v1 topic (ADR-007)", () => {
+    const topics = contract("event-topics.schema.json");
+    expect(topics.topics).toBe(39);
+    expect(topics.mapped).toBe(3);
+    expect(topics.pending).toBe(36);
+    expect(topics.reshapedPayloads).toBe(3);
+    const claimed = new Map<string, number>();
+    for (const row of topics.rows as Row[]) {
+      expect(String(row.topic)).toMatch(/^[a-z0-9_]+\.[a-z0-9_]+$/);
+      for (const channel of row.legacyChannels as string[]) {
+        claimed.set(channel, (claimed.get(channel) ?? 0) + 1);
+      }
+      if (row.status === "mapped") {
+        // A decided row must say where the name came from and what the payload becomes.
+        expect(String(row.source)).toContain("§");
+        expect(
+          ["verbatim", "reshaped:"].some((prefix) => String(row.payload).startsWith(prefix)),
+        ).toBe(true);
+      } else {
+        expect(String(row.plannedDirection).startsWith("pending")).toBe(true);
+        expect(String(row.payload).startsWith("pending")).toBe(true);
+      }
+    }
+    expect(claimed.size).toBe(38);
+    for (const event of eventSurface.events as Row[]) {
+      expect(claimed.get(event.name as string), `${event.name} is uncovered`).toBe(1);
+    }
+    expect(topics.contract.unknownTopic).toContain("must not fail");
+    // §2.3's own spellings are the three decided rows.
+    expect((topics.rows as Row[]).filter((r) => r.status === "mapped").map((r) => r.topic).sort())
+      .toEqual(["task.updated", "terminal.gap", "terminal.output"]);
+  });
 });

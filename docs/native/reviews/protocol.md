@@ -64,3 +64,17 @@
 3. **INV-02 源码扫描拦住了一句注释**：注释里写了 `AppHandle` 字面量，`inv02-core-source-scan` 就红了。选择改注释而不是放宽扫描，并在注释里写明为什么用描述性说法——放宽一次，下一个人就会以为可以放宽第二次。
 4. **能力门控的判定键变了**：60 条 wsl 门控里有 39 条本身是孪生、其父方法是 `domain_rpc`。收敛后方法面只剩 21 条 `wsl` 门控，其余 39 条随别名走 `requiresCapability`。若继续按方法门控，`fs.read_dir_entries` 会在 macOS 上被整体禁掉。
 5. **`surfaceProvenance` 现在是四组之和**：caller-literal 450 + stated-evidence 82 + uncalled-no-evidence 0 = 532 方法，另有 109 条别名；`prefixDerivedAliases` 单独成项，三方各断言一次。
+
+## ADR-007 落地时的反例验证（2026-09-22，四条规则各改坏一次）
+
+| 改坏的东西 | 生成器的反应 |
+| --- | --- |
+| 把 `task.updated` 的 `source` 换成不含 `§` 的说法 | `mapped topic "task.updated" names no document line as its source (ADR-007)`，exit 1 |
+| 删掉一条 topic 行（`weekly.report_progress`）并同步改 `count` | `legacy channel "weekly-report-progress" is covered by no v1 topic` |
+| 给一条 `pending` 行提前填上 `plannedDirection` | `... is "pending: P3-04" yet already states a direction or payload shape — that decision belongs to the pending task` |
+| 让两行同时认领 `task-status` | `legacy channel "task-status" is claimed by 2 topics` |
+| 把父方法参数类型改坏（前一轮） | `alias mappings moved: 76 proven / 33 pending` |
+
+四条都是"看起来像数据、其实是决定"的地方：表的规则不允许一个还没做的决定被写成已做，也不允许一个漏掉的映射静默通过。
+
+`direction` 这一列还纠正了我自己的一个偷换：起初用旧通道的 emitters/listeners 直接当 v1 的方向，但 `shell-output` 在旧实现里根本没有 Rust 侧 emitter（11 条属 `unproven`），而 v1 的 `terminal.output` 必然由宿主发。现在拆成 `legacyDirection`（证据）与 `plannedDirection`（计划），两者不许互相冒充。

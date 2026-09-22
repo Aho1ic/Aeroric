@@ -10,7 +10,7 @@
 //! Unknown verbs classify as *mutating*: a wrong guess there refuses a call, while
 //! the opposite mistake would let an unrecognised mutation be replayed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES;
@@ -115,13 +115,11 @@ fn is_mutating(command: &str) -> bool {
     READ_VERB_IS_A_NOUN.contains(&command) || leading_action(command).unwrap_or(true)
 }
 
-/// Event topics the fixtures use that the 38-channel inventory does not name yet.
-/// Each one is quoted from `MIGRATION_PLAN.md` §2.3 (the frame examples at lines 529
-/// and 532-533), which prescribes v1's own topic spelling; the inventory lists the
-/// legacy listen channels the bridge republishes. Naming the rest of the v1 topic
-/// plane is still an open question (Q9 in `docs/native/reviews/protocol.md`), so
-/// this list is deliberately short and each entry has to be used by a fixture.
-const PLAN_SOURCED_EVENTS: &[&str] = &["task.updated", "terminal.output", "terminal.gap"];
+/// Where a v1 event topic's name comes from. ADR-007 moved the authority into
+/// `docs/native/event-topics.json`: a `mapped` row must name a document line there,
+/// so the fixture check below validates provenance through the table instead of a
+/// second list that could drift out of agreement with it.
+const TOPIC_SOURCE_PATTERN: &str = "§";
 
 /// Names a fixture uses *because* no host knows them: the forward-compatibility
 /// cases. The generator refuses one that turns out to be published, and refuses one
@@ -155,10 +153,10 @@ fn collect_names(value: &Value, found: &mut BTreeMap<String, Vec<String>>) {
 fn fixtures_are_sourced(
     documents: &[(String, Value)],
     methods: &[Value],
-    events: &[Value],
+    topics: &[Value],
 ) -> Result<(), String> {
     let published_methods: Vec<&str> = methods.iter().filter_map(|m| m["name"].as_str()).collect();
-    let published_events: Vec<&str> = events.iter().filter_map(|e| e["name"].as_str()).collect();
+    let published_events: Vec<&str> = topics.iter().filter_map(|t| t["topic"].as_str()).collect();
     let mut used: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (name, document) in documents {
         if !name.contains("fixtures/") {
@@ -173,8 +171,9 @@ fn fixtures_are_sourced(
             let allowed = if key == "method" {
                 published_methods.contains(&name.as_str())
             } else {
+                // A topic must be in the ADR-007 table, or be a channel the bridge
+                // has not renamed yet — never a name invented inside a fixture.
                 published_events.contains(&name.as_str())
-                    || PLAN_SOURCED_EVENTS.contains(&name.as_str())
             } || NEGATIVE_NAMES.contains(&name.as_str());
             if !allowed {
                 return Err(format!(
@@ -187,12 +186,8 @@ fn fixtures_are_sourced(
             }
         }
     }
-    for name in NEGATIVE_NAMES
-        .iter()
-        .copied()
-        .chain(PLAN_SOURCED_EVENTS.iter().copied())
-    {
-        if !seen.contains(&name) {
+    for name in NEGATIVE_NAMES {
+        if !seen.contains(name) {
             return Err(format!("{name:?} is declared but no fixture uses it"));
         }
     }
@@ -709,6 +704,151 @@ fn methods_schema(methods: &[Value], aliases: &[Value]) -> Value {
     })
 }
 
+/// ADR-007: the v1 topic plane. Every legacy channel must be covered exactly once,
+/// every `mapped` row must say where its name comes from, and every `pending` row
+/// must name a task that exists in the plan — otherwise "we will decide later" is
+/// indistinguishable from "we forgot", which is how the 38 channels would drift.
+fn event_topics(table: &Value, map: &Value) -> Result<Vec<Value>, String> {
+    let rows = table["topics"]
+        .as_array()
+        .ok_or("event-topics.json has no `topics` array")?;
+    let plan = std::fs::read_to_string(repo_root().join("MIGRATION_PLAN.md"))
+        .map_err(|e| format!("cannot read MIGRATION_PLAN.md: {e}"))?;
+    let mut seen_channels: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut seen_topics: BTreeSet<&str> = BTreeSet::new();
+    let dotted = |text: &str| {
+        text.contains('.')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_'))
+    };
+    for row in rows {
+        let topic = row["topic"].as_str().ok_or("topic row without a topic")?;
+        if !dotted(topic) {
+            return Err(format!(
+                "topic {topic:?} is not `<domain>.<name>` (ADR-007)"
+            ));
+        }
+        if !seen_topics.insert(topic) {
+            return Err(format!("topic {topic:?} is declared twice"));
+        }
+        let status = row["status"].as_str().unwrap_or_default();
+        if status == "mapped" {
+            let source = row["source"].as_str().unwrap_or_default();
+            if !source.contains(TOPIC_SOURCE_PATTERN) {
+                return Err(format!(
+                    "mapped topic {topic:?} names no document line as its source (ADR-007)"
+                ));
+            }
+        } else if let Some(task) = status.strip_prefix("pending: ") {
+            if !plan.contains(&format!("### Task {task} ")) {
+                return Err(format!(
+                    "topic {topic:?} is pending on {task}, which is not a Task"
+                ));
+            }
+        } else if !status.starts_with("not-forwarded: ") {
+            return Err(format!(
+                "topic {topic:?} status {status:?} must be mapped / pending: <Task> / not-forwarded: <reason>"
+            ));
+        }
+        let legacy_direction = row["legacyDirection"].as_str().unwrap_or_default();
+        if ![
+            "core-to-client",
+            "client-to-core",
+            "both",
+            "unproven",
+            "none",
+        ]
+        .contains(&legacy_direction)
+        {
+            return Err(format!("topic {topic:?} has an unusable legacyDirection"));
+        }
+        // A `mapped` row is a promise the bridge can actually keep: it must state
+        // which way v1 sends the frame and what happens to the payload. An unmapped
+        // row is not allowed to look decided.
+        let payload = row["payload"].as_str().unwrap_or_default();
+        let planned = row["plannedDirection"].as_str().unwrap_or_default();
+        if status == "mapped" {
+            if !["core-to-client", "client-to-core", "both"].contains(&planned) {
+                return Err(format!(
+                    "mapped topic {topic:?} does not state a planned direction"
+                ));
+            }
+            if !(payload.starts_with("verbatim") || payload.starts_with("reshaped:")) {
+                return Err(format!(
+                    "mapped topic {topic:?} must say whether the payload is verbatim or reshaped, and how"
+                ));
+            }
+        } else if !(planned.starts_with("pending") && payload.starts_with("pending")) {
+            return Err(format!(
+                "topic {topic:?} is {status:?} yet already states a direction or payload shape — that decision belongs to the pending task"
+            ));
+        }
+        // `&[]` is const-promoted, so the fallback slice is 'static and the borrow
+        // of `channel` can outlive the statement.
+        let channels: &[Value] = row["legacyChannels"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for channel in channels {
+            let name = channel.as_str().unwrap_or_default();
+            *seen_channels.entry(name).or_insert(0) += 1;
+        }
+    }
+    let legacy: &[Value] = map["events"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let channels: Vec<&str> = legacy.iter().filter_map(|e| e["name"].as_str()).collect();
+    for name in &channels {
+        match seen_channels.get(name).copied().unwrap_or(0) {
+            0 => return Err(format!("legacy channel {name:?} is covered by no v1 topic")),
+            1 => {}
+            n => return Err(format!("legacy channel {name:?} is claimed by {n} topics")),
+        }
+    }
+    if let Some(unknown) = seen_channels.keys().find(|n| !channels.contains(n)) {
+        return Err(format!(
+            "topic table names an unknown legacy channel {unknown:?}"
+        ));
+    }
+    Ok(rows.clone())
+}
+
+fn topics_schema(rows: &[Value], table: &Value) -> Value {
+    let by_status = |want: &str| {
+        rows.iter()
+            .filter(|r| r["status"].as_str().unwrap_or_default() == want)
+            .count()
+    };
+    let shaped = rows
+        .iter()
+        .filter(|r| {
+            r["payload"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("reshaped:")
+        })
+        .count();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "aeroric-local-protocol-v1-event-topics",
+        "protocolVersion": PROTOCOL_VERSION,
+        "adr": "ADR-007: v1 owns its dotted topic names; the 38 legacy Tauri channels are bridged by this table, not republished verbatim",
+        "derivation": table["derivation"].clone(),
+        "topics": rows.len(),
+        "legacyChannels": rows.iter().map(|r| r["legacyChannels"].as_array().map(Vec::len).unwrap_or(0)).sum::<usize>(),
+        "mapped": by_status("mapped"),
+        "pending": rows.iter().filter(|r| r["status"].as_str().unwrap_or_default().starts_with("pending")).count(),
+        "notForwarded": by_status("not-forwarded"),
+        "reshapedPayloads": shaped,
+        "legacyDirectionUnproven": rows.iter().filter(|r| r["legacyDirection"] == json!("unproven")).count(),
+        "contract": {
+            "unknownTopic": "a client keeps the frame and must not fail the stream",
+            "pending": "a pending topic may not be wired by a host until the named task resolves it",
+            "renameIsProtocolChange": "topics are wire names: adding, renaming or dropping one is a protocol change; editing this table's mappings is not"
+        },
+        "rows": rows
+    })
+}
+
 fn events_schema(events: &[Value]) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -849,6 +989,18 @@ fn main() -> Result<(), String> {
         .map_err(|e| format!("cannot read docs/native/command-map.json: {e}"))?;
     let map: Value =
         serde_json::from_str(&raw).map_err(|e| format!("command-map.json is unparseable: {e}"))?;
+    let topics_raw = std::fs::read_to_string(root.join("docs/native/event-topics.json"))
+        .map_err(|e| format!("cannot read docs/native/event-topics.json (ADR-007): {e}"))?;
+    let topic_table: Value =
+        serde_json::from_str(&topics_raw).map_err(|e| format!("event-topics.json: {e}"))?;
+    let topics = event_topics(&topic_table, &map)?;
+    if topic_table["count"].as_u64() != Some(topics.len() as u64) {
+        return Err(format!(
+            "event-topics.json says count {} but holds {} rows",
+            topic_table["count"],
+            topics.len()
+        ));
+    }
 
     let (methods, aliases) = methods_from_inventory(&map)?;
     let events = events_from_inventory(&map);
@@ -859,12 +1011,16 @@ fn main() -> Result<(), String> {
             methods_schema(&methods, &aliases),
         ),
         ("v1/events.schema.json".into(), events_schema(&events)),
+        (
+            "v1/event-topics.schema.json".into(),
+            topics_schema(&topics, &topic_table),
+        ),
     ];
     for (name, value) in fixtures() {
         documents.push((format!("v1/fixtures/{name}"), value));
     }
     documents.sort_by(|a, b| a.0.cmp(&b.0));
-    fixtures_are_sourced(&documents, &methods, &events)?;
+    fixtures_are_sourced(&documents, &methods, &topics)?;
 
     for (name, value) in &documents {
         let path = base.join("contracts/native").join(name);
@@ -875,14 +1031,15 @@ fn main() -> Result<(), String> {
         std::fs::write(&path, text).map_err(|e| format!("{path:?}: {e}"))?;
     }
     println!(
-        "export-schema: wrote {} documents to {} — {} methods + {} aliases ({} mutating, {} capability-gated), {} events",
+        "export-schema: wrote {} documents to {} — {} methods + {} aliases ({} mutating, {} capability-gated), {} legacy channels, {} v1 topics",
         documents.len(),
         base.display(),
         methods.len(),
         methods.iter().filter(|m| m["mutating"] == json!(true)).count(),
         methods.iter().filter(|m| m["requiresCapability"] != Value::Null).count(),
         aliases.len(),
-        events.len()
+        events.len(),
+        topics.len()
     );
     Ok(())
 }

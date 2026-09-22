@@ -38,7 +38,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P1-03 | **accepted**（父+10 子任务建立，validate 双通过且无截断告警；仅 start Phase 1 子任务） | 新发现 D8 注入上限已处理 | 2026-09-21 |
 | P1-04 | **accepted，但一条自述已被推翻**（11 项验收命令当时全绿；骨架可构建、check 入口统一。**其中「`--freeze` 可复现地重生成冻结清单并保留人工字段」当时并不成立，见 P1-05 第七次补记**） | 无（`AGENTS.md` 不被跟踪的口径问题转入 P1-05） | 2026-09-21 |
 | P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁 20 case／106 用例；第十五次补记后另立 `protocol` 模块 5 case／80 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
-| P2-01 | **in_progress（门禁未闭合）**：契约层三方绿 + 门禁第一轮四个答案已全部落到工件。ADR-006 的收敛**契约侧已完成**：`inventory.mjs` 冻结每条命令的 `params`（`!` = Rust 注入句柄），方法面 641→**532**，109 条 `remote_`/`wsl_` 孪生降级为 `twinAliases`（**77 proven / 32 pending**，pending 者宿主必须拒绝）；Q10 的 17 条**逐条定性完毕**（`uncalled-no-evidence` 17→**0**，全部指向 P5-05/P6-03/P7-02/P7-06/P8-01/P8-04）。门禁：`protocol` 5 case／**81** 用例、`skeleton` 20 case／**113** 用例、`contracts --check` 逐字节。**未完成**：ADR-007 事件 topic 映射表、门禁第二轮（Q12 密钥投影／Q13 版本边界）、宿主 target 路由（P3-06/P7-02）与 32 条 pending 别名的人工决定 | 见左列三项；证据在 `docs/native/reviews/protocol.md` | 2026-09-22 |
+| P2-01 | **in_progress（只差门禁第二轮）**：契约层三方绿，第一轮 Q8～Q11 全部落成工件。ADR-006 收敛已发布（**532 方法 + 109 别名**，77 proven / 32 pending，签名逐条冻结进 `command-map.json`）；Q10 的 17 条逐条定性（`uncalled-no-evidence` → **0**）；ADR-007 的 topic 表建好并被生成器校验（**39 topic 覆盖 38 旧通道**，36 条 `pending: P3-04`，四条规则各配一次反例改坏并确认报错）。门禁：`protocol` 5 case／**83** 用例、`skeleton` 20 case／**113** 用例。**未完成**：第二轮 Q12（`RpcError.detail` 密钥投影）／Q13（本地/远程版本边界）；宿主 target 路由与 32 条 pending 别名归 P3-06/P7-02，36 条 pending topic 归 P3-04 | 第二轮拷问（问题清单在 `reviews/protocol.md`） | 2026-09-22 |
 | P2-02 ~ P2-05 | pending | P2-01 | — |
 | P3-01 ~ P3-07 | pending | Phase 2 Gate | — |
 | P4-01 ~ P4-04 | pending | Phase 3 Gate | — |
@@ -51,14 +51,14 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-22）：P2-01 进行中——契约层与三方解码器全绿，门禁第一轮四个答案已全部落成工件；剩两件事 + 一轮拷问。** Phase 1 全部 accepted、Gate 已过（`3091c8f` + `e2d111c` + `10b64e8`，`main`，未 push）。本轮新增：ADR-006 收敛已发布（532 方法 / 109 别名 / 77 可证明 / 32 待决）、Q10 的 17 条逐条定性（无一走"来历不明"入面）、`params` 参数表进入冻结清单并被 `--check` 逐条比对源码。
+**当前状态（2026-09-22）：P2-01 只剩门禁第二轮。** Phase 1 全部 accepted（`3091c8f`／`e2d111c`／`10b64e8`／`5a0cab0`，`main`，**未 push**）。第一轮 Q8～Q11 已全部落成工件与门禁：ADR-006 收敛发布 532 方法 + 109 别名（77/32）、Q10 的 17 条逐条定性（无证据名字归零）、ADR-007 建起 39 条 v1 topic 覆盖 38 条旧通道并被生成器逐条校验；参数表进入冻结清单，`inventory --check` 会因源码签名漂移而失败。
 
 **恢复执行时按顺序做：**
 
-1. **ADR-007 的事件 topic 映射表**：新建 `docs/native/event-topics.json`（人工维护：`topic` / `legacyChannels[]` / `direction` / `payload` / `status`），由 `export-schema` 生成 `contracts/native/v1/event-topics.schema.json`；38 条旧通道必须**每条恰好被一条 topic 覆盖或明确 `not-forwarded` + 原因**，并把该文件纳入 `native:contracts --check` 与 `protocol` 模块。种子只有三条有出处（`task.updated`／`terminal.output`／`terminal.gap`，见 §2.3 补记与 `PLAN_SOURCED_EVENTS`）。
-2. **门禁第二轮**：`grillme-matt:grill-with-docs` 问 **Q12**（`RpcError.detail` 的密钥投影：目前 `mustNotContain` 只是契约上的书面禁止 + 三方断言，宿主是否写出前主动剥离未决）与 **Q13**（本地/远程版本边界：`protocolVersion` 只有常量与握手字段，跨版本策略未成文）。答案落成 ADR-008/009 并变成断言。
-3. 两件做完后把 P2-01 标 `accepted`，才进 **P2-02**（路径、依赖注入与单写者存储）。
-4. **不要在本任务里顺手做**：宿主 `params.target` 路由与 32 条 pending 别名的参数决定归 **P3-06/P7-02**（ADR-006 §落地前必须完成 1 已说明为什么不能凭空收敛）；ADR-005 的 41 条 `pending: P3-05` 到 P3-05 出口交代。
+1. **门禁第二轮**：跑 `grillme-matt:grill-with-docs`，问 **Q12**（`RpcError.detail` 的密钥投影：`mustNotContain` 目前只是契约里的书面禁止 + 三方断言，宿主写出前是否主动剥离、剥不掉时是否整条丢弃）与 **Q13**（本地/远程版本边界：`protocolVersion` 只有常量与握手字段，跨版本策略——拒绝／降级／双栈并存——未成文；远程协议版本与本地版本的关系也要定）。答案落成 ADR-008/009 + 断言，然后才能把 P2-01 标 `accepted`。
+2. 标 `accepted` 前重跑：`pnpm native:check skeleton`、`pnpm native:check protocol`、`pnpm native:contracts --check`、`pnpm native:doctor`、`cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings`、`pnpm exec tsc --noEmit`。
+3. 然后进 **P2-02**（路径、依赖注入与单写者存储）。
+4. **不要在本任务里顺手做**：宿主 `params.target` 路由与 32 条 pending 别名的参数决定 → **P3-06/P7-02**；36 条 pending topic 的接线 → **P3-04**；ADR-005 的 41 条 `pending: P3-05` → **P3-05 出口**。
 
 ⚠ **不需要重启会话**（本文件与 `tooling.md` 早前都写错过，已各自更正）：本 CLI 读取的技能根是 `~/.mirasim/skills`（`~/.claude/skills` 与 `~/.agents/skills` 都是指向它的符号链接），项目内的 `.claude/skills/` **完全不被读取**——反证是同目录里 frontmatter 合法的 `trellis-check` 同样不在注册表中。已按用户批准把固定 revision 的 `grill-me`/`grilling` 拷入该全局根（四个文件 sha256 与 `docs/native/tooling.md` §2 逐字一致，原有 6 个技能未受影响），注册表**当场热加载**，`Skill(grilling)` 随即成功。
 
@@ -1021,6 +1021,14 @@ grill-me
 > 5. **两处自己坑自己**：① 签名抽取把生命周期 `'` 当引号起点，吞掉整条签名 → 21 行 `params` 静默为空，现按形状各配一条断言（多行／限定路径／泛型逗号／函数名不符）；② G10 与新规则最初读 `repoRoot` 而非仓库既有的 `sourceRoot ?? repoRoot` 约定，导致临时树里的漂移测试根本触发不了（改坏参数类型也"通过"）。
 > 6. **INV-02 源码扫描拦下了一句注释**：注释里写了 `AppHandle` 字面量就把 `core/` 扫红。选择改注释并写明"为什么用描述性说法"，**不放宽扫描**——放宽一次，下一个人就以为可以放宽第二次。
 > 7. 计数与地板：`skeleton` 20 case／**113**（`inventory-unit` 33→40、`gate-runner-unit` 18→24）、`protocol` 5 case／**81**（rust 47 / swift 17 / ts 17）；`protocol-swift-golden` 与 `inventory-unit` 的地板与 `minCases` 同一次编辑改齐。`command-map.json` 因参数表涨到 807 KB、`methods.schema.json` 307 KB——两者都不在注入路径上（注入走 `digest` 分片，最大分片仍 16 769 B / 51%）。
+
+> **【第十七次补记 @ 2026-09-22】ADR-007 落地：39 条 v1 topic 覆盖 38 条旧通道，四条规则各被改坏一次都报错。**
+>
+> 1. **表建了，也被机器管住了**：`docs/native/event-topics.json`（人工维护）→ `export-schema` 校验 → `contracts/native/v1/event-topics.schema.json`（第 10 份产物，纳入 `native:contracts --check` 与 Rust/Swift/TS 三方断言）。派生规则写进工件：`topic = <旧通道首段>.<余段以 _ 相连>`，单段通道落到 `events.`；只有带 `source`（必须含 `§` 与行号）的行可以破规则。
+> 2. **只有 3 条敢写 `mapped`**：`task.updated`／`terminal.output`／`terminal.gap`（§2.3 定名）；其余 **36 条 `pending: P3-04`**。校验器额外禁止"未决行提前装作已决"——pending 行的 `plannedDirection`/`payload` 必须是 `pending`。这条不是洁癖：`terminal.output` 的 payload 与旧 `shell-output` 的 `{shell_id, data}` 完全不是一回事，写 `verbatim` 就是假话，所以生成器要求 `mapped` 行必须说清 `reshaped:` 里缺的 `generation`/`revision` 由谁补。
+> 3. **`direction` 拆成两列**：原先用旧通道的 emitters/listeners 直接当 v1 方向，实测 11 条旧通道根本没有 Rust 侧 emitter（`unproven`），而 v1 的 `terminal.output` 必然由宿主发。现在 `legacyDirection`（证据）与 `plannedDirection`（计划）不许互相冒充，`legacyDirectionUnproven: 11` 也进了汇总计数。
+> 4. **四条规则各改坏一次，全部报错**：换掉 `source` → `names no document line as its source`；删一行 → `legacy channel "weekly-report-progress" is covered by no v1 topic`；给 pending 行提前填方向 → `... yet already states a direction or payload shape`；两行认领同一通道 → `is claimed by 2 topics`。加上前一轮的参数类型改坏，共 **5 次反例**。
+> 5. 计数：`protocol` 5 case／**83** 用例（rust 47 / swift 18 / ts 18），`skeleton` 20／**113**；产物从 9 份变 10 份。下一件事只剩门禁第二轮（Q12 密钥投影、Q13 版本边界），问完标 P2-01 accepted，再进 P2-02。
 
 - **Input**：§4、工具探测结果、`scripts/native/checks.json`、现有 `.github/workflows/checks.yml`。
 - **Action**：

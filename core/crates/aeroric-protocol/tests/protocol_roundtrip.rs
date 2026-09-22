@@ -5,6 +5,7 @@
 //! A missing artifact must fail, never skip: a skipped golden test is how a frozen
 //! contract ends up untested.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use aeroric_protocol::{
@@ -471,6 +472,64 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         summary["pendingBlocksHost"],
         json!(true),
         "a pending alias must not be accepted by a host"
+    );
+
+    // ADR-007: the v1 topic plane must cover the legacy channels exactly once, and a
+    // row may not look "decided" before the task that owns it has decided.
+    let topics = contract("event-topics.schema.json");
+    assert_eq!(
+        topics["topics"],
+        json!(39),
+        "38 channels plus the synthesised terminal.gap"
+    );
+    assert_eq!(topics["legacyChannels"], json!(38));
+    assert_eq!(topics["mapped"], json!(3));
+    assert_eq!(topics["pending"], json!(36));
+    assert_eq!(topics["reshapedPayloads"], json!(3));
+    assert_eq!(topics["legacyDirectionUnproven"], json!(11));
+    let rows = topics["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 39);
+    let mut claimed: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in rows {
+        let topic = row["topic"].as_str().unwrap();
+        assert!(topic.contains('.'), "{topic} is not dotted");
+        for channel in row["legacyChannels"].as_array().unwrap() {
+            *claimed.entry(channel.as_str().unwrap()).or_insert(0) += 1;
+        }
+        if row["status"] == json!("mapped") {
+            assert!(
+                row["source"].as_str().is_some_and(|s| s.contains('§')),
+                "{topic} is mapped without naming a document line"
+            );
+            assert!(
+                row["payload"]
+                    .as_str()
+                    .is_some_and(|p| p.starts_with("reshaped:") || p.starts_with("verbatim")),
+                "{topic} is mapped without a payload statement"
+            );
+        } else {
+            assert!(
+                row["plannedDirection"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("pending"),
+                "{topic} is not mapped yet states a direction"
+            );
+        }
+    }
+    let legacy = contract("events.schema.json");
+    for event in legacy["events"].as_array().unwrap() {
+        let name = event["name"].as_str().unwrap();
+        assert_eq!(
+            claimed.get(name).copied().unwrap_or(0),
+            1,
+            "legacy channel {name:?} must be claimed by exactly one v1 topic"
+        );
+    }
+    assert_eq!(
+        claimed.len(),
+        38,
+        "the table claims a channel that does not exist"
     );
 
     let events = contract("events.schema.json");

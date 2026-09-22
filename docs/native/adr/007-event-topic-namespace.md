@@ -1,6 +1,7 @@
 # ADR-007：v1 事件 topic 自成一集，38 条旧通道经显式映射表桥接
 
 - 状态：**accepted（用户在 P2-01 协议门禁的 frontier 追问中拍板，2026-09-22）**
+- 实施进度（同日）：**表已建、校验已成门禁**。`docs/native/event-topics.json` 39 条 topic 覆盖 38 条旧通道（外加宿主合成的 `terminal.gap`），由 `export-schema` 校验并生成 `contracts/native/v1/event-topics.schema.json`，纳入 `native:contracts --check`；Rust/Swift/TS 各有一条断言逐字核对覆盖与"未决不许装作已决"。**36 条仍是 `pending: P3-04`**，只有 §2.3 已定名的 3 条是 `mapped`。实测还纠正了一处我自己写错的东西：`direction` 起初由旧通道证据直接充当 v1 方向，但 `shell-output` 在旧实现里根本没有 Rust 侧 emitter（11 条属"unproven"），而 v1 的 `terminal.output` 一定要由宿主发——现在拆成 `legacyDirection`（证据）与 `plannedDirection`（v1 计划），两者不再互相冒充。
 - 日期：2026-09-22
 - 关联：ADR-002／ADR-006（方法面）、`MIGRATION_PLAN.md` §2.3（示例帧）、P2-01（`events.schema.json`）、P3-04（事件桥接）、P5-01/P5-02（终端与原生会话）
 
@@ -31,7 +32,7 @@
 
 ## 后果
 
-- 交付物：`docs/native/event-topics.json`（人工维护的映射源）→ 由 `export-schema` 生成 `contracts/native/v1/event-topics.schema.json`，并纳入 `native:contracts --check` 的漂移门禁。
+- 交付物：`docs/native/event-topics.json`（人工维护的映射源）→ 由 `export-schema` 生成 `contracts/native/v1/event-topics.schema.json`，并纳入 `native:contracts --check` 的漂移门禁。**已完成**；另外两条 §2.3 定名的 topic 其 payload 实测**不是**原样搬运（`shell-output` 是 `{shell_id, data}`，v1 要 `{taskId, generation, offset, nextOffset, bytesBase64}`；`task-status` 是 `{task_id, status}`，v1 要 `{taskId, generation, revision}`），所以两行都写成 `reshaped:` 并点名由哪个任务补上 generation/revision，校验器禁止 `mapped` 行用 `verbatim` 蒙过去。
 - `events.schema.json` 的角色收窄为「旧通道清点」（emitters/listeners/orphan/`disposition`），v1 的对外 topic 由新工件承担；两者都要过覆盖检查。
 - 归属：P3-04 之前由 P2-01 起持续补全；`pending` 条目在进入 P3-04 时必须清零或转为 `not-forwarded` + 原因。
 - 与 ADR-006 同一原则：**映射表内的改动不是协议变更，发布/删除 topic 才是**。

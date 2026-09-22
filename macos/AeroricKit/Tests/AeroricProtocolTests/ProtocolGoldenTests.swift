@@ -397,6 +397,38 @@ final class ProtocolGoldenTests: XCTestCase {
         XCTAssertEqual(report?.enabled("ssh"), true)
     }
 
+    /// ADR-007 in Swift: the bridge table must cover each of the 38 legacy channels
+    /// exactly once, and an undecided row must not look decided.
+    func testEventTopicTableBridgesEveryLegacyChannel() throws {
+        let topics = try document("event-topics.schema.json")
+        let rows = topics["rows"]?.arrayValue ?? []
+        XCTAssertEqual(rows.count, 39)
+        XCTAssertEqual(number(topics["mapped"]), 3)
+        XCTAssertEqual(number(topics["pending"]), 36)
+        var claimed: [String: Int] = [:]
+        for row in rows {
+            let fields = row.fields
+            let topic = fields["topic"]?.stringValue ?? "?"
+            XCTAssertNotNil(topic.range(of: "^[a-z0-9_]+\\.[a-z0-9_]+$", options: .regularExpression), topic)
+            for case let .string(channel) in fields["legacyChannels"]?.arrayValue ?? [] {
+                claimed[channel, default: 0] += 1
+            }
+            if fields["status"]?.stringValue == "mapped" {
+                XCTAssertTrue(fields["source"]?.stringValue?.contains("§") ?? false, "\(topic) is mapped without a source")
+                let payload = fields["payload"]?.stringValue ?? ""
+                XCTAssertTrue(payload.hasPrefix("reshaped:") || payload.hasPrefix("verbatim"), "\(topic) has no payload statement")
+            } else {
+                XCTAssertTrue((fields["plannedDirection"]?.stringValue ?? "").hasPrefix("pending"),
+                              "\(topic) is undecided yet states a direction")
+            }
+        }
+        XCTAssertEqual(claimed.count, 38)
+        for case let .object(fields) in try document("events.schema.json")["events"]?.arrayValue ?? [] {
+            guard let name = fields["name"]?.stringValue else { continue }
+            XCTAssertEqual(claimed[name], 1, "\(name) must be claimed by exactly one topic")
+        }
+    }
+
     func testEventSurfaceIsCountable() throws {
         let events = try document("events.schema.json")
         let rows = events["events"]?.arrayValue ?? []

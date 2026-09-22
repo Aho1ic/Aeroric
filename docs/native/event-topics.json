@@ -1,0 +1,574 @@
+{
+  "$comment": "Authoritative v1 event-topic table (ADR-007). Hand-maintained, machine-checked: export-schema refuses an uncovered or duplicated legacy channel, a topic outside the dotted grammar, a status that is neither mapped nor pending: <Task in MIGRATION_PLAN.md>, or a mapped row without a document source and a stated payload shape.",
+  "derivation": {
+    "rule": "topic = <first segment of the legacy channel>.<remaining segments joined with _>; a one-segment channel lands under events.",
+    "exceptions": "only rows carrying `source` may break the rule, and `source` must name a document line.",
+    "legacyDirection": "what the frozen emitters/listeners prove about the OLD channel (`unproven` = neither side is Rust); plannedDirection is what v1 will do, and only mapped rows may state it.",
+    "ownerOfPending": "P3-04 wires the bridge; every pending row must become mapped or not-forwarded before P3-04 exits."
+  },
+  "count": 39,
+  "legacyChannels": 38,
+  "topics": [
+    {
+      "topic": "aeroric.app_settings_changed",
+      "legacyChannels": [
+        "aeroric:app-settings-changed"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "agent.operation_changed",
+      "legacyChannels": [
+        "agent-operation-changed"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "agent.tool_install_progress",
+      "legacyChannels": [
+        "agent-tool-install-progress"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "emitted-without-listener",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 0
+      }
+    },
+    {
+      "topic": "app.exit_requested",
+      "legacyChannels": [
+        "app-exit-requested"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "app.restart_requested",
+      "legacyChannels": [
+        "app-restart-requested"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dbx.production_confirm_requested",
+      "legacyChannels": [
+        "dbx-production-confirm-requested"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dbx.transfer_progress",
+      "legacyChannels": [
+        "dbx-transfer-progress"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.approval_requested",
+      "legacyChannels": [
+        "dsh-approval-requested"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.approval_resolved",
+      "legacyChannels": [
+        "dsh-approval-resolved"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_agent_error",
+      "legacyChannels": [
+        "dsh-host-agent-error"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_archived_sessions_changed",
+      "legacyChannels": [
+        "dsh-host-archived-sessions-changed"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_remote_event",
+      "legacyChannels": [
+        "dsh-host-remote-event"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "emitted-without-listener",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 0
+      }
+    },
+    {
+      "topic": "dsh.host_session_added",
+      "legacyChannels": [
+        "dsh-host-session-added"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_session_removed",
+      "legacyChannels": [
+        "dsh-host-session-removed"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_session_status",
+      "legacyChannels": [
+        "dsh-host-session-status"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_stream_error",
+      "legacyChannels": [
+        "dsh-host-stream-error"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "emitted-without-listener",
+      "evidence": {
+        "emitters": 4,
+        "listeners": 0
+      }
+    },
+    {
+      "topic": "dsh.host_workspace_changed",
+      "legacyChannels": [
+        "dsh-host-workspace-changed"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_workspace_order_changed",
+      "legacyChannels": [
+        "dsh-host-workspace-order-changed"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.host_workspace_removed",
+      "legacyChannels": [
+        "dsh-host-workspace-removed"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.question_requested",
+      "legacyChannels": [
+        "dsh-question-requested"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.question_resolved",
+      "legacyChannels": [
+        "dsh-question-resolved"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.session_event",
+      "legacyChannels": [
+        "dsh-session-event"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.session_jobs",
+      "legacyChannels": [
+        "dsh-session-jobs"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.session_projection",
+      "legacyChannels": [
+        "dsh-session-projection"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 2,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.session_queue",
+      "legacyChannels": [
+        "dsh-session-queue"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "dsh.session_subscribed",
+      "legacyChannels": [
+        "dsh-session-subscribed"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "lsp.diagnostics",
+      "legacyChannels": [
+        "lsp://diagnostics"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "notebook.rag_index_progress",
+      "legacyChannels": [
+        "notebook-rag-index-progress"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "notebook.sync_updated",
+      "legacyChannels": [
+        "notebook-sync-updated"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "project.pinned_changed",
+      "legacyChannels": [
+        "project-pinned-changed"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "remote.device_paired",
+      "legacyChannels": [
+        "remote-device-paired"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "remote.task_request",
+      "legacyChannels": [
+        "remote-task-request"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "remote.terminal_resized",
+      "legacyChannels": [
+        "remote-terminal-resized"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 2,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "task.session",
+      "legacyChannels": [
+        "task-session"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 6,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "task.updated",
+      "legacyChannels": [
+        "task-status"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "core-to-client",
+      "payload": "reshaped: legacy payload is {task_id, status}; the v1 frame data is {taskId, generation, revision}, so the bridge must attach the current generation/revision (P3-04 reads them from the task store)",
+      "status": "mapped",
+      "source": "MIGRATION_PLAN.md §2.3 line 532",
+      "evidence": {
+        "emitters": 22,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "terminal.gap",
+      "legacyChannels": [],
+      "legacyDirection": "none",
+      "plannedDirection": "core-to-client",
+      "payload": "reshaped: no legacy channel existed; the host synthesises this frame when a terminal buffer is compacted, carrying {taskId, generation, reason, reset, truncated}",
+      "status": "mapped",
+      "source": "MIGRATION_PLAN.md §2.3 line 533 (terminal plane) and the resync rule at line 546",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 0
+      }
+    },
+    {
+      "topic": "terminal.output",
+      "legacyChannels": [
+        "shell-output"
+      ],
+      "legacyDirection": "unproven",
+      "plannedDirection": "core-to-client",
+      "payload": "reshaped: legacy payload is {shell_id, data} while v1 carries {taskId, generation, offset, nextOffset, bytesBase64}; bytes are base64-encoded and identity/offset come from the PTY plane (P3-03)",
+      "status": "mapped",
+      "source": "MIGRATION_PLAN.md §2.3 line 533",
+      "legacyOrphan": "listened-without-emitter",
+      "evidence": {
+        "emitters": 0,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "usage.statistics_updated",
+      "legacyChannels": [
+        "usage-statistics-updated"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 1,
+        "listeners": 1
+      }
+    },
+    {
+      "topic": "weekly.report_progress",
+      "legacyChannels": [
+        "weekly-report-progress"
+      ],
+      "legacyDirection": "core-to-client",
+      "plannedDirection": "pending: P3-04",
+      "payload": "pending: P3-04",
+      "status": "pending: P3-04",
+      "evidence": {
+        "emitters": 2,
+        "listeners": 1
+      }
+    }
+  ]
+}
