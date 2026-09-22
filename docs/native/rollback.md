@@ -11,6 +11,7 @@
 |---|---|
 | Branch | `main` (INV-01: no feature/fix/worktree branches for this project) |
 | Baseline commit before any migration code | `ca69a4b` — `fix(sftp): drop unused Windows merge-check helper that failed clippy -D warnings` |
+| Phase 1 committed (Q5 answered 2026-09-22) | `3091c8f` on `main` — 64 files / 32 748 insertions, local only: **not pushed, no tag, no release**. Reverting the migration now means `git revert 3091c8f` (or `git reset --soft ca69a4b` locally), which is recoverable in a way the previous single untracked copy was not. |
 | Migration commits so far | none. Working tree carries P1-01…P1-05 output as **uncommitted** changes; nothing has been pushed, tagged or released |
 
 > ### ⚠ Self-inflicted loss on 2026-09-21, and the rule it produced

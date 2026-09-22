@@ -4,12 +4,12 @@
   "sources": [
     {
       "path": "docs/native/command-map.summary.json",
-      "bytes": 32694,
-      "sha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+      "bytes": 33296,
+      "sha256": "075f1205c1d89c35bce4f864850756a3d31b4f8931fc13554628b54baca76b56",
       "shards": [
         {
           "file": "docs/native/digest/command-map-head.json",
-          "bytes": 5848
+          "bytes": 6512
         },
         {
           "file": "docs/native/digest/command-map-modules.json",
@@ -27,12 +27,12 @@
     },
     {
       "path": "docs/native/feature-matrix.json",
-      "bytes": 31560,
-      "sha256": "32789919b7c85f69d6784eaac6ee27b70ccbd8d82bdfbc02879b165c32a0a255",
+      "bytes": 41793,
+      "sha256": "001bca5f52b9fa144d1d5d2a151902cb38a8a33de178f3060819cfe1d2f180de",
       "shards": [
         {
           "file": "docs/native/digest/feature-matrix-head.json",
-          "bytes": 2612
+          "bytes": 3252
         },
         {
           "file": "docs/native/digest/feature-matrix-features.json",
@@ -40,7 +40,7 @@
         },
         {
           "file": "docs/native/digest/feature-matrix-gaps.json",
-          "bytes": 13939
+          "bytes": 14210
         }
       ]
     }

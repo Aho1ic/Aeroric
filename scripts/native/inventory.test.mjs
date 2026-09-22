@@ -370,3 +370,55 @@ test("deleting the derivation table fails loudly", () => {
   expectCategoryProblem(null, (map) => { delete map.meta.category_resolution; },
     /unaccountable hand-written field/, "missing category_resolution");
 });
+
+// ---- method-surface accountability (ADR-002 / 003 / 005) ----
+
+function expectMethodProblem(mutate, pattern, label) {
+  const { dir, cleanup } = tempTree(mutate);
+  try {
+    const result = check({ repoRoot: dir, sourceRoot: repoRoot });
+    assert.equal(result.ok, false, `${label}: expected failure`);
+    assert.ok(result.problems.some((p) => pattern.test(p)), `${label} not caught: ${result.problems.slice(0, 3).join(" | ")}`);
+  } finally { cleanup(); }
+}
+
+test("a platform_specific command without a wire name is refused", () => {
+  expectMethodProblem((map) => {
+    map.commands.find((c) => c.category === "platform_specific").rpc_method = null;
+  }, /has no rpc_method/, "missing method");
+});
+
+test("a client-only command given a wire name is refused", () => {
+  expectMethodProblem((map) => {
+    map.commands.find((c) => c.category === "host_local_os_ui").rpc_method = "git.hack";
+  }, /host_local_os_ui must have no wire name/, "UI command on the wire");
+});
+
+test("a hand-edited prefix that no longer matches the table is refused", () => {
+  expectMethodProblem((map) => {
+    map.commands.find((c) => c.rpc_method === "git.git_status").rpc_method = "vcs.git_status";
+  }, /does not match the derived "git\.git_status"/, "hand-edited method");
+});
+
+test("a duplicate method name is refused", () => {
+  expectMethodProblem((map) => {
+    const rows = map.commands.filter((c) => c.rpc_method);
+    rows[1].rpc_method = rows[0].rpc_method;
+  }, /rpc_method collision/, "duplicate wire name");
+});
+
+test("DSH typed methods must state their caller evidence", () => {
+  expectMethodProblem((map) => { delete map.commands.find((c) => c.rust_path.startsWith("dsh_webui::")).caller_evidence; },
+    /missing caller_evidence/, "no evidence");
+  expectMethodProblem((map) => {
+    map.commands.find((c) => c.rust_path.startsWith("dsh_webui::")).caller_evidence = "pending: P99-99";
+  }, /not a Task in MIGRATION_PLAN/, "evidence pointing at a nonexistent task");
+  expectMethodProblem((map) => {
+    map.commands.find((c) => c.rust_path.startsWith("dsh_webui::")).caller_evidence = "maybe someone calls it";
+  }, /must start with proven: or pending:/, "unparseable evidence");
+});
+
+test("a stale module mapping in the derivation table is refused", () => {
+  expectMethodProblem((map) => { map.meta.rpc_resolution.module_to_service.ghost_module = "git"; },
+    /maps module "ghost_module" that no longer has commands/, "stale module mapping");
+});

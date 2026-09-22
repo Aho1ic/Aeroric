@@ -239,6 +239,68 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
     }
   }
 
+  // The plan lives in the real tree; a temp copy under test has no copy of it.
+  const planRoot = sourceRoot ?? repoRoot;
+
+  // ---- method surface accountability (ADR-002 / ADR-003 / ADR-005) ----
+  const rpcRes = map.meta?.rpc_resolution;
+  if (!rpcRes || typeof rpcRes.module_to_service !== "object" || !Object.keys(rpcRes.module_to_service ?? {}).length) {
+    problems.push("meta.rpc_resolution.module_to_service is missing — rpc_method would be an unaccountable hand-written field");
+  } else {
+    const svcOf = (c) => rpcRes.module_to_service[c.rust_path.split("::")[0]];
+    for (const command of map.commands) {
+      if (command.category === "host_local_os_ui") {
+        if (command.rpc_method) {
+          problems.push(`${command.rust_path}: host_local_os_ui must have no wire name (ADR-003) — it is implemented by the client adapter, and a method here would let a host accept work it cannot do`);
+        }
+        continue;
+      }
+      if (!command.rpc_method) {
+        problems.push(`${command.rust_path}: ${command.category} command has no rpc_method — the method surface would silently omit it`);
+        continue;
+      }
+      const svc = svcOf(command);
+      if (!svc) {
+        problems.push(`${command.rust_path}: module "${command.rust_path.split("::")[0]}" has no service mapping — classify it in meta.rpc_resolution; a new module must not inherit a prefix by accident`);
+        continue;
+      }
+      const expected = `${svc}.${command.rust_path.split("::").pop()}`;
+      if (command.rpc_method !== expected) {
+        problems.push(`${command.rust_path}: rpc_method "${command.rpc_method}" does not match the derived "${expected}"`);
+      }
+      if (command.rust_path.split("::").pop() !== command.command) {
+        problems.push(`${command.rust_path}: wire leaf is not the legacy command name "${command.command}" (ADR-002 keeps them verbatim equal)`);
+      }
+    }
+    const seenModules = new Set(map.commands.map((c) => c.rust_path.split("::")[0]));
+    for (const mod of Object.keys(rpcRes.module_to_service)) {
+      if (!seenModules.has(mod)) problems.push(`rpc_resolution maps module "${mod}" that no longer has commands`);
+    }
+    // ADR-005: every DSH typed method must say whether anyone calls it.
+    for (const command of map.commands) {
+      if (!command.rust_path.startsWith("dsh_webui::")) continue;
+      const evidence = String(command.caller_evidence ?? "");
+      if (!evidence) {
+        problems.push(`${command.rust_path}: missing caller_evidence — ADR-005 requires proven:/pending: for every DSH typed method`);
+      } else if (evidence.startsWith("pending:")) {
+        const task = evidence.slice("pending:".length).trim();
+        if (!/^P\d+-\d+$/.test(task)) problems.push(`${command.rust_path}: pending caller evidence must name a task id, got "${task}"`);
+        else if (!new RegExp(`### Task ${task} `).test(read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8"))) {
+          problems.push(`${command.rust_path}: pending evidence points at ${task}, which is not a Task in MIGRATION_PLAN.md`);
+        }
+      } else if (!evidence.startsWith("proven:")) {
+        problems.push(`${command.rust_path}: caller_evidence must start with proven: or pending:, got "${evidence.slice(0, 24)}"`);
+      }
+    }
+    const named = map.commands.filter((c) => c.rpc_method).map((c) => c.rpc_method);
+    if (new Set(named).size !== named.length) {
+      problems.push(`rpc_method collision in the frozen surface: ${named.length - new Set(named).size} duplicate names`);
+    }
+    if (map.meta?.counts?.methods !== undefined && map.meta.counts.methods !== named.length) {
+      problems.push(`meta.counts.methods is ${map.meta.counts.methods} but ${named.length} commands carry a method`);
+    }
+  }
+
   // ---- Q2: test-case floors cannot drift from minCases, and may not be orphaned ----
   // Honest scope: this makes "silently lower the bar" a two-edit, reviewable act and
   // catches deleting a whole test case (its floor becomes an orphan). It cannot detect a

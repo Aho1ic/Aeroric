@@ -68,7 +68,8 @@
         "module-subtree-unique": 660
       },
       "reachable": 567,
-      "unreachable": 93
+      "unreachable": 93,
+      "methods": 641
     },
     "method": "机械解析注册表条目 → 56 模块级分类默认值（见 meta.category_resolution） → 命令名级 host-local override；definition_candidates 由全量 fn 声明索引得出",
     "caveats": [
@@ -240,6 +241,99 @@
       },
       "counts_by_category": null,
       "corrected": "meta.method 原称分类来自「52 模块级人工分类表」，实为 56 个模块 + 4 条命令级例外（第十三次补记核对）。"
+    },
+    "rpc_resolution": {
+      "rule": "rpc_method = module_to_service[rust_path 首段] + \".\" + rust_path 尾段（尾段就是旧命令名，逐字不变）。依据 ADR-002；platform_specific 的 62 条依 ADR-003 入表。",
+      "module_to_service": {
+        "pty": "terminal",
+        "fs": "files",
+        "formatter": "files",
+        "local_history": "files",
+        "search": "files",
+        "dap": "ide",
+        "lsp": "ide",
+        "run_config": "ide",
+        "tests": "ide",
+        "remote_fs": "files",
+        "sftp": "connections",
+        "storage_conn": "storage_backend",
+        "storage_oauth": "storage_backend",
+        "git": "git",
+        "agent_assist": "agent_tools",
+        "report": "maintenance",
+        "ports": "infra",
+        "remote_git": "git",
+        "diagnostics": "ide",
+        "analytics": "usage",
+        "usage_index": "usage",
+        "session": "session",
+        "config": "settings",
+        "storage": "project",
+        "remote": "remote",
+        "ssh": "connections",
+        "ssh_hostkey": "connections",
+        "app_settings": "settings",
+        "agent_usage": "usage",
+        "local_router_commands": "router",
+        "dsh_plugins": "extensions",
+        "dsh_webui": "dsh",
+        "omp_home": "agent_tools",
+        "agent_tools": "agent_tools",
+        "agent_ops": "operations",
+        "node_runtime": "providers",
+        "conda": "infra",
+        "database": "database",
+        "docker": "infra",
+        "notification": "maintenance",
+        "startup_diagnostics": "diagnostics",
+        "usage": "usage",
+        "hooks": "extensions",
+        "skills": "extensions",
+        "mcp": "extensions",
+        "notebook": "notebook",
+        "wsl": "connections",
+        "wsl_fs": "connections",
+        "platform": "platform",
+        "wsl_git": "git",
+        "permissions": "platform"
+      },
+      "services": [
+        "agent_tools",
+        "connections",
+        "database",
+        "diagnostics",
+        "dsh",
+        "extensions",
+        "files",
+        "git",
+        "ide",
+        "infra",
+        "maintenance",
+        "notebook",
+        "operations",
+        "platform",
+        "project",
+        "providers",
+        "remote",
+        "router",
+        "session",
+        "settings",
+        "storage_backend",
+        "terminal",
+        "usage"
+      ],
+      "assigned_now": {
+        "platform_specific_methods_added": 62
+      },
+      "notes": [
+        "新增服务面 platform（get_platform_runtime_info / build_runnable_file_command，F12/F25），因为它们既不属于 connections 也不属于 git。",
+        "pty → terminal：原 11 条写成 `task/terminal.*`。2026-09-22 拷问定案归一为 `terminal.*`，与 check 模块 `terminal-core` 对齐；发生在 methods.schema.json 冻结（P2-01）之前，属提案修订而非协议变更（详见 ADR-002 追加节）。"
+      ],
+      "method_surface": {
+        "total": 641,
+        "unique": 641,
+        "duplicates": []
+      }
     }
   },
   "modules": {
@@ -919,7 +1013,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.run_task",
+      "rpc_method": "terminal.run_task",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-run_task",
@@ -950,7 +1044,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.resume_task",
+      "rpc_method": "terminal.resume_task",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-resume_task",
@@ -981,7 +1075,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.cancel_task",
+      "rpc_method": "terminal.cancel_task",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-cancel_task",
@@ -1012,7 +1106,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.complete_task",
+      "rpc_method": "terminal.complete_task",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-complete_task",
@@ -1043,7 +1137,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.get_active_task_ids",
+      "rpc_method": "terminal.get_active_task_ids",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-get_active_task_ids",
@@ -1074,7 +1168,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.validate_agent_launch",
+      "rpc_method": "terminal.validate_agent_launch",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-validate_agent_launch",
@@ -1105,7 +1199,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.reset_task_process",
+      "rpc_method": "terminal.reset_task_process",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-reset_task_process",
@@ -1136,7 +1230,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.send_input",
+      "rpc_method": "terminal.send_input",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-send_input",
@@ -1167,7 +1261,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.resize_pty",
+      "rpc_method": "terminal.resize_pty",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-resize_pty",
@@ -1198,7 +1292,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.open_shell",
+      "rpc_method": "terminal.open_shell",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-open_shell",
@@ -1229,7 +1323,7 @@
       "definition_unique": true,
       "category": "domain_rpc",
       "core_service": "runtime+terminal",
-      "rpc_method": "task/terminal.kill_shell",
+      "rpc_method": "terminal.kill_shell",
       "swift_scene": "AeroricUI/Terminal",
       "check_module": "terminal-core",
       "test_id": "T-pty-kill_shell",
@@ -8462,7 +8556,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.get_wsl_status",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-get_wsl_status",
@@ -8492,7 +8586,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.list_wsl_distributions",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-list_wsl_distributions",
@@ -8522,7 +8616,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.probe_wsl_distribution",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-probe_wsl_distribution",
@@ -8552,7 +8646,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.read_wsl_environment",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-read_wsl_environment",
@@ -8582,7 +8676,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.load_wsl_settings",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-load_wsl_settings",
@@ -8612,7 +8706,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.save_wsl_settings",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-save_wsl_settings",
@@ -8642,7 +8736,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.read_wsl_config_file",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-read_wsl_config_file",
@@ -8672,7 +8766,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.write_wsl_config_file",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-write_wsl_config_file",
@@ -8702,7 +8796,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.get_wsl_agent_status",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-get_wsl_agent_status",
@@ -8732,7 +8826,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.upgrade_wsl_agent_versions",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-upgrade_wsl_agent_versions",
@@ -8762,7 +8856,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.read_wsl_agent_config",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-read_wsl_agent_config",
@@ -8792,7 +8886,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.write_wsl_agent_config",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-write_wsl_agent_config",
@@ -8822,7 +8916,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.restart_wsl",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-restart_wsl",
@@ -8852,7 +8946,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.validate_wsl_project_path",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-validate_wsl_project_path",
@@ -8882,7 +8976,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.open_wsl_shell",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-open_wsl_shell",
@@ -8912,7 +9006,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.kill_wsl_shell",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-kill_wsl_shell",
@@ -8942,7 +9036,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.run_wsl_task",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-run_wsl_task",
@@ -8972,7 +9066,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.resume_wsl_task",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-resume_wsl_task",
@@ -9002,7 +9096,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl",
-      "rpc_method": null,
+      "rpc_method": "connections.cancel_wsl_task",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-cancel_wsl_task",
@@ -9092,7 +9186,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_read_dir_entries",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_read_dir_entries",
@@ -9123,7 +9217,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_read_file_content",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_read_file_content",
@@ -9154,7 +9248,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_read_image_preview",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_read_image_preview",
@@ -9185,7 +9279,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_write_file_content",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_write_file_content",
@@ -9216,7 +9310,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_create_file",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_create_file",
@@ -9247,7 +9341,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_create_directory",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_create_directory",
@@ -9278,7 +9372,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_delete_path",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_delete_path",
@@ -9309,7 +9403,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_rename_path",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_rename_path",
@@ -9340,7 +9434,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "connections::wsl_files",
-      "rpc_method": null,
+      "rpc_method": "connections.wsl_copy_paths_to_directory",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_fs-wsl_copy_paths_to_directory",
@@ -9371,7 +9465,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_status",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_status",
@@ -9402,7 +9496,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_changes",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_changes",
@@ -9433,7 +9527,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_list_branches",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_list_branches",
@@ -9464,7 +9558,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_log",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_log",
@@ -9495,7 +9589,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_commit_detail",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_commit_detail",
@@ -9526,7 +9620,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_remote_counts",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_remote_counts",
@@ -9557,7 +9651,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_show_diff",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_show_diff",
@@ -9588,7 +9682,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_show_commit_diff",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_show_commit_diff",
@@ -9619,7 +9713,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_show_file_diff",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_show_file_diff",
@@ -9650,7 +9744,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_file_diff",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_file_diff",
@@ -9681,7 +9775,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stage",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stage",
@@ -9712,7 +9806,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_unstage",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_unstage",
@@ -9743,7 +9837,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stage_files",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stage_files",
@@ -9774,7 +9868,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_unstage_files",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_unstage_files",
@@ -9805,7 +9899,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stage_all",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stage_all",
@@ -9836,7 +9930,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_unstage_all",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_unstage_all",
@@ -9867,7 +9961,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_commit",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_commit",
@@ -9898,7 +9992,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_discard_file",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_discard_file",
@@ -9929,7 +10023,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_discard_files",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_discard_files",
@@ -9960,7 +10054,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_discard_all",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_discard_all",
@@ -9991,7 +10085,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_push",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_push",
@@ -10022,7 +10116,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_pull",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_pull",
@@ -10053,7 +10147,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_blame_file",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_blame_file",
@@ -10084,7 +10178,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_branch_graph",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_branch_graph",
@@ -10115,7 +10209,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stash_list",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stash_list",
@@ -10146,7 +10240,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stash_diff",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stash_diff",
@@ -10177,7 +10271,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stash_push",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stash_push",
@@ -10208,7 +10302,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stash_apply",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stash_apply",
@@ -10239,7 +10333,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_stash_drop",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_stash_drop",
@@ -10270,7 +10364,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_conflict_files",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_conflict_files",
@@ -10301,7 +10395,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_conflict_preview",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_conflict_preview",
@@ -10332,7 +10426,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "git(wsl target)",
-      "rpc_method": null,
+      "rpc_method": "git.wsl_git_resolve_conflict",
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl_git-wsl_git_resolve_conflict",
@@ -11792,7 +11886,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "stop_dsh_webui",
@@ -11822,7 +11917,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "get_dsh_webui_status",
@@ -11852,7 +11948,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "get_dsh_protocol_capabilities",
@@ -11882,7 +11979,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "invoke_dsh_remote",
@@ -11912,7 +12010,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "run_dsh_task",
@@ -11942,7 +12041,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "prompt_dsh_task",
@@ -11972,7 +12072,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "cancel_dsh_task",
@@ -12002,7 +12103,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "complete_dsh_task",
@@ -12032,7 +12134,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "update_omp_thinking_level",
@@ -12124,7 +12227,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "execute_dsh_command",
@@ -12154,7 +12258,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "list_dsh_message_feedback",
@@ -12184,7 +12289,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "put_dsh_message_feedback",
@@ -12214,7 +12320,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "delete_dsh_message_feedback",
@@ -12244,7 +12351,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "list_dsh_agent_presets",
@@ -12274,7 +12382,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "proven:  / test-only"
     },
     {
       "command": "list_dsh_agent_preset_details",
@@ -12304,7 +12413,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "set_dsh_web_default_preset",
@@ -12334,7 +12444,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_sessions",
@@ -12364,7 +12475,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "get_dsh_session_history",
@@ -12394,7 +12506,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "rename_dsh_session",
@@ -12424,7 +12537,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "fork_dsh_session",
@@ -12454,7 +12568,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "search_dsh_sessions",
@@ -12484,7 +12599,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "update_dsh_session_queue",
@@ -12514,7 +12630,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "list_dsh_workspaces",
@@ -12544,7 +12661,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "create_dsh_workspace",
@@ -12574,7 +12692,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "rename_dsh_workspace",
@@ -12604,7 +12723,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "delete_dsh_workspace",
@@ -12634,7 +12754,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "reorder_dsh_workspaces",
@@ -12664,7 +12785,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "move_dsh_session_in_workspace",
@@ -12694,7 +12816,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "archive_dsh_session",
@@ -12724,7 +12847,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "describe_dsh_credentials",
@@ -12754,7 +12878,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "set_dsh_credential",
@@ -12784,7 +12909,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "unset_dsh_credential",
@@ -12814,7 +12940,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_llm_providers",
@@ -12844,7 +12971,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_llm_models",
@@ -12874,7 +13002,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "discover_dsh_llm_models",
@@ -12904,7 +13033,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_subagents",
@@ -12934,7 +13064,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "get_dsh_subagent_history",
@@ -12964,7 +13095,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "prompt_dsh_subagent",
@@ -12994,7 +13126,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "interrupt_dsh_subagent",
@@ -13024,7 +13157,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "create_dsh_goal",
@@ -13054,7 +13188,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "edit_dsh_goal",
@@ -13084,7 +13219,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "pause_dsh_goal",
@@ -13114,7 +13250,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "resume_dsh_goal",
@@ -13144,7 +13281,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "complete_dsh_goal",
@@ -13174,7 +13312,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "clear_dsh_goals",
@@ -13204,7 +13343,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_skills",
@@ -13234,7 +13374,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "describe_dsh_host",
@@ -13264,7 +13405,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "list_dsh_host_directory",
@@ -13294,7 +13436,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "create_dsh_host_directory",
@@ -13324,7 +13467,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "open_dsh_host_path",
@@ -13354,7 +13498,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "select_dsh_session_preset",
@@ -13384,7 +13529,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "read_dsh_agent_preset",
@@ -13414,7 +13560,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "copy_dsh_agent_preset",
@@ -13444,7 +13591,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "open_dsh_agent_preset_document",
@@ -13475,7 +13623,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "remove_dsh_agent_preset",
@@ -13505,7 +13654,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "open_dsh_settings_document",
@@ -13535,7 +13685,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "replace_dsh_settings",
@@ -13565,7 +13716,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "mutate_dsh_settings",
@@ -13595,7 +13747,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "update_dsh_settings",
@@ -13625,7 +13778,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "respond_dsh_remote_event",
@@ -13655,7 +13809,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "get_dsh_session_attachment",
@@ -13685,7 +13840,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "start_dsh_host_events",
@@ -13715,7 +13871,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "stop_dsh_host_events",
@@ -13745,7 +13902,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "pick_dsh_host_directory",
@@ -13775,7 +13933,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": false,
+      "caller_evidence": "pending: P3-05"
     },
     {
       "command": "export_dsh_session_log",
@@ -13805,7 +13964,8 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": true
+      "reachable": true,
+      "caller_evidence": "proven: frontend literal"
     },
     {
       "command": "detect_agent_paths",
@@ -14214,7 +14374,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "platform",
-      "rpc_method": null,
+      "rpc_method": "platform.get_platform_runtime_info",
       "swift_scene": "AeroricApp/Sources",
       "check_module": "platforms",
       "test_id": "T-platform-get_platform_runtime_info",
@@ -14245,7 +14405,7 @@
       "definition_unique": true,
       "category": "platform_specific",
       "core_service": "platform",
-      "rpc_method": null,
+      "rpc_method": "platform.build_runnable_file_command",
       "swift_scene": "AeroricApp/Sources",
       "check_module": "platforms",
       "test_id": "T-platform-build_runnable_file_command",

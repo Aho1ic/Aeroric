@@ -1,7 +1,7 @@
 {
   "shard": "command-map-head.json",
   "from": "docs/native/command-map.summary.json",
-  "sourceSha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+  "sourceSha256": "075f1205c1d89c35bce4f864850756a3d31b4f8931fc13554628b54baca76b56",
   "capBytes": 32768,
   "payload": {
     "generated": "2026-09-21",
@@ -72,7 +72,9 @@
         "module-subtree-unique": 660
       },
       "reachable": 567,
-      "unreachable": 93
+      "unreachable": 93,
+      "methods": 641,
+      "services": 23
     },
     "method": "机械解析注册表条目 → 56 模块级分类默认值 + 4 条命令级例外（见 command-map.json 的 meta.category_resolution） → 命令名级 host-local override；definition_candidates 由全量 fn 声明索引得出",
     "caveats": [
@@ -111,11 +113,6 @@
       "needs_human_resolution": [],
       "why": "同名 fn 在别的模块存在时按名字取首个会把源文件记错，§5.1 的『一文件一条』展开会落到错误目标（G10）"
     },
-    "category_resolution": {
-      "rule": "category = override[rust_path] ?? moduleDefault[首段模块]，由 inventory --check 强制",
-      "modules": 56,
-      "overrides": 4
-    },
     "reachability": {
       "rule": "reachable = 名字以字符串字面量出现在 src/ 或 mobile//packages/，或在 src-tauri/src 内除自身 fn 声明行与 lib.rs 注册之外仍被按行引用。计数单位为引用行数。",
       "excluded_dirs": [
@@ -143,6 +140,40 @@
       },
       "note": "不可达不等于可删：remote_/wsl_ 镜像变体可能由 prefixCommand 运行时拼接，也可能只被外部客户端使用。删除任何一条之前必须先完成 G16 的逐项定性。"
     },
-    "note": "compact digest for context injection; the frozen per-command/event/panel/dynamic-site/reachability checklist is docs/native/command-map.json — read on demand or via scripts/native/inventory.mjs. This digest does NOT replace a checklist row and must not be treated as one."
+    "note": "compact digest for context injection; the frozen per-command/event/panel/dynamic-site/reachability checklist is docs/native/command-map.json — read on demand or via scripts/native/inventory.mjs. This digest does NOT replace a checklist row and must not be treated as one.",
+    "category_resolution": {
+      "rule": "category = override[rust_path] ?? moduleDefault[首段模块]，由 inventory --check 强制",
+      "modules": 56,
+      "overrides": 4
+    },
+    "method_surface": {
+      "methods": 641,
+      "services": [
+        "agent_tools",
+        "connections",
+        "database",
+        "diagnostics",
+        "dsh",
+        "extensions",
+        "files",
+        "git",
+        "ide",
+        "infra",
+        "maintenance",
+        "notebook",
+        "operations",
+        "platform",
+        "project",
+        "providers",
+        "remote",
+        "router",
+        "session",
+        "settings",
+        "storage_backend",
+        "task/terminal",
+        "usage"
+      ],
+      "derivation": "meta.rpc_resolution in command-map.json (ADR-002/003/005)"
+    }
   }
 }

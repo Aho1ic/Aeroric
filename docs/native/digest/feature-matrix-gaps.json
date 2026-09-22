@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "32789919b7c85f69d6784eaac6ee27b70ccbd8d82bdfbc02879b165c32a0a255",
+  "sourceSha256": "001bca5f52b9fa144d1d5d2a151902cb38a8a33de178f3060819cfe1d2f180de",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -167,13 +167,13 @@
       },
       {
         "id": "G17",
-        "finding": "42 条 dsh_webui::* typed Tauri 命令在活代码里零引用；React 的 DSH 层实际经 `/api/remote.mux` WebSocket 下行直连 dsh-web（src/dshProtocol.ts:16-21）。权威能力清单是 src-tauri/src/dsh_webui/protocol_inventory.rs 里固定的 **235 个上游 RPC 方法名**（SOURCE_COMMIT c291e7961a515f6d7af9304e7fd1d257929aef26、PACKAGE_VERSION 0.1.5-rc.2、PROTOCOL_VERSION 2），不是这 42 条命令",
+        "finding": "42 条 dsh_webui::* typed Tauri 命令在活代码里零引用；React 的 DSH 层实际经 `/api/remote.mux` WebSocket 下行直连 dsh-web（src/dshProtocol.ts:16-21）。权威能力清单是 src-tauri/src/dsh_webui/protocol_inventory.rs 里固定的 **235 个上游 RPC 方法名**（SOURCE_COMMIT c291e7961a515f6d7af9304e7fd1d257929aef26、PACKAGE_VERSION 0.1.5-rc.2、PROTOCOL_VERSION 2），不是这 42 条命令（2026-09-22 拷问定案：typed 全量入表 + 逐条 caller 证据；原「42 typed vs 1 mux」的二选一被实测否定——remote_mux 不是分发器，41 条与上游 117 个不重复名字零匹配。见 ADR-005。）",
         "evidence": "docs/native/reachability-triage.md 桶 C；protocol_inventory.rs 235 条方法串；src/dshProtocol.ts 注释与 remoteDownlink 路径",
         "requirement": "P3-05 必须**一次性显式决定**：把能力移植成 42 个 typed core 方法，还是一个 gateway/mux 形态的 core service + 固定 inventory 清单。默认『42 条全搬』会把同一个上游能力复制成两套本地契约，且 §5.1 的一文件一条展开会把这层重复固化进 core",
         "task_ids": "P3-05, P8-03",
         "owner": "core:agents::dsh_host + protocol",
-        "test": "F06 每条能力恰好一个 owner：inventory --check 断言 command-map 的 dsh 组命令要么被 typed RPC 登记、要么显式标 mux-proxied；未标记者失败。fake DSH server 侧对 235 方法清单跑一遍存在性核对（新增/消失方法必须报告）",
-        "status": "open"
+        "test": "inventory --check 逐条断言：dsh_webui 的 66 条 typed 方法必须带 caller_evidence（proven: … 或 pending: <存在的 Task id>），缺失/格式错/pending 指向不存在的 Task 都让门禁失败；P3-05 出口要求 pending 全部转 proven 或经批准删除。",
+        "status": "decided-adr-005-awaiting-p3-05-evidence"
       }
     ]
   }

@@ -1,7 +1,7 @@
 {
   "shard": "command-map-surfaces.json",
   "from": "docs/native/command-map.summary.json",
-  "sourceSha256": "5d5749d5ed5f8d3eb5db3286c43a07156c50c0d32493f5fc51f43878723bd70a",
+  "sourceSha256": "075f1205c1d89c35bce4f864850756a3d31b4f8931fc13554628b54baca76b56",
   "capBytes": 32768,
   "payload": {
     "event_dispositions": {

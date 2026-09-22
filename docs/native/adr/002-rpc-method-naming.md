@@ -33,3 +33,7 @@
 1. 我最初给"保留 `domain.name`"的理由是"尾名与 `rust_path` 逐字相等，因此可由规则推导"。实测只有 229/579 成立，故该理由作废，选项被重新定义为你现在看到的 A1′/A2/B。
 2. 我第一次量"去冗余前缀是否碰撞"时报出 30 个碰撞（`git.status`、`git.list_branches`、`git.log`）——那是脚本自身把两种改写混用造成的假阳性，重算后为 0。结论沿用第十三次补记之前的更正：**三种写法都不碰撞**。
 3. 文档里"20% 的命令带冗余前缀"也是未回源的旧数：按模块口径实为 **184/579 ≈ 31%**。
+
+## 追加（同日拷问，冻结前修订）
+
+被本 ADR 记为"留待 P2-01 决定"的 11 条 `task/terminal.*` 已定案：归一为 **`terminal.<旧命令名>`**。理由：其余 22 个服务面都是单一标识符段，`/` 会把非标识符分隔符永久写进协议面（mobile/relay 契约、Swift 枚举、日志维度都要容忍）；`terminal` 又与既有 check 模块 `terminal-core`、`core_service: runtime+terminal` 对齐。因发生在 `methods.schema.json` 冻结之前，这属于**提案修订**，不是协议变更；`meta.rpc_resolution.module_to_service.pty = terminal` 已同步，归一后 641 个方法名实测仍全局唯一。

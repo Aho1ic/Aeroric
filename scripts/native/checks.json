@@ -12,8 +12,8 @@
     "floors": {
       "core-rust-skeleton@skeleton": 5,
       "swift-package-smoke@skeleton": 12,
-      "inventory-unit@skeleton": 27,
-      "digest-unit@skeleton": 8,
+      "inventory-unit@skeleton": 33,
+      "digest-unit@skeleton": 10,
       "gate-runner-unit@skeleton": 18,
       "invariants-unit@skeleton": 13,
       "extraction-unit@skeleton": 9
@@ -144,7 +144,7 @@
           "kind": "test",
           "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/inventory.test.mjs"],
           "parse": "node-test",
-          "minCases": 27,
+          "minCases": 33,
           "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
           "timeoutMs": 300000
         },
@@ -176,7 +176,7 @@
           "kind": "test",
           "argv": ["node", "--test", "--test-reporter=tap", "scripts/native/digest.test.mjs"],
           "parse": "node-test",
-          "minCases": 8,
+          "minCases": 10,
           "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。",
           "timeoutMs": 300000
         }

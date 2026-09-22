@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-head.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "32789919b7c85f69d6784eaac6ee27b70ccbd8d82bdfbc02879b165c32a0a255",
+  "sourceSha256": "001bca5f52b9fa144d1d5d2a151902cb38a8a33de178f3060819cfe1d2f180de",
   "capBytes": 32768,
   "payload": {
     "meta": {
@@ -50,7 +50,18 @@
         "F21~F24 现有命令数为 0 是**预期结果**（外部能力与新增模式开关），不得当作迁移遗漏，也不得据此声称已支持",
         "status 只有 accepted 才可关闭条目；§1.2 明令不得以『以后迁移』关闭条目",
         "本文件为 P1-02 规划工件；P1-04 的 inventory.mjs 必须把它当作可比对的已提交清单，而非运行时重新推导"
-      ]
+      ],
+      "decisions": {
+        "Q1": "ADR-002 — rpc_method = <服务面>.<旧命令名>，前缀由 meta.rpc_resolution 推导并被 --check 强制",
+        "Q3": "ADR-003 — 62 条 platform_specific 进入协议 v1 并带 requires_capability（方法面 641）",
+        "Q6": "ADR-004 — git 语义一致性由 git 门禁跑三目标同一套 fixtures；connections/platforms 只跑适配与能力门控反例",
+        "Q7": "ADR-005 — DSH 66 条 typed 全量入表，41 条零证据逐条 caller_evidence"
+      },
+      "method_surface": {
+        "methods": 641,
+        "services": 23,
+        "host_local_unnamed": 19
+      }
     }
   }
 }

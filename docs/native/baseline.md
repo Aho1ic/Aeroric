@@ -89,15 +89,15 @@ what the same commands report now.
 
 | Command | Exit | Cases |
 |---|---|---|
-| `pnpm native:check skeleton` | 0 | 20 cases, **92 test cases**, ~8 s wall |
+| `pnpm native:check skeleton` | 0 | 20 cases, **100 test cases**, ~8 s wall |
 | `pnpm native:inventory --check` | 0 | 660 / 660 mapped, 26 features, **17 gaps**, 38 events, 19 panels, 660 definitions resolved, 5 dynamic sites, 422 frontend invoke literals, 93 unreachable |
-| `node --test --test-reporter=tap scripts/native/inventory.test.mjs` | 0 | 27 (19 negative: 4 freeze-merge, 5 category-derivation, rest inventory) |
+| `node --test --test-reporter=tap scripts/native/inventory.test.mjs` | 0 | 33 (25 negative: 4 freeze-merge, 5 category-derivation, 6 method-surface, rest inventory) |
 | `node scripts/native/extraction.mjs --module=database --module=notebook --check …` | 0 | 75 rows / 168 wrappers reproducible; re-deriving corrected two long-standing columns (test items 914→782, pub symbols 586→650) |
 | `node scripts/native/extraction.mjs --module=remote --check …` | 0 | 22 rows / 9 wrappers — the §5.1 expansion for `remote/` |
 | `node scripts/native/extraction.mjs --module=dsh_webui --check …` | 0 | 9 rows / 66 wrappers — the §5.1 expansion for `dsh_webui` (dir + sibling file)
 | `node --test --test-reporter=tap scripts/native/extraction.test.mjs` | 0 | 9, incl. counting-semantics negatives (`#[cfg(test)]` on its own line, field-level `cfg(test)`, parameterised `#[tokio::test(…)]`, impl methods) |
 | `node scripts/native/inventory.mjs --freeze-check` | 0 | frozen file is byte-identical to what `--freeze` would write |
-| `node --test --test-reporter=tap scripts/native/digest.test.mjs` | 0 | 8 (7 negative) |
+| `node --test --test-reporter=tap scripts/native/digest.test.mjs` | 0 | 10 (9 negative, incl. the catch-all head shard) |
 | `node --test --test-reporter=tap scripts/native/check-runner.test.mjs` | 0 | 18, incl. five subprocess assertions (empty module, red child, unreadable corpus, genuinely clean corpus, empty purity listing) |
 | `node scripts/native/digest.mjs --check` | 0 | 7 shards + index, largest **16 769 B of a 32 768 B injection cap** |
 | whitespace sweep over untracked text | 0 problems | 52 files, zero trailing whitespace / EOF blank / CRLF |

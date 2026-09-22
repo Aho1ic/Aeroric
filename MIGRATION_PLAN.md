@@ -37,7 +37,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P1-02 | **accepted**（三份规划工件落盘；未写脚本、未改运行时代码） | 后续增量：G08/G10 已由工具闭环、新发现 G15，见 P1-05 补记 | 2026-09-21 |
 | P1-03 | **accepted**（父+10 子任务建立，validate 双通过且无截断告警；仅 start Phase 1 子任务） | 新发现 D8 注入上限已处理 | 2026-09-21 |
 | P1-04 | **accepted，但一条自述已被推翻**（11 项验收命令当时全绿；骨架可构建、check 入口统一。**其中「`--freeze` 可复现地重生成冻结清单并保留人工字段」当时并不成立，见 P1-05 第七次补记**） | 无（`AGENTS.md` 不被跟踪的口径问题转入 P1-05） | 2026-09-21 |
-| P1-05 | **门禁待答复**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁现为 20 case／92 用例） | Q1／Q5／Q6／Q7 待答；G16 定性归 P2-01 首步 | 2026-09-21 |
+| P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁现为 20 case／100 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
 | P2-01 ~ P2-05 | pending | Phase 1 Gate | — |
 | P3-01 ~ P3-07 | pending | Phase 2 Gate | — |
 | P4-01 ~ P4-04 | pending | Phase 3 Gate | — |
@@ -50,7 +50,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态：Phase 1 的四个实现型 Task（P1-01～P1-04）已 accepted；P1-05 的交付文档、基线与回滚记录均已完成，`grill-me` 链路也已真实调用并完成第一轮 frontier 追问；第六～九轮（忽略白名单漏洞、空白卫生、注入分片；`--freeze` 会静默删人工字段 → `inventory-freeze-is-noop`；注册 0 条 case 的模块曾让门禁假绿 → `gate-runner-unit`；**INV-02 源码守卫曾被一个 `.gitignore` 完全绕过 → `--no-ignore` + 每个被扫路径一条正控探针**；第十轮（INV-09 签名基线此前无守卫 → 新增 `inv09-signing-baseline`；`check-patches` 空表恒绿 → 要求 ≥9 条且识别引号注册表）也已做完 —— 现在只剩等用户回答 Q1／Q5／Q6／Q7。**
+**当前状态（2026-09-22）：Phase 1 全部 accepted，Gate 已通过；下一步是 P2-01。** 旧的续跑说明保留在下方。P1-05 的交付文档、基线与回滚记录均已完成，`grill-me` 链路也已真实调用并完成第一轮 frontier 追问；第六～九轮（忽略白名单漏洞、空白卫生、注入分片；`--freeze` 会静默删人工字段 → `inventory-freeze-is-noop`；注册 0 条 case 的模块曾让门禁假绿 → `gate-runner-unit`；**INV-02 源码守卫曾被一个 `.gitignore` 完全绕过 → `--no-ignore` + 每个被扫路径一条正控探针**；第十轮（INV-09 签名基线此前无守卫 → 新增 `inv09-signing-baseline`；`check-patches` 空表恒绿 → 要求 ≥9 条且识别引号注册表）也已做完 —— 现在只剩等用户回答 Q1／Q5／Q6／Q7。**
 
 ⚠ **不需要重启会话**（本文件与 `tooling.md` 早前都写错过，已各自更正）：本 CLI 读取的技能根是 `~/.mirasim/skills`（`~/.claude/skills` 与 `~/.agents/skills` 都是指向它的符号链接），项目内的 `.claude/skills/` **完全不被读取**——反证是同目录里 frontmatter 合法的 `trellis-check` 同样不在注册表中。已按用户批准把固定 revision 的 `grill-me`/`grilling` 拷入该全局根（四个文件 sha256 与 `docs/native/tooling.md` §2 逐字一致，原有 6 个技能未受影响），注册表**当场热加载**，`Skill(grilling)` 随即成功。
 
@@ -58,7 +58,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 1. 用户回答 `docs/native/reviews/skeleton.md` 末尾的 **Q1／Q5／Q6／Q7**：RPC 命名（三方案实测零碰撞，660 名本就全局唯一）／Phase 1 是否提交到 main（不 push）／远程与 WSL 的 git 语义归属哪个 check 模块／DSH 取「42 条具名 core 方法」还是「一个 mux 网关服务」。
    （**Q2／Q3／Q4 已实施并复验，不需再答**：地板只升不降＋孤儿检测、INV-02 源码与 manifest 双守卫、日志写入前脱敏并有自测。Q3 的守卫在第九轮被证过一个可绕过路径，现已加正控，勿当作免检项。）
-2. 按答案实施，重跑 `pnpm native:check skeleton`（当前 **20 cases / 92 用例**，实测 ~6 s），把复验结果与问题级别写回 `reviews/skeleton.md`，再把 P1-05 与 Phase 1 Gate 标 `accepted`。
+2. 按答案实施，重跑 `pnpm native:check skeleton`（当前 **20 cases / 100 用例**，实测 ~6 s），把复验结果与问题级别写回 `reviews/skeleton.md`，再把 P1-05 与 Phase 1 Gate 标 `accepted`。
 3. 才开始 **P2-01**（`aeroric-protocol` 的 envelope/DTO/schema/fixtures + Rust/TS/Swift 三方 decoder 共用**同一份** fixtures）。Phase 2 的产物、输入与验收见本文件 §Phase 2。
 4. **Phase 1 内不依赖门禁的收尾已全部做完**，包括 G16 的定性：93 条不可达命令已全部归入四个桶并落成 `docs/native/reachability-triage.md`（A 34 条 `prefixCommand` 运行时拼接、B 4 条 `tests::*` 整簇未接线、C 42 条 `dsh_webui::*` 被 `/api/remote.mux` 旁路、D 15 条逐项待判）。**下一步只剩回答待决问题。**
 5. **待你决策的问题清单：Q1～Q6（`docs/native/reviews/skeleton.md` 末尾）+ Q7 = G17（DSH 能力形态。**第十二次补记按实测重新定标**：真正待定的是 66 个 typed wrapper 中 41 个零证据者如何在 core 暴露，而 `protocol_inventory.rs` 把上游 dsh `c291e796…` / `0.1.5-rc.2` / protocol v2 钉住，所以选择题其实是「谁承担与上游的版本偏移」；证据在 `docs/native/extraction/dsh-webui.md`。旧述：42 个 typed core 方法 vs 一个 mux/gateway core service + 钉死的 `protocol_inventory` 清单（实测 10 张表 246 项：62 本地 RPC + 87 remote 方法 + 19 事件 + 19 事件模式 + 11 流帧 + 48 项已退役；live 198））**。这些都属于"中低风险由谁接受"与产品形态选择，Agent 不能替你把风险归零。
@@ -73,7 +73,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 - `pnpm test` 单次全量变红不足以判定回归：本机同一套代码实测 3 失败 → 369 全绿；先定向复跑再全量复跑。
 - **静态抽取的三条教训**（写任何新扫描器都会再踩）：符号表必须**文件内优先**（`PROGRESS_EVENT` 在两文件取值不同）；跨行嵌套泛型必须用**深度计号的调用点扫描**而不是正则；`check()` 里冻结工件按 `repoRoot` 读、源码文件必须按 `sourceRoot` 找，否则临时树负向测试会全量误报。
 - 不得动 `../dbx`（38 个脏文件属用户）、不得动五个参考仓库、不得改 `src-tauri/tauri.conf.json` 的 ad-hoc 基线（INV-09）。
-- Phase 1 产出**仍未提交**（用户当前决定，见 Q5），回滚点即 `ca69a4b` + 可整块丢弃的新增目录；提交需按 INV-01 先出文件清单再确认。**已有一次实证**：`checks.json` 因对未跟踪文件误用 `git checkout` 兜底而被截断成 0 字节、靠重建恢复（详见 `docs/native/rollback.md` › Self-inflicted loss）。新增硬规则：**破坏性验证一律在临时副本上做（照 `inventory.test.mjs` 的 `tempTree()`）；未跟踪文件改前先 `cp x x.bak`，绝不用重定向 / `/dev/null` / 管道兜底恢复；恢复后必须逐条重跑受影响门禁**，因为当时门禁仍然是绿的（配置已载入进程内存），绿灯不能证明文件完好。
+- Phase 1 产出**已提交到 `main`（不 push）**：`3091c8f`，64 文件／32 748 行，工作树干净。Q5 于 2026-09-22 拷问中拍板；迁移前基线仍是 `ca69a4b`，回滚点即它 + 该提交。新增目录；提交需按 INV-01 先出文件清单再确认。**已有一次实证**：`checks.json` 因对未跟踪文件误用 `git checkout` 兜底而被截断成 0 字节、靠重建恢复（详见 `docs/native/rollback.md` › Self-inflicted loss）。新增硬规则：**破坏性验证一律在临时副本上做（照 `inventory.test.mjs` 的 `tempTree()`）；未跟踪文件改前先 `cp x x.bak`，绝不用重定向 / `/dev/null` / 管道兜底恢复；恢复后必须逐条重跑受影响门禁**，因为当时门禁仍然是绿的（配置已载入进程内存），绿灯不能证明文件完好。
 -
 
 Q
@@ -820,7 +820,9 @@ grill-me
 
 ### Task P1-05 — 接通 Review 工具并固化基线
 
-> **【执行状态】交付物已完成，Gate 按用户决定挂账（不宣布通过）@ 2026-09-21**
+> **【执行状态】accepted —— Phase 1 Gate 通过 @ 2026-09-22**（三条 Acceptance 全部实测成立：① `pnpm native:check skeleton` = 20 case／100 用例 exit 0；② `grill-me` 链路真实调用过**两次**——先 `Skill(grilling)`（第五次补记），后由用户安装 `grillme-matt` 插件、走 `grillme-matt:grill-with-docs` 一次一问收口；③ P1 工件完整且**用户已给实施范围确认**，Q1／Q5／Q6／Q7 全部有答案并落成 ADR-002～005。原「Gate 挂账」标题保留在此行下方作为历史，不静默删除。）
+>
+> **历史标题（2026-09-21）：交付物已完成，Gate 按用户决定挂账（不宣布通过）**
 >
 > **Action 1**：新建 `docs/native/tooling.md`（工具真实形态判定、固定 revision `c55ee460…`、MIT 许可、sha256、完整调用链 `grill-me → grilling`、本会话不可调用的实测证据）与 `docs/native/reviews/skeleton.md`（§4.2 输入、被审文件清单、已执行命令与用例数、五个追问项的本地证据、**未解决风险**、"实际调用"一节留空待填）。
 > **Action 2**：新建 `docs/native/baseline.md`，记录 `pnpm lint`(0) / `pnpm typecheck`(0) / `pnpm build`(0) / `cargo check --manifest-path src-tauri/Cargo.toml --locked`(0，1m11s) / `pnpm test` 的**两次**全量运行，以及新骨架侧 10 条命令的退出码与用例数。原有失败**单列未回退断言**。
@@ -890,7 +892,7 @@ grill-me
 > - 恢复：按已知设计重建该文件，并**逐条重跑 10 个 case + 18 个测试 + `--check`** 以确认行为与丢失前一致（35 用例、10 case、inventory consistent 全复现）。文件内已写明"reconstructed after truncation"。
 > - **两条永久教训**（已并入下方纪律与 `rollback.md`）：① **未跟踪文件没有 git 兜底**，任何"恢复"必须显式 `cp` 备份再改，绝不能用重定向/`/dev/null`/管道兜底；做破坏性验证前先 `cp x x.bak`。② 这正是 **Q5 的实证**：Phase 1 全部产出现在仍只存在于这台机器的单一副本里，`docs/native/` 与 `scripts/native/` 一旦被误写就没有第二份。**建议现在就提交到 `main`（不 push）**，但这仍是你的决定，我没有替你做。
 >
-> **另**：用户同时决定 ① Phase 1 产出**暂不提交**（保持未提交状态，回滚点即 `ca69a4b` 工作树）；② `AGENTS.md` **维持被忽略、不再处理**，SwiftUI 原生规则的持久载体以已跟踪的 `.trellis/spec/aeroric-macos/frontend/index.md` 与 `docs/native/adr/001-native-boundary.md` 为准。D4 的口径问题据此关闭。
+> **另**：用户当时决定 ① Phase 1 产出**暂不提交**（保持未提交状态，回滚点即 `ca69a4b` 工作树）；② `AGENTS.md` **维持被忽略、不再处理**，SwiftUI 原生规则的持久载体以已跟踪的 `.trellis/spec/aeroric-macos/frontend/index.md` 与 `docs/native/adr/001-native-boundary.md` 为准。D4 的口径问题据此关闭。
 >
 > **【第六次补记 @ 2026-09-21】门禁答复之外的最后一类风险：工件"存在但不被看见"。** 这轮不加功能，专查我自己写进 §3.1 第 5 条却从未真正执行过的两项，结果挖出一个正在发生的丢失。
 >
@@ -899,6 +901,8 @@ grill-me
 > 3. **注入上限这件事从"逼近"变成了"已解决"。** 上一轮记录的 `feature-matrix.json` 31 560 B / `command-map.summary.json` 30 942 B（96%／94% of 32 768）确实就是 D8 的重演前夜。新建 **`scripts/native/digest.mjs`**（`pnpm native:digest` 重切，`--check` 校验）把两份 canonical 摘要切成 **7 个分片 + `index.json`，最大片 16 769 B（51% 上限）**；canonical 文件保持原样继续当真相源，分片只是"切"不是"摘要"。关键在 `--check` 的四条断言：canonical 每个顶层键**必须恰好落在一篇**（漏键＝静默丢行，直接失败）、不得重复分配、分片合并后必须**逐值还原** canonical、以及每片不得超上限、分片记录的 `sourceSha256` 必须等于当前 canonical（改了 canonical 忘了重切＝stale 失败）。**21 份 Trellis 清单**（11 implement + 10 check + 父）改指向分片，11 个 native 任务 `validate` 全通过，`list-context` 实测分片确实被注入。
 > 4. 新增 **8 条负例测试**（`digest.test.mjs`，全部在临时副本上做，绝不碰冻结清单）：漏键／重复分配／幽灵键／改 canonical 不重切／手改分片 payload／分片文件缺失／超上限。**两个 bug 是这套自校验当场抓出来的**：① 我最初用 `!==` 比较对象，于是刚写出的分片被自己判成不匹配；② `repoRoot` 用 `new URL(...).pathname` 求目录——本仓路径含中文（`同步空间`），pathname 是**百分号编码**的，一律改用 `fileURLToPath`。这两类错误如果留到 Phase 4 之后，代价完全不同。
 > 5. 门禁由 10 case／35 用例增至 **12 case／43 用例**（新增 `digest-shards-current` gate 与 `digest-unit` test，后者按既有规则同时登记地板 `digest-unit@skeleton: 8`）；`unknown module → exit 2`、`native:doctor 18/18`、`inventory --check consistent`（660/660/26/17/38/19/660/5/422/93）、`git diff --check` 干净。**因为这轮真的动了四个 `core/crates/*/Cargo.toml`**（删 EOF 空行），`cargo fmt --manifest-path core/Cargo.toml --all --check` 与 `cargo clippy … -- -D warnings` 都**重新实跑并各自 exit 0**（后者用重定向拿真实退出码，不看管道尾巴），门禁内没有这两条不代表可以不验。
+>
+> 〔2026-09-22 更新：这一行的「四项」已缩为两项——**Q1 与 Q5 已由用户拍板并执行**（Q1＝ADR-002 服务面分组＋推导落表；Q5＝提交 `3091c8f`，不 push）。仍待答：**Q6／Q7**。〕
 >
 > 仍未动的还是那四项：**Q1／Q5／Q6／Q7**。第 1、3 条各自降低了"未提交状态"的损失概率（工件现在可提交、注入不再靠边缘余量），但**是否提交仍是你的决定**。
 >
@@ -975,6 +979,22 @@ grill-me
 > 4. **顺手在别的工件里清掉两条过期"阻塞"。** ADR §7 长期写着"`grill-me` 本会话不可调用 → 阻塞 P1-05 Gate 进而阻塞 Phase 1 出口"，但第一轮追问其实早已真实完成（第五次补记前后）；也写着"`AGENTS.md` 原生规则段落已批准、延后执行"，而这两段其实已经写入。两处都改成实测状态，并各留一句"此前为何没回写"，因为**同一份文档里其它没被复核的"阻塞"字样可能同样过期**——`meta.category_resolution` 就是这条规律的第三个实例。
 > 5. **一个我自己造出来的反例被自己拦住了：** 给 canonical `command-map.summary.json` 加 `category_resolution` 后，`digest.mjs --check` 立刻拒绝：**key "category_resolution" is in no shard — sharding would silently drop it**。这正是第七／八轮那条"分片不得成为丢行的借口"的设计目的第一次在真实改动上开火（此前只在单测里开火）。按规则把它并入 `command-map-head` 分片后重切，7 片仍全部可无损还原 canonical，最大 16 769 B（51 % 上限）。
 > 6. 门禁 **20 case／92 用例**（`inventory-unit` 27 条），`--check`／`--freeze-check`／`digest --check`／`doctor 18/18`／`git diff --check` 全绿。本轮 `command-map.json` 的哈希**有意变了**（新增 `meta.category_resolution`、更正 `method`），备份 `/tmp/command-map.PRE-cat.json` 可逐字节回退，`--freeze`／`--freeze-reachability` 对新内容仍是 no-op（`extraction-docs-current*` 与 `inventory-freeze-is-noop` 均通过）。
+>
+> **【第十四次补记 @ 2026-09-22】grill-me 插件装好后重跑门禁拷问：Q1／Q5／Q6／Q7 全部有答案，并已落成 ADR-002～005 + 工件改动。**
+>
+> 1. **工具入口换了、也真的用上了。** 用户从插件市场装了 `grillme-matt`，本轮走 `grillme-matt:grill-with-docs`（一次一问 + AskUserQuestion 选项卡），与第五次补记用的 `Skill(grilling)` 是不同实现；两份调用证据都留在 `docs/native/reviews/skeleton.md`。
+> 2. **四个决策全部落定**（每题都先自查事实再交用户拍板）：
+>    - **Q1→ADR-002**：`rpc_method = <服务面>.<旧命令名>`，前缀由 `meta.rpc_resolution`（56 模块→23 服务面）推导，`--check` 逐条强制。**过程中我自己两次给出错误前提**：先说"剥前缀有碰撞"（否），再说"保留现写法可由 rust_path 规则推导"（实测只有 229/579 成立）；重问后用户选了服务面口径。附带测得：现提案里带斜杠的 `task/terminal.*` 有 11 条，是否改成标识符风格属协议形状变更，留给 P2-01 schema 评审单独决定，我没擅自改。
+>    - **Q5→已执行**：Phase 1 提交为 `3091c8f`（64 文件／32 748 行，`main`，**未 push、无 tag、无发布**）。提交前后各跑一次门禁（20 case／92 用例 exit 0），确认没有哪个检查依赖"文件必须未跟踪"。
+>    - **Q6→ADR-004**：混合口径——`git` 用同一套 fixtures 跑 local/ssh/wsl 三目标语义一致性；`connections`/`platforms` 只跑适配与能力门控反例，且不得另写一份 git 断言。选它的原因是：全部交给 `git` 会让 Phase 6 门禁依赖 Phase 7 才有的传输实现（只能默默 skip，§5.4 禁止）。
+>    - **Q7→ADR-005**：原"42 typed vs 1 mux"是我自己造出的假两难。实测：`remote_mux.rs` 无任何 `#[tauri::command]`、不按方法名分发；41 条零证据命令与上游 117 个不重复名字**零匹配**；P3-05 Action 4 本就要求逐条映射。用户选：66 条全量 typed 入表 + 每条 `caller_evidence`（`proven:` 或 `pending: <Task>`），`--check` 强制，P3-05 出口必须逐条交代。
+> 3. **决策立刻变成工件与门禁，不止写在文档里**：`meta.rpc_resolution` 落表（579 条既有名字被规则**完全复现、零 per-command 例外**）；62 条 platform_specific 补上线名 → 方法面 **641 个、实测全局唯一**（ADR-003）；19 条 host_local_os_ui 由 `--check` **禁止**被赋予线名；41 条 DSH 方法带 `pending: P3-05`。新增 6 条负例（缺线名、UI 命令上线、手写前缀漂移、重名、证据缺失/指向不存在的 Task/格式错、失效模块映射），`inventory-unit` 27→33、`digest-unit` 8→10（地板同一次编辑）。
+> 4. **两处我自己的失误被当场拦住并修好**：① 为省事用字符串拼接改 `digest.mjs`，造出重复 `const wildcard` 的语法错——按既有教训改为读全文后整体重写；② 新方法面校验里读 `MIGRATION_PLAN.md` 用了注入 root，临时树里没有该文件，26 条测试连锁炸红；改用 `sourceRoot` 后 33/33 通过。**教训复用**：`--check` 通过不代表新分支被执行过，所以每个新断言都配了负例，并断言各自分支的原文消息。
+> 5. **分片守卫一天内两次拦住我**：给 canonical 摘要加 `category_resolution`、再加 `method_surface` 时，`digest --check` 都拒绝"key is in no shard"。第二次我改了设计而不是继续补键名：`head` 分片改为 `["*"]` 兜底认领所有未被显式声明的键——**"新增顶层键=静默丢失"这一整类失效从此消失**，覆盖断言仍然在（并配 2 条新测试）。
+> 6. 措辞精度修正：`protocol_inventory.rs` 是 **198 条目 / 117 个不重复名字**（另 48 项 RETIRED），此前"198 names/235 names"的写法都不准。
+> 7. `feature-matrix.json` 因加入决策记录涨到 **41 793 B = 上限的 127%**——正因为第六轮把注入改成 7 个分片，这事才不再是问题：canonical 不再被注入，被注入的分片最大仍是 16 769 B（51%）。
+> 9. 收尾前最后一道口径也定了：11 条 `task/terminal.*` 归一为 **`terminal.*`**（与 check 模块 `terminal-core` 对齐；23 个服务面、641 个方法名实测仍全局唯一、零斜杠名）。因发生在 `methods.schema.json` 冻结之前，属提案修订而非协议变更，已记入 ADR-002 追加节与 `meta.rpc_resolution.module_to_service.pty`。
+> 8. 门禁现为 **20 case／100 用例**。§5.1 四块展开表全部由生成器可重导；ADR-001 的两条过期"阻塞"已更正；`CONTEXT.md`（术语表，未被忽略、可提交）与 ADR-002～005 落盘。
 
 - **Input**：§4、工具探测结果、`scripts/native/checks.json`、现有 `.github/workflows/checks.yml`。
 - **Action**：
@@ -1824,7 +1844,7 @@ grill-me
 ### 5.1 大模块不能在一次 Task 内全仓替换
 
 > **【已提前完成的规划工件 @ 2026-09-21】** `database/`（14 文件）与 `notebook/`（61 文件）已按本节要求展开成**一文件一条**，落在被跟踪的 `docs/native/extraction/database-notebook.md`（75 行、168 个 command wrapper、586 个 `pub` 符号、914 项测试专用条目单列、以及 `AppHandle`/`include_str!`/`cfg(windows)`/spawn/凭据 的聚合风险登记表）。生成器把行数与 `command-map.json` **交叉校验，不一致就中止不写文件**（该性质在第十一次补记前只是一句声称：当时生成代码是一次性的、不可复现；现为 `scripts/native/extraction.mjs`，并由两条 `extraction-docs-current*` 门禁 case 持续校验。重导同时更正了本文档 `testOnlyItemsExcluded` 914→782、`pubSymbolsTotal` 586→650 两列历史错误）。这条约束在本轮真实拦下三次错（173→含注释与断言字符串的虚高、111→测试块括号深度没退回、168→只算整行属性才对）。
-> 已解除并完成：`remote/` 于第十一次补记展开为 `docs/native/extraction/remote.md`（22 行、9 wrapper，阻塞事实实测为"mobile 0 处 `@tauri-apps` 引用"）。仍**有意尚未**展开的一块：`dsh_webui/` 等 **Q7/G17** 的能力形态决定——若结论是 mux 网关，66 个文件的落点布局会整体不同，现在展开必然返工。二者已在 Phase 7 子任务 `implement.md` 记名为待办，不算遗漏。
+> 已解除并完成：`remote/` 于第十一次补记展开为 `docs/native/extraction/remote.md`（22 行、9 wrapper，阻塞事实实测为"mobile 0 处 `@tauri-apps` 引用"）。已解除：`dsh_webui/` 于第十四次补记展开为 `docs/native/extraction/dsh-webui.md`（Q7 定案后不再需要等形态；且文件级事实本与该决定无关）。至此 §5.1 点名的四块目录级模块全部有可重导的行清单。旧述：`dsh_webui/` 等 **Q7/G17** 的能力形态决定——若结论是 mux 网关，66 个文件的落点布局会整体不同，现在展开必然返工。二者已在 Phase 7 子任务 `implement.md` 记名为待办，不算遗漏。
 
 上面涉及 `notebook/`、`database/`、`remote/` 等完整目录的 Task，实施 Agent 必须先在该子任务 `implement.md` 展开为**一文件一条**，不得一次性搬完整目录后再碰运气修编译。展开规则固定：
 

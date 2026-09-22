@@ -24,6 +24,9 @@
 | 纯原生 / 高级(advanced) 模式 | 呈现方式偏好（`interactionMode`），切换不重启 Agent、不改协议 | 不是外观的 glass/classic，也不是权限档位 |
 | 零证据 / zero-evidence | 在生产与测试源码里都找不到任何调用线索的命令 | 不是"确定死代码"；前缀派生与只被 mux 触达都另计 |
 | 已退役 / RETIRED | `protocol_inventory.rs` 里显式标为退役的条目（48 项），不计入能力面 | 不是"待支持"，也不是 live 名字 |
+| 能力门控 / capability gate | 方法在 schema 上声明 `requires_capability`；**能力由 host 声明，client 不得用自己所在 OS 推断 host 能力**（ADR-003） | 不是客户端本地开关；控件禁用之外服务端也必须拒绝 |
+| 平台面 / platform surface | 62 条 `platform_specific` 命令（`wsl_git` 32、`wsl` 19、`wsl_fs` 9、`platform` 2）及其方法 | 不是"暂不迁移"的委婉说法；已进入协议 v1 |
+| 方法面 / method surface | 协议 v1 冻结时包含的全部方法（ADR-003 后为 641） | 不是 660：其中 19 条 host_local_os_ui 有意无线名 |
 | 权威来源 / authoritative source | 一个事实唯一的答案所在处（如事件通道以源码常量与调用点为准） | 文档转述、ADR 表格、记忆里的数字都不是 |
 | 回滚点 / rollback point | 基线 commit `ca69a4b` + 可整块丢弃的新增目录 | 不是 `git reset --hard`；不是把旧全量内存快照写回去 |
 | 未决 / open、deferred | 需要用户拍板或需单独审定才可关闭的事项（Q1、Q5、Q6、Q7） | 不许写成"已通过"；关闭需带实测复验 |

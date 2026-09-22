@@ -1,6 +1,6 @@
 # Module review — skeleton (Phase 1, Task P1-04/P1-05)
 
-**Gate status: `BLOCKED: grill-me entrypoint not loaded in this session` — NOT accepted.**
+**Gate status: `PASS` — accepted 2026-09-22.** 原头部长期写着 `BLOCKED: grill-me entrypoint not loaded in this session`，那是**技能装好之前的旧状态**：`grill-me` 链路先经 `Skill(grilling)`、后经用户安装的 `grillme-matt` 插件各真实跑过一轮（见下文 Actual invocation 与第十四次补记），Q1／Q5／Q6／Q7 也已逐一拍板并落成 ADR-002～005 + 门禁断言。这条过期声明本身就说明「阻塞字样没人回写」是什么现象，故原文保留在此句内而不删除。
 
 Per `MIGRATION_PLAN.md` §4.1 and §5.4, this file records the real state instead of
 substituting an agent self-review for the tool call. The skeleton may not be
@@ -119,7 +119,18 @@ should make rather than this file.
 
 ### Frontier put to the user (answers pending — gate stays open)
 
-1. **Q1** RPC naming. **Correction to how this question was first put to the user:** it was
+1. **Q1** RPC naming — **ANSWERED 2026-09-22: A1′ (service-area prefix + recorded derivation)**,
+   now `docs/native/adr/002-rpc-method-naming.md`. The question went through **two** corrections
+   before the user decided: it was first framed as "strip prefixes and risk collisions" (false:
+   all three options are collision-free), then I justified "keep `domain.name`" by claiming the
+   name is derivable from `rust_path` by rule — also false, only **229/579** prefixes match the
+   Rust module, and 11 rows use a `task/terminal.` style. The decided shape keeps the 22 authored
+   service prefixes but *requires* `meta.rpc_resolution` (56 module→service rows + named,
+   justified overrides) with `inventory --check` deriving every value, so the field stops being
+   an unaccountable hand-written table. A transient "30 collisions" measurement was my own
+   script bug and is withdrawn; re-derived: 0. Also corrected: "20% redundant prefixes" is
+   184/579 ≈ 31% by the module reading.
+   Original framing, kept for the record: it was
    framed as "keep verbatim, or strip prefixes and **risk collisions**". Verified 2026-09-21:
    **collisions are zero under all three options** (verbatim 0, stripped 0, no-namespace 0),
    because **all 660 legacy command names are already globally unique**. So the collision
@@ -140,15 +151,19 @@ should make rather than this file.
    per scanned path that has to find content; `forbid` cases must declare `mustContain`. Re-running
    the same attack sample now yields `FAIL (forbidden matches present)` and gate exit 1.
 4. **Q4** Log redaction — **implemented** with a self-test that found two leaks on first run.
-5. **Q5** Commit to `main` — **still open**, and now backed by an incident: an untracked
-   `checks.json` was truncated to 0 bytes and recovered only by reconstruction
-   (`docs/native/rollback.md` › Self-inflicted loss).
-6. **Q6** Remote/WSL git check-module ownership — **still open**.
-7. **Q7 / G17** DSH typed-vs-mux shape — **still open**; note the triage revision moved 42 →
+5. **Q5** Commit to `main` — **ANSWERED and executed 2026-09-22**: `3091c8f` on `main`, 64 files /
+   32 748 insertions, **not pushed, no tag, no release**. The incident that justified asking — an
+   untracked `checks.json` truncated to 0 bytes and recovered only by reconstruction
+   (`docs/native/rollback.md` › Self-inflicted loss) — is what this removes: an accidental write now
+   has a second copy again. Gate was re-run immediately before the commit (20 cases / 92 tests,
+   exit 0) and again after it, so nothing depended on the files being untracked.
+6. **Q6** Remote/WSL git check-module ownership — **ANSWERED 2026-09-22: ADR-004 (hybrid)**. `git` proves target-agnostic semantics from one shared fixture set (local/ssh/wsl as parameters); `connections` owns SSH adapter counterexamples, `platforms` owns WSL adapter + ADR-003 capability-gate negatives, and neither may re-implement git assertions.
+7. **Q7 / G17** — **ANSWERED 2026-09-22: ADR-005 (typed full surface + per-row caller evidence)**. The question as first posed was invalid: `remote_mux.rs` holds no `#[tauri::command]` and dispatches no method table, and the 41 zero-evidence commands match 0 of the 117 distinct upstream names, so "typed vs one mux" was a false choice. `inventory --check` now requires every `dsh_webui::*` method to carry `proven:` or `pending: <existing Task>`.
+   (Original open wording, kept for the record: the triage revision moved 42 →
    **41** genuinely unevidenced `dsh_webui::*` commands, since `list_dsh_agent_presets` turned
    out to have test evidence.
 
-**Gate remains `BLOCKED` until the user answers and the resulting decisions are implemented and re-verified.** Recording the questions is not the same as passing the review; §4.2 forbids writing unanswered questions as passes.
+**Gate closed 2026-09-22**: 用户逐一回答后，决定已实现并复验（`pnpm native:check skeleton` = 20 case／100 用例 exit 0；12 条新负例覆盖命名推导、能力门控与 caller 证据）。原句为： Recording the questions is not the same as passing the review; §4.2 forbids writing unanswered questions as passes.
 
 Rounds 11–13 added, beyond the cases listed above: `extraction-docs-current` ×3
 (database+notebook / remote / dsh_webui — §5.1 row lists must be reproducible from source and agree with

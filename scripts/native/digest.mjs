@@ -26,11 +26,10 @@ const SPECS = [
     source: "docs/native/command-map.summary.json",
     prefix: "command-map",
     parts: {
-      head: [
-        "generated", "task", "repo_commit", "authoritative_source", "counts",
-        "method", "caveats", "revisions", "known_ambiguities",
-        "definition_resolution", "category_resolution", "reachability", "note",
-      ],
+      // "*" = everything no other shard claims, so adding a top-level key can
+      // never mean "quietly left out of the injection" — the coverage assertion
+      // stays, the manual key list goes away.
+      head: ["*"],
       modules: ["modules"],
       surfaces: ["event_dispositions", "panel_targets", "dynamic_sites"],
       unreachable: ["unreachable_commands"],
@@ -40,7 +39,7 @@ const SPECS = [
     source: "docs/native/feature-matrix.json",
     prefix: "feature-matrix",
     parts: {
-      head: ["meta"],
+      head: ["*"],
       features: ["features"],
       gaps: ["gaps"],
     },
@@ -62,31 +61,52 @@ function canonicalize(value) {
 // by-reference `!==` would report every shard as stale.
 const sameValue = (a, b) => JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 
-/** Split one canonical object into shard payloads, reporting any key that
- *  would be dropped or duplicated by the split. */
+/**
+ * Split one canonical object into shard payloads, reporting any key that would be
+ * dropped or duplicated by the split. A part declared as `["*"]` receives every key
+ * no other part claims: adding a top-level key to the canonical digest then can never
+ * mean "quietly missing from the injected shards", and the key list stops needing
+ * manual upkeep.
+ */
+function claimedElsewhere(key, parts, exceptPart) {
+  return Object.entries(parts).some(
+    ([part, listed]) => part !== exceptPart && !listed.includes("*") && listed.includes(key),
+  );
+}
+
+function partKeys(part, listed, canonicalKeys, parts) {
+  return listed.includes("*")
+    ? canonicalKeys.filter((key) => !claimedElsewhere(key, parts, part))
+    : listed;
+}
+
 export function shardPlanFor(spec, canonical) {
   const problems = [];
-  const keys = Object.keys(canonical);
+  const canonicalKeys = Object.keys(canonical);
   const assigned = new Map();
   for (const [part, listed] of Object.entries(spec.parts)) {
-    for (const key of listed) {
+    for (const key of partKeys(part, listed, canonicalKeys, spec.parts)) {
       if (assigned.has(key)) {
         problems.push(`${spec.source}: key "${key}" is assigned to both shards "${assigned.get(key)}" and "${part}"`);
       }
       assigned.set(key, part);
-      if (!keys.includes(key)) {
+      if (!canonicalKeys.includes(key)) {
         problems.push(`${spec.source}: shard "${part}" names key "${key}" which the canonical file does not contain`);
       }
     }
   }
-  for (const key of keys) {
+  for (const key of canonicalKeys) {
     if (!assigned.has(key)) {
       problems.push(`${spec.source}: key "${key}" is in no shard — sharding would silently drop it`);
     }
   }
   const shards = Object.entries(spec.parts).map(([part, listed]) => ({
     name: `${spec.prefix}-${part}.json`,
-    payload: Object.fromEntries(listed.filter((k) => keys.includes(k)).map((k) => [k, canonical[k]])),
+    payload: Object.fromEntries(
+      partKeys(part, listed, canonicalKeys, spec.parts)
+        .filter((key) => canonicalKeys.includes(key))
+        .map((key) => [key, canonical[key]]),
+    ),
   }));
   return { problems, shards };
 }

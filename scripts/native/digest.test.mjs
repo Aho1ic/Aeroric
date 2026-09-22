@@ -84,3 +84,19 @@ test("a shard over the injection cap is reported, not truncated", () => {
   assert.match(problems.join("\n"), /exceeds the 2048 B injection cap/);
   cleanup();
 });
+
+test("a key added to the canonical digest lands in the catch-all head shard", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { head: ["*"], big: ["blob"] } };
+  const canonical = { blob: 1, a: 2, later_added: 3 };
+  const { problems, shards } = shardPlanFor(spec, canonical);
+  assert.deepEqual(problems, []);
+  const head = shards.find((s2) => s2.name === "x-head.json");
+  assert.deepEqual(Object.keys(head.payload).sort(), ["a", "later_added"], "new key must be carried, not dropped");
+});
+
+test("the catch-all never double-claims a key an explicit shard owns", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { head: ["*"], big: ["blob"] } };
+  const { problems, shards } = shardPlanFor(spec, { blob: 1, other: 2 });
+  assert.deepEqual(problems, []);
+  assert.deepEqual(Object.keys(shards.find((s2) => s2.name === "x-head.json").payload), ["other"]);
+});
