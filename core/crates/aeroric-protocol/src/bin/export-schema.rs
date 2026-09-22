@@ -224,15 +224,137 @@ fn quantity() -> Value {
     })
 }
 
-/// One record per wire method, cross-checked against the derivation table.
-fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
+/// Client-visible parameters of a frozen row. `params` is written by `inventory.mjs`
+/// as `name: Type`, with a trailing `!` marking a Rust-injected handle (application
+/// or state extractor) that no client ever sends.
+///
+/// The handle types are named descriptively rather than by their identifiers on
+/// purpose: `inv02-core-source-scan` greps this crate for those identifiers, and a
+/// comment that mentions one is a false positive that would teach someone to weaken
+/// the scan instead of rewording the sentence.
+fn visible_params(command: &Value) -> Vec<(String, String)> {
+    command["params"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|entry| !entry.ends_with('!'))
+                .filter(|entry| entry.contains(": "))
+                .map(|entry| {
+                    let mut halves = entry.splitn(2, ": ");
+                    (
+                        halves.next().unwrap_or_default().to_string(),
+                        halves.next().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The members of `ProjectTarget`. A twin's transport handle is *consumed by the
+/// target*, so it is not a parameter the collapsed method must also take.
+const TARGET_FIELDS: &[&str] = &[
+    "connection",
+    "connection_id",
+    "remote_path",
+    "distribution",
+    "linux_path",
+];
+
+/// `remote_project_path` and `linux_project_path` name the same argument the local
+/// command calls `project_path`: the prefix is the transport, not the meaning.
+fn normalize(name: &str) -> &str {
+    ["remote_", "linux_", "wsl_"]
+        .iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
+        .unwrap_or(name)
+}
+
+/// ADR-006: a prefix twin collapses into its parent plus `params.target`. The
+/// collapse is only publishable as `proven` when every remaining argument lines up
+/// by name *and* type with the parent's — a silent rename or a changed optionality
+/// would let a client send a payload the old command never accepted. Anything else
+/// stays `pending: P3-06` with the diff recorded, and the host must refuse it.
+fn twin_alias(rust_path: &str, twin: &Value, parent: &Value) -> Result<Value, String> {
+    let parent_wire = parent["rpc_method"].as_str().ok_or_else(|| {
+        format!(
+            "{rust_path}: twin's parent {:?} has no wire name",
+            parent["command"]
+        )
+    })?;
+    let legacy = twin["command"].as_str().unwrap_or_default();
+    let target_kind = if legacy.starts_with("wsl_") {
+        "wsl"
+    } else {
+        "ssh"
+    };
+    let mine = visible_params(twin);
+    let parents = visible_params(parent);
+    let rest: Vec<&(String, String)> = mine
+        .iter()
+        .filter(|(name, _)| !TARGET_FIELDS.contains(&name.as_str()))
+        .collect();
+    let mut mapping: BTreeMap<String, String> = BTreeMap::new();
+    let mut problems: Vec<String> = Vec::new();
+    for (name, ty) in &rest {
+        match parents
+            .iter()
+            .find(|(pname, _)| normalize(pname) == normalize(name))
+        {
+            Some((pname, pty)) => {
+                mapping.insert(name.clone(), pname.clone());
+                if pty != ty {
+                    problems.push(format!("{name}: {ty} vs {pname}: {pty}"));
+                }
+            }
+            None => problems.push(format!("{name}: {ty} has no parent argument")),
+        }
+    }
+    let covered: Vec<&String> = mapping.values().collect();
+    for (pname, _) in &parents {
+        if !covered.contains(&pname) {
+            problems.push(format!(
+                "parent argument {pname} is not supplied by the twin"
+            ));
+        }
+    }
+    if rest.len() != parents.len() && problems.is_empty() {
+        problems.push(format!(
+            "arity differs: twin supplies {} of {} parent arguments",
+            rest.len(),
+            parents.len()
+        ));
+    }
+    Ok(json!({
+        "legacyCommand": legacy,
+        "method": parent_wire,
+        "targetKind": target_kind,
+        "targetParams": mine.iter().filter(|(name, _)| TARGET_FIELDS.contains(&name.as_str()))
+            .map(|(name, ty)| format!("{name}: {ty}")).collect::<Vec<_>>(),
+        "paramMapping": if problems.is_empty() { "proven" } else { "pending: P3-06" },
+        "paramDiff": problems,
+        "requiresCapability": if target_kind == "wsl" { Value::String("wsl".into()) } else { Value::Null },
+        "comment": "not a protocol method: renaming or dropping an alias is not a protocol change (ADR-006)"
+    }))
+}
+
+/// One record per wire method, cross-checked against the derivation table. Prefix
+/// twins leave the method surface entirely and become entries in `aliases`.
+fn methods_from_inventory(map: &Value) -> Result<(Vec<Value>, Vec<Value>), String> {
     let table = map["meta"]["rpc_resolution"]["module_to_service"]
         .as_object()
         .ok_or("meta.rpc_resolution.module_to_service is absent")?;
     let commands = map["commands"]
         .as_array()
         .ok_or("`commands` is not an array")?;
+    let by_command: BTreeMap<&str, &Value> = commands
+        .iter()
+        .filter_map(|c| c["command"].as_str().map(|name| (name, c)))
+        .collect();
     let mut out = Vec::with_capacity(commands.len());
+    let mut aliases: Vec<Value> = Vec::new();
     let mut skipped_unnamed = 0usize;
     for command in commands {
         let rust_path = command["rust_path"]
@@ -269,36 +391,45 @@ fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
             return Err(format!("{rust_path}: wire leaf {legacy:?} != rust leaf {leaf:?} (ADR-002 keeps them equal)"));
         }
         let category = command["category"].as_str().unwrap_or("domain_rpc");
-        // G16 triage, carried into the contract instead of being resolved by it. The
-        // plan forbids promoting names nobody calls; three of these four groups are
-        // live for a *documented* reason (a literal caller, a runtime-prefixed twin of
-        // a live parent, or ADR-005's typed surface with per-row evidence). The
-        // fourth has no evidence at all, so it is flagged rather than blessed —
-        // collapsing or dropping one is a protocol decision, not a migration detail.
         let reachability = &command["reachability"];
         let derived_of = reachability["prefix_derived_of"].as_str();
         let parent_live = reachability["prefix_derived_parent_reachable"].as_bool() == Some(true);
         let live = command["reachable"].as_bool() == Some(true);
         let evidence = command["caller_evidence"].as_str().unwrap_or("");
+        let twin = derived_of.is_some() && parent_live && evidence.is_empty();
+        if twin {
+            let parent = *by_command
+                .get(derived_of.unwrap_or_default())
+                .ok_or_else(|| {
+                    format!(
+                        "{rust_path}: twin of {:?}, which the inventory does not list",
+                        derived_of
+                    )
+                })?;
+            aliases.push(twin_alias(rust_path, command, parent)?);
+            continue;
+        }
+        // G16 triage, carried into the contract instead of being resolved by it: a
+        // name is in the method surface because a caller literal, or ADR-005's typed
+        // surface with per-row evidence, put it there. `uncalled-no-evidence` has
+        // nothing behind it, so it is flagged rather than blessed — dropping or
+        // keeping one is a protocol decision, not a migration detail.
         let (promotion, requires_decision) = if !evidence.is_empty() {
             (
-                "adr-005-typed-surface".to_string(),
+                "stated-evidence".to_string(),
                 !evidence.starts_with("proven"),
             )
-        } else if live && derived_of.is_some() && parent_live {
-            ("prefix-derived-twin-of-live-parent".to_string(), false)
         } else if live {
             ("caller-literal".to_string(), false)
-        } else if derived_of.is_some() && parent_live {
-            ("prefix-derived-twin-of-live-parent".to_string(), false)
         } else {
             ("uncalled-no-evidence".to_string(), true)
         };
         // ADR-003: the platform plane is capability-gated, and the capability is
-        // named after the platform the legacy command actually needs. Only 60 of
-        // the 62 mention WSL; the two cross-platform ones (`get_platform_runtime_info`,
-        // `build_runnable_file_command`) must stay callable on every host, so a
-        // blanket "wsl" would refuse calls that work everywhere.
+        // named after the platform the legacy command actually needs. Only 21 of the
+        // 23 non-twin platform commands mention WSL; the two cross-platform ones
+        // (`get_platform_runtime_info`, `build_runnable_file_command`) must stay
+        // callable on every host, so a blanket "wsl" would refuse calls that work
+        // everywhere. WSL twins carry their gating on the alias instead.
         let capability = if category == "platform_specific" && legacy.contains("wsl") {
             Value::String("wsl".into())
         } else {
@@ -316,7 +447,7 @@ fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
             "featureIds": command["feature_ids"],
             "promotion": promotion,
             "requiresTriageDecision": requires_decision,
-            "derivedOf": derived_of.map(Value::from).unwrap_or(Value::Null),
+            "takesTarget": command["category"].as_str() != Some("platform_specific"),
             "callerEvidence": command["caller_evidence"].clone()
         }));
     }
@@ -325,19 +456,64 @@ fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
             "expected 19 unnamed host_local_os_ui commands, saw {skipped_unnamed}"
         ));
     }
+    let counted = |want: &str| out.iter().filter(|m| m["promotion"] == json!(want)).count();
+    for (want, promotion) in [
+        (450usize, "caller-literal"),
+        (82, "stated-evidence"),
+        // Q10 closed this group: every remaining name either has a caller literal or
+        // states who decides. A non-zero count here means a name rode in on nothing.
+        (0, "uncalled-no-evidence"),
+    ] {
+        if counted(promotion) != want {
+            return Err(format!(
+                "promotion {promotion:?} holds {} method(s), pinned at {want}: re-triage G16 before publishing",
+                counted(promotion)
+            ));
+        }
+    }
+    if out.len() != 532 {
+        return Err(format!(
+            "the method surface holds {} names (pinned 532 = 641 - 109 twins): re-review ADR-006",
+            out.len()
+        ));
+    }
+    if aliases.len() != 109 {
+        return Err(format!(
+            "expected 109 prefix twins to become aliases, saw {}",
+            aliases.len()
+        ));
+    }
     let gated = out
         .iter()
         .filter(|m| m["requiresCapability"] != Value::Null)
         .count();
-    if gated != 60 {
+    if gated != 21 {
         return Err(format!(
-            "expected 60 wsl-gated methods (ADR-003), saw {gated}"
+            "expected 21 wsl-gated methods after the collapse (ADR-003/006), saw {gated}"
         ));
     }
-    // A verb no method uses is a claim about the vocabulary that nothing checks,
-    // so an unreadable list would rot silently. Both lists must earn their place.
+    let proven = aliases
+        .iter()
+        .filter(|a| a["paramMapping"] == json!("proven"))
+        .count();
+    if proven != 77 || aliases.len() - proven != 32 {
+        return Err(format!(
+            "alias mappings moved: {proven} proven / {} pending. Every pending alias must be refused by \
+             the host until P3-06 maps it; a change here means a source signature changed.",
+            aliases.len() - proven
+        ));
+    }
+    let reads = out.iter().filter(|m| m["mutating"] == json!(false)).count();
+    if reads != 120 {
+        return Err(format!(
+            "read-classified methods moved to {reads} (pinned 120): re-review the classification, then re-pin it here"
+        ));
+    }
+    // A verb no method uses is a claim about the vocabulary that nothing checks, so
+    // an unreadable list would rot silently. Both lists must earn their place.
     let names: Vec<&str> = out
         .iter()
+        .chain(aliases.iter())
         .filter_map(|m| m["legacyCommand"].as_str())
         .collect();
     for verb in READ_VERBS.iter().chain(WRITE_VERBS) {
@@ -352,41 +528,16 @@ fn methods_from_inventory(map: &Value) -> Result<Vec<Value>, String> {
             return Err(format!("override {name:?} no longer needs overriding"));
         }
     }
-    let reads = out.iter().filter(|m| m["mutating"] == json!(false)).count();
-    if reads != 138 {
-        return Err(format!(
-            "read-classified methods moved to {reads} (pinned 138): re-review the classification, then re-pin it here"
-        ));
-    }
-    // G16: how the 641 names were earned. Pinned so a change in the inventory's
-    // reachability evidence cannot quietly resize the promoted surface — re-run
-    // `native:inventory`, re-review the buckets, and move these numbers in the same
-    // change that re-publishes the contract.
-    let counted = |want: &str| out.iter().filter(|m| m["promotion"] == json!(want)).count();
     let flagged = out
         .iter()
         .filter(|m| m["requiresTriageDecision"] == json!(true))
         .count();
-    for (want, promotion) in [
-        (450usize, "caller-literal"),
-        (109, "prefix-derived-twin-of-live-parent"),
-        (65, "adr-005-typed-surface"),
-        (17, "uncalled-no-evidence"),
-    ] {
-        if counted(promotion) != want {
-            return Err(format!(
-                "promotion {promotion:?} holds {} method(s), pinned at {want}: re-triage G16 before publishing",
-                counted(promotion)
-            ));
-        }
-    }
-    if out.len() != 641 || flagged != 58 {
+    if flagged != 58 {
         return Err(format!(
-            "surface moved: {} methods, {flagged} flagged for a decision",
-            out.len()
+            "{flagged} methods are owed a triage decision, pinned at 58"
         ));
     }
-    Ok(out)
+    Ok((out, aliases))
 }
 
 fn events_from_inventory(map: &Value) -> Vec<Value> {
@@ -499,7 +650,7 @@ fn envelope_schema() -> Value {
     })
 }
 
-fn methods_schema(methods: &[Value]) -> Value {
+fn methods_schema(methods: &[Value], aliases: &[Value]) -> Value {
     let mutating = methods
         .iter()
         .filter(|m| m["mutating"] == json!(true))
@@ -536,19 +687,25 @@ fn methods_schema(methods: &[Value]) -> Value {
         "surfaceProvenance": {
             "how": "each row carries `promotion`: how its name was earned in the G16 triage",
             "caller-literal": methods.iter().filter(|m| m["promotion"] == json!("caller-literal")).count(),
-            "prefix-derived-twin-of-live-parent": methods.iter().filter(|m| m["promotion"] == json!("prefix-derived-twin-of-live-parent")).count(),
-            "adr-005-typed-surface": methods.iter().filter(|m| m["promotion"] == json!("adr-005-typed-surface")).count(),
+            "prefixDerivedAliases": aliases.len(),
+            "stated-evidence": methods.iter().filter(|m| m["promotion"] == json!("stated-evidence")).count(),
             "uncalled-no-evidence": methods.iter().filter(|m| m["promotion"] == json!("uncalled-no-evidence")).count(),
             "requiresTriageDecision": methods.iter().filter(|m| m["requiresTriageDecision"] == json!(true)).count(),
-            "collapseCandidates": {
-                "note": "A prefix-derived twin is the same behaviour as its parent with a different transport target; publishing both names duplicates one behaviour in the contract. Collapsing them onto `target` is Q9, not a migration detail.",
-                "distinctParents": 70
-            }
+            "adr": "ADR-006: prefix twins left the method surface; see `twinAliases`"
         },
         "excluded": {
-            "hostLocalOsUi": "19 client-adapter commands carry no wire name; CLI answers INTERACTIVE_UI_REQUIRED (ADR-003)"
+            "hostLocalOsUi": "19 client-adapter commands carry no wire name; CLI answers INTERACTIVE_UI_REQUIRED (ADR-003)",
+            "prefixTwins": "109 remote_/wsl_ twins carry no method name of their own (ADR-006); they are aliases whose host must also check the alias's own capability gate"
         },
-        "methods": methods
+        "aliasSummary": {
+            "total": aliases.len(),
+            "proven": aliases.iter().filter(|a| a["paramMapping"] == json!("proven")).count(),
+            "pending": aliases.iter().filter(|a| a["paramMapping"] != json!("proven")).count(),
+            "rule": "proven only when every non-target argument matches a parent argument by name and type; a rename or an optionality change stays pending and the host refuses it",
+            "pendingBlocksHost": true
+        },
+        "methods": methods,
+        "twinAliases": aliases
     })
 }
 
@@ -693,11 +850,14 @@ fn main() -> Result<(), String> {
     let map: Value =
         serde_json::from_str(&raw).map_err(|e| format!("command-map.json is unparseable: {e}"))?;
 
-    let methods = methods_from_inventory(&map)?;
+    let (methods, aliases) = methods_from_inventory(&map)?;
     let events = events_from_inventory(&map);
     let mut documents: Vec<(String, Value)> = vec![
         ("v1/envelope.schema.json".into(), envelope_schema()),
-        ("v1/methods.schema.json".into(), methods_schema(&methods)),
+        (
+            "v1/methods.schema.json".into(),
+            methods_schema(&methods, &aliases),
+        ),
         ("v1/events.schema.json".into(), events_schema(&events)),
     ];
     for (name, value) in fixtures() {
@@ -715,12 +875,13 @@ fn main() -> Result<(), String> {
         std::fs::write(&path, text).map_err(|e| format!("{path:?}: {e}"))?;
     }
     println!(
-        "export-schema: wrote {} documents to {} — {} methods ({} mutating, {} capability-gated), {} events",
+        "export-schema: wrote {} documents to {} — {} methods + {} aliases ({} mutating, {} capability-gated), {} events",
         documents.len(),
         base.display(),
         methods.len(),
         methods.iter().filter(|m| m["mutating"] == json!(true)).count(),
         methods.iter().filter(|m| m["requiresCapability"] != Value::Null).count(),
+        aliases.len(),
         events.len()
     );
     Ok(())

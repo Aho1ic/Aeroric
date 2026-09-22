@@ -12,13 +12,13 @@
     "floors": {
       "core-rust-skeleton@skeleton": 5,
       "swift-package-smoke@skeleton": 12,
-      "inventory-unit@skeleton": 33,
+      "inventory-unit@skeleton": 40,
       "digest-unit@skeleton": 10,
       "gate-runner-unit@skeleton": 24,
       "invariants-unit@skeleton": 13,
       "extraction-unit@skeleton": 9,
       "protocol-rust@protocol": 47,
-      "protocol-swift-golden@protocol": 16,
+      "protocol-swift-golden@protocol": 17,
       "protocol-ts-golden@protocol": 17
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
@@ -290,7 +290,7 @@
             "scripts/native/inventory.test.mjs"
           ],
           "parse": "node-test",
-          "minCases": 33,
+          "minCases": 40,
           "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
           "timeoutMs": 300000
         },
@@ -388,7 +388,7 @@
             "--filter",
             "ProtocolGoldenTests"
           ],
-          "minCases": 16,
+          "minCases": 17,
           "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
           "timeoutMs": 900000
         },

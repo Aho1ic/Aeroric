@@ -239,8 +239,23 @@ describe("the rules every client shares", () => {
     const gated = methodSurface.methods.filter((m: Row) => m.requiresCapability);
     expect(gated).toHaveLength(methodSurface.capabilityGatedCount);
     expect(gated.length).toBeGreaterThan(0);
+    expect(methodSurface.aliasSummary.pendingBlocksHost).toBe(true);
+    // The alias plane is where the ssh/wsl spelling lives: the same behaviour, one
+    // method, and the target's own capability gate.
+    const aliases = methodSurface.twinAliases as Row[];
+    expect(aliases).toHaveLength(methodSurface.surfaceProvenance.prefixDerivedAliases);
+    const published = new Set((methodSurface.methods as Row[]).map((m) => m.name as string));
+    const byStatus = { proven: 0, pending: 0 } as Record<string, number>;
+    for (const alias of aliases) {
+      const status = String(alias.paramMapping).startsWith("proven") ? "proven" : "pending";
+      byStatus[status] += 1;
+      expect(published.has(alias.method as string), `${alias.legacyCommand} aliases an unpublished method`).toBe(true);
+      expect((alias.paramDiff as unknown[]).length === 0).toBe(status === "proven");
+    }
+    expect(byStatus).toEqual({ proven: methodSurface.aliasSummary.proven, pending: methodSurface.aliasSummary.pending });
     expect(gated.every((m: Row) => m.requiresCapability === "wsl")).toBe(true);
     expect(gated.every((m: Row) => m.category === "platform_specific")).toBe(true);
+    expect(methodSurface.capabilityGatedCount).toBe(21);
     // the two cross-platform platform commands must stay callable on every host
     const ungatedPlatform = methodSurface.methods
       .filter((m: Row) => m.category === "platform_specific" && !m.requiresCapability)
@@ -250,6 +265,11 @@ describe("the rules every client shares", () => {
 
   it("publishes the method surface ADR-002 froze", () => {
     const names: string[] = methodSurface.methods.map((m: Row) => m.name);
+    expect(methodSurface.count).toBe(532);
+    expect(methodSurface.surfaceProvenance.prefixDerivedAliases).toBe(109);
+    // Q10: every name on the surface either has a caller literal or states who decides.
+    expect(methodSurface.surfaceProvenance["uncalled-no-evidence"]).toBe(0);
+    expect(methodSurface.surfaceProvenance["stated-evidence"]).toBe(82);
     expect(names).toHaveLength(methodSurface.count);
     expect(new Set(names).size).toBe(names.length);
     expect(names.some((n) => n.includes("/"))).toBe(false);
@@ -262,6 +282,7 @@ describe("the rules every client shares", () => {
       Object.values(methodSurface.byService as Record<string, number>).reduce((t, n) => t + n, 0),
     ).toBe(methodSurface.count);
     expect(methodSurface.excluded.hostLocalOsUi).toContain("19");
+    expect(methodSurface.excluded.prefixTwins).toContain("ADR-006");
     expect(methodSurface.classificationRule.default).toBe("mutating");
     expect(methodSurface.methods.filter((m: Row) => !m.mutating)).toHaveLength(
       methodSurface.readCount,

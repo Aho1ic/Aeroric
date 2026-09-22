@@ -172,13 +172,34 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
     if (!resolved) { problems.push(`${command.rust_path}: definition not resolved (${command.resolution ?? "none"})`); continue; }
     const [file, lineText] = resolved.split(":");
     const line = Number(lineText);
-    if (!existsSync(path.join(root, file))) problems.push(`${command.rust_path}: resolved file missing ${file}`);
+    // G10 reads source, so it reads `scanRoot` — the same root every other live
+    // extractor uses. `repoRoot` may be a throwaway copy of the frozen artifacts.
+    const definition = path.join(scanRoot, file);
+    if (!existsSync(definition)) problems.push(`${command.rust_path}: resolved file missing ${file}`);
     else {
-      const decl = read(path.join(root, file)).split("\n")[line - 1] ?? "";
+      const decl = read(definition).split("\n")[line - 1] ?? "";
       if (!new RegExp(`\\bfn\\s+${command.command}\\b`).test(decl)) {
         problems.push(`${command.rust_path}: definition_resolved points at ${resolved}, which is not that fn's declaration`);
       }
+      // ADR-006 depends on these: a twin may only collapse into its parent when the
+      // argument lists still relate, so a source signature that moved must fail here
+      // rather than at the first cross-language call.
+      const live = extractSignature({ file: definition, line, command: command.command });
+      const frozen = command.params;
+      if (!("params" in command)) {
+        problems.push(`${command.rust_path}: has no \`params\` key — run \`node scripts/native/inventory.mjs --freeze\``);
+      } else if (command.definition_unique === false) {
+        if (frozen !== null) problems.push(`${command.rust_path}: ambiguous definition must record params as null`);
+      } else if (!live) {
+        problems.push(`${command.rust_path}: signature no longer extractable from ${resolved}`);
+      } else if (JSON.stringify(renderParams(live)) !== JSON.stringify(frozen)) {
+        problems.push(`${command.rust_path}: params drifted from source — frozen ${JSON.stringify(frozen)}, live ${JSON.stringify(renderParams(live))}`);
+      }
     }
+  }
+  const skipped = [...mapped.values()].filter((c) => c.definition_resolved && !("params" in c));
+  if (skipped.length) {
+    problems.push(`${skipped.length} resolved command(s) carry no params (silent extraction gap): ${skipped.slice(0, 3).map((c) => c.command).join(", ")}`);
   }
   if (map.meta?.definition_resolution?.needs_human_resolution?.length) {
     const list = map.meta.definition_resolution.needs_human_resolution;
@@ -292,6 +313,35 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
         problems.push(`${command.rust_path}: caller_evidence must start with proven: or pending:, got "${evidence.slice(0, 24)}"`);
       }
     }
+    // ADR-005's rule, widened to the whole method surface (Q10): a name may enter a
+    // three-language wire contract only with a reason — a caller literal that exists,
+    // or `caller_evidence` naming who will decide. "Nobody calls this" with no owner
+    // is not a reason.
+    for (const command of map.commands.filter((c) => c.rpc_method)) {
+      const evidence = String(command.caller_evidence ?? "");
+      const reach = command.reachability ?? {};
+      const alias = reach.prefix_derived_of && reach.prefix_derived_parent_reachable === true;
+      if (!evidence) {
+        // A caller literal *is* evidence, and 450 rows have one. What may not happen
+        // is a name with neither a caller nor a stated reason riding into the
+        // contract. Prefix twins are not in the contract at all — ADR-006 made them
+        // aliases — so the same exemption the exporter applies has to apply here.
+        if (command.reachable !== true && !alias) {
+          problems.push(`${command.rust_path}: neither a caller literal nor caller_evidence — this name has no reason to be on the wire`);
+        }
+        continue;
+      }
+      if (evidence.startsWith("pending:")) {
+        const task = evidence.slice("pending:".length).trim().split(/\s/)[0];
+        if (!/^P\d+-\d+$/.test(task)) problems.push(`${command.rust_path}: pending evidence must name a task id, got "${task}"`);
+        else if (!new RegExp(`### Task ${task} `).test(read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8"))) {
+          problems.push(`${command.rust_path}: pending evidence points at ${task}, which is not a Task in MIGRATION_PLAN.md`);
+        }
+      } else if (!evidence.startsWith("proven:")) {
+        problems.push(`${command.rust_path}: caller_evidence must start with proven: or pending:, got "${evidence.slice(0, 24)}"`);
+      }
+    }
+
     const named = map.commands.filter((c) => c.rpc_method).map((c) => c.rpc_method);
     if (new Set(named).size !== named.length) {
       problems.push(`rpc_method collision in the frozen surface: ${named.length - new Set(named).size} duplicate names`);
@@ -645,6 +695,81 @@ export function invalidateInventoryCaches(repoRoot) {
 }
 
 /** Settings panels straight out of the registry, including const-valued keys. */
+/**
+ * Client-visible parameters of one command, read from its resolved definition
+ * (ADR-006 needs them: a `remote_X` twin may only collapse into `X` when the extra
+ * arguments are exactly the transport target). Rust injection (`State`, `AppHandle`,
+ * windows) is marked, not dropped, so "we filtered a parameter" stays auditable.
+ */
+export function extractSignature({ file, line, command, read = readFileSync }) {
+  const text = read(file, "utf8");
+  const start = text.split("\n").slice(line - 1).join("\n");
+  const decl = new RegExp(`\\bfn\\s+${command}\\b`).exec(start);
+  if (!decl) return null;
+  const opened = start.indexOf("(", decl.index);
+  if (opened < 0) return null;
+  let depth = 0, angle = 0, end = -1;
+  for (let i = opened; i < start.length; i += 1) {
+    const ch = start[i];
+    // Only `"` is skipped: a `'` here is a lifetime (`State<'_, X>`), and treating it
+    // as an opening quote made the scanner swallow the rest of the signature.
+    if (ch === '"') {
+      i += 1;
+      while (i < start.length && start[i] !== '"') i += (start[i] === "\\" ? 2 : 1);
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+    else if (ch === "<" && !/[=!<>]/.test(start[i + 1] ?? "")) angle += 1;
+    else if (ch === ">" && angle > 0) angle -= 1;
+    if (ch === ")" && depth === 0) { end = i; break; }
+  }
+  if (end < 0) return null;
+  const body = start.slice(opened + 1, end);
+  const parts = [];
+  let current = "", d = 0, a = 0;
+  for (const ch of body) {
+    if (ch === "(" || ch === "[" || ch === "{") d += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") d -= 1;
+    else if (ch === "<") a += 1;
+    else if (ch === ">" && a > 0) a -= 1;
+    if (ch === "," && d === 0 && a === 0) { parts.push(current); current = ""; }
+    else current += ch;
+  }
+  if (current.trim()) parts.push(current);
+  // A Rust type may be qualified (`tauri::State<'_, X>`), so the injected-runtime names
+  // are matched at any path boundary rather than only at the start of the type.
+  const injected = /(^|[^\w>])(State|AppHandle|Manager|Window|WebviewWindow|Webview)\b/;
+  return parts.map((part) => {
+    const raw = part.trim().replace(/\s+/g, " ");
+    const colon = raw.indexOf(":");
+    if (colon < 0) return { name: raw.replace(/&/, ""), type: null, injected: raw === "self" || raw.startsWith("&self") };
+    return {
+      name: raw.slice(0, colon).trim().replace(/&mut\s+/, "").replace(/&/, ""),
+      type: raw.slice(colon + 1).trim(),
+      injected: injected.test(raw.slice(colon + 1)),
+    };
+  }).filter((entry) => entry.name && entry.name !== "self");
+}
+
+/** How a parameter is written into the frozen map: `name: Type`, `!` for injected. */
+export function renderParams(params) {
+  return params.map((p) => `${p.name}: ${p.type}${p.injected ? "!" : ""}`);
+}
+
+/** Same, for every command the map has already resolved to a single definition. */
+export function extractSignatures({ repoRoot = defaultRoot, commands, read = readFileSync }) {
+  const out = new Map();
+  for (const command of commands) {
+    const resolved = command.definition_resolved;
+    if (!resolved || command.definition_unique === false) { out.set(command.rust_path, null); continue; }
+    const [file, line] = resolved.split(":");
+    const params = extractSignature({ file: path.join(repoRoot, file), line: Number(line), command: command.command, read });
+    out.set(command.rust_path, params);
+  }
+  return out;
+}
+
 export function extractPanels({ repoRoot = defaultRoot, readFileSync: read = readFileSync } = {}) {
   const file = "src/components/app-settings/panelRegistry.tsx";
   const text = read(path.join(repoRoot, file), "utf8");
@@ -733,6 +858,19 @@ export function freeze({
     task_ids: null,
     maps_commands: null,
   }));
+  // Commands are annotated, never regenerated: `--freeze` has no extractor for the
+  // human keys on a command row, so only `params` may be written here.
+  const signatures = extractSignatures({ repoRoot, commands: map.commands });
+  let annotated = 0;
+  for (const command of map.commands) {
+    const params = signatures.get(command.rust_path);
+    // `null` is recorded rather than omitted: an ambiguous definition is a known gap
+    // in the contract's evidence, and "key absent" would be indistinguishable from
+    // "the extractor was never run".
+    command.params = params ? renderParams(params) : null;
+    if (params) annotated += 1;
+  }
+  map.meta.counts.command_params_annotated = annotated;
   map.meta.counts.events = merged.length;
   map.meta.counts.panels = panels.length;
   const extraFields = (entries, derivedKeys) =>

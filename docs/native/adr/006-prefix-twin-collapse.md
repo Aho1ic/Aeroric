@@ -1,6 +1,7 @@
 # ADR-006：109 条 `remote_`/`wsl_` 前缀孪生命令并入父方法 + `target` 参数
 
 - 状态：**accepted（用户在 P2-01 协议门禁的 frontier 追问中拍板，2026-09-22）**
+- 实施进度（同日）：**契约侧已完成**——`inventory.mjs` 现在冻结每条命令的参数表（`params`，`!` 标记 Rust 注入句柄），`export-schema` 发布 **532 方法 + 109 别名**（`twinAliases`），别名映射 **77 proven / 32 pending**，全部数字钉死并由 Rust/Swift/TS 三方各断言一次；`inventory --check` 新增"名字既无调用方又无 `caller_evidence` 即失败"的规则（ADR-006/Q10）。**宿主侧 target 路由仍未实现**（P3-06 / P7-02），且 32 条 `pending` 别名在宿主里必须被拒绝——它们参数形状与父方法不齐（例如 `remote_lsp_hover` 多出一个父方法没有的 `remote_project_path`），这不是改名问题，是一次真实的入参设计决定。
 - 日期：2026-09-22
 - 关联：ADR-002（命名口径，本 ADR 收窄其适用范围）、ADR-003（平台面能力门控）、`MIGRATION_PLAN.md` §G16/§5.4、P2-01（方法面）、P3-06/P7-02（target 路由落地）
 

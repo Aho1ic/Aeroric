@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writ
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { check, freeze, parseRegistry, parseCommandDefinitions } from "./inventory.mjs";
+import { check, extractSignature, freeze, parseCommandDefinitions, parseRegistry, renderParams } from "./inventory.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mapPath = path.join(repoRoot, "docs/native/command-map.json");
@@ -418,7 +418,117 @@ test("DSH typed methods must state their caller evidence", () => {
   }, /must start with proven: or pending:/, "unparseable evidence");
 });
 
+test("a method name with neither a caller nor a stated reason is refused", () => {
+  // Q10: this is the whole point of widening the rule — a dead name must carry the
+  // task that decides its fate, or it may not sit in a three-language contract.
+  expectMethodProblem((map) => {
+    const row = map.commands.find((c) => c.rpc_method && c.reachable === true && !c.caller_evidence);
+    row.reachable = false;
+  }, /neither a caller literal nor caller_evidence/, "uncalled name without evidence");
+});
+
+test("an alias is exempt from the evidence rule because it is not on the wire", () => {
+  const { dir, cleanup } = tempTree((map) => {
+    const twin = map.commands.find(
+      (c) => c.reachability?.prefix_derived_of && c.reachability.prefix_derived_parent_reachable === true && !c.caller_evidence,
+    );
+    twin.reachable = false;
+  });
+  try {
+    const problems = check({ repoRoot: dir, sourceRoot: repoRoot }).problems
+      .filter((p) => p.includes("neither a caller literal"));
+    assert.deepEqual(problems, [], "ADR-006 aliases must not be demanded a reason they already show");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a stale module mapping in the derivation table is refused", () => {
   expectMethodProblem((map) => { map.meta.rpc_resolution.module_to_service.ghost_module = "git"; },
     /maps module "ghost_module" that no longer has commands/, "stale module mapping");
+});
+
+// ADR-006 needs argument lists that survive real Rust signatures: lifetimes,
+// qualified paths and generics with commas. Each shape below has already broken an
+// implementation once in this session.
+const fakeRead = (files) => (file) => {
+  const key = file.split("/").slice(-2).join("/");
+  if (!(key in files)) throw Object.assign(new Error(`ENOENT ${key}`), { code: "ENOENT" });
+  return files[key];
+};
+
+test("extractSignature reads a multi-line signature and marks injected state", () => {
+  const files = {
+    "src/pty.rs": `pub async fn kill_shell(
+    task_manager: State<'_, TaskManager>,
+    shell_id: String,
+) -> Result<(), String> {
+    todo!()
+}
+`,
+  };
+  const params = extractSignature({ file: "/x/src/pty.rs", line: 1, command: "kill_shell", read: fakeRead(files) });
+  assert.deepEqual(params, [
+    { name: "task_manager", type: "State<'_, TaskManager>", injected: true },
+    { name: "shell_id", type: "String", injected: false },
+  ]);
+  assert.deepEqual(renderParams(params), ["task_manager: State<'_, TaskManager>!", "shell_id: String"]);
+});
+
+test("a qualified runtime handle is injected too, not a client parameter", () => {
+  // The regression: `'` in a lifetime was once treated as an opening quote, so the
+  // scanner swallowed the rest of the signature and this row silently had no params.
+  const files = {
+    "src/usage.rs": "pub async fn read_usage_snapshot(\n    state: tauri::State<'_, crate::TaskManager>,\n) -> Result<UsageSnapshot, String> {\n    todo!()\n}\n",
+  };
+  const params = extractSignature({ file: "/x/src/usage.rs", line: 1, command: "read_usage_snapshot", read: fakeRead(files) });
+  assert.deepEqual(renderParams(params), ["state: tauri::State<'_, crate::TaskManager>!"]);
+});
+
+test("generic commas do not split a parameter", () => {
+  const files = {
+    "src/db.rs": "pub fn q(map: HashMap<String, Vec<u8>>, page: u32) -> i32 { 0 }\n",
+  };
+  const params = extractSignature({ file: "/x/src/db.rs", line: 1, command: "q", read: fakeRead(files) });
+  assert.deepEqual(params.map((p) => p.name), ["map", "page"]);
+  assert.equal(params[0].type, "HashMap<String, Vec<u8>>");
+});
+
+test("a name that is not the requested function yields nothing rather than a guess", () => {
+  const files = { "src/a.rs": "pub fn other(x: u8) -> u8 { x }\n" };
+  assert.equal(extractSignature({ file: "/x/src/a.rs", line: 1, command: "wanted", read: fakeRead(files) }), null);
+});
+
+test("frozen params must match the source, and an absent key is a failure", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-params-"));
+  try {
+    mkdirSync(path.join(dir, "docs/native"), { recursive: true });
+    // The registry (lib.rs) is read from `repoRoot`, source signatures from
+    // `sourceRoot`: copying only the registration site keeps this a drift test
+    // rather than a missing-file test.
+    mkdirSync(path.join(dir, "src-tauri/src"), { recursive: true });
+    cpSync(path.join(repoRoot, "src-tauri/src/lib.rs"), path.join(dir, "src-tauri/src/lib.rs"));
+    cpSync(path.join(repoRoot, "docs/native/feature-matrix.json"), path.join(dir, "docs/native/feature-matrix.json"));
+    cpSync(path.join(repoRoot, "scripts/native/checks.json"), path.join(dir, "scripts/native/checks.json"));
+    const map = JSON.parse(readFileSync(mapPath, "utf8"));
+    const row = map.commands.find((c) => c.command === "read_usage_snapshot");
+    assert.equal(row.definition_resolved, "src-tauri/src/usage.rs:280");
+    const write = (mutate) => {
+      const copy = structuredClone(map);
+      mutate(copy.commands.find((c) => c.command === "read_usage_snapshot"));
+      writeFileSync(path.join(dir, "docs/native/command-map.json"), JSON.stringify(copy));
+      return check({ repoRoot: dir, sourceRoot: repoRoot }).problems
+        .filter((p) => p.includes("read_usage_snapshot") && /params/.test(p));
+    };
+    assert.ok(write((c) => { c.params = ["shell_id: String"]; }).some((p) => /params drifted/.test(p)),
+      "a source signature that moved must fail the gate");
+    assert.ok(write((c) => { delete c.params; }).some((p) => /has no `params` key/.test(p)),
+      "a row never annotated must not read as 'nothing to check'");
+    // Unmutated: no params complaint. Other problems (event paths that only exist in
+    // a full tree) are out of scope for this assertion.
+    assert.deepEqual(write((c) => c).filter((p) => /params/.test(p)), [],
+      "the committed map must be self-consistent about params");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

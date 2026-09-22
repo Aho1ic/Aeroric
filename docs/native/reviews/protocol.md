@@ -47,8 +47,8 @@
 | 编号 | 事项 | 状态 |
 | --- | --- | --- |
 | Q8 | §2.3 示例名 vs ADR-002 推导面谁为权威 | **已答**：产物为准，§2.3 加注（见计划补记）；生成器 `fixtures_are_sourced` 已把口径钉成机械检查 |
-| Q9 | 109 条前缀孪生 | **已答**：并入父方法 + `params.target`（ADR-006）。**实现未做**：面 641→532、`twinAliases`（含 `paramMapping`/`requiresCapability` 随别名走）、参数形状核实（`inventory.mjs` 目前**不记录签名**，需先加抽取） |
-| Q10 | 17 条既无字面调用方、也非孪生、也无 ADR-005 证据的方法 | **已答**：逐条现在定性。**未做**：目前它们带 `promotion=uncalled-no-evidence` + `requiresTriageDecision=true` 进面（58 条旗标含 41 条 ADR-005 `pending`） |
+| Q9 | 109 条前缀孪生 | **已答并已实现（契约侧）**：`inventory.mjs` 现冻结 `params`；面 641→**532**，`twinAliases` 109 条带 `paramMapping`/`targetKind`/`requiresCapability`；**77 proven / 32 pending**（pending 的样本：`remote_lsp_hover` 带一个父方法没有的 `remote_project_path`）。**未做**：宿主 target 路由（P3-06/P7-02）与 32 条 mapping 的人工决定 |
+| Q10 | 17 条既无字面调用方、也非孪生、也无 ADR-005 证据的方法 | **已答并已做完**：17 条全部逐条落成 `pending: P6-03/P7-02/P5-05/P8-01/P8-04/P7-06`（测试簇 4、WSL 2、Agent 设置 2、扩展/市场 4、更新 2、笔记同步 3）。方法面 `uncalled-no-evidence` 从 17 → **0** 并被生成器与 `inventory --check` 双向钉住；旗标数仍是 58（17+41），语义变成"到期要交代的账"而不是"来历不明" |
 | Q11 | v1 事件 topic 命名 | **已答**：v1 自定 topic + 38 条旧通道映射表（ADR-007）。**未做**：`docs/native/event-topics.json` 与生成的 `event-topics.schema.json` |
 | Q12 | `RpcError.detail` 的密钥投影 | **未问**：`mustNotContain` 目前只是契约里的**书面禁止**（列表已发布并三方断言），宿主是否要在写出前主动剥离这些键尚未决定；留给门禁第二轮 |
 | Q13 | 本地/远程版本边界 | **未问**：`protocolVersion` 只有常量与握手字段，跨版本策略（拒绝 / 降级 / 双栈）未成文；留给门禁第二轮 |
@@ -56,3 +56,11 @@
 ## 回滚
 
 全部为新增文件 + `checks.json` 注册 + 计划补记，不改旧命令、不改 Tauri 客户端行为。回滚 = 删除 `contracts/`、`core/crates/aeroric-protocol/src/*`（除 `lib.rs` 的模块声明）、两个 Swift 源与测试、TS 模块与测试，并把 `checks.json` 的 `protocol` 模块与相关地板还原；`pnpm native:check skeleton` 与 `native:doctor` 是回滚后的验证入口。
+
+## 第二轮追加的实测（Q9/Q10 落地时新发现，2026-09-22）
+
+1. **`params` 抽取的第一版被自己写的注释坑了一次**：生命周期 `'` 被当成引号起点，扫描器把整条签名吞掉 → 21 行 `params` 静默为空。现在的规则是"抽取失败必须写 `params: null` 并在 `--check` 里拒绝缺键"，另有 4 条形状断言（多行、限定路径 `tauri::State<'_, X>`、泛型里的逗号、目标函数名不符）钉住这几种写法。
+2. **G10 与参数比对原先读 `repoRoot`**，而仓库里所有 live 抽取都读 `sourceRoot ?? repoRoot`。测试用临时树 + 真实源码根是既有约定，跟着改过来；否则"漂移"在测试里根本触发不了（改坏一个父方法参数类型，`--write` 会拒绝发布：`alias mappings moved: 76 proven / 33 pending`）。
+3. **INV-02 源码扫描拦住了一句注释**：注释里写了 `AppHandle` 字面量，`inv02-core-source-scan` 就红了。选择改注释而不是放宽扫描，并在注释里写明为什么用描述性说法——放宽一次，下一个人就会以为可以放宽第二次。
+4. **能力门控的判定键变了**：60 条 wsl 门控里有 39 条本身是孪生、其父方法是 `domain_rpc`。收敛后方法面只剩 21 条 `wsl` 门控，其余 39 条随别名走 `requiresCapability`。若继续按方法门控，`fs.read_dir_entries` 会在 macOS 上被整体禁掉。
+5. **`surfaceProvenance` 现在是四组之和**：caller-literal 450 + stated-evidence 82 + uncalled-no-evidence 0 = 532 方法，另有 109 条别名；`prefixDerivedAliases` 单独成项，三方各断言一次。

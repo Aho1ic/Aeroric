@@ -373,7 +373,11 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
     );
 
     let methods = contract("methods.schema.json");
-    assert_eq!(methods["count"], json!(641));
+    assert_eq!(
+        methods["count"],
+        json!(532),
+        "ADR-006: the surface is 641 minus 109 twins"
+    );
     assert_eq!(
         methods["count"].as_u64().unwrap(),
         methods["methods"].as_array().unwrap().len() as u64,
@@ -398,17 +402,12 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         !names.iter().any(|n| n.contains('/')),
         "ADR-002 forbids a slash in a wire name"
     );
-    assert_eq!(methods["capabilityGatedCount"], json!(60));
+    assert_eq!(methods["capabilityGatedCount"], json!(21));
 
     // G16 provenance: the surface must state how each name was earned, and the
     // numbers must add up to the surface they describe.
     let provenance = &methods["surfaceProvenance"];
-    let groups = [
-        "caller-literal",
-        "prefix-derived-twin-of-live-parent",
-        "adr-005-typed-surface",
-        "uncalled-no-evidence",
-    ];
+    let groups = ["caller-literal", "stated-evidence", "uncalled-no-evidence"];
     let total: usize = groups
         .iter()
         .map(|group| provenance[*group].as_u64().unwrap() as usize)
@@ -418,8 +417,14 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         methods["count"].as_u64().unwrap() as usize,
         "the provenance groups must partition the published surface"
     );
-    assert_eq!(provenance["uncalled-no-evidence"], json!(17));
+    assert_eq!(provenance["stated-evidence"], json!(82));
+    assert_eq!(
+        provenance["uncalled-no-evidence"],
+        json!(0),
+        "Q10 closed this group: a name with neither a caller nor a stated reason may not ride in"
+    );
     assert_eq!(provenance["requiresTriageDecision"], json!(58));
+    assert_eq!(provenance["prefixDerivedAliases"], json!(109));
     let flagged: Vec<&Value> = methods["methods"]
         .as_array()
         .unwrap()
@@ -433,14 +438,39 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
             .all(|m| m["promotion"] != json!("caller-literal")),
         "a name with a literal caller is not owed a decision"
     );
-    assert!(
-        methods["methods"].as_array().unwrap().iter().any(|m| {
-            m["promotion"] == json!("prefix-derived-twin-of-live-parent")
-                && m["derivedOf"]
-                    .as_str()
-                    .is_some_and(|parent| !parent.is_empty())
-        }),
-        "a twin must name the parent it duplicates"
+    // ADR-006: the twins left the method surface. An alias must point at a published
+    // method, and its mapping may only read `proven` when nothing about the
+    // arguments had to be guessed — otherwise the host has to refuse it, because a
+    // silently renamed or newly-optional argument is a payload the parent command
+    // never accepted.
+    let aliases = methods["twinAliases"].as_array().unwrap();
+    assert_eq!(aliases.len(), 109, "provenance says 109 aliases");
+    for alias in aliases {
+        let legacy = alias["legacyCommand"].as_str().unwrap();
+        let target = alias["method"].as_str().unwrap();
+        assert!(
+            names.contains(&target),
+            "{legacy} aliases {target}, which is not published"
+        );
+        let proven = alias["paramMapping"] == json!("proven");
+        let empty_diff = alias["paramDiff"].as_array().is_some_and(Vec::is_empty);
+        assert_eq!(
+            proven, empty_diff,
+            "{legacy}: mapping status and diff disagree"
+        );
+        assert!(
+            ["ssh", "wsl"].contains(&alias["targetKind"].as_str().unwrap_or("")),
+            "{legacy} has no target kind"
+        );
+    }
+    let summary = &methods["aliasSummary"];
+    assert_eq!(summary["total"], json!(109));
+    assert_eq!(summary["proven"], json!(77));
+    assert_eq!(summary["pending"], json!(32));
+    assert_eq!(
+        summary["pendingBlocksHost"],
+        json!(true),
+        "a pending alias must not be accepted by a host"
     );
 
     let events = contract("events.schema.json");

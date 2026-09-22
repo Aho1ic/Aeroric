@@ -304,7 +304,8 @@ final class ProtocolGoldenTests: XCTestCase {
     func testMethodSurfaceIsWhatADR002Froze() throws {
         let methods = try document("methods.schema.json")
         let rows = methods["methods"]?.arrayValue ?? []
-        XCTAssertEqual(rows.count, 641)
+        // ADR-006: 641 names minus the 109 prefix twins that became aliases.
+        XCTAssertEqual(rows.count, 532)
         // `count` must equal the array it advertises, and every method must be
         // classified exactly once.
         XCTAssertEqual(number(methods["count"]), rows.count)
@@ -328,11 +329,34 @@ final class ProtocolGoldenTests: XCTestCase {
                        "plan §2.3's illustrative name predates the derived surface")
     }
 
+    /// ADR-006 in Swift: the twins are aliases, an alias must point at a published
+    /// method, and only a mapping with no outstanding diff may be `proven`.
+    func testPrefixTwinsAreAliasesNotMethods() throws {
+        let methods = try document("methods.schema.json")
+        let published = Set((methods["methods"]?.arrayValue ?? []).compactMap { $0.fields["name"]?.stringValue })
+        let aliases = methods["twinAliases"]?.arrayValue ?? []
+        XCTAssertEqual(aliases.count, 109)
+        XCTAssertEqual(number(methods["aliasSummary"]?["proven"]), 77)
+        XCTAssertEqual(number(methods["aliasSummary"]?["pending"]), 32)
+        XCTAssertEqual(methods["aliasSummary"]?["pendingBlocksHost"]?.boolValue, true)
+        var proven = 0
+        for alias in aliases {
+            let fields = alias.fields
+            let legacy = fields["legacyCommand"]?.stringValue ?? "?"
+            XCTAssertNotNil(fields["method"]?.stringValue.flatMap { published.contains($0) ? Optional<Bool>.some(true) : nil }, "\(legacy) aliases an unpublished method")
+            let diffEmpty = (fields["paramDiff"]?.arrayValue ?? []).isEmpty
+            let isProven = fields["paramMapping"]?.stringValue == "proven"
+            XCTAssertEqual(isProven, diffEmpty, "\(legacy): mapping status and diff disagree")
+            if isProven { proven += 1 }
+        }
+        XCTAssertEqual(proven, 77)
+    }
+
     func testPlatformMethodsAreCapabilityGated() throws {
         let methods = try document("methods.schema.json")
         let rows = methods["methods"]?.arrayValue ?? []
         let gated = rows.filter { $0.fields["requiresCapability"]?.stringValue != nil }
-        XCTAssertEqual(gated.count, 60)
+        XCTAssertEqual(gated.count, 21)
         XCTAssertEqual(number(methods["capabilityGatedCount"]), gated.count)
         for row in gated {
             let fields = row.fields
