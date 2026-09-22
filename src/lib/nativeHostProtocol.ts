@@ -53,6 +53,35 @@ export type TaskStatus =
 
 export type ProtocolFamily = "claude" | "codex" | "dsh" | "omp";
 
+/**
+ * The only keys a host may put into `RpcError.detail` (Q12). Closed on purpose:
+ * `detail` is where diagnostics go, and diagnostics get pasted into review evidence
+ * and `.artifacts` logs. A key we cannot name is not a diagnostic.
+ */
+export const ERROR_DETAIL_ALLOWED_KEYS = [
+  "actualRevision",
+  "epoch",
+  "expectedRevision",
+  "field",
+  "fromSeq",
+  "generation",
+  "lockHolder",
+  "reason",
+  "taskId",
+  "throughSeq",
+] as const;
+
+export type ErrorDetailKey = (typeof ERROR_DETAIL_ALLOWED_KEYS)[number];
+
+export function isAllowedErrorDetailKey(key: string): key is ErrorDetailKey {
+  return (ERROR_DETAIL_ALLOWED_KEYS as readonly string[]).includes(key);
+}
+
+/** Q13: exact major equality. Compatibility inside v1 is carried by capabilities. */
+export function handshakeAllowsPeer(version: number): boolean {
+  return version === PROTOCOL_VERSION;
+}
+
 export function asErrorCode(text: string): ErrorCode {
   return (WIRE_ERROR_CODES as readonly string[]).includes(text) ? (text as WireErrorCode) : "UNKNOWN";
 }

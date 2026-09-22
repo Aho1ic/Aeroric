@@ -38,7 +38,8 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P1-03 | **accepted**（父+10 子任务建立，validate 双通过且无截断告警；仅 start Phase 1 子任务） | 新发现 D8 注入上限已处理 | 2026-09-21 |
 | P1-04 | **accepted，但一条自述已被推翻**（11 项验收命令当时全绿；骨架可构建、check 入口统一。**其中「`--freeze` 可复现地重生成冻结清单并保留人工字段」当时并不成立，见 P1-05 第七次补记**） | 无（`AGENTS.md` 不被跟踪的口径问题转入 P1-05） | 2026-09-21 |
 | P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁 20 case／106 用例；第十五次补记后另立 `protocol` 模块 5 case／80 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
-| P2-01 | **in_progress（只差门禁第二轮）**：契约层三方绿，第一轮 Q8～Q11 全部落成工件。ADR-006 收敛已发布（**532 方法 + 109 别名**，77 proven / 32 pending，签名逐条冻结进 `command-map.json`）；Q10 的 17 条逐条定性（`uncalled-no-evidence` → **0**）；ADR-007 的 topic 表建好并被生成器校验（**39 topic 覆盖 38 旧通道**，36 条 `pending: P3-04`，四条规则各配一次反例改坏并确认报错）。门禁：`protocol` 5 case／**83** 用例、`skeleton` 20 case／**113** 用例。**未完成**：第二轮 Q12（`RpcError.detail` 密钥投影）／Q13（本地/远程版本边界）；宿主 target 路由与 32 条 pending 别名归 P3-06/P7-02，36 条 pending topic 归 P3-04 | 第二轮拷问（问题清单在 `reviews/protocol.md`） | 2026-09-22 |
+| P2-01 | **accepted —— P2-01 Gate 通过**（2026-09-22）：两轮 `grillme-matt:grill-with-docs` 真实调用，Q8～Q13 六个答案全部落成工件 + 断言 + 反例。契约层三方读同一份 fixtures；ADR-006 收敛发布 **532 方法 + 109 别名**（77 proven / 32 pending，参数表已冻结进清单）；ADR-007 建 **39 topic 覆盖 38 旧通道**（36 条 pending → P3-04）；G16 的 17 条逐条定性（无证据名字归零）；ADR-008 把 `RpcError.detail` 关成 10 键白名单、ADR-009 定死主版本严格相等 + 远程独立版本空间。门禁：`protocol` 5 case／85 用例、`skeleton` 20／113、`contracts --check` 逐字节、doctor 18/18、clippy/tsc/fmt/`git diff --check` 全绿 | 排期账而非缺口：32 pending 别名 → P3-06/P7-02、36 pending topic → P3-04、41 dsh 证据 → P3-05 出口 | 2026-09-22 |
+| P2-02 ~ P2-05 | pending | P2-01（已过） | — |
 | P2-02 ~ P2-05 | pending | P2-01 | — |
 | P3-01 ~ P3-07 | pending | Phase 2 Gate | — |
 | P4-01 ~ P4-04 | pending | Phase 3 Gate | — |
@@ -51,14 +52,13 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-22）：P2-01 只剩门禁第二轮。** Phase 1 全部 accepted（`3091c8f`／`e2d111c`／`10b64e8`／`5a0cab0`，`main`，**未 push**）。第一轮 Q8～Q11 已全部落成工件与门禁：ADR-006 收敛发布 532 方法 + 109 别名（77/32）、Q10 的 17 条逐条定性（无证据名字归零）、ADR-007 建起 39 条 v1 topic 覆盖 38 条旧通道并被生成器逐条校验；参数表进入冻结清单，`inventory --check` 会因源码签名漂移而失败。
+**当前状态（2026-09-22）：P2-01 accepted，P2-01 Gate 通过；下一步是 P2-02。** Phase 1 与 P2-01 的提交都在 `main`（`3091c8f`／`e2d111c`／`10b64e8`／`5a0cab0`／`10f4e6c` + 本轮 P2-01 收口一次），**未 push、无 tag、无发布**。P2-01 交付：`aeroric-protocol` 全量 DTO、`contracts/native/v1/` 10 份产物、`scripts/native/contracts.mjs`、TS 与 Swift 读侧、ADR-002～009、`protocol` 门禁模块。两轮拷问（Q8～Q13）六个答案全部落成工件与断言，反例共 10 次改坏验证（详见 `docs/native/reviews/protocol.md`）。
 
 **恢复执行时按顺序做：**
 
-1. **门禁第二轮**：跑 `grillme-matt:grill-with-docs`，问 **Q12**（`RpcError.detail` 的密钥投影：`mustNotContain` 目前只是契约里的书面禁止 + 三方断言，宿主写出前是否主动剥离、剥不掉时是否整条丢弃）与 **Q13**（本地/远程版本边界：`protocolVersion` 只有常量与握手字段，跨版本策略——拒绝／降级／双栈并存——未成文；远程协议版本与本地版本的关系也要定）。答案落成 ADR-008/009 + 断言，然后才能把 P2-01 标 `accepted`。
-2. 标 `accepted` 前重跑：`pnpm native:check skeleton`、`pnpm native:check protocol`、`pnpm native:contracts --check`、`pnpm native:doctor`、`cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings`、`pnpm exec tsc --noEmit`。
-3. 然后进 **P2-02**（路径、依赖注入与单写者存储）。
-4. **不要在本任务里顺手做**：宿主 `params.target` 路由与 32 条 pending 别名的参数决定 → **P3-06/P7-02**；36 条 pending topic 的接线 → **P3-04**；ADR-005 的 41 条 `pending: P3-05` → **P3-05 出口**。
+1. 读 §Phase 2 的 **Task P2-02 — 路径、依赖注入与单写者存储**：Action 1 起先把 data-dir 发现、`XDG_*`/OneDrive 反解析、`AlreadyInUse`（不得自动杀 PID）、revision + 原子写 + flock 落成 core 侧实现；验收要求 `pnpm native:check database` 通过且该模块首次注册时要同步写 `checks.json` 的 case 与地板。
+2. **继承 P2-01 的三条纪律**（都有门禁，不是口头约定）：① 任何"给人看的清单"式生成器必须带字节级 noop 断言（`--freeze-check` 那套）；② 新代码若做 source 扫描/校验，必须配正控证明它读到了内容；③ 三方共用的事实一律放进 `contracts/native/v1/` 工件 + 三方断言，不要在两种语言里各抄一份规则。
+3. 记账类待办按排期走，不要在 P2-02 顺手做：32 pending 别名与 target 路由（P3-06/P7-02）、36 pending topic 接线（P3-04）、41 条 dsh `caller_evidence`（P3-05 出口）。
 
 ⚠ **不需要重启会话**（本文件与 `tooling.md` 早前都写错过，已各自更正）：本 CLI 读取的技能根是 `~/.mirasim/skills`（`~/.claude/skills` 与 `~/.agents/skills` 都是指向它的符号链接），项目内的 `.claude/skills/` **完全不被读取**——反证是同目录里 frontmatter 合法的 `trellis-check` 同样不在注册表中。已按用户批准把固定 revision 的 `grill-me`/`grilling` 拷入该全局根（四个文件 sha256 与 `docs/native/tooling.md` §2 逐字一致，原有 6 个技能未受影响），注册表**当场热加载**，`Skill(grilling)` 随即成功。
 
@@ -1029,6 +1029,13 @@ grill-me
 > 3. **`direction` 拆成两列**：原先用旧通道的 emitters/listeners 直接当 v1 方向，实测 11 条旧通道根本没有 Rust 侧 emitter（`unproven`），而 v1 的 `terminal.output` 必然由宿主发。现在 `legacyDirection`（证据）与 `plannedDirection`（计划）不许互相冒充，`legacyDirectionUnproven: 11` 也进了汇总计数。
 > 4. **四条规则各改坏一次，全部报错**：换掉 `source` → `names no document line as its source`；删一行 → `legacy channel "weekly-report-progress" is covered by no v1 topic`；给 pending 行提前填方向 → `... yet already states a direction or payload shape`；两行认领同一通道 → `is claimed by 2 topics`。加上前一轮的参数类型改坏，共 **5 次反例**。
 > 5. 计数：`protocol` 5 case／**83** 用例（rust 47 / swift 18 / ts 18），`skeleton` 20／**113**；产物从 9 份变 10 份。下一件事只剩门禁第二轮（Q12 密钥投影、Q13 版本边界），问完标 P2-01 accepted，再进 P2-02。
+
+> **【第十八次补记 @ 2026-09-22】门禁第二轮（Q12／Q13）跑完：`detail` 关成白名单、主版本严格相等，P2-01 accepted。**
+>
+> 1. **提问前先查的三件事实**（不查就会把"其实已经防住了"当成前提）：`mustNotContain` 只活在生成器／契约／1 条 TS 断言里，**没有任何代码执行它**；`HostCapabilities` 报了 `protocolVersion`/`buildVersion`/`dataFormat` 但没有一行比较逻辑；`packages/remote-contracts` 里**没有任何版本常量**，所以远程 relay 与本地协议今天根本没有映射关系。
+> 2. **Q12 → ADR-008**：`RpcError.detail` 变成**闭合白名单**（10 键）。做法是让类型而不是检查兜底——Rust 只能由 `ErrorDetail`（`deny_unknown_fields`、全 `Option`、`skip_serializing_if`）构造，名单由序列化器自己导出，写进 `constants.errorDetailAllowedKeys` 与 `errorDetail.keys`，TS/Swift 各持同名单；生成器还会遍历 fixtures 拒绝未登记键（反例实测：塞 `connectionString` → 报错 exit 1）。**这里刻意放弃前向兼容**：帧级仍保留未知内容，但一个说不清来历的诊断字段不是诊断，是长得像诊断的泄漏。
+> 3. **Q13 → ADR-009**：本地主版本严格相等（`handshake_allows_peer`，三方各一份），`versionPolicy` 的两个布尔是**算出来的**不是抄的；v1 内的兼容性只由具名能力承载，绝不由版本号推断（与 ADR-003"客户端不得用自己 OS 推 host 能力"是同一条纪律）；引入 v2 必须先写 ADR；远程是独立版本空间，P8-03 必须公布映射的版本对。
+> 4. 计数与门禁：`protocol` 5 case／**85** 用例（rust 48 / swift 18 / ts 19），三处地板与 `minCases` 同编辑抬齐；`contracts/native/v1/` 现为 **10 份**产物（新增 `event-topics.schema.json`）。**P2-01 标 accepted，下一步 P2-02。**
 
 - **Input**：§4、工具探测结果、`scripts/native/checks.json`、现有 `.github/workflows/checks.yml`。
 - **Action**：

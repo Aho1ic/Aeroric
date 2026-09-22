@@ -254,6 +254,20 @@ public enum ProtocolCodec {
     public static let replayMaxEvents = 4_096
     public static let replayMaxBytes = 8_388_608
 
+    /// The only keys a host may put into `RpcError.detail` (Q12). Closed on purpose:
+    /// a diagnostic we cannot name is not a diagnostic, it is a leak with a plausible
+    /// shape — and `detail` is exactly what ends up pasted into review evidence.
+    public static let errorDetailAllowedKeys: [String] = [
+        "actualRevision", "epoch", "expectedRevision", "field", "fromSeq", "generation",
+        "lockHolder", "reason", "taskId", "throughSeq",
+    ]
+
+    /// Q13: exact major equality. Anything inside v1 is a capability question, never
+    /// a version-number inference.
+    public static func handshakeAllowsPeer(_ version: Int) -> Bool {
+        version == protocolVersion
+    }
+
     /// Order mirrors the Rust decoder: blank, byte limit, UTF-8, JSON, frame. A
     /// transport fault must not be laundered into a generic parse error.
     public static func decodeLine(_ bytes: Data) -> Result<Frame, FrameError> {

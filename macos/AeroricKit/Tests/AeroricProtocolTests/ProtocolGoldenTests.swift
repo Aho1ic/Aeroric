@@ -32,7 +32,10 @@ final class ProtocolGoldenTests: XCTestCase {
     // MARK: - constants
 
     func testConstantsMatchThePublishedArtifact() throws {
-        let constants = try document("envelope.schema.json")["constants"]?.fields ?? [:]
+        let envelope = try document("envelope.schema.json")
+        let constants = envelope["constants"]?.fields ?? [:]
+        // `versionPolicy` sits at the document root, not inside `constants`.
+        let policy = envelope["versionPolicy"]?.fields ?? [:]
         let texts: (String) -> [String] = { key in
             (constants[key]?.arrayValue ?? []).compactMap(\.stringValue)
         }
@@ -43,6 +46,16 @@ final class ProtocolGoldenTests: XCTestCase {
         XCTAssertEqual(texts("permissionModes"), PermissionMode.allCases.map(\.rawValue))
         XCTAssertEqual(texts("builtInAgents"), BuiltInAgent.allCases.map(\.rawValue))
         XCTAssertEqual(texts("errorCodes"), WireErrorCode.emittable.map(\.text))
+        XCTAssertEqual(constants["errorDetailAllowedKeys"]?.arrayValue?.compactMap(\.stringValue),
+                       ProtocolCodec.errorDetailAllowedKeys)
+        XCTAssertFalse(ProtocolCodec.errorDetailAllowedKeys.contains("token"),
+                       "a secret-shaped key must never be on the allowlist")
+        XCTAssertEqual(policy["acceptsSameMajor"]?.boolValue, true)
+        XCTAssertEqual(policy["rejectsAnyOtherVersion"]?.boolValue, true)
+        XCTAssertTrue(ProtocolCodec.handshakeAllowsPeer(ProtocolCodec.protocolVersion))
+        for other in [0, 2, 255] {
+            XCTAssertFalse(ProtocolCodec.handshakeAllowsPeer(other), "v\(other) must be refused")
+        }
         XCTAssertEqual(constants["limits"]?["maxFrameBytes"]?.numberText,
                        String(ProtocolCodec.maxFrameBytes))
         XCTAssertEqual(constants["limits"]?["maxTerminalChunkRawBytes"]?.numberText,
@@ -97,6 +110,9 @@ final class ProtocolGoldenTests: XCTestCase {
         XCTAssertEqual(failure.error.code, .revisionConflict)
         XCTAssertFalse(failure.error.retryable, "a conflict must not be retried blindly")
         XCTAssertEqual(failure.error.detail?["actualRevision"]?.stringValue, "9")
+        for case let .string(key) in failure.error.detail?.fields.keys.sorted().map { JSONValue.string($0) } ?? [] {
+            XCTAssertTrue(ProtocolCodec.errorDetailAllowedKeys.contains(key), "\(key) is not allowed")
+        }
     }
 
     func testUnknownFieldsCodesAndTopicsSurvive() throws {

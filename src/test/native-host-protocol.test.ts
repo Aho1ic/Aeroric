@@ -19,8 +19,11 @@ import {
   capabilityEnabled,
   decodeBase64Strict,
   decodeLine,
+  ERROR_DETAIL_ALLOWED_KEYS,
   encodeFrame,
+  handshakeAllowsPeer,
   hasTaskSession,
+  isAllowedErrorDetailKey,
   isQuantity,
   missingCapabilityReason,
   parseFrame,
@@ -69,6 +72,24 @@ describe("constants published by the Rust exporter", () => {
     expect(envelope.transport.replay.beyond).toBe("SNAPSHOT_REQUIRED");
   });
 
+  it("keep the error-detail allowlist closed and the major version strict (Q12/Q13)", () => {
+    // The allowlist is published twice on purpose: as the fixture's authority and as
+    // the host's constructor surface. Either side drifting must show up here.
+    expect([...ERROR_DETAIL_ALLOWED_KEYS]).toEqual(envelope.constants.errorDetailAllowedKeys);
+    expect(envelope.errorDetail.keys).toEqual(envelope.constants.errorDetailAllowedKeys);
+    expect(envelope.constants.errorDetailAllowedKeys).not.toContain("token");
+    expect(envelope.errorDetail.mustNotContain).toContain("connection string");
+    expect(envelope.errorDetail.rule).toContain("closed");
+    // Q13: an exact major match, or nothing. No version arithmetic, no degradation.
+    expect(envelope.versionPolicy.acceptsSameMajor).toBe(true);
+    expect(envelope.versionPolicy.rejectsAnyOtherVersion).toBe(true);
+    expect(handshakeAllowsPeer(PROTOCOL_VERSION)).toBe(true);
+    for (const other of [0, PROTOCOL_VERSION + 1, 255]) {
+      expect(handshakeAllowsPeer(other)).toBe(false);
+    }
+    expect(envelope.versionPolicy.remote).toContain("separate version space");
+  });
+
   it("publish the single-writer and cancellation rules the UI has to honour", () => {
     expect(envelope.ownership.alreadyInUse).toContain("never kill a PID");
     expect(envelope.cancellation.disconnect).toBe("a socket close is not a task end");
@@ -96,6 +117,11 @@ describe("frame decoding", () => {
     const response = parseFrame(success.response) as Row;
     expect(response.ok).toBe(true);
     expect(response.result).toMatchObject({ revision: "8", generation: "2" });
+
+    for (const key of Object.keys(fixture("error.json").response.error.detail)) {
+      expect(isAllowedErrorDetailKey(key), `${key} is not an allowed detail key`).toBe(true);
+    }
+    expect(isAllowedErrorDetailKey("connectionString")).toBe(false);
 
     const failure = parseFrame(fixture("error.json").response) as Row;
     expect(failure.ok).toBe(false);

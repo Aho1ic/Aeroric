@@ -26,6 +26,18 @@
       "INTERACTIVE_UI_REQUIRED",
       "IO_ERROR"
     ],
+    "errorDetailAllowedKeys": [
+      "actualRevision",
+      "epoch",
+      "expectedRevision",
+      "field",
+      "fromSeq",
+      "generation",
+      "lockHolder",
+      "reason",
+      "taskId",
+      "throughSeq"
+    ],
     "limits": {
       "maxFrameBytes": 1048576,
       "maxTerminalChunkRawBytes": 65536,
@@ -57,6 +69,30 @@
       "failed",
       "cancelled"
     ]
+  },
+  "errorDetail": {
+    "keys": [
+      "actualRevision",
+      "epoch",
+      "expectedRevision",
+      "field",
+      "fromSeq",
+      "generation",
+      "lockHolder",
+      "reason",
+      "taskId",
+      "throughSeq"
+    ],
+    "mustNotContain": [
+      "token",
+      "password",
+      "passphrase",
+      "api key",
+      "connection string",
+      "raw session content"
+    ],
+    "rule": "closed set (Q12): a host builds `detail` from ErrorDetail, so an unregistered key cannot reach the wire without a diff-visible change to that type",
+    "whyClosed": "frames keep unknown content for forward compatibility, but `detail` is where diagnostics go, and diagnostics get pasted into review evidence and .artifacts logs — from P7-04 real connection strings live nearby"
   },
   "frameKinds": {
     "event": {
@@ -243,5 +279,14 @@
       "maxEvents": 4096
     },
     "socket": "unix domain socket"
+  },
+  "versionPolicy": {
+    "acceptsSameMajor": true,
+    "compatibilityInsideMajor": "carried by named capabilities in HostCapabilities, never inferred from a version number — the same rule P7-02 fixed for OS assumptions (ADR-003)",
+    "local": "the `v` in every frame must equal constants.protocolVersion exactly; `handshake_allows_peer` is the one implementation of that rule",
+    "mismatch": "refuse at the handshake with a stated reason; never degrade to a partial connection",
+    "newMajor": "introducing v2 requires its own ADR first: method, topic and enum names become frozen by whatever replaces this",
+    "rejectsAnyOtherVersion": true,
+    "remote": "the relay/mobile protocol is a separate version space: `packages/remote-contracts` declares no version constant today, so any bridge must name the pairs it maps (P8-03) instead of assuming the two move together"
   }
 }

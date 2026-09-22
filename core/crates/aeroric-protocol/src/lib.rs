@@ -21,7 +21,7 @@ pub use envelope::{
     decode_line, encode_line, EventFrame, Failure, Frame, FrameError, Quantity, Request, Success,
     MAX_FRAME_BYTES,
 };
-pub use error::{DispatchError, ErrorCode, RpcError};
+pub use error::{DispatchError, ErrorCode, ErrorDetail, RpcError};
 pub use event::{GapNotice, GapReason, SubscriptionHandshake};
 pub use project::{Project, ProjectTarget};
 pub use session::{
@@ -66,6 +66,19 @@ pub fn built_in_agents() -> Vec<String> {
 }
 pub fn error_codes() -> Vec<String> {
     wire_names(error::ErrorCode::ALL)
+}
+
+/// The only keys a host may put into `RpcError.detail` (Q12). Derived from the
+/// struct so the published contract and the type cannot disagree.
+pub fn detail_allowed_keys() -> Vec<String> {
+    error::ErrorDetail::allowed_keys()
+}
+
+/// Local protocol version policy (Q13): the major version must match exactly.
+/// Compatibility inside v1 is carried by named capabilities, never inferred from a
+/// version number, and a v2 requires its own ADR before it can exist.
+pub fn handshake_allows_peer(version: u8) -> bool {
+    version == PROTOCOL_VERSION
 }
 
 /// Crate version string reported during the host handshake.

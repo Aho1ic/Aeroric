@@ -9,10 +9,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use aeroric_protocol::{
-    built_in_agents, decode_line, error_codes, permission_modes, protocol_families, task_statuses,
-    AgentId, BytesBase64, ContentBlock, ErrorCode, Frame, FrameError, GapReason, PermissionMode,
-    ProtocolFamily, Quantity, Request, RpcError, SessionOwner, SessionPage, SessionSource, Success,
-    TaskSnapshot, TaskStatus, TerminalGap, TerminalLease, TerminalOutput,
+    built_in_agents, decode_line, detail_allowed_keys, error_codes, handshake_allows_peer,
+    permission_modes, protocol_families, task_statuses, AgentId, BytesBase64, ContentBlock,
+    ErrorCode, Frame, FrameError, GapReason, PermissionMode, ProtocolFamily, Quantity, Request,
+    RpcError, SessionOwner, SessionPage, SessionSource, Success, TaskSnapshot, TaskStatus,
+    TerminalGap, TerminalLease, TerminalOutput, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -367,6 +368,26 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
     assert_eq!(constants["permissionModes"], json!(permission_modes()));
     assert_eq!(constants["builtInAgents"], json!(built_in_agents()));
     assert_eq!(constants["errorCodes"], json!(error_codes()));
+    assert_eq!(
+        constants["errorDetailAllowedKeys"],
+        json!(detail_allowed_keys())
+    );
+    assert!(
+        !constants["errorDetailAllowedKeys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| ["token", "password", "connectionString", "apiKey"]
+                .contains(&k.as_str().unwrap())),
+        "a secret-shaped key must never be on the allowlist"
+    );
+    let policy = contract("envelope.schema.json")["versionPolicy"].clone();
+    assert_eq!(policy["acceptsSameMajor"], json!(handshake_allows_peer(1)));
+    assert_eq!(policy["rejectsAnyOtherVersion"], json!(true));
+    assert!(handshake_allows_peer(PROTOCOL_VERSION));
+    for other in [0u8, 2, 255] {
+        assert!(!handshake_allows_peer(other), "v{other} must be refused");
+    }
     assert_eq!(
         constants["limits"]["replay"]["maxEvents"],
         json!(4096),

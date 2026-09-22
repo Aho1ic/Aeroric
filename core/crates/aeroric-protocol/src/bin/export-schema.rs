@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES;
 use aeroric_protocol::{
-    built_in_agents, error_codes, permission_modes, protocol_families, task_statuses,
-    MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    built_in_agents, detail_allowed_keys, error_codes, handshake_allows_peer, permission_modes,
+    protocol_families, task_statuses, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -191,7 +191,45 @@ fn fixtures_are_sourced(
             return Err(format!("{name:?} is declared but no fixture uses it"));
         }
     }
+    // Q12: the published allowlist must actually describe the fixtures. A detail key
+    // nobody declared would otherwise ship in the artifact and reach a log.
+    let allowed = detail_allowed_keys();
+    let mut details = Vec::new();
+    for (name, document) in documents {
+        if name.contains("fixtures/") {
+            collect_detail_keys(document, &mut details);
+        }
+    }
+    for key in details {
+        if !allowed.contains(&key) {
+            return Err(format!(
+                "a fixture puts {key:?} into an error detail, which is not in the allowlist: {allowed:?}"
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Every object key that appears under a `"detail"` member of a document tree.
+fn collect_detail_keys(value: &Value, found: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "detail" {
+                    if let Some(fields) = child.as_object() {
+                        found.extend(fields.keys().cloned());
+                    }
+                }
+                collect_detail_keys(child, found);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_detail_keys(item, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn repo_root() -> PathBuf {
@@ -206,6 +244,7 @@ pub fn constants() -> Value {
         "permissionModes": permission_modes(),
         "builtInAgents": built_in_agents(),
         "errorCodes": error_codes(),
+        "errorDetailAllowedKeys": detail_allowed_keys(),
         "limits": { "maxFrameBytes": MAX_FRAME_BYTES, "maxTerminalChunkRawBytes": MAX_TERMINAL_CHUNK_BYTES,
                     "replay": { "maxEvents": 4096, "maxBytes": 8388608 } }
     })
@@ -616,6 +655,23 @@ fn envelope_schema() -> Value {
                 },
                 "openContent": open
             }
+        },
+        "versionPolicy": {
+            "local": "the `v` in every frame must equal constants.protocolVersion exactly; `handshake_allows_peer` is the one implementation of that rule",
+            "mismatch": "refuse at the handshake with a stated reason; never degrade to a partial connection",
+            "compatibilityInsideMajor": "carried by named capabilities in HostCapabilities, never inferred from a version number — the same rule P7-02 fixed for OS assumptions (ADR-003)",
+            "newMajor": "introducing v2 requires its own ADR first: method, topic and enum names become frozen by whatever replaces this",
+            "acceptsSameMajor": handshake_allows_peer(PROTOCOL_VERSION),
+            "rejectsAnyOtherVersion": !handshake_allows_peer(PROTOCOL_VERSION + 1)
+                && !handshake_allows_peer(PROTOCOL_VERSION - 1)
+                && !handshake_allows_peer(0),
+            "remote": "the relay/mobile protocol is a separate version space: `packages/remote-contracts` declares no version constant today, so any bridge must name the pairs it maps (P8-03) instead of assuming the two move together"
+        },
+        "errorDetail": {
+            "keys": detail_allowed_keys(),
+            "rule": "closed set (Q12): a host builds `detail` from ErrorDetail, so an unregistered key cannot reach the wire without a diff-visible change to that type",
+            "whyClosed": "frames keep unknown content for forward compatibility, but `detail` is where diagnostics go, and diagnostics get pasted into review evidence and .artifacts logs — from P7-04 real connection strings live nearby",
+            "mustNotContain": ["token", "password", "passphrase", "api key", "connection string", "raw session content"]
         },
         "quantities": {
             "seq": quantity(),

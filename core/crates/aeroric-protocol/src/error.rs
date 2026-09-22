@@ -95,14 +95,74 @@ impl<'de> Deserialize<'de> for ErrorCode {
     }
 }
 
+/// The only shape a host may put into `RpcError.detail` (Q12).
+///
+/// `detail` exists to carry diagnostics, and diagnostics are exactly what gets
+/// pasted into review evidence and `.artifacts` logs — from P7-04 onward real
+/// DBX connection strings live nearby. So the field is a *closed struct*, not a
+/// free map: an unregistered key cannot reach the wire without changing this type,
+/// which makes the omission visible in a diff. `contracts/native/v1/envelope.schema.json`
+/// publishes the same key list, and the round-trip test pins the two together.
+///
+/// Note the deliberate asymmetry: frames keep unknown content (§2.3 forward
+/// compatibility), `detail` does not. A diagnostic we cannot name is not a
+/// diagnostic, it is a leak with a plausible shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct ErrorDetail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_holder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<crate::envelope::Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seq: Option<crate::envelope::Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through_seq: Option<crate::envelope::Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<crate::envelope::Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_revision: Option<crate::envelope::Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl ErrorDetail {
+    /// Published key list, in the order the contract prints it. Derived from the
+    /// struct's own serializer so it cannot drift from the type.
+    pub fn allowed_keys() -> Vec<String> {
+        let sample = ErrorDetail {
+            lock_holder: Some(String::new()),
+            task_id: Some(String::new()),
+            generation: Some(crate::envelope::Quantity::from_u64(0)),
+            epoch: Some(String::new()),
+            from_seq: Some(crate::envelope::Quantity::from_u64(0)),
+            through_seq: Some(crate::envelope::Quantity::from_u64(0)),
+            expected_revision: Some(crate::envelope::Quantity::from_u64(0)),
+            actual_revision: Some(crate::envelope::Quantity::from_u64(0)),
+            field: Some(String::new()),
+            reason: Some(String::new()),
+        };
+        match serde_json::to_value(&sample) {
+            Ok(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpcError {
     pub code: ErrorCode,
     pub message: String,
     #[serde(default)]
     pub retryable: bool,
-    /// Machine-readable detail (lock holder, gap cursor, field name). Never carries
-    /// secrets, tokens, connection strings or raw session content.
+    /// Machine-readable detail. Built from [`ErrorDetail`]; see that type for why
+    /// the key set is closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<serde_json::Value>,
 }
@@ -122,6 +182,14 @@ impl RpcError {
     pub fn with_detail(mut self, detail: serde_json::Value) -> Self {
         self.detail = Some(detail);
         self
+    }
+
+    /// The sanctioned way to attach diagnostics.
+    pub fn with_error_detail(self, detail: &ErrorDetail) -> Self {
+        match serde_json::to_value(detail) {
+            Ok(value) => self.with_detail(value),
+            Err(_) => self,
+        }
     }
 }
 
@@ -176,6 +244,40 @@ mod tests {
         ))
         .unwrap();
         assert!(json.contains("\"INTERACTIVE_UI_REQUIRED\""), "{json}");
+    }
+
+    /// A key the allowlist does not contain must not survive into a detail object.
+    #[test]
+    fn the_detail_allowlist_rejects_an_unregistered_key() {
+        let error = RpcError::new(ErrorCode::Busy, "try again");
+        let detail = ErrorDetail {
+            lock_holder: Some("pid-4242".into()),
+            ..Default::default()
+        };
+        let built = error.with_error_detail(&detail);
+        let detail_value = built.detail.clone().expect("a detail must be attached");
+        assert_eq!(detail_value["lockHolder"], serde_json::json!("pid-4242"));
+        assert_eq!(
+            detail_value.as_object().map(|m| m.len()),
+            Some(1),
+            "an unset optional must not appear as null on the wire"
+        );
+        let unregistered: Result<ErrorDetail, _> = serde_json::from_value(serde_json::json!({
+            "lockHolder": "pid-4242",
+            "connectionString": "postgres://u:p@h/d"
+        }));
+        assert!(
+            unregistered.is_err(),
+            "an unregistered detail key must be refused, not carried"
+        );
+        let keys = ErrorDetail::allowed_keys();
+        assert_eq!(keys.len(), 10, "{keys:?}");
+        for secret in ["token", "password", "connectionString", "apiKey"] {
+            assert!(
+                !keys.contains(&secret.to_string()),
+                "{secret} must not be allowed"
+            );
+        }
     }
 
     /// `ALL` is published into `contracts/native/v1/envelope.schema.json`. The match
