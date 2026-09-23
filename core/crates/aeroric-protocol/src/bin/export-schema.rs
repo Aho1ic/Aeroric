@@ -244,10 +244,55 @@ pub fn constants() -> Value {
         "permissionModes": permission_modes(),
         "builtInAgents": built_in_agents(),
         "errorCodes": error_codes(),
+        "storageRejections": storage_rejections(),
         "errorDetailAllowedKeys": detail_allowed_keys(),
         "limits": { "maxFrameBytes": MAX_FRAME_BYTES, "maxTerminalChunkRawBytes": MAX_TERMINAL_CHUNK_BYTES,
                     "replay": { "maxEvents": 4096, "maxBytes": 8388608 } }
     })
+}
+
+/// ADR-011: how the three storage refusals look on the wire. Built from the Rust enum and
+/// *validated* against ADR-008's allowlist here, so an unmappable key stops the contract
+/// from being written rather than reaching a client as a detail nobody declared.
+fn storage_rejections() -> Value {
+    let allowed = aeroric_protocol::ErrorDetail::allowed_keys();
+    let rows: Vec<Value> = aeroric_protocol::StorageRejection::ALL
+        .iter()
+        .map(|rejection| {
+            let keys = rejection.detail_keys();
+            for key in &keys {
+                assert!(
+                    allowed.iter().any(|allowed| allowed == *key),
+                    "storage rejection {:?} declares detail key {key:?}, which is not in the ADR-008 allowlist",
+                    rejection.as_str()
+                );
+            }
+            json!({
+                "rejection": rejection.as_str(),
+                "code": rejection.error_code().as_str(),
+                "detailKeys": keys,
+                "retryable": rejection.retryable(),
+            })
+        })
+        .collect();
+    Value::Array(rows)
+}
+
+/// Task P2-03's parity table, published verbatim as a fixture. The rows were produced by
+/// the shipping client's own TypeScript (`src/test/project-core-parity.test.ts` asserts
+/// them every run), so this generator carries them into the artifact without inventing a
+/// second copy of the expectations — and `contracts.mjs --check` fails if the committed
+/// artifact and this embedded table ever disagree.
+fn project_parity_cases() -> Value {
+    let text = include_str!("../../knowledge/project-parity-cases.json");
+    serde_json::from_str(text).expect("knowledge/project-parity-cases.json must be valid JSON")
+}
+
+/// Task P2-04's status/handoff/retention parity table, same rule as above: the shipped
+/// client's own functions produced it, so the committed fixture cannot be quietly rewritten.
+fn task_parity_cases() -> Value {
+    let text = include_str!("../../knowledge/task-parity-cases.json");
+    serde_json::from_str(text).expect("knowledge/task-parity-cases.json must be valid JSON")
 }
 
 fn quantity() -> Value {
@@ -922,6 +967,10 @@ fn events_schema(events: &[Value]) -> Value {
 fn fixtures() -> Vec<(&'static str, Value)> {
     let epoch = "11111111-1111-4111-8111-111111111111";
     vec![
+        // Task P2-03: behaviour, not a frame. Both decoders of this file (Rust core and the
+        // shipping TypeScript) must produce the stored `expected` for the stored `input`.
+        ("projects.json", project_parity_cases()),
+        ("task-transitions.json", task_parity_cases()),
         (
             "success.json",
             json!({

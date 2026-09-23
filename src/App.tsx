@@ -372,9 +372,13 @@ function AppShell() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (!selected) return;
     const path = selected as string;
-    const { project } = upsertLocalProject(projects, path);
+    // One timestamp for both computations, exactly as `handleOpenWslProject` already does.
+    // The two calls used to read `Date.now()` separately, so across a millisecond boundary the
+    // project activated here was not the project persisted below (ADR-013 Q29).
+    const now = Date.now();
+    const { project } = upsertLocalProject(projects, path, now);
     setProjects((prev) => {
-      const next = upsertLocalProject(prev, path).projects;
+      const next = upsertLocalProject(prev, path, now).projects;
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });
@@ -389,9 +393,11 @@ function AppShell() {
   }
 
   function handleOpenSshProject(input: SshProjectInput) {
-    const { project } = upsertSshProject(projects, input);
+    // Same single-timestamp rule as local and WSL opens (ADR-013 Q29).
+    const now = Date.now();
+    const { project } = upsertSshProject(projects, input, now);
     setProjects((prev) => {
-      const next = upsertSshProject(prev, input).projects;
+      const next = upsertSshProject(prev, input, now).projects;
       persistProjects(next, showToast, formatSaveProjectsError);
       return next;
     });

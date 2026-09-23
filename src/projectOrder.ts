@@ -36,8 +36,11 @@ export function sortProjectsForRail(projects: Project[]): Project[] {
 }
 
 export function applyProjectOrder(projects: Project[], orderedProjectIds: string[]): Project[] {
+  // A duplicated id used to duplicate the project record, and `projects.json` is a
+  // whole-file overwrite, so the duplicate was persisted. First-occurrence dedupe keeps the
+  // requested order and makes one id mean one record; the core does the same (ADR-013).
   const requested = new Set(orderedProjectIds);
-  const ordered = orderedProjectIds
+  const ordered = [...requested]
     .map((id) => projects.find((project) => project.id === id))
     .filter((project): project is Project => Boolean(project));
   const remaining = sortProjectsForRail(projects).filter((project) => !requested.has(project.id));

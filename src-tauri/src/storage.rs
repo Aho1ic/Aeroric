@@ -233,16 +233,11 @@ fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir(project_id)?.join("tasks.json"))
 }
 
-pub(crate) fn validate_storage_id(id: &str, label: &str) -> Result<(), String> {
-    let trimmed = id.trim();
-    if trimmed.is_empty()
-        || !trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-    {
-        return Err(format!("Invalid {label} id"));
-    }
-    Ok(())
+/// The rule now lives in the native core so both clients answer it the same way
+/// (Task P2-02 Action 5). The message and the writer role stay here: P2-05 is what moves
+/// the writer, and until then exactly one of the two implementations may save.
+pub(crate) fn validate_storage_id(id: &str, label: &'static str) -> Result<(), String> {
+    crate::core_bridge::validate_id(id, label)
 }
 
 fn project_dir(project_id: &str) -> Result<PathBuf, String> {
@@ -927,6 +922,21 @@ fn warn_once_on_acl_failure(path: &Path, result: Result<(), String>) {
             );
         }
     }
+}
+
+/// ADR-010 的 Windows「私有权限回执」:这个目录的 DACL 现在真的只有当前用户吗?
+///
+/// 这里**不做新的收紧动作** —— `ensure_private_dir` 已经对同一个目录、每次启动都调用
+/// 过一次 `restrict_to_current_user(path, true)`,原先那个返回值被 `warn_once_on_acl_failure`
+/// 吞掉了。回执做的事只是把它接回来:SET_ACCESS + PROTECTED_DACL + 从 null 基表重建,
+/// 成功即意味着「DACL 里只有本人一条继承型完全控制 ACE」。
+///
+/// 失败就是 `false`,不猜:不支持 ACL 的卷(FAT32 U 盘等)必然失败,而那里的文件确实对其他
+/// 本地账户可读 —— 那正是 ADR-010 要 core 拒绝写者角色的情形。core 拒写只是让老客户端照旧
+/// 独自写,不丢数据。
+#[cfg(windows)]
+pub(crate) fn windows_private_acl_receipt(path: &Path) -> bool {
+    windows_acl::restrict_to_current_user(path, true).is_ok()
 }
 
 #[cfg(test)]

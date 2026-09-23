@@ -1,0 +1,1420 @@
+{
+  "title": "Project behaviour cases, produced by the shipping client's own TypeScript",
+  "source": "src/test/project-core-parity.test.ts (AERORIC_WRITE_PROJECT_EXPECTATIONS=1)",
+  "note": "Each row is `run(case)` from the real functions in src/projectOrder.ts, src/projectGroups.ts, src/appProjectState.ts and src/state/app/projectMutations.ts. The vitest asserts these expectations every run, aeroric-core is tested against the artifact this table is published into, and scripts/native/contracts.mjs --check keeps the artifact and this file byte-identical. Re-deriving the table is deliberate: rerun the vitest with the env var, then review the diff.",
+  "caseCount": 42,
+  "cases": [
+    {
+      "name": "rail order keeps pinned first and missing indexes last",
+      "operation": "sortProjectsForRail",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "orderIndex": 2
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b"
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "pinned": true,
+            "orderIndex": 9
+          },
+          {
+            "name": "d",
+            "path": "/repo/d",
+            "lastOpenedAt": 1700000000000,
+            "id": "d",
+            "orderIndex": 0
+          }
+        ]
+      },
+      "expected": [
+        {
+          "name": "c",
+          "path": "/repo/c",
+          "lastOpenedAt": 1700000000000,
+          "id": "c",
+          "pinned": true,
+          "orderIndex": 9
+        },
+        {
+          "name": "d",
+          "path": "/repo/d",
+          "lastOpenedAt": 1700000000000,
+          "id": "d",
+          "orderIndex": 0
+        },
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "orderIndex": 2
+        },
+        {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000000000,
+          "id": "b"
+        }
+      ]
+    },
+    {
+      "name": "equal order indexes keep their original order",
+      "operation": "sortProjectsForRail",
+      "input": {
+        "projects": [
+          {
+            "name": "x",
+            "path": "/repo/x",
+            "lastOpenedAt": 1700000000000,
+            "id": "x",
+            "orderIndex": 1
+          },
+          {
+            "name": "y",
+            "path": "/repo/y",
+            "lastOpenedAt": 1700000000000,
+            "id": "y",
+            "orderIndex": 1
+          },
+          {
+            "name": "z",
+            "path": "/repo/z",
+            "lastOpenedAt": 1700000000000,
+            "id": "z",
+            "orderIndex": 1
+          }
+        ]
+      },
+      "expected": [
+        {
+          "name": "x",
+          "path": "/repo/x",
+          "lastOpenedAt": 1700000000000,
+          "id": "x",
+          "orderIndex": 1
+        },
+        {
+          "name": "y",
+          "path": "/repo/y",
+          "lastOpenedAt": 1700000000000,
+          "id": "y",
+          "orderIndex": 1
+        },
+        {
+          "name": "z",
+          "path": "/repo/z",
+          "lastOpenedAt": 1700000000000,
+          "id": "z",
+          "orderIndex": 1
+        }
+      ]
+    },
+    {
+      "name": "a non-numeric order index is treated as missing",
+      "operation": "normalizeProjectOrder",
+      "input": {
+        "projects": [
+          {
+            "name": "s",
+            "path": "/repo/s",
+            "lastOpenedAt": 1700000000000,
+            "id": "s",
+            "orderIndex": "3"
+          },
+          {
+            "name": "t",
+            "path": "/repo/t",
+            "lastOpenedAt": 1700000000000,
+            "id": "t",
+            "orderIndex": 0
+          }
+        ]
+      },
+      "expected": [
+        {
+          "name": "s",
+          "path": "/repo/s",
+          "lastOpenedAt": 1700000000000,
+          "id": "s",
+          "orderIndex": 0
+        },
+        {
+          "name": "t",
+          "path": "/repo/t",
+          "lastOpenedAt": 1700000000000,
+          "id": "t",
+          "orderIndex": 0
+        }
+      ]
+    },
+    {
+      "name": "a fractional order index survives untouched",
+      "operation": "normalizeProjectOrder",
+      "input": {
+        "projects": [
+          {
+            "name": "half",
+            "path": "/repo/half",
+            "lastOpenedAt": 1700000000000,
+            "id": "half",
+            "orderIndex": 1.5
+          }
+        ]
+      },
+      "expected": [
+        {
+          "name": "half",
+          "path": "/repo/half",
+          "lastOpenedAt": 1700000000000,
+          "id": "half",
+          "orderIndex": 1.5
+        }
+      ]
+    },
+    {
+      "name": "reordering by ids drops unknown ids and re-indexes the rest",
+      "operation": "applyProjectOrder",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "orderIndex": 0
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "orderIndex": 1
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "orderIndex": 2
+          }
+        ],
+        "orderedProjectIds": [
+          "c",
+          "ghost",
+          "a"
+        ]
+      },
+      "expected": [
+        {
+          "name": "c",
+          "path": "/repo/c",
+          "lastOpenedAt": 1700000000000,
+          "id": "c",
+          "orderIndex": 0
+        },
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "orderIndex": 1
+        },
+        {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000000000,
+          "id": "b",
+          "orderIndex": 2
+        }
+      ]
+    },
+    {
+      "name": "a duplicated id in the order list means one record, after the ADR-013 fix",
+      "operation": "applyProjectOrder",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "orderIndex": 0
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "orderIndex": 1
+          }
+        ],
+        "orderedProjectIds": [
+          "a",
+          "a",
+          "b"
+        ]
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "orderIndex": 0
+        },
+        {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000000000,
+          "id": "b",
+          "orderIndex": 1
+        }
+      ]
+    },
+    {
+      "name": "an empty id list leaves rail order",
+      "operation": "applyProjectOrder",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "orderIndex": 5
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "pinned": true,
+            "orderIndex": 7
+          }
+        ],
+        "orderedProjectIds": []
+      },
+      "expected": [
+        {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000000000,
+          "id": "b",
+          "pinned": true,
+          "orderIndex": 0
+        },
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "orderIndex": 1
+        }
+      ]
+    },
+    {
+      "name": "groups are configured order first, then discovered, ungrouped last",
+      "operation": "groupProjectsForRail",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b"
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "group": "  Padded  "
+          },
+          {
+            "name": "d",
+            "path": "/repo/d",
+            "lastOpenedAt": 1700000000000,
+            "id": "d",
+            "group": "Work"
+          },
+          {
+            "name": "e",
+            "path": "/repo/e",
+            "lastOpenedAt": 1700000000000,
+            "id": "e",
+            "group": "   "
+          }
+        ],
+        "configuredNames": [
+          "Later",
+          "Work",
+          "Later",
+          "  "
+        ]
+      },
+      "expected": [
+        {
+          "name": "Later",
+          "projects": [],
+          "isUngrouped": false
+        },
+        {
+          "name": "Work",
+          "projects": [
+            {
+              "name": "a",
+              "path": "/repo/a",
+              "lastOpenedAt": 1700000000000,
+              "id": "a",
+              "group": "Work"
+            },
+            {
+              "name": "d",
+              "path": "/repo/d",
+              "lastOpenedAt": 1700000000000,
+              "id": "d",
+              "group": "Work"
+            }
+          ],
+          "isUngrouped": false
+        },
+        {
+          "name": "Padded",
+          "projects": [
+            {
+              "name": "c",
+              "path": "/repo/c",
+              "lastOpenedAt": 1700000000000,
+              "id": "c",
+              "group": "  Padded  "
+            }
+          ],
+          "isUngrouped": false
+        },
+        {
+          "name": "__ungrouped__",
+          "projects": [
+            {
+              "name": "b",
+              "path": "/repo/b",
+              "lastOpenedAt": 1700000000000,
+              "id": "b"
+            },
+            {
+              "name": "e",
+              "path": "/repo/e",
+              "lastOpenedAt": 1700000000000,
+              "id": "e",
+              "group": "   "
+            }
+          ],
+          "isUngrouped": true
+        }
+      ]
+    },
+    {
+      "name": "no ungrouped section is emitted when every project has a group",
+      "operation": "groupProjectsForRail",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "configuredNames": []
+      },
+      "expected": [
+        {
+          "name": "Work",
+          "projects": [
+            {
+              "name": "a",
+              "path": "/repo/a",
+              "lastOpenedAt": 1700000000000,
+              "id": "a",
+              "group": "Work"
+            }
+          ],
+          "isUngrouped": false
+        }
+      ]
+    },
+    {
+      "name": "merge reports each group once",
+      "operation": "mergeProjectGroupNames",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "group": "Play"
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "group": "Work"
+          }
+        ],
+        "configuredNames": [
+          "Play"
+        ]
+      },
+      "expected": [
+        "Play",
+        "Work"
+      ]
+    },
+    {
+      "name": "a zero-width-no-break name normalises away",
+      "operation": "normalizeProjectGroupNames",
+      "input": {
+        "value": [
+          "﻿Bom",
+          "",
+          "  ",
+          7,
+          "Bom",
+          "﻿"
+        ]
+      },
+      "expected": [
+        "Bom"
+      ]
+    },
+    {
+      "name": "projectGroupForProject falls back to the sentinel",
+      "operation": "projectGroupForProject",
+      "input": {
+        "project": {
+          "name": "u",
+          "path": "/repo/u",
+          "lastOpenedAt": 1700000000000,
+          "id": "u",
+          "group": null
+        }
+      },
+      "expected": "__ungrouped__"
+    },
+    {
+      "name": "opening a new local project prepends and re-indexes",
+      "operation": "upsertLocalProject",
+      "input": {
+        "projects": [
+          {
+            "name": "1",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 0
+          },
+          {
+            "name": "2",
+            "path": "/repo/two",
+            "lastOpenedAt": 1700000000000,
+            "id": "2",
+            "orderIndex": 1
+          }
+        ],
+        "path": "/repo/three",
+        "now": 1700000009999
+      },
+      "expected": {
+        "project": {
+          "id": "1700000009999",
+          "name": "three",
+          "path": "/repo/three",
+          "lastOpenedAt": 1700000009999,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000009999",
+            "name": "three",
+            "path": "/repo/three",
+            "lastOpenedAt": 1700000009999,
+            "orderIndex": 0
+          },
+          {
+            "name": "1",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 1
+          },
+          {
+            "name": "2",
+            "path": "/repo/two",
+            "lastOpenedAt": 1700000000000,
+            "id": "2",
+            "orderIndex": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "reopening the same path touches it and keeps its place",
+      "operation": "upsertLocalProject",
+      "input": {
+        "projects": [
+          {
+            "name": "1",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 0
+          },
+          {
+            "name": "2",
+            "path": "/repo/two",
+            "lastOpenedAt": 1700000000000,
+            "id": "2",
+            "orderIndex": 1
+          }
+        ],
+        "path": "/repo/two",
+        "now": 1700000010000
+      },
+      "expected": {
+        "project": {
+          "name": "2",
+          "path": "/repo/two",
+          "lastOpenedAt": 1700000010000,
+          "id": "2",
+          "orderIndex": 1
+        },
+        "projects": [
+          {
+            "name": "1",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 0
+          },
+          {
+            "name": "2",
+            "path": "/repo/two",
+            "lastOpenedAt": 1700000010000,
+            "id": "2",
+            "orderIndex": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "a differently spelled same path is a second project, as today",
+      "operation": "upsertLocalProject",
+      "input": {
+        "projects": [
+          {
+            "name": "1",
+            "path": "/repo/one/",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 0
+          }
+        ],
+        "path": "/repo/one",
+        "now": 1700000011000
+      },
+      "expected": {
+        "project": {
+          "id": "1700000011000",
+          "name": "one",
+          "path": "/repo/one",
+          "lastOpenedAt": 1700000011000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000011000",
+            "name": "one",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000011000,
+            "orderIndex": 0
+          },
+          {
+            "name": "1",
+            "path": "/repo/one/",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 1
+          }
+        ]
+      },
+      "coreExpected": {
+        "project": {
+          "id": "1",
+          "name": "1",
+          "path": "/repo/one/",
+          "lastOpenedAt": 1700000011000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1",
+            "name": "1",
+            "path": "/repo/one/",
+            "lastOpenedAt": 1700000011000,
+            "orderIndex": 0
+          }
+        ]
+      },
+      "divergenceReason": "ADR-013: local identity is compared after lossless normalisation (trailing separators), so this touches the existing record instead of adding a second one."
+    },
+    {
+      "name": "a chinese and spaced path keeps its name and byte order",
+      "operation": "upsertLocalProject",
+      "input": {
+        "projects": [],
+        "path": "/home/dev/同步 空间/项目 一",
+        "now": 1700000012000
+      },
+      "expected": {
+        "project": {
+          "id": "1700000012000",
+          "name": "项目 一",
+          "path": "/home/dev/同步 空间/项目 一",
+          "lastOpenedAt": 1700000012000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000012000",
+            "name": "项目 一",
+            "path": "/home/dev/同步 空间/项目 一",
+            "lastOpenedAt": 1700000012000,
+            "orderIndex": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "case-differing paths stay distinct",
+      "operation": "upsertLocalProject",
+      "input": {
+        "projects": [
+          {
+            "name": "1",
+            "path": "/Repo/One",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 0
+          }
+        ],
+        "path": "/repo/one",
+        "now": 1700000013000
+      },
+      "expected": {
+        "project": {
+          "id": "1700000013000",
+          "name": "one",
+          "path": "/repo/one",
+          "lastOpenedAt": 1700000013000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000013000",
+            "name": "one",
+            "path": "/repo/one",
+            "lastOpenedAt": 1700000013000,
+            "orderIndex": 0
+          },
+          {
+            "name": "1",
+            "path": "/Repo/One",
+            "lastOpenedAt": 1700000000000,
+            "id": "1",
+            "orderIndex": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "ssh upsert matches on connection and path, not on the ssh:// string",
+      "operation": "upsertSshProject",
+      "input": {
+        "projects": [
+          {
+            "name": "s1",
+            "path": "ssh://conn-a/srv/app",
+            "lastOpenedAt": 1700000000000,
+            "id": "s1",
+            "orderIndex": 0,
+            "location": {
+              "kind": "ssh",
+              "connectionId": "conn-a",
+              "remotePath": "/srv/app"
+            }
+          }
+        ],
+        "input": {
+          "name": "renamed?",
+          "connectionId": "conn-a",
+          "remotePath": "srv/app"
+        },
+        "now": 1700000014000
+      },
+      "expected": {
+        "project": {
+          "name": "s1",
+          "path": "ssh://conn-a/srv/app",
+          "lastOpenedAt": 1700000014000,
+          "id": "s1",
+          "orderIndex": 0,
+          "location": {
+            "kind": "ssh",
+            "connectionId": "conn-a",
+            "remotePath": "/srv/app"
+          }
+        },
+        "projects": [
+          {
+            "name": "s1",
+            "path": "ssh://conn-a/srv/app",
+            "lastOpenedAt": 1700000014000,
+            "id": "s1",
+            "orderIndex": 0,
+            "location": {
+              "kind": "ssh",
+              "connectionId": "conn-a",
+              "remotePath": "/srv/app"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "the same remote path under another connection is a new project",
+      "operation": "upsertSshProject",
+      "input": {
+        "projects": [
+          {
+            "name": "s1",
+            "path": "ssh://conn-a/srv/app",
+            "lastOpenedAt": 1700000000000,
+            "id": "s1",
+            "orderIndex": 0,
+            "location": {
+              "kind": "ssh",
+              "connectionId": "conn-a",
+              "remotePath": "/srv/app"
+            }
+          }
+        ],
+        "input": {
+          "name": "other host",
+          "connectionId": "conn-b",
+          "remotePath": "/srv/app"
+        },
+        "now": 1700000015000
+      },
+      "expected": {
+        "project": {
+          "id": "1700000015000",
+          "name": "other host",
+          "path": "ssh://conn-b/srv/app",
+          "location": {
+            "kind": "ssh",
+            "connectionId": "conn-b",
+            "remotePath": "/srv/app"
+          },
+          "lastOpenedAt": 1700000015000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000015000",
+            "name": "other host",
+            "path": "ssh://conn-b/srv/app",
+            "location": {
+              "kind": "ssh",
+              "connectionId": "conn-b",
+              "remotePath": "/srv/app"
+            },
+            "lastOpenedAt": 1700000015000,
+            "orderIndex": 0
+          },
+          {
+            "name": "s1",
+            "path": "ssh://conn-a/srv/app",
+            "lastOpenedAt": 1700000000000,
+            "id": "s1",
+            "orderIndex": 1,
+            "location": {
+              "kind": "ssh",
+              "connectionId": "conn-a",
+              "remotePath": "/srv/app"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "wsl normalises the root path and encodes the distribution",
+      "operation": "upsertWslProject",
+      "input": {
+        "projects": [],
+        "input": {
+          "name": "wsl",
+          "distribution": "Ubuntu-24.04 LTS",
+          "linuxPath": "/home/dev/app/"
+        },
+        "now": 1700000016000
+      },
+      "expected": {
+        "project": {
+          "id": "1700000016000",
+          "name": "wsl",
+          "path": "wsl://Ubuntu-24.04%20LTS/home/dev/app",
+          "location": {
+            "kind": "wsl",
+            "distribution": "Ubuntu-24.04 LTS",
+            "linuxPath": "/home/dev/app"
+          },
+          "lastOpenedAt": 1700000016000,
+          "orderIndex": 0
+        },
+        "projects": [
+          {
+            "id": "1700000016000",
+            "name": "wsl",
+            "path": "wsl://Ubuntu-24.04%20LTS/home/dev/app",
+            "location": {
+              "kind": "wsl",
+              "distribution": "Ubuntu-24.04 LTS",
+              "linuxPath": "/home/dev/app"
+            },
+            "lastOpenedAt": 1700000016000,
+            "orderIndex": 0
+          }
+        ],
+        "reused": false
+      }
+    },
+    {
+      "name": "a wsl root path stays a root",
+      "operation": "normalizeWslProjectPath",
+      "input": {
+        "linuxPath": " / "
+      },
+      "expected": "/"
+    },
+    {
+      "name": "touch leaves the order alone",
+      "operation": "touchProjectInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1,
+            "id": "a",
+            "orderIndex": 0
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 2,
+            "id": "b",
+            "orderIndex": 1
+          }
+        ],
+        "projectId": "b",
+        "now": 1700000017000
+      },
+      "expected": {
+        "project": {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000017000,
+          "id": "b",
+          "orderIndex": 1
+        },
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1,
+            "id": "a",
+            "orderIndex": 0
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000017000,
+            "id": "b",
+            "orderIndex": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "assigning no group removes the key",
+      "operation": "assignProjectGroup",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "projectId": "a",
+        "groupName": "   "
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a"
+        }
+      ]
+    },
+    {
+      "name": "renaming a group moves every member and reports the change",
+      "operation": "renameProjectGroupInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "group": "Play"
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "group": "Work"
+          }
+        ],
+        "oldName": "Work",
+        "nextName": "  Work 2026  "
+      },
+      "expected": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work 2026"
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "group": "Play"
+          },
+          {
+            "name": "c",
+            "path": "/repo/c",
+            "lastOpenedAt": 1700000000000,
+            "id": "c",
+            "group": "Work 2026"
+          }
+        ],
+        "groupChanged": true,
+        "groupsNext": []
+      }
+    },
+    {
+      "name": "renaming to the same name is not a change",
+      "operation": "renameProjectGroupInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "oldName": "Work",
+        "nextName": "Work"
+      },
+      "expected": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "groupChanged": false,
+        "groupsNext": []
+      }
+    },
+    {
+      "name": "renaming to blank is not a change",
+      "operation": "renameProjectGroupInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "oldName": "Work",
+        "nextName": " "
+      },
+      "expected": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          }
+        ],
+        "groupChanged": false,
+        "groupsNext": []
+      }
+    },
+    {
+      "name": "clearing a group empties its members",
+      "operation": "clearProjectGroupFromList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "group": "Work"
+          },
+          {
+            "name": "b",
+            "path": "/repo/b",
+            "lastOpenedAt": 1700000000000,
+            "id": "b",
+            "group": "Play"
+          }
+        ],
+        "groupName": "Work"
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a"
+        },
+        {
+          "name": "b",
+          "path": "/repo/b",
+          "lastOpenedAt": 1700000000000,
+          "id": "b",
+          "group": "Play"
+        }
+      ]
+    },
+    {
+      "name": "renaming a project keeps every other field",
+      "operation": "renameProjectInList",
+      "input": {
+        "projects": [
+          {
+            "name": "old",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "branch": "main",
+            "group": "Work",
+            "orderIndex": 3
+          }
+        ],
+        "projectId": "a",
+        "name": "新名字"
+      },
+      "expected": [
+        {
+          "name": "新名字",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "branch": "main",
+          "group": "Work",
+          "orderIndex": 3
+        }
+      ]
+    },
+    {
+      "name": "hiding toggles the flag only",
+      "operation": "toggleProjectHiddenInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "hiddenFromRail": true
+          }
+        ],
+        "projectId": "a"
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "hiddenFromRail": false
+        }
+      ]
+    },
+    {
+      "name": "pinning toggles without touching orderIndex",
+      "operation": "toggleProjectPinnedInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "orderIndex": 4
+          }
+        ],
+        "projectId": "a"
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a",
+          "orderIndex": 4,
+          "pinned": true
+        }
+      ]
+    },
+    {
+      "name": "pinning an unknown id changes nothing",
+      "operation": "toggleProjectPinnedInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a"
+          }
+        ],
+        "projectId": "ghost"
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a"
+        }
+      ]
+    },
+    {
+      "name": "removing an avatar clears the key",
+      "operation": "setProjectAvatarInList",
+      "input": {
+        "projects": [
+          {
+            "name": "a",
+            "path": "/repo/a",
+            "lastOpenedAt": 1700000000000,
+            "id": "a",
+            "avatar": {
+              "emoji": "x"
+            }
+          }
+        ],
+        "projectId": "a"
+      },
+      "expected": [
+        {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a"
+        }
+      ]
+    },
+    {
+      "name": "deriveProjectName takes the last segment",
+      "operation": "deriveProjectName",
+      "input": {
+        "path": "/repo/app/"
+      },
+      "expected": "app"
+    },
+    {
+      "name": "deriveProjectName handles windows separators",
+      "operation": "deriveProjectName",
+      "input": {
+        "path": "C:\\repo\\app\\"
+      },
+      "expected": "app"
+    },
+    {
+      "name": "deriveProjectName keeps a bare separator as-is",
+      "operation": "deriveProjectName",
+      "input": {
+        "path": "/"
+      },
+      "expected": "/"
+    },
+    {
+      "name": "deriveProjectName keeps an empty path",
+      "operation": "deriveProjectName",
+      "input": {
+        "path": ""
+      },
+      "expected": ""
+    },
+    {
+      "name": "normalizeRemotePath makes a path absolute",
+      "operation": "normalizeRemotePath",
+      "input": {
+        "path": " srv/app "
+      },
+      "expected": "/srv/app"
+    },
+    {
+      "name": "sshProjectPath prefixes the connection id",
+      "operation": "sshProjectPath",
+      "input": {
+        "connectionId": "c-1",
+        "remotePath": "/a/b"
+      },
+      "expected": "ssh://c-1/a/b"
+    },
+    {
+      "name": "wslProjectPath encodes the distribution",
+      "operation": "wslProjectPath",
+      "input": {
+        "distribution": "a b",
+        "linuxPath": "/x"
+      },
+      "expected": "wsl://a%20b/x"
+    },
+    {
+      "name": "resolveProjectLocation defaults to local",
+      "operation": "resolveProjectLocation",
+      "input": {
+        "project": {
+          "name": "a",
+          "path": "/repo/a",
+          "lastOpenedAt": 1700000000000,
+          "id": "a"
+        }
+      },
+      "expected": {
+        "kind": "local",
+        "path": "/repo/a"
+      }
+    },
+    {
+      "name": "resolveProjectLocation passes an unknown kind through",
+      "operation": "resolveProjectLocation",
+      "input": {
+        "project": {
+          "name": "o",
+          "path": "/repo/o",
+          "lastOpenedAt": 1700000000000,
+          "id": "o",
+          "location": {
+            "kind": "carrier-pigeon",
+            "remotePath": "/srv/app"
+          }
+        }
+      },
+      "expected": {
+        "kind": "carrier-pigeon",
+        "remotePath": "/srv/app"
+      },
+      "coreExpected": {
+        "kind": "local",
+        "path": "/repo/o"
+      },
+      "divergenceReason": "ADR-013 Q32: the core cannot name this kind, so it reads the record as listed-but-unaddressable (identity falls back to the legacy path field) while `is_addressable` refuses any operation that needs the location."
+    },
+    {
+      "name": "resolveProjectLocation reads an ssh location",
+      "operation": "resolveProjectLocation",
+      "input": {
+        "project": {
+          "name": "s",
+          "path": "/repo/s",
+          "lastOpenedAt": 1700000000000,
+          "id": "s",
+          "location": {
+            "kind": "ssh",
+            "connectionId": "c",
+            "remotePath": "/r"
+          }
+        }
+      },
+      "expected": {
+        "kind": "ssh",
+        "connectionId": "c",
+        "remotePath": "/r"
+      }
+    }
+  ]
+}

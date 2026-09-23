@@ -82,6 +82,35 @@ export function handshakeAllowsPeer(version: number): boolean {
   return version === PROTOCOL_VERSION;
 }
 
+/**
+ * ADR-011: the three storage refusals and what each one means to a caller. Declared here
+ * and asserted against the published contract, because the difference between them is a
+ * user-facing decision: one is worth waiting for, one is never fixed by retrying.
+ */
+export type StorageRejectionRow = {
+  readonly rejection: string;
+  readonly code: WireErrorCode;
+  readonly detailKeys: readonly ErrorDetailKey[];
+  readonly retryable: boolean;
+};
+
+export const STORAGE_REJECTIONS: readonly StorageRejectionRow[] = [
+  { rejection: "leaseHeld", code: "BUSY", detailKeys: ["lockHolder", "epoch"], retryable: true },
+  { rejection: "locationUnfit", code: "IO_ERROR", detailKeys: ["reason"], retryable: false },
+  {
+    rejection: "staleWrite",
+    code: "REVISION_CONFLICT",
+    detailKeys: ["expectedRevision", "actualRevision", "epoch"],
+    retryable: false,
+  },
+] as const;
+
+/** Unknown codes are not retryable: a client guessing "probably fine to retry" is how a
+ * location refusal turns into an endless spinner. */
+export function storageRejectionIsRetryable(code: string): boolean {
+  return STORAGE_REJECTIONS.find((row) => row.code === code)?.retryable ?? false;
+}
+
 export function asErrorCode(text: string): ErrorCode {
   return (WIRE_ERROR_CODES as readonly string[]).includes(text) ? (text as WireErrorCode) : "UNKNOWN";
 }

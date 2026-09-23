@@ -19,6 +19,8 @@ mod clock;
 mod command_registration_tests;
 mod conda;
 mod config;
+/// 复用原生 core 的纯函数(P2-02 Action 5);写入权仍在 storage.rs,移交是 P2-05。
+mod core_bridge;
 mod custom_themes;
 mod dap;
 mod database;
@@ -78,6 +80,7 @@ mod storage_backend_mount;
 mod storage_backend_opendal;
 mod storage_backend_smb;
 mod storage_conn;
+mod storage_location;
 mod storage_oauth;
 mod subprocess;
 mod tests;

@@ -15,6 +15,8 @@ declare module "node:fs" {
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
   export function mkdtempSync(prefix: string): string;
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
+  export function mkdirSync(path: string, options?: { recursive: boolean }): void;
+  export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
 }
 
 declare module "node:os" {

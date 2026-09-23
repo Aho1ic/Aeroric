@@ -17,9 +17,17 @@
       "gate-runner-unit@skeleton": 24,
       "invariants-unit@skeleton": 13,
       "extraction-unit@skeleton": 9,
-      "protocol-rust@protocol": 48,
-      "protocol-swift-golden@protocol": 18,
-      "protocol-ts-golden@protocol": 19
+      "protocol-rust@protocol": 49,
+      "protocol-swift-golden@protocol": 19,
+      "protocol-ts-golden@protocol": 20,
+      "storage-core-rust@storage": 81,
+      "projects-core-rust@projects": 16,
+      "projects-parity-is-derived-from-client@projects": 2,
+      "tasks-status-machine-rust@tasks": 27,
+      "tasks-idempotency-rust@tasks": 8,
+      "tasks-parity-rust@tasks": 4,
+      "tasks-reducer-unit-rust@tasks": 61,
+      "tasks-parity-is-derived-from-client@tasks": 3
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -373,7 +381,7 @@
             "-p",
             "aeroric-protocol"
           ],
-          "minCases": 48,
+          "minCases": 49,
           "timeoutMs": 900000
         },
         {
@@ -388,7 +396,7 @@
             "--filter",
             "ProtocolGoldenTests"
           ],
-          "minCases": 18,
+          "minCases": 19,
           "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
           "timeoutMs": 900000
         },
@@ -402,7 +410,7 @@
             "run",
             "src/test/native-host-protocol.test.ts"
           ],
-          "minCases": 19,
+          "minCases": 20,
           "timeoutMs": 900000
         },
         {
@@ -442,12 +450,379 @@
           "timeoutMs": 120000
         }
       ]
+    },
+    "storage": {
+      "registeredBy": "P2-02",
+      "cases": [
+        {
+          "name": "storage-core-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core"
+          ],
+          "minCases": 81,
+          "$note": "单一写入者存储层 + P2-03 项目层的 lib 用例（paths/clock/context/location/storage_lock 与 storage/*、projects/*），加 tests/storage_compat.rs 8 个、tests/storage_lock.rs 4 个（独立进程争用、不同目录并存、死持有者释放、symlink 同一把锁）与 tests/projects.rs 8 个。地板 81 = 53+8+4+16；P2-03 的用例并进这条是因为它跑的是同一个 `cargo test -p aeroric-core`，两条地板不能各持一半真相。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "storage-core-clippy",
+          "kind": "gate",
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--all-targets",
+            "--locked",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "core/ 与 macos/ 没有 CI，门禁是唯一的强制点：-D warnings 在这里松掉就没人再跑它。不钉 Compiling/Checking 这类输出 token——cargo 缓存命中时它们本就不出现，钉上去只会让 case 随机红；退出码 0 才是「所有 target 都过了 lint」的证据。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "core-discovers-no-real-home",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "home_dir|dirs::home|env::var(_os)?\\(\\s*\"HOME|USERPROFILE|/Users/",
+            "core/crates/aeroric-core/src",
+            "core/crates/aeroric-core/tests"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "fn writer",
+              "core/crates/aeroric-core/src/storage/mod.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "temp_dir",
+              "core/crates/aeroric-core/src/storage/mod.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "AERORIC_LEASE_CHILD_DIR",
+              "core/crates/aeroric-core/tests/storage_lock.rs"
+            ]
+          ],
+          "$note": "INV-03 与「测试不得触碰真实用户目录」的机械形态：家目录只能由调用方注入（AppPaths::from_user_home / with_data_dir），core 自己不许去查 $HOME、home_dir 或写死某台机器的路径。父进程传给子进程的 AERORIC_LEASE_CHILD_* 不在禁止之列，所以模式限定到 HOME 本身。三条正控证明 rg 读得到被扫的文件，且它们确实依赖注入与 temp_dir。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "lease-refusal-never-kills-a-foreign-pid",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\.kill\\(\\)|libc::kill|pkill|killall|SIGKILL|SIGTERM|Command::new\\(\"kill",
+            "core/crates/aeroric-core/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "AlreadyInUse",
+              "core/crates/aeroric-core/src/storage_lock.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "never kill",
+              "core/crates/aeroric-core/src/storage_lock.rs"
+            ]
+          ],
+          "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：生产代码里出现任何 kill 调用都意味着它在替用户决定该死哪个进程。测试夹具里的 holder.kill() 收拾的是自己 spawn 的子进程，故本 case 只扫 src/。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "legacy-client-ignores-core-exclusive-files",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "runtime\\.json|project-groups\\.json|task-operations\\.json",
+            "src-tauri/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric-core",
+              "src-tauri/Cargo.toml"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "core_bridge",
+              "src-tauri/src/lib.rs"
+            ]
+          ],
+          "$note": "ADR-012/013：`runtime.json` 与 `project-groups.json` 都是核心独占、可丢弃的状态——旧客户端读不到它们就必须真的不读它们，否则「删掉也不影响」这句前提会被一次 legacy 读取悄悄作废（而 `AppSettings` 是强类型 struct，把它塞进 settings.json 更会在下一次保存时被抹掉）。两条正控证明 src-tauri 确实编译进了 core 与桥接模块，rg 不是因为路径写错才返回 1。 P2-04 追加 task-operations.json：它是 spawn-once 的唯一凭据，旧客户端整表覆盖会把它抹掉。",
+          "timeoutMs": 120000
+        }
+      ]
+    },
+    "projects": {
+      "registeredBy": "P2-03",
+      "cases": [
+        {
+          "name": "projects-core-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "projects"
+          ],
+          "minCases": 16,
+          "$note": "P2-03 的两半：41 条 parity 用例重放 `contracts/native/v1/fixtures/projects.json`（期望由旧客户端 TypeScript 亲自算出，其中 2 条是 ADR-013 声明的有意分歧，必须与客户端结果不同且带理由，否则 Rust 用例直接红）+ 15 条服务层用例：一次真实改动推进一格 revision、无效改动与被拒写入不消耗 revision、分组清单是 core 独占文件且不碰 settings.json、reorder 重复 id 去重、本地路径只做无损归一、id 由调用方给且重复 id 拒绝落盘、坏 location 看得见但不可寻址且永远可删。地板 16 = 1 + 15；parity 表另由 projects-parity-is-derived-from-client 在 TS 侧断言。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-parity-is-derived-from-client",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/project-core-parity.test.ts"
+          ],
+          "minCases": 2,
+          "$note": "期望值不是手抄的：这条 case 用真实的 src/projectOrder.ts、projectGroups.ts、appProjectState.ts、state/app/projectMutations.ts 重放知识表里的每一条，一旦产品侧行为变了，这里是红的（而 Rust 侧同一张表的断言在 projects-core-rust）。重派生知识表需要显式环境变量，属于评审动作。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "新增的 fixtures/projects.json 必须与 Rust 生成器内嵌的知识表逐字节一致，否则三方读的就不是同一份东西。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-core-has-no-ui-coupling",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState",
+            "core/crates/aeroric-core/src/projects"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub struct ProjectService",
+              "core/crates/aeroric-core/src/projects/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "save_projects",
+              "core/crates/aeroric-core/src/projects/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub fn merge_group_names",
+              "core/crates/aeroric-core/src/projects/mutations.rs"
+            ]
+          ],
+          "$note": "验收原文是「业务操作不调用任何 UI 回调」，所以这条按代码形状检查而不是按词：只拦真实的调用/依赖写法（tauri::、.emit(、window.、addEventListener、localStorage.setItem…），否则注释里那句「没有 window」都会把自己判红。三条正控证明 rg 读到的是这个模块的真实内容。",
+          "timeoutMs": 120000
+        }
+      ]
+    },
+    "tasks": {
+      "registeredBy": "P2-04",
+      "cases": [
+        {
+          "name": "tasks-status-machine-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_lifecycle"
+          ],
+          "minCases": 27,
+          "$note": "P2-04 的时序与服务层：9×9 状态表只有 detached→running/input_required 一条被忽略；进终态的 completedAt 首值不刷新、离开终态清空；'先持久化再启动' 由 fake executor 在调用瞬间回读磁盘证明（launch 发生时记录已在盘上是 pending）；持久化被拒时一次 spawn 都不发生；内容指纹的两条反例（旧客户端先写过、人工把文件换回旧内容）都必须是 PersistFailed 而不是覆盖；runtime.json 里发布的 (sha256,size) 与磁盘逐字节一致且 StorageError::ContentDiverged 走 is_stale_write()（→ REVISION_CONFLICT，ADR-011）；spawn 失败→failed+原因→再次真实启动仍可；崩溃遗留的 start 认领在下次启动被对账成 interrupted 且绝不自动重开；无 listener 时 start/resume/cancel 全通；删除跳过收藏、拒绝活任务、不碰磁盘上的 worktree。地板 23。 另加配置切换编排：认领先于一切副作用（同 key 重试被拒、不烧号）、reset 失败＝零写入零 spawn、无上下文可续时拒绝、持久化被拒＝不写 revision 不起进程不 spawn、跨族=handoff 同族=native resume；以及对账后的待确认闸只挡 resume、被丢弃的 worktree 不能续跑。 远程通道限制（attachments / worktree）也在服务层拒绝，不再只靠表单隐藏。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-idempotency-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_idempotency"
+          ],
+          "minCases": 8,
+          "$note": "同 ID 重试只 spawn 一次：认领键是 (taskId, kind, generation) 且**先查重再取号**——先取号会让每次重试拿到新键，'只 spawn 一次' 就成了没有机制的口号。另含：4 线程并发只有一个通过、认领跨进程存活（重启后重试仍被拒）、cancel 之后才允许下一次真实启动、迟到的 TerminalReady 不能释放当前一代的认领、FutureGeneration 是报错而不是静默丢弃。地板 8。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-parity-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_parity"
+          ],
+          "minCases": 4,
+          "$note": "283 条由旧客户端 TypeScript 亲自算出的期望在 Rust 侧逐条重放（状态跃迁 90、字段迁移 6、回滚 5、会话归属/字段 44、续跑策略 28、完成命令 9、保留期 3、调度 9、终端清洗 34、其余为谓词矩阵）；另有：契约文件与生成器的知识表内容一致、声明的分歧必须真的不一致、覆盖度自检（9×9 一对都不能少、四个族都要出现）。地板 4。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-reducer-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "tasks::",
+            "--"
+          ],
+          "minCases": 61,
+          "$note": "纯端口层：reducer/session_owner/launch_plan/handoff/cleanup/operations 的 61 条单测（absent≠null 的字段语义、三方字段回滚、会话归属优先级、dsh 续跑空 prompt、spinner/状态栏/400 行去重窗、本地日历分量与周槽、认领去重）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-parity-is-derived-from-client",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/task-core-parity.test.ts"
+          ],
+          "minCases": 3,
+          "$note": "期望值不是手抄的：这条用真实的 src/state/app/taskStatus.ts、taskMutations.ts、taskLifecycle.ts、taskSession.ts、taskCompletion.ts、taskCleanup.ts、sessionHandoff.ts 重算每一条。产品侧行为一变这里是红的（Rust 侧同一张表在 tasks-parity-rust）。重新派生需要显式环境变量，属于评审动作。builtIn 标志由客户端自己的 isBuiltInAgent 读出后写进用例——第一版把内置 id 写成显示名 'claude-gpt-5.5'（真名是 claude_gpt55），两侧就因为一个字符串分歧过。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "新增 fixtures/task-transitions.json 必须与 Rust 生成器内嵌的知识表内容一致，否则三方读的不是同一份东西。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-core-has-no-ui-coupling",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState|invoke\\(",
+            "core/crates/aeroric-core/src/tasks"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub struct TaskService",
+              "core/crates/aeroric-core/src/tasks/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub trait TaskExecutor",
+              "core/crates/aeroric-core/src/tasks/executor.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub fn apply_status_transition",
+              "core/crates/aeroric-core/src/tasks/reducer.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub trait LocalCalendar",
+              "core/crates/aeroric-core/src/tasks/cleanup.rs"
+            ]
+          ],
+          "$note": "验收原文是 'fake runtime 没有 GUI listener 时 start/resume/cancel 全部可执行'，所以按代码形状查：连 invoke( 都拦（那是旧前端的调用入口），四条正控证明 rg 读到的是这个模块的真实内容。LocalCalendar 是刻意的端口：core 定规则、宿主报时区，与 ADR-010 的探针同一个形状。",
+          "timeoutMs": 120000
+        }
+      ]
     }
   },
   "plannedModules": {
     "$comment": "Registered by the task that creates the suite, per §3.2. Listed here only so the mapping is visible and auditable; check.mjs must fail on any of these until it exists.",
-    "storage": "P2-02",
-    "projects": "P2-03",
     "tasks": "P2-04",
     "tauri-adapter": "P2-05",
     "runtime": "P3-01",

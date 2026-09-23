@@ -21,7 +21,7 @@ pub use envelope::{
     decode_line, encode_line, EventFrame, Failure, Frame, FrameError, Quantity, Request, Success,
     MAX_FRAME_BYTES,
 };
-pub use error::{DispatchError, ErrorCode, ErrorDetail, RpcError};
+pub use error::{DispatchError, ErrorCode, ErrorDetail, RpcError, StorageRejection};
 pub use event::{GapNotice, GapReason, SubscriptionHandshake};
 pub use project::{Project, ProjectTarget};
 pub use session::{

@@ -115,6 +115,14 @@ public enum FrameError: Error, Equatable, CustomStringConvertible {
 
 /// The wire error code. `other` is what a decoder produces for text it has never
 /// seen — the text is kept so the user can be told what the host said.
+/// ADR-011: one storage refusal, and what a caller may do about it.
+public struct StorageRejection: Equatable, Sendable {
+    public let rejection: String
+    public let code: WireErrorCode
+    public let detailKeys: [String]
+    public let retryable: Bool
+}
+
 public enum WireErrorCode: Equatable, Sendable {
     case invalidArgument
     case unauthenticated
@@ -261,6 +269,25 @@ public enum ProtocolCodec {
         "actualRevision", "epoch", "expectedRevision", "field", "fromSeq", "generation",
         "lockHolder", "reason", "taskId", "throughSeq",
     ]
+
+    /// ADR-011: the three storage refusals mapped onto codes a host may emit. Swift holds
+    /// its own row for the same reason TS does — a client has to decide *before* the reply
+    /// arrives whether waiting is meaningful.
+    public static let storageRejections: [StorageRejection] = [
+        StorageRejection(rejection: "leaseHeld", code: .busy,
+                         detailKeys: ["lockHolder", "epoch"], retryable: true),
+        StorageRejection(rejection: "locationUnfit", code: .ioError,
+                         detailKeys: ["reason"], retryable: false),
+        StorageRejection(rejection: "staleWrite", code: .revisionConflict,
+                         detailKeys: ["expectedRevision", "actualRevision", "epoch"],
+                         retryable: false),
+    ]
+
+    /// Unlisted codes are not retryable: guessing "probably worth another try" turns a
+    /// location refusal into an endless spinner.
+    public static func storageRejectionIsRetryable(_ code: String) -> Bool {
+        storageRejections.first { $0.code.text == code }?.retryable ?? false
+    }
 
     /// Q13: exact major equality. Anything inside v1 is a capability question, never
     /// a version-number inference.

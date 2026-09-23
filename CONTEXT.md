@@ -40,3 +40,67 @@
 | 主版本严格相等 | 本地 `v` 必须等于 `PROTOCOL_VERSION`，不等即握手失败（ADR-009） | 不是版本区间协商；兼容性走具名能力 |
 | 独立版本空间 | 远程 relay 协议与本地协议各自演进，桥接必须显式公布映射的版本对 | 不是同一版本号的两处使用 |
 | legacyDirection / plannedDirection | 前者是旧通道 emitters/listeners 的证据，后者是 v1 的计划；两者不许互相冒充 | `unproven` 不是"没有事件"，是"证据里没有 Rust 侧发出方" |
+
+## 存储层门禁新增（P2-02，2026-09-22）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 写入者资格 / writer eligibility | 某个数据目录**能不能**成为 writer（由所在文件系统决定，ADR-010）；资格 ≠ 权限，权限是 lease | 不是 `StorageWritePermission`（那是"没拿到 lease 就写"） |
+| 持有者提示 / holder hint | `.write.lock` 里那份 `HolderInfo`，锁拿到之后才写，只是报告 | 不是锁本身；删掉它不会释放锁 |
+| 写入世代 / writer epoch | 一次 writer 会话的身份（`runtime.json.epoch` + `HolderInfo.epoch`），用于识别"上一个写我的人" | 不是 `revision`（世代内递增的是 revision） |
+| 云同步根 / cloud-synced root | 文件在本地盘上、后台被 iCloud/OneDrive/Dropbox 同步的目录：本机锁有效，跨机合并不可控 | 不是网络卷；不是"任何带同步字样的路径" |
+| 非本地卷 / non-local volume | NFS/SMB/FUSE 等记录锁语义不保证的挂载，直接拒绝当 writer | 不是外部盘（本地 USB/Thunderbolt 仍算本地） |
+| 位置探针 / storage location probe | core 定义的端口（`VolumeKind` + 前缀表 + 分级判定）；真实 `statvfs`/`GetDriveType` 在 adapter | 不是"core 自己去查环境"；判不出来是 Unknown，不是放行 |
+| 权限回执 / permission receipt | adapter 对"该平台私有权限已强制"的显式确认（Windows ACE 语义）；无回执 = Unknown = 不可写 | 不是 `FileMode::Private`（那是 unix 侧 core 自己保证的部分） |
+| 身份重验 / lease identity revalidation | 写入前比对锁文件 `(dev, ino)`；消失或换 inode 即停写报错，不自动重拿 | 不是 `metadata().is_ok()`（那只证明路径还在）；Windows 无稳定等价 API，差异写死不假装 |
+| 内容指纹 / content fingerprint | 受管文件的 `(sha256, size)` 记录，跨 writer 与人工恢复的检测手段；不符即 `REVISION_CONFLICT` | 不是 revision：计数器只在参与它的 writer 之间有意义 |
+| 可丢弃状态 / disposable state | `runtime.json`：删了即重建，不影响用户数据 | 不是备份；不是"必需文件"，任何"没它就报错"的设计都是错的 |
+| 机制 / 语义生效 | 机制=能力已实现并有反例；语义生效=生产写入路径真的经过它。两者分开记账（ADR-012 决策 3） | "写完了"不等于"不变量成立了"；INV-03 在 P2-05 前不宣布全局成立 |
+## 项目层门禁新增（P2-03，2026-09-22）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| parity 知识表 | `core/crates/aeroric-protocol/knowledge/project-parity-cases.json`：旧客户端 TypeScript 亲自算出的 input→expected 表，是行为的**权威存储** | 不是文档里的示例；不是手抄的期望值 |
+| 派生链 | 真实 TS 函数 → 知识表 → 生成器 `include_str!` → 契约产物 → TS 与 Rust 各自断言 | 不是"两边各写一遍再人工比对" |
+| 显示串 / display path | `path` 里那个 `ssh://conn/app`：给人看、给日志、不是身份也不是文件系统路径 | 不是 `identity_key`；不是可 join 的路径 |
+| 项目身份 / identity key | `ProjectTarget::identity_key()`（`local:<path>` / `ssh:<conn>:<path>` / `wsl:<dist>:<path>`），唯一的"是不是同一个项目"答案 | 不是项目 id；不是 `path` 字面值 |
+| 无效改动 / no-op mutation | 语义上什么都没变的调用（把 pin 设成原值、重命名成分组同名）：不写文件也不推进 revision | 不是失败；不是"写了同样的内容" |
+| 活任务 | 状态属于契约里 `TaskStatus::is_live()`（pending/running/input_required/detached）的任务；有活任务就拒绝移除项目记录 | 不是"看起来在跑"；不用 ANSI 猜（INV-12） |
+| 无损归一 / lossless normalisation | 只在"不会丢信息"的前提下统一路径拼法：去尾分隔符、`\\` 与 `/` 同义；**不**改大小写、不跨记录合并 | 不是 canonicalise（真实大小写、符号链接目标都可能改变含义）；不是自动合并 |
+| 不可寻址记录 / unaddressable record | `location.kind` 认不出的项目：能列出、能删除，但不能被任何需要"它在哪"的操作使用 | 不是坏文件（文件整体仍可读）；不是"远程项目"（core 不猜） |
+| 有意分歧 / intentional divergence | parity 表里 `expected`（旧客户端算出）与 `coreExpected`（新核心意图）并列的用例：两侧各自被断言，差异是写明并评审过的 | 不是"测试期望写错了"；不是静默改变行为 |
+
+
+## 任务层门禁新增（P2-04，2026-09-23）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 认领 / claim | 一次尝试在 `task-operations.json` 里的登记；未结清期间同 key 的重试被拒 | 不是锁（它不阻止别的任务）；不是"进程存在"的证据 |
+| 操作键 / operation key | 调用方为一次尝试自带的身份（= §2.3 `idempotencyKey`）。**同键=同一次尝试**，不同键=两次尝试，即便落在同一任务上 | 不是 generation（那是 core 的运行编号）；不是 taskId |
+| 世代 / generation | core 每次真实尝试前进一格的运行号；事件靠它判新旧，且"已结清"才算陈旧 | 不是 revision（那是快照计数器）；不是重试身份（ADR-017） |
+| 重叠运行 / overlapping runs | 同一任务允许多代同时在飞（Q41）；此时任何单代终止不写终态，任务回 `running` | 不是"最新一代赢"；不是双开的实现细节——legacy `TaskManager` 必须先改成 `(task_id, generation)` 键 |
+| 写入基线 / cover | 一次写只允许覆盖"core 上一次发布的字节"（`runtime.json` 的 `(sha256,size)` 表） | 不是"我刚读到的内容"（每次写前都读，那样检查永不成立）；不是 revision |
+| 首次采纳 / adoption | core 从未发布过的文件，第一次写直接接纳磁盘现状并记账；此后受保护 | 不是"无条件覆盖"；不是永久盲点 |
+| 待确认 / awaiting acknowledgement | 被对账截断的运行，在有人看过之前不许 `resume`（只挡续跑，Q42/Q43） | 不是新状态（状态词表 v1 冻结）；不是"任务被锁住" |
+| 乐观写 / optimistic write | 先改内存/磁盘、失败再回滚。core **不做**这种写：失败即什么都没发生，因此不存在"磁盘回滚" | 不是 `rollback_mutation`（那是宿主自己那份乐观列表的字段级回滚） |
+| 远程通道限制 | 附件与 worktree 不能进入 ssh/wsl 运行：由服务层拒绝，不只靠表单隐藏 | 不是"产品不支持远程"；不是 UI 偏好 |
+
+## 宿主层门禁新增（P2-05，2026-09-23）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 运行身份 / run identity | 一个任务某一次运行的唯一编号：core 的 per-task generation，经 `LaunchRequest`/`ResumeRequest` 传给宿主。全仓只有这一个（ADR-020） | 不是 `STARTUP_SIGNAL_GENERATION`（进程全局 `AtomicU64`，已决定删除）；不是 `DshStartAttempt.generation`（按 agent 不按任务）；不是 `Arc::ptr_eq` 的句柄身份 |
+| 句柄身份 / handle identity | `Arc<...Child>` 的指针相等性，ADR-020 后**只**用作"同代被注册两次"的安全网断言 | 不再是"要不要清理 PTY"的判定依据（那是 `remove_pty_handles_if_current` 今天的职责） |
+| 按任务 / 按运行 | 一个容器存的是"用户对任务的整体意图"（取消、手动完成）还是"某一次运行的资源"（pty 句柄、子进程、启动输入信号）。重键后两类仍不同，区别写明在容器上而不是靠猜 | "按任务"不等于"可以覆盖"；取消一个双开任务是两代都停 |
+| 卷型探针 / volume probe | 宿主用 `statfs` 实测文件系统类型（macOS/BSD 读 `f_fstypename`，Linux 读 `f_type` 超级块魔数）；答不出就是 `Unknown`，不给 writer 资格 | 不是 `statvfs`（可移植的那个恰好不带类型字段）；不是从路径字符串猜网络盘 |
+| 权限回执 / permission receipt | "这个目录确实只有本人可写"的平台证明。unix 由 0600/0700 构造成立；Windows 复用 `ensure_private_dir` 已在调的 `restrict_to_current_user` 的返回值 | 不是"ACL 一般会继承所以大概没事"（ADR-010 明确否决）；失败必须 `false`，不猜 |
+| 否决表 / veto table | Linux 超级块魔数里认定"远程/不可信锁语义"的那一份。它与"本地表"必须逐值不相交，由测试钉住 | 不是"认识的 FS 白名单"——表外的值是"无意见"，不是"本地" |
+
+## 宿主层门禁新增（P2-05 续，Q51～Q54）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 资源型 / 意图型操作 | 只带 taskId 时：资源型（写输入、resize、会话挂接、启动信号投递）寻址**已注册的最大 generation**；意图型（cancel、手动完成）作用于**全部在飞代**（ADR-025） | "已注册的最大代"不等于"账本计数器当前值"——后者在没有运行时会指向不存在的代 |
+| 一次性幂等导入 | 分组名单从 localStorage 迁进 core 的动作：只在 core 文件不存在时发生，重复执行不追加、不改顺序 | 不是"每次启动都合并"；不是把 localStorage 继续当真相源 |
+| 元数据重放 / 状态 op 不重放 | 被 `REVISION_CONFLICT` 拒绝时：无副作用意图重应用一次后重试，可能起进程的意图直接报错（ADR-026） | 不是"operation key 能兜住所以都可以自动重试"；重放上限**一次** |
+| 只读实例 | 拿不到 lease 的第二个实例：能看不能写，不抢租约、不退临时目录，且告知必须**持续可见**（ADR-027） | 不是"降级到临时目录"（那会让两份数据分叉）；`StartupDegradation` 的 toast 会自动消失，不满足"持续可见" |

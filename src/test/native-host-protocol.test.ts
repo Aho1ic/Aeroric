@@ -20,6 +20,8 @@ import {
   decodeBase64Strict,
   decodeLine,
   ERROR_DETAIL_ALLOWED_KEYS,
+  STORAGE_REJECTIONS,
+  storageRejectionIsRetryable,
   encodeFrame,
   handshakeAllowsPeer,
   hasTaskSession,
@@ -362,4 +364,29 @@ describe("the rules every client shares", () => {
     expect((topics.rows as Row[]).filter((r) => r.status === "mapped").map((r) => r.topic).sort())
       .toEqual(["task.updated", "terminal.gap", "terminal.output"]);
   });
+
+  it("publishes the same three storage refusals the Rust enum generated (ADR-011)", () => {
+    const published = envelope.constants.storageRejections as Array<{
+      rejection: string;
+      code: string;
+      detailKeys: string[];
+      retryable: boolean;
+    }>;
+    expect(published.map((row) => row.rejection)).toEqual(
+      STORAGE_REJECTIONS.map((row) => row.rejection),
+    );
+    expect(published).toEqual(STORAGE_REJECTIONS);
+    for (const row of STORAGE_REJECTIONS) {
+      for (const key of row.detailKeys) {
+        expect(isAllowedErrorDetailKey(key)).toBe(true);
+      }
+      expect(WIRE_ERROR_CODES).toContain(row.code);
+    }
+    // The whole point of the table: three refusals, two answers.
+    expect(storageRejectionIsRetryable("BUSY")).toBe(true);
+    expect(storageRejectionIsRetryable("IO_ERROR")).toBe(false);
+    expect(storageRejectionIsRetryable("REVISION_CONFLICT")).toBe(false);
+    expect(storageRejectionIsRetryable("SOMETHING_NEW")).toBe(false);
+  });
+
 });

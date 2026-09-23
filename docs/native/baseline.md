@@ -63,6 +63,52 @@ full-parallel run is not sufficient evidence. Targeted re-runs (as done above
 for the two notebook files) are the fastest disambiguation.
 
 
+## Full-parallel `cargo test --lib` (src-tauri) — first recorded at P2-02
+
+The same load-sensitivity the TS suite shows exists on the Rust side, and it is now
+measured rather than assumed:
+
+| Test | Fails when | Passes when |
+|---|---|---|
+| `remote::network_exposure_tests::failed_invite_after_widening_restores_loopback_listener` | full parallel run, 4 added tests, machine busy with concurrent cargo builds (2 consecutive runs) | same code, idle machine (2 consecutive runs, 2412 passed); `--test-threads=1` (2412 passed); run alone or with its own group (`network_exposure`, 9 passed) |
+
+Mechanism, read from source rather than guessed: `src/remote/mod.rs:875-881` — after a
+failed invite restores the loopback scope, the code asks `handle.is_listening()` **once**.
+Under scheduling pressure that read can land before the rebound listener reports itself,
+and the `else` branch tears the server down, leaving `running == None`, which is what the
+test's `expect("server remains available locally after failed invite")` observes. In
+product terms: **a failed pairing-QR request can stop the local remote server on a loaded
+machine.** Owner: P7-01/P7-03 (remote listener); it is a Phase 7 input, not a Phase 2 fix,
+and it must not be "fixed" by loosening the test.
+
+Attribution evidence kept deliberately boring: the three touched `src-tauri` files were
+restored to HEAD content by `cp` from backups and the suite re-run (2408 passed), then put
+back (`diff` confirmed byte-identical). No `git checkout`/`stash`/`reset` was used.
+
+Consequence, same rule as the TS section above: a red **full-parallel** `cargo test --lib`
+on this machine gets re-run (and, if it persists, narrowed to a group) before anyone may
+call it a regression.
+
+## Data-directory file inventory (`~/.aeroric`) — required by ADR-012
+
+`~/.aeroric` on this machine holds 15 GB across ~412k files. The categories below matter
+because the migration adds a file the shipping client has never seen, and because
+`docs/native/rollback.md` requires backing this directory up before any handover.
+
+| Path | Who writes today | Who writes after P2-05 | May it be deleted? |
+|---|---|---|---|
+| `projects.json`, `projects/<id>/tasks.json`, `settings.json` | Tauri client (`src-tauri/src/storage.rs`) | core, via `storage/{projects,tasks,settings}.rs` | no — user data |
+| `terminal-history/<id>.log`, `events/<id>/events.jsonl`, `agent-homes/**`, `agent-credentials/<id>` | Tauri client | unchanged until their own phase (P3-02/P3-03/P3-04) | no |
+| `.write.lock` | nobody today (the client has no cross-process lock) | core only, and only while a writer lives | yes — deleting it does **not** release the lock and must not be treated as a lock |
+| `runtime.json` | nobody yet | core only. **Core-exclusive and disposable**: absent or deleted ⇒ rebuilt at `revision: 0`; the shipping client never reads it (asserted by the `legacy-client-ignores-runtime-metadata` gate case) | yes, deliberately |
+| `project-groups.json` | nobody yet | core only, and only while a writer lives. **Core-exclusive and disposable**: absent means "no configured groups", which is not an error. It cannot live in `settings.json` because `AppSettings` is a typed struct whose next save drops unknown keys (asserted by the `legacy-client-ignores-core-exclusive-files` gate case) | yes, deliberately |
+| `task-operations.json` | nobody yet | core only, and only while a writer lives. **Core-exclusive**: it holds the operation claims (one spawn per attempt, ADR-017), each task's generation counter, and the cut-off-but-not-yet-acknowledged entries (ADR-018). None of the three can live in the task record, because the legacy client's whole-list save of `tasks.json` drops fields it does not model — and a lost claim is a lost spawn-once guarantee | yes, deliberately |
+| `<file>.bak` | nobody today | core, one generation per replaced file | user's call; the core keeps exactly the previous version and no more (ADR-011 decision 3) |
+| `.<name>.<pid>-<ns>.tmp` | both writers (same spelling on purpose) | swept only by a lease holder, older than 24 h (ADR-010 decision 8) | swept, not by hand |
+| `backups/` | **no code writes or reads it** (verified: `rg` over `src-tauri/src` finds no reference) | unchanged | out of scope; a user-created directory, not a product feature |
+
+`docs/native/reviews/storage.md` records what was measured for each row.
+
 ## New-surface baseline (`core/`, `macos/`, `scripts/native/`)
 
 Recorded so a later regression is distinguishable from "never existed".
@@ -137,3 +183,15 @@ local `pnpm native:check` above. Tracked as `docs/native/feature-matrix.json` **
   P2-05's acceptance; `cargo check` was used here to establish compile parity only.
 - Any Swift/Xcode build of the app target — the Xcode project does not exist yet
   (`macos/project.yml` is created in P4-01).
+
+## P2-04 复核记录（2026-09-23）
+
+| 项 | 实测 |
+| --- | --- |
+| 门禁 | `tasks` **7 case／105 用例**；回归 `storage` 5／183、`projects` 4／18、`protocol` 5／88、`skeleton` 20／113；`doctor` 18/18 |
+| 全量 | `pnpm test` **373 files 全绿，exit 0**；`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib` **2412 passed**；`cargo test -p aeroric-core` = 114 单测 + 16 + 8 + 4 + 10 + 27 + 4 |
+| 静态 | `clippy --all-targets --workspace -- -D warnings` 0 错；`cargo fmt --check` 0 diff；`pnpm typecheck` 0 错；`git diff --check` 干净 |
+| parity | `contracts/native/v1/fixtures/task-transitions.json` **283 条**，期望由旧客户端 TypeScript 亲自算出（`src/test/task-core-parity.test.ts`），Rust `tests/task_parity.rs` 逐条重放，**0 条声明分歧**；产物与知识表内容一致由专门断言守着（`contracts.mjs --check` 只比字节，跨渲染会误报，故内容断言在 Rust 侧） |
+| 真实 `~/.aeroric` | 目录树 411,846 个文件里 **`runtime.json` / `project-groups.json` / `task-operations.json` 一个都不存在** —— 这才是可复查的口径：core 从未写过真实数据目录。2 秒窗口内另有两处漂移（`usage-statistics.sqlite3` 与一个 terminal-history 日志），是产品自身在写；证据 `.artifacts/native/real-home-p204-window.json`。**不写"真实目录零漂移"**：产品在本机常在写，任何零漂移说法都必须先说明是"core 没写"而不是"目录没动" |
+| 反例 | 9 次（M1–M9）：改坏实现 → 门禁必须红 → 还原并逐文件 `cmp` 确认字节一致。M7/M8 各自钉住一条设计选择，见 `reviews/tasks.md` §5 |
+| 自曝 | M4 首次跑时忘了备份 `operations.rs`，改坏后无备份可还原，只能逐字符反向替换 + 当场验证 8/8 转绿。教训：**反例脚本必须先 cp 备份、后改文件**，备份清单要和被改文件清单对得上 |

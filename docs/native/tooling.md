@@ -123,3 +123,33 @@ ls ~/.claude/skills/grill-me/SKILL.md ~/.claude/skills/grilling/SKILL.md
 1. 用户重启会话或改用 Claude Code 后，首次真实调用为 `grill-me [skeleton]`，产出 `docs/native/reviews/skeleton.md`。
 2. 该证据齐备前，Phase 1 Gate（P1-05 验收第 2 条）保持未闭合。
 3. 参考代码如需复制，先按 §7 末段登记 `docs/native/reference-provenance.md`；`mattpocock/skills` 为 MIT，本处仅安装其两个技能文本，保留来源与 revision 记录。
+
+## 7. 委派 agent 通道（用户提供，2026-09-22 起启用）
+
+用户给了一个可用来分担侦察工作的 agent 配置（`mimo-cpa`，`omp` 家族）。它**不是门禁的一部分**，本节记录的是"怎样安全地用它、以及它的产出算不算证据"。
+
+**形状**
+
+```
+env -u PI_PROFILE -u OMP_PROFILE \
+    PI_CODING_AGENT_DIR="$HOME/.cache/aeroric-delegate/omp-worker" \
+    omp --cwd "$PWD" --model "mimo-v2.6-pro" --max-time 900 -p "@/tmp/delegate-task-N.md"
+```
+
+- **模型/网关**：本地网关 `127.0.0.1:8317/v1`（用户配置里的 base_url），不是公网端点。配置里带一个 API key —— **它从不进 argv、日志、产物、审查文档或 git**；本节故意指代，不复述。
+- **独立 home**：`~/.cache/aeroric-delegate/omp-worker`。既不是用户的 `~/.omp`，也不是 Aeroric 托管的 `~/.aeroric/agent-homes/omp`（AGENTS.md 的 OMP 规则）。`PI_PROFILE`/`OMP_PROFILE` 必须显式清空，否则按上游 `dirs.ts` 的语义整个 `PI_CODING_AGENT_DIR` 会被忽略，会写到用户自己的 home 里去。
+- **任务形状**：只派"读多写少"的侦察活，且任务书里写明：只准写**一个**指定产物文件；禁止 git 命令、禁止网络、禁止构建；每条结论必须带 `文件:行号`。
+- **超时**：`--max-time` 是硬约束；超时退出（exit 1）不影响门禁，因为它从来不是验收证据。
+
+**它的产出怎么用（P2-04 的实际做法）**
+
+1. 底稿 `docs/native/extraction/task-lifecycle-react.md`（172 行，含 50 条"仍留在 React 的业务决定"）。
+2. **抽样回查后才当输入**：随机取 20 处 `file:line`（覆盖它自己没读、我也没读过的 `taskSwitch.ts`/`worktreeOps.ts`/`taskLaunch.ts`/`taskFlush.ts`/`App.tsx`/`types.ts`/`appProjectState.ts`/协议 `task.rs`），逐条 `sed` 出那些行号核对 —— 20/20 命中。
+3. 它自己列的"无法证实的条目"（15 条）不当结论：其中"legacy 幂等键是否存在""generation 谁分配"两条，我是靠读源码+反例自己定的（ADR-017 正是被它列进"未核对"的那条引出来的）。
+4. 它在 §5 承认没读 `remote/tasks_rpc.rs`（P2-04 Input 清单里有），那份是我自己读的。
+
+**红线**
+
+- 它的输出**不写进** `knowledge/`、`contracts/`、parity 表或门禁 case：派生链的每一环都必须能被门禁重算，委派 agent 不在链上。
+- 它的产物若要引用进计划，必须先声明回查方式与命中率（`MIGRATION_PLAN.md` 续跑指令第 2 条就是这么写的）。
+- 不做 git 操作、不提交、不 push；也不碰 `~/.aeroric`（真实数据目录）。

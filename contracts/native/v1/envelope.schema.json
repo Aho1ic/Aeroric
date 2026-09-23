@@ -58,6 +58,35 @@
       "omp"
     ],
     "protocolVersion": 1,
+    "storageRejections": [
+      {
+        "code": "BUSY",
+        "detailKeys": [
+          "lockHolder",
+          "epoch"
+        ],
+        "rejection": "leaseHeld",
+        "retryable": true
+      },
+      {
+        "code": "IO_ERROR",
+        "detailKeys": [
+          "reason"
+        ],
+        "rejection": "locationUnfit",
+        "retryable": false
+      },
+      {
+        "code": "REVISION_CONFLICT",
+        "detailKeys": [
+          "expectedRevision",
+          "actualRevision",
+          "epoch"
+        ],
+        "rejection": "staleWrite",
+        "retryable": false
+      }
+    ],
     "taskStatuses": [
       "todo",
       "pending",

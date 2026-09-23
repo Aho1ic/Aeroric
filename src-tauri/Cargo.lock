@@ -32,6 +32,7 @@ dependencies = [
 name = "aeroric"
 version = "1.4.9"
 dependencies = [
+ "aeroric-core",
  "axum",
  "base64 0.22.1",
  "brotli 7.0.0",
@@ -81,6 +82,27 @@ dependencies = [
  "x25519-dalek",
  "zip 8.6.0",
  "zstd",
+]
+
+[[package]]
+name = "aeroric-core"
+version = "0.1.0"
+dependencies = [
+ "aeroric-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "aeroric-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

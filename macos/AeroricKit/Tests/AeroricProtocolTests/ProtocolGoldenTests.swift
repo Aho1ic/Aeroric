@@ -454,4 +454,32 @@ final class ProtocolGoldenTests: XCTestCase {
         XCTAssertEqual(Set(names).count, names.count)
         XCTAssertTrue(names.contains("task-status"))
     }
+
+    func testPublishedStorageRejectionsMatchSwiftTable() throws {
+        // ADR-011: three refusals, two answers. Row order is part of the contract, so a
+        // renamed or reordered rejection fails here rather than in a user's retry loop.
+        let envelope = try document("envelope.schema.json")
+        let constants = envelope["constants"]?.fields ?? [:]
+        let rows = constants["storageRejections"]?.arrayValue ?? []
+        XCTAssertEqual(rows.count, ProtocolCodec.storageRejections.count)
+        XCTAssertEqual(rows.count, 3)
+        for (row, swift) in zip(rows, ProtocolCodec.storageRejections) {
+            let fields = row.fields
+            XCTAssertEqual(fields["rejection"]?.stringValue, swift.rejection)
+            XCTAssertEqual(fields["code"]?.stringValue, swift.code.text)
+            XCTAssertEqual(fields["detailKeys"]?.arrayValue?.compactMap(\.stringValue),
+                           swift.detailKeys)
+            XCTAssertEqual(fields["retryable"]?.boolValue, swift.retryable)
+            for key in swift.detailKeys {
+                XCTAssertTrue(ProtocolCodec.errorDetailAllowedKeys.contains(key),
+                              "\(key) is not in the ADR-008 allowlist")
+            }
+        }
+        XCTAssertTrue(ProtocolCodec.storageRejectionIsRetryable("BUSY"))
+        XCTAssertFalse(ProtocolCodec.storageRejectionIsRetryable("IO_ERROR"),
+                       "moving a data directory is not something a retry can do")
+        XCTAssertFalse(ProtocolCodec.storageRejectionIsRetryable("REVISION_CONFLICT"))
+        XCTAssertFalse(ProtocolCodec.storageRejectionIsRetryable("SOMETHING_NEW"))
+    }
+
 }

@@ -155,6 +155,65 @@ impl ErrorDetail {
     }
 }
 
+/// The three storage-layer refusals a client has to distinguish (ADR-011). They are
+/// declared *here* because the mapping is protocol: a client that cannot tell "retry after
+/// the other Aeroric exits" apart from "move your data directory off NFS" will retry
+/// forever, or show a spinner for a problem that never fixes itself.
+///
+/// The core owns the conditions; this enum owns the spelling. `detail_keys` must stay
+/// inside ADR-008's closed allowlist, and `export-schema` refuses to publish the contract
+/// if it does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageRejection {
+    /// Another live process holds the data directory (INV-03).
+    LeaseHeld,
+    /// This location may not host a writer at all (ADR-010), including "nobody probed".
+    LocationUnfit,
+    /// The bytes on disk are not the ones this writer last produced (ADR-012).
+    StaleWrite,
+}
+
+impl StorageRejection {
+    pub const ALL: &'static [StorageRejection] = &[
+        StorageRejection::LeaseHeld,
+        StorageRejection::LocationUnfit,
+        StorageRejection::StaleWrite,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StorageRejection::LeaseHeld => "leaseHeld",
+            StorageRejection::LocationUnfit => "locationUnfit",
+            StorageRejection::StaleWrite => "staleWrite",
+        }
+    }
+
+    /// No new codes: adding one would be a protocol change (ADR-009), so each refusal is
+    /// mapped onto an existing one.
+    pub fn error_code(self) -> ErrorCode {
+        match self {
+            StorageRejection::LeaseHeld => ErrorCode::Busy,
+            StorageRejection::LocationUnfit => ErrorCode::IoError,
+            StorageRejection::StaleWrite => ErrorCode::RevisionConflict,
+        }
+    }
+
+    /// Which `ErrorDetail` keys carry the information a client needs to act.
+    pub fn detail_keys(self) -> Vec<&'static str> {
+        match self {
+            StorageRejection::LeaseHeld => vec!["lockHolder", "epoch"],
+            StorageRejection::LocationUnfit => vec!["reason"],
+            StorageRejection::StaleWrite => vec!["expectedRevision", "actualRevision", "epoch"],
+        }
+    }
+
+    /// Whether a retry could ever succeed. `LocationUnfit` never can: the fix is a human
+    /// moving the directory, and a client that retries it just spins.
+    pub fn retryable(self) -> bool {
+        matches!(self, StorageRejection::LeaseHeld)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpcError {
     pub code: ErrorCode,
@@ -305,5 +364,35 @@ mod tests {
             None,
             "the fallback is never emittable"
         );
+    }
+
+    #[test]
+    fn each_storage_refusal_uses_an_existing_code_and_allowlisted_detail() {
+        let allowed = ErrorDetail::allowed_keys();
+        for rejection in StorageRejection::ALL {
+            assert!(
+                ErrorCode::ALL.contains(&rejection.error_code()),
+                "{} maps to a code no host may emit",
+                rejection.as_str()
+            );
+            for key in rejection.detail_keys() {
+                assert!(
+                    allowed.iter().any(|k| k == key),
+                    "{:?} is not in the ADR-008 allowlist",
+                    key
+                );
+            }
+        }
+        assert_eq!(
+            StorageRejection::LocationUnfit.error_code(),
+            ErrorCode::IoError,
+            "an unfit location is not a capability the client can ask for again"
+        );
+        assert!(
+            !StorageRejection::LocationUnfit.retryable(),
+            "and retrying it must be sayably pointless"
+        );
+        assert!(StorageRejection::LeaseHeld.retryable());
+        assert!(!StorageRejection::StaleWrite.retryable());
     }
 }

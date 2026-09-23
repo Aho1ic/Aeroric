@@ -75,6 +75,10 @@ crypto_secretbox = "0.1.1"
 hkdf = "0.12"
 # relay 撮合控制面消息(与 remote-relay 共享)
 remote-protocol = { path = "../remote-protocol" }
+# 原生迁移的核心 crate(Task P2-02 Action 5)。目前只复用其中「两侧必然一致」的纯函数
+# (路径成分校验、原子写字节),写入权仍在下面的 storage.rs 手里:INV-03 不允许同一个数据
+# 目录里同时跑两套 writer,整体移交是 P2-05 的原子切换。
+aeroric-core = { path = "../core/crates/aeroric-core" }
 url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"

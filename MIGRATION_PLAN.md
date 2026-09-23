@@ -39,8 +39,10 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P1-04 | **accepted，但一条自述已被推翻**（11 项验收命令当时全绿；骨架可构建、check 入口统一。**其中「`--freeze` 可复现地重生成冻结清单并保留人工字段」当时并不成立，见 P1-05 第七次补记**） | 无（`AGENTS.md` 不被跟踪的口径问题转入 P1-05） | 2026-09-21 |
 | P1-05 | **accepted —— Phase 1 Gate 通过**（`grill-me` 已真实调用并完成 frontier 追问；Phase 1 内不依赖门禁的收尾**已全部做完**：忽略白名单修复、注入分片、`--freeze` 保人、空模块拒注册、INV-02 正控。门禁 20 case／106 用例；第十五次补记后另立 `protocol` 模块 5 case／80 用例） | 无（范围确认已于 2026-09-22 给出；G16 的 41 条判定归 P2-01 首步，G17 的 41 条 caller 证据归 P3-05） | 2026-09-21 |
 | P2-01 | **accepted —— P2-01 Gate 通过**（2026-09-22）：两轮 `grillme-matt:grill-with-docs` 真实调用，Q8～Q13 六个答案全部落成工件 + 断言 + 反例。契约层三方读同一份 fixtures；ADR-006 收敛发布 **532 方法 + 109 别名**（77 proven / 32 pending，参数表已冻结进清单）；ADR-007 建 **39 topic 覆盖 38 旧通道**（36 条 pending → P3-04）；G16 的 17 条逐条定性（无证据名字归零）；ADR-008 把 `RpcError.detail` 关成 10 键白名单、ADR-009 定死主版本严格相等 + 远程独立版本空间。门禁：`protocol` 5 case／85 用例、`skeleton` 20／113、`contracts --check` 逐字节、doctor 18/18、clippy/tsc/fmt/`git diff --check` 全绿 | 排期账而非缺口：32 pending 别名 → P3-06/P7-02、36 pending topic → P3-04、41 dsh 证据 → P3-05 出口 | 2026-09-22 |
-| P2-02 ~ P2-05 | pending | P2-01（已过） | — |
-| P2-02 ~ P2-05 | pending | P2-01 | — |
+| P2-02 | **accepted —— P2-02 Gate 通过**（2026-09-22；Action 1–5 全部落地；`pnpm native:check storage` 5 case／**65** 用例、回归 `skeleton` 20／113 与 `protocol` 5／**88**、`doctor` 18/18、`clippy -D warnings`/`fmt`/`git diff --check` 绿、`pnpm typecheck` 绿、旧客户端 `--locked --lib` **2412 passed**、**门禁窗口内真实 `~/.aeroric` 零漂移**（`Aeroric.app` 本机在跑，全天对照会出现产品自身的写入——口径见 `reviews/storage.md`）；反例 14 次含 1 条"断言对象不存在"的用例被补齐；`grill-me [storage]` 已真实调用，Q14～Q26 十三个答案落成 ADR-010/011/012） | 语义下传而非缺口：`revision`+内容指纹强制（P2-03/P2-04）、真实 `statfs`/Windows ACE 回执（P2-05/P3-06）；`bump_revision` 暂无生产调用方 | 2026-09-22 |
+| P2-03 | **accepted —— P2-03 Gate 通过**（2026-09-22；`grill-me [projects]` 已真实调用，Q27～Q34 八个答案 → ADR-013 + 代码 + 两侧断言；详见下方第二十三次补记。原实现口径：Action 1–4 落地；`projects` 模块 4 case／12 用例，`storage` 抬到 5／**75**；41 条 parity 期望由旧客户端 TypeScript 亲自算出，链条每一环都有断言；`bump_revision` 已真被写入路径调用（一次真实改动推进一格、无效改动不消耗、被拒绝的删除也不推进）；活任务拒绝删除、删除不碰磁盘；无 UI 耦合与「未跑窗口也能列出」都是机械检查；反例累计 8 次，其中 1 次是首轮自己抓到的移植缺陷、1 次是守卫自己骗人） | 移交前置而非缺口：分组清单与 localStorage 的合并规则（P2-05 第一条）、内容指纹强制（P2-04） | 2026-09-22 |
+| P2-04 | **accepted —— P2-04 Gate 通过**（2026-09-23；`grill-me [tasks]` 已真实调用，Q35～Q43 九个答案 → ADR-014～019 + 代码 + 9 次反例。要点：`tasks/{reducer,session_owner,launch_plan,executor,operations,service,handoff,cleanup}.rs` 全量移植；`tasks` 门禁 **7 case／105 用例**，回归 `storage` 5／183、`projects` 4／18、`protocol` 5／88、`skeleton` 20／113、`doctor` 18/18、typecheck/clippy/fmt 干净；**P2-02 下传的内容指纹阻塞项已闭环**（`runtime.json` v2 表 + 两条反例：旧客户端先写过、人工换回旧字节，两者都零 spawn、零 revision）；283 条 parity 期望由旧客户端 TypeScript 亲自算出、Rust 逐条重放、**0 条声明分歧**；`bump_revision` 与指纹在同一次写里发布） | 移交前置而非缺口：legacy `TaskManager` 必须改 `(task_id, generation)` 键（Q38/ADR-017，否则双开漏进程）；待确认闸的 UI 入口（ADR-018）；会话阶梯/转录探测收养/worktree git 副作用/保存队列节奉（Q43） | 2026-09-23 |
+| P2-05 | **in_progress —— 前置① 已落地并验证；`grill-me [tauri-adapter]` 已真实调用，Q44～Q54 十一问全部获答 → ADR-020～027；等用户确认共识后才写实现代码**。前置①：`src-tauri/src/storage_location.rs`（卷型探针 + Windows ACE 回执）12 条单测绿、src-tauri `--locked --lib` **2424 passed**（＝基线 2412＋本模块 12；这条计数同时证明一处"编辑时把 `#[test]` 合进注释导致测试静默消失"的回归已修好）；Linux/Windows 两个 `cfg` 分支只做到 `cargo check --target` 编译验证，运行时未测。已定：Q44 全量重键＋Q45 运行身份唯一化（ADR-020）、Q46 `claimed_session_paths` 保持路径粒度为例外（ADR-020 §3）、Q47 writer **只在 macOS 递交**（ADR-021）、Q48 就地确认并重试覆盖 resume+reconnect、Q49 队列只排队意图（ADR-022）、Q50 core 唯一发射 task-status/task-session（ADR-023）、Q51 分组名单以 core 文件为唯一权威＋localStorage 一次性幂等导入（ADR-024）、Q52 taskId-only 请求＝资源跟已注册最大代／取消打全部在飞代（ADR-025）、Q53 冲突时分两类：元数据重放一次、状态 op 报错（ADR-026）、Q54 第二实例只读启动＋持续可见告知且不抢 lease（ADR-027） | 待办按 `reviews/tauri-adapter.md` §4 的依赖序：先 `TaskManager` 全量重键（277 处＋锁序表），再 `core_adapter.rs`/`legacy_task_executor.rs`，**同一次编辑**里注册 `tauri-adapter` 门禁（7 条按 ADR 派生的机械检查＋`runner.floors`）。侦察口径修正三条已写明（`statvfs` 无 `f_fstypename`、legacy 本有三套代际编号、task 事件发射点是 ~8 处不是 24） | 2026-09-23 |
 | P3-01 ~ P3-07 | pending | Phase 2 Gate | — |
 | P4-01 ~ P4-04 | pending | Phase 3 Gate | — |
 | P5-01 ~ P5-05 | pending | Phase 4 Gate | — |
@@ -52,13 +54,23 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-22）：P2-01 accepted，P2-01 Gate 通过；下一步是 P2-02。** Phase 1 与 P2-01 的提交都在 `main`（`3091c8f`／`e2d111c`／`10b64e8`／`5a0cab0`／`10f4e6c` + 本轮 P2-01 收口一次），**未 push、无 tag、无发布**。P2-01 交付：`aeroric-protocol` 全量 DTO、`contracts/native/v1/` 10 份产物、`scripts/native/contracts.mjs`、TS 与 Swift 读侧、ADR-002～009、`protocol` 门禁模块。两轮拷问（Q8～Q13）六个答案全部落成工件与断言，反例共 10 次改坏验证（详见 `docs/native/reviews/protocol.md`）。
+**当前状态（2026-09-23）：P2-01～P2-04 均 accepted；P2-05 in_progress——前置①（`StorageLocationProbe` + Windows ACE 回执）已交付并验证，`grill-me [tauri-adapter]` 已真实调用，Q44～Q54 十一问全部获答并落成 ADR-020～027（Q51 在中断后已重问获答）。下一步不是写 adapter：先由用户确认共识，再按 ADR-020/025 做 `TaskManager` 全量重键，然后才是 `core_adapter.rs`/`legacy_task_executor.rs` 与 `tauri-adapter` 门禁注册。** Phase 1、P2-01 的提交都在 `main`（`3091c8f`／`e2d111c`／`10b64e8`／`5a0cab0`／`10f4e6c` + P2-01 收口一次），**未 push、无 tag、无发布**；**P2-02、P2-03、P2-04、P2-05 前置① 的改动都尚未提交**（等用户口径，见下面第 1 步）。P2-02 交付：`aeroric-core` 的 `paths/clock/context/location/storage_lock` + `storage/{atomic,compat,projects,tasks,settings,runtime}` + `tests/{storage_compat,storage_lock}`、`src-tauri/src/core_bridge.rs` 薄适配、`storage`（5 case／65，P2-04 后抬到 183）与抬齐的 `protocol`（5／88）门禁、ADR-010/011/012、`docs/native/reviews/storage.md`、baseline 的 `~/.aeroric` 文件清单。反例 14 次；真实 `~/.aeroric` 在门禁窗口内逐字段零漂移（产品自身在本机仍在写，口径见 `reviews/storage.md`）。
 
 **恢复执行时按顺序做：**
 
-1. 读 §Phase 2 的 **Task P2-02 — 路径、依赖注入与单写者存储**：Action 1 起先把 data-dir 发现、`XDG_*`/OneDrive 反解析、`AlreadyInUse`（不得自动杀 PID）、revision + 原子写 + flock 落成 core 侧实现；验收要求 `pnpm native:check database` 通过且该模块首次注册时要同步写 `checks.json` 的 case 与地板。
-2. **继承 P2-01 的三条纪律**（都有门禁，不是口头约定）：① 任何"给人看的清单"式生成器必须带字节级 noop 断言（`--freeze-check` 那套）；② 新代码若做 source 扫描/校验，必须配正控证明它读到了内容；③ 三方共用的事实一律放进 `contracts/native/v1/` 工件 + 三方断言，不要在两种语言里各抄一份规则。
-3. 记账类待办按排期走，不要在 P2-02 顺手做：32 pending 别名与 target 路由（P3-06/P7-02）、36 pending topic 接线（P3-04）、41 条 dsh `caller_evidence`（P3-05 出口）。
+1. **先确认提交口径**：P2-02 的改动（`core/`、`src-tauri/{Cargo.toml,Cargo.lock,src/lib.rs,src/storage.rs,src/core_bridge.rs}`、`contracts/native/v1/envelope.schema.json`、`docs/native/{adr/010,011,012}*.md、baseline.md、reviews/storage.md`、`CONTEXT.md`、`scripts/native/checks.json`、`docs/native/command-map.json`、`MIGRATION_PLAN.md`）加上 P2-03 的 `core/crates/aeroric-core/src/projects/`、`tests/projects.rs`、`core/crates/aeroric-protocol/knowledge/project-parity-cases.json`、`contracts/native/v1/fixtures/projects.json`、`src/test/project-core-parity.test.ts`、`src/test/node-builtins.d.ts`、`docs/native/reviews/projects.md`、`scripts/native/checks.json`）目前**未提交**。默认口径：用户确认后才在 `main` 上做一次 P2-02+P2-03 提交（**不 push、不打 tag、不发布**，INV-01）。提交前逐模块跑 `pnpm native:check projects`／`storage`／`protocol`／`skeleton` + `pnpm native:doctor`（`all` 模块要到 P10-05 才注册，现在跑它必然红）。
+   **未提交范围已经扩大**：P2-04 的 `core/crates/aeroric-core/src/tasks/`（9 文件）、`tests/{task_lifecycle,task_idempotency,task_parity}.rs`、`tests/common/mod.rs`、`storage/{fingerprint,tasks,runtime}.rs`、`knowledge/task-parity-cases.json`、`contracts/native/v1/fixtures/task-transitions.json`、`src/test/task-core-parity.test.ts`、`checks.json` 的 `tasks` 模块、ADR-014～019、`reviews/tasks.md`，以及 P2-05 前置① 的 `src-tauri/src/storage_location.rs` + `storage.rs::windows_private_acl_receipt` + `lib.rs` 的 `mod storage_location;` + ADR-020～023。**崩溃即丢失的工作量现在是三个任务**，恢复执行时把这条作为第一个要问用户的决定。
+2. 读 §Phase 2 的 **Task P2-05 — 建立 Tauri embedded adapter**。**四条前置的当前状态**：
+   - **① 已交付**（`src-tauri/src/storage_location.rs` + `storage.rs::windows_private_acl_receipt`）。口径修正：计划原文写的 `statvfs` 在 macOS/BSD 上**没有** `f_fstypename` 字段（编译器直接报 E0609），文件系统名在 `statfs` 上，Linux 也只有 `statfs::f_type`——所以两平台都走 `statfs`，`getmntinfo` 不再需要。Linux 超级块魔数表逐条对照 `include/uapi/linux/magic.h` 核对过，并由 `a_local_superblock_is_never_in_the_remote_table` 钉住"两表不相交"（凭记忆写下的两条假值已删，其中一条是 BTRFS 真值的近似抄写错，留着会让 Linux btrfs 根分区拿不到 writer 资格）。Windows 回执复用 `ensure_private_dir` 已在调的那次收紧，**不引入新的 ACL 变更**。
+   - **② 已定做法，尚未实施**：Q44 选择 **14 个容器全量重键**（277 处引用），Q45 选择**运行身份唯一化为 core 的 per-task generation**（删除 `STARTUP_SIGNAL_GENERATION` 全局计数、把 `Arc::ptr_eq` 降级为安全网断言），Q46 把 `claimed_session_paths` **保持路径粒度**写明为例外。ADR-020。注意 `codex_rpc` 本来就不是任务键（全局单例），"全量"对它是豁免而非漏做。
+   - **③ 已定入口**：Q48 —— resume 与 reconnect 两个入口（`App.tsx:616`/`631`，`RunningView.tsx:971`）共用一次就地确认：收到 `AwaitingAcknowledgement` 就展示"上次运行被截断"并给一键确认，确认后 `acknowledge()` 再自动重试。
+   - **④ 已定**：Q51 —— `project-groups.json`（core）是分组名单**含顺序**的唯一真相源；localStorage 只在 core 文件不存在时**一次性幂等导入**（归一化沿用 `normalizeProjectGroupNames`，逐字节一致），此后不再参与读取；`mergeProjectGroupNames` 的"名单落后于项目数据"那一半保留（ADR-024）。过渡期差异必须记住：非 macOS 平台按 ADR-021 还没交出 writer，所以那边仍以 localStorage 为准——这条要写进门禁，不能靠记忆。
+   - **⑤ 已定寻址规则**：Q52 —— v1 契约不含参数形状（`methods.schema.json` 的方法条目里没有参数），旧 GUI 也无法选代，所以"哪一代"必须由宿主回答：**资源型操作**（写输入/resize/会话挂接/启动信号投递）寻址**已注册的最大 generation**，**意图型操作**（cancel/手动完成）作用于**全部在飞代**（ADR-025）。副作用：容器必须支持"按任务聚合所有代"，单值 map 满足不了取消语义。
+   - **⑥ 已定失败语义**：Q53 —— core 拒写（`REVISION_CONFLICT`/指纹不符）时**分两类**：元数据类自动重放一次（重拉权威快照→重应用同一意图→提交，仍失败才报错），状态机类（start/resume/complete/cancel/switch_config）**一律不自动重放**、直接报错并刷新（ADR-026）。Q54 —— 第二实例拿不到 lease 时**只读启动 + 持续可见告知**，不抢 lease（既有约束：绝不自动 kill 外部 PID）、不退临时目录；复用 `startup_diagnostics::StartupDegradation` + `useStartupDegradationToasts`，但该机制是会自动消失的 toast，**只读态还需一个不随 toast 消失的常驻指示**（ADR-027）。
+   - **⑤ 已定归属**：Q49 —— 保存队列只排队**意图**（op＋载荷＋operation key），读-改-写归 core，宿主不再发整表快照（ADR-022）；Q50 —— `task-status`/`task-session` 由 core 唯一发射，事件名与 payload 不变，`events_bridge.rs` 与 `useAppTauriEvents.ts` 因此不用改（ADR-023）。**这 ~8 处发射点是唯一要动的发射面**，其余 ~83 处 emit 与 PTY 旁路（`OutputSink::Channel`）本任务不碰。
+   - 侦察底稿 `docs/native/extraction/task-lifecycle-react.md` 已复核（20 处 file:line 抽样全部命中）。P2-05 的门禁模块 `tauri-adapter` 需按 ADR-020/021/022/023 各配一条机械检查（非 macOS 不得递交 writer 角色；`session*.rs`/`event_watcher.rs` 内不再出现两个事件名字面量；队列不再携带整表快照；generation 编号只有一处来源）。
+3. **继承 P2-01/P2-02 的四条纪律**（都有门禁，不是口头约定）：① 任何"给人看的清单"式生成器必须带字节级 noop 断言；② 新代码若做 source 扫描/校验，必须配正控证明它读到了内容；③ 三方共用的事实一律进 `contracts/native/v1/` 工件 + 三方断言；④ 新增的"不变量"要么写成门禁 case，要么写成"未生效"——`bump_revision` 就是例子，机制已交付，语义要等写入路径真的调用它。
+4. 记账类待办按排期走，不要顺手做：32 pending 别名与 target 路由（P3-06/P7-02）、36 pending topic 接线（P3-04）、41 条 dsh `caller_evidence`（P3-05 出口）、`command-map` 行号 pin 在源码编辑后失效且 `--freeze` 只降级不重定位（待议，属门禁工具）、legacy `remote` 监听恢复竞态 `src/remote/mod.rs:875-881`（P7-01/P7-03）。
 
 ⚠ **不需要重启会话**（本文件与 `tooling.md` 早前都写错过，已各自更正）：本 CLI 读取的技能根是 `~/.mirasim/skills`（`~/.claude/skills` 与 `~/.agents/skills` 都是指向它的符号链接），项目内的 `.claude/skills/` **完全不被读取**——反证是同目录里 frontmatter 合法的 `trellis-check` 同样不在注册表中。已按用户批准把固定 revision 的 `grill-me`/`grilling` 拷入该全局根（四个文件 sha256 与 `docs/native/tooling.md` §2 逐字一致，原有 6 个技能未受影响），注册表**当场热加载**，`Skill(grilling)` 随即成功。
 
@@ -1036,6 +1048,48 @@ grill-me
 > 2. **Q12 → ADR-008**：`RpcError.detail` 变成**闭合白名单**（10 键）。做法是让类型而不是检查兜底——Rust 只能由 `ErrorDetail`（`deny_unknown_fields`、全 `Option`、`skip_serializing_if`）构造，名单由序列化器自己导出，写进 `constants.errorDetailAllowedKeys` 与 `errorDetail.keys`，TS/Swift 各持同名单；生成器还会遍历 fixtures 拒绝未登记键（反例实测：塞 `connectionString` → 报错 exit 1）。**这里刻意放弃前向兼容**：帧级仍保留未知内容，但一个说不清来历的诊断字段不是诊断，是长得像诊断的泄漏。
 > 3. **Q13 → ADR-009**：本地主版本严格相等（`handshake_allows_peer`，三方各一份），`versionPolicy` 的两个布尔是**算出来的**不是抄的；v1 内的兼容性只由具名能力承载，绝不由版本号推断（与 ADR-003"客户端不得用自己 OS 推 host 能力"是同一条纪律）；引入 v2 必须先写 ADR；远程是独立版本空间，P8-03 必须公布映射的版本对。
 > 4. 计数与门禁：`protocol` 5 case／**85** 用例（rust 48 / swift 18 / ts 19），三处地板与 `minCases` 同编辑抬齐；`contracts/native/v1/` 现为 **10 份**产物（新增 `event-topics.schema.json`）。**P2-01 标 accepted，下一步 P2-02。**
+>
+> **【第十九次补记 @ 2026-09-22】P2-02 单写者存储层落地：49→51 用例、8 次反例、真实 `~/.aeroric` 零漂移；`grill-me [storage]` 尚未调用。**
+>
+> 1. 交付：`core/crates/aeroric-core/src/{paths,clock,context,storage_lock}.rs` + `storage/{mod,atomic,compat,projects,tasks,settings,runtime}.rs` + `tests/{storage_compat,storage_lock}.rs`，以及 `src-tauri/src/core_bridge.rs`（Action 5 的薄适配：`validate_storage_id` 委托给 core，**旧 writer 一行未动**，两套 writer 未并行启用）。详见 `docs/native/reviews/storage.md`。
+> 2. 锁的正确性只有跨进程才算：`File::try_lock`（std，**零新依赖**）+ 子进程重跑 test 二进制；`.write.lock` 里的 `HolderInfo` 是报告不是锁，死持有者的文件被删掉也不等于释放。**`AlreadyInUse` 不是击杀授权**——`src/` 里出现任何 kill 由门禁抓住（负控实测：注入 `Command::new("kill")` → 该 case 立刻红）。
+> 3. `corrupt ≠ absent` 是本层最容易丢数据的地方：旧 `load_save.rs:442-458` 把损坏的 `settings.json` 读成默认值再写回去，用户唯一的配置就此消失。新层拒写不覆盖，且**拒绝时连 `.bak` 都不留**。新增 `runtime.json` 记 `schema/epoch/revision`（revision 是十进制字符串，与 §2.3 同一条规则），新 schema 拒绝被旧核心降级。
+> 4. 反例 8 次：4 次改坏 core 实现（非 object 元素被静默吞、`try_lock` 失败被忽略、非规范 revision 被当数字、schema 判断被短路）、2 次注入门禁违例、1 次字节级 writer 等价、1 次把 src-tauri 三个文件退回 HEAD 做归属判定。其中一条是**本轮抓到的自我欺骗**：`a_non_array_document_is_refused...` 从未写入它断言的那份坏文件——补齐 fixture 并变异证明后它才真的会红（"测试通过" ≠ "测试在测这件事"）。
+> 5. 门禁：`storage` **4 case／51 用例**（地板 51 与 `minCases` 同编辑写入），回归 `skeleton` 20／113、`protocol` 5／85、`doctor` 18/18、`clippy -D warnings`／`fmt --check`／`git diff --check` 全绿；旧客户端 `cargo test --locked --lib` **2412 passed**。
+>
+> *（本节的 `storage` 4／51 与 `protocol` 5／85 两条计数已被第二十次补记作废：现为 5 case／**65** 与 5／**88**，反例累计 **14** 次。原文保留是为了让「门禁前后各测到什么」可追溯，不是给当下引用。）*
+> 6. 两笔记账（都不是本层可顺手修的）：① 改 `src-tauri` 任何源码都会让 `command-map.json` 的 pinned `definition_resolved` 失效，而 `--freeze` 不重定位、只把 `params` 降级为 `null`（659→653）——本轮人工改 11 行后复绿，重定位策略待议；② legacy `remote::network_exposure_tests::failed_invite_after_widening_restores_loopback_listener` 在高负载下红、独占 CPU/单线程/单组跑绿，机制在 `src-tauri/src/remote/mod.rs:875-881` 的 `is_listening()` 竞态（「QR 失败可能顺手关掉本机远程服务」），**归 P7-01/P7-03**，本轮未弱化未跳过未改断言。
+> 7. 口径更正：续跑指令里"P2-02 验收要求 `pnpm native:check database`"是抄错，原文是 **`storage`**（`database` 属 P7-03）。已按原文注册。
+> 8. **下一步**：调用 `grill-me [storage]`（锁／原子写／恢复未问完不得进 P2-03）；`bump_revision` 目前没有生产调用方，revision 单调要等 P2-03/P2-04 的写入路径真的调它才算成立——这句话必须原样带进门禁。
+>
+> **【第二十次补记 @ 2026-09-22】P2-02 门禁跑完（Q14～Q26）：单写者多了"在哪里才配当单写者"这一层，P2-02 accepted。**
+>
+> 1. 十三个答案 → 三份 ADR + 代码 + 断言：**ADR-010** 写入者资格（非本地卷拒绝、`Unknown` 拒绝、无 Windows 权限回执拒绝、锁身份 `(dev, ino)` 写前重验、只有持有者能扫临时文件、云同步根允许但必须告警）；**ADR-011** 三类拒绝的对外形态（`BUSY` / `IO_ERROR`+reason token / `REVISION_CONFLICT`，不扩码）与"恢复权在人、一代 `.bak` 为上限、不为它扩 detail 白名单"；**ADR-012** `runtime.json` 可丢弃、跨 writer 的真相是内容指纹、机制与语义分开记账。
+> 2. 判定手段**下沉为端口**：core 只有 `VolumeKind`/前缀表/分级判定，真实 `statvfs`/`GetDriveType`/ACE 留在 adapter（它已有 `libc`、`windows-sys`；core 仍是 5 个依赖、零平台 FFI）。fail-closed 落在构造函数上：`StorageLocation::new()` 在非 unix 一律 `privatePermissions=false`，要真写必须显式 `with_permissions(..., true)`。
+> 3. 三方共享的事实进契约：`constants.storageRejections` 由 Rust 枚举**算出来**写盘（生成器会断言每个 detail 键都在 ADR-008 白名单内，否则拒绝产出契约），TS/Swift 各加一条断言读同一份。反例证明不是装饰：把 TS 表里 `locationUnfit` 改成 `NOT_FOUND`，TS 用例立刻红。
+> 4. **本轮被自家测试和门禁反过来改掉的两处**：① `writer_eligible()` 原先先查权限再查卷类型，NFS 上的报错竟在讲权限——会把用户支去 chmod 一个不是原因的东西 → 改成卷优先，并断言消息含 "network volume"；② 新写的 `location.rs` 夹具用了 `/Users/me/...`，被 `core-discovers-no-real-home` 判红 → 改中性路径。门禁不放过本轮的新代码。
+> 5. 计数：`storage` 5 case／**65** 用例（lib 53 + compat 8 + lock 4）、`protocol` 5／**88**（rust 49 / swift 19 / ts 20，三处地板与 `minCases` 同编辑抬齐）、`skeleton` 20／113、`doctor` 18/18；旧客户端 `cargo test --locked --lib` **2412 passed**；`contracts/native/v1/` 仍 10 份产物（`envelope.schema.json` 内容变更）。反例累计 **14 次**。真实 `~/.aeroric` 的对照改了口径：先发现"全天对照"会出现产品自身写入的漂移（`Aeroric.app` pid 89834 在本机运行），再改成紧挨两次门禁运行的窗口对照 → drift 为空，且 `runtime.json`/`.write.lock` 两次都不存在。
+> 6. `docs/native/baseline.md` 新增两节：`cargo test --lib` 全并行的负载敏感抖动（`remote::network_exposure_tests::failed_invite_after_widening_restores_loopback_listener`，机制定位 `src-tauri/src/remote/mod.rs:875-881` 的 `is_listening()` 竞态，归属 P7-01/P7-03，未弱化未跳过未改断言）与 **`~/.aeroric` 文件清单**（共享 / 核心独占 / `runtime.json` 可删 / 删 `.write.lock` ≠ 释放锁 / `backups/` 无代码读写）。
+> 7. 验收原文已按门禁结论扩写：P2-03 与 P2-04 各加"必须真的调用 `bump_revision`、必须过内容指纹 + 反例"，P2-05 与 P3-01 各加"探针与权限回执是移交前置，接不上就是红的"。**INV-03 在 P2-05 之前不宣布全局成立。**
+> 8. **下一步**：P2-03（`pnpm native:check projects` 首次注册）。P2-02 的代码/文档改动**尚未提交**，提交与否听用户口径。>
+> **【第二十二次补记 @ 2026-09-22】P2-03 项目命令化落地：41 条 parity 期望是旧客户端 TypeScript 自己算出来的，不是抄的。**
+>
+> 1. 落点：`core/crates/aeroric-core/src/projects/{mod,service,mutations}.rs`（763/331/25 行）+ `tests/projects.rs`（567）+ 知识表 `core/crates/aeroric-protocol/knowledge/project-parity-cases.json`（1383 行）+ 产物 `contracts/native/v1/fixtures/projects.json`。派生链是真实 TS 函数（重派生需显式环境变量）→ 知识表 → `include_str!` 进生成器 → 产物，**TS 侧与 Rust 侧各自断言同一张表**：任何一环单独改动就红，不靠人事后对比。
+> 2. **移植缺陷由表自己抓到**：`merge_group_names` 原样 clone 了未归一化的 configured 列表，`["Work","Work","  "]` 在 Rust 里生成三个分组、在 TS 里是一个。顺序是"测试先红 → 才改代码"，修正后 41/41 通过。
+> 3. P2-02 下传的阻塞项达成：`bump_revision` 真被项目写入路径调用——一次真实改动推进一格 revision，无效改动（把 pin 设成它已有的值）与被拒绝的删除**不**消耗 revision。**内容指纹仍按约定归 P2-04**：P2-03 不宣称能发现旧客户端的旁路写入。
+> 4. 身份收敛到契约类型：是不是同一个项目只由 `aeroric_protocol::ProjectTarget::identity_key()` 回答，`ssh://…` 只是显示串。`an_ssh_path_is_never_a_local_path` 同时钉住反例——无 `location` 的旧记录按字面 path 记成 local，不许"聪明地"猜成远程。
+> 5. 计数：`projects` 4 case／**12** 用例（rust 10 / ts 2 / contracts-current / no-UI-coupling absent 带三条正控）；`storage` 地板同编辑 65→73→**75**；回归 `protocol` 5／88、`skeleton` 20／113、`doctor` 18/18、`pnpm typecheck` 绿、clippy／`fmt --check`／`git diff --check` 绿；`~/.aeroric` 在门禁窗口内零漂移。
+> 6. 自家门禁再抓一次：项目夹具里写 `/Users/me/...`，被协议模块的 `contracts-free-of-local-state` 判红，改 `/home/dev/...` 后复绿。
+> 7. **下一步**：`grill-me [projects]`。六条"写代码时已顺手决定"的事交给用户拍板，其中 reorder 重复 id 会**复制项目记录**与 `id = now_ms` 同毫秒相撞是真丢数据的窗口——现状已各钉成用例，改不改是产品决定，不是迁移细节。
+>
+> **【第二十三次补记 @ 2026-09-22】P2-03 门禁跑完（Q27～Q34）：项目身份、id 来源与分组归属都定了，P2-03 accepted。**
+>
+> 1. `grillme-matt:grill-with-docs [projects]` 一次一问，八个答案：**ADR-013** 记下——本地路径只做**无损归一**（去尾分隔符、`\`≡`/`；不折叠大小写、不自动合并）；新项目 id 由调用方给 uuidv7、旧毫秒 id 不动、**写入前拒绝重复 id**；`handleOpen`/`handleOpenSshProject` 现在起只读一次 `Date.now()`（照文件里 `handleOpenWslProject` 已有的写法）；reorder 的重复 id **两侧**都按首次出现去重；分组清单落进核心独占的 `project-groups.json`（**不能**放 `settings.json`：`AppSettings` 是强类型 struct，下一次保存会抹掉未知键——这条是读源码读出来的，不是猜的）；认不出的 `location.kind` = **看得见但不可寻址**；而 `remove` 永远可用，否则坏记录只能靠手改文件清除。
+> 2. **parity 表新增「有意分歧」机制**：`expected` 永远是旧客户端算出来的结果，`coreExpected` + `divergenceReason` 才是新核心的意图；Rust 侧断言二者必须不同且理由够长，否则直接红——防止"顺手改期望值"变成静默改行为。当前 42 条用例、2 条声明分歧。dedupe 落进客户端之后，原来那条重复 id 的分歧自然消失（表重派生 + 改名），这正是链条该有的表现。
+> 3. 计数：`projects` **4 case／18** 用例（rust 16 / ts 2）、`storage` 5／**81**、`protocol` 5／88、`skeleton` 20／113、`doctor` 18/18；`clippy -D warnings`／`fmt --check`／`pnpm typecheck` 绿。旧客户端两处产品改动（`src/App.tsx`、`src/projectOrder.ts`）+ 两个 TS 守卫文件，全量 `pnpm test` 结果见下条。
+> 4. **守卫自己骗人的一次**（记进 `reviews/projects.md` 的教训）：第一版 `project-open-single-timestamp.test.ts` 数 `Date.now()` 出现次数，于是**解释这个 bug 的那句注释**让守卫红了——红得不是地方。改成剥掉注释后再数，并写明它只证明"单一时间戳"，不证明对话框其余流程。与 P2-02 那条"断言一个从未写入的文件"是同一类错误。
+> 5. 新增一条委派通道（用户提供的 `mimo-cpa` omp agent，本地网关 127.0.0.1:8317，独立 omp home 在 `~/.cache/aeroric-delegate/`，不碰 `~/.omp` 也不碰 `~/.aeroric`）：用于读多写少的侦察型子任务，产出必须带 `file:line` 由我逐条回查；它不参与门禁、不做 git 操作。首个任务是 P2-04 的 React 任务生命周期侦察报告 `docs/native/extraction/task-lifecycle-react.md`。
+
 
 - **Input**：§4、工具探测结果、`scripts/native/checks.json`、现有 `.github/workflows/checks.yml`。
 - **Action**：
@@ -1070,6 +1124,8 @@ grill-me
 
 ### Task P2-02 — 路径、依赖注入与单写者存储
 
+> **状态（2026-09-22）：accepted，Gate 通过。** Action 1–5 与四条验收全部完成并实测：`grillme-matt:grill-with-docs [storage]` 已真实调用（Q14～Q26 十三个答案 → ADR-010/011/012 + 代码 + 三方断言），证据、13 次反例与偏差记录见 `docs/native/reviews/storage.md`。两处口径需要说明：① 本任务原文未要求 XDG/`--data-dir` 之外的路径行为，"默认路径仍与现有 Aeroric 一致"已按 `AppPaths` 两个根落实（管理目录可搬，外部 transcript 根不搬）；② "锁不只用内存 Mutex"落实为 std 的 `File::try_lock`（**零新依赖**），其在网络盘/云同步 Home 上的可靠性属门禁待问项。
+
 - **Input**：`src-tauri/src/storage.rs`、`app_settings/load_save.rs`、`path_guard.rs`、`git_path_guard.rs`、`secrets.rs`；现有数据文件格式。
 - **Action**：
   1. 新建 `core/crates/aeroric-core/src/{paths,context,clock,storage_lock}.rs`、`storage/{mod,projects,tasks,settings,atomic,compat}.rs`，实现 `AppPaths`、`CoreContext`、可替换 `Clock`、跨进程 `DataDirectoryLease`。
@@ -1093,10 +1149,13 @@ grill-me
   4. 新建 `contracts/native/v1/fixtures/projects.json` 和 `tests/projects.rs`，为 React 原纯函数与 Rust 新函数提供同输入同结果。
 - **Acceptance Criteria**：
   - `pnpm native:check projects`：项目重复打开不重复创建；中文/空格路径、大小写、丢失远程连接、group rename/order 均有确定结果。
+  - **继承 P2-02 门禁的阻塞项（ADR-012 决策 3）**：项目写入路径必须真的调用 `bump_revision`，并各带一条反例——两个 writer 争同一目录被拒、`revision` 落后被拒且不静默覆盖。做不到就不算 P2-02 的语义已生效。
   - 业务操作不调用任何 UI 回调；未跑窗口也能列出保存的项目。
   - **调用 `grill-me [projects]`**；通过前不把 React 写入责任移交。
 
 ### Task P2-04 — 迁移 React 的任务生命周期与状态持久化
+
+> **状态（2026-09-23）：accepted —— 门禁 Q35～Q43 已跑，实现见 `core/crates/aeroric-core/src/tasks/`、门禁 `pnpm native:check tasks`（7 case／105 用例）、审查记录 `docs/native/reviews/tasks.md`、决定 ADR-014～019。下面 Action/Acceptance 保留原文，作为"当时要求了什么"的证据。**
 
 - **Input**：`src/state/app/{taskLifecycle,taskLaunch,taskStatus,taskMutations,taskSwitch,taskDeleteDone,worktreeOps}.ts`；`src/{taskSession,sessionHandoff,taskCleanup,taskCompletion,taskFlush}.ts`；`src-tauri/src/remote/tasks_rpc.rs`。
 - **Action**：
@@ -1108,7 +1167,18 @@ grill-me
 - **Acceptance Criteria**：
   - `pnpm native:check tasks`：完整状态转换表、同 ID 重试只 spawn 一次、旧 generation exit 不覆盖新 generation、取消/手动完成/迟到 hook 竞态。
   - fake runtime 没有 GUI listener 时 start/resume/cancel 全部可执行；持久化失败时不得启动进程。
+  - **继承 P2-02 门禁的阻塞项（ADR-012 决策 2）**：任务写入必须过内容指纹（`(sha256,size)` 不符 → `REVISION_CONFLICT`，并同步 bump `RUNTIME_SCHEMA_VERSION`）；反例至少两条——旧客户端先写过、人工把文件换回旧内容。
   - **调用 `grill-me [tasks]`**；特别追问 React 尚有哪一个业务决策未移走，清单必须为零或明确阻塞项。
+
+> **【第二十四次补记 @ 2026-09-23】P2-04 门禁跑完（Q35～Q43）：内容指纹闭环、双开语义确定、P2-04 accepted。**
+>
+> 1. 门禁是真实调用：`grill-me [tasks]` 一次一问走完九个未决点，答案全部落成 ADR-014～019 + 代码 + 反例，不是"我替你决定了"。
+> 2. **P2-02 下传两期的内容指纹阻塞项真正闭环**：`runtime.json` schema v2 携带 `(sha256,size)` 表，与 revision 同一次写发布；两条必需反例（旧客户端先写过、人工把文件换回旧内容）都在 `task_lifecycle` 里，且各自断言"零 spawn、零 revision、别人的字节原样留在盘上"。反例 M7 证明另一种设计（读取时也刷新基线）会让检查永久失效——每个写路径都先 load，"我上次看到的"恒等于盘上的。
+> 3. Q38 是本任务最有价值的一次纠正：我第一版把去重键写成 `(task,kind,generation)`，看起来"同 ID 重试只 spawn 一次"成立，实际含义是**同一任务同时只能有一个窗口能起进程**。用户选双开后，事实立刻显形：`src-tauri/src/lib.rs:110-124` 的 `TaskManager` 以 taskId 单键存 pty master/writer/child 句柄，双开会覆盖前一个句柄、留下无法 kill 的进程。于是重试身份改为调用方的 operation key（§2.3 的 `idempotencyKey`），generation 退回"运行编号"的单一职责，并把"legacy 注册表改 `(task_id, generation)` 键"写成 P2-05/P3-01 的阻塞项。反例 M4/M8 钉住机制，M9 钉住重叠时不落终态。
+> 4. Q41/ADR-018 的连带发现：确认状态**不能做成新 `TaskStatus`**——9 值词表同时冻结在契约、Swift、TS 三处（ADR-009）。它因此住进 core 独占账本；这也意味着旧客户端在 P2-05 之前不会受这条约束，已作为"有意改变产品行为"写明。
+> 5. 实现期自曝并修掉三处：对账误给 `interrupted` 盖 `completedAt`（它非终态，P2-03 规则要求清空）；`switch_config` 曾在末尾才认领（同键重试会双开）；远程附件/worktree 限制原来只在 `RunningView`/提交处理器里挡（ADR-019 第 3 条）。另外承认：`core 不做乐观写`，所以"切换失败回滚"的正确形态是"失败即什么都没发生"，字段级回滚的两个端口留给宿主的乐观列表。
+> 6. 度量：`tasks` **7 case／105 用例**（27 lifecycle + 10 幂等 + 4 parity 重放 283 条客户端期望 + 61 单测 + 3 TS 派生断言）；`storage` 5／183、`projects` 4／18、`protocol` 5／88、`skeleton` 20／113、`doctor` 18/18、typecheck/clippy/fmt 全干净；全量 `pnpm test` 与 `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib`（2412）见下方复核记录。反例 9 次，还原逐文件 `cmp` 确认。
+> 7. 委派通道（用户提供的 `mimo-cpa` omp agent）首次实战：它交回 P2-04 的 React 侦察底稿 `docs/native/extraction/task-lifecycle-react.md`（283 行报告、50 条"仍在 React 的业务决定"），我抽样 20 处 `file:line` 逐条回查全部命中，才把它的结论当输入用；它超时无结论退出（exit 1）也不影响门禁——**它的产出从来不是验收证据，只是我的阅读材料**。设置与边界见 `docs/native/tooling.md`。
 
 ### Task P2-05 — 建立 Tauri embedded adapter，保持旧客户端可回归
 
@@ -1122,7 +1192,20 @@ grill-me
 - **Acceptance Criteria**：
   - `pnpm typecheck`、`pnpm test`、`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib`；`pnpm native:check tauri-adapter`。
   - 旧 GUI 经真实 legacy executor 创建/恢复/完成一项 fake 任务，只发生一次存储写入序列和一次 spawn；没有双事件/事件回环/递归命令调用；四族暂未抽取的启动路径仍可达。
+  - **移交前置（P2-02 门禁 Q16/Q21/Q24）**：Tauri adapter 必须先实现 `StorageLocationProbe`（`statvfs`/`getmntinfo`）与 Windows ACE 回执，**接不上就是红的**——core 侧默认探针回答 `Unknown`，而 `Unknown` 不给 writer 资格。同时带上"旧客户端仍在写"的反例：core 必须因指纹冲突而拒写，不是猜一个 revision。
+  - **移交前置（P2-04 门禁 Q38/Q41/Q43）**：① `LegacyTaskExecutor` 之前把 `src-tauri/src/lib.rs:110-124` 的 `TaskManager` 改成 `(task_id, generation)` 键，否则同任务双开会覆盖 pty 句柄、漏出无法 kill 的进程（ADR-017）；② 待确认闸要在旧客户端的续跑入口上生效——状态词表 v1 冻结，所以它是 core 账本里的条目而非新状态，宿主需要 `awaiting_acknowledgement()`/`acknowledge()` 两个调用点（ADR-018）；③ 保存队列（防抖/单飞/退出前双队列）改为"宿主只决定何时合并、core 决定何时必须落盘"，每次写带 revision 对账；④ worktree 的 git 副作用经临时端口调用原实现，不许静默 no-op。
   - **调用 `grill-me [tauri-adapter]`**；Phase 2 Gate 通过后才开始抽 PTY。
+
+> **第二十五次补记（2026-09-23，P2-05 前置① 落地）**：`src-tauri/src/storage_location.rs` 建成并接上 `StorageLocationProbe`，12 条单元测试绿（`cargo test --locked --lib storage_location::`）。三件按事实改正了计划里的口径：
+>
+> 1. **`statvfs` 拿不到答案**。macOS/BSD 的 `libc::statvfs` 结构体里根本没有 `f_fstypename`（编译器直接报 E0609），文件系统名在 `statfs` 上；Linux 反过来只有 `statfs::f_type` 的超级块魔数。所以两条路都走 `statfs`，各读各的字段——本节验收原文写的"`statvfs`/`getmntinfo`"是错的，已在此说明而非悄悄改掉，`getmntinfo` 因此不再需要（挂载表能答，但 `statfs` 一次调用就够，且不必处理"路径不在表里"）。
+> 2. **魔数表按内核头逐条核对过**。凭记忆写下的 `0x6e667364`(NFS)、`0xFF53ACBA`(CIFS) 都是错的，真值 `0x6969`、`0xFF534D42`；另外两条 `0x1bad1eed`、`0x9123_6ff3` 在 `include/uapi/linux/magic.h` 里不存在，后者是 BTRFS 真值 `0x9123683E` 的近似抄写错误——**它一旦留在否决表里，Linux 上的 btrfs 根分区就会被判成"非本地"，core 白拿不到 writer 资格**。因此新增 `LOCAL_FTYPE_MAGICS` 与一条"两表必须不相交"的断言，把这类抄写错误变成红的而不是变成沉默的行为差异。
+> 3. **Windows 的 ACE 回执不必新写收紧逻辑**。`storage.rs::ensure_private_dir` 已经对同一个数据目录、每次启动调用 `windows_acl::restrict_to_current_user(path, true)`（SET_ACCESS + PROTECTED_DACL + 从 null 基表重建），只是返回值被 `warn_once_on_acl_failure` 吞掉。回执做的事只是把它接回来（`storage.rs::windows_private_acl_receipt`），所以这里**没有引入新的 ACL 变更**；失败仍是 `false`，在不支持 ACL 的卷（FAT32 U 盘）上必然失败，而那正是 ADR-010 该拒的情形。**连带后果要交给门禁**：正常 NTFS 安装上回执现在会成功，意味着 P2-05 切换 writer 时 Windows 上的 core 会真的拿到写者资格，而不是像之前假设的那样"Windows 只读"。
+>
+> 验证口径（不要当成三平台都跑过）：macOS 本机跑了全部 12 条，含"探针接在真 temp 目录上必须给出 `writer_eligible() == Ok`"这条(load-bearing，接不上就是红的)；Linux/Windows 两个 `cfg` 分支只做到**编译验证**——用 `/tmp` 里一个只依赖 `windows-sys`/`libc`/`aeroric-core` 的旁路 crate 分别 `cargo check --target x86_64-unknown-linux-gnu|x86_64-pc-windows-msvc --tests` 通过，运行时行为未测（本机无这两个平台的可执行环境）。旁路 crate 用完即删，不进仓库。
+>
+> 修好一处自己制造的静默回归：中途一次"看起来只是删空行"的编辑把 `storage.rs` 里 `healthy_data_dir_is_not_reported_as_degraded` 的 `#[test]` 合进了上一行的文档注释，测试从此不再运行也不报错——是 `dead_code` 警告暴露的。**回归口径**：src-tauri `--lib` 用例总数必须回到 2412 + 本模块 12 = 2424，少一条就是有人把断言改成了注释。
+
 
 ## Phase 3 — CLI 核心解耦、原始 PTY 与宿主
 
@@ -1134,8 +1217,8 @@ grill-me
 
 - **Input**：`src-tauri/src/lib.rs::TaskManager`、`pty.rs`、`event_watcher.rs`、`subprocess.rs`、`platform/`、`clock.rs`；P2 `CoreContext`。
 - **Action**：
-  1. 新建 `core/crates/aeroric-core/src/runtime/{mod,manager,ports,events,shutdown}.rs`，定义 `Runtime`、`TaskRegistry`、`EventSink`、`ProcessSpawner`、`PlatformServices`，复用 P2 的 executor/observer 端口，不另建一套不兼容生命周期。
-  2. 将 `TaskManager` 中 PTY maps/session maps/generation 容器归属迁到 `TaskRegistry`，legacy executor 暂时引用同一 registry；每个 task 的清理 idempotent。不得让两份全局 map 同时成为真相源；P3-03/05 只替换本地 PTY/DSH 分支，SSH/WSL 分支仍通过 Tauri 临时 adapter 接同一 registry/generation/observer，直到 P7-01/02 分别验收后才能删除整个临时 adapter。
+  1. 新建 `core/crates/aeroric-core/src/runtime/{mod,manager,ports,events,shutdown}.rs`，定义 `Runtime`、`TaskRegistry`、`EventSink`、`ProcessSpawner`、`PlatformServices`，复用 P2 的 executor/observer 端口，不另建一套不兼容生命周期。**原生宿主同样必须先接 `StorageLocationProbe`（P2-02 门禁 Q15/Q16/Q24 的落点之一），否则它拿不到 writer 资格。**
+  2. 将 `TaskManager` 中 PTY maps/session maps/generation 容器归属迁到 `TaskRegistry`，legacy executor 暂时引用同一 registry；每个 task 的清理 idempotent。**注册表的键必须是 `(task_id, generation)`（P2-04 Q38 移交项；若 P2-05 未做完则在此补完）**：同一任务允许多代在飞之后，按 taskId 单键会覆盖前一个进程的 master/writer/child 句柄。不得让两份全局 map 同时成为真相源；P3-03/05 只替换本地 PTY/DSH 分支，SSH/WSL 分支仍通过 Tauri 临时 adapter 接同一 registry/generation/observer，直到 P7-01/02 分别验收后才能删除整个临时 adapter。
   3. 所有后台 watcher 接收可取消 token 与 `Arc<CoreContext>`；结束时 join/回收，不能因 Swift view deinit 杀任务。每个 await 前检查锁作用域。
   4. 新建 `src-tauri/src/platform_adapter.rs` 提供文件管理器、系统 dialog 等 UI 端口；Tauri emitter 只把 core 事件转换给旧前端。
   5. `lib.rs` setup 改成按阶段启动核心服务，失败服务写 diagnostics 与 capability=false；关键存储/锁失败不启动写服务。
@@ -1157,6 +1240,7 @@ grill-me
   - `pnpm native:check agents` 比较迁移前后 argv/env/cwd，差异必须在 approved ADR 中逐项说明。
   - OMP 7 档 thinking 正确；兼容输入 ultra 最多归一到 max，不向上游发送 ultra；存在 `PI_PROFILE`/`OMP_PROFILE` 时子进程环境仍指向 managed home。
   - OMP 带 prompt 的交互 argv 不含 `--mode`，flags 在 `--` 前；hook 扩展名和 willContinue 反例测试通过。
+  - **移交项（P2-04 Q43）**：`validate_agent_launch`/`get_local_router_status`/`switch_target` 的目标选择与 `adopt_session_for_agent` 的转录落盘，是任务切换的证据来源；core 的 `switch_config` 已把这些定义为输入（`SwitchEvidence`），本任务要提供真实实现，不能让宿主继续自己判策略。
   - **调用 `grill-me [agents]`**；未经用户确认不运行安装/升级命令或写真实 Agent 配置。
 
 ### Task P3-03 — 提取 PTY 字节流、租约、回放与退出
@@ -1187,6 +1271,7 @@ grill-me
 - **Acceptance Criteria**：
   - 新建 `tests/{session_discovery,session_parsers,session_resume,hook_reader,usage_index}.rs`；`pnpm native:check sessions` 覆盖四族与 custom home、部分 JSONL、损坏记录、长文件分页、路径越界、DSH 压缩 transcript。
   - OMP 等待超过旧 DSH deadline 仍可绑定；同一文件不能给两个 task；退出后 late watcher 不改新会话。
+  - **移交项（P2-04 Q43）**：会话引用解析阶梯（`src/state/app/taskLifecycle.ts:549-615`：family 字段 → `read_session_id(path)` → legacy 字段/path → `recover_task_session`，仅 local 且 worktree 未丢弃）与 `session_supports_native_resume` 的真实判据都属本任务；core 只保留"解析不出 session 就拒绝续跑"这条判定。
   - **调用 `grill-me [sessions]`**；会话 owner 不是当前 UI 下拉框中的 agent，而是保存的真实 session owner。
 
 ### Task P3-05 — 将 DSH 结构化宿主变成核心服务
@@ -1480,6 +1565,7 @@ grill-me
   5. 已 discarded 的 task 禁用 resume/merge/discard，但历史与路径审计保留；不能在按“继续”时重新创建同名目录覆盖用户文件。
 - **Acceptance Criteria**：
   - 新建 `tests/worktree_lifecycle.rs`、`WorktreePolicyTests.swift`；`pnpm native:check worktree`。
+  - **移交项（P2-04 Q43）**：`create_task_worktree` / merge / remove / `cleanupTaskWorktree` 的 git 副作用归本任务；P6-05 之前由 P2-05 的临时端口转调原实现，不得静默 no-op。core 侧已承担"worktree 覆盖项目路径""worktreeDiscarded 禁止续跑""远程项目不得带 worktree/附件"三条判定。
   - tmp repo 完成 create→task→diff→merge；冲突/dirty/discard/reopen 有反例；真实 Aeroric 仍是 main 且没有新分支。
   - **调用 `grill-me [worktree]`**；Phase 6 Gate 包含 F07–F10 每个子能力，不能只有 git status。
 
