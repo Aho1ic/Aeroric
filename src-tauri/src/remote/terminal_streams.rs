@@ -269,7 +269,7 @@ async fn run_forwarder<R: Runtime>(
         let epoch = hub().current_epoch(&task_id);
         let (live, size) = {
             let tm = app.state::<TaskManager>();
-            let live = tm.pty_writers.lock().contains_key(&task_id);
+            let live = tm.writer_for(&task_id).is_some();
             (live, crate::pty::current_task_pty_size(&tm, &task_id))
         };
         let tail_task_id = task_id.clone();

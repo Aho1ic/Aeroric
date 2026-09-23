@@ -22,7 +22,9 @@ use crate::storage::compat::Record;
 use crate::tasks::executor::{
     CancelTarget, LaunchRequest, ResetOutcome, ResumeRequest, WorkingDirectory,
 };
-use crate::tasks::session_owner::{family_prefix, resolve_session_owner, AgentFamilies};
+use crate::tasks::session_owner::{
+    family_prefix, launch_family_of, resolve_session_owner, AgentFamilies,
+};
 
 /// How a task is meant to start. `Worktree` and `WebUi` are launch-time choices the client
 /// carries; the persisted record only remembers the *result* (`worktreePath`).
@@ -66,9 +68,15 @@ pub fn working_directory(record: &Record, project: &Record) -> Option<WorkingDir
         return None;
     }
     match resolve_location(project) {
-        ProjectTarget::Ssh { remote_path, .. } => {
+        ProjectTarget::Ssh {
+            connection_id,
+            remote_path,
+        } => {
             let _ = worktree; // a remote project never has one; the client refuses that combination
-            Some(WorkingDirectory::Ssh { remote_path })
+            Some(WorkingDirectory::Ssh {
+                connection_id,
+                remote_path,
+            })
         }
         ProjectTarget::Wsl {
             distribution,
@@ -89,7 +97,9 @@ pub fn working_directory(record: &Record, project: &Record) -> Option<WorkingDir
 pub fn process_path(record: &Record, project: &Record) -> String {
     match working_directory(record, project) {
         Some(WorkingDirectory::Local { path })
-        | Some(WorkingDirectory::Ssh { remote_path: path }) => path,
+        | Some(WorkingDirectory::Ssh {
+            remote_path: path, ..
+        }) => path,
         Some(WorkingDirectory::Wsl { path, .. }) => path,
         None => string(record, "worktreePath").unwrap_or_default(),
     }
@@ -101,8 +111,9 @@ pub fn cancel_target(
     project: &Record,
     families: &dyn AgentFamilies,
 ) -> CancelTarget {
-    let owner = resolve_session_owner(record, families);
-    if owner.family == ProtocolFamily::Dsh {
+    // Which command stops a process is a question about how it was started, so this reads
+    // the launch family, not the session one (ADR-028).
+    if launch_family_of(record, families) == ProtocolFamily::Dsh {
         return CancelTarget::Dsh;
     }
     if !is_addressable(project) {
@@ -124,6 +135,7 @@ pub fn launch_request(
     record: &Record,
     project: &Record,
     families: &dyn AgentFamilies,
+    operation_key: &str,
     generation: u64,
     images: Vec<String>,
     texts: Vec<String>,
@@ -132,14 +144,19 @@ pub fn launch_request(
 ) -> Option<LaunchRequest> {
     let working_directory = working_directory(record, project)?;
     let owner = resolve_session_owner(record, families);
+    // Two different families in one request: which session fields to read is a session
+    // question, which argument shape the CLI gets is a launch question. Collapsing them is
+    // the bug ADR-028 exists to prevent.
     let session_prefix = family_prefix(owner.family);
     Some(LaunchRequest {
         task_id: string(record, "id")?,
         project_id: string(record, "projectId")?,
+        operation_key: operation_key.to_string(),
         generation,
         agent: string(record, "agent").unwrap_or_default(),
-        family: owner.family,
+        family: launch_family_of(record, families),
         permission_mode: permission_mode(record),
+        permission_mode_wire: string(record, "permissionMode").unwrap_or_default(),
         prompt: string(record, "prompt").unwrap_or_default(),
         prompt_override,
         images,
@@ -166,21 +183,26 @@ pub fn resume_request(
     record: &Record,
     project: &Record,
     families: &dyn AgentFamilies,
+    operation_key: &str,
     generation: u64,
     session_id: &str,
 ) -> Option<ResumeRequest> {
     let working_directory = working_directory(record, project)?;
-    let owner = resolve_session_owner(record, families);
-    let takes_prompt = owner.family != ProtocolFamily::Dsh
+    let launch = launch_family_of(record, families);
+    // Whether the CLI takes the original prompt as an argument is about the command line,
+    // not about the transcript.
+    let takes_prompt = launch != ProtocolFamily::Dsh
         && matches!(working_directory, WorkingDirectory::Local { .. });
     Some(ResumeRequest {
         task_id: string(record, "id")?,
         project_id: string(record, "projectId")?,
+        operation_key: operation_key.to_string(),
         generation,
-        family: owner.family,
+        family: launch,
         agent: string(record, "agent").unwrap_or_default(),
         session_id: session_id.to_string(),
         permission_mode: permission_mode(record),
+        permission_mode_wire: string(record, "permissionMode").unwrap_or_default(),
         selected_model: string(record, "selectedModel"),
         reasoning_effort: string(record, "reasoningEffort"),
         speed: string(record, "speed"),
@@ -203,8 +225,9 @@ pub enum Completion {
 }
 
 pub fn completion_for(record: &Record, families: &dyn AgentFamilies) -> Completion {
-    let owner = resolve_session_owner(record, families);
-    if owner.family == ProtocolFamily::Dsh {
+    // "Which command finishes this task" is asked of the process, so it is a launch
+    // question (ADR-028).
+    if launch_family_of(record, families) == ProtocolFamily::Dsh {
         return Completion::Dsh;
     }
     match status_of(record) {
@@ -333,6 +356,7 @@ pub fn plan_start(
             record,
             project,
             families,
+            "op-key",
             generation,
             Vec::new(),
             Vec::new(),
@@ -364,6 +388,72 @@ mod tests {
         }))
     }
 
+    /// ADR-028, both halves in one case. `claude_gpt55` is not a puzzle to be solved but a
+    /// fact about the shipping client: it is *started* with codex arguments and its
+    /// transcript is *read* as Claude. A test that only checked one of the two would pass
+    /// while the other silently regressed — which is how the single field got here.
+    #[test]
+    fn one_agent_has_two_families_and_the_record_outlives_the_table() {
+        let families = Table::new();
+        let unpinned = record(json!({
+            "id": "t", "projectId": "p1", "agent": "claude_gpt55", "status": "running",
+            "claudeSessionId": "c-1"
+        }));
+        assert_eq!(
+            launch_family_of(&unpinned, &families),
+            ProtocolFamily::Codex,
+            "the client runs build_codex_cmd for this agent (pty.rs selects on codex_like)"
+        );
+        assert_eq!(
+            resolve_session_owner(&unpinned, &families).family,
+            ProtocolFamily::Claude,
+            "…and reads its history from ~/.claude/projects"
+        );
+
+        let request = launch_request(
+            &unpinned,
+            &local_project(),
+            &families,
+            "op-key",
+            3,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .expect("a local project is launchable");
+        assert_eq!(
+            request.family,
+            ProtocolFamily::Codex,
+            "what the executor builds arguments from must be the launch family"
+        );
+        assert_eq!(
+            request.session_id.as_deref(),
+            Some("c-1"),
+            "while the session coordinates still come from the claude-format fields"
+        );
+
+        let pinned = record(json!({
+            "id": "t", "projectId": "p1", "agent": "claude_gpt55", "status": "running",
+            "launchFamily": "claude", "claudeSessionId": "c-1"
+        }));
+        assert_eq!(
+            launch_family_of(&pinned, &families),
+            ProtocolFamily::Claude,
+            "a task that recorded how it was started is not re-decided by a later profile edit"
+        );
+
+        let nonsense = record(json!({
+            "id": "t", "projectId": "p1", "agent": "claude_gpt55", "status": "running",
+            "launchFamily": "martian"
+        }));
+        assert_eq!(
+            launch_family_of(&nonsense, &families),
+            ProtocolFamily::Codex,
+            "an unreadable value falls back to the same derivation, never to a guess"
+        );
+    }
+
     #[test]
     fn a_worktree_overrides_the_project_path_and_a_remote_project_has_neither() {
         let plain =
@@ -381,6 +471,7 @@ mod tests {
         assert_eq!(
             working_directory(&remote, &ssh_project()),
             Some(WorkingDirectory::Ssh {
+                connection_id: "c1".to_string(),
                 remote_path: "/srv/app".to_string()
             }),
             "a worktree path from an older record must not be used as a remote cwd"
@@ -425,7 +516,8 @@ mod tests {
             "id": "t1", "projectId": "p1", "agent": "dsh", "prompt": "build it",
             "dshSessionId": "d-1", "sessionFamily": "dsh", "dshAgentPreset": "standard"
         }));
-        let request = resume_request(&dsh, &local_project(), &families, 2, "d-1").expect("planned");
+        let request =
+            resume_request(&dsh, &local_project(), &families, "op-key", 2, "d-1").expect("planned");
         assert_eq!(
             request.prompt, None,
             "replaying the message would run the task twice"
@@ -438,15 +530,16 @@ mod tests {
             "id": "t2", "projectId": "p1", "agent": "claude", "prompt": "build it",
             "claudeSessionId": "c-1", "sessionFamily": "claude", "permissionMode": "auto_edit"
         }));
-        let request =
-            resume_request(&claude, &local_project(), &families, 1, "c-1").expect("planned");
+        let request = resume_request(&claude, &local_project(), &families, "op-key", 1, "c-1")
+            .expect("planned");
         assert_eq!(request.prompt.as_deref(), Some("build it"));
         assert_eq!(request.permission_mode, PermissionMode::AutoEdit);
 
         let remote = record(json!({
             "id": "t3", "projectId": "p2", "agent": "claude", "prompt": "x", "sessionFamily": "claude"
         }));
-        let request = resume_request(&remote, &ssh_project(), &families, 1, "s").expect("planned");
+        let request =
+            resume_request(&remote, &ssh_project(), &families, "op-key", 1, "s").expect("planned");
         assert_eq!(
             request.prompt, None,
             "the remote resume never sent a prompt, and this is not where that changes"
@@ -465,6 +558,7 @@ mod tests {
             &record,
             &local_project(),
             &families,
+            "op-key",
             7,
             vec!["img".to_string()],
             vec![],
@@ -534,6 +628,7 @@ mod tests {
             &orphan,
             &local_project(),
             &families,
+            "op-key",
             0,
             vec![],
             vec![],
@@ -542,7 +637,7 @@ mod tests {
         )
         .is_none());
         let no_id = record(json!({"projectId": "p1", "agent": "claude"}));
-        assert!(resume_request(&no_id, &local_project(), &families, 0, "s").is_none());
+        assert!(resume_request(&no_id, &local_project(), &families, "op-key", 0, "s").is_none());
         // `task.worktreePath ?? project.path ?? ""`: the empty string only appears when the
         // project itself is gone, which is what the delete path does on purpose.
         assert_eq!(

@@ -632,7 +632,7 @@ pub(crate) fn spawn_dsh_session_watcher(
         for _ in 0..240 {
             {
                 let tm = app.state::<TaskManager>();
-                let still_running = tm.child_handles.lock().contains_key(&task_id);
+                let still_running = tm.has_live_run(&task_id);
                 let already = tm.dsh_sessions.lock().contains_key(&task_id);
                 if already {
                     return;

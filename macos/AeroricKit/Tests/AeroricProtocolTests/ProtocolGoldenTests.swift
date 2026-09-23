@@ -262,6 +262,45 @@ final class ProtocolGoldenTests: XCTestCase {
                        rule["discardedWorktreeWithTranscript"]?.boolValue)
     }
 
+    /// ADR-028: an agent carries two families. `content-derived` is deliberately not a
+    /// family name — if it ever decoded as one, the split would collapse back into the
+    /// single field that made `claude_gpt55` ambiguous to begin with.
+    func testFamilySplitNamesThreeFieldsAndRejectsAFakeFamily() throws {
+        let case1 = try fixture("legacy-task.json")
+        let split = case1["familySplit"] ?? .null
+        XCTAssertEqual(split["fields"]?["launch"]?.stringValue, "launchFamily")
+        XCTAssertEqual(split["fields"]?["session"]?.stringValue, "sessionFamily")
+        XCTAssertEqual(split["fields"]?["resume"]?.stringValue, "resumeFamily")
+        let names = [split["fields"]?["launch"]?.stringValue,
+                     split["fields"]?["session"]?.stringValue,
+                     split["fields"]?["resume"]?.stringValue]
+        XCTAssertEqual(Set(names.compactMap { $0 }).count, 3,
+                       "one field carrying two of these answers is what ADR-028/029 prevent")
+
+        let builtIn = split["builtIn"]?.objectValue ?? [:]
+        XCTAssertEqual(Set(builtIn.keys), Set(BuiltInAgent.allCases.map(\.rawValue)),
+                       "every built-in agent must carry all three answers")
+        for agent in BuiltInAgent.allCases {
+            guard let row = builtIn[agent.rawValue]?.objectValue else {
+                XCTFail("missing familySplit row for \(agent.rawValue)"); continue
+            }
+            for key in ["launch", "session", "resume"] {
+                let value = row[key]?.stringValue ?? ""
+                XCTAssertTrue(value == "content-derived" || ProtocolFamily(rawValue: value) != nil,
+                              "\(agent.rawValue).\(key) = \"\(value)\" is neither a family nor the placeholder")
+            }
+            XCTAssertEqual(row["session"]?.stringValue, agent.family.rawValue,
+                           "Swift's own family must be the session half, not the launch half")
+        }
+        let gpt55 = builtIn["claude_gpt55"]?.objectValue ?? [:]
+        XCTAssertEqual(gpt55["resume"]?.stringValue, "codex",
+                       "Claude transcript, codex --resume: this is why the switch is a handoff")
+        XCTAssertNotEqual(gpt55["resume"]?.stringValue, gpt55["session"]?.stringValue)
+        XCTAssertNil(ProtocolFamily(rawValue: "content-derived"))
+        XCTAssertEqual(split["missingFieldRule"]?.stringValue,
+                       "derive-from-host then backfill-on-write; never a batch rewrite of stored tasks")
+    }
+
     func testLegacyTaskReadsWithoutAMigration() throws {
         let case1 = try fixture("legacy-task.json")
         guard let task = TaskSnapshot.decode(case1["stored"] ?? .null) else {

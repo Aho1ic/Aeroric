@@ -253,6 +253,76 @@ fn a_legacy_task_reads_without_a_migration() {
     assert_eq!(rewritten["agent"], json!({ "builtIn": "codex" }));
 }
 
+/// ADR-028: an agent has two families, so there are two fields, and the launch half of one
+/// built-in is deliberately *not* a family name. If anyone teaches `ProtocolFamily` to
+/// parse `"content-derived"`, the split silently collapses back into the single field that
+/// created the problem — which is why this is asserted rather than commented.
+#[test]
+fn the_family_split_names_three_fields_and_refuses_a_fake_family() {
+    let split = fixture("legacy-task.json")["familySplit"].clone();
+    assert_eq!(split["fields"]["launch"], json!("launchFamily"));
+    assert_eq!(split["fields"]["session"], json!("sessionFamily"));
+    assert_eq!(split["fields"]["resume"], json!("resumeFamily"));
+    let names: Vec<&str> = split["fields"]
+        .as_object()
+        .expect("fields is a table")
+        .values()
+        .filter_map(|value| value.as_str())
+        .collect();
+    let distinct: std::collections::HashSet<&str> = names.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        names.len(),
+        "one field carrying two of these answers is exactly what ADR-028/029 prevent"
+    );
+
+    let built_in = split["builtIn"]
+        .as_object()
+        .expect("builtIn must be a table of agents");
+    assert_eq!(
+        built_in.len(),
+        5,
+        "the four ordinary built-ins plus claude_gpt55"
+    );
+    for agent in ["claude", "codex", "dsh", "omp"] {
+        assert_eq!(built_in[agent]["launch"], json!(agent), "{agent} launch");
+        assert_eq!(built_in[agent]["session"], json!(agent), "{agent} session");
+    }
+
+    let gpt55 = &built_in["claude_gpt55"];
+    assert_eq!(
+        gpt55["session"],
+        json!("claude"),
+        "its transcript is Claude-format and lives under ~/.claude"
+    );
+    assert_eq!(
+        gpt55["resume"],
+        json!("codex"),
+        "…but its --resume reads codex transcripts, which is why the switch is a handoff"
+    );
+    assert_ne!(
+        gpt55["session"], gpt55["resume"],
+        "ADR-029: session and resume disagree for this one agent"
+    );
+    assert_eq!(
+        gpt55["launch"],
+        json!("content-derived"),
+        "how it is started is read from the user's script; a constant here would override them"
+    );
+    serde_json::from_value::<ProtocolFamily>(gpt55["launch"].clone())
+        .expect_err("the placeholder must never parse as a protocol family");
+    assert_eq!(
+        serde_json::from_value::<ProtocolFamily>(gpt55["session"].clone()).ok(),
+        Some(ProtocolFamily::Claude)
+    );
+
+    assert_eq!(
+        split["missingFieldRule"],
+        json!("derive-from-host then backfill-on-write; never a batch rewrite of stored tasks"),
+        "the migration rule is part of the contract, not a private choice in one language"
+    );
+}
+
 /// The resume table is the shared authority for a rule that exists twice — once
 /// here, once in TypeScript — on top of a list the shipping client already builds.
 #[test]

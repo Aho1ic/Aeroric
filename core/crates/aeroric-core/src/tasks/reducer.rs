@@ -312,6 +312,7 @@ pub const SESSION_FIELDS: &[&str] = &[
     "sessionAgent",
     "sessionCodexLike",
     "sessionFamily",
+    "resumeFamily",
 ];
 
 /// `mergeChangedTaskSessionFields`: take `source`'s value for every session field this

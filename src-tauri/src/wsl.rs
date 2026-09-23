@@ -940,7 +940,10 @@ fn spawn_wsl_exit_monitor(
         let exit_status = child_handle.lock().try_wait().ok().flatten();
         if let Some(status) = exit_status {
             let manager = app.state::<crate::TaskManager>();
-            if !manager.remove_pty_handles_if_current(&task_id, &child_handle) {
+            if !manager.remove_pty_handles_if_current(
+                &crate::run_registry::RunKey::unminted(&task_id),
+                &child_handle,
+            ) {
                 return;
             }
             let (cancelled, manually_completed) = {
@@ -1002,8 +1005,13 @@ fn spawn_wsl_task_pty(
         .master
         .take_writer()
         .map_err(|error| error.to_string())?;
-    let child_handle =
-        crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
+    let child_handle = crate::pty::register_pty_handles(
+        task_manager,
+        &crate::run_registry::RunKey::unminted(task_id),
+        pair.master,
+        writer,
+        child,
+    )?;
     task_manager
         .wsl_active_ids
         .lock()
@@ -1030,7 +1038,7 @@ fn spawn_wsl_task_pty(
         None,
     );
     if needs_initial_input {
-        if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
+        if let Some(writer) = task_manager.writer_for(task_id) {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.to_string();
             #[allow(clippy::expect_used, reason = "与 pty::run_task 同一约定")]
@@ -1400,12 +1408,12 @@ pub async fn open_wsl_shell(
             ),
         ),
     )?;
-    if let Some(child) = task_manager.child_handles.lock().get(&shell_id).cloned() {
+    if let Some(child) = task_manager.child_for(&shell_id) {
         let mut child = child.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
-    task_manager.remove_pty_handles(&shell_id);
+    task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
     task_manager.wsl_active_ids.lock().remove(&shell_id);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -1428,7 +1436,13 @@ pub async fn open_wsl_shell(
         .master
         .take_writer()
         .map_err(|error| error.to_string())?;
-    crate::pty::register_pty_handles(&task_manager, &shell_id, pair.master, writer, child)?;
+    crate::pty::register_pty_handles(
+        &task_manager,
+        &crate::run_registry::RunKey::unminted(&shell_id),
+        pair.master,
+        writer,
+        child,
+    )?;
     task_manager.wsl_active_ids.lock().insert(shell_id.clone());
     let cleanup_app = app.clone();
     let cleanup_id = shell_id.clone();
@@ -1444,7 +1458,7 @@ pub async fn open_wsl_shell(
         None,
         Some(Box::new(move || {
             let manager = cleanup_app.state::<crate::TaskManager>();
-            manager.remove_pty_handles(&cleanup_id);
+            manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&cleanup_id));
             manager.wsl_active_ids.lock().remove(&cleanup_id);
         })),
     );
@@ -1457,12 +1471,12 @@ pub async fn kill_wsl_shell(
     shell_id: String,
 ) -> Result<(), String> {
     crate::pty::validate_wsl_shell_id(&shell_id)?;
-    if let Some(child) = task_manager.child_handles.lock().get(&shell_id).cloned() {
+    if let Some(child) = task_manager.child_for(&shell_id) {
         let mut child = child.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
-    task_manager.remove_pty_handles(&shell_id);
+    task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
     task_manager.wsl_active_ids.lock().remove(&shell_id);
     Ok(())
 }
@@ -1471,6 +1485,45 @@ pub async fn kill_wsl_shell(
 pub async fn run_wsl_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    distribution: String,
+    linux_project_path: String,
+    prompt: String,
+    agent: String,
+    permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    force_prompt_injection: Option<bool>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    run_wsl_task_core(
+        app,
+        &task_manager,
+        task_id,
+        distribution,
+        linux_project_path,
+        prompt,
+        agent,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+        force_prompt_injection,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// `run_wsl_task` 的内核。理由与 `pty::run_task_core` 相同:执行器只能调内核,不能调命令
+/// (P2-05 Action 4)。参数与实参名一字未改。
+pub(crate) async fn run_wsl_task_core(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
     task_id: String,
     distribution: String,
     linux_project_path: String,
@@ -1524,7 +1577,7 @@ pub async fn run_wsl_task(
     crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
     spawn_wsl_task_pty(
         app,
-        &task_manager,
+        task_manager,
         &task_id,
         spec,
         cols,
@@ -1539,6 +1592,42 @@ pub async fn run_wsl_task(
 pub async fn resume_wsl_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    distribution: String,
+    linux_project_path: String,
+    agent: String,
+    session_id: String,
+    permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    resume_wsl_task_core(
+        app,
+        &task_manager,
+        task_id,
+        distribution,
+        linux_project_path,
+        agent,
+        session_id,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// 见 `run_wsl_task_core`。
+pub(crate) async fn resume_wsl_task_core(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
     task_id: String,
     distribution: String,
     linux_project_path: String,
@@ -1582,7 +1671,7 @@ pub async fn resume_wsl_task(
         .remove(&task_id);
     spawn_wsl_task_pty(
         app,
-        &task_manager,
+        task_manager,
         &task_id,
         spec,
         cols,
@@ -1599,17 +1688,29 @@ pub async fn cancel_wsl_task(
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
-    crate::pty::validate_task_id(&task_id)?;
-    task_manager.cancelled_tasks.lock().insert(task_id.clone());
-    if let Some(child) = task_manager.child_handles.lock().get(&task_id).cloned() {
+    cancel_wsl_task_core(&app, &task_manager, &task_id).await
+}
+
+/// 见 `run_wsl_task_core`。
+pub(crate) async fn cancel_wsl_task_core(
+    app: &AppHandle,
+    task_manager: &crate::TaskManager,
+    task_id: &str,
+) -> Result<(), String> {
+    crate::pty::validate_task_id(task_id)?;
+    task_manager
+        .cancelled_tasks
+        .lock()
+        .insert(task_id.to_string());
+    if let Some(child) = task_manager.child_for(task_id) {
         let mut child = child.lock();
         let _ = child.kill();
         let _ = child.wait();
     } else {
-        task_manager.cancelled_tasks.lock().remove(&task_id);
+        task_manager.cancelled_tasks.lock().remove(task_id);
     }
-    task_manager.remove_pty_handles(&task_id);
-    task_manager.wsl_active_ids.lock().remove(&task_id);
+    task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(task_id));
+    task_manager.wsl_active_ids.lock().remove(task_id);
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "cancelled" }),

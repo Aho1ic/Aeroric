@@ -30,6 +30,9 @@ public enum PermissionMode: String, Equatable, CaseIterable, Sendable {
 public enum BuiltInAgent: String, Equatable, CaseIterable, Sendable {
     case claude, claudeGpt55 = "claude_gpt55", codex, dsh, omp
 
+    /// The **session** family (ADR-028): which transcript format and config home this agent
+    /// reads. Not the launch family — `claude_gpt55` is Claude here but is started with
+    /// codex-style arguments, which the host resolves from the user's own script.
     public var family: ProtocolFamily {
         switch self {
         case .claude, .claudeGpt55: .claude

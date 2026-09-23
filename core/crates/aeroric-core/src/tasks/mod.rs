@@ -17,6 +17,7 @@
 //! started.
 
 pub mod cleanup;
+pub mod events;
 pub mod executor;
 pub mod handoff;
 pub mod launch_plan;
@@ -25,10 +26,14 @@ pub mod reducer;
 pub mod service;
 pub mod session_owner;
 
+/// The vocabulary the ports speak. A host implementing [`AgentFamilies`] cannot name a
+/// protocol family without it, and src-tauri deliberately depends on `aeroric-core` only.
+pub use aeroric_protocol::task::{PermissionMode, ProtocolFamily, TaskStatus};
 pub use cleanup::{
     expired_task_ids, latest_weekly_slot, should_run_cleanup, CleanupSchedule, LocalCalendar, Mode,
     ShouldRun, DELETABLE_STATUSES,
 };
+pub use events::{NullSink, TaskEventSink, TaskNotification, TaskSessionFacts};
 pub use executor::{
     CancelTarget, Execution, ExecutorFailure, LaunchRequest, ResetOutcome, ResumeRequest,
     TaskEvent, TaskExecutor, TaskRuntimeObserver, WorkingDirectory,

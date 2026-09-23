@@ -25,12 +25,26 @@ pub enum CancelTarget {
 pub struct LaunchRequest {
     pub task_id: String,
     pub project_id: String,
+    /// Which call of the caller's operation key produced this spawn (ADR-017). Core needs
+    /// it to make a retry idempotent; the host needs it for a second reason — the output
+    /// channel is a webview object that cannot travel inside a `LaunchRequest`, so the
+    /// command that started this operation parks it in a host-side mailbox under this key,
+    /// and the executor takes it back out here. Without the key the executor could not
+    /// tell which of two concurrent runs of one task a channel belongs to.
+    pub operation_key: String,
     /// Which run of this task this is. A result carrying an older generation than the
     /// task has now must not move its state.
     pub generation: u64,
     pub family: ProtocolFamily,
     pub agent: String,
     pub permission_mode: PermissionMode,
+    /// The string the record actually carries. The enum above is what core *reasons* over;
+    /// this is what the CLI flags are built from, and the two are not interchangeable: an
+    /// unrecognised stored value collapses to `Ask` in the enum, while the legacy arg maps
+    /// emit **no flag at all** for it. Reconstructing the flag list from the enum would
+    /// therefore change the command line of a real user's task — the same two-facts-one-
+    /// field mistake ADR-028 was written about.
+    pub permission_mode_wire: String,
     pub prompt: String,
     /// `promptOverride` in the client: a handoff prompt replaces the original message
     /// rather than being appended to it.
@@ -53,9 +67,22 @@ pub struct LaunchRequest {
 /// project has no host-side path at all, which is why this is a sum and not an `Option`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkingDirectory {
-    Local { path: String },
-    Ssh { remote_path: String },
-    Wsl { distribution: String, path: String },
+    Local {
+        path: String,
+    },
+    /// A remote project is identified by its *connection*, not just its path: two saved
+    /// connections can both put a project at `/srv/app`, and spawning into the wrong one is
+    /// not a cosmetic mistake. The host resolves this id to the connection record (auth,
+    /// port, key) at spawn time — `ProjectTarget::Ssh` already carries it, and dropping it
+    /// here would leave the host unable to start the process at all.
+    Ssh {
+        connection_id: String,
+        remote_path: String,
+    },
+    Wsl {
+        distribution: String,
+        path: String,
+    },
 }
 
 /// Resuming is a different request, not `LaunchRequest` with a flag: it carries no prompt
@@ -64,11 +91,16 @@ pub enum WorkingDirectory {
 pub struct ResumeRequest {
     pub task_id: String,
     pub project_id: String,
+    /// See [`LaunchRequest::operation_key`]: the continuation is its own operation, and the
+    /// window that asked for it is the one whose channel the resumed process must write to.
+    pub operation_key: String,
     pub generation: u64,
     pub family: ProtocolFamily,
     pub agent: String,
     pub session_id: String,
     pub permission_mode: PermissionMode,
+    /// See [`LaunchRequest::permission_mode_wire`].
+    pub permission_mode_wire: String,
     pub selected_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub speed: Option<String>,

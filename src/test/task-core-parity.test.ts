@@ -51,7 +51,7 @@ import {
   sanitizeTerminalHistoryForHandoff,
   stripTerminalControlSequences,
 } from "../sessionHandoff";
-import { isBuiltInAgent } from "../agents";
+import { agentOption, isBuiltInAgent } from "../agents";
 import type { AgentOption } from "../agents";
 import type { Task, TaskStatus } from "../types";
 import type { AutoCleanupSettings } from "../components/app-settings/types";
@@ -89,12 +89,29 @@ function task(over: Record<string, unknown>): Row {
  *  decides it from `isBuiltInAgent` (`src/agents.ts:73-81`) — a list the core cannot consult.
  *  The ids below are the real ones (`claude_gpt55`), not a display label; the first draft of
  *  this table invented "claude-gpt-5.5" and the two sides disagreed for that reason alone. */
+/** Built-in options are **read from the client**, never transcribed (ADR-028 follow-up).
+ *  The first version of this table hand-wrote `claude_gpt55` as `codexLike: false` /
+ *  `family: "claude"`, while `agentOption("claude_gpt55")` actually answers `codexLike: true`
+ *  / `family: "codex"` (it is not in `AGENT_OPTIONS`, so it takes the `src/agents.ts:170-178`
+ *  fallback). 45 cases were computed against that invented row. Deriving the row is the only
+ *  fix that keeps working when the client's fallback changes again. */
+const BUILT_IN_AGENT_IDS = ["claude", "claude_gpt55", "codex", "dsh", "omp"] as const;
+type AgentOptionId = Parameters<typeof agentOption>[0];
+
+const BUILT_IN_OPTIONS = BUILT_IN_AGENT_IDS.map((id) => {
+  const option = agentOption(id as AgentOptionId);
+  return {
+    value: id,
+    label: option.label,
+    configFile: option.configFile,
+    configLang: option.configLang,
+    codexLike: option.codexLike,
+    family: option.family,
+  };
+});
+
 const OPTIONS: AgentOption[] = [
-  { value: "claude", label: "Claude Code", configFile: "", configLang: "json", codexLike: false, family: "claude" },
-  { value: "claude_gpt55", label: "Claude (GPT-5.5)", configFile: "", configLang: "json", codexLike: false, family: "claude" },
-  { value: "codex", label: "Codex", configFile: "", configLang: "toml", codexLike: true, family: "codex" },
-  { value: "dsh", label: "DeepSeek Harness", configFile: "", configLang: "toml", codexLike: false, family: "dsh" },
-  { value: "omp", label: "oh-my-pi", configFile: "", configLang: "yaml", codexLike: false, family: "omp" },
+  ...BUILT_IN_OPTIONS,
   { value: "my-claude", label: "My Claude", configFile: "", configLang: "json", codexLike: false, family: "claude", custom: true },
   { value: "my-codex", label: "My Codex", configFile: "", configLang: "toml", codexLike: true, family: "codex", custom: true },
 ] as AgentOption[];

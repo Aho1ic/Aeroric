@@ -75,7 +75,32 @@ struct Table {
 }
 
 impl AgentFamilies for Table {
-    fn family(&self, agent: &str) -> ProtocolFamily {
+    /// Both answers are the *same* function here on purpose: the 283 replayed cases were
+    /// produced by the client's own family resolution, so the parity harness must not
+    /// introduce a launch/session split of its own. The divergence is pinned in
+    /// `session_owner`/`launch_plan` unit tests, where it can be asserted per field.
+    fn launch_family(&self, agent: &str) -> ProtocolFamily {
+        self.resolve(agent)
+    }
+    fn session_family(&self, agent: &str) -> ProtocolFamily {
+        self.resolve(agent)
+    }
+    fn native_resume_family(&self, agent: &str) -> ProtocolFamily {
+        // The client answers all three questions from one field, so replaying its verdicts
+        // must too. ADR-029's split lives in the host table, asserted in `session_owner`.
+        self.resolve(agent)
+    }
+    fn is_builtin(&self, agent: &str) -> bool {
+        self.entries
+            .iter()
+            .find(|(value, _, _)| value == agent)
+            .map(|(_, _, builtin)| *builtin)
+            .unwrap_or(false)
+    }
+}
+
+impl Table {
+    fn resolve(&self, agent: &str) -> ProtocolFamily {
         if let Some((_, family, _)) = self.entries.iter().find(|(value, _, _)| value == agent) {
             return *family;
         }
@@ -85,14 +110,6 @@ impl AgentFamilies for Table {
         } else {
             ProtocolFamily::Codex
         }
-    }
-
-    fn is_builtin(&self, agent: &str) -> bool {
-        self.entries
-            .iter()
-            .find(|(value, _, _)| value == agent)
-            .map(|(_, _, builtin)| *builtin)
-            .unwrap_or(false)
     }
 }
 

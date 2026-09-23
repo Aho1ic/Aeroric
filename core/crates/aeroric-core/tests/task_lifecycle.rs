@@ -857,6 +857,7 @@ fn a_task_family_is_resolved_once_and_the_plan_follows_it() {
         &mixed,
         &local_project("p1", "/repo"),
         &Families,
+        "op-family",
         1,
         vec![],
         vec![],
@@ -1232,9 +1233,12 @@ fn a_config_switch_that_cannot_be_saved_rolls_back_and_never_reaches_a_process()
     );
     executor.clear_failure("reset");
 
-    // A clean switch lands first, so core now owns a published cover for this file. Staying
-    // inside the claude family with native resume supported makes it a `resume`, not a
-    // handoff: the transcript is one the target CLI can read where it stands.
+    // A clean switch lands first, so core now owns a published cover for this file. The
+    // strategy is **handoff**, not resume (ADR-029): `claude_gpt55` reads Claude-format
+    // transcripts but its CLI is codex-style, so `--resume` cannot pick the session up where
+    // it stands. An earlier version of this test asserted `Resume` because the parity fixture
+    // row it was written against was transcribed wrong; the parity table flipped the same two
+    // conclusions when that row was fixed.
     let (strategy, applied) = service
         .switch_config(
             &project,
@@ -1250,7 +1254,7 @@ fn a_config_switch_that_cannot_be_saved_rolls_back_and_never_reaches_a_process()
         .expect("switched");
     assert_eq!(
         strategy,
-        aeroric_core::tasks::session_owner::ConfigSwitchStrategy::Resume
+        aeroric_core::tasks::session_owner::ConfigSwitchStrategy::Handoff
     );
     assert!(applied.changed);
     assert_eq!(

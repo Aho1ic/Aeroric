@@ -5,6 +5,43 @@
     "familyFromAgent": "codex",
     "unknownFieldSurvives": true
   },
+  "familySplit": {
+    "builtIn": {
+      "claude": {
+        "launch": "claude",
+        "resume": "claude",
+        "session": "claude"
+      },
+      "claude_gpt55": {
+        "launch": "content-derived",
+        "resume": "codex",
+        "session": "claude"
+      },
+      "codex": {
+        "launch": "codex",
+        "resume": "codex",
+        "session": "codex"
+      },
+      "dsh": {
+        "launch": "dsh",
+        "resume": "dsh",
+        "session": "dsh"
+      },
+      "omp": {
+        "launch": "omp",
+        "resume": "omp",
+        "session": "omp"
+      }
+    },
+    "comment": "Rust, Swift and TypeScript all read the same three field names from here; the claude_gpt55 row is the case a single field gets wrong (ADR-028, ADR-029)",
+    "fields": {
+      "launch": "launchFamily",
+      "resume": "resumeFamily",
+      "session": "sessionFamily"
+    },
+    "missingFieldRule": "derive-from-host then backfill-on-write; never a batch rewrite of stored tasks",
+    "resumeIsNotSession": "claude_gpt55 reads Claude transcripts but its CLI resumes codex ones, so a `claude` task switching to it is a handoff today and must stay one"
+  },
   "resumeRule": {
     "comment": "mirrors canResumeTask in src/components/task-panel/TaskList.tsx; Rust and TypeScript both assert their predicate against this table",
     "discardedWorktreeWithTranscript": false,

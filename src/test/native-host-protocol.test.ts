@@ -389,4 +389,34 @@ describe("the rules every client shares", () => {
     expect(storageRejectionIsRetryable("SOMETHING_NEW")).toBe(false);
   });
 
+  it("publishes two distinct families per agent, and no fake family value", () => {
+    // ADR-028. The client already lives this split: `agentOption("claude_gpt55")` reports
+    // codex while its transcript is Claude. The contract now names both halves so no side
+    // can quietly answer one question with the other field.
+    const split = legacyFixture.familySplit;
+    expect(split.fields.launch).toBe("launchFamily");
+    expect(split.fields.session).toBe("sessionFamily");
+    expect(split.fields.resume).toBe("resumeFamily");
+    expect(new Set(Object.values(split.fields)).size).toBe(3);
+
+    const families: string[] = envelope.constants.protocolFamilies;
+    const builtIn = split.builtIn as Record<string, { launch: string; session: string }>;
+    // Every built-in must carry both answers: a missing row would let one family stand in
+    // for the other, which is the collapse ADR-028 exists to prevent.
+    expect(Object.keys(builtIn).sort()).toEqual(
+      [...envelope.constants.builtInAgents].sort(),
+    );
+    for (const row of Object.values(builtIn)) {
+      for (const value of [row.launch, row.session]) {
+        expect(value === "content-derived" || families.includes(value)).toBe(true);
+      }
+    }
+    expect(builtIn.claude_gpt55.session).toBe("claude");
+    expect(builtIn.claude_gpt55.launch).toBe("content-derived");
+    expect(families).not.toContain("content-derived");
+    expect(split.missingFieldRule).toBe(
+      "derive-from-host then backfill-on-write; never a batch rewrite of stored tasks",
+    );
+  });
+
 });

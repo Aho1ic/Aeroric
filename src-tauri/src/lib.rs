@@ -1,6 +1,5 @@
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -19,6 +18,8 @@ mod clock;
 mod command_registration_tests;
 mod conda;
 mod config;
+/// P2-05:这个进程能不能当业务写者(ADR-021/027)的唯一判定点。
+mod core_adapter;
 /// 复用原生 core 的纯函数(P2-02 Action 5);写入权仍在 storage.rs,移交是 P2-05。
 mod core_bridge;
 mod custom_themes;
@@ -52,6 +53,13 @@ mod platform;
 mod ports;
 mod posix_fs;
 mod protocol_decode;
+// Not yet on the product path: `TaskService` is what will construct this, and that wiring is
+// the step that also flips the writer role (ADR-021). The tests here are the evidence until then.
+#[allow(
+    dead_code,
+    reason = "P2-05: constructed by the TaskService wiring step"
+)]
+mod legacy_task_executor;
 mod pty;
 mod remote;
 mod remote_fs;
@@ -59,6 +67,13 @@ mod remote_git;
 mod remote_os;
 mod report;
 mod run_config;
+/// ADR-025 的 `(task_id, generation)` 命名空间：资源型操作寻址最新已注册代，
+/// 意图型操作打全部在飞代。消费点是把 `TaskManager` 重键的那一步。
+#[allow(
+    dead_code,
+    reason = "wired in by the TaskManager rekey, the next step of P2-05"
+)]
+mod run_registry;
 mod search;
 mod secrets;
 mod session;
@@ -110,11 +125,17 @@ use session_dsh::DshSessionInfo;
 /// 死锁不受锁序保护);omp/远端 waiter 线程取锁必须用显式作用域限界。
 pub struct TaskManager {
     pub(crate) pty_masters:
-        Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
-    pub(crate) pty_writers: Mutex<HashMap<String, Arc<Mutex<Box<dyn Write + Send>>>>>,
-    pub(crate) child_handles:
-        Mutex<HashMap<String, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
-    pub(crate) pending_pty_sizes: Mutex<HashMap<String, (u16, u16)>>,
+        Mutex<HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
+    pub(crate) pty_writers:
+        Mutex<HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
+    pub(crate) child_handles: Mutex<
+        HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    >,
+    /// Addressed to "the next run of this id", not to a run: a resize that arrives before the
+    /// process exists has no generation to name, which is why every entry here carries
+    /// [`run_registry::RunKey::UNMINTED`] and `register_pty_handles` reads it back under that
+    /// key whatever it is about to register.
+    pub(crate) pending_pty_sizes: Mutex<HashMap<run_registry::RunKey, (u16, u16)>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
@@ -127,6 +148,9 @@ pub struct TaskManager {
     pub(crate) wsl_active_ids: Mutex<HashSet<String>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
+    /// Which runs of a task exist right now (ADR-020 + ADR-025). A leaf: it takes no other
+    /// lock while held, so it may be locked last from any of the maps above.
+    pub(crate) runs: run_registry::RunRegistry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,47 +246,112 @@ pub(crate) fn authorize_app_restart(app: &tauri::AppHandle) {
 }
 
 impl TaskManager {
-    /// Atomically remove a task/shell from all PTY maps (masters, writers, children).
+    /// ADR-025 rule 1: which run a resource operation (write input, resize, attach a session)
+    /// addresses — the newest registered one, or nothing when the task has no live run.
+    /// Centralised here so no call site can invent its own answer, and because `runs` is a leaf
+    /// lock: it is resolved before any PTY map is touched.
+    pub(crate) fn resource_run(&self, task_id: &str) -> Option<run_registry::RunKey> {
+        self.runs.resource_key(task_id)
+    }
+
+    pub(crate) fn writer_for(
+        &self,
+        task_id: &str,
+    ) -> Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>> {
+        let run = self.resource_run(task_id)?;
+        self.pty_writers.lock().get(&run).cloned()
+    }
+
+    pub(crate) fn child_for(
+        &self,
+        task_id: &str,
+    ) -> Option<Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>> {
+        let run = self.resource_run(task_id)?;
+        self.child_handles.lock().get(&run).cloned()
+    }
+
+    pub(crate) fn master_for(
+        &self,
+        task_id: &str,
+    ) -> Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> {
+        let run = self.resource_run(task_id)?;
+        self.pty_masters.lock().get(&run).cloned()
+    }
+
+    /// Whether this task or shell has a live process at all — **any** run, not the newest one,
+    /// because "is it still alive" is answered by a still-running older run too. ADR-020's note
+    /// on `child_handles`: this stays the liveness signal, now read through the run namespace.
+    pub(crate) fn has_live_run(&self, id: &str) -> bool {
+        !self.runs.live_generations(id).is_empty()
+    }
+
+    /// The size a run should start at, including one that has not been registered yet: a
+    /// resize arriving before the process exists is addressed to the next run of that id.
+    pub(crate) fn pending_size(&self, id: &str) -> Option<(u16, u16)> {
+        self.pending_pty_sizes
+            .lock()
+            .get(&run_registry::RunKey::unminted(id))
+            .copied()
+    }
+
+    pub(crate) fn stage_pending_size(&self, id: &str, size: (u16, u16)) {
+        self.pending_pty_sizes
+            .lock()
+            .insert(run_registry::RunKey::unminted(id), size);
+    }
+
+    /// Atomically remove one run from all PTY maps (masters, writers, children) and retire it.
     /// Locks are acquired in a fixed order to prevent deadlocks.
-    pub(crate) fn remove_pty_handles(&self, id: &str) {
+    pub(crate) fn remove_pty_handles(&self, run: &run_registry::RunKey) {
         let mut masters = self.pty_masters.lock();
         let mut pending_sizes = self.pending_pty_sizes.lock();
         let mut writers = self.pty_writers.lock();
         let mut children = self.child_handles.lock();
-        masters.remove(id);
-        pending_sizes.remove(id);
-        writers.remove(id);
-        children.remove(id);
-        pty::cancel_initial_input_signal(self, id);
+        masters.remove(run);
+        pending_sizes.remove(&run_registry::RunKey::unminted(run.id()));
+        writers.remove(run);
+        children.remove(run);
+        drop(children);
+        drop(writers);
+        drop(pending_sizes);
+        drop(masters);
+        self.runs.retire(run.id(), run.generation());
+        pty::cancel_initial_input_signal(self, run.id());
     }
 
-    /// Remove a completed process generation only if it is still the current
-    /// child for this task ID. A manual configuration switch reuses the task ID
-    /// for a new process, so an old exit monitor must not clean up the new PTY.
+    /// Remove one finished run's handles, keeping the safety net ADR-020 leaves in place: the
+    /// generation decides *which* entry is cleaned up, and the handle identity only gets to
+    /// report "the same generation was registered twice", which is an implementation bug
+    /// rather than a race between two legitimate runs.
     pub(crate) fn remove_pty_handles_if_current(
         &self,
-        id: &str,
+        run: &run_registry::RunKey,
         expected: &Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     ) -> bool {
         let mut masters = self.pty_masters.lock();
         let mut pending_sizes = self.pending_pty_sizes.lock();
         let mut writers = self.pty_writers.lock();
         let mut children = self.child_handles.lock();
-        if !children
-            .get(id)
-            .is_some_and(|current| Arc::ptr_eq(current, expected))
-        {
+        let Some(current) = children.get(run) else {
+            return false;
+        };
+        if !Arc::ptr_eq(current, expected) {
+            debug_assert!(
+                false,
+                "run {run:?} holds two different children: a generation was registered twice"
+            );
             return false;
         }
-        masters.remove(id);
-        pending_sizes.remove(id);
-        writers.remove(id);
-        children.remove(id);
+        masters.remove(run);
+        pending_sizes.remove(&run_registry::RunKey::unminted(run.id()));
+        writers.remove(run);
+        children.remove(run);
         drop(children);
         drop(writers);
         drop(pending_sizes);
         drop(masters);
-        pty::cancel_initial_input_signal(self, id);
+        self.runs.retire(run.id(), run.generation());
+        pty::cancel_initial_input_signal(self, run.id());
         true
     }
 }
@@ -459,6 +548,7 @@ pub fn run() {
             initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
             wsl_active_ids: Mutex::new(HashSet::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
+            runs: run_registry::RunRegistry::new(),
         })
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())

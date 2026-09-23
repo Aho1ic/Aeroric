@@ -81,7 +81,20 @@ pub fn task(id: &str, project_id: &str, status: &str) -> Record {
 pub struct Families;
 
 impl AgentFamilies for Families {
-    fn family(&self, agent: &str) -> ProtocolFamily {
+    /// Mirrors the shipping client, both halves (ADR-028): `claude_gpt55` keeps
+    /// Claude-format sessions but is started with codex-style arguments, because
+    /// `src/agents.ts` gives it `codexLike: true` and `pty.rs` picks `build_codex_cmd`
+    /// from that flag.
+    fn launch_family(&self, agent: &str) -> ProtocolFamily {
+        match agent {
+            "claude" => ProtocolFamily::Claude,
+            "claude_gpt55" | "codex" => ProtocolFamily::Codex,
+            "dsh" => ProtocolFamily::Dsh,
+            "omp" => ProtocolFamily::Omp,
+            _ => self.session_family(agent),
+        }
+    }
+    fn session_family(&self, agent: &str) -> ProtocolFamily {
         match agent {
             "claude" | "claude_gpt55" => ProtocolFamily::Claude,
             "codex" => ProtocolFamily::Codex,
@@ -93,6 +106,14 @@ impl AgentFamilies for Families {
     }
     fn is_builtin(&self, agent: &str) -> bool {
         matches!(agent, "claude" | "claude_gpt55" | "codex" | "dsh" | "omp")
+    }
+    /// ADR-029: Claude transcripts, codex-style CLI. `claude` → `claude_gpt55` therefore is
+    /// *not* a native resume, which is what the shipping client actually concludes.
+    fn native_resume_family(&self, agent: &str) -> ProtocolFamily {
+        match agent {
+            "claude_gpt55" => ProtocolFamily::Codex,
+            other => self.session_family(other),
+        }
     }
 }
 
@@ -231,7 +252,8 @@ impl TaskExecutor for FakeExecutor {
             request.generation,
             match &request.working_directory {
                 aeroric_core::tasks::WorkingDirectory::Local { path } => path.clone(),
-                aeroric_core::tasks::WorkingDirectory::Ssh { remote_path } => remote_path.clone(),
+                aeroric_core::tasks::WorkingDirectory::Ssh { remote_path, .. } =>
+                    remote_path.clone(),
                 aeroric_core::tasks::WorkingDirectory::Wsl { path, .. } => path.clone(),
             },
             request

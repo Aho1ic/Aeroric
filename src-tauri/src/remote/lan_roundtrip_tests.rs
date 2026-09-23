@@ -39,6 +39,7 @@ fn empty_task_manager() -> crate::TaskManager {
         initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
         wsl_active_ids: Mutex::new(HashSet::new()),
         codex_rpc: Arc::new(Mutex::new(None)),
+        runs: crate::run_registry::RunRegistry::new(),
     }
 }
 
@@ -383,11 +384,13 @@ fn terminal_stream_snapshot_live_input_and_resize() {
     // 假 PTY writer:验证 Input 帧最终落到 pty_writers
     {
         let tm = handle.state::<crate::TaskManager>();
-        tm.pending_pty_sizes
-            .lock()
-            .insert(task_id.clone(), (120, 40));
+        tm.stage_pending_size(&task_id, (120, 40));
+        // Registered the way `register_pty_handles` would: ADR-025's addressing reads the run
+        // ledger, so a writer injected without it would be unaddressable.
+        tm.runs
+            .register(&task_id, crate::run_registry::RunKey::UNMINTED);
         tm.pty_writers.lock().insert(
-            task_id.clone(),
+            crate::run_registry::RunKey::unminted(&task_id),
             std::sync::Arc::new(parking_lot::Mutex::new(
                 Box::new(SharedWriter(written.clone())) as Box<dyn std::io::Write + Send>,
             )),
@@ -485,7 +488,7 @@ fn terminal_stream_snapshot_live_input_and_resize() {
             assert_eq!(size["cols"], json!(92));
             {
                 let tm = handle.state::<crate::TaskManager>();
-                assert_eq!(tm.pending_pty_sizes.lock().get(&task_id), Some(&(92, 38)));
+                assert_eq!(tm.pending_size(&task_id), Some((92, 38)));
             }
 
             // ── unsubscribe:最后一个远程订阅释放后恢复订阅前桌面尺寸 ──
@@ -501,8 +504,7 @@ fn terminal_stream_snapshot_live_input_and_resize() {
             for _ in 0..50 {
                 let size = {
                     let tm = handle.state::<crate::TaskManager>();
-                    let current = tm.pending_pty_sizes.lock().get(&task_id).copied();
-                    current
+                    tm.pending_size(&task_id)
                 };
                 if size == Some((120, 40)) {
                     restored = true;
@@ -631,8 +633,10 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
         // 注入假 PTY writer 后:bracketed paste 包裹 + 回车提交
         {
             let tm = handle.state::<crate::TaskManager>();
+            tm.runs
+                .register(&task_id, crate::run_registry::RunKey::UNMINTED);
             tm.pty_writers.lock().insert(
-                task_id.clone(),
+                crate::run_registry::RunKey::unminted(&task_id),
                 std::sync::Arc::new(parking_lot::Mutex::new(
                     Box::new(SharedWriter(written.clone())) as Box<dyn std::io::Write + Send>,
                 )),

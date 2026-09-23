@@ -24,20 +24,40 @@
 //! A directory that does not exist yet is the normal first-run case, so the unix probe
 //! walks to the nearest existing ancestor instead of reporting `Unknown`.
 
+#![allow(
+    dead_code,
+    reason = "the Linux/Windows classification tables are only live on their own OS; every \
+              host compiles the whole matrix and tests it, so a macOS product build sees the \
+              other platforms' rows as unused"
+)]
+
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
 
 use aeroric_core::location::{
-    classify_by_path, with_cloud_sync_heuristic, StorageLocation, StorageLocationProbe, VolumeKind,
+    with_cloud_sync_heuristic, StorageLocation, StorageLocationProbe, VolumeKind,
 };
 
 /// Filesystem names that mean "this is a remote mount" on macOS/BSD, where `statvfs`
 /// carries the type name. Matched as a prefix because these appear with version suffixes
 /// (`nfs4`, `smb2`, `afpfs`).
 const NETWORK_FSTYPENAMES: &[&str] = &[
-    "nfs", "smb", "cifs", "afp", "webdav", "davfs", "curlftpfs", "sshfs", "9p", "ncp", "ceph",
-    "gluster", "lustre", "fuse", "afs",
+    "nfs",
+    "smb",
+    "cifs",
+    "afp",
+    "webdav",
+    "davfs",
+    "curlftpfs",
+    "sshfs",
+    "9p",
+    "ncp",
+    "ceph",
+    "gluster",
+    "lustre",
+    "fuse",
+    "afs",
 ];
 
 /// Local filesystem names on macOS/BSD. Only a *prefix* match here, so a name nobody
@@ -204,11 +224,19 @@ fn unix_stat(data_dir: &Path) -> ProbeVolume {
     c_path.push(0);
 
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+    // SAFETY: `c_path` is a NUL-terminated byte copy of a real path, and `stat.as_mut_ptr()`
+    // points at writable, correctly-sized storage for one `statfs`. Both stay alive across the
+    // call, and a non-zero return means the struct was left untouched, which is why reading it
+    // below is gated on `rc == 0`.
     let rc = unsafe { libc::statfs(c_path.as_ptr() as *const libc::c_char, stat.as_mut_ptr()) };
     if rc != 0 {
         return ProbeVolume::NotVerifiable;
     }
+    // SAFETY: `statfs` returned 0, so it fully initialised the struct.
     let stat = unsafe { stat.assume_init() };
+    // SAFETY: `f_fstypename` is a fixed-size array of `c_char` that `statfs` NUL-terminates;
+    // taking a pointer into the local copy is valid for as long as `stat` lives, which is the
+    // rest of this expression.
     let name = unsafe { CStr::from_ptr(stat.f_fstypename.as_ptr()) };
     match classify_fstypename(&name.to_string_lossy()) {
         Some(kind) => ProbeVolume::Measured(kind),
@@ -327,12 +355,10 @@ mod tests {
                 "{name}"
             );
         }
-        for name in ["apfs", "hfsplus", "ext4", "xfs", "zfs", "btrfs", "ntfs", "exfat"] {
-            assert_eq!(
-                classify_fstypename(name),
-                Some(VolumeKind::Local),
-                "{name}"
-            );
+        for name in [
+            "apfs", "hfsplus", "ext4", "xfs", "zfs", "btrfs", "ntfs", "exfat",
+        ] {
+            assert_eq!(classify_fstypename(name), Some(VolumeKind::Local), "{name}");
         }
         // No opinion, not "local": an unrecognised name must not become a licence to write.
         assert_eq!(classify_fstypename("whateverfs"), None);
@@ -371,7 +397,11 @@ mod tests {
             Some(VolumeKind::NonLocal),
             "DRIVE_REMOTE"
         );
-        assert_eq!(classify_drive_type(3), Some(VolumeKind::Local), "DRIVE_FIXED");
+        assert_eq!(
+            classify_drive_type(3),
+            Some(VolumeKind::Local),
+            "DRIVE_FIXED"
+        );
         assert_eq!(
             classify_drive_type(2),
             Some(VolumeKind::Local),
@@ -434,7 +464,10 @@ mod tests {
         assert!(!missing.exists(), "the fixture must not exist");
         let ancestor = nearest_existing_ancestor(&missing).expect("some ancestor exists");
         assert!(
-            matches!(probe_volume(&missing), ProbeVolume::Measured(VolumeKind::Local)),
+            matches!(
+                probe_volume(&missing),
+                ProbeVolume::Measured(VolumeKind::Local)
+            ),
             "walking up from {missing:?} reached {ancestor:?} and still could not measure it"
         );
     }
@@ -500,7 +533,7 @@ mod tests {
     fn classify_by_path_catches_a_sync_root_the_platform_cannot_see() {
         // Proves the two halves really are complementary: `statfs` calls iCloud Drive `apfs`.
         assert_eq!(
-            classify_by_path(
+            aeroric_core::location::classify_by_path(
                 Path::new("/Users/me/Library/Mobile Documents/.aeroric"),
                 aeroric_core::location::CLOUD_SYNCED_ROOT_MARKERS
             ),

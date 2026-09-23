@@ -1318,7 +1318,10 @@ fn spawn_remote_task_exit_monitor(
 
         if let Some(status) = exit_status {
             let tm = app.state::<crate::TaskManager>();
-            if !tm.remove_pty_handles_if_current(&task_id, &child_handle) {
+            if !tm.remove_pty_handles_if_current(
+                &crate::run_registry::RunKey::unminted(&task_id),
+                &child_handle,
+            ) {
                 return;
             }
             let ok = status.success();
@@ -1373,8 +1376,13 @@ fn spawn_remote_task_pty(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle =
-        crate::pty::register_pty_handles(task_manager, task_id, pair.master, writer, child)?;
+    let child_handle = crate::pty::register_pty_handles(
+        task_manager,
+        &crate::run_registry::RunKey::unminted(task_id),
+        pair.master,
+        writer,
+        child,
+    )?;
 
     let _ = app.emit(
         "task-status",
@@ -1399,7 +1407,7 @@ fn spawn_remote_task_pty(
         None,
     );
     if needs_initial_input {
-        if let Some(writer) = task_manager.pty_writers.lock().get(task_id).cloned() {
+        if let Some(writer) = task_manager.writer_for(task_id) {
             match startup_generation {
                 Some(cleanup_generation) => {
                     let signals = Arc::clone(&task_manager.initial_input_signals);
@@ -1486,6 +1494,30 @@ fn load_ssh_connections_with_passwords() -> Result<Vec<SshConnection>, String> {
     )
 }
 
+/// 一个项目指向的那条连接,含已 hydrate 的明文。
+///
+/// P2-05 的 `LegacyTaskExecutor` 需要它,因为 `LaunchRequest` 只带 connection id:core 既不
+/// 保存也不应该保存口令。查不到就是查不到 —— 返回错误让调用方当场拒绝,而不是派生出一个
+/// "看起来能启动、其实一个字节都不会产出"的任务。
+#[allow(
+    dead_code,
+    reason = "consumed by legacy_task_executor, which the TaskService wiring step constructs"
+)]
+pub(crate) fn ssh_connection_by_id(connection_id: &str) -> Result<SshConnection, String> {
+    pick_ssh_connection(&load_ssh_connections_with_passwords()?, connection_id)
+}
+
+fn pick_ssh_connection(
+    connections: &[SshConnection],
+    connection_id: &str,
+) -> Result<SshConnection, String> {
+    connections
+        .iter()
+        .find(|connection| connection.id == connection_id)
+        .cloned()
+        .ok_or_else(|| format!("no saved ssh connection with id {connection_id}"))
+}
+
 /// 按 id 取一条连接的明文密码。
 ///
 /// 单独一条命令而不是让 `load_ssh_connections` 带上明文:暴露窗口从"列表加载后常驻"
@@ -1542,13 +1574,13 @@ pub async fn open_ssh_shell(
     crate::pty::validate_ssh_shell_id(&shell_id)?;
     // 明文密码由后端按 id 自取,不经渲染进程。已带明文(未保存的新连接)时不覆盖。
     hydrate_ssh_password(&mut connection)?;
-    let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
+    let child_arc = task_manager.child_for(&shell_id);
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
-    task_manager.remove_pty_handles(&shell_id);
+    task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
 
     // 起始命令要按远端 OS 分流,而探测是一次同步的 ssh 往返 —— 所以只在真的会用到起始
     // 命令(连接配了远端路径)时才探。没配路径的连接照旧直接开终端,不多付这一次往返;
@@ -1579,13 +1611,19 @@ pub async fn open_ssh_shell(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
-    crate::pty::register_pty_handles(&task_manager, &shell_id, pair.master, writer, child)?;
+    crate::pty::register_pty_handles(
+        &task_manager,
+        &crate::run_registry::RunKey::unminted(&shell_id),
+        pair.master,
+        writer,
+        child,
+    )?;
     let hint_filter = host_key_failure_hint_filter(&connection);
     let output_filter = if connection_can_auto_sudo(&connection) {
         let writer = task_manager
             .pty_writers
             .lock()
-            .get(&shell_id)
+            .get(&crate::run_registry::RunKey::unminted(&shell_id))
             .cloned()
             .ok_or_else(|| "Failed to initialize SSH sudo input".to_string())?;
         Some(chain_output_filters(
@@ -1607,7 +1645,7 @@ pub async fn open_ssh_shell(
     let sid_cleanup = shell_id.clone();
     let on_finish = Box::new(move || {
         let tm = app_cleanup.state::<crate::TaskManager>();
-        tm.remove_pty_handles(&sid_cleanup);
+        tm.remove_pty_handles(&crate::run_registry::RunKey::unminted(&sid_cleanup));
     });
 
     crate::pty::spawn_pty_reader(
@@ -1632,13 +1670,13 @@ pub async fn kill_ssh_shell(
     shell_id: String,
 ) -> Result<(), String> {
     crate::pty::validate_ssh_shell_id(&shell_id)?;
-    let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
+    let child_arc = task_manager.child_for(&shell_id);
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
-    task_manager.remove_pty_handles(&shell_id);
+    task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
     Ok(())
 }
 
@@ -1646,6 +1684,45 @@ pub async fn kill_ssh_shell(
 pub async fn run_remote_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    connection: SshConnection,
+    remote_project_path: String,
+    prompt: String,
+    agent: String,
+    permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    force_prompt_injection: Option<bool>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    run_remote_task_core(
+        app,
+        &task_manager,
+        task_id,
+        connection,
+        remote_project_path,
+        prompt,
+        agent,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+        force_prompt_injection,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// `run_remote_task` 的内核。抽它的唯一理由是方向:`LegacyTaskExecutor` 只能调这个,
+/// 不能调 `#[tauri::command]`(P2-05 Action 4 的递归禁令)。参数与实参名一字未改。
+pub(crate) async fn run_remote_task_core(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
     task_id: String,
     mut connection: SshConnection,
     remote_project_path: String,
@@ -1707,7 +1784,7 @@ pub async fn run_remote_task(
     let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
         app,
-        &task_manager,
+        task_manager,
         &task_id,
         cmd,
         cols,
@@ -1723,6 +1800,42 @@ pub async fn run_remote_task(
 pub async fn resume_remote_task(
     app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    connection: SshConnection,
+    remote_project_path: String,
+    agent: String,
+    session_id: String,
+    permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    resume_remote_task_core(
+        app,
+        &task_manager,
+        task_id,
+        connection,
+        remote_project_path,
+        agent,
+        session_id,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// 见 `run_remote_task_core`:同一条递归禁令,同一次未改动的搬运。
+pub(crate) async fn resume_remote_task_core(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
     task_id: String,
     mut connection: SshConnection,
     remote_project_path: String,
@@ -1771,7 +1884,7 @@ pub async fn resume_remote_task(
     let hint_filter = host_key_failure_hint_filter(&connection);
     spawn_remote_task_pty(
         app,
-        &task_manager,
+        task_manager,
         &task_id,
         cmd,
         cols,
@@ -1789,19 +1902,28 @@ pub async fn cancel_remote_task(
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
-    crate::pty::validate_task_id(&task_id)?;
+    cancel_remote_task_core(&app, &task_manager, &task_id).await
+}
+
+/// 同一条递归禁令下 `LegacyTaskExecutor` 要能停远程任务,这个内核就得先存在。
+pub(crate) async fn cancel_remote_task_core(
+    app: &AppHandle,
+    task_manager: &crate::TaskManager,
+    task_id: &str,
+) -> Result<(), String> {
+    crate::pty::validate_task_id(task_id)?;
     let child_arc = {
         let mut cancelled_tasks = task_manager.cancelled_tasks.lock();
-        cancelled_tasks.insert(task_id.clone());
-        task_manager.child_handles.lock().get(&task_id).cloned()
+        cancelled_tasks.insert(task_id.to_string());
+        task_manager.child_for(task_id)
     };
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
         let _ = child.wait();
     } else {
-        task_manager.cancelled_tasks.lock().remove(&task_id);
-        task_manager.remove_pty_handles(&task_id);
+        task_manager.cancelled_tasks.lock().remove(task_id);
+        task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(task_id));
     }
     let _ = app.emit(
         "task-status",

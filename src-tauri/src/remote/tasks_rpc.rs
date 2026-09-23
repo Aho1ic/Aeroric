@@ -195,7 +195,7 @@ pub(crate) fn task_input<R: Runtime>(app: &AppHandle<R>, params: &Value) -> Resu
     }
     crate::pty::validate_task_id(&task_id)?;
     let tm = app.state::<TaskManager>();
-    if !tm.pty_writers.lock().contains_key(&task_id) {
+    if tm.writer_for(&task_id).is_none() {
         return Err("Task is not running".to_string());
     }
     let data = format!("\x1b[200~{text}\x1b[201~\r");
@@ -242,7 +242,7 @@ pub(crate) async fn task_respond<R: Runtime>(
 
     let steps = agent_keymap::keys_for(is_codex, action);
     let tm = app.state::<TaskManager>();
-    if !tm.pty_writers.lock().contains_key(&task_id) {
+    if tm.writer_for(&task_id).is_none() {
         app.state::<RemoteState>()
             .approvals
             .restore(task_id.clone(), approval);

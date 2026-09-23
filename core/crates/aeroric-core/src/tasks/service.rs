@@ -297,7 +297,14 @@ impl TaskService {
             return Err(TaskError::DuplicateId(spec.id));
         }
         let now = self.clock().now_ms();
-        let family = self.families.family(&spec.agent);
+        // A newly created task is pinned to all three families (ADR-028, ADR-029): which
+        // argument shape starts it, which transcript format it writes, and which CLI's
+        // `--resume` can read that transcript. `claude_gpt55` splits all three ways —
+        // launch and resume are codex-ish while the transcript is Claude — which is exactly
+        // why one field could never carry them.
+        let launch_family = self.families.launch_family(&spec.agent);
+        let session_family = self.families.session_family(&spec.agent);
+        let resume_family = self.families.native_resume_family(&spec.agent);
         let mut record = Record(Default::default());
         record.0.insert("id".into(), Value::String(spec.id.clone()));
         record
@@ -318,6 +325,22 @@ impl TaskService {
         record
             .0
             .insert("agent".into(), Value::String(spec.agent.clone()));
+        for (key, family) in [
+            ("launchFamily", launch_family),
+            ("sessionFamily", session_family),
+            ("resumeFamily", resume_family),
+        ] {
+            record.0.insert(
+                key.into(),
+                Value::String(
+                    serde_json::to_value(family)
+                        .expect("a family is a string")
+                        .as_str()
+                        .expect("a family is a string")
+                        .to_string(),
+                ),
+            );
+        }
         if let Some(model) = spec.selected_model {
             record
                 .0
@@ -331,7 +354,7 @@ impl TaskService {
         if let Some(speed) = spec.speed {
             record.0.insert("speed".into(), Value::String(speed));
         }
-        if family == ProtocolFamily::Dsh {
+        if launch_family == ProtocolFamily::Dsh {
             record.0.insert(
                 "dshAgentPreset".into(),
                 Value::String(spec.dsh_agent_preset.unwrap_or_else(|| "standard".into())),
@@ -390,6 +413,7 @@ impl TaskService {
                     record,
                     project,
                     service.families.as_ref(),
+                    operation_key,
                     generation,
                     attachments.images.clone(),
                     attachments.texts.clone(),
@@ -463,6 +487,7 @@ impl TaskService {
                     &with_session,
                     project,
                     service.families.as_ref(),
+                    operation_key,
                     generation,
                     session_id,
                 )

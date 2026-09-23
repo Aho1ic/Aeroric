@@ -104,3 +104,6 @@
 | 一次性幂等导入 | 分组名单从 localStorage 迁进 core 的动作：只在 core 文件不存在时发生，重复执行不追加、不改顺序 | 不是"每次启动都合并"；不是把 localStorage 继续当真相源 |
 | 元数据重放 / 状态 op 不重放 | 被 `REVISION_CONFLICT` 拒绝时：无副作用意图重应用一次后重试，可能起进程的意图直接报错（ADR-026） | 不是"operation key 能兜住所以都可以自动重试"；重放上限**一次** |
 | 只读实例 | 拿不到 lease 的第二个实例：能看不能写，不抢租约、不退临时目录，且告知必须**持续可见**（ADR-027） | 不是"降级到临时目录"（那会让两份数据分叉）；`StartupDegradation` 的 toast 会自动消失，不满足"持续可见" |
+| 启动族 / launchFamily | 决定用哪套 CLI 参数起进程。宿主侧**委托**给 `get_agent_launch_spec()`，因为 `claude_gpt55` 要读用户脚本内容才能定（ADR-028） | 不是会话族；不是可以在宿主里查表写死的东西 |
+| 会话族 / sessionFamily | 决定会话文件格式与配置 home。内置四个 + `claude_gpt55`（Claude 格式）走表；自定义 profile 用 `family`，空则回落 `codex_like` | 不是启动族；`src/agents.ts` 的 `agentOption` 给它的**不是**这个答案 |
+| content-derived | 契约里的**非值**：表示"这个问题只有宿主（读了用户脚本之后）能答"。三方都断言它不可被解析成 `ProtocolFamily` | 不是一个族名；把它当族名用等于把 ADR-028 拆回一个字段 |

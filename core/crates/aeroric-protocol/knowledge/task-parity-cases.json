@@ -5020,11 +5020,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -5040,7 +5040,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -5256,11 +5256,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -5276,7 +5276,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -5473,11 +5473,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -5493,7 +5493,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -5696,11 +5696,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -5716,7 +5716,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -5897,11 +5897,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -5917,7 +5917,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6107,11 +6107,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6127,7 +6127,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6323,11 +6323,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6343,7 +6343,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6519,11 +6519,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6539,7 +6539,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6732,11 +6732,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6752,7 +6752,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6789,7 +6789,7 @@
         ]
       },
       "source": "src/taskSession.ts:113-127",
-      "expected": true
+      "expected": false
     },
     {
       "id": "adopt:builtinsTrustEachOther",
@@ -6819,11 +6819,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6839,7 +6839,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6907,11 +6907,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -6927,7 +6927,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -6964,7 +6964,7 @@
         ]
       },
       "source": "src/taskSession.ts:156-166",
-      "expected": "resume"
+      "expected": "handoff"
     },
     {
       "id": "strategy:builtinsTrustEachOther:native=false",
@@ -6995,11 +6995,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7015,7 +7015,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7082,11 +7082,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7102,7 +7102,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7169,11 +7169,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7189,7 +7189,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7257,11 +7257,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7277,7 +7277,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7345,11 +7345,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7365,7 +7365,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7432,11 +7432,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7452,7 +7452,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7519,11 +7519,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7539,7 +7539,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7607,11 +7607,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7627,7 +7627,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7695,11 +7695,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7715,7 +7715,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7782,11 +7782,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7802,7 +7802,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7869,11 +7869,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7889,7 +7889,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -7957,11 +7957,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -7977,7 +7977,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8045,11 +8045,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8065,7 +8065,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8132,11 +8132,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8152,7 +8152,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8219,11 +8219,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8239,7 +8239,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8307,11 +8307,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8327,7 +8327,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8395,11 +8395,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8415,7 +8415,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8482,11 +8482,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8502,7 +8502,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8569,11 +8569,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8589,7 +8589,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8657,11 +8657,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8677,7 +8677,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8745,11 +8745,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8765,7 +8765,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8832,11 +8832,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8852,7 +8852,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -8919,11 +8919,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -8939,7 +8939,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9007,11 +9007,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9027,7 +9027,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9095,11 +9095,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9115,7 +9115,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9405,11 +9405,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9425,7 +9425,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9489,11 +9489,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9509,7 +9509,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9573,11 +9573,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9593,7 +9593,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9657,11 +9657,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9677,7 +9677,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9741,11 +9741,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9761,7 +9761,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9825,11 +9825,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9845,7 +9845,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9910,11 +9910,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -9930,7 +9930,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -9995,11 +9995,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -10015,7 +10015,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true
@@ -10080,11 +10080,11 @@
           },
           {
             "value": "claude_gpt55",
-            "label": "Claude (GPT-5.5)",
+            "label": "Claude Gpt55",
             "configFile": "",
-            "configLang": "json",
-            "codexLike": false,
-            "family": "claude",
+            "configLang": "shellscript",
+            "codexLike": true,
+            "family": "codex",
             "builtIn": true
           },
           {
@@ -10100,7 +10100,7 @@
             "value": "dsh",
             "label": "DeepSeek Harness",
             "configFile": "",
-            "configLang": "toml",
+            "configLang": "yaml",
             "codexLike": false,
             "family": "dsh",
             "builtIn": true

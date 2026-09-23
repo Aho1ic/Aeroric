@@ -1060,6 +1060,29 @@ fn fixtures() -> Vec<(&'static str, Value)> {
                 "stored": { "id": "old-1", "projectId": "p", "status": "interrupted", "agent": { "builtIn": "codex" },
                            "createdAt": 1_700_000_000_000_u64, "sessionCodexLike": true },
                 "expectations": { "canResume": false, "familyFromAgent": "codex", "unknownFieldSurvives": true },
+                // ADR-028. One agent, two families: `launchFamily` decides which CLI's
+                // argument shape runs it, `sessionFamily` decides which transcript format
+                // and config home it reads. They are not interchangeable, and a single
+                // field cannot carry both — `claude_gpt55` is the row that proves it.
+                //
+                // "content-derived" is a deliberate non-value: the shipping host infers
+                // claude-vs-codex for that agent by reading its start script
+                // (`app_settings/launch_spec.rs:400-406`), so no adapter may replace this
+                // row with a constant. Consumers must treat it as "ask the host", never as
+                // a family name.
+                "familySplit": {
+                    "comment": "Rust, Swift and TypeScript all read the same three field names from here; the claude_gpt55 row is the case a single field gets wrong (ADR-028, ADR-029)",
+                    "fields": { "launch": "launchFamily", "session": "sessionFamily", "resume": "resumeFamily" },
+                    "builtIn": {
+                        "claude": { "launch": "claude", "session": "claude", "resume": "claude" },
+                        "codex": { "launch": "codex", "session": "codex", "resume": "codex" },
+                        "dsh": { "launch": "dsh", "session": "dsh", "resume": "dsh" },
+                        "omp": { "launch": "omp", "session": "omp", "resume": "omp" },
+                        "claude_gpt55": { "launch": "content-derived", "session": "claude", "resume": "codex" }
+                    },
+                    "resumeIsNotSession": "claude_gpt55 reads Claude transcripts but its CLI resumes codex ones, so a `claude` task switching to it is a handoff today and must stay one",
+                    "missingFieldRule": "derive-from-host then backfill-on-write; never a batch rewrite of stored tasks"
+                },
                 "resumeRule": {
                     "comment": "mirrors canResumeTask in src/components/task-panel/TaskList.tsx; Rust and TypeScript both assert their predicate against this table",
                     "withTranscript": {

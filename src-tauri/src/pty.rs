@@ -1,4 +1,6 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+use crate::run_registry::RunKey;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -137,7 +139,7 @@ fn wait_for_session(app: &AppHandle, task_id: &str, is_codex: bool) {
 
 fn finalize_task_exit(
     app: &AppHandle,
-    task_id: &str,
+    run: &RunKey,
     project_path: &str,
     family: crate::app_settings::AgentFamily,
     exit_ok: bool,
@@ -145,7 +147,10 @@ fn finalize_task_exit(
     child_handle: &Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
     let tm = app.state::<TaskManager>();
-    if !tm.remove_pty_handles_if_current(task_id, child_handle) {
+    // The body below keeps reading `task_id` for the maps that are not run-keyed yet; the run
+    // key is what decides which process's handles come down (ADR-020).
+    let task_id = run.id();
+    if !tm.remove_pty_handles_if_current(run, child_handle) {
         return;
     }
     let (is_cancelled, is_manually_completed) = {
@@ -416,14 +421,16 @@ fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, is_co
 /// 将 PTY master/writer/child 注册到 TaskManager 的三个 HashMap 中。
 pub(crate) fn register_pty_handles(
     task_manager: &TaskManager,
-    id: &str,
+    run: &RunKey,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 ) -> Result<Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>, String> {
     let mut masters = task_manager.pty_masters.lock();
     let mut pending_sizes = task_manager.pending_pty_sizes.lock();
-    if let Some((cols, rows)) = pending_sizes.remove(id) {
+    // A staged resize is addressed to "the next run of this id", which is why it is read back
+    // under the unminted key whatever this run's generation turns out to be.
+    if let Some((cols, rows)) = pending_sizes.remove(&RunKey::unminted(run.id())) {
         master
             .resize(PtySize {
                 rows,
@@ -433,18 +440,21 @@ pub(crate) fn register_pty_handles(
             })
             .map_err(|e| e.to_string())?;
     }
-    masters.insert(id.to_string(), Arc::new(parking_lot::Mutex::new(master)));
+    masters.insert(run.clone(), Arc::new(parking_lot::Mutex::new(master)));
     drop(pending_sizes);
     drop(masters);
     task_manager
         .pty_writers
         .lock()
-        .insert(id.to_string(), Arc::new(parking_lot::Mutex::new(writer)));
+        .insert(run.clone(), Arc::new(parking_lot::Mutex::new(writer)));
     let child_handle = Arc::new(parking_lot::Mutex::new(child));
     task_manager
         .child_handles
         .lock()
-        .insert(id.to_string(), Arc::clone(&child_handle));
+        .insert(run.clone(), Arc::clone(&child_handle));
+    // Registered only once all three handles exist: `runs` is what ADR-025's addressing reads,
+    // and a run that is half-registered would be addressable but unwritable.
+    task_manager.runs.register(run.id(), run.generation());
     Ok(child_handle)
 }
 
@@ -652,39 +662,42 @@ pub(crate) fn spawn_pty_reader(
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
 fn spawn_exit_monitor(
     app: AppHandle,
-    task_id: String,
+    run: RunKey,
     project_path: String,
     family: crate::app_settings::AgentFamily,
     child_handle: Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
-    tokio::task::spawn_blocking(move || loop {
-        let exit_status = child_handle.lock().try_wait().ok().flatten();
+    tokio::task::spawn_blocking(move || {
+        let task_id = run.id().to_string();
+        loop {
+            let exit_status = child_handle.lock().try_wait().ok().flatten();
 
-        if let Some(status) = exit_status {
-            let exit_ok = status.success();
-            let exit_code = if exit_ok {
-                None
-            } else {
-                Some(status.exit_code())
-            };
-            // 等待会话注册完成(dsh 由退出码定状态,注册竞态由 watcher 的
-            // 退出后兜底发现覆盖,无需在此阻塞)
-            if family != crate::app_settings::AgentFamily::Dsh {
-                wait_for_session(&app, &task_id, family.is_codex_like());
+            if let Some(status) = exit_status {
+                let exit_ok = status.success();
+                let exit_code = if exit_ok {
+                    None
+                } else {
+                    Some(status.exit_code())
+                };
+                // 等待会话注册完成(dsh 由退出码定状态,注册竞态由 watcher 的
+                // 退出后兜底发现覆盖,无需在此阻塞)
+                if family != crate::app_settings::AgentFamily::Dsh {
+                    wait_for_session(&app, &task_id, family.is_codex_like());
+                }
+                finalize_task_exit(
+                    &app,
+                    &run,
+                    &project_path,
+                    family,
+                    exit_ok,
+                    exit_code,
+                    &child_handle,
+                );
+                return;
             }
-            finalize_task_exit(
-                &app,
-                &task_id,
-                &project_path,
-                family,
-                exit_ok,
-                exit_code,
-                &child_handle,
-            );
-            return;
-        }
 
-        std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(100));
+        }
     });
 }
 
@@ -1546,6 +1559,55 @@ pub async fn run_task(
     rows: Option<u16>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    run_task_core(
+        app,
+        &task_manager,
+        RunKey::unminted(&task_id),
+        task_id,
+        project_path,
+        prompt,
+        created_at,
+        agent,
+        permission_mode,
+        images,
+        texts,
+        selected_model,
+        reasoning_effort,
+        speed,
+        force_prompt_injection,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// `run_task` 的内核。拆出来不是为了重构,而是为了方向:`LegacyTaskExecutor` 只能调这个,
+/// 不能调上面那个 `#[tauri::command]` —— 那会把 `TaskService → executor → command →
+/// TaskService` 接成递归(P2-05 Action 4)。参数与启动序列一字未改,wrapper 只负责解
+/// `State`。
+/// `run` says which run of `task_id` this spawn is (ADR-020): `RunKey::unminted` when the
+/// command wrapper started it, the generation core minted when the executor did.
+pub(crate) async fn run_task_core(
+    app: AppHandle,
+    task_manager: &TaskManager,
+    run: RunKey,
+    task_id: String,
+    project_path: String,
+    prompt: String,
+    created_at: Option<i64>,
+    agent: String,
+    permission_mode: String,
+    images: Option<Vec<String>>,
+    texts: Option<Vec<String>>,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    force_prompt_injection: Option<bool>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
     validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
@@ -1880,7 +1942,7 @@ pub async fn run_task(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle = register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
+    let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
 
     let _ = app.emit(
         "task-status",
@@ -1991,7 +2053,7 @@ pub async fn run_task(
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = needs_initial_input
-        .then(|| register_initial_input_signal(&task_manager, &task_id, startup_tx.clone()));
+        .then(|| register_initial_input_signal(task_manager, &task_id, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -2005,7 +2067,7 @@ pub async fn run_task(
         None,
     );
     if needs_initial_input {
-        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        let writer = task_manager.writer_for(&task_id);
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
@@ -2024,10 +2086,10 @@ pub async fn run_task(
                 })),
             );
         } else {
-            cancel_initial_input_signal(&task_manager, &task_id);
+            cancel_initial_input_signal(task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, launch.family, child_handle);
+    spawn_exit_monitor(app, run, project_path, launch.family, child_handle);
 
     Ok(())
 }
@@ -2046,7 +2108,7 @@ pub(crate) fn cancel_task_core<R: tauri::Runtime>(
         .insert(task_id.to_string());
     task_manager.manually_completed_tasks.lock().remove(task_id);
 
-    let child_arc = task_manager.child_handles.lock().get(task_id).cloned();
+    let child_arc = task_manager.child_for(task_id);
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
@@ -2097,7 +2159,7 @@ pub(crate) fn complete_task_core<R: tauri::Runtime>(
         .insert(task_id.to_string());
     task_manager.cancelled_tasks.lock().remove(task_id);
 
-    let child_arc = task_manager.child_handles.lock().get(task_id).cloned();
+    let child_arc = task_manager.child_for(task_id);
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
@@ -2140,8 +2202,8 @@ pub async fn get_active_task_ids(
         .child_handles
         .lock()
         .keys()
-        .filter(|id| validate_task_id(id).is_ok())
-        .cloned()
+        .filter(|run| validate_task_id(run.id()).is_ok())
+        .map(|run| run.id().to_string())
         .collect())
 }
 
@@ -2237,6 +2299,28 @@ pub struct ResetTaskProcessResult {
     omp_session_path: Option<String>,
 }
 
+impl ResetTaskProcessResult {
+    /// The same facts under core's names, so the field correspondence is checked where the
+    /// struct is defined. `had_live_process` has no counterpart: whether a process was
+    /// alive is a state-machine input, and core already knows it from its own ledger.
+    #[allow(
+        dead_code,
+        reason = "consumed by legacy_task_executor::reset, which the TaskService wiring step constructs"
+    )]
+    pub(crate) fn into_outcome(self) -> aeroric_core::tasks::ResetOutcome {
+        aeroric_core::tasks::ResetOutcome {
+            claude_session_id: self.claude_session_id,
+            claude_session_path: self.claude_session_path,
+            codex_session_id: self.codex_session_id,
+            codex_session_path: self.codex_session_path,
+            dsh_session_id: self.dsh_session_id,
+            dsh_session_path: self.dsh_session_path,
+            omp_session_id: self.omp_session_id,
+            omp_session_path: self.omp_session_path,
+        }
+    }
+}
+
 fn wait_for_terminal_history_to_settle(task_id: &str) {
     let deadline = Instant::now() + TERMINAL_HISTORY_SETTLE_MAX;
     let mut previous_len = crate::storage::task_terminal_history_len(task_id);
@@ -2262,6 +2346,15 @@ pub async fn reset_task_process(
     task_manager: State<'_, TaskManager>,
     task_id: String,
 ) -> Result<ResetTaskProcessResult, String> {
+    reset_task_process_core(app, &task_manager, task_id).await
+}
+
+/// `reset_task_process` 的内核。同一个递归禁令(见 `run_task_core`),同一份逐字未改的body。
+pub(crate) async fn reset_task_process_core(
+    app: AppHandle,
+    task_manager: &TaskManager,
+    task_id: String,
+) -> Result<ResetTaskProcessResult, String> {
     validate_task_id(&task_id)?;
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
@@ -2269,17 +2362,20 @@ pub async fn reset_task_process(
         .lock()
         .remove(&task_id);
     let (master, writer, child_arc) = {
+        // A reset replaces the process the user is looking at, which is ADR-025's resource
+        // rule: the newest registered run, not "whatever shares this id".
+        let run = task_manager.resource_run(&task_id);
         let mut masters = task_manager.pty_masters.lock();
         let mut pending_sizes = task_manager.pending_pty_sizes.lock();
         let mut writers = task_manager.pty_writers.lock();
         let mut children = task_manager.child_handles.lock();
-        let master = masters.remove(&task_id);
-        pending_sizes.remove(&task_id);
-        let writer = writers.remove(&task_id);
-        let child = children.remove(&task_id);
+        let master = run.as_ref().and_then(|run| masters.remove(run));
+        pending_sizes.remove(&RunKey::unminted(&task_id));
+        let writer = run.as_ref().and_then(|run| writers.remove(run));
+        let child = run.as_ref().and_then(|run| children.remove(run));
         (master, writer, child)
     };
-    cancel_initial_input_signal(&task_manager, &task_id);
+    cancel_initial_input_signal(task_manager, &task_id);
 
     // A reset replaces the process under the same task ID. Clear the old
     // session registrations before killing the child so its watcher cannot
@@ -2378,6 +2474,46 @@ pub async fn reset_task_process(
 pub async fn resume_task(
     app: AppHandle,
     task_manager: State<'_, TaskManager>,
+    task_id: String,
+    project_path: String,
+    agent: String,
+    session_id: String,
+    _prompt: String,
+    permission_mode: String,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    speed: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    resume_task_core(
+        app,
+        &task_manager,
+        RunKey::unminted(&task_id),
+        task_id,
+        project_path,
+        agent,
+        session_id,
+        _prompt,
+        permission_mode,
+        selected_model,
+        reasoning_effort,
+        speed,
+        cols,
+        rows,
+        on_output,
+    )
+    .await
+}
+
+/// `resume_task` 的内核。拆它的理由与 `run_task_core` 同一条:`LegacyTaskExecutor` 只能调
+/// 这个,不能调上面那个 `#[tauri::command]` —— 否则接成 `TaskService → executor → command
+/// → TaskService` 的递归(P2-05 Action 4)。参数、启动序列与前端可见的实参名一字未改。
+pub(crate) async fn resume_task_core(
+    app: AppHandle,
+    task_manager: &TaskManager,
+    run: RunKey,
     task_id: String,
     project_path: String,
     agent: String,
@@ -2557,7 +2693,7 @@ pub async fn resume_task(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle = register_pty_handles(&task_manager, &task_id, pair.master, writer, child)?;
+    let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
 
     let _ = app.emit(
         "task-status",
@@ -2590,7 +2726,7 @@ pub async fn resume_task(
     }
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = uses_ultracode
-        .then(|| register_initial_input_signal(&task_manager, &task_id, startup_tx.clone()));
+        .then(|| register_initial_input_signal(task_manager, &task_id, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -2604,7 +2740,7 @@ pub async fn resume_task(
         None,
     );
     if uses_ultracode {
-        let writer = task_manager.pty_writers.lock().get(&task_id).cloned();
+        let writer = task_manager.writer_for(&task_id);
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
             let cleanup_id = task_id.clone();
@@ -2623,10 +2759,10 @@ pub async fn resume_task(
                 })),
             );
         } else {
-            cancel_initial_input_signal(&task_manager, &task_id);
+            cancel_initial_input_signal(task_manager, &task_id);
         }
     }
-    spawn_exit_monitor(app, task_id, project_path, launch.family, child_handle);
+    spawn_exit_monitor(app, run, project_path, launch.family, child_handle);
 
     Ok(())
 }
@@ -2637,7 +2773,7 @@ pub(crate) fn write_task_input(
     task_id: &str,
     data: &str,
 ) -> Result<(), String> {
-    let writer = task_manager.pty_writers.lock().get(task_id).cloned();
+    let writer = task_manager.writer_for(task_id);
     if let Some(writer) = writer {
         let mut writer = writer.lock();
         writer
@@ -2670,9 +2806,7 @@ pub(crate) fn resize_task_pty(
     if cols < 2 || rows < 2 || cols > 10_000 || rows > 10_000 {
         return Ok(());
     }
-    let masters = task_manager.pty_masters.lock();
-    let master = masters.get(task_id).cloned();
-    drop(masters);
+    let master = task_manager.master_for(task_id);
     if let Some(master) = master {
         let master = master.lock();
         master
@@ -2684,10 +2818,7 @@ pub(crate) fn resize_task_pty(
             })
             .map_err(|e| e.to_string())?;
     } else {
-        task_manager
-            .pending_pty_sizes
-            .lock()
-            .insert(task_id.to_string(), (cols, rows));
+        task_manager.stage_pending_size(task_id, (cols, rows));
     }
     Ok(())
 }
@@ -2697,13 +2828,13 @@ pub(crate) fn current_task_pty_size(
     task_manager: &TaskManager,
     task_id: &str,
 ) -> Option<(u16, u16)> {
-    let master = task_manager.pty_masters.lock().get(task_id).cloned();
+    let master = task_manager.master_for(task_id);
     if let Some(master) = master {
         if let Ok(size) = master.lock().get_size() {
             return Some((size.cols, size.rows));
         }
     }
-    task_manager.pending_pty_sizes.lock().get(task_id).copied()
+    task_manager.pending_size(task_id)
 }
 
 #[tauri::command]
@@ -2737,13 +2868,13 @@ pub async fn open_shell(
     validate_shell_id(&shell_id)?;
     // 先终止已存在的同 ID Shell
     {
-        let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
+        let child_arc = task_manager.child_for(&shell_id);
         if let Some(arc) = child_arc {
             let mut child = arc.lock();
             let _ = child.kill();
             let _ = child.wait();
         }
-        task_manager.remove_pty_handles(&shell_id);
+        task_manager.remove_pty_handles(&RunKey::unminted(&shell_id));
     }
 
     let pair = native_pty_system()
@@ -2767,14 +2898,20 @@ pub async fn open_shell(
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    register_pty_handles(&task_manager, &shell_id, pair.master, writer, child)?;
+    register_pty_handles(
+        &task_manager,
+        &RunKey::unminted(&shell_id),
+        pair.master,
+        writer,
+        child,
+    )?;
 
     // Shell 退出后清理 TaskManager 中的残留句柄
     let app_cleanup = app.clone();
     let sid_cleanup = shell_id.clone();
     let on_finish = Box::new(move || {
         let tm = app_cleanup.state::<TaskManager>();
-        tm.remove_pty_handles(&sid_cleanup);
+        tm.remove_pty_handles(&RunKey::unminted(&sid_cleanup));
     });
 
     spawn_pty_reader(
@@ -2803,13 +2940,13 @@ pub async fn kill_shell(
     shell_id: String,
 ) -> Result<(), String> {
     validate_shell_id(&shell_id)?;
-    let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
+    let child_arc = task_manager.child_for(&shell_id);
     if let Some(arc) = child_arc {
         let mut child = arc.lock();
         let _ = child.kill();
         let _ = child.wait();
     }
-    task_manager.remove_pty_handles(&shell_id);
+    task_manager.remove_pty_handles(&RunKey::unminted(&shell_id));
     Ok(())
 }
 

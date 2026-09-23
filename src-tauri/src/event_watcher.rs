@@ -273,7 +273,7 @@ fn last_status() -> &'static Mutex<HashMap<String, String>> {
 /// 避免给已退出的任务发送 input_required/running,也避免高频事件刷屏。
 fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
     let tm = app.state::<TaskManager>();
-    if !tm.child_handles.lock().contains_key(&ev.task_id) {
+    if !tm.has_live_run(&ev.task_id) {
         return;
     }
     let remote = app.state::<crate::remote::RemoteState>();

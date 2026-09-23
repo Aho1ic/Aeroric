@@ -1787,6 +1787,48 @@ pub async fn run_dsh_task(
     client_time_zone: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    run_dsh_task_core(
+        app,
+        &state,
+        task_id,
+        agent,
+        project_path,
+        prompt,
+        session_id,
+        workspace_id,
+        agent_preset,
+        prompt_mode,
+        selected_model,
+        reasoning_effort,
+        permission_mode,
+        images,
+        client_time_zone,
+        on_output,
+    )
+    .await
+}
+
+/// `run_dsh_task` 的内核。`LegacyTaskExecutor` 从 `app.state::<DshWebUiManager>()` 拿到
+/// 引用后只能调这个 —— 调上面那个命令会把 `TaskService → executor → command →
+/// TaskService` 接成递归(P2-05 Action 4)。参数与实参名一字未改。
+pub(crate) async fn run_dsh_task_core(
+    app: AppHandle,
+    state: &DshWebUiManager,
+    task_id: String,
+    agent: String,
+    project_path: String,
+    prompt: String,
+    session_id: Option<String>,
+    workspace_id: Option<String>,
+    agent_preset: Option<String>,
+    prompt_mode: Option<String>,
+    selected_model: Option<String>,
+    reasoning_effort: Option<String>,
+    permission_mode: Option<String>,
+    images: Option<Vec<String>>,
+    client_time_zone: Option<String>,
+    on_output: Channel<String>,
+) -> Result<(), String> {
     // 只有内置官方 dsh 配置带 reasoning 元数据的模型目录;提供方 / 自定义提供方
     // 档案只做模型选择,即使前端回传了强度也一律丢弃。
     let reasoning_effort = if agent == "dsh" {
@@ -1807,7 +1849,7 @@ pub async fn run_dsh_task(
         let _ = crate::storage::truncate_task_terminal_history(&task_id);
         crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
     }
-    let web = ensure_dsh_webui(&agent, &state).await?;
+    let web = ensure_dsh_webui(&agent, state).await?;
     let base_url = web
         .url
         .ok_or_else(|| "DSH Web URL is unavailable".to_string())?;
@@ -1841,7 +1883,7 @@ pub async fn run_dsh_task(
     );
     let result: Result<(), String> = async {
         state.sync_terminal_cols(&app, &task_id);
-        start_task_session_stream(&app, &state, &task_id, &api, &session_id, &on_output).await?;
+        start_task_session_stream(&app, state, &task_id, &api, &session_id, &on_output).await?;
         let models = api.models(&session_id).await?;
         if selected_model.is_some() || reasoning_effort.is_some() {
             let current = &models.current;
@@ -1994,14 +2036,22 @@ pub async fn cancel_dsh_task(
     state: State<'_, DshWebUiManager>,
     task_id: String,
 ) -> Result<(), String> {
-    let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
+    cancel_dsh_task_core(&state, &task_id).await
+}
+
+/// 见 `run_dsh_task_core` —— 取消也是执行器的 `cancel` 分发目标之一。
+pub(crate) async fn cancel_dsh_task_core(
+    state: &DshWebUiManager,
+    task_id: &str,
+) -> Result<(), String> {
+    let task_lifecycle_lock = state.task_lifecycle_lock(task_id);
     let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
-    let active = state.active_sessions.lock().get(&task_id).cloned();
+    let active = state.active_sessions.lock().get(task_id).cloned();
     let Some(active) = active else { return Ok(()) };
     let api = DshApiClient::new(active.base_url)?;
     api.cancel(&active.session_id).await?;
-    if !state.completed_tasks.lock().contains(&task_id) {
-        state.cancelled_tasks.lock().insert(task_id.clone());
+    if !state.completed_tasks.lock().contains(task_id) {
+        state.cancelled_tasks.lock().insert(task_id.to_string());
     }
     Ok(())
 }

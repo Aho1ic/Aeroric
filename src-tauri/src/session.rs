@@ -74,7 +74,7 @@ fn emit_active_task_status(app: &AppHandle, task_id: &str, status: &str) {
 
 pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
     let tm = app.state::<TaskManager>();
-    if tm.child_handles.lock().contains_key(task_id) {
+    if tm.has_live_run(task_id) {
         return true;
     }
 
@@ -1933,8 +1933,7 @@ fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
     fn write_to_pty(app: &AppHandle, task_id: &str, bytes: &[u8]) {
         let writer = {
             let tm = app.state::<TaskManager>();
-            let writer = tm.pty_writers.lock().get(task_id).cloned();
-            writer
+            tm.writer_for(task_id)
         };
         if let Some(writer) = writer {
             let mut writer = writer.lock();
@@ -2025,8 +2024,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             // 因为我们刚注入的占位条目会被它跳过（设计如此），改成直接看进程在不在更准确。
             let alive = {
                 let tm = app.state::<TaskManager>();
-                let handles = tm.child_handles.lock();
-                handles.contains_key(&task_id)
+                tm.has_live_run(&task_id)
             };
             if !alive {
                 break;
@@ -2254,8 +2252,7 @@ fn run_status_session_watcher(
                     if !is_codex {
                         let writer = {
                             let tm = app.state::<TaskManager>();
-                            let writer = tm.pty_writers.lock().get(&task_id).cloned();
-                            writer
+                            tm.writer_for(&task_id)
                         };
                         if let Some(writer) = writer {
                             let mut writer = writer.lock();

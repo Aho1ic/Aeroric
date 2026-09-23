@@ -304,7 +304,7 @@ pub(crate) fn spawn_omp_session_watcher(
                 if tm.omp_sessions.lock().contains_key(&task_id) {
                     return;
                 }
-                if !tm.child_handles.lock().contains_key(&task_id) {
+                if !tm.has_live_run(&task_id) {
                     // 进程已退出:再发现一次,秒退的短会话也能补挂。这是最后一次机会,
                     // 认领输了也只能收摊 —— 进程都没了,不会再有属于自己的文件出现。
                     if let Some((session_id, path)) =
@@ -659,6 +659,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             wsl_active_ids: parking_lot::Mutex::new(std::collections::HashSet::new()),
+            runs: crate::run_registry::RunRegistry::new(),
             codex_rpc: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         });
         let handle = app.handle().clone();

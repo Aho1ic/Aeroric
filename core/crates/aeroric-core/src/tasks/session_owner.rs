@@ -21,11 +21,32 @@ use crate::storage::compat::Record;
 /// The table is shared across the host's threads, so it is `Send + Sync` by definition:
 /// a service that could not hand its own family table to a worker could not start a task
 /// from anywhere but the caller's thread.
+///
+/// **Two families, because the shipping product has always had two** (ADR-028). The
+/// built-in `claude_gpt55` is the proof: it is *started* with codex-style arguments
+/// (`src/agents.ts:167-176` gives it `codexLike: true`, and `pty.rs:1625,1808` picks
+/// `build_codex_cmd` from that flag) while its *transcript* is a Claude-format file under
+/// `~/.claude/projects` (`src-tauri/src/session.rs:557`). One field cannot say both, and
+/// whichever one it said, the other half of today's behaviour would silently change — so
+/// the port asks two questions, and callers must not answer one with the other.
 pub trait AgentFamilies: Send + Sync {
-    fn family(&self, agent: &str) -> ProtocolFamily;
-    /// Built-in agents of the same family may continue each other's sessions ("claude"
-    /// resuming a "claude_gpt55" task). Two custom profiles may not, even when they
-    /// share a family: they read different homes and different config.
+    /// Which CLI's argument shape starts this agent, i.e. the record's `launchFamily`.
+    fn launch_family(&self, agent: &str) -> ProtocolFamily;
+    /// Which session-file format and config home this agent reads, i.e. `sessionFamily`.
+    fn session_family(&self, agent: &str) -> ProtocolFamily;
+    /// Whichever CLI's own `--resume` can read this agent's transcripts, i.e. the record's
+    /// `resumeFamily` (ADR-029). Neither of the two above: `claude_gpt55` keeps Claude-format
+    /// history but is driven by a codex-style CLI, so today it cannot natively resume a
+    /// `claude` task — an answer that belongs to no family any longer does.
+    fn native_resume_family(&self, agent: &str) -> ProtocolFamily;
+    /// Built-in agents of the same **resume** family may continue each other's sessions. Two
+    /// custom profiles may not, even when they share a family: they read different homes and
+    /// different config.
+    ///
+    /// Worth stating plainly: after ADR-029 no two *current* built-ins share a resume family
+    /// (`claude` and `claude_gpt55` differ in capability despite one transcript format), so
+    /// this clause is inert today and exists for the next built-in. `SessionOwner`'s own unit
+    /// test pins that inertness rather than assuming it.
     fn is_builtin(&self, agent: &str) -> bool;
 }
 
@@ -117,8 +138,47 @@ pub fn resolve_session_owner(record: &Record, families: &dyn AgentFamilies) -> S
         return owner(agent.clone(), present[0]);
     }
     // Zero families, or an ambiguous mix: the configured agent decides.
-    let family = families.family(&agent);
+    let family = families.session_family(&agent);
     owner(agent, family)
+}
+
+/// Which argument shape a run of this task must use (ADR-028).
+///
+/// Precedence is deliberately *not* the same as [`resolve_session_owner`]'s: a stored
+/// `launchFamily` is a decision that was already made about how this task starts, and
+/// editing a custom profile afterwards must not retroactively change it. Only a record
+/// from before the field existed falls back to deriving from the agent — that derivation
+/// has to be the same function the shipping client uses, or the migration changes what
+/// gets launched.
+pub fn launch_family_of(record: &Record, families: &dyn AgentFamilies) -> ProtocolFamily {
+    if let Some(stored) = text(record, "launchFamily").and_then(parse_family) {
+        return stored;
+    }
+    // `sessionAgent` names whose CLI actually runs when a session was adopted; the launch
+    // shape follows that same agent, exactly as the record's own `agent` otherwise.
+    let agent = text(record, "sessionAgent")
+        .filter(|value| !value.is_empty())
+        .or_else(|| text(record, "agent"))
+        .unwrap_or_default();
+    families.launch_family(agent)
+}
+
+fn parse_family(text: &str) -> Option<ProtocolFamily> {
+    serde_json::from_value::<ProtocolFamily>(Value::String(text.to_string())).ok()
+}
+
+/// Which CLI's `--resume` can read this record's transcript (ADR-029).
+///
+/// A stored `resumeFamily` wins. When it is absent — every record written before this field
+/// existed — it is derived from the *session* family once, which is what the shipping client
+/// effectively did by comparing a single field, and it is backfilled on the next write. The
+/// derivation is deliberately not `launch_family_of`: that would re-collapse the two answers
+/// this field exists to keep apart.
+pub fn resume_family_of(record: &Record, families: &dyn AgentFamilies) -> ProtocolFamily {
+    if let Some(stored) = text(record, "resumeFamily").and_then(parse_family) {
+        return stored;
+    }
+    resolve_session_owner(record, families).family
 }
 
 /// One family's session coordinates, plus whichever other family still holds a value —
@@ -180,17 +240,22 @@ pub fn family_prefix(family: ProtocolFamily) -> &'static str {
 }
 
 /// `canNativeResumeWithAgent`: the CLI's own `--resume` may be used.
+///
+/// Compares **resume families**, not session families (ADR-029): "whose `--resume` reads
+/// this" is its own fact, and keying it off the transcript format would silently turn
+/// today's `handoff` for `claude` → `claude_gpt55` into a native resume.
 pub fn can_native_resume(
     record: &Record,
     target_agent: &str,
     families: &dyn AgentFamilies,
 ) -> bool {
     let source = resolve_session_owner(record, families);
+    let source_resume = resume_family_of(record, families);
     // dsh has no native CLI resume at all — it reconnects over its own Web RPC channel.
-    if source.family == ProtocolFamily::Dsh {
+    if source.family == ProtocolFamily::Dsh || source_resume == ProtocolFamily::Dsh {
         return false;
     }
-    if source.family != families.family(target_agent) {
+    if source_resume != families.native_resume_family(target_agent) {
         return false;
     }
     if families.is_builtin(&source.agent) && families.is_builtin(target_agent) {
@@ -203,12 +268,13 @@ pub fn can_native_resume(
 /// copied into the target's home before `--resume` can see it.
 pub fn can_adopt(record: &Record, target_agent: &str, families: &dyn AgentFamilies) -> bool {
     let source = resolve_session_owner(record, families);
+    let source_resume = resume_family_of(record, families);
     // Adoption is a claude/codex home migration. omp's `--resume` takes a file path and
     // needs none; dsh cannot resume natively either way.
-    if source.family == ProtocolFamily::Dsh || source.family == ProtocolFamily::Omp {
+    if source_resume == ProtocolFamily::Dsh || source_resume == ProtocolFamily::Omp {
         return false;
     }
-    if source.family != families.family(target_agent) {
+    if source_resume != families.native_resume_family(target_agent) {
         return false;
     }
     source.agent != target_agent && !can_native_resume(record, target_agent, families)
@@ -323,8 +389,21 @@ pub(crate) mod test_support {
         }
     }
 
+    /// Mirrors the shipping client, including the one place where the two families
+    /// disagree: `claude_gpt55` is started with codex-style arguments but keeps
+    /// Claude-format sessions (ADR-028). A fixture that collapsed the two would let a
+    /// regression pass that the real product would notice.
     impl AgentFamilies for Table {
-        fn family(&self, agent: &str) -> ProtocolFamily {
+        fn launch_family(&self, agent: &str) -> ProtocolFamily {
+            match agent {
+                "claude" => ProtocolFamily::Claude,
+                "claude_gpt55" | "codex" => ProtocolFamily::Codex,
+                "dsh" => ProtocolFamily::Dsh,
+                "omp" => ProtocolFamily::Omp,
+                other => self.session_family(other),
+            }
+        }
+        fn session_family(&self, agent: &str) -> ProtocolFamily {
             match agent {
                 "claude" | "claude_gpt55" => ProtocolFamily::Claude,
                 "codex" => ProtocolFamily::Codex,
@@ -336,6 +415,15 @@ pub(crate) mod test_support {
                     .find(|(id, _)| id == other)
                     .map(|(_, family)| *family)
                     .unwrap_or(ProtocolFamily::Claude),
+            }
+        }
+        /// ADR-029: `claude_gpt55` writes Claude transcripts but is driven by a codex-style
+        /// CLI, so its `--resume` reads codex transcripts. This is the row where the three
+        /// families disagree, and the reason none of them may be used as a proxy for another.
+        fn native_resume_family(&self, agent: &str) -> ProtocolFamily {
+            match agent {
+                "claude_gpt55" => ProtocolFamily::Codex,
+                other => self.session_family(other),
             }
         }
         fn is_builtin(&self, agent: &str) -> bool {
@@ -431,12 +519,56 @@ mod tests {
         assert_eq!(fields.legacy_session_path.as_deref(), Some("/o"));
     }
 
+    /// ADR-029 decision 4: a stored `resumeFamily` outranks the derivation, an absent one is
+    /// derived from the **session** family exactly once, and an unreadable value falls back to
+    /// that same derivation. It is never borrowed from `launchFamily` — doing so is the
+    /// collapse this field exists to prevent.
+    #[test]
+    fn the_resume_family_is_stored_or_derived_but_never_borrowed_from_launch() {
+        let table = claude();
+        let unstamped = record(json!({ "agent": "claude", "claudeSessionId": "c" }));
+        assert_eq!(resume_family_of(&unstamped, &table), ProtocolFamily::Claude);
+
+        let stamped = record(json!({
+            "agent": "claude", "claudeSessionId": "c", "resumeFamily": "omp"
+        }));
+        assert_eq!(
+            resume_family_of(&stamped, &table),
+            ProtocolFamily::Omp,
+            "a recorded capability outranks the derivation even where they disagree"
+        );
+
+        let nonsense = record(json!({
+            "agent": "claude", "claudeSessionId": "c", "resumeFamily": "martian"
+        }));
+        assert_eq!(
+            resume_family_of(&nonsense, &table),
+            ProtocolFamily::Claude,
+            "unreadable falls back, never guesses"
+        );
+
+        // The three answers for one agent, side by side: this is why none may proxy another.
+        let gpt55 = record(json!({ "agent": "claude_gpt55", "sessionFamily": "claude" }));
+        assert_eq!(resume_family_of(&gpt55, &table), ProtocolFamily::Claude);
+        assert_eq!(table.session_family("claude_gpt55"), ProtocolFamily::Claude);
+        assert_eq!(table.launch_family("claude_gpt55"), ProtocolFamily::Codex);
+        assert_eq!(
+            table.native_resume_family("claude_gpt55"),
+            ProtocolFamily::Codex
+        );
+    }
+
     #[test]
     fn resume_ability_is_per_family_and_builtins_trust_each_other() {
         let claude_row =
             record(json!({"agent": "claude", "claudeSessionId": "c", "sessionFamily": "claude"}));
         let table = claude();
-        assert!(can_native_resume(&claude_row, "claude_gpt55", &table));
+        assert!(
+            !can_native_resume(&claude_row, "claude_gpt55", &table),
+            "ADR-029: same transcript format, different CLI — the client hands this off, and \
+             the parity table flipped from `true` to `false` when its invented row was removed"
+        );
+        assert!(can_native_resume(&claude_row, "claude", &table));
         assert!(!can_native_resume(&claude_row, "my-codex", &table));
         let omp = record(json!({"agent": "omp", "ompSessionId": "o", "sessionFamily": "omp"}));
         assert!(can_native_resume(&omp, "omp", &table));
@@ -463,7 +595,8 @@ mod tests {
         }));
         assert!(
             !can_adopt(&claude_record, "claude_gpt55", &table),
-            "two built-ins already resume natively; adoption would be a wasted copy"
+            "ADR-029: not 'already resumes natively' but 'different resume family' — copying \
+             the transcript would not make the other CLI's --resume read it"
         );
         let omp = record(json!({"agent": "omp", "sessionFamily": "omp", "ompSessionId": "o"}));
         assert!(!can_adopt(&omp, "omp", &table));
@@ -479,7 +612,8 @@ mod tests {
         let table = claude();
         assert_eq!(
             resolve_config_switch_strategy(&record, "claude_gpt55", true, &table),
-            ConfigSwitchStrategy::Resume
+            ConfigSwitchStrategy::Handoff,
+            "ADR-029: neither native nor adoptable, so the conversation goes over as text"
         );
         assert_eq!(
             resolve_config_switch_strategy(&record, "my-custom-claude", true, &table),
