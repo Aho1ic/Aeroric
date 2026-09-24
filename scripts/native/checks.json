@@ -22,15 +22,15 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2467,
+      "src-tauri-lib-tests@tauri-adapter": 2468,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 30,
-      "adapter-acceptance-real-kernel@tauri-adapter": 7,
+      "tasks-status-machine-rust@tasks": 31,
+      "adapter-acceptance-real-kernel@tauri-adapter": 8,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
@@ -692,8 +692,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 30,
-          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红，还原即 30/30。",
+          "minCases": 31,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。",
           "timeoutMs": 900000
         },
         {
@@ -856,7 +856,7 @@
           "name": "adapter-acceptance-real-kernel",
           "kind": "test",
           "parse": "rust",
-          "minCases": 7,
+          "minCases": 8,
           "timeoutMs": 900000,
           "argv": [
             "cargo",
@@ -869,13 +869,13 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。"
+          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。第 8 条 `the_wired_service_asks_the_host_about_a_run_core_never_minted`（ADR-036）是这一组里唯一驱动`install_core_services` 真正建出来的那对（`TaskService` + 宿主 `LiveRuns`）的用例：其余场景一律喂 `NoLiveRuns`，所以“接线把端口接错了”在它们那里是隐形的。它登记的是一条 generation 0 的运行——正是产品路径今天的全部。"
         },
         {
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2467,
+          "minCases": 2468,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -885,7 +885,7 @@
             "--locked",
             "--lib"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ **2468**（ADR-036 那条：接进产品路径的 `LiveRuns` 必须真的被问到）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
         },
         {
           "name": "src-tauri-cargo-fmt",

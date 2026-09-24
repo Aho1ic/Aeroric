@@ -33,7 +33,8 @@ use aeroric_core::paths::AppPaths;
 use aeroric_core::storage::Record;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
-    AgentFamilies, Applied, NewTask, ProtocolFamily, TaskError, TaskExecutor, TaskService,
+    AgentFamilies, Applied, NewTask, NoLiveRuns, ProtocolFamily, TaskError, TaskExecutor,
+    TaskService,
 };
 use serde_json::{json, Map, Value};
 use tauri::ipc::Channel;
@@ -181,10 +182,14 @@ impl Scenario {
         >::new(
             handle.clone(), sinks.clone()
         ));
+        // ADR-036: every run in this file is core-minted, so core's own claims answer the
+        // liveness question. The port stays `NoLiveRuns` deliberately — a stub that said "all
+        // live" would hide any regression in the claim-based half of the guard.
         let service = TaskService::new(
             Arc::new(context),
             Arc::new(SettingsFamilies) as Arc<dyn AgentFamilies>,
             executor,
+            Arc::new(NoLiveRuns),
         )
         .expect("service");
 
@@ -954,4 +959,55 @@ fn a_refused_lease_is_reported_and_names_the_directory_it_will_not_write() {
     );
     // `scratch` drops before `home` by declaration order, which is what clears the global slot
     // before the directory is deleted.
+}
+
+/// ADR-036: the service `install_core_services` actually builds has to answer the liveness
+/// question by asking the host, and the host's answer must count a run core never minted a
+/// generation for — which is **every** run on the shipping client until the writer switch lands.
+///
+/// The scenarios above all use `NoLiveRuns`, so they cannot catch this seam being wrong: with a
+/// stub that always answers "no" they stay green (their runs are core-minted, so the claim half
+/// of the union carries them). This is the one test that drives the wired pair.
+#[test]
+fn the_wired_service_asks_the_host_about_a_run_core_never_minted() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("adr036-liveness");
+    let _scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    std::fs::create_dir_all(home.path().join(".aeroric")).expect("data dir");
+
+    let app = tauri::test::mock_app();
+    app.manage(task_manager());
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+
+    let manager = app.state::<TaskManager>();
+    let service = app.state::<TaskService>();
+
+    assert!(
+        !service.is_task_live("legacy-task"),
+        "nothing is running yet: the port must not be a rubber stamp"
+    );
+
+    // Exactly what the legacy launch path leaves behind: a run in the host's registry with
+    // generation 0, and no core claim anywhere.
+    manager
+        .runs
+        .register("legacy-task", crate::run_registry::RunKey::UNMINTED);
+    assert!(
+        service.is_task_live("legacy-task"),
+        "ADR-036: an unminted run is still a live run, or deleting the legacy emit sites \
+         silences every status the product path reports"
+    );
+
+    assert!(
+        manager
+            .runs
+            .retire("legacy-task", crate::run_registry::RunKey::UNMINTED),
+        "and the retirement is heard by the same table"
+    );
+    assert!(
+        !service.is_task_live("legacy-task"),
+        "a run that ended must stop holding observations up"
+    );
 }

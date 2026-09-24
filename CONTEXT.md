@@ -135,3 +135,10 @@
 | 只决策的观察 / announce-only observation | `observe` 的决策段（reducer + 两道守卫）不依赖写权，落盘是它后面可选的一步。非 writer 平台走"决策 + 发射 + 不提交" | 不是"观察失败就丢掉"（那是静默不发，ADR-033 §4 禁止）；不是"排队等切换后补发"（补发队列是第二个事件权威） |
 | 准入即发射 / admitted means emitted | 被 reducer **准入**的观察必须发事件，即使 `changed == false`；只有 `EventOutcome::Dropped` 才不发。今天 28 处里 25 处无条件发射 | 不是"状态变了才发"（那是把宿主没做的折叠补上，属于夹带行为变更）；不是"发两次算重复" |
 | 存活代登记 / host-reported liveness | 宿主把"某个代正在跑"报进 core 账本的动作。DSH 的 9 处必须有它才能删：dsh 从不走 core 的 `start`，`live_for(task)` 恒空 | 不是 core 铸造 generation（ADR-020 的唯一编号源不变）；不是 `RunRegistry` 的注册（那是宿主自己的寻址表，core 看不见） |
+
+## 存活代来源新增（P2-05 续，Q65，ADR-036）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 问出来的存活 / asked liveness | core 通过 `LiveRuns` 端口**问**宿主"这个任务还有活着的代吗"，自己不存副本。宿主答的是 `TaskManager::runs`（真正握着进程句柄的那张表） | 不是 core 里的镜像表（漏一次 retire 就永久"活着"，失效方向是抑制闸静默停摆）；不是"宿主自己做决定"（决定仍在 core 的准入判据里） |
+| 存活判据之并 / union of two sources | `is_task_live = 有 core 自己的 claim ∨ 端口答是`。两半各覆盖一类运行：claim 覆盖 core 起的，端口覆盖旧命令路径起的 | 不是"看最新一代"（ADR-025：存活看任意一代）；不是只看 claim（产品路径今天一条 claim 都不产生，只看它就会让 5 处 launch 的 `running` 全部静默） |

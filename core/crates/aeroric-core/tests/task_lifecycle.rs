@@ -12,12 +12,15 @@ use aeroric_core::storage::atomic::StorageError;
 use aeroric_core::storage::{runtime, Cover, Fingerprint};
 use aeroric_core::tasks::executor::TaskEvent;
 use aeroric_core::tasks::service::{Attachments, EventOutcome, NewTask, TaskError};
-use aeroric_core::tasks::{launch_plan, operations, reducer, session_owner};
+use aeroric_core::tasks::{launch_plan, operations, reducer, session_owner, NoLiveRuns};
 use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
 use serde_json::{json, Value};
 
 mod common;
-use common::{build_service, cleanup, harness, local_project, reader, record, task, Families};
+use common::{
+    build_service, build_service_with_liveness, cleanup, harness, local_project, reader, record,
+    task, Families, StubLiveness,
+};
 
 /// The harness puts the managed data directory at `root/managed`, exactly the way
 /// `AppPaths::with_data_dir` does. Spelled once here so a test never re-derives the layout
@@ -900,6 +903,7 @@ fn the_ledger_file_is_core_exclusive_and_a_corrupt_one_stops_the_service_from_wr
         Arc::new(context),
         Arc::new(Families),
         runner,
+        Arc::new(NoLiveRuns),
     );
     match failure {
         Err(StorageError::Corrupt { .. }) => {}
@@ -1783,6 +1787,69 @@ fn a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_can
     assert!(
         matches!(dropped, EventOutcome::Dropped(_)),
         "with no run left, the same report is exactly the accident ADR-034 exists for: {dropped:?}"
+    );
+    cleanup(root);
+}
+
+/// ADR-036: the run the *host* started has no core claim, ever — and on the shipping client
+/// that is every run, because the product path still launches through the legacy commands. So
+/// the liveness question must genuinely reach the port. Two services over the same seeded row,
+/// differing only in what the port answers.
+#[test]
+fn a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else() {
+    let (root, context, executor) = harness("port-live", &[task("t1", "p1", "done")]);
+    let live = StubLiveness::live(&["t1"]);
+    let service = build_service_with_liveness(context, &executor, live.clone());
+
+    let (outcome, _) = service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 0,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("answered");
+    assert!(
+        matches!(outcome, EventOutcome::Applied { .. }),
+        "the host says a run is alive, so this is not a late observation: {outcome:?}"
+    );
+    assert!(
+        live.asks() > 0,
+        "the guard has to actually ask; a port nobody calls passes every test"
+    );
+    assert_eq!(
+        rows(&tasks_json(&root))[0].get("status"),
+        Some(&json!("running")),
+        "and the answer is applied"
+    );
+    cleanup(root);
+
+    let (root, context, executor) = harness("port-dead", &[task("t1", "p1", "done")]);
+    let service = build_service(context, &executor);
+    let (dropped, _) = service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 0,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("answered");
+    assert!(
+        matches!(dropped, EventOutcome::Dropped(_)),
+        "with nothing alive behind it, the same report is the accident ADR-034 exists for: {dropped:?}"
+    );
+    assert_eq!(
+        rows(&tasks_json(&root))[0].get("status"),
+        Some(&json!("done")),
+        "the counter-example writes nothing"
     );
     cleanup(root);
 }

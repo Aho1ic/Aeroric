@@ -31,7 +31,7 @@ use crate::storage::compat::Record;
 use crate::storage::fingerprint::Cover;
 use crate::storage::runtime;
 use crate::storage::tasks as task_storage;
-use crate::tasks::executor::{ExecutorFailure, TaskEvent, TaskExecutor};
+use crate::tasks::executor::{ExecutorFailure, LiveRuns, TaskEvent, TaskExecutor};
 use crate::tasks::launch_plan::{self, Completion};
 use crate::tasks::operations::{Claim, Claimed, OperationKind, OperationLedger};
 use crate::tasks::reducer;
@@ -175,6 +175,10 @@ pub struct TaskService {
     context: Arc<CoreContext>,
     families: Arc<dyn AgentFamilies>,
     executor: Arc<dyn TaskExecutor>,
+    /// ADR-036: which runs are still alive is asked, not stored. Core's own claims cover the
+    /// runs it started; the shipping client starts most runs through the legacy commands, and
+    /// those only exist here.
+    live_runs: Arc<dyn LiveRuns>,
     ledger: Mutex<OperationLedger>,
 }
 
@@ -183,6 +187,7 @@ impl TaskService {
         context: Arc<CoreContext>,
         families: Arc<dyn AgentFamilies>,
         executor: Arc<dyn TaskExecutor>,
+        live_runs: Arc<dyn LiveRuns>,
     ) -> Result<Self, StorageError> {
         let ledger = match OperationLedger::load_state(&context)? {
             Some(state) => OperationLedger::new(state),
@@ -195,6 +200,7 @@ impl TaskService {
             context,
             families,
             executor,
+            live_runs,
             ledger: Mutex::new(ledger),
         })
     }
@@ -1041,7 +1047,7 @@ impl TaskService {
         // (row already `cancelled`, process still dying), and the host emits unconditionally in
         // both. Gating on the row instead would silently swallow the `running` that starts a
         // re-run of a finished task, which is a user-visible regression dressed up as a guard.
-        if !status.is_terminal() && self.open_claims(event.task_id()).is_empty() {
+        if !status.is_terminal() && !self.is_task_live(event.task_id()) {
             return Ok((
                 EventOutcome::Dropped("no live run for this task"),
                 self.unchanged(snapshot.records.clone(), snapshot.fingerprint.clone()),
@@ -1285,6 +1291,14 @@ impl TaskService {
     /// Does this run still have an attempt in flight?
     pub fn is_run_live(&self, task_id: &str, generation: u64) -> bool {
         self.ledger(|ledger| ledger.is_live(task_id, generation))
+    }
+
+    /// ADR-036: does this task have **any** run alive in this process? Two sources, unioned —
+    /// a claim core itself took, or the host's answer through the port. Only the first covers
+    /// a core-launched run, and only the second covers the legacy launch path; using either
+    /// one alone silently mis-classifies the other. "Any", not "newest": ADR-025.
+    pub fn is_task_live(&self, task_id: &str) -> bool {
+        !self.open_claims(task_id).is_empty() || self.live_runs.has_live_run(task_id)
     }
 
     /// A run reconciliation cut off, waiting to be acknowledged.

@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_core::{
-    tasks::{AgentFamilies, ProtocolFamily, TaskEventSink, TaskNotification, TaskSessionFacts},
+    tasks::{
+        AgentFamilies, LiveRuns, ProtocolFamily, TaskEventSink, TaskNotification, TaskSessionFacts,
+    },
     AppPaths, Clock, CoreContext, LeaseError, LeaseOwner, SystemClock,
 };
 
@@ -514,6 +516,28 @@ impl TaskEventSink for TauriEventSink {
     }
 }
 
+/// ADR-036: the host's answer to "is any run of this task still alive".
+///
+/// `TaskManager::runs` is the only table with a real claim on the process handles, and it
+/// already counts an unminted run (`RunKey::UNMINTED`, i.e. one the legacy command path started
+/// without core minting a generation) as a run — which is what makes the answer equivalent to the
+/// `is_task_active` gate this replaces. Nothing is copied into core: a mirror would fail by
+/// staying alive forever if a single retire path were missed, and the failure would be silent
+/// (the suppression gate simply stops suppressing).
+///
+/// It must not call back into core, and `has_live_run` only takes the registry's leaf lock, so
+/// asking cannot extend a lock chain.
+struct HostLiveness<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+}
+
+impl<R: tauri::Runtime> LiveRuns for HostLiveness<R> {
+    fn has_live_run(&self, task_id: &str) -> bool {
+        use tauri::Manager;
+        self.app.state::<crate::TaskManager>().has_live_run(task_id)
+    }
+}
+
 /// Puts the adapter's shared state in front of the app, from `lib.rs`'s setup hook.
 ///
 /// Three rules shape this function, and none of them are stylistic:
@@ -544,10 +568,12 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>
     let executor: Arc<dyn TaskExecutor> = Arc::new(
         crate::legacy_task_executor::LegacyTaskExecutor::new(app.clone(), mailbox),
     );
+    let live_runs: Arc<dyn LiveRuns> = Arc::new(HostLiveness { app: app.clone() });
     match TaskService::new(
         context,
         Arc::new(SettingsFamilies) as Arc<dyn AgentFamilies>,
         executor,
+        live_runs,
     ) {
         Ok(service) => {
             app.manage(service);

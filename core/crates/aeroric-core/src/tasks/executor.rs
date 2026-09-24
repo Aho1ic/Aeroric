@@ -194,6 +194,32 @@ pub trait TaskRuntimeObserver: Send + Sync {
     fn observe(&self, event: TaskEvent);
 }
 
+/// ADR-036: who is still running is a question core **asks**, not a table it keeps.
+///
+/// ADR-034's guard drops a non-terminal observation when the task has no live run, and on the
+/// shipping client most runs are not core's — the product path still launches through the
+/// legacy commands, so core's operation ledger holds no claim for them. A mirror table would
+/// fail in the dangerous direction: one missed `retire` leaves a run alive forever and the
+/// suppression gate silently stops suppressing. The process handles live in the host's
+/// registry, so the answer lives there too.
+///
+/// The implementation must not call back into core (P2-05 Action 4's recursion ban), and must
+/// treat an unminted run the same as a minted one — "is any run of this id live" is the
+/// question ADR-025 settled, not "is the newest one".
+pub trait LiveRuns: Send + Sync {
+    fn has_live_run(&self, task_id: &str) -> bool;
+}
+
+/// Nothing is running: a headless CLI, a test that drives no processes. Combined with core's
+/// own claims, this leaves the guard exactly where ADR-034 put it for core-launched runs.
+pub struct NoLiveRuns;
+
+impl LiveRuns for NoLiveRuns {
+    fn has_live_run(&self, _task_id: &str) -> bool {
+        false
+    }
+}
+
 /// What an injected failure looks like to a caller.
 pub type Execution<T> = Result<T, ExecutorFailure>;
 

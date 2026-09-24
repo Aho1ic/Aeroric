@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
 use aeroric_core::storage::compat::Record;
 use aeroric_core::tasks::executor::{
-    CancelTarget, ExecutorFailure, LaunchRequest, ResetOutcome, ResumeRequest, TaskEvent,
-    TaskExecutor,
+    CancelTarget, ExecutorFailure, LaunchRequest, LiveRuns, NoLiveRuns, ResetOutcome,
+    ResumeRequest, TaskEvent, TaskExecutor,
 };
 use aeroric_core::tasks::service::TaskService;
 use aeroric_core::tasks::session_owner::AgentFamilies;
@@ -341,12 +341,54 @@ pub fn harness(tag: &str, initial: &[Record]) -> (PathBuf, CoreContext, Arc<Fake
 }
 
 pub fn build_service(context: CoreContext, executor: &Arc<FakeExecutor>) -> TaskService {
+    build_service_with_liveness(context, executor, Arc::new(NoLiveRuns))
+}
+
+/// ADR-036's seam under test: some hosts must be able to answer "this task is still running"
+/// for a run core never started, so the port has to be injectable rather than hard-wired.
+pub fn build_service_with_liveness(
+    context: CoreContext,
+    executor: &Arc<FakeExecutor>,
+    live_runs: Arc<dyn LiveRuns>,
+) -> TaskService {
     let families: Arc<dyn AgentFamilies> = Arc::new(Families);
     let runner: Arc<dyn TaskExecutor> = executor.clone();
     // `build_service` still takes the context by value so the 20-odd callers that got one from
     // `writer()`/`reacquire()` stay as they are; the Arc is the service's sharing rule, not
     // theirs.
-    TaskService::new(Arc::new(context), families, runner).expect("service")
+    TaskService::new(Arc::new(context), families, runner, live_runs).expect("service")
+}
+
+/// A `LiveRuns` that answers for exactly the ids a test names, and counts how many times core
+/// actually asked. The counter is the point: without it a port that is never consulted still
+/// passes every assertion.
+#[derive(Default)]
+pub struct StubLiveness {
+    live: Mutex<Vec<String>>,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl StubLiveness {
+    pub fn live(ids: &[&str]) -> Arc<Self> {
+        Arc::new(StubLiveness {
+            live: Mutex::new(ids.iter().map(|id| id.to_string()).collect()),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+    pub fn asks(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl LiveRuns for StubLiveness {
+    fn has_live_run(&self, task_id: &str) -> bool {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.live
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|id| id == task_id)
+    }
 }
 
 pub fn cleanup(root: PathBuf) {

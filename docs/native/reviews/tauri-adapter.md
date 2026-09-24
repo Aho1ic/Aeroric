@@ -140,6 +140,19 @@ ADR-033 §4：「每一处删除都必须能指出它现在经由哪个观察进
 2. **`RunKey::UNMINTED(0)` 与真实代同等参与**。今天 `is_task_active` 问的就是"这个 id 有没有任意存活代"，
    按 0 登记恰好等价；把它当成"没有代"就是把 ADR-034 的判据再次写宽。
 
+### 5.1a 这条前置已于同轮关闭（Q65 → ADR-036）
+
+上面第 1 条推荐的形态**被采纳并落地了**：core 不存镜像，而是持一个 `LiveRuns` 端口去问宿主，
+`is_task_live = 有 core 自己的 claim ∨ 端口答"活"`。宿主侧实现就是 `TaskManager::has_live_run`
+（`core_adapter.rs::HostLiveness`），generation 0 与真实代同等参与，因此 §5.1 第 2 条约束是
+天然满足的，不需要额外机制。可核对性落在两条用例上：core 侧 `a_legacy_runs_report_is_held_up_by_
+the_port_and_by_nothing_else`（含"端口被真的调用过"的计数断言），宿主侧
+`the_wired_service_asks_the_host_about_a_run_core_never_minted`（唯一驱动 `install_core_services`
+真建出来的那一对的用例——其余验收场景都喂 `NoLiveRuns`，接线接错在它们那里是隐形的）。
+
+任务 #14 因此不是"再做一份登记"，而是**已经被端口取代**；剩下的只有 §5.2 的会话入口与 #12 的
+task→project 解析。
+
 ### 5.2 `task-session` 走的不是观察通道
 
 6 处 `task-session` 报的是"这份转录现在在哪"，不是"某个运行发生了什么"。它在 core 里已有的对应入口是
