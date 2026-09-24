@@ -29,7 +29,7 @@
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 28,
+      "tasks-status-machine-rust@tasks": 30,
       "adapter-acceptance-real-kernel@tauri-adapter": 7,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
@@ -692,8 +692,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 28,
-          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）。新增那条不是锦上添花：它是宿主 `is_task_active` 抑制闸的等价物，缺了它，28 处发射点里那 3 处保护的就是宿主删不掉的私货。可失败性已用 `if false` 变异验证（关掉规则立即红）。",
+          "minCases": 30,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红，还原即 30/30。",
           "timeoutMs": 900000
         },
         {

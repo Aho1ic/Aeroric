@@ -353,6 +353,15 @@ pub fn cleanup(root: PathBuf) {
     std::fs::remove_dir_all(root).ok();
 }
 
+/// The same directory as seen by a process that was **never handed the writer role**
+/// (ADR-021: that is every non-macOS install today). No lease is attempted, so
+/// `require_write` fails and `load_*` still work — which is precisely the split ADR-035
+/// builds the announcement path on.
+pub fn reader(root: &Path) -> CoreContext {
+    let paths = AppPaths::with_data_dir(root, Some(&root.join("managed")));
+    CoreContext::read_only(paths).with_clock(Arc::new(FixedClock::at(1_700_000_005_000)))
+}
+
 /// Re-open a directory the way a fresh process would: same paths, new lease, new epoch.
 /// This is how the crash-recovery tests prove that nothing important lived only in the
 /// first service's memory.

@@ -159,6 +159,15 @@ pub enum EventOutcome {
     Dropped(&'static str),
 }
 
+/// Whether an accepted observation also gets written. ADR-035 splits this from the decision:
+/// reads need no write authority (only `save_covering` asks for it), so a host that is not the
+/// writer can still let core decide what a task's status is — and therefore what gets emitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Persist {
+    Commit,
+    DecideOnly,
+}
+
 pub struct TaskService {
     /// Shared, because the host's adapter owns the same context: the gateway is what took the
     /// writer lease, and a service that carried its own copy would be a second answer to
@@ -915,10 +924,44 @@ impl TaskService {
     /// Where a hook/exit event lands. One reducer, one owner: this is the only way an
     /// outside observation moves a task, and the generation guard is what keeps a late exit
     /// from settling a task that has already been resumed.
+    ///
+    /// The writer half. On a platform that has not been handed the writer role this returns
+    /// `Err` from [`TaskService::commit`] — which is why the announcement path calls
+    /// [`decide_observation`](TaskService::decide_observation) instead (ADR-035).
     pub fn observe(
         &self,
         project_id: &str,
         event: TaskEvent,
+    ) -> Result<(EventOutcome, Applied), TaskError> {
+        self.apply_observation(project_id, event, Persist::Commit)
+    }
+
+    /// ADR-035: the same decision, without the write.
+    ///
+    /// Which status a run's report produces, whether it is dropped, and whether the task is
+    /// therefore still live are decided here and nowhere else — but the bytes stay wherever
+    /// the host put them. This is what lets core be the only emitter of `task-status` on a
+    /// platform where it is not the writer: the reads (`load_stamped`) need no write
+    /// authority, only `save_covering` does.
+    ///
+    /// The returned [`Applied`] carries the post-decision records with `revision: None` and
+    /// `fingerprint: None`, because nothing was written. The in-memory claim *is* settled for
+    /// a terminal observation: a run that has reported has reported, and the alternative —
+    /// leaving the claim open so a later commit can see it — would let the same run settle a
+    /// task twice.
+    pub fn decide_observation(
+        &self,
+        project_id: &str,
+        event: TaskEvent,
+    ) -> Result<(EventOutcome, Applied), TaskError> {
+        self.apply_observation(project_id, event, Persist::DecideOnly)
+    }
+
+    fn apply_observation(
+        &self,
+        project_id: &str,
+        event: TaskEvent,
+        persist: Persist,
     ) -> Result<(EventOutcome, Applied), TaskError> {
         let snapshot = self.load(project_id)?;
         let current = self.generation(event.task_id());
@@ -978,30 +1021,29 @@ impl TaskService {
                 ));
             }
         };
-        // ADR-034: an observation may not pull a settled task back out of a terminal status.
-        // This is the guard the host used to apply at three transcript-watcher call sites via
-        // `is_task_active`, and it is the case the staleness check above does *not* cover: a
-        // watcher thread outlives the process it polls (each carries its own deadline), so a line
-        // read late arrives with the *same* generation as the run that just settled the row —
-        // neither older nor future, therefore admissible above, and without this rule it re-lights
-        // a finished card.
+        // ADR-034: an observation may not resurrect a task that has no run left. This is the
+        // guard the host used to apply at three transcript-watcher call sites via
+        // `is_task_active`, and the case the staleness check above does *not* cover: a watcher
+        // thread outlives the process it polls (each carries its own deadline), so a line read
+        // late arrives with the *same* generation as the run that just settled the row — neither
+        // older nor future, therefore admissible above, and without this rule it re-lights a
+        // finished card.
         //
         // Deliberately here rather than in `should_ignore_transition`: that table is held
         // byte-equivalent to the client's `applyTaskStatusTransition`, which carries no such rule
         // because the client never sees these events. This is about admitting an observation, not
         // about what a transition means.
         //
-        // One named divergence from the legacy gate, since "equivalent to today" is what this
-        // adapter is for: the host asked "is any run live?", so during a cancel — row already
-        // `cancelled`, process still dying — legacy let a late `running` through and flickered the
-        // card. This rule drops it. Stricter, and the flicker was never a feature, but recorded
-        // rather than passed over in silence.
-        if !status.is_terminal()
-            && Self::find(&snapshot.records, event.task_id())
-                .is_some_and(|row| reducer::status_of(row).is_some_and(TaskStatus::is_terminal))
-        {
+        // The test is "does this *task* have any live run", not "is this row terminal".
+        // ADR-034's decision 2 limits the rule to late observations, and a row that reads
+        // `done`/`cancelled` while a claim is still open is not a late observation — it is
+        // either a second run overlapping a settled one (ADR-017) or the cancel window
+        // (row already `cancelled`, process still dying), and the host emits unconditionally in
+        // both. Gating on the row instead would silently swallow the `running` that starts a
+        // re-run of a finished task, which is a user-visible regression dressed up as a guard.
+        if !status.is_terminal() && self.open_claims(event.task_id()).is_empty() {
             return Ok((
-                EventOutcome::Dropped("task already settled"),
+                EventOutcome::Dropped("no live run for this task"),
                 self.unchanged(snapshot.records.clone(), snapshot.fingerprint.clone()),
             ));
         }
@@ -1042,14 +1084,27 @@ impl TaskService {
                 self.unchanged(snapshot.records, snapshot.fingerprint),
             ));
         }
-        let applied = self.commit(project_id, &transition.records)?;
-        Ok((
-            EventOutcome::Applied {
-                status,
-                changed: true,
-            },
-            applied,
-        ))
+        let outcome = EventOutcome::Applied {
+            status,
+            changed: true,
+        };
+        match persist {
+            Persist::Commit => Ok((outcome, self.commit(project_id, &transition.records)?)),
+            Persist::DecideOnly => Ok((
+                outcome,
+                Applied {
+                    records: transition.records,
+                    // ADR-035: "no revision, no fingerprint" is the honest answer here, and it
+                    // is a different answer from "the file did not change" — `changed` still
+                    // reports what the reducer decided, because that is what the announcement
+                    // path is not allowed to re-derive.
+                    revision: None,
+                    changed: true,
+                    fingerprint: None,
+                    generation: None,
+                },
+            )),
+        }
     }
 
     /// The manual "this is finished". A live task's process is stopped and the status is

@@ -99,3 +99,50 @@
 6. **验证边界（诚实口径）**：Linux/Windows 的 `cfg` 分支只做到 `cargo check --target x86_64-unknown-linux-gnu|x86_64-pc-windows-msvc --tests` **编译通过**，运行时未测——本机无这两个平台的可执行环境。`TauriEventSink::notify` 需要 `AppHandle`，因此**只有 payload 构造器有单测**（三条用例钉住四键/五键/六键的形状），真实 emit 要到接线那一步才有覆盖。`RunRegistry` 与 `TauriEventSink` 目前都带 `#[allow(dead_code, reason = "…next step of P2-05")]`：尚未接进产品路径，这件事是写下来的，不是靠警告被忽略。
 6b. **端口曾经装不下 `failure_reason`——这是删发射点前必须先修的前提（2026-09-24 实测，见补记四十二）**：`useAppTauriEvents.ts` 解构 `{ task_id, status, failure_reason? }` 并把 reason 一路喂到 `storage.rs` 的持久字段，而 5 处 legacy 发射点在 failed 路径上都带这个键；`TaskNotification::Status` 当时只有 `{task_id, status}`，所以照 ADR-023『payload 不变』去删那 8 处会**在删除的当下静默丢掉失败原因**且无任何东西变红。已按 `TaskSessionFacts::family` 的同一口径补 `Option<String>` 并"只在 Some 时带上键"。守卫是新登记的 `adapter-event-payload-contract`（TS 侧，三方键集全部从源码扫出：客户端 `listen<{…}>` 类型字面量 × `src-tauri` 各 `.emit(...)` 的 `json!` 字面量 × core 两个构造函数），断言方向 legacy ⊆ core。可失败性已用变异验证（改回不带键 → 立刻红），正控断言的是**键集合非空**——第一版只数发射点个数，于是一个把键扫成空的括号 bug 让最关键那条真空通过。
 7. **ADR-023 的可核对判据（不是"看起来只有一个发射者"）**：`contracts/native/v1/events.schema.json` 逐事件统计 `emitters`。加进 sink 之后契约如实漂了两个数：`task-status` **22 → 23**、`task-session` **6 → 7**——这就是"过渡期同一事件有两个发射者"被工件记下来的样子。删除那 8 处 legacy 发射点后，这两个数必须**降回 1**（只剩 `TauriEventSink`），`tauri-adapter` 门禁应当断言这两个数字本身；否则"core 是唯一发射者"只是一句口号，而双向事件回环恰恰发生在这两个计数悄悄都大于 1 的时候。
+
+## 5. 发射面逐站点清单与它的存活代前置（2026-09-24，ADR-033 §4 要求的工件）
+
+ADR-033 §4：「每一处删除都必须能指出它现在经由哪个观察进入哪个 reducer 转移」。逐站点量出来的第一列
+就是那个"哪个观察"。状态词是从源码的 `json!` 字面量里读的，不是记忆。
+
+| 站点 | 事件 | 发的状态 | 移交后进入的观察 |
+| --- | --- | --- | --- |
+| `dsh_webui.rs:1473` | task-status | `running` | `Status(running)`（turn/start） |
+| `dsh_webui.rs:1488` | task-status | `cancelled` | `Status(cancelled)` |
+| `dsh_webui.rs:1507` | task-status | `input_required` | `Status(input_required)` |
+| `dsh_webui.rs:1931/1962` | task-status | `input_required` | 同上（两条不同的等待边） |
+| `dsh_webui.rs:1937/2029` | task-status | `pending` | `Status(pending)` |
+| `dsh_webui.rs:1973` | task-status | `failed` | `Status(failed, reason)` |
+| `dsh_webui.rs:2108` | task-status | `done` | `Exit(code 0)` |
+| `pty.rs:232` | task-status | 包装函数体 | 见下方"共享出口" |
+| `pty.rs:1970` / `2734` | task-status | `running` | `Status(running)`（launch / resume） |
+| `pty.rs:2153` | task-status | `cancelled` | `Status(cancelled)` |
+| `pty.rs:2203` | task-status | `done` | `Exit` |
+| `ssh.rs:1388` / `wsl.rs:1022` | task-status | `running` | `Status(running)`（launch） |
+| `ssh.rs:1347` / `wsl.rs:972` | task-status | 包装函数调用点 | 见下方"共享出口" |
+| `ssh.rs:1933` / `wsl.rs:1736` | task-status | `cancelled` | `Status(cancelled)` |
+| `session.rs:63` | task-status | 参数 `status` | **共享出口**：`emit_task_status` 自己，删它一处即覆盖其全部调用点 |
+| `event_watcher.rs:319` | task-status | hook 写的状态（另带一个 `approval` 键，前端无读取点） | `Status`（hook 观察） |
+| `session.rs:1839/2018/2097`、`event_watcher.rs:264`、`session_dsh.rs:695`、`session_omp.rs:53` | task-session | — | **注意**：这不是观察，是"宿主治好了一个路径事实"。core 里对应的入口是 `apply_resolved_session`，不是 `observe` |
+
+### 5.1 删除的前置不是 dsh 独有——是全部 legacy 启动（本轮实测）
+
+`TaskEvent` 的存活判断按 ADR-034 的定案口径是"这个任务还有没有存活代"，而 core 只在 `start`/`resume`
+时取 claim。**产品路径今天一条 claim 都不产生**：`lib.rs:672` 的注释自己写着"仍由 `storage.rs` 保存，
+没有任何 mutation 走 `TaskService`"。所以上表里 5 处 launch 报的 `running`（`pty.rs:1970/2734`、
+`ssh.rs:1388`、`wsl.rs:1022`、`dsh_webui.rs:1473`）一经删除就会全部被判"无存活代"而静默。
+
+因此"宿主报告的存活代"（任务 #14）是**整张表的前置**，不是 dsh 那一格的前置。两条机制约束：
+
+1. **不得伪造 `Claim`**。claim 承载的是"一次尝试只 spawn 一次"的幂等账（ADR-016/ADR-017），宿主报的
+   运行没有 `operation_key`，塞进同一张表会让"core 是否已为这个 key 起过进程"变成两个来源。
+   存活代要独立一份，`observe` 的准入判据取 **两者之并**。
+2. **`RunKey::UNMINTED(0)` 与真实代同等参与**。今天 `is_task_active` 问的就是"这个 id 有没有任意存活代"，
+   按 0 登记恰好等价；把它当成"没有代"就是把 ADR-034 的判据再次写宽。
+
+### 5.2 `task-session` 走的不是观察通道
+
+6 处 `task-session` 报的是"这份转录现在在哪"，不是"某个运行发生了什么"。它在 core 里已有的对应入口是
+`apply_resolved_session`（P2-04 落地，带 `SESSION_FIELDS` 合并），所以这 6 处的移交判据是"经由
+`apply_resolved_session` 之后由 sink 发 `TaskNotification::Session`"，与 `observe` 无关。把它们塞进
+观察通道会造出一个假的"会话状态机"。

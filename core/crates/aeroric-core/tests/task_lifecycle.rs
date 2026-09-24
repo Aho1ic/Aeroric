@@ -17,7 +17,7 @@ use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
 use serde_json::{json, Value};
 
 mod common;
-use common::{build_service, cleanup, harness, local_project, record, task, Families};
+use common::{build_service, cleanup, harness, local_project, reader, record, task, Families};
 
 /// The harness puts the managed data directory at `root/managed`, exactly the way
 /// `AppPaths::with_data_dir` does. Spelled once here so a test never re-derives the layout
@@ -984,16 +984,42 @@ fn mutating_helpers_keep_their_own_idempotence() {
 
 #[test]
 fn a_status_with_no_change_writes_nothing_and_burns_no_revision() {
-    let (root, context, executor) = harness("no-write", &[task("t1", "p1", "running")]);
+    let (root, context, executor) = harness("no-write", &[task("t1", "p1", "todo")]);
     let service = build_service(context, &executor);
+    let project = local_project("p1", "/repo");
     let tasks_file = tasks_json(&root);
-    let before = std::fs::read(&tasks_file).expect("seeded");
+    // The run has to be live: ADR-034 drops a non-terminal report for a task with no run left,
+    // and this test is about the *other* half — an admitted report that changes nothing.
+    service
+        .start(
+            &project,
+            "t1",
+            "op-1",
+            true,
+            None,
+            false,
+            Attachments::default(),
+        )
+        .expect("run 1");
+    service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 1,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("the run starts");
+    let before = std::fs::read(&tasks_file).expect("started");
     let (outcome, applied) = service
         .observe(
             "p1",
             TaskEvent::Status {
                 task_id: "t1".into(),
-                generation: 0,
+                generation: 1,
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
@@ -1594,6 +1620,169 @@ fn a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_ta
             .sha256,
         fingerprint_before,
         "a dropped observation may not even rewrite the file"
+    );
+    cleanup(root);
+}
+
+/// ADR-035: the announcement path has to work on an install that was never handed the writer
+/// role, because that is every non-macOS install today (ADR-021). If the *decision* needed the
+/// write, deleting the legacy emit sites there would have silenced every `task-status` — the
+/// exact outcome ADR-033 §4 forbids.
+#[test]
+fn a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing() {
+    let (root, _writer, executor) = harness("decide-only", &[task("t1", "p1", "running")]);
+    let tasks_file = tasks_json(&root);
+    let service = build_service(reader(&root), &executor);
+
+    let fingerprint_before = service
+        .load("p1")
+        .expect("reading needs no lease")
+        .fingerprint
+        .expect("the seed wrote bytes")
+        .sha256;
+
+    let (outcome, applied) = service
+        .decide_observation(
+            "p1",
+            TaskEvent::Exit {
+                task_id: "t1".into(),
+                generation: 0,
+                code: Some(0),
+            },
+        )
+        .expect("a reader can decide");
+
+    assert_eq!(
+        outcome,
+        EventOutcome::Applied {
+            status: TaskStatus::Done,
+            changed: true
+        },
+        "the reducer ran — that is the whole point of splitting it from the commit"
+    );
+    assert!(applied.revision.is_none(), "nothing was written");
+    assert!(applied.fingerprint.is_none(), "no cover was bought");
+    assert_eq!(
+        rows(&tasks_file)[0].get("status"),
+        Some(&json!("running")),
+        "the host's bytes stay whatever the host left there"
+    );
+    assert_eq!(
+        service
+            .load("p1")
+            .expect("reload")
+            .fingerprint
+            .expect("still seeded")
+            .sha256,
+        fingerprint_before,
+        "a decision may not even touch the file"
+    );
+
+    // Positive control. Without it "decide_observation wrote nothing" could be true because
+    // *nothing* on a read-only context ever writes, which is not the property anyone needs.
+    let refused = service
+        .observe(
+            "p1",
+            TaskEvent::Exit {
+                task_id: "t1".into(),
+                generation: 0,
+                code: Some(0),
+            },
+        )
+        .expect_err("the writer entry point must still refuse");
+    assert!(
+        matches!(refused, TaskError::Storage(_)),
+        "expected a storage refusal, got {refused:?}"
+    );
+    assert!(
+        !root.join("task-operations.json").exists(),
+        "settling a claim in memory may not create the ledger file either"
+    );
+    cleanup(root);
+}
+
+/// ADR-034's boundary is "no live run left", not "the row reads terminal". The two differ in
+/// exactly one place, and it is a place the shipping client reaches today: a run is still
+/// alive while the row already says `cancelled` (the client's save path wrote that; the
+/// process has not finished dying), and the host emits unconditionally during that window.
+/// Gating on the row would swallow the `running` that starts a re-run of a finished card.
+#[test]
+fn a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled() {
+    let (root, context, executor) = harness("relight-while-live", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let project = local_project("p1", "/repo");
+
+    service
+        .start(
+            &project,
+            "t1",
+            "op-1",
+            true,
+            None,
+            false,
+            Attachments::default(),
+        )
+        .expect("run 1");
+
+    // The client's own write, not core's: `mutate` commits without settling the run's claim,
+    // which is precisely the state a cancel leaves behind.
+    service
+        .mutate("p1", |records, _| {
+            let mut records = records.to_vec();
+            for row in &mut records {
+                if row.get("id").and_then(Value::as_str) == Some("t1") {
+                    row.0.insert("status".into(), json!("cancelled"));
+                }
+            }
+            (records, true)
+        })
+        .expect("the host's status write");
+
+    let (outcome, _) = service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 1,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("answered, not refused");
+
+    assert!(
+        matches!(outcome, EventOutcome::Applied { .. }),
+        "the run is live, so this is not a late observation: {outcome:?}"
+    );
+
+    // And the same report with nothing live behind it must still be dropped, or the previous
+    // assertion only proves the rule got weaker.
+    service
+        .observe(
+            "p1",
+            TaskEvent::Exit {
+                task_id: "t1".into(),
+                generation: 1,
+                code: Some(0),
+            },
+        )
+        .expect("the run settles");
+    let (dropped, _) = service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 1,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("answered");
+    assert!(
+        matches!(dropped, EventOutcome::Dropped(_)),
+        "with no run left, the same report is exactly the accident ADR-034 exists for: {dropped:?}"
     );
     cleanup(root);
 }
