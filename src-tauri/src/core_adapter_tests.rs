@@ -870,3 +870,88 @@ fn startup_wiring_installs_the_gateway_and_the_service_over_the_scratch_home() {
 
     drop(scratch);
 }
+
+/// ADR-027 decisions 1 and 3, checked on the channel the user actually sees.
+///
+/// "Read-only" is only a real state if it reaches `list_startup_degradations`: the gateway's
+/// `mode()` field is invisible to a user, and the ADR is explicit that reusing
+/// `StartupDegradation` is not the same as satisfying it. Two things are pinned here — that a
+/// refused lease is *reported*, and that what it names is the real data directory rather than a
+/// relocated one (decision 3 forbids the temp-directory fallback, because two divergent data
+/// sets that both look healthy is the worst available outcome).
+#[test]
+fn a_refused_lease_is_reported_and_names_the_directory_it_will_not_write() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("adr027-reporting");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data_dir = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data_dir).expect("data dir");
+
+    let lease_records = || -> Vec<crate::startup_diagnostics::StartupDegradation> {
+        crate::startup_diagnostics::list_startup_degradations()
+            .into_iter()
+            .filter(|entry| entry.component == "storage-lease")
+            .collect()
+    };
+
+    // ADR-021 × ADR-027 as one pair: the *first* instance records nothing on either platform.
+    // On macOS it holds the lease; elsewhere it never even tries, and `HandoverDeferred` is
+    // deliberately not a degradation — reporting "this platform has not been handed the role yet"
+    // would hand every Windows and Linux user a warning about a fault that does not exist.
+    let before = lease_records().len();
+    let first = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(first.handle(), "0-test");
+    let is_writer = first
+        .state::<crate::core_adapter::CoreGateway>()
+        .is_writer();
+    assert_eq!(
+        lease_records().len(),
+        before,
+        "an uncontested start adds no storage-lease record, whether it is the writer or deferred"
+    );
+    assert_eq!(is_writer, cfg!(target_os = "macos"));
+
+    if !is_writer {
+        drop(scratch);
+        return;
+    }
+
+    // Only now is there a refusal to report. `record` is append-only and process-global, so a
+    // count delta is the only honest shape for "this instance reported exactly one".
+    let second = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(second.handle(), "0-test");
+    let gateway = second.state::<crate::core_adapter::CoreGateway>();
+    assert!(
+        !gateway.is_writer(),
+        "the first instance still holds the lease"
+    );
+    assert_eq!(
+        gateway.data_dir(),
+        data_dir,
+        "the refusal is about *this* directory"
+    );
+
+    let reported = lease_records();
+    assert_eq!(
+        reported.len() - before,
+        1,
+        "exactly one new storage-lease record for the refused instance"
+    );
+    let entry = reported.last().expect("the record just added");
+    // Exact equality, not a substring: "the fallback mentions the scratch root" would still pass
+    // if the host had quietly moved the data elsewhere and left the old name in the message.
+    assert_eq!(
+        entry.fallback,
+        data_dir.display().to_string(),
+        "ADR-027 decision 3: the refusal names the directory it will not write — there is no          relocated copy for it to point at"
+    );
+    assert!(
+        entry.reason.contains("held by another process"),
+        "the reason is core's own words, so the holder hint survives: {:?}",
+        entry.reason
+    );
+    // `scratch` drops before `home` by declaration order, which is what clears the global slot
+    // before the directory is deleted.
+}
