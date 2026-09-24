@@ -826,7 +826,7 @@
     },
     "tauri-adapter": {
       "registeredBy": "P2-05",
-      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 8 处 legacy 发射点；ADR-026 的重放上限一次、ADR-027 的只读实例写入口全拒，要等 `CoreGateway`/`TaskService` 真被 managed state 注入（今天还没有调用方）。",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 **28** 处 legacy 发射点（ADR-033 实测：task-status 22 + task-session 6，原记 8 处漏了所有绕过包装函数的直接 .emit）；ADR-026 的重放上限一次、ADR-027 的只读实例写入口全拒：地基已在 bf798a3 到位（`install_core_services` 于 setup 注入 `CoreGateway`/`TaskService`/`OutputSinkMailbox`，macOS 上真的取写者租约，第二实例只读且说得出目录与持有者已有用例实测），**现在缺的是这两条 case 本身，不是宿主状态**。",
       "cases": [
         {
           "name": "adapter-invariants-unit",
