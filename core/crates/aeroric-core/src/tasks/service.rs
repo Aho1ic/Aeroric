@@ -18,6 +18,7 @@
 //! acceptance test for this module is that start, resume and cancel all work with no
 //! listener attached.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
@@ -29,6 +30,7 @@ use crate::projects::mutations::is_addressable;
 use crate::storage::atomic::StorageError;
 use crate::storage::compat::Record;
 use crate::storage::fingerprint::Cover;
+use crate::storage::projects;
 use crate::storage::runtime;
 use crate::storage::tasks as task_storage;
 use crate::tasks::executor::{ExecutorFailure, LiveRuns, TaskEvent, TaskExecutor};
@@ -179,6 +181,9 @@ pub struct TaskService {
     /// runs it started; the shipping client starts most runs through the legacy commands, and
     /// those only exist here.
     live_runs: Arc<dyn LiveRuns>,
+    /// ADR-035's router: task id → the project whose `tasks.json` holds the row. See
+    /// [`TaskService::project_of`].
+    task_projects: Mutex<HashMap<String, String>>,
     ledger: Mutex<OperationLedger>,
 }
 
@@ -201,6 +206,7 @@ impl TaskService {
             families,
             executor,
             live_runs,
+            task_projects: Mutex::new(HashMap::new()),
             ledger: Mutex::new(ledger),
         })
     }
@@ -227,6 +233,61 @@ impl TaskService {
 
     pub fn open_claims(&self, task_id: &str) -> Vec<Claim> {
         self.ledger(|ledger| ledger.open_for(task_id).into_iter().cloned().collect())
+    }
+
+    /// ADR-035's router: which project's `tasks.json` holds this task. The host's 28 report
+    /// sites only carry a `task_id` (`emit_task_status(app, task_id, status)`, `pty.rs:1970`,
+    /// `dsh_webui.rs:1473`, `event_watcher.rs:319`), while every core mutation is addressed by
+    /// project — so an observation cannot reach the reducer without this question being
+    /// answerable somewhere.
+    ///
+    /// The answer comes from disk, never from a guess: `Ok(None)` means "this process has no
+    /// row for that id", and callers must say so out loud rather than pick a project. Writing
+    /// one task into two projects' files is the divergence ADR-027 refuses to create.
+    ///
+    /// The scan is O(projects) file reads, which is why the result is remembered. Remembering
+    /// is safe here for one specific reason: `projectId` is written when the task is created
+    /// and never moved afterwards. `delete` is therefore the only operation that can make an
+    /// entry wrong, and it forgets what it removes.
+    pub fn project_of(&self, task_id: &str) -> Result<Option<String>, TaskError> {
+        let remembered = self
+            .task_projects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(task_id)
+            .cloned();
+        if let Some(project_id) = remembered {
+            return Ok(Some(project_id));
+        }
+        for project in projects::load_projects(&self.context)? {
+            let Some(project_id) = project.id() else {
+                continue;
+            };
+            let rows = task_storage::load_tasks(&self.context, project_id)?;
+            if Self::find(&rows, task_id).is_some() {
+                let found = project_id.to_string();
+                self.remember_project(task_id, &found);
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    fn remember_project(&self, task_id: &str, project_id: &str) {
+        self.task_projects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(task_id.to_string(), project_id.to_string());
+    }
+
+    fn forget_projects(&self, task_ids: &[String]) {
+        let mut guard = self
+            .task_projects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for id in task_ids {
+            guard.remove(id);
+        }
     }
 
     /// A snapshot plus the bytes it came from. Every mutation in this service starts here,
@@ -1235,6 +1296,9 @@ impl TaskService {
             });
         }
         let applied = self.commit(project_id, &records)?;
+        // The router must stop answering for ids that no longer exist; this is the only
+        // operation that can make a remembered project wrong (ADR-035's `project_of`).
+        self.forget_projects(&requested);
         Ok(Deleted {
             removed: requested,
             skipped_starred,

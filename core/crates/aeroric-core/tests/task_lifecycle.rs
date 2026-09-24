@@ -1853,3 +1853,61 @@ fn a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else() {
     );
     cleanup(root);
 }
+
+/// ADR-035's router: the 28 legacy report sites carry a task id and nothing else
+/// (`emit_task_status(app, task_id, status)`), while every core mutation — including the
+/// `decide_observation` those sites are about to call — is addressed by project. Two projects
+/// have to exist on disk for this to mean anything: with one, "always answer the only project"
+/// passes without resolving anything.
+#[test]
+fn an_observation_can_be_routed_from_a_task_id_alone() {
+    let (root, context, executor) = harness("router", &[task("t1", "p1", "todo")]);
+    std::fs::write(
+        context.paths.projects_file(),
+        serde_json::to_vec(&json!([
+            {"id": "p1", "path": "/repo", "name": "repo"},
+            {"id": "p2", "path": "/other", "name": "other"},
+        ]))
+        .expect("project list"),
+    )
+    .expect("write projects.json");
+    let p2_dir = root.join("managed").join("projects").join("p2");
+    std::fs::create_dir_all(&p2_dir).expect("p2 dir");
+    std::fs::write(
+        p2_dir.join("tasks.json"),
+        serde_json::to_vec(&vec![Value::Object(task("t2", "p2", "todo").0)]).expect("p2 rows"),
+    )
+    .expect("write p2 tasks");
+
+    let service = build_service(context, &executor);
+
+    assert_eq!(
+        service.project_of("t1").expect("scan"),
+        Some("p1".to_string()),
+        "the row's own project, found through the project list"
+    );
+    assert_eq!(
+        service.project_of("t2").expect("scan"),
+        Some("p2".to_string()),
+        "and not the first project it happened to look at"
+    );
+    assert_eq!(
+        service.project_of("ghost").expect("scan"),
+        None,
+        "no row is an honest none, never a guess — writing one task into two projects' files \
+         is the divergence ADR-027 refuses"
+    );
+
+    // The scan is O(projects) file reads, so the answer is remembered; that is only legal
+    // because `delete` is the one operation that can retire an id.
+    service
+        .delete("p2", &["t2".to_string()])
+        .expect("delete t2");
+    assert_eq!(
+        service.project_of("t2").expect("rescan"),
+        None,
+        "a deleted task must not keep its router entry, or a late report re-creates the row's \
+         home in a table that no longer holds it"
+    );
+    cleanup(root);
+}

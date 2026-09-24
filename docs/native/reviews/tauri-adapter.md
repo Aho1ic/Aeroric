@@ -153,6 +153,16 @@ the_port_and_by_nothing_else`（含"端口被真的调用过"的计数断言）�
 任务 #14 因此不是"再做一份登记"，而是**已经被端口取代**；剩下的只有 §5.2 的会话入口与 #12 的
 task→project 解析。
 
+### 5.1b 第二条前置也已关闭（补记五十：`project_of`）
+
+§5.1 点的两件事里，"task→project 解析"已经落地：`TaskService::project_of(task_id)` 先查进程内
+记忆、miss 时按 `projects.json` 扫每个项目的 `tasks.json`，**答不出是 `Ok(None)` 而不是猜一个项目**。
+缓存之所以合法：`projectId` 创建时定死、之后不迁，`delete` 是唯一能让条目变错的操作，它在提交成功后
+forget。用例 #32 要求盘上真有两个项目，两处变异（扫成"第一个非空项目"、去掉 delete 的 forget）分别验过。
+
+现在 28 处删除只缺一样东西：宿主侧那条 `TaskRuntimeObserver` 实现，以及 `EventOutcome →
+TaskNotification → sink` 的映射。机制层没有未关的前置了。
+
 ### 5.2 `task-session` 走的不是观察通道
 
 6 处 `task-session` 报的是"这份转录现在在哪"，不是"某个运行发生了什么"。它在 core 里已有的对应入口是

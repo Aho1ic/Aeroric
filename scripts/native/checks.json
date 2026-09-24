@@ -29,7 +29,7 @@
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 31,
+      "tasks-status-machine-rust@tasks": 32,
       "adapter-acceptance-real-kernel@tauri-adapter": 8,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
@@ -692,8 +692,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 31,
-          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。",
+          "minCases": 32,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。",
           "timeoutMs": 900000
         },
         {
