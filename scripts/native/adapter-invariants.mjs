@@ -13,6 +13,9 @@
 //                      agents write one transcript.
 //   ADR-021            the writer role is handed to core on macOS and nowhere else; that decision
 //                      lives in the host, never in core.
+//   ADR-023            a handed-over event family is emitted by exactly one line of the host —
+//                      core's sink. `task-status` entered this rule when its 22 legacy sites
+//                      were deleted; `task-session` joins it after step F5.
 //
 // Each rule carries a positive control: if the scan cannot show it read the text it claims to
 // have read, the check fails rather than passing on an empty corpus.
@@ -128,6 +131,44 @@ export function adapterInvariantProblems(files) {
     problems.push(`ADR-021: writer_handover_allowed no longer returns cfg!(target_os = "macos"); non-macOS builds could hand the writer role over: ${handover[1].trim().slice(0, 120)}`);
   } else if (/target_os\s*=\s*"(windows|linux)"/.test(handover[1])) {
     problems.push("ADR-021: writer_handover_allowed names windows/linux — the handover is macOS-only until P7");
+  }
+
+  // ---- ADR-023: exactly one line in the host emits each handed-over family
+  //
+  // "core is the sole emitter" is only a claim if it is countable. A family enters this list
+  // when its legacy sites are gone; `task-session` is not here yet because its six sites move
+  // through apply_resolved_session rather than the observation channel, and listing a family
+  // whose count is still 7 would just be a permanently red case.
+  for (const family of ["task-status"]) {
+    const constant = family.toUpperCase().replace(/-/g, "_");
+    // Over the whole file, not line by line: the sink writes `emit(` and the event name on
+    // separate lines, and a line-scoped scan would report "no sink in view" for real code.
+    const pattern = new RegExp(
+      `\\.emit\\(\\s*(?:"${family}"|crate::event_names::${constant})`,
+      "g",
+    );
+    const sites = [];
+    for (const file of files) {
+      // Test-only modules emit whatever they need to exercise; the rule is about who the
+      // product emits through, and `*_tests.rs` files are not in that path.
+      if (file.name.endsWith("_tests.rs")) continue;
+      for (const match of file.text.matchAll(pattern)) {
+        sites.push(`${file.name}:${1 + (file.text.slice(0, match.index).match(/\n/g) || []).length}`);
+      }
+    }
+    const isSink = (site) => site.split(":")[0].endsWith("/core_adapter.rs");
+    const inSink = sites.filter(isSink);
+    const legacy = sites.filter((site) => !isSink(site));
+    if (inSink.length !== 1) {
+      problems.push(
+        `ADR-023: ${family} must be emitted by exactly one line of core_adapter.rs, found ${inSink.length} — with no sink in view, "only core emits" would be passing on an empty corpus`,
+      );
+    }
+    if (legacy.length) {
+      problems.push(
+        `ADR-023: ${family} still has legacy emitters outside the sink: ${legacy.join(", ")} — two emitters is the double-event loop P2-05's acceptance forbids`,
+      );
+    }
   }
 
   return problems;

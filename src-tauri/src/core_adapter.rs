@@ -36,8 +36,8 @@ use std::sync::Arc;
 
 use aeroric_core::{
     tasks::{
-        AgentFamilies, LiveRuns, ProtocolFamily, TaskEvent, TaskEventSink, TaskNotification,
-        TaskRuntimeObserver, TaskService, TaskSessionFacts, TaskStatus,
+        AgentFamilies, LiveRuns, ObservationOrigin, ProtocolFamily, TaskEvent, TaskEventSink,
+        TaskNotification, TaskRuntimeObserver, TaskService, TaskSessionFacts, TaskStatus,
     },
     AppPaths, Clock, CoreContext, LeaseError, LeaseOwner, SystemClock,
 };
@@ -600,6 +600,18 @@ pub(crate) fn report_task_status<R: tauri::Runtime>(
     report_task_status_with_reason(app, task_id, status, None);
 }
 
+/// A status a *watcher* read rather than a change the host made: transcript lines and hook
+/// events. These are the reports ADR-034's late-observation guard exists for, and passing
+/// anything else here would be the moment the guard quietly stops applying.
+pub(crate) fn report_observed_status<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    status: &str,
+    origin: ObservationOrigin,
+) {
+    report_status(app, task_id, status, None, origin);
+}
+
 /// The same report with the reason the host already had. Sites like `finalize_task_exit` word
 /// the reason themselves ("Process exited with code 1", "WSL process exited with code 7"), and
 /// that text is user-visible today — so it travels in the event and core passes it through
@@ -609,6 +621,16 @@ pub(crate) fn report_task_status_with_reason<R: tauri::Runtime>(
     task_id: &str,
     status: &str,
     reason: Option<&str>,
+) {
+    report_status(app, task_id, status, reason, ObservationOrigin::Runtime);
+}
+
+fn report_status<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    status: &str,
+    reason: Option<&str>,
+    origin: ObservationOrigin,
 ) {
     use tauri::Manager;
     let Ok(parsed) = serde_json::from_value::<TaskStatus>(serde_json::json!(status)) else {
@@ -628,6 +650,7 @@ pub(crate) fn report_task_status_with_reason<R: tauri::Runtime>(
         status: parsed,
         attention_requested_at_ms: None,
         failure_reason: reason.map(str::to_string),
+        origin,
     };
     match app.try_state::<Arc<dyn TaskRuntimeObserver>>() {
         Some(observer) => observer.observe(event),

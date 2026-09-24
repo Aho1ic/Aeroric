@@ -142,3 +142,10 @@
 | --- | --- | --- |
 | 问出来的存活 / asked liveness | core 通过 `LiveRuns` 端口**问**宿主"这个任务还有活着的代吗"，自己不存副本。宿主答的是 `TaskManager::runs`（真正握着进程句柄的那张表） | 不是 core 里的镜像表（漏一次 retire 就永久"活着"，失效方向是抑制闸静默停摆）；不是"宿主自己做决定"（决定仍在 core 的准入判据里） |
 | 存活判据之并 / union of two sources | `is_task_live = 有 core 自己的 claim ∨ 端口答是`。两半各覆盖一类运行：claim 覆盖 core 起的，端口覆盖旧命令路径起的 | 不是"看最新一代"（ADR-025：存活看任意一代）；不是只看 claim（产品路径今天一条 claim 都不产生，只看它就会让 5 处 launch 的 `running` 全部静默） |
+
+## 观察来源分类新增（P2-05 续，删 dsh 那 9 处时补上，ADR-034 更正二）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 观察来源 / observation origin | `TaskEvent::Status` 上的 `ObservationOrigin::{Transcript, Hook, Runtime}`。ADR-034 的迟到观察闸**只对前两者生效**；`Runtime` 是宿主自己改的（launch / cancel / 手动完成 / dsh 状态机），今天无条件发，移交后仍然无条件 | 不是状态词（九值词表 v1 冻结，没加任何东西）；不是"哪个进程"（那是 generation）；不是宿主的权限——它是事件自带的事实 |
+| 有闸 / 无闸 / is_guarded | `Transcript \| Hook ⇒ 有闸`。这条边界在补记四十八之前**无法执行**（事件里没这个信息），于是 dsh 的 9 处非终态报告会被误判"无存活代"而九处全静默 | 不是"是否终态"（那是 `is_terminal`，另一道判据）；闸的判定仍是 `is_task_live`，origin 只决定要不要问它 |

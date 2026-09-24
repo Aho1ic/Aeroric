@@ -1470,10 +1470,7 @@ fn dispatch_mux_frame(
             let event = payload.get("event").unwrap_or(&Value::Null);
             match event.get("type").and_then(Value::as_str) {
                 Some("turn/start") => {
-                    let _ = app.emit(
-                        "task-status",
-                        json!({ "task_id": task_id, "status": "running" }),
-                    );
+                    crate::core_adapter::report_task_status(app, task_id, "running");
                 }
                 Some("turn/end") => {
                     let reason = event
@@ -1485,10 +1482,7 @@ fn dispatch_mux_frame(
                         .and_then(Value::as_str)
                         .unwrap_or("completed");
                     if matches!(kind, "aborted" | "interrupted" | "cancelled") {
-                        let _ = app.emit(
-                            "task-status",
-                            json!({ "task_id": task_id, "status": "cancelled" }),
-                        );
+                        crate::core_adapter::report_task_status(app, task_id, "cancelled");
                     } else {
                         // A DSH session stays interactive after a turn settles, so
                         // the end of a turn is not the end of the task: it hands
@@ -1504,10 +1498,7 @@ fn dispatch_mux_frame(
                         // into the terminal by `session_event_terminal_output`
                         // instead. Only a boot or transport failure (see
                         // `run_dsh_task`) genuinely ends the task.
-                        let _ = app.emit(
-                            "task-status",
-                            json!({ "task_id": task_id, "status": "input_required" }),
-                        );
+                        crate::core_adapter::report_task_status(app, task_id, "input_required");
                     }
                 }
                 _ => {}
@@ -1928,16 +1919,10 @@ pub(crate) async fn run_dsh_task_core(
             // "Start terminal" with no prompt: the session is live and waiting
             // for the composer, which is an interactive state, not a finished
             // task. Completion stays an explicit user action.
-            let _ = app.emit(
-                "task-status",
-                json!({ "task_id": task_id.clone(), "status": "input_required" }),
-            );
+            crate::core_adapter::report_task_status(&app, &task_id, "input_required");
             return Ok(());
         }
-        let _ = app.emit(
-            "task-status",
-            json!({ "task_id": task_id.clone(), "status": "pending" }),
-        );
+        crate::core_adapter::report_task_status(&app, &task_id, "pending");
         let image_count = images.as_ref().map_or(0, Vec::len);
         if let Some(echo) = user_prompt_echo(&prompt, image_count) {
             state.send_terminal_text_for_task(&task_id, &on_output, &echo);
@@ -1959,10 +1944,7 @@ pub(crate) async fn run_dsh_task_core(
             state.send_terminal_text_for_task(&task_id, &on_output, &format!("\r\n{text}\r\n"));
             // A slash command answers inline without opening a turn, so no
             // turn/end will follow: settle the task as waiting for the user.
-            let _ = app.emit(
-                "task-status",
-                json!({ "task_id": task_id.clone(), "status": "input_required" }),
-            );
+            crate::core_adapter::report_task_status(&app, &task_id, "input_required");
         }
         Ok(())
     }
@@ -1970,9 +1952,11 @@ pub(crate) async fn run_dsh_task_core(
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = app.emit(
-                "task-status",
-                json!({ "task_id": task_id.clone(), "status": "failed", "failure_reason": error }),
+            crate::core_adapter::report_task_status_with_reason(
+                &app,
+                &task_id,
+                "failed",
+                Some(error.as_str()),
             );
             Err(error)
         }
@@ -2026,10 +2010,7 @@ pub async fn prompt_dsh_task(
     {
         state.send_terminal_text_for_task(&task_id, &active.on_output, &format!("\r\n{text}\r\n"));
     } else {
-        let _ = app.emit(
-            "task-status",
-            json!({ "task_id": task_id, "status": "pending" }),
-        );
+        crate::core_adapter::report_task_status(&app, &task_id, "pending");
     }
     Ok(value)
 }
@@ -2105,10 +2086,7 @@ pub(crate) async fn complete_dsh_task_core<R: Runtime>(
     task_manager.cancelled_tasks.lock().remove(task_id);
     task_manager.manually_completed_tasks.lock().remove(task_id);
 
-    let _ = app.emit(
-        "task-status",
-        json!({ "task_id": task_id, "status": "done" }),
-    );
+    crate::core_adapter::report_task_status(app, task_id, "done");
     let _ = std::fs::remove_dir_all(
         Path::new(project_path)
             .join(".aeroric")

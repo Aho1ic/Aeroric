@@ -106,3 +106,23 @@ ADR-033 决定这 28 处一次性全交 core。那时这道抑制必须有归属
    存活代非空。这一条是判据必须按"任意存活代"而不是"这一行是否终态"的真正原因：
    后者会让"在一张已 `done` 的卡片上再跑一次"这条正常路径变成静默不发。
 
+## 落实更正二（2026-09-24，删到 dsh 那 9 处时才看得见）
+
+决策 2 说"规则的边界就是来源类型：转录与 hook 观察；启动/退出/取消/手动完成/DSH 状态机不在其列"。
+这条边界**当时无法执行**：`TaskEvent::Status` 只有一个状态词，没有任何字段说明"这是谁报的"。
+所以补记四十八把判据改成"有无存活代"之后，规则事实上又变宽了一次——只是这次宽在 dsh 身上：
+dsh 的运行既不在 core 的账本里，也不在 `is_task_active` 看的两张会话表里，`is_task_live` 恒为假，
+那 9 处（`running` / `pending` / `input_required`，全是非终态）一经删除就会九处全静默。
+
+修法是给事件补上决策 2 早就预设的那个区分：`ObservationOrigin::{Transcript, Hook, Runtime}` +
+`is_guarded()`，守卫只对 `Transcript | Hook` 生效。落点仍然只有一处（`apply_observation`），
+不新增端口方法、不新增状态词，符合决策 1 的约束。
+
+可核对性不是靠读代码：加上 `origin` 字段之后，`task_lifecycle` 33 条里**只有那 3 条断言守卫的用例**
+变红，其余 30 条原样通过——这说明字段真的在参与判定，而不是一个没人读的标签。那三条用例的 6 个
+字面量随后显式改成 `Transcript`。宿主的两个报告入口也各自点名：`report_observed_status(...,
+Transcript)`（`session.rs` 的三处转录观察）与 `ObservationOrigin::Hook`（`event_watcher.rs`），
+其余 `report_task_status` 一律 `Runtime`。
+
+`event_watcher.rs:287` 那道 `has_live_run` 抑制保留不动：它是 ADR-033 更正块新记的第四处闸，
+与 core 的新闸是子集关系，取交集结果与今天一致。

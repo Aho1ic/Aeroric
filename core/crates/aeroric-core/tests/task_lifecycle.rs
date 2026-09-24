@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use aeroric_core::storage::atomic::StorageError;
 use aeroric_core::storage::{runtime, Cover, Fingerprint};
-use aeroric_core::tasks::executor::TaskEvent;
+use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::service::{Attachments, EventOutcome, NewTask, TaskError};
 use aeroric_core::tasks::{
     launch_plan, operations, reducer, session_owner, NoLiveRuns, TaskNotification,
@@ -120,6 +120,7 @@ fn a_terminal_entry_stamps_once_and_a_second_terminal_event_keeps_the_first_time
                 status: TaskStatus::Cancelled,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("cancelled");
@@ -469,6 +470,7 @@ fn start_resume_and_cancel_all_work_with_no_listener_attached() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("running");
@@ -546,6 +548,7 @@ fn a_late_exit_from_the_previous_run_does_not_move_the_task() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("running");
@@ -576,6 +579,7 @@ fn a_late_exit_from_the_previous_run_does_not_move_the_task() {
                 status: TaskStatus::Failed,
                 attention_requested_at_ms: None,
                 failure_reason: Some("the old process died".into()),
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("dropped");
@@ -1020,6 +1024,7 @@ fn a_status_with_no_change_writes_nothing_and_burns_no_revision() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("the run starts");
@@ -1033,6 +1038,7 @@ fn a_status_with_no_change_writes_nothing_and_burns_no_revision() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("same status");
@@ -1566,6 +1572,7 @@ fn a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_ta
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("running");
@@ -1608,6 +1615,7 @@ fn a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_ta
                 status: TaskStatus::InputRequired,
                 attention_requested_at_ms: Some(1_700_000_099_000),
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("a late observation is answered, not an error");
@@ -1759,6 +1767,7 @@ fn a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_can
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("answered, not refused");
@@ -1789,6 +1798,7 @@ fn a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_can
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("answered");
@@ -1818,6 +1828,7 @@ fn a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("answered");
@@ -1847,6 +1858,7 @@ fn a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else() {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Transcript,
             },
         )
         .expect("answered");

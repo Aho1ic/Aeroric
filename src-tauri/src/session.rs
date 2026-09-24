@@ -68,7 +68,12 @@ pub struct RecoveredSession {
 /// flow guard, which is exactly the distinction ADR-034 decision 3 draws. Deleting it along with
 /// the visibility role would break how those loops exit.
 fn emit_active_task_status<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, status: &str) {
-    crate::core_adapter::report_task_status(app, task_id, status);
+    crate::core_adapter::report_observed_status(
+        app,
+        task_id,
+        status,
+        aeroric_core::tasks::ObservationOrigin::Transcript,
+    );
 }
 
 pub(crate) fn is_task_active<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str) -> bool {

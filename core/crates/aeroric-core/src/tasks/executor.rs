@@ -138,6 +138,35 @@ pub enum ExecutorFailure {
     Stop { reason: String },
 }
 
+/// Who told us about a status. ADR-034 decision 2 draws the line by **source**, not by word:
+/// transcript and hook observations are what the late-observation guard exists for, while
+/// "the host changed this on purpose" (a launch, a cancel, a manual completion, dsh's own state
+/// machine) is emitted unconditionally today and stays that way.
+///
+/// Without this field the rule silently grows to cover the sites ADR-034 excludes — which is
+/// exactly what happened first, and what made dsh's nine reports unremovable: dsh runs never
+/// appear in core's ledger, so a liveness-only guard would drop all nine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObservationOrigin {
+    /// A transcript watcher read a line (codex / claude).
+    Transcript,
+    /// An agent hook wrote an event file.
+    Hook,
+    /// The host itself moved the task: launch, resume, cancel, manual completion, dsh's
+    /// session state machine. Never suppressed by the late-observation guard.
+    Runtime,
+}
+
+impl ObservationOrigin {
+    /// Is this the kind of report ADR-034's guard exists to catch?
+    pub fn is_guarded(self) -> bool {
+        matches!(
+            self,
+            ObservationOrigin::Transcript | ObservationOrigin::Hook
+        )
+    }
+}
+
 /// The side a task can be moved to by something outside the state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskEvent {
@@ -148,6 +177,8 @@ pub enum TaskEvent {
         status: TaskStatus,
         attention_requested_at_ms: Option<u64>,
         failure_reason: Option<String>,
+        /// ADR-034 decision 2: the guard applies to transcript and hook reports only.
+        origin: ObservationOrigin,
     },
     /// The process ended. Only the current generation may settle a task.
     Exit {
@@ -290,6 +321,7 @@ mod tests {
                 status: TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
             TaskEvent::Exit {
                 task_id: "t".into(),

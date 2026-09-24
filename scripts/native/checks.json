@@ -10,7 +10,7 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
-      "adapter-invariants-unit@tauri-adapter": 11,
+      "adapter-invariants-unit@tauri-adapter": 14,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 10,
       "extraction-unit@skeleton": 9,
@@ -832,7 +832,7 @@
           "name": "adapter-invariants-unit",
           "kind": "test",
           "parse": "node-test",
-          "minCases": 11,
+          "minCases": 14,
           "timeoutMs": 300000,
           "argv": [
             "node",

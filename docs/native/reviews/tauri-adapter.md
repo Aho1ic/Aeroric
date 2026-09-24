@@ -169,3 +169,19 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 `apply_resolved_session`（P2-04 落地，带 `SESSION_FIELDS` 合并），所以这 6 处的移交判据是"经由
 `apply_resolved_session` 之后由 sink 发 `TaskNotification::Session`"，与 `observe` 无关。把它们塞进
 观察通道会造出一个假的"会话状态机"。
+### 5.3 发射面实测结果（2026-09-24，第一、二批发完之后）
+
+`command-map.json` 的 `events[].emitters` 现在如实记着：**`task-status` = 1**（唯一那条
+`core_adapter.rs:503` 的 sink），**`task-session` = 7**（sink + 6 处 legacy）。§5.1 的"存活代登记"
+前置被两条更准的机制取代：ADR-036 的 `LiveRuns` 端口回答宿主 `is_task_active` 的**全部**问题
+（含 codex/claude 会话表，只答 run registry 会漏掉 lazy-attach 窗口），以及 ADR-034 更正二补上的
+`ObservationOrigin`——dsh 那 9 处的正确分类是 `Runtime`，本来就不该过那道闸。
+
+判据已进门禁：`adapter-invariants.mjs` 的 ADR-023 规则要求"已移交家族必须由 `core_adapter.rs`
+的恰好一行发出"，配三条负例（多一个发射点 / sink 看不见 / 走 `event_names::` 常量发）。
+`task-session` 尚未列入这条规则——它现在的数字是 7，列进去就是一条永远红的 case；等 §5.2 那 6 处
+改走 `apply_resolved_session` 之后再并入，与 ADR-022/024/026 的处理口径一致。
+
+顺带记两条扫描器的错，都是门禁第一遍运行就报出来的：按行匹配看不见 sink 那种 `emit(` 与事件名
+换行写的调用（会误报"没有 sink"），以及 `remote/lan_roundtrip_tests.rs` 里测试自己发的
+`task-status` 被算成生产发射点（现在 `*_tests.rs` 显式排除，理由写在代码里而不是靠巧合）。

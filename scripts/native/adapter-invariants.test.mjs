@@ -49,6 +49,14 @@ pub(crate) fn clear_initial_input_signal_if_current(signals: &StartupSignalRegis
       text: `pub(crate) fn writer_handover_allowed() -> bool {
     cfg!(target_os = "macos")
 }
+impl TaskEventSink for TauriEventSink {
+    fn notify(&self, notification: TaskNotification) {
+        let _ = self.app.emit(
+            "task-status",
+            task_status_payload(task_id, status, None),
+        );
+    }
+}
 `,
     },
     { name: SESSION, text: `fn claim_session_path(app: &AppHandle, path: &str) -> bool {\n    true\n}\n` },
@@ -147,4 +155,36 @@ test("the real tree is scanned, not an empty stand-in", () => {
   const names = rustFiles("src-tauri/src");
   assert.ok(names.length > 100, `expected the real src-tauri tree, got ${names.length} files`);
   assert.ok(names.includes(PTY) && names.includes(LIB) && names.includes(ADAPTER));
+});
+
+test("a second emitter of a handed-over family is a problem", () => {
+  const files = cleanFiles();
+  files[0].text += `
+pub(crate) fn rogue(app: &AppHandle<Wry>, task_id: &str) {
+    let _ = app.emit("task-status", json!({ "task_id": task_id }));
+}
+`;
+  assert.match(problemText(files), /ADR-023: task-status still has legacy emitters outside the sink/);
+});
+
+test("the sink itself must be in view, or ADR-023 is unprovable", () => {
+  const files = cleanFiles();
+  files[2].text = `pub(crate) fn writer_handover_allowed() -> bool {
+    cfg!(target_os = "macos")
+}
+`;
+  assert.match(
+    problemText(files),
+    /ADR-023: task-status must be emitted by exactly one line of core_adapter\.rs, found 0/,
+  );
+});
+
+test("emitting through the event-name constant is still counted", () => {
+  const files = cleanFiles();
+  files[0].text += `
+pub(crate) fn via_constant(app: &AppHandle<Wry>, payload: Value) {
+    let _ = app.emit(crate::event_names::TASK_STATUS, payload);
+}
+`;
+  assert.match(problemText(files), /ADR-023: task-status still has legacy emitters/);
 });

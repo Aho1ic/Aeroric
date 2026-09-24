@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use aeroric_core::tasks::executor::TaskEvent;
+use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::operations::{LedgerState, OperationKind};
 use aeroric_core::tasks::service::TaskError;
 use serde_json::json;
@@ -282,6 +282,7 @@ fn cancel_and_complete_are_not_the_same_request() {
                 status: aeroric_protocol::task::TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .ok();
@@ -385,6 +386,7 @@ fn the_record_copy_is_a_mirror_and_never_the_authority() {
                 status: aeroric_protocol::task::TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect_err("an event for a run this process never issued is a wiring fault");
@@ -522,6 +524,7 @@ fn two_distinct_operation_keys_on_one_task_both_reach_the_executor() {
                 status: aeroric_protocol::task::TaskStatus::Running,
                 attention_requested_at_ms: None,
                 failure_reason: None,
+                origin: ObservationOrigin::Runtime,
             },
         )
         .expect("run 2 reports");

@@ -319,7 +319,12 @@ fn emit_active_status<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent, sta
     // only the wire key goes, and ADR-035 requires it be named rather than dropped inside a
     // blanket "payloads unchanged" claim.
     let _ = approval;
-    crate::core_adapter::report_task_status(app, &ev.task_id, status);
+    crate::core_adapter::report_observed_status(
+        app,
+        &ev.task_id,
+        status,
+        aeroric_core::tasks::ObservationOrigin::Hook,
+    );
 }
 
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。

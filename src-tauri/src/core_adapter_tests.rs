@@ -33,8 +33,8 @@ use aeroric_core::paths::AppPaths;
 use aeroric_core::storage::Record;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
-    AgentFamilies, Applied, NewTask, NoLiveRuns, ProtocolFamily, TaskError, TaskEvent,
-    TaskExecutor, TaskRuntimeObserver, TaskService, TaskStatus,
+    AgentFamilies, Applied, NewTask, NoLiveRuns, ObservationOrigin, ProtocolFamily, TaskError,
+    TaskEvent, TaskExecutor, TaskRuntimeObserver, TaskService, TaskStatus,
 };
 use serde_json::{json, Map, Value};
 use tauri::ipc::Channel;
@@ -1085,6 +1085,7 @@ fn an_observation_announces_once_and_writes_nothing() {
         status: TaskStatus::InputRequired,
         attention_requested_at_ms: Some(1_700_000_099_000),
         failure_reason: None,
+        origin: ObservationOrigin::Transcript,
     });
 
     let after = scenario.emitted("task-status");
@@ -1129,6 +1130,7 @@ fn an_observation_announces_once_and_writes_nothing() {
         status: TaskStatus::Running,
         attention_requested_at_ms: None,
         failure_reason: None,
+        origin: ObservationOrigin::Transcript,
     });
     assert_eq!(
         scenario.emitted("task-status").len(),

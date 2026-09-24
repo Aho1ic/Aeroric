@@ -1081,18 +1081,28 @@ impl TaskService {
                 current,
             });
         }
-        let (status, attention, reason) = match &event {
+        // The fourth element is whether ADR-034's guard applies at all, and it is decided by
+        // the *source* of the report, not by the status word: ADR-034 decision 2 excludes the
+        // host's own changes (launch, cancel, manual completion, dsh's state machine) from the
+        // rule, and those are exactly the reports whose runs never appear in core's ledger.
+        let (status, attention, reason, guarded) = match &event {
             TaskEvent::Status {
                 status,
                 attention_requested_at_ms,
                 failure_reason,
+                origin,
                 ..
-            } => (*status, *attention_requested_at_ms, failure_reason.clone()),
+            } => (
+                *status,
+                *attention_requested_at_ms,
+                failure_reason.clone(),
+                origin.is_guarded(),
+            ),
             TaskEvent::Exit { code, .. } => {
                 // One rule, shared with the unrecorded path (`settled_by_exit`), so the two
                 // can never disagree about what a nonzero exit is called.
                 let (settled, reason) = settled_by_exit(*code);
-                (settled, None, reason)
+                (settled, None, reason, false)
             }
             TaskEvent::TerminalReady { .. } => {
                 // First input can go in: the attempt it was waiting for is over, and from
@@ -1124,7 +1134,7 @@ impl TaskService {
         // (row already `cancelled`, process still dying), and the host emits unconditionally in
         // both. Gating on the row instead would silently swallow the `running` that starts a
         // re-run of a finished task, which is a user-visible regression dressed up as a guard.
-        if !status.is_terminal() && !self.is_task_live(event.task_id()) {
+        if guarded && !status.is_terminal() && !self.is_task_live(event.task_id()) {
             return Ok((
                 EventOutcome::Dropped("no live run for this task"),
                 self.unchanged(snapshot.records.clone(), snapshot.fingerprint.clone()),
