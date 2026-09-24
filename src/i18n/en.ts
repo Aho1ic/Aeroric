@@ -3357,6 +3357,8 @@ export const en: Record<string, string> = {
   "project.actionFeedback.summary": "{total} actions · {failed} failed · avg {avg}ms",
   "project.backHome": "Back home",
   "toast.initProjectConfigFailed": "Failed to initialize project config: {error}",
+  "app.readOnlyStorageBadge": "Read-only",
+  "app.readOnlyStorageHint": "Another Aeroric instance is writing {dir}; this window saves nothing.",
   "toast.startupDegradedMemory":
     "Aeroric could not open its data directory, so it started with an in-memory database. Anything you save now will be lost when you quit. Reason: {reason}",
   "toast.startupDegradedFallbackDir":

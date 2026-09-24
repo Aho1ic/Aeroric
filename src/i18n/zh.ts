@@ -3243,6 +3243,8 @@ export const zh: Record<string, string> = {
   "project.actionFeedback.summary": "{total} 次操作 · {failed} 次失败 · 平均 {avg}ms",
   "project.backHome": "回到首页",
   "toast.initProjectConfigFailed": "初始化项目配置失败：{error}",
+  "app.readOnlyStorageBadge": "只读",
+  "app.readOnlyStorageHint": "另一个 Aeroric 实例正在写入 {dir}；本窗口不会保存任何改动。",
   "toast.startupDegradedMemory":
     "Aeroric 打不开数据目录，已改用内存数据库启动。现在保存的内容退出后会丢失。原因：{reason}",
   "toast.startupDegradedFallbackDir":

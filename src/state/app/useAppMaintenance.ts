@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "../../lib/api/invoke";
-import type { Project, SkillHubConfig, StartupDegradation, Task } from "../../types";
+import type { Project, SkillHubConfig, Task } from "../../types";
 import type { AppSettings } from "../../components/app-settings/types";
 import { normalizeProjectOrder } from "../../projectOrder";
 import { persistProjects } from "../../appProjectState";
 import { expiredTaskIds, shouldRunCleanup } from "../../taskCleanup";
 import { normalizeAutoCleanupSettings } from "../../components/app-settings/types";
 import { CLEANUP_COMMANDS } from "../../lib/api/appCommands";
+import { readStartupDegradations } from "../startupDiagnostics";
 import { SKILL_HUB_CHANGED_EVENT } from "../../components/app-settings/types";
 
 export type MaintenanceRefs = {
@@ -23,9 +24,8 @@ export function useStartupDegradationToasts(refs: MaintenanceRefs): void {
   const refsRef = useRef(refs);
   refsRef.current = refs;
   useEffect(() => {
-    invoke<StartupDegradation[]>("list_startup_degradations")
+    readStartupDegradations()
       .then((degradations) => {
-        if (!Array.isArray(degradations)) return;
         for (const degradation of degradations) {
           const isMemory = degradation.fallback === ":memory:";
           const translate = refsRef.current.translateRef.current;
@@ -40,9 +40,6 @@ export function useStartupDegradationToasts(refs: MaintenanceRefs): void {
           );
         }
       })
-      .catch((e: unknown) => {
-        console.error("list_startup_degradations failed", e);
-      });
   }, []);
 }
 

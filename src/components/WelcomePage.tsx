@@ -45,6 +45,7 @@ import { projectAvatarOf } from "../projectAvatar";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { ProjectAppearanceEditor } from "./ProjectAppearanceEditor";
 import { SidebarFooterActions } from "./SidebarFooterActions";
+import { ReadOnlyStorageBadge } from "./ReadOnlyStorageBadge";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   OPEN_APP_SETTINGS_EVENT,
@@ -693,6 +694,7 @@ export function WelcomePage({
               monoFontFamily={monoFontFamily}
               onMonoFontFamilyChange={onMonoFontFamilyChange ?? (() => {})}
             />
+            <ReadOnlyStorageBadge />
           </div>
         </div>
 
