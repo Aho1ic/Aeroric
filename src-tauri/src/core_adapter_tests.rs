@@ -182,7 +182,7 @@ impl Scenario {
             handle.clone(), sinks.clone()
         ));
         let service = TaskService::new(
-            context,
+            Arc::new(context),
             Arc::new(SettingsFamilies) as Arc<dyn AgentFamilies>,
             executor,
         )
@@ -806,4 +806,67 @@ fn a_launch_that_refuses_at_the_port_is_recorded_and_releases_the_claim() {
     assert_eq!(scenario.spawn_count(), 1);
     scenario.release_agent();
     scenario.wait_for_retirement();
+}
+
+/// `install_core_services` is what `run()` calls on every launch, and until now nothing had
+/// ever called it: a wiring function that is never exercised is exactly the kind of code that
+/// can be wrong in ways no unit test can see (wrong directory, forgotten state, a panic on the
+/// startup path). This drives it once, over a scratch home.
+#[test]
+fn startup_wiring_installs_the_gateway_and_the_service_over_the_scratch_home() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("startup-wiring");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    std::fs::create_dir_all(home.path().join(".aeroric")).expect("data dir");
+
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+
+    let expected = home.path().join(".aeroric");
+    {
+        let gateway = app.state::<crate::core_adapter::CoreGateway>();
+        assert_eq!(
+            gateway.data_dir(),
+            expected,
+            "the gateway must resolve its directory through `platform::home_dir()`, not a guess"
+        );
+        assert_eq!(
+            gateway.is_writer(),
+            cfg!(target_os = "macos"),
+            "ADR-021: only macOS takes the role, and the lease attempt must not even happen elsewhere"
+        );
+    }
+    assert!(
+        app.try_state::<TaskService>().is_some(),
+        "no `TaskService` in managed state means the wiring is decorative"
+    );
+    assert!(
+        app.try_state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
+            .is_some(),
+        "the channel mailbox has to be shared with the command that starts a task"
+    );
+
+    // Second instance over the same directory. Only meaningful where a lease was being held at
+    // all — on other platforms both are `HandoverDeferred` by design (ADR-021), and asserting a
+    // read-only refusal there would test the wrong thing.
+    if cfg!(target_os = "macos") {
+        let second = tauri::test::mock_app();
+        crate::core_adapter::install_core_services(second.handle(), "0-test");
+        let gateway = second.state::<crate::core_adapter::CoreGateway>();
+        assert!(
+            !gateway.is_writer(),
+            "the first instance still holds the lease; this one must not write"
+        );
+        assert!(
+            gateway
+                .notice()
+                .is_some_and(|notice| notice.contains("aeroric")),
+            "a refusal the UI cannot explain is not a refusal: {:?}",
+            gateway.notice()
+        );
+    }
+
+    drop(scratch);
 }

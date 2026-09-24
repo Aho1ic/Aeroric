@@ -160,7 +160,10 @@ pub enum EventOutcome {
 }
 
 pub struct TaskService {
-    context: CoreContext,
+    /// Shared, because the host's adapter owns the same context: the gateway is what took the
+    /// writer lease, and a service that carried its own copy would be a second answer to
+    /// "may this process write" — the thing ADR-021/027 exist to keep singular.
+    context: Arc<CoreContext>,
     families: Arc<dyn AgentFamilies>,
     executor: Arc<dyn TaskExecutor>,
     ledger: Mutex<OperationLedger>,
@@ -168,7 +171,7 @@ pub struct TaskService {
 
 impl TaskService {
     pub fn new(
-        context: CoreContext,
+        context: Arc<CoreContext>,
         families: Arc<dyn AgentFamilies>,
         executor: Arc<dyn TaskExecutor>,
     ) -> Result<Self, StorageError> {

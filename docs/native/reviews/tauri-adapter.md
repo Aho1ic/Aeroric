@@ -3,7 +3,7 @@
 - **Reviewed**: 2026-09-23
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-05
 - **Code（本模块目前唯一已合并部分）**: `src-tauri/src/storage_location.rs`、`src-tauri/src/storage.rs::windows_private_acl_receipt`、`src-tauri/src/lib.rs` 的 `mod storage_location;`
-- **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（9 case／2486 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `adapter-acceptance-real-kernel`（地板 5，P2-05 验收 #2 的证据本身，串行跑）+ `src-tauri-lib-tests`（地板 2465）+ `adapter-event-payload-contract`（地板 5，Action 5 点名的 TS 侧载荷契约）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`；用例：`src-tauri/src/core_adapter_tests.rs`、`src/test/native-core-adapter.test.ts`
+- **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（9 case／2488 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `adapter-acceptance-real-kernel`（地板 6，P2-05 验收 #2 的证据本身 + 启动接线实跑一遍，串行跑）+ `src-tauri-lib-tests`（地板 2466）+ `adapter-event-payload-contract`（地板 5，Action 5 点名的 TS 侧载荷契约）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`；用例：`src-tauri/src/core_adapter_tests.rs`、`src/test/native-core-adapter.test.ts`
 - **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032、Q62～Q63 → ADR-033/034（2026-09-24 第三轮，Q62 再次否掉窄路推荐）。收口提交 `1279520`/`bf57afa`/`cef9e15`/`88d3646`，不 push、不 tag。**任务仍未 accepted，但原因变了**：§1 的三条验收**现在全部有证据**（#2 见 §4c，2026-09-24 按用户拍板的 B 路补上），剩下的不是缺证据，而是还有活没干完——ADR-023 的那 8 处 legacy 发射点还在，执行器还没接进产品路径（前置是 Action 3 + ADR-022，属排期）。
 
 ## 1. 验收标准（引计划原文）
@@ -73,7 +73,7 @@
    - ✅ ADR-021：`writer_handover_allowed()` 体必须是 `cfg!(target_os = "macos")`，出现 windows/linux 即红。
    - ✅ ADR-031：claim 的 remove 只准出现在 `release_session_path_if_unreferenced` 内（helper 里若不 remove 也报错）。
    - ✅ ADR-030：靠 `--lib` 用例计数地板 + 3 条专项测试（含两次变异验证其可失败性）。
-   - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3；ADR-023（两个 `emitters` 计数降回 1）→ 等删那 8 处发射点；ADR-026（重放上限一次）、ADR-027（只读实例写入口全拒）→ 等 `CoreGateway`/`TaskService` 进 managed state。这五条**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
+   - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3；ADR-023（两个 `emitters` 计数降回 1）→ 等删那 **28** 处发射点（实测，见 ADR-033）；ADR-026（重放上限一次）、ADR-027（只读实例写入口全拒）→ **地基已到位**（补记四十五：`CoreGateway`/`TaskService` 已进 managed state，ADR-027 的"第二实例只读且说得出目录与持有者"已有一条用例实测过），现在缺的是 case 本身而不是宿主状态。这五条仍**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
 4b. **验收 #2（真 executor 跑 fake 任务）不可写，原因不是存储根，是 Wry 具体类型**（2026-09-23 实测，不是推测）：
    - 先解决了一个次要障碍：`platform::home_dir()` 在 unix 上就是读 `$HOME`，加一个 `#[cfg(test)]` 专用重定向确实可行，且现存三处读 `home_dir()` 的测试（`config.rs`、`sftp.rs`、`notebook/export.rs`）都是"与 `home_dir()` 自比"，重定向不会让它们断言到假东西。
    - **真正的墙**：`LegacyTaskExecutor` 持有的必须是 `AppHandle<Wry>`，因为 `launch` 要一路调进 `run_task_core → spawn_pty_reader → send_pty_chunk`，这条链上的签名是 Wry 具体的；而 `tauri::test` 只产出 `App<MockRuntime>`。编译器直接把这条路堵死：`error[E0308]: expected AppHandle, found App<MockRuntime>`。`complete_dsh_task_core` 那类泛型先例救不了它——同一次尝试里 `run_dsh_task_core<R: Runtime>` 就已经因为体内要调具体 `AppHandle` 的函数而编译失败（补记三十五记过）。

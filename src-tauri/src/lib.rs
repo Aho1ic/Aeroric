@@ -667,6 +667,14 @@ pub fn run() {
             // 不再 `.expect()`:构造已改为逐级降级(见 `DbxState::new_blocking`),
             // 磁盘不可用时退到临时目录或内存库,原因记进启动诊断由前端横幅告知。
             app.manage(crate::database::dbx_state::DbxState::new_blocking());
+            // P2-05：原生 core 的共享状态进 managed state。macOS 上这一步会真的去取写者租约
+            // （ADR-021），所以第二实例从此以只读启动并如实告知；但**这不是写权移交**——任务表
+            // 仍由 storage.rs 保存，没有任何 mutation 走 TaskService。失败不阻塞启动：
+            // 装载不上就记一条启动降级，旧客户端照常跑。
+            crate::core_adapter::install_core_services(
+                app.handle(),
+                &app.package_info().version.to_string(),
+            );
             // 后台预热 login shell 环境，避免第一次启动任务时阻塞
             std::thread::spawn(|| {
                 crate::app_settings::get_login_shell_path();

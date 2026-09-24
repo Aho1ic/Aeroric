@@ -22,7 +22,7 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2465,
+      "src-tauri-lib-tests@tauri-adapter": 2466,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
@@ -30,7 +30,7 @@
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
       "tasks-status-machine-rust@tasks": 28,
-      "adapter-acceptance-real-kernel@tauri-adapter": 5,
+      "adapter-acceptance-real-kernel@tauri-adapter": 6,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
@@ -856,7 +856,7 @@
           "name": "adapter-acceptance-real-kernel",
           "kind": "test",
           "parse": "rust",
-          "minCases": 5,
+          "minCases": 6,
           "timeoutMs": 900000,
           "argv": [
             "cargo",
@@ -869,13 +869,13 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。"
+          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。"
         },
         {
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2465,
+          "minCases": 2466,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -885,7 +885,7 @@
             "--locked",
             "--lib"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
         },
         {
           "name": "src-tauri-cargo-fmt",

@@ -343,7 +343,10 @@ pub fn harness(tag: &str, initial: &[Record]) -> (PathBuf, CoreContext, Arc<Fake
 pub fn build_service(context: CoreContext, executor: &Arc<FakeExecutor>) -> TaskService {
     let families: Arc<dyn AgentFamilies> = Arc::new(Families);
     let runner: Arc<dyn TaskExecutor> = executor.clone();
-    TaskService::new(context, families, runner).expect("service")
+    // `build_service` still takes the context by value so the 20-odd callers that got one from
+    // `writer()`/`reacquire()` stay as they are; the Arc is the service's sharing rule, not
+    // theirs.
+    TaskService::new(Arc::new(context), families, runner).expect("service")
 }
 
 pub fn cleanup(root: PathBuf) {

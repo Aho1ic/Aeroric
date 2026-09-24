@@ -896,8 +896,11 @@ fn the_ledger_file_is_core_exclusive_and_a_corrupt_one_stops_the_service_from_wr
     // A ledger that cannot be read is not an empty ledger: constructing the service would
     // be a promise that no start is in flight, and that promise is what permits a spawn.
     let runner: Arc<dyn aeroric_core::tasks::executor::TaskExecutor> = _executor.clone();
-    let failure =
-        aeroric_core::tasks::service::TaskService::new(context, Arc::new(Families), runner);
+    let failure = aeroric_core::tasks::service::TaskService::new(
+        Arc::new(context),
+        Arc::new(Families),
+        runner,
+    );
     match failure {
         Err(StorageError::Corrupt { .. }) => {}
         Err(other) => panic!("the ledger error must reach the caller, not become {other:?}"),

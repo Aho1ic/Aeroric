@@ -20,18 +20,18 @@
 //!
 //! The mode decision is split out as [`decide_mode`] so the platform × lease-outcome
 //! matrix is testable without touching a real filesystem.
+//!
+//! `install_core_services` runs from `lib.rs`'s setup hook, so the gateway is constructed on the
+//! product path and the writer lease **is** taken on macOS from this point. That is deliberate and
+//! it is not yet the writer switch: `storage.rs` still saves the task table, and nothing routes a
+//! mutation through `TaskService`. What changes is that the refusal is now real — a second instance
+//! starts read-only and says so — and that core's cover fingerprints start recording what the
+//! legacy save path does to the same files, which is the counter-example ADR-011 and acceptance #3
+//! ask for. Items still unused by the product path carry a targeted `dead_code` allowance at the
+//! item, never a module-wide one: an allow whose stated reason has become false is worse than a
+//! warning.
 
-//! A module-level `dead_code` allowance is deliberate: nothing in the product path
-//! constructs `CoreGateway` yet, because doing so would take the writer lease on macOS while
-//! `storage.rs` is still the code that actually saves — which is the double-writer INV-03
-//! forbids. The allowance is removed by the writer switch in this same task; `cargo test`
-//! hides these warnings (tests use the items), so only `cargo check` shows them.
-#![allow(
-    dead_code,
-    reason = "P2-05 in progress: consumed once the writer role switches over"
-)]
-
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_core::{
@@ -61,6 +61,10 @@ pub(crate) enum CoreMode {
 }
 
 impl CoreMode {
+    #[allow(
+        dead_code,
+        reason = "读它的是 CoreGateway 上的同名转发，那条路要等第一个走 core 的写入口"
+    )]
     pub(crate) fn is_writer(self) -> bool {
         self == CoreMode::Writer
     }
@@ -79,6 +83,10 @@ impl CoreMode {
 /// `LeaseError` is what lets the whole matrix be tested without creating a real directory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Acquisition {
+    #[allow(
+        dead_code,
+        reason = "生产路径在 Ok(acquisition) 分支里直接给 CoreMode::Writer；该变体只被 decide_mode 的四格矩阵用例构造"
+    )]
     Acquired,
     HeldByAnother,
     Refused,
@@ -183,20 +191,62 @@ impl CoreGateway {
         }
     }
 
+    /// The start-up entry point: resolve the user home the way the rest of the host does, then
+    /// hand the decision to [`CoreGateway::startup`].
+    ///
+    /// A missing home is a degradation, not a panic. `CoreContext::read_only` touches nothing on
+    /// disk — no lease, no directory creation — so an unusable placeholder path is safe to carry
+    /// purely for the message, and every later write still refuses through `require_write`.
+    pub(crate) fn at_startup(version: &str) -> Self {
+        let Some(home) = crate::platform::home_dir() else {
+            let reason = "无法定位用户主目录，原生 core 本次启动只读".to_string();
+            startup_diagnostics::record("storage-location", reason.clone(), String::new());
+            return Self {
+                context: Arc::new(CoreContext::read_only(AppPaths::from_user_home(""))),
+                mode: CoreMode::ReadOnlyLocation,
+                data_dir: PathBuf::from("~"),
+                location_warning: Some(reason),
+            };
+        };
+        Self::startup(AppPaths::from_user_home(home), version)
+    }
+
     pub(crate) fn context(&self) -> &Arc<CoreContext> {
         &self.context
     }
 
+    /// The directory this instance will or will not write. ADR-027's persistent read-only
+    /// indicator has to name it, and a refusal that names nothing is not an explanation.
+    #[allow(
+        dead_code,
+        reason = "只读的常驻横幅（ADR-027）与它的测试都要这个名字；今天只有 startup_wiring 用例在读"
+    )]
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    #[allow(
+        dead_code,
+        reason = "UI 侧的只读横幅要等 Action 3；ADR-027 要求的『持续可见』就是它，先留类型不留调用"
+    )]
     pub(crate) fn mode(&self) -> CoreMode {
         self.mode
     }
 
+    #[allow(
+        dead_code,
+        reason = "第一个经 core 的写入口就是它的调用方；今天 mutation 仍全走 storage.rs"
+    )]
     pub(crate) fn is_writer(&self) -> bool {
         self.mode.is_writer()
     }
 
     /// What the host owes the user at start-up: the reason we are not writing, and/or the
     /// cloud-sync caveat. `None` means there is genuinely nothing to report.
+    #[allow(
+        dead_code,
+        reason = "与 ADR-010 的云端目录告知同一个出口，接进 UI 时与 mode() 一起用"
+    )]
     pub(crate) fn notice(&self) -> Option<&str> {
         self.location_warning.as_deref()
     }
@@ -206,6 +256,10 @@ impl CoreGateway {
     /// It exists so "read-only" is one decision rather than N: a command that forgets to
     /// check still cannot write, because `CoreContext::require_write` inside core refuses
     /// without a lease. This function only turns that into a message the UI can act on.
+    #[allow(
+        dead_code,
+        reason = "真正的兜底是 core 的 require_write，本函数只把理由说给人听；第一个经 core 的写入口即调用方"
+    )]
     pub(crate) fn require_writer(&self) -> Result<(), String> {
         if self.is_writer() {
             return Ok(());
@@ -424,11 +478,16 @@ mod family_tests {
 /// a per-site answer, not a policy here — and inventing one now would either drop events that
 /// ship today or deliver ones today's code suppresses. Removing those eight sites is the next
 /// step, and the gate is listed as an open item in `docs/native/reviews/tauri-adapter.md`.
+#[allow(
+    dead_code,
+    reason = "发射权移交（ADR-023）必须与删掉那 28 处 legacy 发射点同批落地，单独接线会出现双发射环"
+)]
 pub(crate) struct TauriEventSink {
     app: tauri::AppHandle,
 }
 
 impl TauriEventSink {
+    #[allow(dead_code, reason = "随 TauriEventSink 一起接线，见 ADR-023 与步骤 F")]
     pub(crate) fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }
@@ -455,10 +514,60 @@ impl TaskEventSink for TauriEventSink {
     }
 }
 
+/// Puts the adapter's shared state in front of the app, from `lib.rs`'s setup hook.
+///
+/// Three rules shape this function, and none of them are stylistic:
+///
+/// 1. **The gateway is built before anything is managed**, because the executor it hands the
+///    service needs an `AppHandle` that only exists by then, and the service needs the *same*
+///    `Arc<CoreContext>` the gateway resolved — a second context would be a second answer to
+///    "may this process write" (ADR-021).
+/// 2. **A failure here must not stop the app from starting.** If the ledger cannot be loaded,
+///    the honest outcome is "no core service this run", recorded as a degradation — the same
+///    posture `DbxState::new_blocking` takes. Refusing to boot over a corrupt
+///    core 独占的账本文件坏了，就 strand 用户整个工作区，而那个文件之后是
+///    release can repair.
+/// 3. **Managing the service is not the writer switch.** `storage.rs` still saves the task
+///    table; nothing routes a mutation through here yet. What becomes real is the lease and the
+///    read-only refusal, and the fingerprints core records for the legacy writer's benefit.
+pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>, version: &str) {
+    use aeroric_core::tasks::{TaskExecutor, TaskService};
+    use tauri::Manager;
+
+    let gateway = CoreGateway::at_startup(version);
+    let context = gateway.context().clone();
+    app.manage(gateway);
+
+    let mailbox = Arc::new(crate::legacy_task_executor::OutputSinkMailbox::new());
+    app.manage(Arc::clone(&mailbox));
+
+    let executor: Arc<dyn TaskExecutor> = Arc::new(
+        crate::legacy_task_executor::LegacyTaskExecutor::new(app.clone(), mailbox),
+    );
+    match TaskService::new(
+        context,
+        Arc::new(SettingsFamilies) as Arc<dyn AgentFamilies>,
+        executor,
+    ) {
+        Ok(service) => {
+            app.manage(service);
+        }
+        Err(error) => startup_diagnostics::record(
+            "core-service",
+            format!("原生 core 本次启动不可用：{error}"),
+            String::new(),
+        ),
+    }
+}
+
 /// The frozen nine spellings, written out rather than round-tripped through serde: a payload
 /// constructor should not need an `expect` to obtain a string that is total by construction.
 /// `the_event_words_match_their_serialized_forms` pins this list against the contract's own
 /// serialisation, so a new variant cannot drift silently.
+#[allow(
+    dead_code,
+    reason = "载荷构造器随 TauriEventSink 一起接进产品路径；今天由三条形状用例与 TS 侧载荷契约测试守住"
+)]
 const fn status_word(status: aeroric_core::tasks::TaskStatus) -> &'static str {
     use aeroric_core::tasks::TaskStatus;
     match status {
@@ -474,6 +583,7 @@ const fn status_word(status: aeroric_core::tasks::TaskStatus) -> &'static str {
     }
 }
 
+#[allow(dead_code, reason = "同上")]
 const fn family_word(family: aeroric_core::tasks::ProtocolFamily) -> &'static str {
     use aeroric_core::tasks::ProtocolFamily;
     match family {
@@ -496,6 +606,10 @@ const fn family_word(family: aeroric_core::tasks::ProtocolFamily) -> &'static st
 /// `running` event carries two keys today, so sending `"failure_reason": null` would be a new
 /// key on a wire the frontend already parses — and omitting the key on the failed path would
 /// take away the text the UI explains the failure with.
+#[allow(
+    dead_code,
+    reason = "随 TauriEventSink 接线；键集与拼写由 core_adapter_tests 与 src/test/native-core-adapter.test.ts 双侧钉住"
+)]
 pub(crate) fn task_status_payload(
     task_id: &str,
     status: aeroric_core::tasks::TaskStatus,
@@ -514,6 +628,7 @@ pub(crate) fn task_status_payload(
 /// Builds a `task-session` payload, adding the per-family extras only where the shipping
 /// events add them. Emitting `"family": null` for a claude transcript would be a new key on
 /// a wire the frontend already parses, which is the opposite of what ADR-023 permits.
+#[allow(dead_code, reason = "同上")]
 pub(crate) fn task_session_payload(facts: &TaskSessionFacts) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "task_id": facts.task_id,
