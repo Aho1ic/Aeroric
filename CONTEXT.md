@@ -117,3 +117,12 @@
 | 存活代 / 最新代 | "这个任务还有进程活着吗"看**任意一代**（`has_live_run`）；"这次输入/resize 给谁"看**已注册的最大代**（`resource_run`，ADR-025） | 两者不可互换：用最新代判存活会把仍在跑的老代报成已死，用任意代做寻址会把输入喂给错误的窗口 |
 | 条目版本戳 / entry version stamp | 只在一张表内部回答"我登记的那条还在不在"的序号。`STARTUP_SIGNAL_GENERATION` 本波降格为此（ADR-032），**不是**运行身份 | 不是 generation；除 signal 登记/清除两处外不得再被引用，这条进门禁 |
 | 反查释放 / release-if-unreferenced | 路径 claim 的唯一释放规则：先删本次会话条目，再反查四张会话表，仍有人引用就不放（ADR-031） | 不是"删条目顺手删 claim"；不是持有者计数（那是第二份会漂移的账） |
+
+## 发射面移交新增（P2-05 续，Q62～Q63，ADR-033/034）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 发射面 / emit surface | 某事件在宿主里的**全部 `.emit` 调用点**，以 `command-map.json` 的 `events[].emitters` 为准。`task-status` 23 个（1 个是 core 的 sink）、`task-session` 7 个（同上） | 不是"包装函数的调用点数"（那个数曾把 28 处算成 8 处）；不是 `event_names.rs` 里的常量个数 |
+| 观察 / observation | 宿主把**已经发生的事实**（退出、hook、转录行、DSH 状态变化）报进 `TaskService::observe`，由 core 的 reducer 决定是否改变状态、是否发射。28 处移交的目标形态 | 不是"宿主直接调 sink"（那只是换个发射者，状态没过 reducer）；不是命令（命令是意图，观察是既成事实） |
+| 迟到观察丢弃 / late-observation drop | core 规则：**来自观察**的状态变更，若该任务在本进程已无存活代，则 `Dropped`，不改记录也不发事件（ADR-034）。今天它是 `session.rs` 3 个发射点上的局部习惯 | 不是按代判定（必须按"任意存活代"，否则双开时迟到的老代观察会被误丢，那是行为变更）；不覆盖启动/退出/取消/手动完成/DSH 状态机那些宿主主动告知的变化 |
+| 可见性决定权 / who decides visibility | "这条状态该不该让用户看到"的归属。移交后归 core；`is_task_active` 保留但只剩循环条件与流程守卫两种用途 | 不是"谁调用 `.emit`"（那是发射权）；宿主删掉 `session.rs:70` 那一处读取≠可以删掉 `is_task_active` 本身 |

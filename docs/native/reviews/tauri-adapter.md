@@ -4,7 +4,7 @@
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-05
 - **Code（本模块目前唯一已合并部分）**: `src-tauri/src/storage_location.rs`、`src-tauri/src/storage.rs::windows_private_acl_receipt`、`src-tauri/src/lib.rs` 的 `mod storage_location;`
 - **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（9 case／2486 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `adapter-acceptance-real-kernel`（地板 5，P2-05 验收 #2 的证据本身，串行跑）+ `src-tauri-lib-tests`（地板 2465）+ `adapter-event-payload-contract`（地板 5，Action 5 点名的 TS 侧载荷契约）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`；用例：`src-tauri/src/core_adapter_tests.rs`、`src/test/native-core-adapter.test.ts`
-- **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032（用户确认共识）。收口提交 `1279520`/`bf57afa`/`cef9e15`/`88d3646`，不 push、不 tag。**任务仍未 accepted，但原因变了**：§1 的三条验收**现在全部有证据**（#2 见 §4c，2026-09-24 按用户拍板的 B 路补上），剩下的不是缺证据，而是还有活没干完——ADR-023 的那 8 处 legacy 发射点还在，执行器还没接进产品路径（前置是 Action 3 + ADR-022，属排期）。
+- **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032、Q62～Q63 → ADR-033/034（2026-09-24 第三轮，Q62 再次否掉窄路推荐）。收口提交 `1279520`/`bf57afa`/`cef9e15`/`88d3646`，不 push、不 tag。**任务仍未 accepted，但原因变了**：§1 的三条验收**现在全部有证据**（#2 见 §4c，2026-09-24 按用户拍板的 B 路补上），剩下的不是缺证据，而是还有活没干完——ADR-023 的那 8 处 legacy 发射点还在，执行器还没接进产品路径（前置是 Action 3 + ADR-022，属排期）。
 
 ## 1. 验收标准（引计划原文）
 
@@ -39,6 +39,8 @@
 | Q59 | `cancelled_tasks`/`manually_completed_tasks` 按代记还是按任务记？（今天两者都是**读时消费**） | **任务级共享一条，最后一个退出的代销账**（否掉"意图操作 fan-out 按代写"的推荐） | ADR-030 | ✅ 否掉 |
 | Q60 | 会话表按代键后，路径 claim 何时释放？ | **不新增状态**：删本次条目后**反查四张会话表**，仍有人引用就不放；锁序统一为"会话表 → claim" | ADR-031 | 采纳 |
 | Q61 | `STARTUP_SIGNAL_GENERATION` 删除后 unminted 两代共享 0 会回归，怎么办？ | **保留该序号但降格为"条目版本戳"**，作用域钉死在 signal 表内，不作运行身份；其余容器仍只认 core 的代 | ADR-032（修订 ADR-020 决策 2） | 采纳 |
+| Q62 | ADR-023 的移交面实测是 28 处（22+6），其中 `dsh_webui.rs` 占 9 处而执行器按 ADR-021 明确拒绝驱动 dsh。这一步交哪一部分？（推荐：只交 core 今天真能驱动的 18 处，dsh 留到 P3-05） | **全量 28 处现在就交 core**，含 dsh 那 9 处；因此必须先建 runtime→core 观察通道（把 P3-05 的通知那一半提前） | ADR-033 | ✅ 否掉 |
+| Q63 | 那 3 处走 `is_task_active` 的抑制（迟到 watcher 事件不得复活已结束任务）移交后算谁的决定？ | **进 core 观察通道，成为一条规则**：来自观察的变更若该任务已无存活代则 `Dropped`；边界只覆盖转录/hook 来源 | ADR-034 | 采纳（推荐） |
 
 本轮从源码查到、改变问题形状的四条事实：① 两个标记集合今天都是 `remove()` 返回值当判定（一次性消费）；② dsh 另有一套自己的 `cancelled_tasks`，不在 `TaskManager` 内；③ omp/dsh 的登记侧**在持有 claim 的同时插会话表**，与 `lib.rs` 锁序表第 3 条相反（今天不致死锁，但表已名不副实 → ADR-031 决策 3 定死为"会话表 → claim"）；④ `wsl_active_ids` 同时装 shell id 与 task id，判空用于"还有没有 WSL 侧活运行"，属**存活**语义，按 RunKey 集合走即可，不需要新决策。
 
@@ -52,7 +54,7 @@
 
 1. **"`generation` 在 src-tauri 里根本不存在"是错的**。实际三套并行编号：`pty.rs:1205-1229` 进程全局 `AtomicU64`（作 `initial_input_signals` 值的判别字段）、`lib.rs:241-266` 的 `Arc::ptr_eq`（其注释已点名"配置切换复用 taskId"这个危害本身）、`dsh_webui.rs:217-243` 按 agent 的 `$events` 代际。这条错误会让重键被当成绿地工程，实际是**替换既有身份**。
 2. **`statvfs` 在 macOS/BSD 上没有 `f_fstypename`**（编译期 E0609）；文件系统名在 `statfs` 上，Linux 也只有 `statfs::f_type`。计划原文的"`statvfs`/`getmntinfo`"改成：两平台都走 `statfs`、各读各字段，`getmntinfo` 不需要。Linux 魔数表逐条对照 `include/uapi/linux/magic.h` 核对，并加"与本地表不相交"断言（凭记忆写的两条假值已删，其中一条是 BTRFS 真值的近似抄写错）。
-3. 发射点数量修正：`task-status`/`task-session` 相关 **~8 处**（包装函数 4 个调用点 + `task-session` 6 处字面量，分布于 `session.rs`/`session_omp.rs`/`session_dsh.rs`/`event_watcher.rs`），不是早先记录的 24；全仓 `.emit(` 共 91 处，与本模块无关的 ~83 处不动。
+3. **发射点数量：本文件曾记 `task-status`/`task-session` 相关 ~8 处（包装函数 4 个调用点 + `task-session` 6 处字面量），这个数字是错的**（2026-09-24 按 `command-map.json` 的 `events[].emitters` 重数）。真值：`task-status` 23 个 emitter（含 core 的 sink ⇒ legacy 22）、`task-session` 7 个（含 sink ⇒ legacy 6），legacy 22 处分布 `dsh_webui.rs` 9 / `pty.rs` 5 / `ssh.rs` 3 / `wsl.rs` 3 / `session.rs` 1 / `event_watcher.rs` 1。漏数的原因是只数了包装函数的调用点，没数绕过包装函数的直接 `.emit`。全仓 `.emit(` 共 91 处，与移交无关的约 63 处不动。详见 ADR-033。
 4. Q48 不做 ADR 的理由：它是交互层选择，改法是局部替换而非语义迁移；同时它带来一条必须记的事实——`reconnectTask`（`taskDeleteDone.ts:134-144`）是 `reset` + `resume` 的**程序化**续跑，只改 resume 按钮会让 reconnect 绕开确认闸。
 
 ## 4. 待办与阻塞（按依赖序）
@@ -93,7 +95,7 @@
    - ADR-024：分组导入幂等（导入前后名单逐字节相同）。
    - ADR-026：`REVISION_CONFLICT` 的重放次数上限为一次，且状态 op 不重放。
    - ADR-027：只读实例的所有写入口被拒；`list_startup_degradations` 报告该状态。
-5. **未决：`is_task_active` 这道抑制闸**。`task-status` 的 4 个调用点里 3 个走 `emit_active_task_status`（先查 `is_task_active(app, task_id)` 再发）、1 个不查；`task-session` 的 6 处都不查。所以"哪些事件被抑制"是**逐调用点**的决定，不是事件级策略。`TauriEventSink` 现在**故意不带这道闸**——带上就等于替那八个点各自做一次决定，那是行为变更而不是搬运。删掉那八处发射点之前必须先定：抑制语义留在哪一侧、什么粒度。
+5. **`is_task_active` 抑制闸——已于 2026-09-24 定案（Q63 → ADR-034）**：成为 core 观察通道上的一条规则（迟到的转录/hook 观察在任务已无存活代时 `Dropped`）。下面这段是定案前的原始记录，保留供对照。`task-status` 的 4 个调用点里 3 个走 `emit_active_task_status`（先查 `is_task_active(app, task_id)` 再发）、1 个不查；`task-session` 的 6 处都不查。所以"哪些事件被抑制"是**逐调用点**的决定，不是事件级策略。`TauriEventSink` 现在**故意不带这道闸**——带上就等于替那八个点各自做一次决定，那是行为变更而不是搬运。删掉那八处发射点之前必须先定：抑制语义留在哪一侧、什么粒度。
 6. **验证边界（诚实口径）**：Linux/Windows 的 `cfg` 分支只做到 `cargo check --target x86_64-unknown-linux-gnu|x86_64-pc-windows-msvc --tests` **编译通过**，运行时未测——本机无这两个平台的可执行环境。`TauriEventSink::notify` 需要 `AppHandle`，因此**只有 payload 构造器有单测**（三条用例钉住四键/五键/六键的形状），真实 emit 要到接线那一步才有覆盖。`RunRegistry` 与 `TauriEventSink` 目前都带 `#[allow(dead_code, reason = "…next step of P2-05")]`：尚未接进产品路径，这件事是写下来的，不是靠警告被忽略。
 6b. **端口曾经装不下 `failure_reason`——这是删发射点前必须先修的前提（2026-09-24 实测，见补记四十二）**：`useAppTauriEvents.ts` 解构 `{ task_id, status, failure_reason? }` 并把 reason 一路喂到 `storage.rs` 的持久字段，而 5 处 legacy 发射点在 failed 路径上都带这个键；`TaskNotification::Status` 当时只有 `{task_id, status}`，所以照 ADR-023『payload 不变』去删那 8 处会**在删除的当下静默丢掉失败原因**且无任何东西变红。已按 `TaskSessionFacts::family` 的同一口径补 `Option<String>` 并"只在 Some 时带上键"。守卫是新登记的 `adapter-event-payload-contract`（TS 侧，三方键集全部从源码扫出：客户端 `listen<{…}>` 类型字面量 × `src-tauri` 各 `.emit(...)` 的 `json!` 字面量 × core 两个构造函数），断言方向 legacy ⊆ core。可失败性已用变异验证（改回不带键 → 立刻红），正控断言的是**键集合非空**——第一版只数发射点个数，于是一个把键扫成空的括号 bug 让最关键那条真空通过。
 7. **ADR-023 的可核对判据（不是"看起来只有一个发射者"）**：`contracts/native/v1/events.schema.json` 逐事件统计 `emitters`。加进 sink 之后契约如实漂了两个数：`task-status` **22 → 23**、`task-session` **6 → 7**——这就是"过渡期同一事件有两个发射者"被工件记下来的样子。删除那 8 处 legacy 发射点后，这两个数必须**降回 1**（只剩 `TauriEventSink`），`tauri-adapter` 门禁应当断言这两个数字本身；否则"core 是唯一发射者"只是一句口号，而双向事件回环恰恰发生在这两个计数悄悄都大于 1 的时候。
