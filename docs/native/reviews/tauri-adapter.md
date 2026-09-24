@@ -72,7 +72,11 @@
    - ✅ ADR-031：claim 的 remove 只准出现在 `release_session_path_if_unreferenced` 内（helper 里若不 remove 也报错）。
    - ✅ ADR-030：靠 `--lib` 用例计数地板 + 3 条专项测试（含两次变异验证其可失败性）。
    - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3；ADR-023（两个 `emitters` 计数降回 1）→ 等删那 8 处发射点；ADR-026（重放上限一次）、ADR-027（只读实例写入口全拒）→ 等 `CoreGateway`/`TaskService` 进 managed state。这五条**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
-4b. **验收 #2（真 executor 跑 fake 任务）目前的硬阻塞**：`src-tauri` 没有测试期的存储根覆盖（没有 `AERORIC_DATA_DIR` 一类 env），而 `run_task_core` 必经 `app_settings::get_agent_launch_spec()` 读活的 `~/.aeroric`。两条出路，需用户拍板：① 开一个 `#[cfg(test)]` 专用的根覆盖（会碰 ADR-010 依赖的路径判定，须确认产品构建读不到它）；② 把这条验收推迟到 P3-01 抽出运行时端口之后（那时宿主设置注入是天然能力）。
+4b. **验收 #2（真 executor 跑 fake 任务）不可写，原因不是存储根，是 Wry 具体类型**（2026-09-23 实测，不是推测）：
+   - 先解决了一个次要障碍：`platform::home_dir()` 在 unix 上就是读 `$HOME`，加一个 `#[cfg(test)]` 专用重定向确实可行，且现存三处读 `home_dir()` 的测试（`config.rs`、`sftp.rs`、`notebook/export.rs`）都是"与 `home_dir()` 自比"，重定向不会让它们断言到假东西。
+   - **真正的墙**：`LegacyTaskExecutor` 持有的必须是 `AppHandle<Wry>`，因为 `launch` 要一路调进 `run_task_core → spawn_pty_reader → send_pty_chunk`，这条链上的签名是 Wry 具体的；而 `tauri::test` 只产出 `App<MockRuntime>`。编译器直接把这条路堵死：`error[E0308]: expected AppHandle, found App<MockRuntime>`。`complete_dsh_task_core` 那类泛型先例救不了它——同一次尝试里 `run_dsh_task_core<R: Runtime>` 就已经因为体内要调具体 `AppHandle` 的函数而编译失败（补记三十五记过）。
+   - 因此这不是"我没找到办法"，而是**任务本身的前提**：能在无 webview 环境里驱动宿主启动路径，等价于 P3-01 的标题——"提取运行时端口，替代 `AppHandle` 与全局查找"。P2-05 的验收 #2 写在 P3-01 之前，是计划里的一处顺序缺陷。
+   - 两条出路（需用户拍板，§1 的三条验收目前只有 #1 与 #3 有证据）：**(A)** 把 #2 随 P3-01 一起做（端口化之后测试自然可写，代价是 P2-05 只能标 "accepted-with-deferred-criterion"，Phase 2 Gate 要显式放行）；**(B)** 现在就把 `send_pty_chunk`/`spawn_pty_reader`/`run_task_core` 这条链做成 `R: Runtime` 泛型（约 6 个函数 + 若干调用点，属于提前支付 P3-01 的一部分成本）。**没有 (C)**：用记录型假执行器代替只能证明"假执行器被调用"，那正是 P2-04 关掉这条验收时给过的理由。
    - ADR-020/025：src-tauri 内 generation 编号只有一处来源；`STARTUP_SIGNAL_GENERATION` 不得复活。
    - ADR-021：非 macOS 构建不得递交 writer 角色。
    - ADR-022：队列类型不再携带整表快照（`save_project_tasks` 不得出现在宿主的写路径上）。
