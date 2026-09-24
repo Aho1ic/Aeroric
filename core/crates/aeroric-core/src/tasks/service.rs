@@ -73,8 +73,11 @@ pub struct Applied {
     pub changed: bool,
     /// The cover the caller's *next* write in this session must present.
     pub fingerprint: Option<Value>,
-    /// Which run number the host must launch, when the change was a switch or start. The
-    /// spawn itself stays with the caller: the first-input gate means the terminal says when.
+    /// Which run number the caller owes a spawn to, and only for a change that does *not* reach
+    /// the executor itself: a config switch decides the next run but leaves starting it to the
+    /// host, so the number has to come back here. A start or resume reports `None` on purpose —
+    /// the host already received that generation inside `LaunchRequest`/`ResumeRequest`, and a
+    /// second copy on the return value would be a second place for it to disagree.
     pub generation: Option<u64>,
 }
 

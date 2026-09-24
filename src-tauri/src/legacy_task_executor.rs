@@ -85,13 +85,18 @@ impl OutputSinkMailbox {
     }
 }
 
-pub(crate) struct LegacyTaskExecutor {
-    app: AppHandle,
+/// Generic over the runtime on purpose (P2-05's acceptance evidence): the launch chain it
+/// dispatches into (`run_task_core → spawn_pty_reader → send_pty_chunk`) has to be able to run
+/// without a Wry webview, or "one start, one process" can only be asserted against a mock —
+/// which is exactly what P2-04 could not close. Production instantiates it at `Wry`; the host
+/// tests instantiate it at `MockRuntime`.
+pub(crate) struct LegacyTaskExecutor<R: tauri::Runtime = tauri::Wry> {
+    app: AppHandle<R>,
     sinks: Arc<OutputSinkMailbox>,
 }
 
-impl LegacyTaskExecutor {
-    pub(crate) fn new(app: AppHandle, sinks: Arc<OutputSinkMailbox>) -> Self {
+impl<R: tauri::Runtime> LegacyTaskExecutor<R> {
+    pub(crate) fn new(app: AppHandle<R>, sinks: Arc<OutputSinkMailbox>) -> Self {
         Self { app, sinks }
     }
 
@@ -173,7 +178,7 @@ fn permission_is_carried_verbatim(mode: PermissionMode, wire: &str) -> bool {
     )
 }
 
-impl TaskExecutor for LegacyTaskExecutor {
+impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
         if request.family == ProtocolFamily::Dsh {
             return Err(ExecutorFailure::Unsupported {

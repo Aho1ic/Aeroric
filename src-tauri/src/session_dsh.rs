@@ -578,8 +578,8 @@ pub(crate) fn newest_dsh_session_since(
 }
 
 /// 在项目会话目录下寻找 `since_ms` 之后创建、且未被其他任务认领的最新会话。
-pub(crate) fn discover_dsh_session_since(
-    app: &AppHandle,
+pub(crate) fn discover_dsh_session_since<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     agent: &str,
     project_path: &str,
     since_ms: i64,
@@ -620,8 +620,8 @@ pub(crate) fn discover_dsh_session_since(
 /// TaskManager,向前端广播 `task-session`(family = "dsh")。任务状态由退出码
 /// 驱动(见 pty.rs),headless 下审批 fail-closed,无 input_required 流转,
 /// 因此注册完成后 watcher 即退出。
-pub(crate) fn spawn_dsh_session_watcher(
-    app: AppHandle,
+pub(crate) fn spawn_dsh_session_watcher<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     agent: String,
@@ -659,8 +659,8 @@ pub(crate) fn spawn_dsh_session_watcher(
     });
 }
 
-pub(crate) fn register_dsh_session(
-    app: &AppHandle,
+pub(crate) fn register_dsh_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
@@ -669,8 +669,8 @@ pub(crate) fn register_dsh_session(
     register_dsh_session_with_preset(app, run, task_id, session_id, session_path, None);
 }
 
-pub(crate) fn register_dsh_session_with_preset(
-    app: &AppHandle,
+pub(crate) fn register_dsh_session_with_preset<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,

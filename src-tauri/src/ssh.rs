@@ -1308,8 +1308,8 @@ fn chain_output_filters(
     Box::new(move |data| first(data).and_then(&mut second))
 }
 
-fn spawn_remote_task_exit_monitor(
-    app: AppHandle,
+fn spawn_remote_task_exit_monitor<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_id: String,
     child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
@@ -1352,8 +1352,8 @@ fn spawn_remote_task_exit_monitor(
     });
 }
 
-fn spawn_remote_task_pty(
-    app: AppHandle,
+fn spawn_remote_task_pty<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: &str,
     cmd: CommandBuilder,
@@ -1725,8 +1725,8 @@ pub async fn run_remote_task(
 
 /// `run_remote_task` 的内核。抽它的唯一理由是方向:`LegacyTaskExecutor` 只能调这个,
 /// 不能调 `#[tauri::command]`(P2-05 Action 4 的递归禁令)。参数与实参名一字未改。
-pub(crate) async fn run_remote_task_core(
-    app: AppHandle,
+pub(crate) async fn run_remote_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: String,
     mut connection: SshConnection,
@@ -1838,8 +1838,8 @@ pub async fn resume_remote_task(
 }
 
 /// 见 `run_remote_task_core`:同一条递归禁令,同一次未改动的搬运。
-pub(crate) async fn resume_remote_task_core(
-    app: AppHandle,
+pub(crate) async fn resume_remote_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: String,
     mut connection: SshConnection,
@@ -1911,8 +1911,8 @@ pub async fn cancel_remote_task(
 }
 
 /// 同一条递归禁令下 `LegacyTaskExecutor` 要能停远程任务,这个内核就得先存在。
-pub(crate) async fn cancel_remote_task_core(
-    app: &AppHandle,
+pub(crate) async fn cancel_remote_task_core<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: &str,
 ) -> Result<(), String> {

@@ -294,8 +294,8 @@ pub(crate) fn discover_unclaimed_omp_session_since<R: tauri::Runtime>(
 ///
 /// 同项目下的多个 omp 任务共用一个会话目录。所以发现要跳过已认领的路径,而认领本身
 /// 还可能输给同一瞬间的另一个 watcher —— 那时不能退出,要继续等自己的文件出现。
-pub(crate) fn spawn_omp_session_watcher(
-    app: AppHandle,
+pub(crate) fn spawn_omp_session_watcher<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     agent: String,

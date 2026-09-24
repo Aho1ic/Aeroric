@@ -59,20 +59,20 @@ pub struct RecoveredSession {
 
 // ── 公共辅助函数 ──────────────────────────────────────────────────────────────
 
-pub(crate) fn emit_task_status(app: &AppHandle, task_id: &str, status: &str) {
+pub(crate) fn emit_task_status<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, status: &str) {
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": status }),
     );
 }
 
-fn emit_active_task_status(app: &AppHandle, task_id: &str, status: &str) {
+fn emit_active_task_status<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, status: &str) {
     if is_task_active(app, task_id) {
         emit_task_status(app, task_id, status);
     }
 }
 
-pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
+pub(crate) fn is_task_active<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str) -> bool {
     let tm = app.state::<TaskManager>();
     if tm.has_live_run(task_id) {
         return true;
@@ -101,7 +101,7 @@ pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
     has_claude_session
 }
 
-fn claim_session_path(app: &AppHandle, path: &str) -> bool {
+fn claim_session_path<R: tauri::Runtime>(app: &AppHandle<R>, path: &str) -> bool {
     let tm = app.state::<TaskManager>();
     let mut claimed = tm.claimed_session_paths.lock();
     if claimed.contains(path) {
@@ -295,8 +295,8 @@ fn hooks_own_approval_signal(agent: &str) -> bool {
     crate::hooks::usable_for(agent)
 }
 
-fn watch_codex_session(
-    app: AppHandle,
+fn watch_codex_session<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_id: String,
     session_path: PathBuf,
     project_path: PathBuf,
@@ -349,8 +349,8 @@ fn watch_codex_session(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn process_codex_session_line(
-    app: &AppHandle,
+fn process_codex_session_line<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_id: &str,
     line: &str,
     project_path: &Path,
@@ -501,8 +501,8 @@ fn process_codex_session_line(
     }
 }
 
-fn sync_waiting_for_user(
-    app: &AppHandle,
+fn sync_waiting_for_user<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_id: &str,
     waiting_for_user: &mut bool,
     pending_confirmation_calls: &HashSet<String>,
@@ -579,7 +579,12 @@ fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<Path
     claude_sessions_dir_for_agent_in(&home, agent, project_path)
 }
 
-fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf, agent: String) {
+fn watch_claude_session<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    task_id: String,
+    session_path: PathBuf,
+    agent: String,
+) {
     use notify::{RecursiveMode, Watcher};
 
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
@@ -621,8 +626,8 @@ fn watch_claude_session(app: AppHandle, task_id: String, session_path: PathBuf, 
     }
 }
 
-fn process_claude_session_line(
-    app: &AppHandle,
+fn process_claude_session_line<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_id: &str,
     line: &str,
     waiting_for_user: &mut bool,
@@ -1791,8 +1796,8 @@ fn wait_for_session_file(session_id: &str, project_path: &str, is_codex: bool) -
 ///
 /// `run` 是这个会话属于哪一次运行（ADR-020）。每条 attach 路径都是由某次启动自己派生的
 /// watcher 触发的，所以这里从不需要猜代。
-pub(crate) fn register_and_watch_session(
-    app: &AppHandle,
+pub(crate) fn register_and_watch_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
@@ -1896,8 +1901,8 @@ pub(crate) fn should_start_status_session_watcher(
 /// Codex 没有公开的启动参数用于预置 session id。带首条 prompt 的任务启动后，
 /// 通过新生成的 session 文件按项目、提示词和创建时间匹配真实 session，避免向
 /// 正在显示启动确认界面的 PTY 注入 `/status`。
-pub(crate) fn spawn_codex_session_recovery(
-    app: AppHandle,
+pub(crate) fn spawn_codex_session_recovery<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
@@ -1931,8 +1936,8 @@ pub(crate) fn spawn_codex_session_recovery(
     });
 }
 
-fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
-    fn write_to_pty(app: &AppHandle, task_id: &str, bytes: &[u8]) {
+fn send_status_command<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, is_codex: bool) {
+    fn write_to_pty<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, bytes: &[u8]) {
         let writer = {
             let tm = app.state::<TaskManager>();
             tm.writer_for(task_id)
@@ -1964,8 +1969,8 @@ fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
 /// 任何退出路径都会清理占位条目和 claimed 路径。
 /// Claude 已经通过 `--session-id` 预先确定会话 ID 时，立即广播并持久化该 ID，
 /// 同时后台等待 transcript 文件出现后再升级为可监视的真实会话。
-pub(crate) fn spawn_claude_lazy_session_attach(
-    app: AppHandle,
+pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     session_id: String,
@@ -2136,8 +2141,8 @@ pub(crate) fn spawn_claude_lazy_session_attach(
 ///
 /// 当 `pre_session_id` 为 `Some` 时（Claude >= 2.1.87），跳过 `/status` 发现，
 /// 直接使用预置 session id 注册会话文件。若文件在超时内未出现，自动回退到 `/status` 流程。
-pub(crate) fn spawn_status_session_watcher(
-    app: AppHandle,
+pub(crate) fn spawn_status_session_watcher<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
@@ -2189,8 +2194,8 @@ pub(crate) fn spawn_status_session_watcher(
 }
 
 /// 旧的 /status 轮询流程：非空 prompt 且无法使用 hook/预置 session 的任务走此路径。
-fn run_status_session_watcher(
-    app: AppHandle,
+fn run_status_session_watcher<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
@@ -2300,8 +2305,8 @@ fn run_status_session_watcher(
 }
 
 /// 供 `resume_task` 使用：根据已知的 session_id 查找会话文件并开始监视。
-pub(crate) fn spawn_resume_session_watcher(
-    app: AppHandle,
+pub(crate) fn spawn_resume_session_watcher<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,

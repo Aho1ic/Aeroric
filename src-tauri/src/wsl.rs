@@ -931,8 +931,8 @@ fn upgrade_wsl_agent_versions_blocking(
         .collect()
 }
 
-fn spawn_wsl_exit_monitor(
-    app: AppHandle,
+fn spawn_wsl_exit_monitor<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_id: String,
     child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
@@ -976,8 +976,8 @@ fn spawn_wsl_exit_monitor(
     });
 }
 
-fn spawn_wsl_task_pty(
-    app: AppHandle,
+fn spawn_wsl_task_pty<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: &str,
     spec: WslCommandSpec,
@@ -1540,8 +1540,8 @@ pub async fn run_wsl_task(
 
 /// `run_wsl_task` 的内核。理由与 `pty::run_task_core` 相同:执行器只能调内核,不能调命令
 /// (P2-05 Action 4)。参数与实参名一字未改。
-pub(crate) async fn run_wsl_task_core(
-    app: AppHandle,
+pub(crate) async fn run_wsl_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: String,
     distribution: String,
@@ -1644,8 +1644,8 @@ pub async fn resume_wsl_task(
 }
 
 /// 见 `run_wsl_task_core`。
-pub(crate) async fn resume_wsl_task_core(
-    app: AppHandle,
+pub(crate) async fn resume_wsl_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: String,
     distribution: String,
@@ -1711,8 +1711,8 @@ pub async fn cancel_wsl_task(
 }
 
 /// 见 `run_wsl_task_core`。
-pub(crate) async fn cancel_wsl_task_core(
-    app: &AppHandle,
+pub(crate) async fn cancel_wsl_task_core<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     task_manager: &crate::TaskManager,
     task_id: &str,
 ) -> Result<(), String> {

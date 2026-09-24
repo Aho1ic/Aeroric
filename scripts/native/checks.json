@@ -22,14 +22,15 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2459,
+      "src-tauri-lib-tests@tauri-adapter": 2464,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 27
+      "tasks-status-machine-rust@tasks": 27,
+      "adapter-acceptance-real-kernel@tauri-adapter": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -824,7 +825,7 @@
     },
     "tauri-adapter": {
       "registeredBy": "P2-05",
-      "$note": "P2-05 的宿主侧门禁。**已生效**：ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 8 处 legacy 发射点；ADR-026 的重放上限一次、ADR-027 的只读实例写入口全拒，要等 `CoreGateway`/`TaskService` 真被 managed state 注入（今天还没有调用方）。",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 8 处 legacy 发射点；ADR-026 的重放上限一次、ADR-027 的只读实例写入口全拒，要等 `CoreGateway`/`TaskService` 真被 managed state 注入（今天还没有调用方）。",
       "cases": [
         {
           "name": "adapter-invariants-unit",
@@ -851,10 +852,29 @@
           "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。"
         },
         {
+          "name": "adapter-acceptance-real-kernel",
+          "kind": "test",
+          "parse": "rust",
+          "minCases": 5,
+          "timeoutMs": 900000,
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "core_adapter_tests::",
+            "--",
+            "--test-threads=1"
+          ],
+          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。"
+        },
+        {
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2459,
+          "minCases": 2464,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -864,7 +884,7 @@
             "--locked",
             "--lib"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
         },
         {
           "name": "src-tauri-cargo-fmt",

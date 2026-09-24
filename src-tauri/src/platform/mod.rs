@@ -38,7 +38,70 @@ pub(crate) struct PlatformRuntimeInfo {
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(scratch) = scratch::home_dir() {
+        return Some(scratch);
+    }
     imp::home_dir()
+}
+
+/// A test-only data root, so a test can drive the real launch kernels without writing into the
+/// developer's live `~/.aeroric`.
+///
+/// Not `std::env::set_var("HOME", …)`: `permissions/mod.rs` records that this repository removed
+/// that pattern from its tests precisely because mutating the process environment races a
+/// multithreaded test binary. Our own lock-guarded slot has no such hazard — reads and writes are
+/// both synchronised, and it is `#[cfg(test)]`, so no product build can observe it.
+///
+/// The slot is global because every host storage path funnels through [`home_dir`] and none of
+/// them takes a root argument. That is the price of reaching the real kernels; what keeps it
+/// survivable is that a scenario asserts on paths it names itself (a unique task id, its own
+/// marker file), so another test landing in the same directory cannot change the answer.
+#[cfg(test)]
+mod scratch {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static SLOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    pub(crate) fn home_dir() -> Option<PathBuf> {
+        SLOT.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Restores whatever was installed, so scenarios do not stack. It carries no path of its own:
+    /// the caller already owns the directory it installed.
+    pub(crate) struct Guard {
+        previous: Option<PathBuf>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if let Ok(mut slot) = SLOT.lock() {
+                *slot = self.previous.take();
+            }
+        }
+    }
+
+    /// Hold the returned guard for the whole scenario: the kernels reach this root from reader
+    /// and watcher threads the caller never sees.
+    pub(crate) fn install(root: PathBuf) -> Guard {
+        let previous = SLOT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .replace(root);
+        Guard { previous }
+    }
+}
+
+#[cfg(test)]
+pub(crate) use scratch::Guard as ScratchHome;
+
+/// The host's `~/.aeroric` parent while the returned guard is alive.
+#[cfg(test)]
+pub(crate) fn install_scratch_home(root: std::path::PathBuf) -> ScratchHome {
+    scratch::install(root)
 }
 
 pub(crate) fn login_shell_env() -> &'static [(String, String)] {

@@ -3,8 +3,8 @@
 - **Reviewed**: 2026-09-23
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-05
 - **Code（本模块目前唯一已合并部分）**: `src-tauri/src/storage_location.rs`、`src-tauri/src/storage.rs::windows_private_acl_receipt`、`src-tauri/src/lib.rs` 的 `mod storage_location;`
-- **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（2026-09-23，7 case／2470 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `src-tauri-lib-tests`（地板 2459）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`
-- **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032（用户确认共识）。已收口提交 `1279520`（88 files）与 `bf57afa`（43 files），不 push、不 tag。**任务仍未 accepted**：§1 验收 #2（真 executor 跑 fake 任务，只一次写入序列 + 一次 spawn）尚无证据——`src-tauri` 没有测试期的存储根覆盖，跑真 executor 会读活的 `~/.aeroric`（见 §4b）；且 ADR-023 的那 8 处 legacy 发射点还在。
+- **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（8 case／2480 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `adapter-acceptance-real-kernel`（地板 5，P2-05 验收 #2 的证据本身，串行跑）+ `src-tauri-lib-tests`（地板 2464）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`；用例：`src-tauri/src/core_adapter_tests.rs`
+- **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032（用户确认共识）。收口提交 `1279520`/`bf57afa`/`cef9e15`/`88d3646`，不 push、不 tag。**任务仍未 accepted，但原因变了**：§1 的三条验收**现在全部有证据**（#2 见 §4c，2026-09-24 按用户拍板的 B 路补上），剩下的不是缺证据，而是还有活没干完——ADR-023 的那 8 处 legacy 发射点还在，执行器还没接进产品路径（前置是 Action 3 + ADR-022，属排期）。
 
 ## 1. 验收标准（引计划原文）
 
@@ -77,6 +77,15 @@
    - **真正的墙**：`LegacyTaskExecutor` 持有的必须是 `AppHandle<Wry>`，因为 `launch` 要一路调进 `run_task_core → spawn_pty_reader → send_pty_chunk`，这条链上的签名是 Wry 具体的；而 `tauri::test` 只产出 `App<MockRuntime>`。编译器直接把这条路堵死：`error[E0308]: expected AppHandle, found App<MockRuntime>`。`complete_dsh_task_core` 那类泛型先例救不了它——同一次尝试里 `run_dsh_task_core<R: Runtime>` 就已经因为体内要调具体 `AppHandle` 的函数而编译失败（补记三十五记过）。
    - 因此这不是"我没找到办法"，而是**任务本身的前提**：能在无 webview 环境里驱动宿主启动路径，等价于 P3-01 的标题——"提取运行时端口，替代 `AppHandle` 与全局查找"。P2-05 的验收 #2 写在 P3-01 之前，是计划里的一处顺序缺陷。
    - 两条出路（需用户拍板，§1 的三条验收目前只有 #1 与 #3 有证据）：**(A)** 把 #2 随 P3-01 一起做（端口化之后测试自然可写，代价是 P2-05 只能标 "accepted-with-deferred-criterion"，Phase 2 Gate 要显式放行）；**(B)** 现在就把 `send_pty_chunk`/`spawn_pty_reader`/`run_task_core` 这条链做成 `R: Runtime` 泛型（约 6 个函数 + 若干调用点，属于提前支付 P3-01 的一部分成本）。**没有 (C)**：用记录型假执行器代替只能证明"假执行器被调用"，那正是 P2-04 关掉这条验收时给过的理由。
+4c. **验收 #2 已按 (B) 路拿到证据（2026-09-24，实测不是推测）**：
+   - **泛型化实际范围 = 45 个函数 ×7 文件**（`pty/session/ssh/wsl/session_dsh/session_omp/event_watcher`），不是本节估的「约 6 个」。签名加了 `<R: tauri::Runtime>` 之后，参数 `app: AppHandle` 必须逐个跟改成 `AppHandle<R>`；批处理还漏掉一类只有编译器能抓到的：**函数体内嵌套的 `fn`**（`session.rs` 的 `write_to_pty`）不在「签名区间」里，正则扫不到。
+   - **存储根**：`platform::install_scratch_home` + RAII Guard（`#[cfg(test)]` 的 `Mutex<Option<PathBuf>>`）。**刻意不用 `set_var("HOME")`** —— `permissions/mod.rs:291` 与 `permissions/linux.rs:55` 记着本仓库已因并行测试把该做法移除，给出的替代是喂参数；但宿主侧所有路径都从 `platform::home_dir()` 起、没有入参可喂，所以我们自己的加锁槽是唯一同时满足「能改根」与「不碰 ambient env」的做法。
+   - **两条只有跑起来才知道的事实**（P3-01 同样需要知道）：
+     1. **版本探测在启动路径上是同步等待的** —— 而且"写 marker 再等闸门"的脚本会把每一次探测变成一个**永久孤儿进程**：`ps` 实测 10 个挂了 1h45m，其临时 home 已被 Drop 删除，所以测试全绿也看不见这个泄漏。`[ -t 1 ]` 同时解决误计数与泄漏（之后四次全量/门禁跑零新增孤儿）。 —— `run_task_core` 走到 `register_pty_handles` 之前会跑 `<agent> --version`。fake agent 只要「写 marker 然后等闸门」，探测进程就会**把整条启动路径钉死**（症状：`spawns=1` 但 `runs=[]`，看着像注册逻辑坏了）。判别器是 `[ -t 1 ]`：真启动持有终端，探测的 stdout 是管道。
+     2. **`load_settings_unlocked()` 在 `settings.json` 缺失时会创建并缓存默认值** —— 先装根再写 fixture 的话，本二进制里任何一条读设置的测试都会把默认设置落进我的临时 home，fake agent 查不到档案，按 `unknown_session_family` 退成 Codex 族。顺序因此是硬约束：**整个 home 先建好再安装**，析构时**先清槽再删目录**。
+   - **五条用例**（`src-tauri/src/core_adapter_tests.rs`，门禁 case `adapter-acceptance-real-kernel`，`--test-threads=1`）：一次 start ⇒ 一个进程 + 宿主 maps 恰为 `RunKey::minted(task,1)` 且不含 `unminted` + `running` 只发一次 + 表 digest 只在 start 变一次；换 key ⇒ 第二代共存且 `resource_run`/`intent_keys` 按 ADR-025 分流；同 key 重放 ⇒ `AlreadyClaimed`、0 额外 spawn、不预留代、不重写表；`cancel` ⇒ 注册与句柄全清；**失败注入**（§4.5.5 要求的）⇒ 端口处拒绝的 launch 记为 `failed` 并释放 claim，之后真重试能起来。
+   - **这次写作纠正的两条不实**：① 我原以为被拒的 launch 会**回滚**状态，实测 `abandon_launch` 记的是 `failed`（对齐 `reportLaunchFailure` → `updateTaskStatus(failed)`），后者才是与旧客户端一致的语义；② `Applied.generation` 的注释写着「switch or start」，实测只有 `switch_config` 会填 —— start/resume 的代已经在 `LaunchRequest.generation` 里给了宿主，返回值再带一份就是第二个可互相矛盾之处，注释已改。
+   - **共存性**：默认并行全量 `--lib` 连续两跑 **2464 passed / 0 failed**。中途 `remote::lan_roundtrip_tests::m3_…` 出现过一次 WS 超时，按记录流程归因（`cp` 备份 → 用 `git show 88d3646:` 覆盖回 HEAD 跑通 → 校验 sha256 还原 → 带改动单跑 3/3 通过），结论是那条测试本就有的超时敏感，不是本次回归；全程未用 `git checkout`/`git stash`。
    - ADR-020/025：src-tauri 内 generation 编号只有一处来源；`STARTUP_SIGNAL_GENERATION` 不得复活。
    - ADR-021：非 macOS 构建不得递交 writer 角色。
    - ADR-022：队列类型不再携带整表快照（`save_project_tasks` 不得出现在宿主的写路径上）。

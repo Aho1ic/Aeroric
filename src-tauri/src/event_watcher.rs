@@ -66,7 +66,7 @@ pub fn start(app: AppHandle) {
     thread::spawn(move || run_loop(app));
 }
 
-fn run_loop(app: AppHandle) {
+fn run_loop<R: tauri::Runtime>(app: AppHandle<R>) {
     use notify::{RecursiveMode, Watcher};
 
     let events_root = match crate::hooks::events_root() {
@@ -129,7 +129,11 @@ fn run_loop(app: AppHandle) {
     }
 }
 
-fn read_and_dispatch(app: &AppHandle, path: &PathBuf, offset: u64) -> Option<u64> {
+fn read_and_dispatch<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    path: &PathBuf,
+    offset: u64,
+) -> Option<u64> {
     let mut file = fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     if size <= offset {
@@ -172,7 +176,7 @@ fn parse_events_and_offset(buf: &[u8], offset: u64) -> (Vec<HookEvent>, u64) {
     (events, offset + last_complete_end as u64)
 }
 
-fn dispatch(app: &AppHandle, ev: &HookEvent) {
+fn dispatch<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent) {
     if ev.task_id.is_empty() {
         return;
     }
@@ -200,7 +204,7 @@ fn dispatch(app: &AppHandle, ev: &HookEvent) {
     }
 }
 
-fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
+fn handle_session_start<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent) {
     if ev.session_id.is_empty() {
         return;
     }
@@ -278,7 +282,7 @@ fn last_status() -> &'static Mutex<HashMap<String, String>> {
 
 /// 仅当任务进程仍存活(本进程持有子进程句柄)且状态相比上次有变化时才广播,
 /// 避免给已退出的任务发送 input_required/running,也避免高频事件刷屏。
-fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
+fn emit_active_status<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent, status: &str) {
     let tm = app.state::<TaskManager>();
     if !tm.has_live_run(&ev.task_id) {
         return;

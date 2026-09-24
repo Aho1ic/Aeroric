@@ -124,7 +124,7 @@ fn validate_namespaced_shell_id(
     Ok(())
 }
 
-fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
+fn has_task_session<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, is_codex: bool) -> bool {
     let tm = app.state::<TaskManager>();
     if is_codex {
         tm.has_codex_session(task_id)
@@ -134,7 +134,7 @@ fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
 }
 
 /// 任务结束后，等待会话注册完成，最长等待 500ms。
-fn wait_for_session(app: &AppHandle, task_id: &str, is_codex: bool) {
+fn wait_for_session<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, is_codex: bool) {
     let deadline = Instant::now() + SESSION_WAIT_MAX;
     while Instant::now() < deadline {
         if has_task_session(app, task_id, is_codex) {
@@ -144,8 +144,8 @@ fn wait_for_session(app: &AppHandle, task_id: &str, is_codex: bool) {
     }
 }
 
-fn finalize_task_exit(
-    app: &AppHandle,
+fn finalize_task_exit<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     run: &RunKey,
     project_path: &str,
     family: crate::app_settings::AgentFamily,
@@ -498,7 +498,12 @@ pub(crate) enum OutputSink {
 
 pub(crate) type PtyOutputFilter = Box<dyn FnMut(String) -> Option<String> + Send>;
 
-fn send_pty_chunk(app: &AppHandle, id: &str, sink: &OutputSink, data: String) {
+fn send_pty_chunk<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    sink: &OutputSink,
+    data: String,
+) {
     match sink {
         OutputSink::Event { event_name, id_key } => {
             let mut payload = serde_json::Map::new();
@@ -559,8 +564,8 @@ fn run_emit_batcher(
 /// - `startup_tx`：把原始输出转成启动态信号,供初始输入门控判断
 /// - `output_filter`：可选输出过滤器，可在发送到前端前消费或改写数据
 /// - `on_finish`：PTY 关闭后执行的可选清理回调
-pub(crate) fn spawn_pty_reader(
-    app: AppHandle,
+pub(crate) fn spawn_pty_reader<R: tauri::Runtime>(
+    app: AppHandle<R>,
     id: String,
     sink: OutputSink,
     emit_mode: PtyEmitMode,
@@ -656,8 +661,8 @@ pub(crate) fn spawn_pty_reader(
 }
 
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
-fn spawn_exit_monitor(
-    app: AppHandle,
+fn spawn_exit_monitor<R: tauri::Runtime>(
+    app: AppHandle<R>,
     run: RunKey,
     project_path: String,
     family: crate::app_settings::AgentFamily,
@@ -1606,8 +1611,8 @@ pub async fn run_task(
 /// `State`。
 /// `run` says which run of `task_id` this spawn is (ADR-020): `RunKey::unminted` when the
 /// command wrapper started it, the generation core minted when the executor did.
-pub(crate) async fn run_task_core(
-    app: AppHandle,
+pub(crate) async fn run_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &TaskManager,
     run: RunKey,
     task_id: String,
@@ -2373,8 +2378,8 @@ pub async fn reset_task_process(
 }
 
 /// `reset_task_process` 的内核。同一个递归禁令(见 `run_task_core`),同一份逐字未改的body。
-pub(crate) async fn reset_task_process_core(
-    app: AppHandle,
+pub(crate) async fn reset_task_process_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &TaskManager,
     task_id: String,
 ) -> Result<ResetTaskProcessResult, String> {
@@ -2541,8 +2546,8 @@ pub async fn resume_task(
 /// `resume_task` 的内核。拆它的理由与 `run_task_core` 同一条:`LegacyTaskExecutor` 只能调
 /// 这个,不能调上面那个 `#[tauri::command]` —— 否则接成 `TaskService → executor → command
 /// → TaskService` 的递归(P2-05 Action 4)。参数、启动序列与前端可见的实参名一字未改。
-pub(crate) async fn resume_task_core(
-    app: AppHandle,
+pub(crate) async fn resume_task_core<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: &TaskManager,
     run: RunKey,
     task_id: String,

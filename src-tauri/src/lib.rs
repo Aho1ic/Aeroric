@@ -20,6 +20,10 @@ mod conda;
 mod config;
 /// P2-05:这个进程能不能当业务写者(ADR-021/027)的唯一判定点。
 mod core_adapter;
+/// P2-05 验收 #2 的证据:真执行器 + 真 PTY + 真子进程跑一项 fake 任务。只在测试构建里存在,
+/// 因为它带着不会出现在产品路径上的脚手架。
+#[cfg(test)]
+mod core_adapter_tests;
 /// 复用原生 core 的纯函数(P2-02 Action 5);写入权仍在 storage.rs,移交是 P2-05。
 mod core_bridge;
 mod custom_themes;
