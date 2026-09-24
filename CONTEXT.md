@@ -126,3 +126,12 @@
 | 观察 / observation | 宿主把**已经发生的事实**（退出、hook、转录行、DSH 状态变化）报进 `TaskService::observe`，由 core 的 reducer 决定是否改变状态、是否发射。28 处移交的目标形态 | 不是"宿主直接调 sink"（那只是换个发射者，状态没过 reducer）；不是命令（命令是意图，观察是既成事实） |
 | 迟到观察丢弃 / late-observation drop | core 规则：**来自观察**的状态变更，若该任务在本进程已无存活代，则 `Dropped`，不改记录也不发事件（ADR-034）。今天它是 `session.rs` 3 个发射点上的局部习惯 | 不是按代判定（必须按"任意存活代"，否则双开时迟到的老代观察会被误丢，那是行为变更）；不覆盖启动/退出/取消/手动完成/DSH 状态机那些宿主主动告知的变化 |
 | 可见性决定权 / who decides visibility | "这条状态该不该让用户看到"的归属。移交后归 core；`is_task_active` 保留但只剩循环条件与流程守卫两种用途 | 不是"谁调用 `.emit`"（那是发射权）；宿主删掉 `session.rs:70` 那一处读取≠可以删掉 `is_task_active` 本身 |
+
+## 决策/落盘解耦新增（P2-05 续，Q64，ADR-035）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 事件权威 / 数据权威 | 两件事，不按平台切：**事件权威永远是 core**（唯一决定"这条状态用户该不该看到"的地方）；**数据权威按平台递交**（ADR-021：目前只有 macOS）。非 writer 平台 core 只读磁盘行做决策、不提交 | 不是"core 是不是 writer"——那是数据权威；不是"谁调 `.emit`"——那是发射权，两者都收口在 core 才叫移交完成 |
+| 只决策的观察 / announce-only observation | `observe` 的决策段（reducer + 两道守卫）不依赖写权，落盘是它后面可选的一步。非 writer 平台走"决策 + 发射 + 不提交" | 不是"观察失败就丢掉"（那是静默不发，ADR-033 §4 禁止）；不是"排队等切换后补发"（补发队列是第二个事件权威） |
+| 准入即发射 / admitted means emitted | 被 reducer **准入**的观察必须发事件，即使 `changed == false`；只有 `EventOutcome::Dropped` 才不发。今天 28 处里 25 处无条件发射 | 不是"状态变了才发"（那是把宿主没做的折叠补上，属于夹带行为变更）；不是"发两次算重复" |
+| 存活代登记 / host-reported liveness | 宿主把"某个代正在跑"报进 core 账本的动作。DSH 的 9 处必须有它才能删：dsh 从不走 core 的 `start`，`live_for(task)` 恒空 | 不是 core 铸造 generation（ADR-020 的唯一编号源不变）；不是 `RunRegistry` 的注册（那是宿主自己的寻址表，core 看不见） |
