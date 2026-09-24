@@ -195,3 +195,36 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 顺带记两条扫描器的错，都是门禁第一遍运行就报出来的：按行匹配看不见 sink 那种 `emit(` 与事件名
 换行写的调用（会误报"没有 sink"），以及 `remote/lan_roundtrip_tests.rs` 里测试自己发的
 `task-status` 被算成生产发射点（现在 `*_tests.rs` 显式排除，理由写在代码里而不是靠巧合）。
+
+## 6. `src-tauri --lib` 的"负载敏感"是一条我造成的真缺陷（2026-09-25 结题）
+
+补记五十三、五十四把两次红记成"并行负载敏感、单跑不复现"。那个归因是错的，本轮按退出码追到根因：
+
+- **症状**：`exit 101`，`app_settings::tests::updating_a_generated_claude_profile_refreshes_the_
+  wrapper_and_sidecar` 在 `mod.rs:854` 对 `fs::read_to_string(credential_path).unwrap()` 拿到
+  `NotFound`。门禁只打印 `FAIL (exit 101)`，真实输出留在 `.artifacts/native/tauri-adapter--src-tauri-lib-tests.log`
+  ——这条日志是被保留的，先前几轮没人去读它，所以"查不到"其实是"没去查"。
+- **判据**：写 sidecar 与读 sidecar 用的是同一个 `agent_api_key_path()`，而它每次现算
+  `aeroric_dir()` → `platform::home_dir()`；同一次运行里两次解析之间根换了，就是写在一处、读在另一处。
+  决定性证据是 `~/.aeroric/agent-credentials/` 里留着 9 个 `claude-refresh-*`（测试 panic 在
+  自己的清理之前），其中一个 mtime = 01:55:08 正对着那次失败——**文件确实写进了 live home**，
+  所以读失败只能是读侧解析到了别的根。
+- **根因**：`platform::install_scratch_home`（补记四十一为真内核验收引入）换的是**进程全局**的 home 槽。
+  `core_adapter_tests` 的 10 个场景各自安装/卸载它；`SCENARIO` 互斥量只把这 10 个彼此隔开，
+  其余 2460 条完全不参与，于是任何"写一次路径、稍后再算一次路径"的测试都在赌运气。
+- **对照组**：把 app_settings 那条改成自带 scratch root、并给槽加上 `SERIAL`（`Guard` 持有到场景结束）
+  之后，15 次并行全量跑仍红 **4 次**，受害者换成了 `agent_scripts::tests::
+  resets_codex_chat_bridge_wrappers_when_setting_is_off`（3 次）和场景自己的
+  `an_observation_announces_once_and_writes_nothing`（1 次，多收到一个 `done`）。
+  这一步价值在于它证明了**逐条给受害者加根不是解**：类是"任何经 `aeroric_dir()` 的测试 vs 任何持槽场景"，
+  成员数量是未知的，加锁只挡住了"根被别人换掉"这一个方向。
+- **处置（围堵，不是治愈）**：`src-tauri-lib-tests` 这条 case 加 `--test-threads=1`。串行之没有两个测试
+  同时活着，全局槽就不可能被子读到；实测 66.3s／2470 passed（并行 18s），门禁 11/11、2500 用例全绿。
+  代价写进 case 的 `$note`：**开发者本地 `cargo test --lib` 默认并行仍会竞争**，这不是被解决了，只是被
+  门禁挡住了。真正的修法是 Action 3 的数据根注入——让宿主存储路径不再只能从进程全局推导，那时这个
+  测试专用槽应当整体删除。
+- **顺手关掉的一条卫生问题**：那条测试此前一直往开发者的 live `~/.aeroric/agent-credentials` 写凭据
+  （失败时留下孤儿文件），现在它拥有自己的 scratch root，写入落进临时目录。`SERIAL` 的注释也改成了
+  它实际能保证的东西——它保护"自己装了根的测试"，不保护"没装根的读者"，早先那句"别的测试落到同一个
+  目录也改变不了答案"是错的，它没算到反向：别人的写会落进**我的**根。
+

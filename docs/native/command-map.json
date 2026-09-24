@@ -16468,7 +16468,7 @@
         "F12",
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/platform/mod.rs:397",
+      "definition_resolved": "src-tauri/src/platform/mod.rs:424",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16500,7 +16500,7 @@
         "F12",
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/platform/mod.rs:368",
+      "definition_resolved": "src-tauri/src/platform/mod.rs:395",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

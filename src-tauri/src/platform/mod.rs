@@ -54,15 +54,31 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 /// both synchronised, and it is `#[cfg(test)]`, so no product build can observe it.
 ///
 /// The slot is global because every host storage path funnels through [`home_dir`] and none of
-/// them takes a root argument. That is the price of reaching the real kernels; what keeps it
-/// survivable is that a scenario asserts on paths it names itself (a unique task id, its own
-/// marker file), so another test landing in the same directory cannot change the answer.
+/// them takes a root argument. [`install_scratch_home`] holds [`SERIAL`] for the whole scenario,
+/// so two scenarios are never live at once, and a test that owns a root is fully covered: nothing
+/// moves under it, and no foreign test's writes land inside it.
+///
+/// What [`SERIAL`] does *not* do is protect a test that never installed one — it never blocks such
+/// a reader, so an install or a drop can still move `~/.aeroric` between that test's write and the
+/// path it recomputes a few statements later. That is not hypothetical: it is how
+/// `app_settings::tests::updating_a_generated_claude_profile_refreshes_the_wrapper_and_sidecar`
+/// failed (sidecar written to the live home, read back against a scratch root), and the same class
+/// then hit `agent_scripts::tests::resets_codex_chat_bridge_wrappers_when_setting_is_off` and one
+/// scenario's own status assertions.
+///
+/// Containment, not cure: this crate's `--lib` case runs single-threaded
+/// (`scripts/native/checks.json`), so no two tests are ever live together. A developer running
+/// `cargo test --lib` locally still races. The cure is a data-root seam that reaches host storage
+/// without a global, which is Action 3's.
 #[cfg(test)]
 mod scratch {
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
 
     static SLOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    /// Held by every live [`Guard`]. See [`install_scratch_home`].
+    static SERIAL: Mutex<()> = Mutex::new(());
 
     pub(crate) fn home_dir() -> Option<PathBuf> {
         SLOT.lock()
@@ -74,6 +90,8 @@ mod scratch {
     /// the caller already owns the directory it installed.
     pub(crate) struct Guard {
         previous: Option<PathBuf>,
+        /// Declared after `previous` so it is released only once the slot is restored.
+        _serial: MutexGuard<'static, ()>,
     }
 
     impl Drop for Guard {
@@ -86,12 +104,21 @@ mod scratch {
 
     /// Hold the returned guard for the whole scenario: the kernels reach this root from reader
     /// and watcher threads the caller never sees.
+    ///
+    /// Takes [`SERIAL`] for the guard's lifetime, so no other scenario's root can replace this one
+    /// underneath a reader — including readers in tests that never installed a root at all.
     pub(crate) fn install(root: PathBuf) -> Guard {
+        let serial = SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = SLOT
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .replace(root);
-        Guard { previous }
+        Guard {
+            previous,
+            _serial: serial,
+        }
     }
 }
 

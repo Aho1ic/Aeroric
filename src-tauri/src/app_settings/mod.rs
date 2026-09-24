@@ -792,6 +792,18 @@ mod tests {
 
     #[test]
     fn updating_a_generated_claude_profile_refreshes_the_wrapper_and_sidecar() {
+        // The sidecar path is derived from `home_dir()`, which is process-global and belongs to
+        // whichever scenario last installed a scratch root. Own one here: that keeps this write
+        // out of the developer's live `~/.aeroric`, and the serial lock behind
+        // `install_scratch_home` stops another scenario from moving the root between the
+        // transaction's write and the read that checks it a few statements later.
+        let home = std::env::temp_dir().join(format!(
+            "aeroric-claude-refresh-home-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&home).unwrap();
+        let scratch = crate::platform::install_scratch_home(home.clone());
+
         let id = format!("claude-refresh-{}", uuid::Uuid::new_v4().simple());
         let root = std::env::temp_dir().join(format!("aeroric-claude-upsert-{}", id));
         fs::create_dir_all(&root).unwrap();
@@ -854,6 +866,8 @@ mod tests {
         assert_eq!(fs::read_to_string(&credential_path).unwrap(), "new-key");
 
         let _ = remove_agent_api_key(&id);
+        drop(scratch);
+        let _ = fs::remove_dir_all(home);
         let _ = fs::remove_dir_all(root);
     }
 
