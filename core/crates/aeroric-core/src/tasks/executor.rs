@@ -159,6 +159,25 @@ pub enum TaskEvent {
     TerminalReady { task_id: String, generation: u64 },
 }
 
+/// What a process exit means as a status, and the reason the process gave.
+///
+/// Shared by [`TaskService::observe`](super::service::TaskService::observe) and
+/// [`TaskEvent::notification_when_unrecorded`] so the two can never disagree about what a
+/// nonzero exit is called: a task that quietly turns itself red is indistinguishable from one
+/// the user cancelled, which is why the text travels with the status.
+pub fn settled_by_exit(code: Option<i32>) -> (TaskStatus, Option<String>) {
+    let settled = if matches!(code, Some(0) | None) {
+        TaskStatus::Done
+    } else {
+        TaskStatus::Failed
+    };
+    let reason = match code {
+        Some(code) if code != 0 => Some(format!("the process exited with code {code}")),
+        _ => None,
+    };
+    (settled, reason)
+}
+
 impl TaskEvent {
     pub fn generation(&self) -> u64 {
         match self {
@@ -172,6 +191,41 @@ impl TaskEvent {
             TaskEvent::Status { task_id, .. }
             | TaskEvent::Exit { task_id, .. }
             | TaskEvent::TerminalReady { task_id, .. } => task_id,
+        }
+    }
+
+    /// ADR-033 §4's floor under ADR-035: an observation whose task this process cannot find in
+    /// any project still announces itself.
+    ///
+    /// Every guard in the reducer exists to protect a record — a settled row, a stale
+    /// generation, an overlapping run. With no record there is nothing to protect, and silence
+    /// here would be precisely the "quietly stop emitting to make a count look good" outcome
+    /// ADR-033 forbids. This is the *no-row* path, not a way around the guards: it runs only
+    /// when routing failed, and it states its reason in the log line the adapter writes.
+    pub fn notification_when_unrecorded(&self) -> Option<crate::tasks::events::TaskNotification> {
+        use crate::tasks::events::TaskNotification;
+        match self {
+            TaskEvent::Status {
+                task_id,
+                status,
+                failure_reason,
+                ..
+            } => Some(match failure_reason {
+                Some(reason) => {
+                    TaskNotification::status_with_reason(task_id, *status, reason.clone())
+                }
+                None => TaskNotification::status(task_id, *status),
+            }),
+            TaskEvent::Exit { task_id, code, .. } => {
+                let (status, reason) = settled_by_exit(*code);
+                Some(match reason {
+                    Some(reason) => TaskNotification::status_with_reason(task_id, status, reason),
+                    None => TaskNotification::status(task_id, status),
+                })
+            }
+            // A terminal-ready edge moves nothing, recorded or not — it is not a status, and
+            // inventing one would show a card that never changed.
+            TaskEvent::TerminalReady { .. } => None,
         }
     }
 }

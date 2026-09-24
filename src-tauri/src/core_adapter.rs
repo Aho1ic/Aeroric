@@ -36,7 +36,8 @@ use std::sync::Arc;
 
 use aeroric_core::{
     tasks::{
-        AgentFamilies, LiveRuns, ProtocolFamily, TaskEventSink, TaskNotification, TaskSessionFacts,
+        AgentFamilies, LiveRuns, ProtocolFamily, TaskEvent, TaskEventSink, TaskNotification,
+        TaskRuntimeObserver, TaskService, TaskSessionFacts,
     },
     AppPaths, Clock, CoreContext, LeaseError, LeaseOwner, SystemClock,
 };
@@ -475,27 +476,22 @@ mod family_tests {
 
 /// The adapter's announcement channel (ADR-023): core decides, this emits.
 ///
-/// Deliberately thin, and deliberately without the legacy `is_task_active` suppression. That
-/// gate is applied at *some* of the eight call sites and not others, so reproducing it needs
-/// a per-site answer, not a policy here — and inventing one now would either drop events that
-/// ship today or deliver ones today's code suppresses. Removing those eight sites is the next
-/// step, and the gate is listed as an open item in `docs/native/reviews/tauri-adapter.md`.
-#[allow(
-    dead_code,
-    reason = "发射权移交（ADR-023）必须与删掉那 28 处 legacy 发射点同批落地，单独接线会出现双发射环"
-)]
-pub(crate) struct TauriEventSink {
-    app: tauri::AppHandle,
+/// Deliberately thin. It carries **no** suppression gate: `is_task_active` was applied at some
+/// of the 28 legacy sites and not others, and ADR-034 resolved that by moving the rule into the
+/// observation channel (one core rule over "does this task still have a live run"), not into the
+/// emitter. This type only knows how to spell a payload; `EventOutcome::notification_for` is the
+/// only thing that decides whether to spell it.
+pub(crate) struct TauriEventSink<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
 }
 
-impl TauriEventSink {
-    #[allow(dead_code, reason = "随 TauriEventSink 一起接线，见 ADR-023 与步骤 F")]
-    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+impl<R: tauri::Runtime> TauriEventSink<R> {
+    pub(crate) fn new(app: tauri::AppHandle<R>) -> Self {
         Self { app }
     }
 }
 
-impl TaskEventSink for TauriEventSink {
+impl<R: tauri::Runtime> TaskEventSink for TauriEventSink<R> {
     fn notify(&self, notification: TaskNotification) {
         use tauri::Emitter;
         match &notification {
@@ -512,6 +508,71 @@ impl TaskEventSink for TauriEventSink {
             TaskNotification::Session(facts) => {
                 let _ = self.app.emit("task-session", task_session_payload(facts));
             }
+        }
+    }
+}
+
+/// The runtime -> core observation channel (ADR-033 §3): the single door an outside fact about
+/// a task walks through on its way to the reducer, and the reason `TauriEventSink` can be the
+/// only emitter (ADR-023).
+///
+/// Four things get decided here rather than at a call site, each with an ADR behind it:
+///
+/// * where the row lives - `TaskService::project_of`, because report sites carry a task id only;
+/// * whether the observation is admitted at all - core's guards (ADR-034);
+/// * what gets announced - `EventOutcome::notification_for` (ADR-035: admitted means emitted,
+///   even when nothing changed; only a drop is silent);
+/// * whether anything is written - never from here, see the note inside.
+///
+/// A task this process cannot route still announces itself through
+/// `TaskEvent::notification_when_unrecorded`, because ADR-033 §4 forbids turning a handover into
+/// silence; that path says so in the log instead of pretending the reducer saw it.
+pub(crate) struct CoreRuntimeObserver<R: tauri::Runtime> {
+    service: Arc<TaskService>,
+    sink: Arc<TauriEventSink<R>>,
+}
+
+impl<R: tauri::Runtime> CoreRuntimeObserver<R> {
+    pub(crate) fn new(service: Arc<TaskService>, sink: Arc<TauriEventSink<R>>) -> Self {
+        Self { service, sink }
+    }
+}
+
+impl<R: tauri::Runtime> TaskRuntimeObserver for CoreRuntimeObserver<R> {
+    fn observe(&self, event: TaskEvent) {
+        let task_id = event.task_id().to_string();
+        let project = match self.service.project_of(&task_id) {
+            Ok(project) => project,
+            Err(error) => {
+                // A corrupt or unreadable table is not an answer about *this* task, so it takes
+                // the same no-row path as a missing row rather than silently swallowing a fact.
+                eprintln!("[aeroric] core observer could not resolve {task_id}: {error}");
+                None
+            }
+        };
+        let notification = match project {
+            Some(project_id) => {
+                // `decide_observation`, not `observe`, and deliberately: on macOS the gateway
+                // already *is* the writer while `storage.rs` is still the code that saves the
+                // task table. Committing from here would put two writers on one `tasks.json`
+                // with no reconciliation protocol in place (INV-03). Attaching the commit is
+                // part of the store cutover (Action 3), and the gate case
+                // `core-observer-does-not-write-yet` turns red if this starts calling `observe`
+                // before that switch has been reviewed.
+                match self.service.decide_observation(&project_id, event.clone()) {
+                    Ok((outcome, _)) => outcome.notification_for(&task_id),
+                    Err(error) => {
+                        eprintln!(
+                            "[aeroric] core observer refused an event for {task_id}: {error}"
+                        );
+                        None
+                    }
+                }
+            }
+            None => event.notification_when_unrecorded(),
+        };
+        if let Some(notification) = notification {
+            self.sink.notify(notification);
         }
     }
 }
@@ -552,10 +613,12 @@ impl<R: tauri::Runtime> LiveRuns for HostLiveness<R> {
 ///    core 独占的账本文件坏了，就 strand 用户整个工作区，而那个文件之后是
 ///    release can repair.
 /// 3. **Managing the service is not the writer switch.** `storage.rs` still saves the task
-///    table; nothing routes a mutation through here yet. What becomes real is the lease and the
-///    read-only refusal, and the fingerprints core records for the legacy writer's benefit.
+///    table; nothing routes a *mutation* through here yet. What becomes real is the lease, the
+///    read-only refusal, and — since ADR-033/035 — the observation channel: the managed
+///    `TaskRuntimeObserver` decides and announces without ever writing, which is exactly why the
+///    announcement handover and the store cutover can land separately.
 pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>, version: &str) {
-    use aeroric_core::tasks::{TaskExecutor, TaskService};
+    use aeroric_core::tasks::TaskExecutor;
     use tauri::Manager;
 
     let gateway = CoreGateway::at_startup(version);
@@ -576,7 +639,15 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>
         live_runs,
     ) {
         Ok(service) => {
+            // Arc, not the bare service: `CoreRuntimeObserver` has to share it, and a second
+            // `TaskService` would be a second ledger over the same directory.
+            let service = Arc::new(service);
+            let observer: Arc<dyn TaskRuntimeObserver> = Arc::new(CoreRuntimeObserver::new(
+                Arc::clone(&service),
+                Arc::new(TauriEventSink::new(app.clone())),
+            ));
             app.manage(service);
+            app.manage(observer);
         }
         Err(error) => startup_diagnostics::record(
             "core-service",

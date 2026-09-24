@@ -12,7 +12,9 @@ use aeroric_core::storage::atomic::StorageError;
 use aeroric_core::storage::{runtime, Cover, Fingerprint};
 use aeroric_core::tasks::executor::TaskEvent;
 use aeroric_core::tasks::service::{Attachments, EventOutcome, NewTask, TaskError};
-use aeroric_core::tasks::{launch_plan, operations, reducer, session_owner, NoLiveRuns};
+use aeroric_core::tasks::{
+    launch_plan, operations, reducer, session_owner, NoLiveRuns, TaskNotification,
+};
 use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
 use serde_json::{json, Value};
 
@@ -604,7 +606,11 @@ fn a_late_exit_from_the_previous_run_does_not_move_the_task() {
         outcome,
         EventOutcome::Applied {
             status: TaskStatus::Failed,
-            changed: true
+            changed: true,
+            // The reason the exit gave has to ride along in the outcome: the sink is not
+            // allowed to reconstruct it, and `failed` without it is a payload regression the
+            // frontend would swallow silently.
+            failure_reason: Some("the process exited with code 1".into())
         }
     );
     assert_eq!(
@@ -1034,7 +1040,8 @@ fn a_status_with_no_change_writes_nothing_and_burns_no_revision() {
         outcome,
         EventOutcome::Applied {
             status: TaskStatus::Running,
-            changed: false
+            changed: false,
+            failure_reason: None
         }
     );
     assert!(!applied.changed);
@@ -1660,7 +1667,8 @@ fn a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes
         outcome,
         EventOutcome::Applied {
             status: TaskStatus::Done,
-            changed: true
+            changed: true,
+            failure_reason: None
         },
         "the reducer ran — that is the whole point of splitting it from the commit"
     );
@@ -1910,4 +1918,41 @@ fn an_observation_can_be_routed_from_a_task_id_alone() {
          home in a table that no longer holds it"
     );
     cleanup(root);
+}
+
+/// ADR-035's announcement rule lives in core so no adapter can re-derive it: admitted ⇒
+/// announce (even with nothing changed), dropped ⇒ silent. A sink that decided this itself
+/// would be the second authority ADR-023 exists to prevent.
+#[test]
+fn the_announcement_rule_is_part_of_the_outcome_not_of_the_sink() {
+    let admitted_unchanged = EventOutcome::Applied {
+        status: TaskStatus::Running,
+        changed: false,
+        failure_reason: None,
+    };
+    assert_eq!(
+        admitted_unchanged.notification_for("t1"),
+        Some(TaskNotification::status("t1", TaskStatus::Running)),
+        "25 of the 28 legacy sites emit unconditionally today; folding changed:false into \
+         'say nothing' would be a behaviour change inside a handover"
+    );
+    let admitted_failed = EventOutcome::Applied {
+        status: TaskStatus::Failed,
+        changed: true,
+        failure_reason: Some("the process exited with code 2".into()),
+    };
+    assert_eq!(
+        admitted_failed.notification_for("t1"),
+        Some(TaskNotification::status_with_reason(
+            "t1",
+            TaskStatus::Failed,
+            "the process exited with code 2"
+        )),
+        "and the reason arrives already attached, not reconstructed downstream"
+    );
+    assert_eq!(
+        EventOutcome::Dropped("no live run for this task").notification_for("t1"),
+        None,
+        "the only silence is the one core decided, with a reason a host can log"
+    );
 }

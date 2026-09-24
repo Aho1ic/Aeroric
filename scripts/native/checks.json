@@ -22,15 +22,15 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2468,
+      "src-tauri-lib-tests@tauri-adapter": 2470,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 32,
-      "adapter-acceptance-real-kernel@tauri-adapter": 8,
+      "tasks-status-machine-rust@tasks": 33,
+      "adapter-acceptance-real-kernel@tauri-adapter": 10,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
@@ -692,8 +692,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 32,
-          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。",
+          "minCases": 33,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。",
           "timeoutMs": 900000
         },
         {
@@ -856,7 +856,7 @@
           "name": "adapter-acceptance-real-kernel",
           "kind": "test",
           "parse": "rust",
-          "minCases": 8,
+          "minCases": 10,
           "timeoutMs": 900000,
           "argv": [
             "cargo",
@@ -875,7 +875,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2468,
+          "minCases": 2470,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -982,6 +982,35 @@
             ]
           ],
           "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "core-observer-does-not-write-yet",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "service\\.observe\\(",
+            "src-tauri/src/core_adapter.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "decide_observation",
+              "src-tauri/src/core_adapter.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "TaskRuntimeObserver for CoreRuntimeObserver",
+              "src-tauri/src/core_adapter.rs"
+            ]
+          ],
+          "$note": "ADR-035 与 INV-03 的交叉点。观察通道今天**只决策不落盘**：macOS 上 gateway 已经拿着写者租约，而 `storage.rs` 仍是真正保存任务表的那份代码，所以从 announce 路径提交会让两个 writer 在没有对账协议的情况下写同一个 tasks.json。把 `decide_observation` 换成 `observe` 是 Action 3 存储改造那一步的动作，必须先过评审，所以这里挡着。两条正控各防一类假绿：一条证明扫描真读到 core_adapter.rs 且非写入口确实在用（路径写错时 rg 也返回 1），一条证明观察通道本体存在——整个 `CoreRuntimeObserver` 被删掉的话这条 absent 会因为无物可查而永远绿。",
           "timeoutMs": 120000
         }
       ]

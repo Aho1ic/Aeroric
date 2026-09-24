@@ -33,8 +33,8 @@ use aeroric_core::paths::AppPaths;
 use aeroric_core::storage::Record;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
-    AgentFamilies, Applied, NewTask, NoLiveRuns, ProtocolFamily, TaskError, TaskExecutor,
-    TaskService,
+    AgentFamilies, Applied, NewTask, NoLiveRuns, ProtocolFamily, TaskError, TaskEvent,
+    TaskExecutor, TaskRuntimeObserver, TaskService, TaskStatus,
 };
 use serde_json::{json, Map, Value};
 use tauri::ipc::Channel;
@@ -126,7 +126,7 @@ struct Scenario {
     /// Held so managed state is not torn down while the scenario runs.
     _app: tauri::App<tauri::test::MockRuntime>,
     sinks: Arc<OutputSinkMailbox>,
-    service: TaskService,
+    service: Arc<TaskService>,
     project: Record,
     spawns: PathBuf,
     gate: PathBuf,
@@ -192,6 +192,17 @@ impl Scenario {
             Arc::new(NoLiveRuns),
         )
         .expect("service");
+        let service = Arc::new(service);
+        // The router (`TaskService::project_of`) resolves an id through the project list, which
+        // is the same `projects.json` the client writes. Without it every observation in these
+        // scenarios would land on the no-row path and the reducer's guards would never be
+        // reached — a green channel that never asked the question.
+        let project = Record(project_record(&project_path, tag));
+        std::fs::write(
+            service.context().paths.projects_file(),
+            serde_json::to_vec(&json!([Value::Object(project.0.clone())])).expect("encode"),
+        )
+        .expect("projects.json");
 
         let events = Arc::new(Mutex::new(Vec::new()));
         listen(&handle, &events);
@@ -201,7 +212,7 @@ impl Scenario {
             _app: app,
             sinks,
             service,
-            project: Record(project_record(&project_path, tag)),
+            project,
             spawns,
             gate,
             events,
@@ -209,6 +220,15 @@ impl Scenario {
             _scratch: scratch,
             _home: home,
         }
+    }
+
+    /// The real observation channel (ADR-033 §3): `install_core_services` builds this pair on
+    /// every launch, so the acceptance scenarios drive the same type the product will.
+    fn observer(&self) -> crate::core_adapter::CoreRuntimeObserver<tauri::test::MockRuntime> {
+        crate::core_adapter::CoreRuntimeObserver::new(
+            Arc::clone(&self.service),
+            Arc::new(crate::core_adapter::TauriEventSink::new(self.app.clone())),
+        )
     }
 
     fn create_task(&self) -> Applied {
@@ -844,8 +864,13 @@ fn startup_wiring_installs_the_gateway_and_the_service_over_the_scratch_home() {
         );
     }
     assert!(
-        app.try_state::<TaskService>().is_some(),
+        app.try_state::<Arc<TaskService>>().is_some(),
         "no `TaskService` in managed state means the wiring is decorative"
+    );
+    assert!(
+        app.try_state::<Arc<dyn aeroric_core::tasks::TaskRuntimeObserver>>()
+            .is_some(),
+        "the observation channel is what replaces the 28 emit sites; if it is not managed,          the handover has nowhere to go"
     );
     assert!(
         app.try_state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
@@ -982,7 +1007,7 @@ fn the_wired_service_asks_the_host_about_a_run_core_never_minted() {
     crate::core_adapter::install_core_services(app.handle(), "0-test");
 
     let manager = app.state::<TaskManager>();
-    let service = app.state::<TaskService>();
+    let service = app.state::<Arc<TaskService>>();
 
     assert!(
         !service.is_task_live("legacy-task"),
@@ -1010,4 +1035,118 @@ fn the_wired_service_asks_the_host_about_a_run_core_never_minted() {
         !service.is_task_live("legacy-task"),
         "a run that ended must stop holding observations up"
     );
+}
+
+/// ADR-033 §3's channel, end to end: a host-side fact enters through `TaskRuntimeObserver`,
+/// core's reducer decides, and the sink is the only thing that emits. `TauriEventSink::notify`
+/// had no caller anywhere in the product before this test ran.
+#[test]
+fn an_observation_announces_once_and_writes_nothing() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scenario = Scenario::new("observer-announce");
+    scenario.create_task();
+    scenario.start("op-1").expect("start");
+    scenario.wait_for_launch();
+
+    let sha_before = table_sha(&scenario.service, "p1");
+    let before = scenario.emitted("task-status").len();
+
+    scenario.observer().observe(TaskEvent::Status {
+        task_id: scenario.task_id.clone(),
+        generation: 1,
+        status: TaskStatus::InputRequired,
+        attention_requested_at_ms: Some(1_700_000_099_000),
+        failure_reason: None,
+    });
+
+    let after = scenario.emitted("task-status");
+    assert_eq!(
+        after.len(),
+        before + 1,
+        "one admitted observation is exactly one event; a second would be the loop ADR-023 \
+         exists to prevent. statuses seen: {:?}",
+        scenario.statuses()
+    );
+    assert_eq!(
+        after.last().and_then(|payload| payload.get("status")),
+        Some(&json!("input_required")),
+        "and it is the status core decided, spelled the way the client listens for it"
+    );
+    assert_eq!(
+        table_sha(&scenario.service, "p1"),
+        sha_before,
+        "ADR-035: the announcement path decides and announces without committing, because \
+         `storage.rs` is still the writer on every platform"
+    );
+
+    // The drop half, reported through the same channel rather than assumed: the host's own
+    // exit path emits `done` and settles nothing in core, so core still holds generation 1's
+    // claim until an observation says otherwise. That is the state ADR-034's guard reads.
+    scenario.observer().observe(TaskEvent::Exit {
+        task_id: scenario.task_id.clone(),
+        generation: 1,
+        code: Some(0),
+    });
+    assert!(
+        scenario.service.open_claims(&scenario.task_id).is_empty(),
+        "a terminal observation must settle the run it reports, or nothing is ever late"
+    );
+    scenario.release_agent();
+    scenario.wait_for_retirement();
+
+    let settled = scenario.emitted("task-status").len();
+    scenario.observer().observe(TaskEvent::Status {
+        task_id: scenario.task_id.clone(),
+        generation: 1,
+        status: TaskStatus::Running,
+        attention_requested_at_ms: None,
+        failure_reason: None,
+    });
+    assert_eq!(
+        scenario.emitted("task-status").len(),
+        settled,
+        "ADR-034's guard is what makes the handover safe; the sink may not re-light a settled \
+         card. If `project_of` had failed to route, this would have announced anyway and the \
+         channel would look wider than it is. statuses seen: {:?}",
+        scenario.statuses()
+    );
+}
+
+/// ADR-033 §4's floor: an observation core cannot route is still announced. Silence here would
+/// be the "quietly stop emitting to make the count look good" outcome that ADR forbids, and it
+/// would be invisible to every other check.
+#[test]
+fn an_unroutable_observation_announces_rather_than_going_quiet() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scenario = Scenario::new("observer-unroutable");
+    scenario.create_task();
+    scenario.start("op-1").expect("start");
+    scenario.wait_for_launch();
+
+    let before = scenario.emitted("task-status").len();
+    scenario.observer().observe(TaskEvent::Exit {
+        task_id: "a-task-core-never-heard-of".into(),
+        generation: 0,
+        code: Some(3),
+    });
+    let after = scenario.emitted("task-status");
+    assert_eq!(
+        after.len(),
+        before + 1,
+        "no row means no guard applies, not no event"
+    );
+    let payload = after.last().cloned().expect("one event");
+    assert_eq!(payload.get("status"), Some(&json!("failed")));
+    assert_eq!(
+        payload.get("failure_reason").and_then(Value::as_str),
+        Some("the process exited with code 3"),
+        "the reason comes from core's one exit rule, the same one `observe` uses — not from \
+         the host re-deriving it"
+    );
+    scenario.release_agent();
+    scenario.wait_for_retirement();
 }

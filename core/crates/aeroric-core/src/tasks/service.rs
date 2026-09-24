@@ -33,7 +33,8 @@ use crate::storage::fingerprint::Cover;
 use crate::storage::projects;
 use crate::storage::runtime;
 use crate::storage::tasks as task_storage;
-use crate::tasks::executor::{ExecutorFailure, LiveRuns, TaskEvent, TaskExecutor};
+use crate::tasks::events::TaskNotification;
+use crate::tasks::executor::{settled_by_exit, ExecutorFailure, LiveRuns, TaskEvent, TaskExecutor};
 use crate::tasks::launch_plan::{self, Completion};
 use crate::tasks::operations::{Claim, Claimed, OperationKind, OperationLedger};
 use crate::tasks::reducer;
@@ -156,9 +157,35 @@ pub enum EventOutcome {
     Applied {
         status: TaskStatus,
         changed: bool,
+        /// The reason core attached to this status, from the event itself or synthesized for a
+        /// nonzero exit. It travels in the outcome because the announcement path is not allowed
+        /// to re-derive it: the shipping client's `failed` emits carry `failure_reason`, and a
+        /// sink that had to invent one would be a second place the text diverges (ADR-023).
+        failure_reason: Option<String>,
     },
     /// Dropped: an older generation, or a transition the machine ignores.
     Dropped(&'static str),
+}
+
+impl EventOutcome {
+    /// ADR-035's announcement rule, kept here so no adapter has to decide it: **an admitted
+    /// observation announces, whether or not the row moved** — 25 of the 28 legacy sites emit
+    /// unconditionally today, and folding "nothing changed" into "say nothing" would be a
+    /// user-visible behaviour change smuggled into a handover (ADR-033 §4). Only `Dropped` is
+    /// silent, and it is silent for a reason a host can log.
+    pub fn notification_for(&self, task_id: &str) -> Option<TaskNotification> {
+        match self {
+            EventOutcome::Applied {
+                status,
+                failure_reason,
+                ..
+            } => Some(match failure_reason {
+                Some(reason) => TaskNotification::status_with_reason(task_id, *status, reason),
+                None => TaskNotification::status(task_id, *status),
+            }),
+            EventOutcome::Dropped(_) => None,
+        }
+    }
 }
 
 /// Whether an accepted observation also gets written. ADR-035 splits this from the decision:
@@ -1062,20 +1089,9 @@ impl TaskService {
                 ..
             } => (*status, *attention_requested_at_ms, failure_reason.clone()),
             TaskEvent::Exit { code, .. } => {
-                // A zero exit settles as done; anything else is a failure *with the reason
-                // the process gave*, because a task that quietly turned itself red is
-                // indistinguishable from one the user cancelled.
-                let settled = if matches!(code, Some(0) | None) {
-                    TaskStatus::Done
-                } else {
-                    TaskStatus::Failed
-                };
-                let reason = match code {
-                    Some(code) if *code != 0 => {
-                        Some(format!("the process exited with code {code}"))
-                    }
-                    _ => None,
-                };
+                // One rule, shared with the unrecorded path (`settled_by_exit`), so the two
+                // can never disagree about what a nonzero exit is called.
+                let (settled, reason) = settled_by_exit(*code);
                 (settled, None, reason)
             }
             TaskEvent::TerminalReady { .. } => {
@@ -1147,6 +1163,7 @@ impl TaskService {
                 EventOutcome::Applied {
                     status,
                     changed: false,
+                    failure_reason: reason.clone(),
                 },
                 self.unchanged(snapshot.records, snapshot.fingerprint),
             ));
@@ -1154,6 +1171,7 @@ impl TaskService {
         let outcome = EventOutcome::Applied {
             status,
             changed: true,
+            failure_reason: reason.clone(),
         };
         match persist {
             Persist::Commit => Ok((outcome, self.commit(project_id, &transition.records)?)),
