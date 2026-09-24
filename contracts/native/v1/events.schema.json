@@ -254,7 +254,7 @@
     },
     {
       "disposition": "in-use",
-      "emitters": 23,
+      "emitters": 10,
       "listeners": 1,
       "name": "task-status",
       "orphan": null

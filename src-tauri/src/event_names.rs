@@ -4,9 +4,6 @@
 //! 持有同名常量,字符串必须逐字一致,改名时同步改两侧。这里只收录 Rust 侧
 //! 实际 emit 用的名字。
 
-/// 任务生命周期状态(前端 `TASK_STATUS_EVENT`)。
-pub(crate) const TASK_STATUS: &str = "task-status";
-
 // ── dsh webui 会话通道 ─────────────────────────────────────────────────────────
 pub(crate) const DSH_SESSION_EVENT: &str = "dsh-session-event";
 pub(crate) const DSH_SESSION_SUBSCRIBED: &str = "dsh-session-subscribed";

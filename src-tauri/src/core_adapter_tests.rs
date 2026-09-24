@@ -1035,6 +1035,32 @@ fn the_wired_service_asks_the_host_about_a_run_core_never_minted() {
         !service.is_task_live("legacy-task"),
         "a run that ended must stop holding observations up"
     );
+
+    // The port answers `is_task_active`'s whole question, not just the registry's half: a
+    // transcript watcher can be alive because the session file was found, with no pty run
+    // registered at all. A narrower answer would drop those statuses, and nothing else here
+    // would notice.
+    manager.claude_sessions.lock().insert(
+        crate::run_registry::RunKey::unminted("legacy-task"),
+        crate::session::ClaudeSessionInfo {
+            session_id: "s-1".into(),
+            session_path: "/tmp/legacy-task.jsonl".into(),
+            is_placeholder: false,
+        },
+    );
+    assert!(
+        service.is_task_live("legacy-task"),
+        "a real session entry keeps the task active even with no live run"
+    );
+    manager
+        .claude_sessions
+        .lock()
+        .values_mut()
+        .for_each(|info| info.is_placeholder = true);
+    assert!(
+        !service.is_task_live("legacy-task"),
+        "but a lazy-attach placeholder must not: that is `is_task_active`'s rule, and the          port inherits it rather than inventing a simpler one"
+    );
 }
 
 /// ADR-033 §3's channel, end to end: a host-side fact enters through `TaskRuntimeObserver`,

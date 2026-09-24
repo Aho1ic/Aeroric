@@ -37,7 +37,7 @@ use std::sync::Arc;
 use aeroric_core::{
     tasks::{
         AgentFamilies, LiveRuns, ProtocolFamily, TaskEvent, TaskEventSink, TaskNotification,
-        TaskRuntimeObserver, TaskService, TaskSessionFacts,
+        TaskRuntimeObserver, TaskService, TaskSessionFacts, TaskStatus,
     },
     AppPaths, Clock, CoreContext, LeaseError, LeaseOwner, SystemClock,
 };
@@ -577,14 +577,75 @@ impl<R: tauri::Runtime> TaskRuntimeObserver for CoreRuntimeObserver<R> {
     }
 }
 
+/// The door every legacy report site walks through on its way to core (ADR-023, ADR-033).
+///
+/// Two decisions are made here rather than at the 22 call sites, and both have a reason:
+///
+/// * **Which generation reports.** The transcript watchers are task-scoped, not run-scoped —
+///   they outlive the process whose transcript they read. Asking "which run is this line from?"
+///   is unanswerable there, so the observation carries *the newest registered generation*
+///   (ADR-025's addressing rule), which is what the site's own status word always described:
+///   what this task is doing right now. Falling back to `UNMINTED` keeps a run core never
+///   numbered observable instead of silently out of range.
+/// * **What happens when core is not running.** `install_core_services` can fail (a corrupt
+///   ledger) and the app still starts, by design. Then the announcement falls back to the same
+///   `TauriEventSink`, so no report site ever goes quiet — ADR-033 §4 forbids the silence, and
+///   keeping the emit inside the sink means "one emitter" stays literally true even in the
+///   degraded mode.
+pub(crate) fn report_task_status<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    status: &str,
+) {
+    report_task_status_with_reason(app, task_id, status, None);
+}
+
+/// The same report with the reason the host already had. Sites like `finalize_task_exit` word
+/// the reason themselves ("Process exited with code 1", "WSL process exited with code 7"), and
+/// that text is user-visible today — so it travels in the event and core passes it through
+/// rather than synthesizing its own wording.
+pub(crate) fn report_task_status_with_reason<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    status: &str,
+    reason: Option<&str>,
+) {
+    use tauri::Manager;
+    let Ok(parsed) = serde_json::from_value::<TaskStatus>(serde_json::json!(status)) else {
+        // A status word outside the frozen nine is a bug in the caller, not a new spelling.
+        eprintln!("[aeroric] report_task_status got unknown status {status:?} for {task_id}");
+        return;
+    };
+    let generation = app
+        .state::<crate::TaskManager>()
+        .runs
+        .resource_key(task_id)
+        .map(|run| run.generation())
+        .unwrap_or(crate::run_registry::RunKey::UNMINTED);
+    let event = TaskEvent::Status {
+        task_id: task_id.to_string(),
+        generation,
+        status: parsed,
+        attention_requested_at_ms: None,
+        failure_reason: reason.map(str::to_string),
+    };
+    match app.try_state::<Arc<dyn TaskRuntimeObserver>>() {
+        Some(observer) => observer.observe(event),
+        None => TauriEventSink::new(app.clone()).notify(match reason {
+            Some(reason) => TaskNotification::status_with_reason(task_id, parsed, reason),
+            None => TaskNotification::status(task_id, parsed),
+        }),
+    }
+}
+
 /// ADR-036: the host's answer to "is any run of this task still alive".
 ///
-/// `TaskManager::runs` is the only table with a real claim on the process handles, and it
-/// already counts an unminted run (`RunKey::UNMINTED`, i.e. one the legacy command path started
-/// without core minting a generation) as a run — which is what makes the answer equivalent to the
-/// `is_task_active` gate this replaces. Nothing is copied into core: a mirror would fail by
-/// staying alive forever if a single retire path were missed, and the failure would be silent
-/// (the suppression gate simply stops suppressing).
+/// The answer is `is_task_active`'s *body*, not just the run registry: that gate also counts a
+/// codex session entry, and a claude entry that is not a lazy-attach placeholder. Answering with
+/// `TaskManager::has_live_run` alone would be narrower than the thing being replaced, and the
+/// failure is the silent kind — the transcript watchers would start dropping statuses that ship
+/// today. Nothing is copied into core: a mirror would fail by staying alive forever if a single
+/// retire path were missed, and the failure would be silent (the gate stops suppressing).
 ///
 /// It must not call back into core, and `has_live_run` only takes the registry's leaf lock, so
 /// asking cannot extend a lock chain.
@@ -594,8 +655,7 @@ struct HostLiveness<R: tauri::Runtime> {
 
 impl<R: tauri::Runtime> LiveRuns for HostLiveness<R> {
     fn has_live_run(&self, task_id: &str) -> bool {
-        use tauri::Manager;
-        self.app.state::<crate::TaskManager>().has_live_run(task_id)
+        crate::session::is_task_active(&self.app, task_id)
     }
 }
 

@@ -35,8 +35,8 @@ pub use cleanup::{
 };
 pub use events::{NullSink, TaskEventSink, TaskNotification, TaskSessionFacts};
 pub use executor::{
-    CancelTarget, Execution, ExecutorFailure, LaunchRequest, LiveRuns, NoLiveRuns, ResetOutcome,
-    ResumeRequest, TaskEvent, TaskExecutor, TaskRuntimeObserver, WorkingDirectory,
+    settled_by_exit, CancelTarget, Execution, ExecutorFailure, LaunchRequest, LiveRuns, NoLiveRuns,
+    ResetOutcome, ResumeRequest, TaskEvent, TaskExecutor, TaskRuntimeObserver, WorkingDirectory,
 };
 pub use launch_plan::{completion_for, Completion, ContinuationMode};
 pub use operations::{Claim, Claimed, LedgerState, OperationKind, OperationLedger};

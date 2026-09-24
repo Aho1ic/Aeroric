@@ -10,7 +10,6 @@ use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::Emitter;
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent_family_maps::{
@@ -1335,16 +1334,17 @@ fn spawn_remote_task_exit_monitor<R: tauri::Runtime>(
             if was_cancelled || was_manually_completed {
                 return;
             }
-            let payload = if ok {
-                serde_json::json!({ "task_id": task_id, "status": "done" })
+            if ok {
+                crate::core_adapter::report_task_status(&app, &task_id, "done");
             } else {
-                serde_json::json!({
-                    "task_id": task_id,
-                    "status": "failed",
-                    "failure_reason": format!("Remote process exited with code {}", status.exit_code())
-                })
-            };
-            let _ = app.emit(crate::event_names::TASK_STATUS, payload);
+                let reason = format!("Remote process exited with code {}", status.exit_code());
+                crate::core_adapter::report_task_status_with_reason(
+                    &app,
+                    &task_id,
+                    "failed",
+                    Some(&reason),
+                );
+            }
             return;
         }
 
@@ -1385,10 +1385,7 @@ fn spawn_remote_task_pty<R: tauri::Runtime>(
         child,
     )?;
 
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    crate::core_adapter::report_task_status(&app, task_id, "running");
 
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
@@ -1930,10 +1927,7 @@ pub(crate) async fn cancel_remote_task_core<R: tauri::Runtime>(
         task_manager.cancelled_tasks.lock().remove(task_id);
         task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(task_id));
     }
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "cancelled" }),
-    );
+    crate::core_adapter::report_task_status(app, task_id, "cancelled");
     Ok(())
 }
 

@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 const WSL_PROGRAM: &str = "wsl.exe";
 const WSL_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -960,16 +960,17 @@ fn spawn_wsl_exit_monitor<R: tauri::Runtime>(
             if cancelled || manually_completed {
                 return;
             }
-            let payload = if status.success() {
-                serde_json::json!({ "task_id": task_id, "status": "done" })
+            if status.success() {
+                crate::core_adapter::report_task_status(&app, &task_id, "done");
             } else {
-                serde_json::json!({
-                    "task_id": task_id,
-                    "status": "failed",
-                    "failure_reason": format!("WSL process exited with code {}", status.exit_code())
-                })
-            };
-            let _ = app.emit(crate::event_names::TASK_STATUS, payload);
+                let reason = format!("WSL process exited with code {}", status.exit_code());
+                crate::core_adapter::report_task_status_with_reason(
+                    &app,
+                    &task_id,
+                    "failed",
+                    Some(&reason),
+                );
+            }
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -1019,10 +1020,7 @@ fn spawn_wsl_task_pty<R: tauri::Runtime>(
         .wsl_active_ids
         .lock()
         .insert(crate::run_registry::RunKey::unminted(task_id));
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    crate::core_adapter::report_task_status(&app, task_id, "running");
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = needs_initial_input.then(|| {
@@ -1733,10 +1731,7 @@ pub(crate) async fn cancel_wsl_task_core<R: tauri::Runtime>(
         .wsl_active_ids
         .lock()
         .remove(&crate::run_registry::RunKey::unminted(task_id));
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "cancelled" }),
-    );
+    crate::core_adapter::report_task_status(app, task_id, "cancelled");
     Ok(())
 }
 

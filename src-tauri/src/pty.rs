@@ -220,16 +220,18 @@ fn finalize_task_exit<R: tauri::Runtime>(
     } else {
         "failed"
     };
-    let payload = if status == "failed" {
+    // The reason wording stays here: it is user-visible text this function has always produced
+    // (and core's own exit rule says something different), so it rides along in the observation
+    // rather than being re-derived downstream.
+    if status == "failed" {
         let reason = match exit_code {
             Some(code) => format!("Process exited with code {}", code),
             None => "Process exited with non-zero status".to_string(),
         };
-        serde_json::json!({ "task_id": task_id, "status": status, "failure_reason": reason })
+        crate::core_adapter::report_task_status_with_reason(app, task_id, status, Some(&reason));
     } else {
-        serde_json::json!({ "task_id": task_id, "status": status })
-    };
-    let _ = app.emit(crate::event_names::TASK_STATUS, payload);
+        crate::core_adapter::report_task_status(app, task_id, status);
+    }
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(app, task_id);
@@ -1967,10 +1969,7 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
 
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    crate::core_adapter::report_task_status(&app, &task_id, "running");
 
     // Claude >= 2.1.87 接受 Aeroric 预先生成的 session id。先把这个 ID 注册为
     // placeholder 并广播给前端，再等待 transcript 文件出现；这样任务刚创建并
@@ -2150,10 +2149,7 @@ pub(crate) fn cancel_task_core<R: tauri::Runtime>(
     // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
     release_claimed_session_paths(task_manager, task_id);
 
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "cancelled" }),
-    );
+    crate::core_adapter::report_task_status(app, task_id, "cancelled");
 
     // 清理任务附件
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
@@ -2200,10 +2196,7 @@ pub(crate) fn complete_task_core<R: tauri::Runtime>(
     // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
     release_claimed_session_paths(task_manager, task_id);
 
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "done" }),
-    );
+    crate::core_adapter::report_task_status(app, task_id, "done");
 
     // 清理任务附件
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
@@ -2731,10 +2724,7 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
 
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    crate::core_adapter::report_task_status(&app, &task_id, "running");
 
     if is_omp {
         // omp 的 session_id 已知,但 finalize_task_exit 在上次退出时清掉了

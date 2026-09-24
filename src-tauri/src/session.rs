@@ -59,17 +59,16 @@ pub struct RecoveredSession {
 
 // ── 公共辅助函数 ──────────────────────────────────────────────────────────────
 
-pub(crate) fn emit_task_status<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, status: &str) {
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": status }),
-    );
-}
-
+/// The transcript watchers' status door. The old body emitted `task-status` directly after an
+/// `is_task_active` check. Both halves moved: the check is core's rule now (ADR-034 — an
+/// observation from a task with no live run is dropped), and the emit lives in the adapter's sink,
+/// so this file no longer spells the event name at all.
+///
+/// `is_task_active` itself stays: three other readers use it as a watcher loop condition and a
+/// flow guard, which is exactly the distinction ADR-034 decision 3 draws. Deleting it along with
+/// the visibility role would break how those loops exit.
 fn emit_active_task_status<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, status: &str) {
-    if is_task_active(app, task_id) {
-        emit_task_status(app, task_id, status);
-    }
+    crate::core_adapter::report_task_status(app, task_id, status);
 }
 
 pub(crate) fn is_task_active<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str) -> bool {

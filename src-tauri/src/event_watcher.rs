@@ -312,11 +312,14 @@ fn emit_active_status<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent, sta
         }
         last.insert(ev.task_id.clone(), status.to_string());
     }
-    let mut payload = serde_json::json!({ "task_id": ev.task_id, "status": status });
-    if let Some(approval) = approval {
-        payload["approval"] = serde_json::to_value(approval).unwrap_or_default();
-    }
-    let _ = app.emit(crate::event_names::TASK_STATUS, payload);
+    // `approval` used to be folded into the payload as an extra key. Nothing reads it: the
+    // client's `task-status` listener destructures `{ task_id, status, failure_reason? }`
+    // (`src/state/app/useAppTauriEvents.ts:43`), and the approval dialogs it does render come
+    // from dsh's own `dsh-approval-*` events. The `RemoteState` bookkeeping above stays --
+    // only the wire key goes, and ADR-035 requires it be named rather than dropped inside a
+    // blanket "payloads unchanged" claim.
+    let _ = approval;
+    crate::core_adapter::report_task_status(app, &ev.task_id, status);
 }
 
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。
