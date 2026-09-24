@@ -55,6 +55,7 @@ impl TaskEventSink for TauriEventSink {
             "task-status",
             task_status_payload(task_id, status, None),
         );
+        let _ = self.app.emit("task-session", task_session_payload(facts));
     }
 }
 `,
@@ -187,4 +188,14 @@ pub(crate) fn via_constant(app: &AppHandle<Wry>, payload: Value) {
 }
 `;
   assert.match(problemText(files), /ADR-023: task-status still has legacy emitters/);
+});
+
+test("the second family is guarded too, not just the one that was deleted first", () => {
+  const files = cleanFiles();
+  files[0].text += `
+pub(crate) fn rogue_session(app: &AppHandle<Wry>, facts: Value) {
+    let _ = app.emit("task-session", facts);
+}
+`;
+  assert.match(problemText(files), /ADR-023: task-session still has legacy emitters outside the sink/);
 });

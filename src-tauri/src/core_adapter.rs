@@ -575,6 +575,28 @@ impl<R: tauri::Runtime> TaskRuntimeObserver for CoreRuntimeObserver<R> {
             self.sink.notify(notification);
         }
     }
+
+    fn report_session(&self, facts: TaskSessionFacts) {
+        // No reducer step to run: the six legacy sites announced the path the host had just
+        // resolved, and announcing it here keeps that behavior while collapsing the emitter
+        // surface to one line. The record's session fields stay the client's until the store
+        // cutover (see the port doc).
+        self.sink.notify(TaskNotification::Session(facts));
+    }
+}
+
+/// The door the six `task-session` report sites use. It takes the same path as
+/// `report_task_status` — one observer, one sink — because ADR-023's criterion is that each
+/// family has exactly one emitter, not that only statuses go through core.
+pub(crate) fn report_task_session<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    facts: TaskSessionFacts,
+) {
+    use tauri::Manager;
+    match app.try_state::<Arc<dyn TaskRuntimeObserver>>() {
+        Some(observer) => observer.report_session(facts),
+        None => TauriEventSink::new(app.clone()).notify(TaskNotification::Session(facts)),
+    }
 }
 
 /// The door every legacy report site walks through on its way to core (ADR-023, ADR-033).

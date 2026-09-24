@@ -1,3 +1,4 @@
+use aeroric_core::tasks::TaskSessionFacts;
 use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -5,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::TaskManager;
 
@@ -1840,14 +1841,16 @@ pub(crate) fn register_and_watch_session<R: tauri::Runtime>(
         );
     }
 
-    let _ = app.emit(
-        "task-session",
-        serde_json::json!({
-            "task_id": task_id,
-            "session_id": session_id,
-            "session_path": path_string,
-            "codex_like": is_codex,
-        }),
+    crate::core_adapter::report_task_session(
+        app,
+        TaskSessionFacts {
+            task_id: task_id.to_string(),
+            session_id: session_id.to_string(),
+            session_path: path_string.clone(),
+            codex_like: is_codex,
+            family: None,
+            agent_preset: None,
+        },
     );
 
     let app_clone = app.clone();
@@ -2019,14 +2022,16 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
             );
         }
 
-        let _ = app.emit(
-            "task-session",
-            serde_json::json!({
-                "task_id": task_id,
-                "session_id": session_id,
-                "session_path": path_string,
-                "codex_like": false,
-            }),
+        crate::core_adapter::report_task_session(
+            &app,
+            TaskSessionFacts {
+                task_id: task_id.to_string(),
+                session_id: session_id.to_string(),
+                session_path: path_string.clone(),
+                codex_like: false,
+                family: None,
+                agent_preset: None,
+            },
         );
 
         // 后台等文件真正出现（500ms × 240 = 2 分钟，或任务结束）。
@@ -2098,14 +2103,16 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
                     break;
                 }
                 // 让前端把先前持久化的错误路径替换为真实路径。
-                let _ = app.emit(
-                    "task-session",
-                    serde_json::json!({
-                        "task_id": task_id,
-                        "session_id": session_id,
-                        "session_path": actual_string,
-                        "codex_like": false,
-                    }),
+                crate::core_adapter::report_task_session(
+                    &app,
+                    TaskSessionFacts {
+                        task_id: task_id.to_string(),
+                        session_id: session_id.to_string(),
+                        session_path: actual_string.clone(),
+                        codex_like: false,
+                        family: None,
+                        agent_preset: None,
+                    },
                 );
             }
 

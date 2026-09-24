@@ -10,7 +10,7 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
-      "adapter-invariants-unit@tauri-adapter": 14,
+      "adapter-invariants-unit@tauri-adapter": 15,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 10,
       "extraction-unit@skeleton": 9,
@@ -826,13 +826,13 @@
     },
     "tauri-adapter": {
       "registeredBy": "P2-05",
-      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 **28** 处 legacy 发射点（ADR-033 实测：task-status 22 + task-session 6，原记 8 处漏了所有绕过包装函数的直接 .emit）；ADR-027 的只读实例状态可查询与\"不退临时目录\"：地基已在 bf798a3 到位（`install_core_services` 于 setup 注入 `CoreGateway`/`TaskService`/`OutputSinkMailbox`，macOS 上真的取写者租约，第二实例只读且说得出目录与持有者已有用例实测），本模块因此已有两条 ADR-027 检查：行为侧 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`、源码侧 `core-adapter-never-relocates-data-dir`。ADR-027 决策 4 的**常驻**指示仍未生效——toast 会消失而只读是整场会话的状态，按该 ADR 自己写明的\"复用 StartupDegradation ≠ 已满足持续可见\"。ADR-026（元数据重放一次、状态 op 一律不重放）**也未生效，且我上一版把它的阻塞原因写错了**：全仓没有任何重放实现，而 ADR-026 通篇讲的是\"写权移交之后宿主才会第一次拿到 `REVISION_CONFLICT`\"，所以真正的前置是 Action 3 的 store 改造，不是 managed state。这条更正留在这里而不是悄悄改掉。",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 **已生效**：两个家族的 `emitters` 都已经是 1（`task-status` 曾 23、`task-session` 曾 7），由 adapter-invariants 的 ADR-023 规则逐家族断言\"恰好一行、且必须在 core_adapter.rs\"，4 条负例防它空转；那 28 处 legacy 发射点已在步骤 F 三批里删完。**但本 ADR 只完成\"唯一发射者\"这一半**：`apply_resolved_session` 的写路径与状态观察的 commit 同批，都要等 Action 3 的 store 切换才接上（ADR-035）；ADR-027 的只读实例状态可查询与\"不退临时目录\"：地基已在 bf798a3 到位（`install_core_services` 于 setup 注入 `CoreGateway`/`TaskService`/`OutputSinkMailbox`，macOS 上真的取写者租约，第二实例只读且说得出目录与持有者已有用例实测），本模块因此已有两条 ADR-027 检查：行为侧 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`、源码侧 `core-adapter-never-relocates-data-dir`。ADR-027 决策 4 的**常驻**指示仍未生效——toast 会消失而只读是整场会话的状态，按该 ADR 自己写明的\"复用 StartupDegradation ≠ 已满足持续可见\"。ADR-026（元数据重放一次、状态 op 一律不重放）**也未生效，且我上一版把它的阻塞原因写错了**：全仓没有任何重放实现，而 ADR-026 通篇讲的是\"写权移交之后宿主才会第一次拿到 `REVISION_CONFLICT`\"，所以真正的前置是 Action 3 的 store 改造，不是 managed state。这条更正留在这里而不是悄悄改掉。",
       "cases": [
         {
           "name": "adapter-invariants-unit",
           "kind": "test",
           "parse": "node-test",
-          "minCases": 14,
+          "minCases": 15,
           "timeoutMs": 300000,
           "argv": [
             "node",

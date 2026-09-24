@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::session::{OmpSessionInfo, SessionContent, SessionMessage};
 use crate::TaskManager;
@@ -50,15 +50,16 @@ pub(crate) fn register_omp_session<R: tauri::Runtime>(
             },
         );
     }
-    let _ = app.emit(
-        "task-session",
-        serde_json::json!({
-            "task_id": task_id,
-            "session_id": session_id,
-            "session_path": path_string,
-            "codex_like": false,
-            "family": "omp",
-        }),
+    crate::core_adapter::report_task_session(
+        app,
+        aeroric_core::tasks::TaskSessionFacts {
+            task_id: task_id.to_string(),
+            session_id: session_id.to_string(),
+            session_path: path_string.clone(),
+            codex_like: false,
+            family: Some(aeroric_core::tasks::ProtocolFamily::Omp),
+            agent_preset: None,
+        },
     );
     true
 }

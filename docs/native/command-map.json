@@ -8332,7 +8332,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:903",
+      "definition_resolved": "src-tauri/src/session.rs:904",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8368,7 +8368,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:935",
+      "definition_resolved": "src-tauri/src/session.rs:936",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8405,7 +8405,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:985",
+      "definition_resolved": "src-tauri/src/session.rs:986",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8441,7 +8441,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:884",
+      "definition_resolved": "src-tauri/src/session.rs:885",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8477,7 +8477,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:1007",
+      "definition_resolved": "src-tauri/src/session.rs:1008",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8515,7 +8515,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:1695",
+      "definition_resolved": "src-tauri/src/session.rs:1696",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8551,7 +8551,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:2337",
+      "definition_resolved": "src-tauri/src/session.rs:2344",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24757,13 +24757,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:509",
-        "src-tauri/src/event_watcher.rs:264",
-        "src-tauri/src/session.rs:1843",
-        "src-tauri/src/session.rs:2022",
-        "src-tauri/src/session.rs:2101",
-        "src-tauri/src/session_dsh.rs:695",
-        "src-tauri/src/session_omp.rs:53"
+        "src-tauri/src/core_adapter.rs:509"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:53"

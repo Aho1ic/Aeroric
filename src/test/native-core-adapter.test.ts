@@ -185,6 +185,26 @@ function eventName(constant: string): string {
   return value![1];
 }
 
+/**
+ * Keys the deleted legacy sites put on the wire that no client listener destructures. They are
+ * here because ADR-023 promises payloads do not change during the handover: core must keep
+ * sending them, and no *new* key may join them. If the client starts reading one, delete it from
+ * this list — `core invents no key...` fails while a listed key is also declared, so the list
+ * cannot quietly grow stale.
+ *
+ * The mirror case is asserted too: `approval` used to ride on `task-status` from the hook
+ * watcher and was deliberately dropped (no reader anywhere, and the approval dialogs use dsh's
+ * own events). Recording it as absent is what keeps a decision that was written down in an ADR
+ * from being quietly re-added, or re-removed from a family that still ships it.
+ */
+const carriedOver: Record<string, string[]> = {
+  // `session_dsh.rs` announced dsh transcripts with a preset; no client listener
+  // destructures it (`useAppTauriEvents.ts` takes task_id/session_id/session_path/
+  // codex_like/family), but it has always been on the wire, so it stays.
+  [TASK_SESSION]: ["agent_preset"],
+  [TASK_STATUS]: [],
+    };
+
 const contractRows = JSON.parse(
   source("contracts/native/v1/events.schema.json"),
 ).events as { name: string; disposition: string }[];
@@ -200,20 +220,33 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
     }
   });
 
-  it("the scan really reads both sides (a guard that matches nothing is worse than none)", () => {
-    // Positive control, and it earns its keep: the first version of this file counted *sites*
-    // only, and a brace-stripping bug that made every key set empty still reported green.
-    // What must be non-empty is the key sets.
+  it("the scan reads a surface with exactly one emitter per family, and can see both sides", () => {
+    // This is the same positive control the first version had, re-pointed at what is true now.
+    // Before step F it asserted "more than one legacy site"; after the handover that assertion
+    // would be satisfied by nothing, so the control now has two halves that must hold together:
+    // the legacy side is empty (the criterion), and the scan still sees the sink plus the key
+    // sets on both other sides (so emptiness is a fact, not a broken scanner). A brace-stripping
+    // bug in the first version made every key set empty while the file stayed green, which is
+    // the exact failure this guards.
     for (const event of [TASK_STATUS, TASK_SESSION]) {
-      const sites = literalEmitSites(event);
-      expect(sites.length, `legacy ${event} literal emit sites`).toBeGreaterThan(1);
-      const keys = new Set(sites.flatMap((site) => site.keys));
-      expect(keys.has("task_id"), `${event} sites must be read down to their keys`).toBe(true);
+      // `*_tests.rs` files emit whatever they need to exercise — here the remote bridge's
+      // forwarding of these very names. The rule is about who the product emits through, and
+      // this exclusion mirrors the one in scripts/native/adapter-invariants.mjs rather than
+      // inventing a second policy.
+      const sites = literalEmitSites(event).filter((site) => !site.file.endsWith("_tests.rs"));
+      const legacy = sites.filter((site) => !site.file.endsWith("core_adapter.rs"));
+      const sink = sites.filter((site) => site.file.endsWith("core_adapter.rs"));
+      expect(
+        legacy.map((site) => `${site.file}:${site.keys.join("/")}`),
+        `${event}: ADR-023 wants one emitter, so any legacy site is now a regression`,
+      ).toEqual([]);
+      expect(sink.length, `${event} must still be emitted from core_adapter.rs`).toBe(1);
     }
     expect(corePayloadKeys("task_status_payload")).toContain("task_id");
     expect(corePayloadKeys("task_session_payload")).toContain("session_path");
     expect(clientKeys("TASK_STATUS_EVENT").required).toContain("status");
     expect(clientKeys("TASK_SESSION_EVENT").required).toContain("session_id");
+    expect(corePayloadKeys("task_status_payload")).not.toContain("approval");
   });
 
   it("core sends every key the client requires, so no listener reads undefined", () => {
@@ -229,18 +262,28 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
     }
   });
 
-  it("core can carry everything the legacy sites send, because those are being deleted", () => {
+  it("core can carry everything the deleted sites used to send, because that is the promise", () => {
+    // The legacy literal sites are gone, so the set this used to compare against is empty and
+    // the assertion would pass on nothing. The keys those sites put on the wire are recorded
+    // here instead, one line each, with where they came from: ADR-023 promises payloads do not
+    // change during the handover, so a key core emits without a shipping source is a new wire
+    // field, and a key core drops is a silent regression.
     const cases: [string, string][] = [
       [TASK_STATUS, "task_status_payload"],
       [TASK_SESSION, "task_session_payload"],
     ];
     for (const [event, builder] of cases) {
-      const legacy = new Set(literalEmitSites(event).flatMap((site) => site.keys));
+      const legacy = new Set<string>([
+        ...literalEmitSites(event)
+          .filter((site) => !site.file.endsWith("_tests.rs"))
+          .flatMap((site) => site.keys),
+        ...(carriedOver[event] ?? []),
+      ]);
       const emitted = new Set(corePayloadKeys(builder));
       const dropped = [...legacy].filter((key) => !emitted.has(key));
       expect(
         dropped,
-        `${event}: deleting the legacy sites would drop ${dropped.join(", ")} from the wire`,
+        `${event}: core no longer carries ${dropped.join(", ")} that the shipping wire has`,
       ).toEqual([]);
     }
   });
@@ -252,10 +295,20 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
     ];
     for (const [event, builder] of cases) {
       const constant = event === TASK_STATUS ? "TASK_STATUS_EVENT" : "TASK_SESSION_EVENT";
+      const declared = new Set([...clientKeys(constant).required, ...clientKeys(constant).optional]);
+      const carried = carriedOver[event] ?? [];
+      for (const key of carried) {
+        expect(
+          declared.has(key),
+          `${event}: ${key} is listed as shipped-but-unread yet the client now reads it — drop it from carriedOver`,
+        ).toBe(false);
+      }
       const known = new Set([
-        ...literalEmitSites(event).flatMap((site) => site.keys),
-        ...clientKeys(constant).required,
-        ...clientKeys(constant).optional,
+        ...literalEmitSites(event)
+          .filter((site) => !site.file.endsWith("_tests.rs"))
+          .flatMap((site) => site.keys),
+        ...declared,
+        ...carried,
       ]);
       const invented = corePayloadKeys(builder).filter((key) => !known.has(key));
       expect(invented, `${builder} adds ${invented.join(", ")} that no shipping event carries`).toEqual([]);

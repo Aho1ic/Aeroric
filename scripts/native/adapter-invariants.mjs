@@ -14,8 +14,9 @@
 //   ADR-021            the writer role is handed to core on macOS and nowhere else; that decision
 //                      lives in the host, never in core.
 //   ADR-023            a handed-over event family is emitted by exactly one line of the host —
-//                      core's sink. `task-status` entered this rule when its 22 legacy sites
-//                      were deleted; `task-session` joins it after step F5.
+//                      core's sink. Both `task-status` (22 legacy sites) and `task-session`
+//                      (6) are now under the rule; this is the check that makes "only core
+//                      emits" countable instead of reviewed.
 //
 // Each rule carries a positive control: if the scan cannot show it read the text it claims to
 // have read, the check fails rather than passing on an empty corpus.
@@ -135,11 +136,12 @@ export function adapterInvariantProblems(files) {
 
   // ---- ADR-023: exactly one line in the host emits each handed-over family
   //
-  // "core is the sole emitter" is only a claim if it is countable. A family enters this list
-  // when its legacy sites are gone; `task-session` is not here yet because its six sites move
-  // through apply_resolved_session rather than the observation channel, and listing a family
-  // whose count is still 7 would just be a permanently red case.
-  for (const family of ["task-status"]) {
+  // "core is the sole emitter" is only a claim if it is countable. Both families are listed now
+  // that their 28 legacy sites are gone: `task-status` was 23 emitters before step F, and
+  // `task-session` was 7. A family belongs here only while the criterion actually holds —
+  // registering one at 7 would have been a permanently red case, which is the failure mode this
+  // repo has kept stepping on.
+  for (const family of ["task-status", "task-session"]) {
     const constant = family.toUpperCase().replace(/-/g, "_");
     // Over the whole file, not line by line: the sink writes `emit(` and the event name on
     // separate lines, and a line-scoped scan would report "no sink in view" for real code.

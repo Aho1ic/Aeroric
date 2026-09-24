@@ -163,6 +163,16 @@ forget。用例 #32 要求盘上真有两个项目，两处变异（扫成"第�
 现在 28 处删除只缺一样东西：宿主侧那条 `TaskRuntimeObserver` 实现，以及 `EventOutcome →
 TaskNotification → sink` 的映射。机制层没有未关的前置了。
 
+### 5.2b 落地实况（2026-09-24）：本节预测的入口没有用上，原因是时机而不是设计
+
+上面写"这 6 处的移交判据是经由 `apply_resolved_session`"。**实际落地的是端口的第二个方法
+`TaskRuntimeObserver::report_session`**，`apply_resolved_session` 至今没有被发射路径调用。
+理由与状态家族的 commit 完全同构：那条函数会写记录，而写记录属于 Action 3 的 store 切换；
+在 `storage.rs` 仍是保存者的今天从 announce 路径提交，就是 INV-03 要防的双写。
+所以今天的移交只完成"唯一发射者"这一半（两个家族 emitters 各 = 1），会话字段落盘那一半
+与状态提交同批接上。**本节保留原文不删**，因为它对"会话事实不是状态转移"的判断是对的，
+错的只是我以为这一步就能同时把写路径接进去。
+
 ### 5.2 `task-session` 走的不是观察通道
 
 6 处 `task-session` 报的是"这份转录现在在哪"，不是"某个运行发生了什么"。它在 core 里已有的对应入口是
@@ -171,16 +181,16 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 观察通道会造出一个假的"会话状态机"。
 ### 5.3 发射面实测结果（2026-09-24，第一、二批发完之后）
 
-`command-map.json` 的 `events[].emitters` 现在如实记着：**`task-status` = 1**（唯一那条
-`core_adapter.rs:503` 的 sink），**`task-session` = 7**（sink + 6 处 legacy）。§5.1 的"存活代登记"
+`command-map.json` 的 `events[].emitters` 现在如实记着：**`task-status` = 1**
+（`core_adapter.rs:503` 的 sink）、**`task-session` = 1**（`core_adapter.rs:509` 的同一行 sink）。§5.1 的"存活代登记"
 前置被两条更准的机制取代：ADR-036 的 `LiveRuns` 端口回答宿主 `is_task_active` 的**全部**问题
 （含 codex/claude 会话表，只答 run registry 会漏掉 lazy-attach 窗口），以及 ADR-034 更正二补上的
 `ObservationOrigin`——dsh 那 9 处的正确分类是 `Runtime`，本来就不该过那道闸。
 
 判据已进门禁：`adapter-invariants.mjs` 的 ADR-023 规则要求"已移交家族必须由 `core_adapter.rs`
 的恰好一行发出"，配三条负例（多一个发射点 / sink 看不见 / 走 `event_names::` 常量发）。
-`task-session` 尚未列入这条规则——它现在的数字是 7，列进去就是一条永远红的 case；等 §5.2 那 6 处
-改走 `apply_resolved_session` 之后再并入，与 ADR-022/024/026 的处理口径一致。
+两个家族都在规则里（`task-session` 是在它的 6 处删完之后并入的，没有先登记成一条永远红的 case），
+负例 4 条，其中一条专门证明第二个家族也受管。
 
 顺带记两条扫描器的错，都是门禁第一遍运行就报出来的：按行匹配看不见 sink 那种 `emit(` 与事件名
 换行写的调用（会误报"没有 sink"），以及 `remote/lan_roundtrip_tests.rs` 里测试自己发的

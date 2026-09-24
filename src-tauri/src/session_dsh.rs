@@ -23,7 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::session::{SessionContent, SessionMessage};
 use crate::TaskManager;
@@ -692,16 +692,16 @@ pub(crate) fn register_dsh_session_with_preset<R: tauri::Runtime>(
             },
         );
     }
-    let _ = app.emit(
-        "task-session",
-        serde_json::json!({
-            "task_id": task_id,
-            "session_id": session_id,
-            "session_path": path_string,
-            "codex_like": false,
-            "family": "dsh",
-            "agent_preset": agent_preset,
-        }),
+    crate::core_adapter::report_task_session(
+        app,
+        aeroric_core::tasks::TaskSessionFacts {
+            task_id: task_id.to_string(),
+            session_id: session_id.to_string(),
+            session_path: path_string.clone(),
+            codex_like: false,
+            family: Some(aeroric_core::tasks::ProtocolFamily::Dsh),
+            agent_preset: agent_preset.map(str::to_string),
+        },
     );
 }
 

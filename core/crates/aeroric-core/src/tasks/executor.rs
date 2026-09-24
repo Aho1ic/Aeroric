@@ -277,6 +277,18 @@ pub trait TaskExecutor: Send + Sync {
 /// Where the executor's world gets reported back. One reducer, one owner.
 pub trait TaskRuntimeObserver: Send + Sync {
     fn observe(&self, event: TaskEvent);
+
+    /// Where this task's transcript now lives — ADR-023's second family (`task-session`).
+    ///
+    /// Deliberately a separate method instead of another `TaskEvent` variant: every guard in
+    /// [`TaskService::observe`](super::service::TaskService::observe) is about *which run* may
+    /// move a status, and a session path is not a status. No default body either — a silent
+    /// default would be the "quietly stop emitting" outcome ADR-033 §4 forbids.
+    ///
+    /// What is *not* done here: writing the path into the record. That is
+    /// [`apply_resolved_session`](super::session_owner::apply_resolved_session), and attaching
+    /// it belongs to the same store cutover that lets status observations commit (ADR-035).
+    fn report_session(&self, facts: crate::tasks::events::TaskSessionFacts);
 }
 
 /// ADR-036: who is still running is a question core **asks**, not a table it keeps.

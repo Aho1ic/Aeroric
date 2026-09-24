@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::session::{ClaudeSessionInfo, CodexSessionInfo};
 use crate::TaskManager;
@@ -261,14 +261,16 @@ fn handle_session_start<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent) {
         claimed.insert(session_path.clone());
     }
 
-    let _ = app.emit(
-        "task-session",
-        serde_json::json!({
-            "task_id": ev.task_id,
-            "session_id": ev.session_id,
-            "session_path": session_path,
-            "codex_like": is_codex,
-        }),
+    crate::core_adapter::report_task_session(
+        app,
+        aeroric_core::tasks::TaskSessionFacts {
+            task_id: ev.task_id.clone(),
+            session_id: ev.session_id.clone(),
+            session_path: session_path.clone(),
+            codex_like: is_codex,
+            family: None,
+            agent_preset: None,
+        },
     );
 }
 
