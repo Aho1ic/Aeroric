@@ -622,6 +622,7 @@ pub(crate) fn discover_dsh_session_since(
 /// 因此注册完成后 watcher 即退出。
 pub(crate) fn spawn_dsh_session_watcher(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     agent: String,
     project_path: String,
@@ -633,7 +634,7 @@ pub(crate) fn spawn_dsh_session_watcher(
             {
                 let tm = app.state::<TaskManager>();
                 let still_running = tm.has_live_run(&task_id);
-                let already = tm.dsh_sessions.lock().contains_key(&task_id);
+                let already = tm.has_dsh_session(&task_id);
                 if already {
                     return;
                 }
@@ -642,7 +643,7 @@ pub(crate) fn spawn_dsh_session_watcher(
                     if let Some((session_id, path)) =
                         discover_dsh_session_since(&app, &agent, &project_path, since_ms)
                     {
-                        register_dsh_session(&app, &task_id, &session_id, &path);
+                        register_dsh_session(&app, &run, &task_id, &session_id, &path);
                     }
                     return;
                 }
@@ -650,7 +651,7 @@ pub(crate) fn spawn_dsh_session_watcher(
             if let Some((session_id, path)) =
                 discover_dsh_session_since(&app, &agent, &project_path, since_ms)
             {
-                register_dsh_session(&app, &task_id, &session_id, &path);
+                register_dsh_session(&app, &run, &task_id, &session_id, &path);
                 return;
             }
             thread::sleep(Duration::from_millis(500));
@@ -660,15 +661,17 @@ pub(crate) fn spawn_dsh_session_watcher(
 
 pub(crate) fn register_dsh_session(
     app: &AppHandle,
+    run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
     session_path: &Path,
 ) {
-    register_dsh_session_with_preset(app, task_id, session_id, session_path, None);
+    register_dsh_session_with_preset(app, run, task_id, session_id, session_path, None);
 }
 
 pub(crate) fn register_dsh_session_with_preset(
     app: &AppHandle,
+    run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
     session_path: &Path,
@@ -682,7 +685,7 @@ pub(crate) fn register_dsh_session_with_preset(
             return;
         }
         tm.dsh_sessions.lock().insert(
-            task_id.to_string(),
+            run.clone(),
             DshSessionInfo {
                 session_id: session_id.to_string(),
                 session_path: path_string.clone(),

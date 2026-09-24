@@ -107,3 +107,13 @@
 | 启动族 / launchFamily | 决定用哪套 CLI 参数起进程。宿主侧**委托**给 `get_agent_launch_spec()`，因为 `claude_gpt55` 要读用户脚本内容才能定（ADR-028） | 不是会话族；不是可以在宿主里查表写死的东西 |
 | 会话族 / sessionFamily | 决定会话文件格式与配置 home。内置四个 + `claude_gpt55`（Claude 格式）走表；自定义 profile 用 `family`，空则回落 `codex_like` | 不是启动族；`src/agents.ts` 的 `agentOption` 给它的**不是**这个答案 |
 | content-derived | 契约里的**非值**：表示"这个问题只有宿主（读了用户脚本之后）能答"。三方都断言它不可被解析成 `ProtocolFamily` | 不是一个族名；把它当族名用等于把 ADR-028 拆回一个字段 |
+
+## 宿主层门禁新增（P2-05 续，Q59～）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 销账 / consume-on-settle | 一次性标记被某个退出**读走并清除**的动作。取消/手动完成的账按任务共享，只由**最后一个退出的代**销账（ADR-030） | 不是"谁先退出谁吃掉"（那是今天的实现，双开时会把后退出的一代误判 failed）；销账判断必须在自我 retire 之后 |
+| 未 Minted 运行 / unminted run | `generation == 0` 的运行：所有 shell，以及 writer 未递交前由旧命令直接起的任务。0 是**保留常量**，不是第四个计数器（core 的编号从 1 起，故它永远抢不到寻址） | 不是"没有代"；不是宿主自己分配的号；`RunRegistry` 里它与真实代同等参与 `newest`/`live` 计算 |
+| 存活代 / 最新代 | "这个任务还有进程活着吗"看**任意一代**（`has_live_run`）；"这次输入/resize 给谁"看**已注册的最大代**（`resource_run`，ADR-025） | 两者不可互换：用最新代判存活会把仍在跑的老代报成已死，用任意代做寻址会把输入喂给错误的窗口 |
+| 条目版本戳 / entry version stamp | 只在一张表内部回答"我登记的那条还在不在"的序号。`STARTUP_SIGNAL_GENERATION` 本波降格为此（ADR-032），**不是**运行身份 | 不是 generation；除 signal 登记/清除两处外不得再被引用，这条进门禁 |
+| 反查释放 / release-if-unreferenced | 路径 claim 的唯一释放规则：先删本次会话条目，再反查四张会话表，仍有人引用就不放（ADR-031） | 不是"删条目顺手删 claim"；不是持有者计数（那是第二份会漂移的账） |

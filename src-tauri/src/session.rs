@@ -81,9 +81,9 @@ pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
     let has_codex_session = tm
         .codex_sessions
         .lock()
-        .get(task_id)
-        .map(|info| !info.session_id.is_empty() && !info.session_path.is_empty())
-        .unwrap_or(false);
+        .iter()
+        .filter(|(run, _)| run.id() == task_id)
+        .any(|(_, info)| !info.session_id.is_empty() && !info.session_path.is_empty());
 
     if has_codex_session {
         return true;
@@ -92,11 +92,11 @@ pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
     let has_claude_session = tm
         .claude_sessions
         .lock()
-        .get(task_id)
-        .map(|info| {
+        .iter()
+        .filter(|(run, _)| run.id() == task_id)
+        .any(|(_, info)| {
             !info.session_id.is_empty() && !info.session_path.is_empty() && !info.is_placeholder
-        })
-        .unwrap_or(false);
+        });
 
     has_claude_session
 }
@@ -1788,8 +1788,12 @@ fn wait_for_session_file(session_id: &str, project_path: &str, is_codex: bool) -
 ///
 /// `agent` 用于判定 hook 链路是否已独占工具审批信号(见
 /// `hooks_own_approval_signal`),与 `pty.rs` 里 `use_hooks` 同源同判据。
+///
+/// `run` 是这个会话属于哪一次运行（ADR-020）。每条 attach 路径都是由某次启动自己派生的
+/// watcher 触发的，所以这里从不需要猜代。
 pub(crate) fn register_and_watch_session(
     app: &AppHandle,
+    run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
     project_path: &str,
@@ -1809,7 +1813,7 @@ pub(crate) fn register_and_watch_session(
     if is_codex {
         let tm = app.state::<TaskManager>();
         tm.codex_sessions.lock().insert(
-            task_id.to_string(),
+            run.clone(),
             CodexSessionInfo {
                 session_id: session_id.to_string(),
                 session_path: path_string.clone(),
@@ -1818,7 +1822,7 @@ pub(crate) fn register_and_watch_session(
     } else {
         let tm = app.state::<TaskManager>();
         tm.claude_sessions.lock().insert(
-            task_id.to_string(),
+            run.clone(),
             ClaudeSessionInfo {
                 session_id: session_id.to_string(),
                 session_path: path_string.clone(),
@@ -1894,6 +1898,7 @@ pub(crate) fn should_start_status_session_watcher(
 /// 正在显示启动确认界面的 PTY 注入 `/status`。
 pub(crate) fn spawn_codex_session_recovery(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
     prompt: String,
@@ -1904,11 +1909,7 @@ pub(crate) fn spawn_codex_session_recovery(
         // 30 秒覆盖 Codex 启动、trust/review 和首条消息落盘的常见延迟；任务
         // 退出后仍继续短暂扫描，确保手动完成不会抢在 session 事件之前清理状态。
         for _ in 0..150 {
-            let registered = {
-                let tm = app.state::<TaskManager>();
-                let registered = tm.codex_sessions.lock().contains_key(&task_id);
-                registered
-            };
+            let registered = app.state::<TaskManager>().has_codex_session(&task_id);
             if registered {
                 return;
             }
@@ -1916,6 +1917,7 @@ pub(crate) fn spawn_codex_session_recovery(
             if let Some(recovered) = recover_session(&project_path, &prompt, created_at, true) {
                 register_and_watch_session(
                     &app,
+                    &run,
                     &task_id,
                     &recovered.session_id,
                     &project_path,
@@ -1964,6 +1966,7 @@ fn send_status_command(app: &AppHandle, task_id: &str, is_codex: bool) {
 /// 同时后台等待 transcript 文件出现后再升级为可监视的真实会话。
 pub(crate) fn spawn_claude_lazy_session_attach(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     session_id: String,
     project_path: String,
@@ -1983,7 +1986,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             if tm
                 .claude_sessions
                 .lock()
-                .get(&task_id)
+                .get(&run)
                 .map(|info| info.session_id == session_id && !info.is_placeholder)
                 .unwrap_or(false)
             {
@@ -1998,7 +2001,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
         {
             let tm = app.state::<TaskManager>();
             tm.claude_sessions.lock().insert(
-                task_id.clone(),
+                run.clone(),
                 ClaudeSessionInfo {
                     session_id: session_id.clone(),
                     session_path: path_string.clone(),
@@ -2049,7 +2052,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             let should_start_watcher = {
                 let tm = app.state::<TaskManager>();
                 let mut sessions = tm.claude_sessions.lock();
-                match sessions.get_mut(&task_id) {
+                match sessions.get_mut(&run) {
                     Some(info) if info.is_placeholder => {
                         info.is_placeholder = false;
                         info.session_path = actual_string.clone();
@@ -2060,17 +2063,26 @@ pub(crate) fn spawn_claude_lazy_session_attach(
             };
 
             if should_start_watcher && corrected {
-                // 换 claim：旧的猜测路径不再持有，新路径若已被别的任务占用则放弃接管。
+                // 换 claim：新路径若已被别的任务占用则放弃接管。
+                //
+                // 顺序是刻意的（ADR-031）：先认领真实路径，认领成功才让猜测路径走反查释放——
+                // 认领失败时本任务的占位条目还指着猜测路径，那时释放它就是把还在被读的路径
+                // 放回市场。释放本身只在 `release_session_path_if_unreferenced` 里发生。
                 let claimed_actual = {
                     let tm = app.state::<TaskManager>();
-                    let mut claimed = tm.claimed_session_paths.lock();
-                    claimed.remove(&path_string);
-                    claimed.insert(actual_string.clone())
+                    let got = tm
+                        .claimed_session_paths
+                        .lock()
+                        .insert(actual_string.clone());
+                    if got {
+                        tm.release_session_path_if_unreferenced(&path_string);
+                    }
+                    got
                 };
                 if !claimed_actual {
                     // 已被其他任务监听：还原占位标记，交给下方清理分支收尾。
                     let tm = app.state::<TaskManager>();
-                    if let Some(info) = tm.claude_sessions.lock().get_mut(&task_id) {
+                    if let Some(info) = tm.claude_sessions.lock().get_mut(&run) {
                         info.is_placeholder = true;
                         info.session_path = path_string.clone();
                     }
@@ -2103,14 +2115,15 @@ pub(crate) fn spawn_claude_lazy_session_attach(
 
         // 否则（超时 / 任务退出）：清理占位条目和 claimed 路径，避免泄漏。
         let tm = app.state::<TaskManager>();
-        let removed = tm.claude_sessions.lock().remove(&task_id);
+        let removed = tm.claude_sessions.lock().remove(&run);
         if let Some(info) = removed {
             if info.is_placeholder {
-                tm.claimed_session_paths.lock().remove(&info.session_path);
+                // ADR-031: the path goes back on the market only if no other entry reads it.
+                tm.release_session_path_if_unreferenced(&info.session_path);
             } else {
                 // 极少数情况：placeholder 已被外部翻成 false 但 attached 仍为 false
                 // （例如 watch 启动失败）。把它还原回 sessions，避免吞掉真实条目。
-                tm.claude_sessions.lock().insert(task_id.clone(), info);
+                tm.claude_sessions.lock().insert(run.clone(), info);
             }
         }
     });
@@ -2125,6 +2138,7 @@ pub(crate) fn spawn_claude_lazy_session_attach(
 /// 直接使用预置 session id 注册会话文件。若文件在超时内未出现，自动回退到 `/status` 流程。
 pub(crate) fn spawn_status_session_watcher(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
     agent: String,
@@ -2139,7 +2153,14 @@ pub(crate) fn spawn_status_session_watcher(
     // 后台再无限等文件出现后 attach 监听。
     if let Some(ref sid) = pre_session_id {
         if !is_codex && prompt_empty {
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
+            spawn_claude_lazy_session_attach(
+                app,
+                run.clone(),
+                task_id,
+                sid.clone(),
+                project_path,
+                agent,
+            );
             return;
         }
     }
@@ -2149,20 +2170,28 @@ pub(crate) fn spawn_status_session_watcher(
         if !is_codex {
             // ID 已经在 run_task 启动前确定，并由 spawn_claude_lazy_session_attach
             // 立即发给前端；这里不再等待文件或重复启动 watcher。
-            spawn_claude_lazy_session_attach(app, task_id, sid.clone(), project_path, agent);
+            spawn_claude_lazy_session_attach(
+                app,
+                run.clone(),
+                task_id,
+                sid.clone(),
+                project_path,
+                agent,
+            );
             return;
         }
     }
 
     // ── 原始路径：Codex 或 Claude < 2.1.87 ──
     thread::spawn(move || {
-        run_status_session_watcher(app, task_id, project_path, agent, is_codex, rx);
+        run_status_session_watcher(app, run, task_id, project_path, agent, is_codex, rx);
     });
 }
 
 /// 旧的 /status 轮询流程：非空 prompt 且无法使用 hook/预置 session 的任务走此路径。
 fn run_status_session_watcher(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
     agent: String,
@@ -2241,6 +2270,7 @@ fn run_status_session_watcher(
                 if let Some(sid) = session_id {
                     register_and_watch_session(
                         &app,
+                        &run,
                         &task_id,
                         &sid,
                         &project_path,
@@ -2272,6 +2302,7 @@ fn run_status_session_watcher(
 /// 供 `resume_task` 使用：根据已知的 session_id 查找会话文件并开始监视。
 pub(crate) fn spawn_resume_session_watcher(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     project_path: String,
     session_id: String,
@@ -2279,7 +2310,15 @@ pub(crate) fn spawn_resume_session_watcher(
     agent: String,
 ) {
     thread::spawn(move || {
-        register_and_watch_session(&app, &task_id, &session_id, &project_path, is_codex, &agent);
+        register_and_watch_session(
+            &app,
+            &run,
+            &task_id,
+            &session_id,
+            &project_path,
+            is_codex,
+            &agent,
+        );
     });
 }
 

@@ -901,7 +901,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:399",
+      "definition_resolved": "src-tauri/src/lib.rs:552",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -934,7 +934,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:407",
+      "definition_resolved": "src-tauri/src/lib.rs:560",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -967,7 +967,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:413",
+      "definition_resolved": "src-tauri/src/lib.rs:566",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1000,7 +1000,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:419",
+      "definition_resolved": "src-tauri/src/lib.rs:572",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1021,7 +1021,7 @@
       "rust_path": "pty::run_task",
       "registered_at": "src-tauri/src/lib.rs:492",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:1543"
+        "src-tauri/src/pty.rs:1561"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1034,7 +1034,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:1543",
+      "definition_resolved": "src-tauri/src/pty.rs:1561",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1071,7 +1071,7 @@
       "rust_path": "pty::resume_task",
       "registered_at": "src-tauri/src/lib.rs:493",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2474"
+        "src-tauri/src/pty.rs:2505"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1084,7 +1084,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2474",
+      "definition_resolved": "src-tauri/src/pty.rs:2505",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1118,7 +1118,7 @@
       "rust_path": "pty::cancel_task",
       "registered_at": "src-tauri/src/lib.rs:494",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2139"
+        "src-tauri/src/pty.rs:2162"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1131,7 +1131,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2139",
+      "definition_resolved": "src-tauri/src/pty.rs:2162",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1155,7 +1155,7 @@
       "rust_path": "pty::complete_task",
       "registered_at": "src-tauri/src/lib.rs:495",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2188"
+        "src-tauri/src/pty.rs:2211"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1168,7 +1168,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2188",
+      "definition_resolved": "src-tauri/src/pty.rs:2211",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1192,7 +1192,7 @@
       "rust_path": "pty::get_active_task_ids",
       "registered_at": "src-tauri/src/lib.rs:496",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2198"
+        "src-tauri/src/pty.rs:2221"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1205,7 +1205,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2198",
+      "definition_resolved": "src-tauri/src/pty.rs:2221",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1226,7 +1226,7 @@
       "rust_path": "pty::validate_agent_launch",
       "registered_at": "src-tauri/src/lib.rs:497",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2278"
+        "src-tauri/src/pty.rs:2301"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1239,7 +1239,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2278",
+      "definition_resolved": "src-tauri/src/pty.rs:2301",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1261,7 +1261,7 @@
       "rust_path": "pty::reset_task_process",
       "registered_at": "src-tauri/src/lib.rs:498",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2344"
+        "src-tauri/src/pty.rs:2367"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1274,7 +1274,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2344",
+      "definition_resolved": "src-tauri/src/pty.rs:2367",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1297,7 +1297,7 @@
       "rust_path": "pty::send_input",
       "registered_at": "src-tauri/src/lib.rs:499",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2841"
+        "src-tauri/src/pty.rs:2877"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1310,7 +1310,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2841",
+      "definition_resolved": "src-tauri/src/pty.rs:2877",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1333,7 +1333,7 @@
       "rust_path": "pty::resize_pty",
       "registered_at": "src-tauri/src/lib.rs:500",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2850"
+        "src-tauri/src/pty.rs:2886"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1346,7 +1346,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2850",
+      "definition_resolved": "src-tauri/src/pty.rs:2886",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1370,7 +1370,7 @@
       "rust_path": "pty::open_shell",
       "registered_at": "src-tauri/src/lib.rs:501",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2860"
+        "src-tauri/src/pty.rs:2896"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1383,7 +1383,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2860",
+      "definition_resolved": "src-tauri/src/pty.rs:2896",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1409,7 +1409,7 @@
       "rust_path": "pty::kill_shell",
       "registered_at": "src-tauri/src/lib.rs:502",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2938"
+        "src-tauri/src/pty.rs:2974"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1422,7 +1422,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2938",
+      "definition_resolved": "src-tauri/src/pty.rs:2974",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8539,7 +8539,7 @@
       "rust_path": "session::export_session_markdown",
       "registered_at": "src-tauri/src/lib.rs:706",
       "definition_candidates": [
-        "src-tauri/src/session.rs:2289"
+        "src-tauri/src/session.rs:2328"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8551,7 +8551,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:2289",
+      "definition_resolved": "src-tauri/src/session.rs:2328",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9362,7 +9362,7 @@
       "rust_path": "ssh::load_ssh_connections",
       "registered_at": "src-tauri/src/lib.rs:730",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1538"
+        "src-tauri/src/ssh.rs:1543"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9374,7 +9374,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1538",
+      "definition_resolved": "src-tauri/src/ssh.rs:1543",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9393,7 +9393,7 @@
       "rust_path": "ssh::get_ssh_connection_password",
       "registered_at": "src-tauri/src/lib.rs:731",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1530"
+        "src-tauri/src/ssh.rs:1535"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9405,7 +9405,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1530",
+      "definition_resolved": "src-tauri/src/ssh.rs:1535",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9426,7 +9426,7 @@
       "rust_path": "ssh::save_ssh_connections",
       "registered_at": "src-tauri/src/lib.rs:732",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1551"
+        "src-tauri/src/ssh.rs:1556"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9438,7 +9438,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1551",
+      "definition_resolved": "src-tauri/src/ssh.rs:1556",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9459,7 +9459,7 @@
       "rust_path": "ssh::delete_ssh_connection",
       "registered_at": "src-tauri/src/lib.rs:733",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1558"
+        "src-tauri/src/ssh.rs:1563"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9471,7 +9471,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1558",
+      "definition_resolved": "src-tauri/src/ssh.rs:1563",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9492,7 +9492,7 @@
       "rust_path": "ssh::open_ssh_shell",
       "registered_at": "src-tauri/src/lib.rs:734",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1565"
+        "src-tauri/src/ssh.rs:1570"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9504,7 +9504,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1565",
+      "definition_resolved": "src-tauri/src/ssh.rs:1570",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9531,7 +9531,7 @@
       "rust_path": "ssh::kill_ssh_shell",
       "registered_at": "src-tauri/src/lib.rs:735",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1668"
+        "src-tauri/src/ssh.rs:1673"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9543,7 +9543,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1668",
+      "definition_resolved": "src-tauri/src/ssh.rs:1673",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9565,7 +9565,7 @@
       "rust_path": "ssh::run_remote_task",
       "registered_at": "src-tauri/src/lib.rs:736",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1684"
+        "src-tauri/src/ssh.rs:1689"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9577,7 +9577,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1684",
+      "definition_resolved": "src-tauri/src/ssh.rs:1689",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9612,7 +9612,7 @@
       "rust_path": "ssh::resume_remote_task",
       "registered_at": "src-tauri/src/lib.rs:737",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1800"
+        "src-tauri/src/ssh.rs:1805"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9624,7 +9624,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1800",
+      "definition_resolved": "src-tauri/src/ssh.rs:1805",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9658,7 +9658,7 @@
       "rust_path": "ssh::cancel_remote_task",
       "registered_at": "src-tauri/src/lib.rs:738",
       "definition_candidates": [
-        "src-tauri/src/ssh.rs:1900"
+        "src-tauri/src/ssh.rs:1905"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9670,7 +9670,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1900",
+      "definition_resolved": "src-tauri/src/ssh.rs:1905",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9760,7 +9760,7 @@
       "rust_path": "wsl::get_wsl_status",
       "registered_at": "src-tauri/src/lib.rs:741",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1069"
+        "src-tauri/src/wsl.rs:1076"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9772,7 +9772,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1069",
+      "definition_resolved": "src-tauri/src/wsl.rs:1076",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9791,7 +9791,7 @@
       "rust_path": "wsl::list_wsl_distributions",
       "registered_at": "src-tauri/src/lib.rs:742",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1105"
+        "src-tauri/src/wsl.rs:1112"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9803,7 +9803,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1105",
+      "definition_resolved": "src-tauri/src/wsl.rs:1112",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9822,7 +9822,7 @@
       "rust_path": "wsl::probe_wsl_distribution",
       "registered_at": "src-tauri/src/lib.rs:743",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1112"
+        "src-tauri/src/wsl.rs:1119"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9831,39 +9831,6 @@
       "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
       "check_module": "platforms",
       "test_id": "T-wsl-probe_wsl_distribution",
-      "feature_ids": [
-        "F12"
-      ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1112",
-      "resolution": "module-subtree-unique",
-      "reachability": {
-        "frontend_literal": true,
-        "other_package_literal": false,
-        "rust_internal_refs": 0,
-        "test_only_literal": false,
-        "prefix_derived_of": null,
-        "prefix_derived_parent_reachable": null,
-        "registered": false
-      },
-      "reachable": true,
-      "params": [
-        "distribution: String"
-      ]
-    },
-    {
-      "command": "read_wsl_environment",
-      "rust_path": "wsl::read_wsl_environment",
-      "registered_at": "src-tauri/src/lib.rs:744",
-      "definition_candidates": [
-        "src-tauri/src/wsl.rs:1119"
-      ],
-      "definition_unique": true,
-      "category": "platform_specific",
-      "core_service": "connections::wsl",
-      "rpc_method": "connections.read_wsl_environment",
-      "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
-      "check_module": "platforms",
-      "test_id": "T-wsl-read_wsl_environment",
       "feature_ids": [
         "F12"
       ],
@@ -9884,11 +9851,44 @@
       ]
     },
     {
+      "command": "read_wsl_environment",
+      "rust_path": "wsl::read_wsl_environment",
+      "registered_at": "src-tauri/src/lib.rs:744",
+      "definition_candidates": [
+        "src-tauri/src/wsl.rs:1126"
+      ],
+      "definition_unique": true,
+      "category": "platform_specific",
+      "core_service": "connections::wsl",
+      "rpc_method": "connections.read_wsl_environment",
+      "swift_scene": "AeroricUI/Connections/UnsupportedTarget",
+      "check_module": "platforms",
+      "test_id": "T-wsl-read_wsl_environment",
+      "feature_ids": [
+        "F12"
+      ],
+      "definition_resolved": "src-tauri/src/wsl.rs:1126",
+      "resolution": "module-subtree-unique",
+      "reachability": {
+        "frontend_literal": true,
+        "other_package_literal": false,
+        "rust_internal_refs": 0,
+        "test_only_literal": false,
+        "prefix_derived_of": null,
+        "prefix_derived_parent_reachable": null,
+        "registered": false
+      },
+      "reachable": true,
+      "params": [
+        "distribution: String"
+      ]
+    },
+    {
       "command": "load_wsl_settings",
       "rust_path": "wsl::load_wsl_settings",
       "registered_at": "src-tauri/src/lib.rs:745",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1126"
+        "src-tauri/src/wsl.rs:1133"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9900,7 +9900,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1126",
+      "definition_resolved": "src-tauri/src/wsl.rs:1133",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9919,7 +9919,7 @@
       "rust_path": "wsl::save_wsl_settings",
       "registered_at": "src-tauri/src/lib.rs:746",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1133"
+        "src-tauri/src/wsl.rs:1140"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9931,7 +9931,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1133",
+      "definition_resolved": "src-tauri/src/wsl.rs:1140",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9952,7 +9952,7 @@
       "rust_path": "wsl::read_wsl_config_file",
       "registered_at": "src-tauri/src/lib.rs:747",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1169"
+        "src-tauri/src/wsl.rs:1176"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9964,7 +9964,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1169",
+      "definition_resolved": "src-tauri/src/wsl.rs:1176",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9986,7 +9986,7 @@
       "rust_path": "wsl::write_wsl_config_file",
       "registered_at": "src-tauri/src/lib.rs:748",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1202"
+        "src-tauri/src/wsl.rs:1209"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -9998,7 +9998,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1202",
+      "definition_resolved": "src-tauri/src/wsl.rs:1209",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10021,7 +10021,7 @@
       "rust_path": "wsl::get_wsl_agent_status",
       "registered_at": "src-tauri/src/lib.rs:749",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1249"
+        "src-tauri/src/wsl.rs:1256"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10033,7 +10033,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1249",
+      "definition_resolved": "src-tauri/src/wsl.rs:1256",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -10056,7 +10056,7 @@
       "rust_path": "wsl::upgrade_wsl_agent_versions",
       "registered_at": "src-tauri/src/lib.rs:750",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1279"
+        "src-tauri/src/wsl.rs:1286"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10068,7 +10068,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1279",
+      "definition_resolved": "src-tauri/src/wsl.rs:1286",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10090,7 +10090,7 @@
       "rust_path": "wsl::read_wsl_agent_config",
       "registered_at": "src-tauri/src/lib.rs:751",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1289"
+        "src-tauri/src/wsl.rs:1296"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10102,7 +10102,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1289",
+      "definition_resolved": "src-tauri/src/wsl.rs:1296",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10124,7 +10124,7 @@
       "rust_path": "wsl::write_wsl_agent_config",
       "registered_at": "src-tauri/src/lib.rs:752",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1314"
+        "src-tauri/src/wsl.rs:1321"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10136,7 +10136,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1314",
+      "definition_resolved": "src-tauri/src/wsl.rs:1321",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10159,7 +10159,7 @@
       "rust_path": "wsl::restart_wsl",
       "registered_at": "src-tauri/src/lib.rs:753",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1341"
+        "src-tauri/src/wsl.rs:1348"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10171,7 +10171,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1341",
+      "definition_resolved": "src-tauri/src/wsl.rs:1348",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10192,7 +10192,7 @@
       "rust_path": "wsl::validate_wsl_project_path",
       "registered_at": "src-tauri/src/lib.rs:754",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1364"
+        "src-tauri/src/wsl.rs:1371"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10204,7 +10204,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1364",
+      "definition_resolved": "src-tauri/src/wsl.rs:1371",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10226,7 +10226,7 @@
       "rust_path": "wsl::open_wsl_shell",
       "registered_at": "src-tauri/src/lib.rs:755",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1385"
+        "src-tauri/src/wsl.rs:1392"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10238,7 +10238,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1385",
+      "definition_resolved": "src-tauri/src/wsl.rs:1392",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10266,7 +10266,7 @@
       "rust_path": "wsl::kill_wsl_shell",
       "registered_at": "src-tauri/src/lib.rs:756",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1469"
+        "src-tauri/src/wsl.rs:1485"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10278,7 +10278,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1469",
+      "definition_resolved": "src-tauri/src/wsl.rs:1485",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10300,7 +10300,7 @@
       "rust_path": "wsl::run_wsl_task",
       "registered_at": "src-tauri/src/lib.rs:757",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1485"
+        "src-tauri/src/wsl.rs:1504"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10312,7 +10312,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1485",
+      "definition_resolved": "src-tauri/src/wsl.rs:1504",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10347,7 +10347,7 @@
       "rust_path": "wsl::resume_wsl_task",
       "registered_at": "src-tauri/src/lib.rs:758",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1592"
+        "src-tauri/src/wsl.rs:1611"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10359,7 +10359,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1592",
+      "definition_resolved": "src-tauri/src/wsl.rs:1611",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10393,7 +10393,7 @@
       "rust_path": "wsl::cancel_wsl_task",
       "registered_at": "src-tauri/src/lib.rs:759",
       "definition_candidates": [
-        "src-tauri/src/wsl.rs:1686"
+        "src-tauri/src/wsl.rs:1705"
       ],
       "definition_unique": true,
       "category": "platform_specific",
@@ -10405,7 +10405,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1686",
+      "definition_resolved": "src-tauri/src/wsl.rs:1705",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13794,7 +13794,7 @@
       "rust_path": "dsh_webui::prompt_dsh_task",
       "registered_at": "src-tauri/src/lib.rs:855",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:1983"
+        "src-tauri/src/dsh_webui.rs:1986"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -13806,7 +13806,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1983",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1986",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13834,7 +13834,7 @@
       "rust_path": "dsh_webui::cancel_dsh_task",
       "registered_at": "src-tauri/src/lib.rs:856",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:2035"
+        "src-tauri/src/dsh_webui.rs:2038"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -13846,7 +13846,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2035",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2038",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13869,7 +13869,7 @@
       "rust_path": "dsh_webui::complete_dsh_task",
       "registered_at": "src-tauri/src/lib.rs:857",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:2112"
+        "src-tauri/src/dsh_webui.rs:2124"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -13881,7 +13881,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2112",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2124",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -14158,7 +14158,7 @@
       "rust_path": "dsh_webui::list_dsh_agent_presets",
       "registered_at": "src-tauri/src/lib.rs:865",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:2123"
+        "src-tauri/src/dsh_webui.rs:2135"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -14170,7 +14170,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2123",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2135",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14192,7 +14192,7 @@
       "rust_path": "dsh_webui::list_dsh_agent_preset_details",
       "registered_at": "src-tauri/src/lib.rs:866",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:2138"
+        "src-tauri/src/dsh_webui.rs:2150"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -14204,7 +14204,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2138",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2150",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14226,7 +14226,7 @@
       "rust_path": "dsh_webui::set_dsh_web_default_preset",
       "registered_at": "src-tauri/src/lib.rs:867",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:2151"
+        "src-tauri/src/dsh_webui.rs:2163"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -14238,7 +14238,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2151",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2163",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15883,7 +15883,7 @@
       "rust_path": "dsh_webui::start_dsh_host_events",
       "registered_at": "src-tauri/src/lib.rs:925",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:3387"
+        "src-tauri/src/dsh_webui.rs:3399"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -15895,7 +15895,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3387",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3399",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15918,7 +15918,7 @@
       "rust_path": "dsh_webui::stop_dsh_host_events",
       "registered_at": "src-tauri/src/lib.rs:926",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:3400"
+        "src-tauri/src/dsh_webui.rs:3412"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -15930,7 +15930,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3400",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3412",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15952,7 +15952,7 @@
       "rust_path": "dsh_webui::pick_dsh_host_directory",
       "registered_at": "src-tauri/src/lib.rs:928",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:3577"
+        "src-tauri/src/dsh_webui.rs:3589"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -15964,7 +15964,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3577",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3589",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15987,7 +15987,7 @@
       "rust_path": "dsh_webui::export_dsh_session_log",
       "registered_at": "src-tauri/src/lib.rs:930",
       "definition_candidates": [
-        "src-tauri/src/dsh_webui.rs:3471"
+        "src-tauri/src/dsh_webui.rs:3483"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -15999,7 +15999,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3471",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3483",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24272,7 +24272,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3302"
+        "src-tauri/src/dsh_webui.rs:3314"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24363,10 +24363,10 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3129",
-        "src-tauri/src/dsh_webui.rs:3251",
-        "src-tauri/src/dsh_webui.rs:3329",
-        "src-tauri/src/dsh_webui.rs:3346"
+        "src-tauri/src/dsh_webui.rs:3141",
+        "src-tauri/src/dsh_webui.rs:3263",
+        "src-tauri/src/dsh_webui.rs:3341",
+        "src-tauri/src/dsh_webui.rs:3358"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24758,12 +24758,12 @@
       ],
       "emitters": [
         "src-tauri/src/core_adapter.rs:447",
-        "src-tauri/src/event_watcher.rs:253",
-        "src-tauri/src/session.rs:1830",
-        "src-tauri/src/session.rs:2010",
-        "src-tauri/src/session.rs:2080",
-        "src-tauri/src/session_dsh.rs:692",
-        "src-tauri/src/session_omp.rs:49"
+        "src-tauri/src/event_watcher.rs:260",
+        "src-tauri/src/session.rs:1834",
+        "src-tauri/src/session.rs:2013",
+        "src-tauri/src/session.rs:2092",
+        "src-tauri/src/session_dsh.rs:695",
+        "src-tauri/src/session_omp.rs:53"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:53"
@@ -24793,25 +24793,25 @@
         "src-tauri/src/dsh_webui.rs:1473",
         "src-tauri/src/dsh_webui.rs:1488",
         "src-tauri/src/dsh_webui.rs:1507",
-        "src-tauri/src/dsh_webui.rs:1928",
-        "src-tauri/src/dsh_webui.rs:1934",
-        "src-tauri/src/dsh_webui.rs:1959",
-        "src-tauri/src/dsh_webui.rs:1970",
-        "src-tauri/src/dsh_webui.rs:2026",
-        "src-tauri/src/dsh_webui.rs:2096",
-        "src-tauri/src/event_watcher.rs:308",
-        "src-tauri/src/pty.rs:228",
-        "src-tauri/src/pty.rs:1947",
-        "src-tauri/src/pty.rs:2125",
-        "src-tauri/src/pty.rs:2175",
-        "src-tauri/src/pty.rs:2698",
+        "src-tauri/src/dsh_webui.rs:1931",
+        "src-tauri/src/dsh_webui.rs:1937",
+        "src-tauri/src/dsh_webui.rs:1962",
+        "src-tauri/src/dsh_webui.rs:1973",
+        "src-tauri/src/dsh_webui.rs:2029",
+        "src-tauri/src/dsh_webui.rs:2108",
+        "src-tauri/src/event_watcher.rs:315",
+        "src-tauri/src/pty.rs:232",
+        "src-tauri/src/pty.rs:1965",
+        "src-tauri/src/pty.rs:2148",
+        "src-tauri/src/pty.rs:2198",
+        "src-tauri/src/pty.rs:2729",
         "src-tauri/src/session.rs:63",
-        "src-tauri/src/ssh.rs:1346",
-        "src-tauri/src/ssh.rs:1387",
-        "src-tauri/src/ssh.rs:1928",
-        "src-tauri/src/wsl.rs:969",
-        "src-tauri/src/wsl.rs:1019",
-        "src-tauri/src/wsl.rs:1714"
+        "src-tauri/src/ssh.rs:1347",
+        "src-tauri/src/ssh.rs:1388",
+        "src-tauri/src/ssh.rs:1933",
+        "src-tauri/src/wsl.rs:972",
+        "src-tauri/src/wsl.rs:1022",
+        "src-tauri/src/wsl.rs:1736"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:43"
@@ -24881,11 +24881,11 @@
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:485",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:494",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:500",
-    "event_name @ src-tauri/src/dsh_webui.rs:3057",
-    "event_name @ src-tauri/src/dsh_webui.rs:3170",
-    "event_name @ src-tauri/src/dsh_webui.rs:3183",
-    "action.event_name() @ src-tauri/src/lib.rs:225",
-    "event_name @ src-tauri/src/pty.rs:514"
+    "event_name @ src-tauri/src/dsh_webui.rs:3069",
+    "event_name @ src-tauri/src/dsh_webui.rs:3182",
+    "event_name @ src-tauri/src/dsh_webui.rs:3195",
+    "action.event_name() @ src-tauri/src/lib.rs:244",
+    "event_name @ src-tauri/src/pty.rs:510"
   ],
   "event_dynamic_listen_sites": [],
   "panels": [

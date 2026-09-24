@@ -946,14 +946,17 @@ fn spawn_wsl_exit_monitor(
             ) {
                 return;
             }
-            let (cancelled, manually_completed) = {
-                let result = (
-                    manager.cancelled_tasks.lock().remove(&task_id),
-                    manager.manually_completed_tasks.lock().remove(&task_id),
-                );
-                result
+            let (cancelled, manually_completed) = match manager.settle_marks_for_exit(&task_id) {
+                crate::ExitSettlement::WaitingForOtherRuns => return,
+                crate::ExitSettlement::Settle {
+                    cancelled,
+                    manually_completed,
+                } => (cancelled, manually_completed),
             };
-            manager.wsl_active_ids.lock().remove(&task_id);
+            manager
+                .wsl_active_ids
+                .lock()
+                .remove(&crate::run_registry::RunKey::unminted(&task_id));
             if cancelled || manually_completed {
                 return;
             }
@@ -1015,7 +1018,7 @@ fn spawn_wsl_task_pty(
     task_manager
         .wsl_active_ids
         .lock()
-        .insert(task_id.to_string());
+        .insert(crate::run_registry::RunKey::unminted(task_id));
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "running" }),
@@ -1023,7 +1026,11 @@ fn spawn_wsl_task_pty(
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = needs_initial_input.then(|| {
-        crate::pty::register_initial_input_signal(task_manager, task_id, startup_tx.clone())
+        crate::pty::register_initial_input_signal(
+            task_manager,
+            &crate::run_registry::RunKey::unminted(task_id),
+            startup_tx.clone(),
+        )
     });
     crate::pty::spawn_pty_reader(
         app.clone(),
@@ -1052,7 +1059,7 @@ fn spawn_wsl_task_pty(
                 Some(Box::new(move || {
                     crate::pty::clear_initial_input_signal_if_current(
                         &signals,
-                        &cleanup_id,
+                        &crate::run_registry::RunKey::unminted(&cleanup_id),
                         cleanup_generation,
                     );
                 })),
@@ -1414,7 +1421,10 @@ pub async fn open_wsl_shell(
         let _ = child.wait();
     }
     task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
-    task_manager.wsl_active_ids.lock().remove(&shell_id);
+    task_manager
+        .wsl_active_ids
+        .lock()
+        .remove(&crate::run_registry::RunKey::unminted(&shell_id));
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: rows.unwrap_or(24),
@@ -1443,7 +1453,10 @@ pub async fn open_wsl_shell(
         writer,
         child,
     )?;
-    task_manager.wsl_active_ids.lock().insert(shell_id.clone());
+    task_manager
+        .wsl_active_ids
+        .lock()
+        .insert(crate::run_registry::RunKey::unminted(&shell_id));
     let cleanup_app = app.clone();
     let cleanup_id = shell_id.clone();
     crate::pty::spawn_pty_reader(
@@ -1459,7 +1472,10 @@ pub async fn open_wsl_shell(
         Some(Box::new(move || {
             let manager = cleanup_app.state::<crate::TaskManager>();
             manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&cleanup_id));
-            manager.wsl_active_ids.lock().remove(&cleanup_id);
+            manager
+                .wsl_active_ids
+                .lock()
+                .remove(&crate::run_registry::RunKey::unminted(&cleanup_id));
         })),
     );
     Ok(())
@@ -1477,7 +1493,10 @@ pub async fn kill_wsl_shell(
         let _ = child.wait();
     }
     task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(&shell_id));
-    task_manager.wsl_active_ids.lock().remove(&shell_id);
+    task_manager
+        .wsl_active_ids
+        .lock()
+        .remove(&crate::run_registry::RunKey::unminted(&shell_id));
     Ok(())
 }
 
@@ -1710,7 +1729,10 @@ pub(crate) async fn cancel_wsl_task_core(
         task_manager.cancelled_tasks.lock().remove(task_id);
     }
     task_manager.remove_pty_handles(&crate::run_registry::RunKey::unminted(task_id));
-    task_manager.wsl_active_ids.lock().remove(task_id);
+    task_manager
+        .wsl_active_ids
+        .lock()
+        .remove(&crate::run_registry::RunKey::unminted(task_id));
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "cancelled" }),

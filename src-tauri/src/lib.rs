@@ -114,12 +114,15 @@ use session_dsh::DshSessionInfo;
 /// 1. `cancelled_tasks` / `manually_completed_tasks` —— 同族函数内成对出现,
 ///    先 cancelled 后 manually(见 pty.rs finalize/cancel/complete 三处);
 /// 2. 四族 sessions(codex/claude/dsh/omp)彼此独立,从不同时持有两族;
-/// 3. `claimed_session_paths` 在 sessions 释放之后获取(先取条目再释放占用);
+/// 3. **嵌套持有**时的方向只有一个:`claimed_session_paths` → 会话表(dsh/omp 的登记侧)。
+///    拆除侧不嵌套——先删会话条目(临时锁)、再单独取 claim 做 ADR-031 的反查释放,
+///    所以它不构成反向持锁顺序。任何"同时持有两边"的新代码必须按登记侧这个方向写。
+///    3a. ADR-030:判断"是否最后一个退出者"要先 retire 自己再读 `runs`(叶子锁,不嵌套)。
 /// 4. `pty_masters` → `pty_writers` → `child_handles` → `pending_pty_sizes`
 ///    按 reset/cleanup 流程固定次序取放;
 /// 5. dsh_webui 侧:`completed_tasks` → `active_sessions`(三处全局同序,
 ///    见 dispatch_mux_frame / send_terminal_text_if_current / begin_task_completion);
-/// 6. `codex_rpc`、`wsl_active_ids`、`initial_input_signals` 为叶子锁。
+/// 6. `codex_rpc`、`wsl_active_ids`、`initial_input_signals`、`runs` 为叶子锁。
 ///
 /// 约束:任何锁不得跨越 `.await` 持有(parking_lot 无中毒,但 await 上的
 /// 死锁不受锁序保护);omp/远端 waiter 线程取锁必须用显式作用域限界。
@@ -138,19 +141,35 @@ pub struct TaskManager {
     pub(crate) pending_pty_sizes: Mutex<HashMap<run_registry::RunKey, (u16, u16)>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
-    pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
-    pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
-    pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
-    pub(crate) omp_sessions: Mutex<HashMap<String, OmpSessionInfo>>,
+    pub(crate) codex_sessions: Mutex<HashMap<run_registry::RunKey, CodexSessionInfo>>,
+    pub(crate) claude_sessions: Mutex<HashMap<run_registry::RunKey, ClaudeSessionInfo>>,
+    pub(crate) dsh_sessions: Mutex<HashMap<run_registry::RunKey, DshSessionInfo>>,
+    pub(crate) omp_sessions: Mutex<HashMap<run_registry::RunKey, OmpSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
     /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
     pub(crate) initial_input_signals: pty::StartupSignalRegistry,
-    pub(crate) wsl_active_ids: Mutex<HashSet<String>>,
+    /// 这台机器上还活着哪些 WSL 侧运行（shell 与任务共用一张表，ADR-032 的存活语义）。
+    pub(crate) wsl_active_ids: Mutex<HashSet<run_registry::RunKey>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
     /// Which runs of a task exist right now (ADR-020 + ADR-025). A leaf: it takes no other
     /// lock while held, so it may be locked last from any of the maps above.
     pub(crate) runs: run_registry::RunRegistry,
+}
+
+/// Outcome of asking "may this exit settle the task?" — see
+/// [`TaskManager::settle_marks_for_exit`] and ADR-030.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExitSettlement {
+    /// This was the last live run: the marks are consumed and the caller owns the status event
+    /// plus the cleanup side effects.
+    Settle {
+        cancelled: bool,
+        manually_completed: bool,
+    },
+    /// Another run of the same task is still in flight: consume nothing, emit nothing, delete
+    /// nothing.
+    WaitingForOtherRuns,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,6 +319,140 @@ impl TaskManager {
             .insert(run_registry::RunKey::unminted(id), size);
     }
 
+    /// What an exiting run is allowed to do about its task's state (ADR-030).
+    ///
+    /// The cancel/completion marks are **one task-scoped account**, and only the last run to
+    /// exit consumes them — together with the settlement event and the cleanup side effects,
+    /// which today the *first* exit performed while another run was still writing to those same
+    /// directories.
+    pub(crate) fn settle_marks_for_exit(&self, task_id: &str) -> ExitSettlement {
+        // Called after the exiting run has retired itself, so anything still registered here
+        // belongs to another run. Reversing those two steps is the bug this comment exists for:
+        // checking before the retire would always find "another run" and nothing would ever
+        // settle.
+        if !self.runs.live_generations(task_id).is_empty() {
+            return ExitSettlement::WaitingForOtherRuns;
+        }
+        let cancelled = self.cancelled_tasks.lock().remove(task_id);
+        let manually_completed = self.manually_completed_tasks.lock().remove(task_id);
+        ExitSettlement::Settle {
+            cancelled,
+            manually_completed,
+        }
+    }
+
+    /// ADR-031: the one rule for putting a session path back on the market.
+    ///
+    /// Call this *after* removing the run's own session entry, and note the lock order —
+    /// session tables first, `claimed_session_paths` last. It deliberately matches the teardown
+    /// side of `lib.rs`'s lock-order table, which is why the registration sites in
+    /// `session_omp.rs` / `session_dsh.rs` had to stop holding the claim across an insert.
+    /// Without the reverse lookup, the first run to exit would free a path another run still
+    /// reads, and two agents would write one transcript.
+    pub(crate) fn release_session_path_if_unreferenced(&self, path: &str) -> bool {
+        let referenced = self
+            .codex_sessions
+            .lock()
+            .values()
+            .any(|info| info.session_path == path)
+            || self
+                .claude_sessions
+                .lock()
+                .values()
+                .any(|info| info.session_path == path)
+            || self
+                .dsh_sessions
+                .lock()
+                .values()
+                .any(|info| info.session_path == path)
+            || self
+                .omp_sessions
+                .lock()
+                .values()
+                .any(|info| info.session_path == path);
+        if referenced {
+            return false;
+        }
+        self.claimed_session_paths.lock().remove(&path.to_string())
+    }
+
+    /// The same teardown for one run: drop its four possible session entries, then let each
+    /// path it held go through the reverse lookup. Returns the paths this run had, whatever
+    /// happened to the claims, so callers that report "was there a real transcript" can judge
+    /// from the entries they saw rather than re-reading the tables.
+    pub(crate) fn release_run_sessions(&self, run: &run_registry::RunKey) -> Vec<String> {
+        let mut released = Vec::new();
+        if let Some(info) = self.codex_sessions.lock().remove(run) {
+            released.push(info.session_path);
+        }
+        if let Some(info) = self.claude_sessions.lock().remove(run) {
+            released.push(info.session_path);
+        }
+        if let Some(info) = self.dsh_sessions.lock().remove(run) {
+            released.push(info.session_path);
+        }
+        if let Some(info) = self.omp_sessions.lock().remove(run) {
+            released.push(info.session_path);
+        }
+        for path in &released {
+            self.release_session_path_if_unreferenced(path);
+        }
+        released
+    }
+
+    pub(crate) fn has_codex_session(&self, task_id: &str) -> bool {
+        self.codex_sessions
+            .lock()
+            .keys()
+            .any(|run| run.id() == task_id)
+    }
+
+    pub(crate) fn has_claude_session(&self, task_id: &str) -> bool {
+        self.claude_sessions
+            .lock()
+            .keys()
+            .any(|run| run.id() == task_id)
+    }
+
+    pub(crate) fn has_dsh_session(&self, task_id: &str) -> bool {
+        self.dsh_sessions
+            .lock()
+            .keys()
+            .any(|run| run.id() == task_id)
+    }
+
+    pub(crate) fn has_omp_session(&self, task_id: &str) -> bool {
+        self.omp_sessions
+            .lock()
+            .keys()
+            .any(|run| run.id() == task_id)
+    }
+
+    /// Every run of this task that holds a session entry — what an intent operation such as a
+    /// cancellation must clean up (ADR-025 rule 2), as opposed to the one run a read addresses.
+    pub(crate) fn session_runs_for_task(&self, task_id: &str) -> Vec<run_registry::RunKey> {
+        // One family at a time: lock-order rule 2 forbids holding two families' tables at once,
+        // so this cannot be a chain over four guards. The four tables hold different info types,
+        // which rules out a loop as well — hence the macro.
+        macro_rules! runs_of {
+            ($table:expr) => {{
+                $table
+                    .lock()
+                    .keys()
+                    .filter(|run| run.id() == task_id)
+                    .cloned()
+                    .collect::<Vec<run_registry::RunKey>>()
+            }};
+        }
+        let mut runs = runs_of!(self.codex_sessions);
+        runs.extend(runs_of!(self.claude_sessions));
+        runs.extend(runs_of!(self.dsh_sessions));
+        runs.extend(runs_of!(self.omp_sessions));
+        runs.sort();
+        runs.dedup();
+        runs
+    }
+
     /// Atomically remove one run from all PTY maps (masters, writers, children) and retire it.
     /// Locks are acquired in a fixed order to prevent deadlocks.
     pub(crate) fn remove_pty_handles(&self, run: &run_registry::RunKey) {
@@ -316,7 +469,7 @@ impl TaskManager {
         drop(pending_sizes);
         drop(masters);
         self.runs.retire(run.id(), run.generation());
-        pty::cancel_initial_input_signal(self, run.id());
+        pty::cancel_initial_input_signal_for_run(self, run);
     }
 
     /// Remove one finished run's handles, keeping the safety net ADR-020 leaves in place: the
@@ -351,7 +504,7 @@ impl TaskManager {
         drop(pending_sizes);
         drop(masters);
         self.runs.retire(run.id(), run.generation());
-        pty::cancel_initial_input_signal(self, run.id());
+        pty::cancel_initial_input_signal_for_run(self, run);
         true
     }
 }
@@ -1298,4 +1451,163 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod run_settlement_tests {
+    //! ADR-030 in executable form: the marks are one task-scoped account and only the last
+    //! live run consumes them.
+    use crate::run_registry::RunKey;
+    use crate::{ExitSettlement, TaskManager};
+    use parking_lot::Mutex;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    fn manager() -> TaskManager {
+        TaskManager {
+            pty_masters: parking_lot::Mutex::new(HashMap::new()),
+            pty_writers: parking_lot::Mutex::new(HashMap::new()),
+            child_handles: parking_lot::Mutex::new(HashMap::new()),
+            pending_pty_sizes: Mutex::new(HashMap::new()),
+            cancelled_tasks: Mutex::new(HashSet::new()),
+            manually_completed_tasks: Mutex::new(HashSet::new()),
+            codex_sessions: Mutex::new(HashMap::new()),
+            claude_sessions: Mutex::new(HashMap::new()),
+            dsh_sessions: Mutex::new(HashMap::new()),
+            omp_sessions: Mutex::new(HashMap::new()),
+            claimed_session_paths: Mutex::new(HashSet::new()),
+            initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
+            wsl_active_ids: Mutex::new(HashSet::new()),
+            codex_rpc: Arc::new(Mutex::new(None)),
+            runs: crate::run_registry::RunRegistry::new(),
+        }
+    }
+
+    #[test]
+    fn a_cancel_mark_waits_for_the_last_live_run_to_exit() {
+        let tm = manager();
+        tm.cancelled_tasks.lock().insert("t1".to_string());
+        tm.runs.register("t1", 1);
+        tm.runs.register("t1", 2);
+        // Run 1 exits: it has retired itself, run 2 is still in flight.
+        assert!(tm.runs.retire("t1", 1));
+        assert_eq!(
+            tm.settle_marks_for_exit("t1"),
+            ExitSettlement::WaitingForOtherRuns,
+            "the first exit must not consume the user's cancellation"
+        );
+        assert!(
+            tm.cancelled_tasks.lock().contains("t1"),
+            "waiting must leave the account untouched"
+        );
+        // Run 2 exits last and owns the settlement.
+        assert!(tm.runs.retire("t1", 2));
+        assert_eq!(
+            tm.settle_marks_for_exit("t1"),
+            ExitSettlement::Settle {
+                cancelled: true,
+                manually_completed: false
+            }
+        );
+        assert!(!tm.cancelled_tasks.lock().contains("t1"), "consumed once");
+    }
+
+    #[test]
+    fn a_task_with_a_single_run_settles_exactly_as_it_did_before() {
+        // The no-double-open case is the shipping client's everyday path; ADR-030 must not
+        // change what it observes.
+        let tm = manager();
+        tm.manually_completed_tasks.lock().insert("t1".to_string());
+        tm.runs.register("t1", RunKey::UNMINTED);
+        assert!(tm.runs.retire("t1", RunKey::UNMINTED));
+        assert_eq!(
+            tm.settle_marks_for_exit("t1"),
+            ExitSettlement::Settle {
+                cancelled: false,
+                manually_completed: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_shared_transcript_path_stays_claimed_until_the_last_reader_is_gone() {
+        // ADR-031 in one scenario: two runs read the same jsonl, the first one to leave must not
+        // put the path back on the market — that is precisely the "two agents write one
+        // transcript" accident ADR-020 kept the claim path-keyed to prevent.
+        let tm = manager();
+        let first = RunKey::minted("t1", 1);
+        let second = RunKey::minted("t1", 2);
+        let path = "/tmp/x.jsonl".to_string();
+        for run in [&first, &second] {
+            tm.claude_sessions.lock().insert(
+                run.clone(),
+                crate::session::ClaudeSessionInfo {
+                    session_id: "s-1".to_string(),
+                    session_path: path.clone(),
+                    is_placeholder: false,
+                },
+            );
+        }
+        tm.claimed_session_paths.lock().insert(path.clone());
+
+        let released = tm.release_run_sessions(&first);
+        assert_eq!(
+            released,
+            vec![path.clone()],
+            "the exit learns which path it held"
+        );
+        assert!(
+            tm.claimed_session_paths.lock().contains(&path),
+            "a sibling still reads it, so the claim must stay"
+        );
+
+        tm.release_run_sessions(&second);
+        assert!(
+            !tm.claimed_session_paths.lock().contains(&path),
+            "the last reader is what frees it"
+        );
+    }
+
+    #[test]
+    fn releasing_a_run_touches_only_that_run() {
+        let tm = manager();
+        let mine = RunKey::minted("t1", 3);
+        let sibling = RunKey::minted("t1", 4);
+        tm.codex_sessions.lock().insert(
+            sibling.clone(),
+            crate::session::CodexSessionInfo {
+                session_id: "keep".to_string(),
+                session_path: "/tmp/keep.jsonl".to_string(),
+            },
+        );
+        tm.claimed_session_paths
+            .lock()
+            .insert("/tmp/keep.jsonl".to_string());
+        assert!(tm.release_run_sessions(&mine).is_empty());
+        assert!(
+            tm.has_codex_session("t1"),
+            "an exit for one generation cannot unregister another one's session"
+        );
+        assert!(
+            !tm.release_session_path_if_unreferenced("/tmp/keep.jsonl"),
+            "still referenced by the sibling entry, so nothing may be released"
+        );
+    }
+
+    #[test]
+    fn another_tasks_run_does_not_hold_this_one_back() {
+        let tm = manager();
+        tm.runs.register("t1", 1);
+        tm.runs.register("t2", 7);
+        assert!(tm.runs.retire("t1", 1));
+        assert_eq!(
+            tm.settle_marks_for_exit("t1"),
+            ExitSettlement::Settle {
+                cancelled: false,
+                manually_completed: false
+            },
+            "a sibling task's live run is not this task's live run"
+        );
+        assert!(tm.runs.is_live("t2", 7), "and it is untouched by t1's exit");
+    }
 }

@@ -23,8 +23,12 @@ use crate::TaskManager;
 /// 返回**是否由本次调用认领成功**。`false` 说明这条路径已经属于别的任务 —— 同项目下多个
 /// omp 任务会扫到同一个目录,谁先落盘谁先被看到。调用方(watcher)必须据此继续等自己的文件
 /// 出现,而不是把别人的会话当成自己的然后退出。
+///
+/// `run` 是这条 omp 会话属于哪一次运行（ADR-020）；条目按它键，`task_id` 只是同一条记录里
+/// 用来寻项目的那半。
 pub(crate) fn register_omp_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
+    run: &crate::run_registry::RunKey,
     task_id: &str,
     session_id: &str,
     session_path: &Path,
@@ -39,7 +43,7 @@ pub(crate) fn register_omp_session<R: tauri::Runtime>(
             return false;
         }
         tm.omp_sessions.lock().insert(
-            task_id.to_string(),
+            run.clone(),
             OmpSessionInfo {
                 session_id: session_id.to_string(),
                 session_path: path_string.clone(),
@@ -292,6 +296,7 @@ pub(crate) fn discover_unclaimed_omp_session_since<R: tauri::Runtime>(
 /// 还可能输给同一瞬间的另一个 watcher —— 那时不能退出,要继续等自己的文件出现。
 pub(crate) fn spawn_omp_session_watcher(
     app: AppHandle,
+    run: crate::run_registry::RunKey,
     task_id: String,
     agent: String,
     project_path: PathBuf,
@@ -301,7 +306,7 @@ pub(crate) fn spawn_omp_session_watcher(
         for tick in 0u32.. {
             {
                 let tm = app.state::<TaskManager>();
-                if tm.omp_sessions.lock().contains_key(&task_id) {
+                if tm.has_omp_session(&task_id) {
                     return;
                 }
                 if !tm.has_live_run(&task_id) {
@@ -310,7 +315,7 @@ pub(crate) fn spawn_omp_session_watcher(
                     if let Some((session_id, path)) =
                         discover_unclaimed_omp_session_since(&app, &agent, &project_path, since_ms)
                     {
-                        register_omp_session(&app, &task_id, &session_id, &path);
+                        register_omp_session(&app, &run, &task_id, &session_id, &path);
                     }
                     return;
                 }
@@ -319,7 +324,7 @@ pub(crate) fn spawn_omp_session_watcher(
                 discover_unclaimed_omp_session_since(&app, &agent, &project_path, since_ms)
             {
                 // 认领成功才收工。失败说明这条路径刚被别的任务拿走,自己的还没落盘。
-                if register_omp_session(&app, &task_id, &session_id, &path) {
+                if register_omp_session(&app, &run, &task_id, &session_id, &path) {
                     return;
                 }
             }
@@ -509,6 +514,7 @@ fn parse_omp_tool_result_content(message: &Value) -> Vec<SessionContent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run_registry::RunKey;
 
     /// profile 作用域的会话目录必须在放行名单里。
     ///
@@ -666,18 +672,35 @@ mod tests {
         let path = Path::new("/tmp/aeroric-omp-shared/2026-09-08T10-00-00_shared.jsonl");
 
         assert!(
-            register_omp_session(&handle, "task-one", "shared", path),
+            register_omp_session(
+                &handle,
+                &RunKey::unminted("task-one"),
+                "task-one",
+                "shared",
+                path
+            ),
             "第一个任务应当认领成功"
         );
         assert!(
-            !register_omp_session(&handle, "task-two", "shared", path),
+            !register_omp_session(
+                &handle,
+                &RunKey::unminted("task-two"),
+                "task-two",
+                "shared",
+                path
+            ),
             "同一条路径不能被第二个任务再认领一次"
         );
 
         let tm = handle.state::<crate::TaskManager>();
-        assert!(tm.omp_sessions.lock().contains_key("task-one"));
+        assert!(tm
+            .omp_sessions
+            .lock()
+            .contains_key(&RunKey::unminted("task-one")));
         assert!(
-            !tm.omp_sessions.lock().contains_key("task-two"),
+            !tm.omp_sessions
+                .lock()
+                .contains_key(&RunKey::unminted("task-two")),
             "认领失败的任务不该留下会话绑定"
         );
     }

@@ -1876,6 +1876,9 @@ pub(crate) async fn run_dsh_task_core(
         .ok_or_else(|| "Could not resolve the DSH session log path".to_string())?;
     crate::session_dsh::register_dsh_session_with_preset(
         &app,
+        // dsh 的启动路径还没有 core 的代可用（它的 launch 走自己的命令，见
+        // `legacy_task_executor` 的 dsh 拒绝分支），所以登记在未 Minted 键上。
+        &crate::run_registry::RunKey::unminted(&task_id),
         &task_id,
         &session_id,
         &session_path,
@@ -2082,13 +2085,22 @@ pub(crate) async fn complete_dsh_task_core<R: Runtime>(
         }
     }
 
-    let dsh_path = task_manager
+    // 手动完成是**意图型**操作：它要清掉这个任务所有代的 dsh 登记（ADR-025 规则 2），
+    // 而路径按 ADR-031 的反查释放——还有别的条目读它就不能放回市场。
+    let dsh_runs: Vec<_> = task_manager
         .dsh_sessions
         .lock()
-        .remove(task_id)
-        .map(|info| info.session_path);
-    if let Some(path) = dsh_path {
-        task_manager.claimed_session_paths.lock().remove(&path);
+        .keys()
+        .filter(|run| run.id() == task_id)
+        .cloned()
+        .collect();
+    let dsh_paths: Vec<_> = dsh_runs
+        .iter()
+        .filter_map(|run| task_manager.dsh_sessions.lock().remove(run))
+        .map(|info| info.session_path)
+        .collect();
+    for path in &dsh_paths {
+        task_manager.release_session_path_if_unreferenced(path);
     }
     task_manager.cancelled_tasks.lock().remove(task_id);
     task_manager.manually_completed_tasks.lock().remove(task_id);

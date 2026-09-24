@@ -56,7 +56,10 @@ const TERMINAL_HISTORY_SETTLE_MAX: Duration = Duration::from_millis(320);
 const MAX_TASK_IMAGE_COUNT: usize = 8;
 const MAX_TASK_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TASK_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
-static STARTUP_SIGNAL_GENERATION: AtomicU64 = AtomicU64::new(1);
+/// **条目版本戳**，不是运行身份（ADR-032）。它只回答"我登记的那一条还在不在"，
+/// 作用是让被顶替的老登记不会在退出时把顶替者的登记删掉。除本文件的登记/清除两处之外，
+/// 任何地方都不许读它当身份——`tauri-adapter` 门禁按这条断言。
+static STARTUP_SIGNAL_VERSION: AtomicU64 = AtomicU64::new(1);
 
 /// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
 #[derive(Debug)]
@@ -69,12 +72,16 @@ pub(crate) enum StartupSignal {
 
 #[derive(Clone)]
 pub(crate) struct StartupSignalRegistration {
-    generation: u64,
+    /// See [`STARTUP_SIGNAL_VERSION`]: a per-entry stamp, not a generation.
+    version: u64,
     sender: std::sync::mpsc::Sender<StartupSignal>,
 }
 
+/// Keyed by the run that registered it (ADR-020). The value still carries a version stamp,
+/// because two unminted runs of one task share a key and the older one must not clear the
+/// newer one's registration on its way out (ADR-032).
 pub(crate) type StartupSignalRegistry =
-    Arc<parking_lot::Mutex<HashMap<String, StartupSignalRegistration>>>;
+    Arc<parking_lot::Mutex<HashMap<RunKey, StartupSignalRegistration>>>;
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
     Path::new(project_path)
@@ -120,9 +127,9 @@ fn validate_namespaced_shell_id(
 fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
     let tm = app.state::<TaskManager>();
     if is_codex {
-        tm.codex_sessions.lock().contains_key(task_id)
+        tm.has_codex_session(task_id)
     } else {
-        tm.claude_sessions.lock().contains_key(task_id)
+        tm.has_claude_session(task_id)
     }
 }
 
@@ -153,24 +160,28 @@ fn finalize_task_exit(
     if !tm.remove_pty_handles_if_current(run, child_handle) {
         return;
     }
-    let (is_cancelled, is_manually_completed) = {
-        let mut cancelled = tm.cancelled_tasks.lock();
-        let mut manually_completed = tm.manually_completed_tasks.lock();
-        (
-            cancelled.remove(task_id),
-            manually_completed.remove(task_id),
-        )
+    // ADR-030: the marks, the status event and the cleanup all belong to the last run to exit.
+    // Anything before that check (the handle teardown above) is per-run; anything after it reads
+    // this run's session entries, which a still-live sibling must not lose.
+    let (is_cancelled, is_manually_completed) = match tm.settle_marks_for_exit(task_id) {
+        crate::ExitSettlement::WaitingForOtherRuns => return,
+        crate::ExitSettlement::Settle {
+            cancelled,
+            manually_completed,
+        } => (cancelled, manually_completed),
     };
 
     let had_agent_session;
     {
-        let codex_info = tm.codex_sessions.lock().remove(task_id);
+        // Per-run teardown (ADR-020), and the claims go through ADR-031's reverse lookup at the
+        // end — never "remove the entry, free the path" as one step.
+        let codex_info = tm.codex_sessions.lock().remove(run);
         let codex_path = codex_info.map(|info| info.session_path);
-        let claude_info = tm.claude_sessions.lock().remove(task_id);
+        let claude_info = tm.claude_sessions.lock().remove(run);
         let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
-        let dsh_info = tm.dsh_sessions.lock().remove(task_id);
+        let dsh_info = tm.dsh_sessions.lock().remove(run);
         let dsh_path = dsh_info.map(|info| info.session_path);
-        let omp_info = tm.omp_sessions.lock().remove(task_id);
+        let omp_info = tm.omp_sessions.lock().remove(run);
         let omp_path = omp_info.map(|info| info.session_path);
         had_agent_session = match family {
             crate::app_settings::AgentFamily::Codex => codex_path.is_some(),
@@ -190,18 +201,11 @@ fn finalize_task_exit(
                     .unwrap_or(false)
             }
         };
-        let mut claimed = tm.claimed_session_paths.lock();
-        if let Some(path) = codex_path {
-            claimed.remove(&path);
-        }
-        if let Some(path) = claude_path {
-            claimed.remove(&path);
-        }
-        if let Some(path) = dsh_path {
-            claimed.remove(&path);
-        }
-        if let Some(path) = omp_path {
-            claimed.remove(&path);
+        for path in [codex_path, claude_path, dsh_path, omp_path]
+            .into_iter()
+            .flatten()
+        {
+            tm.release_session_path_if_unreferenced(&path);
         }
     }
 
@@ -346,23 +350,15 @@ fn save_task_texts(
     Ok(paths)
 }
 
+/// 取消是**意图型**操作：它要清掉这个任务**每一代**的会话登记，而不是只清最新那代
+/// （ADR-025 规则 2 + ADR-031）。
+///
+/// 今天它只放 claim、不删条目，于是路径"是否还有人引用"这件事无法被回答——ADR-031 的反查
+/// 释放要求条目与 claim 一起退场，否则反查永远命中自己。单代场景（也就是今天全部真实场景）
+/// 观感不变：条目本来就要等退出时删，而取消路径的退出会直接 return，从不读这些条目。
 fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
-    let codex_path = task_manager
-        .codex_sessions
-        .lock()
-        .get(task_id)
-        .map(|info| info.session_path.clone());
-    let claude_path = task_manager
-        .claude_sessions
-        .lock()
-        .get(task_id)
-        .map(|info| info.session_path.clone());
-    let mut claimed = task_manager.claimed_session_paths.lock();
-    if let Some(path) = codex_path {
-        claimed.remove(&path);
-    }
-    if let Some(path) = claude_path {
-        claimed.remove(&path);
+    for run in task_manager.session_runs_for_task(task_id) {
+        task_manager.release_run_sessions(&run);
     }
 }
 
@@ -1217,35 +1213,51 @@ fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
 
 pub(crate) fn register_initial_input_signal(
     task_manager: &TaskManager,
-    task_id: &str,
+    run: &RunKey,
     sender: std::sync::mpsc::Sender<StartupSignal>,
 ) -> u64 {
-    let generation = STARTUP_SIGNAL_GENERATION.fetch_add(1, Ordering::Relaxed);
-    task_manager.initial_input_signals.lock().insert(
-        task_id.to_string(),
-        StartupSignalRegistration { generation, sender },
-    );
-    generation
+    let version = STARTUP_SIGNAL_VERSION.fetch_add(1, Ordering::Relaxed);
+    task_manager
+        .initial_input_signals
+        .lock()
+        .insert(run.clone(), StartupSignalRegistration { version, sender });
+    version
 }
 
 pub(crate) fn clear_initial_input_signal_if_current(
     signals: &StartupSignalRegistry,
-    task_id: &str,
-    generation: u64,
+    run: &RunKey,
+    version: u64,
 ) {
     let mut signals = signals.lock();
     if signals
-        .get(task_id)
-        .is_some_and(|registration| registration.generation == generation)
+        .get(run)
+        .is_some_and(|registration| registration.version == version)
     {
-        signals.remove(task_id);
+        signals.remove(run);
     }
 }
 
-pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &str) {
-    let registration = task_manager.initial_input_signals.lock().remove(task_id);
+/// Per-run teardown: only this run's pending first input is cancelled.
+pub(crate) fn cancel_initial_input_signal_for_run(task_manager: &TaskManager, run: &RunKey) {
+    let registration = task_manager.initial_input_signals.lock().remove(run);
     if let Some(registration) = registration {
         let _ = registration.sender.send(StartupSignal::Cancelled);
+    }
+}
+
+/// Intent operation (cancel / reset of the whole task): every registered run's pending first
+/// input goes, not just the newest one (ADR-025 rule 2).
+pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &str) {
+    let runs: Vec<RunKey> = task_manager
+        .initial_input_signals
+        .lock()
+        .keys()
+        .filter(|run| run.id() == task_id)
+        .cloned()
+        .collect();
+    for run in runs {
+        cancel_initial_input_signal_for_run(task_manager, &run);
     }
 }
 
@@ -1261,10 +1273,16 @@ pub(crate) fn require_initial_input_generation(
 }
 
 pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
+    // Hook events are task-scoped (`hooks::events_dir_for`), so the newest registered run is
+    // the only defensible addressee; with nothing registered, fall back to the unminted key,
+    // which is what the legacy launch path itself would have used.
+    let run = task_manager
+        .resource_run(task_id)
+        .unwrap_or_else(|| RunKey::unminted(task_id));
     let sender = task_manager
         .initial_input_signals
         .lock()
-        .get(task_id)
+        .get(&run)
         .map(|registration| registration.sender.clone());
     if let Some(sender) = sender {
         let _ = sender.send(StartupSignal::SessionReady);
@@ -1956,6 +1974,7 @@ pub(crate) async fn run_task_core(
         if !is_codex {
             spawn_claude_lazy_session_attach(
                 app.clone(),
+                run.clone(),
                 task_id.clone(),
                 session_id,
                 project_path.clone(),
@@ -1978,6 +1997,7 @@ pub(crate) async fn run_task_core(
         });
         spawn_codex_session_recovery(
             app.clone(),
+            run.clone(),
             task_id.clone(),
             project_path.clone(),
             final_prompt.clone(),
@@ -1997,6 +2017,7 @@ pub(crate) async fn run_task_core(
         }) - 10_000;
         crate::session_dsh::spawn_dsh_session_watcher(
             app.clone(),
+            run.clone(),
             task_id.clone(),
             agent.clone(),
             project_path.clone(),
@@ -2018,6 +2039,7 @@ pub(crate) async fn run_task_core(
             .max(0) as u128;
         crate::session_omp::spawn_omp_session_watcher(
             app.clone(),
+            run.clone(),
             task_id.clone(),
             agent.clone(),
             PathBuf::from(&project_path),
@@ -2034,6 +2056,7 @@ pub(crate) async fn run_task_core(
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
         spawn_status_session_watcher(
             app.clone(),
+            run.clone(),
             task_id.clone(),
             project_path.clone(),
             agent.clone(),
@@ -2053,7 +2076,7 @@ pub(crate) async fn run_task_core(
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = needs_initial_input
-        .then(|| register_initial_input_signal(task_manager, &task_id, startup_tx.clone()));
+        .then(|| register_initial_input_signal(task_manager, &run, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -2070,7 +2093,7 @@ pub(crate) async fn run_task_core(
         let writer = task_manager.writer_for(&task_id);
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
-            let cleanup_id = task_id.clone();
+            let cleanup_run = run.clone();
             let cleanup_generation = require_initial_input_generation(startup_generation)?;
             spawn_initial_input_injection(
                 writer,
@@ -2080,13 +2103,13 @@ pub(crate) async fn run_task_core(
                 Some(Box::new(move || {
                     clear_initial_input_signal_if_current(
                         &signals,
-                        &cleanup_id,
+                        &cleanup_run,
                         cleanup_generation,
                     );
                 })),
             );
         } else {
-            cancel_initial_input_signal(task_manager, &task_id);
+            cancel_initial_input_signal_for_run(task_manager, &run);
         }
     }
     spawn_exit_monitor(app, run, project_path, launch.family, child_handle);
@@ -2375,36 +2398,44 @@ pub(crate) async fn reset_task_process_core(
         let child = run.as_ref().and_then(|run| children.remove(run));
         (master, writer, child)
     };
+    // A reset replaces the process under this task id, so every pending first input for that
+    // task is stale — the intent-scoped cancel is the honest form here (ADR-032).
     cancel_initial_input_signal(task_manager, &task_id);
 
     // A reset replaces the process under the same task ID. Clear the old
     // session registrations before killing the child so its watcher cannot
     // keep reporting stale status events into the replacement run.
-    let mut codex_info = task_manager.codex_sessions.lock().remove(&task_id);
-    let mut claude_info = task_manager.claude_sessions.lock().remove(&task_id);
-    let mut dsh_info = task_manager.dsh_sessions.lock().remove(&task_id);
+    let run = task_manager.resource_run(&task_id);
+    let mut codex_info = run
+        .as_ref()
+        .and_then(|run| task_manager.codex_sessions.lock().remove(run));
+    let mut claude_info = run
+        .as_ref()
+        .and_then(|run| task_manager.claude_sessions.lock().remove(run));
+    let mut dsh_info = run
+        .as_ref()
+        .and_then(|run| task_manager.dsh_sessions.lock().remove(run));
     // omp 现在是 PTY 族,子进程就在 child_handles 里,与 claude/codex 同路径被
     // 下面的 kill 终止;这里只需和它们一样清掉会话注册,免得旧 watcher 把状态
     // 报到替换进程上。
-    let mut omp_info = task_manager.omp_sessions.lock().remove(&task_id);
+    let mut omp_info = run
+        .as_ref()
+        .and_then(|run| task_manager.omp_sessions.lock().remove(run));
     let omp_path = omp_info.as_ref().map(|info| info.session_path.clone());
     let codex_path = codex_info.as_ref().map(|info| info.session_path.clone());
     let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
     let dsh_path = dsh_info.as_ref().map(|info| info.session_path.clone());
-    let mut claimed = task_manager.claimed_session_paths.lock();
-    if let Some(path) = codex_path.as_ref() {
-        claimed.remove(path);
+    for path in [
+        codex_path.as_ref(),
+        claude_path.as_ref(),
+        dsh_path.as_ref(),
+        omp_path.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        task_manager.release_session_path_if_unreferenced(path);
     }
-    if let Some(path) = claude_path.as_ref() {
-        claimed.remove(path);
-    }
-    if let Some(path) = dsh_path.as_ref() {
-        claimed.remove(path);
-    }
-    if let Some(path) = omp_path.as_ref() {
-        claimed.remove(path);
-    }
-    drop(claimed);
     crate::event_watcher::cleanup_task_events(&app, &task_id);
 
     let had_live_process = child_arc.is_some();
@@ -2427,32 +2458,32 @@ pub(crate) async fn reset_task_process_core(
     // reset removed the maps. Sweep once more before returning so that late
     // source-session metadata is included in the handoff snapshot rather than
     // leaking into the replacement run.
-    if let Some(late_info) = task_manager.codex_sessions.lock().remove(&task_id) {
-        task_manager
-            .claimed_session_paths
-            .lock()
-            .remove(&late_info.session_path);
+    if let Some(late_info) = run
+        .as_ref()
+        .and_then(|run| task_manager.codex_sessions.lock().remove(run))
+    {
+        task_manager.release_session_path_if_unreferenced(&late_info.session_path);
         codex_info = Some(late_info);
     }
-    if let Some(late_info) = task_manager.claude_sessions.lock().remove(&task_id) {
-        task_manager
-            .claimed_session_paths
-            .lock()
-            .remove(&late_info.session_path);
+    if let Some(late_info) = run
+        .as_ref()
+        .and_then(|run| task_manager.claude_sessions.lock().remove(run))
+    {
+        task_manager.release_session_path_if_unreferenced(&late_info.session_path);
         claude_info = Some(late_info);
     }
-    if let Some(late_info) = task_manager.dsh_sessions.lock().remove(&task_id) {
-        task_manager
-            .claimed_session_paths
-            .lock()
-            .remove(&late_info.session_path);
+    if let Some(late_info) = run
+        .as_ref()
+        .and_then(|run| task_manager.dsh_sessions.lock().remove(run))
+    {
+        task_manager.release_session_path_if_unreferenced(&late_info.session_path);
         dsh_info = Some(late_info);
     }
-    if let Some(late_info) = task_manager.omp_sessions.lock().remove(&task_id) {
-        task_manager
-            .claimed_session_paths
-            .lock()
-            .remove(&late_info.session_path);
+    if let Some(late_info) = run
+        .as_ref()
+        .and_then(|run| task_manager.omp_sessions.lock().remove(run))
+    {
+        task_manager.release_session_path_if_unreferenced(&late_info.session_path);
         omp_info = Some(late_info);
     }
 
@@ -2711,12 +2742,14 @@ pub(crate) async fn resume_task_core(
             &session_id,
         ) {
             // 这里的路径是显式解析出来的,不参与 watcher 之间的认领竞争:返回值无意义。
-            let _ = crate::session_omp::register_omp_session(&app, &task_id, &resolved_id, &path);
+            let _ =
+                crate::session_omp::register_omp_session(&app, &run, &task_id, &resolved_id, &path);
         }
     } else if !use_hooks {
         // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
         spawn_resume_session_watcher(
             app.clone(),
+            run.clone(),
             task_id.clone(),
             project_path.clone(),
             session_id,
@@ -2726,7 +2759,7 @@ pub(crate) async fn resume_task_core(
     }
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = uses_ultracode
-        .then(|| register_initial_input_signal(task_manager, &task_id, startup_tx.clone()));
+        .then(|| register_initial_input_signal(task_manager, &run, startup_tx.clone()));
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
@@ -2743,7 +2776,7 @@ pub(crate) async fn resume_task_core(
         let writer = task_manager.writer_for(&task_id);
         if let Some(writer) = writer {
             let signals = Arc::clone(&task_manager.initial_input_signals);
-            let cleanup_id = task_id.clone();
+            let cleanup_run = run.clone();
             let cleanup_generation = require_initial_input_generation(startup_generation)?;
             spawn_initial_input_injection(
                 writer,
@@ -2753,13 +2786,13 @@ pub(crate) async fn resume_task_core(
                 Some(Box::new(move || {
                     clear_initial_input_signal_if_current(
                         &signals,
-                        &cleanup_id,
+                        &cleanup_run,
                         cleanup_generation,
                     );
                 })),
             );
         } else {
-            cancel_initial_input_signal(task_manager, &task_id);
+            cancel_initial_input_signal_for_run(task_manager, &run);
         }
     }
     spawn_exit_monitor(app, run, project_path, launch.family, child_handle);
@@ -2773,6 +2806,9 @@ pub(crate) fn write_task_input(
     task_id: &str,
     data: &str,
 ) -> Result<(), String> {
+    let run = task_manager
+        .resource_run(task_id)
+        .unwrap_or_else(|| RunKey::unminted(task_id));
     let writer = task_manager.writer_for(task_id);
     if let Some(writer) = writer {
         let mut writer = writer.lock();
@@ -2784,7 +2820,7 @@ pub(crate) fn write_task_input(
         let startup_signal = task_manager
             .initial_input_signals
             .lock()
-            .get(task_id)
+            .get(&run)
             .map(|registration| registration.sender.clone());
         if let Some(startup_signal) = startup_signal {
             let _ = startup_signal.send(StartupSignal::UserInput);
@@ -3737,24 +3773,60 @@ mod tests {
 
     #[test]
     fn stale_startup_cleanup_does_not_remove_the_replacement_registration() {
+        // ADR-032's reason for keeping the counter: two unminted runs of one task share a key,
+        // and the version stamp is what stops the older one's cleanup from deleting the newer
+        // one's registration. Without it the replaced run's prompt silently never arrives.
         let signals: StartupSignalRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let run = RunKey::unminted("task-1");
         let (sender, _receiver) = std::sync::mpsc::channel();
         signals.lock().insert(
-            "task-1".to_string(),
-            StartupSignalRegistration {
-                generation: 2,
-                sender,
-            },
+            run.clone(),
+            StartupSignalRegistration { version: 2, sender },
         );
 
-        clear_initial_input_signal_if_current(&signals, "task-1", 1);
+        clear_initial_input_signal_if_current(&signals, &run, 1);
 
         assert_eq!(
             signals
                 .lock()
-                .get("task-1")
-                .map(|registration| registration.generation),
-            Some(2)
+                .get(&run)
+                .map(|registration| registration.version),
+            Some(2),
+            "a stale version must leave the current registration alone"
+        );
+        clear_initial_input_signal_if_current(&signals, &run, 2);
+        assert!(
+            signals.lock().get(&run).is_none(),
+            "the matching version still clears it"
+        );
+    }
+
+    #[test]
+    fn two_minted_runs_of_one_task_hold_their_own_registration() {
+        // The case the version stamp alone cannot cover, and the reason the key is a run:
+        // generations 4 and 5 each wait for their own gate.
+        let signals: StartupSignalRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let (first, _rx1) = std::sync::mpsc::channel();
+        let (second, _rx2) = std::sync::mpsc::channel();
+        signals.lock().insert(
+            RunKey::minted("task-1", 4),
+            StartupSignalRegistration {
+                version: 1,
+                sender: first,
+            },
+        );
+        signals.lock().insert(
+            RunKey::minted("task-1", 5),
+            StartupSignalRegistration {
+                version: 2,
+                sender: second,
+            },
+        );
+        clear_initial_input_signal_if_current(&signals, &RunKey::minted("task-1", 4), 1);
+        assert!(signals.lock().get(&RunKey::minted("task-1", 4)).is_none());
+        assert!(
+            signals.lock().get(&RunKey::minted("task-1", 5)).is_some(),
+            "the surviving run keeps its own gate"
         );
     }
 

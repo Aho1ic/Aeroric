@@ -3,8 +3,8 @@
 - **Reviewed**: 2026-09-23
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-05
 - **Code（本模块目前唯一已合并部分）**: `src-tauri/src/storage_location.rs`、`src-tauri/src/storage.rs::windows_private_acl_receipt`、`src-tauri/src/lib.rs` 的 `mod storage_location;`
-- **Gate**: `pnpm native:check tauri-adapter` —— **尚未注册**（注册要在 `core_adapter.rs`/`legacy_task_executor.rs` 落地的同一次编辑里完成，见 §4）
-- **Gate status**: 拷问**已结束**——Q44～Q54 十一问全部获答（ADR-020～027），用户已确认共识并授权先做收口提交（`1279520`，88 files，不 push、不 tag）。**任务本身仍未 accepted**：实现尚未开始、`tauri-adapter` 门禁模块尚未注册——accept 的条件是 §1 三条验收全绿，不是"决策已定"。
+- **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（2026-09-23，7 case／2470 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `src-tauri-lib-tests`（地板 2459）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`
+- **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032（用户确认共识）。已收口提交 `1279520`（88 files）与 `bf57afa`（43 files），不 push、不 tag。**任务仍未 accepted**：§1 验收 #2（真 executor 跑 fake 任务，只一次写入序列 + 一次 spawn）尚无证据——`src-tauri` 没有测试期的存储根覆盖，跑真 executor 会读活的 `~/.aeroric`（见 §4b）；且 ADR-023 的那 8 处 legacy 发射点还在。
 
 ## 1. 验收标准（引计划原文）
 
@@ -32,6 +32,16 @@
 | Q56 | 拆分落在哪一层？（推荐：只拆宿主端口与 core 模型，v1 契约不动） | **拆到任务记录：每个任务存 `launchFamily` + `sessionFamily`**，钉死当初怎么起的 | ADR-028 决策 2 |
 | Q57 | 存量记录都没有 `launchFamily`，缺失时怎么办？ | **缺失＝用与 legacy 相同的纯函数按现推导，写时补齐**；不做启动期批量重写用户数据 | ADR-028 决策 3 |
 
+**续轮（重键第二波前置，2026-09-23）**
+
+| # | 问题 | 用户决定 | 落点 | 是否否掉推荐 |
+| --- | --- | --- | --- | --- |
+| Q59 | `cancelled_tasks`/`manually_completed_tasks` 按代记还是按任务记？（今天两者都是**读时消费**） | **任务级共享一条，最后一个退出的代销账**（否掉"意图操作 fan-out 按代写"的推荐） | ADR-030 | ✅ 否掉 |
+| Q60 | 会话表按代键后，路径 claim 何时释放？ | **不新增状态**：删本次条目后**反查四张会话表**，仍有人引用就不放；锁序统一为"会话表 → claim" | ADR-031 | 采纳 |
+| Q61 | `STARTUP_SIGNAL_GENERATION` 删除后 unminted 两代共享 0 会回归，怎么办？ | **保留该序号但降格为"条目版本戳"**，作用域钉死在 signal 表内，不作运行身份；其余容器仍只认 core 的代 | ADR-032（修订 ADR-020 决策 2） | 采纳 |
+
+本轮从源码查到、改变问题形状的四条事实：① 两个标记集合今天都是 `remove()` 返回值当判定（一次性消费）；② dsh 另有一套自己的 `cancelled_tasks`，不在 `TaskManager` 内；③ omp/dsh 的登记侧**在持有 claim 的同时插会话表**，与 `lib.rs` 锁序表第 3 条相反（今天不致死锁，但表已名不副实 → ADR-031 决策 3 定死为"会话表 → claim"）；④ `wsl_active_ids` 同时装 shell id 与 task id，判空用于"还有没有 WSL 侧活运行"，属**存活**语义，按 RunKey 集合走即可，不需要新决策。
+
 版本口径不是问题（不必问）：ADR-009 已定"v1 内部兼容性一律由具名能力承载，绝不由版本号推断，引入 v2 需另立 ADR"，所以这是**v1 内新增可选字段 + 一个能力位**，不 bump、不升 v2。
 
 **本轮否掉推荐共 4 次：Q44、Q53、Q55、Q56。** 共同点很一致：**要更完整、更显式、更少自动行为**——不做收窄的键改造（要全量）、不自动重放会起进程的操作（要人拍板）、不复用单个 `family` 字段（要拆成语义正确的两个）、不只在端口里拆（要落进记录钉死）。迁移期把"少动一步"当作风险而不是收益；这条口径供后续任务沿用，也意味着**在这份计划里推荐"更省事"的选项要准备好被否**。
@@ -47,7 +57,7 @@
 
 ## 4. 待办与阻塞（按依赖序）
 
-1. **`TaskManager` 全量重键（ADR-020 + ADR-025）——第一波已完成（2026-09-23）**：`RunKey{ id, generation }` 进 `run_registry.rs`，`generation == RunKey::UNMINTED(0)` 是"这次运行不是 core 起的"的保留常量（不是第四个计数器；core 的编号从 1 起，所以未 minted 永不会赢得寻址竞争）。已重键：`pty_masters`/`pty_writers`/`child_handles`/`pending_pty_sizes` + `TaskManager.runs`；`register_pty_handles` 收 `&RunKey` 并在三张表都插好后才 `runs.register`；`remove_pty_handles*` 收 `&RunKey` 并 retire；`Arc::ptr_eq` 从判定依据降为 `debug_assert` 安全网。两条重键逼出的语义区别已写成断言/helper：**存活判断看"任意一代"（`has_live_run`），资源判断看"最新一代"（`resource_run`/`writer_for`/`master_for`）**；`pending_pty_sizes` 是"投递给这个 id 的下一次运行"的信箱，读写一律 `unminted`。**剩下（wave 2，先问后做）**：三个 taskId 集合 + 四张会话表 + `initial_input_signals`/删 `STARTUP_SIGNAL_GENERATION` + 锁序表重写。三题：① 取消/手动完成是任务级意图还是运行级条目；② 会话表按代键后与 `claimed_session_paths` 的"先取条目再释放占用"如何重排；③ 旧命令路径没有 core 代，`UNMINTED` 当"这一代"是否与 ADR-020 决策 2 相容。**安全网计数**：src-tauri `--lib` 基线 2412 → 前置① 2424 → CoreGateway 2430 → ADR-029 2433 → TauriEventSink 2436 → RunRegistry 2441 → 执行器 2450 → 重键第一波 **2453**。
+1. **`TaskManager` 全量重键（ADR-020 + ADR-025）——第一波已完成（2026-09-23）**：`RunKey{ id, generation }` 进 `run_registry.rs`，`generation == RunKey::UNMINTED(0)` 是"这次运行不是 core 起的"的保留常量（不是第四个计数器；core 的编号从 1 起，所以未 minted 永不会赢得寻址竞争）。已重键：`pty_masters`/`pty_writers`/`child_handles`/`pending_pty_sizes` + `TaskManager.runs`；`register_pty_handles` 收 `&RunKey` 并在三张表都插好后才 `runs.register`；`remove_pty_handles*` 收 `&RunKey` 并 retire；`Arc::ptr_eq` 从判定依据降为 `debug_assert` 安全网。两条重键逼出的语义区别已写成断言/helper：**存活判断看"任意一代"（`has_live_run`），资源判断看"最新一代"（`resource_run`/`writer_for`/`master_for`）**；`pending_pty_sizes` 是"投递给这个 id 的下一次运行"的信箱，读写一律 `unminted`。**wave 2 已完成（2026-09-23，Q59～Q61 → ADR-030/031/032）**：取消/完成保持任务级一条账、由最后一个退出者销账（三处消费点收敛到 `settle_marks_for_exit`）；四张会话表按 `RunKey` 键，claim 走 `release_session_path_if_unreferenced` 反查释放；`initial_input_signals` 按 `RunKey` 键且 `STARTUP_SIGNAL_VERSION` 降格为条目版本戳；`wsl_active_ids` 按 `RunKey`；锁序表第 3 条重写为"谁嵌套谁定序"并新增 3a（先 retire 再读 `runs`）。计数安全网：src-tauri `--lib` **2459 passed**、clippy `-D warnings` 与 fmt 干净、两次变异反例成立。
 2. **已完成（2026-09-23）**：`core_adapter.rs::CoreGateway`（writer 交接判定 + 只读回退，9 条测试）与 `SettingsFamilies`（ADR-028 的宿主侧）。**关键事实修正**：`launch_family` 不能查表——`app_settings/launch_spec.rs:400-406` 是**读用户 start 脚本内容**动态推断的，写死一张表会覆盖真实配置并改变实际执行的命令行；因此宿主委托给 `get_agent_launch_spec()`（`pty.rs` 选 `build_codex_cmd`/`build_claude_cmd` 用的就是它）。`launch_family` 因此**没有单测**（它会读活的 `~/.aeroric`），可测部分抽成三个纯函数。core 的 `tasks/mod.rs` 补了 `ProtocolFamily`/`PermissionMode`/`TaskStatus` 再导出——src-tauri 只依赖 `aeroric-core`，此前宿主根本无法命名端口参数类型。
    门禁实测（本轮全绿）：`skeleton` 20/113、`protocol` 5/88、`storage` 5/184、`projects` 4/18、`tasks` 7/106、`doctor` 18/18、`contracts --check` 12 份逐字节一致、`inventory --check` consistent、core 233 passed、src-tauri **2433 passed / 0 warning**、`clippy -D warnings` 零错误。
 3. **已完成（同日，ADR-029）**：`native_resume_family` 端口方法 + `resumeFamily` 记录字段 + 契约 `familySplit` 三字段三方断言 + 变异测试（换回 `session_family` 立即 2 条红）。**同一次错误在三个地方各活了一次**：parity 表 45 条、`task_lifecycle.rs` 的切换集成测试（断言过 `Resume`）、`AgentFamilies` 端口文档（拿 claude↔gpt55 当同族互信的例子），三处均已按 ADR-029 纠正。一处已知未覆盖：`apply_resolved_session` 不写 `resumeFamily`（加了会破坏 parity 的 `applyResolvedTaskSession` 期望），故转录跨族迁移时该字段可能落后，靠推导兜着——留给 P3-02 连同 G18 一起收。
@@ -56,7 +66,13 @@
 5.5. **接线前必须先定的两件事（本轮新记录，别再靠记忆）**：
    - **spawn 之后的失败没有回音路**。端口是同步的，内核是 async，`Err` 无处可还；按 ADR-023 它应当作为 `TaskEvent` 经 observer 回来。**"旧 GUI 经真实 executor 完成一项 fake 任务"这条验收必须包含一条失败注入**，否则回音路是空的而测试仍是绿的。
    - **执行器尚未接进产品路径**（`LegacyTaskExecutor` 带 `#[allow(dead_code, reason = ...)]`）。接线的真正前置不是代码而是 ADR-021/022：旧客户端仍在写任务表，切过去之前必须先让 React 侧交出写权（Action 3 的 store 改造 + 保存队列改成只排队意图），否则 core 每次写都撞 ADR-011 的指纹拒绝。**这是一条排期事实，不是缺口**：P2-05 的"移交"包含它，Phase 2 Gate 不放行就不进 P3。
-4. **`tauri-adapter` 门禁模块未注册**。注册时按每条 ADR 配机械检查（并在同一次编辑里写 `runner.floors`）：
+4. **`tauri-adapter` 门禁已注册（2026-09-23，7 case／2470 用例）**：`scripts/native/adapter-invariants.mjs`（对真实源码树）+ `.test.mjs`（11 条负例，地板 11）+ `src-tauri-lib-tests`（地板 2459）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`。逐条 ADR 的落实状态：
+   - ✅ ADR-020/025/032：`STARTUP_SIGNAL_GENERATION` 不得复现；`STARTUP_SIGNAL_VERSION` 只允许 `pty.rs` 的登记/清除两处被读（含"版本戳没人读＝规则没在检查"的反口号守卫）。
+   - ✅ ADR-021：`writer_handover_allowed()` 体必须是 `cfg!(target_os = "macos")`，出现 windows/linux 即红。
+   - ✅ ADR-031：claim 的 remove 只准出现在 `release_session_path_if_unreferenced` 内（helper 里若不 remove 也报错）。
+   - ✅ ADR-030：靠 `--lib` 用例计数地板 + 3 条专项测试（含两次变异验证其可失败性）。
+   - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3；ADR-023（两个 `emitters` 计数降回 1）→ 等删那 8 处发射点；ADR-026（重放上限一次）、ADR-027（只读实例写入口全拒）→ 等 `CoreGateway`/`TaskService` 进 managed state。这五条**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
+4b. **验收 #2（真 executor 跑 fake 任务）目前的硬阻塞**：`src-tauri` 没有测试期的存储根覆盖（没有 `AERORIC_DATA_DIR` 一类 env），而 `run_task_core` 必经 `app_settings::get_agent_launch_spec()` 读活的 `~/.aeroric`。两条出路，需用户拍板：① 开一个 `#[cfg(test)]` 专用的根覆盖（会碰 ADR-010 依赖的路径判定，须确认产品构建读不到它）；② 把这条验收推迟到 P3-01 抽出运行时端口之后（那时宿主设置注入是天然能力）。
    - ADR-020/025：src-tauri 内 generation 编号只有一处来源；`STARTUP_SIGNAL_GENERATION` 不得复活。
    - ADR-021：非 macOS 构建不得递交 writer 角色。
    - ADR-022：队列类型不再携带整表快照（`save_project_tasks` 不得出现在宿主的写路径上）。

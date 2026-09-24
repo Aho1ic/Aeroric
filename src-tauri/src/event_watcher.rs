@@ -209,17 +209,24 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
     let session_path = ev.transcript_path.clone();
     let is_codex = event_is_codex_like(ev);
 
+    // Hook 事件只带 taskId：事件的落点目录本身就是按任务分的（`hooks::events_dir_for`），
+    // 所以它天然属于"当前最新那一代"（ADR-025 的资源型寻址）。没有登记中的运行时
+    // 退回未 Minted 键——那正是旧命令路径自己会用的键，行为与今天逐字相同。
+    // 局限已登记：两代同时在飞时它们共用一个事件目录，hook 分不清是谁的事件。
+    let run = tm
+        .resource_run(&ev.task_id)
+        .unwrap_or_else(|| crate::run_registry::RunKey::unminted(&ev.task_id));
     // 已注册过且 session_id 一致则跳过,避免重复 emit
     let already = if is_codex {
         tm.codex_sessions
             .lock()
-            .get(&ev.task_id)
+            .get(&run)
             .map(|info| info.session_id == ev.session_id)
             .unwrap_or(false)
     } else {
         tm.claude_sessions
             .lock()
-            .get(&ev.task_id)
+            .get(&run)
             .map(|info| info.session_id == ev.session_id && !info.is_placeholder)
             .unwrap_or(false)
     };
@@ -229,7 +236,7 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
 
     if is_codex {
         tm.codex_sessions.lock().insert(
-            ev.task_id.clone(),
+            run.clone(),
             CodexSessionInfo {
                 session_id: ev.session_id.clone(),
                 session_path: session_path.clone(),
@@ -237,7 +244,7 @@ fn handle_session_start(app: &AppHandle, ev: &HookEvent) {
         );
     } else {
         tm.claude_sessions.lock().insert(
-            ev.task_id.clone(),
+            run.clone(),
             ClaudeSessionInfo {
                 session_id: ev.session_id.clone(),
                 session_path: session_path.clone(),

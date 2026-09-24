@@ -1325,11 +1325,12 @@ fn spawn_remote_task_exit_monitor(
                 return;
             }
             let ok = status.success();
-            let (was_cancelled, was_manually_completed) = {
-                let mut cancelled_tasks = tm.cancelled_tasks.lock();
-                let was_cancelled = cancelled_tasks.remove(&task_id);
-                let was_manually_completed = tm.manually_completed_tasks.lock().remove(&task_id);
-                (was_cancelled, was_manually_completed)
+            let (was_cancelled, was_manually_completed) = match tm.settle_marks_for_exit(&task_id) {
+                crate::ExitSettlement::WaitingForOtherRuns => return,
+                crate::ExitSettlement::Settle {
+                    cancelled,
+                    manually_completed,
+                } => (cancelled, manually_completed),
             };
             if was_cancelled || was_manually_completed {
                 return;
@@ -1392,7 +1393,11 @@ fn spawn_remote_task_pty(
     let needs_initial_input = initial_prelude.is_some() || initial_prompt.is_some();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel();
     let startup_generation = needs_initial_input.then(|| {
-        crate::pty::register_initial_input_signal(task_manager, task_id, startup_tx.clone())
+        crate::pty::register_initial_input_signal(
+            task_manager,
+            &crate::run_registry::RunKey::unminted(task_id),
+            startup_tx.clone(),
+        )
     });
     crate::pty::spawn_pty_reader(
         app.clone(),
@@ -1420,7 +1425,7 @@ fn spawn_remote_task_pty(
                         Some(Box::new(move || {
                             crate::pty::clear_initial_input_signal_if_current(
                                 &signals,
-                                &cleanup_id,
+                                &crate::run_registry::RunKey::unminted(&cleanup_id),
                                 cleanup_generation,
                             );
                         })),

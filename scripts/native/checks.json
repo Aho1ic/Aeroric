@@ -10,24 +10,26 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
+      "adapter-invariants-unit@tauri-adapter": 11,
       "core-rust-skeleton@skeleton": 5,
-      "swift-package-smoke@skeleton": 12,
-      "inventory-unit@skeleton": 40,
       "digest-unit@skeleton": 10,
+      "extraction-unit@skeleton": 9,
       "gate-runner-unit@skeleton": 24,
       "invariants-unit@skeleton": 13,
-      "extraction-unit@skeleton": 9,
+      "inventory-unit@skeleton": 40,
+      "projects-core-rust@projects": 16,
+      "projects-parity-is-derived-from-client@projects": 2,
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
+      "src-tauri-lib-tests@tauri-adapter": 2459,
       "storage-core-rust@storage": 81,
-      "projects-core-rust@projects": 16,
-      "projects-parity-is-derived-from-client@projects": 2,
-      "tasks-status-machine-rust@tasks": 27,
+      "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
+      "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-parity-is-derived-from-client@tasks": 3
+      "tasks-status-machine-rust@tasks": 27
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -817,6 +819,106 @@
           ],
           "$note": "验收原文是 'fake runtime 没有 GUI listener 时 start/resume/cancel 全部可执行'，所以按代码形状查：连 invoke( 都拦（那是旧前端的调用入口），四条正控证明 rg 读到的是这个模块的真实内容。LocalCalendar 是刻意的端口：core 定规则、宿主报时区，与 ADR-010 的探针同一个形状。",
           "timeoutMs": 120000
+        }
+      ]
+    },
+    "tauri-adapter": {
+      "registeredBy": "P2-05",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 的\"`events.schema.json` 两个 emitters 降回 1\"要等删掉那 8 处 legacy 发射点；ADR-026 的重放上限一次、ADR-027 的只读实例写入口全拒，要等 `CoreGateway`/`TaskService` 真被 managed state 注入（今天还没有调用方）。",
+      "cases": [
+        {
+          "name": "adapter-invariants-unit",
+          "kind": "test",
+          "parse": "node-test",
+          "minCases": 11,
+          "timeoutMs": 300000,
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/adapter-invariants.test.mjs"
+          ],
+          "$note": "三条宿主不变量各自的负例：第二个运行身份来源回归、版本戳泄漏到别的文件/别的函数、反查释放之外出现 claim remove、helper 里不再 remove（口号化）、writer 递交扩到非 macOS、以及\"读不到就报错而不是报干净\"。另含一条防止把方法算成上一个自由函数的归属回归。"
+        },
+        {
+          "name": "adapter-invariants-src",
+          "kind": "gate",
+          "timeoutMs": 180000,
+          "argv": [
+            "node",
+            "scripts/native/adapter-invariants.mjs"
+          ],
+          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。"
+        },
+        {
+          "name": "src-tauri-lib-tests",
+          "kind": "test",
+          "parse": "rust",
+          "minCases": 2459,
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib"
+          ],
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
+        },
+        {
+          "name": "src-tauri-cargo-fmt",
+          "kind": "gate",
+          "timeoutMs": 300000,
+          "argv": [
+            "cargo",
+            "fmt",
+            "--check",
+            "--manifest-path",
+            "src-tauri/Cargo.toml"
+          ],
+          "$note": "本轮查明：scripts/native 里此前没有任何 fmt 检查，而工作树里确实躺着四个未格式化的文件。"
+        },
+        {
+          "name": "core-cargo-fmt",
+          "kind": "gate",
+          "timeoutMs": 300000,
+          "argv": [
+            "cargo",
+            "fmt",
+            "--check",
+            "--all",
+            "--manifest-path",
+            "core/Cargo.toml"
+          ],
+          "$note": "同上，覆盖 core crate。注意 `core/Cargo.toml` 是 workspace 根，`cargo fmt` 必须带 `--all` 才找得到 targets（不带就以 `Failed to find targets` 失败——那是一台机器上永远红的门禁，比没有门禁更糟）。"
+        },
+        {
+          "name": "src-tauri-clippy",
+          "kind": "gate",
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "首次进门禁：`--lib` 全绿的同时这里有 3 处缺安全说明的 unsafe（deny 级，cargo check 看不见）与 13 处 needless_borrow。`--all-targets` 是必须的——不带它测试代码不参与 lint。"
+        },
+        {
+          "name": "ts-typecheck",
+          "kind": "gate",
+          "timeoutMs": 900000,
+          "argv": [
+            "pnpm",
+            "typecheck"
+          ],
+          "$note": "vitest 只转译不类型检查：`expect(a).toEqual(b, msg)` 这类 TS2554 曾长期只被 tsc 看见。TS 证据必须两条一起跑，因此本 case 与 `pnpm test` 不互相替代。"
         }
       ]
     }
