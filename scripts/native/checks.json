@@ -29,7 +29,7 @@
       "tasks-parity-is-derived-from-client@tasks": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 27,
+      "tasks-status-machine-rust@tasks": 28,
       "adapter-acceptance-real-kernel@tauri-adapter": 5,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
@@ -692,8 +692,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 27,
-          "$note": "P2-04 的时序与服务层：9×9 状态表只有 detached→running/input_required 一条被忽略；进终态的 completedAt 首值不刷新、离开终态清空；'先持久化再启动' 由 fake executor 在调用瞬间回读磁盘证明（launch 发生时记录已在盘上是 pending）；持久化被拒时一次 spawn 都不发生；内容指纹的两条反例（旧客户端先写过、人工把文件换回旧内容）都必须是 PersistFailed 而不是覆盖；runtime.json 里发布的 (sha256,size) 与磁盘逐字节一致且 StorageError::ContentDiverged 走 is_stale_write()（→ REVISION_CONFLICT，ADR-011）；spawn 失败→failed+原因→再次真实启动仍可；崩溃遗留的 start 认领在下次启动被对账成 interrupted 且绝不自动重开；无 listener 时 start/resume/cancel 全通；删除跳过收藏、拒绝活任务、不碰磁盘上的 worktree。地板 23。 另加配置切换编排：认领先于一切副作用（同 key 重试被拒、不烧号）、reset 失败＝零写入零 spawn、无上下文可续时拒绝、持久化被拒＝不写 revision 不起进程不 spawn、跨族=handoff 同族=native resume；以及对账后的待确认闸只挡 resume、被丢弃的 worktree 不能续跑。 远程通道限制（attachments / worktree）也在服务层拒绝，不再只靠表单隐藏。",
+          "minCases": 28,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）。新增那条不是锦上添花：它是宿主 `is_task_active` 抑制闸的等价物，缺了它，28 处发射点里那 3 处保护的就是宿主删不掉的私货。可失败性已用 `if false` 变异验证（关掉规则立即红）。",
           "timeoutMs": 900000
         },
         {

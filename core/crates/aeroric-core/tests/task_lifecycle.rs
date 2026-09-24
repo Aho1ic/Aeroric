@@ -1489,3 +1489,108 @@ fn a_remote_project_refuses_attachments_and_a_worktree_before_anything_moves() {
     );
     cleanup(root);
 }
+
+/// ADR-034: an observation from a run that has already reported must not resurrect the task.
+///
+/// This is the accident the host's `is_task_active` gate exists to prevent, and the reason it
+/// cannot simply be deleted with the eight emit sites: codex/claude transcript watchers keep
+/// polling after the process is gone (`spawn_status_session_watcher` and the lazy-attach loop
+/// each carry their own deadline), so a line read late can arrive *after* the exit event that
+/// settled the row. The guard in `observe` catches an older *generation*, but this observation
+/// carries the same generation as the run that just finished — which is exactly the case the
+/// legacy gate covered and the current conjunct does not.
+#[test]
+fn a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task() {
+    let (root, context, executor) = harness("late-observation", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let project = local_project("p1", "/repo");
+    let tasks_file = tasks_json(&root);
+
+    service
+        .start(
+            &project,
+            "t1",
+            "op-1",
+            true,
+            None,
+            false,
+            Attachments::default(),
+        )
+        .expect("run 1");
+    service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 1,
+                status: TaskStatus::Running,
+                attention_requested_at_ms: None,
+                failure_reason: None,
+            },
+        )
+        .expect("running");
+    // The counter-case ADR-034 demands: while the run is live, the same kind of observation
+    // must be applied, or the rule could "drop" everything and still look green.
+    assert_eq!(
+        rows(&tasks_file)[0].get("status"),
+        Some(&json!("running")),
+        "a live run's observations are not late"
+    );
+
+    service
+        .observe(
+            "p1",
+            TaskEvent::Exit {
+                task_id: "t1".into(),
+                generation: 1,
+                code: Some(0),
+            },
+        )
+        .expect("the run settled");
+    assert_eq!(
+        rows(&tasks_file)[0].get("status"),
+        Some(&json!("done")),
+        "a clean exit settles"
+    );
+
+    let fingerprint_before = service
+        .load("p1")
+        .expect("load")
+        .fingerprint
+        .expect("written")
+        .sha256;
+    let (outcome, applied) = service
+        .observe(
+            "p1",
+            TaskEvent::Status {
+                task_id: "t1".into(),
+                generation: 1,
+                status: TaskStatus::InputRequired,
+                attention_requested_at_ms: Some(1_700_000_099_000),
+                failure_reason: None,
+            },
+        )
+        .expect("a late observation is answered, not an error");
+
+    assert!(
+        matches!(outcome, EventOutcome::Dropped(_)),
+        "the run already reported; this line belongs to a world that ended: {outcome:?}"
+    );
+    assert!(!applied.changed, "and nothing was written");
+    assert_eq!(
+        rows(&tasks_file)[0].get("status"),
+        Some(&json!("done")),
+        "the card must not start spinning again"
+    );
+    assert_eq!(
+        service
+            .load("p1")
+            .expect("reload")
+            .fingerprint
+            .expect("written")
+            .sha256,
+        fingerprint_before,
+        "a dropped observation may not even rewrite the file"
+    );
+    cleanup(root);
+}

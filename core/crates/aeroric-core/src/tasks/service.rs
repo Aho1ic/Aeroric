@@ -975,6 +975,33 @@ impl TaskService {
                 ));
             }
         };
+        // ADR-034: an observation may not pull a settled task back out of a terminal status.
+        // This is the guard the host used to apply at three transcript-watcher call sites via
+        // `is_task_active`, and it is the case the staleness check above does *not* cover: a
+        // watcher thread outlives the process it polls (each carries its own deadline), so a line
+        // read late arrives with the *same* generation as the run that just settled the row —
+        // neither older nor future, therefore admissible above, and without this rule it re-lights
+        // a finished card.
+        //
+        // Deliberately here rather than in `should_ignore_transition`: that table is held
+        // byte-equivalent to the client's `applyTaskStatusTransition`, which carries no such rule
+        // because the client never sees these events. This is about admitting an observation, not
+        // about what a transition means.
+        //
+        // One named divergence from the legacy gate, since "equivalent to today" is what this
+        // adapter is for: the host asked "is any run live?", so during a cancel — row already
+        // `cancelled`, process still dying — legacy let a late `running` through and flickered the
+        // card. This rule drops it. Stricter, and the flicker was never a feature, but recorded
+        // rather than passed over in silence.
+        if !status.is_terminal()
+            && Self::find(&snapshot.records, event.task_id())
+                .is_some_and(|row| reducer::status_of(row).is_some_and(TaskStatus::is_terminal))
+        {
+            return Ok((
+                EventOutcome::Dropped("task already settled"),
+                self.unchanged(snapshot.records.clone(), snapshot.fingerprint.clone()),
+            ));
+        }
         // One task row carries one status, so with overlapping runs the honest answer to
         // "is the task finished?" is "no, not while another run is live": this run is done
         // (its claim is released below), and the task itself moves back to `running`.
