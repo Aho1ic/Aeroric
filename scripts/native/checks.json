@@ -22,7 +22,7 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2464,
+      "src-tauri-lib-tests@tauri-adapter": 2465,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
@@ -30,7 +30,8 @@
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
       "tasks-status-machine-rust@tasks": 27,
-      "adapter-acceptance-real-kernel@tauri-adapter": 5
+      "adapter-acceptance-real-kernel@tauri-adapter": 5,
+      "adapter-event-payload-contract@tauri-adapter": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -874,7 +875,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2464,
+          "minCases": 2465,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -884,7 +885,7 @@
             "--locked",
             "--lib"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。"
         },
         {
           "name": "src-tauri-cargo-fmt",
@@ -939,6 +940,20 @@
             "typecheck"
           ],
           "$note": "vitest 只转译不类型检查：`expect(a).toEqual(b, msg)` 这类 TS2554 曾长期只被 tsc 看见。TS 证据必须两条一起跑，因此本 case 与 `pnpm test` 不互相替代。"
+        },
+        {
+          "name": "adapter-event-payload-contract",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/native-core-adapter.test.ts"
+          ],
+          "minCases": 5,
+          "timeoutMs": 900000,
+          "$note": "P2-05 Action 5 点名的 TS 侧契约测试（此前根本不存在）。它把 useAppTauriEvents.ts 里 listen<{…}> 的**类型字面量**与 src-tauri 各处 .emit(...) 的 json! 字面量、以及 core_adapter.rs 两个载荷构造函数，三方都从真实源码里扫出来对比，一条键都不手抄。方向是 legacy ⊆ core：那 8 处发射点要被删掉，任何 legacy 带而 core 表达不了的键都会在删除的当下静默消失。首跑即抓出 failure_reason —— 客户端解构它并落进 storage.rs 的持久字段，而 core 的 TaskNotification::Status 当时装不下它，这与 ADR-023『payload 不变』直接冲突，因此端口先长出了 Option 的 failure_reason。可失败性已验证：把载荷构造函数改回不带该键，这条 case 立刻红。正控断言键集合非空，因为本文件第一版只数发射点个数，一个把键集扫成空的括号 bug 仍然全绿。"
         }
       ]
     }

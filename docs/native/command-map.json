@@ -24757,7 +24757,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:447",
+        "src-tauri/src/core_adapter.rs:452",
         "src-tauri/src/event_watcher.rs:264",
         "src-tauri/src/session.rs:1839",
         "src-tauri/src/session.rs:2018",
@@ -24789,7 +24789,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:444",
+        "src-tauri/src/core_adapter.rs:446",
         "src-tauri/src/dsh_webui.rs:1473",
         "src-tauri/src/dsh_webui.rs:1488",
         "src-tauri/src/dsh_webui.rs:1507",

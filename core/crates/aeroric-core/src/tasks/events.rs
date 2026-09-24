@@ -33,7 +33,18 @@ pub struct TaskSessionFacts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskNotification {
     /// The task moved to `status`. Emitted for every settled transition the reducer allowed.
-    Status { task_id: String, status: TaskStatus },
+    ///
+    /// `failure_reason` is `Option` for the same reason `TaskSessionFacts::family` is: the
+    /// shipping client's own listener destructures `{ task_id, status, failure_reason? }`
+    /// (`src/state/app/useAppTauriEvents.ts`), and today only the `failed` emits carry the key —
+    /// a `running` or `done` event sends two keys and no `null`. Absent-or-present is therefore
+    /// the only modelling that reproduces the wire unchanged (ADR-023). Dropping it would take
+    /// away the text the UI shows for why a task failed, silently, because nothing else reads it.
+    Status {
+        task_id: String,
+        status: TaskStatus,
+        failure_reason: Option<String>,
+    },
     /// Where the transcript now lives — including when a guess is replaced by a real path.
     Session(TaskSessionFacts),
 }
@@ -43,6 +54,22 @@ impl TaskNotification {
         TaskNotification::Status {
             task_id: task_id.into(),
             status,
+            failure_reason: None,
+        }
+    }
+
+    /// The same announcement with the reason the runtime gave. Core keeps that text on the
+    /// record as `failureReason`, so an adapter reaches it from the committed row rather than
+    /// inventing one.
+    pub fn status_with_reason(
+        task_id: impl Into<String>,
+        status: TaskStatus,
+        reason: impl Into<String>,
+    ) -> Self {
+        TaskNotification::Status {
+            task_id: task_id.into(),
+            status,
+            failure_reason: Some(reason.into()),
         }
     }
 
@@ -115,6 +142,38 @@ mod tests {
         assert_eq!(facts.agent_preset, None);
         assert!(facts.codex_like);
         assert_eq!(note.task_id(), "t1");
+    }
+
+    /// A status announcement has to be able to carry the reason, or the adapter that replaces the
+    /// legacy emitters has nowhere to get it from. The frontend reads `failure_reason` as an
+    /// optional key and only the failed path sends one, so `None` is a real state rather than a
+    /// placeholder.
+    #[test]
+    fn a_failure_notice_keeps_its_reason_and_a_plain_one_does_not_invent_it() {
+        let plain = TaskNotification::status("t1", TaskStatus::Running);
+        let failed = TaskNotification::status_with_reason("t1", TaskStatus::Failed, "exit code 1");
+        match (&plain, &failed) {
+            (
+                TaskNotification::Status {
+                    status: running,
+                    failure_reason: plain_reason,
+                    ..
+                },
+                TaskNotification::Status {
+                    status: failed_status,
+                    failure_reason,
+                    ..
+                },
+            ) => {
+                assert_eq!(*running, TaskStatus::Running);
+                assert_eq!(*failed_status, TaskStatus::Failed);
+                assert_eq!(plain_reason.as_deref(), None);
+                assert_eq!(failure_reason.as_deref(), Some("exit code 1"));
+            }
+            other => panic!("expected two status notifications, got {other:?}"),
+        }
+        assert_eq!(plain.task_id(), "t1");
+        assert_eq!(failed.task_id(), "t1");
     }
 
     #[test]

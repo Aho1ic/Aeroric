@@ -438,10 +438,15 @@ impl TaskEventSink for TauriEventSink {
     fn notify(&self, notification: TaskNotification) {
         use tauri::Emitter;
         match &notification {
-            TaskNotification::Status { task_id, status } => {
-                let _ = self
-                    .app
-                    .emit("task-status", task_status_payload(task_id, *status));
+            TaskNotification::Status {
+                task_id,
+                status,
+                failure_reason,
+            } => {
+                let _ = self.app.emit(
+                    "task-status",
+                    task_status_payload(task_id, *status, failure_reason.as_deref()),
+                );
             }
             TaskNotification::Session(facts) => {
                 let _ = self.app.emit("task-session", task_session_payload(facts));
@@ -482,16 +487,28 @@ const fn family_word(family: aeroric_core::tasks::ProtocolFamily) -> &'static st
 /// Builds the `task-status` payload.
 ///
 /// The key set and spellings are the shipping client's, not a redesign:
-/// `src/state/app/useAppTauriEvents.ts` reads `task_id` and `status`, and the status strings
-/// are the frozen nine (`input_required`, not `inputRequired`).
+/// `src/state/app/useAppTauriEvents.ts` reads `task_id`, `status` and an *optional*
+/// `failure_reason`, and the status strings are the frozen nine (`input_required`, not
+/// `inputRequired`). `src/test/native-core-adapter.test.ts` re-derives all of it from both
+/// sources at gate time, because ADR-023 promises this payload does not change.
+///
+/// `failure_reason` is added only when present, exactly as the shipping `failed` emits do: a
+/// `running` event carries two keys today, so sending `"failure_reason": null` would be a new
+/// key on a wire the frontend already parses — and omitting the key on the failed path would
+/// take away the text the UI explains the failure with.
 pub(crate) fn task_status_payload(
     task_id: &str,
     status: aeroric_core::tasks::TaskStatus,
+    failure_reason: Option<&str>,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "task_id": task_id,
         "status": status_word(status),
-    })
+    });
+    if let Some(reason) = failure_reason {
+        payload["failure_reason"] = serde_json::json!(reason);
+    }
+    payload
 }
 
 /// Builds a `task-session` payload, adding the per-family extras only where the shipping
@@ -545,13 +562,44 @@ mod sink_tests {
     #[test]
     fn the_status_payload_is_the_shape_the_frontend_already_reads() {
         assert_eq!(
-            task_status_payload("t1", TaskStatus::InputRequired),
+            task_status_payload("t1", TaskStatus::InputRequired, None),
             json!({ "task_id": "t1", "status": "input_required" }),
             "snake_case, two keys, no extras"
         );
         assert_eq!(
-            task_status_payload("t1", TaskStatus::Running),
+            task_status_payload("t1", TaskStatus::Running, None),
             json!({ "task_id": "t1", "status": "running" })
+        );
+    }
+
+    /// The reason is the third key the frontend destructures, and only the failed path has it.
+    /// Both halves matter: without the `Some` arm the UI loses its failure text, and without the
+    /// `None` arm every event grows a key the shipping client never sees today.
+    #[test]
+    fn a_failure_carries_its_reason_and_a_non_failure_does_not() {
+        assert_eq!(
+            task_status_payload(
+                "t1",
+                TaskStatus::Failed,
+                Some("Remote process exited with code 1"),
+            ),
+            json!({
+                "task_id": "t1",
+                "status": "failed",
+                "failure_reason": "Remote process exited with code 1",
+            })
+        );
+        assert_eq!(
+            task_status_payload("t1", TaskStatus::Failed, None),
+            json!({ "task_id": "t1", "status": "failed" }),
+            "a failure core has no text for sends no key, not an empty one"
+        );
+        assert!(
+            !task_status_payload("t1", TaskStatus::Done, None)
+                .as_object()
+                .expect("an object")
+                .contains_key("failure_reason"),
+            "the key must be absent rather than null"
         );
     }
 
