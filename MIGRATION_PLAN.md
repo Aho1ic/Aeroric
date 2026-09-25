@@ -1492,6 +1492,16 @@ grill-me
 > - **微任务窗口而非 350 ms**：旧队列靠防抖合并整表；意图队列只开 `setTimeout(0)` 的合并窗口，同键在窗口内合并、异键按序立即排空。这不是优化，是 ADR-022 决策 4 的字面实现——"宿主只决定何时合并"，而合并不再吞键。
 > - **门禁**：`protocol` 6/**98**（`protocol-ts-vocabulary` 地板 6 → **7** 与 minCases 同改读回，`$note` 续写第 5 用例）；`tauri-adapter` 新增 case `adapter-intent-queue`（8 条），模块 12 → **13 case／2522 用例**；`pnpm typecheck` 0 错（首跑抓到 vitest matcher 不接第二条 message 参数的三处 TS2554——消息移到 `expect(value, message)` 位）；**全量 `pnpm test` 空闲机复跑 377 files／5492 passed**（+1 文件 +9 用例，vs 补记六十六的 376/5483）。Rust 侧本轮零改动，core/tasks/storage/contracts/inventory 不重跑（上一条提交 `4ba506a` 处它们全绿，工作区只差 TS 文件）。
 > - **还没做的（下一步不变）**：21 处调用点的逐点切换——每处把"算新整表再 `persistProjectTasks`"改成"发意图 + `onAdopt` 采纳"，五个补偿点里 #8/#10/#13 不再落盘（纯内存回滚）、#4/#6 发真 `Delete`；#11 启动路径按项目扇出 `normalizeAfterBoot`；切完之后 `save_project_tasks` 的宿主写路径在同一刀里退役，`adapter-invariants` 加"还剩几处快照写 = 0"的可数断言。**切换完成前 `apply_task_intent` 保持 `reachable=false` 如实记账。**
+>
+> **第七十二次补记（2026-09-26，Q72：#20 在 13 条里没有名字——缺口上报、用户拍板、第 14 条 `EditTodo` 四侧同改落地）**：提交为 `3ca5762`（§11 执行方案，把 21 处映射钉成表并暴露这条缺口）与 `d5dd26d`（14 条意图本体，13 files）。
+>
+> - **缺口怎么暴露的**：§11 逐点映射时才发现 #20（todo 编辑 `prompt`/`agent`/`permissionMode`，前置 `status==="todo"`）没有对应 op——补记六十七的四问把它归为"单行编辑（带前置）"却从未为它命名。**这是把"下一步"从一句话变成可执行表的价值：清单逼每个站点认领一条意图，认领不上来的就是词汇表的洞。**
+> - **用户拍板（选项①）**：新增第 14 条具名意图 `EditTodo`，元数据类（10/4）；否掉"并进 create"（编辑发生在建行之后任意时刻）与"#20 例外保留快照"（=重开决策 1 否过的混合形态）。`reducer::edit_todo` 与 `updateTodoTaskInList` 一字不差：非 todo 行静默不改、同值重放零写、前置判等发生在 core 的权威快照上（守卫留在宿主就是把竞态交给 core 看不见的那一侧）。
+> - **四侧同改的实感**：protocol 名单、`TASK_INTENT_VOCABULARY`、`TaskIntentOp`/队列镜像、契约产物四处一起动——中间任何一处漏改都有现成的红（分类用例、parity 第 5 条、队列对表用例）。ADR-037 追加"修正案"一节（不重写历史决策），`CONTEXT.md` 词汇表条目 13→14。
+> - **一条容易记混的账**：`src/taskIntentQueue.ts` 里的 `invoke("apply_task_intent")` 字面量使 inventory 的可达性扫描把这条命令转成 `reachable=true`（`--freeze-reachability` 落盘：reachable 567→568、unreachable 94→93，diff 仅三条相关行 + 两个计数）。**这条 true 的含义是"前端存在字面量"，不是"21 处已接上"**——§11 与本条同时写下，防止下一会话把它读成切换已完成。真正的验收面仍是 `persistProjectTasks` 归零 + 快照写计数门禁。
+> - **顺带查明的门禁工具事实**：`--freeze` **不**重算 reachability（它按既有语义透传机器字段），工具专门有 `--freeze-reachability` 一条（同一索引重算并写 `meta.counts.reachable/unreachable`）。此前文档只记过"pin 行号要手改"，今天补上这半边。**教训照例：绿灯顺序会骗人——`--freeze-check` 说 noop、`--check` 说 drifted，两个都跑才知道差在哪。**
+> - **门禁**：core 272/0、`tasks` 7/144、`storage` 5/222、`protocol` 6/98、`projects` 5/21、`skeleton` 20/113、`tauri-adapter` 13/2522、`doctor` 18/18、`contracts --check` 12 份逐字节、`inventory --check` consistent + `--freeze-check` noop、typecheck 0 错、全量 `pnpm test` **377/5492 绿**（用例数与补记七十一相同——本轮全是既有用例内加断言）。
+> - **下一步（不变，可以动手了）**：按 §11 映射表做 21 处切换本体——一次提交的粒度（切换期间双通道风险已记进 §11），同刀退役 `save_project_tasks` 快照写 + 计数门禁；#7 的 `todo→pending` 与启动耦合处按"决策 5 + 执行器接线"处理，不许塞进队列。
 
 
 **发射面移交已收口（补记五十四）**：两个家族的 `emitters` 都是 1，且由 `adapter-invariants` 的 ADR-023 规则逐家族守着。未接上的另一半是"会话字段与状态一起落盘"，它与状态观察的 commit 同属 Action 3，见 ADR-023 落实与评审 §5.2b。`failure_reason` 障碍、抑制闸归属、观察通道本体三项前置分别由补记四十二、ADR-034 + 补记四十七、补记五十一关闭。**P2-05 剩下的三项**：执行器接线（writer 在 macOS 真正递交，前置是 Action 3 的 store 改造 + ADR-022 意图队列）、ADR-026 按 op 分类的冲突处置（同样前置是写权移交）、以及门禁那两项待撤的守卫（`core-observer-does-not-write-yet`）。**ADR-027 决策 4 的常驻只读指示已在补记五十五完成**，它此前一直挂在"未生效"清单里。**G18 仍未裁决。** §1 的三条验收现在**都有了证据**（#1 门禁全绿、#2 补记四十一、#3 前置①与重键），P2-05 可在接线之后收口。
