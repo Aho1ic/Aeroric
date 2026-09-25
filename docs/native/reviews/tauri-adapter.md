@@ -73,7 +73,9 @@
    - ✅ ADR-021：`writer_handover_allowed()` 体必须是 `cfg!(target_os = "macos")`，出现 windows/linux 即红。
    - ✅ ADR-031：claim 的 remove 只准出现在 `release_session_path_if_unreferenced` 内（helper 里若不 remove 也报错）。
    - ✅ ADR-030：靠 `--lib` 用例计数地板 + 3 条专项测试（含两次变异验证其可失败性）。
-   - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3；ADR-023（两个 `emitters` 计数降回 1）→ 等删那 **28** 处发射点（实测，见 ADR-033）；ADR-026（重放上限一次）、ADR-027（只读实例写入口全拒）→ **地基已到位**（补记四十五：`CoreGateway`/`TaskService` 已进 managed state，ADR-027 的"第二实例只读且说得出目录与持有者"已有一条用例实测过），现在缺的是 case 本身而不是宿主状态。这五条仍**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
+   - ✅ **Action 4 调用方向（2026-09-25 新增，第五条规则）**：`legacy command → TaskService → executor → *_core` 不得回头。可判定的两种破坏面各有一条负例——回头调 command wrapper（命令名取自 `command-map.json` 的 660 条注册表，因此**新增命令自动纳入**，无需改脚本）与未委派就 `return Ok(`（无声 no-op）；`ExecutorFailure::Unsupported` 必须以 `Err(...)` 出门，否则等于拒绝被吞掉。扫描前过 `codeOnly()`：清空注释但保留字节长度与行数，所以报出的行号仍指向真代码，而字符串里的 `//` 不当注释起点。`run_task_core(` 不被 `run_task\(` 误伤有一条近亲正控。真实树判定：5 个端口方法全部委派到位。单元负例 15 → **23**。
+   - ⏳ ADR-022（队列不得携带整表快照）、ADR-024（分组导入幂等）→ 等 Action 3，而 Action 3 卡在 **Q67 未拍板**（intents 在哪执行，见计划补记五十七）；ADR-026（重放上限一次）→ 同因，且**全仓尚无重放实现**。这三条仍**记为未生效**并写在模块 `$note` 里，不注册成永远红或永远绿的假 case。
+   - ✅ **ADR-023 已生效（2026-09-24，补记五十二～五十四）**：28 处 legacy 发射点全部删除，`task-status`/`task-session` 的 `emitters` 都是 1，由上面那条 ADR-023 规则逐家族断言"恰好一行且必须在 `core_adapter.rs`"。**ADR-027 决策 4 的常驻指示也已生效（补记五十五）**：`ReadOnlyStorageBadge` 挂在侧边栏底部，toast 之外那份不过期的告知补上了。
 4b. **验收 #2（真 executor 跑 fake 任务）不可写，原因不是存储根，是 Wry 具体类型**（2026-09-23 实测，不是推测）：
    - 先解决了一个次要障碍：`platform::home_dir()` 在 unix 上就是读 `$HOME`，加一个 `#[cfg(test)]` 专用重定向确实可行，且现存三处读 `home_dir()` 的测试（`config.rs`、`sftp.rs`、`notebook/export.rs`）都是"与 `home_dir()` 自比"，重定向不会让它们断言到假东西。
    - **真正的墙**：`LegacyTaskExecutor` 持有的必须是 `AppHandle<Wry>`，因为 `launch` 要一路调进 `run_task_core → spawn_pty_reader → send_pty_chunk`，这条链上的签名是 Wry 具体的；而 `tauri::test` 只产出 `App<MockRuntime>`。编译器直接把这条路堵死：`error[E0308]: expected AppHandle, found App<MockRuntime>`。`complete_dsh_task_core` 那类泛型先例救不了它——同一次尝试里 `run_dsh_task_core<R: Runtime>` 就已经因为体内要调具体 `AppHandle` 的函数而编译失败（补记三十五记过）。

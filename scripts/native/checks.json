@@ -10,7 +10,7 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
-      "adapter-invariants-unit@tauri-adapter": 15,
+      "adapter-invariants-unit@tauri-adapter": 23,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 10,
       "extraction-unit@skeleton": 9,
@@ -832,7 +832,7 @@
           "name": "adapter-invariants-unit",
           "kind": "test",
           "parse": "node-test",
-          "minCases": 15,
+          "minCases": 23,
           "timeoutMs": 300000,
           "argv": [
             "node",
@@ -850,7 +850,7 @@
             "node",
             "scripts/native/adapter-invariants.mjs"
           ],
-          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。"
+          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则五条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
         },
         {
           "name": "adapter-acceptance-real-kernel",

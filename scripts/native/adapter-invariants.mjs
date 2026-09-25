@@ -17,6 +17,13 @@
 //                      core's sink. Both `task-status` (22 legacy sites) and `task-session`
 //                      (6) are now under the rule; this is the check that makes "only core
 //                      emits" countable instead of reviewed.
+//   Action 4 (P2-05)   the call direction is `legacy command -> TaskService -> executor -> *_core`
+//                      and never back up. Two things the acceptance criteria name as forbidden —
+//                      a recursive call from the executor into a command wrapper, and a port that
+//                      quietly succeeds without launching — are both decidable from source, so
+//                      they are checked rather than reviewed. The command names come from the
+//                      frozen inventory, so a newly added command is covered without editing this
+//                      file.
 //
 // Each rule carries a positive control: if the scan cannot show it read the text it claims to
 // have read, the check fails rather than passing on an empty corpus.
@@ -27,6 +34,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TAURI_SRC = "src-tauri/src";
+const EXECUTOR = `${TAURI_SRC}/legacy_task_executor.rs`;
+const COMMAND_MAP = "docs/native/command-map.json";
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /** Every `.rs` file under `dir`, recursively, as repo-relative paths. */
 export function rustFiles(dir, root = repoRoot) {
@@ -54,8 +67,66 @@ function lineOf(text, index) {
   return text.slice(0, index).split("\n").length - 1;
 }
 
-/** @returns {string[]} problems; empty means the three ADR rules all hold. */
-export function adapterInvariantProblems(files) {
+/**
+ * Comments blanked out, byte length and line numbers preserved.
+ *
+ * Action 4's rule is a *reference* check, and this repo has already been fooled twice in opposite
+ * directions: a doc comment naming a forbidden identifier made an absence guard report a violation
+ * that did not exist, while an ignored file made it report cleanliness that did not. Blanking
+ * comments keeps the module doc that explains the direction readable to a human while making it
+ * invisible to the rule. `//` inside a string literal is not a comment, so string state is tracked;
+ * raw strings are not modelled — the file this runs on has none.
+ */
+export function codeOnly(text) {
+  const out = text.split("");
+  let inString = false;
+  let inBlock = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (inBlock > 0) {
+      if (c === "/" && next === "*") inBlock += 1;
+      else if (c === "*" && next === "/") inBlock -= 1;
+      if (c !== "\n") out[i] = " ";
+      continue;
+    }
+    if (inString) {
+      if (c === "\\") {
+        if (next && next !== "\n") out[i + 1] = " ";
+        i += 1;
+        continue;
+      }
+      if (c === '"') inString = false;
+      if (c !== "\n") out[i] = " ";
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out[i] = " ";
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      let j = i;
+      while (j < text.length && text[j] !== "\n") {
+        out[j] = " ";
+        j += 1;
+      }
+      i = j - 1;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlock = 1;
+      out[i] = " ";
+      out[i + 1] = " ";
+      i += 1;
+      continue;
+    }
+  }
+  return out.join("");
+}
+
+/** @returns {string[]} problems; empty means every rule above holds. */
+export function adapterInvariantProblems(files, commandNames = []) {
   const problems = [];
   const named = new Map(files.map((file) => [file.name, file.text]));
   const pty = named.get(`${TAURI_SRC}/pty.rs`);
@@ -173,7 +244,81 @@ export function adapterInvariantProblems(files) {
     }
   }
 
+  // ---- Action 4: the executor delegates downward and never calls back up
+  //
+  // `legacy command -> TaskService -> LegacyTaskExecutor -> *_core launch body` is the whole
+  // reason each launch body was split in two. The two ways it rots are both visible from source:
+  // a call from the executor into a command wrapper (the recursion), and a port that reports
+  // success without reaching a launch body (the silent no-op the plan forbids by name).
+  const executorRaw = named.get(EXECUTOR);
+  // Offsets are preserved, so every slice below lands where the raw file does — the line numbers
+  // this rule reports still point at real code, it just cannot be satisfied or fooled by prose.
+  const executor = executorRaw ? codeOnly(executorRaw) : executorRaw;
+  if (!executor) {
+    problems.push(`Action 4: ${EXECUTOR} is not in the scan — the call-direction rule cannot judge an absent file`);
+  } else {
+    const implAt = executor.search(/\nimpl[^\n]*\bTaskExecutor\s+for\b/);
+    const implStart = implAt < 0 ? -1 : executor.indexOf("{", implAt);
+    // A trait impl's methods close at 4+ spaces, so the first column-0 `}` is the impl's own end.
+    const implEnd = implStart < 0 ? -1 : executor.indexOf("\n}\n", implStart);
+    if (implEnd < 0) {
+      problems.push(`Action 4: the \`impl … TaskExecutor for …\` block in ${EXECUTOR} could not be read — refusing to pass an unreadable direction rule`);
+    } else {
+      const implText = executor.slice(implStart, implEnd);
+      const marks = [...implText.matchAll(/\n    (?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/g)]
+        .map((match) => ({ name: match[1], at: match.index }));
+      if (marks.length === 0) {
+        problems.push(`Action 4: the TaskExecutor impl in ${EXECUTOR} exposes no method — the scan read an empty block, so absence proves nothing`);
+      }
+      for (const [index, mark] of marks.entries()) {
+        const body = implText.slice(mark.at, marks[index + 1] ? marks[index + 1].at : implText.length);
+        const delegated = /\b[A-Za-z0-9_]*_core\s*\(/.exec(body);
+        if (!delegated) {
+          problems.push(
+            `Action 4: LegacyTaskExecutor::${mark.name} reaches no *_core launch body — a port that launches nothing must refuse out loud (ExecutorFailure), not return quietly`,
+          );
+          continue;
+        }
+        const earlySuccess = body.indexOf("return Ok(");
+        if (earlySuccess >= 0 && earlySuccess < delegated.index) {
+          problems.push(
+            `Action 4: LegacyTaskExecutor::${mark.name} returns Ok before delegating to a *_core body — that is the silent no-op P2-05's acceptance names`,
+          );
+        }
+      }
+      for (const match of implText.matchAll(/ExecutorFailure::Unsupported/g)) {
+        const before = implText.slice(Math.max(0, match.index - 40), match.index);
+        if (!/Err\(\s*$/.test(before)) {
+          problems.push("Action 4: an ExecutorFailure::Unsupported is built outside an Err(...) — a refusal has to travel back to core as an error to be recorded");
+        }
+      }
+      if (/\bTaskService\b/.test(executor)) {
+        problems.push(`Action 4: ${EXECUTOR} names TaskService — the executor may not call back into the service that owns it`);
+      }
+      const lines = executor.split("\n");
+      for (const name of commandNames) {
+        const upward = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}\\s*\\(`, "g");
+        for (const match of executor.matchAll(upward)) {
+          const fn = enclosingFunction(lines, lineOf(executor, match.index));
+          problems.push(
+            `Action 4: ${EXECUTOR}:${fn ?? "top-level"} calls the command wrapper ${name}() — the direction is command -> service -> executor -> *_core, and a call back up re-enters the ledger`,
+          );
+        }
+      }
+    }
+  }
+
   return problems;
+}
+
+/** The command names from the frozen inventory — the set the executor must never call. */
+export function inventoryCommandNames(root = repoRoot) {
+  const map = JSON.parse(readFileSync(path.join(root, COMMAND_MAP), "utf8"));
+  const names = (map.commands ?? []).map((entry) => entry.command).filter((name) => typeof name === "string");
+  if (names.length < 100) {
+    throw new Error(`${COMMAND_MAP}: only ${names.length} command names — a thin inventory would make the no-recursion rule pass on nothing`);
+  }
+  return [...new Set(names)].sort();
 }
 
 function main() {
@@ -182,13 +327,13 @@ function main() {
     console.error(`adapter-invariants: only ${files.length} rust files found under ${TAURI_SRC} — the scan target is wrong, not clean`);
     process.exit(1);
   }
-  const problems = adapterInvariantProblems(files);
+  const problems = adapterInvariantProblems(files, inventoryCommandNames());
   for (const problem of problems) console.error(`  - ${problem}`);
   if (problems.length) {
-    console.error(`adapter-invariants: ${problems.length} problem(s) — ADR-020/021/031/032 are load-bearing, see docs/native/adr/`);
+    console.error(`adapter-invariants: ${problems.length} problem(s) — ADR-020/021/023/031/032 and Action 4 are load-bearing, see docs/native/adr/`);
     process.exit(1);
   }
-  console.log(`adapter-invariants: ${files.length} files, ADR-020/021/031/032 hold`);
+  console.log(`adapter-invariants: ${files.length} files, ADR-020/021/023/031/032 and Action 4 hold`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

@@ -7,12 +7,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { adapterInvariantProblems, enclosingFunction, rustFiles } from "./adapter-invariants.mjs";
+import { adapterInvariantProblems, codeOnly, enclosingFunction, rustFiles } from "./adapter-invariants.mjs";
 
 const PTY = "src-tauri/src/pty.rs";
 const LIB = "src-tauri/src/lib.rs";
 const ADAPTER = "src-tauri/src/core_adapter.rs";
 const SESSION = "src-tauri/src/session.rs";
+const EXECUTOR = "src-tauri/src/legacy_task_executor.rs";
+/** Names the no-recursion rule is judged against; the real run loads them from the inventory. */
+const COMMANDS = ["run_task", "resume_task", "save_project_tasks"];
 
 /** A source tree that satisfies all three rules, so every mutation below is attributable to the
  *  one line it changes rather than to scaffolding. */
@@ -61,15 +64,47 @@ impl TaskEventSink for TauriEventSink {
 `,
     },
     { name: SESSION, text: `fn claim_session_path(app: &AppHandle, path: &str) -> bool {\n    true\n}\n` },
+    {
+      // The module doc names TaskService on purpose: prose must not satisfy or trip the rule, only
+      // a reference in code may. Every method here delegates, so mutations below are attributable.
+      name: EXECUTOR,
+      text: `//! The fixed direction is command -> TaskService -> this file -> *_core launch bodies.
+impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
+    fn launch(&self, request: &LaunchRequest) -> Execution<()> {
+        if request.family == ProtocolFamily::Dsh {
+            return Err(ExecutorFailure::Unsupported {
+                reason: dsh_refusal_reason(),
+            });
+        }
+        run_task_core(app, task_id)
+    }
+    fn resume(&self, request: &ResumeRequest) -> Execution<()> {
+        resume_task_core(app, task_id)
+    }
+}
+`,
+    },
   ];
 }
 
-function problemText(files) {
-  return adapterInvariantProblems(files).join("\n");
+function problemText(files, commands = COMMANDS) {
+  return adapterInvariantProblems(files, commands).join("\n");
+}
+
+/**
+ * For a one-fact mutation, "some problem mentions it" is not enough: a fixture that breaks in two
+ * ways at once would let a rule look like it understood the wrong thing. Assert a single problem.
+ */
+function onlyProblemText(files, commands = COMMANDS) {
+  const problems = adapterInvariantProblems(files, commands);
+  assert.equal(problems.length, 1, `expected exactly one problem, got:\n  ${problems.join("\n  ")}`);
+  return problems[0];
 }
 
 test("the reference tree satisfies every rule", () => {
-  assert.deepEqual(adapterInvariantProblems(cleanFiles()), []);
+  // Doubles as the near-miss control: the fixture calls `run_task_core(`, and a command name that
+  // is a prefix of the body it delegates to must not read as calling the command wrapper.
+  assert.deepEqual(adapterInvariantProblems(cleanFiles(), COMMANDS), []);
 });
 
 test("a second run-identity source is refused", () => {
@@ -197,5 +232,106 @@ pub(crate) fn rogue_session(app: &AppHandle<Wry>, facts: Value) {
     let _ = app.emit("task-session", facts);
 }
 `;
-  assert.match(problemText(files), /ADR-023: task-session still has legacy emitters outside the sink/);
+  assert.match(onlyProblemText(files), /ADR-023: task-session still has legacy emitters outside the sink/);
+});
+
+// ---- Action 4: the call direction. Each case mutates one fact about the executor fixture.
+
+test("a call back up into a command wrapper is refused, and named by its function", () => {
+  const files = cleanFiles();
+  files[4].text += `
+fn retry_after_failure(app: &AppHandle<Wry>, task_id: &str) {
+    run_task(app, task_id.to_string());
+}
+`;
+  assert.match(
+    onlyProblemText(files),
+    /Action 4: src-tauri\/src\/legacy_task_executor\.rs:retry_after_failure calls the command wrapper run_task\(\)/,
+  );
+});
+
+test("a port that reaches no launch body is caught rather than praised", () => {
+  const files = cleanFiles();
+  files[4].text = files[4].text.replace(
+    "        resume_task_core(app, task_id)\n",
+    "        Ok(Execution::ready(()))\n",
+  );
+  assert.match(
+    onlyProblemText(files),
+    /Action 4: LegacyTaskExecutor::resume reaches no \*_core launch body/,
+  );
+});
+
+test("reporting success before delegating is the silent no-op the plan names", () => {
+  const files = cleanFiles();
+  files[4].text = files[4].text.replace(
+    "        resume_task_core(app, task_id)",
+    "        if request.detached {\n            return Ok(Execution::ready(()));\n        }\n        resume_task_core(app, task_id)",
+  );
+  assert.match(
+    onlyProblemText(files),
+    /Action 4: LegacyTaskExecutor::resume returns Ok before delegating/,
+  );
+});
+
+test("a refusal that does not travel as an Err is not a refusal", () => {
+  const files = cleanFiles();
+  files[4].text = files[4].text.replace(
+    "            return Err(ExecutorFailure::Unsupported {",
+    "            let parked = ExecutorFailure::Unsupported {",
+  );
+  assert.match(
+    onlyProblemText(files),
+    /Action 4: an ExecutorFailure::Unsupported is built outside an Err/,
+  );
+});
+
+test("an executor that cannot be found is a failure, not an empty clean sweep", () => {
+  const files = cleanFiles();
+  files[4].text = files[4].text.replace("impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {", "impl<R: tauri::Runtime> SomethingElse for LegacyTaskExecutor<R> {");
+  assert.match(
+    onlyProblemText(files),
+    /Action 4: the `impl … TaskExecutor for …` block in .* could not be read/,
+  );
+});
+
+test("prose naming TaskService is invisible to the rule; a code reference is not", () => {
+  // The fixture's module doc already names TaskService and stays clean (see the reference-tree
+  // case), which is what makes this direction meaningful.
+  const files = cleanFiles();
+  files[4].text = files[4].text.replace(
+    "        run_task_core(app, task_id)",
+    "        let service: Arc<TaskService> = self.service.clone();\n        run_task_core(app, task_id)",
+  );
+  assert.match(onlyProblemText(files), /Action 4: src-tauri\/src\/legacy_task_executor\.rs names TaskService/);
+});
+
+// ---- codeOnly: the blanker that makes the two directions above possible.
+
+test("blanking comments preserves length and line numbers", () => {
+  const text = `//! prose about TaskService and run_task()
+fn real() {
+    // another prose line
+    run_task_core()
+}
+`;
+  const blanked = codeOnly(text);
+  assert.equal(blanked.length, text.length, "byte length must survive so line numbers still point at code");
+  assert.equal(blanked.split("\n").length, text.split("\n").length);
+  assert.ok(!blanked.includes("TaskService"), "doc-comment prose must not survive as content");
+  assert.ok(!blanked.includes("another prose line"), "line comments must not survive either");
+  assert.match(blanked, /fn real\(\) \{/);
+  assert.match(blanked, /run_task_core\(\)/);
+});
+
+test("a slash-slash inside a string is content, not a comment", () => {
+  const text = 'let url = "https://example/a"; let after = 1;\n';
+  const blanked = codeOnly(text);
+  assert.equal(blanked.length, text.length);
+  assert.ok(!blanked.includes("https"), "string contents are blanked out");
+  assert.match(
+    blanked,
+    /let after = 1;/,
+    "if `//` inside the string were read as a comment, the rest of the line would be blanked too",
+  );
 });
