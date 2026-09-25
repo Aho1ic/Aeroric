@@ -189,6 +189,22 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_family: Option<String>,
+    /// ADR-028:钉住"这个任务当初是怎么起的"。core 的 `create` 会写这个键,宿主必须能装下它——
+    /// serde 静默丢未知字段,而 `save_project_tasks` 是整份覆盖,所以缺这一个声明就等于每次
+    /// 客户端保存都会把启动族抹掉,任务被改判成另一族(表现是换了 CLI 参数与会话文件格式)。
+    #[serde(
+        rename = "launchFamily",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub launch_family: Option<String>,
+    /// ADR-029:续跑走的族,同上;缺失时由 sessionFamily 推导。
+    #[serde(
+        rename = "resumeFamily",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resume_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
     #[serde(rename = "failureReason", skip_serializing_if = "Option::is_none")]

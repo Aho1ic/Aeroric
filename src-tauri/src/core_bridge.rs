@@ -141,6 +141,8 @@ mod tests {
             session_agent: Some("omp".into()),
             session_codex_like: Some(true),
             session_family: Some("omp".into()),
+            launch_family: Some("omp".into()),
+            resume_family: Some("omp".into()),
             starred: Some(true),
             failure_reason: Some("signal 9".into()),
             worktree_path: Some("/w/t1".into()),

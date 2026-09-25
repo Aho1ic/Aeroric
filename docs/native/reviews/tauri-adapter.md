@@ -230,3 +230,24 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
   它实际能保证的东西——它保护"自己装了根的测试"，不保护"没装根的读者"，早先那句"别的测试落到同一个
   目录也改变不了答案"是错的，它没算到反向：别人的写会落进**我的**根。
 
+
+## 7. Action 3 的一条硬前置：宿主装不下 core 写的启动族（2026-09-25）
+
+量 ADR-022 意图词汇表时撞上的，不是设计歧义而是会静默丢数据的事实链：
+
+| 环节 | 证据 |
+| --- | --- |
+| core 的 `create` 往任务记录写 `launchFamily`/`sessionFamily`/`resumeFamily` | `core/crates/aeroric-core/src/tasks/service.rs:437-441` |
+| 宿主 `Task` 只有 `session_family` | `src-tauri/src/storage.rs:191` |
+| TS `Task` 只有 `sessionFamily` | `src/types.ts:349` |
+| serde 静默忽略未知字段（无 `deny_unknown_fields`），且整份覆盖写 | `src-tauri/src/storage.rs:397-410` |
+
+结论：**写权一递交，客户端每次保存都会把 ADR-028/029 钉死的启动族抹掉**——任务下次被换成另一族的 CLI 参数与会话文件格式，而两侧都不会报错。今天没有生产调用方走 `TaskService`（`src-tauri/src/lib.rs:672` 明写"仍由 storage.rs 保存"），所以是隐性缺陷；但它属于 Action 3 的前置，不是收尾项。
+
+**为什么既有门禁看不见**：`src/test/task-model-parity.test.ts` 守的是 TS↔Rust 两侧字段集合**相等**，两侧同时缺一个键时它完美通过。缺的是第三边——"core 写的键 ⊆ 宿主装得下的键"。已补，扫描范围是 `core/crates/aeroric-core/src/tasks/` 的生产段，正控要求至少扫到 `id`/`status`/`agent`/三个族键。
+
+**豁免按判据给，不按名单给**：`generation` 同样不在宿主结构体里，但它是 `stamp_generation_copies`（`service.rs:373-383`）每次写时从账本重盖的派生副本，丢了能自愈；`launchFamily`/`resumeFamily` 不可重算，所以必须声明。测试里另有一条"白名单键若 core 已不写就报错"，防豁免面只增不减。
+
+**已落地的修复**：两侧各加两个可选字段 + `core_bridge.rs` 的逐字段 fixture 同步；v1 契约不变（`contracts --check` 仍 12 份逐字节一致）。可失败性：注释掉 `launch_family` 声明后两条守卫同时红并点名 `launchFamily`。
+
+**顺带查到的意图词汇表规模**（Q67 的输入）：21 个持久化调用点，其中 7 处 core 无具名 op（todo 编辑、会话归属、worktree 挂载/丢弃、4 处回滚补偿写），但全部可由现成的 `TaskService::mutate` 表达；4 处回滚是补偿写而非用户意图，倾向留在宿主侧做字段级回退。

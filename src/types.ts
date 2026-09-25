@@ -347,6 +347,14 @@ export interface Task {
   sessionCodexLike?: boolean;
   /** 三值协议族;读取优先于 sessionCodexLike(旧任务缺省时由其推导)。 */
   sessionFamily?: ProtocolFamily;
+  /**
+   * ADR-028:这个任务当初是按哪一族起起来的,钉进记录后不随 profile 改动追溯存量任务。
+   * 必须声明在这一侧:save_project_tasks 是整份覆盖,而 serde 静默丢未知字段,
+   * 所以这里少一个字段就等于客户端每次保存都把 core 钉好的启动族抹掉。
+   */
+  launchFamily?: ProtocolFamily;
+  /** ADR-029:续跑走的族;缺失时由 sessionFamily 推导。同上,少了就会被抹掉。 */
+  resumeFamily?: ProtocolFamily;
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;

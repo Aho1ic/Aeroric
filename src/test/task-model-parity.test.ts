@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -88,6 +88,40 @@ function rustTaskFields(): RustField[] {
   return fields.sort((left, right) => (left.wire < right.wire ? -1 : 1));
 }
 
+const CORE_TASK_DIR = "core/crates/aeroric-core/src/tasks";
+
+/**
+ * core 在生产代码里往任务记录上写下的键名。
+ *
+ * 这是两侧的集合相等断言看不见的**第三边**:`types.ts` 与 `storage.rs` 同时缺一个字段时,
+ * 它们仍然完美相等,而这个字段是 core 会写的 —— 于是宿主整份覆盖写会把它静默抹掉。
+ * 只扫 `src/tasks/`(任务记录的写端都在这里)并在 `#[cfg(test)]` 处截断,否则测试夹具里的
+ * `"aFieldTheCoreHasNeverSeen"` 之类字符串会混进集合。
+ */
+function coreWrittenTaskKeys(): string[] {
+  const keys = new Set<string>();
+  const dir = resolve(process.cwd(), CORE_TASK_DIR);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() || !entry.name.endsWith(".rs")) continue;
+    const name = entry.name;
+    const source = readFileSync(resolve(dir, name), "utf8")
+      .split("#[cfg(test)]")[0]
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    // record.0.insert("status".into(), …) —— 单行或换行都算
+    for (const match of source.matchAll(/\.0\s*\.\s*insert\(\s*"([A-Za-z][A-Za-z0-9_]*)"/g)) {
+      keys.add(match[1]);
+    }
+    // 一族三键是循环里写的:for (key, family) in [("launchFamily", launch_family), …]
+    for (const match of source.matchAll(
+      /\(\s*"([A-Za-z][A-Za-z0-9_]*)"\s*,\s*(?:launch_family|session_family|resume_family)\b/g,
+    )) {
+      keys.add(match[1]);
+    }
+  }
+  return [...keys].sort();
+}
+
 describe("Task model parity between src/types.ts and src-tauri/src/storage.rs", () => {
   it("declares the same field set on both sides", () => {
     const ts = tsTaskFields();
@@ -150,5 +184,31 @@ describe("Task model parity between src/types.ts and src-tauri/src/storage.rs", 
       expect(ts).not.toContain(dead);
       expect(wire).not.toContain(dead);
     }
+  });
+
+  it("can hold every key core writes into a task record", () => {
+    const written = coreWrittenTaskKeys();
+    const wire = rustTaskFields().map((field) => field.wire);
+
+    // 正控:这几个键里只要有一个扫不到,就是解析器坏了而不是规则通过。
+    for (const key of ["id", "status", "agent", "sessionFamily", "launchFamily", "resumeFamily"]) {
+      expect(written, `${CORE_TASK_DIR} 里没扫到 ${key},扫描大概率坏了`).toContain(key);
+    }
+    // 允许宿主不装得下的,只有"每次写都由 core 从账本重盖的派生副本"这一类:
+    // `generation` 由 stamp_generation_copies(service.rs:373-383)在每次写时改写,
+    // 权威永远在账本里,客户端抹掉它不丢信息。判据是"丢了能不能自愈",不是"懒得上黑名单"——
+    // ADR-028/029 的 launchFamily/resumeFamily 是**钉死的**、不可重算,所以它们必须被声明。
+    const derived = new Set(["generation"]);
+    expect(
+      [...derived].filter((key) => !written.includes(key)),
+      "白名单里的键 core 已经不再写了,请把它删掉而不是留着扩大豁免面",
+    ).toEqual([]);
+    const unheld = written.filter((key) => !wire.includes(key) && !derived.has(key));
+    expect(
+      unheld,
+      `core 会往任务记录上写这些键,但宿主 Task 装不下。serde 静默丢未知字段,而 ` +
+        `save_project_tasks 是整份覆盖 —— 写权一递交,客户端每次保存都会把它们抹掉;` +
+        `launchFamily/resumeFamily 被抹掉的后果是 ADR-028/029 钉住的启动族失效`,
+    ).toEqual([]);
   });
 });

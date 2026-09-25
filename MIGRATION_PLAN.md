@@ -1381,6 +1381,17 @@ grill-me
 > - **两件留给用户的事，我都没擅自做**：① `~/.aeroric/agent-credentials/` 里有 **9 个 `claude-refresh-*`** 遗留文件，是本仓测试在过去几次并行运行中 panic 于自身清理之前留下的（现在那条测试已有自己的 scratch root，不再往 live 目录写）。删用户数据目录里的东西属项目外写入，等你确认再动。② `67d8382` 的提交标题要不要 amend——未推送所以 amend 安全，但按纪律我不自己改。
 > - **P2-05 现状与卡点**：发射面（ADR-023）与常驻指示（ADR-027 决策 4）已收口；剩下 Action 3（卡 **Q67**）、执行器接进产品路径（卡 Action 3）、ADR-026 按 op 分类的冲突处置（卡 Action 3——**注意它等的是宿主重放，不是 core 侧先建**，所以我没有提前在 core 里造一个没有调用方的重放）、G18 归 P3-02。**Phase 2 Gate 在 Action 3 之前不能放行**，因此也没替它准备"看起来能过"的口径。
 
+>
+> **第六十次补记（2026-09-25，查出并补上一处会让 Action 3 静默毁数据的前置：宿主装不下 core 写的启动族）**：这条不是新功能，是 Q67 等答复期间去量"ADR-022 的意图队列到底要携带哪些意图"时撞出来的——量法是把 21 个持久化调用点与 core 的记录写端逐键对照。
+>
+> - **缺陷本身**：core 的 `create` 往任务记录里写三个族键 `launchFamily` / `sessionFamily` / `resumeFamily`（`service.rs:437-441`），而宿主 `Task` 只声明了 `session_family`（`storage.rs:191`）、TS `Task` 只有 `sessionFamily`（`types.ts:349`）。serde 默认**静默忽略未知字段**且这里没有 `deny_unknown_fields`，`save_project_tasks` 又是整份覆盖写（`storage.rs:397-410`）——所以**写权一递交，客户端每次保存都会把 ADR-028/029 钉死的启动族抹掉**，表现是任务被换成另一族的 CLI 参数与会话文件格式重起。今天是隐性的：生产路径没有任何 `TaskService` mutation 调用方（`lib.rs:672` 就明写着"仍由 storage.rs 保存"），但它是 Action 3 的**前置**而不是后续收尾项。
+> - **为什么既有门禁看不见它**：`src/test/task-model-parity.test.ts` 已经守着 TS↔Rust 两侧字段集合相等，可它结构上是**对称**的——两侧同时缺同一个键时完美相等。缺的是第三边。已补一条用例："core 写进任务记录的键 ⊆ 宿主 Task 装得下的键"，扫描范围 `core/crates/aeroric-core/src/tasks/` 的生产段（在 `#[cfg(test)]` 处截断，否则夹具里的 `"aFieldTheCoreHasNeverSeen"` 会混进来），正控要求它至少扫到 `id`/`status`/`agent`/三个族键，防"解析器坏了→集合空→永真"。
+> - **豁免面写成判据而不是名单**：`generation` 也在这批键里，但它是派生副本——`stamp_generation_copies`（`service.rs:373-383`）在每次写时从账本重盖，权威永远在账本，客户端丢了能自愈。判据是"**丢了能不能重算**"：能重算的才允许不声明；`launchFamily`/`resumeFamily` 不可重算，所以必须声明。另加一条反向断言"白名单里的键若 core 已不再写就报错"，让豁免面不能只增不减。
+> - **改动面**：`storage.rs` 与 `types.ts` 各加两个可选字段，`core_bridge.rs` 那个逐字段 fixture 同步（它本来就是"新字段不声明就编译不过"的漂移探测器，只此一处构造点）。v1 契约不受影响——`contracts --check` 仍报 12 份逐字节一致，因为宿主 `Task` 不是 native DTO。
+> - **两次被工具当场抓住（都是记忆里已有的坑，仍然各犯了一次）**：① `readdirSync` 在这个项目的手写 `node:fs` shim 里只有 `{withFileTypes:true}` 一个重载，我先用 `readdirSync(dir)` 再用 `{encoding}` 都过不了类型——**vitest 两次全绿而 `tsc` 红**，"pnpm typecheck 与 vitest 不重叠"这条第三次成立；② 一次 Edit 的 `old_string` 选错锚点，把既有用例的 `it("declares the same field set…", () => {` 整行删掉了，靠重读文件发现并逐行补回（没有用 `git checkout`，因为那会连这次真正的改动一起丢）。
+> - **可失败性证明**：把 `launch_family` 的声明注释掉，两条守卫**同时变红并都点名 `launchFamily`**（新增那条与原有的对称那条），恢复后 parity 4/4、`tauri-adapter` **12 case／2508** 全绿、`--lib` 仍 2470/0。
+> - **顺带把两个数字查实**：意图词汇总量是 **21 个持久化调用点**，其中 7 处 core 目前没有对应 op（todo 编辑、会话归属、worktree 挂载/丢弃、4 个回滚补偿写）——好消息是它们全部可以用现成的 `TaskService::mutate` 表达，所以 ADR-022 的代价是"要不要给 mutate 之外再具名 6 个 op"，不是"core 表达不了"。另外我第一轮误报过 5 个"缺失键"（`avatar`/`group`/`orderIndex`/`path`/`pinned`），它们属于 `Project` 而非 `Task`，比对时用了错的宿主结构体。
+
 
 **发射面移交已收口（补记五十四）**：两个家族的 `emitters` 都是 1，且由 `adapter-invariants` 的 ADR-023 规则逐家族守着。未接上的另一半是"会话字段与状态一起落盘"，它与状态观察的 commit 同属 Action 3，见 ADR-023 落实与评审 §5.2b。`failure_reason` 障碍、抑制闸归属、观察通道本体三项前置分别由补记四十二、ADR-034 + 补记四十七、补记五十一关闭。**P2-05 剩下的三项**：执行器接线（writer 在 macOS 真正递交，前置是 Action 3 的 store 改造 + ADR-022 意图队列）、ADR-026 按 op 分类的冲突处置（同样前置是写权移交）、以及门禁那两项待撤的守卫（`core-observer-does-not-write-yet`）。**ADR-027 决策 4 的常驻只读指示已在补记五十五完成**，它此前一直挂在"未生效"清单里。**G18 仍未裁决。** §1 的三条验收现在**都有了证据**（#1 门禁全绿、#2 补记四十一、#3 前置①与重键），P2-05 可在接线之后收口。
 
