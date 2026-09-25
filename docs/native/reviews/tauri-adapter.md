@@ -333,3 +333,29 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 2. **五个补偿点（#4/#6/#8/#10/#13）今天和真意图共用同一个队列**。ADR-022 决策 4 说乐观视图由宿主自己回滚——那么在意图队列里它们**根本不该落盘**（意图失败时 core 什么都没写，宿主只需把内存里的行改回去）。但 #4/#6 例外：它们要删的是 #3 已经真落过盘的行（远程路径还 await 过 flush）。这不是措辞问题，是"行什么时候算存在"的语义决定。
 
 **当前 `TaskIntent` 只有 4 个变体**（`service.rs:212-215`），而 core 已有的具名方法 `create:412` / `start:521` / `resume:563` / `switch_config:852` / `complete:1225` / `cancel:1262` / `delete:1287` 都**不是**意图。上表 ⇒ 至少要新增的意图词汇：删行（#2/#4/#6）、会话挂接（#21，且**互斥规则必须由 core 拥有**——今天 `family` 是宿主从事件里算的，core 只能盲信）、worktree 挂接/丢弃（#5/#14）、异步统计（#16）、todo 编辑（#20，其 `status==="todo"` 前置必须搬到 core，否则权威状态在 core、守卫在宿主，等于把竞态留给 core 看不见的那一侧）。**#9/#12 是复合事务**：一次写里既有会话字段又有状态，`switch_config` 的载荷比四个元数据变体丰富得多，是否整体搬进意图是下一个决定。
+
+## 11. JS 切换的执行方案（2026-09-25，补记七十一之后；动手前的最后校准）
+
+队列本体已落地（`src/taskIntentQueue.ts`，门禁 `adapter-intent-queue` 8 条）。这一节把"21 处怎么切"钉成可执行答案，并记下一条查台账查不出来的结构风险。
+
+**站点 → 意图映射（16 处直接映射，5 处按 ADR-037 决策 2/5 改性质）**：
+
+| 站点 | 去向 |
+| --- | --- |
+| #1 `taskNaming.ts:63` | `rename` 带 `expect`（四样取自发起时的行；JS 原有守卫可保留为视图层优化） |
+| #2 `taskDeleteDone.ts:78` | 按受影响项目各发一条 `delete`（扇出在宿主，规则在 core） |
+| #3 `taskLifecycle.ts:338` | `create`；远程路径的 `persistBeforeLaunch` 改 `await flushProjectIntents(pid)`，10 s 超时语义不动 |
+| #4/#6 补偿 | 真 `delete`（行已落过盘） |
+| #8/#10/#13 补偿 | **不落盘**——只回滚内存行（ADR-022 决策 4） |
+| #5 `:428` | `setWorktree`；#14 `worktreeOps.ts:21` | `discardWorktree` |
+| #9 `:644` | `resumeWithSession`（launch 本体照旧走 `resume_task`，直到执行器接线） |
+| #11 `useAppStartup.ts:67` | 按项目 `normalizeAfterBoot`，`liveTaskIds` 来自 `get_active_task_ids`；dsh `speed` 清理并入同一条意图（规则已在 core） |
+| #12 `taskSwitch.ts:409` | `switchConfig`（previous/resolved 两份快照由宿主交，"当前"归 core）；`:418` 的 await-flush 后启动改等意图队列 |
+| #15 `taskStatus.ts:64` | **不发意图**——观察通道已拥有它（ADR-023/035）；这一处的职责只剩"更新视图"，`status.ts` 的 persist 调用直接删 |
+| #16 `App.tsx:258` | `recordDiffStats` + `operationKey`（=产生该数字的那次完成事件身份；队列合并语义已测试） |
+| #17/#18/#19/#20 | `archive`/`unarchive`、`toggleStar`、`rename`（手输，不带 expect）、`create` 之外的 todo 编辑（#20：prompt/agent/permissionMode 的编辑 + `status==="todo"` 前置——词汇表里没有 `EditTodo`？**没有也不需要**：#20 的三键写走 `rename` 不行（三个键），这是一条映射缺口，见下"开放问题 A" |
+| #21 `App.tsx:1021` | `attachSession`（family 事实照旧由宿主从事件算，规则在 core）；`RunningView.tsx:316` 回灌同一条 |
+
+**结构风险（切换期间的新双写者）**：旧快照队列与新意图队列若长期并存，同项目会出现在未合并的两条通道里交错写入——意图先落盘、旧通道的快照从内存（哪怕刚采纳过权威行）整表覆盖，比今天单队列更糟。约束：**切换是一次提交的粒度**（ADR-037"不允许局部迁移"的执行形态），同一提交里 21 处 + `save_project_tasks` 的宿主整表写退役 + 计数门禁；转换期间树不落地半切换状态。
+
+**开放问题 A（下一步动手前必须裁决，归用户）**：#20（todo 编辑 prompt/agent/permissionMode）在 13 条词汇表里没有对应意图——词汇表是 Q68~Q71 四问推出来的，当时把 #20 记为"单行编辑（带前置）"却没有为它命名 op。三个候选：① 新增具名 `EditTodo{task_id, prompt, agent, permission_mode, expect_status}`（词汇表变 14 条，`status==="todo"` 前置进 core，与 Q71 的 expect 同型）；➁ 把 #20 并进 `create` 的"建行后再编辑"特例——被否：编辑发生在建行之后任意时刻；③ 保留 #20 走快照——直接违反"不允许局部迁移"，被否。推荐 ①：一条新具名意图 + 契约/词表两侧同改（protocol 名单、`TASK_INTENT_VOCABULARY`、`TaskIntentOp` 三处都会因新增 op 而红，正是门禁该有的行为）。**这一问必须问用户，不许静默扩词汇表。**
