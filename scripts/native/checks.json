@@ -28,6 +28,7 @@
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
       "protocol-ts-vocabulary@protocol": 6,
+      "projects-save-single-queue@projects": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
       "tasks-status-machine-rust@tasks": 33,
@@ -639,6 +640,20 @@
           "minCases": 2,
           "$note": "期望值不是手抄的：这条 case 用真实的 src/projectOrder.ts、projectGroups.ts、appProjectState.ts、state/app/projectMutations.ts 重放知识表里的每一条，一旦产品侧行为变了，这里是红的（而 Rust 侧同一张表的断言在 projects-core-rust）。重派生知识表需要显式环境变量，属于评审动作。",
           "timeoutMs": 900000
+        },
+        {
+          "name": "projects-save-single-queue",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/project-save-single-queue.test.ts"
+          ],
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "Action 3 的第一步（用户已拍板：先让 JS 交出整表快照、再翻 commit）：projects.json 只有一个整份覆盖写点，所以全进程只能有一条落盘链。此前 appProjectState 与 projectsStore 各持一个 createProjectPersister 实例，而 AppOpsProvider 的回退 ops（rename/pin/reorder）走后者，于是 ① App 的 flushProjects() 在 store 那份写还挂着时就返回（退出会丢改动），② 两条链互相覆盖同一个文件。两条用例在双实例下实测为红、共用单例（src/projectSaveQueue.ts）后为绿。"
         },
         {
           "name": "projects-contracts-current",

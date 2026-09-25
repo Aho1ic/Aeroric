@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, SshConnection, Task, TaskStatus } from "./types";
 import { isActiveTaskStatus, resolveProjectLocation, wslProjectPath } from "./types";
-import { createProjectPersister } from "./projectPersistence";
+import { queuedProjectPersist } from "./projectSaveQueue";
 import { PERSISTENCE_COMMANDS } from "./lib/api/sftpCommands";
 import { createProjectTaskPersister } from "./taskPersistence";
 import { deriveRemoteProjectName } from "./components/ssh/sshProject";
@@ -120,10 +120,6 @@ export function normalizeSshProjectNames(
   });
   return changed ? normalized : projects;
 }
-
-const queuedProjectPersist = createProjectPersister((projects) =>
-  invoke(PERSISTENCE_COMMANDS.saveProjects, { projects }),
-);
 
 export function persistProjects(
   projects: Project[],
