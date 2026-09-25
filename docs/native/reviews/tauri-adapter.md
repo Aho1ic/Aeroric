@@ -309,8 +309,8 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 | 4 | `taskLifecycle.ts:362` | 删掉 #3 刚插的行 | **补偿** | #3 失败分支 |
 | 5 | `taskLifecycle.ts:428` | `worktreePath`/`worktreeBranch`/`baseBranch`，值来自 `invoke("create_task_worktree")` | worktree 挂接 | 用户动作（launchMode=worktree） |
 | 6 | `taskLifecycle.ts:440` | 删行 | **补偿** | #5 失败分支 |
-| 7 | `taskLifecycle.ts:484` | `todo → pending` + 清 `attentionRequestedAt` | 状态变迁 | 用户动作 + 远程 |
-| 8 | `taskLifecycle.ts:506` | `rollbackTaskMutation` 键级撤销 | **补偿** | #7 失败分支 |
+| 7 | `taskLifecycle.ts:524`（2026-09-26 复勘：切换提交一后已从 484 漂到 524） | `todo → pending` + 清 `attentionRequestedAt` | 状态变迁 | 用户动作 + 远程 |
+| 8 | `taskLifecycle.ts:546`（同上，506 → 546） | `rollbackTaskMutation` 键级撤销 | **补偿** | #7 失败分支 |
 | 9 | `taskLifecycle.ts:644` | `applyResolvedTaskSession`（11 个会话字段）+ `agent` + `status` 一次写 | 会话+dsh状态 复合 | 用户动作 + 远程 |
 | 10 | `taskLifecycle.ts:667` | 键级撤销 | **补偿** | #9 失败分支 |
 | 11 | `useAppStartup.ts:67`（quiet，**无 onError**） | 启动归一：`running/…→detached/interrupted` + `attentionRequestedAt ?? interruptedAt`（`appProjectState.ts:189-202`），**外加一件不相干的事**：dsh 的 `speed: fast → standard`（`:62`）；跨多项目扇出 | 批量修复 | 仅启动 |
@@ -362,14 +362,16 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 
 **排序发现（2026-09-26，动切换代码前的最后校准，不需要问用户——两条既有决策推出来的）**：#7（`todo→pending`+清 `attentionRequestedAt`）在 14 条词汇表里**没有也不该有** op——决策 5 说状态变迁不进队列，而它的正解是 launch 走 core 具名 `start()`（persist-before-launch 就是 `start` 的既有参数，ADR-024/022 线）。`start` 进产品路径 = P2-05 最后一项"执行器接线"。因此合法顺序是：**切换提交一（20 处 + #8/#10/#13 去落盘）→ 接线提交（#7 随 `start` 归 core，同时删它最后一处快照）→ 同一提交里 `save_project_tasks` 退役 + 快照写计数门禁归零**。切换一落地时窗口确实还没关（#7 仍发快照），这是决策 5 与接线排期的必然交叠，如实记账：`adapter-invariants` 的可数断言在接线提交才升成 `== 0`，此前它数的就是"还剩 #7 一处"。
 
-## 12. 接线提交的勘察蓝图（2026-09-26，补记七十三之后；未动工）
+## 12. 接线提交的勘察蓝图（2026-09-26 起草，补记七十三之后；①与②a 已落，顺序按下面修订过）
 
 **为什么 #7 与 #15 必须同一刀**：core 的 Commit 走 `Cover::LastCoreWrite`——"只许覆盖 core 上次发布的字节"。观察者若先开始 Commit 而 #7 快照还在写整表，每次 launch 都把 core 的覆盖基线打断，下一次状态事件的提交就被自己的守卫拒写（ADR-015 的"旧客户端先写过"反例是特性不是事故）。反向同理：先接 #7 再动 #15，事件写入仍由 JS 快照负责，执行器写出的 pending 会被防抖窗口里的陈旧整表回抹。**观察 Commit + launch 走 service + 快照退役 + `core-observer-does-not-write-yet` 撤守卫，是一个不可分单元。**
 
 **三个硬点与定案设计**：
 
-1. **非递交平台的落盘原语（core 改动）**：`CoreContext` 注入一个 host-save 回调（"桥"），`require_write` 失败时改走桥——桥的实现就是 `write_task_records_raw`（逐字节，不过 `Task` 结构体）+ 宿主侧的记录版 fingerprint 表更新。这不是新语义：`apply_intent` 的 HandoverDeferred 分支已经在做"core 决定、宿主转发"，桥只是把同一职责从命令层下移到 commit 层，好让 `start()/observe()` 这类复合流程（begin: claim→写→executor.launch）不需要每个调用点手接二段式。**后果写进门禁**：`adapter-invariants` 的 ADR-021 规则要改成"非递交平台 core 可经桥落任务表，但业务写者租约仍不递交"（桥≠lease）。
-2. **DSH 的三个每窗口事实（`workspace_id`/`prompt_mode`/`client_time_zone`）**：`LaunchRequest` 今天不携带，executor 因此按名拒绝。定案：`dshAgentPreset/selectedModel/reasoningEffort` 已在记录与请求里；缺的三样是**调用参数**，加进 `LaunchRequest` 的 dsh 分支（`Option`，非 dsh 恒 None；serde 上不进 v1 契约，与 `operation_key`/`connection_id` 同一先例）。`LegacyTaskExecutor::launch/resume` 的 dsh 分支改分发 `run_dsh_task_core`/`cancel_dsh_task_core`（内核早已抽好），三样缺失 ⇒ `Unsupported` 按名报错而不是静默。`prompt_mode` 的来源：webui 的 prompt 注入选择——launchTaskById 的调用方（JS）今天就把这个值传给 webui 通道，接线时随参数进 service。
+1. **非递交平台的落盘原语（core 改动）**：`CoreContext` 注入一个 host-save 回调（"桥"），`Persist::ViaHost` 走它——桥的实现就是 `write_task_records_raw`（逐字节，不过 `Task` 结构体）。~~+ 宿主侧的记录版 fingerprint 表更新~~ **这半句作废**：让宿主的整表写去更新 core 的覆盖基线，等于把 ADR-015 的守卫改成"谁写都说没变"，而它防的正是"旧客户端先写过"；基线断裂要靠退役快照解决，不靠让被防的那一方自我免责。~~后果写进门禁：ADR-021 规则要改成"core 可经桥落任务表"~~ **也作废**（已查到规则原文）：`adapter-invariants.mjs:199-206` 校的是 `writer_handover_allowed()` 必须返回 `cfg!(target_os = "macos")`，说的是**写者租约**不递交；桥从来不是租约，所以规则今天就是对的，不需要改。这一条按"桥≠lease"的形状落地，`revision: None` 就是它的口径。
+2. **DSH 的三个每窗口事实（`workspace_id`/`prompt_mode`/`client_time_zone`）**：~~`LaunchRequest` 今天不携带~~ → 步骤①已加 `DshWindowFacts`。**§10 复勘（2026-09-26）把这条的两处前提证翻了**：`run_dsh_task_core` 三个参数全是 `Option<String>`（`dsh_webui.rs:1771/1773/1778`），而 JS 的 dsh 启动点**只发得出 `clientTimeZone` 一个**（`taskLaunch.ts:51`/`:187`，`Intl.DateTimeFormat` 现算）；`workspaceId` 在 `src/` 里零命中，`promptMode` 只活在 composer 那条 `prompt_dsh_task`（`DshComposer.tsx:112-118`），webui 侧缺省为 `"queue"`。所以三样都定案为 `Option`——把必填做进类型等于逼宿主替内核发明"缺省"，那是新行为不是迁移；另外**没有 `resume_dsh_task` 这条命令**，dsh 续跑是拿解析出的 sessionId 再调 `run_dsh_task`（`taskLaunch.ts:174`），所以"七条命令"的第七个分发目标是 run 而不是 resume。`LegacyTaskExecutor` 的 dsh 分支照旧**整条**拒绝（缺的是分发，不是字段），改分发 `run_dsh_task_core` 与命令体交换同刀。
 3. **`start()`/`resume()` 的宿主入口形状**：新内部函数（`core_adapter` 内，非 `#[tauri::command]`）`launch_via_core(app, project_id, task_id, operation_key, persist_before_launch, prompt_override, inject, attachments, cols, rows)`：mailbox 先挂 channel（按 operation key），再按 `gateway.mode()` 三分（Writer→`service.start`；Deferred→`start` 经桥；ReadOnly→拒绝且 channel 归还）。旧命令 `run_task`/`run_remote_task`/`run_wsl_task`/`run_dsh_task`/`resume_task`/`resume_remote_task`/`resume_wsl_task` 的**命令名与 JS 侧参数保持不变**（JS 只删 #7/#8 的 persist 块与 `taskLaunch.ts` 里 dsh 的特判——channel 注册移入宿主），`invokeXxx` 的 onOutput Channel 继续经 mailbox。operation key 由宿主生成 uuid（JS 不重试 run 命令，ADR-017 的"两代并发"由不同 key 天然放行）。
 
-**落地顺序（每个子提交自身可绿）**：① core：桥 + `LaunchRequest` dsh 三字段 + 两侧用例（含"桥失败 ⇒ 报错非静默"）② 宿主：`launch_via_core` + 七条命令换体 + mailbox/观察者 mode 化（`decide_observation`→按 mode：Writer Commit / Deferred 桥 / ReadOnly 只决定）③ JS：删 #7/#8/#15 三处 + 装配层测试迁到 fake-core 意图/事件形状 ④ 退役：`save_project_tasks` 的宿主整表写删除、撤守卫、`adapter-invariants` 加"生产快照写 == 0"、命令面/契约复核。验收含一次真机 launch（本机 macOS = Writer 路径）与一次失败注入。
+**落地顺序（每个子提交自身可绿）**：① core：桥 + `LaunchRequest` dsh 三字段 + 两侧用例（含"桥失败 ⇒ 报错非静默"）——**已落，`ada1011`**。② 宿主分两半：**②a 装桥**（`cb09166`：`deferred_context()` + 意图入口收敛到 `apply_intent_via_host`，并删掉宿主侧的 `save_decided_records`——留两扇门不是重复问题而是字节问题，`DecideOnly` 不戳 generation 而 `commit`/桥都戳）；**②b `launch_via_core` 建体但不换命令体**（先建后接，同补记六十三/六十四/六十六的"入口先行"）。③ JS：删 #7/#8/#15 三处 + 装配层测试迁到 fake-core 意图/事件形状。④ 退役：`save_project_tasks` 的宿主整表写删除、撤守卫、`adapter-invariants` 加"生产快照写 == 0"、命令面/契约复核。验收含一次真机 launch（本机 macOS = Writer 路径）与一次失败注入。
+
+**为什么"②b 只建体、命令体交换并进 ③④"（这条修正了上面原本的顺序）**：互锁已经查到代码级证据，不再是推断——`check_cover` 在 `Cover::LastCoreWrite` 下拿的是 `runtime::recorded_cover`，盘上指纹与它不同就 `ContentDiverged`（`storage/fingerprint.rs:105-125`），而宿主的整表保存**完全没有**告知 core 的钩子（`grep cover|fingerprint src-tauri/src/storage.rs` 零命中）。所以只要 `run_task` 换成走 core 的 `start()`（Commit）而 #7 快照还在写，一次 launch 之后第一条状态观察的提交就会被自己的守卫拒掉——那是能上生产的功能倒退，不是"红牌先亮"。原顺序里"②含命令体换体"因此作废。

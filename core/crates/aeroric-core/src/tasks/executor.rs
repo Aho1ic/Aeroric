@@ -20,15 +20,23 @@ pub enum CancelTarget {
     Local { project_path: String },
 }
 
-/// The three per-window facts a DSH launch needs and no other family asks for
-/// (§12 of `docs/native/reviews/tauri-adapter.md`): the webui instance to open against,
-/// how the prompt should be applied, and the viewer's time zone for rendering. They are
-/// `Option` on the request because non-DSH requests never carry them, and the executor's
-/// DSH branch refuses by name when they are missing rather than inventing defaults.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The three per-window facts a DSH launch asks about and no other family does (§12 of
+/// `docs/native/reviews/tauri-adapter.md`): the webui instance to open against, how the prompt
+/// should be applied, and the viewer's time zone for rendering.
+///
+/// All three are `Option` because the kernel this ends up calling — `run_dsh_task_core` — takes
+/// `Option<String>` for each: a missing `workspace_id` skips that branch (`dsh_webui.rs`), a
+/// missing `prompt_mode` has its own default, and §10's JS ledger measured that the launch site
+/// today sends only the time zone. Making them required would force the host to invent values the
+/// kernel already distinguishes "absent" from, which is a new behaviour wearing a migration costume.
+///
+/// What is required is the struct itself: `LaunchRequest::dsh_window == None` means the caller is
+/// not a DSH window at all, and the executor's DSH branch refuses by name rather than launching a
+/// headless webui.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DshWindowFacts {
-    pub workspace_id: String,
-    pub prompt_mode: String,
+    pub workspace_id: Option<String>,
+    pub prompt_mode: Option<String>,
     pub client_time_zone: Option<String>,
 }
 

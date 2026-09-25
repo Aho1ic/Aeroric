@@ -657,4 +657,52 @@ mod tests {
             "and a project with no path yields the empty string, not a panic"
         );
     }
+
+    /// §10 的 JS 台账量出来的一件事：dsh 的启动点今天**只发得出一个**每窗口事实（`clientTimeZone`）——
+    /// `workspaceId` 一次都没发过，`promptMode` 只活在 composer 那条命令里。所以三个字段必须都是
+    /// `Option`：把必填做进类型，宿主就只能替内核发明一个"缺省值"，而那是一条新行为不是迁移。
+    /// 这条钉的是**形状可表达**，不是分发对不对（执行器仍整条拒绝 dsh）。
+    #[test]
+    fn a_dsh_launch_is_expressible_with_only_the_fact_the_webview_actually_sends() {
+        let families = Table::new();
+        let row = record(json!({
+            "id": "t", "projectId": "p1", "agent": "dsh", "status": "running",
+            "dshSessionId": "s-1", "dshAgentPreset": "standard"
+        }));
+        let request = launch_request(
+            &row,
+            &local_project(),
+            &families,
+            "op-dsh",
+            1,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            Some(DshWindowFacts {
+                client_time_zone: Some("Asia/Shanghai".to_string()),
+                ..Default::default()
+            }),
+        )
+        .expect("a dsh row on a local project is launchable");
+
+        assert_eq!(
+            request.family,
+            ProtocolFamily::Dsh,
+            "otherwise this case is about some other family"
+        );
+        let facts = request
+            .dsh_window
+            .expect("the webview's facts travel with the request");
+        assert_eq!(facts.client_time_zone.as_deref(), Some("Asia/Shanghai"));
+        assert!(
+            facts.workspace_id.is_none() && facts.prompt_mode.is_none(),
+            "absent stays absent — the kernel distinguishes it, so the host must not invent a default"
+        );
+        assert_eq!(
+            request.session_id.as_deref(),
+            Some("s-1"),
+            "and the session the row already has still rides along"
+        );
+    }
 }

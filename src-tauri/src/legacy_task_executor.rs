@@ -133,12 +133,14 @@ impl<R: tauri::Runtime> LegacyTaskExecutor<R> {
     }
 }
 
-/// Two facts, two fields (ADR-028's shape): the enum is what core reasons over, the wire
-/// string is what the CLI flags are built from, and the executor must use the second.
+/// DSH 是**整条**拒绝，不是逐字段拒绝。三个每窗口事实现在都进得了 `LaunchRequest`（`DshWindowFacts`），
+/// 所以这条理由不能再说是"端口表达不了"——真正的缺口是**这个执行器还没分发 webui 的启动体**。措辞
+/// 因此只陈述两件可查的事：dsh 今天由 `run_dsh_task` 那条命令自己启动，那条命令收这三个窗口参数；
+/// 分发 `run_dsh_task_core` 是 P3-05 的事。点名三个事实，门禁可查、用户在 UI 上读到的也不是抽象话。
 fn dsh_refusal_reason() -> String {
-    "the dsh channel needs workspace_id, prompt_mode and client_time_zone, which a \
-     LaunchRequest does not carry; dsh tasks keep launching through the webview's own dsh \
-     launch command until P3-05 makes that host a core service"
+    "this executor does not launch dsh yet: dsh runs over the webui's own dsh launch command, \
+     which takes the window-scoped workspace_id / prompt_mode / client_time_zone, and \
+     dispatching the webui launch body from here is P3-05's step"
         .to_string()
 }
 
@@ -626,9 +628,11 @@ mod tests {
     }
 
     #[test]
-    fn the_dsh_refusal_names_the_facts_it_cannot_carry() {
-        // A silent no-op here would report a launch that never happened, so the reason has to
-        // be specific enough to be checked by the gate and read by a user.
+    fn the_dsh_refusal_still_names_the_three_window_facts() {
+        // A silent no-op here would report a launch that never happened, so the reason has to be
+        // specific enough for a gate to check and a user to read. The three facts are what the
+        // webui command takes; the message no longer claims a `LaunchRequest` cannot carry them,
+        // because since `DshWindowFacts` it can — what it lacks is the dispatch.
         let reason = dsh_refusal_reason();
         for fact in ["workspace_id", "prompt_mode", "client_time_zone"] {
             assert!(reason.contains(fact), "{fact} must be named: {reason}");

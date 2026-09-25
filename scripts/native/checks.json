@@ -30,7 +30,7 @@
       "protocol-ts-vocabulary@protocol": 7,
       "projects-save-single-queue@projects": 3,
       "tasks-parity-rust@tasks": 4,
-      "tasks-reducer-unit-rust@tasks": 61,
+      "tasks-reducer-unit-rust@tasks": 78,
       "tasks-status-machine-rust@tasks": 54,
       "adapter-acceptance-real-kernel@tauri-adapter": 10,
       "adapter-event-payload-contract@tauri-adapter": 5,
@@ -781,8 +781,8 @@
             "tasks::",
             "--"
           ],
-          "minCases": 61,
-          "$note": "纯端口层：reducer/session_owner/launch_plan/handoff/cleanup/operations 的 61 条单测（absent≠null 的字段语义、三方字段回滚、会话归属优先级、dsh 续跑空 prompt、spinner/状态栏/400 行去重窗、本地日历分量与周槽、认领去重）。",
+          "minCases": 78,
+          "$note": "纯端口层：reducer/session_owner/launch_plan/handoff/cleanup/operations 的单测（注册时为 61 条，现按实测抬到 78：ADR-037 那几轮往 reducer/launch_plan 里加用例时没有同步这条地板，它已经松到抓不到 17 条删除——抬紧而不是继续留着当装饰）（absent≠null 的字段语义、三方字段回滚、会话归属优先级、dsh 续跑空 prompt、spinner/状态栏/400 行去重窗、本地日历分量与周槽、认领去重）。接线步骤②另加一条 `a_dsh_launch_is_expressible_with_only_the_fact_the_webview_actually_sends`：三个每窗口事实必须都是 Option，因为 §10 的 JS 台账量出 dsh 启动点今天只发得出 clientTimeZone 一个。",
           "timeoutMs": 900000
         },
         {
