@@ -2990,3 +2990,79 @@ fn a_via_host_observation_announces_and_hands_the_bytes_to_the_bridge() {
     );
     cleanup(root);
 }
+/// 桥上的续跑（§12 步骤②c），并且把一条边界钉在盘上：`resume()` **只写状态**，宿主解析出来的
+/// 那个 session id **不由它落盘**——那是 `ResumeWithSession` 那条复合意图的职责（Q70：一次复合写＝
+/// 一条原子意图）。这条断言写反过一次（本用例第一版就断言了 `claudeSessionId` 会经桥落定，红在
+/// `Null`），所以它现在的价值是双向的：既防接线那一刀有人以为 spawn 顺手把会话写了而漏发意图，
+/// 也防他把会话写成第二段落盘、把 `ResumeWithSession` 的原子性拆掉。
+#[test]
+fn a_via_host_resume_stores_the_pending_and_leaves_the_session_to_the_intent() {
+    let (root, _writer, executor) = harness("bridge-resume", &[task("t1", "p1", "interrupted")]);
+    let saver = Arc::new(CapturingSaver::default());
+    let bridge: Arc<dyn aeroric_core::context::HostTaskSaver> = saver.clone();
+    let service = build_service(reader(&root).with_task_saver(bridge), &executor);
+    let project = local_project("p1", "/repo");
+
+    let applied = service
+        .resume_via_host(&project, "t1", "c-77", "op-bridge-r", true)
+        .expect("a reader may resume as long as the host stores its decision");
+
+    assert!(applied.changed);
+    assert!(
+        applied.revision.is_none(),
+        "the bridge stores bytes; it buys no cover revision"
+    );
+    let batches = saver.saved.lock().expect("saver mutex").len();
+    assert_eq!(
+        batches, 1,
+        "one decision, one store — not a session write and a status write"
+    );
+    let stored = last_saved(&saver);
+    assert_eq!(stored[0]["status"], json!("pending"));
+    assert_eq!(
+        stored[0].get("claudeSessionId"),
+        None,
+        "解析出的 session 不由 `resume()` 落盘——它是 `ResumeWithSession` 的职责（Q70）。\
+         这条为 `None` 而存在：写成 `Some` 就是在这里偷偷开出会话的第二段落盘"
+    );
+    assert_eq!(
+        executor.calls().first().map(|call| call.what),
+        Some("resume"),
+        "the reconnect was asked for, and only after that single write"
+    );
+    assert_eq!(
+        rows(&tasks_json(&root))[0]["status"],
+        json!("interrupted"),
+        "core's own file is untouched; the host holds the truth"
+    );
+    cleanup(root);
+}
+
+/// 守卫不因为改走桥就松动：空 session 在桥这一侧同样是"不许把旧对话悄悄换成一段新的"
+/// （`resume` 里那条 `NoSession` 与 `claudeSessionId` 的来历是同一个理由）。这条用例的**后半句**
+/// 才是它存在的全部意义——桥一次都不许被调用。只断言"错误传出去了"会放过另一种事故：错误传出去
+/// 之前已经写了一半字节出去。
+#[test]
+fn the_bridge_resume_refuses_a_blank_session_without_touching_the_bridge() {
+    let (root, _writer, executor) =
+        harness("bridge-resume-blank", &[task("t1", "p1", "interrupted")]);
+    let saver = Arc::new(CapturingSaver::default());
+    let bridge: Arc<dyn aeroric_core::context::HostTaskSaver> = saver.clone();
+    let service = build_service(reader(&root).with_task_saver(bridge), &executor);
+    let project = local_project("p1", "/repo");
+
+    let error = service
+        .resume_via_host(&project, "t1", "", "op-bridge-r", true)
+        .expect_err("the bridge does not get to reinterpret a blank session");
+    assert!(matches!(error, TaskError::NoSession(_)), "{error:?}");
+    assert!(
+        saver.saved.lock().expect("saver mutex").is_empty(),
+        "a refused resume stored nothing — not even the rows it had already read"
+    );
+    assert!(
+        executor.call_log().is_empty(),
+        "and no process was asked for"
+    );
+    assert_eq!(service.generation("t1"), 0, "and no generation was burned");
+    cleanup(root);
+}

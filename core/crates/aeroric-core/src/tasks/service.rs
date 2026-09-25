@@ -907,6 +907,50 @@ impl TaskService {
         operation_key: &str,
         persist_before_launch: bool,
     ) -> Result<Applied, TaskError> {
+        self.resume_as(
+            project,
+            task_id,
+            session_id,
+            operation_key,
+            persist_before_launch,
+            Persist::Commit,
+        )
+    }
+
+    /// 非递交平台的续跑入口（§12 步骤②c）：与 `resume` 同一条守卫链、同一次 executor 调用，
+    /// 只有落盘改经宿主桥。守卫一条都不能少 —— `AwaitingAcknowledgement`（ADR-018）与空
+    /// session 的拒绝在桥这一侧同样是"不许把旧对话悄悄换成一段新的"。
+    ///
+    /// 两侧一致的另一件事：**解析出的 session 不由 `resume` 落盘**。它只写状态那一段；把会话与
+    /// 状态当一次原子递交写下去是 `ResumeWithSession` 那条复合意图的职责（Q70）。接线时如果以为
+    /// spawn 顺手把会话写了，就会漏发那条意图；如果在这里补上第二段写，就又开出一个会话入口。
+    pub fn resume_via_host(
+        &self,
+        project: &Record,
+        task_id: &str,
+        session_id: &str,
+        operation_key: &str,
+        persist_before_launch: bool,
+    ) -> Result<Applied, TaskError> {
+        self.resume_as(
+            project,
+            task_id,
+            session_id,
+            operation_key,
+            persist_before_launch,
+            Persist::ViaHost,
+        )
+    }
+
+    fn resume_as(
+        &self,
+        project: &Record,
+        task_id: &str,
+        session_id: &str,
+        operation_key: &str,
+        persist_before_launch: bool,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
         let blocked = self
             .load(project.id().unwrap_or_default())?
             .records
@@ -943,7 +987,7 @@ impl TaskService {
             OperationKind::Resume,
             persist_before_launch,
             &Attachments::default(),
-            Persist::Commit,
+            persist,
             |service, record, project, generation| {
                 let owner = session_owner::resolve_session_owner(record, service.families.as_ref());
                 let with_session =
@@ -967,7 +1011,7 @@ impl TaskService {
                         failure,
                         OperationKind::Resume,
                         operation_key,
-                        Persist::Commit,
+                        persist,
                     )
                 })
             },

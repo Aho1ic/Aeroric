@@ -1178,6 +1178,74 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
     })
 }
 
+/// §12 步骤②c 的续跑入口：与 [`launch_via_core`] 同一个三步形状（解析 → 寄存 → 按 mode 三分），
+/// 差别只在 core 那条守卫链必须原样生效——空 session 与"上次被截断还没人看过"（ADR-018）在这里
+/// 同样是拒绝，桥不给它们开后门。
+///
+/// 它今天同样**没有生产调用方**。它现在就该存在、而不是等接的时候现场发明的理由很具体：
+/// `run_dsh_task` 的"续跑"就是拿解析出的 sessionId 再调**启动**命令（§12 已按台账把这条更正过），
+/// 所以三条 `resume_*` 与那条 dsh 分支各自要调哪一具身体，是这两具身体先立起来才答得出的问题。
+///
+/// 一具身体与另一具的分工也钉在这里：`resume` **只写状态那一段**。宿主解析出的 session id 不由
+/// 这条入口落盘——那是 `ResumeWithSession` 那条复合意图的职责（Q70），拆开投两次就会留下"会话已挂、
+/// 状态未改"的中间态。
+#[allow(
+    dead_code,
+    reason = "§12 步骤②c 的入口先行：三条 `resume_*` 命令体与 #7/#8/#15 快照退役同刀才换（互锁见 §12），在此之前它只有下面的用例真跑"
+)]
+pub(crate) fn resume_via_core<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    session_id: &str,
+    sink: crate::pty::OutputSink,
+    persist_before_launch: bool,
+) -> Result<TaskWriteOutcome, String> {
+    use tauri::Manager;
+
+    let service = app.state::<Arc<TaskService>>();
+    let mailbox = app.state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>();
+    let mode = app.state::<CoreGateway>().mode();
+    let project = project_record_for(&service, task_id)?;
+
+    let operation_key = uuid::Uuid::new_v4().to_string();
+    mailbox.park(&operation_key, sink);
+
+    let started = match mode {
+        CoreMode::Writer => service.resume(
+            &project,
+            task_id,
+            session_id,
+            &operation_key,
+            persist_before_launch,
+        ),
+        CoreMode::HandoverDeferred => service.resume_via_host(
+            &project,
+            task_id,
+            session_id,
+            &operation_key,
+            persist_before_launch,
+        ),
+        CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
+            mailbox.take(&operation_key);
+            return Err(
+                "Aeroric 本次启动是只读的（数据目录被另一个实例持有，或本机不接受它），任务没有续跑"
+                    .to_string(),
+            );
+        }
+    };
+    let applied = started.map_err(|error| {
+        mailbox.take(&operation_key);
+        error.to_string()
+    })?;
+
+    Ok(TaskWriteOutcome {
+        tasks: records_as_values(&applied.records),
+        revision: applied.revision,
+        changed: applied.changed,
+        committed_by_core: mode == CoreMode::Writer,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

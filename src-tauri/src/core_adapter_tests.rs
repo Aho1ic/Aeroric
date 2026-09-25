@@ -1610,3 +1610,57 @@ fn on_disk_rows(tasks_file: &Path) -> Vec<Value> {
     serde_json::from_str(&std::fs::read_to_string(tasks_file).expect("readable"))
         .expect("valid json array")
 }
+
+/// 守卫在宿主这一侧同样成立，而这条用例的重点是它**发生在寄存之后**：空 session 是 core 的
+/// `resume` 拒的，那时 channel 已经寄出去了，所以入口必须自己取回来。`launch` 那条同类用例正好
+/// 相反（解析不出项目 ⇒ 寄存之前就失败，`parked()` 本来就是 0）——两条合起来才把"寄存前失败"和
+/// "寄存后失败"这两种错误路径都钉住，而只有后者会漏下取不回来的窗口。
+#[test]
+fn a_resume_with_no_session_is_refused_after_parking_and_writes_nothing() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("resume-blank");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+    let service = app.state::<Arc<TaskService>>();
+    seed_launchable_task(
+        &service,
+        &tasks_file,
+        json!({
+            "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "claude",
+            "permissionMode": "ask", "status": "interrupted", "createdAt": 1
+        }),
+    );
+    let seeded = std::fs::read_to_string(&tasks_file).expect("seeded bytes");
+
+    let error = crate::core_adapter::resume_via_core(
+        app.handle(),
+        "t1",
+        "",
+        OutputSink::Channel(Channel::new(|_| Ok(()))),
+        true,
+    )
+    .expect_err("a blank session id is not the same as resume-with-no-session");
+    assert!(
+        error.contains("no session"),
+        "core's own words must reach the caller, got: {error}"
+    );
+    assert_eq!(
+        app.state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
+            .parked(),
+        0,
+        "the channel was parked before core looked at the session, so the entry had to take it back"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&tasks_file).expect("still readable"),
+        seeded,
+        "refusing means refusing: not one byte, and no half-written session either"
+    );
+    drop(scratch);
+}
