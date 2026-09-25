@@ -1968,3 +1968,136 @@ fn the_announcement_rule_is_part_of_the_outcome_not_of_the_sink() {
         "the only silence is the one core decided, with a reason a host can log"
     );
 }
+
+#[test]
+fn a_rename_buys_a_revision_and_an_empty_name_drops_the_key() {
+    let (root, context, executor) = harness("meta-rename", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+
+    let applied = service
+        .rename("p1", "t1", "重构登录")
+        .expect("rename is a core-side read-modify-write (ADR-022)");
+    assert!(applied.changed, "a real edit changed the row");
+    assert!(applied.revision.is_some(), "and it bought a revision");
+    assert_eq!(rows(&tasks_file)[0].get("name"), Some(&json!("重构登录")));
+
+    // 空串不是名字：键要消失，而不是留下一个清不掉的空标签（与旧客户端 renameTaskInList 一致）。
+    let cleared = service
+        .rename("p1", "t1", "")
+        .expect("clearing is a write too");
+    assert!(cleared.changed);
+    assert_eq!(
+        rows(&tasks_file)[0].get("name"),
+        None,
+        "the key must go away entirely"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn starring_twice_flips_the_flag_and_advances_the_revision_both_times() {
+    let (root, context, executor) = harness("meta-star", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+
+    let first = service.toggle_star("p1", "t1").expect("star");
+    assert_eq!(rows(&tasks_file)[0].get("starred"), Some(&json!(true)));
+    let second = service.toggle_star("p1", "t1").expect("unstar");
+    // 两次都推进 revision：unstar 是一次真实写入，不是"撤销回原字节"。
+    assert_eq!(rows(&tasks_file)[0].get("starred"), Some(&json!(false)));
+    assert_ne!(
+        first.revision, second.revision,
+        "an unstar must not reuse the star's revision"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn archiving_a_batch_writes_once_and_re_archiving_writes_nothing() {
+    let (root, context, executor) = harness(
+        "meta-archive",
+        &[task("t1", "p1", "done"), task("t2", "p1", "failed")],
+    );
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+    let ids = vec!["t1".to_string(), "t2".to_string()];
+
+    let applied = service.archive("p1", &ids).expect("archive both");
+    assert!(
+        applied.changed && applied.revision.is_some(),
+        "the first archive is a real write"
+    );
+    let archived = rows(&tasks_file);
+    assert!(
+        archived.iter().all(|row| row.get("archivedAt").is_some()),
+        "one intent covers every named row: {archived:?}"
+    );
+
+    let again = service
+        .archive("p1", &ids)
+        .expect("re-archive is not an error");
+    assert!(
+        !again.changed && again.revision.is_none(),
+        "an already-archived batch must not burn a revision"
+    );
+    assert_eq!(rows(&tasks_file), archived, "and must not touch the bytes");
+
+    service.unarchive("p1", &ids).expect("unarchive");
+    assert!(
+        rows(&tasks_file)
+            .iter()
+            .all(|row| row.get("archivedAt").is_none()),
+        "unarchive clears every named row"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn a_metadata_edit_on_a_missing_row_is_an_error_not_a_quiet_no_change() {
+    let (root, context, executor) = harness("meta-missing", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+
+    let error = service
+        .rename("p1", "ghost", "x")
+        .expect_err("editing a row that is not there must fail loudly");
+    assert!(
+        matches!(error, TaskError::NotFound { .. }),
+        "expected NotFound, got {error:?}"
+    );
+    // 批量同理：只归档一半比全不归档更难解释。
+    let partial = service
+        .archive("p1", &["t1".to_string(), "ghost".to_string()])
+        .expect_err("one missing id rejects the whole intent");
+    assert!(
+        matches!(partial, TaskError::NotFound { .. }),
+        "expected NotFound, got {partial:?}"
+    );
+    assert!(
+        rows(&tasks_file)[0].get("archivedAt").is_none(),
+        "the rejected batch must not have written the row that did exist"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn a_read_only_host_cannot_rename_even_though_the_op_is_public() {
+    let (root, _writer, executor) = harness("meta-readonly", &[task("t1", "p1", "todo")]);
+    let service = build_service(reader(&root), &executor);
+    let tasks_file = tasks_json(&root);
+
+    let error = service
+        .rename("p1", "t1", "不该落盘")
+        .expect_err("ADR-021: no writer role, no write");
+    assert!(
+        matches!(error, TaskError::Storage(_)),
+        "expected the same storage refusal the observation path gives, got {error:?}"
+    );
+    assert_eq!(
+        rows(&tasks_file)[0].get("name"),
+        None,
+        "the op being callable is not the same as the row being written"
+    );
+    cleanup(root);
+}

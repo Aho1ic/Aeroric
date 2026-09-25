@@ -251,3 +251,18 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 **已落地的修复**：两侧各加两个可选字段 + `core_bridge.rs` 的逐字段 fixture 同步；v1 契约不变（`contracts --check` 仍 12 份逐字节一致）。可失败性：注释掉 `launch_family` 声明后两条守卫同时红并点名 `launchFamily`。
 
 **顺带查到的意图词汇表规模**（Q67 的输入）：21 个持久化调用点，其中 7 处 core 无具名 op（todo 编辑、会话归属、worktree 挂载/丢弃、4 处回滚补偿写），但全部可由现成的 `TaskService::mutate` 表达；4 处回滚是补偿写而非用户意图，倾向留在宿主侧做字段级回退。
+
+## 8. Action 3 的两块地基（2026-09-25）+ Q67 的结案方式
+
+**Q67 不是开放问题。** 连着两轮想问用户"intents 在哪执行"，读 ADR 后发现早已判定：ADR-022 决策 2 明写读-改-写归 `TaskService`，其"后果"第 28 行把"继续发快照＋字段级重放"和"状态走 op、元数据走快照的混合"两个方案点名否掉——那正是我要问的两项。非递交平台的落盘问题则是 ADR-035 的 decide/commit 解耦换个调用点复用。**教训：把已闭的庭重新开成"待用户拍板"，看起来谨慎，实际是把决策成本推回去换取自己不动手的安全感。**
+
+已落下的两块：
+
+| 地基 | 内容 | 证据 |
+| --- | --- | --- |
+| 队列合一（补记六十三） | `projects.json` 单文件整份覆盖，却挂着 `appProjectState.ts:124` 与 `projectsStore.ts:9` 两条 promise 链，`AppOpsProvider.tsx:164-175` 的回退 ops 走后者 ⇒ `flushProjects()` 等不到 store 那份写，且两链互相覆盖 | `src/projectSaveQueue.ts` 单例；`src/test/project-save-single-queue.test.ts` 3 条；双实例下精确红 2 条、修好后绿，且**修好后又把双实例还原重跑一次**确认判别力 |
+| 元数据 op（补记六十四） | `TaskService::{rename,toggle_star,archive,unarchive}`（`load → reducer → commit`） | ADR-022:17 声称这些"服务已有"，实际当时只是 `reducer.rs` 的纯函数；5 条新用例（含 reader context 拒写、批量缺一即整条 `NotFound`、重复归档不烧 revision） |
+
+钉住的语义：空串改名删 `name` 键；批量归档不允许"只归档一半"；unstar 是一次真实写入（`starred:false`）而不是回到键不存在——这条我先写错在注释里，被自己的用例推翻后改的**是注释不是测试**。
+
+下一步：mutation 的 decide/commit 拆分（否则非 macOS 上意图无处落盘），然后才是 21 处调用点改为声明 `op + payload + operationKey`。

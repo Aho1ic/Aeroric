@@ -1347,6 +1347,85 @@ impl TaskService {
         self.commit(project_id, &records)
     }
 
+    /// ADR-022 决策 2 的元数据入口。这四个操作在 `reducer` 里早就有了，但 ADR-022 第 17 行
+    /// 说"core 侧已经有逐 op 的服务"并不成立：没有公开入口，宿主就只能走 `mutate` 自己拼
+    /// 闭包，而那等于把"哪个字段谁能写"重新交回宿主记账——正是这条 ADR 否掉的形态。
+    ///
+    /// 共同形状：先确认这一行真的存在（改一个不存在的任务必须是错误，不是静默无变化），
+    /// 再在权威快照上跑 reducer，最后按 ADR-015 校验覆盖基线提交。
+    fn metadata_edit(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        change: impl Fn(&[Record]) -> Vec<Record>,
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
+            project_id: project_id.to_string(),
+            task_id: task_id.to_string(),
+        })?;
+        let records = change(&snapshot.records);
+        if records == snapshot.records {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        self.commit(project_id, &records)
+    }
+
+    /// 改名。**空串不是名字**：reducer 会删掉 `name` 键，与旧客户端 `renameTaskInList` 一致，
+    /// 否则任务留下一个再也清不掉的空标签。
+    pub fn rename(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        name: &str,
+    ) -> Result<Applied, TaskError> {
+        self.metadata_edit(project_id, task_id, |records| {
+            reducer::rename(records, task_id, name)
+        })
+    }
+
+    /// 收藏开关。它读的是当前值：取消收藏写的是 `starred: false`，不是"把键删掉回到原点"，
+    /// 与旧客户端一致；两次调用因此都是真实的一格 revision。
+    pub fn toggle_star(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
+        self.metadata_edit(project_id, task_id, |records| {
+            reducer::toggle_star(records, task_id)
+        })
+    }
+
+    /// 归档/取消归档：旧客户端一次点选多行，所以这是一条**批量**意图，ids 里任何一行不存在
+    /// 都整条拒绝——只归档一半比全不归档更难解释。
+    fn metadata_batch(
+        &self,
+        project_id: &str,
+        task_ids: &[String],
+        change: impl Fn(&[Record]) -> (Vec<Record>, bool),
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        for task_id in task_ids {
+            Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
+                project_id: project_id.to_string(),
+                task_id: task_id.clone(),
+            })?;
+        }
+        let (records, changed) = change(&snapshot.records);
+        if !changed || records == snapshot.records {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        self.commit(project_id, &records)
+    }
+
+    pub fn archive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
+        let now_ms = self.clock().now_ms();
+        self.metadata_batch(project_id, task_ids, |records| {
+            reducer::archive(records, task_ids, now_ms)
+        })
+    }
+
+    pub fn unarchive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
+        self.metadata_batch(project_id, task_ids, |records| {
+            reducer::unarchive(records, task_ids)
+        })
+    }
     /// What a fresh process owes the user before it accepts any request: every start or
     /// resume the last process left unclaimed is now `interrupted`, and nothing is respawned
     /// on anybody's behalf.
