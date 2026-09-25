@@ -98,7 +98,8 @@
         "setWorktree",
         "discardWorktree",
         "recordDiffStats",
-        "normalizeAfterBoot"
+        "normalizeAfterBoot",
+        "editTodo"
       ],
       "ops": [
         "rename",
@@ -110,6 +111,7 @@
         "discardWorktree",
         "recordDiffStats",
         "normalizeAfterBoot",
+        "editTodo",
         "create",
         "delete",
         "switchConfig",

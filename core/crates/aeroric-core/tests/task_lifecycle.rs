@@ -2339,8 +2339,18 @@ fn the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state() {
             session_id: None,
             session_path: None,
         },
+        TaskIntent::EditTodo {
+            task_id: "t".into(),
+            prompt: "p".into(),
+            agent: "claude".into(),
+            permission_mode: "ask".into(),
+        },
     ];
-    assert_eq!(samples.len(), 13, "词汇表规模是 13 条，钉死");
+    assert_eq!(
+        samples.len(),
+        14,
+        "词汇表规模是 14 条（ADR-037 的 13 + Q72 修正案 EditTodo），钉死"
+    );
     let metadata = TASK_INTENT_VOCABULARY
         .iter()
         .filter(|(_, kind)| *kind == TaskIntentKind::Metadata)
@@ -2351,8 +2361,8 @@ fn the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state() {
         .count();
     assert_eq!(
         (metadata, state),
-        (9, 4),
-        "ADR-026 的分账是元数据 9 / 状态 4；任何一侧偷偷多一条都会让'冲突时能不能重放'变成口头账"
+        (10, 4),
+        "ADR-026 的分账是元数据 10 / 状态 4；任何一侧偷偷多一条都会让'冲突时能不能重放'变成口头账"
     );
     let mut names: Vec<&str> = TASK_INTENT_VOCABULARY
         .iter()
@@ -2386,8 +2396,8 @@ fn the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state() {
             .iter()
             .filter(|s| s.kind() == TaskIntentKind::Metadata)
             .count(),
-        9,
-        "13 个样本按 kind() 数出来也得是 9/4"
+        10,
+        "14 个样本按 kind() 数出来也得是 10/4"
     );
     // 契约那一头的同一份事实：protocol 的名单（`contracts --write` 的拼写来源）必须与
     // core 的表逐条同名同分类——两条名单各长一份的那天，就是 TS/Swift 拿到第三份的那天。

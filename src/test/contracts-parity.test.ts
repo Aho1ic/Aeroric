@@ -72,19 +72,19 @@ describe("published vocabulary vs the TypeScript unions", () => {
     const published = JSON.parse(readFileSync(resolve(process.cwd(), ENVELOPE), "utf8"))
       .constants.taskIntents;
     expect(published, `${ENVELOPE} 里没有 constants.taskIntents`).toBeTruthy();
-    expect(published.ops.length, "产物读空即正控失败").toBeGreaterThanOrEqual(13);
+    expect(published.ops.length, "产物读空即正控失败").toBeGreaterThanOrEqual(14);
 
     const declared = tsUnionMembers("TaskIntentOp");
-    expect(declared.length, `${SHARED} 里 TaskIntentOp 解析到的成员数异常`).toBe(13);
+    expect(declared.length, `${SHARED} 里 TaskIntentOp 解析到的成员数异常`).toBe(14);
     expect([...declared].sort(), "op 名单不一致:一侧改了另一侧不会报错").toEqual(
       [...published.ops].sort(),
     );
-    expect(declared.filter((op) => published.metadata.includes(op)).length, "9 条元数据").toBe(9);
+    expect(declared.filter((op) => published.metadata.includes(op)).length, "10 条元数据").toBe(10);
     expect(declared.filter((op) => published.state.includes(op)).length, "4 条状态").toBe(4);
     expect(
       new Set([...published.metadata, ...published.state]).size,
       "分类必须恰好覆盖 13 条、互不重叠",
-    ).toBe(13);
+    ).toBe(14);
     expect(published.metadata.length + published.state.length).toBe(published.ops.length);
   });
 });

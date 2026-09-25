@@ -83,6 +83,7 @@ pub fn task_intents() -> Vec<(&'static str, &'static str)> {
         ("discardWorktree", "metadata"),
         ("recordDiffStats", "metadata"),
         ("normalizeAfterBoot", "metadata"),
+        ("editTodo", "metadata"),
         ("create", "state"),
         ("delete", "state"),
         ("switchConfig", "state"),
@@ -161,10 +162,10 @@ mod tests {
         );
         assert_eq!(super::error_codes().len(), 11);
         assert_eq!(super::error_codes()[9], "INTERACTIVE_UI_REQUIRED");
-        // ADR-037/026：词汇表的账——13 条、9/4、名字唯一。
+        // ADR-037/026：词汇表的账——14 条、10/4、名字唯一。
         let intents = super::task_intents();
-        assert_eq!(intents.len(), 13);
-        assert_eq!(super::task_intent_ops_of("metadata").len(), 9);
+        assert_eq!(intents.len(), 14);
+        assert_eq!(super::task_intent_ops_of("metadata").len(), 10);
         assert_eq!(super::task_intent_ops_of("state").len(), 4);
         let mut names: Vec<&str> = intents.iter().map(|(n, _)| *n).collect();
         let before = names.len();

@@ -443,7 +443,7 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         constants["errorDetailAllowedKeys"],
         json!(detail_allowed_keys())
     );
-    // ADR-037 词汇表进契约：ops/9/4 三份名单与 protocol 的函数逐条同拼法。
+    // ADR-037 词汇表进契约（含 Q72 `EditTodo`）：ops/10/4 三份名单与 protocol 的函数逐条同拼法。
     assert_eq!(constants["taskIntents"]["ops"], json!(task_intent_ops()));
     assert_eq!(
         constants["taskIntents"]["metadata"],
@@ -458,7 +458,7 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
             .iter()
             .filter(|(_, kind)| *kind == "metadata")
             .count(),
-        9
+        10
     );
     assert_eq!(
         task_intents()

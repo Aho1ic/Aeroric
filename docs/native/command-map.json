@@ -67,8 +67,8 @@
       "definition_by_resolution": {
         "module-subtree-unique": 661
       },
-      "reachable": 567,
-      "unreachable": 94,
+      "reachable": 568,
+      "unreachable": 93,
       "methods": 642,
       "command_params_annotated": 660
     },
@@ -9005,7 +9005,7 @@
       ],
       "caller_evidence": "pending: P2-05 宿主入口先行：两条 core_adapter 用例真跑 apply_task_intent_core（写者侧提交 / 只读侧拒绝），JS 改为交意图时接上。在此之前它只有注册与用例，没有前端字面量，按 ADR-005 同口径记 pending。",
       "reachability": {
-        "frontend_literal": false,
+        "frontend_literal": true,
         "other_package_literal": false,
         "rust_internal_refs": 0,
         "test_only_literal": false,
@@ -9013,7 +9013,7 @@
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
-      "reachable": false
+      "reachable": true
     },
     {
       "command": "read_task_terminal_history",

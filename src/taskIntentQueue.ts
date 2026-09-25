@@ -23,6 +23,7 @@ export const METADATA_TASK_INTENT_OPS = [
   "discardWorktree",
   "recordDiffStats",
   "normalizeAfterBoot",
+  "editTodo",
 ] as const;
 
 /** 一行的会话字段族（11 键）。`SwitchConfig` 的三路合并要 previous/resolved 两份。 */
@@ -77,6 +78,7 @@ export type TaskIntent =
       speed?: string;
       dshAgentPreset?: string;
     }
+  | { op: "editTodo"; taskId: string; prompt: string; agent: string; permissionMode: string }
   | { op: "delete"; taskIds: string[] }
   | { op: "normalizeAfterBoot"; liveTaskIds: string[] }
   | {

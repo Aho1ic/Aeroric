@@ -311,6 +311,14 @@ pub enum TaskIntent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_path: Option<String>,
     },
+    /// #20（`App.tsx:783`）：todo 编辑三键（Q72 拍板的第 14 条，元数据类）。
+    /// `status === "todo"` 的前置在 core——权威状态在 core，守卫不许留在宿主。
+    EditTodo {
+        task_id: String,
+        prompt: String,
+        agent: String,
+        permission_mode: String,
+    },
 }
 
 /// 一份行的会话字段族（11 个键）的可序列化形状，`SwitchConfig` 的三路合并拿它当输入。
@@ -418,9 +426,9 @@ pub enum TaskIntentKind {
     State,
 }
 
-/// `op` 名与 `TaskIntent` 的 serde 判别式同一套 camelCase 拼法；条目数与 9/4 的分配
-/// 由单测钉死（`task_lifecycle.rs` 的词汇表用例）。
-pub const TASK_INTENT_VOCABULARY: [(&str, TaskIntentKind); 13] = [
+/// `op` 名与 `TaskIntent` 的 serde 判别式同一套 camelCase 拼法；条目数与 10/4 的分配
+/// 由单测钉死（`task_lifecycle.rs` 的词汇表用例）。14 = 13（ADR-037）+ `EditTodo`（Q72 修正案）。
+pub const TASK_INTENT_VOCABULARY: [(&str, TaskIntentKind); 14] = [
     ("rename", TaskIntentKind::Metadata),
     ("toggleStar", TaskIntentKind::Metadata),
     ("archive", TaskIntentKind::Metadata),
@@ -430,6 +438,7 @@ pub const TASK_INTENT_VOCABULARY: [(&str, TaskIntentKind); 13] = [
     ("discardWorktree", TaskIntentKind::Metadata),
     ("recordDiffStats", TaskIntentKind::Metadata),
     ("normalizeAfterBoot", TaskIntentKind::Metadata),
+    ("editTodo", TaskIntentKind::Metadata),
     ("create", TaskIntentKind::State),
     ("delete", TaskIntentKind::State),
     ("switchConfig", TaskIntentKind::State),
@@ -453,6 +462,7 @@ impl TaskIntent {
             TaskIntent::NormalizeAfterBoot { .. } => "normalizeAfterBoot",
             TaskIntent::SwitchConfig { .. } => "switchConfig",
             TaskIntent::ResumeWithSession { .. } => "resumeWithSession",
+            TaskIntent::EditTodo { .. } => "editTodo",
         }
     }
 
@@ -2164,6 +2174,14 @@ impl TaskService {
                 session_path.as_deref(),
                 persist,
             ),
+            TaskIntent::EditTodo {
+                task_id,
+                prompt,
+                agent,
+                permission_mode,
+            } => self.metadata_one(project_id, task_id, persist, |records| {
+                reducer::edit_todo(records, task_id, prompt, agent, permission_mode)
+            }),
         }
     }
 

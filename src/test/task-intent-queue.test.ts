@@ -155,11 +155,11 @@ describe("createTaskIntentQueue", () => {
     expect(queue.pendingCount()).toBe(0);
   });
 
-  it("mirrors the contract's split: nine metadata ops are replay-eligible, the vocabulary has thirteen", () => {
+  it("mirrors the contract's split: ten metadata ops are replay-eligible, the vocabulary has fourteen", () => {
     const published = JSON.parse(
       readFileSync("contracts/native/v1/envelope.schema.json", "utf8"),
     ).constants.taskIntents;
     expect([...METADATA_TASK_INTENT_OPS].sort()).toEqual([...published.metadata].sort());
-    expect(published.ops.length).toBe(13);
+    expect(published.ops.length).toBe(14);
   });
 });

@@ -600,6 +600,44 @@ pub fn normalize_after_boot(
     (if changed { next } else { records.to_vec() }, changed)
 }
 
+/// #20（`App.tsx:783` + `taskNaming.ts:7-15`）：todo 编辑三键。前置 `status === "todo"` 与
+/// 静默不改都照旧客户端一字不差——守卫在 core（Q72 拍板：第 14 条具名意图，不借
+/// 通用 patch），因为权威状态在 core，守卫留在宿主就是把竞态交给 core 看不见的那一侧。
+pub fn edit_todo(
+    records: &[Record],
+    task_id: &str,
+    prompt: &str,
+    agent: &str,
+    permission_mode: &str,
+) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) || status_of(record) != Some(TaskStatus::Todo) {
+                return record.clone();
+            }
+            let mut updated = record.clone();
+            updated
+                .0
+                .insert("prompt".to_string(), Value::String(prompt.to_string()));
+            updated
+                .0
+                .insert("agent".to_string(), Value::String(agent.to_string()));
+            updated.0.insert(
+                "permissionMode".to_string(),
+                Value::String(permission_mode.to_string()),
+            );
+            if &updated == record {
+                return record.clone();
+            }
+            changed = true;
+            updated
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
 /// #12 三路合并的落盘半边：宿主交得出 `previous → resolved` 的**变化**（它读到的旧快照和
 /// 它解析出的新事实），交不出"当前行"——那份只在 core 的权威快照里。这里只应用 delta 里
 /// 点名的键（`None` 值＝删键，与 JS 的 `undefined` 序列化后掉键一致），未被点名的键一个不碰
@@ -874,6 +912,30 @@ mod tests {
             &want,
             records[0].get("claudeSessionPath").and_then(Value::as_str)
         ));
+    }
+
+    #[test]
+    fn editing_a_todo_writes_three_keys_and_a_non_todo_row_is_untouched() {
+        let records = vec![task(json!({"status": "todo", "prompt": "旧"}))];
+        let (next, changed) = edit_todo(&records, "t1", "新 prompt", "codex", "full_access");
+        assert!(changed);
+        let row = &next[0].0;
+        assert_eq!(row["prompt"], json!("新 prompt"));
+        assert_eq!(row["agent"], json!("codex"));
+        assert_eq!(row["permissionMode"], json!("full_access"));
+        assert_eq!(row["status"], json!("todo"), "前置成立也不改状态");
+
+        let started = vec![task(json!({"status": "running"}))];
+        let (same, changed) = edit_todo(&started, "t1", "p", "a", "ask");
+        assert!(
+            !changed,
+            "status!==\"todo\" ⇒ 静默不改，与 updateTodoTaskInList 一致"
+        );
+        assert_eq!(same, started);
+
+        let (again, second) = edit_todo(&next, "t1", "新 prompt", "codex", "full_access");
+        assert!(!second, "同一份值改第二遍不烧 revision");
+        assert_eq!(again, next);
     }
 
     #[test]

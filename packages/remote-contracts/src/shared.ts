@@ -44,6 +44,7 @@ export type TaskIntentOp =
   | "discardWorktree"
   | "recordDiffStats"
   | "normalizeAfterBoot"
+  | "editTodo"
   | "create"
   | "delete"
   | "switchConfig"
