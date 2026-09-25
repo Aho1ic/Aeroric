@@ -501,6 +501,7 @@ mod tests {
             reasoning_effort: None,
             speed: None,
             dsh_agent_preset: None,
+            dsh_window: None,
             created_at_ms: 1_700_000_000_000,
             working_directory,
             terminal_size: Some((120, 40)),

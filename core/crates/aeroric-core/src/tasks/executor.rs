@@ -20,6 +20,18 @@ pub enum CancelTarget {
     Local { project_path: String },
 }
 
+/// The three per-window facts a DSH launch needs and no other family asks for
+/// (§12 of `docs/native/reviews/tauri-adapter.md`): the webui instance to open against,
+/// how the prompt should be applied, and the viewer's time zone for rendering. They are
+/// `Option` on the request because non-DSH requests never carry them, and the executor's
+/// DSH branch refuses by name when they are missing rather than inventing defaults.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DshWindowFacts {
+    pub workspace_id: String,
+    pub prompt_mode: String,
+    pub client_time_zone: Option<String>,
+}
+
 /// What to run, with the choice of channel already made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchRequest {
@@ -59,6 +71,8 @@ pub struct LaunchRequest {
     pub speed: Option<String>,
     pub dsh_agent_preset: Option<String>,
     pub created_at_ms: u64,
+    /// DSH-only window facts; `None` for every other family.
+    pub dsh_window: Option<DshWindowFacts>,
     pub working_directory: WorkingDirectory,
     pub terminal_size: Option<(u16, u16)>,
 }

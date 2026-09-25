@@ -195,6 +195,11 @@ impl EventOutcome {
 enum Persist {
     Commit,
     DecideOnly,
+    /// ADR-021 + §12: core decides, the *host* stores the bytes through its
+    /// [`crate::context::HostTaskSaver`]. Not a guess core makes about platforms - the
+    /// adapter picks this arm when its gateway says `HandoverDeferred` - and never a
+    /// silent fallback: with no saver installed the write is an error.
+    ViaHost,
 }
 
 /// ADR-022 决策 1 里宿主队列交出来的东西：一条意图，不是一份快照。
@@ -805,6 +810,53 @@ impl TaskService {
         inject_prompt_into_terminal: bool,
         attachments: Attachments,
     ) -> Result<Applied, TaskError> {
+        self.start_as(
+            project,
+            task_id,
+            operation_key,
+            persist_before_launch,
+            prompt_override,
+            inject_prompt_into_terminal,
+            attachments,
+            Persist::Commit,
+        )
+    }
+
+    /// 非递交平台的执行入口（§12）：claim/generation/executor 完全同 `start`，只有落盘
+    /// 那一步改经宿主桥。远程 `persistBeforeLaunch` 在这条路上同样成立——桥是同步写。
+    pub fn start_via_host(
+        &self,
+        project: &Record,
+        task_id: &str,
+        operation_key: &str,
+        persist_before_launch: bool,
+        prompt_override: Option<String>,
+        inject_prompt_into_terminal: bool,
+        attachments: Attachments,
+    ) -> Result<Applied, TaskError> {
+        self.start_as(
+            project,
+            task_id,
+            operation_key,
+            persist_before_launch,
+            prompt_override,
+            inject_prompt_into_terminal,
+            attachments,
+            Persist::ViaHost,
+        )
+    }
+
+    fn start_as(
+        &self,
+        project: &Record,
+        task_id: &str,
+        operation_key: &str,
+        persist_before_launch: bool,
+        prompt_override: Option<String>,
+        inject_prompt_into_terminal: bool,
+        attachments: Attachments,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
         self.begin(
             project,
             task_id,
@@ -812,6 +864,7 @@ impl TaskService {
             OperationKind::Start,
             persist_before_launch,
             &attachments,
+            persist,
             |service, record, project, generation| {
                 let request = launch_plan::launch_request(
                     record,
@@ -823,12 +876,21 @@ impl TaskService {
                     attachments.texts.clone(),
                     inject_prompt_into_terminal,
                     prompt_override,
+                    // The DSH window facts arrive through the command entry (wiring §12
+                    // step two); nothing else in core can invent per-window truth.
+                    None,
                 )
                 .ok_or_else(|| {
                     TaskError::Unaddressable(project.id().unwrap_or_default().to_string())
                 })?;
                 service.executor.launch(&request).map_err(|failure| {
-                    service.abandon_launch(record, failure, OperationKind::Start, operation_key)
+                    service.abandon_launch(
+                        record,
+                        failure,
+                        OperationKind::Start,
+                        operation_key,
+                        persist,
+                    )
                 })
             },
         )
@@ -881,6 +943,7 @@ impl TaskService {
             OperationKind::Resume,
             persist_before_launch,
             &Attachments::default(),
+            Persist::Commit,
             |service, record, project, generation| {
                 let owner = session_owner::resolve_session_owner(record, service.families.as_ref());
                 let with_session =
@@ -904,6 +967,7 @@ impl TaskService {
                         failure,
                         OperationKind::Resume,
                         operation_key,
+                        Persist::Commit,
                     )
                 })
             },
@@ -962,6 +1026,7 @@ impl TaskService {
         kind: OperationKind,
         persist_before_launch: bool,
         attachments: &Attachments,
+        persist: Persist,
         spawn: impl FnOnce(&Self, &Record, &Record, u64) -> Result<(), TaskError>,
     ) -> Result<Applied, TaskError> {
         let project_id = project.id().unwrap_or_default().to_string();
@@ -1022,7 +1087,7 @@ impl TaskService {
             .expect("found above");
         records[position] = prepared.clone();
 
-        let applied = match self.commit(&project_id, &records) {
+        let applied = match self.persist_launch(&project_id, &records, persist) {
             Ok(applied) => applied,
             Err(error) => {
                 // Nothing reached the disk, so the claim describes an attempt that will
@@ -1088,6 +1153,7 @@ impl TaskService {
         failure: ExecutorFailure,
         kind: OperationKind,
         operation_key: &str,
+        persist: Persist,
     ) -> TaskError {
         let project_id = record
             .str_field("projectId")
@@ -1109,7 +1175,7 @@ impl TaskService {
                 );
                 // Best effort, and deliberately not allowed to mask the launch error: the
                 // caller still has to be told the process did not come up.
-                let _ = self.commit(&project_id, &transition.records);
+                let _ = self.persist_launch(&project_id, &transition.records, persist);
             }
         }
         self.settle(&task_id, kind, operation_key);
@@ -1480,6 +1546,10 @@ impl TaskService {
         };
         match persist {
             Persist::Commit => Ok((outcome, self.commit(project_id, &transition.records)?)),
+            Persist::ViaHost => Ok((
+                outcome,
+                self.save_via_host(project_id, &transition.records)?,
+            )),
             Persist::DecideOnly => Ok((
                 outcome,
                 Applied {
@@ -2040,6 +2110,25 @@ impl TaskService {
         self.run_intent(project_id, intent, Persist::DecideOnly)
     }
 
+    /// `apply_task_intent` 在非递交平台的那一格（§12）：命令层按 `gateway.mode()` 选这条，
+    /// core 决定 + 桥保存，一次调用完成，不再需要"decide 后手接转发"。
+    pub fn apply_intent_via_host(
+        &self,
+        project_id: &str,
+        intent: &TaskIntent,
+    ) -> Result<Applied, TaskError> {
+        self.run_intent(project_id, intent, Persist::ViaHost)
+    }
+
+    /// 观察通道的桥版本（#15 接线）：与 `observe` 同一决策，字节交宿主存。
+    pub fn observe_via_host(
+        &self,
+        project_id: &str,
+        event: crate::tasks::executor::TaskEvent,
+    ) -> Result<(EventOutcome, Applied), TaskError> {
+        self.apply_observation(project_id, event, Persist::ViaHost)
+    }
+
     fn run_intent(
         &self,
         project_id: &str,
@@ -2203,6 +2292,9 @@ impl TaskService {
                     self.commit(project_id, &records)
                 }
             }
+            // 桥这一侧同样把生成戳记盖上再交出去：宿库存的是 core 决定的**最终字节**，
+            // 与 Writer 路径同源；空数组 ⇒ 删文件由宿主的 write_task_records_raw 镜像。
+            Persist::ViaHost => self.save_via_host(project_id, &records),
             Persist::DecideOnly => Ok(Applied {
                 records,
                 revision: None,
@@ -2211,6 +2303,58 @@ impl TaskService {
                 generation: None,
             }),
         }
+    }
+
+    /// begin() 用的落盘分派：launch 的写必须发生在 spawn 之前（Commit 或桥），
+    /// `DecideOnly` 对执行类操作没有意义——"决定了但没人存"不能成为一个进程的开始。
+    fn persist_launch(
+        &self,
+        project_id: &str,
+        records: &[Record],
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        match persist {
+            Persist::Commit => self.commit(project_id, records),
+            Persist::ViaHost => self.save_via_host(project_id, records),
+            Persist::DecideOnly => Err(TaskError::Storage(StorageError::WriteFailed {
+                path: self.context.paths.data_dir().to_path_buf(),
+                reason: format!(
+                    "a {project_id} launch cannot be decided without being stored; the executor would spawn over an unpersisted row"
+                ),
+            })),
+        }
+    }
+
+    /// `Persist::ViaHost` 的落盘原语：core 决定字节，宿主保存。`revision: None` 是诚实
+    /// ——`runtime.json` 的修订与覆盖面属于写者租约，这条路径不持有它；"宿主存好了"
+    /// 与"我发布了一格修订"是两件事（§12 蓝图）。没有桥就是错误，绝不静默降级为不写。
+    fn save_via_host(&self, project_id: &str, records: &[Record]) -> Result<Applied, TaskError> {
+        let stamped = self.stamp_generation_copies(records);
+        let saver = self.context.task_saver().ok_or_else(|| {
+            TaskError::Storage(StorageError::WriteFailed {
+                path: self.context.paths.data_dir().to_path_buf(),
+                reason: format!(
+                    "no host task saver is installed, so ViaHost cannot store the decision for {project_id}"
+                ),
+            })
+        })?;
+        let values: Vec<serde_json::Value> = stamped
+            .iter()
+            .map(|record| serde_json::Value::Object(record.0.clone()))
+            .collect();
+        saver
+            .save_task_records(project_id, &values)
+            .map_err(|reason| StorageError::WriteFailed {
+                path: self.context.paths.data_dir().to_path_buf(),
+                reason,
+            })?;
+        Ok(Applied {
+            records: stamped,
+            revision: None,
+            changed: true,
+            fingerprint: None,
+            generation: None,
+        })
     }
 
     /// 与 `commit` 对偶的"文件不该存在"那一支：覆盖面发布为缺席（`bump_covering(.., None)`），

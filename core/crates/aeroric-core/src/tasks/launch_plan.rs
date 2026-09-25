@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::projects::mutations::{is_addressable, resolve_location};
 use crate::storage::compat::Record;
 use crate::tasks::executor::{
-    CancelTarget, LaunchRequest, ResetOutcome, ResumeRequest, WorkingDirectory,
+    CancelTarget, DshWindowFacts, LaunchRequest, ResetOutcome, ResumeRequest, WorkingDirectory,
 };
 use crate::tasks::session_owner::{
     family_prefix, launch_family_of, resolve_session_owner, AgentFamilies,
@@ -141,6 +141,7 @@ pub fn launch_request(
     texts: Vec<String>,
     inject_prompt_into_terminal: bool,
     prompt_override: Option<String>,
+    dsh_window: Option<DshWindowFacts>,
 ) -> Option<LaunchRequest> {
     let working_directory = working_directory(record, project)?;
     let owner = resolve_session_owner(record, families);
@@ -170,6 +171,7 @@ pub fn launch_request(
         speed: string(record, "speed"),
         dsh_agent_preset: string(record, "dshAgentPreset"),
         created_at_ms: number(record, "createdAt").unwrap_or_default(),
+        dsh_window,
         working_directory,
         // Gathered from the view at the call site; a core-side launch has none until the
         // host says so, and the executor must not invent a size.
@@ -362,6 +364,7 @@ pub fn plan_start(
             Vec::new(),
             false,
             None,
+            None,
         )?,
         continuation: ContinuationMode::Start,
     })
@@ -419,6 +422,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             false,
+            None,
             None,
         )
         .expect("a local project is launchable");
@@ -564,6 +568,7 @@ mod tests {
             vec![],
             true,
             Some("handoff text".to_string()),
+            None,
         )
         .expect("planned");
         assert_eq!(request.family, ProtocolFamily::Codex);
@@ -633,7 +638,8 @@ mod tests {
             vec![],
             vec![],
             false,
-            None
+            None,
+            None,
         )
         .is_none());
         let no_id = record(json!({"projectId": "p1", "agent": "claude"}));

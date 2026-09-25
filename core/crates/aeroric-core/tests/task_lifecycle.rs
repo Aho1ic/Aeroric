@@ -879,6 +879,7 @@ fn a_task_family_is_resolved_once_and_the_plan_follows_it() {
         vec![],
         false,
         None,
+        None,
     )
     .expect("planned");
     assert_eq!(planned.session_id.as_deref(), Some("x-1"));
@@ -2812,4 +2813,180 @@ fn the_new_intents_cross_the_wire_with_their_vocabulary_names() {
         .is_err(),
         "蛇形首字母小写拼错了族名也必须被拒——词汇表只有一种拼法"
     );
+}
+
+// ---- §12 步骤一：`Persist::ViaHost` 的宿主桥（core 决定、宿主存字节）----
+
+#[derive(Default)]
+struct CapturingSaver {
+    saved: std::sync::Mutex<Vec<(String, Vec<Value>)>>,
+}
+
+impl aeroric_core::context::HostTaskSaver for CapturingSaver {
+    fn save_task_records(&self, project_id: &str, records: &[Value]) -> Result<(), String> {
+        self.saved
+            .lock()
+            .expect("saver mutex")
+            .push((project_id.to_string(), records.to_vec()));
+        Ok(())
+    }
+}
+
+fn last_saved(saver: &CapturingSaver) -> Vec<Value> {
+    saver
+        .saved
+        .lock()
+        .expect("saver mutex")
+        .last()
+        .map(|(_, rows)| rows.clone())
+        .unwrap_or_default()
+}
+
+/// 桥上的意图写：决定生效、字节经桥、盘上的旧文件一格不动、`revision: None`
+/// ——宿主存好了与 core 发布了一格修订是两件事（§12）。
+#[test]
+fn a_via_host_intent_stores_through_the_bridge_and_publishes_no_revision() {
+    let (root, _writer, executor) = harness("bridge-intent", &[task("t1", "p1", "todo")]);
+    let saver = Arc::new(CapturingSaver::default());
+    let bridge: Arc<dyn aeroric_core::context::HostTaskSaver> = saver.clone();
+    let service = build_service(reader(&root).with_task_saver(bridge), &executor);
+    let tasks_file = tasks_json(&root);
+    let bytes_before = std::fs::read(&tasks_file).expect("seeded");
+
+    let applied = service
+        .apply_intent_via_host(
+            "p1",
+            &TaskIntent::Rename {
+                task_id: "t1".into(),
+                name: "桥上的名字".into(),
+                expect: None,
+            },
+        )
+        .expect("the bridge stores what core decided");
+
+    assert!(applied.changed);
+    assert!(
+        applied.revision.is_none() && applied.fingerprint.is_none(),
+        "a ViaHost write is not a publication; claiming a revision would lie"
+    );
+    let stored = last_saved(&saver);
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["name"], json!("桥上的名字"));
+    assert_eq!(stored[0]["projectId"], json!("p1"));
+    assert_eq!(
+        std::fs::read(&tasks_file).expect("untouched"),
+        bytes_before,
+        "core's own file must not move on the bridge path"
+    );
+    cleanup(root);
+}
+
+/// 没装桥就不是"静默不写"而是错误——ADR-021 的平台政策在宿主，机制不许假装成功。
+#[test]
+fn a_via_host_write_without_a_bridge_is_a_refusal_not_a_silent_skip() {
+    let (root, _writer, executor) = harness("bridge-absent", &[task("t1", "p1", "todo")]);
+    let service = build_service(reader(&root), &executor);
+    let refused = service
+        .apply_intent_via_host(
+            "p1",
+            &TaskIntent::Rename {
+                task_id: "t1".into(),
+                name: "没人存".into(),
+                expect: None,
+            },
+        )
+        .expect_err("no saver means no store, and that is an error");
+    assert!(
+        matches!(&refused, TaskError::Storage(inner) if inner.to_string().contains("no host task saver")),
+        "{refused:?}"
+    );
+    cleanup(root);
+}
+
+/// 桥上的 launch：pending 先经桥存下，进程后起（`persist_before_launch` 的同步语义在
+/// 桥这一侧天然成立——桥就是同步写），而 core 的文件一格不动。
+#[test]
+fn a_via_host_launch_stores_pending_before_the_executor_spawns() {
+    let (root, _writer, executor) = harness("bridge-launch", &[task("t1", "p1", "todo")]);
+    let saver = Arc::new(CapturingSaver::default());
+    let bridge: Arc<dyn aeroric_core::context::HostTaskSaver> = saver.clone();
+    let service = build_service(reader(&root).with_task_saver(bridge), &executor);
+    let project = local_project("p1", "/repo");
+
+    let applied = service
+        .start_via_host(
+            &project,
+            "t1",
+            "op-bridge-1",
+            false,
+            None,
+            false,
+            Attachments::default(),
+        )
+        .expect("a reader may launch as long as the host stores its decision");
+
+    assert!(applied.changed);
+    assert!(
+        applied.revision.is_none(),
+        "same honesty as the intent path"
+    );
+    let stored = last_saved(&saver);
+    assert_eq!(
+        stored[0]["status"],
+        json!("pending"),
+        "begin() 的 pending 写在 spawn 前经桥落定"
+    );
+    assert_eq!(
+        stored[0]["generation"],
+        json!("1"),
+        "generation 戳记与 Writer 路径同源"
+    );
+    let calls = executor.calls();
+    assert_eq!(
+        calls.first().map(|call| call.what),
+        Some("launch"),
+        "the spawn happened - and only after the bridge call above"
+    );
+    let rows = rows(&tasks_json(&root));
+    assert_eq!(
+        rows[0]["status"],
+        json!("todo"),
+        "core's file is untouched; the host holds the truth"
+    );
+    cleanup(root);
+}
+
+/// 桥上的观察（#15 接线的主形态）：决策、宣告、字节交桥——与 `decide_observation` 的
+/// "只决定"和 `observe` 的"自己写"三态分明。
+#[test]
+fn a_via_host_observation_announces_and_hands_the_bytes_to_the_bridge() {
+    let (root, _writer, executor) = harness("bridge-observe", &[task("t1", "p1", "running")]);
+    let saver = Arc::new(CapturingSaver::default());
+    let bridge: Arc<dyn aeroric_core::context::HostTaskSaver> = saver.clone();
+    let service = build_service(reader(&root).with_task_saver(bridge), &executor);
+
+    let (outcome, applied) = service
+        .observe_via_host(
+            "p1",
+            TaskEvent::Exit {
+                task_id: "t1".into(),
+                generation: 0,
+                code: Some(0),
+            },
+        )
+        .expect("the decision is a reader's right; the bridge is its hand");
+
+    match outcome {
+        EventOutcome::Applied { status, .. } => assert_eq!(status, TaskStatus::Done),
+        other => panic!("an exit with code 0 settles: {other:?}"),
+    }
+    assert!(applied.changed && applied.revision.is_none());
+    let stored = last_saved(&saver);
+    assert_eq!(stored[0]["status"], json!("done"));
+    assert_eq!(
+        rows(&tasks_json(&root))[0]["status"],
+        json!("running"),
+        "core's copy still shows the pre-event truth"
+    );
+    cleanup(root);
 }

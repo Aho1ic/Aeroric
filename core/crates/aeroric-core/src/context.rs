@@ -47,6 +47,29 @@ pub trait SettingsSource: Send + Sync {
     fn read(&self) -> Result<Option<serde_json::Value>, String>;
 }
 
+/// The host-side primitive behind `Persist::ViaHost` (§12 蓝图 of
+/// `docs/native/reviews/tauri-adapter.md`): on a platform that has NOT been handed the
+/// writer role (ADR-021), core still decides the task table — somebody else stores the
+/// bytes. That somebody is this trait, implemented by the adapter over
+/// `write_task_records_raw`, i.e. byte-faithful JSON with no typed struct in between
+/// (计划补记六十's mutation proved why). It is a mechanism, not a platform policy: the
+/// host chooses when to route a write through it, and an absent saver is an error, never
+/// a silent fallback.
+///
+/// Deliberately narrow: it saves and nothing else. No cover bookkeeping is offered —
+/// `runtime.json` belongs to the writer lease, which this path does not hold, and that is
+/// why a `ViaHost` write reports `revision: None`: "the host stored my decision" and
+/// "I published a revision" are different facts.
+pub trait HostTaskSaver: Send + Sync {
+    /// Store the whole task list for one project, verbatim. An empty list means the
+    /// project's file must go away (ADR-037 后果 1) — the implementer owns that mirroring.
+    fn save_task_records(
+        &self,
+        project_id: &str,
+        records: &[serde_json::Value],
+    ) -> Result<(), String>;
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MemorySecrets {
     entries: Arc<Mutex<BTreeMap<String, String>>>,
@@ -131,6 +154,8 @@ pub struct CoreContext {
     /// it, because a shared read of a directory mid-write is recoverable, whereas a
     /// blind second writer is not.
     lease: Option<Arc<DataDirectoryLease>>,
+    /// The byte-saving partner for `Persist::ViaHost` writes; see [`HostTaskSaver`].
+    task_saver: Option<Arc<dyn HostTaskSaver>>,
 }
 
 impl CoreContext {
@@ -143,7 +168,21 @@ impl CoreContext {
             secrets: Arc::new(MemorySecrets::default()),
             hooks: Arc::new(NoHooks),
             lease: None,
+            task_saver: None,
         }
+    }
+
+    /// Installs the host's byte saver for `ViaHost` writes. Only the adapter that has
+    /// decided - per platform policy, never per core's guess - that it is a deferring
+    /// host calls this, so the presence of a saver is itself the host's statement
+    /// "core decides, I store".
+    pub fn with_task_saver(mut self, saver: Arc<dyn HostTaskSaver>) -> Self {
+        self.task_saver = Some(saver);
+        self
+    }
+
+    pub fn task_saver(&self) -> Option<&Arc<dyn HostTaskSaver>> {
+        self.task_saver.as_ref()
     }
 
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
@@ -187,6 +226,7 @@ impl CoreContext {
             secrets: Arc::new(MemorySecrets::default()),
             hooks: Arc::new(NoHooks),
             lease: Some(lease),
+            task_saver: None,
         })
     }
 

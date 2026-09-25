@@ -31,7 +31,7 @@
       "projects-save-single-queue@projects": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 50,
+      "tasks-status-machine-rust@tasks": 54,
       "adapter-acceptance-real-kernel@tauri-adapter": 10,
       "adapter-event-payload-contract@tauri-adapter": 5,
       "adapter-intent-queue@tauri-adapter": 9
@@ -723,7 +723,7 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 50,
+          "minCases": 54,
           "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。第 42 条 `an_intent_crosses_the_wire_as_op_plus_camel_case_payload`（补记六十六）钉的是意图的**线上词汇**：`op` 做判别式、字段 camelCase，三条反例（蛇形 op 名 / Pascal 判别式 / 蛇形字段）必须解不出；变异是去掉 `#[serde(tag=…)]`，精确红这 1 条，现场形状是外部标签 + 蛇形字段——也就是“宿主一套、core 一套”的默认结局。（34～41 条由补记六十四/六十五加入，当时只改了数字没续写本注，此处一并记：四条具名元数据 op 的语义 + 三条意图 decide/apply 逐字节等价与只读侧决策。）第 43～50 条由补记六十九加入（ADR-037 词汇表补齐）：`the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state` 把三条 op 名（serde 判别式 / 手写 `op_name` / `TASK_INTENT_VOCABULARY` 表）钉成同一拼法并数死 13 与 9/4；`a_create_intent_pins_three_families_at_the_front_of_the_list` 让 `Create` 走具名 `create` 的同一个行构造器（重复 id 拒绝且零写）；`deleting_the_last_row_removes_the_file_and_a_new_create_reopens_it` 落 ADR-037 后果 1 的\"删空 ⇒ 删文件\"，覆盖面发布为缺席；`a_delete_intent_and_the_named_delete_produce_the_same_bytes` 防跳收藏/拒在飞长成两套规则；`normalizing_after_boot_applies_the_four_client_rules_and_is_idempotent` 逐条对照 `appProjectState.ts:171-210` 且二次投递零写；`a_switch_config_intent_merges_only_the_delta_onto_the_authoritative_row` 断言未被点名的键（另一窗口刚写的名）不许被抹；`resume_with_session_sets_one_family_and_pending_clearing_the_two_fields` 与 #21 共用清三设一；`the_new_intents_cross_the_wire_with_their_vocabulary_names` 钉新四条的线上形状（None 整键缺席，不许发 null）。",
           "timeoutMs": 900000
         },
