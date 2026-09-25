@@ -115,6 +115,32 @@ pub(crate) fn decide_mode(handover_allowed: bool, acquisition: Acquisition) -> C
     }
 }
 
+/// [`aeroric_core::context::HostTaskSaver`] 的宿主实现：core 决定的记录**原样**落盘。
+///
+/// 为什么不复用 `save_project_tasks`：那条路把每一行过一遍宿主的 `Task` 结构体，而 `Task` 只声明
+/// 它认识的键，serde 静默丢弃其余的——`launchFamily`/`resumeFamily` 就是这么被抹掉的（计划补记六十，
+/// 补记六十六用变异复现）。只要宿主还是保存者，它就必须按字节转发，否则"谁写盘"的答案会偷偷变成
+/// "谁能表示什么"。空数组 ⇒ 删文件由 `write_task_records_raw` 镜像（ADR-037 后果 1）。
+struct StorageTaskBridge;
+
+impl aeroric_core::context::HostTaskSaver for StorageTaskBridge {
+    fn save_task_records(
+        &self,
+        project_id: &str,
+        records: &[serde_json::Value],
+    ) -> Result<(), String> {
+        crate::storage::write_task_records_raw(project_id, records)
+    }
+}
+
+/// 延迟递交写权那一站的 context：core 没有写者租约（所以只读），但装着一根把字节存回去的桥。
+///
+/// 抽成函数不是为了整洁。`writer_handover_allowed()` 是 `cfg!`，macOS 上那条分支永远走不到，
+/// 于是唯一可测的就是"这个 context 长什么样"这件事本身——调用点测不到，函数体测得到。
+pub(crate) fn deferred_context(paths: AppPaths) -> CoreContext {
+    CoreContext::read_only(paths).with_task_saver(Arc::new(StorageTaskBridge))
+}
+
 /// The host's single handle on the core. `None` context is impossible by construction: a
 /// non-writer still gets a read-only `CoreContext`, so callers never branch on "did the
 /// core come up" — only on `is_writer()`.
@@ -134,9 +160,12 @@ impl CoreGateway {
     pub(crate) fn startup(paths: AppPaths, version: &str) -> Self {
         let data_dir = paths.data_dir().to_path_buf();
         if !writer_handover_allowed() {
-            // No lease attempt at all: `CoreContext::read_only` touches nothing.
+            // No lease attempt at all: `CoreContext::read_only` touches nothing. The saver this
+            // arm installs is the whole difference between "deferred" and "read-only": a host that
+            // has not been handed the writer role still lets core decide, and stores those bytes
+            // itself (ADR-022 §12). The two refusal modes below deliberately get no bridge.
             return Self {
-                context: Arc::new(CoreContext::read_only(paths)),
+                context: Arc::new(deferred_context(paths)),
                 mode: CoreMode::HandoverDeferred,
                 data_dir,
                 location_warning: None,
@@ -985,18 +1014,6 @@ pub(crate) struct TaskIntentOutcome {
     pub committed_by_core: bool,
 }
 
-/// core 决定的行原样转交给旧保存路径的那一步。
-///
-/// 单独成函数不是为了整洁：`CoreMode::HandoverDeferred` 在 macOS 上永远拿不到（`writer_handover_allowed`
-/// 是 `cfg!`），而这一步是那一格唯一真正落盘的地方。留在 `match` 里就等于"只有别的平台才会跑的
-/// 代码没有测试"——而它恰好是补记六十那个坑（宿主重序列化会吃掉自己没声明的键）的防线。
-pub(crate) fn save_decided_records(
-    project_id: &str,
-    records: &[aeroric_core::storage::Record],
-) -> Result<(), String> {
-    crate::storage::write_task_records_raw(project_id, &records_as_values(records))
-}
-
 fn records_as_values(records: &[aeroric_core::storage::Record]) -> Vec<serde_json::Value> {
     records
         .iter()
@@ -1009,9 +1026,9 @@ fn records_as_values(records: &[aeroric_core::storage::Record]) -> Vec<serde_jso
 /// 三种情况必须分开，不能只看 `is_writer()`：那样会把"本平台还没递交写权"和"租约在另一个活
 /// 实例手里"当成同一件事，而这两个问题对"这个实例能不能写盘"的答案是相反的。
 /// - `Writer`：core 提交，覆盖基线按 ADR-015 由它校验。
-/// - `HandoverDeferred`（ADR-021）：旧客户端仍是保存者，但 core 必须先**决定**，宿主只转发它
-///   决定的字节 —— 走 [`save_decided_records`] 而不是 `Task` 结构体，否则 core 写下、宿主没声明
-///   的键会被 serde 静默丢掉（计划补记六十就是这个坑）。
+/// - `HandoverDeferred`（ADR-021）：core 决定并提交给 [`StorageTaskBridge`]——同一个 reducer、
+///   同一套 generation 戳记，只是字节由宿主落。这条臂以前自己 `decide_intent` + 转发，与桥是
+///   同一件事的两扇门，收敛以后只剩一扇。
 /// - `ReadOnlyBusy` / `ReadOnlyLocation`（ADR-027 / ADR-010）：**一个字节都不许写**。这条若放行，
 ///   "第二个实例只读"就只剩 UI 上的说法。
 pub(crate) fn apply_task_intent_core<R: tauri::Runtime>(
@@ -1028,15 +1045,9 @@ pub(crate) fn apply_task_intent_core<R: tauri::Runtime>(
         CoreMode::Writer => service
             .apply_intent(project_id, intent)
             .map_err(|error| error.to_string())?,
-        CoreMode::HandoverDeferred => {
-            let decided = service
-                .decide_intent(project_id, intent)
-                .map_err(|error| error.to_string())?;
-            if decided.changed {
-                save_decided_records(project_id, &decided.records)?;
-            }
-            decided
-        }
+        CoreMode::HandoverDeferred => service
+            .apply_intent_via_host(project_id, intent)
+            .map_err(|error| error.to_string())?,
         CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
             return Err(
                 "Aeroric 本次启动是只读的（数据目录被另一个实例持有，或本机不接受它），改动没有保存"

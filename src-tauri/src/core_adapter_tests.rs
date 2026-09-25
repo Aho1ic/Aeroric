@@ -1256,17 +1256,19 @@ fn an_intent_is_executed_by_whichever_side_holds_the_writer_role() {
     drop(scratch);
 }
 
-/// The other half of the handover line, tested where it can be: `writer_handover_allowed()` is a
-/// `cfg!`, so a macOS scenario can never observe `CoreMode::HandoverDeferred`. What it *can*
-/// observe is the body of that branch — core decides, the host forwards. The point is not that
-/// bytes land (the writer case already proves the reducers work) but that the forwarding step
-/// neither re-derives the rows nor invents a revision it never bought.
+/// 延迟递交写权那一格，测在它测得到的地方：`writer_handover_allowed()` 是 `cfg!`，macOS 上永远
+/// 进不去 `CoreMode::HandoverDeferred` 那条臂。能测的是臂的**体**——core 决定、宿主按字节存。
+///
+/// 这条曾经走 `decide_intent` + 宿主侧转发。换成桥以后断言更硬了：桥会把 generation 副本对齐到
+/// 账本编号（`commit` 也做，`DecideOnly` 不做），所以"延迟平台存下的字节"与"写者存下的字节"是
+/// 同一套逻辑的产物，而不是两套各自实现的近似。未知键仍然是重点：宿主一旦过自己的 `Task` 结构体，
+/// 它就没了（计划补记六十就是这个坑）。
 #[test]
-fn the_forwarding_step_lands_cores_decision_without_burning_a_revision() {
+fn the_bridge_stores_a_deferring_cores_decision_verbatim() {
     let _serial = SCENARIO
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let home = ScratchRoot::new("intent-forward");
+    let home = ScratchRoot::new("intent-bridge");
     let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
     let data = home.path().join(".aeroric");
     std::fs::create_dir_all(&data).expect("data dir");
@@ -1281,45 +1283,46 @@ fn the_forwarding_step_lands_cores_decision_without_burning_a_revision() {
     std::fs::write(&tasks_file, &seeded).expect("seed tasks");
 
     let app = tauri::test::mock_app();
-    crate::core_adapter::install_core_services(app.handle(), "0-test");
-    let service = app.state::<Arc<TaskService>>();
-    let decided = service
-        .decide_intent(
+    let executor: Arc<dyn TaskExecutor> =
+        Arc::new(LegacyTaskExecutor::<tauri::test::MockRuntime>::new(
+            app.handle().clone(),
+            Arc::new(OutputSinkMailbox::new()),
+        ));
+    let service = TaskService::new(
+        Arc::new(crate::core_adapter::deferred_context(
+            AppPaths::with_data_dir(home.path(), Some(&data)),
+        )),
+        Arc::new(SettingsFamilies) as Arc<dyn AgentFamilies>,
+        executor,
+        Arc::new(NoLiveRuns),
+    )
+    .expect("a deferring context still builds a service");
+
+    let applied = service
+        .apply_intent_via_host(
             "p1",
             &TaskIntent::ToggleStar {
                 task_id: "t1".into(),
             },
         )
-        .expect("deciding needs no writer role");
+        .expect("the host bridge stores what core decided");
 
+    assert!(applied.changed, "the row really changed");
     assert!(
-        decided.changed,
-        "the task was unstarred, so there is something to forward"
+        applied.revision.is_none() && applied.fingerprint.is_none(),
+        "a host-side save buys no cover revision — reporting one would invent a ledger"
     );
-    assert!(
-        decided.revision.is_none(),
-        "a decision buys no cover revision — reporting one would be a ledger that does not exist"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&tasks_file).expect("still there"),
-        seeded,
-        "deciding writes nothing on its own; only the forward step may touch the file"
-    );
-
-    crate::core_adapter::save_decided_records("p1", &decided.records)
-        .expect("forward the decision");
-
     let on_disk: Value =
         serde_json::from_str(&std::fs::read_to_string(&tasks_file).expect("written file"))
             .expect("valid json");
-    let forwarded: Vec<Value> = decided
+    let decided: Vec<Value> = applied
         .records
         .iter()
         .map(|record| Value::Object(record.0.clone()))
         .collect();
     assert_eq!(
         on_disk,
-        Value::Array(forwarded),
+        Value::Array(decided),
         "the file must be exactly what core decided, not a host-side re-derivation of it"
     );
     assert_eq!(on_disk[0]["starred"], json!(true));
@@ -1330,6 +1333,27 @@ fn the_forwarding_step_lands_cores_decision_without_burning_a_revision() {
     );
     assert_eq!(on_disk[0]["launchFamily"], json!("codex"));
     drop(scratch);
+}
+
+/// 装不装桥，就是"延迟递交写权"与"只读"之间唯一的差别——所以这条差别只能有一处定义。
+///
+/// 两种只读用的都是 `CoreContext::read_only` 本身，拿不到桥，于是 `ViaHost` 在它们身上是错误
+/// 而不是"照写"（ADR-027：租约在另一个活实例手里时，一个字节都不许动）。反向的那半句由 core 的
+/// `a_via_host_write_without_a_bridge_is_a_refusal_not_a_silent_skip` 守住；这里守的是宿主要装。
+#[test]
+fn only_a_deferring_context_is_offered_a_route_to_the_disk() {
+    let home = ScratchRoot::new("bridge-presence");
+    let paths = AppPaths::with_data_dir(home.path(), Some(&home.path().join(".aeroric")));
+    assert!(
+        crate::core_adapter::deferred_context(paths.clone())
+            .task_saver()
+            .is_some(),
+        "'core decides, the host stores' is exactly the saver being installed"
+    );
+    assert!(
+        CoreContext::read_only(paths).task_saver().is_none(),
+        "a read-only instance must have no door out to the disk at all"
+    );
 }
 
 /// ADR-027's "read-only" claim, tested where it is actually at risk: a write entry point.

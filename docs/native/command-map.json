@@ -8983,7 +8983,7 @@
       "rust_path": "core_adapter::apply_task_intent",
       "registered_at": "src-tauri/src/lib.rs:1320",
       "definition_candidates": [
-        "src-tauri/src/core_adapter.rs:1057"
+        "src-tauri/src/core_adapter.rs:1068"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8996,7 +8996,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/core_adapter.rs:1057",
+      "definition_resolved": "src-tauri/src/core_adapter.rs:1068",
       "resolution": "module-subtree-unique",
       "params": [
         "app: tauri::AppHandle!",
@@ -24796,7 +24796,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:509"
+        "src-tauri/src/core_adapter.rs:538"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:53"
@@ -24817,7 +24817,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:503"
+        "src-tauri/src/core_adapter.rs:532"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:43"
