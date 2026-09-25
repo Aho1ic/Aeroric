@@ -203,7 +203,11 @@ enum Persist {
 /// （收到 op 名与载荷，转成这个枚举），而 ADR-021 让"落不落盘"按平台分叉——两条路径共用同一
 /// 个意图类型，才不会变成"macOS 走 op、别的平台走快照"那种 ADR-022 明确否掉的混合形态。
 /// 重试身份（operation key）不在这里：那是调用方的事，账本按 ADR-017 记。
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// 线上形状是 `{"op":"rename","taskId":"t1","name":"…"}`：`op` 做判别式、字段走 camelCase，
+/// 与 `AgentId` 等既有跨端类型同一套约定，免得宿主再写一个转换器。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TaskIntent {
     Rename { task_id: String, name: String },
     ToggleStar { task_id: String },

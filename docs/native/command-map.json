@@ -5,7 +5,7 @@
     "repo_commit": "ca69a4b",
     "authoritative_source": "src-tauri/src/lib.rs:487-1162 tauri::generate_handler![...] (single registration site, 656 module-qualified + 4 crate-root entries)",
     "counts": {
-      "registered_entries": 660,
+      "registered_entries": 661,
       "by_category": {
         "host_local_os_ui": 19,
         "domain_rpc": 579,
@@ -65,12 +65,12 @@
       "dynamic_invoke_sites": 5,
       "dynamic_command_names_enumerated": 83,
       "definition_by_resolution": {
-        "module-subtree-unique": 660
+        "module-subtree-unique": 661
       },
       "reachable": 567,
-      "unreachable": 93,
-      "methods": 641,
-      "command_params_annotated": 659
+      "unreachable": 94,
+      "methods": 642,
+      "command_params_annotated": 660
     },
     "method": "机械解析注册表条目 → 56 模块级分类默认值（见 meta.category_resolution） → 命令名级 host-local override；definition_candidates 由全量 fn 声明索引得出",
     "caveats": [
@@ -197,7 +197,8 @@
         "skills": "domain_rpc",
         "mcp": "domain_rpc",
         "notebook": "domain_rpc",
-        "custom_themes": "host_local_os_ui"
+        "custom_themes": "host_local_os_ui",
+        "core_adapter": "domain_rpc"
       },
       "overrides": {
         "app_settings::get_system_fonts": {
@@ -296,7 +297,8 @@
         "wsl_fs": "connections",
         "platform": "platform",
         "wsl_git": "git",
-        "permissions": "platform"
+        "permissions": "platform",
+        "core_adapter": "tasks"
       },
       "services": [
         "agent_tools",
@@ -8977,11 +8979,48 @@
       ]
     },
     {
+      "command": "apply_task_intent",
+      "rust_path": "core_adapter::apply_task_intent",
+      "registered_at": "src-tauri/src/lib.rs:1320",
+      "definition_candidates": [
+        "src-tauri/src/core_adapter.rs:1057"
+      ],
+      "definition_unique": true,
+      "category": "domain_rpc",
+      "core_service": "core+tasks",
+      "rpc_method": "tasks.apply_task_intent",
+      "swift_scene": "AeroricUI/Projects",
+      "check_module": "tauri-adapter",
+      "test_id": "T-core_adapter-apply_task_intent",
+      "feature_ids": [
+        "F01",
+        "F02"
+      ],
+      "definition_resolved": "src-tauri/src/core_adapter.rs:1057",
+      "resolution": "module-subtree-unique",
+      "params": [
+        "app: tauri::AppHandle!",
+        "project_id: String",
+        "intent: aeroric_core::tasks::TaskIntent"
+      ],
+      "caller_evidence": "pending: P2-05 宿主入口先行：两条 core_adapter 用例真跑 apply_task_intent_core（写者侧提交 / 只读侧拒绝），JS 改为交意图时接上。在此之前它只有注册与用例，没有前端字面量，按 ADR-005 同口径记 pending。",
+      "reachability": {
+        "frontend_literal": false,
+        "other_package_literal": false,
+        "rust_internal_refs": 0,
+        "test_only_literal": false,
+        "prefix_derived_of": null,
+        "prefix_derived_parent_reachable": null,
+        "registered": false
+      },
+      "reachable": false
+    },
+    {
       "command": "read_task_terminal_history",
       "rust_path": "storage::read_task_terminal_history",
       "registered_at": "src-tauri/src/lib.rs:719",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:547"
+        "src-tauri/src/storage.rs:581"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8994,7 +9033,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:558",
+      "definition_resolved": "src-tauri/src/storage.rs:581",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9015,7 +9054,7 @@
       "rust_path": "storage::delete_task_terminal_histories",
       "registered_at": "src-tauri/src/lib.rs:720",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:557"
+        "src-tauri/src/storage.rs:591"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9028,7 +9067,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:568",
+      "definition_resolved": "src-tauri/src/storage.rs:591",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

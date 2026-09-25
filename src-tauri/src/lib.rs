@@ -1317,6 +1317,7 @@ pub fn run() {
             permissions::reset_system_permission,
             permissions::restart_app_for_permissions,
             startup_diagnostics::list_startup_degradations,
+            core_adapter::apply_task_intent,
             usage::read_usage_snapshot,
             hooks::get_hook_status,
             hooks::get_hook_readiness,

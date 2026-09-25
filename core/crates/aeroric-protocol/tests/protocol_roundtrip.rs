@@ -467,8 +467,8 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
     let methods = contract("methods.schema.json");
     assert_eq!(
         methods["count"],
-        json!(532),
-        "ADR-006: the surface is 641 minus 109 twins"
+        json!(533),
+        "ADR-006: the surface is 642 minus 109 twins"
     );
     assert_eq!(
         methods["count"].as_u64().unwrap(),
@@ -509,13 +509,13 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         methods["count"].as_u64().unwrap() as usize,
         "the provenance groups must partition the published surface"
     );
-    assert_eq!(provenance["stated-evidence"], json!(82));
+    assert_eq!(provenance["stated-evidence"], json!(83));
     assert_eq!(
         provenance["uncalled-no-evidence"],
         json!(0),
         "Q10 closed this group: a name with neither a caller nor a stated reason may not ride in"
     );
-    assert_eq!(provenance["requiresTriageDecision"], json!(58));
+    assert_eq!(provenance["requiresTriageDecision"], json!(59));
     assert_eq!(provenance["prefixDerivedAliases"], json!(109));
     let flagged: Vec<&Value> = methods["methods"]
         .as_array()
@@ -523,7 +523,7 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         .iter()
         .filter(|m| m["requiresTriageDecision"] == json!(true))
         .collect();
-    assert_eq!(flagged.len(), 58);
+    assert_eq!(flagged.len(), 59);
     assert!(
         flagged
             .iter()

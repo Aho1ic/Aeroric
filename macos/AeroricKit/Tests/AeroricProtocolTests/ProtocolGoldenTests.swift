@@ -359,8 +359,8 @@ final class ProtocolGoldenTests: XCTestCase {
     func testMethodSurfaceIsWhatADR002Froze() throws {
         let methods = try document("methods.schema.json")
         let rows = methods["methods"]?.arrayValue ?? []
-        // ADR-006: 641 names minus the 109 prefix twins that became aliases.
-        XCTAssertEqual(rows.count, 532)
+        // ADR-006: 642 names minus the 109 prefix twins that became aliases.
+        XCTAssertEqual(rows.count, 533)
         // `count` must equal the array it advertises, and every method must be
         // classified exactly once.
         XCTAssertEqual(number(methods["count"]), rows.count)

@@ -425,6 +425,29 @@ pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), St
     atomic_write_private(&path, &raw)
 }
 
+/// 把 core 决定好的任务记录**原样**落盘，不经过 `Task` 结构体。
+///
+/// 为什么必须有这一条而不是复用上面那个：`Task` 逐字段声明它认识的键，serde 静默丢弃它不认识的
+/// ——`launchFamily`/`resumeFamily` 就是靠这个把一个已钉死的启动族抹掉的（计划补记六十）。
+/// core 的记录是刻意无类型的（`storage/compat.rs`），所以只要宿主还在当保存者，它就必须按字节
+/// 转发，否则"谁写盘"的答案会偷偷变成"谁能表示什么"。空数组仍删文件，与 `save_project_tasks`
+/// 一致——两条路径的语义差别只能多不能少。
+pub(crate) fn write_task_records_raw(
+    project_id: &str,
+    records: &[serde_json::Value],
+) -> Result<(), String> {
+    ensure_project_dir(project_id)?;
+    let path = tasks_path(project_id)?;
+    if records.is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    let raw = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
+    atomic_write_private(&path, &raw)
+}
+
 pub(crate) fn append_task_terminal_history(task_id: &str, data: &str) -> Result<(), String> {
     if data.is_empty() {
         return Ok(());

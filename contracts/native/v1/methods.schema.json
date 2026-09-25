@@ -29,6 +29,7 @@
     "session": 7,
     "settings": 42,
     "storage_backend": 7,
+    "tasks": 1,
     "terminal": 11,
     "usage": 6
   },
@@ -109,7 +110,7 @@
       "open"
     ]
   },
-  "count": 532,
+  "count": 533,
   "excluded": {
     "hostLocalOsUi": "19 client-adapter commands carry no wire name; CLI answers INTERACTIVE_UI_REQUIRED (ADR-003)",
     "prefixTwins": "109 remote_/wsl_ twins carry no method name of their own (ADR-006); they are aliases whose host must also check the alias's own capability gate"
@@ -2788,6 +2789,24 @@
       "requiresCapability": null,
       "requiresTriageDecision": false,
       "service": "project",
+      "takesTarget": true
+    },
+    {
+      "callerEvidence": "pending: P2-05 宿主入口先行：两条 core_adapter 用例真跑 apply_task_intent_core（写者侧提交 / 只读侧拒绝），JS 改为交意图时接上。在此之前它只有注册与用例，没有前端字面量，按 ADR-005 同口径记 pending。",
+      "category": "domain_rpc",
+      "checkModule": "tauri-adapter",
+      "coreService": "core+tasks",
+      "featureIds": [
+        "F01",
+        "F02"
+      ],
+      "legacyCommand": "apply_task_intent",
+      "mutating": true,
+      "name": "tasks.apply_task_intent",
+      "promotion": "stated-evidence",
+      "requiresCapability": null,
+      "requiresTriageDecision": true,
+      "service": "tasks",
       "takesTarget": true
     },
     {
@@ -9299,7 +9318,7 @@
       "takesTarget": true
     }
   ],
-  "mutatingCount": 412,
+  "mutatingCount": 413,
   "protocolVersion": 1,
   "readCount": 120,
   "source": "docs/native/command-map.json + meta.rpc_resolution (ADR-002), re-derived independently by export-schema",
@@ -9308,8 +9327,8 @@
     "caller-literal": 450,
     "how": "each row carries `promotion`: how its name was earned in the G16 triage",
     "prefixDerivedAliases": 109,
-    "requiresTriageDecision": 58,
-    "stated-evidence": 82,
+    "requiresTriageDecision": 59,
+    "stated-evidence": 83,
     "uncalled-no-evidence": 0
   },
   "title": "aeroric-local-protocol-v1-methods",

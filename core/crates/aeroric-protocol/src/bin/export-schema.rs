@@ -538,7 +538,7 @@ fn methods_from_inventory(map: &Value) -> Result<(Vec<Value>, Vec<Value>), Strin
     let counted = |want: &str| out.iter().filter(|m| m["promotion"] == json!(want)).count();
     for (want, promotion) in [
         (450usize, "caller-literal"),
-        (82, "stated-evidence"),
+        (83, "stated-evidence"),
         // Q10 closed this group: every remaining name either has a caller literal or
         // states who decides. A non-zero count here means a name rode in on nothing.
         (0, "uncalled-no-evidence"),
@@ -550,9 +550,9 @@ fn methods_from_inventory(map: &Value) -> Result<(Vec<Value>, Vec<Value>), Strin
             ));
         }
     }
-    if out.len() != 532 {
+    if out.len() != 533 {
         return Err(format!(
-            "the method surface holds {} names (pinned 532 = 641 - 109 twins): re-review ADR-006",
+            "the method surface holds {} names (pinned 533 = 642 - 109 twins): re-review ADR-006",
             out.len()
         ));
     }
@@ -611,9 +611,9 @@ fn methods_from_inventory(map: &Value) -> Result<(Vec<Value>, Vec<Value>), Strin
         .iter()
         .filter(|m| m["requiresTriageDecision"] == json!(true))
         .count();
-    if flagged != 58 {
+    if flagged != 59 {
         return Err(format!(
-            "{flagged} methods are owed a triage decision, pinned at 58"
+            "{flagged} methods are owed a triage decision, pinned at 59"
         ));
     }
     Ok((out, aliases))

@@ -266,3 +266,33 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 钉住的语义：空串改名删 `name` 键；批量归档不允许"只归档一半"；unstar 是一次真实写入（`starred:false`）而不是回到键不存在——这条我先写错在注释里，被自己的用例推翻后改的**是注释不是测试**。
 
 下一步：mutation 的 decide/commit 拆分（否则非 macOS 上意图无处落盘），然后才是 21 处调用点改为声明 `op + payload + operationKey`。
+
+## 9. 宿主意图入口落地（2026-09-25，补记六十六）：一个"没人调"的命令怎么进契约
+
+`apply_task_intent`（`core_adapter.rs:1046`）是 ADR-022 决策 1 的落点：前端交一条意图，交回来的就是该采纳的权威快照。它按 `CoreGateway::mode()` 三分，而**不是**按 `is_writer()` 二分——二分会把"本平台还没递交写权"和"租约被另一个活实例拿着"混成一格，而这两格对"能不能写盘"的答案相反。
+
+| 模式 | 谁决定 | 谁落盘 | `committedByCore` | `revision` |
+| --- | --- | --- | --- | --- |
+| `Writer`（macOS 首实例） | core | core，按 ADR-015 校验覆盖基线 | `true` | 有 |
+| `HandoverDeferred`（非递交平台，ADR-021） | core（`decide_intent`） | 宿主转发 core 决定的字节 | `false` | `None`——没人买过 revision |
+| `ReadOnlyBusy` / `ReadOnlyLocation`（ADR-027/010） | 没人 | **一个字节都不写**，直接报错 | — | — |
+
+**`HandoverDeferred` 那一格在本机永远进不去**：`writer_handover_allowed()` 是 `cfg!(target_os = "macos")`。所以把"转发决定的字节"那一步抽成独立函数 `save_decided_records`，直接测它的体——否则这条分支的证据只能等一台别的平台的机器，等于没有证据。三条用例：
+
+| 用例 | 钉住的东西 |
+| --- | --- |
+| `an_intent_is_executed_by_whichever_side_holds_the_writer_role` | `committed_by_core == 谁拿着租约`、`revision.is_some() == 同上`、返回体就是权威快照 |
+| `the_forwarding_step_lands_cores_decision_without_burning_a_revision` | decide 阶段磁盘字节不变；转发后文件**逐字段等于 core 决定的那批行**；`starred` 落地；未知键与 `launchFamily` 存活 |
+| `a_read_only_instance_refuses_an_intent_and_writes_nothing` | 第二个实例报错文案含"只读"，文件字节不变（只在 macOS 跑，理由写在用例开头） |
+
+**两次变异，各打中不同的断言**：① 把 `save_decided_records` 改成空操作 → 红在"文件必须等于决定的行"；② 改成"过一遍宿主 `Task` 结构体再序列化" → 红在同一处，而现场正是补记六十那个坑的复现：`aFieldTheHostHasNotDeclared` 消失，`launchFamily` 因为已经声明所以活下来。这条差别很重要——**只加字段声明并不能让宿主变成安全的转发者**，未声明的键永远会在下一轮宿主-coreside 交替中被吃掉；唯一的解法是不重序列化。
+
+**进契约的代价（第一次）**：`tasks.apply_task_intent` 是方法面上**第一个 `tasks.*`** 方法（`byService.tasks` 从不存在到 1），因为旧的任务保存从来没有自己的 service——它藏在 `project.save_project_tasks` 的整表覆盖里。这把它变成一次 pin 变更：stated-evidence 82→83、方法面 532→533、`requiresTriageDecision` 58→59，而这组数字实际钉在**四处**（生成器两条 `if`、Rust 往返用例、Swift 金样、TS 门禁），生成器里那句 `pinned 532 = 641 - 109 twins` 的注释也得跟着改，否则它自己变成假话。
+
+**`inventory --check` 的一条词法我踩了**：`caller_evidence` 的 `pending:` 后面**第一个空白分隔的 token 必须匹配 `^P\d+-\d+$`**，我写的 `pending: Action 3（P2-05 进行中）—` 被拒（`got "Action"`）。这条规则不是洁癖：它要的是"谁在哪个任务里把它变成不 pending"，一个阶段名（Action 3）回答不了这个问题，而工具能核对任务号确实在计划里存在。
+
+**同一轮里我又踩了一次 §9 自己上面那类坑的孪生兄弟**：把 `save_decided_records` 抽到 `apply_task_intent_core` **上面**，注册表条目一个字没动，但 pin 的 `definition_resolved` 不再是那条 `fn` 的声明行 → `skeleton/inventory-consistency` 立刻红（`points at …:1046, which is not that fn's declaration`）。修法仍是本计划 §续跑指令 第 1 条写的那四步：手改行号 → `--freeze` → `--freeze-check`（必须字节 noop）→ `--check`（必须 consistent）。**教训的形状**：只要在同一文件里插入过代码，行号 pin 就得重做，跟"有没有改命令签名"无关。
+
+**注册一条命令要手改的数，比 `--check` 校的多**（这轮实测出来的口径，下一个人可直接照抄）：`meta.counts` 里 `registered_entries` / `methods` / `unreachable` / `command_params_annotated` / `definition_by_resolution` **五处小计**，外加 `scripts/native/inventory.test.mjs` 里 **5 处硬编码 660**（那 5 处读真仓库，会红，算有安全网）。而 **`--check` 与 `--freeze` 都不校验 `meta.counts` 的派生小计**——`definition_by_resolution` 在我把 `registered_entries` 改成 661 之后仍停在 660，一路没有任何红灯，是我重数 `commands` 数组才发现。所以"counts 块填对了"这件事今天靠人不靠工具；真正的修法是让 `--check` 断言这些小计等于实际数出来的值，但那属门禁工具改造，不在 P2-05 里顺手做，记为已知项。
+
+**诚实记账**：这条命令**目前没有生产调用方**（`reachable=false`，21 处 JS 调用点还都在发快照），它是"入口先行"，与补记六十三/六十四同形。前端改造时它必须同时改掉 `save_project_tasks` 这条路径，否则同一份数据有两个写者——那才是 ADR-022 要防的东西。

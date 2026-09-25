@@ -65,6 +65,7 @@
 3. **INV-02 源码扫描拦住了一句注释**：注释里写了 `AppHandle` 字面量，`inv02-core-source-scan` 就红了。选择改注释而不是放宽扫描，并在注释里写明为什么用描述性说法——放宽一次，下一个人就会以为可以放宽第二次。
 4. **能力门控的判定键变了**：60 条 wsl 门控里有 39 条本身是孪生、其父方法是 `domain_rpc`。收敛后方法面只剩 21 条 `wsl` 门控，其余 39 条随别名走 `requiresCapability`。若继续按方法门控，`fs.read_dir_entries` 会在 macOS 上被整体禁掉。
 5. **`surfaceProvenance` 现在是四组之和**：caller-literal 450 + stated-evidence 82 + uncalled-no-evidence 0 = 532 方法，另有 109 条别名；`prefixDerivedAliases` 单独成项，三方各断言一次。
+   - 2026-09-25 更新：P2-05 Action 3 的宿主入口 `tasks.apply_task_intent`（无前端字面量、带 `pending: P2-05` 证据）入面，stated-evidence 82→83、方法面 532→533、`requiresTriageDecision` 58→59。这组数字实际钉在**四处**（`export-schema` 的两条 `if`、Rust 往返用例、Swift 金样、TS 门禁），漂移一次就要手改四处——这正是它设计的样子，也是"三方各断言一次"这句话当时漏说了生成器自己那一处。
 
 ## ADR-007 落地时的反例验证（2026-09-22，四条规则各改坏一次）
 

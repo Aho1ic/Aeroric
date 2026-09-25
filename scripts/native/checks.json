@@ -22,7 +22,7 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2470,
+      "src-tauri-lib-tests@tauri-adapter": 2473,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
@@ -31,7 +31,7 @@
       "projects-save-single-queue@projects": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
-      "tasks-status-machine-rust@tasks": 41,
+      "tasks-status-machine-rust@tasks": 42,
       "adapter-acceptance-real-kernel@tauri-adapter": 10,
       "adapter-event-payload-contract@tauri-adapter": 5
     },
@@ -722,8 +722,8 @@
             "--test",
             "task_lifecycle"
           ],
-          "minCases": 41,
-          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。",
+          "minCases": 42,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。第 42 条 `an_intent_crosses_the_wire_as_op_plus_camel_case_payload`（补记六十六）钉的是意图的**线上词汇**：`op` 做判别式、字段 camelCase，三条反例（蛇形 op 名 / Pascal 判别式 / 蛇形字段）必须解不出；变异是去掉 `#[serde(tag=…)]`，精确红这 1 条，现场形状是外部标签 + 蛇形字段——也就是“宿主一套、core 一套”的默认结局。（34～41 条由补记六十四/六十五加入，当时只改了数字没续写本注，此处一并记：四条具名元数据 op 的语义 + 三条意图 decide/apply 逐字节等价与只读侧决策。）",
           "timeoutMs": 900000
         },
         {
@@ -905,7 +905,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2470,
+          "minCases": 2473,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -917,7 +917,7 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。"
         },
         {
           "name": "src-tauri-cargo-fmt",

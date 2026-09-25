@@ -2217,3 +2217,43 @@ fn an_intent_and_the_named_op_it_carries_produce_the_same_bytes() {
     cleanup(root_a);
     cleanup(root_b);
 }
+
+/// ADR-022 决策 1 的下一步是"JS 交 `op` + 载荷"，所以 `TaskIntent` 的线上形状从此是契约而不是
+/// 实现细节：钉在这里，总比让保存队列在运行时吃一个反序列化错误再让人去猜约定。
+#[test]
+fn an_intent_crosses_the_wire_as_op_plus_camel_case_payload() {
+    let encoded = serde_json::to_value(TaskIntent::Rename {
+        task_id: "t1".to_string(),
+        name: "重命名".to_string(),
+    })
+    .expect("serializable");
+    assert_eq!(
+        encoded,
+        json!({"op": "rename", "taskId": "t1", "name": "重命名"}),
+        "`op` is the discriminator and fields are camelCase — the vocabulary the queue will send"
+    );
+
+    let batch: TaskIntent =
+        serde_json::from_value(json!({"op": "unarchive", "taskIds": ["t1", "t2"]}))
+            .expect("deserializable");
+    assert_eq!(
+        batch,
+        TaskIntent::Unarchive {
+            task_ids: vec!["t1".to_string(), "t2".to_string()]
+        },
+        "a batch intent decodes from the same vocabulary it encodes to"
+    );
+
+    // 反例：蛇形 op 名、Pascal 判别式、蛇形字段都必须被拒——否则宿主与 core 会各自发明一套，
+    // 而第三套是 Swift 那一边。
+    for wrong in [
+        json!({"op": "toggle_star", "taskId": "t1"}),
+        json!({"op": "ToggleStar", "taskId": "t1"}),
+        json!({"op": "toggleStar", "task_id": "t1"}),
+    ] {
+        assert!(
+            serde_json::from_value::<TaskIntent>(wrong.clone()).is_err(),
+            "{wrong} must not decode: the vocabulary is one shape, not three"
+        );
+    }
+}

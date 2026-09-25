@@ -34,7 +34,7 @@ use aeroric_core::storage::Record;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_core::tasks::{
     AgentFamilies, Applied, NewTask, NoLiveRuns, ObservationOrigin, ProtocolFamily, TaskError,
-    TaskEvent, TaskExecutor, TaskRuntimeObserver, TaskService, TaskStatus,
+    TaskEvent, TaskExecutor, TaskIntent, TaskRuntimeObserver, TaskService, TaskStatus,
 };
 use serde_json::{json, Map, Value};
 use tauri::ipc::Channel;
@@ -1177,4 +1177,215 @@ fn an_unroutable_observation_announces_rather_than_going_quiet() {
     );
     scenario.release_agent();
     scenario.wait_for_retirement();
+}
+
+/// The host entry point for ADR-022: JS hands over one intent, never a whole-table snapshot.
+///
+/// Asserted on both sides of the ADR-021 line rather than only macOS, because the two branches
+/// must produce the *same file* — what differs is only who wrote it. The unknown key is the
+/// point: a host that re-serializes through its own `Task` struct would drop it (that is exactly
+/// how `launchFamily` would have been erased), so the write must forward core's bytes.
+#[test]
+fn an_intent_is_executed_by_whichever_side_holds_the_writer_role() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("intent-entry");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    std::fs::create_dir_all(data.join("projects/p1")).expect("project dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+    std::fs::write(
+        &tasks_file,
+        json!([{
+            "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "claude",
+            "permissionMode": "ask", "status": "todo", "createdAt": 1,
+            "launchFamily": "claude", "aFieldTheHostHasNotDeclared": "keep me"
+        }])
+        .to_string(),
+    )
+    .expect("seed tasks");
+
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+    let writer = app.state::<crate::core_adapter::CoreGateway>().is_writer();
+
+    let outcome = crate::core_adapter::apply_task_intent_core(
+        app.handle(),
+        "p1",
+        &TaskIntent::Rename {
+            task_id: "t1".into(),
+            name: "改在 core 里".into(),
+        },
+    )
+    .expect("an intent must be executable on either side of the handover line");
+
+    assert!(outcome.changed, "the row really changed");
+    assert_eq!(
+        outcome.committed_by_core, writer,
+        "`committedByCore` must say who wrote, not merely that something was written"
+    );
+    assert_eq!(
+        outcome.revision.is_some(),
+        writer,
+        "only core buying a cover revision may report one; a host-side save has no revision to show"
+    );
+    assert_eq!(
+        outcome.tasks[0]["name"],
+        json!("改在 core 里"),
+        "the response is the authoritative snapshot the store should adopt"
+    );
+
+    let on_disk: Value =
+        serde_json::from_str(&std::fs::read_to_string(&tasks_file).expect("written file"))
+            .expect("valid json");
+    assert_eq!(
+        on_disk[0]["name"],
+        json!("改在 core 里"),
+        "the intent landed"
+    );
+    assert_eq!(
+        on_disk[0]["aFieldTheHostHasNotDeclared"],
+        json!("keep me"),
+        "a key no side declares must survive the write — forwarding core's bytes is what keeps \
+         the handover from silently deleting fields the host cannot name"
+    );
+    assert_eq!(on_disk[0]["launchFamily"], json!("claude"));
+    drop(scratch);
+}
+
+/// The other half of the handover line, tested where it can be: `writer_handover_allowed()` is a
+/// `cfg!`, so a macOS scenario can never observe `CoreMode::HandoverDeferred`. What it *can*
+/// observe is the body of that branch — core decides, the host forwards. The point is not that
+/// bytes land (the writer case already proves the reducers work) but that the forwarding step
+/// neither re-derives the rows nor invents a revision it never bought.
+#[test]
+fn the_forwarding_step_lands_cores_decision_without_burning_a_revision() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("intent-forward");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    std::fs::create_dir_all(data.join("projects/p1")).expect("project dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+    let seeded = json!([{
+        "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "claude",
+        "permissionMode": "ask", "status": "todo", "createdAt": 1,
+        "launchFamily": "codex", "aFieldTheHostHasNotDeclared": "keep me"
+    }])
+    .to_string();
+    std::fs::write(&tasks_file, &seeded).expect("seed tasks");
+
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+    let service = app.state::<Arc<TaskService>>();
+    let decided = service
+        .decide_intent(
+            "p1",
+            &TaskIntent::ToggleStar {
+                task_id: "t1".into(),
+            },
+        )
+        .expect("deciding needs no writer role");
+
+    assert!(
+        decided.changed,
+        "the task was unstarred, so there is something to forward"
+    );
+    assert!(
+        decided.revision.is_none(),
+        "a decision buys no cover revision — reporting one would be a ledger that does not exist"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&tasks_file).expect("still there"),
+        seeded,
+        "deciding writes nothing on its own; only the forward step may touch the file"
+    );
+
+    crate::core_adapter::save_decided_records("p1", &decided.records)
+        .expect("forward the decision");
+
+    let on_disk: Value =
+        serde_json::from_str(&std::fs::read_to_string(&tasks_file).expect("written file"))
+            .expect("valid json");
+    let forwarded: Vec<Value> = decided
+        .records
+        .iter()
+        .map(|record| Value::Object(record.0.clone()))
+        .collect();
+    assert_eq!(
+        on_disk,
+        Value::Array(forwarded),
+        "the file must be exactly what core decided, not a host-side re-derivation of it"
+    );
+    assert_eq!(on_disk[0]["starred"], json!(true));
+    assert_eq!(
+        on_disk[0]["aFieldTheHostHasNotDeclared"],
+        json!("keep me"),
+        "the whole reason this step forwards bytes instead of `Task` values"
+    );
+    assert_eq!(on_disk[0]["launchFamily"], json!("codex"));
+    drop(scratch);
+}
+
+/// ADR-027's "read-only" claim, tested where it is actually at risk: a write entry point.
+///
+/// A second instance over the same directory must refuse an intent outright and leave the file
+/// byte-identical. Without this, "read-only" would only be a UI statement while the intent path
+/// happily saved — the exact failure mode ADR-027 exists to prevent.
+#[test]
+fn a_read_only_instance_refuses_an_intent_and_writes_nothing() {
+    if !cfg!(target_os = "macos") {
+        // Off macOS both instances are `HandoverDeferred` by design (ADR-021), so there is no
+        // lease holder to be refused. Asserting a refusal here would test the wrong mechanism.
+        return;
+    }
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("intent-readonly");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    std::fs::create_dir_all(data.join("projects/p1")).expect("project dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+    let seeded = json!([{
+        "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "claude",
+        "permissionMode": "ask", "status": "todo", "createdAt": 1
+    }])
+    .to_string();
+    std::fs::write(&tasks_file, &seeded).expect("seed tasks");
+
+    let first = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(first.handle(), "0-test");
+    assert!(
+        first
+            .state::<crate::core_adapter::CoreGateway>()
+            .is_writer(),
+        "the first instance must hold the lease for this test to mean anything"
+    );
+
+    let second = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(second.handle(), "0-test");
+    let error = crate::core_adapter::apply_task_intent_core(
+        second.handle(),
+        "p1",
+        &TaskIntent::ToggleStar {
+            task_id: "t1".into(),
+        },
+    )
+    .expect_err("a read-only instance must not save");
+    assert!(
+        error.contains("只读"),
+        "the refusal has to be explainable to the user, got: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&tasks_file).expect("still there"),
+        seeded,
+        "refusing must mean refusing: not one byte written"
+    );
+    drop(scratch);
 }

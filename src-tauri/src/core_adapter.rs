@@ -971,6 +971,97 @@ mod sink_tests {
     }
 }
 
+/// 一条意图的结果，同时就是前端该采纳的权威快照（Action 3 的"React 接受 authoritative
+/// snapshot"那一半从这条返回开始）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TaskIntentOutcome {
+    /// 这个项目决定后的全部任务记录。
+    pub tasks: Vec<serde_json::Value>,
+    /// `None` 意味着这一格没被 advance：要么没变化，要么本平台还没递交写权。
+    pub revision: Option<String>,
+    pub changed: bool,
+    /// 谁落的盘：`true` = core；`false` = 宿主按 core 的决定原样写回。
+    pub committed_by_core: bool,
+}
+
+/// core 决定的行原样转交给旧保存路径的那一步。
+///
+/// 单独成函数不是为了整洁：`CoreMode::HandoverDeferred` 在 macOS 上永远拿不到（`writer_handover_allowed`
+/// 是 `cfg!`），而这一步是那一格唯一真正落盘的地方。留在 `match` 里就等于"只有别的平台才会跑的
+/// 代码没有测试"——而它恰好是补记六十那个坑（宿主重序列化会吃掉自己没声明的键）的防线。
+pub(crate) fn save_decided_records(
+    project_id: &str,
+    records: &[aeroric_core::storage::Record],
+) -> Result<(), String> {
+    crate::storage::write_task_records_raw(project_id, &records_as_values(records))
+}
+
+fn records_as_values(records: &[aeroric_core::storage::Record]) -> Vec<serde_json::Value> {
+    records
+        .iter()
+        .map(|record| serde_json::Value::Object(record.0.clone()))
+        .collect()
+}
+
+/// ADR-022 决策 1/2 的宿主入口：前端交一条意图，不再交整表快照。
+///
+/// 三种情况必须分开，不能只看 `is_writer()`：那样会把"本平台还没递交写权"和"租约在另一个活
+/// 实例手里"当成同一件事，而这两个问题对"这个实例能不能写盘"的答案是相反的。
+/// - `Writer`：core 提交，覆盖基线按 ADR-015 由它校验。
+/// - `HandoverDeferred`（ADR-021）：旧客户端仍是保存者，但 core 必须先**决定**，宿主只转发它
+///   决定的字节 —— 走 [`save_decided_records`] 而不是 `Task` 结构体，否则 core 写下、宿主没声明
+///   的键会被 serde 静默丢掉（计划补记六十就是这个坑）。
+/// - `ReadOnlyBusy` / `ReadOnlyLocation`（ADR-027 / ADR-010）：**一个字节都不许写**。这条若放行，
+///   "第二个实例只读"就只剩 UI 上的说法。
+pub(crate) fn apply_task_intent_core<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    project_id: &str,
+    intent: &aeroric_core::tasks::TaskIntent,
+) -> Result<TaskIntentOutcome, String> {
+    use tauri::Manager;
+
+    let service = app.state::<Arc<TaskService>>();
+    let mode = app.state::<CoreGateway>().mode();
+
+    let applied = match mode {
+        CoreMode::Writer => service
+            .apply_intent(project_id, intent)
+            .map_err(|error| error.to_string())?,
+        CoreMode::HandoverDeferred => {
+            let decided = service
+                .decide_intent(project_id, intent)
+                .map_err(|error| error.to_string())?;
+            if decided.changed {
+                save_decided_records(project_id, &decided.records)?;
+            }
+            decided
+        }
+        CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
+            return Err(
+                "Aeroric 本次启动是只读的（数据目录被另一个实例持有，或本机不接受它），改动没有保存"
+                    .to_string(),
+            );
+        }
+    };
+
+    Ok(TaskIntentOutcome {
+        tasks: records_as_values(&applied.records),
+        revision: applied.revision,
+        changed: applied.changed,
+        committed_by_core: mode == CoreMode::Writer,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn apply_task_intent(
+    app: tauri::AppHandle,
+    project_id: String,
+    intent: aeroric_core::tasks::TaskIntent,
+) -> Result<TaskIntentOutcome, String> {
+    apply_task_intent_core(&app, &project_id, &intent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
