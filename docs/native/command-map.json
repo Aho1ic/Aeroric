@@ -8866,7 +8866,7 @@
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 10,
+        "rust_internal_refs": 11,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -8983,7 +8983,7 @@
       "rust_path": "core_adapter::apply_task_intent",
       "registered_at": "src-tauri/src/lib.rs:1320",
       "definition_candidates": [
-        "src-tauri/src/core_adapter.rs:1068"
+        "src-tauri/src/core_adapter.rs:1072"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8996,7 +8996,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/core_adapter.rs:1068",
+      "definition_resolved": "src-tauri/src/core_adapter.rs:1072",
       "resolution": "module-subtree-unique",
       "params": [
         "app: tauri::AppHandle!",

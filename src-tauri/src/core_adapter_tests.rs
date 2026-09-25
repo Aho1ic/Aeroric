@@ -1414,3 +1414,199 @@ fn a_read_only_instance_refuses_an_intent_and_writes_nothing() {
     );
     drop(scratch);
 }
+
+/// `launch_via_core` 的三条用例共用的播种：`projects.json` 里有 p1，`projects/p1/tasks.json`
+/// 里有那一行。写在 `install_core_services` **之后**是刻意的——`projects.json` 的路径由 service
+/// 自己的 context 给出，测试再算一遍就是第二个真相源（ADR-027 反对的就是这个）。
+fn seed_launchable_task(service: &TaskService, tasks_file: &Path, row: Value) {
+    std::fs::create_dir_all(tasks_file.parent().expect("project dir")).expect("project dir");
+    std::fs::write(
+        tasks_file,
+        serde_json::to_vec(&json!([row])).expect("encode tasks"),
+    )
+    .expect("tasks.json");
+    std::fs::write(
+        service.context().paths.projects_file(),
+        serde_json::to_vec(&json!([project_record(
+            tasks_file
+                .parent()
+                .expect("project dir")
+                .parent()
+                .expect("data dir"),
+            "launch"
+        )]))
+        .expect("encode projects"),
+    )
+    .expect("projects.json");
+}
+
+/// 解析不出项目就不能递交，而这条错误路径**必须在寄存之前**：channel 一旦寄出去又没人来取，
+/// 它就永久留在 mailbox 里（`parked()` 这个计数存在就是为了发现这种残留）。
+#[test]
+fn a_launch_that_cannot_find_its_project_parks_no_channel() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("launch-no-project");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+
+    let error = crate::core_adapter::launch_via_core(
+        app.handle(),
+        "t-missing",
+        OutputSink::Channel(Channel::new(|_| Ok(()))),
+        false,
+        None,
+        false,
+        aeroric_core::tasks::Attachments::default(),
+    )
+    .expect_err("a task no project owns cannot be launched through core");
+    assert!(
+        error.contains("t-missing"),
+        "the refusal has to name the task the user was looking at, got: {error}"
+    );
+    assert_eq!(
+        app.state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
+            .parked(),
+        0,
+        "nothing was handed out, so nothing may be left parked"
+    );
+    drop(scratch);
+}
+
+/// 失败注入（§12 验收点名的那一次）：dsh 分支**按名拒绝**，所以这条用例不需要任何真二进制，
+/// 却能同时打中三件事——错误要传回调用方、寄出的 channel 要收回来、那一行要落成 failed。
+/// 第三件是 `abandon_launch` 的补偿语义：今天由 `finalize_task_exit` 负责的事，接线的同时就得
+/// 由 core 负责，否则"进程没起来"在盘上会留下一行 pending。
+#[test]
+fn a_launch_the_executor_refuses_lands_failed_and_gives_the_channel_back() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("launch-refused");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+
+    let app = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(app.handle(), "0-test");
+    let service = app.state::<Arc<TaskService>>();
+    seed_launchable_task(
+        &service,
+        &tasks_file,
+        json!({
+            "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "codex",
+            "launchFamily": "dsh", "permissionMode": "ask", "status": "todo", "createdAt": 1
+        }),
+    );
+
+    let error = crate::core_adapter::launch_via_core(
+        app.handle(),
+        "t1",
+        OutputSink::Channel(Channel::new(|_| Ok(()))),
+        false,
+        None,
+        false,
+        aeroric_core::tasks::Attachments::default(),
+    )
+    .expect_err("the dsh branch refuses by name, and that refusal must not be swallowed");
+    assert!(
+        error.contains("workspace_id"),
+        "the launch error must carry the executor's own words, got: {error}"
+    );
+    assert_eq!(
+        app.state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
+            .parked(),
+        0,
+        "the executor refused before taking the channel, so the entry had to take it back out"
+    );
+
+    let on_disk: Value =
+        serde_json::from_str(&std::fs::read_to_string(&tasks_file).expect("written file"))
+            .expect("valid json");
+    assert_eq!(
+        on_disk[0]["status"],
+        json!("failed"),
+        "a launch that never produced a process is not left reading pending"
+    );
+    assert!(
+        on_disk[0]["failureReason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("workspace_id"),
+        "the reason the user sees has to be the reason the executor gave: {on_disk}"
+    );
+    drop(scratch);
+}
+
+/// 只读实例的启动：与意图入口那条拒绝用例同一个口径，但它多测一件那边没有的事——**拒绝发生在
+/// 寄存之后**，所以 channel 必须被拿回来。留在 mailbox 里的那个 channel 不是"什么都没发生"，
+/// 它是那个终端从此收不到任何字节的原因。
+#[test]
+fn a_read_only_instance_refuses_a_launch_and_returns_the_channel() {
+    if !cfg!(target_os = "macos") {
+        // Off macOS both instances are `HandoverDeferred` by design (ADR-021) and both may
+        // launch through the bridge, so there is no refusal to observe here.
+        return;
+    }
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home = ScratchRoot::new("launch-readonly");
+    let scratch = crate::platform::install_scratch_home(home.path().to_path_buf());
+    let data = home.path().join(".aeroric");
+    std::fs::create_dir_all(&data).expect("data dir");
+    let tasks_file = data.join("projects/p1/tasks.json");
+    let seeded = json!({
+        "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "codex",
+        "permissionMode": "ask", "status": "todo", "createdAt": 1
+    });
+
+    let first = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(first.handle(), "0-test");
+    let service = first.state::<Arc<TaskService>>();
+    seed_launchable_task(&service, &tasks_file, seeded.clone());
+    assert!(
+        first
+            .state::<crate::core_adapter::CoreGateway>()
+            .is_writer(),
+        "the first instance must hold the lease for this test to mean anything"
+    );
+
+    let second = tauri::test::mock_app();
+    crate::core_adapter::install_core_services(second.handle(), "0-test");
+    let error = crate::core_adapter::launch_via_core(
+        second.handle(),
+        "t1",
+        OutputSink::Channel(Channel::new(|_| Ok(()))),
+        false,
+        None,
+        false,
+        aeroric_core::tasks::Attachments::default(),
+    )
+    .expect_err("a read-only instance must not start a process over a row it cannot save");
+    assert!(
+        error.contains("只读"),
+        "the refusal has to be explainable: {error}"
+    );
+    assert_eq!(
+        second
+            .state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>()
+            .parked(),
+        0,
+        "refusing after parking is exactly the case where a channel could be leaked"
+    );
+    assert_eq!(
+        on_disk_rows(&tasks_file)[0]["status"],
+        json!("todo"),
+        "refusing must mean refusing: the row still reads todo"
+    );
+    drop(scratch);
+}
+
+fn on_disk_rows(tasks_file: &Path) -> Vec<Value> {
+    serde_json::from_str(&std::fs::read_to_string(tasks_file).expect("readable"))
+        .expect("valid json array")
+}

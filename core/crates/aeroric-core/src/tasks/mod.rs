@@ -42,7 +42,7 @@ pub use executor::{
 pub use launch_plan::{completion_for, Completion, ContinuationMode};
 pub use operations::{Claim, Claimed, LedgerState, OperationKind, OperationLedger};
 pub use service::{
-    Applied, EventOutcome, NewTask, SessionSnapshot, TaskError, TaskIntent, TaskIntentKind,
-    TaskService, TASK_INTENT_VOCABULARY,
+    Applied, Attachments, EventOutcome, NewTask, SessionSnapshot, TaskError, TaskIntent,
+    TaskIntentKind, TaskService, TASK_INTENT_VOCABULARY,
 };
 pub use session_owner::{AgentFamilies, ConfigSwitchStrategy, SessionFields, SessionOwner};

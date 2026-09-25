@@ -1000,11 +1000,15 @@ mod sink_tests {
     }
 }
 
-/// 一条意图的结果，同时就是前端该采纳的权威快照（Action 3 的"React 接受 authoritative
-/// snapshot"那一半从这条返回开始）。
+/// 一次经 core 的任务写的结果，同时就是前端该采纳的权威快照（Action 3 的"React 接受
+/// authoritative snapshot"那一半从这条返回开始）。
+///
+/// 它原来叫 `TaskIntentOutcome`，只有意图入口用它。启动入口（`launch_via_core`）返回的是同一个
+/// 四元组——"这批行、这格修订、有没有变、谁落的盘"——再起一个字段一模一样的结构体就是让
+/// "谁写了什么"有两种拼写。TS 侧的接口名不参与序列化，线上形状一字未改。
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TaskIntentOutcome {
+pub(crate) struct TaskWriteOutcome {
     /// 这个项目决定后的全部任务记录。
     pub tasks: Vec<serde_json::Value>,
     /// `None` 意味着这一格没被 advance：要么没变化，要么本平台还没递交写权。
@@ -1035,7 +1039,7 @@ pub(crate) fn apply_task_intent_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     project_id: &str,
     intent: &aeroric_core::tasks::TaskIntent,
-) -> Result<TaskIntentOutcome, String> {
+) -> Result<TaskWriteOutcome, String> {
     use tauri::Manager;
 
     let service = app.state::<Arc<TaskService>>();
@@ -1056,7 +1060,7 @@ pub(crate) fn apply_task_intent_core<R: tauri::Runtime>(
         }
     };
 
-    Ok(TaskIntentOutcome {
+    Ok(TaskWriteOutcome {
         tasks: records_as_values(&applied.records),
         revision: applied.revision,
         changed: applied.changed,
@@ -1069,8 +1073,109 @@ pub(crate) fn apply_task_intent(
     app: tauri::AppHandle,
     project_id: String,
     intent: aeroric_core::tasks::TaskIntent,
-) -> Result<TaskIntentOutcome, String> {
+) -> Result<TaskWriteOutcome, String> {
     apply_task_intent_core(&app, &project_id, &intent)
+}
+
+/// `run_task` 那批命令今天只带得出 `task_id`，而 core 的每个执行入口都按**项目**寻址。
+///
+/// 答案从盘上来，不从参数来：`project_of` 就是为"站点只有 task_id"造的（ADR-033 §4），拿到的
+/// 项目 id 再去 `projects.json` 换成记录。命令参数里那条 `projectPath` 不作数——一份数据只能有
+/// 一个真相源（ADR-027），而那条路径连"任务在哪个项目"都回答不了。
+fn project_record_for(
+    service: &TaskService,
+    task_id: &str,
+) -> Result<aeroric_core::storage::Record, String> {
+    let project_id = service
+        .project_of(task_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("查不到任务 {task_id} 属于哪个项目，所以无法经 core 启动它"))?;
+    aeroric_core::storage::projects::load_projects(service.context())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|record| record.id() == Some(project_id.as_str()))
+        .ok_or_else(|| format!("项目 {project_id} 不在 projects.json 里，任务 {task_id} 启动不了"))
+}
+
+/// §12 步骤②b 的启动入口：**解析项目 → 寄存 channel → 按 `mode()` 三分递交**。
+///
+/// **今天还没有生产调用方**。七条命令体要等 ③④ 那一刀才换：#7 的整表快照还在写，先换体就等于让
+/// 一次 launch 之后的第一条状态观察被 ADR-015 的覆盖守卫拒掉（`fingerprint.rs` 的 `LastCoreWrite`
+/// 只认 core 上次发布的字节，而宿主的整表保存没有任何告知钩子）。入口先行不是拖延——下面三件事
+/// 每一件都会**安静地**变成"进程起来了但没人收字节"或"一个永远取不回来的窗口"，而"安静"正是
+/// 这个模块一路被门禁要求消除的那类失败：
+///
+/// 1. **operation key 由宿主发**。§10 复勘量过：八个启动调用点没有一个发 key，而 ADR-017 要的"这一次
+///    点击而不是下一次"的身份必须有，它同时是 mailbox 的键。uuid v4 让同一任务的两次并发启动天然
+///    落在两个 key 上。
+/// 2. **先寄存再递交**。终端 channel 是 webview 对象，进不了 `LaunchRequest`，executor 只能从
+///    mailbox 取；反过来做就把"进程已经起来、字节没人收"变成一种可能的结果。
+/// 3. **拒绝要把 channel 取回来**。留在 mailbox 里没人认领的 channel 不是"什么都没发生"，它是那个
+///    窗口再也收不到输出的原因——`parked()` 这个计数存在就是为了能发现这种残留。
+#[allow(
+    dead_code,
+    reason = "§12 步骤②b 的入口先行：七条命令体要等 #7/#8/#15 快照退役的那一刀才换（互锁见 §12），在此之前它只有下面的用例真跑，没有前端字面量"
+)]
+pub(crate) fn launch_via_core<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    sink: crate::pty::OutputSink,
+    persist_before_launch: bool,
+    prompt_override: Option<String>,
+    inject_prompt_into_terminal: bool,
+    attachments: aeroric_core::tasks::Attachments,
+) -> Result<TaskWriteOutcome, String> {
+    use tauri::Manager;
+
+    let service = app.state::<Arc<TaskService>>();
+    let mailbox = app.state::<Arc<crate::legacy_task_executor::OutputSinkMailbox>>();
+    let mode = app.state::<CoreGateway>().mode();
+    // 解析不出项目时 channel 还没寄出去，所以这条错误路径不需要归还。
+    let project = project_record_for(&service, task_id)?;
+
+    let operation_key = uuid::Uuid::new_v4().to_string();
+    mailbox.park(&operation_key, sink);
+
+    let started = match mode {
+        CoreMode::Writer => service.start(
+            &project,
+            task_id,
+            &operation_key,
+            persist_before_launch,
+            prompt_override,
+            inject_prompt_into_terminal,
+            attachments,
+        ),
+        CoreMode::HandoverDeferred => service.start_via_host(
+            &project,
+            task_id,
+            &operation_key,
+            persist_before_launch,
+            prompt_override,
+            inject_prompt_into_terminal,
+            attachments,
+        ),
+        CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
+            mailbox.take(&operation_key);
+            return Err(
+                "Aeroric 本次启动是只读的（数据目录被另一个实例持有，或本机不接受它），任务没有启动"
+                    .to_string(),
+            );
+        }
+    };
+    let applied = started.map_err(|error| {
+        // core 或 executor 失败了：这条 key 上再不会有人来取 channel，留着它就是残留。
+        // （`LegacyTaskExecutor` 成功路径已经 take 过一次，take 是幂等的。）
+        mailbox.take(&operation_key);
+        error.to_string()
+    })?;
+
+    Ok(TaskWriteOutcome {
+        tasks: records_as_values(&applied.records),
+        revision: applied.revision,
+        changed: applied.changed,
+        committed_by_core: mode == CoreMode::Writer,
+    })
 }
 
 #[cfg(test)]
