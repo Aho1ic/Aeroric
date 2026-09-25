@@ -65,21 +65,57 @@ for the two notebook files) are the fastest disambiguation.
 
 ## Full-parallel `cargo test --lib` (src-tauri) — first recorded at P2-02
 
-The same load-sensitivity the TS suite shows exists on the Rust side, and it is now
-measured rather than assumed:
+A Rust-side flake was observed in the same pattern as the TS one, and was **classified** as
+load-sensitivity on the same evidence shape (fails under a busy sweep, passes on re-run). The
+mechanism offered for it has since been disproved — see the correction below the table. Treat
+"classified as load-sensitive" in this section as *undiagnosed*, not as *explained*.
 
-| Test | Fails when | Passes when |
-|---|---|---|
-| `remote::network_exposure_tests::failed_invite_after_widening_restores_loopback_listener` | full parallel run, 4 added tests, machine busy with concurrent cargo builds (2 consecutive runs) | same code, idle machine (2 consecutive runs, 2412 passed); `--test-threads=1` (2412 passed); run alone or with its own group (`network_exposure`, 9 passed) |
+| Test | Fails when | Passes when | Status now |
+|---|---|---|---|
+| `remote::network_exposure_tests::failed_invite_after_widening_restores_loopback_listener` | full parallel run, 4 added tests, machine busy with concurrent cargo builds (2 consecutive runs) | same code, idle machine (2 consecutive runs, 2412 passed); `--test-threads=1` (2412 passed); run alone or with its own group (`network_exposure`, 9 passed) | cause **unknown**; 47 later runs (alone / group @16 threads / full parallel `--lib`) produced 0 failures; gate case now single-threaded, so it is contained either way |
 
-Mechanism, read from source rather than guessed: `src/remote/mod.rs:875-881` — after a
-failed invite restores the loopback scope, the code asks `handle.is_listening()` **once**.
-Under scheduling pressure that read can land before the rebound listener reports itself,
-and the `else` branch tears the server down, leaving `running == None`, which is what the
-test's `expect("server remains available locally after failed invite")` observes. In
-product terms: **a failed pairing-QR request can stop the local remote server on a loaded
-machine.** Owner: P7-01/P7-03 (remote listener); it is a Phase 7 input, not a Phase 2 fix,
-and it must not be "fixed" by loosening the test.
+Mechanism, as originally written here (2026-09-22): `ensure_started` asks
+`handle.is_listening()` **once** after restoring the loopback scope, and under scheduling
+pressure that read was claimed to land "before the rebound listener reports itself", so the
+`else` branch tears the server down and the test's
+`expect("server remains available locally after failed invite")` fires. It went on to assert
+a product consequence: "a failed pairing-QR request can stop the local remote server on a
+loaded machine".
+
+**That mechanism is wrong, and the product claim with it. Disproved by reading the
+implementation, 2026-09-25:**
+
+- `is_listening()` is `self.bound_addr.is_some()` (`remote/server.rs:225-226`) — a plain field
+  read, not a socket or task-state probe. There is nothing that can "not have reported yet".
+- `replace_listener` sets `self.bound_addr = Some(bound_addr)` (`remote/server.rs:320-321`)
+  before returning `Ok(())` (`:325`).
+- `ensure_listener_scope` (`remote/server.rs:260-290`) can only return `Ok(())` from two
+  places: the early return at `:265-267`, whose guard **already requires** `is_listening()`,
+  or `replace_listener`'s `Ok` path, which guarantees `bound_addr == Some(_)`. Every failure
+  path returns `Err`, and the caller (`remote/mod.rs:859-871`) shuts down and returns before
+  reaching the check.
+
+So on the failed-invite path, by the time `remote/mod.rs:874` runs, `is_listening()` is
+**necessarily true** — the `else` branch there is unreachable on that path, and the
+"loaded machine stops the local remote server" consequence has no support. (The `else` is
+still reachable on the invite-*success* path, where no scope restore happens; that is the
+"both binds genuinely failed" case its comment describes, and it behaves correctly.)
+
+What is therefore still open: the two failures recorded below have **no established cause**.
+The observation itself stands (they happened, and went away on re-run), but "load-sensitive"
+was an inference from that pattern, not a diagnosis, and the diagnosis offered here was
+falsifiable and turned out false. Since 2026-09-25 the same test has been re-run 20 times
+alone, 12 times with its whole `remote::` group at `--test-threads=16` (139 tests per run),
+and 15 times inside full default-parallel `--lib` runs — 0 failures. The `--lib` gate case
+now runs single-threaded anyway (MIGRATION_PLAN 补记五十六/六十二), so this cannot resurface
+as gate noise; if it ever fails again it should be treated as an undiagnosed defect, not
+dismissed as load.
+
+Owner note, corrected: **do not take "fix the `is_listening()` race" into P7-01/P7-03 as an
+input** — there is no such race. What P7 may legitimately look at is whether a
+`running: Option<_>` teardown decision that depends on a field the compiler can already prove
+`Some` is worth simplifying, and whether the `else` branch deserves a debug log, since it is
+unreachable on one of its two paths.
 
 Attribution evidence kept deliberately boring: the three touched `src-tauri` files were
 restored to HEAD content by `cp` from backups and the suite re-run (2408 passed), then put
