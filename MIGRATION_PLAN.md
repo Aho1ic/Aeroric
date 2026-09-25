@@ -1392,6 +1392,15 @@ grill-me
 > - **可失败性证明**：把 `launch_family` 的声明注释掉，两条守卫**同时变红并都点名 `launchFamily`**（新增那条与原有的对称那条），恢复后 parity 4/4、`tauri-adapter` **12 case／2508** 全绿、`--lib` 仍 2470/0。
 > - **顺带把两个数字查实**：意图词汇总量是 **21 个持久化调用点**，其中 7 处 core 目前没有对应 op（todo 编辑、会话归属、worktree 挂载/丢弃、4 个回滚补偿写）——好消息是它们全部可以用现成的 `TaskService::mutate` 表达，所以 ADR-022 的代价是"要不要给 mutate 之外再具名 6 个 op"，不是"core 表达不了"。另外我第一轮误报过 5 个"缺失键"（`avatar`/`group`/`orderIndex`/`path`/`pinned`），它们属于 `Project` 而非 `Task`，比对时用了错的宿主结构体。
 
+>
+> **第六十一次补记（2026-09-25，跨端词表的另一半链条补上；同时记一次我自己的漏跑门禁）**：接着量 ADR-028/029 的族词汇时发现的第二处"文档说有守卫、其实没有"。
+>
+> - **缺的一环**：`contracts/native/v1/envelope.schema.json` 的 `constants`（`protocolFamilies` / `taskStatuses` / `permissionModes` / `builtInAgents` / `errorCodes`）是 **Rust 生成**的（`export-schema.rs` 读各枚举的 `ALL`），而且 `contracts --check` 逐字节比这份产物——所以"产物 == Rust"这头本来就是硬的。软的是另一头：`packages/remote-contracts/src/shared.ts` 里那四个字面量联合**从来没有跟这份产物比过**。而 `shared.ts` 的头注释写着"Rust 侧不强制 codegen；parity 测试锁关键字段名（见 `src/test/contracts-parity.test.ts`）"，那个文件里的断言却全是 TS↔TS 的赋值兼容（`desktop.ProtocolFamily` 接受 `"omp"` 之类），从不读产物。后果与上一条同族：Rust 加一个族，产物会红、TS 联合不会，桌面与移动端继续拿着漏值的联合给 wire 值做穷举。
+> - **补法**：`src/test/contracts-parity.test.ts` 新增 4 条 `it.each` 用例，把 TS 联合与产物里的同名清单做集合相等；两侧各设**尺寸门槛正控**（族 ≥4、状态 ≥9、模式 ≥3、内建 ≥5），否则"产物读空 / 键名打错"会让相等断言变成永真。可失败性：往 `PermissionMode` 加一个 `"ghost_mode"`，**只有那一条用例变红**且归因干净，恢复后 6/6。
+> - **另一条过时声明**：`core/crates/aeroric-protocol/src/task.rs:26` 的注释说词表"Pinned by `the_published_vocabulary_matches_the_enum`"——**全仓检索零命中，这个测试不存在**。已把注释改成写明真正的链条（`export-schema.rs` + `contracts --check` + 这次新增的 TS 比对），并注明"这个名字是否曾经存在过不可考"，而不是替它编来历。这是本仓又一次"注释引用的守卫早已不在"。
+> - **我这一轮自己的漏跑，按纪律写下来**：上一个提交 `d31d3d2` 往 `src-tauri/src/storage.rs` 加了 17 行，让 **6 条 `definition_resolved` pin 集体错位**，而我提交前只复跑了 `tauri-adapter`（12/12 绿）、没跑 `skeleton`——`inventory-consistency` 与 `inventory-unit` 是在提交**之后**才红的。修法走既有流程（逐条断言目标行确实是那个 `fn` → 手改 6 个行号 → `--check` consistent → `--freeze-check` 字节 noop → `command_params_annotated` 读回 659 → `skeleton` 20/113 复绿）。**从此定为固定动作**：凡是改动 `src-tauri/src/**` 行数的提交，提跑前必须同时跑 `skeleton` 与 `tauri-adapter`，只跑本模块那条门禁不够。
+> - **实测**：`contracts --check` 12 份逐字节一致、`inventory --check` consistent、`--freeze-check` 字节 noop、params 659、`skeleton` 20/113、`tauri-adapter` 12 case／2508、`npx tsc --noEmit` 干净、该文件 vitest 6/6。
+
 
 **发射面移交已收口（补记五十四）**：两个家族的 `emitters` 都是 1，且由 `adapter-invariants` 的 ADR-023 规则逐家族守着。未接上的另一半是"会话字段与状态一起落盘"，它与状态观察的 commit 同属 Action 3，见 ADR-023 落实与评审 §5.2b。`failure_reason` 障碍、抑制闸归属、观察通道本体三项前置分别由补记四十二、ADR-034 + 补记四十七、补记五十一关闭。**P2-05 剩下的三项**：执行器接线（writer 在 macOS 真正递交，前置是 Action 3 的 store 改造 + ADR-022 意图队列）、ADR-026 按 op 分类的冲突处置（同样前置是写权移交）、以及门禁那两项待撤的守卫（`core-observer-does-not-write-yet`）。**ADR-027 决策 4 的常驻只读指示已在补记五十五完成**，它此前一直挂在"未生效"清单里。**G18 仍未裁决。** §1 的三条验收现在**都有了证据**（#1 门禁全绿、#2 补记四十一、#3 前置①与重键），P2-05 可在接线之后收口。
 

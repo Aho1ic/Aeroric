@@ -23,7 +23,12 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     /// The complete wire vocabulary, in the order `contracts/native/v1/` publishes
-    /// it. Pinned by `the_published_vocabulary_matches_the_enum`.
+    /// it. What pins it: `export-schema.rs` generates `envelope.schema.json`'s
+    /// `constants.taskStatuses` from this list and `contracts --check` byte-compares the
+    /// artifact, while `src/test/contracts-parity.test.ts` compares the same list against
+    /// the TypeScript `TaskStatus` union. (An earlier revision of this comment cited a test
+    /// named `the_published_vocabulary_matches_the_enum`; no such test exists anywhere in the
+    /// repo — the claim was stale, not merely unlinked.)
     pub const ALL: &'static [TaskStatus] = &[
         TaskStatus::Todo,
         TaskStatus::Pending,
