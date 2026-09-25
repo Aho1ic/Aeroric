@@ -246,6 +246,7 @@ export type {
   ProjectAvatarOverride,
   ProjectLocation,
   ProtocolFamily,
+  TaskIntentOp,
   TaskStatus,
 } from "@aeroric/remote-contracts";
 
