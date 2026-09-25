@@ -13,7 +13,7 @@ use aeroric_core::storage::{runtime, Cover, Fingerprint};
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::service::{Attachments, EventOutcome, NewTask, TaskError};
 use aeroric_core::tasks::{
-    launch_plan, operations, reducer, session_owner, NoLiveRuns, TaskNotification,
+    launch_plan, operations, reducer, session_owner, NoLiveRuns, TaskIntent, TaskNotification,
 };
 use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
 use serde_json::{json, Value};
@@ -2100,4 +2100,120 @@ fn a_read_only_host_cannot_rename_even_though_the_op_is_public() {
         "the op being callable is not the same as the row being written"
     );
     cleanup(root);
+}
+
+#[test]
+fn deciding_an_intent_returns_the_new_rows_without_touching_the_file() {
+    // ADR-035 搬到 mutation 上：非递交写权的平台上，core 照样决定结果，保存者仍是宿主。
+    let (root, context, executor) = harness("intent-decide", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+    let bytes_before = std::fs::read(&tasks_file).expect("seeded bytes");
+
+    let decided = service
+        .decide_intent(
+            "p1",
+            &TaskIntent::Rename {
+                task_id: "t1".into(),
+                name: "决定但未落盘".into(),
+            },
+        )
+        .expect("deciding needs no lease");
+
+    assert!(decided.changed, "the reducer really did change the row");
+    assert!(
+        decided.revision.is_none() && decided.fingerprint.is_none(),
+        "no write means no revision — and that is a different answer from 'nothing changed'"
+    );
+    assert_eq!(
+        decided.records[0].get("name"),
+        Some(&json!("决定但未落盘")),
+        "the caller must get the decided row back, not just a verdict"
+    );
+    assert_eq!(
+        std::fs::read(&tasks_file).expect("still readable"),
+        bytes_before,
+        "byte-identical: a decision is not a save"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn a_reader_can_decide_an_intent_it_cannot_apply() {
+    let (root, _writer, executor) = harness("intent-reader", &[task("t1", "p1", "todo")]);
+    let service = build_service(reader(&root), &executor);
+    let tasks_file = tasks_json(&root);
+    let star = TaskIntent::ToggleStar {
+        task_id: "t1".into(),
+    };
+
+    let decided = service
+        .decide_intent("p1", &star)
+        .expect("ADR-021 withholds the writer role, not the decision");
+    assert_eq!(decided.records[0].get("starred"), Some(&json!(true)));
+
+    let refused = service
+        .apply_intent("p1", &star)
+        .expect_err("but the same intent must not be written here");
+    assert!(
+        matches!(refused, TaskError::Storage(_)),
+        "expected the same storage refusal as every other write, got {refused:?}"
+    );
+    assert_eq!(
+        rows(&tasks_file)[0].get("starred"),
+        None,
+        "the refused path wrote nothing, including no ledger"
+    );
+    cleanup(root);
+}
+
+#[test]
+fn an_intent_and_the_named_op_it_carries_produce_the_same_bytes() {
+    // 宿主将来只有一个入口（apply_intent）。它必须与逐 op 入口逐字节等价，否则"一条命令
+    // 一个 op"的迁移会把同一件事做出两种结果，而对账只能看见其中一种。
+    let (root_a, context_a, executor_a) = harness("intent-equiv-a", &[task("t1", "p1", "todo")]);
+    let service_a = build_service(context_a, &executor_a);
+    service_a
+        .rename("p1", "t1", "同一个改动")
+        .expect("named op");
+    service_a
+        .archive("p1", &["t1".to_string()])
+        .expect("named batch op");
+
+    let (root_b, context_b, executor_b) = harness("intent-equiv-b", &[task("t1", "p1", "todo")]);
+    let service_b = build_service(context_b, &executor_b);
+    service_b
+        .apply_intent(
+            "p1",
+            &TaskIntent::Rename {
+                task_id: "t1".into(),
+                name: "同一个改动".into(),
+            },
+        )
+        .expect("intent");
+    service_b
+        .apply_intent(
+            "p1",
+            &TaskIntent::Archive {
+                task_ids: vec!["t1".to_string()],
+            },
+        )
+        .expect("intent");
+
+    let mut before = rows(&tasks_json(&root_a));
+    let mut after = rows(&tasks_json(&root_b));
+    for row in before.iter_mut().chain(after.iter_mut()) {
+        if let Some(obj) = row.as_object_mut() {
+            // createdAt/completedAt 由时钟固定，两边同种子；这里只比"改了什么"。
+            obj.remove("archivedAt");
+        }
+    }
+    assert_eq!(before, after, "two entry points, one result");
+    // 但两边都必须真的写了 archivedAt，否则把键删掉也能"相等"。
+    assert!(
+        rows(&tasks_json(&root_a))[0].get("archivedAt").is_some(),
+        "the equivalence assertion above is only meaningful if the archive really landed"
+    );
+    cleanup(root_a);
+    cleanup(root_b);
 }

@@ -41,5 +41,5 @@ pub use executor::{
 };
 pub use launch_plan::{completion_for, Completion, ContinuationMode};
 pub use operations::{Claim, Claimed, LedgerState, OperationKind, OperationLedger};
-pub use service::{Applied, EventOutcome, NewTask, TaskError, TaskService};
+pub use service::{Applied, EventOutcome, NewTask, TaskError, TaskIntent, TaskService};
 pub use session_owner::{AgentFamilies, ConfigSwitchStrategy, SessionFields, SessionOwner};

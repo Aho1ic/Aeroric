@@ -197,6 +197,20 @@ enum Persist {
     DecideOnly,
 }
 
+/// ADR-022 决策 1 里宿主队列交出来的东西：一条意图，不是一份快照。
+///
+/// 为什么要有具名类型而不是让宿主直接调 `rename`/`archive`：宿主最终只会有**一个**入口
+/// （收到 op 名与载荷，转成这个枚举），而 ADR-021 让"落不落盘"按平台分叉——两条路径共用同一
+/// 个意图类型，才不会变成"macOS 走 op、别的平台走快照"那种 ADR-022 明确否掉的混合形态。
+/// 重试身份（operation key）不在这里：那是调用方的事，账本按 ADR-017 记。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TaskIntent {
+    Rename { task_id: String, name: String },
+    ToggleStar { task_id: String },
+    Archive { task_ids: Vec<String> },
+    Unarchive { task_ids: Vec<String> },
+}
+
 pub struct TaskService {
     /// Shared, because the host's adapter owns the same context: the gateway is what took the
     /// writer lease, and a service that carried its own copy would be a second answer to
@@ -1351,12 +1365,13 @@ impl TaskService {
     /// 说"core 侧已经有逐 op 的服务"并不成立：没有公开入口，宿主就只能走 `mutate` 自己拼
     /// 闭包，而那等于把"哪个字段谁能写"重新交回宿主记账——正是这条 ADR 否掉的形态。
     ///
-    /// 共同形状：先确认这一行真的存在（改一个不存在的任务必须是错误，不是静默无变化），
-    /// 再在权威快照上跑 reducer，最后按 ADR-015 校验覆盖基线提交。
+    /// 共同形状：先确认这些行真的存在（改一个不存在的任务必须是错误，不是静默无变化），
+    /// 再在权威快照上跑 reducer，最后按 `persist` 决定提交还是只交回决定结果。
     fn metadata_edit(
         &self,
         project_id: &str,
         task_id: &str,
+        persist: Persist,
         change: impl Fn(&[Record]) -> Vec<Record>,
     ) -> Result<Applied, TaskError> {
         let snapshot = self.load(project_id)?;
@@ -1368,7 +1383,7 @@ impl TaskService {
         if records == snapshot.records {
             return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
         }
-        self.commit(project_id, &records)
+        self.finish_intent(project_id, records, persist)
     }
 
     /// 改名。**空串不是名字**：reducer 会删掉 `name` 键，与旧客户端 `renameTaskInList` 一致，
@@ -1379,7 +1394,7 @@ impl TaskService {
         task_id: &str,
         name: &str,
     ) -> Result<Applied, TaskError> {
-        self.metadata_edit(project_id, task_id, |records| {
+        self.metadata_edit(project_id, task_id, Persist::Commit, |records| {
             reducer::rename(records, task_id, name)
         })
     }
@@ -1387,7 +1402,7 @@ impl TaskService {
     /// 收藏开关。它读的是当前值：取消收藏写的是 `starred: false`，不是"把键删掉回到原点"，
     /// 与旧客户端一致；两次调用因此都是真实的一格 revision。
     pub fn toggle_star(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
-        self.metadata_edit(project_id, task_id, |records| {
+        self.metadata_edit(project_id, task_id, Persist::Commit, |records| {
             reducer::toggle_star(records, task_id)
         })
     }
@@ -1398,6 +1413,7 @@ impl TaskService {
         &self,
         project_id: &str,
         task_ids: &[String],
+        persist: Persist,
         change: impl Fn(&[Record]) -> (Vec<Record>, bool),
     ) -> Result<Applied, TaskError> {
         let snapshot = self.load(project_id)?;
@@ -1411,21 +1427,91 @@ impl TaskService {
         if !changed || records == snapshot.records {
             return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
         }
-        self.commit(project_id, &records)
+        self.finish_intent(project_id, records, persist)
     }
 
     pub fn archive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
         let now_ms = self.clock().now_ms();
-        self.metadata_batch(project_id, task_ids, |records| {
+        self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
             reducer::archive(records, task_ids, now_ms)
         })
     }
 
     pub fn unarchive(&self, project_id: &str, task_ids: &[String]) -> Result<Applied, TaskError> {
-        self.metadata_batch(project_id, task_ids, |records| {
+        self.metadata_batch(project_id, task_ids, Persist::Commit, |records| {
             reducer::unarchive(records, task_ids)
         })
     }
+
+    /// ADR-035 给观察路径的那一半，搬到 mutation 上：非递交写权的平台上，core 仍然决定结果，
+    /// 保存者还是宿主。"没有 revision、没有指纹"是这里的诚实答案，与"文件没变"是两回事。
+    pub fn apply_intent(
+        &self,
+        project_id: &str,
+        intent: &TaskIntent,
+    ) -> Result<Applied, TaskError> {
+        self.run_intent(project_id, intent, Persist::Commit)
+    }
+
+    pub fn decide_intent(
+        &self,
+        project_id: &str,
+        intent: &TaskIntent,
+    ) -> Result<Applied, TaskError> {
+        self.run_intent(project_id, intent, Persist::DecideOnly)
+    }
+
+    fn run_intent(
+        &self,
+        project_id: &str,
+        intent: &TaskIntent,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        match intent {
+            TaskIntent::Rename { task_id, name } => {
+                self.metadata_edit(project_id, task_id, persist, |records| {
+                    reducer::rename(records, task_id, name)
+                })
+            }
+            TaskIntent::ToggleStar { task_id } => {
+                self.metadata_edit(project_id, task_id, persist, |records| {
+                    reducer::toggle_star(records, task_id)
+                })
+            }
+            TaskIntent::Archive { task_ids } => {
+                let now_ms = self.clock().now_ms();
+                self.metadata_batch(project_id, task_ids, persist, |records| {
+                    reducer::archive(records, task_ids, now_ms)
+                })
+            }
+            TaskIntent::Unarchive { task_ids } => {
+                self.metadata_batch(project_id, task_ids, persist, |records| {
+                    reducer::unarchive(records, task_ids)
+                })
+            }
+        }
+    }
+
+    /// 一条意图的收尾：`Commit` 按 ADR-015 的覆盖基线提交，`DecideOnly` 只把决定后的记录交回去。
+    /// （不叫 `settle`：那个名字在本类型上已经是"了结一条账本 claim"，两者不是一回事。）
+    fn finish_intent(
+        &self,
+        project_id: &str,
+        records: Vec<Record>,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        match persist {
+            Persist::Commit => self.commit(project_id, &records),
+            Persist::DecideOnly => Ok(Applied {
+                records,
+                revision: None,
+                changed: true,
+                fingerprint: None,
+                generation: None,
+            }),
+        }
+    }
+
     /// What a fresh process owes the user before it accepts any request: every start or
     /// resume the last process left unclaimed is now `interrupted`, and nothing is respawned
     /// on anybody's behalf.
