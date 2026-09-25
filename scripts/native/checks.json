@@ -917,6 +917,23 @@
           "$note": "同上，覆盖 core crate。注意 `core/Cargo.toml` 是 workspace 根，`cargo fmt` 必须带 `--all` 才找得到 targets（不带就以 `Failed to find targets` 失败——那是一台机器上永远红的门禁，比没有门禁更糟）。"
         },
         {
+          "name": "core-clippy",
+          "kind": "gate",
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "补上 src-tauri 有、core 没有的那一半：core 此前只跑 fmt、从不跑 clippy，所以 doc_lazy_continuation、needless_borrow 一类 lint 在这里是隐形的——`cargo check` 与 `--lib` 都看不见它们。`--all-targets` 必须带，否则 16 个测试二进制不参与 lint。本机实测 exit 0；stderr 上那一串 unused-patch 警告来自 `../dbx` 与 vendor 的 [patch] 表，不改变退出码（见仓库记忆里的 stderr 陷阱）。"
+        },
+        {
           "name": "src-tauri-clippy",
           "kind": "gate",
           "timeoutMs": 1800000,
