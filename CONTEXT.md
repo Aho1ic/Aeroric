@@ -149,3 +149,13 @@
 | --- | --- | --- |
 | 观察来源 / observation origin | `TaskEvent::Status` 上的 `ObservationOrigin::{Transcript, Hook, Runtime}`。ADR-034 的迟到观察闸**只对前两者生效**；`Runtime` 是宿主自己改的（launch / cancel / 手动完成 / dsh 状态机），今天无条件发，移交后仍然无条件 | 不是状态词（九值词表 v1 冻结，没加任何东西）；不是"哪个进程"（那是 generation）；不是宿主的权限——它是事件自带的事实 |
 | 有闸 / 无闸 / is_guarded | `Transcript \| Hook ⇒ 有闸`。这条边界在补记四十八之前**无法执行**（事件里没这个信息），于是 dsh 的 9 处非终态报告会被误判"无存活代"而九处全静默 | 不是"是否终态"（那是 `is_terminal`，另一道判据）；闸的判定仍是 `is_task_live`，origin 只决定要不要问它 |
+
+## 意图词汇表新增（P2-05 续，Q68～Q71，ADR-037）
+
+| 术语 | 含义 | 不要与混用 |
+| --- | --- | --- |
+| 意图词汇表 / intent vocabulary | ADR-022 说的"交意图"到底交哪些**种类**：13 条具名意图（既有 4 + 新增 9），每条自己定义载荷与"改了什么"。**每一类落盘写都有自己的名字**，所以"这个字段谁能写"永远是逐 op 定义的 | 不是一条通用 `PatchFields{fields}`＋字段白名单（被否：白名单就是 ADR-022:28 否掉的逐字段记账）；不是"op 名的字符串集合"（它是类型，serde 形状钉在 core 的用例里） |
+| 原子复合意图 / atomic compound intent | 一次横跨多个字段族的写（`SwitchConfig`、`ResumeWithSession`）算**一条**意图，由 core 同一轮 `load → 改 → commit` 保证要么整套生效要么不动 | 不是"多条小意图按序投递"（会留下"会话已挂但状态未改"的中间态，而 #12 的 await-flush-then-launch 要禁的正是这个） |
+| 纯回滚不落盘 / rollback stays in memory | 意图失败 ⇒ core 什么都没写 ⇒ 宿主的撤销只改自己的视图（#8/#10/#13）。而"删掉一条已经真落过盘的行"（#4/#6）不是回滚，是**一条真 `Delete` 意图** | 不是 ADR-022 决策 4 的"回滚留在宿主"被推翻——它说的正是视图层；行的存在性从来由磁盘说了算 |
+| 带前置的改名 / compare-and-set rename | `Rename{…, expect_name}`：core 在权威快照上判等，不等 ⇒ `changed:false` 且**不报错**。用于 #1（LLM 名字 3–5 s 后回来）与 #19（用户手输）抢同一字段 | 不是乐观锁版本号（没有 generation 参与，`name` 不是运行身份）；不是"报错让宿主重试"（今天的语义就是静默丢弃过期结果） |
+| 删空即删文件 / delete-on-empty | `Delete` 意图必须保留 `save_project_tasks` 的隐性契约：该项目任务为空 ⇒ 删 `tasks.json`，且不得为"确保目录存在"把已删空的目录复活。全仓没有 `delete_project` 命令，删项目就走这条路 | 不是"清空数组顺便删目录"（目录留着会让下次 `load` 与 `ensure_project_dir` 复活一个空项目）；与 `write_task_records_raw` 的同名行为成对，两侧语义差别只能多不能少 |

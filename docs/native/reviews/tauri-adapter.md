@@ -296,3 +296,40 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 **注册一条命令要手改的数，比 `--check` 校的多**（这轮实测出来的口径，下一个人可直接照抄）：`meta.counts` 里 `registered_entries` / `methods` / `unreachable` / `command_params_annotated` / `definition_by_resolution` **五处小计**，外加 `scripts/native/inventory.test.mjs` 里 **5 处硬编码 660**（那 5 处读真仓库，会红，算有安全网）。而 **`--check` 与 `--freeze` 都不校验 `meta.counts` 的派生小计**——`definition_by_resolution` 在我把 `registered_entries` 改成 661 之后仍停在 660，一路没有任何红灯，是我重数 `commands` 数组才发现。所以"counts 块填对了"这件事今天靠人不靠工具；真正的修法是让 `--check` 断言这些小计等于实际数出来的值，但那属门禁工具改造，不在 P2-05 里顺手做，记为已知项。
 
 **诚实记账**：这条命令**目前没有生产调用方**（`reachable=false`，21 处 JS 调用点还都在发快照），它是"入口先行"，与补记六十三/六十四同形。前端改造时它必须同时改掉 `save_project_tasks` 这条路径，否则同一份数据有两个写者——那才是 ADR-022 要防的东西。
+
+## 10. 21 个持久化调用点的逐点台账（2026-09-25，改造的输入）
+
+单一入口确认：全仓只有 `src/appProjectState.ts:137-138` 一处 `invoke(PERSISTENCE_COMMANDS.saveProjectTasks)`，其余都是 `persistProjectTasks` / `persistProjectTasksQuietly` 这两个包装的调用点（21 处 = 20 × 带错误处理 + 1 × quiet）。`src/projectSaveQueue.ts` 是**项目**队列，与任务行无关。
+
+| # | 调用点 | 实际改了什么 | 类别 | 触发面 |
+| --- | --- | --- | --- | --- |
+| 1 | `taskNaming.ts:63` | `name`，值来自 `invoke("generate_task_name")`（LLM，3–5 s） | 单行元数据 | 用户动作，且带 4 字段陈旧判定（`:53-60`）丢弃过期结果 |
+| 2 | `taskDeleteDone.ts:78` | 按 id **删行**，跨多项目扇出（`:76-77`） | 批量删 | 用户动作 + 30 分钟定时器（`useAppMaintenance.ts:80`） |
+| 3 | `taskLifecycle.ts:338` | 插入整行 `baseTask` | 建行 | 用户动作 + 远程请求（`useRemoteTaskRequests.ts:193`，`persistBeforeLaunch`） |
+| 4 | `taskLifecycle.ts:362` | 删掉 #3 刚插的行 | **补偿** | #3 失败分支 |
+| 5 | `taskLifecycle.ts:428` | `worktreePath`/`worktreeBranch`/`baseBranch`，值来自 `invoke("create_task_worktree")` | worktree 挂接 | 用户动作（launchMode=worktree） |
+| 6 | `taskLifecycle.ts:440` | 删行 | **补偿** | #5 失败分支 |
+| 7 | `taskLifecycle.ts:484` | `todo → pending` + 清 `attentionRequestedAt` | 状态变迁 | 用户动作 + 远程 |
+| 8 | `taskLifecycle.ts:506` | `rollbackTaskMutation` 键级撤销 | **补偿** | #7 失败分支 |
+| 9 | `taskLifecycle.ts:644` | `applyResolvedTaskSession`（11 个会话字段）+ `agent` + `status` 一次写 | 会话+dsh状态 复合 | 用户动作 + 远程 |
+| 10 | `taskLifecycle.ts:667` | 键级撤销 | **补偿** | #9 失败分支 |
+| 11 | `useAppStartup.ts:67`（quiet，**无 onError**） | 启动归一：`running/…→detached/interrupted` + `attentionRequestedAt ?? interruptedAt`（`appProjectState.ts:189-202`），**外加一件不相干的事**：dsh 的 `speed: fast → standard`（`:62`）；跨多项目扇出 | 批量修复 | 仅启动 |
+| 12 | `taskSwitch.ts:409` | 5 个配置字段 + 11 个会话字段 + `status` + 清 2 字段，**一次写** | 复合事务 | 用户动作，且 `:418` **必须 await flush 再启动** |
+| 13 | `taskSwitch.ts:425` | 键级撤销 | **补偿** | #12 的 flush 失败分支 |
+| 14 | `worktreeOps.ts:21` | `worktreeDiscarded: true`（path/branch 故意保留） | worktree 丢弃标记 | 用户动作 |
+| 15 | `taskStatus.ts:64` | `status` + `attentionRequestedAt` + `completedAt` + `failureReason` | **唯一的状态机写点** | 后台 `listen(TASK_STATUS_EVENT)` + 4 处用户动作直调 + 远程 |
+| 16 | `App.tsx:258`（`persistTasksForHook`） | `additions`/`deletions`，值来自 `invoke("worktree_diff_stats")`（`useWorktreeDiffStats.ts:43-55`，`pendingRef` 只在内存里） | 异步派生的两个数字 | 后台（状态事件之后） |
+| 17 | `App.tsx:642` | `archivedAt` 有/无，跨项目扇出（`:640-641`） | 批量元数据 | 用户动作（多选批处理条） |
+| 18 | `App.tsx:743` | `starred` 取反 | 单行元数据 | 用户动作 |
+| 19 | `App.tsx:753` | `name`（用户手输） | 单行元数据 | 用户动作，与 #1 **抢同一个字段** |
+| 20 | `App.tsx:783` | `prompt` + `agent` + `permissionMode`，且 `taskNaming.ts:13` 用 `status !== "todo"` 做前置 | 单行编辑（带前置） | 用户动作 |
+| 21 | `App.tsx:1021` | 11 个会话字段（四族互斥地清三设一 + `sessionAgent`/`sessionCodexLike`/`sessionFamily`），`family` 由**事件载荷**算出（`:980-984`） | 会话挂接 | 后台 `listen(TASK_SESSION_EVENT)` + `RunningView.tsx:316` 的恢复回灌 |
+
+`flush(projectId)` 只有 4 个调用点：`taskStatus.ts:66`（仅 `done`）、`App.tsx:1027`（会话捕获后无条件）、`taskSwitch.ts:418`（await 后才启动，#13 就是它的 catch）、`taskLifecycle.ts:82-88`（远程 `persistBeforeLaunch`，10 s 超时）。`flushAll()` 只有 `taskFlush.ts:69` 一个调用点，纯退出/重启排空。
+
+**两条结构性事实，比清单本身重要**：
+
+1. **删掉项目依赖"空数组 ⇒ 删文件"**。全仓没有 `delete_project` 之类的命令（`remove_dir_all` 只出现在无关代码里），所以 `App.tsx:788` 删项目时是靠 #2 把该项目的任务清空、由 `save_project_tasks` 的空数组分支删掉 `projects/<id>/tasks.json`。意图化之后如果没有一条"删完这批行 ⇒ 若为空则删文件"的规则，**删项目会静默留下 tasks.json**；而 `write_task_records_raw` 已按同一语义镜像了空数组行为（`storage.rs:433`），#4/#6 的"删刚插的行"也走同一条。
+2. **五个补偿点（#4/#6/#8/#10/#13）今天和真意图共用同一个队列**。ADR-022 决策 4 说乐观视图由宿主自己回滚——那么在意图队列里它们**根本不该落盘**（意图失败时 core 什么都没写，宿主只需把内存里的行改回去）。但 #4/#6 例外：它们要删的是 #3 已经真落过盘的行（远程路径还 await 过 flush）。这不是措辞问题，是"行什么时候算存在"的语义决定。
+
+**当前 `TaskIntent` 只有 4 个变体**（`service.rs:212-215`），而 core 已有的具名方法 `create:412` / `start:521` / `resume:563` / `switch_config:852` / `complete:1225` / `cancel:1262` / `delete:1287` 都**不是**意图。上表 ⇒ 至少要新增的意图词汇：删行（#2/#4/#6）、会话挂接（#21，且**互斥规则必须由 core 拥有**——今天 `family` 是宿主从事件里算的，core 只能盲信）、worktree 挂接/丢弃（#5/#14）、异步统计（#16）、todo 编辑（#20，其 `status==="todo"` 前置必须搬到 core，否则权威状态在 core、守卫在宿主，等于把竞态留给 core 看不见的那一侧）。**#9/#12 是复合事务**：一次写里既有会话字段又有状态，`switch_config` 的载荷比四个元数据变体丰富得多，是否整体搬进意图是下一个决定。
