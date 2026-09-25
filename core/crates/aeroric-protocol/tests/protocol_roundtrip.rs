@@ -10,10 +10,11 @@ use std::path::PathBuf;
 
 use aeroric_protocol::{
     built_in_agents, decode_line, detail_allowed_keys, error_codes, handshake_allows_peer,
-    permission_modes, protocol_families, task_statuses, AgentId, BytesBase64, ContentBlock,
-    ErrorCode, Frame, FrameError, GapReason, PermissionMode, ProtocolFamily, Quantity, Request,
-    RpcError, SessionOwner, SessionPage, SessionSource, Success, TaskSnapshot, TaskStatus,
-    TerminalGap, TerminalLease, TerminalOutput, PROTOCOL_VERSION,
+    permission_modes, protocol_families, task_intent_ops, task_intent_ops_of, task_intents,
+    task_statuses, AgentId, BytesBase64, ContentBlock, ErrorCode, Frame, FrameError, GapReason,
+    PermissionMode, ProtocolFamily, Quantity, Request, RpcError, SessionOwner, SessionPage,
+    SessionSource, Success, TaskSnapshot, TaskStatus, TerminalGap, TerminalLease, TerminalOutput,
+    PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -441,6 +442,30 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
     assert_eq!(
         constants["errorDetailAllowedKeys"],
         json!(detail_allowed_keys())
+    );
+    // ADR-037 词汇表进契约：ops/9/4 三份名单与 protocol 的函数逐条同拼法。
+    assert_eq!(constants["taskIntents"]["ops"], json!(task_intent_ops()));
+    assert_eq!(
+        constants["taskIntents"]["metadata"],
+        json!(task_intent_ops_of("metadata"))
+    );
+    assert_eq!(
+        constants["taskIntents"]["state"],
+        json!(task_intent_ops_of("state"))
+    );
+    assert_eq!(
+        task_intents()
+            .iter()
+            .filter(|(_, kind)| *kind == "metadata")
+            .count(),
+        9
+    );
+    assert_eq!(
+        task_intents()
+            .iter()
+            .filter(|(_, kind)| *kind == "state")
+            .count(),
+        4
     );
     assert!(
         !constants["errorDetailAllowedKeys"]

@@ -87,6 +87,42 @@
         "retryable": false
       }
     ],
+    "taskIntents": {
+      "authority": "aeroric_protocol::task_intents(); the authoritative enum is core's tasks::service::TaskIntent and a core test pins the two lists together",
+      "metadata": [
+        "rename",
+        "toggleStar",
+        "archive",
+        "unarchive",
+        "attachSession",
+        "setWorktree",
+        "discardWorktree",
+        "recordDiffStats",
+        "normalizeAfterBoot"
+      ],
+      "ops": [
+        "rename",
+        "toggleStar",
+        "archive",
+        "unarchive",
+        "attachSession",
+        "setWorktree",
+        "discardWorktree",
+        "recordDiffStats",
+        "normalizeAfterBoot",
+        "create",
+        "delete",
+        "switchConfig",
+        "resumeWithSession"
+      ],
+      "rule": "the save queue carries named intents, never whole-project snapshots (ADR-022); on a rejected write metadata ops replay exactly once and state ops never replay (ADR-026); delete-empty deletes tasks.json (ADR-037)",
+      "state": [
+        "create",
+        "delete",
+        "switchConfig",
+        "resumeWithSession"
+      ]
+    },
     "taskStatuses": [
       "todo",
       "pending",

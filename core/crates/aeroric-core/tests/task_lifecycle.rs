@@ -2389,6 +2389,22 @@ fn the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state() {
         9,
         "13 个样本按 kind() 数出来也得是 9/4"
     );
+    // 契约那一头的同一份事实：protocol 的名单（`contracts --write` 的拼写来源）必须与
+    // core 的表逐条同名同分类——两条名单各长一份的那天，就是 TS/Swift 拿到第三份的那天。
+    let protocol_list = aeroric_protocol::task_intents();
+    assert_eq!(protocol_list.len(), TASK_INTENT_VOCABULARY.len());
+    for (name, kind) in TASK_INTENT_VOCABULARY {
+        let wire_kind = match kind {
+            TaskIntentKind::Metadata => "metadata",
+            TaskIntentKind::State => "state",
+        };
+        assert!(
+            protocol_list
+                .iter()
+                .any(|(pn, pk)| *pn == name && *pk == wire_kind),
+            "core 的 ({name}, {wire_kind}) 在 protocol 名单里找不到同名同分类的条目"
+        );
+    }
 }
 
 /// #3/#20：`Create` 意图走的必须是具名 `create` 的**同一个**行构造器——三族钉法、

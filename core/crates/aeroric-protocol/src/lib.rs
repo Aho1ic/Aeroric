@@ -68,6 +68,43 @@ pub fn error_codes() -> Vec<String> {
     wire_names(error::ErrorCode::ALL)
 }
 
+/// ADR-037 的意图词汇表：13 条具名意图，每条按 ADR-026 归入 `metadata`（冲突可自动重放
+/// 一次）或 `state`（永不自动重放）。权威枚举住 core（`tasks::service::TaskIntent`），
+/// 这份名单是它的**线上事实**——契约、TS 与宿主都从这里拼写，core 侧有一条对齐用例钉住
+/// "名单与 serde 判别式不许各长一份"。
+pub fn task_intents() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("rename", "metadata"),
+        ("toggleStar", "metadata"),
+        ("archive", "metadata"),
+        ("unarchive", "metadata"),
+        ("attachSession", "metadata"),
+        ("setWorktree", "metadata"),
+        ("discardWorktree", "metadata"),
+        ("recordDiffStats", "metadata"),
+        ("normalizeAfterBoot", "metadata"),
+        ("create", "state"),
+        ("delete", "state"),
+        ("switchConfig", "state"),
+        ("resumeWithSession", "state"),
+    ]
+}
+
+pub fn task_intent_ops() -> Vec<String> {
+    task_intents()
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+pub fn task_intent_ops_of(kind: &str) -> Vec<String> {
+    task_intents()
+        .into_iter()
+        .filter(|(_, k)| *k == kind)
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
 /// The only keys a host may put into `RpcError.detail` (Q12). Derived from the
 /// struct so the published contract and the type cannot disagree.
 pub fn detail_allowed_keys() -> Vec<String> {
@@ -124,5 +161,21 @@ mod tests {
         );
         assert_eq!(super::error_codes().len(), 11);
         assert_eq!(super::error_codes()[9], "INTERACTIVE_UI_REQUIRED");
+        // ADR-037/026：词汇表的账——13 条、9/4、名字唯一。
+        let intents = super::task_intents();
+        assert_eq!(intents.len(), 13);
+        assert_eq!(super::task_intent_ops_of("metadata").len(), 9);
+        assert_eq!(super::task_intent_ops_of("state").len(), 4);
+        let mut names: Vec<&str> = intents.iter().map(|(n, _)| *n).collect();
+        let before = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), before, "op 名不得有重");
+        assert!(
+            intents
+                .iter()
+                .all(|(_, kind)| matches!(*kind, "metadata" | "state")),
+            "分类只有两个合法取值"
+        );
     }
 }

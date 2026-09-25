@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES;
 use aeroric_protocol::{
     built_in_agents, detail_allowed_keys, error_codes, handshake_allows_peer, permission_modes,
-    protocol_families, task_statuses, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    protocol_families, task_intent_ops, task_intent_ops_of, task_statuses, MAX_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -246,6 +247,13 @@ pub fn constants() -> Value {
         "errorCodes": error_codes(),
         "storageRejections": storage_rejections(),
         "errorDetailAllowedKeys": detail_allowed_keys(),
+        "taskIntents": {
+            "ops": task_intent_ops(),
+            "metadata": task_intent_ops_of("metadata"),
+            "state": task_intent_ops_of("state"),
+            "rule": "the save queue carries named intents, never whole-project snapshots (ADR-022); on a rejected write metadata ops replay exactly once and state ops never replay (ADR-026); delete-empty deletes tasks.json (ADR-037)",
+            "authority": "aeroric_protocol::task_intents(); the authoritative enum is core's tasks::service::TaskIntent and a core test pins the two lists together"
+        },
         "limits": { "maxFrameBytes": MAX_FRAME_BYTES, "maxTerminalChunkRawBytes": MAX_TERMINAL_CHUNK_BYTES,
                     "replay": { "maxEvents": 4096, "maxBytes": 8388608 } }
     })
