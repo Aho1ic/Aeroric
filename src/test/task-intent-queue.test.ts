@@ -71,7 +71,8 @@ describe("createTaskIntentQueue", () => {
     const onError = vi.fn();
 
     queue.enqueue("p1", { op: "delete", taskIds: ["t1"] }, { onError });
-    await queue.flush("p1");
+    // 与旧快照队列同语义：永久失败必须能被 await flush 的调用方看见（远程 launch 门）。
+    await expect(queue.flush("p1")).rejects.toThrow(/REVISION_CONFLICT/);
 
     expect(calls, "ADR-026：状态 op 永不自动重放").toEqual(["delete"]);
     expect(onError).toHaveBeenCalledTimes(1);
@@ -86,10 +87,24 @@ describe("createTaskIntentQueue", () => {
     const onError = vi.fn();
 
     queue.enqueue("p1", rename("t1", "网络断了"), { onError });
-    await queue.flush("p1");
+    await expect(queue.flush("p1")).rejects.toThrow("disk is full");
 
     expect(calls, "重放只属于 REVISION_CONFLICT，不是所有失败").toEqual(["rename"]);
     expect(onError).toHaveBeenCalledWith(expect.stringContaining("disk is full"));
+  });
+
+  it("does not attribute an older, already-reported failure to a later flush", async () => {
+    let fail = true;
+    const queue = createTaskIntentQueue(async (projectId) => {
+      if (fail) throw new Error("REVISION_CONFLICT: refused");
+      return outcome(projectId, ["t1"]);
+    });
+    const onError = vi.fn();
+    queue.enqueue("p1", { op: "delete", taskIds: ["t1"] }, { onError });
+    await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+    fail = false;
+    // 陈旧失败属于上一个调用点（toast 已报）；这次 flush 只看见新失败或不失败。
+    await expect(queue.flush("p1")).resolves.toBeUndefined();
   });
 
   it("coalesces same-key intents enqueued before the window drains, keeping the latest payload", async () => {

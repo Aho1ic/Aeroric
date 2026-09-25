@@ -11,6 +11,9 @@
  */
 
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { createFakeCore } from "./taskIntentFakeCore";
+import { flushAllProjectIntents } from "../taskIntentQueue";
+import { flushAllProjectTasks } from "../appProjectState";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sshProjectPath, wslProjectPath } from "../types";
 import type { Project, SshConnection, Task, TaskStatus } from "../types";
@@ -133,20 +136,41 @@ interface Fixture {
   onInvoke?: (command: string, args?: Record<string, unknown>) => unknown | undefined;
 }
 
+let activeFake: { savedTasksFor: (projectId: string) => Task[]; store: Record<string, Task[]> } | null = null;
+
+const TASK_SAVE_COMMANDS = new Set(["save_project_tasks", "apply_task_intent"]);
+function isTaskSave(command: unknown): boolean {
+  return typeof command === "string" && TASK_SAVE_COMMANDS.has(command);
+}
+function finalTasksFor(projectId: string): Task[] {
+  return activeFake?.savedTasksFor(projectId) ?? [];
+}
+
 function installInvokeDispatcher({
   projects = [],
   tasksByProject = {},
   sshConnections = [],
   onInvoke,
 }: Fixture) {
+  const fake = createFakeCore(tasksByProject);
+  activeFake = fake;
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     const override = onInvoke?.(command, args);
-    if (override !== undefined) return override;
+    if (override !== undefined) {
+      // 意图车道的调用方要拿回 outcome：闸门(挂起/失败)之后仍然让 fake 真正应用一遍。
+      if (command === "apply_task_intent") {
+        return Promise.resolve(override).then(() => fake.invoke(command, args));
+      }
+      return override;
+    }
     switch (command) {
+      case "apply_task_intent":
+      case "save_project_tasks":
+        return fake.invoke(command, args);
       case "load_projects":
         return projects;
       case "load_project_tasks":
-        return tasksByProject[String(args?.projectId)] ?? [];
+        return fake.store[String(args?.projectId)] ?? [];
       case "load_ssh_connections":
         return sshConnections;
       case "get_active_task_ids":
@@ -302,7 +326,9 @@ beforeEach(() => {
   installInvokeDispatcher({});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushAllProjectIntents().catch(() => {});
+  await flushAllProjectTasks().catch(() => {});
   cleanup();
   vi.restoreAllMocks();
 });
@@ -354,7 +380,7 @@ describe("remote-task-request:请求本身不合法", () => {
       accepted: false,
       error: "Invalid task creation request",
     });
-    expect(invokeMock.mock.calls.some(([c]) => c === "save_project_tasks")).toBe(false);
+    expect(invokeMock.mock.calls.some(([c]) => isTaskSave(c))).toBe(false);
   });
 });
 
@@ -596,7 +622,7 @@ describe("remote-task-request:resume 成功", () => {
 
     const after = invokeMock.mock.calls.slice(cutoff);
     const saveIdx = after.findIndex(
-      ([c, a]) => c === "save_project_tasks" && (a as { projectId?: string })?.projectId === "p1",
+      ([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1",
     );
     const replyIdx = after.findIndex(([c]) => c === REPLY);
     expect(saveIdx, "落盘必须发生过").toBeGreaterThanOrEqual(0);
@@ -721,7 +747,7 @@ describe("remote-task-request:create", () => {
 
     const after = invokeMock.mock.calls.slice(cutoff);
     const saveIdx = after.findIndex(
-      ([c, a]) => c === "save_project_tasks" && (a as { projectId?: string })?.projectId === "p1",
+      ([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1",
     );
     const replyIdx = after.findIndex(([c]) => c === REPLY);
     expect(saveIdx, "落盘必须发生过").toBeGreaterThanOrEqual(0);
@@ -751,12 +777,8 @@ describe("remote-task-request:create", () => {
 
     expect(realReplies()).toHaveLength(2);
     expect(realReplies().every((reply) => reply.accepted)).toBe(true);
-    const saves = invokeMock.mock.calls.filter(
-      ([command, args]) =>
-        command === "save_project_tasks" &&
-        (args as { projectId?: string } | undefined)?.projectId === "p1",
-    );
-    const finalTasks = (saves.at(-1)?.[1] as { tasks: Task[] }).tasks;
+    const finalTasks = finalTasksFor("p1");
+    expect(invokeMock.mock.calls.some(([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1"), "并发创建必须真的落过盘").toBe(true);
     expect(finalTasks.map((item) => item.prompt)).toEqual(
       expect.arrayContaining(["first task", "second task"]),
     );
@@ -770,7 +792,7 @@ describe("remote-task-request:create", () => {
     });
     installInvokeDispatcher({
       projects: [project({ id: "p1" })],
-      onInvoke: (command) => (command === "save_project_tasks" ? pendingSave : undefined),
+      onInvoke: (command) => (isTaskSave(command) ? pendingSave : undefined),
     });
     renderApp();
     await waitForBoot();
@@ -782,9 +804,7 @@ describe("remote-task-request:create", () => {
       prompt: "wait for disk",
     });
     await waitFor(() => {
-      expect(invokeMock.mock.calls.some(([command]) => command === "save_project_tasks")).toBe(
-        true,
-      );
+      expect(invokeMock.mock.calls.some(([command]) => isTaskSave(command))).toBe(true);
     });
 
     expect(invokeMock.mock.calls.some(([command]) => command === "run_task")).toBe(false);
@@ -826,7 +846,7 @@ describe("remote-task-request:create", () => {
       projects: [target.project()],
       sshConnections: target.sshConnections(),
       onInvoke: (command) => {
-        if (command !== "save_project_tasks") return undefined;
+        if (!isTaskSave(command)) return undefined;
         saveAttempts += 1;
         return saveAttempts === 1 ? Promise.reject(new Error("disk full")) : Promise.resolve();
       },
@@ -867,9 +887,6 @@ describe("remote-task-request:create", () => {
         `${command} must not be used for ${target.name}`,
       ).toHaveLength(0);
     }
-    const successfulSave = invokeMock.mock.calls
-      .filter(([command]) => command === "save_project_tasks")
-      .at(-1)?.[1] as { tasks: Task[] };
-    expect(successfulSave.tasks.map((item) => item.prompt)).toEqual(["retry"]);
+    expect(finalTasksFor("p1").map((item) => item.prompt)).toEqual(["retry"]);
   });
 });

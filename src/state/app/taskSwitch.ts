@@ -4,7 +4,9 @@ import { resolveProjectLocation } from "../../types";
 import { agentDisplayLabel, agentFamily, type AgentOption } from "../../agents";
 import type { AgentConfigSwitchValues } from "../../components/AgentConfigSwitchDialog";
 import type { LocalRouterAgent, LocalRouterStatus } from "../../components/app-settings/types";
-import { persistProjectTasks, flushProjectTasks } from "../../appProjectState";
+import { flushProjectTasks } from "../../appProjectState";
+import { flushProjectIntents, type TaskSessionSnapshot } from "../../taskIntentQueue";
+import { sendTaskIntent } from "./taskIntentAdoption";
 import { dispatchAppSettingsChanged } from "../../appRemoteEvents";
 import { LOCAL_ROUTER_COMMANDS } from "../../lib/api/appCommands";
 import { resolveConfigSwitchSessionStrategy, resolveTaskSessionOwner } from "../../taskSession";
@@ -29,6 +31,22 @@ interface ResetTaskProcessResult {
   dshSessionPath?: string;
   ompSessionId?: string;
   ompSessionPath?: string;
+}
+
+function sessionSnapshotOf(task: Task): TaskSessionSnapshot {
+  return {
+    claudeSessionId: task.claudeSessionId,
+    claudeSessionPath: task.claudeSessionPath,
+    codexSessionId: task.codexSessionId,
+    codexSessionPath: task.codexSessionPath,
+    dshSessionId: task.dshSessionId,
+    dshSessionPath: task.dshSessionPath,
+    ompSessionId: task.ompSessionId,
+    ompSessionPath: task.ompSessionPath,
+    sessionAgent: task.sessionAgent,
+    sessionCodexLike: task.sessionCodexLike,
+    sessionFamily: task.sessionFamily,
+  };
 }
 
 function mergeChangedTaskSessionFields(current: Task, previous: Task, source: Task): Task {
@@ -406,29 +424,37 @@ export async function handleSwitchTaskConfig(
     const current = prev.find((item) => item.id === taskId);
     if (!current) return prev;
     const nextTasks = prev.map((item) => (item.id === taskId ? committedTask : item));
-    persistProjectTasks(
-      task.projectId,
-      nextTasks,
-      deps.showToastRef.current,
-      deps.formatSaveTasksErrorRef.current,
-    );
+    sendTaskIntent({
+      projectId: task.projectId,
+      intent: {
+        op: "switchConfig",
+        taskId,
+        agent: values.agent,
+        selectedModel: values.selectedModel ?? undefined,
+        reasoningEffort: values.reasoningEffort ?? undefined,
+        speed: values.speed ?? undefined,
+        permissionMode: values.permissionMode as PermissionMode,
+        previousSession: sessionSnapshotOf(task),
+        resolvedSession: sessionSnapshotOf(sourceTask),
+      },
+      setTasks: deps.setTasks,
+      showToast: deps.showToastRef.current,
+      formatError: deps.formatSaveTasksErrorRef.current,
+    });
     return nextTasks;
   });
   try {
-    await flushProjectTasks(task.projectId);
+    await Promise.all([
+      flushProjectIntents(task.projectId),
+      flushProjectTasks(task.projectId),
+    ]);
   } catch (error) {
     deps.setTasks((prev) => {
       const current = prev.find((item) => item.id === taskId);
       if (!current) return prev;
+      // 纯内存回滚，不落盘（ADR-037 决策 2）：意图失败时 core 什么都没写。
       const restoredTask = rollbackTaskMutation(current, task, committedTask);
-      const nextTasks = prev.map((item) => (item.id === taskId ? restoredTask : item));
-      persistProjectTasks(
-        task.projectId,
-        nextTasks,
-        deps.showToastRef.current,
-        deps.formatSaveTasksErrorRef.current,
-      );
-      return nextTasks;
+      return prev.map((item) => (item.id === taskId ? restoredTask : item));
     });
     showToast(t("running.switchConfigFailed", { error: String(error) }), "error");
     return false;

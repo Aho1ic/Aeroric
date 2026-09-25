@@ -1,6 +1,6 @@
 import { invoke } from "../../lib/api/invoke";
 import type { AgentType, PermissionMode, Task } from "../../types";
-import { persistProjectTasks } from "../../appProjectState";
+import { sendTaskIntent } from "./taskIntentAdoption";
 import { getTaskSessionFieldsByFamily, resolveTaskSessionOwner } from "../../taskSession";
 import type { AgentOption } from "../../agents";
 
@@ -47,6 +47,27 @@ export async function generateTaskName(
     const trimmed = name.trim();
     if (!trimmed) return;
 
+    // 过期判定交给 core：`expect` 四样（name/prompt/status/归属族会话路径）在权威快照上
+    // 判等，不等 ⇒ changed:false、不报错、不烧 revision——与旧客户端"静默丢弃过期结果"
+    // 一字不变，只是权威从宿主内存换成磁盘（ADR-037 决策 4 / Q71）。
+    sendTaskIntent({
+      projectId: task.projectId,
+      intent: {
+        op: "rename",
+        taskId,
+        name: trimmed,
+        expect: {
+          name: expectedPriorName,
+          prompt: expectedPrompt,
+          status: expectedStatus,
+          sessionPath: expectedSessionPath ?? undefined,
+        },
+      },
+      setTasks: deps.setTasks,
+      showToast: deps.showToast,
+      formatError: deps.formatSaveTasksError,
+    });
+    // 乐观展示仍按旧的守卫走宿主内存：陈旧时先不显示这个名字，等采纳覆盖。
     deps.setTasks((prev) => {
       const current = prev.find((x) => x.id === taskId);
       if (!current) return prev;
@@ -58,10 +79,7 @@ export async function generateTaskName(
       const currentSessionPath =
         currentFields.sessionPath ?? currentFields.legacySessionPath ?? null;
       if (currentSessionPath !== expectedSessionPath) return prev;
-
-      const next = prev.map((x) => (x.id === taskId ? { ...x, name: trimmed || undefined } : x));
-      persistProjectTasks(current.projectId, next, deps.showToast, deps.formatSaveTasksError);
-      return next;
+      return prev.map((x) => (x.id === taskId ? { ...x, name: trimmed || undefined } : x));
     });
   } catch (e) {
     deps.showToast(deps.translate("task.generateNameFailed", { error: String(e) }), "error");

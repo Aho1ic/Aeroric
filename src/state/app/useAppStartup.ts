@@ -7,9 +7,9 @@ import { normalizeProjectOrder } from "../../projectOrder";
 import {
   normalizeInterruptedTasksOnStartup,
   normalizeSshProjectNames,
-  persistProjectTasksQuietly,
   persistProjects,
 } from "../../appProjectState";
+import { sendTaskIntent } from "./taskIntentAdoption";
 import { DSH_TASK_COMMANDS } from "../../lib/api/worktree";
 
 export type AppStartupDeps = {
@@ -62,9 +62,18 @@ export function useAppStartupLoad(deps: AppStartupDeps): void {
         return { ...task, speed: "standard" };
       });
       d.setTasks(normalizedTasks);
+      // 修复的落盘走 `normalizeAfterBoot`：宿主只交出"哪些 id 还活着"这一份事实，
+      // detached/interrupted、`attentionRequestedAt ?? now`、dsh `fast→standard` 都由
+      // core 在权威快照上判（ADR-037 决策 1；逐项目扇出在宿主）。
       const projectsToPersist = new Set([...changedProjectIds, ...dshSpeedCleanedProjectIds]);
+      const liveTaskIds = [...activeTaskIds];
       projectsToPersist.forEach((projectId) => {
-        persistProjectTasksQuietly(projectId, normalizedTasks);
+        sendTaskIntent({
+          projectId,
+          intent: { op: "normalizeAfterBoot", liveTaskIds },
+          setTasks: d.setTasks,
+          quiet: true,
+        });
       });
     }
 

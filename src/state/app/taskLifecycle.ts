@@ -5,6 +5,8 @@ import { resolveProjectLocation } from "../../types";
 import type { ProtocolFamily } from "../../types";
 import { agentDisplayLabel, agentFamily, familyFromCodexLike } from "../../agents";
 import { persistProjectTasks, flushProjectTasks } from "../../appProjectState";
+import { flushProjectIntents } from "../../taskIntentQueue";
+import { sendTaskIntent } from "./taskIntentAdoption";
 import { withTimeout, TASK_FLUSH_TIMEOUT_MS } from "../../taskFlush";
 import { createTaskId } from "../../taskId";
 import { recordAgentConfigUsage } from "../../hooks/useAgentUsage";
@@ -80,8 +82,12 @@ export function applyResolvedTaskSession(
 }
 
 async function flushProjectTasksForRemoteLaunch(projectId: string): Promise<void> {
+  // 过渡期两条落盘车道都要等：意图队列（切换过的站点）与旧快照队列（#7/#15 随
+  // 执行器接线才退役）。见 docs/native/reviews/tauri-adapter.md §11。
   await withTimeout(
-    flushProjectTasks(projectId),
+    Promise.all([flushProjectIntents(projectId), flushProjectTasks(projectId)]).then(
+      () => undefined,
+    ),
     TASK_FLUSH_TIMEOUT_MS,
     "Timed out while saving the task. The remote request was rejected.",
   );
@@ -316,6 +322,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
 
     void recordAgentConfigUsage(agent);
 
+    let createdRow: Task | null = null;
     const baseTask: Task = {
       id: taskId,
       projectId: project.id,
@@ -335,12 +342,31 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     };
     deps.setTasks((prev) => {
       const next = [baseTask, ...prev];
-      persistProjectTasks(
-        baseTask.projectId,
-        next,
-        deps.showToastRef.current,
-        deps.formatSaveTasksErrorRef.current,
-      );
+      sendTaskIntent({
+        projectId: baseTask.projectId,
+        intent: {
+          op: "create",
+          id: taskId,
+          prompt,
+          agent,
+          permissionMode,
+          immediate,
+          selectedModel,
+          reasoningEffort: reasoningEffort ?? undefined,
+          speed,
+          dshAgentPreset:
+            agentFamily(agent, deps.agentOptionsRef.current) === "dsh"
+              ? (dshAgentPreset ?? "standard")
+              : undefined,
+        },
+        setTasks: deps.setTasks,
+        showToast: deps.showToastRef.current,
+        formatError: deps.formatSaveTasksErrorRef.current,
+        onAdopted: (rows) => {
+          const adopted = rows.find((row) => row.id === taskId);
+          if (adopted) createdRow = adopted;
+        },
+      });
       return next;
     });
     deps.setActiveProject(project);
@@ -350,21 +376,27 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     if (!immediate) return baseTask;
 
     if (persistBeforeLaunch) {
+      let gateError: unknown = null;
       try {
         await flushProjectTasksForRemoteLaunch(baseTask.projectId);
-        if (deps.tasksRef.current.find((task) => task.id === taskId) !== baseTask) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
       } catch (error) {
+        gateError = error;
+      }
+      // 内存里合法存在两个身份：乐观插入的 baseTask 与采纳替换出的 core 行（谁先谁后
+      // 取决于 React 刷新时机）。都不是 ⇒ 真的有第三者改过这行，远程请求必须被拒。
+      const currentRow = deps.tasksRef.current.find((task) => task.id === taskId);
+      if (gateError || (currentRow !== baseTask && currentRow !== createdRow)) {
         deps.setTasks((prev) => {
-          if (prev.find((task) => task.id === taskId) !== baseTask) return prev;
+          const live = prev.find((task) => task.id === taskId);
+          if (live !== baseTask && live !== createdRow) return prev;
           const next = prev.filter((task) => task.id !== taskId);
-          persistProjectTasks(
-            baseTask.projectId,
-            next,
-            deps.showToastRef.current,
-            deps.formatSaveTasksErrorRef.current,
-          );
+          sendTaskIntent({
+            projectId: baseTask.projectId,
+            intent: { op: "delete", taskIds: [taskId] },
+            setTasks: deps.setTasks,
+            showToast: deps.showToastRef.current,
+            formatError: deps.formatSaveTasksErrorRef.current,
+          });
           return next;
         });
         deps.setProjectViews((prev) => {
@@ -375,7 +407,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
             [project.id]: { ...view, selectedTaskId: null, isNewTask: true },
           };
         });
-        throw error;
+        throw gateError ?? new Error("Task changed while saving; the remote request was rejected.");
       }
     }
 
@@ -425,24 +457,32 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
               ? { ...tk, worktreePath, worktreeBranch, baseBranch: resolvedBaseBranch }
               : tk,
           );
-          persistProjectTasks(
-            baseTask.projectId,
-            next,
-            deps.showToastRef.current,
-            deps.formatSaveTasksErrorRef.current,
-          );
+          sendTaskIntent({
+            projectId: baseTask.projectId,
+            intent: {
+              op: "setWorktree",
+              taskId,
+              path: worktreePath ?? "",
+              branch: worktreeBranch ?? "",
+              baseBranch: resolvedBaseBranch ?? "",
+            },
+            setTasks: deps.setTasks,
+            showToast: deps.showToastRef.current,
+            formatError: deps.formatSaveTasksErrorRef.current,
+          });
           return next;
         });
       } catch (e) {
         showToast(t("toast.worktreeCreateFailed", { error: String(e) }), "error");
         deps.setTasks((prev) => {
           const next = prev.filter((tk) => tk.id !== taskId);
-          persistProjectTasks(
-            baseTask.projectId,
-            next,
-            deps.showToastRef.current,
-            deps.formatSaveTasksErrorRef.current,
-          );
+          sendTaskIntent({
+            projectId: baseTask.projectId,
+            intent: { op: "delete", taskIds: [taskId] },
+            setTasks: deps.setTasks,
+            showToast: deps.showToastRef.current,
+            formatError: deps.formatSaveTasksErrorRef.current,
+          });
           return next;
         });
         deps.removeTaskBuffers([taskId]);
@@ -632,6 +672,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       return false;
     }
 
+    let adoptedRow: Task | null = null;
     const taskWithSession: Task = {
       ...applyResolvedTaskSession(task, owner, session),
       agent: owner.agent,
@@ -641,12 +682,24 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     };
     deps.setTasks((prev) => {
       const next = prev.map((item) => (item.id === taskId ? taskWithSession : item));
-      persistProjectTasks(
-        task.projectId,
-        next,
-        deps.showToastRef.current,
-        deps.formatSaveTasksErrorRef.current,
-      );
+      sendTaskIntent({
+        projectId: task.projectId,
+        intent: {
+          op: "resumeWithSession",
+          taskId,
+          agent: owner.agent,
+          family: owner.family,
+          sessionId: session.sessionId ?? undefined,
+          sessionPath: session.sessionPath ?? undefined,
+        },
+        setTasks: deps.setTasks,
+        showToast: deps.showToastRef.current,
+        formatError: deps.formatSaveTasksErrorRef.current,
+        onAdopted: (rows) => {
+          const adopted = rows.find((row) => row.id === taskId);
+          if (adopted) adoptedRow = adopted;
+        },
+      });
       return next;
     });
     deps.setActiveProject(project);
@@ -654,35 +707,33 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     deps.updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
 
     if (persistBeforeLaunch) {
+      let gateError: unknown = null;
       try {
         await flushProjectTasksForRemoteLaunch(task.projectId);
-        if (deps.tasksRef.current.find((item) => item.id === taskId) !== taskWithSession) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
       } catch (error) {
+        gateError = error;
+      }
+      const liveRow = deps.tasksRef.current.find((item) => item.id === taskId);
+      // 同 create 侧：乐观行与采纳行都是合法身份，只有第三者改写才拒绝。
+      if (gateError || (liveRow !== taskWithSession && liveRow !== adoptedRow)) {
         deps.setTasks((prev) => {
-          const next = prev.map((current) =>
+          // 纯内存回滚，不落盘（ADR-037 决策 2）：意图失败时 core 什么都没写，
+          // 磁盘上没有需要"反着写回去"的东西。
+          return prev.map((current) =>
             current.id === taskId ? rollbackTaskMutation(current, task, taskWithSession) : current,
           );
-          persistProjectTasks(
-            task.projectId,
-            next,
-            deps.showToastRef.current,
-            deps.formatSaveTasksErrorRef.current,
-          );
-          return next;
         });
-        throw error;
+        throw gateError ?? new Error("Task changed while saving; the remote request was rejected.");
       }
     }
 
     deps.resetTaskTerminal(taskId);
     deps.setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
     if (persistBeforeLaunch) {
-      invokeResumeTask(taskWithSession, project, session.sessionId!);
+      invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
     } else {
       deps.pendingTaskStartsRef.current[taskId] = () => {
-        invokeResumeTask(taskWithSession, project, session.sessionId!);
+        invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
       };
     }
     return true;

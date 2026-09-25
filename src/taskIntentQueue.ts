@@ -156,6 +156,24 @@ export function createTaskIntentQueue(
   const queues = new Map<string, Entry[]>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const draining = new Map<string, Promise<void>>();
+  // 落盘失败的传播：旧队列的 flush 会把失败抛回 await 它的调用方
+  // （远程 persistBeforeLaunch 与退出排空都靠这个），意图车道必须同语义，
+  // 否则"保存失败应答复拒绝"会变成"失败被 toast 吞掉、flush 假装成功"。
+  const failures = new Map<string, unknown[]>();
+
+  function recordFailure(projectId: string, error: unknown): void {
+    const list = failures.get(projectId) ?? [];
+    list.push(error);
+    failures.set(projectId, list);
+  }
+
+  function consumeFailures(projectId: string): void {
+    const list = failures.get(projectId);
+    if (list && list.length > 0) {
+      failures.delete(projectId);
+      throw list[0];
+    }
+  }
 
   function report(entry: Entry, projectId: string, error: unknown): void {
     const text = entry.formatError
@@ -188,6 +206,7 @@ export function createTaskIntentQueue(
           continue;
         }
         report(entry, projectId, error);
+        recordFailure(projectId, error);
       }
     }
     if (queues.get(projectId) === queue) {
@@ -250,6 +269,9 @@ export function createTaskIntentQueue(
       schedule(projectId);
     },
     async flush(projectId) {
+      // 只把"这次 flush 期间新发生的失败"抛回调用方：之前没人 await 的失败属于别的
+      // 调用点（toast 已经报过），归错账会让一次无关的陈旧拒绝卡住远程 launch 门。
+      const seenFailures = failures.get(projectId)?.length ?? 0;
       for (;;) {
         const timer = timers.get(projectId);
         if (timer) {
@@ -261,18 +283,29 @@ export function createTaskIntentQueue(
           await running;
           continue;
         }
-        if (!queues.has(projectId) || queues.get(projectId)!.length === 0) return;
+        if (!queues.has(projectId) || queues.get(projectId)!.length === 0) break;
         await startDrain(projectId);
+      }
+      const list = failures.get(projectId) ?? [];
+      if (list.length > seenFailures) {
+        const [fresh] = list.slice(seenFailures);
+        failures.delete(projectId);
+        throw fresh;
       }
     },
     async flushAll() {
       // 与旧 `flushAll` 同一姿态：排空期间被顺手 enqueue 的也要等完（退出前的那份）。
       for (;;) {
         const projects = new Set([...queues.keys(), ...draining.keys(), ...timers.keys()]);
-        if (projects.size === 0) return;
+        if (projects.size === 0) break;
         for (const projectId of projects) {
-          await this.flush(projectId);
+          await this.flush(projectId).catch((error) => {
+            recordFailure(projectId, error);
+          });
         }
+      }
+      for (const projectId of [...failures.keys()]) {
+        consumeFailures(projectId);
       }
     },
     pendingCount() {
@@ -303,4 +336,29 @@ export function flushProjectIntents(projectId: string): Promise<void> {
 
 export function flushAllProjectIntents(): Promise<void> {
   return taskIntentQueue.flushAll();
+}
+
+/**
+ * 把权威行集合并回全局列表：保持该项目原有的**位置块**（首条该项目行的下标），
+ * 项目内顺序完全按权威走；其他项目的行原样。意图采纳走这一条，不是整表覆盖。
+ */
+export function replaceProjectRows<T extends { projectId: string }>(
+  all: T[],
+  projectId: string,
+  rows: T[],
+): T[] {
+  const out: T[] = [];
+  let inserted = false;
+  for (const row of all) {
+    if (row.projectId !== projectId) {
+      out.push(row);
+      continue;
+    }
+    if (!inserted) {
+      out.push(...rows);
+      inserted = true;
+    }
+  }
+  if (!inserted) out.push(...rows);
+  return out;
 }

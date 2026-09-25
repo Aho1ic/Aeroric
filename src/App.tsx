@@ -51,6 +51,8 @@ import {
 } from "./state/app/useAppMaintenance";
 import { discardTaskWorktree, mergeTaskWorktree } from "./state/app/worktreeOps";
 import { createTaskLifecycleActions } from "./state/app/taskLifecycle";
+import { flushProjectIntents } from "./taskIntentQueue";
+import { sendTaskIntent } from "./state/app/taskIntentAdoption";
 import {
   deleteTasks as deleteTasksImpl,
   markTaskDone as markTaskDoneImpl,
@@ -102,8 +104,6 @@ import {
   loadCollapsedProjectGroups,
   saveCollapsedProjectGroups,
   persistProjects,
-  persistProjectTasks,
-  flushProjectTasks,
   PROJECT_RAIL_WIDTH_STORAGE_KEY,
   SELECTED_CONDA_ENV_KEY,
   upsertWslProject,
@@ -253,17 +253,26 @@ function AppShell() {
     tRef.current = t;
   }, [agentOptions, showToast, formatSaveProjectsError, formatSaveTasksError, t]);
 
-  const persistTasksForHook = useCallback(
-    (projectId: string, allTasks: Task[]) => {
-      persistProjectTasks(projectId, allTasks, showToast, formatSaveTasksError);
+  const saveDiffStats = useCallback(
+    (projectId: string, task: Task, additions: number, deletions: number) => {
+      sendTaskIntent({
+        projectId,
+        intent: { op: "recordDiffStats", taskId: task.id, additions, deletions },
+        // 操作键表达"这一次完成算出的这一对数字"（ADR-017；刷新后重算是同键，
+        // core 同值零写，队列合并同键待发）。
+        operationKey: `diff-${task.id}-${task.completedAt ?? task.createdAt}`,
+        setTasks,
+        showToast,
+        formatError: formatSaveTasksError,
+      });
     },
-    [showToast, formatSaveTasksError],
+    [setTasks, showToast, formatSaveTasksError],
   );
   const { scheduleForDoneTask } = useWorktreeDiffStats({
     projects,
     tasks,
     setTasks,
-    persistTasks: persistTasksForHook,
+    saveDiffStats,
   });
 
   const { handleSshConnectionsChange, handleDeleteSshConnection } = useSshConnectionPersistence(
@@ -632,15 +641,23 @@ function AppShell() {
   }
 
   /**
-   * 把 `changedTasks` 涉及的每个项目各落盘一次。
-   * 一次批量操作常跨多个项目,而 tasks.json 是按项目分文件的:漏掉一个项目
-   * 就意味着那个项目的改动只活在内存里。
+   * 归档/取消归档按项目各发一条批量意图（一次点选常跨多项目，而 tasks.json
+   * 按项目分文件）。"哪些行真的被归档了"仍以 core 采纳回来的权威行为准。
    */
-  function persistAffectedProjects(changedTasks: Task[], next: Task[]) {
-    const affectedProjectIds = new Set(changedTasks.map((task) => task.projectId));
-    affectedProjectIds.forEach((pid) =>
-      persistProjectTasks(pid, next, showToast, formatSaveTasksError),
-    );
+  function queueBatchArchiveIntent(op: "archive" | "unarchive", changedTasks: Task[]) {
+    const idsByProject = new Map<string, string[]>();
+    changedTasks.forEach((task) => {
+      idsByProject.set(task.projectId, [...(idsByProject.get(task.projectId) ?? []), task.id]);
+    });
+    for (const [projectId, ids] of idsByProject) {
+      sendTaskIntent({
+        projectId,
+        intent: { op, taskIds: ids },
+        setTasks,
+        showToast,
+        formatError: formatSaveTasksError,
+      });
+    }
   }
 
   function deleteTasks(taskIds: string[]) {
@@ -719,7 +736,7 @@ function AppShell() {
       if (next === prev) return prev;
       const ids = new Set(taskIds);
       const changed = next.filter((task) => ids.has(task.id) && task.archivedAt);
-      persistAffectedProjects(changed, next);
+      queueBatchArchiveIntent("archive", changed);
       return next;
     });
   }
@@ -730,7 +747,7 @@ function AppShell() {
       if (next === prev) return prev;
       const ids = new Set(taskIds);
       const changed = prev.filter((task) => ids.has(task.id) && task.archivedAt);
-      persistAffectedProjects(changed, next);
+      queueBatchArchiveIntent("unarchive", changed);
       return next;
     });
   }
@@ -739,9 +756,14 @@ function AppShell() {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
       if (!task) return prev;
-      const next = toggleTaskStarInList(prev, taskId);
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
+      sendTaskIntent({
+        projectId: task.projectId,
+        intent: { op: "toggleStar", taskId },
+        setTasks,
+        showToast,
+        formatError: formatSaveTasksError,
+      });
+      return toggleTaskStarInList(prev, taskId);
     });
   }
 
@@ -749,9 +771,14 @@ function AppShell() {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
       if (!task) return prev;
-      const next = renameTaskInList(prev, taskId, name);
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
+      sendTaskIntent({
+        projectId: task.projectId,
+        intent: { op: "rename", taskId, name },
+        setTasks,
+        showToast,
+        formatError: formatSaveTasksError,
+      });
+      return renameTaskInList(prev, taskId, name);
     });
   }
 
@@ -780,7 +807,21 @@ function AppShell() {
       const next = updateTodoTaskInList(prev, taskId, updates);
       if (next === prev) return prev;
       const task = next.find((t) => t.id === taskId);
-      if (task) persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      if (task) {
+        sendTaskIntent({
+          projectId: task.projectId,
+          intent: {
+            op: "editTodo",
+            taskId,
+            prompt: updates.prompt,
+            agent: updates.agent,
+            permissionMode: updates.permissionMode,
+          },
+          setTasks,
+          showToast,
+          formatError: formatSaveTasksError,
+        });
+      }
       return next;
     });
   }
@@ -973,6 +1014,7 @@ function AppShell() {
     codexLikeFromEvent?: boolean,
     familyFromEvent?: string,
   ) {
+    let capturedFamily: ProtocolFamily | null = null;
     setTasks((prev) => {
       let changed = false;
       const next = prev.map((task) => {
@@ -1006,6 +1048,7 @@ function AppShell() {
           task.sessionFamily === family;
         if (unchanged) return task;
         changed = true;
+        capturedFamily = family;
         return {
           ...task,
           ...fields,
@@ -1017,14 +1060,23 @@ function AppShell() {
 
       if (changed) {
         const task = next.find((t) => t.id === taskId);
-        if (task) {
-          persistProjectTasks(
-            task.projectId,
-            next,
-            showToastRef.current,
-            formatSaveTasksErrorRef.current,
-          );
-          void flushProjectTasks(task.projectId).catch((error: unknown) => {
+        if (task && capturedFamily) {
+          const family = capturedFamily;
+          sendTaskIntent({
+            projectId: task.projectId,
+            intent: {
+              op: "attachSession",
+              taskId,
+              family,
+              sessionAgent: task.agent,
+              sessionId: sessionId || undefined,
+              sessionPath: sessionPath || undefined,
+            },
+            setTasks,
+            showToast: showToastRef.current,
+            formatError: formatSaveTasksErrorRef.current,
+          });
+          void flushProjectIntents(task.projectId).catch((error: unknown) => {
             console.error("Failed to flush task session", error);
           });
         }

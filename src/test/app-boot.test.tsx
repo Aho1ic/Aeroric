@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { Project, SshConnection, Task, TaskStatus } from "../types";
+import { createFakeCore } from "./taskIntentFakeCore";
+import { flushAllProjectIntents } from "../taskIntentQueue";
+import { flushAllProjectTasks } from "../appProjectState";
 
 // App.tsx 的启动链路（load_projects → normalizeSshProjectNames → load_project_tasks →
 // get_active_task_ids → normalizeInterruptedTasksOnStartup → persist）此前完全没有测试覆盖。
@@ -98,14 +101,20 @@ function installInvokeDispatcher({
   tasksByProject = {},
   activeTaskIds = [],
 }: BootFixture) {
+  activeFake = null;
+  const fake = createFakeCore(tasksByProject);
+  activeFake = fake;
   invokeMock.mockImplementation(async (command, args) => {
     switch (command) {
+      case "apply_task_intent":
+      case "save_project_tasks":
+        return fake.invoke(command, args);
       case "load_projects":
         return projects;
       case "load_ssh_connections":
         return sshConnections;
       case "load_project_tasks":
-        return tasksByProject[String(args?.projectId)] ?? [];
+        return fake.store[String(args?.projectId)] ?? [];
       case "get_active_task_ids":
         return activeTaskIds;
       case "get_skill_hub_config":
@@ -138,10 +147,16 @@ function renderApp() {
   );
 }
 
+let activeFake: { savedTasksFor: (projectId: string) => Task[] } | null = null;
+
 function savedTaskSnapshots(projectId: string): Task[][] {
-  return invokeMock.mock.calls
+  // 过渡期两条落盘车道都算"盘上状态"：旧快照队列(save_project_tasks)与意图队列
+  // (fake core 的 commit)。切换提交二退役快照后,前半截自然消失。
+  const legacy = invokeMock.mock.calls
     .filter(([command, args]) => command === "save_project_tasks" && args?.projectId === projectId)
     .map(([, args]) => (args as { tasks: Task[] }).tasks);
+  const viaIntent = activeFake ? [activeFake.savedTasksFor(projectId)] : [];
+  return [...legacy, ...viaIntent.filter((rows) => rows.length > 0)];
 }
 
 /**
@@ -166,8 +181,13 @@ beforeEach(() => {
   invokeMock.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // 意图队列的采纳是异步的：onAdopt 会顺手刷新旧快照队列的待发内容
+  // （taskIntentAdoption 的过渡守卫）。不等完，上一个用例的落盘会漂进下一个用例的
+  // invokeMock 调用表里——`does not rewrite` 那条曾经就是这么红的。
+  await flushAllProjectIntents().catch(() => {});
+  await flushAllProjectTasks().catch(() => {});
   vi.restoreAllMocks();
 });
 

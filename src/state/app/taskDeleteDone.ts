@@ -2,7 +2,8 @@ import { invoke } from "../../lib/api/invoke";
 import type { Project, Task } from "../../types";
 import { isActiveTaskStatus } from "../../types";
 import { agentFamily, type AgentOption } from "../../agents";
-import { persistProjectTasks, type ProjectViewState } from "../../appProjectState";
+import { type ProjectViewState } from "../../appProjectState";
+import { sendTaskIntent } from "./taskIntentAdoption";
 import { taskCompletionCommand } from "../../taskCompletion";
 import { TASK_PROCESS_COMMANDS, CLEANUP_COMMANDS } from "../../lib/api/appCommands";
 import { cleanupTaskWorktree } from "./worktreeOps";
@@ -75,13 +76,16 @@ export function deleteTasks(deps: TaskDeleteDoneDeps, taskIds: string[]): void {
     const next = prev.filter((task) => !toDelete.has(task.id));
     const affectedProjectIds = new Set(stillDeleting.map((task) => task.projectId));
     affectedProjectIds.forEach((pid) => {
-      persistProjectTasks(
-        pid,
-        next,
-        deps.showToast,
-        // format error uses projectId; App's persistAffectedProjects uses the same pair
-        (error) => t("toast.saveTasksFailed", { error, projectId: pid }),
-      );
+      sendTaskIntent({
+        projectId: pid,
+        intent: {
+          op: "delete",
+          taskIds: stillDeleting.filter((task) => task.projectId === pid).map((task) => task.id),
+        },
+        setTasks: deps.setTasks,
+        showToast: deps.showToast,
+        formatError: (error, projectId) => t("toast.saveTasksFailed", { error, projectId }),
+      });
     });
     return next;
   });

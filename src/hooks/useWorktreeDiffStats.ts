@@ -6,14 +6,15 @@ interface Args {
   projects: Project[];
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
-  persistTasks: (projectId: string, allTasks: Task[]) => void;
+  /** 落盘交意图队列：op + 载荷 + 能表达"哪次完成算出来的"操作键（ADR-017/037）。 */
+  saveDiffStats: (projectId: string, task: Task, additions: number, deletions: number) => void;
 }
 
 /**
  * worktree 任务转为 `done` 时拉取相对 base 的 +/− 行数并写回 Task。
  * 仅对未丢弃且未算过的 worktree 任务触发，并用 pendingRef 去重，避免事件重发或 StrictMode 重复调用。
  */
-export function useWorktreeDiffStats({ projects, tasks, setTasks, persistTasks }: Args) {
+export function useWorktreeDiffStats({ projects, tasks, setTasks, saveDiffStats }: Args) {
   // task-status 事件监听器在 mount 时一次性挂载，闭包会捕获到首次渲染的 projects/tasks。
   // 用 ref 让事件路径能拿到最新值（diff-stats 需要 projectPath 反查、需要 task 当前 worktree 字段）。
   const projectsRef = useRef(projects);
@@ -54,7 +55,7 @@ export function useWorktreeDiffStats({ projects, tasks, setTasks, persistTasks }
               changed = true;
               return { ...t, additions, deletions };
             });
-            if (changed) persistTasks(task.projectId, next);
+            if (changed) saveDiffStats(task.projectId, task, additions, deletions);
             return changed ? next : prev;
           });
         })
@@ -66,7 +67,7 @@ export function useWorktreeDiffStats({ projects, tasks, setTasks, persistTasks }
           pendingRef.current.delete(task.id);
         });
     },
-    [setTasks, persistTasks],
+    [setTasks, saveDiffStats],
   );
 
   return { scheduleForDoneTask };

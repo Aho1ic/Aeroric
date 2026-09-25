@@ -34,7 +34,7 @@
       "tasks-status-machine-rust@tasks": 50,
       "adapter-acceptance-real-kernel@tauri-adapter": 10,
       "adapter-event-payload-contract@tauri-adapter": 5,
-      "adapter-intent-queue@tauri-adapter": 8
+      "adapter-intent-queue@tauri-adapter": 9
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1015,7 +1015,7 @@
             "run",
             "src/test/task-intent-queue.test.ts"
           ],
-          "minCases": 8,
+          "minCases": 9,
           "timeoutMs": 900000,
           "$note": "补记七十一：ADR-022 的意图队列（`src/taskIntentQueue.ts`）的机制用例。钉的是四件事：同项目 FIFO、权威快照经 onAdopt 交回宿主、ADR-026 的两类失败（元数据在 REVISION_CONFLICT 时重放恰好一次；状态 op 永不重放、非冲突错误对两类都只报不重放）、ADR-017 的调用方身份（同 operationKey 在未发出前合并载荷，落过盘后再来一发是新事实不是重试）。最后一条还把 `METADATA_TASK_INTENT_OPS` 与产物 `constants.taskIntents.metadata` 对表——TS 那份分类是镜像，不是第二权威。21 处调用点的切换全部走这一条队列；切换完成之前旧快照队列仍在，两者不共存于同一次落盘。"
         },

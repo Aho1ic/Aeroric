@@ -2,7 +2,7 @@ import { invoke } from "../../lib/api/invoke";
 import type { Project, Task } from "../../types";
 import { WORKTREE_COMMANDS } from "../../lib/api/worktree";
 import { confirm } from "../../lib/appDialog";
-import { persistProjectTasks } from "../../appProjectState";
+import { sendTaskIntent } from "./taskIntentAdoption";
 
 export type WorktreeOpsDeps = {
   tasks: Task[];
@@ -17,9 +17,14 @@ function markDiscarded(deps: WorktreeOpsDeps, taskId: string): void {
   deps.setTasks((prev) => {
     const task = prev.find((x) => x.id === taskId);
     if (!task) return prev;
-    const next = prev.map((x) => (x.id === taskId ? { ...x, worktreeDiscarded: true } : x));
-    persistProjectTasks(task.projectId, next, deps.showToast, deps.formatSaveTasksError);
-    return next;
+    sendTaskIntent({
+      projectId: task.projectId,
+      intent: { op: "discardWorktree", taskId },
+      setTasks: deps.setTasks,
+      showToast: deps.showToast,
+      formatError: deps.formatSaveTasksError,
+    });
+    return prev.map((x) => (x.id === taskId ? { ...x, worktreeDiscarded: true } : x));
   });
 }
 

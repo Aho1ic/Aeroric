@@ -13,6 +13,9 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFakeCore } from "./taskIntentFakeCore";
+import { flushAllProjectIntents } from "../taskIntentQueue";
+import { flushAllProjectTasks } from "../appProjectState";
 import type { Project, Task, TaskStatus } from "../types";
 
 interface Subscription {
@@ -160,12 +163,17 @@ function installInvokeDispatcher({
   activeTaskIds = [],
   appSettings = {},
 }: Fixture) {
+  const fake = createFakeCore(tasksByProject);
+  activeFake = fake;
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
+      case "apply_task_intent":
+      case "save_project_tasks":
+        return fake.invoke(command, args);
       case "load_projects":
         return projects;
       case "load_project_tasks":
-        return tasksByProject[String(args?.projectId)] ?? [];
+        return fake.store[String(args?.projectId)] ?? [];
       case "get_active_task_ids":
         return activeTaskIds;
       case "load_ssh_connections":
@@ -213,10 +221,14 @@ async function emit(event: string, payload: unknown): Promise<void> {
   for (const subscription of subscriptionsFor(event)) subscription.handler({ payload });
 }
 
+let activeFake: { savedTasksFor: (projectId: string) => Task[] } | null = null;
+
 function savedTaskSnapshots(projectId: string): Task[][] {
-  return invokeMock.mock.calls
+  const legacy = invokeMock.mock.calls
     .filter(([command, args]) => command === "save_project_tasks" && args?.projectId === projectId)
     .map(([, args]) => (args as { tasks: Task[] }).tasks);
+  const viaIntent = activeFake ? [activeFake.savedTasksFor(projectId)] : [];
+  return [...legacy, ...viaIntent.filter((rows) => rows.length > 0)];
 }
 
 /**
@@ -285,7 +297,9 @@ beforeEach(() => {
   installInvokeDispatcher({});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushAllProjectIntents().catch(() => {});
+  await flushAllProjectTasks().catch(() => {});
   cleanup();
   vi.restoreAllMocks();
 });
@@ -402,8 +416,13 @@ describe("App 装配层:task-status / task-session 接线", () => {
 
     await emit("task-status", { task_id: "t-1", status: "failed", failure_reason: "exit code 1" });
 
-    const saved = await latestSavedTask("p1", "t-1");
-    expect(saved.status).toBe("failed");
+    // 过渡期启动修复走意图车道、事件状态走快照车道，两条各自落盘；等的是**内容**里
+    // 出现 failed 的那一次，而不是"第一次有快照"（旧世界两件事被同一次防抖合并）。
+    const saved = await waitFor(() => {
+      const s = savedTaskNow("p1", "t-1");
+      if (s?.status !== "failed") throw new Error("failed 还没有落到最新快照");
+      return s;
+    });
     // failureReason 只在 failed 时保留,是 UI 上"为什么挂了"的唯一来源。
     expect(saved.failureReason).toBe("exit code 1");
   });
