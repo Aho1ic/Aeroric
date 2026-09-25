@@ -30,6 +30,26 @@ export type ProjectLocation =
   | { kind: "wsl"; distribution: string; linuxPath: string };
 
 /**
+ * ADR-037 意图词汇表的 `op` 判别式。名单的权威在 Rust（core 的 `TaskIntent` 与
+ * `aeroric_protocol::task_intents()`），这份联合由 `contracts-parity.test.ts` 逐条对
+ * `envelope.schema.json` 的 `constants.taskIntents.ops` 比对——一侧改另一侧必红。
+ */
+export type TaskIntentOp =
+  | "rename"
+  | "toggleStar"
+  | "archive"
+  | "unarchive"
+  | "attachSession"
+  | "setWorktree"
+  | "discardWorktree"
+  | "recordDiffStats"
+  | "normalizeAfterBoot"
+  | "create"
+  | "delete"
+  | "switchConfig"
+  | "resumeWithSession";
+
+/**
  * 项目头像定制。`color` 是调色板键名而非色值，换主题时可整体重调。
  */
 export interface ProjectAvatarOverride {

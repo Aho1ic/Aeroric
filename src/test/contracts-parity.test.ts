@@ -62,6 +62,31 @@ describe("published vocabulary vs the TypeScript unions", () => {
       ).toEqual([...published].sort());
     },
   );
+
+  /**
+   * ADR-037 的意图词汇表走同一条链：`constants.taskIntents` 由 protocol 生成，
+   * `TaskIntentOp` 联合是宿主唯一允许发出的 op 名。分类表（9 元数据 / 4 状态）也在这里对——
+   * ADR-026 的"冲突时谁能重放"按这份分类执行，两侧各抄一份就是口号。
+   */
+  it("keeps TaskIntentOp and the metadata/state split identical to taskIntents", () => {
+    const published = JSON.parse(readFileSync(resolve(process.cwd(), ENVELOPE), "utf8"))
+      .constants.taskIntents;
+    expect(published, `${ENVELOPE} 里没有 constants.taskIntents`).toBeTruthy();
+    expect(published.ops.length, "产物读空即正控失败").toBeGreaterThanOrEqual(13);
+
+    const declared = tsUnionMembers("TaskIntentOp");
+    expect(declared.length, `${SHARED} 里 TaskIntentOp 解析到的成员数异常`).toBe(13);
+    expect([...declared].sort(), "op 名单不一致:一侧改了另一侧不会报错").toEqual(
+      [...published.ops].sort(),
+    );
+    expect(declared.filter((op) => published.metadata.includes(op)).length, "9 条元数据").toBe(9);
+    expect(declared.filter((op) => published.state.includes(op)).length, "4 条状态").toBe(4);
+    expect(
+      new Set([...published.metadata, ...published.state]).size,
+      "分类必须恰好覆盖 13 条、互不重叠",
+    ).toBe(13);
+    expect(published.metadata.length + published.state.length).toBe(published.ops.length);
+  });
 });
 
 /**
