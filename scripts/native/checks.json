@@ -27,6 +27,7 @@
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
+      "protocol-ts-vocabulary@protocol": 6,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 61,
       "tasks-status-machine-rust@tasks": 33,
@@ -416,6 +417,20 @@
           ],
           "minCases": 20,
           "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-ts-vocabulary",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/contracts-parity.test.ts"
+          ],
+          "minCases": 6,
+          "timeoutMs": 900000,
+          "$note": "补记六十一：shared.ts 的四个字面量联合（族/状态/权限模式/内建 agent）与 Rust 生成的 envelope.constants 做集合相等。此前这条链条两处都松：没有任何门禁跑这个文件（它只在 pnpm test 里被顺带执行），而产物==Rust 那头虽硬、TS==产物那头根本不存在。两侧各有尺寸门槛正控，防产物读空变永真。"
         },
         {
           "name": "contracts-free-of-local-state",
