@@ -11,7 +11,10 @@ use std::sync::Arc;
 use aeroric_core::storage::atomic::StorageError;
 use aeroric_core::storage::{runtime, Cover, Fingerprint};
 use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
-use aeroric_core::tasks::service::{Attachments, EventOutcome, NewTask, TaskError};
+use aeroric_core::tasks::service::{
+    Attachments, EventOutcome, NewTask, SessionSnapshot, TaskError, TaskIntentKind,
+    TASK_INTENT_VOCABULARY,
+};
 use aeroric_core::tasks::{
     launch_plan, operations, reducer, session_owner, NoLiveRuns, TaskIntent, TaskNotification,
 };
@@ -2259,4 +2262,528 @@ fn an_intent_crosses_the_wire_as_op_plus_camel_case_payload() {
             "{wrong} must not decode: the vocabulary is one shape, not three"
         );
     }
+}
+
+/// ADR-037 词汇表的"一处定义＋门禁可数"那一半：13 条、9/4 的分类、以及**三条 op 名**
+/// （serde 判别式、手写的 `op_name`、`TASK_INTENT_VOCABULARY` 表）必须是同一个拼法。
+/// 三条各自长出来的那天，就是"宿主一套、core 一套、Swift 一套"重演的那天。
+#[test]
+fn the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state() {
+    let samples: Vec<TaskIntent> = vec![
+        TaskIntent::Rename {
+            task_id: "t".into(),
+            name: "n".into(),
+            expect: None,
+        },
+        TaskIntent::ToggleStar {
+            task_id: "t".into(),
+        },
+        TaskIntent::Archive {
+            task_ids: vec!["t".into()],
+        },
+        TaskIntent::Unarchive {
+            task_ids: vec!["t".into()],
+        },
+        TaskIntent::AttachSession {
+            task_id: "t".into(),
+            family: ProtocolFamily::Claude,
+            session_agent: "claude".into(),
+            session_id: None,
+            session_path: None,
+        },
+        TaskIntent::SetWorktree {
+            task_id: "t".into(),
+            path: "/wt".into(),
+            branch: "b".into(),
+            base_branch: "main".into(),
+        },
+        TaskIntent::DiscardWorktree {
+            task_id: "t".into(),
+        },
+        TaskIntent::RecordDiffStats {
+            task_id: "t".into(),
+            additions: 1,
+            deletions: 2,
+        },
+        TaskIntent::Create {
+            id: "n".into(),
+            prompt: "p".into(),
+            agent: "claude".into(),
+            permission_mode: "ask".into(),
+            immediate: false,
+            selected_model: None,
+            reasoning_effort: None,
+            speed: None,
+            dsh_agent_preset: None,
+        },
+        TaskIntent::Delete {
+            task_ids: vec!["t".into()],
+        },
+        TaskIntent::NormalizeAfterBoot {
+            live_task_ids: vec!["t".into()],
+        },
+        TaskIntent::SwitchConfig {
+            task_id: "t".into(),
+            agent: "codex".into(),
+            selected_model: None,
+            reasoning_effort: None,
+            speed: None,
+            permission_mode: "ask".into(),
+            previous_session: SessionSnapshot::default(),
+            resolved_session: SessionSnapshot::default(),
+        },
+        TaskIntent::ResumeWithSession {
+            task_id: "t".into(),
+            agent: "codex".into(),
+            family: ProtocolFamily::Codex,
+            session_id: None,
+            session_path: None,
+        },
+    ];
+    assert_eq!(samples.len(), 13, "词汇表规模是 13 条，钉死");
+    let metadata = TASK_INTENT_VOCABULARY
+        .iter()
+        .filter(|(_, kind)| *kind == TaskIntentKind::Metadata)
+        .count();
+    let state = TASK_INTENT_VOCABULARY
+        .iter()
+        .filter(|(_, kind)| *kind == TaskIntentKind::State)
+        .count();
+    assert_eq!(
+        (metadata, state),
+        (9, 4),
+        "ADR-026 的分账是元数据 9 / 状态 4；任何一侧偷偷多一条都会让'冲突时能不能重放'变成口头账"
+    );
+    let mut names: Vec<&str> = TASK_INTENT_VOCABULARY
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    let total = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), total, "表里不许有重名");
+
+    for sample in &samples {
+        let encoded = serde_json::to_value(sample).expect("serializable");
+        let wire_op = encoded
+            .get("op")
+            .and_then(Value::as_str)
+            .expect("op discriminator");
+        assert_eq!(
+            wire_op,
+            sample.op_name(),
+            "serde 判别式与 op_name() 必须同拼法（{sample:?}）"
+        );
+        assert!(
+            TASK_INTENT_VOCABULARY
+                .iter()
+                .any(|(name, kind)| *name == wire_op && kind == &sample.kind()),
+            "每个变体都必须在表里、且分类一致（{wire_op}）"
+        );
+    }
+    assert_eq!(
+        samples
+            .iter()
+            .filter(|s| s.kind() == TaskIntentKind::Metadata)
+            .count(),
+        9,
+        "13 个样本按 kind() 数出来也得是 9/4"
+    );
+}
+
+/// #3/#20：`Create` 意图走的必须是具名 `create` 的**同一个**行构造器——三族钉法、
+/// 空 prompt 用 agent 名、`immediate ⇒ pending`。两份构造就是两种未来。
+#[test]
+fn a_create_intent_pins_three_families_at_the_front_of_the_list() {
+    let (root, context, executor) = harness("intent-create", &[task("t1", "p1", "todo")]);
+    let service = build_service(context, &executor);
+    let applied = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::Create {
+                id: "new1".into(),
+                prompt: "  ".into(),
+                agent: "claude_gpt55".into(),
+                permission_mode: "ask".into(),
+                immediate: false,
+                selected_model: Some("m".into()),
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+            },
+        )
+        .expect("create intent");
+    assert!(applied.changed);
+    let rows = rows(&tasks_json(&root));
+    assert_eq!(rows.len(), 2);
+    let fresh = &rows[0];
+    assert_eq!(fresh["id"], json!("new1"));
+    assert_eq!(fresh["status"], json!("todo"));
+    assert_eq!(
+        fresh["name"],
+        json!("claude_gpt55"),
+        "空 prompt ⇒ agent 名当标签"
+    );
+    assert_eq!(fresh["launchFamily"], json!("codex"));
+    assert_eq!(fresh["sessionFamily"], json!("claude"));
+    assert_eq!(fresh["resumeFamily"], json!("codex"));
+    assert_eq!(fresh["selectedModel"], json!("m"));
+
+    let bytes_before = std::fs::read(tasks_json(&root)).expect("written");
+    let refused = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::Create {
+                id: "new1".into(),
+                prompt: "again".into(),
+                agent: "claude".into(),
+                permission_mode: "ask".into(),
+                immediate: false,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+            },
+        )
+        .expect_err("重复 id 必须拒绝，不是静默第二条");
+    assert!(matches!(refused, TaskError::DuplicateId(_)), "{refused:?}");
+    assert_eq!(
+        std::fs::read(tasks_json(&root)).expect("untouched"),
+        bytes_before,
+        "被拒绝的建行一格 revision 都不烧"
+    );
+    cleanup(root);
+}
+
+/// ADR-037 后果 1：**删空 ⇒ 删文件**。删项目今天就靠这条；core 的写者路径没有它，
+/// "core 是唯一发射者"就会变成"core 是唯一留下孤魂 tasks.json 的人"。
+#[test]
+fn deleting_the_last_row_removes_the_file_and_a_new_create_reopens_it() {
+    let (root, context, executor) = harness("intent-delete-empty", &[task("t1", "p1", "done")]);
+    let service = build_service(context, &executor);
+    let tasks_file = tasks_json(&root);
+    let applied = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::Delete {
+                task_ids: vec!["t1".to_string()],
+            },
+        )
+        .expect("delete intent");
+    assert!(applied.changed);
+    assert!(applied.revision.is_some(), "删空是一次真写");
+    assert!(
+        applied.fingerprint.is_none(),
+        "覆盖面发布为缺席——文件不在了，下一写的合法基线就是'不存在'"
+    );
+    assert!(!tasks_file.exists(), "删空 ⇒ 删文件");
+
+    let loaded = service.load("p1").expect("load after removal");
+    assert!(loaded.records.is_empty());
+
+    service
+        .apply_intent(
+            "p1",
+            &TaskIntent::Create {
+                id: "t2".into(),
+                prompt: "再来".into(),
+                agent: "claude".into(),
+                permission_mode: "ask".into(),
+                immediate: false,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+            },
+        )
+        .expect("creating after an emptied deletion is a fresh list, not a resurrected one");
+    assert_eq!(rows(&tasks_file).len(), 1);
+    cleanup(root);
+}
+
+/// `Delete` 意图与具名 `delete` 必须共享**同一套规则**（跳收藏、拒在飞）——两份规则
+/// 早晚分叉，而 JS 迁移后宿主只会看见其中一份。
+#[test]
+fn a_delete_intent_and_the_named_delete_produce_the_same_bytes() {
+    let seed = vec![
+        {
+            let mut starred = task("t1", "p1", "done").0;
+            starred.insert("starred".into(), json!(true));
+            record(Value::Object(starred))
+        },
+        task("t2", "p1", "done"),
+    ];
+    let (root_a, context_a, executor_a) = harness("intent-del-a", &seed);
+    build_service(context_a, &executor_a)
+        .delete("p1", &["t1".to_string(), "t2".to_string()])
+        .expect("named delete");
+    let (root_b, context_b, executor_b) = harness("intent-del-b", &seed);
+    let applied = build_service(context_b, &executor_b)
+        .apply_intent(
+            "p1",
+            &TaskIntent::Delete {
+                task_ids: vec!["t1".to_string(), "t2".to_string()],
+            },
+        )
+        .expect("delete intent");
+    assert_eq!(
+        rows(&tasks_json(&root_a)),
+        rows(&tasks_json(&root_b)),
+        "一条规则，两个入口，一份字节"
+    );
+    assert_eq!(rows(&tasks_json(&root_b)).len(), 1, "收藏行被规则跳过");
+    assert!(applied.changed);
+    cleanup(root_a);
+    cleanup(root_b);
+}
+
+/// #11：启动修复。宿主只交"哪些 id 还活着"这一个事实；四条判据都在 core，
+/// 且第二次跑必须**零写**——重启不烧 revision 是旧客户端今天的行为。
+#[test]
+fn normalizing_after_boot_applies_the_four_client_rules_and_is_idempotent() {
+    let mut dsh = task("t-dsh", "p1", "done").0;
+    dsh.insert("agent".into(), json!("dsh"));
+    dsh.insert("speed".into(), json!("fast"));
+    let (root, context, executor) = harness(
+        "intent-boot",
+        &[
+            task("t-run", "p1", "running"),
+            task("t-dead", "p1", "running"),
+            task("t-int", "p1", "interrupted"),
+            task("t-det", "p1", "detached"),
+            record(Value::Object(dsh)),
+        ],
+    );
+    let service = build_service(context, &executor);
+    let live = || {
+        vec![
+            "t-run".to_string(),
+            "t-int".to_string(),
+            "t-det".to_string(),
+        ]
+    };
+    let applied = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::NormalizeAfterBoot {
+                live_task_ids: live(),
+            },
+        )
+        .expect("normalize");
+    assert!(applied.changed);
+    let rows = rows(&tasks_json(&root));
+    let row = |id: &str| {
+        rows.iter()
+            .find(|r| r["id"] == json!(id))
+            .expect("seeded")
+            .clone()
+    };
+    assert_eq!(
+        row("t-run")["status"],
+        json!("detached"),
+        "活孩子 ⇒ detached"
+    );
+    assert!(row("t-run")
+        .get("attentionRequestedAt")
+        .is_some_and(Value::is_number));
+    assert_eq!(
+        row("t-dead")["status"],
+        json!("interrupted"),
+        "没孩子 ⇒ interrupted"
+    );
+    assert_eq!(
+        row("t-int")["status"],
+        json!("detached"),
+        "interrupted+活孩子 ⇒ detached"
+    );
+    assert_eq!(
+        row("t-det")["status"],
+        json!("detached"),
+        "已是 detached 的行原样，不补 attentionRequestedAt"
+    );
+    assert!(row("t-det").get("attentionRequestedAt").is_none());
+    assert_eq!(
+        row("t-dsh")["speed"],
+        json!("standard"),
+        "dsh 的 fast 清成 standard"
+    );
+
+    let bytes = std::fs::read(tasks_json(&root)).expect("written");
+    let again = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::NormalizeAfterBoot {
+                live_task_ids: live(),
+            },
+        )
+        .expect("second pass");
+    assert!(!again.changed, "重复启动零写");
+    assert_eq!(std::fs::read(tasks_json(&root)).expect("same"), bytes);
+    cleanup(root);
+}
+
+/// #12：三路合并。**未被点名的键一个不碰**——权威行上别人刚写进去的字段不许被
+/// 宿主内存里那份旧行抹掉（这正是整表快照的死法）；配置五项与两个清空则无条件落。
+#[test]
+fn a_switch_config_intent_merges_only_the_delta_onto_the_authoritative_row() {
+    let mut seed = task("t1", "p1", "running").0;
+    seed.insert("selectedModel".into(), json!("stale-model"));
+    seed.insert("attentionRequestedAt".into(), json!(123));
+    seed.insert("failureReason".into(), json!("boom"));
+    seed.insert("name".into(), json!("别的窗口刚改的名"));
+    let (root, context, executor) = harness("intent-switch", &[record(Value::Object(seed))]);
+    let service = build_service(context, &executor);
+    let previous = SessionSnapshot::default();
+    let resolved = SessionSnapshot {
+        claude_session_id: Some("s-new".into()),
+        session_agent: Some("claude".into()),
+        session_family: Some("claude".into()),
+        ..Default::default()
+    };
+    let applied = service
+        .apply_intent(
+            "p1",
+            &TaskIntent::SwitchConfig {
+                task_id: "t1".into(),
+                agent: "codex".into(),
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                permission_mode: "bypass".into(),
+                previous_session: previous,
+                resolved_session: resolved,
+            },
+        )
+        .expect("switch write");
+    assert!(applied.changed);
+    let row = &rows(&tasks_json(&root))[0];
+    assert_eq!(
+        row["claudeSessionId"],
+        json!("s-new"),
+        "previous→resolved 的变化被应用"
+    );
+    assert_eq!(row["sessionAgent"], json!("claude"));
+    assert_eq!(row["sessionFamily"], json!("claude"));
+    assert_eq!(row["agent"], json!("codex"));
+    assert_eq!(row["permissionMode"], json!("bypass"));
+    assert_eq!(row["status"], json!("pending"));
+    assert!(
+        row.get("selectedModel").is_none(),
+        "values.selectedModel 是 undefined ⇒ 键被删，与 JS 落盘一致"
+    );
+    assert!(row.get("attentionRequestedAt").is_none());
+    assert!(row.get("failureReason").is_none());
+    assert_eq!(
+        row["name"],
+        json!("别的窗口刚改的名"),
+        "未被点名的键不许被这次写抹掉"
+    );
+    cleanup(root);
+}
+
+/// #9：会话 + 状态一次落定，且与 #21 共用清三设一；重复投递零写。
+#[test]
+fn resume_with_session_sets_one_family_and_pending_clearing_the_two_fields() {
+    let mut seed = task("t1", "p1", "done").0;
+    seed.insert("claudeSessionPath".into(), json!("/old.jsonl"));
+    seed.insert("codexSessionId".into(), json!("stale-other"));
+    seed.insert("attentionRequestedAt".into(), json!(5));
+    seed.insert("failureReason".into(), json!("boom"));
+    let (root, context, executor) = harness("intent-resume-write", &[record(Value::Object(seed))]);
+    let service = build_service(context, &executor);
+    let intent = TaskIntent::ResumeWithSession {
+        task_id: "t1".into(),
+        agent: "codex".into(),
+        family: ProtocolFamily::Codex,
+        session_id: Some("s1".into()),
+        session_path: Some("/new.jsonl".into()),
+    };
+    let applied = service
+        .apply_intent("p1", &intent)
+        .expect("resume write intent");
+    assert!(applied.changed);
+    let row = &rows(&tasks_json(&root))[0];
+    assert_eq!(row["codexSessionId"], json!("s1"));
+    assert_eq!(row["codexSessionPath"], json!("/new.jsonl"));
+    assert!(
+        row.get("claudeSessionPath").is_none(),
+        "清三设一：claude 的路径不许活过这次挂接"
+    );
+    assert_eq!(row["sessionCodexLike"], json!(true));
+    assert_eq!(row["sessionFamily"], json!("codex"));
+    assert_eq!(row["agent"], json!("codex"));
+    assert_eq!(row["status"], json!("pending"));
+    assert!(row.get("attentionRequestedAt").is_none());
+    assert!(row.get("failureReason").is_none());
+
+    let bytes = std::fs::read(tasks_json(&root)).expect("written");
+    let again = service
+        .apply_intent("p1", &intent)
+        .expect("second pass decodes");
+    assert!(!again.changed, "同一次续跑写两遍是烧 revision，不是幂等");
+    assert_eq!(std::fs::read(tasks_json(&root)).expect("same"), bytes);
+    cleanup(root);
+}
+
+/// 新四条的线上形状（ADR-022 决策 1 的下一步就是 JS 按这个发）。
+#[test]
+fn the_new_intents_cross_the_wire_with_their_vocabulary_names() {
+    let created = serde_json::to_value(TaskIntent::Create {
+        id: "n1".into(),
+        prompt: "p".into(),
+        agent: "claude".into(),
+        permission_mode: "ask".into(),
+        immediate: true,
+        selected_model: None,
+        reasoning_effort: None,
+        speed: None,
+        dsh_agent_preset: None,
+    })
+    .expect("serializable");
+    assert_eq!(
+        created,
+        json!({"op": "create", "id": "n1", "prompt": "p", "agent": "claude",
+               "permissionMode": "ask", "immediate": true}),
+        "None 的可选字段整键缺席，不许发 null——JS 发的就是没这个键"
+    );
+
+    let deleted: TaskIntent =
+        serde_json::from_value(json!({"op": "delete", "taskIds": ["t1"]})).expect("decodes");
+    assert_eq!(deleted.kind(), TaskIntentKind::State);
+
+    let normalized: TaskIntent = serde_json::from_value(json!({
+        "op": "normalizeAfterBoot", "liveTaskIds": ["t1", "t2"]
+    }))
+    .expect("decodes");
+    assert_eq!(
+        normalized,
+        TaskIntent::NormalizeAfterBoot {
+            live_task_ids: vec!["t1".to_string(), "t2".to_string()]
+        }
+    );
+
+    let resumed: TaskIntent = serde_json::from_value(json!({
+        "op": "resumeWithSession", "taskId": "t1", "agent": "codex", "family": "codex",
+        "sessionId": "s1"
+    }))
+    .expect("decodes");
+    assert_eq!(
+        resumed,
+        TaskIntent::ResumeWithSession {
+            task_id: "t1".into(),
+            agent: "codex".into(),
+            family: ProtocolFamily::Codex,
+            session_id: Some("s1".into()),
+            session_path: None,
+        }
+    );
+
+    assert!(
+        serde_json::from_value::<TaskIntent>(json!({
+            "op": "switchconfig", "taskId": "t1", "agent": "codex",
+            "permissionMode": "ask", "previousSession": {}, "resolvedSession": {}
+        }))
+        .is_err(),
+        "蛇形首字母小写拼错了族名也必须被拒——词汇表只有一种拼法"
+    );
 }

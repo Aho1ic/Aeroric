@@ -517,6 +517,129 @@ pub fn record_diff_stats(
     (if changed { next } else { records.to_vec() }, changed)
 }
 
+/// #11（`useAppStartup.ts:67` + `appProjectState.ts:171-210`）：启动修复，规则全部在这里，
+/// 宿主交出来的只有事实（`live_task_ids`＝还挂着活子进程的 id、`is_dsh`＝宿主家族表对
+/// `agent` 的回答）。四条判据与旧客户端一字不差：活孩子还在 ⇒ 非 `detached` 的行改
+/// `detached`；孩子没了 ⇒ 非 `interrupted` 的行改 `interrupted`；两者都补
+/// `attentionRequestedAt = 已有值 ?? now`；DSH 的 `fast` 清成 `standard`。已经是目标状态的行
+/// **不改**——重复启动因此不烧 revision。
+pub fn normalize_after_boot(
+    records: &[Record],
+    live_task_ids: &[String],
+    now_ms: u64,
+    is_dsh: &dyn Fn(&str) -> bool,
+) -> (Vec<Record>, bool) {
+    let live = |record: &Record| {
+        record
+            .id()
+            .is_some_and(|id| live_task_ids.iter().any(|l| l == id))
+    };
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            let mut updated = record.clone();
+            let mut touched = false;
+            let status = status_of(record);
+            let active = status.is_some_and(|value| {
+                matches!(
+                    value,
+                    TaskStatus::Pending | TaskStatus::Running | TaskStatus::InputRequired
+                )
+            });
+            let interrupted_with_child = status == Some(TaskStatus::Interrupted) && live(record);
+            if active || interrupted_with_child {
+                let target = if live(record) {
+                    TaskStatus::Detached
+                } else {
+                    TaskStatus::Interrupted
+                };
+                if status != Some(target) {
+                    updated.0.insert(
+                        "status".to_string(),
+                        Value::String(
+                            serde_json::to_value(target)
+                                .expect("a status is a string")
+                                .as_str()
+                                .expect("a status is a string")
+                                .to_string(),
+                        ),
+                    );
+                    touched = true;
+                }
+                if !updated.contains("attentionRequestedAt") {
+                    updated.0.insert(
+                        "attentionRequestedAt".to_string(),
+                        Value::Number(now_ms.into()),
+                    );
+                    touched = true;
+                }
+            }
+            if record
+                .get("speed")
+                .and_then(Value::as_str)
+                .is_some_and(|speed| speed == "fast")
+                && record
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_dsh)
+            {
+                updated
+                    .0
+                    .insert("speed".to_string(), Value::String("standard".to_string()));
+                touched = true;
+            }
+            if touched {
+                changed = true;
+                updated
+            } else {
+                record.clone()
+            }
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
+/// #12 三路合并的落盘半边：宿主交得出 `previous → resolved` 的**变化**（它读到的旧快照和
+/// 它解析出的新事实），交不出"当前行"——那份只在 core 的权威快照里。这里只应用 delta 里
+/// 点名的键（`None` 值＝删键，与 JS 的 `undefined` 序列化后掉键一致），未被点名的键一个不碰
+/// （ADR-037 后果：意图不重写未点名的键）。
+pub fn apply_field_delta(
+    records: &[Record],
+    task_id: &str,
+    delta: &[(&str, Option<Value>)],
+) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) || delta.is_empty() {
+                return record.clone();
+            }
+            let mut updated = record.clone();
+            for (key, value) in delta {
+                match value {
+                    Some(v) => {
+                        if updated.get(key) != Some(v) {
+                            updated.0.insert((*key).to_string(), v.clone());
+                        }
+                    }
+                    None => {
+                        updated.0.remove(*key);
+                    }
+                }
+            }
+            if &updated != record {
+                changed = true;
+                updated
+            } else {
+                record.clone()
+            }
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

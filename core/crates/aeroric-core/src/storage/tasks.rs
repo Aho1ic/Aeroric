@@ -1,9 +1,12 @@
 //! `projects/<id>/tasks.json` — one array of task records per project.
 //!
 //! The shipping client deletes this file when the list becomes empty
-//! (`src-tauri/src/storage.rs`); here an empty snapshot is written as `[]` and the
-//! previous content is kept as `.bak`, because "the frontend briefly reported no tasks"
-//! and "this project never had tasks" must not be the same event on disk.
+//! (`src-tauri/src/storage.rs`); an ordinary save here writes an empty snapshot as `[]` and
+//! keeps the previous content as `.bak`, because "the frontend briefly reported no tasks"
+//! and "this project never had tasks" must not be the same event on disk. The one place
+//! that DOES earn the client's delete-on-empty contract is [`remove_covering`] — reached
+//! only when a delete intent empties the list (ADR-037 后果 1: project removal depends on
+//! it, and the host's forwarding save (`write_task_records_raw`) mirrors the same rule).
 
 use std::path::PathBuf;
 
@@ -89,6 +92,28 @@ pub fn save_covering(
     let written = fingerprint::of_file(&path)?
         .expect("write_array just put the file there, so it has bytes to hash");
     Ok((written, key))
+}
+
+/// 删空 ⇒ 删文件（ADR-037 后果 1）。只由"这条意图把列表删到空"的路径到达：普通保存把空列表
+/// 写成 `[]`（见模块头的理由），删除则连文件一起消失——发布客户端的 `save_project_tasks`
+/// 与宿主的字节转发 `write_task_records_raw` 都是这个形状，删项目依赖它。
+/// 返回的指纹是 `None`：这就是"下一次写的合法覆盖面是文件不存在"。
+pub fn remove_covering(
+    context: &CoreContext,
+    project_id: &str,
+    cover: Cover,
+) -> Result<(Option<Fingerprint>, String), StorageError> {
+    compat::require_writer(context)?;
+    let path = context.paths.tasks_file(project_id)?;
+    let key = fingerprint::table_key(context, &path)?;
+    fingerprint::check_cover(context, &key, &path, &cover)?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| StorageError::WriteFailed {
+            path: path.clone(),
+            reason: e.to_string(),
+        })?;
+    }
+    Ok((None, key))
 }
 
 impl AppPaths {

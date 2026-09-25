@@ -253,6 +253,216 @@ pub enum TaskIntent {
         additions: u64,
         deletions: u64,
     },
+    /// #3（`taskLifecycle.ts:338`）：建行。行的形状（三族钉法、空 prompt 用 agent 标签当名字、
+    /// `immediate ⇒ pending`）是 core 的既有具名 `create` 的，意图只是把它接进同一条 persist
+    /// 通道；id 由宿主生成（ADR-037 决策 2：建与删都是意图，不是"推迟到 spawn 成功"）。
+    Create {
+        id: String,
+        prompt: String,
+        agent: String,
+        permission_mode: String,
+        immediate: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selected_model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speed: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dsh_agent_preset: Option<String>,
+    },
+    /// #2/#4/#6：删行。"跳过收藏、拒绝在飞、删空 ⇒ 删文件"三条规则都在这条意图里由 core 执行
+    /// （ADR-037 后果 1），#4/#6 的补偿删走的也是这一条——被删的行是真落过盘的。
+    Delete {
+        task_ids: Vec<String>,
+    },
+    /// #11（`useAppStartup.ts:67`）：启动修复。宿主交的是**事实**（哪些 id 还挂着活的子进程），
+    /// "有活孩子 ⇒ detached、没活孩子 ⇒ interrupted、`attentionRequestedAt ?? now`、
+    /// dsh 的 `fast → standard`"这四条规则全在 core。逐项目投递（JS 的扇出循环在宿主）。
+    NormalizeAfterBoot {
+        live_task_ids: Vec<String>,
+    },
+    /// #12（`taskSwitch.ts:409`）：配置切换的那**一次**写。ADR-037 决策 3——复合写是一条原子
+    /// 意图，拆开投递会留下"会话已挂、状态未改"的中间态。三个会话快照里宿主只交得出
+    /// previous/resolved 两份，第三份"当前"由 core 从权威快照读——三路合并的规则在 core，
+    /// 陈旧的那份不再是任何人的落盘依据。
+    SwitchConfig {
+        task_id: String,
+        agent: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selected_model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speed: Option<String>,
+        permission_mode: String,
+        previous_session: SessionSnapshot,
+        resolved_session: SessionSnapshot,
+    },
+    /// #9（`taskLifecycle.ts:644`）：续跑前的那次写——11 个会话字段 + `agent` + `status` 同轮
+    /// 落定。宿主交的是解析结果这份**事实**；"清四族只设一族"归 `attach_session` 共用的那条
+    /// 规则（`session_owner::apply_resolved_session`）。启动本身不在这条意图里。
+    ResumeWithSession {
+        task_id: String,
+        agent: String,
+        family: ProtocolFamily,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_path: Option<String>,
+    },
+}
+
+/// 一份行的会话字段族（11 个键）的可序列化形状，`SwitchConfig` 的三路合并拿它当输入。
+/// 键缺席＝`undefined`，与 JS 的 `Object.is` 判等一致——"没带这个键"与"值是空串"是两回事，
+/// 前者按缺席合并、后者按改值合并。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_session_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_session_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp_session_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_codex_like: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_family: Option<String>,
+}
+
+impl SessionSnapshot {
+    /// 十一键按磁盘名对齐的两份快照；`taskSwitch.ts:34-69` 逐键 `Object.is` 的那张表，
+    /// 搬到 core 侧只多不少。
+    fn zip_entries(&self, other: &Self) -> Vec<(&'static str, Option<Value>, Option<Value>)> {
+        let text = |value: &Option<String>| value.as_ref().map(|text| Value::String(text.clone()));
+        let boolean = |value: &Option<bool>| value.map(Value::Bool);
+        let entries = vec![
+            (
+                "claudeSessionId",
+                text(&self.claude_session_id),
+                text(&other.claude_session_id),
+            ),
+            (
+                "claudeSessionPath",
+                text(&self.claude_session_path),
+                text(&other.claude_session_path),
+            ),
+            (
+                "codexSessionId",
+                text(&self.codex_session_id),
+                text(&other.codex_session_id),
+            ),
+            (
+                "codexSessionPath",
+                text(&self.codex_session_path),
+                text(&other.codex_session_path),
+            ),
+            (
+                "dshSessionId",
+                text(&self.dsh_session_id),
+                text(&other.dsh_session_id),
+            ),
+            (
+                "dshSessionPath",
+                text(&self.dsh_session_path),
+                text(&other.dsh_session_path),
+            ),
+            (
+                "ompSessionId",
+                text(&self.omp_session_id),
+                text(&other.omp_session_id),
+            ),
+            (
+                "ompSessionPath",
+                text(&self.omp_session_path),
+                text(&other.omp_session_path),
+            ),
+            (
+                "sessionAgent",
+                text(&self.session_agent),
+                text(&other.session_agent),
+            ),
+            (
+                "sessionCodexLike",
+                boolean(&self.session_codex_like),
+                boolean(&other.session_codex_like),
+            ),
+            (
+                "sessionFamily",
+                text(&self.session_family),
+                text(&other.session_family),
+            ),
+        ];
+        entries
+    }
+}
+
+/// ADR-037 词汇表的分类（ADR-026）：**元数据类**冲突可自动重放一次，**状态类**永不重放。
+/// 这张表必须显式存在且可数——否则"按 op 分类的冲突处置"会退化成逐条 `if`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskIntentKind {
+    Metadata,
+    State,
+}
+
+/// `op` 名与 `TaskIntent` 的 serde 判别式同一套 camelCase 拼法；条目数与 9/4 的分配
+/// 由单测钉死（`task_lifecycle.rs` 的词汇表用例）。
+pub const TASK_INTENT_VOCABULARY: [(&str, TaskIntentKind); 13] = [
+    ("rename", TaskIntentKind::Metadata),
+    ("toggleStar", TaskIntentKind::Metadata),
+    ("archive", TaskIntentKind::Metadata),
+    ("unarchive", TaskIntentKind::Metadata),
+    ("attachSession", TaskIntentKind::Metadata),
+    ("setWorktree", TaskIntentKind::Metadata),
+    ("discardWorktree", TaskIntentKind::Metadata),
+    ("recordDiffStats", TaskIntentKind::Metadata),
+    ("normalizeAfterBoot", TaskIntentKind::Metadata),
+    ("create", TaskIntentKind::State),
+    ("delete", TaskIntentKind::State),
+    ("switchConfig", TaskIntentKind::State),
+    ("resumeWithSession", TaskIntentKind::State),
+];
+
+impl TaskIntent {
+    /// 判别式的 `op` 名——与线上 JSON 的 `"op"` 字段同一个拼法，词汇表因此可以对着它数。
+    pub fn op_name(&self) -> &'static str {
+        match self {
+            TaskIntent::Rename { .. } => "rename",
+            TaskIntent::ToggleStar { .. } => "toggleStar",
+            TaskIntent::Archive { .. } => "archive",
+            TaskIntent::Unarchive { .. } => "unarchive",
+            TaskIntent::AttachSession { .. } => "attachSession",
+            TaskIntent::SetWorktree { .. } => "setWorktree",
+            TaskIntent::DiscardWorktree { .. } => "discardWorktree",
+            TaskIntent::RecordDiffStats { .. } => "recordDiffStats",
+            TaskIntent::Create { .. } => "create",
+            TaskIntent::Delete { .. } => "delete",
+            TaskIntent::NormalizeAfterBoot { .. } => "normalizeAfterBoot",
+            TaskIntent::SwitchConfig { .. } => "switchConfig",
+            TaskIntent::ResumeWithSession { .. } => "resumeWithSession",
+        }
+    }
+
+    pub fn kind(&self) -> TaskIntentKind {
+        TASK_INTENT_VOCABULARY
+            .iter()
+            .find(|(name, _)| *name == self.op_name())
+            .expect("every op name is in the vocabulary")
+            .1
+    }
 }
 
 pub struct TaskService {
@@ -459,9 +669,20 @@ impl TaskService {
         if !is_addressable(project) {
             return Err(TaskError::Unaddressable(project_id));
         }
-        let snapshot = self.load(&project_id)?;
+        self.insert_new_task(&project_id, &spec, Persist::Commit)
+    }
+
+    /// 建行行的完整形状——具名 `create` 与 `Create` 意图共用这**一个**构造器。
+    /// 分成两份就是"宿主一套、core 一套"的开始，这里不留那个口子。
+    fn insert_new_task(
+        &self,
+        project_id: &str,
+        spec: &NewTask,
+        persist: Persist,
+    ) -> Result<(Record, Applied), TaskError> {
+        let snapshot = self.load(project_id)?;
         if Self::find(&snapshot.records, &spec.id).is_some() {
-            return Err(TaskError::DuplicateId(spec.id));
+            return Err(TaskError::DuplicateId(spec.id.clone()));
         }
         let now = self.clock().now_ms();
         // A newly created task is pinned to all three families (ADR-028, ADR-029): which
@@ -476,7 +697,7 @@ impl TaskService {
         record.0.insert("id".into(), Value::String(spec.id.clone()));
         record
             .0
-            .insert("projectId".into(), Value::String(project_id.clone()));
+            .insert("projectId".into(), Value::String(project_id.to_string()));
         record
             .0
             .insert("prompt".into(), Value::String(spec.prompt.clone()));
@@ -508,23 +729,29 @@ impl TaskService {
                 ),
             );
         }
-        if let Some(model) = spec.selected_model {
+        if let Some(model) = &spec.selected_model {
             record
                 .0
-                .insert("selectedModel".into(), Value::String(model));
+                .insert("selectedModel".into(), Value::String(model.clone()));
         }
-        if let Some(effort) = spec.reasoning_effort {
+        if let Some(effort) = &spec.reasoning_effort {
             record
                 .0
-                .insert("reasoningEffort".into(), Value::String(effort));
+                .insert("reasoningEffort".into(), Value::String(effort.clone()));
         }
-        if let Some(speed) = spec.speed {
-            record.0.insert("speed".into(), Value::String(speed));
+        if let Some(speed) = &spec.speed {
+            record
+                .0
+                .insert("speed".into(), Value::String(speed.clone()));
         }
         if launch_family == ProtocolFamily::Dsh {
             record.0.insert(
                 "dshAgentPreset".into(),
-                Value::String(spec.dsh_agent_preset.unwrap_or_else(|| "standard".into())),
+                Value::String(
+                    spec.dsh_agent_preset
+                        .clone()
+                        .unwrap_or_else(|| "standard".into()),
+                ),
             );
         }
         record.0.insert(
@@ -551,7 +778,7 @@ impl TaskService {
 
         let mut records = snapshot.records.clone();
         records.insert(0, record.clone());
-        let applied = self.commit(&project_id, &records)?;
+        let applied = self.finish_intent(project_id, records, persist)?;
         Ok((record, applied))
     }
 
@@ -1325,6 +1552,15 @@ impl TaskService {
     /// transcript on disk is left alone: removing a row from the list is not permission to
     /// delete the work it describes.
     pub fn delete(&self, project_id: &str, task_ids: &[String]) -> Result<Deleted, TaskError> {
+        self.delete_with(project_id, task_ids, Persist::Commit)
+    }
+
+    fn delete_with(
+        &self,
+        project_id: &str,
+        task_ids: &[String],
+        persist: Persist,
+    ) -> Result<Deleted, TaskError> {
         let snapshot = self.load(project_id)?;
         let starred = |id: &str| {
             Self::find(&snapshot.records, id)
@@ -1381,7 +1617,7 @@ impl TaskService {
                 ledger.acknowledge(id);
             });
         }
-        let applied = self.commit(project_id, &records)?;
+        let applied = self.finish_intent(project_id, records, persist)?;
         // The router must stop answering for ids that no longer exist; this is the only
         // operation that can make a remembered project wrong (ADR-035's `project_of`).
         self.forget_projects(&requested);
@@ -1587,6 +1823,195 @@ impl TaskService {
         self.finish_intent(project_id, records, persist)
     }
 
+    /// #11：启动修复逐项目投递（宿主的扇出循环在宿主）。宿主交出的事实只有"哪些 id 还挂着
+    /// 活子进程"；四条判据在 `reducer::normalize_after_boot`，"是不是 dsh 族"由宿主家族表
+    /// 回答——那是 ADR-028 的唯一权威，core 只是把它的回答带给规则。
+    pub fn normalize_after_boot(
+        &self,
+        project_id: &str,
+        live_task_ids: &[String],
+    ) -> Result<Applied, TaskError> {
+        self.normalize_after_boot_with(project_id, live_task_ids, Persist::Commit)
+    }
+
+    fn normalize_after_boot_with(
+        &self,
+        project_id: &str,
+        live_task_ids: &[String],
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        let families = self.families.clone();
+        let (records, changed) = reducer::normalize_after_boot(
+            &snapshot.records,
+            live_task_ids,
+            self.clock().now_ms(),
+            &|agent| families.session_family(agent) == ProtocolFamily::Dsh,
+        );
+        if !changed {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        self.finish_intent(project_id, records, persist)
+    }
+
+    /// #9：续跑前的那**一次**写。会话字段与 #21 走同一条 `apply_resolved_session`（清三设一），
+    /// 外加 `agent`、`status: pending` 与两个清空——都落在 core 刚读出的权威行上，而不是宿主
+    /// 内存里那份可能已过期的整行（ADR-037 决策 3：载荷与今天那一次写等价）。
+    pub fn resume_with_session(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        agent: &str,
+        family: ProtocolFamily,
+        session_id: Option<&str>,
+        session_path: Option<&str>,
+    ) -> Result<Applied, TaskError> {
+        self.resume_with_session_with(
+            project_id,
+            task_id,
+            agent,
+            family,
+            session_id,
+            session_path,
+            Persist::Commit,
+        )
+    }
+
+    fn resume_with_session_with(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        agent: &str,
+        family: ProtocolFamily,
+        session_id: Option<&str>,
+        session_path: Option<&str>,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        let position = snapshot
+            .records
+            .iter()
+            .position(|row| row.id() == Some(task_id))
+            .ok_or_else(|| TaskError::NotFound {
+                project_id: project_id.to_string(),
+                task_id: task_id.to_string(),
+            })?;
+        let record = &snapshot.records[position];
+        let owner = session_owner::SessionOwner {
+            agent: agent.to_string(),
+            family,
+            codex_like: family == ProtocolFamily::Codex,
+        };
+        let mut committed =
+            session_owner::apply_resolved_session(record, &owner, session_id, session_path);
+        committed
+            .0
+            .insert("agent".to_string(), Value::String(agent.to_string()));
+        committed.0.insert(
+            "status".to_string(),
+            Value::String(
+                serde_json::to_value(TaskStatus::Pending)
+                    .expect("a status is a string")
+                    .as_str()
+                    .expect("a status is a string")
+                    .to_string(),
+            ),
+        );
+        committed.0.remove("attentionRequestedAt");
+        committed.0.remove("failureReason");
+        if &committed == record {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        let mut records = snapshot.records.clone();
+        records[position] = committed;
+        self.finish_intent(project_id, records, persist)
+    }
+
+    /// #12：配置切换的复合写＝一条原子意图。三路合并里 core 提供"当前行"这一份——今天
+    /// 它来自宿主内存（`latestTask`），权威化之后它就是磁盘上的那份；宿主只交得出
+    /// previous/resolved 的**差**（`taskSwitch.ts:34` 的 `Object.is` 判据搬到 core）。
+    pub fn switch_config_write(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        agent: &str,
+        selected_model: Option<&str>,
+        reasoning_effort: Option<&str>,
+        speed: Option<&str>,
+        permission_mode: &str,
+        previous: &SessionSnapshot,
+        resolved: &SessionSnapshot,
+    ) -> Result<Applied, TaskError> {
+        self.switch_config_write_with(
+            project_id,
+            task_id,
+            agent,
+            selected_model,
+            reasoning_effort,
+            speed,
+            permission_mode,
+            previous,
+            resolved,
+            Persist::Commit,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn switch_config_write_with(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        agent: &str,
+        selected_model: Option<&str>,
+        reasoning_effort: Option<&str>,
+        speed: Option<&str>,
+        permission_mode: &str,
+        previous: &SessionSnapshot,
+        resolved: &SessionSnapshot,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
+            project_id: project_id.to_string(),
+            task_id: task_id.to_string(),
+        })?;
+        let mut delta: Vec<(&str, Option<Value>)> = Vec::new();
+        for (key, before, after) in previous.zip_entries(resolved) {
+            if before != after {
+                delta.push((key, after));
+            }
+        }
+        delta.push(("agent", Some(Value::String(agent.to_string()))));
+        for (key, value) in [
+            ("selectedModel", selected_model),
+            ("reasoningEffort", reasoning_effort),
+            ("speed", speed),
+        ] {
+            delta.push((key, value.map(|text| Value::String(text.to_string()))));
+        }
+        delta.push((
+            "permissionMode",
+            Some(Value::String(permission_mode.to_string())),
+        ));
+        delta.push((
+            "status",
+            Some(Value::String(
+                serde_json::to_value(TaskStatus::Pending)
+                    .expect("a status is a string")
+                    .as_str()
+                    .expect("a status is a string")
+                    .to_string(),
+            )),
+        ));
+        delta.push(("attentionRequestedAt", None));
+        delta.push(("failureReason", None));
+        let (records, changed) = reducer::apply_field_delta(&snapshot.records, task_id, &delta);
+        if !changed {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        self.finish_intent(project_id, records, persist)
+    }
+
     /// ADR-035 给观察路径的那一半，搬到 mutation 上：非递交写权的平台上，core 仍然决定结果，
     /// 保存者还是宿主。"没有 revision、没有指纹"是这里的诚实答案，与"文件没变"是两回事。
     pub fn apply_intent(
@@ -1669,6 +2094,76 @@ impl TaskService {
             } => self.metadata_one(project_id, task_id, persist, |records| {
                 reducer::record_diff_stats(records, task_id, *additions, *deletions)
             }),
+            TaskIntent::Create {
+                id,
+                prompt,
+                agent,
+                permission_mode,
+                immediate,
+                selected_model,
+                reasoning_effort,
+                speed,
+                dsh_agent_preset,
+            } => {
+                let spec = NewTask {
+                    id: id.clone(),
+                    project_id: project_id.to_string(),
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                    permission_mode: permission_mode.clone(),
+                    immediate: *immediate,
+                    selected_model: selected_model.clone(),
+                    reasoning_effort: reasoning_effort.clone(),
+                    speed: speed.clone(),
+                    dsh_agent_preset: dsh_agent_preset.clone(),
+                    images: Vec::new(),
+                    texts: Vec::new(),
+                };
+                self.insert_new_task(project_id, &spec, persist)
+                    .map(|(_record, applied)| applied)
+            }
+            TaskIntent::Delete { task_ids } => self
+                .delete_with(project_id, task_ids, persist)
+                .map(|deleted| deleted.applied),
+            TaskIntent::NormalizeAfterBoot { live_task_ids } => {
+                self.normalize_after_boot_with(project_id, live_task_ids, persist)
+            }
+            TaskIntent::SwitchConfig {
+                task_id,
+                agent,
+                selected_model,
+                reasoning_effort,
+                speed,
+                permission_mode,
+                previous_session,
+                resolved_session,
+            } => self.switch_config_write_with(
+                project_id,
+                task_id,
+                agent,
+                selected_model.as_deref(),
+                reasoning_effort.as_deref(),
+                speed.as_deref(),
+                permission_mode,
+                previous_session,
+                resolved_session,
+                persist,
+            ),
+            TaskIntent::ResumeWithSession {
+                task_id,
+                agent,
+                family,
+                session_id,
+                session_path,
+            } => self.resume_with_session_with(
+                project_id,
+                task_id,
+                agent,
+                *family,
+                session_id.as_deref(),
+                session_path.as_deref(),
+                persist,
+            ),
         }
     }
 
@@ -1681,7 +2176,15 @@ impl TaskService {
         persist: Persist,
     ) -> Result<Applied, TaskError> {
         match persist {
-            Persist::Commit => self.commit(project_id, &records),
+            // 删空 ⇒ 删文件（ADR-037 后果 1）。只有把列表删到空的那条路径会走到
+            // `commit_removal`——其余意图的结果天然非空，普通保存的空快照仍按 `[]` 落盘。
+            Persist::Commit => {
+                if records.is_empty() {
+                    self.commit_removal(project_id)
+                } else {
+                    self.commit(project_id, &records)
+                }
+            }
             Persist::DecideOnly => Ok(Applied {
                 records,
                 revision: None,
@@ -1690,6 +2193,24 @@ impl TaskService {
                 generation: None,
             }),
         }
+    }
+
+    /// 与 `commit` 对偶的"文件不该存在"那一支：覆盖面发布为缺席（`bump_covering(.., None)`），
+    /// 宿主的转发保存（`write_task_records_raw`）对空数组本来就删文件——两条平台路径的
+    /// 语义差别只能多不能少。不得反向复活：为"确保目录存在"而把删空的目录写回来就是破契约。
+    fn commit_removal(&self, project_id: &str) -> Result<Applied, TaskError> {
+        let (fingerprint, key) =
+            task_storage::remove_covering(&self.context, project_id, Cover::LastCoreWrite)?;
+        let bumped = runtime::bump_covering(&self.context, &[(key, fingerprint.clone())])?;
+        self.ledger(|ledger| ledger.persist(&self.context))?;
+        Ok(Applied {
+            records: Vec::new(),
+            revision: Some(bumped.metadata.revision),
+            changed: true,
+            generation: None,
+            fingerprint: fingerprint
+                .map(|value| serde_json::to_value(value).expect("a fingerprint is a value")),
+        })
     }
 
     /// What a fresh process owes the user before it accepts any request: every start or
