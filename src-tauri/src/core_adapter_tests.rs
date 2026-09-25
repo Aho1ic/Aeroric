@@ -1217,6 +1217,7 @@ fn an_intent_is_executed_by_whichever_side_holds_the_writer_role() {
         &TaskIntent::Rename {
             task_id: "t1".into(),
             name: "改在 core 里".into(),
+            expect: None,
         },
     )
     .expect("an intent must be executable on either side of the handover line");

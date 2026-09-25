@@ -209,10 +209,50 @@ enum Persist {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TaskIntent {
-    Rename { task_id: String, name: String },
-    ToggleStar { task_id: String },
-    Archive { task_ids: Vec<String> },
-    Unarchive { task_ids: Vec<String> },
+    Rename {
+        task_id: String,
+        name: String,
+        /// ADR-037 决策 4：LLM 生成的名字带前置，用户手输的不带。缺省 = 无条件改名，
+        /// 所以不发这个字段的旧调用方行为不变。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<reducer::RenameExpect>,
+    },
+    ToggleStar {
+        task_id: String,
+    },
+    Archive {
+        task_ids: Vec<String>,
+    },
+    Unarchive {
+        task_ids: Vec<String>,
+    },
+    /// #21/#9：会话挂接。`family` 是宿主从终端事件里拿到的**事实**，"清四族只设一族"的规则在
+    /// core（ADR-037 决策 1）。
+    AttachSession {
+        task_id: String,
+        family: ProtocolFamily,
+        session_agent: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_path: Option<String>,
+    },
+    SetWorktree {
+        task_id: String,
+        path: String,
+        branch: String,
+        base_branch: String,
+    },
+    DiscardWorktree {
+        task_id: String,
+    },
+    /// #16：完成后异步算出来的两个数字。幂等由调用方的 operation key 负责，不由这条意图判等
+    /// ——两个数字算出同样的值，与"这一对已经写过"是两回事。
+    RecordDiffStats {
+        task_id: String,
+        additions: u64,
+        deletions: u64,
+    },
 }
 
 pub struct TaskService {
@@ -1398,9 +1438,7 @@ impl TaskService {
         task_id: &str,
         name: &str,
     ) -> Result<Applied, TaskError> {
-        self.metadata_edit(project_id, task_id, Persist::Commit, |records| {
-            reducer::rename(records, task_id, name)
-        })
+        self.run_rename(project_id, task_id, name, None, Persist::Commit)
     }
 
     /// 收藏开关。它读的是当前值：取消收藏写的是 `starred: false`，不是"把键删掉回到原点"，
@@ -1447,6 +1485,108 @@ impl TaskService {
         })
     }
 
+    /// 单行、reducer 自己报"改没改"的那一类意图的共同形状：先确认行存在（改一个不存在的任务
+    /// 必须是错误，不是静默无变化），再在权威快照上跑 reducer。
+    fn metadata_one(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        persist: Persist,
+        change: impl Fn(&[Record]) -> (Vec<Record>, bool),
+    ) -> Result<Applied, TaskError> {
+        self.metadata_batch(project_id, &[task_id.to_string()], persist, change)
+    }
+
+    /// #21/#9：会话挂接。宿主交的是事实（哪个族、哪个 agent、拿到什么 id/路径），
+    /// "清四族只设一族"与"两个都空就不动"由 core 判（ADR-037 决策 1）。
+    pub fn attach_session(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        family: ProtocolFamily,
+        session_agent: &str,
+        session_id: Option<&str>,
+        session_path: Option<&str>,
+    ) -> Result<Applied, TaskError> {
+        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+            reducer::attach_session(
+                records,
+                task_id,
+                family,
+                session_agent,
+                session_id,
+                session_path,
+            )
+        })
+    }
+
+    pub fn set_worktree(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        path: &str,
+        branch: &str,
+        base_branch: &str,
+    ) -> Result<Applied, TaskError> {
+        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+            reducer::set_worktree(records, task_id, path, branch, base_branch)
+        })
+    }
+
+    pub fn discard_worktree(&self, project_id: &str, task_id: &str) -> Result<Applied, TaskError> {
+        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+            reducer::discard_worktree(records, task_id)
+        })
+    }
+
+    pub fn record_diff_stats(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        additions: u64,
+        deletions: u64,
+    ) -> Result<Applied, TaskError> {
+        self.metadata_one(project_id, task_id, Persist::Commit, |records| {
+            reducer::record_diff_stats(records, task_id, additions, deletions)
+        })
+    }
+
+    /// 这一行现在归属哪一族的会话路径——`RenameExpect` 第四样比的正是它，且必须从**权威快照**
+    /// 算，不然前置又退回"宿主以为自己看到的那份是新的"。
+    fn resolved_session_path(&self, record: &Record) -> Option<String> {
+        let owner = session_owner::resolve_session_owner(record, self.families.as_ref());
+        let fields = session_owner::session_fields(record, owner.family);
+        fields.session_path.or(fields.legacy_session_path)
+    }
+
+    /// 带前置的改名走这一条：前置不成立 ⇒ 原样返回、`changed: false`、**不报错**，也不烧
+    /// revision（ADR-037 决策 4，与旧客户端"静默丢弃过期 LLM 结果"一字不变）。
+    fn run_rename(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        name: &str,
+        expect: Option<&reducer::RenameExpect>,
+        persist: Persist,
+    ) -> Result<Applied, TaskError> {
+        let snapshot = self.load(project_id)?;
+        let record = Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
+            project_id: project_id.to_string(),
+            task_id: task_id.to_string(),
+        })?;
+        if let Some(want) = expect {
+            let current_path = self.resolved_session_path(record);
+            if !reducer::rename_precondition_holds(record, want, current_path.as_deref()) {
+                return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+            }
+        }
+        let records = reducer::rename(&snapshot.records, task_id, name);
+        if records == snapshot.records {
+            return Ok(self.unchanged(snapshot.records, snapshot.fingerprint));
+        }
+        self.finish_intent(project_id, records, persist)
+    }
+
     /// ADR-035 给观察路径的那一半，搬到 mutation 上：非递交写权的平台上，core 仍然决定结果，
     /// 保存者还是宿主。"没有 revision、没有指纹"是这里的诚实答案，与"文件没变"是两回事。
     pub fn apply_intent(
@@ -1472,11 +1612,11 @@ impl TaskService {
         persist: Persist,
     ) -> Result<Applied, TaskError> {
         match intent {
-            TaskIntent::Rename { task_id, name } => {
-                self.metadata_edit(project_id, task_id, persist, |records| {
-                    reducer::rename(records, task_id, name)
-                })
-            }
+            TaskIntent::Rename {
+                task_id,
+                name,
+                expect,
+            } => self.run_rename(project_id, task_id, name, expect.as_ref(), persist),
             TaskIntent::ToggleStar { task_id } => {
                 self.metadata_edit(project_id, task_id, persist, |records| {
                     reducer::toggle_star(records, task_id)
@@ -1493,6 +1633,42 @@ impl TaskService {
                     reducer::unarchive(records, task_ids)
                 })
             }
+            TaskIntent::AttachSession {
+                task_id,
+                family,
+                session_agent,
+                session_id,
+                session_path,
+            } => self.metadata_one(project_id, task_id, persist, |records| {
+                reducer::attach_session(
+                    records,
+                    task_id,
+                    *family,
+                    session_agent,
+                    session_id.as_deref(),
+                    session_path.as_deref(),
+                )
+            }),
+            TaskIntent::SetWorktree {
+                task_id,
+                path,
+                branch,
+                base_branch,
+            } => self.metadata_one(project_id, task_id, persist, |records| {
+                reducer::set_worktree(records, task_id, path, branch, base_branch)
+            }),
+            TaskIntent::DiscardWorktree { task_id } => {
+                self.metadata_one(project_id, task_id, persist, |records| {
+                    reducer::discard_worktree(records, task_id)
+                })
+            }
+            TaskIntent::RecordDiffStats {
+                task_id,
+                additions,
+                deletions,
+            } => self.metadata_one(project_id, task_id, persist, |records| {
+                reducer::record_diff_stats(records, task_id, *additions, *deletions)
+            }),
         }
     }
 

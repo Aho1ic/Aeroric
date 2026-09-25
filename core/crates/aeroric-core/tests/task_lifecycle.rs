@@ -2116,6 +2116,7 @@ fn deciding_an_intent_returns_the_new_rows_without_touching_the_file() {
             &TaskIntent::Rename {
                 task_id: "t1".into(),
                 name: "决定但未落盘".into(),
+                expect: None,
             },
         )
         .expect("deciding needs no lease");
@@ -2188,6 +2189,7 @@ fn an_intent_and_the_named_op_it_carries_produce_the_same_bytes() {
             &TaskIntent::Rename {
                 task_id: "t1".into(),
                 name: "同一个改动".into(),
+                expect: None,
             },
         )
         .expect("intent");
@@ -2225,6 +2227,7 @@ fn an_intent_crosses_the_wire_as_op_plus_camel_case_payload() {
     let encoded = serde_json::to_value(TaskIntent::Rename {
         task_id: "t1".to_string(),
         name: "重命名".to_string(),
+        expect: None,
     })
     .expect("serializable");
     assert_eq!(

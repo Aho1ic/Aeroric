@@ -14,9 +14,10 @@
 
 use serde_json::Value;
 
-use aeroric_protocol::task::TaskStatus;
+use aeroric_protocol::task::{ProtocolFamily, TaskStatus};
 
 use crate::storage::compat::Record;
+use crate::tasks::session_owner;
 
 /// A field the reducer writes is either a number or *gone*. `Clear` is deliberately not
 /// `None`: the client spreads `undefined` into the object, which drops the key when it
@@ -339,6 +340,183 @@ pub fn merge_changed_session_fields(
     next
 }
 
+/// ADR-037 决策 4（Q71）：带前置的改名要比哪四样。
+///
+/// **不是只比 name。** 今天 `generateTaskName` 的守卫看的是 name / prompt / status / 归属族的
+/// 会话路径四项（`src/state/app/taskNaming.ts:52-62`）。只比 name 会悄悄放宽一条现存的守卫：
+/// 用户在 LLM 生成期间改了 prompt 或切了配置，过期的名字今天会被丢掉，改完就会被写回去。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameExpect {
+    /// 旧客户端用 `task.name ?? ""` 比对，所以"没有 `name` 键"与"`name` 是空串"是同一种前置。
+    pub name: String,
+    pub prompt: String,
+    pub status: TaskStatus,
+    /// 归属族解析出来的那条会话路径；`None` = 当时就没有。这一样要 service 用**权威快照里的
+    /// 这一行**算出来（owner 解析要家族的表），所以它是入参而不是 reducer 自己算。
+    pub session_path: Option<String>,
+}
+
+/// 前置成立吗。成立 ⇒ 调用方才允许走 [`rename`]；不成立 ⇒ `changed: false`，且不报错
+/// （与今天"静默丢弃过期结果"一字不变）。
+pub fn rename_precondition_holds(
+    record: &Record,
+    expect: &RenameExpect,
+    current_session_path: Option<&str>,
+) -> bool {
+    expect.name == record.str_field("name").unwrap_or("")
+        && expect.prompt == record.str_field("prompt").unwrap_or("")
+        && status_of(record) == Some(expect.status)
+        && expect.session_path.as_deref() == current_session_path
+}
+
+/// `applyResolvedTaskSession`（`src/state/app/taskLifecycle.ts:33-81`）搬进 core（ADR-037 决策 1）。
+///
+/// 分工要说清："清四族、只设一族"的机制早就在
+/// [`session_owner::apply_resolved_session`]，这里补的是旧客户端另外两条判据——**两个值都空
+/// 就整条不动**（用的是 falsy，空串算空），以及缺值时回落到**清场之前**这一行自己的值。
+/// 把这两条留在宿主，就等于允许"某个客户端忘了清场"这种状态存在。
+pub fn attach_session(
+    records: &[Record],
+    task_id: &str,
+    family: ProtocolFamily,
+    session_agent: &str,
+    session_id: Option<&str>,
+    session_path: Option<&str>,
+) -> (Vec<Record>, bool) {
+    let blank = |value: Option<&str>| value.is_none_or(str::is_empty);
+    if blank(session_id) && blank(session_path) {
+        return (records.to_vec(), false);
+    }
+    let prefix = session_owner::family_prefix(family);
+    let id_key = format!("{prefix}SessionId");
+    let path_key = format!("{prefix}SessionPath");
+    let owner = session_owner::SessionOwner {
+        agent: session_agent.to_string(),
+        family,
+        codex_like: family == ProtocolFamily::Codex,
+    };
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) {
+                return record.clone();
+            }
+            let applied = session_owner::apply_resolved_session(
+                record,
+                &owner,
+                // `?? task.<同族原值>`：回落读的是清场前的那一行。
+                session_id.or_else(|| record.str_field(&id_key)),
+                session_path.or_else(|| record.str_field(&path_key)),
+            );
+            if &applied == record {
+                return record.clone();
+            }
+            changed = true;
+            applied
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
+/// #5（`taskLifecycle.ts:425`）：worktree 三个字段一次挂上。值来自宿主的
+/// `create_task_worktree` 命令，宿主只是搬运，规则是"要么三个一起有，要么不动"。
+pub fn set_worktree(
+    records: &[Record],
+    task_id: &str,
+    path: &str,
+    branch: &str,
+    base_branch: &str,
+) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) {
+                return record.clone();
+            }
+            let mut updated = record.clone();
+            updated
+                .0
+                .insert("worktreePath".to_string(), Value::String(path.to_string()));
+            updated.0.insert(
+                "worktreeBranch".to_string(),
+                Value::String(branch.to_string()),
+            );
+            updated.0.insert(
+                "baseBranch".to_string(),
+                Value::String(base_branch.to_string()),
+            );
+            // 挂上新的就摘掉"已丢弃"这个标记，与旧客户端 spread 之后的结果一致：一个被丢弃
+            // 过的 worktree 重新挂上之后，UI 不该再显示它被丢弃。
+            updated.0.remove("worktreeDiscarded");
+            if &updated == record {
+                return record.clone();
+            }
+            changed = true;
+            updated
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
+/// #14（`worktreeOps.ts:20`）：丢弃**只打标记**，path/branch 故意留着——UI 还要显示这个任务
+/// 曾经挂过哪儿。重复丢弃不再写一次（`changed: false`），否则每次点击都白烧一格 revision。
+pub fn discard_worktree(records: &[Record], task_id: &str) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id)
+                || record.get("worktreeDiscarded") == Some(&Value::Bool(true))
+            {
+                return record.clone();
+            }
+            let mut updated = record.clone();
+            updated
+                .0
+                .insert("worktreeDiscarded".to_string(), Value::Bool(true));
+            changed = true;
+            updated
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
+/// #16（`useWorktreeDiffStats.ts:55`）：完成之后异步算出来的两个数字。它们**不是**用户意图，
+/// 载荷里只有事实，去重靠调用方的 operation key（ADR-017）——这条意图自己不做幂等判断，
+/// 因为两个数字算出同样的值与"这一对数字已经写过"是两回事。
+pub fn record_diff_stats(
+    records: &[Record],
+    task_id: &str,
+    additions: u64,
+    deletions: u64,
+) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    let next: Vec<Record> = records
+        .iter()
+        .map(|record| {
+            if record.id() != Some(task_id) {
+                return record.clone();
+            }
+            let mut updated = record.clone();
+            updated
+                .0
+                .insert("additions".to_string(), Value::Number(additions.into()));
+            updated
+                .0
+                .insert("deletions".to_string(), Value::Number(deletions.into()));
+            if &updated == record {
+                return record.clone();
+            }
+            changed = true;
+            updated
+        })
+        .collect();
+    (if changed { next } else { records.to_vec() }, changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +534,223 @@ mod tests {
             }
         }
         Record(object.clone())
+    }
+
+    /// ADR-037 决策 1：四族互斥是 core 的规则，不是宿主记着的清单。
+    #[test]
+    fn attaching_a_session_clears_the_other_three_families() {
+        let records = vec![task(json!({
+            "claudeSessionId": "old-claude", "claudeSessionPath": "/p/old.jsonl",
+            "dshSessionId": "old-dsh", "dshSessionPath": "/p/old-dsh.json",
+            "ompSessionPath": "/p/omp.jsonl",
+        }))];
+        let (next, changed) = attach_session(
+            &records,
+            "t1",
+            ProtocolFamily::Codex,
+            "codex",
+            Some("new-codex"),
+            None,
+        );
+        assert!(changed);
+        let row = &next[0].0;
+        assert_eq!(row["codexSessionId"], json!("new-codex"));
+        // 事件只带来 id、没带路径 ⇒ 回落读的是这一行**自己那一族**的原值，这里没有，所以不出现。
+        assert!(!row.contains_key("codexSessionPath"));
+        for key in [
+            "claudeSessionId",
+            "claudeSessionPath",
+            "dshSessionId",
+            "dshSessionPath",
+            "ompSessionPath",
+        ] {
+            assert!(!row.contains_key(key), "{key} 必须被清掉：一 task 一族");
+        }
+        assert_eq!(row["sessionFamily"], json!("codex"));
+        assert_eq!(row["sessionAgent"], json!("codex"));
+        assert_eq!(row["sessionCodexLike"], json!(true));
+    }
+
+    #[test]
+    fn an_empty_session_changes_nothing() {
+        let records = vec![task(json!({"claudeSessionPath": "/p/a.jsonl"}))];
+        // 旧客户端的守卫是 falsy：空串与缺席同样算"没有会话"。
+        for pair in [
+            (None, None),
+            (Some(""), None),
+            (None, Some("")),
+            (Some(""), Some("")),
+        ] {
+            let (next, changed) = attach_session(
+                &records,
+                "t1",
+                ProtocolFamily::Claude,
+                "claude",
+                pair.0,
+                pair.1,
+            );
+            assert!(!changed, "{pair:?} 不该动盘");
+            assert_eq!(next, records, "{pair:?} 连记录都不该重建");
+        }
+    }
+
+    #[test]
+    fn a_missing_session_value_keeps_what_the_row_already_had() {
+        let records = vec![task(json!({"codexSessionPath": "/p/keep.jsonl"}))];
+        let (next, changed) = attach_session(
+            &records,
+            "t1",
+            ProtocolFamily::Codex,
+            "codex",
+            Some("id-only"),
+            None,
+        );
+        assert!(changed);
+        assert_eq!(
+            next[0].get("codexSessionPath"),
+            Some(&json!("/p/keep.jsonl")),
+            "`?? task.<同族原值>`：宿主只带回 id 时，路径不能被清成没有"
+        );
+    }
+
+    #[test]
+    fn attaching_the_same_session_twice_writes_once() {
+        let records = vec![task(json!({}))];
+        let (first, changed_first) = attach_session(
+            &records,
+            "t1",
+            ProtocolFamily::Dsh,
+            "dsh",
+            None,
+            Some("/p/d.json"),
+        );
+        assert!(changed_first);
+        let (second, changed_again) = attach_session(
+            &first,
+            "t1",
+            ProtocolFamily::Dsh,
+            "dsh",
+            None,
+            Some("/p/d.json"),
+        );
+        assert!(
+            !changed_again,
+            "重复挂同一条会话不再烧一格 revision，与归档那条同一判据"
+        );
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn mounting_a_worktree_sets_three_fields_and_lifts_the_discarded_mark() {
+        let records = vec![task(
+            json!({"worktreeDiscarded": true, "worktreeBranch": "stale"}),
+        )];
+        let (next, changed) = set_worktree(&records, "t1", "/wt/x", "feature/a", "main");
+        assert!(changed);
+        let row = &next[0].0;
+        assert_eq!(row["worktreePath"], json!("/wt/x"));
+        assert_eq!(row["worktreeBranch"], json!("feature/a"));
+        assert_eq!(row["baseBranch"], json!("main"));
+        assert!(
+            !row.contains_key("worktreeDiscarded"),
+            "重新挂上之后不该还显示『已丢弃』——今天宿主 spread 的结果就是这样"
+        );
+        let (again, second) = set_worktree(&next, "t1", "/wt/x", "feature/a", "main");
+        assert!(!second, "同样的三个值不再写一次");
+        assert_eq!(again, next);
+    }
+
+    #[test]
+    fn discarding_a_worktree_keeps_where_it_was() {
+        let records = vec![task(
+            json!({"worktreePath": "/wt/x", "worktreeBranch": "feature/a"}),
+        )];
+        let (next, changed) = discard_worktree(&records, "t1");
+        assert!(changed);
+        assert_eq!(next[0].get("worktreeDiscarded"), Some(&json!(true)));
+        assert_eq!(next[0].get("worktreePath"), Some(&json!("/wt/x")));
+        assert_eq!(next[0].get("worktreeBranch"), Some(&json!("feature/a")));
+        let (again, second) = discard_worktree(&next, "t1");
+        assert!(!second, "重复丢弃是幂等的");
+        assert_eq!(again, next);
+    }
+
+    #[test]
+    fn diff_stats_land_as_numbers_and_a_repeat_is_not_a_change() {
+        let records = vec![task(json!({}))];
+        let (next, changed) = record_diff_stats(&records, "t1", 12, 3);
+        assert!(changed);
+        assert_eq!(next[0].get("additions"), Some(&json!(12)));
+        assert_eq!(next[0].get("deletions"), Some(&json!(3)));
+        let (_, repeat) = record_diff_stats(&next, "t1", 12, 3);
+        assert!(!repeat);
+    }
+
+    /// Q71（ADR-037 决策 4）：前置比的是**四样**。每一样单独判一次，防止"只比 name"这种
+    /// 悄悄放宽——那条守卫今天真的存在（`taskNaming.ts:52-62`）。
+    #[test]
+    fn the_rename_precondition_checks_all_four_samples() {
+        let records = [task(json!({
+            "status": "running", "prompt": "hi",
+            "claudeSessionPath": "/p/a.jsonl", "sessionFamily": "claude", "sessionAgent": "claude",
+        }))];
+        let row = &records[0];
+        let want = RenameExpect {
+            name: String::new(),
+            prompt: "hi".to_string(),
+            status: TaskStatus::Running,
+            session_path: Some("/p/a.jsonl".to_string()),
+        };
+        assert!(
+            rename_precondition_holds(row, &want, Some("/p/a.jsonl")),
+            "四样全对才成立"
+        );
+        let renamed = rename(std::slice::from_ref(row), "t1", "有人先改了名");
+        assert!(
+            !rename_precondition_holds(&renamed[0], &want, Some("/p/a.jsonl")),
+            "name 变了 ⇒ 不成立"
+        );
+        for (key, value) in [
+            ("prompt", json!("changed prompt")),
+            ("status", json!("done")),
+            ("claudeSessionPath", json!("/p/b.jsonl")),
+        ] {
+            let mut moved = row.0.clone();
+            moved.insert(key.to_string(), value);
+            let moved = Record(moved);
+            assert!(
+                !rename_precondition_holds(
+                    &moved,
+                    &want,
+                    if key == "claudeSessionPath" {
+                        Some("/p/b.jsonl")
+                    } else {
+                        Some("/p/a.jsonl")
+                    }
+                ),
+                "{key} 变了也必须不成立：只比 name 是放宽"
+            );
+        }
+    }
+
+    /// 宿主以为"没有 name"，行上也确实没有 ⇒ 前置成立。空串与缺席是同一种前置（JS 用
+    /// `task.name ?? ""`），把这条钉住，免得有人拿 `Option` 的有无去做判等。
+    #[test]
+    fn an_absent_name_and_an_empty_name_are_the_same_precondition() {
+        let records = [task(json!({
+            "status": "running", "prompt": "hi", "name": "",
+        }))];
+        let want = RenameExpect {
+            name: String::new(),
+            prompt: "hi".to_string(),
+            status: TaskStatus::Running,
+            session_path: None,
+        };
+        assert!(rename_precondition_holds(
+            &records[0],
+            &want,
+            records[0].get("claudeSessionPath").and_then(Value::as_str)
+        ));
     }
 
     #[test]
