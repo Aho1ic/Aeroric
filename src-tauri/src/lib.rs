@@ -1,5 +1,4 @@
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -109,9 +108,6 @@ mod wsl;
 mod wsl_fs;
 mod wsl_git;
 
-use session::{ClaudeSessionInfo, CodexSessionInfo, OmpSessionInfo};
-use session_dsh::DshSessionInfo;
-
 /// TaskManager 锁序表(2026-09 全量审查固化;新增多锁函数前先对照)。
 ///
 /// 全局顺序(仅列会被同时持有的锁;叶子锁单独持有,不参与排序):
@@ -130,51 +126,35 @@ use session_dsh::DshSessionInfo;
 ///
 /// 约束:任何锁不得跨越 `.await` 持有(parking_lot 无中毒,但 await 上的
 /// 死锁不受锁序保护);omp/远端 waiter 线程取锁必须用显式作用域限界。
+/// 委托壳(P3-01 切片三):14 张容器表与 `RunRegistry` 已一次性 move 进
+/// core 的 `aeroric_core::runtime::registry::TaskRegistry`——禁止双真相源,所以
+/// 这里不是副本。上面这段锁序表随本体搬进了 core 的 registry.rs(此处保留原表
+/// 文本作为宿主侧的对照锚);本壳只保留宿主专属的 `codex_rpc` 单例
+/// (ADR-020 豁免它不是任务键)。
+#[derive(Default)]
 pub struct TaskManager {
-    pub(crate) pty_masters:
-        Mutex<HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>>,
-    pub(crate) pty_writers:
-        Mutex<HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
-    pub(crate) child_handles: Mutex<
-        HashMap<run_registry::RunKey, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
-    >,
-    /// Addressed to "the next run of this id", not to a run: a resize that arrives before the
-    /// process exists has no generation to name, which is why every entry here carries
-    /// [`run_registry::RunKey::UNMINTED`] and `register_pty_handles` reads it back under that
-    /// key whatever it is about to register.
-    pub(crate) pending_pty_sizes: Mutex<HashMap<run_registry::RunKey, (u16, u16)>>,
-    pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
-    pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
-    pub(crate) codex_sessions: Mutex<HashMap<run_registry::RunKey, CodexSessionInfo>>,
-    pub(crate) claude_sessions: Mutex<HashMap<run_registry::RunKey, ClaudeSessionInfo>>,
-    pub(crate) dsh_sessions: Mutex<HashMap<run_registry::RunKey, DshSessionInfo>>,
-    pub(crate) omp_sessions: Mutex<HashMap<run_registry::RunKey, OmpSessionInfo>>,
-    pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
-    /// 启动态初始输入的门控信号:trust/hook 等交互完成后再投递 prompt。
-    pub(crate) initial_input_signals: pty::StartupSignalRegistry,
-    /// 这台机器上还活着哪些 WSL 侧运行（shell 与任务共用一张表，ADR-032 的存活语义）。
-    pub(crate) wsl_active_ids: Mutex<HashSet<run_registry::RunKey>>,
+    registry: aeroric_core::runtime::TaskRegistry,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
-    /// Which runs of a task exist right now (ADR-020 + ADR-025). A leaf: it takes no other
-    /// lock while held, so it may be locked last from any of the maps above.
-    pub(crate) runs: run_registry::RunRegistry,
 }
 
-/// Outcome of asking "may this exit settle the task?" — see
-/// [`TaskManager::settle_marks_for_exit`] and ADR-030.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExitSettlement {
-    /// This was the last live run: the marks are consumed and the caller owns the status event
-    /// plus the cleanup side effects.
-    Settle {
-        cancelled: bool,
-        manually_completed: bool,
-    },
-    /// Another run of the same task is still in flight: consume nothing, emit nothing, delete
-    /// nothing.
-    WaitingForOtherRuns,
+impl std::ops::Deref for TaskManager {
+    type Target = aeroric_core::runtime::TaskRegistry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.registry
+    }
 }
+
+impl std::ops::DerefMut for TaskManager {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.registry
+    }
+}
+
+// `ExitSettlement` 随 P3-01 切片三 move 进 core(它是 TaskRegistry::settle_marks_for_exit
+// 的返回类型)。re-export 保持 `crate::ExitSettlement` 路径不变。
+pub(crate) use aeroric_core::runtime::registry::ExitSettlement;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExitAction {
@@ -268,250 +248,9 @@ pub(crate) fn authorize_app_restart(app: &tauri::AppHandle) {
         .authorize(ExitAction::Restart);
 }
 
-impl TaskManager {
-    /// ADR-025 rule 1: which run a resource operation (write input, resize, attach a session)
-    /// addresses — the newest registered one, or nothing when the task has no live run.
-    /// Centralised here so no call site can invent its own answer, and because `runs` is a leaf
-    /// lock: it is resolved before any PTY map is touched.
-    pub(crate) fn resource_run(&self, task_id: &str) -> Option<run_registry::RunKey> {
-        self.runs.resource_key(task_id)
-    }
-
-    pub(crate) fn writer_for(
-        &self,
-        task_id: &str,
-    ) -> Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>> {
-        let run = self.resource_run(task_id)?;
-        self.pty_writers.lock().get(&run).cloned()
-    }
-
-    pub(crate) fn child_for(
-        &self,
-        task_id: &str,
-    ) -> Option<Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>> {
-        let run = self.resource_run(task_id)?;
-        self.child_handles.lock().get(&run).cloned()
-    }
-
-    pub(crate) fn master_for(
-        &self,
-        task_id: &str,
-    ) -> Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>> {
-        let run = self.resource_run(task_id)?;
-        self.pty_masters.lock().get(&run).cloned()
-    }
-
-    /// Whether this task or shell has a live process at all — **any** run, not the newest one,
-    /// because "is it still alive" is answered by a still-running older run too. ADR-020's note
-    /// on `child_handles`: this stays the liveness signal, now read through the run namespace.
-    pub(crate) fn has_live_run(&self, id: &str) -> bool {
-        !self.runs.live_generations(id).is_empty()
-    }
-
-    /// The size a run should start at, including one that has not been registered yet: a
-    /// resize arriving before the process exists is addressed to the next run of that id.
-    pub(crate) fn pending_size(&self, id: &str) -> Option<(u16, u16)> {
-        self.pending_pty_sizes
-            .lock()
-            .get(&run_registry::RunKey::unminted(id))
-            .copied()
-    }
-
-    pub(crate) fn stage_pending_size(&self, id: &str, size: (u16, u16)) {
-        self.pending_pty_sizes
-            .lock()
-            .insert(run_registry::RunKey::unminted(id), size);
-    }
-
-    /// What an exiting run is allowed to do about its task's state (ADR-030).
-    ///
-    /// The cancel/completion marks are **one task-scoped account**, and only the last run to
-    /// exit consumes them — together with the settlement event and the cleanup side effects,
-    /// which today the *first* exit performed while another run was still writing to those same
-    /// directories.
-    pub(crate) fn settle_marks_for_exit(&self, task_id: &str) -> ExitSettlement {
-        // Called after the exiting run has retired itself, so anything still registered here
-        // belongs to another run. Reversing those two steps is the bug this comment exists for:
-        // checking before the retire would always find "another run" and nothing would ever
-        // settle.
-        if !self.runs.live_generations(task_id).is_empty() {
-            return ExitSettlement::WaitingForOtherRuns;
-        }
-        let cancelled = self.cancelled_tasks.lock().remove(task_id);
-        let manually_completed = self.manually_completed_tasks.lock().remove(task_id);
-        ExitSettlement::Settle {
-            cancelled,
-            manually_completed,
-        }
-    }
-
-    /// ADR-031: the one rule for putting a session path back on the market.
-    ///
-    /// Call this *after* removing the run's own session entry, and note the lock order —
-    /// session tables first, `claimed_session_paths` last. It deliberately matches the teardown
-    /// side of `lib.rs`'s lock-order table, which is why the registration sites in
-    /// `session_omp.rs` / `session_dsh.rs` had to stop holding the claim across an insert.
-    /// Without the reverse lookup, the first run to exit would free a path another run still
-    /// reads, and two agents would write one transcript.
-    pub(crate) fn release_session_path_if_unreferenced(&self, path: &str) -> bool {
-        let referenced = self
-            .codex_sessions
-            .lock()
-            .values()
-            .any(|info| info.session_path == path)
-            || self
-                .claude_sessions
-                .lock()
-                .values()
-                .any(|info| info.session_path == path)
-            || self
-                .dsh_sessions
-                .lock()
-                .values()
-                .any(|info| info.session_path == path)
-            || self
-                .omp_sessions
-                .lock()
-                .values()
-                .any(|info| info.session_path == path);
-        if referenced {
-            return false;
-        }
-        self.claimed_session_paths.lock().remove(&path.to_string())
-    }
-
-    /// The same teardown for one run: drop its four possible session entries, then let each
-    /// path it held go through the reverse lookup. Returns the paths this run had, whatever
-    /// happened to the claims, so callers that report "was there a real transcript" can judge
-    /// from the entries they saw rather than re-reading the tables.
-    pub(crate) fn release_run_sessions(&self, run: &run_registry::RunKey) -> Vec<String> {
-        let mut released = Vec::new();
-        if let Some(info) = self.codex_sessions.lock().remove(run) {
-            released.push(info.session_path);
-        }
-        if let Some(info) = self.claude_sessions.lock().remove(run) {
-            released.push(info.session_path);
-        }
-        if let Some(info) = self.dsh_sessions.lock().remove(run) {
-            released.push(info.session_path);
-        }
-        if let Some(info) = self.omp_sessions.lock().remove(run) {
-            released.push(info.session_path);
-        }
-        for path in &released {
-            self.release_session_path_if_unreferenced(path);
-        }
-        released
-    }
-
-    pub(crate) fn has_codex_session(&self, task_id: &str) -> bool {
-        self.codex_sessions
-            .lock()
-            .keys()
-            .any(|run| run.id() == task_id)
-    }
-
-    pub(crate) fn has_claude_session(&self, task_id: &str) -> bool {
-        self.claude_sessions
-            .lock()
-            .keys()
-            .any(|run| run.id() == task_id)
-    }
-
-    pub(crate) fn has_dsh_session(&self, task_id: &str) -> bool {
-        self.dsh_sessions
-            .lock()
-            .keys()
-            .any(|run| run.id() == task_id)
-    }
-
-    pub(crate) fn has_omp_session(&self, task_id: &str) -> bool {
-        self.omp_sessions
-            .lock()
-            .keys()
-            .any(|run| run.id() == task_id)
-    }
-
-    /// Every run of this task that holds a session entry — what an intent operation such as a
-    /// cancellation must clean up (ADR-025 rule 2), as opposed to the one run a read addresses.
-    pub(crate) fn session_runs_for_task(&self, task_id: &str) -> Vec<run_registry::RunKey> {
-        // One family at a time: lock-order rule 2 forbids holding two families' tables at once,
-        // so this cannot be a chain over four guards. The four tables hold different info types,
-        // which rules out a loop as well — hence the macro.
-        macro_rules! runs_of {
-            ($table:expr) => {{
-                $table
-                    .lock()
-                    .keys()
-                    .filter(|run| run.id() == task_id)
-                    .cloned()
-                    .collect::<Vec<run_registry::RunKey>>()
-            }};
-        }
-        let mut runs = runs_of!(self.codex_sessions);
-        runs.extend(runs_of!(self.claude_sessions));
-        runs.extend(runs_of!(self.dsh_sessions));
-        runs.extend(runs_of!(self.omp_sessions));
-        runs.sort();
-        runs.dedup();
-        runs
-    }
-
-    /// Atomically remove one run from all PTY maps (masters, writers, children) and retire it.
-    /// Locks are acquired in a fixed order to prevent deadlocks.
-    pub(crate) fn remove_pty_handles(&self, run: &run_registry::RunKey) {
-        let mut masters = self.pty_masters.lock();
-        let mut pending_sizes = self.pending_pty_sizes.lock();
-        let mut writers = self.pty_writers.lock();
-        let mut children = self.child_handles.lock();
-        masters.remove(run);
-        pending_sizes.remove(&run_registry::RunKey::unminted(run.id()));
-        writers.remove(run);
-        children.remove(run);
-        drop(children);
-        drop(writers);
-        drop(pending_sizes);
-        drop(masters);
-        self.runs.retire(run.id(), run.generation());
-        pty::cancel_initial_input_signal_for_run(self, run);
-    }
-
-    /// Remove one finished run's handles, keeping the safety net ADR-020 leaves in place: the
-    /// generation decides *which* entry is cleaned up, and the handle identity only gets to
-    /// report "the same generation was registered twice", which is an implementation bug
-    /// rather than a race between two legitimate runs.
-    pub(crate) fn remove_pty_handles_if_current(
-        &self,
-        run: &run_registry::RunKey,
-        expected: &Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    ) -> bool {
-        let mut masters = self.pty_masters.lock();
-        let mut pending_sizes = self.pending_pty_sizes.lock();
-        let mut writers = self.pty_writers.lock();
-        let mut children = self.child_handles.lock();
-        let Some(current) = children.get(run) else {
-            return false;
-        };
-        if !Arc::ptr_eq(current, expected) {
-            debug_assert!(
-                false,
-                "run {run:?} holds two different children: a generation was registered twice"
-            );
-            return false;
-        }
-        masters.remove(run);
-        pending_sizes.remove(&run_registry::RunKey::unminted(run.id()));
-        writers.remove(run);
-        children.remove(run);
-        drop(children);
-        drop(writers);
-        drop(pending_sizes);
-        drop(masters);
-        self.runs.retire(run.id(), run.generation());
-        pty::cancel_initial_input_signal_for_run(self, run);
-        true
-    }
-}
+// `impl TaskManager` 的全部方法(resource_run/writer_for/settle_marks_for_exit/release_run_sessions
+// 等)随 P3-01 切片三 move 进 core 的 `TaskRegistry`;`ExitSettlement` 也是。TaskManager
+// 现在 Deref 到它,全部调用点经解引用不变。
 
 /// macOS: 把主窗口收起到 Dock(hide 而非退出)。
 ///
@@ -698,23 +437,7 @@ pub fn run() {
             crate::remote::init(app.handle().clone());
             Ok(())
         })
-        .manage(TaskManager {
-            pty_masters: Mutex::new(HashMap::new()),
-            pty_writers: Mutex::new(HashMap::new()),
-            child_handles: Mutex::new(HashMap::new()),
-            pending_pty_sizes: Mutex::new(HashMap::new()),
-            cancelled_tasks: Mutex::new(HashSet::new()),
-            manually_completed_tasks: Mutex::new(HashSet::new()),
-            codex_sessions: Mutex::new(HashMap::new()),
-            claude_sessions: Mutex::new(HashMap::new()),
-            dsh_sessions: Mutex::new(HashMap::new()),
-            omp_sessions: Mutex::new(HashMap::new()),
-            claimed_session_paths: Mutex::new(HashSet::new()),
-            initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
-            wsl_active_ids: Mutex::new(HashSet::new()),
-            codex_rpc: Arc::new(Mutex::new(None)),
-            runs: run_registry::RunRegistry::new(),
-        })
+        .manage(TaskManager::default())
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
         .manage(remote::RemoteState::new())
@@ -1471,28 +1194,9 @@ mod run_settlement_tests {
     //! live run consumes them.
     use crate::run_registry::RunKey;
     use crate::{ExitSettlement, TaskManager};
-    use parking_lot::Mutex;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
 
     fn manager() -> TaskManager {
-        TaskManager {
-            pty_masters: parking_lot::Mutex::new(HashMap::new()),
-            pty_writers: parking_lot::Mutex::new(HashMap::new()),
-            child_handles: parking_lot::Mutex::new(HashMap::new()),
-            pending_pty_sizes: Mutex::new(HashMap::new()),
-            cancelled_tasks: Mutex::new(HashSet::new()),
-            manually_completed_tasks: Mutex::new(HashSet::new()),
-            codex_sessions: Mutex::new(HashMap::new()),
-            claude_sessions: Mutex::new(HashMap::new()),
-            dsh_sessions: Mutex::new(HashMap::new()),
-            omp_sessions: Mutex::new(HashMap::new()),
-            claimed_session_paths: Mutex::new(HashSet::new()),
-            initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
-            wsl_active_ids: Mutex::new(HashSet::new()),
-            codex_rpc: Arc::new(Mutex::new(None)),
-            runs: crate::run_registry::RunRegistry::new(),
-        }
+        TaskManager::default()
     }
 
     #[test]

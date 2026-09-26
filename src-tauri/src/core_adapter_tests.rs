@@ -22,7 +22,6 @@
 //! would exit before the test could look at the host's maps, and every mid-run assertion would
 //! be a race that happens to pass.
 
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -66,23 +65,7 @@ impl StorageLocationProbe for LocalVolume {
 }
 
 fn task_manager() -> TaskManager {
-    TaskManager {
-        pty_masters: parking_lot::Mutex::new(HashMap::new()),
-        pty_writers: parking_lot::Mutex::new(HashMap::new()),
-        child_handles: parking_lot::Mutex::new(HashMap::new()),
-        pending_pty_sizes: parking_lot::Mutex::new(HashMap::new()),
-        cancelled_tasks: parking_lot::Mutex::new(HashSet::new()),
-        manually_completed_tasks: parking_lot::Mutex::new(HashSet::new()),
-        codex_sessions: parking_lot::Mutex::new(HashMap::new()),
-        claude_sessions: parking_lot::Mutex::new(HashMap::new()),
-        dsh_sessions: parking_lot::Mutex::new(HashMap::new()),
-        omp_sessions: parking_lot::Mutex::new(HashMap::new()),
-        claimed_session_paths: parking_lot::Mutex::new(HashSet::new()),
-        initial_input_signals: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-        wsl_active_ids: parking_lot::Mutex::new(HashSet::new()),
-        runs: crate::run_registry::RunRegistry::new(),
-        codex_rpc: Arc::new(parking_lot::Mutex::new(None)),
-    }
+    TaskManager::default()
 }
 
 /// A throwaway `$HOME`, in the same shape every existing test in this crate uses.

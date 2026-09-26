@@ -18,10 +18,18 @@
 pub mod events;
 pub mod manager;
 pub mod ports;
+pub mod registry;
 pub mod shutdown;
 pub mod subprocess;
 
 pub use events::{NullSink, TaskEventSink, TaskNotification};
 pub use manager::{SuperviserError, WatcherSupervisor};
 pub use ports::Runtime;
+pub use registry::{
+    cancel_initial_input_signal, cancel_initial_input_signal_for_run,
+    clear_initial_input_signal_if_current, notify_initial_input_session_ready,
+    register_initial_input_signal, ClaudeSessionInfo, CodexSessionInfo, DshSessionInfo,
+    ExitSettlement, OmpSessionInfo, RunKey, RunRegistry, StartupSignal, StartupSignalRegistration,
+    StartupSignalRegistry, TaskRegistry,
+};
 pub use shutdown::ShutdownToken;

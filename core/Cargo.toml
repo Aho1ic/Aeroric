@@ -22,6 +22,8 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "process", "io-util", "net", "fs"] }
 base64 = "0.22"
+parking_lot = "0.12"
+portable-pty = { path = "../src-tauri/vendor/portable-pty" }
 
 # This workspace root is the patch owner for everything it resolves; patches
 # declared in a member crate are silently ignored by Cargo, so the mapping lives

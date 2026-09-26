@@ -15,6 +15,7 @@ import {
   snapshotWriteProblems,
 } from "./adapter-invariants.mjs";
 
+const REGISTRY = "core/crates/aeroric-core/src/runtime/registry.rs";
 const PTY = "src-tauri/src/pty.rs";
 const LIB = "src-tauri/src/lib.rs";
 const ADAPTER = "src-tauri/src/core_adapter.rs";
@@ -74,22 +75,21 @@ test("wiring §12: the presence controls refuse an unreadable or thin corpus", (
 function cleanFiles() {
   return [
     {
-      name: PTY,
-      text: `pub(crate) static STARTUP_SIGNAL_VERSION: AtomicU64 = AtomicU64::new(1);
-pub(crate) struct StartupSignalRegistration { version: u64, sender: Sender }
-pub(crate) fn register_initial_input_signal(task_manager: &TaskManager, run: &RunKey) -> u64 {
+      // P3-01 切片三之后,信箱/版本戳与 claim 释放的本体都在 core 的 TaskRegistry 里;
+      // 宿主 pty.rs / lib.rs 只剩 re-export,不再是这两个不变量的锚。
+      name: REGISTRY,
+      text: `static STARTUP_SIGNAL_VERSION: AtomicU64 = AtomicU64::new(1);
+pub struct StartupSignalRegistration { version: u64, sender: Sender }
+pub fn register_initial_input_signal(registry: &TaskRegistry, run: &RunKey) -> u64 {
     let version = STARTUP_SIGNAL_VERSION.fetch_add(1, Ordering::Relaxed);
     version
 }
-pub(crate) fn clear_initial_input_signal_if_current(signals: &StartupSignalRegistry) {
+pub fn clear_initial_input_signal_if_current(signals: &StartupSignalRegistry, version: u64) {
+    let _ = version;
     let _ = STARTUP_SIGNAL_VERSION.load(Ordering::Relaxed);
 }
-`,
-    },
-    {
-      name: LIB,
-      text: `impl TaskManager {
-    pub(crate) fn release_session_path_if_unreferenced(&self, path: &str) -> bool {
+impl TaskRegistry {
+    pub fn release_session_path_if_unreferenced(&self, path: &str) -> bool {
         let referenced = false;
         if referenced {
             return false;
@@ -99,6 +99,7 @@ pub(crate) fn clear_initial_input_signal_if_current(signals: &StartupSignalRegis
 }
 `,
     },
+    { name: PTY, text: `pub(crate) fn wait_for_initial_input_ready(rx: Receiver<StartupSignal>) -> bool { true }\n` },
     {
       name: ADAPTER,
       text: `pub(crate) fn writer_handover_allowed() -> bool {
@@ -147,6 +148,10 @@ function problemText(files, commands = COMMANDS) {
  * For a one-fact mutation, "some problem mentions it" is not enough: a fixture that breaks in two
  * ways at once would let a rule look like it understood the wrong thing. Assert a single problem.
  */
+function byName(files, name) {
+  return files.find((file) => file.name === name);
+}
+
 function onlyProblemText(files, commands = COMMANDS) {
   const problems = adapterInvariantProblems(files, commands);
   assert.equal(problems.length, 1, `expected exactly one problem, got:\n  ${problems.join("\n  ")}`);
@@ -161,19 +166,19 @@ test("the reference tree satisfies every rule", () => {
 
 test("a second run-identity source is refused", () => {
   const files = cleanFiles();
-  files[0].text += "\nstatic STARTUP_SIGNAL_GENERATION: AtomicU64 = AtomicU64::new(1);\n";
+  byName(files, REGISTRY).text += "\nstatic STARTUP_SIGNAL_GENERATION: AtomicU64 = AtomicU64::new(1);\n";
   assert.match(problemText(files), /STARTUP_SIGNAL_GENERATION is back/);
 });
 
 test("the version stamp cannot leak into another file", () => {
   const files = cleanFiles();
-  files[3].text += "\nlet _ = STARTUP_SIGNAL_VERSION.load(Ordering::Relaxed);\n";
-  assert.match(problemText(files), /read outside pty\.rs/);
+  byName(files, SESSION).text += "\nlet _ = STARTUP_SIGNAL_VERSION.load(Ordering::Relaxed);\n";
+  assert.match(problemText(files), /read outside the TaskRegistry's home/);
 });
 
-test("and cannot be read by a third function in pty.rs either", () => {
+test("and cannot be read by a third function in the registry either", () => {
   const files = cleanFiles();
-  files[0].text += `pub(crate) fn some_other_thing() -> u64 {
+  byName(files, REGISTRY).text += `pub fn some_other_thing() -> u64 {
     STARTUP_SIGNAL_VERSION.load(Ordering::Relaxed)
 }
 `;
@@ -182,7 +187,7 @@ test("and cannot be read by a third function in pty.rs either", () => {
 
 test("a stamp nothing reads means the rule is not being checked", () => {
   const files = cleanFiles();
-  files[0].text = files[0].text
+  byName(files, REGISTRY).text = byName(files, REGISTRY).text
     .replace("    let version = STARTUP_SIGNAL_VERSION.fetch_add(1, Ordering::Relaxed);\n", "")
     .replace("    let _ = STARTUP_SIGNAL_VERSION.load(Ordering::Relaxed);\n", "");
   assert.match(problemText(files), /no function reads STARTUP_SIGNAL_VERSION/);
@@ -190,7 +195,7 @@ test("a stamp nothing reads means the rule is not being checked", () => {
 
 test("a second claim-removal site is refused", () => {
   const files = cleanFiles();
-  files[3].text = files[3].text.replace(
+  byName(files, SESSION).text = byName(files, SESSION).text.replace(
     "    true\n}",
     `    let mut claimed = tm.claimed_session_paths.lock();
     claimed.remove(&path);
@@ -202,7 +207,7 @@ test("a second claim-removal site is refused", () => {
 
 test("a helper that no longer removes anything is caught, not praised", () => {
   const files = cleanFiles();
-  files[1].text = files[1].text.replace(
+  byName(files, REGISTRY).text = byName(files, REGISTRY).text.replace(
     "        self.claimed_session_paths.lock().remove(&path.to_string())",
     "        let _ = path;\n        false",
   );
@@ -224,7 +229,7 @@ test("handover must stay macOS-only", () => {
 
 test("an unreadable guard fails instead of passing", () => {
   const noHelper = cleanFiles();
-  noHelper[1].text = "impl TaskManager {}\n";
+  byName(noHelper, REGISTRY).text = "impl TaskRegistry {}\n";
   assert.match(problemText(noHelper), /the scan read nothing/);
 
   const noAdapter = cleanFiles();
@@ -233,8 +238,9 @@ test("an unreadable guard fails instead of passing", () => {
 });
 
 test("methods are attributed to their own function, not to the last free fn", () => {
-  const lib = cleanFiles()[1].text.split("\n");
-  assert.equal(enclosingFunction(lib, 1), "release_session_path_if_unreferenced");
+  const registry = byName(cleanFiles(), REGISTRY).text.split("\n");
+  const helperLine = registry.findIndex((line) => line.includes("fn release_session_path_if_unreferenced"));
+  assert.equal(enclosingFunction(registry, helperLine), "release_session_path_if_unreferenced");
   const withPrecedingFreeFn = `pub(crate) fn authorize_app_exit() {}\n\nimpl TaskManager {\n    pub(crate) fn helper(&self) {}\n}\n`.split("\n");
   assert.equal(enclosingFunction(withPrecedingFreeFn, 3), "helper");
 });

@@ -21,26 +21,7 @@ type ClientWs = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 const WAIT: Duration = Duration::from_secs(5);
 
 fn empty_task_manager() -> crate::TaskManager {
-    use parking_lot::Mutex;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
-    crate::TaskManager {
-        pty_masters: Mutex::new(HashMap::new()),
-        pty_writers: Mutex::new(HashMap::new()),
-        child_handles: Mutex::new(HashMap::new()),
-        pending_pty_sizes: Mutex::new(HashMap::new()),
-        cancelled_tasks: Mutex::new(HashSet::new()),
-        manually_completed_tasks: Mutex::new(HashSet::new()),
-        codex_sessions: Mutex::new(HashMap::new()),
-        claude_sessions: Mutex::new(HashMap::new()),
-        dsh_sessions: Mutex::new(HashMap::new()),
-        omp_sessions: Mutex::new(HashMap::new()),
-        claimed_session_paths: Mutex::new(HashSet::new()),
-        initial_input_signals: Arc::new(Mutex::new(HashMap::new())),
-        wsl_active_ids: Mutex::new(HashSet::new()),
-        codex_rpc: Arc::new(Mutex::new(None)),
-        runs: crate::run_registry::RunRegistry::new(),
-    }
+    crate::TaskManager::default()
 }
 
 /// 已完成 E2EE 握手的测试客户端(模拟手机端 e2ee.ts)。

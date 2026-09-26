@@ -2,12 +2,10 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::run_registry::RunKey;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -59,29 +57,15 @@ const MAX_TASK_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 /// **条目版本戳**，不是运行身份（ADR-032）。它只回答"我登记的那一条还在不在"，
 /// 作用是让被顶替的老登记不会在退出时把顶替者的登记删掉。除本文件的登记/清除两处之外，
 /// 任何地方都不许读它当身份——`tauri-adapter` 门禁按这条断言。
-static STARTUP_SIGNAL_VERSION: AtomicU64 = AtomicU64::new(1);
-
-/// 启动态门控信号:首条输入可能需要等 trust folder / hook 授权完成后再投递。
-#[derive(Debug)]
-pub(crate) enum StartupSignal {
-    Output(String),
-    UserInput,
-    SessionReady,
-    Cancelled,
-}
-
-#[derive(Clone)]
-pub(crate) struct StartupSignalRegistration {
-    /// See [`STARTUP_SIGNAL_VERSION`]: a per-entry stamp, not a generation.
-    version: u64,
-    sender: std::sync::mpsc::Sender<StartupSignal>,
-}
-
-/// Keyed by the run that registered it (ADR-020). The value still carries a version stamp,
-/// because two unminted runs of one task share a key and the older one must not clear the
-/// newer one's registration on its way out (ADR-032).
-pub(crate) type StartupSignalRegistry =
-    Arc<parking_lot::Mutex<HashMap<RunKey, StartupSignalRegistration>>>;
+// 启动态门控信号的类型、版本戳与登记/清除/取消/通知六个函数已随 P3-01 切片三迁入
+// core 的 TaskRegistry(信箱是它的一张表)。这里 re-export,`crate::pty::…` 的
+// 调用点(含 ssh.rs / wsl.rs / event_watcher.rs)路径不变;条目版本戳仍只被
+// register/clear 这一对读——adapter-invariants 的 ADR-032 规则已随锚改指 core。
+pub(crate) use aeroric_core::runtime::registry::{
+    cancel_initial_input_signal, cancel_initial_input_signal_for_run,
+    clear_initial_input_signal_if_current, notify_initial_input_session_ready,
+    register_initial_input_signal, StartupSignal,
+};
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
     Path::new(project_path)
@@ -1218,56 +1202,6 @@ fn startup_output_indicates_gate(tail: &mut String, output: &str) -> bool {
     startup_gate_text(tail)
 }
 
-pub(crate) fn register_initial_input_signal(
-    task_manager: &TaskManager,
-    run: &RunKey,
-    sender: std::sync::mpsc::Sender<StartupSignal>,
-) -> u64 {
-    let version = STARTUP_SIGNAL_VERSION.fetch_add(1, Ordering::Relaxed);
-    task_manager
-        .initial_input_signals
-        .lock()
-        .insert(run.clone(), StartupSignalRegistration { version, sender });
-    version
-}
-
-pub(crate) fn clear_initial_input_signal_if_current(
-    signals: &StartupSignalRegistry,
-    run: &RunKey,
-    version: u64,
-) {
-    let mut signals = signals.lock();
-    if signals
-        .get(run)
-        .is_some_and(|registration| registration.version == version)
-    {
-        signals.remove(run);
-    }
-}
-
-/// Per-run teardown: only this run's pending first input is cancelled.
-pub(crate) fn cancel_initial_input_signal_for_run(task_manager: &TaskManager, run: &RunKey) {
-    let registration = task_manager.initial_input_signals.lock().remove(run);
-    if let Some(registration) = registration {
-        let _ = registration.sender.send(StartupSignal::Cancelled);
-    }
-}
-
-/// Intent operation (cancel / reset of the whole task): every registered run's pending first
-/// input goes, not just the newest one (ADR-025 rule 2).
-pub(crate) fn cancel_initial_input_signal(task_manager: &TaskManager, task_id: &str) {
-    let runs: Vec<RunKey> = task_manager
-        .initial_input_signals
-        .lock()
-        .keys()
-        .filter(|run| run.id() == task_id)
-        .cloned()
-        .collect();
-    for run in runs {
-        cancel_initial_input_signal_for_run(task_manager, &run);
-    }
-}
-
 /// 热启动路径上「登记必须存在」的闸门。
 ///
 /// `needs_initial_input` 为 true 时 generation 按构造必然是 `Some`,但条件一旦在
@@ -1277,23 +1211,6 @@ pub(crate) fn require_initial_input_generation(
     startup_generation: Option<u64>,
 ) -> Result<u64, String> {
     startup_generation.ok_or_else(|| "initial input registration must exist".to_string())
-}
-
-pub(crate) fn notify_initial_input_session_ready(task_manager: &TaskManager, task_id: &str) {
-    // Hook events are task-scoped (`hooks::events_dir_for`), so the newest registered run is
-    // the only defensible addressee; with nothing registered, fall back to the unminted key,
-    // which is what the legacy launch path itself would have used.
-    let run = task_manager
-        .resource_run(task_id)
-        .unwrap_or_else(|| RunKey::unminted(task_id));
-    let sender = task_manager
-        .initial_input_signals
-        .lock()
-        .get(&run)
-        .map(|registration| registration.sender.clone());
-    if let Some(sender) = sender {
-        let _ = sender.send(StartupSignal::SessionReady);
-    }
 }
 
 fn wait_for_initial_input_ready(startup_rx: std::sync::mpsc::Receiver<StartupSignal>) -> bool {
@@ -2798,14 +2715,9 @@ pub(crate) fn write_task_input(
             .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
         drop(writer);
-        let startup_signal = task_manager
-            .initial_input_signals
-            .lock()
-            .get(&run)
-            .map(|registration| registration.sender.clone());
-        if let Some(startup_signal) = startup_signal {
-            let _ = startup_signal.send(StartupSignal::UserInput);
-        }
+        // 用户输入经启动信箱投递(UserInput);信箱已清就直接忽略——writer 写入
+        // 已经完成,信号只是让等门控的首条输入少等一次。
+        task_manager.send_user_input_signal(&run);
     }
     Ok(())
 }
@@ -3750,65 +3662,6 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(StartupSignal::Cancelled).unwrap();
         assert!(!wait_for_initial_input_ready(receiver));
-    }
-
-    #[test]
-    fn stale_startup_cleanup_does_not_remove_the_replacement_registration() {
-        // ADR-032's reason for keeping the counter: two unminted runs of one task share a key,
-        // and the version stamp is what stops the older one's cleanup from deleting the newer
-        // one's registration. Without it the replaced run's prompt silently never arrives.
-        let signals: StartupSignalRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let run = RunKey::unminted("task-1");
-        let (sender, _receiver) = std::sync::mpsc::channel();
-        signals.lock().insert(
-            run.clone(),
-            StartupSignalRegistration { version: 2, sender },
-        );
-
-        clear_initial_input_signal_if_current(&signals, &run, 1);
-
-        assert_eq!(
-            signals
-                .lock()
-                .get(&run)
-                .map(|registration| registration.version),
-            Some(2),
-            "a stale version must leave the current registration alone"
-        );
-        clear_initial_input_signal_if_current(&signals, &run, 2);
-        assert!(
-            signals.lock().get(&run).is_none(),
-            "the matching version still clears it"
-        );
-    }
-
-    #[test]
-    fn two_minted_runs_of_one_task_hold_their_own_registration() {
-        // The case the version stamp alone cannot cover, and the reason the key is a run:
-        // generations 4 and 5 each wait for their own gate.
-        let signals: StartupSignalRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let (first, _rx1) = std::sync::mpsc::channel();
-        let (second, _rx2) = std::sync::mpsc::channel();
-        signals.lock().insert(
-            RunKey::minted("task-1", 4),
-            StartupSignalRegistration {
-                version: 1,
-                sender: first,
-            },
-        );
-        signals.lock().insert(
-            RunKey::minted("task-1", 5),
-            StartupSignalRegistration {
-                version: 2,
-                sender: second,
-            },
-        );
-        clear_initial_input_signal_if_current(&signals, &RunKey::minted("task-1", 4), 1);
-        assert!(signals.lock().get(&RunKey::minted("task-1", 4)).is_none());
-        assert!(
-            signals.lock().get(&RunKey::minted("task-1", 5)).is_some(),
-            "the surviving run keeps its own gate"
-        );
     }
 
     #[test]

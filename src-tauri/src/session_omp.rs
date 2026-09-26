@@ -650,25 +650,7 @@ mod tests {
     #[test]
     fn claiming_a_taken_path_reports_failure() {
         let app = tauri::test::mock_app();
-        app.manage(crate::TaskManager {
-            pty_masters: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            pty_writers: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            child_handles: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            pending_pty_sizes: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            cancelled_tasks: parking_lot::Mutex::new(std::collections::HashSet::new()),
-            manually_completed_tasks: parking_lot::Mutex::new(std::collections::HashSet::new()),
-            codex_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            claude_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            dsh_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            omp_sessions: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            claimed_session_paths: parking_lot::Mutex::new(std::collections::HashSet::new()),
-            initial_input_signals: std::sync::Arc::new(parking_lot::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
-            wsl_active_ids: parking_lot::Mutex::new(std::collections::HashSet::new()),
-            runs: crate::run_registry::RunRegistry::new(),
-            codex_rpc: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-        });
+        app.manage(crate::TaskManager::default());
         let handle = app.handle().clone();
         let path = Path::new("/tmp/aeroric-omp-shared/2026-09-08T10-00-00_shared.jsonl");
 

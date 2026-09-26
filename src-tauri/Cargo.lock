@@ -90,6 +90,8 @@ version = "0.1.0"
 dependencies = [
  "aeroric-protocol",
  "libc",
+ "parking_lot",
+ "portable-pty",
  "serde",
  "serde_json",
  "sha2 0.10.9",

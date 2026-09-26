@@ -29,27 +29,11 @@ pub use export::ExportTaskMeta;
 /// 而"bullet 被换行撑破""导出路径没 canonicalize"都是已经在这里解决过的问题。
 pub(crate) use export::{format_timestamp_ms, sanitize_md_inline, validate_export_output_path};
 
-#[derive(Clone)]
-pub(crate) struct CodexSessionInfo {
-    pub(crate) session_id: String,
-    pub(crate) session_path: String,
-}
-
-#[derive(Clone)]
-pub(crate) struct ClaudeSessionInfo {
-    pub(crate) session_id: String,
-    pub(crate) session_path: String,
-    /// true 表示 lazy attach 预先注入的占位条目（jsonl 还未落盘），
-    /// `is_task_active` 和 `finalize_task_exit::had_agent_session` 都应跳过它。
-    pub(crate) is_placeholder: bool,
-}
-
-/// omp 会话信息:仅记录 task_id 关联的 session id 与文件路径。
-/// `session_id` 经 task-session 事件同步给前端,持久化在任务字段里。
-pub(crate) struct OmpSessionInfo {
-    pub(crate) session_id: String,
-    pub(crate) session_path: String,
-}
+// 三族会话条目已随 P3-01 切片三迁入 core 的 TaskRegistry(它们是注册表的纯数据值)。
+// 这里 re-export 保持 `crate::session::…` 路径不变。
+pub(crate) use aeroric_core::runtime::registry::{
+    ClaudeSessionInfo, CodexSessionInfo, OmpSessionInfo,
+};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

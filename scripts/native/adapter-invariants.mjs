@@ -152,11 +152,12 @@ export function adapterInvariantProblems(files, commandNames = []) {
   const adapter = named.get(`${TAURI_SRC}/core_adapter.rs`);
 
   // ---- positive controls: prove the scan actually read the three files it judges
-  if (!pty?.includes("StartupSignalRegistration")) {
-    return [`${TAURI_SRC}/pty.rs: no StartupSignalRegistration — the scan read nothing, so absence proves nothing`];
+  const coreRegistry = named.get("core/crates/aeroric-core/src/runtime/registry.rs");
+  if (!coreRegistry?.includes("struct StartupSignalRegistration")) {
+    return ["core/crates/aeroric-core/src/runtime/registry.rs: no StartupSignalRegistration — the scan read nothing, so absence proves nothing"];
   }
-  if (!lib?.includes("fn release_session_path_if_unreferenced")) {
-    return [`${TAURI_SRC}/lib.rs: the claim-release helper is missing — the scan read nothing, so absence proves nothing`];
+  if (!coreRegistry?.includes("fn release_session_path_if_unreferenced")) {
+    return ["core/crates/aeroric-core/src/runtime/registry.rs: the claim-release helper is missing — the scan read nothing, so absence proves nothing"];
   }
   if (!adapter?.includes("fn writer_handover_allowed")) {
     return [`${TAURI_SRC}/core_adapter.rs: writer_handover_allowed is missing — the scan read nothing, so absence proves nothing`];
@@ -170,14 +171,22 @@ export function adapterInvariantProblems(files, commandNames = []) {
     );
   }
   const stampReaders = files.filter((file) => /STARTUP_SIGNAL_VERSION/.test(file.text));
-  if (stampReaders.length !== 1 || stampReaders[0].name !== `${TAURI_SRC}/pty.rs`) {
+  const STAMP_HOME = "core/crates/aeroric-core/src/runtime/registry.rs";
+  if (stampReaders.length !== 1 || stampReaders[0].name !== STAMP_HOME) {
     problems.push(
-      `ADR-032: STARTUP_SIGNAL_VERSION is read outside pty.rs (${stampReaders.map((f) => f.name).join(", ") || "nowhere"}) — it is an entry version stamp, not an identity other code may compare`,
+      `ADR-032: STARTUP_SIGNAL_VERSION is read outside the TaskRegistry's home (${stampReaders.map((f) => f.name).join(", ") || "nowhere"}) — it is an entry version stamp, not an identity other code may compare`,
     );
   } else {
     const lines = stampReaders[0].text.split("\n");
+    const codeLines = codeOnly(stampReaders[0].text).split("\n");
     const users = [...stampReaders[0].text.matchAll(/STARTUP_SIGNAL_VERSION/g)]
-      .map((match) => enclosingFunction(lines, lineOf(stampReaders[0].text, match.index)))
+      .map((match) => {
+        const line = lineOf(stampReaders[0].text, match.index);
+        // 定义行不是读者:static 声明自己必然携带这个名字,而它不在任何 fn 里,
+        // enclosingFunction 会把它误归给上文的函数(P3-01 切片三在 core 落位时踩中)。
+        if (/^\s*static\s+STARTUP_SIGNAL_VERSION/.test(codeLines[line] ?? "")) return null;
+        return enclosingFunction(lines, line);
+      })
       .filter((name) => name !== null);
     const allowed = new Set(["register_initial_input_signal", "clear_initial_input_signal_if_current"]);
     const outside = [...new Set(users.filter((name) => !allowed.has(name)))];
@@ -386,7 +395,11 @@ export function inventoryCommandNames(root = repoRoot) {
 }
 
 function main() {
+  const CORE_REGISTRY = "core/crates/aeroric-core/src/runtime/registry.rs";
   const files = rustFiles(TAURI_SRC).map((name) => ({ name, text: readFileSync(path.join(repoRoot, name), "utf8") }));
+  // P3-01 切片三把 TaskRegistry 连同 ADR-031/032 锚定的代码一起搬进了 core——不变量
+  // 随主语走,所以扫描语料把 core 的注册表文件并入;它不在 src-tauri 的递归目录里。
+  files.push({ name: CORE_REGISTRY, text: readFileSync(path.join(repoRoot, CORE_REGISTRY), "utf8") });
   if (files.length < 20) {
     console.error(`adapter-invariants: only ${files.length} rust files found under ${TAURI_SRC} — the scan target is wrong, not clean`);
     process.exit(1);

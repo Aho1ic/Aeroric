@@ -36,11 +36,8 @@ pub(crate) const DSH_TRANSCRIPT_RAW: &str = "session.jsonl";
 /// 压缩 transcript 文件名(插件默认 `compression: zstd`)。
 pub(crate) const DSH_TRANSCRIPT_ZSTD: &str = "session.jsonl.zstd";
 
-#[derive(Clone)]
-pub(crate) struct DshSessionInfo {
-    pub(crate) session_id: String,
-    pub(crate) session_path: String,
-}
+// DshSessionInfo 已随 P3-01 切片三迁入 core 的 TaskRegistry;re-export 保持路径不变。
+pub(crate) use aeroric_core::runtime::registry::DshSessionInfo;
 
 // ── 路径规范化(与 dsh format.ts 逐字符对齐) ────────────────────────────────
 
