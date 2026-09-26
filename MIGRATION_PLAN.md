@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十六次更新）：P3-02 切片四已落地（补记九十一）——hook 脚本资源迁入 core `agents/managed_home/`(单一来源,宿主 re-export 消费)+ hooks.rs 纯构造半边(Claude settings JSON/Codex TOML 注入块)迁 core;托管 home 的 I/O 安装逻辑留待与 P3-06 CLI 数据面同刀(范围决定记底稿 §4-4)。** core **321**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 收口前最后一片(§4-5)**:SwitchEvidence/`adopt_session_for_agent` 真实实现 + G18 裁决 → `grill-me [agents]`。
+**当前状态（2026-09-26，第二十七次更新）：P3-02 切片四已落地（补记九十一,hook 资源单一来源 + 纯构造半边迁 managed_home）;§4-5 侦察完成并记档（SwitchEvidence 形状已因意图车道改变、switch_config 无生产调用方、G18 需拍板）——三问待用户:①switch_config 经意图升级还是挂账为 CLI 形状;②adopt_session_for_agent 复制逻辑迁 core 与否;③G18 claude_gpt55 族裁决。** 之后 grill-me [agents] 收口 P3-02。core **321**/0、src-tauri **2465**/0、全量 `pnpm test` 376/5483 绿、工作树干净。
 
+**（上一轮口径——第二十六次更新，2026-09-26）：P3-02 切片四已落地（补记九十一,hook 资源单一来源 + 纯构造半边迁 managed_home）。**
 **（上一轮口径——第二十五次更新，2026-09-26）：P3-02 切片三已落地（补记九十）——env 层顺序操作表进 core(`EnvOp` 三段计划,`combined_omp_env_ops` 把"setup_omp_env 后于 setup_env"变成结构),宿主三函数机械重放(旧测试=等价证明);OMP 三条不变量进 core `agents/omp.rs`(hook 扩展名/willContinue fail-closed/--mode 永不产出),宿主 omp_home 消费 `OMP_HOOK_FILE_NAME`。**
 **（上一轮口径——第二十四次更新，2026-09-26）：P3-02 切片二已落地（补记八十九）——四族计划函数进 core(claude/codex/dsh/omp_plan),宿主 8 个 builder/add 函数收敛为 4 个机械翻译命令,parity fixtures 18 case 由旧宿主路径冻结、core 重放逐字节相等、宿主同 fixtures 等价守卫;`pnpm native:check agents` 注册(1 case/2)。**
 **（上一轮口径——第二十三次更新，2026-09-26）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。**
@@ -1699,6 +1700,13 @@ grill-me
 > 4. **托管 home 的 I/O 安装逻辑不在此片的理由**:omp/dsh_home 的安装器依赖宿主路径解析(~/.aeroric 根)、`atomic_write_private` 与 install 状态缓存,而 core 侧对应物(paths/atomic 的 managed-home 视角)要等 P3-06 的 CLI 数据面定形——现在硬搬会出现"core 里的宿主路径假设",那正是 INV-02 要防的。范围决定记进底稿 §4-4。
 > 5. **账目**：core **321**/0(不变:纯函数迁移不增测试,managed_home 由宿主 12 条既有测试经 re-export 覆盖)、src-tauri 串行 **2465**/0(不变)、门禁矩阵全绿(skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 6 条→freeze→noop、params **659**)、typecheck 净(修 omp-hook 测试 import 的 TS7016)、全量 `pnpm test` **376/5483 绿**、fmt/clippy 全净。
 > 6. **下一步(§4-5,P3-02 收口前最后一片)**:SwitchEvidence/`adopt_session_for_agent` 真实实现(core 的 switch_config 已定义为输入;宿主 session.rs:1684 的现有实现作为事实来源核对)+ G18 裁决(claude_gpt55 的 launch 族三站点证据已齐:React 无条件 codex/Rust 读用户脚本/会话侧 claude)→ `grill-me [agents]` 收尾拷问轮。
+
+> **【§4-5 侦察结论 @ 2026-09-26(记档待裁决,未动代码)】**
+>
+> 1. **SwitchEvidence 的形状已因意图车道改变**:生产配置切换现在完全走 `SwitchConfig` 意图(#12,补记七十三)+ run-flow 的 kill/relaunch;`TaskService::switch_config`(executor-reset 路径,service.rs:1261)**已无生产调用方**——它定义了 SwitchEvidence 输入却不再被调用。"目标选择"本身早在 core(`resolve_config_switch_strategy`,session_owner.rs:297,P2-04/Q43 起)。因此移交项的真问题不是"提供实现"而是二选一:**(a)** 把意图车道的 SwitchConfig 升级为经 `TaskService::switch_config`(携带 SwitchEvidence,恢复 executor-reset 的结构化语义);**(b)** 接受意图车道现状(宿主 run-flow 自己 kill/relaunch),把 `switch_config`+SwitchEvidence 标记为 CLI/后续入口的形状并挂账。**这是 grill-me [agents] 的第一问,需用户拍板。**
+> 2. **`adopt_session_for_agent`(session.rs:1684)现状**:纯 I/O 转录复制(校验路径→确保可采纳→算目标路径→复制),前端在派发 SwitchConfig 意图前调用并把结果作为意图的 session 事实。core 侧对应物是 `session_owner::resolve_session_owner` 对记录的判定——I/O 在客户端、判定在 core 的分工与 ADR-035/022 的"证据来自客户端、权威在 core"一致。是否要把复制逻辑迁 core(`adopt_session_for_agent` 需要访问会话根目录,属 P3-04 sessions 的领地)是第二问。
+> 3. **G18 裁决(claude_gpt55 的 launch 族)**:三站点证据不变——React `agentOption` 无条件 codex;宿主 `launch_spec` 读用户 start 脚本内容动态判定;会话侧读 `~/.claude/projects`。判"启动用 claude"会改真实用户的启动命令;判"会话用 codex"会让 `~/.claude/projects` 的历史读不到。**需用户拍板:维持现状(记录侧三字段各表其是,已由 ADR-028/029 落地)还是统一到某一族。**
+> 4. 以上三问 + grill-me [agents] 收尾轮都需要用户在场;本轮未动任何代码。
 
 
 
