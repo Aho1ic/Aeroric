@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 use crate::session::{OmpSessionInfo, SessionContent, SessionMessage};
@@ -303,8 +304,14 @@ pub(crate) fn spawn_omp_session_watcher<R: tauri::Runtime>(
     project_path: PathBuf,
     since_ms: u128,
 ) {
-    thread::spawn(move || {
+    // 切片四:按 (task, generation) 去重登记;token 取消即收摊。
+    let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let watcher_name = format!("watch:omp-session:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
         for tick in 0u32.. {
+            if token.is_cancelled() {
+                return;
+            }
             {
                 let tm = app.state::<TaskManager>();
                 if tm.has_omp_session(&task_id) {
@@ -336,6 +343,9 @@ pub(crate) fn spawn_omp_session_watcher<R: tauri::Runtime>(
             });
         }
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] omp session watcher registration failed: {error:?}");
+    }
 }
 
 /// 读取 omp 会话文件头(`{type:"session",id,...}` 行)的会话 id。

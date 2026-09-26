@@ -553,6 +553,7 @@ fn run_emit_batcher(
 pub(crate) fn spawn_pty_reader<R: tauri::Runtime>(
     app: AppHandle<R>,
     id: String,
+    run: RunKey,
     sink: OutputSink,
     emit_mode: PtyEmitMode,
     reader: Box<dyn Read + Send>,
@@ -562,88 +563,103 @@ pub(crate) fn spawn_pty_reader<R: tauri::Runtime>(
     output_filter: Option<PtyOutputFilter>,
     on_finish: Option<Box<dyn FnOnce() + Send>>,
 ) {
-    tokio::task::spawn_blocking(move || {
-        let mut reader = reader;
-        let mut output_filter = output_filter;
-        let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
-        // 保存上次读取中不完整的 UTF-8 字节序列
-        let mut leftover: Vec<u8> = Vec::new();
-        let PtyEmitMode {
-            flush_interval,
-            max_batch_bytes,
-        } = emit_mode;
-        let (emit_tx, emit_worker) = {
-            let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
-            let emit_app = app.clone();
-            let emit_id = id.clone();
-            let worker_sink = sink.clone();
-            let worker = std::thread::spawn(move || {
-                run_emit_batcher(rx, flush_interval, max_batch_bytes, |batch| {
-                    send_pty_chunk(&emit_app, &emit_id, &worker_sink, batch)
+    // 切片四:reader 经监督者登记。用 spawn_unique(仅记账,不去重)——每次调用都是
+    // 新的一次运行;ssh 的 unminted 共享槽路径下按名去重会拒掉双开的第二个合法循环。
+    // token 检查在读循环顶:取消即收尾,on_finish(结算归退出监控管)不再执行。
+    let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let spawn_result = supervisor.spawn_unique(
+        &format!("pty-reader:{}:{}", id, run.generation()),
+        move |token| {
+            let mut reader = reader;
+            let mut output_filter = output_filter;
+            let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
+            // 保存上次读取中不完整的 UTF-8 字节序列
+            let mut leftover: Vec<u8> = Vec::new();
+            let PtyEmitMode {
+                flush_interval,
+                max_batch_bytes,
+            } = emit_mode;
+            let (emit_tx, emit_worker) = {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<String>(PTY_EMIT_CHANNEL_CAPACITY);
+                let emit_app = app.clone();
+                let emit_id = id.clone();
+                let worker_sink = sink.clone();
+                let worker = std::thread::spawn(move || {
+                    run_emit_batcher(rx, flush_interval, max_batch_bytes, |batch| {
+                        send_pty_chunk(&emit_app, &emit_id, &worker_sink, batch)
+                    });
                 });
-            });
-            (tx, worker)
-        };
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let mut combined = std::mem::take(&mut leftover);
-                    combined.extend_from_slice(&buf[..n]);
+                (tx, worker)
+            };
+            loop {
+                if token.is_cancelled() {
+                    break;
+                }
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut combined = std::mem::take(&mut leftover);
+                        combined.extend_from_slice(&buf[..n]);
 
-                    let valid_len = match std::str::from_utf8(&combined) {
-                        Ok(_) => combined.len(),
-                        Err(e) => e.valid_up_to(),
-                    };
-
-                    if valid_len > 0 {
-                        let Ok(data) = std::str::from_utf8(&combined[..valid_len]) else {
-                            continue;
+                        let valid_len = match std::str::from_utf8(&combined) {
+                            Ok(_) => combined.len(),
+                            Err(e) => e.valid_up_to(),
                         };
-                        let data = data.to_owned();
-                        if let Some(ref tx) = startup_tx {
-                            let _ = tx.send(StartupSignal::Output(data.clone()));
-                        }
-                        let data = match output_filter.as_mut() {
-                            Some(filter) => match filter(data) {
-                                Some(data) if !data.is_empty() => data,
-                                _ => {
-                                    if valid_len < combined.len() {
-                                        leftover = combined[valid_len..].to_vec();
+
+                        if valid_len > 0 {
+                            let Ok(data) = std::str::from_utf8(&combined[..valid_len]) else {
+                                continue;
+                            };
+                            let data = data.to_owned();
+                            if let Some(ref tx) = startup_tx {
+                                let _ = tx.send(StartupSignal::Output(data.clone()));
+                            }
+                            let data = match output_filter.as_mut() {
+                                Some(filter) => match filter(data) {
+                                    Some(data) if !data.is_empty() => data,
+                                    _ => {
+                                        if valid_len < combined.len() {
+                                            leftover = combined[valid_len..].to_vec();
+                                        }
+                                        continue;
                                     }
-                                    continue;
-                                }
-                            },
-                            None => data,
-                        };
-                        if persist_terminal_history {
-                            let _ = crate::storage::append_task_terminal_history(&id, &data);
-                            // 手机远程终端流 tee:无订阅者时近零开销,不影响桌面 Channel 路径
-                            crate::remote::terminal_hub::hub().publish(&id, &data);
+                                },
+                                None => data,
+                            };
+                            if persist_terminal_history {
+                                let _ = crate::storage::append_task_terminal_history(&id, &data);
+                                // 手机远程终端流 tee:无订阅者时近零开销,不影响桌面 Channel 路径
+                                crate::remote::terminal_hub::hub().publish(&id, &data);
+                            }
+                            // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
+                            if let Some(ref tx) = session_tx {
+                                let _ = tx.send(data.clone());
+                            }
+                            // worker 已退出(PTY 关闭竞态)时直接投递,不丢数据。
+                            if let Err(err) = emit_tx.send(data) {
+                                send_pty_chunk(&app, &id, &sink, err.0);
+                            }
                         }
-                        // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
-                        if let Some(ref tx) = session_tx {
-                            let _ = tx.send(data.clone());
-                        }
-                        // worker 已退出(PTY 关闭竞态)时直接投递,不丢数据。
-                        if let Err(err) = emit_tx.send(data) {
-                            send_pty_chunk(&app, &id, &sink, err.0);
-                        }
-                    }
 
-                    if valid_len < combined.len() {
-                        leftover = combined[valid_len..].to_vec();
+                        if valid_len < combined.len() {
+                            leftover = combined[valid_len..].to_vec();
+                        }
                     }
                 }
             }
-        }
-        drop(emit_tx);
-        let _ = emit_worker.join();
-        // session_tx 在此处被 drop，watcher 端的 Receiver 将收到 Disconnected 信号
-        if let Some(f) = on_finish {
-            f();
-        }
-    });
+            drop(emit_tx);
+            let _ = emit_worker.join();
+            // session_tx 在此处被 drop，watcher 端的 Receiver 将收到 Disconnected 信号
+            if !token.is_cancelled() {
+                if let Some(f) = on_finish {
+                    f();
+                }
+            }
+        },
+    );
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] pty reader registration failed: {error:?}");
+    }
 }
 
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
@@ -654,9 +670,16 @@ fn spawn_exit_monitor<R: tauri::Runtime>(
     family: crate::app_settings::AgentFamily,
     child_handle: Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
-    tokio::task::spawn_blocking(move || {
+    // 切片四:退出监控经监督者登记(spawn_unique 仅记账)。token 检查在轮询顶:
+    // 运行时拆除时不再等待/结算进程退出——那是退出路径自己的职责。
+    let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let monitor_name = format!("exit-monitor:{}", run.id());
+    let spawn_result = supervisor.spawn_unique(&monitor_name, move |token| {
         let task_id = run.id().to_string();
         loop {
+            if token.is_cancelled() {
+                return;
+            }
             let exit_status = child_handle.lock().try_wait().ok().flatten();
 
             if let Some(status) = exit_status {
@@ -686,6 +709,9 @@ fn spawn_exit_monitor<R: tauri::Runtime>(
             std::thread::sleep(Duration::from_millis(100));
         }
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] exit monitor registration failed: {error:?}");
+    }
 }
 
 /// 为 Claude 命令构建 CommandBuilder，并根据 permission_mode 添加权限标志。
@@ -1996,6 +2022,7 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
+        run.clone(),
         OutputSink::Channel(on_output),
         PtyEmitMode::agent(),
         reader,
@@ -2661,6 +2688,7 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
     spawn_pty_reader(
         app.clone(),
         task_id.clone(),
+        run.clone(),
         OutputSink::Channel(on_output),
         PtyEmitMode::agent(),
         reader,
@@ -2845,7 +2873,8 @@ pub async fn open_shell(
 
     spawn_pty_reader(
         app,
-        shell_id,
+        shell_id.clone(),
+        RunKey::unminted(&shell_id),
         OutputSink::Event {
             event_name: "shell-output",
             id_key: "shell_id",

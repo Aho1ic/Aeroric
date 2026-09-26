@@ -1,9 +1,11 @@
+use aeroric_core::runtime::ShutdownToken;
 use aeroric_core::tasks::TaskSessionFacts;
 use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager};
@@ -285,6 +287,7 @@ fn hooks_own_approval_signal(agent: &str) -> bool {
 }
 
 fn watch_codex_session<R: tauri::Runtime>(
+    token: ShutdownToken,
     app: AppHandle<R>,
     task_id: String,
     session_path: PathBuf,
@@ -308,7 +311,7 @@ fn watch_codex_session<R: tauri::Runtime>(
     let mut awaiting_user_reply = false;
     let hooks_own_approval = hooks_own_approval_signal(&agent);
 
-    while is_task_active(&app, &task_id) {
+    while !token.is_cancelled() && is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
             // 手机远程:同批新行解析为结构化消息推送(无在线设备时零成本)
             crate::remote::publish_session_appended(&app, &task_id, &lines, true);
@@ -569,6 +572,7 @@ fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<Path
 }
 
 fn watch_claude_session<R: tauri::Runtime>(
+    token: ShutdownToken,
     app: AppHandle<R>,
     task_id: String,
     session_path: PathBuf,
@@ -589,7 +593,7 @@ fn watch_claude_session<R: tauri::Runtime>(
     let mut waiting_for_user = false;
     let hooks_own_approval = hooks_own_approval_signal(&agent);
 
-    while is_task_active(&app, &task_id) {
+    while !token.is_cancelled() && is_task_active(&app, &task_id) {
         if let Ok(lines) = read_session_lines_since(&session_path, &mut offset, &mut partial) {
             // 手机远程:同批新行解析为结构化消息推送(无在线设备时零成本)
             crate::remote::publish_session_appended(&app, &task_id, &lines, false);
@@ -1842,9 +1846,24 @@ pub(crate) fn register_and_watch_session<R: tauri::Runtime>(
     let agent_owned = agent.to_string();
     if is_codex {
         let pp = PathBuf::from(project_path);
-        thread::spawn(move || watch_codex_session(app_clone, tid, path, pp, agent_owned));
+        // 切片四:转录 watcher 也进监督者(spawn_unique 仅记账——每代一份,自终止)。
+        let supervisor = Arc::clone(&app_clone.state::<TaskManager>().supervisor);
+        let spawn_result = supervisor.spawn_unique(
+            &format!("watch:codex-transcript:{tid}:{}", run.generation()),
+            move |token| watch_codex_session(token, app_clone, tid, path, pp, agent_owned),
+        );
+        if let Err(error) = spawn_result {
+            eprintln!("[aeroric] transcript watcher registration failed: {error:?}");
+        }
     } else {
-        thread::spawn(move || watch_claude_session(app_clone, tid, path, agent_owned));
+        let supervisor = Arc::clone(&app_clone.state::<TaskManager>().supervisor);
+        let spawn_result = supervisor.spawn_unique(
+            &format!("watch:claude-transcript:{tid}:{}", run.generation()),
+            move |token| watch_claude_session(token, app_clone, tid, path, agent_owned),
+        );
+        if let Err(error) = spawn_result {
+            eprintln!("[aeroric] transcript watcher registration failed: {error:?}");
+        }
     }
 }
 
@@ -1901,10 +1920,16 @@ pub(crate) fn spawn_codex_session_recovery<R: tauri::Runtime>(
     created_at: i64,
     agent: String,
 ) {
-    thread::spawn(move || {
+    // 切片四:按 (task, generation) 去重登记。
+    let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+    let watcher_name = format!("watch:codex-recovery:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
         // 30 秒覆盖 Codex 启动、trust/review 和首条消息落盘的常见延迟；任务
         // 退出后仍继续短暂扫描，确保手动完成不会抢在 session 事件之前清理状态。
         for _ in 0..150 {
+            if token.is_cancelled() {
+                return;
+            }
             let registered = app.state::<TaskManager>().has_codex_session(&task_id);
             if registered {
                 return;
@@ -1925,6 +1950,9 @@ pub(crate) fn spawn_codex_session_recovery<R: tauri::Runtime>(
             thread::sleep(Duration::from_millis(200));
         }
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] recovery watcher registration failed: {error:?}");
+    }
 }
 
 fn send_status_command<R: tauri::Runtime>(app: &AppHandle<R>, task_id: &str, is_codex: bool) {
@@ -2102,7 +2130,17 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
 
             attached = true;
             if should_start_watcher {
-                watch_claude_session(app.clone(), task_id.clone(), actual, agent.clone());
+                // 切片四:转录 watcher 经监督者(仅记账);token 让拆除能停掉它。
+                let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+                let watcher_name =
+                    format!("watch:claude-transcript:{}:{}", task_id, run.generation());
+                let watcher_app = app.clone();
+                let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
+                    watch_claude_session(token, watcher_app, task_id, actual, agent)
+                });
+                if let Err(error) = spawn_result {
+                    eprintln!("[aeroric] transcript watcher registration failed: {error:?}");
+                }
             }
             break;
         }
@@ -2183,13 +2221,20 @@ pub(crate) fn spawn_status_session_watcher<R: tauri::Runtime>(
     }
 
     // ── 原始路径：Codex 或 Claude < 2.1.87 ──
-    thread::spawn(move || {
-        run_status_session_watcher(app, run, task_id, project_path, agent, is_codex, rx);
+    // 切片四:会话 watcher 按 (task, generation) 去重登记——同名的第二次启动被拒。
+    let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+    let watcher_name = format!("watch:status-session:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
+        run_status_session_watcher(token, app, run, task_id, project_path, agent, is_codex, rx);
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] session watcher registration failed: {error:?}");
+    }
 }
 
 /// 旧的 /status 轮询流程：非空 prompt 且无法使用 hook/预置 session 的任务走此路径。
 fn run_status_session_watcher<R: tauri::Runtime>(
+    token: ShutdownToken,
     app: AppHandle<R>,
     run: crate::run_registry::RunKey,
     task_id: String,
@@ -2209,7 +2254,7 @@ fn run_status_session_watcher<R: tauri::Runtime>(
     let mut collecting_response = false;
 
     loop {
-        if !is_task_active(&app, &task_id) {
+        if token.is_cancelled() || !is_task_active(&app, &task_id) {
             break;
         }
 
@@ -2309,7 +2354,10 @@ pub(crate) fn spawn_resume_session_watcher<R: tauri::Runtime>(
     is_codex: bool,
     agent: String,
 ) {
-    thread::spawn(move || {
+    // 切片四:按 (task, generation) 去重登记;token 一路穿到转录循环。
+    let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+    let watcher_name = format!("watch:resume-session:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |_token| {
         register_and_watch_session(
             &app,
             &run,
@@ -2320,6 +2368,9 @@ pub(crate) fn spawn_resume_session_watcher<R: tauri::Runtime>(
             &agent,
         );
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] session watcher registration failed: {error:?}");
+    }
 }
 
 // ── Markdown export ──────────────────────────────────────────────────────────

@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第十九次更新）：P3-01 切片三已落地（补记八十四）——TaskRegistry 一次性 move 进 core，宿主变 Deref 委托壳（316 处字段访问点零改动），core **304**/0、src-tauri **2466**/0、全量 `pnpm test` 376/5483 绿、门禁矩阵全绿（tauri-adapter 12/2527 含真内核验收 19 条经壳通过）。** ADR-031/032 锚点随本体改指 core 的 registry.rs（invariants 单元负例 28/28）；`core-no-tauri-deps` forbid 精化为包名形态（路径子串≠依赖，理由在 case `$note`）；地板 2466→2466 两处同改并读回；inventory pin 重定位 22 条、params 仍 659。**P3-01 剩余（按底稿 §6-4/5）**：watcher 接 ShutdownToken → `runtime_lifecycle.rs` 补两条判据后注册 `pnpm native:check runtime` → `platform_adapter.rs` + `PlatformServices` → `grill-me [runtime]`。
+**当前状态（2026-09-26，第二十次更新）：P3-01 切片四已落地（补记八十五）——10 个任务作用域 watcher 站点全部经 `WatcherSupervisor`（会话六站按 (task,gen) 去重；reader/退出监控/转录走 spawn_unique 仅记账），token 检查点逐站落位，shutdown 升级为有界拆除；`tests/runtime_lifecycle.rs` 5 条判据全绿并注册 `pnpm native:check runtime`（P3-01 三条计划判据全部有机器守着）。** core **309**/0、src-tauri **2466**/0、tauri-adapter 12/2527、全量 `pnpm test` 376/5483 绿。**P3-01 剩余**：切片五（宿主 `platform_adapter.rs` + `PlatformServices` 端口）→ `grill-me [runtime]` 收尾。
 
+**（上一轮口径——第十九次更新，2026-09-26）：P3-01 切片三已落地（补记八十四）——TaskRegistry 一次性 move 进 core，宿主变 Deref 委托壳（316 处字段访问点零改动），core **304**/0、src-tauri **2466**/0、全量 `pnpm test` 376/5483 绿、门禁矩阵全绿（tauri-adapter 12/2527 含真内核验收 19 条经壳通过）。**
 **（上一轮口径——第十八次更新，2026-09-26）：P3-01 切片二已落地（补记八十三）——`subprocess.rs` 迁入 core，core **290**/0、src-tauri **2476**/0（地板与 runner.floors 两处同改并读回）。** 一次守卫口径收窄（`lease-refusal-never-kills-a-foreign-pid` 改点租约决策面，理由在 case `$note`）；一次假红归因（observer 用例单跑/复跑不复现）。**下一片＝切片三：`TaskRegistry` move**（底稿 §6-3：14 张表 + `RunRegistry` + 锁序表搬进 core，宿主 `TaskManager` 变委托壳，43 处 `state::<TaskManager>` 读取点改道；禁双真相源，与锁序负例、"双开不覆盖句柄"回归同刀）。
 
 **（上一轮口径——第十七次更新，2026-09-26）：P3-01 切片一已落地（补记八十二）——`core/src/runtime/` 骨架进 core，侦察底稿＝`docs/native/extraction/runtime-ports.md`。**
@@ -1633,6 +1634,17 @@ grill-me
 > 7. **账目**：core **304**/0（+14：RunRegistry 8 条 + 版本戳 2 条随体迁入、TaskRegistry 新增 6 条；版本戳是进程全局计数，两条迁移测试从"绝对值断言"改为"严格递增断言"——绝对值断言会随测试顺序漂移）；src-tauri 串行 **2466**/0（−10 即搬家）。`src-tauri-lib-tests` 地板 2476→**2466**（minCases 与 runner.floors 两处同改并读回）；inventory 的 `definition_resolved` 重定位 **22** 条（全部唯一命中）→ freeze → freeze-check 字节 noop → --check consistent、params 仍 **659**；core-no-tauri-deps 的 forbid 精化后复绿。
 > 8. **门禁实测（全绿，现跑）**：skeleton 20/113、tauri-adapter 12 case/**2527**（真内核验收 19 条经壳通过）、storage 5/**254**、protocol 6/98、tasks 7/151、projects 5/21、doctor 18/18、contracts 12 份逐字节、inventory consistent + freeze-check noop、两工作区 fmt/clippy `-D warnings` 干净、typecheck 绿、全量 `pnpm test` **376 files/5483 绿**（空闲机单跑）、`git diff --check` 干净。
 > 9. **下一步（P3-01 剩余，按底稿 §6-4/5）**：watcher 逐站点接 `ShutdownToken`（任务作用域子集）→ `tests/runtime_lifecycle.rs` 补齐"启动两次不重复 watcher""退出监控不能清新 generation"后注册 `pnpm native:check runtime` → `platform_adapter.rs` 与 `PlatformServices` 端口同刀 → `grill-me [runtime]`。
+
+> **【补记八十五 @ 2026-09-26，P3-01 切片四：watcher 逐站点接管 + runtime 门禁注册】**（底稿 §6-4 完结；P3-01 剩 platform_adapter/PlatformServices 与收尾拷问轮）
+>
+> 1. **机制补强（core）**：`WatcherSupervisor::shutdown` 升级为**有界拆除**——轮询 `is_finished` 到 5 秒宽限（`shutdown_within(grace)` 供测试用短宽限），守规矩的 watcher 被 join、无视 token 的（PTY reader 阻塞在 `read()` 上的形状）被 detach 并计入 `ShutdownReport::detached`。没有这一步，"join 每个 watcher"会在退出路径上挂死在等 PTY 关闭的读线程上。新增 `spawn_unique`（名字加监督者内部实例序号，仅记账不去重）。
+> 2. **10 个站点逐点接管**：会话 watcher 六处（status/resume/codex-recovery/dsh/omp/claude-lazy-attach）按 `(task, generation)` **去重登记**——同名的第二次启动被拒并 `eprintln` 点名，这正是"启动两次不重复 watcher"的宿主侧落点；PTY reader（本地 ×3 + ssh ×2 + wsl ×2 个调用点合并到同一个函数）、三个退出监控（local/remote/wsl）、两个转录 watcher（codex/claude）走 `spawn_unique`——**不去重是刻意的**：ssh 的句柄注册今天仍在 unminted 共享槽（kept-verbatim 行为，P7 才收），按名去重会把同任务双开的第二个合法 reader 拒掉、丢掉它的全部输出。reader 签名为此加了 `run: RunKey` 参数（名字里携带代际）。
+> 3. **token 检查点逐站点落位**：status 循环（`token.is_cancelled() || !is_task_active`）、codex/claude 转录循环（同形）、recovery/dsh/omp/懒挂载的 for 循环顶、exit monitor 与 reader 的轮询/读循环顶。取消时 reader 跳过 `on_finish`（结算归退出监控管，拆除期不再发终态）。
+> 4. **两处被 clippy 逼出来的设计澄清**：① `register_and_watch_session` 不需要 token——它本体有界（`wait_for_session_file` 50 次迭代），转录 watcher 各自从监督者拿自己的 token；签名回退，三处调用点跟着回退。② supervisor 放进 `Arc`——spawn 站点 `Arc::clone` 后借用立即结束，消除"state 借用 + move 闭包"的连环冲突（改字段比逐点拉长借用寿命干净）。
+> 5. **验收判据（`tests/runtime_lifecycle.rs`，5 条全绿）**：启动两次不重复（去重 + 唯一循环继续工作）、shutdown 两次安全且可重用、有界拆除（无视 token 的被 detach、守规矩的被 join）、退出监控不能清新 generation（retire 幂等 + remove_pty_handles 只带走旧代 + 新代句柄完好）、结算恰好一次（重复结算零消费、各任务标记独立）。**句柄错配拒绝路径不走测试**：`remove_pty_handles_if_current` 按 ADR-020 合同是 `debug_assert!`（实现 bug 不是竞态），测试构建走到即 panic——这条写成注释钉在用例里。
+> 6. **门禁注册**：`pnpm native:check runtime`（模块 `runtime`，case `runtime-lifecycle-rust`，minCases 5 = 文件内 5 条测试，floor 两处同改读回）。P3-01 的三条计划判据至此全部有机器守着。
+> 7. **账目**：core **309**/0（+5 lifecycle）、src-tauri 串行 **2466**/0（无增减：站点转换零新增用例）、门禁矩阵全绿（skeleton 20/113、tauri-adapter 12/2527、storage 5/259、protocol 6/98、tasks 7/151、projects 5/21、doctor 18/18、contracts 12 份逐字节、runtime 1/5）、inventory pin 重定位 **50** 条（行号随接管漂移）→ freeze → freeze-check 字节 noop、params 仍 **659**、typecheck 绿、全量 `pnpm test` **376 files/5483 绿**（空闲机单跑）。
+> 8. **下一步（P3-01 收尾）**：切片五——宿主 `platform_adapter.rs` + `PlatformServices` 端口同刀；然后 `grill-me [runtime]` 收尾拷问轮，P3-01 可收口。
 
 
 

@@ -23,6 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 use crate::session::{SessionContent, SessionMessage};
@@ -625,9 +626,15 @@ pub(crate) fn spawn_dsh_session_watcher<R: tauri::Runtime>(
     project_path: String,
     since_ms: i64,
 ) {
-    thread::spawn(move || {
+    // 切片四:按 (task, generation) 去重登记;token 取消即收摊。
+    let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let watcher_name = format!("watch:dsh-session:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
         // 会话文件在进程启动后立即创建;宽限 2 分钟覆盖冷启动(npm/node 慢启动)。
         for _ in 0..240 {
+            if token.is_cancelled() {
+                return;
+            }
             {
                 let tm = app.state::<TaskManager>();
                 let still_running = tm.has_live_run(&task_id);
@@ -654,6 +661,9 @@ pub(crate) fn spawn_dsh_session_watcher<R: tauri::Runtime>(
             thread::sleep(Duration::from_millis(500));
         }
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] dsh session watcher registration failed: {error:?}");
+    }
 }
 
 pub(crate) fn register_dsh_session<R: tauri::Runtime>(

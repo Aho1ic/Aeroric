@@ -936,45 +936,55 @@ fn spawn_wsl_exit_monitor<R: tauri::Runtime>(
     task_id: String,
     child_handle: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
-    tokio::task::spawn_blocking(move || loop {
-        let exit_status = child_handle.lock().try_wait().ok().flatten();
-        if let Some(status) = exit_status {
-            let manager = app.state::<crate::TaskManager>();
-            if !manager.remove_pty_handles_if_current(
-                &crate::run_registry::RunKey::unminted(&task_id),
-                &child_handle,
-            ) {
+    // 切片四:退出监控经监督者登记(spawn_unique 仅记账);token 取消即收尾。
+    let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let spawn_result =
+        supervisor.spawn_unique(&format!("exit-monitor:{task_id}"), move |token| loop {
+            if token.is_cancelled() {
                 return;
             }
-            let (cancelled, manually_completed) = match manager.settle_marks_for_exit(&task_id) {
-                crate::ExitSettlement::WaitingForOtherRuns => return,
-                crate::ExitSettlement::Settle {
-                    cancelled,
-                    manually_completed,
-                } => (cancelled, manually_completed),
-            };
-            manager
-                .wsl_active_ids
-                .lock()
-                .remove(&crate::run_registry::RunKey::unminted(&task_id));
-            if cancelled || manually_completed {
+            let exit_status = child_handle.lock().try_wait().ok().flatten();
+            if let Some(status) = exit_status {
+                let manager = app.state::<crate::TaskManager>();
+                if !manager.remove_pty_handles_if_current(
+                    &crate::run_registry::RunKey::unminted(&task_id),
+                    &child_handle,
+                ) {
+                    return;
+                }
+                let (cancelled, manually_completed) = match manager.settle_marks_for_exit(&task_id)
+                {
+                    crate::ExitSettlement::WaitingForOtherRuns => return,
+                    crate::ExitSettlement::Settle {
+                        cancelled,
+                        manually_completed,
+                    } => (cancelled, manually_completed),
+                };
+                manager
+                    .wsl_active_ids
+                    .lock()
+                    .remove(&crate::run_registry::RunKey::unminted(&task_id));
+                if cancelled || manually_completed {
+                    return;
+                }
+                if status.success() {
+                    crate::core_adapter::report_task_status(&app, &task_id, "done");
+                } else {
+                    let reason = format!("WSL process exited with code {}", status.exit_code());
+                    crate::core_adapter::report_task_status_with_reason(
+                        &app,
+                        &task_id,
+                        "failed",
+                        Some(&reason),
+                    );
+                }
                 return;
             }
-            if status.success() {
-                crate::core_adapter::report_task_status(&app, &task_id, "done");
-            } else {
-                let reason = format!("WSL process exited with code {}", status.exit_code());
-                crate::core_adapter::report_task_status_with_reason(
-                    &app,
-                    &task_id,
-                    "failed",
-                    Some(&reason),
-                );
-            }
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    });
+            std::thread::sleep(Duration::from_millis(100));
+        });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] wsl exit monitor registration failed: {error:?}");
+    }
 }
 
 fn spawn_wsl_task_pty<R: tauri::Runtime>(
@@ -1033,6 +1043,7 @@ fn spawn_wsl_task_pty<R: tauri::Runtime>(
     crate::pty::spawn_pty_reader(
         app.clone(),
         task_id.to_string(),
+        crate::run_registry::RunKey::unminted(task_id),
         crate::pty::OutputSink::Channel(on_output),
         crate::pty::PtyEmitMode::agent(),
         reader,
@@ -1459,7 +1470,8 @@ pub async fn open_wsl_shell(
     let cleanup_id = shell_id.clone();
     crate::pty::spawn_pty_reader(
         app,
-        shell_id,
+        shell_id.clone(),
+        crate::run_registry::RunKey::unminted(&shell_id),
         crate::pty::OutputSink::Channel(on_output),
         crate::pty::PtyEmitMode::interactive(),
         reader,

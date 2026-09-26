@@ -23,7 +23,7 @@ pub mod shutdown;
 pub mod subprocess;
 
 pub use events::{NullSink, TaskEventSink, TaskNotification};
-pub use manager::{SuperviserError, WatcherSupervisor};
+pub use manager::{ShutdownReport, SuperviserError, WatcherSupervisor};
 pub use ports::Runtime;
 pub use registry::{
     cancel_initial_input_signal, cancel_initial_input_signal_for_run,

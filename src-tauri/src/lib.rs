@@ -134,6 +134,10 @@ mod wsl_git;
 #[derive(Default)]
 pub struct TaskManager {
     registry: aeroric_core::runtime::TaskRegistry,
+    /// 任务作用域 watcher 的唯一入口(切片四):spawn 站点经它拿名字去重、token
+    /// 与有界拆除。会话 watcher 按 (task, generation) 去重;reader/退出监控用
+    /// `spawn_unique`(仅记账)。
+    pub(crate) supervisor: Arc<aeroric_core::runtime::WatcherSupervisor>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
