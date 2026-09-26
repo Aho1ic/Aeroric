@@ -1,0 +1,63 @@
+# P3-03 侦察底稿:terminal 字节流、租约、回放与退出(2026-09-27)
+
+> 性质:实施前的机械盘点,数字来自 P3-02 收口后的真实源码。每节都是后续切片的输入。
+
+## 1. 现状管道(宿主 pty.rs)
+
+`spawn_pty_reader` → 32 KiB buf 原始读 → **立即 `std::str::from_utf8` 转 String**(非法 UTF-8 截到 valid_up_to,丢弃尾部)→ `run_emit_batcher`(String 攒批,交互档 4ms 窗口 / 32 通道容量)→ `send_pty_chunk`(tauri emit / Channel)。**raw bytes 今天不保真**:终端历史(`append_task_terminal_history`)与 remote `terminal_hub`(tokio broadcast,`publish(task_id, data:String)`)拿到的都是已解码字符串。P3-03 的核心转变:**core 先发布原始 bytes(offset=原始字节计数),旧 Tauri sink 才增量解码**。
+
+## 2. 现有语义清单(迁移时逐条对照)
+
+| 面 | 现状 | P3-03 目标 |
+|---|---|---|
+| 流身份 | 无(仅 task_id 字符串) | `TerminalIdentity = (task_id, generation)`(Action 2) |
+| offset | 无 | 原始字节计数;回放按 offset |
+| 历史 | `storage.rs` append + tail 读 + 4 MiB compaction slack | 与有界回放共享一个 owner(Action 4) |
+| resize | `pending_pty_sizes` 信箱(unminted 键);hidden view 可发 0×0? | 单控制租约;hidden view 无写权限(Action 3) |
+| input | `write_task_input`(writer_for 最新代) | 控制租约持有者才可写 |
+| 慢消费者 | `terminal_hub` broadcast(慢者丢数据?) | 显式 gap,不阻塞 PTY reader(Action 4) |
+| 退出结算 | `finalize_task_exit`(SIGTERM/非零/EOF/迟到 hook) | 每种来源只结算一次(P3-03 验收) |
+
+## 3. 首片范围(纯 core,可验证)
+
+- `TerminalIdentity`;`ByteStream`(append 原始字节 → offset;`read_from(offset, max)` → Chunk/Gap;有界 compaction——低于保留线的请求给 Gap,不撒谎"能恢复屏幕");bytes 不透明(NUL/非法 UTF-8 原样)。
+- `ControlLease`:单控制者(input+resize);`acquire` 显式;被顶替的租约写操作返回 `Superseded`;只读订阅者不需要租约。
+- 单元属性测试:跨帧 append、gap 语义、有界内存、租约顶替。
+
+## 4. 后续切片
+
+2. 宿主管道接流:reader 把 raw bytes 发布进 core ByteStream,旧 String 管道改为增量解码消费(Tauri sink 兼容);`tests/pty_bytes.rs`。
+3. 退出结算单一化(SIGTERM/非零/EOF/正常/迟到 hook 各一次)+ `tests/pty_exit.rs`;fixtures/fake-agent.mjs。
+4. resize 信箱与 hidden-view 规则;`tests/terminal_replay.rs`/`terminal_lease.rs` 补齐;`terminal/executor.rs` CorePtyExecutor 只换本地 PTY 分支;注册 `pnpm native:check terminal-core`;`grill-me [terminal-core]`。
+
+## 5. 门禁对照
+
+- `pnpm native:check terminal-core`:**已注册**(补记九十四,原计划随 §4-2 之后一片注册,实际提前一片——本切片就产出了 `tests/pty_bytes.rs`,§3.2 不允许"用例存在但没人跑")。3 case / 31 用例。
+- core 基线:321 → 切片一 334 → 切片二 **352**(实测 18 个测试二进制求和,非推算)。
+
+## 6. 切片一实施结果(2026-09-27,补记九十三)
+
+上一版本文档随附的 `terminal/{mod,stream,lease}.rs` **从未进模块树**——`lib.rs` 里没有 `pub mod terminal;`,所以 §5 那句"core 基线 321,本片测试在模块内"是一条从没被任何命令验证过的声称(§3.1 第 6 条禁止的正是这个)。接线之后实测:
+
+- 3 处编译错:`b"你好"` 非 ASCII 字节串字面量、`StreamError` 缺 `PartialEq`、`ControlLease::release(&LeaseHandle)` 内经共享引用写 `handle.live`。
+- 2 处逻辑缺陷:(a) Gap 分支 `take(max_bytes)` 未对 `retained.len()` 取小,追平点第一帧可超出调用方上限;(b) 旧设计 `release` 把 `current` 归零 + `acquire` 递增复用 → **释放后重新取得会让调用方手里的旧 handle 复活**。数据结构改为 `next_ticket` 单调递增 + `current: Option<u64>`(票据永不复用),`live` 布尔删除。
+- 1 处断言写反:`compaction_...` 第二个断言拿 offset 10(已落在保留区 `[8,16)` 内)期望 `CDEF`,正确的无缝产物是 `ABCDEF`。按语义改断言并补 offset 12 的情形,**未改实现迁就断言**。
+- 新增用例:跨帧劈开的 4 字节 emoji + ANSI 逐字节保真、Gap 读取尊重 `max_bytes`、`release→reacquire` 不复活旧 handle、32 轮票据不重复、重复释放报错。
+- 计数:terminal 模块 **13** 条(6 lease + 7 stream);core `--lib` **179**;`cargo test -p aeroric-core` 口径 **284**;core workspace 全量 **334**(= 基线 321 + 13)。
+- `storage-core-rust` 地板 81 未动:它是补记六十五点名的假地板,且其口径(`-p aeroric-core`)与 P3 补记一直记录的 core 全量(workspace)**不是同一条**。合并成一条可数地板属门禁工具改动,留给注册 `terminal-core` 那一轮一起做(→ 已在 §7 那轮注册,但两条口径仍未合并,见 §8 第 3 条)。
+
+## 7. 切片二实施结果(2026-09-27,补记九十四)
+
+落点:`core/src/terminal/pty.rs`(`TerminalService` + `Utf8Projection`)、宿主 `lib.rs::TaskManager.terminal` 字段、`pty.rs::spawn_pty_reader` 换形、`tests/pty_bytes.rs` + `tests/fixtures/fake-agent.mjs`、`checks.json` 注册 `terminal-core`(3 case/31)。
+
+- **次序**:reader 现在对每一块读到的字节先 `terminal.publish(identity, chunk)`,再 `projection.push(chunk)` 出字符串。下游(startup_tx → output_filter → 历史/terminal_hub/session_tx → emit)顺序一格未动;`output_filter` 吃掉数据时那些字节仍完整留在 core 流里——"raw 是真相、字符串是投影"就是这条分工。
+- **有界规则是三条**:每流 1 MiB 窗口;**已收尾**的流按插入序 FIFO 退场(≤64 条);**在写的流绝不静默退场**——清空一条还在写的流会让新建的那条从 offset 0 起计数,等于谎报"历史完整",所以配额用尽改为拒绝并计数(`RefusedFull`),宿主只记诊断。
+- **修掉的旧缺陷(有对照用例,不是推测)**:① 非法 UTF-8 被无限期扣在 `leftover` → 终端卡死 + 缓冲无上限增长;② 进程在半个字符中间退出 → 那半截静默丢失;③ `read_from` 的 `start + max_bytes` 在 `usize::MAX` 下 debug 溢出 panic。用例把**迁移前那段算法原样重放**当对照(`legacy_decode`),断言它卡流且留着尾巴。
+- **真 PTY 实测**:4 MiB / 4139 帧 / 112 ms;**100 MiB / 102418 帧 / 6824 ms**,保留量恒等 1 MiB,未截断区间逐字节 + sha256 双比对;2 MiB vs 8 MiB 保留量相同。fidelity 模式的替身块长取图案周期(24 B)的整数倍 ⇒ 拼起来永远合法 UTF-8,而内核 tty 队列(~1 KiB/帧)不按周期对齐 ⇒ 跨帧劈开是必然而非运气,并有一条反空转断言守着。
+- **计数**:core workspace 352/0(18 二进制;321 基线 + 13 切片一 + 18 本片)、`-p aeroric-core` 口径 302、`terminal-core` 3/31、`tauri-adapter` 12/2526(src-tauri 2465 = 地板)、全量 `pnpm test` 376/5483。
+
+## 8. 切片三/四必须带上的三条口径
+
+1. **两套 offset 不是同一个东西**:`src/terminalRingBuffer.ts` 的绝对偏移是 **JS 字符串长度 = UTF-16 计数**,core 的 offset 是**原始字节计数**;非 ASCII 输出下两者不等。跨端"按 cursor offset 续看"(P5-01)必须先有显式映射,否则重连必然重复或漏读。`terminal/replay.rs` 落地时定义,别拖到 P5-01 才发现。
+2. **`cargo fmt --all` 的正确用法**:门禁 argv 是 `cargo fmt --check --all --manifest-path core/Cargo.toml`(core 工作区)与不带 `--all` 的 src-tauri 版。手工加 `--all` 到别的路径会把 `../dbx/vendor/wry` 的 examples 清单拖进遍历(15 条 `Error: file ... does not exist`);本轮核实零写入 dbx、其脏文件数仍是基线 38,但**这不是可以重复利用的余地**——用门禁 argv,或先确认路径不越界。
+3. **两条 core 计数口径仍是两条**:`storage-core-rust` 的地板 81 测的是 `cargo test -p aeroric-core`(今天 302),而 P3 各补记记的是 workspace 全量(今天 352)。`terminal-core` 注册时没有顺手抬那条假地板——合并它属于门禁工具改动,谁做都要连同 `minCases == runner.floors` 的同改规矩一起,别在终端切片里顺手改。

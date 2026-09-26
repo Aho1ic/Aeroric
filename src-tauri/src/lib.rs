@@ -139,6 +139,10 @@ pub struct TaskManager {
     /// 与有界拆除。会话 watcher 按 (task, generation) 去重;reader/退出监控用
     /// `spawn_unique`(仅记账)。
     pub(crate) supervisor: Arc<aeroric_core::runtime::WatcherSupervisor>,
+    /// 原始终端字节流的归属地(P3-03 切片二)。reader 先把 bytes 落到这里,
+    /// 旧的前端字符串只是它的一个增量解码投影;控制租约(input/resize)也按
+    /// `(task_id, generation)` 从这里分发。
+    pub(crate) terminal: Arc<aeroric_core::terminal::TerminalService>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }

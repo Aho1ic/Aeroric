@@ -538,14 +538,21 @@ pub(crate) fn spawn_pty_reader<R: tauri::Runtime>(
     // 新的一次运行;ssh 的 unminted 共享槽路径下按名去重会拒掉双开的第二个合法循环。
     // token 检查在读循环顶:取消即收尾,on_finish(结算归退出监控管)不再执行。
     let supervisor = Arc::clone(&app.state::<crate::TaskManager>().supervisor);
+    let terminal = Arc::clone(&app.state::<crate::TaskManager>().terminal);
     let spawn_result = supervisor.spawn_unique(
         &format!("pty-reader:{}:{}", id, run.generation()),
         move |token| {
             let mut reader = reader;
             let mut output_filter = output_filter;
             let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
-            // 保存上次读取中不完整的 UTF-8 字节序列
-            let mut leftover: Vec<u8> = Vec::new();
+            // P3-03 切片二:**原始字节先落 core 的流**,字符串只是这条流的增量解码
+            // 投影。旧实现是"读到就 from_utf8",非法 UTF-8 会把尾巴无限期扣在
+            // `leftover` 里(终端卡住 + 缓冲无上限增长),进程在半字符中间退出时那半截
+            // 又被静默丢掉 —— 两条都由 `Utf8Projection` 收掉,而字节真相现在在
+            // `TerminalService` 里,投影怎么处理都不会丢信息。
+            let stream_identity =
+                aeroric_core::terminal::TerminalIdentity::new(id.as_str(), run.generation());
+            let mut projection = aeroric_core::terminal::Utf8Projection::new();
             let PtyEmitMode {
                 flush_interval,
                 max_batch_bytes,
@@ -566,60 +573,68 @@ pub(crate) fn spawn_pty_reader<R: tauri::Runtime>(
                 if token.is_cancelled() {
                     break;
                 }
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
+                // `last`:这次读到的是流的最后一批(EOF 或出错),投影要把扣着的
+                // 尾巴交出来。
+                let (data, last) = match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => (projection.finish(), true),
                     Ok(n) => {
-                        let mut combined = std::mem::take(&mut leftover);
-                        combined.extend_from_slice(&buf[..n]);
-
-                        let valid_len = match std::str::from_utf8(&combined) {
-                            Ok(_) => combined.len(),
-                            Err(e) => e.valid_up_to(),
-                        };
-
-                        if valid_len > 0 {
-                            let Ok(data) = std::str::from_utf8(&combined[..valid_len]) else {
-                                continue;
-                            };
-                            let data = data.to_owned();
-                            if let Some(ref tx) = startup_tx {
-                                let _ = tx.send(StartupSignal::Output(data.clone()));
-                            }
-                            let data = match output_filter.as_mut() {
-                                Some(filter) => match filter(data) {
-                                    Some(data) if !data.is_empty() => data,
-                                    _ => {
-                                        if valid_len < combined.len() {
-                                            leftover = combined[valid_len..].to_vec();
-                                        }
-                                        continue;
-                                    }
-                                },
-                                None => data,
-                            };
-                            if persist_terminal_history {
-                                let _ = crate::storage::append_task_terminal_history(&id, &data);
-                                // 手机远程终端流 tee:无订阅者时近零开销,不影响桌面 Channel 路径
-                                crate::remote::terminal_hub::hub().publish(&id, &data);
-                            }
-                            // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
-                            if let Some(ref tx) = session_tx {
-                                let _ = tx.send(data.clone());
-                            }
-                            // worker 已退出(PTY 关闭竞态)时直接投递,不丢数据。
-                            if let Err(err) = emit_tx.send(data) {
-                                send_pty_chunk(&app, &id, &sink, err.0);
-                            }
+                        let chunk = &buf[..n];
+                        if terminal.publish(&stream_identity, chunk)
+                            == aeroric_core::terminal::PublishOutcome::RefusedFull
+                        {
+                            // 只记诊断:字节流是旁证车道,绝不因为注册表满了就
+                            // 拖住或丢帧前端输出。
+                            eprintln!(
+                                "[aeroric] terminal stream registry full: {}",
+                                stream_identity.task_id
+                            );
                         }
-
-                        if valid_len < combined.len() {
-                            leftover = combined[valid_len..].to_vec();
-                        }
+                        (projection.push(chunk), false)
                     }
+                };
+                if data.is_empty() {
+                    if last {
+                        break;
+                    }
+                    continue;
+                }
+                if let Some(ref tx) = startup_tx {
+                    let _ = tx.send(StartupSignal::Output(data.clone()));
+                }
+                let data = match output_filter.as_mut() {
+                    Some(filter) => match filter(data) {
+                        Some(data) if !data.is_empty() => data,
+                        _ => {
+                            if last {
+                                break;
+                            }
+                            continue;
+                        }
+                    },
+                    None => data,
+                };
+                if persist_terminal_history {
+                    let _ = crate::storage::append_task_terminal_history(&id, &data);
+                    // 手机远程终端流 tee:无订阅者时近零开销,不影响桌面 Channel 路径
+                    crate::remote::terminal_hub::hub().publish(&id, &data);
+                }
+                // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
+                if let Some(ref tx) = session_tx {
+                    let _ = tx.send(data.clone());
+                }
+                // worker 已退出(PTY 关闭竞态)时直接投递,不丢数据。
+                if let Err(err) = emit_tx.send(data) {
+                    send_pty_chunk(&app, &id, &sink, err.0);
+                }
+                if last {
+                    break;
                 }
             }
             drop(emit_tx);
             let _ = emit_worker.join();
+            // 这一代的输出到此结束:允许这条字节流日后被 FIFO 退场。**不**立刻删——
+            // 重连的订阅者还要靠这段窗口追平。
+            terminal.mark_finished(&stream_identity);
             // session_tx 在此处被 drop，watcher 端的 Receiver 将收到 Disconnected 信号
             if !token.is_cancelled() {
                 if let Some(f) = on_finish {

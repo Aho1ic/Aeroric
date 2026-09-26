@@ -36,7 +36,9 @@
       "adapter-event-payload-contract@tauri-adapter": 5,
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
-      "agent-launch-parity-rust@agents": 2
+      "agent-launch-parity-rust@agents": 2,
+      "terminal-unit-rust@terminal-core": 25,
+      "terminal-pty-bytes-rust@terminal-core": 6
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1101,6 +1103,88 @@
           "minCases": 2,
           "$note": "P3-02 切片二的 parity 证明:fixtures 的期望由旧宿主路径(build_*_cmd + add_*_launch_args 的 CommandBuilder,经 get_argv/get_env/get_cwd 提取)在迁移前亲自算出并冻结(core tests/fixtures/agent-launch-parity.json,18 case);core 四族计划函数重放逐字节相等。宿主侧另有同 fixtures 的等价守卫(pty.rs agent_launch_parity_fixture_harvest)——迁移后宿主=机械翻译,两侧共用一份真相。第二条测试钉家族特有语义(claude --model 的 agent 门、omp ultra 封顶 max 且不向上游发 ultra)。后续切片(env 层、managed_home、OMP 反例)追加 case 时同步抬 floor。",
           "timeoutMs": 300000
+        }
+      ]
+    },
+    "terminal-core": {
+      "registeredBy": "P3-03",
+      "cases": [
+        {
+          "name": "terminal-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "terminal::"
+          ],
+          "minCases": 25,
+          "$note": "P3-03 切片一/二 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 25 = 7 stream + 6 lease + 12 pty。后续切片(replay/history/executor)追加时同改地板。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "terminal-pty-bytes-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "pty_bytes",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 6,
+          "$note": "P3-03 验收第一条的真实 PTY 证据,替身是 tests/fixtures/fake-agent.mjs(node;`AERORIC_FAKE_AGENT_NODE` 可覆盖)。四件事各自成条:①4 MiB 混排(CJK+emoji+ANSI+NUL)端到端,未截断区间与读到的字节逐字节 + sha256 双比对,且有反空转断言证明确有帧把多字节序列劈在边界上;②100 MiB 连续输出走真 PTY(实测 102418 帧),保留量正好封顶 1 MiB、hash 相等;③nasty 模式(非法 UTF-8 + 结尾半个字符)证明新投影不卡流、不留活扣,并把**迁移前那段算法原样重放**当对照——旧实现在第一个非法字节后彻底卡住且永远扣着尾巴,这一条是缺陷复现而不是推测;④2 MiB vs 8 MiB 两档保留量相同 = 内存不随总输出线性增长。串行跑:每条用例各开一个真 PTY + 一个 node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "host-reader-publishes-raw-bytes-before-decode",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "let mut leftover|valid_up_to|from_utf8\\(&combined",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "terminal\\.publish\\(&stream_identity",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "projection\\.push\\(chunk\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::Utf8Projection",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "Action 1 那句\"reader 首先发布原始 bytes,legacy Tauri sink 才增量解码\"在宿主侧的可执行形状。`spawn_pty_reader` 要 Wry 运行时才能真跑,所以宿主这条管道靠源码守卫钉:旧的急解码形状(`let mut leftover` / `valid_up_to` / `from_utf8(&combined`)不得复现,新形状(publish 先于 push、投影原件来自 core)必须在。三条正控证明 rg 读得到这个文件、且模式确实匹配的是产品代码而不是注释。局限如实记录:守卫证明的是\"调用了这两件原件\",顺序正确性由 core 侧用例 + 这条守卫共同围堵,完整端到端仍要 P5-01 的真终端会话。",
+          "timeoutMs": 120000
         }
       ]
     }

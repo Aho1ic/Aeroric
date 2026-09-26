@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod storage;
 pub mod storage_lock;
 pub mod tasks;
+pub mod terminal;
 
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use context::{
