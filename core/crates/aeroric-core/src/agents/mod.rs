@@ -8,6 +8,6 @@
 pub mod launch;
 
 pub use launch::{
-    claude_permission_args, codex_permission_args, dsh_permission_mode, omp_permission_flag,
-    omp_thinking_level, LaunchPlan,
+    claude_permission_args, claude_plan, codex_permission_args, codex_plan, dsh_permission_mode,
+    dsh_plan, omp_permission_flag, omp_plan, omp_thinking_level, LaunchInput, LaunchPlan,
 };

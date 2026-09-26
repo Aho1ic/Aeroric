@@ -11,10 +11,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::agent_family_maps::{
-    claude_permission_args, codex_permission_args, dsh_permission_mode, omp_permission_flag,
-    omp_thinking_level,
-};
 use crate::session::{
     should_start_status_session_watcher, spawn_claude_lazy_session_attach,
     spawn_codex_session_recovery, spawn_resume_session_watcher, spawn_status_session_watcher,
@@ -714,47 +710,103 @@ fn spawn_exit_monitor<R: tauri::Runtime>(
     }
 }
 
-/// 为 Claude 命令构建 CommandBuilder，并根据 permission_mode 添加权限标志。
-fn build_claude_cmd(
-    launch: &crate::app_settings::AgentLaunchSpec,
-    permission_mode: &str,
-) -> CommandBuilder {
-    let mut c = CommandBuilder::new(&launch.program);
-    c.args(&launch.args);
-    // 这里曾设 CLAUDE_CODE_DISABLE_MOUSE=1（d18976871），为的是让运行时能直接拖动框选：
-    // 程序一开鼠标上报，xterm 就把拖动转发给程序并取消本地选区。但当时的理由「关掉后滚轮
-    // 回退到 xterm 自身 scrollback」是错的——实测 terminal-history：Claude Code 在第 200
-    // 字节就 ESC[?1049h 进 alt screen 并一直待到退出，alt buffer 根本没有 scrollback 可
-    // 回退。滚轮实际掉进 xterm 的 alt-screen 兜底（CoreBrowserTerminal 的 always-on wheel
-    // listener），被合成成 ESC[A / ESC[B 当方向键发给程序，正好撞上 Claude Code Chat 键位
-    // 的 up:"history:previous"——滚一下滚轮就把正在写的内容换成上一条历史。
-    //
-    // 所以不再代替用户关掉它：放开上报后由 Claude Code 自己的 Scroll 键位
-    // （wheelup/wheeldown → scroll:lineUp/lineDown）逐行滚动，滚轮回到"翻看内容"的语义。
-    // 代价是本地框选要按 ⌥Option（macOS，initTerminal 已开 macOptionClickForcesSelection）
-    // 或 Shift（Win/Linux），与 iTerm2 / VS Code 一致。
-    // 权限档 → 启动参数的唯一映射表在 agent_family_maps(远端 ssh.rs 共用)。
-    for arg in claude_permission_args(permission_mode) {
-        c.arg(arg);
+// ── 四族命令:core LaunchPlan 的机械翻译(计划在 core,宿主只负责搬运)────
+
+fn to_command_builder(plan: aeroric_core::agents::LaunchPlan) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&plan.program);
+    c.args(&plan.args);
+    if let Some(cwd) = &plan.cwd {
+        c.cwd(cwd);
+    }
+    for (key, value) in &plan.env {
+        c.env(key, value);
+    }
+    for key in &plan.unset_env {
+        c.env_remove(key);
     }
     c
 }
 
-/// 为 Codex 命令构建 CommandBuilder，并根据 permission_mode 添加全局执行标志。
-fn build_codex_cmd(
+fn launch_input(
     launch: &crate::app_settings::AgentLaunchSpec,
-    permission_mode: &str,
-) -> CommandBuilder {
-    let mut c = CommandBuilder::new(&launch.program);
-    c.args(&launch.args);
-    for arg in codex_permission_args(permission_mode) {
-        c.arg(arg);
+) -> aeroric_core::agents::LaunchInput {
+    aeroric_core::agents::LaunchInput {
+        program: launch.program.clone(),
+        args: launch.args.clone(),
     }
-    c
 }
 
-fn toml_table_key(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+fn claude_command(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    agent: &str,
+    permission_mode: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> CommandBuilder {
+    to_command_builder(aeroric_core::agents::launch::claude_plan(
+        &launch_input(launch),
+        permission_mode,
+        agent,
+        selected_model,
+        reasoning_effort,
+    ))
+}
+
+fn codex_command(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+    project_path: &str,
+    selected_model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    speed: Option<&str>,
+) -> CommandBuilder {
+    to_command_builder(aeroric_core::agents::launch::codex_plan(
+        &launch_input(launch),
+        permission_mode,
+        project_path,
+        selected_model,
+        reasoning_effort,
+        speed,
+    ))
+}
+
+fn dsh_command(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+    interactive: bool,
+    dsh_home: &Path,
+    patches: &[PathBuf],
+) -> CommandBuilder {
+    to_command_builder(aeroric_core::agents::launch::dsh_plan(
+        &launch_input(launch),
+        permission_mode,
+        interactive,
+        dsh_home,
+        patches,
+    ))
+}
+
+fn omp_command(
+    launch: &crate::app_settings::AgentLaunchSpec,
+    permission_mode: &str,
+    home: &Path,
+    project_path: &str,
+    selected_model: Option<&str>,
+    thinking_level: Option<&str>,
+    resume: Option<&str>,
+    positional_prompt: &[String],
+) -> CommandBuilder {
+    let agent_env = crate::omp_home::omp_agent_env(home);
+    to_command_builder(aeroric_core::agents::launch::omp_plan(
+        &launch_input(launch),
+        permission_mode,
+        &agent_env,
+        project_path,
+        selected_model,
+        thinking_level,
+        resume,
+        positional_prompt,
+    ))
 }
 
 /// 为 DeepSeek Harness 构建 CommandBuilder。
@@ -764,94 +816,6 @@ fn toml_table_key(value: &str) -> String {
 /// ask → read-only(写操作审批,headless 下 fail-closed 即拒绝)、
 /// auto_edit → workspace-write(工作区内自动写)、
 /// full_access → danger-full-access(approval never)。
-fn build_dsh_cmd(
-    launch: &crate::app_settings::AgentLaunchSpec,
-    permission_mode: &str,
-    interactive: bool,
-) -> CommandBuilder {
-    let mut c = CommandBuilder::new(&launch.program);
-    c.args(&launch.args);
-    if !interactive {
-        c.arg("--profile");
-        c.arg("headless");
-    }
-    if let Some(mode) = dsh_permission_mode(permission_mode) {
-        c.env("DSH_PERMISSION_MODE", mode);
-    }
-    // 受管 patch 已禁用遥测 row;env 再兜底一层,防 dsh 未来默认值变化。
-    c.env("DSH_TELEMETRY_DISABLED", "1");
-    c
-}
-
-/// dsh 启动参数:托管 DSH_HOME env + `--patch` 覆盖层(受管层在前、任务级模型
-/// 覆盖在后,dsh 的 patch 层按序应用、后者胜)。launcher flags 必须在位置参数
-/// (prompt)之前——dsh launcher 在第一个未知 token 处停止解析自身 flag。
-fn add_dsh_launch_args(cmd: &mut CommandBuilder, dsh_home: &Path, patch_files: &[PathBuf]) {
-    cmd.env("DSH_HOME", dsh_home.as_os_str());
-    for patch in patch_files {
-        cmd.arg("--patch");
-        cmd.arg(patch.to_string_lossy().as_ref());
-    }
-}
-
-/// 为 oh-my-pi 构建 CommandBuilder。
-///
-/// **不传 `--mode`**:上游 `main.ts` 以 `parsedArgs.mode === undefined` 判定
-/// 是否进入原生交互式 TUI,任何 `--mode` 值都会把 omp 打成非交互通道。
-fn build_omp_cmd(
-    launch: &crate::app_settings::AgentLaunchSpec,
-    permission_mode: &str,
-) -> CommandBuilder {
-    let mut c = CommandBuilder::new(&launch.program);
-    c.args(&launch.args);
-    if let Some(flag) = omp_permission_flag(permission_mode) {
-        c.arg("--approval-mode");
-        c.arg(flag);
-    }
-    c
-}
-
-/// omp 启动参数:托管 home 的 env + launcher flag。所有 flag 必须在位置参数
-/// (prompt)之前——位置参数会被 omp 当作"启动后自动提交的首条消息"。
-fn add_omp_launch_args(
-    cmd: &mut CommandBuilder,
-    home: &Path,
-    project_path: &str,
-    selected_model: Option<&str>,
-    thinking_level: Option<&str>,
-    resume: Option<&str>,
-) {
-    // 颜色由 setup_env 统一给(TERM/COLORTERM/FORCE_COLOR);omp_agent_env 只负责
-    // 托管 home 重定向与 setup wizard 短路,不得含抑制颜色的变量。
-    //
-    // 注意:这些变量还必须经 `setup_omp_env` 在 `setup_env` 之后再确认一次 ——
-    // `setup_env` 会合并 login-shell 环境,可能带回 PI_PROFILE 把重定向作废。
-    for (key, value) in crate::omp_home::omp_agent_env(home) {
-        cmd.env(key, value);
-    }
-    cmd.arg("--cwd");
-    cmd.arg(project_path);
-    if let Some(model) = selected_model
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        cmd.arg("--model");
-        cmd.arg(model);
-    }
-    if let Some(level) = thinking_level
-        .map(str::trim)
-        .filter(|level| !level.is_empty())
-        .and_then(omp_thinking_level)
-    {
-        cmd.arg("--thinking");
-        cmd.arg(level);
-    }
-    if let Some(resume) = resume.map(str::trim).filter(|resume| !resume.is_empty()) {
-        cmd.arg("--resume");
-        cmd.arg(resume);
-    }
-}
-
 /// `setup_env` 之后的 omp 环境收尾。必须在 `setup_env` 之后调用。
 ///
 /// omp 的 profile 优先于 `PI_CODING_AGENT_DIR`:上游 `dirs.ts` 的
@@ -871,13 +835,6 @@ fn setup_omp_env(cmd: &mut CommandBuilder, home: &Path, task_id: &str, agent: &s
     // omp 的 hook 装在托管 home 的 `hooks/post/*.js`,不走 `hooks::usable_for`
     // 那条改写 claude/codex 配置的路径,但同样以这两个守卫变量判定"由 Aeroric 拉起"。
     setup_aeroric_env(cmd, task_id, agent, false);
-}
-
-fn codex_project_trust_override(project_path: &str) -> String {
-    format!(
-        "projects.{}.trust_level=\"trusted\"",
-        toml_table_key(project_path)
-    )
 }
 
 pub(crate) fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {
@@ -945,7 +902,7 @@ pub(crate) fn normalized_reasoning_effort_for(
             None => return Ok(None),
             Some(effort) => effort.to_ascii_lowercase(),
         };
-        return if omp_thinking_level(&effort).is_some() {
+        return if aeroric_core::agents::launch::omp_thinking_level(&effort).is_some() {
             Ok(Some(effort))
         } else {
             Err("Invalid reasoningEffort".to_string())
@@ -989,24 +946,6 @@ pub(crate) fn normalized_reasoning_effort(
     Ok(Some(effort))
 }
 
-fn add_claude_launch_args(
-    cmd: &mut CommandBuilder,
-    agent: &str,
-    selected_model: Option<&str>,
-    reasoning_effort: Option<&str>,
-) {
-    if agent == "claude" {
-        if let Some(model) = normalized_selected_model(selected_model) {
-            cmd.arg("--model");
-            cmd.arg(model);
-        }
-    }
-    if let Some(effort) = reasoning_effort {
-        cmd.arg("--effort");
-        cmd.arg(effort);
-    }
-}
-
 fn uses_ultracode_terminal_command(is_codex: bool, reasoning_effort: Option<&str>) -> bool {
     !is_codex && reasoning_effort == Some("ultracode")
 }
@@ -1021,36 +960,6 @@ fn should_use_ultracode_terminal_command(
 
 pub(crate) fn initial_ultracode_command() -> Vec<u8> {
     b"/effort ultracode\r".to_vec()
-}
-
-fn add_codex_launch_args(
-    cmd: &mut CommandBuilder,
-    project_path: &str,
-    selected_model: Option<&str>,
-    reasoning_effort: Option<&str>,
-    speed: Option<&str>,
-) {
-    cmd.arg("-C");
-    cmd.arg(project_path);
-    cmd.arg("-c");
-    cmd.arg(codex_project_trust_override(project_path));
-    if let Some(model) = normalized_selected_model(selected_model) {
-        cmd.arg("-m");
-        cmd.arg(model);
-    }
-    if let Some(effort) = reasoning_effort {
-        cmd.arg("-c");
-        cmd.arg(format!(
-            "model_reasoning_effort={}",
-            toml::Value::String(effort.to_string())
-        ));
-    }
-    if speed == Some("fast") {
-        cmd.arg("-c");
-        cmd.arg("features.fast_mode=true");
-        cmd.arg("-c");
-        cmd.arg("service_tier=\"fast\"");
-    }
 }
 
 fn strip_startup_ansi(input: &str) -> String {
@@ -1806,23 +1715,25 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
     };
 
     let mut cmd = if let Some(omp_home_path) = omp_home.as_ref() {
-        let mut c = build_omp_cmd(&launch, &permission_mode);
-        add_omp_launch_args(
-            &mut c,
+        let c = omp_command(
+            &launch,
+            &permission_mode,
             omp_home_path,
             &project_path,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
             None,
+            &initial_prompt_args(&final_prompt, true),
         );
-        // 位置参数 = omp TUI 启动后自动提交的首条消息;`--` 保护以 `-` 开头的 prompt。
-        for arg in initial_prompt_args(&final_prompt, true) {
-            c.arg(arg);
-        }
         c
     } else if let Some((dsh_home_path, dsh_patches)) = dsh_launch_ctx.as_ref() {
-        let mut c = build_dsh_cmd(&launch, &permission_mode, final_prompt.is_empty());
-        add_dsh_launch_args(&mut c, dsh_home_path, dsh_patches);
+        let mut c = dsh_command(
+            &launch,
+            &permission_mode,
+            final_prompt.is_empty(),
+            dsh_home_path,
+            dsh_patches,
+        );
         // prompt 位置参数必须在所有 launcher flag 之后;`--` 防止以 `-` 开头的
         // prompt 被 launcher 误解析。
         for arg in initial_prompt_args(&final_prompt, true) {
@@ -1830,9 +1741,9 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
         }
         c
     } else if is_codex {
-        let mut c = build_codex_cmd(&launch, &permission_mode);
-        add_codex_launch_args(
-            &mut c,
+        let mut c = codex_command(
+            &launch,
+            &permission_mode,
             &project_path,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
@@ -1855,10 +1766,10 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
         }
         c
     } else {
-        let mut c = build_claude_cmd(&launch, &permission_mode);
-        add_claude_launch_args(
-            &mut c,
+        let mut c = claude_command(
+            &launch,
             &agent,
+            &permission_mode,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
         );
@@ -2577,23 +2488,23 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
     };
 
     let mut cmd = if let Some(omp_home_path) = omp_home.as_ref() {
-        let mut c = build_omp_cmd(&launch, &permission_mode);
         // omp `--resume` 同时接受会话文件绝对路径与 session id;前端传来的
         // session_id 两种形态都可能(取 ompSessionId ?? ompSessionPath)。
         // 不追加位置参数:resume 是接续已有会话,不重放原 prompt。
-        add_omp_launch_args(
-            &mut c,
+        omp_command(
+            &launch,
+            &permission_mode,
             omp_home_path,
             &project_path,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
             Some(&session_id),
-        );
-        c
+            &[],
+        )
     } else if is_codex {
-        let mut c = build_codex_cmd(&launch, &permission_mode);
-        add_codex_launch_args(
-            &mut c,
+        let mut c = codex_command(
+            &launch,
+            &permission_mode,
             &project_path,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
@@ -2613,10 +2524,10 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
         c
     } else {
         // resume 时 session_id 已知，使用 --resume 标志
-        let mut c = build_claude_cmd(&launch, &permission_mode);
-        add_claude_launch_args(
-            &mut c,
+        let mut c = claude_command(
+            &launch,
             &agent,
+            &permission_mode,
             selected_model.as_deref(),
             reasoning_effort.as_deref(),
         );
@@ -3003,7 +2914,13 @@ mod tests {
             ("auto_edit", "workspace-write"),
             ("full_access", "danger-full-access"),
         ] {
-            let cmd = build_dsh_cmd(&launch, mode, false);
+            let cmd = dsh_command(
+                &launch,
+                mode,
+                false,
+                &PathBuf::from("/tmp/aeroric-dsh-home"),
+                &[],
+            );
             assert_eq!(
                 cmd.get_env("DSH_PERMISSION_MODE")
                     .map(|value| value.to_string_lossy().into_owned()),
@@ -3012,7 +2929,13 @@ mod tests {
             );
             assert!(cmd.get_env("DSH_TELEMETRY_DISABLED").is_some());
         }
-        let argv = cmd_argv(&build_dsh_cmd(&launch, "ask", false));
+        let argv = cmd_argv(&dsh_command(
+            &launch,
+            "ask",
+            false,
+            &PathBuf::from("/tmp/aeroric-dsh-home"),
+            &[],
+        ));
         assert_eq!(argv, vec!["dsh", "--profile", "headless"]);
         // 权限不进 CLI 参数,只走 env。
         assert!(!argv.iter().any(|arg| arg.contains("permission")));
@@ -3024,13 +2947,12 @@ mod tests {
             program: "dsh".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_dsh_cmd(&launch, "auto_edit", false);
         let home = PathBuf::from("/tmp/aeroric-dsh-home");
         let patches = vec![
             PathBuf::from("/tmp/aeroric-dsh-home/aeroric.patch.yml"),
             PathBuf::from("/tmp/aeroric-dsh-home/tmp/task-1.patch.yml"),
         ];
-        add_dsh_launch_args(&mut cmd, &home, &patches);
+        let mut cmd = dsh_command(&launch, "auto_edit", false, &home, &patches);
         for arg in initial_prompt_args("do the thing", true) {
             cmd.arg(arg);
         }
@@ -3062,7 +2984,13 @@ mod tests {
             program: "dsh".to_string(),
             ..Default::default()
         };
-        let cmd = build_dsh_cmd(&launch, "auto_edit", true);
+        let cmd = dsh_command(
+            &launch,
+            "auto_edit",
+            true,
+            &PathBuf::from("/tmp/aeroric-dsh-home"),
+            &[],
+        );
 
         assert_eq!(cmd_argv(&cmd), vec!["dsh"]);
         assert_eq!(
@@ -3081,7 +3009,16 @@ mod tests {
             program: "omp".to_string(),
             ..Default::default()
         };
-        let argv = cmd_argv(&build_omp_cmd(&launch, "auto_edit"));
+        let argv = cmd_argv(&omp_command(
+            &launch,
+            "auto_edit",
+            &PathBuf::from("/tmp/aeroric-omp-home"),
+            "/work/project",
+            None,
+            None,
+            None,
+            &[],
+        ));
         assert!(
             !argv.iter().any(|arg| arg == "--mode"),
             "omp 带 --mode 就不是交互式 TUI 了:{argv:?}"
@@ -3099,15 +3036,37 @@ mod tests {
             ("auto_edit", "write"),
             ("full_access", "yolo"),
         ] {
-            let argv = cmd_argv(&build_omp_cmd(&launch, mode));
+            let argv = cmd_argv(&omp_command(
+                &launch,
+                mode,
+                &PathBuf::from("/tmp/aeroric-omp-home"),
+                "/work/project",
+                None,
+                None,
+                None,
+                &[],
+            ));
+            // 合并后的命令含托管 home 的 --cwd;权限 flag 仍紧随 program。
             assert_eq!(
                 argv,
-                vec!["omp", "--approval-mode", expected],
+                vec!["omp", "--approval-mode", expected, "--cwd", "/work/project"],
                 "permission mode {mode}"
             );
         }
-        // 未知模式不追加 flag,交给 omp 自己的默认值。
-        assert_eq!(cmd_argv(&build_omp_cmd(&launch, "fast")), vec!["omp"]);
+        // 未知模式不追加 flag,交给 omp 自己的默认值(--cwd 来自托管 home)。
+        assert_eq!(
+            cmd_argv(&omp_command(
+                &launch,
+                "fast",
+                &PathBuf::from("/tmp/aeroric-omp-home"),
+                "/work/project",
+                None,
+                None,
+                None,
+                &[],
+            )),
+            vec!["omp", "--cwd", "/work/project"]
+        );
     }
 
     #[test]
@@ -3116,19 +3075,18 @@ mod tests {
             program: "omp".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_omp_cmd(&launch, "ask");
         let home = PathBuf::from("/tmp/aeroric-omp-home");
-        add_omp_launch_args(
-            &mut cmd,
+        let positional: Vec<String> = initial_prompt_args("--not-a-flag", true);
+        let mut cmd = omp_command(
+            &launch,
+            "ask",
             &home,
             "/work/project",
             Some("gpt-5"),
             Some("ultra"),
             Some("/tmp/session.jsonl"),
+            &positional,
         );
-        for arg in initial_prompt_args("--not-a-flag", true) {
-            cmd.arg(arg);
-        }
         assert_eq!(
             cmd_argv(&cmd),
             vec![
@@ -3181,8 +3139,16 @@ mod tests {
             ..Default::default()
         };
         let home = PathBuf::from("/tmp/aeroric-omp-home");
-        let mut cmd = build_omp_cmd(&launch, "ask");
-        add_omp_launch_args(&mut cmd, &home, "/work/project", None, None, None);
+        let mut cmd = omp_command(
+            &launch,
+            "ask",
+            &home,
+            "/work/project",
+            None,
+            None,
+            None,
+            &[],
+        );
         // 模拟 login-shell 带回 profile 的情形。
         cmd.env("PI_PROFILE", "sota");
         cmd.env("OMP_PROFILE", "sota");
@@ -3213,14 +3179,15 @@ mod tests {
             program: "omp".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_omp_cmd(&launch, "unknown");
-        add_omp_launch_args(
-            &mut cmd,
+        let cmd = omp_command(
+            &launch,
+            "unknown",
             &PathBuf::from("/tmp/h"),
             "/work/project",
             Some("   "),
             None,
             Some(""),
+            &[],
         );
         assert_eq!(cmd_argv(&cmd), vec!["omp", "--cwd", "/work/project"]);
     }
@@ -3290,17 +3257,17 @@ mod tests {
             normalized_reasoning_effort_for(Some("ultracode"), AgentFamily::Dsh, None).is_err()
         );
         assert_eq!(
-            normalized_speed_for(Some("standard"), AgentFamily::Dsh),
+            normalized_speed_for(Some("standard"), crate::app_settings::AgentFamily::Dsh),
             Ok(Some("standard".to_string()))
         );
-        assert!(normalized_speed_for(Some("fast"), AgentFamily::Dsh).is_err());
+        assert!(normalized_speed_for(Some("fast"), crate::app_settings::AgentFamily::Dsh).is_err());
         // claude/codex 行为不变(重构护栏)。
         assert_eq!(
             normalized_reasoning_effort_for(Some("high"), AgentFamily::Claude, None),
             Ok(Some("high".to_string()))
         );
         assert_eq!(
-            normalized_speed_for(Some("fast"), AgentFamily::Codex),
+            normalized_speed_for(Some("fast"), crate::app_settings::AgentFamily::Codex),
             Ok(Some("fast".to_string()))
         );
     }
@@ -3322,14 +3289,6 @@ mod tests {
         .is_err());
         assert!(decode_task_images_with_limits(std::slice::from_ref(&png), 1, 2, 10).is_err());
         assert!(decode_task_images_with_limits(&[png.clone(), png], 2, 3, 5).is_err());
-    }
-
-    #[test]
-    fn codex_project_trust_override_quotes_project_path() {
-        assert_eq!(
-            codex_project_trust_override("/tmp/has space/quote\"path"),
-            "projects.\"/tmp/has space/quote\\\"path\".trust_level=\"trusted\""
-        );
     }
 
     #[test]
@@ -3362,16 +3321,17 @@ mod tests {
             program: "codex".to_string(),
             ..Default::default()
         };
-        let claude_argv: Vec<_> = build_claude_cmd(&claude_launch, "ask")
+        let claude_argv: Vec<_> = claude_command(&claude_launch, "claude", "ask", None, None)
             .get_argv()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let codex_argv: Vec<_> = build_codex_cmd(&codex_launch, "ask")
-            .get_argv()
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
+        let codex_argv: Vec<_> =
+            codex_command(&codex_launch, "ask", "/work/proj", None, None, None)
+                .get_argv()
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
 
         assert!(claude_argv
             .windows(2)
@@ -3386,7 +3346,7 @@ mod tests {
             args: vec![r"C:\Users\test\.aeroric\agents\mimo.sh".to_string()],
             ..Default::default()
         };
-        let argv: Vec<_> = build_claude_cmd(&launch, "full_access")
+        let argv: Vec<_> = claude_command(&launch, "claude", "full_access", None, None)
             .get_argv()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -3725,8 +3685,7 @@ mod tests {
             program: "claude".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_claude_cmd(&launch, "ask");
-        add_claude_launch_args(&mut cmd, "claude", None, Some("ultracode"));
+        let cmd = claude_command(&launch, "claude", "ask", None, Some("ultracode"));
         let argv: Vec<_> = cmd
             .get_argv()
             .iter()
@@ -3758,7 +3717,7 @@ mod tests {
             program: "claude".to_string(),
             ..Default::default()
         };
-        let cmd = build_claude_cmd(&launch, "ask");
+        let cmd = claude_command(&launch, "claude", "ask", None, None);
         // 不能直接断言为 None：CommandBuilder::new 会快照父进程环境（见 setup_env 的注释），
         // 跑测试的终端自己就可能带着这个变量。与基线对比才能只证明"我们没有再自己设它"，
         // 同时保留用户在自己 shell 里显式关掉鼠标的自由（前端兜底会接住那种情况）。
@@ -3788,8 +3747,7 @@ mod tests {
             program: "codex".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_codex_cmd(&launch, "ask");
-        add_codex_launch_args(&mut cmd, "/tmp/example-project", None, None, None);
+        let cmd = codex_command(&launch, "ask", "/tmp/example-project", None, None, None);
 
         let argv: Vec<_> = cmd
             .get_argv()
@@ -3807,8 +3765,7 @@ mod tests {
             program: "claude".to_string(),
             ..Default::default()
         };
-        let mut claude_cmd = build_claude_cmd(&claude_launch, "ask");
-        add_claude_launch_args(&mut claude_cmd, "claude", None, None);
+        let claude_cmd = claude_command(&claude_launch, "claude", "ask", None, None);
         let claude_argv: Vec<_> = claude_cmd
             .get_argv()
             .iter()
@@ -3824,9 +3781,9 @@ mod tests {
             program: "codex".to_string(),
             ..Default::default()
         };
-        let mut codex_cmd = build_codex_cmd(&codex_launch, "ask");
-        add_codex_launch_args(
-            &mut codex_cmd,
+        let codex_cmd = codex_command(
+            &codex_launch,
+            "ask",
             "/tmp/example-project",
             None,
             None,
@@ -3874,6 +3831,296 @@ mod tests {
         assert_eq!(
             cmd.get_env("FORCE_COLOR").and_then(|value| value.to_str()),
             Some("3")
+        );
+    }
+
+    // ── P3-02 切片二:agent launch parity(计划半边迁 core 的等价守卫)──────────
+
+    #[derive(serde::Serialize)]
+    struct ParityEntry {
+        id: String,
+        family: String,
+        permission: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resume: Option<&'static str>,
+        custom: bool,
+        facts: serde_json::Value,
+        expected: ParityExpected,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ParityExpected {
+        program: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        env: std::collections::BTreeMap<String, String>,
+    }
+
+    fn parity_entry(
+        id: &str,
+        family: &str,
+        permission: &str,
+        prompt: Option<&'static str>,
+        resume: Option<&'static str>,
+        custom: bool,
+        facts: serde_json::Value,
+        cmd: &CommandBuilder,
+        env_keys: &[&str],
+    ) -> ParityEntry {
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let mut env = std::collections::BTreeMap::new();
+        for key in env_keys {
+            if let Some(value) = cmd.get_env(key) {
+                env.insert((*key).to_string(), value.to_string_lossy().into_owned());
+            }
+        }
+        ParityEntry {
+            id: id.to_string(),
+            family: family.to_string(),
+            permission: permission.to_string(),
+            prompt,
+            resume,
+            custom,
+            facts,
+            expected: ParityExpected {
+                program: argv[0].clone(),
+                args: argv[1..].to_vec(),
+                cwd: cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
+                env,
+            },
+        }
+    }
+
+    /// 期望由**旧宿主路径**(build_*_cmd + add_*_launch_args,及 omp/dsh 的位置
+    /// prompt 注入)亲自算出。首次以 AERORIC_AGENT_PARITY_WRITE=1 运行写盘冻结;
+    /// 之后这条测试永远断言「宿主路径产物 == 冻结的 fixtures」——builder 改经
+    /// core 的 LaunchPlan 机械翻译后,它就是宿主↔core 的等价守卫。
+    #[test]
+    fn agent_launch_parity_fixture_harvest() {
+        const FIXTURE: &str = "../core/crates/aeroric-core/tests/fixtures/agent-launch-parity.json";
+        let write_mode = std::env::var("AERORIC_AGENT_PARITY_WRITE").is_ok();
+
+        let plain = |program: &str, family: crate::app_settings::AgentFamily| {
+            crate::app_settings::AgentLaunchSpec {
+                program: program.to_string(),
+                family,
+                ..Default::default()
+            }
+        };
+        let custom =
+            |family: crate::app_settings::AgentFamily| crate::app_settings::AgentLaunchSpec {
+                program: "team-agent".to_string(),
+                args: vec!["--profile".to_string(), "x".to_string()],
+                family,
+                ..Default::default()
+            };
+        let dsh_home = std::path::PathBuf::from("/managed/dsh");
+        let omp_home = std::path::PathBuf::from("/managed/omp");
+        const DSH_KEYS: &[&str] = &["DSH_PERMISSION_MODE", "DSH_TELEMETRY_DISABLED", "DSH_HOME"];
+        const OMP_KEYS: &[&str] = &[
+            "PI_CODING_AGENT_DIR",
+            "OMP_APP_NAME",
+            "OMP_SKIP_SETUP",
+            "PI_AUTO_QA",
+            "OTEL_SDK_DISABLED",
+        ];
+
+        let mut entries: Vec<ParityEntry> = Vec::new();
+        for mode in ["ask", "auto_edit", "full_access"] {
+            let cmd = claude_command(
+                &plain("claude", crate::app_settings::AgentFamily::Claude),
+                "claude",
+                mode,
+                Some("test-model"),
+                Some("high"),
+            );
+            entries.push(parity_entry(
+                &format!("claude-{mode}"),
+                "claude",
+                mode,
+                None,
+                None,
+                false,
+                serde_json::json!({"agent": "claude", "model": "test-model", "effort": "high"}),
+                &cmd,
+                &[],
+            ));
+
+            let cmd = codex_command(
+                &plain("codex", crate::app_settings::AgentFamily::Codex),
+                mode,
+                "/work/proj",
+                None,
+                None,
+                None,
+            );
+            entries.push(parity_entry(
+                &format!("codex-{mode}"), "codex", mode, None, None, false,
+                serde_json::json!({"projectPath": "/work/proj", "model": null, "effort": null, "speed": null}),
+                &cmd, &[],
+            ));
+
+            let cmd = dsh_command(
+                &plain("dsh", crate::app_settings::AgentFamily::Dsh),
+                mode,
+                false,
+                &dsh_home,
+                &[],
+            );
+            entries.push(parity_entry(
+                &format!("dsh-{mode}-prompt"),
+                "dsh",
+                mode,
+                Some("hello world"),
+                None,
+                false,
+                serde_json::json!({"home": "/managed/dsh", "interactive": false, "patches": []}),
+                &cmd,
+                DSH_KEYS,
+            ));
+
+            let positional: Vec<String> = initial_prompt_args("hello world", true);
+            let cmd = omp_command(
+                &plain("omp", crate::app_settings::AgentFamily::Omp),
+                mode,
+                &omp_home,
+                "/work/proj",
+                None,
+                None,
+                None,
+                &positional,
+            );
+            entries.push(parity_entry(
+                &format!("omp-{mode}-prompt"), "omp", mode, Some("hello world"), None, false,
+serde_json::json!({"home": "/managed/omp", "projectPath": "/work/proj", "model": null, "thinking": null, "resume": null, "agentEnv": [["PI_CODING_AGENT_DIR","/managed/omp"],["OMP_APP_NAME","aeroric"],["OMP_SKIP_SETUP","1"],["PI_AUTO_QA","0"],["OTEL_SDK_DISABLED","true"]]}),
+                &cmd, OMP_KEYS,
+            ));
+        }
+
+        // resume 维度:omp 的 --resume 在 add_omp_launch_args 内(claude/codex 的
+        // resume flag 属宿主 run-flow,不在本层)。
+        let positional: Vec<String> = initial_prompt_args("hello world", true);
+        let cmd = omp_command(
+            &plain("omp", crate::app_settings::AgentFamily::Omp),
+            "auto_edit",
+            &omp_home,
+            "/work/proj",
+            Some("pi-model"),
+            Some("xhigh"),
+            Some("sess-1"),
+            &positional,
+        );
+        entries.push(parity_entry(
+            "omp-auto_edit-resume", "omp", "auto_edit", Some("hello world"), Some("sess-1"),
+            false,
+serde_json::json!({"home": "/managed/omp", "projectPath": "/work/proj", "model": "pi-model", "thinking": "xhigh", "resume": "sess-1", "agentEnv": [["PI_CODING_AGENT_DIR","/managed/omp"],["OMP_APP_NAME","aeroric"],["OMP_SKIP_SETUP","1"],["PI_AUTO_QA","0"],["OTEL_SDK_DISABLED","true"]]}),
+            &cmd, OMP_KEYS,
+        ));
+
+        // prompt 空/非空在 dsh 的另一面:interactive = prompt.is_empty()。
+        let cmd = dsh_command(
+            &plain("dsh", crate::app_settings::AgentFamily::Dsh),
+            "auto_edit",
+            true,
+            &dsh_home,
+            &[],
+        );
+        entries.push(parity_entry(
+            "dsh-auto_edit-interactive",
+            "dsh",
+            "auto_edit",
+            None,
+            None,
+            false,
+            serde_json::json!({"home": "/managed/dsh", "interactive": true, "patches": []}),
+            &cmd,
+            DSH_KEYS,
+        ));
+
+        // custom/home/env 维度:自定义 program/args/patch 层。
+        let cmd = claude_command(
+            &custom(crate::app_settings::AgentFamily::Claude),
+            "team-agent",
+            "full_access",
+            None,
+            None,
+        );
+        entries.push(parity_entry(
+            "claude-custom-full_access",
+            "claude",
+            "full_access",
+            None,
+            None,
+            true,
+            serde_json::json!({"agent": "team-agent", "model": null, "effort": null}),
+            &cmd,
+            &[],
+        ));
+        let cmd = codex_command(
+            &custom(crate::app_settings::AgentFamily::Codex),
+            "full_access",
+            "/work/proj",
+            Some("gpt-5.6"),
+            Some("low"),
+            Some("fast"),
+        );
+        entries.push(parity_entry(
+            "codex-custom-full_access", "codex", "full_access", None, None, true,
+            serde_json::json!({"projectPath": "/work/proj", "model": "gpt-5.6", "effort": "low", "speed": "fast"}),
+            &cmd, &[],
+        ));
+        let cmd = dsh_command(
+            &custom(crate::app_settings::AgentFamily::Dsh),
+            "full_access",
+            false,
+            &dsh_home,
+            &[std::path::PathBuf::from("/managed/dsh/patch.toml")],
+        );
+        entries.push(parity_entry(
+            "dsh-custom-full_access", "dsh", "full_access", Some("hello world"), None, true,
+            serde_json::json!({"home": "/managed/dsh", "interactive": false, "patches": ["/managed/dsh/patch.toml"]}),
+            &cmd, DSH_KEYS,
+        ));
+        let cmd = omp_command(
+            &custom(crate::app_settings::AgentFamily::Omp),
+            "full_access",
+            &omp_home,
+            "/work/proj",
+            None,
+            None,
+            None,
+            &[],
+        );
+        entries.push(parity_entry(
+            "omp-custom-full_access", "omp", "full_access", None, None, true,
+serde_json::json!({"home": "/managed/omp", "projectPath": "/work/proj", "model": null, "thinking": null, "resume": null, "agentEnv": [["PI_CODING_AGENT_DIR","/managed/omp"],["OMP_APP_NAME","aeroric"],["OMP_SKIP_SETUP","1"],["PI_AUTO_QA","0"],["OTEL_SDK_DISABLED","true"]]}),
+            &cmd, OMP_KEYS,
+        ));
+
+        let fixture = serde_json::json!({
+            "source": "harvested from the legacy host path (build_*_cmd + add_*_launch_args) before the core plan functions existed; see MIGRATION_PLAN 补记八十九",
+            "envNote": "env keys are the family-known ones; run-flow layers (setup_env, AERORIC_AGENT_MODEL, extra_env last-wins) stay host-side",
+            "cases": entries,
+        });
+        let rendered = serde_json::to_string_pretty(&fixture).expect("serialize fixture");
+
+        if write_mode {
+            std::fs::write(FIXTURE, rendered + "\n").expect("write parity fixture");
+            return;
+        }
+
+        let frozen = std::fs::read_to_string(FIXTURE).expect("parity fixture must exist");
+        assert_eq!(
+            rendered + "\n",
+            frozen,
+            "宿主路径产物与冻结的 parity fixtures 漂移:builder 的计划语义被改动了,\n\
+             若是有意变更,须以 AERORIC_AGENT_PARITY_WRITE=1 重冻结并在 ADR 中逐项说明"
         );
     }
 }

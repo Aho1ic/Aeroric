@@ -1036,7 +1036,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:1511",
+      "definition_resolved": "src-tauri/src/pty.rs:1420",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1085,7 +1085,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2442",
+      "definition_resolved": "src-tauri/src/pty.rs:2353",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1131,7 +1131,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2102",
+      "definition_resolved": "src-tauri/src/pty.rs:2013",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1168,7 +1168,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2148",
+      "definition_resolved": "src-tauri/src/pty.rs:2059",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1205,7 +1205,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2158",
+      "definition_resolved": "src-tauri/src/pty.rs:2069",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1239,7 +1239,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2238",
+      "definition_resolved": "src-tauri/src/pty.rs:2149",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1274,7 +1274,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2304",
+      "definition_resolved": "src-tauri/src/pty.rs:2215",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1310,7 +1310,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2798",
+      "definition_resolved": "src-tauri/src/pty.rs:2709",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1346,7 +1346,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2807",
+      "definition_resolved": "src-tauri/src/pty.rs:2718",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1383,7 +1383,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2817",
+      "definition_resolved": "src-tauri/src/pty.rs:2728",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1422,7 +1422,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2896",
+      "definition_resolved": "src-tauri/src/pty.rs:2807",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24851,7 +24851,7 @@
     "event_name @ src-tauri/src/dsh_webui.rs:3192",
     "event_name @ src-tauri/src/dsh_webui.rs:3209",
     "action.event_name() @ src-tauri/src/lib.rs:233",
-    "event_name @ src-tauri/src/pty.rs:501"
+    "event_name @ src-tauri/src/pty.rs:497"
   ],
   "event_dynamic_listen_sites": [],
   "panels": [

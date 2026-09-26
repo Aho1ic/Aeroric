@@ -119,6 +119,167 @@ impl LaunchPlan {
     }
 }
 
+// ── 四族计划函数:build_*_cmd + add_*_launch_args 的计划半边(P3-02 切片二)──
+//
+// 每个函数覆盖宿主旧 builder 与 add_* 的全部职责,产出 [`LaunchPlan`];
+// 宿主把它机械翻译成 CommandBuilder。run-flow 层(cwd、setup_env 系、
+// AERORIC_AGENT_MODEL、extra_env 最后赢家)不属于家族规划,留在宿主。
+
+/// 家族规划的纯数据输入:与宿主 `AgentLaunchSpec` 的 program/args 同形
+/// (extra_env 的注入在 run-flow 层、最后赢家,不在这里)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaunchInput {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl LaunchInput {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+        }
+    }
+
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+}
+
+fn normalize_selected(model: Option<&str>) -> Option<String> {
+    model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn toml_table_key(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// TOML 字符串字面量(与 `toml::Value::String` 的序列化对基础字符等价:
+/// 转义反斜杠与引号)。effort/模型词表来自受控集合,不会出现控制字符。
+fn toml_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub fn claude_plan(
+    input: &LaunchInput,
+    permission_mode: &str,
+    agent: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> LaunchPlan {
+    let mut plan = LaunchPlan::new(&input.program).args(input.args.clone());
+    for arg in claude_permission_args(permission_mode) {
+        plan = plan.arg(arg);
+    }
+    if agent == "claude" {
+        if let Some(model) = normalize_selected(model) {
+            plan = plan.arg("--model").arg(model);
+        }
+    }
+    if let Some(effort) = effort {
+        plan = plan.arg("--effort").arg(effort);
+    }
+    plan
+}
+
+pub fn codex_plan(
+    input: &LaunchInput,
+    permission_mode: &str,
+    project_path: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    speed: Option<&str>,
+) -> LaunchPlan {
+    let mut plan = LaunchPlan::new(&input.program).args(input.args.clone());
+    for arg in codex_permission_args(permission_mode) {
+        plan = plan.arg(arg);
+    }
+    plan = plan.arg("-C").arg(project_path);
+    plan = plan.arg("-c").arg(format!(
+        "projects.{}.trust_level=\"trusted\"",
+        toml_table_key(project_path)
+    ));
+    if let Some(model) = normalize_selected(model) {
+        plan = plan.arg("-m").arg(model);
+    }
+    if let Some(effort) = effort {
+        plan = plan
+            .arg("-c")
+            .arg(format!("model_reasoning_effort={}", toml_string(effort)));
+    }
+    if speed == Some("fast") {
+        plan = plan.arg("-c").arg("features.fast_mode=true");
+        plan = plan.arg("-c").arg("service_tier=\"fast\"");
+    }
+    plan
+}
+
+pub fn dsh_plan(
+    input: &LaunchInput,
+    permission_mode: &str,
+    interactive: bool,
+    dsh_home: &std::path::Path,
+    patches: &[std::path::PathBuf],
+) -> LaunchPlan {
+    let mut plan = LaunchPlan::new(&input.program).args(input.args.clone());
+    if !interactive {
+        plan = plan.arg("--profile").arg("headless");
+    }
+    if let Some(mode) = dsh_permission_mode(permission_mode) {
+        plan = plan.env("DSH_PERMISSION_MODE", mode);
+    }
+    // 受管 patch 已禁用遥测 row;env 再兜底一层,防 dsh 未来默认值变化。
+    plan = plan.env("DSH_TELEMETRY_DISABLED", "1");
+    plan = plan.env("DSH_HOME", dsh_home.to_string_lossy().into_owned());
+    for patch in patches {
+        plan = plan
+            .arg("--patch")
+            .arg(patch.to_string_lossy().into_owned());
+    }
+    plan
+}
+
+pub fn omp_plan(
+    input: &LaunchInput,
+    permission_mode: &str,
+    agent_env: &[(String, String)],
+    project_path: &str,
+    model: Option<&str>,
+    thinking: Option<&str>,
+    resume: Option<&str>,
+    positional_prompt: &[String],
+) -> LaunchPlan {
+    let mut plan = LaunchPlan::new(&input.program).args(input.args.clone());
+    if let Some(flag) = omp_permission_flag(permission_mode) {
+        plan = plan.arg("--approval-mode").arg(flag);
+    }
+    for (key, value) in agent_env {
+        plan = plan.env(key.clone(), value.clone());
+    }
+    plan = plan.arg("--cwd").arg(project_path);
+    if let Some(model) = normalize_selected(model) {
+        plan = plan.arg("--model").arg(model);
+    }
+    if let Some(level) = normalize_selected(thinking).and_then(|level| omp_thinking_level(&level)) {
+        plan = plan.arg("--thinking").arg(level);
+    }
+    if let Some(resume) = normalize_selected(resume) {
+        plan = plan.arg("--resume").arg(resume);
+    }
+    for arg in positional_prompt {
+        plan = plan.arg(arg.clone());
+    }
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -37,7 +37,7 @@ launch-args 层:`add_dsh_launch_args`(DSH_HOME + --patch 顺序)、`add_omp_laun
 ## 4. 切片顺序(每片自身可绿)
 
 1. ~~映射表 move + `LaunchPlan` 类型~~(已落,补记八十八)。
-2. `build_*_cmd`/`add_*_launch_args` 的**计划半边**进 core(产出 `LaunchPlan`),宿主 builder 变"LaunchPlan → CommandBuilder"的机械翻译;**parity fixtures**(4 家族×3 权限档×prompt 空/非空×resume/new×custom/home/env)由旧宿主路径亲自算出期望、core 重放(沿用 P2-04 parity 方法)。
+2. ~~builder 计划半边进 core + parity fixtures~~(已落,补记八十九):core 四族计划函数 `claude_plan`/`codex_plan`/`dsh_plan`/`omp_plan`(覆盖旧 build_*_cmd + add_*_launch_args 全部职责),宿主 `claude_command` 等四函数 = LaunchPlan→CommandBuilder 机械翻译;fixtures 18 case 由旧宿主路径在迁移前冻结(`core tests/fixtures/agent-launch-parity.json`,facts 字段携带每 case 输入),core 重放逐字节相等 + 宿主同 fixtures 等价守卫(pty.rs `agent_launch_parity_fixture_harvest`)。run-flow 层(cwd/setup_env 系/AERORIC_AGENT_MODEL/extra_env 最后赢家/claude session-id·settings·mcp/codex resume 子命令)留在宿主——那是运行流程决策,不是家族规划。`pnpm native:check agents` 已注册(1 case/2)。
 3. `agent_env.rs` 纯半边 + `setup_env` 顺序约束的 core 侧表达;omp_env 的 PI_PROFILE 清除反例(OMP 不变量)。
 4. `managed_home/`:omp_home/dsh_home/hooks 安装逻辑迁入;`include_str!` hook 文件随迁改路径;单一资源来源(删旧前改全引用)。
 5. SwitchEvidence/`adopt_session_for_agent` 真实实现(P2-04 Q43 移交项)+ G18 裁决窗口。

@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十三次更新）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。** 侦察底稿＝`docs/native/extraction/agents-launch.md`（builder 薄/映射纯/顺序硬约束三判断）。**P3-02 剩余（按底稿 §4-2/3/4/5）**：builder 计划半边进 core + parity fixtures → env 层 + OMP 反例 → managed_home 迁入 → SwitchEvidence/G18 → `pnpm native:check agents` 注册 + `grill-me [agents]`。
+**当前状态（2026-09-26，第二十四次更新）：P3-02 切片二已落地（补记八十九）——四族计划函数进 core(claude/codex/dsh/omp_plan),宿主 8 个 builder/add 函数收敛为 4 个机械翻译命令,parity fixtures 18 case 由旧宿主路径冻结、core 重放逐字节相等、宿主同 fixtures 等价守卫;`pnpm native:check agents` 注册(1 case/2)。** core **314**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 剩余(按底稿 §4-3/4/5)**:env 层 + OMP 反例 → managed_home/ 迁入 → SwitchEvidence/G18 → `grill-me [agents]`。
 
+**（上一轮口径——第二十三次更新，2026-09-26）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。**
 **（上一轮口径——第二十二次更新，2026-09-26）：P3-01 accepted（补记八十七 + 评审 `reviews/runtime.md`），下一任务＝P3-02（原样迁移四族命令构造与托管配置）。**
 **（上一轮口径——第二十一次更新，2026-09-26）：P3-01 切片五已落地（补记八十六）——`PlatformServices` 端口 + 宿主 `platform_adapter.rs::HostPlatformServices`(reveal/clipboard 两条命令改经端口,OS 调用体迁入;`reveal_args` 纯函数三平台各一条测试),src-tauri **2467**/0、core **309**/0、门禁矩阵全绿。**
 **（上一轮口径——第二十次更新，2026-09-26）：P3-01 切片四已落地（补记八十五）——10 个任务作用域 watcher 站点全部经 `WatcherSupervisor`（会话六站按 (task,gen) 去重；reader/退出监控/转录走 spawn_unique 仅记账），token 检查点逐站落位，shutdown 升级为有界拆除；`tests/runtime_lifecycle.rs` 5 条判据全绿并注册 `pnpm native:check runtime`（P3-01 三条计划判据全部有机器守着）。** core **309**/0、src-tauri **2466**/0、tauri-adapter 12/2527、全量 `pnpm test` 376/5483 绿。
@@ -1670,6 +1671,15 @@ grill-me
 > 2. **落地**：映射表五函数 + 2 条测试 move 进 `core/crates/aeroric-core/src/agents/launch.rs`；宿主 `agent_family_maps.rs` 变 re-export（pty/ssh/legacy_task_executor 四处路径不变）。core 新增 **`LaunchPlan{program,args,cwd,env,unset_env}`** 纯数据类型（计划 Action 1 的"计划与执行分离"）——`unset_env` 独立于 `env` 是 omp 不变量的形状要求（`PI_PROFILE`/`OMP_PROFILE` 必须从继承环境**移除**而非覆盖）；一条用例钉住 env 有序 + 双列表独立。
 > 3. **账目**：core **312**/0（+3）、src-tauri 串行 **2465**/0（−2 搬家；地板 2467→**2465** 两处同改读回）、门禁矩阵全绿（skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、doctor 18/18、contracts 12 份逐字节、inventory consistent+freeze-check noop）、fmt/clippy/typecheck 净、全量 `pnpm test` **376/5483 绿**。一次门禁红归因：tauri-adapter 首跑 1 case 红、单独复跑 12/2526 全绿——负载敏感家族（连跑两轮门禁的窗口），按既有口径记录不复现。
 > 4. **下一步（按底稿 §4-2/3）**：builder 的**计划半边**进 core（产出 LaunchPlan，宿主变机械翻译）+ parity fixtures 由旧宿主路径亲自算出、core 重放；然后 env 层顺序约束与 OMP 反例、`managed_home/` 迁入、SwitchEvidence/G18。`pnpm native:check agents` 在 suite 成形后注册。
+
+> **【补记八十九 @ 2026-09-26，P3-02 切片二：计划半边进 core + parity fixtures + agents 门禁注册】**（底稿 §4-2 完结）
+>
+> 1. **fixtures 先于迁移冻结**：`core/crates/aeroric-core/tests/fixtures/agent-launch-parity.json` 的 18 case 期望由**旧宿主路径**亲自算出——`build_*_cmd + add_*_launch_args` 组合出的 CommandBuilder,经 `get_argv`/`get_env(key)`/`get_cwd` 提取。`CommandBuilder` 没有 env 遍历接口,env 按"各家族已知键"逐键采集(DSH_×3 / PI_·OMP_·OTEL×5);facts 字段携带每 case 的输入事实(model/effort/agent/interactive/home/patches/projectPath/agentEnv),core 重放按 facts 重建输入——期望与输入同存,重放不是照抄。case 表覆盖:4 家族×3 权限档、prompt 空/非空(dsh=interactive 维、omp=位置参数维)、resume(omp)、custom/home/env(每族一例)。
+> 2. **core 计划函数四件**:`claude_plan`(含 `--model` 的 agent=="claude" 门)、`codex_plan`(-C/-c trust override/-m/-c model_reasoning_effort/fast_mode 双 -c;`toml_string` 替代宿主的 `toml::Value::String` 序列化——词表受控、基础转义等价,不加 toml 依赖)、`dsh_plan`(--profile headless/DSH_PERMISSION_MODE/DSH_TELEMETRY_DISABLED/DSH_HOME/--patch 顺序)、`omp_plan`(--approval-mode/agent_env/--cwd/--model/--thinking ultra 封顶/--resume/位置参数殿后)。**一次函数签名自查**:omp_plan 的 `home` 参数冗余(agent_env 已承载托管 home 事实),clippy 抓掉。
+> 3. **宿主机械翻译**:四个旧 builder+add_* 对(8 函数)收敛为 `claude_command`/`codex_command`/`dsh_command`/`omp_command` + `to_command_builder`(LaunchPlan→CommandBuilder 的翻译器,unset_env 走 env_remove);run/resume 路径与全部测试调用点改到合并命令。run-flow 层(cwd、setup_env 系、AERORIC_AGENT_MODEL、extra_env 最后赢家、claude session-id/settings/mcp-config、codex hooks-trust/-p/resume 子命令)留在宿主——运行流程决策不属于家族规划,边界写进底稿。
+> 4. **双侧等价证明**:宿主采集器(`agent_launch_parity_fixture_harvest`)迁移后改调合并命令,**对同一份冻结 fixtures 断言逐字节相等**——旧路径产出的期望被新(core 计划+机械翻译)路径精确复现;core 重放同 fixtures 亦逐字节相等。两条额外语义钉:claude --model 的 agent 门、omp ultra→max 且不向上游发送 ultra(OMP 不变量)。
+> 5. **门禁**:`pnpm native:check agents` 注册(case `agent-launch-parity-rust`,1 case/2,floor 2)。**账目**:core **314**/0(+2 重放)、src-tauri 串行 **2465**/0(净 −1:trust-override 纯函数测试随 codex_plan 迁 core,其属性由 fixtures/replay 覆盖;地板 2465 吻合)、tauri-adapter 12/**2526**、skeleton 20/113、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 11 条→freeze→noop、params **659**、typecheck/fmt/clippy 全净、全量 `pnpm test` **376/5483 绿**。
+> 6. **下一步(按底稿 §4-3/4/5)**:env 层顺序约束的 core 侧表达 + OMP 反例(hook 扩展名/willContinue/--mode 禁用)→ `managed_home/` 迁入(omp_home/dsh_home/hooks 安装;include_str! hook 随迁)→ SwitchEvidence/`adopt_session_for_agent` + G18 裁决 → `grill-me [agents]` 收口。
 
 
 

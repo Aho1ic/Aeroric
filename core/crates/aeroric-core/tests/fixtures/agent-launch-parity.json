@@ -1,0 +1,614 @@
+{
+  "source": "harvested from the legacy host path (build_*_cmd + add_*_launch_args) before the core plan functions existed; see MIGRATION_PLAN 补记八十九",
+  "envNote": "env keys are the family-known ones; run-flow layers (setup_env, AERORIC_AGENT_MODEL, extra_env last-wins) stay host-side",
+  "cases": [
+    {
+      "id": "claude-ask",
+      "family": "claude",
+      "permission": "ask",
+      "custom": false,
+      "facts": {
+        "agent": "claude",
+        "model": "test-model",
+        "effort": "high"
+      },
+      "expected": {
+        "program": "claude",
+        "args": [
+          "--permission-mode",
+          "default",
+          "--model",
+          "test-model",
+          "--effort",
+          "high"
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "codex-ask",
+      "family": "codex",
+      "permission": "ask",
+      "custom": false,
+      "facts": {
+        "projectPath": "/work/proj",
+        "model": null,
+        "effort": null,
+        "speed": null
+      },
+      "expected": {
+        "program": "codex",
+        "args": [
+          "-C",
+          "/work/proj",
+          "-c",
+          "projects.\"/work/proj\".trust_level=\"trusted\""
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "dsh-ask-prompt",
+      "family": "dsh",
+      "permission": "ask",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/dsh",
+        "interactive": false,
+        "patches": []
+      },
+      "expected": {
+        "program": "dsh",
+        "args": [
+          "--profile",
+          "headless"
+        ],
+        "cwd": null,
+        "env": {
+          "DSH_HOME": "/managed/dsh",
+          "DSH_PERMISSION_MODE": "read-only",
+          "DSH_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    {
+      "id": "omp-ask-prompt",
+      "family": "omp",
+      "permission": "ask",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/omp",
+        "projectPath": "/work/proj",
+        "model": null,
+        "thinking": null,
+        "resume": null,
+        "agentEnv": [
+          [
+            "PI_CODING_AGENT_DIR",
+            "/managed/omp"
+          ],
+          [
+            "OMP_APP_NAME",
+            "aeroric"
+          ],
+          [
+            "OMP_SKIP_SETUP",
+            "1"
+          ],
+          [
+            "PI_AUTO_QA",
+            "0"
+          ],
+          [
+            "OTEL_SDK_DISABLED",
+            "true"
+          ]
+        ]
+      },
+      "expected": {
+        "program": "omp",
+        "args": [
+          "--approval-mode",
+          "always-ask",
+          "--cwd",
+          "/work/proj",
+          "--",
+          "hello world"
+        ],
+        "cwd": null,
+        "env": {
+          "OMP_APP_NAME": "aeroric",
+          "OMP_SKIP_SETUP": "1",
+          "OTEL_SDK_DISABLED": "true",
+          "PI_AUTO_QA": "0",
+          "PI_CODING_AGENT_DIR": "/managed/omp"
+        }
+      }
+    },
+    {
+      "id": "claude-auto_edit",
+      "family": "claude",
+      "permission": "auto_edit",
+      "custom": false,
+      "facts": {
+        "agent": "claude",
+        "model": "test-model",
+        "effort": "high"
+      },
+      "expected": {
+        "program": "claude",
+        "args": [
+          "--permission-mode",
+          "acceptEdits",
+          "--model",
+          "test-model",
+          "--effort",
+          "high"
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "codex-auto_edit",
+      "family": "codex",
+      "permission": "auto_edit",
+      "custom": false,
+      "facts": {
+        "projectPath": "/work/proj",
+        "model": null,
+        "effort": null,
+        "speed": null
+      },
+      "expected": {
+        "program": "codex",
+        "args": [
+          "--sandbox",
+          "workspace-write",
+          "-a",
+          "on-request",
+          "-C",
+          "/work/proj",
+          "-c",
+          "projects.\"/work/proj\".trust_level=\"trusted\""
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "dsh-auto_edit-prompt",
+      "family": "dsh",
+      "permission": "auto_edit",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/dsh",
+        "interactive": false,
+        "patches": []
+      },
+      "expected": {
+        "program": "dsh",
+        "args": [
+          "--profile",
+          "headless"
+        ],
+        "cwd": null,
+        "env": {
+          "DSH_HOME": "/managed/dsh",
+          "DSH_PERMISSION_MODE": "workspace-write",
+          "DSH_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    {
+      "id": "omp-auto_edit-prompt",
+      "family": "omp",
+      "permission": "auto_edit",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/omp",
+        "projectPath": "/work/proj",
+        "model": null,
+        "thinking": null,
+        "resume": null,
+        "agentEnv": [
+          [
+            "PI_CODING_AGENT_DIR",
+            "/managed/omp"
+          ],
+          [
+            "OMP_APP_NAME",
+            "aeroric"
+          ],
+          [
+            "OMP_SKIP_SETUP",
+            "1"
+          ],
+          [
+            "PI_AUTO_QA",
+            "0"
+          ],
+          [
+            "OTEL_SDK_DISABLED",
+            "true"
+          ]
+        ]
+      },
+      "expected": {
+        "program": "omp",
+        "args": [
+          "--approval-mode",
+          "write",
+          "--cwd",
+          "/work/proj",
+          "--",
+          "hello world"
+        ],
+        "cwd": null,
+        "env": {
+          "OMP_APP_NAME": "aeroric",
+          "OMP_SKIP_SETUP": "1",
+          "OTEL_SDK_DISABLED": "true",
+          "PI_AUTO_QA": "0",
+          "PI_CODING_AGENT_DIR": "/managed/omp"
+        }
+      }
+    },
+    {
+      "id": "claude-full_access",
+      "family": "claude",
+      "permission": "full_access",
+      "custom": false,
+      "facts": {
+        "agent": "claude",
+        "model": "test-model",
+        "effort": "high"
+      },
+      "expected": {
+        "program": "claude",
+        "args": [
+          "--dangerously-skip-permissions",
+          "--model",
+          "test-model",
+          "--effort",
+          "high"
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "codex-full_access",
+      "family": "codex",
+      "permission": "full_access",
+      "custom": false,
+      "facts": {
+        "projectPath": "/work/proj",
+        "model": null,
+        "effort": null,
+        "speed": null
+      },
+      "expected": {
+        "program": "codex",
+        "args": [
+          "--dangerously-bypass-approvals-and-sandbox",
+          "-C",
+          "/work/proj",
+          "-c",
+          "projects.\"/work/proj\".trust_level=\"trusted\""
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "dsh-full_access-prompt",
+      "family": "dsh",
+      "permission": "full_access",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/dsh",
+        "interactive": false,
+        "patches": []
+      },
+      "expected": {
+        "program": "dsh",
+        "args": [
+          "--profile",
+          "headless"
+        ],
+        "cwd": null,
+        "env": {
+          "DSH_HOME": "/managed/dsh",
+          "DSH_PERMISSION_MODE": "danger-full-access",
+          "DSH_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    {
+      "id": "omp-full_access-prompt",
+      "family": "omp",
+      "permission": "full_access",
+      "prompt": "hello world",
+      "custom": false,
+      "facts": {
+        "home": "/managed/omp",
+        "projectPath": "/work/proj",
+        "model": null,
+        "thinking": null,
+        "resume": null,
+        "agentEnv": [
+          [
+            "PI_CODING_AGENT_DIR",
+            "/managed/omp"
+          ],
+          [
+            "OMP_APP_NAME",
+            "aeroric"
+          ],
+          [
+            "OMP_SKIP_SETUP",
+            "1"
+          ],
+          [
+            "PI_AUTO_QA",
+            "0"
+          ],
+          [
+            "OTEL_SDK_DISABLED",
+            "true"
+          ]
+        ]
+      },
+      "expected": {
+        "program": "omp",
+        "args": [
+          "--approval-mode",
+          "yolo",
+          "--cwd",
+          "/work/proj",
+          "--",
+          "hello world"
+        ],
+        "cwd": null,
+        "env": {
+          "OMP_APP_NAME": "aeroric",
+          "OMP_SKIP_SETUP": "1",
+          "OTEL_SDK_DISABLED": "true",
+          "PI_AUTO_QA": "0",
+          "PI_CODING_AGENT_DIR": "/managed/omp"
+        }
+      }
+    },
+    {
+      "id": "omp-auto_edit-resume",
+      "family": "omp",
+      "permission": "auto_edit",
+      "prompt": "hello world",
+      "resume": "sess-1",
+      "custom": false,
+      "facts": {
+        "home": "/managed/omp",
+        "projectPath": "/work/proj",
+        "model": "pi-model",
+        "thinking": "xhigh",
+        "resume": "sess-1",
+        "agentEnv": [
+          [
+            "PI_CODING_AGENT_DIR",
+            "/managed/omp"
+          ],
+          [
+            "OMP_APP_NAME",
+            "aeroric"
+          ],
+          [
+            "OMP_SKIP_SETUP",
+            "1"
+          ],
+          [
+            "PI_AUTO_QA",
+            "0"
+          ],
+          [
+            "OTEL_SDK_DISABLED",
+            "true"
+          ]
+        ]
+      },
+      "expected": {
+        "program": "omp",
+        "args": [
+          "--approval-mode",
+          "write",
+          "--cwd",
+          "/work/proj",
+          "--model",
+          "pi-model",
+          "--thinking",
+          "xhigh",
+          "--resume",
+          "sess-1",
+          "--",
+          "hello world"
+        ],
+        "cwd": null,
+        "env": {
+          "OMP_APP_NAME": "aeroric",
+          "OMP_SKIP_SETUP": "1",
+          "OTEL_SDK_DISABLED": "true",
+          "PI_AUTO_QA": "0",
+          "PI_CODING_AGENT_DIR": "/managed/omp"
+        }
+      }
+    },
+    {
+      "id": "dsh-auto_edit-interactive",
+      "family": "dsh",
+      "permission": "auto_edit",
+      "custom": false,
+      "facts": {
+        "home": "/managed/dsh",
+        "interactive": true,
+        "patches": []
+      },
+      "expected": {
+        "program": "dsh",
+        "args": [],
+        "cwd": null,
+        "env": {
+          "DSH_HOME": "/managed/dsh",
+          "DSH_PERMISSION_MODE": "workspace-write",
+          "DSH_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    {
+      "id": "claude-custom-full_access",
+      "family": "claude",
+      "permission": "full_access",
+      "custom": true,
+      "facts": {
+        "agent": "team-agent",
+        "model": null,
+        "effort": null
+      },
+      "expected": {
+        "program": "team-agent",
+        "args": [
+          "--profile",
+          "x",
+          "--dangerously-skip-permissions"
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "codex-custom-full_access",
+      "family": "codex",
+      "permission": "full_access",
+      "custom": true,
+      "facts": {
+        "projectPath": "/work/proj",
+        "model": "gpt-5.6",
+        "effort": "low",
+        "speed": "fast"
+      },
+      "expected": {
+        "program": "team-agent",
+        "args": [
+          "--profile",
+          "x",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "-C",
+          "/work/proj",
+          "-c",
+          "projects.\"/work/proj\".trust_level=\"trusted\"",
+          "-m",
+          "gpt-5.6",
+          "-c",
+          "model_reasoning_effort=\"low\"",
+          "-c",
+          "features.fast_mode=true",
+          "-c",
+          "service_tier=\"fast\""
+        ],
+        "cwd": null,
+        "env": {}
+      }
+    },
+    {
+      "id": "dsh-custom-full_access",
+      "family": "dsh",
+      "permission": "full_access",
+      "prompt": "hello world",
+      "custom": true,
+      "facts": {
+        "home": "/managed/dsh",
+        "interactive": false,
+        "patches": [
+          "/managed/dsh/patch.toml"
+        ]
+      },
+      "expected": {
+        "program": "team-agent",
+        "args": [
+          "--profile",
+          "x",
+          "--profile",
+          "headless",
+          "--patch",
+          "/managed/dsh/patch.toml"
+        ],
+        "cwd": null,
+        "env": {
+          "DSH_HOME": "/managed/dsh",
+          "DSH_PERMISSION_MODE": "danger-full-access",
+          "DSH_TELEMETRY_DISABLED": "1"
+        }
+      }
+    },
+    {
+      "id": "omp-custom-full_access",
+      "family": "omp",
+      "permission": "full_access",
+      "custom": true,
+      "facts": {
+        "home": "/managed/omp",
+        "projectPath": "/work/proj",
+        "model": null,
+        "thinking": null,
+        "resume": null,
+        "agentEnv": [
+          [
+            "PI_CODING_AGENT_DIR",
+            "/managed/omp"
+          ],
+          [
+            "OMP_APP_NAME",
+            "aeroric"
+          ],
+          [
+            "OMP_SKIP_SETUP",
+            "1"
+          ],
+          [
+            "PI_AUTO_QA",
+            "0"
+          ],
+          [
+            "OTEL_SDK_DISABLED",
+            "true"
+          ]
+        ]
+      },
+      "expected": {
+        "program": "team-agent",
+        "args": [
+          "--profile",
+          "x",
+          "--approval-mode",
+          "yolo",
+          "--cwd",
+          "/work/proj"
+        ],
+        "cwd": null,
+        "env": {
+          "OMP_APP_NAME": "aeroric",
+          "OMP_SKIP_SETUP": "1",
+          "OTEL_SDK_DISABLED": "true",
+          "PI_AUTO_QA": "0",
+          "PI_CODING_AGENT_DIR": "/managed/omp"
+        }
+      }
+    }
+  ]
+}

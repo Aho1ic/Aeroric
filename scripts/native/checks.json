@@ -35,7 +35,8 @@
       "adapter-acceptance-real-kernel@tauri-adapter": 18,
       "adapter-event-payload-contract@tauri-adapter": 5,
       "adapter-intent-queue@tauri-adapter": 9,
-      "runtime-lifecycle-rust@runtime": 5
+      "runtime-lifecycle-rust@runtime": 5,
+      "agent-launch-parity-rust@agents": 2
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1075,6 +1076,30 @@
           ],
           "minCases": 5,
           "$note": "P3-01 的运行时生命周期验收,计划原文三条判据逐一落地:①启动两次不重复 watcher(监督者按名去重,同名的第二次启动被拒且唯一循环继续工作);②shutdown 两次安全且监督者可重用(第二次是安静 no-op、重启语义成立);③退出监控不能清新 generation(旧代 retire 幂等——重复退出报告 retire 不到任何东西;remove_pty_handles 只带走旧代,新生代句柄完好;结算守卫在另一代在飞时零消费)。另两条是机制钉子:有界拆除(无视 token 的 watcher 在宽限内被 detach 而不是把退出挂死——PTY reader 阻塞在 read 上的形状)与结算幂等(重复结算零消费、各任务标记独立成账)。句柄错配拒绝路径不走测试:remove_pty_handles_if_current 按 ADR-020 合同是 debug_assert!(实现 bug),测试构建走到即 panic。宿主 spawn 站点全部经 WatcherSupervisor(切片四接管),所以在这里钉住=钉住宿主行为。地板 5 = 5 条测试。",
+          "timeoutMs": 300000
+        }
+      ]
+    },
+    "agents": {
+      "registeredBy": "P3-02",
+      "cases": [
+        {
+          "name": "agent-launch-parity-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "agent_launch"
+          ],
+          "minCases": 2,
+          "$note": "P3-02 切片二的 parity 证明:fixtures 的期望由旧宿主路径(build_*_cmd + add_*_launch_args 的 CommandBuilder,经 get_argv/get_env/get_cwd 提取)在迁移前亲自算出并冻结(core tests/fixtures/agent-launch-parity.json,18 case);core 四族计划函数重放逐字节相等。宿主侧另有同 fixtures 的等价守卫(pty.rs agent_launch_parity_fixture_harvest)——迁移后宿主=机械翻译,两侧共用一份真相。第二条测试钉家族特有语义(claude --model 的 agent 门、omp ultra 封顶 max 且不向上游发 ultra)。后续切片(env 层、managed_home、OMP 反例)追加 case 时同步抬 floor。",
           "timeoutMs": 300000
         }
       ]
