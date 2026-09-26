@@ -1,0 +1,63 @@
+# P3-01 侦察底稿:运行时端口与 TaskRegistry 迁移面(2026-09-26)
+
+> 性质:实施前的机械盘点,全部数字来自 `75a39e0` 之后的真实源码,不是估计。
+> 消费方式:每一节都是后续切片的输入;与计划有出入的事实在这里更正而不是悄悄改。
+
+## 1. 起点状态:core 已经 tauri-free
+
+P3-01 验收判据 `rg -n 'tauri::|AppHandle|tauri::State' core/crates/aeroric-core/src` **当前零命中**(core crate 的 Cargo.toml 也没有 tauri 依赖;INV-02 从 P2-01 起逐任务维持)。P3-01 的这条验收是**保持零**,不是清零。
+
+## 2. TaskManager 容器清单与可移植性判定
+
+宿主 `TaskManager`(`src-tauri/src/lib.rs`)共 15 个字段,全部按 `RunKey{id,generation}` 键(P2-05 重键 wave 1+2 完成,ADR-020/030/031/032):
+
+| 容器 | 类型要点 | 可移植到 core? |
+|---|---|---|
+| `pty_masters` | `Box<dyn portable_pty::MasterPty + Send>` | ✅ portable-pty 是纯 Rust crate;core workspace 已声明同一 vendor 补丁(`core/Cargo.toml [patch]`),crate 依赖待加 |
+| `pty_writers` | `Box<dyn io::Write + Send>` | ✅ 同上 |
+| `child_handles` | `Box<dyn portable_pty::Child + Send + Sync>` | ✅ 同上 |
+| `pending_pty_sizes` | `(u16,u16)` 信箱,读写走 `unminted(id)` | ✅ 纯数据 |
+| `cancelled_tasks` / `manually_completed_tasks` | `HashSet<String>`,任务级账(ADR-030"最后退出者销账") | ✅ 纯数据 |
+| `codex_sessions` / `claude_sessions` / `dsh_sessions` / `omp_sessions` | Info 全是纯数据(`session_id`/`session_path`/`is_placeholder`,见 `session.rs:33/39/49`、`session_dsh.rs:40`) | ✅ 纯数据,无 AppHandle/Channel/Sender |
+| `claimed_session_paths` | `HashSet<String>`,路径粒度(ADR-020 §3 的例外) | ✅ 纯数据 |
+| `initial_input_signals` | `pty::StartupSignalRegistry`,`std::sync::mpsc::Sender` | ✅ std 通道,无 tauri |
+| `wsl_active_ids` | `HashSet<RunKey>` | ✅ 纯数据 |
+| `runs` | `RunRegistry`(纯 Rust,自含锁序) | ✅ 已是可移植形状 |
+| `codex_rpc` | `Arc<Mutex<Option<CodexRpcClient>>>`(usage.rs:36),**全局单例,非任务键** | ⚠️ ADR-020 已豁免其重键;迁移与否属实现决策,建议留在宿主(它是 usage 的客户端,不是任务资源) |
+
+**迁移纪律**:Action 2 的迁移必须是一次 **move**(宿主 `TaskManager` 变成委托壳,全部 43 处 `app.state::<TaskManager>` 的读取点改道),禁止"core 先立副本再逐表切换"——那是 Action 1 明文禁止的双真相源。这也是 `core/src/runtime/mod.rs` 文档里"TaskRegistry 与 move 同刀"的原因。
+
+## 3. `AppHandle` 的实际用途(45 个泛型化函数的表面需求)
+
+对 `app`/`handle` 的方法调用普查(`src-tauri/src/*.rs`):
+
+| 用途 | 次数 | 说明 |
+|---|---|---|
+| `state::<TaskManager>` | 43 | 主导用途。TaskRegistry 迁移后这些点改读 core registry 或经 executor 端口 |
+| `emit` | 29 | 事件发射。ADR-023 后生产路径只剩 sink 一行 + 远程桥;这批多为命令级的 UI 事件(dsh/approval/终端数据),归宿主 sink 实现 |
+| `manage` | 9 | 仅 setup 阶段(launch 时不调) |
+| `state::<ExitAuthorization>` / `DshWebUiManager` / `CoreGateway` / `RemoteState` / `LocalRouterManager` | 5/3/3/2/1 | 宿主服务定位;`CoreGateway` 已有 core 侧抽象,其余属宿主实现细节 |
+
+结论:`Runtime` 端口(伞形)的最小诚实表面 = `event_sink()` + `watchers()`;`state::<T>()` 这类**具体类型定位**是宿主实现的事,core 的 trait 不收它(收了就把宿主类型系统拖进 core,与 INV-02 同向违背)。
+
+## 4. watcher / spawn 站点普查(Action 3 的迁移面)
+
+`tauri::async_runtime::spawn` / `std::thread::spawn` / `spawn_blocking` 的站点分布(计数):`git.rs` 26、`fs.rs` 13、`agent_tools.rs` 5、`docker.rs` 5、`agent_assist.rs` 4、`config.rs` 4、`analytics.rs`/`conda.rs`/`dap.rs`/`diagnostics.rs`/`ssh.rs` 各 2、其余 1。**其中属于"任务作用域 watcher"(需接 ShutdownToken 的)是少数**:会话 watcher(`spawn_*_session_watcher`)、`event_watcher.rs` 的 hook 循环、PTY reader 线程、dsh 会话流。git/fs/docker 的大多数是命令作用域(tokio join 等在命令内),不在 Action 3 范围。切片时逐站点点名,不用总数当迁移清单。
+
+## 5. `subprocess.rs` 可移植性(331 行,Input 点名)
+
+`configure_*` / `terminate_*_process_tree` / `signal_process_group` 全部是纯 Rust(std/tokio + libc + windows-sys),**零 tauri 引用**,自带 3 条真进程测试(`taskkill_targets_the_complete_process_tree` 为 windows-cfg)。迁入 core 的代价:core 增加两个 cfg 门控的 OS 依赖(`libc` 0.2 unix-only;`windows-sys` 0.61 带具体 feature 列表)。宿主侧改为 `pub use aeroric_core::runtime::subprocess::*;` 的薄 re-export,20+ 个调用点(`agent_tools.rs`/`conda.rs`/`agent_assist.rs`/`ssh.rs` 等)零改动。**src-tauri `--lib` 地板将随测试搬家下降**(搬 3 条),须同轮在 checks.json 的 `$note` 记录,不静默。
+
+## 6. 切片顺序(每片自身可绿)
+
+1. ~~runtime 模块骨架:`ShutdownToken` + `WatcherSupervisor` + `Runtime` 伞形端口 + `events.rs` 再导出~~(本片,补记八十二)。
+2. `subprocess.rs` 迁入 core(薄 re-export;OS 依赖进 core;地板账随迁)。
+3. `TaskRegistry` move:14 张表迁入 core,宿主 `TaskManager` 变委托壳,`RunRegistry` 随迁;锁序表(`lib.rs` §锁序)随之搬家;全部 43 处 `state::<TaskManager>` 读取点改道。**这是本任务最大的一片**,带锁序负例与"双开不覆盖句柄"回归。
+4. watcher 逐站点接 `ShutdownToken`(§4 的任务作用域子集),`tests/runtime_lifecycle.rs` 补齐"启动两次不重复 watcher"与"退出监控不能清新 generation"两条判据(后者由 `RunKey` 寻址 + supervisor 的隔离测试共同钉)。
+5. `platform_adapter.rs`(宿主)与 `PlatformServices` 端口同刀;`ProcessSpawner` 随 §5-§6 的进程面成形。**两个 trait 名字先于消费者出现被刻意推迟**——先立没人调用的 trait 就是 grill 门禁点名的"只检查 trait 名称"。
+
+## 7. 门禁与验收对照
+
+- `pnpm native:check runtime`:**尚未注册**(无 suite 时不注册假门禁);`tests/runtime_lifecycle.rs` 随 §6-4 成形后同轮注册。
+- core 测试基线:279(补记七十八)→ **287**(本片 +8:token 4 + supervisor 4)。
+- `cargo check --manifest-path core/Cargo.toml --locked` 与 src-tauri 同命令:本片仅动 core,两处均绿。
