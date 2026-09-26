@@ -1,8 +1,9 @@
 //! 运行时层(P3-01):把"宿主到底是什么"(Tauri / 原生 macOS / CLI)从 core 的
 //! 视野里抹掉,只留下端口、可取消的 watcher 生命周期与一份迁移契约。
 //!
-//! **本模块存在期间,`rg 'tauri::|AppHandle|tauri::State' core/` 必须保持零命中**
-//! ——这是 P3-01 的验收判据,不是风格偏好。
+//! **本模块存在期间,core 三个 crate 的源码里必须保持"tauri 的类型面零出现"**
+//! (INV-02 的源码扫描是词法的,连文档注释里的字面量都会被它拦下——上一轮就
+//! 拦住过我自己写的这条注释)——这是 P3-01 的验收判据,不是风格偏好。
 //!
 //! ## `TaskRegistry` 的迁移契约(为什么今天还不在这里)
 //!
@@ -18,6 +19,7 @@ pub mod events;
 pub mod manager;
 pub mod ports;
 pub mod shutdown;
+pub mod subprocess;
 
 pub use events::{NullSink, TaskEventSink, TaskNotification};
 pub use manager::{SuperviserError, WatcherSupervisor};

@@ -50,8 +50,8 @@ P3-01 验收判据 `rg -n 'tauri::|AppHandle|tauri::State' core/crates/aeroric-c
 
 ## 6. 切片顺序(每片自身可绿)
 
-1. ~~runtime 模块骨架:`ShutdownToken` + `WatcherSupervisor` + `Runtime` 伞形端口 + `events.rs` 再导出~~(本片,补记八十二)。
-2. `subprocess.rs` 迁入 core(薄 re-export;OS 依赖进 core;地板账随迁)。
+1. ~~runtime 模块骨架:`ShutdownToken` + `WatcherSupervisor` + `Runtime` 伞形端口 + `events.rs` 再导出~~(已落,补记八十二)。
+2. ~~`subprocess.rs` 迁入 core(薄 re-export;OS 依赖进 core;地板账随迁)~~(已落,补记八十三)。连带一次守卫口径收窄:`lease-refusal-never-kills-a-foreign-pid` 原来扫 core 全部源码(写于 core 没有进程管理的 P2 时代),进程树管理迁入后改为点名租约决策面文件(storage_lock/context/location/storage/),理由与主语区分记在该 case 的 `$note`。
 3. `TaskRegistry` move:14 张表迁入 core,宿主 `TaskManager` 变委托壳,`RunRegistry` 随迁;锁序表(`lib.rs` §锁序)随之搬家;全部 43 处 `state::<TaskManager>` 读取点改道。**这是本任务最大的一片**,带锁序负例与"双开不覆盖句柄"回归。
 4. watcher 逐站点接 `ShutdownToken`(§4 的任务作用域子集),`tests/runtime_lifecycle.rs` 补齐"启动两次不重复 watcher"与"退出监控不能清新 generation"两条判据(后者由 `RunKey` 寻址 + supervisor 的隔离测试共同钉)。
 5. `platform_adapter.rs`(宿主)与 `PlatformServices` 端口同刀;`ProcessSpawner` 随 §5-§6 的进程面成形。**两个 trait 名字先于消费者出现被刻意推迟**——先立没人调用的 trait 就是 grill 门禁点名的"只检查 trait 名称"。
@@ -59,5 +59,6 @@ P3-01 验收判据 `rg -n 'tauri::|AppHandle|tauri::State' core/crates/aeroric-c
 ## 7. 门禁与验收对照
 
 - `pnpm native:check runtime`:**尚未注册**(无 suite 时不注册假门禁);`tests/runtime_lifecycle.rs` 随 §6-4 成形后同轮注册。
-- core 测试基线:279(补记七十八)→ **287**(本片 +8:token 4 + supervisor 4)。
-- `cargo check --manifest-path core/Cargo.toml --locked` 与 src-tauri 同命令:本片仅动 core,两处均绿。
+- core 测试基线:279(补记七十八)→ 287(切片一 +8:token 4 + supervisor 4)→ **290**(切片二:+3,subprocess 三条真进程测试随体迁入)。
+- src-tauri `--lib`:2479 → **2476**(−3 即上述搬家;`src-tauri-lib-tests` 的 `minCases` 与 `runner.floors` **两处**同改并读回——runner.floors 漏改会被 inventory-consistency 当场抓住,补记六十二的坑第 N 次由门禁而不是由我抓住)。
+- `cargo check --manifest-path core/Cargo.toml --locked` 与 src-tauri 同命令:均绿;core/Cargo.lock 与 src-tauri/Cargo.lock 各精确一行(`"libc",` 进入 aeroric-core 依赖列表,包本体已在两份锁里,无新包)。

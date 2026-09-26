@@ -17,3 +17,8 @@ serde_json = { workspace = true }
 sha2 = "0.10.9"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+# runtime::subprocess(P3-01 切片二自宿主迁入)只在 unix 分支调 libc(setpgid/kill);
+# Windows 分支只用 std 的 creation_flags,不引入 windows-sys。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

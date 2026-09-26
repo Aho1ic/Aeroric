@@ -22,7 +22,7 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2479,
+      "src-tauri-lib-tests@tauri-adapter": 2476,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
@@ -554,7 +554,10 @@
             "-n",
             "--no-ignore",
             "\\.kill\\(\\)|libc::kill|pkill|killall|SIGKILL|SIGTERM|Command::new\\(\"kill",
-            "core/crates/aeroric-core/src"
+            "core/crates/aeroric-core/src/storage_lock.rs",
+            "core/crates/aeroric-core/src/context.rs",
+            "core/crates/aeroric-core/src/location.rs",
+            "core/crates/aeroric-core/src/storage/"
           ],
           "controls": [
             [
@@ -572,7 +575,7 @@
               "core/crates/aeroric-core/src/storage_lock.rs"
             ]
           ],
-          "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：生产代码里出现任何 kill 调用都意味着它在替用户决定该死哪个进程。测试夹具里的 holder.kill() 收拾的是自己 spawn 的子进程，故本 case 只扫 src/。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
+          "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：不变量的主语是「租约拒绝的决策面」，不是「core 里不许存在进程管理」。原口径扫描 core 全部源码，在 P2 时代（core 没有进程管理）恰好等价；P3-01 切片二把宿主 subprocess.rs 的进程组终止迁入 core/runtime/subprocess.rs（杀的是 core 自己 spawn 的子进程树，与迁移前宿主侧行为逐字节相同，也从来不在本不变量的主语里），全 core 扫描因此改为点名租约决策面文件。收窄是本次评审过的编辑，不是为了让红牌变绿——两个测试夹具的正控照旧。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
           "timeoutMs": 120000
         },
         {
@@ -906,7 +909,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2479,
+          "minCases": 2476,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -918,7 +921,7 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。"
         },
         {
           "name": "src-tauri-cargo-fmt",
