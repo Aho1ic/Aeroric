@@ -348,52 +348,27 @@ fn release_claimed_session_paths(task_manager: &TaskManager, task_id: &str) {
 
 /// 设置 CommandBuilder 的标准环境变量。
 pub(crate) fn setup_env(cmd: &mut CommandBuilder) {
-    // CommandBuilder::new() snapshots the parent process environment before we
-    // merge the login-shell environment. Merely skipping NO_COLOR below does
-    // not remove an inherited value (for example when Aeroric itself is
-    // launched by a terminal/agent with NO_COLOR=1).
-    for key in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR"] {
-        cmd.env_remove(key);
-    }
-
+    // 切片三:操作表在 core(`terminal_env_ops`),这里只按序机械重放——
+    // 颜色键先删、login-shell 合并、LANG/LC_CTYPE 兜底、终端类型与强制真彩。
     let login_env = crate::app_settings::get_login_shell_env();
-    for (key, value) in login_env {
-        if key == "NO_COLOR" || key == "CLICOLOR" || key == "CLICOLOR_FORCE" || key == "FORCE_COLOR"
-        {
-            continue;
-        }
-        cmd.env(key, value);
-    }
-
-    // 确保 locale 为 UTF-8。
-    // macOS 的 Terminal.app / iTerm2 会自动注入 LANG，但从 Dock 启动的 Tauri 应用
-    // 进程环境中没有 locale 变量，导致 PTY 子进程无法正确处理中文等多字节输入。
-    let has = |name: &str| login_env.iter().any(|(k, _)| k == name);
-    if !has("LANG") {
-        cmd.env("LANG", "en_US.UTF-8");
-    }
-    if !has("LC_CTYPE") {
-        cmd.env("LC_CTYPE", "en_US.UTF-8");
-    }
-
-    // 设置终端类型，使 Claude Code / Codex 输出正确的转义序列
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("CLICOLOR", "1");
-    cmd.env("CLICOLOR_FORCE", "1");
-    cmd.env("FORCE_COLOR", "3");
+    let ops = aeroric_core::agents::environment::terminal_env_ops(login_env);
+    apply_env_ops(cmd, &ops);
 }
 
 /// 注入 Aeroric hook 守卫所需的环境变量。
 /// hook 脚本依靠 AERORIC_TASK_ID + AERORIC_EVENT_DIR 同时存在才工作,
 /// 用户在 Aeroric 之外手动跑 agent 时这些变量缺失,脚本立即 exit 0。
 fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, is_codex: bool) {
-    if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
-        cmd.env("AERORIC_TASK_ID", task_id);
-        cmd.env("AERORIC_EVENT_DIR", dir.to_string_lossy().as_ref());
-        cmd.env("AERORIC_AGENT", agent);
-        cmd.env("AERORIC_AGENT_CODEX_LIKE", if is_codex { "1" } else { "0" });
-    }
+    let event_dir = crate::hooks::events_dir_for(task_id)
+        .ok()
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let ops = aeroric_core::agents::environment::aeroric_guard_ops(
+        task_id,
+        agent,
+        is_codex,
+        event_dir.as_deref(),
+    );
+    apply_env_ops(cmd, &ops);
 }
 
 /// 将 PTY master/writer/child 注册到 TaskManager 的三个 HashMap 中。
@@ -816,25 +791,36 @@ fn omp_command(
 /// ask → read-only(写操作审批,headless 下 fail-closed 即拒绝)、
 /// auto_edit → workspace-write(工作区内自动写)、
 /// full_access → danger-full-access(approval never)。
-/// `setup_env` 之后的 omp 环境收尾。必须在 `setup_env` 之后调用。
+/// `setup_omp_env` 的机械重放。必须在 `setup_env` 之后调用。
 ///
 /// omp 的 profile 优先于 `PI_CODING_AGENT_DIR`:上游 `dirs.ts` 的
 /// `resolveActiveAgentDirOverride` 是 `activeProfile ? undefined : ...`,只要
 /// `PI_PROFILE`/`OMP_PROFILE` 有值,`PI_CODING_AGENT_DIR` 直接被丢弃,omp 转去读
 /// `~/.omp/profiles/<name>/agent`。而 `setup_env` 会把 login-shell 环境合并进来
-/// —— 用户在 rc 里 export 过 profile,托管 home 就静默失效:hook 不加载(任务永远
-/// 停在 running)、MCP 配置读不到,而且 Aeroric 会去写用户自己的 `~/.omp`,违背
-/// "绝不触碰用户 home"的前提。
+/// —— 用户在 rc 里 export 过 profile,托管 home 就静默失效。操作表的顺序
+/// (清除在合并之后)由 core 的 `omp_env_ops`/`combined_omp_env_ops` 结构保证。
 fn setup_omp_env(cmd: &mut CommandBuilder, home: &Path, task_id: &str, agent: &str) {
-    cmd.env_remove("PI_PROFILE");
-    cmd.env_remove("OMP_PROFILE");
-    // login-shell 可能覆盖过这几项,重放一次以它们为准。
-    for (key, value) in crate::omp_home::omp_agent_env(home) {
-        cmd.env(key, value);
+    let agent_env = crate::omp_home::omp_agent_env(home);
+    let event_dir = crate::hooks::events_dir_for(task_id)
+        .ok()
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let ops = aeroric_core::agents::environment::omp_env_ops(
+        &agent_env,
+        task_id,
+        agent,
+        false,
+        event_dir.as_deref(),
+    );
+    apply_env_ops(cmd, &ops);
+}
+
+fn apply_env_ops(cmd: &mut CommandBuilder, ops: &[aeroric_core::agents::environment::EnvOp]) {
+    for op in ops {
+        match op {
+            aeroric_core::agents::environment::EnvOp::Set(key, value) => cmd.env(key, value),
+            aeroric_core::agents::environment::EnvOp::Unset(key) => cmd.env_remove(key),
+        }
     }
-    // omp 的 hook 装在托管 home 的 `hooks/post/*.js`,不走 `hooks::usable_for`
-    // 那条改写 claude/codex 配置的路径,但同样以这两个守卫变量判定"由 Aeroric 拉起"。
-    setup_aeroric_env(cmd, task_id, agent, false);
 }
 
 pub(crate) fn normalized_selected_model(selected_model: Option<&str>) -> Option<String> {

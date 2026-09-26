@@ -114,7 +114,12 @@ pub(crate) fn ensure_omp_home_for(agent: &str) -> Result<OmpHomePaths, String> {
     // (`discovery/builtin.ts::loadHooks`)。装在 post/ 下,文件名 `*` 表示对所有
     // tool 生效;真正的事件订阅在脚本里用 `pi.on` 完成。
     // hook_dir 已由 ensure_managed_home_dirs 以 owner-only 权限建好。
-    let hook_path = hook_dir.join("*.js");
+    // 切片三:文件名以 core 的 OMP 不变量为唯一来源;写盘前断言 willContinue
+    // 短路在脚本里(INV-07)——没有短路的 hook 会让角标在自动续跑前闪灭。
+    let hook_path = hook_dir.join(aeroric_core::agents::omp::OMP_HOOK_FILE_NAME);
+    if !aeroric_core::agents::omp::omp_hook_source_guards_will_continue(OMP_HOOK_SCRIPT) {
+        return Err("aeroric-omp-hook.js lost its willContinue guard; refusing to install".into());
+    }
     let hook_current = fs::read_to_string(&hook_path).ok();
     if hook_current.as_deref() != Some(OMP_HOOK_SCRIPT) {
         crate::storage::atomic_write_private(&hook_path, OMP_HOOK_SCRIPT)?;

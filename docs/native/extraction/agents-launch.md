@@ -38,7 +38,7 @@ launch-args 层:`add_dsh_launch_args`(DSH_HOME + --patch 顺序)、`add_omp_laun
 
 1. ~~映射表 move + `LaunchPlan` 类型~~(已落,补记八十八)。
 2. ~~builder 计划半边进 core + parity fixtures~~(已落,补记八十九):core 四族计划函数 `claude_plan`/`codex_plan`/`dsh_plan`/`omp_plan`(覆盖旧 build_*_cmd + add_*_launch_args 全部职责),宿主 `claude_command` 等四函数 = LaunchPlan→CommandBuilder 机械翻译;fixtures 18 case 由旧宿主路径在迁移前冻结(`core tests/fixtures/agent-launch-parity.json`,facts 字段携带每 case 输入),core 重放逐字节相等 + 宿主同 fixtures 等价守卫(pty.rs `agent_launch_parity_fixture_harvest`)。run-flow 层(cwd/setup_env 系/AERORIC_AGENT_MODEL/extra_env 最后赢家/claude session-id·settings·mcp/codex resume 子命令)留在宿主——那是运行流程决策,不是家族规划。`pnpm native:check agents` 已注册(1 case/2)。
-3. `agent_env.rs` 纯半边 + `setup_env` 顺序约束的 core 侧表达;omp_env 的 PI_PROFILE 清除反例(OMP 不变量)。
+3. ~~env 层顺序约束 + OMP 不变量~~(已落,补记九十):core `agents/environment.rs` 用 `EnvOp{Set,Unset}` 有序列表表达三段计划(`terminal_env_ops`/`omp_env_ops`/`aeroric_guard_ops`),`combined_omp_env_ops` 把 terminal+omp 拼成单列表——"setup_omp_env 必须后于 setup_env"从注释变成结构(core 测试断言 profile-Unset 在 login-merge 之后);宿主三函数变机械重放,旧测试(omp_env_clears_profile_after_setup_env 等)成为等价证明。core `agents/omp.rs` 三条不变量:hook 名 `.js/.ts` 可加载性(`.mjs` 反例,1.4.7 真踩过)、willContinue 短路检测(宿主 omp_home 写盘前 fail-closed 断言)、`omp_plan` 永不产出 `--mode`(INV-05/07,全权限档×事实组合)。
 4. `managed_home/`:omp_home/dsh_home/hooks 安装逻辑迁入;`include_str!` hook 文件随迁改路径;单一资源来源(删旧前改全引用)。
 5. SwitchEvidence/`adopt_session_for_agent` 真实实现(P2-04 Q43 移交项)+ G18 裁决窗口。
 6. `tests/agent_launch.rs` + `omp_invariants.rs` 齐后注册 `pnpm native:check agents`;`grill-me [agents]` 收口。
