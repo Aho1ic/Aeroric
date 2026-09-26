@@ -55,7 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第十七次更新）：P3-01 切片一已落地（补记八十二）——`core/src/runtime/` 骨架进 core，侦察底稿＝`docs/native/extraction/runtime-ports.md`。** core **287**/0（+8：ShutdownToken 4 + WatcherSupervisor 4）、fmt/clippy 干净、宿主零改动。**下一片（按底稿 §6）＝切片二：`subprocess.rs` 迁入 core**（薄 re-export、core 增 libc/windows-sys cfg 依赖、src-tauri 地板随 3 条测试搬家在 `$note` 记账），其后是最大的一片 `TaskRegistry` move（14 张表 + 43 处 `state::<TaskManager>` 读取点改道，禁双真相源）。P3-01 验收的 `pnpm native:check runtime` 在 `runtime_lifecycle.rs` 成形前**不注册**。
+**当前状态（2026-09-26，第十八次更新）：P3-01 切片二已落地（补记八十三）——`subprocess.rs` 迁入 core，core **290**/0、src-tauri **2476**/0（地板与 runner.floors 两处同改并读回）。** 一次守卫口径收窄（`lease-refusal-never-kills-a-foreign-pid` 改点租约决策面，理由在 case `$note`）；一次假红归因（observer 用例单跑/复跑不复现）。**下一片＝切片三：`TaskRegistry` move**（底稿 §6-3：14 张表 + `RunRegistry` + 锁序表搬进 core，宿主 `TaskManager` 变委托壳，43 处 `state::<TaskManager>` 读取点改道；禁双真相源，与锁序负例、"双开不覆盖句柄"回归同刀）。
+
+**（上一轮口径——第十七次更新，2026-09-26）：P3-01 切片一已落地（补记八十二）——`core/src/runtime/` 骨架进 core，侦察底稿＝`docs/native/extraction/runtime-ports.md`。**
 
 **（上一轮口径——第十六次更新，2026-09-26）：P2-05 accepted、Phase 2 Gate 通过（补记八十一 + 评审 §13），下一任务＝Phase 3 的 P3-01（提取运行时端口，替代 `AppHandle` 与全局查找）。** 收尾拷问轮 Q73/Q74 用户已拍板：验收 #②（ADR-018 确认闸）挂账（宿主入口→P3-01、确认 UI→P5-03）；ADR-024 挂账 P3-01 后的 Action 3 收尾；ADR-026 生产证据待现；G18 归 P3-02。提交链新增：`75a39e0`（接线 §12 ③④那一刀）→ `c04a597`（补记八十）→ 本次（补记八十一 + Gate 裁定）；都在 `main`，**未 push、无 tag、未发 release**（INV-01）。**P3-01 动工前的已知输入**：45 个函数已泛型化 `R: Runtime`（补记四十一，提前支付的 P3-01 成本）；`TaskManager` 重键 wave 1+2 已完成（ADR-020/030/031/032，键已是 `(task_id, generation)`）；`core/crates/aeroric-core/src/runtime/` 尚不存在（P3-01 Action 1 的新建目标）；验收硬指标＝`rg 'tauri::|AppHandle|tauri::State' core/crates/aeroric-core/src` 零命中 + `tests/runtime_lifecycle.rs` + `pnpm native:check runtime` 注册。
 
@@ -1608,6 +1610,15 @@ grill-me
 > 3. **一处刻意的计划偏离，写明不遮掩**：计划 Action 1 点名 `ProcessSpawner`/`PlatformServices` 两个名字，本片**未定义**——它们的第一个真实消费者分别随 `subprocess.rs` 迁入/`TaskRegistry` 接管进程句柄与宿主 `platform_adapter.rs` 到位；先立没人调用的 trait，正是 [runtime] 门禁要追问的"只检查 trait 名称"。同因，`TaskRegistry` 也不在本片：Action 2 明文禁止两份真相源，迁移必须一次 move（宿主 `TaskManager` 变委托壳），core 里先立平行结构就是把双真相源造出来——契约写在 `runtime/mod.rs` 文档里。
 > 4. **实测**：core **287 passed/0 failed**（279+8；16 个二进制求和）、fmt/clippy `-D warnings` 干净、src-tauri 零改动故其门禁面不变。本片期间被 clippy 抓到一次测试残留（死变量 `gate` 的 `Arc<(Sender,Receiver)>` 非 Send+Sync），删除而非消音。
 > 5. **下一步（切片二起，按底稿 §6 顺序）**：`subprocess.rs` 迁入 core（薄 re-export，core 增 libc/windows-sys 两个 cfg 门控依赖，src-tauri 地板随 3 条测试搬家在 `$note` 记账）→ `TaskRegistry` move（最大一片：14 张表 + `RunRegistry` + 锁序表搬家 + 43 处读取点改道）→ watcher 逐站点接 token → `runtime_lifecycle.rs` 补齐两条判据后注册 `pnpm native:check runtime`。
+
+> **【补记八十三 @ 2026-09-26，P3-01 切片二：`subprocess.rs` 迁入 core】**（宿主改薄 re-export，调用点零改动；侦察底稿 §6-2/§7 已同步）
+>
+> 1. **迁移形态**：函数体逐字节迁入 `core/crates/aeroric-core/src/runtime/subprocess.rs`（只改可见性 `pub(crate)`→`pub`），SAFETY 注释与 3 条真进程测试原样随迁；宿主 `subprocess.rs` 变成一行 `pub(crate) use aeroric_core::runtime::subprocess::*;`——`agent_tools.rs`/`conda.rs`/`agent_assist.rs`/`ssh.rs` 等 20+ 个 `crate::subprocess::…` 调用点零改动。core 依赖代价比侦察预估的还小：windows 分支只用 std 的 `creation_flags` 常量，**不需要 windows-sys**，只需 `[target.'cfg(unix)'.dependencies] libc = "0.2"`。
+> 2. **锁文件纪律执行**：core 与 src-tauri 两份 Cargo.lock 各精确一行 diff（`"libc",` 进 aeroric-core 依赖列表，包本体作为共享传递依赖已在锁里、零新包），按"依赖变更单独记录并审查锁 diff"的规矩逐行看过。
+> 3. **账目**：core **290**/0（+3）、src-tauri 串行 **2476**/0（−3，全部为搬家测试）。`src-tauri-lib-tests` 的地板**两处同改并读回**——`minCases` 2479→2476、`runner.floors` 同步，而后者漏改立刻被 `inventory-consistency` 的 `minCases != frozen floor` 当场拦下（补记六十二记过的那个坑，这次由门禁抓住而不是由我读回抓住，两条防线都在工作）。`$note` 写明"搬家不是消失"。
+> 4. **一次守卫口径收窄（连带，非顺手）**：storage 门禁的 `lease-refusal-never-kills-a-foreign-pid` 原来扫 **core 全部源码**的 kill 调用——这条不变量的主语是"租约拒绝的决策面"（ADR-027），P2 时代 core 没有进程管理所以全扫恰好等价；进程树管理迁入后它红在 `libc::kill` 上。收窄为点名租约决策面文件（`storage_lock.rs`/`context.rs`/`location.rs`/`storage/`），`$note` 记明"主语区分 + 收窄是评审过的编辑"，两条正控照旧。这与补记五十三的 `*_tests.rs` 排除同型：守卫口径随事实演进，不让红牌变绿的唯一方式是把主语写准。
+> 5. **期间一次假红归因**：串行全量 `--lib` 曾红 `a_writer_observer_commits_its_decision_and_announces_exactly_once`（4 个 `done`）——单跑绿、全量串行复跑 2476/0 绿，按补记六十二的口径记"出现一次、复跑不复现、不记为已修"。同轮我自己的文档注释把 `AppHandle`/`tauri::State` 字面量写进 core 的模块文档，被 INV-02 词法扫描当场拦下——按"改措辞不改守卫"处理（补记五十九/六十六同款坑）。
+> 6. **实测**：skeleton 20/113、tauri-adapter 12/2537、storage 5/240、protocol 6/98、tasks 7/151、projects 5/21、doctor 18/18、contracts 12 份逐字节、inventory consistent + freeze-check 字节 noop；TS 零改动故全量 `pnpm test` 未复跑（typecheck 经 tauri-adapter 门禁绿）。**下一步＝切片三**：`TaskRegistry` move（底稿 §6-3，本任务最大一片）。
 
 
 
