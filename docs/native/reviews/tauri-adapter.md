@@ -375,3 +375,15 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 **落地顺序（每个子提交自身可绿）**：① core：桥 + `LaunchRequest` dsh 三字段 + 两侧用例（含"桥失败 ⇒ 报错非静默"）——**已落，`ada1011`**。② 宿主分两半：**②a 装桥**（`cb09166`：`deferred_context()` + 意图入口收敛到 `apply_intent_via_host`，并删掉宿主侧的 `save_decided_records`——留两扇门不是重复问题而是字节问题，`DecideOnly` 不戳 generation 而 `commit`/桥都戳）；**②b `launch_via_core` 建体但不换命令体**（先建后接，同补记六十三/六十四/六十六的"入口先行"）。③ JS：删 #7/#8/#15 三处 + 装配层测试迁到 fake-core 意图/事件形状。④ 退役：`save_project_tasks` 的宿主整表写删除、撤守卫、`adapter-invariants` 加"生产快照写 == 0"、命令面/契约复核。验收含一次真机 launch（本机 macOS = Writer 路径）与一次失败注入。
 
 **为什么"②b 只建体、命令体交换并进 ③④"（这条修正了上面原本的顺序）**：互锁已经查到代码级证据，不再是推断——`check_cover` 在 `Cover::LastCoreWrite` 下拿的是 `runtime::recorded_cover`，盘上指纹与它不同就 `ContentDiverged`（`storage/fingerprint.rs:105-125`），而宿主的整表保存**完全没有**告知 core 的钩子（`grep cover|fingerprint src-tauri/src/storage.rs` 零命中）。所以只要 `run_task` 换成走 core 的 `start()`（Commit）而 #7 快照还在写，一次 launch 之后第一条状态观察的提交就会被自己的守卫拒掉——那是能上生产的功能倒退，不是"红牌先亮"。原顺序里"②含命令体换体"因此作废。
+
+## 13. 接线收尾拷问轮（2026-09-26，Q73/Q74 → P2-05 accepted、Phase 2 Gate 通过）
+
+**轮次输入**：接线 §12 ③④那一刀（提交 `75a39e0`，补记八十）已全量验证。本轮按 §4.2 五轴先自查事实、再把真分叉交用户；frontier 只剩两问，全部获答。
+
+**五轴自查结论（事实，非问题）**：① 唯一 owner=core 且可数（生产快照写==0 第六条规则带两条存在性正控、两家族 emitters==1、generation 单一来源含 dsh 补注册/retire）；② 反例面（19 条真内核验收含解析失败/执行器拒绝/只读三臂失败注入，channel 均收回；本轮两次红牌均为测试侧 bug：fake core 丢弃纯函数返回的 `tasks`、落盘判据按 `projectId` 认而启动命令线上只有 `taskId`——产品代码零改动修复）；③ 权限/路径/token 零新增面；④ 回归面=方法面恰好收窄 1 条（`save_project_tasks`，533→532）、七条命令 wire 兼容（未用参数 `_` 前缀保留线上形状）、parity 零触碰；⑤ 回滚数据兼容（runtime.json 指纹只约束 core 自己的写）。
+
+**Q73（P2-05 验收 #②：ADR-018 确认闸）→ 用户选 (A) accepted-with-deferred-criterion**：core 侧守卫**已活**（`resume` 在 `service.rs:988` 真拒绝 `AwaitingAcknowledgement`），但宿主没有任何 `reconcile` 启动调用（core_adapter.rs/lib.rs 零命中）、`awaiting_acknowledgement()`/`acknowledge()` 两条命令与就地确认 UI 均不存在——账本永远进不了该状态，**闸休眠=与迁移前行为逐字节等价，无回归也无功能**。挂账归属经用户确认：**宿主入口（启动 reconcile 接线 + 两条命令）归 P3-01**（headless CLI 必须同时能答这个闸，按 §2.1 返回 `INTERACTIVE_UI_REQUIRED`）；**就地确认 UI 归 P5-03**。
+
+**Q74（Phase 2 Gate 带两条挂账关闭）→ 用户选 (A)**：① **ADR-024**（`project-groups.json` 唯一真相源 + localStorage 一次性幂等导入）全仓零实现、今天分组仍由 localStorage 权威（=迁移前行为），**转具名挂账：P3-01 之后的 Action 3 收尾**；② **ADR-026** 记"机制已在意图队列测试钉死（元数据重放一次、状态 op 永不重放），生产真实 REVISION_CONFLICT 出现后的宿主侧证据待现"。G18 维持归 P3-02，不在本轮重开。
+
+**Gate 裁定（§4.2 四条判据对照）**：实际调用证据存在（本节 Q73/Q74 + §2 的 Q44～Q72）；必选测试通过（tauri-adapter 12 case/2540，含 src-tauri 串行 2479/0、真内核验收 19 条；core 279/0；全量 pnpm test 376/5483；contracts 12 份逐字节；inventory consistent）；无未解决的崩溃/数据丢失/安全越界/功能阻断问题；中低风险明确由谁接受（上列四条挂账各有具名归属）。**P2-05 标 accepted，Phase 2 Gate 通过。**
