@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十四次更新）：P3-02 切片二已落地（补记八十九）——四族计划函数进 core(claude/codex/dsh/omp_plan),宿主 8 个 builder/add 函数收敛为 4 个机械翻译命令,parity fixtures 18 case 由旧宿主路径冻结、core 重放逐字节相等、宿主同 fixtures 等价守卫;`pnpm native:check agents` 注册(1 case/2)。** core **314**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 剩余(按底稿 §4-3/4/5)**:env 层 + OMP 反例 → managed_home/ 迁入 → SwitchEvidence/G18 → `grill-me [agents]`。
+**当前状态（2026-09-26，第二十五次更新）：P3-02 切片三已落地（补记九十）——env 层顺序操作表进 core(`EnvOp` 三段计划,`combined_omp_env_ops` 把"setup_omp_env 后于 setup_env"变成结构),宿主三函数机械重放(旧测试=等价证明);OMP 三条不变量进 core `agents/omp.rs`(hook 扩展名/willContinue fail-closed/--mode 永不产出),宿主 omp_home 消费 `OMP_HOOK_FILE_NAME`。** core **321**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 剩余**:`managed_home/` 迁入 → SwitchEvidence/G18 → `grill-me [agents]`。
 
+**（上一轮口径——第二十四次更新，2026-09-26）：P3-02 切片二已落地（补记八十九）——四族计划函数进 core(claude/codex/dsh/omp_plan),宿主 8 个 builder/add 函数收敛为 4 个机械翻译命令,parity fixtures 18 case 由旧宿主路径冻结、core 重放逐字节相等、宿主同 fixtures 等价守卫;`pnpm native:check agents` 注册(1 case/2)。**
 **（上一轮口径——第二十三次更新，2026-09-26）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。**
 **（上一轮口径——第二十二次更新，2026-09-26）：P3-01 accepted（补记八十七 + 评审 `reviews/runtime.md`），下一任务＝P3-02（原样迁移四族命令构造与托管配置）。**
 **（上一轮口径——第二十一次更新，2026-09-26）：P3-01 切片五已落地（补记八十六）——`PlatformServices` 端口 + 宿主 `platform_adapter.rs::HostPlatformServices`(reveal/clipboard 两条命令改经端口,OS 调用体迁入;`reveal_args` 纯函数三平台各一条测试),src-tauri **2467**/0、core **309**/0、门禁矩阵全绿。**
@@ -1680,6 +1681,14 @@ grill-me
 > 4. **双侧等价证明**:宿主采集器(`agent_launch_parity_fixture_harvest`)迁移后改调合并命令,**对同一份冻结 fixtures 断言逐字节相等**——旧路径产出的期望被新(core 计划+机械翻译)路径精确复现;core 重放同 fixtures 亦逐字节相等。两条额外语义钉:claude --model 的 agent 门、omp ultra→max 且不向上游发送 ultra(OMP 不变量)。
 > 5. **门禁**:`pnpm native:check agents` 注册(case `agent-launch-parity-rust`,1 case/2,floor 2)。**账目**:core **314**/0(+2 重放)、src-tauri 串行 **2465**/0(净 −1:trust-override 纯函数测试随 codex_plan 迁 core,其属性由 fixtures/replay 覆盖;地板 2465 吻合)、tauri-adapter 12/**2526**、skeleton 20/113、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 11 条→freeze→noop、params **659**、typecheck/fmt/clippy 全净、全量 `pnpm test` **376/5483 绿**。
 > 6. **下一步(按底稿 §4-3/4/5)**:env 层顺序约束的 core 侧表达 + OMP 反例(hook 扩展名/willContinue/--mode 禁用)→ `managed_home/` 迁入(omp_home/dsh_home/hooks 安装;include_str! hook 随迁)→ SwitchEvidence/`adopt_session_for_agent` + G18 裁决 → `grill-me [agents]` 收口。
+
+> **【补记九十 @ 2026-09-26，P3-02 切片三：env 层顺序操作表 + OMP 三条不变量】**（底稿 §4-3 完结）
+>
+> 1. **顺序约束从注释变成结构**：core `agents/environment.rs` 用 `EnvOp{Set,Unset}` 有序列表表达 spawn 环境的三段计划——`terminal_env_ops`(颜色键先删→login 合并跳过颜色键→LANG/LC_CTYPE 兜底→TERM/COLORTERM/强制真彩)、`omp_env_ops`(**先 Unset `PI_PROFILE`/`OMP_PROFILE`**→重放托管 home env→hook 守卫)、`aeroric_guard_ops`(events 目录不可得时全不注入,与旧 if-let 一致)。`combined_omp_env_ops` 把 terminal+omp 拼成**一个列表**——"setup_omp_env 必须后于 setup_env"(AGENTS.md 已记的教训:用户 rc 里的 profile 会让托管 home 静默失效)从两条注释变成 core 测试断言的具体顺序(profile-Unset 的位置必须晚于 login-merge 的 Set)。
+> 2. **宿主三函数变机械重放**:`setup_env`/`setup_omp_env`/`setup_aeroric_env` 的函数体只剩"取 login_env/agent_env/event_dir 事实 → 调 core 取操作表 → `apply_env_ops` 按序重放"。旧的宿主测试(`omp_env_clears_profile_after_setup_env`、`setup_env_removes_inherited_no_color_and_enables_truecolor`、`omp_launch_args_keep_flags_before_positional_prompt` 的 env 断言)原样保留并通过——它们就是重放的等价证明。
+> 3. **OMP 三条不变量进 core `agents/omp.rs`**(错了会静默坏的形状必须可失败):① `omp_hook_extension_is_loadable` 只认 `.js`/`.ts`,`.mjs` 反例(1.4.7 开发期真踩过:目录扫描能看到、hook 永不加载、任务永远 running);② `omp_hook_source_guards_will_continue` 检测源码里的精确短路(`willContinue === true` → return),宿主 `omp_home` 在写盘前 fail-closed 断言(没有短路的 hook 会让角标在自动续跑前闪灭——INV-07);③ `omp_plan` 永不产出 `--mode` 的性质测试(全权限档×thinking×resume 组合;INV-05/07)。**真实消费点**:宿主 `omp_home` 的安装路径改用 core 的 `OMP_HOOK_FILE_NAME` 常量。
+> 4. **账目**：core **321**/0(+7:environment 4 + omp 3)、src-tauri 串行 **2465**/0(旧测试原样通过=重放等价证明;净增减为零)、门禁矩阵全绿(skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 13 条→freeze→noop、params **659**)、typecheck/fmt/clippy 全净、全量 `pnpm test` **376/5483 绿**。
+> 5. **下一步(按底稿 §4-4/5)**:`managed_home/` 迁入(omp_home/dsh_home/hooks 安装逻辑;include_str! hook 随迁到单一资源来源)→ SwitchEvidence/`adopt_session_for_agent` 真实实现 + G18 裁决 → `grill-me [agents]` 收口。
 
 
 
