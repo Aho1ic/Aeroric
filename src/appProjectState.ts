@@ -1,9 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { Project, SshConnection, Task, TaskStatus } from "./types";
 import { isActiveTaskStatus, resolveProjectLocation, wslProjectPath } from "./types";
 import { queuedProjectPersist } from "./projectSaveQueue";
-import { PERSISTENCE_COMMANDS } from "./lib/api/sftpCommands";
-import { createProjectTaskPersister } from "./taskPersistence";
 import { deriveRemoteProjectName } from "./components/ssh/sshProject";
 import { normalizeProjectOrder } from "./projectOrder";
 import { normalizeProjectRailWidth } from "./components/project-page/viewMode";
@@ -134,30 +131,8 @@ export function flushProjects(): Promise<void> {
   return queuedProjectPersist.flush();
 }
 
-const queuedProjectTaskPersist = createProjectTaskPersister((projectId, tasks) =>
-  invoke(PERSISTENCE_COMMANDS.saveProjectTasks, { projectId, tasks }),
-);
-
-export function persistProjectTasks(
-  projectId: string,
-  allTasks: Task[],
-  onError: (msg: string) => void,
-  formatError: (error: string, projectId: string) => string,
-) {
-  queuedProjectTaskPersist(projectId, allTasks, { onError, formatError });
-}
-
-export function persistProjectTasksQuietly(projectId: string, allTasks: Task[]) {
-  queuedProjectTaskPersist(projectId, allTasks);
-}
-
-export function flushProjectTasks(projectId: string): Promise<void> {
-  return queuedProjectTaskPersist.flush(projectId);
-}
-
-export function flushAllProjectTasks(): Promise<void> {
-  return queuedProjectTaskPersist.flushAll();
-}
+// 任务侧的整表快照写已随 core 接线退役（§12 ④）：任务行的唯一写者是 core
+// （意图、启动与观察三条路），前端只采纳权威快照，不再发整表。
 
 export interface ProjectViewState {
   selectedTaskId: string | null;

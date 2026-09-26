@@ -410,20 +410,10 @@ pub fn load_project_tasks(project_id: String) -> Result<Vec<Task>, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), String> {
-    ensure_project_dir(&project_id)?;
-    let path = tasks_path(&project_id)?;
-    if tasks.is_empty() {
-        // Remove the file if no tasks left
-        if path.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
-        return Ok(());
-    }
-    let raw = serde_json::to_string_pretty(&tasks).map_err(|e| e.to_string())?;
-    atomic_write_private(&path, &raw)
-}
+// `save_project_tasks` 已随 core 接线退役（§12 ④）：任务表唯一的写者是 core（意图、
+// 启动与观察三条路都汇到同一个 `TaskService`），整份覆盖写与它只认自己声明过的键
+// （serde 静默丢未知字段）这两个性质，正是 ADR-022/015 要防的双写者与基线断裂。
+// 空数组 ⇒ 删文件的语义由 `write_task_records_raw` 原样保留（ADR-037 后果 1）。
 
 /// 把 core 决定好的任务记录**原样**落盘，不经过 `Task` 结构体。
 ///

@@ -13,7 +13,6 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { createFakeCore } from "./taskIntentFakeCore";
 import { flushAllProjectIntents } from "../taskIntentQueue";
-import { flushAllProjectTasks } from "../appProjectState";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sshProjectPath, wslProjectPath } from "../types";
 import type { Project, SshConnection, Task, TaskStatus } from "../types";
@@ -138,7 +137,17 @@ interface Fixture {
 
 let activeFake: { savedTasksFor: (projectId: string) => Task[]; store: Record<string, Task[]> } | null = null;
 
-const TASK_SAVE_COMMANDS = new Set(["save_project_tasks", "apply_task_intent"]);
+// 整表快照写退役后，任务侧的落盘调用点 = 意图 + 换体后的启动命令（命令体内 core 先落盘）。
+const TASK_SAVE_COMMANDS = new Set([
+  "apply_task_intent",
+  "run_task",
+  "run_remote_task",
+  "run_wsl_task",
+  "run_dsh_task",
+  "resume_task",
+  "resume_remote_task",
+  "resume_wsl_task",
+]);
 function isTaskSave(command: unknown): boolean {
   return typeof command === "string" && TASK_SAVE_COMMANDS.has(command);
 }
@@ -165,7 +174,14 @@ function installInvokeDispatcher({
     }
     switch (command) {
       case "apply_task_intent":
-      case "save_project_tasks":
+      case "save_project_tasks": // 已退役：路由进 fake 是为了吃到它的"炸出来"，不是可用车道。
+      case "run_task":
+      case "run_remote_task":
+      case "run_wsl_task":
+      case "run_dsh_task":
+      case "resume_task":
+      case "resume_remote_task":
+      case "resume_wsl_task":
         return fake.invoke(command, args);
       case "load_projects":
         return projects;
@@ -328,7 +344,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await flushAllProjectIntents().catch(() => {});
-  await flushAllProjectTasks().catch(() => {});
+  await flushAllProjectIntents().catch(() => {});
   cleanup();
   vi.restoreAllMocks();
 });
@@ -621,8 +637,10 @@ describe("remote-task-request:resume 成功", () => {
     await nextReply();
 
     const after = invokeMock.mock.calls.slice(cutoff);
+    // 意图/快照命令带 projectId;换体后的七条启动命令线上只有 taskId(项目由命令体
+    // 内部解析,§12 ③),所以 resume 侧的落盘按 taskId 认。
     const saveIdx = after.findIndex(
-      ([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1",
+      ([c, a]) => isTaskSave(c) && (a as { taskId?: string })?.taskId === "t-1",
     );
     const replyIdx = after.findIndex(([c]) => c === REPLY);
     expect(saveIdx, "落盘必须发生过").toBeGreaterThanOrEqual(0);

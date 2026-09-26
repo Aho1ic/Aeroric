@@ -223,12 +223,23 @@ impl Scenario {
     }
 
     /// The real observation channel (ADR-033 §3): `install_core_services` builds this pair on
-    /// every launch, so the acceptance scenarios drive the same type the product will.
-    fn observer(&self) -> crate::core_adapter::CoreRuntimeObserver<tauri::test::MockRuntime> {
+    /// every launch, so the acceptance scenarios drive the same type the product will. The
+    /// write half routes on the start-up mode, so a scenario asks for the mode it means.
+    fn observer_in(
+        &self,
+        mode: crate::core_adapter::CoreMode,
+    ) -> crate::core_adapter::CoreRuntimeObserver<tauri::test::MockRuntime> {
         crate::core_adapter::CoreRuntimeObserver::new(
             Arc::clone(&self.service),
             Arc::new(crate::core_adapter::TauriEventSink::new(self.app.clone())),
+            mode,
         )
+    }
+
+    /// The product observer on this machine's platform: macOS takes the lease, so the
+    /// writer half is the live branch here.
+    fn observer(&self) -> crate::core_adapter::CoreRuntimeObserver<tauri::test::MockRuntime> {
+        self.observer_in(crate::core_adapter::CoreMode::Writer)
     }
 
     fn create_task(&self) -> Applied {
@@ -266,6 +277,7 @@ impl Scenario {
             true,
             None,
             false,
+            Default::default(),
             Default::default(),
         )
     }
@@ -781,6 +793,7 @@ fn a_launch_that_refuses_at_the_port_is_recorded_and_releases_the_claim() {
             None,
             false,
             Default::default(),
+            Default::default(),
         )
         .expect_err("an agent process needs the channel it was started with");
     assert!(
@@ -1063,11 +1076,13 @@ fn the_wired_service_asks_the_host_about_a_run_core_never_minted() {
     );
 }
 
-/// ADR-033 §3's channel, end to end: a host-side fact enters through `TaskRuntimeObserver`,
-/// core's reducer decides, and the sink is the only thing that emits. `TauriEventSink::notify`
-/// had no caller anywhere in the product before this test ran.
+/// ADR-033 §3's channel, end to end, on the writer side of ADR-021: a host-side fact enters
+/// through `TaskRuntimeObserver`, core's reducer decides **and commits** (the store cutover
+/// made core the writer of the task table), and the sink is the only thing that emits. The
+/// committed row is what a second instance would read — the file is the proof, not a return
+/// value.
 #[test]
-fn an_observation_announces_once_and_writes_nothing() {
+fn a_writer_observer_commits_its_decision_and_announces_exactly_once() {
     let _serial = SCENARIO
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1101,11 +1116,25 @@ fn an_observation_announces_once_and_writes_nothing() {
         Some(&json!("input_required")),
         "and it is the status core decided, spelled the way the client listens for it"
     );
-    assert_eq!(
+    assert_ne!(
         table_sha(&scenario.service, "p1"),
         sha_before,
-        "ADR-035: the announcement path decides and announces without committing, because \
-         `storage.rs` is still the writer on every platform"
+        "the writer half of the observer must land the decision on the disk the next \
+         instance reads; announcing without committing would leave the shipped client's \
+         file contradicting what the UI shows"
+    );
+    let rows = scenario
+        .service
+        .load("p1")
+        .expect("the committed table is readable")
+        .records;
+    assert!(
+        rows.iter().any(|row| {
+            row.id() == Some(scenario.task_id.as_str())
+                && row.get("status").and_then(Value::as_str) == Some("input_required")
+                && row.get("attentionRequestedAt").is_some()
+        }),
+        "and the committed row is the observation, not the pending row `start` wrote"
     );
 
     // The drop half, reported through the same channel rather than assumed: the host's own
@@ -1140,6 +1169,48 @@ fn an_observation_announces_once_and_writes_nothing() {
          channel would look wider than it is. statuses seen: {:?}",
         scenario.statuses()
     );
+}
+
+/// The read-only side of the same channel (ADR-027): a refused instance decides and
+/// announces — its UI must still hear the task's life — but writes nothing anywhere,
+/// bridge included. `decide_observation` is exactly the write-free half of the split.
+#[test]
+fn a_read_only_observer_announces_without_writing() {
+    let _serial = SCENARIO
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scenario = Scenario::new("observer-readonly");
+    scenario.create_task();
+    scenario.start("op-1").expect("start");
+    scenario.wait_for_launch();
+
+    let sha_before = table_sha(&scenario.service, "p1");
+    let before = scenario.emitted("task-status").len();
+
+    scenario
+        .observer_in(crate::core_adapter::CoreMode::ReadOnlyBusy)
+        .observe(TaskEvent::Status {
+            task_id: scenario.task_id.clone(),
+            generation: 1,
+            status: TaskStatus::InputRequired,
+            attention_requested_at_ms: Some(1_700_000_099_000),
+            failure_reason: None,
+            origin: ObservationOrigin::Transcript,
+        });
+
+    assert_eq!(
+        scenario.emitted("task-status").len(),
+        before + 1,
+        "read-only is not silent: the instance's own UI still gets the event"
+    );
+    assert_eq!(
+        table_sha(&scenario.service, "p1"),
+        sha_before,
+        "and ADR-027 holds at the channel level: not one byte reaches the disk, even though \
+         core holds a writer lease in this scenario — the mode, not the lease, decides"
+    );
+    scenario.release_agent();
+    scenario.wait_for_retirement();
 }
 
 /// ADR-033 §4's floor: an observation core cannot route is still announced. Silence here would
@@ -1460,6 +1531,8 @@ fn a_launch_that_cannot_find_its_project_parks_no_channel() {
         None,
         false,
         aeroric_core::tasks::Attachments::default(),
+        None,
+        None,
     )
     .expect_err("a task no project owns cannot be launched through core");
     assert!(
@@ -1475,10 +1548,12 @@ fn a_launch_that_cannot_find_its_project_parks_no_channel() {
     drop(scratch);
 }
 
-/// 失败注入（§12 验收点名的那一次）：dsh 分支**按名拒绝**，所以这条用例不需要任何真二进制，
-/// 却能同时打中三件事——错误要传回调用方、寄出的 channel 要收回来、那一行要落成 failed。
-/// 第三件是 `abandon_launch` 的补偿语义：今天由 `finalize_task_exit` 负责的事，接线的同时就得
-/// 由 core 负责，否则"进程没起来"在盘上会留下一行 pending。
+/// 失败注入（§12 验收点名的那一次）：执行器的 SSH 分支在**派发之前**同步解析连接，查不到
+/// 就按名拒绝，所以这条用例不需要任何真二进制，却能同时打中三件事——错误要传回调用方、寄出的
+/// channel 要收回来、那一行要落成 failed。第三件是 `abandon_launch` 的补偿语义：今天由
+/// `finalize_task_exit` 负责的事，接线的同时就得由 core 负责，否则"进程没起来"在盘上会留下
+/// 一行 pending。dsh 分支曾经是这条注入的宿主，接线后它按名分发了 `run_dsh_task_core`；
+/// 同步拒绝的最后一种形状就是这条远端连接解析。
 #[test]
 fn a_launch_the_executor_refuses_lands_failed_and_gives_the_channel_back() {
     let _serial = SCENARIO
@@ -1498,9 +1573,22 @@ fn a_launch_the_executor_refuses_lands_failed_and_gives_the_channel_back() {
         &tasks_file,
         json!({
             "id": "t1", "projectId": "p1", "prompt": "do it", "agent": "codex",
-            "launchFamily": "dsh", "permissionMode": "ask", "status": "todo", "createdAt": 1
+            "permissionMode": "ask", "status": "todo", "createdAt": 1
         }),
     );
+    // 项目本身是 SSH 目标，而那个 connection id 在宿主里不存在——连接解析是内核之前
+    // 唯一能同步拒绝的分支， refusal 因此带着执行器的原话回到调用方。
+    std::fs::write(
+        service.context().paths.projects_file(),
+        serde_json::to_vec(&json!([{
+            "id": "p1",
+            "name": "project-launch",
+            "path": "/remote/repo",
+            "location": {"kind": "ssh", "connectionId": "conn-missing", "remotePath": "/remote/repo"},
+        }]))
+        .expect("encode projects"),
+    )
+    .expect("projects.json");
 
     let error = crate::core_adapter::launch_via_core(
         app.handle(),
@@ -1510,10 +1598,14 @@ fn a_launch_the_executor_refuses_lands_failed_and_gives_the_channel_back() {
         None,
         false,
         aeroric_core::tasks::Attachments::default(),
+        None,
+        None,
     )
-    .expect_err("the dsh branch refuses by name, and that refusal must not be swallowed");
+    .expect_err(
+        "an unknown ssh connection refuses by name, and that refusal must not be swallowed",
+    );
     assert!(
-        error.contains("workspace_id"),
+        error.contains("conn-missing"),
         "the launch error must carry the executor's own words, got: {error}"
     );
     assert_eq!(
@@ -1535,7 +1627,7 @@ fn a_launch_the_executor_refuses_lands_failed_and_gives_the_channel_back() {
         on_disk[0]["failureReason"]
             .as_str()
             .unwrap_or_default()
-            .contains("workspace_id"),
+            .contains("conn-missing"),
         "the reason the user sees has to be the reason the executor gave: {on_disk}"
     );
     drop(scratch);
@@ -1585,6 +1677,8 @@ fn a_read_only_instance_refuses_a_launch_and_returns_the_channel() {
         None,
         false,
         aeroric_core::tasks::Attachments::default(),
+        None,
+        None,
     )
     .expect_err("a read-only instance must not start a process over a row it cannot save");
     assert!(
@@ -1645,6 +1739,7 @@ fn a_resume_with_no_session_is_refused_after_parking_and_writes_nothing() {
         "",
         OutputSink::Channel(Channel::new(|_| Ok(()))),
         true,
+        None,
     )
     .expect_err("a blank session id is not the same as resume-with-no-session");
     assert!(

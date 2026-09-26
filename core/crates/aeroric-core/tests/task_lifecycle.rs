@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use aeroric_core::storage::atomic::StorageError;
 use aeroric_core::storage::{runtime, Cover, Fingerprint};
-use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
+use aeroric_core::tasks::executor::{HostWindowFacts, ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::service::{
     Attachments, EventOutcome, NewTask, SessionSnapshot, TaskError, TaskIntentKind,
     TASK_INTENT_VOCABULARY,
@@ -155,6 +155,7 @@ fn a_record_is_on_disk_before_the_executor_is_asked_to_spawn() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
     assert_eq!(executor.call_log(), vec!["launch:t1".to_string()]);
@@ -187,6 +188,7 @@ fn a_persist_that_refuses_starts_no_process_at_all() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("core's first write");
     // Close the first attempt the way a live host would: the terminal came up, so the
@@ -217,6 +219,7 @@ fn a_persist_that_refuses_starts_no_process_at_all() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("the cover is gone");
     assert!(
@@ -255,6 +258,7 @@ fn content_hand_back_by_hand_is_a_conflict_rather_than_a_replay() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("first start");
     // Close the first attempt the way a live host would: the terminal came up, so the
@@ -283,6 +287,7 @@ fn content_hand_back_by_hand_is_a_conflict_rather_than_a_replay() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("the restored bytes are not what this writer last published");
     assert!(matches!(error, TaskError::PersistFailed(_)), "{error:?}");
@@ -308,6 +313,7 @@ fn the_fingerprint_is_published_with_the_revision_and_reports_itself_as_stale_wr
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
 
@@ -369,6 +375,7 @@ fn a_launch_failure_marks_the_task_failed_and_frees_the_attempt() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("the process did not come up");
     assert!(matches!(error, TaskError::Launch(_)), "{error:?}");
@@ -394,6 +401,7 @@ fn a_launch_failure_marks_the_task_failed_and_frees_the_attempt() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("retry after a real failure");
     assert_eq!(executor.launches().len(), 2);
@@ -411,7 +419,7 @@ fn resume_refuses_to_invent_a_session_and_writes_nothing() {
     // The host could not resolve a session id. An empty one is not "no session" to a CLI —
     // it is a fresh conversation with the user's old prompt pasted into it.
     let error = service
-        .resume(&project, "t1", "", "op-r1", true)
+        .resume(&project, "t1", "", "op-r1", true, None)
         .expect_err("a blank session is refused");
     assert!(matches!(error, TaskError::NoSession(_)), "{error:?}");
     assert!(executor.call_log().is_empty(), "no process");
@@ -431,7 +439,7 @@ fn a_dsh_resume_is_planned_without_the_original_prompt() {
     let service = build_service(context, &executor);
     let project = local_project("p1", "/repo");
     service
-        .resume(&project, "t1", "d-1", "op-r1", true)
+        .resume(&project, "t1", "d-1", "op-r1", true, None)
         .expect("resumed");
     let call = &executor.call_log()[0];
     assert_eq!(call, "resume:t1");
@@ -462,6 +470,7 @@ fn start_resume_and_cancel_all_work_with_no_listener_attached() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
     service
@@ -517,7 +526,7 @@ fn start_resume_and_cancel_all_work_with_no_listener_attached() {
         )
         .expect("run 1 ends");
     service
-        .resume(&project, "t1", "c-9", "op-r1", true)
+        .resume(&project, "t1", "c-9", "op-r1", true, None)
         .expect("resumed headless");
     assert_eq!(executor.call_log().last().unwrap(), "resume:t1");
     cleanup(root);
@@ -540,6 +549,7 @@ fn a_late_exit_from_the_previous_run_does_not_move_the_task() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     service
@@ -565,6 +575,7 @@ fn a_late_exit_from_the_previous_run_does_not_move_the_task() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 2 is a new attempt");
     let running_after = rows(&tasks_file)[0]
@@ -644,6 +655,7 @@ fn a_terminal_ready_settles_the_attempt_that_was_waiting_for_input() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
     assert!(
@@ -768,6 +780,7 @@ fn an_unresolved_start_becomes_interrupted_on_the_next_boot_without_being_restar
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
     assert!(
@@ -796,7 +809,7 @@ fn an_unresolved_start_becomes_interrupted_on_the_next_boot_without_being_restar
     // ADR-018: the user has not seen this yet, so continuing where it stopped is not
     // offered until it is acknowledged...
     let resume_error = restarted
-        .resume(&project, "t1", "c-old", "op-r", true)
+        .resume(&project, "t1", "c-old", "op-r", true, None)
         .expect_err("a cut-off run needs an acknowledgement before it is resumed");
     assert!(
         matches!(resume_error, TaskError::AwaitingAcknowledgement { .. }),
@@ -816,6 +829,7 @@ fn an_unresolved_start_becomes_interrupted_on_the_next_boot_without_being_restar
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("a fresh run is allowed through");
     assert!(restarted.awaiting_acknowledgement("t1").is_none());
@@ -831,7 +845,7 @@ fn an_unresolved_start_becomes_interrupted_on_the_next_boot_without_being_restar
         )
         .expect("run 2 fails");
     restarted
-        .resume(&project, "t1", "c-old", "op-r2", true)
+        .resume(&project, "t1", "c-old", "op-r2", true, None)
         .expect("no pending acknowledgement: the user already saw this task");
     // The resume itself is an attempt in flight, so close it the way a live host would
     // before asserting that a second boot has nothing left to reconcile.
@@ -1017,6 +1031,7 @@ fn a_status_with_no_change_writes_nothing_and_burns_no_revision() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     service
@@ -1170,6 +1185,7 @@ fn an_immediate_task_is_created_and_spawned_with_the_same_commit_as_its_record()
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("spawned");
     assert_eq!(executor.call_log(), vec!["launch:immediate".to_string()]);
@@ -1194,6 +1210,7 @@ fn a_file_core_has_never_published_is_adopted_rather_than_refused_forever() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("the first core write adopts the legacy bytes");
     // Close the first attempt the way a live host would: the terminal came up, so the
@@ -1225,6 +1242,7 @@ fn a_file_core_has_never_published_is_adopted_rather_than_refused_forever() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("now core has a baseline to defend");
     assert!(matches!(error, TaskError::PersistFailed(_)), "{error:?}");
@@ -1423,7 +1441,7 @@ fn a_discarded_worktree_cannot_be_resumed_even_when_a_session_id_is_offered() {
     let tasks_file = executor.tasks_path();
     let before = std::fs::read(&tasks_file).expect("seeded");
     let error = service
-        .resume(&project, "t1", "c-1", "op-r", true)
+        .resume(&project, "t1", "c-1", "op-r", true, None)
         .expect_err("the tree the session belongs to is gone");
     assert!(
         matches!(error, TaskError::WorktreeDiscarded(_)),
@@ -1442,6 +1460,7 @@ fn a_discarded_worktree_cannot_be_resumed_even_when_a_session_id_is_offered() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("a fresh run is not a continuation");
     cleanup(root);
@@ -1481,6 +1500,7 @@ fn a_remote_project_refuses_attachments_and_a_worktree_before_anything_moves() {
                 images: vec!["shot.png".to_string()],
                 texts: vec![],
             },
+            HostWindowFacts::default(),
         )
         .expect_err("ssh cannot carry an attachment");
     assert!(
@@ -1520,6 +1540,7 @@ fn a_remote_project_refuses_attachments_and_a_worktree_before_anything_moves() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("a remote project has no worktree to run in");
     assert!(
@@ -1565,6 +1586,7 @@ fn a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_ta
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     service
@@ -1745,6 +1767,7 @@ fn a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_can
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
 
@@ -2922,6 +2945,7 @@ fn a_via_host_launch_stores_pending_before_the_executor_spawns() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("a reader may launch as long as the host stores its decision");
 
@@ -3004,7 +3028,7 @@ fn a_via_host_resume_stores_the_pending_and_leaves_the_session_to_the_intent() {
     let project = local_project("p1", "/repo");
 
     let applied = service
-        .resume_via_host(&project, "t1", "c-77", "op-bridge-r", true)
+        .resume_via_host(&project, "t1", "c-77", "op-bridge-r", true, None)
         .expect("a reader may resume as long as the host stores its decision");
 
     assert!(applied.changed);
@@ -3052,7 +3076,7 @@ fn the_bridge_resume_refuses_a_blank_session_without_touching_the_bridge() {
     let project = local_project("p1", "/repo");
 
     let error = service
-        .resume_via_host(&project, "t1", "", "op-bridge-r", true)
+        .resume_via_host(&project, "t1", "", "op-bridge-r", true, None)
         .expect_err("the bridge does not get to reinterpret a blank session");
     assert!(matches!(error, TaskError::NoSession(_)), "{error:?}");
     assert!(

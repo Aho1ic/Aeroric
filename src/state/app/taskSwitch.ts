@@ -4,7 +4,6 @@ import { resolveProjectLocation } from "../../types";
 import { agentDisplayLabel, agentFamily, type AgentOption } from "../../agents";
 import type { AgentConfigSwitchValues } from "../../components/AgentConfigSwitchDialog";
 import type { LocalRouterAgent, LocalRouterStatus } from "../../components/app-settings/types";
-import { flushProjectTasks } from "../../appProjectState";
 import { flushProjectIntents, type TaskSessionSnapshot } from "../../taskIntentQueue";
 import { sendTaskIntent } from "./taskIntentAdoption";
 import { dispatchAppSettingsChanged } from "../../appRemoteEvents";
@@ -444,10 +443,8 @@ export async function handleSwitchTaskConfig(
     return nextTasks;
   });
   try {
-    await Promise.all([
-      flushProjectIntents(task.projectId),
-      flushProjectTasks(task.projectId),
-    ]);
+    // 任务快照队列退役：切换的落盘只剩意图车道（#12 的复合意图），launch 前等它排空。
+    await flushProjectIntents(task.projectId);
   } catch (error) {
     deps.setTasks((prev) => {
       const current = prev.find((item) => item.id === taskId);

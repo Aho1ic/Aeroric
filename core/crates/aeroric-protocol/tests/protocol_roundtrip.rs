@@ -492,8 +492,9 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
     let methods = contract("methods.schema.json");
     assert_eq!(
         methods["count"],
-        json!(533),
-        "ADR-006: the surface is 642 minus 109 twins"
+        json!(532),
+        "ADR-006: the surface is 641 minus 109 twins (save_project_tasks retired with the \
+         snapshot writer, wiring §12)"
     );
     assert_eq!(
         methods["count"].as_u64().unwrap(),

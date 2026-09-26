@@ -345,7 +345,7 @@ impl DshWebUiManager {
 
     /// 记录任务当前的终端列宽。DSH 会话没有 PTY master,前端的 `resize_pty`
     /// 因此只把尺寸存进 `pending_pty_sizes`,这里再读回来当作换行宽度。
-    fn sync_terminal_cols(&self, app: &AppHandle, task_id: &str) {
+    fn sync_terminal_cols<R: Runtime>(&self, app: &AppHandle<R>, task_id: &str) {
         let mut wraps = self.terminal_wraps.lock();
         let wrap = wraps.entry(task_id.to_string()).or_default();
         sync_wrap_cols(app, task_id, wrap);
@@ -1162,7 +1162,7 @@ fn dsh_failure_message(failure: &Value) -> String {
 /// `session/event` 每帧都要走这一步,而调用方多半已经持有 `terminal_wraps`
 /// 锁了,所以这里只接 `&mut TerminalWrap`:锁由调用方决定何时取,热路径上就
 /// 不必为同一张表加锁两次。
-fn sync_wrap_cols(app: &AppHandle, task_id: &str, wrap: &mut TerminalWrap) {
+fn sync_wrap_cols<R: Runtime>(app: &AppHandle<R>, task_id: &str, wrap: &mut TerminalWrap) {
     let Some((cols, _)) =
         crate::pty::current_task_pty_size(&app.state::<crate::TaskManager>(), task_id)
     else {
@@ -1417,8 +1417,8 @@ fn control_frame_envelope(session_id: &str, value: Value) -> Value {
 /// Dispatch one parsed mux envelope. Every session-addressed frame is filtered
 /// before it reaches Tauri; opening one mux per Aeroric task otherwise causes
 /// duplicate dialogs and projection updates for unrelated sessions.
-fn dispatch_mux_frame(
-    app: &AppHandle,
+fn dispatch_mux_frame<R: Runtime>(
+    app: &AppHandle<R>,
     state: &DshWebUiManager,
     envelope: &Value,
     task_id: &str,
@@ -1482,6 +1482,7 @@ fn dispatch_mux_frame(
                         .and_then(Value::as_str)
                         .unwrap_or("completed");
                     if matches!(kind, "aborted" | "interrupted" | "cancelled") {
+                        retire_dsh_runs(app, task_id);
                         crate::core_adapter::report_task_status(app, task_id, "cancelled");
                     } else {
                         // A DSH session stays interactive after a turn settles, so
@@ -1585,8 +1586,8 @@ async fn open_dsh_session_streams(
     Ok((mux, follow, control))
 }
 
-async fn consume_session_events(
-    app: &AppHandle,
+async fn consume_session_events<R: Runtime>(
+    app: &AppHandle<R>,
     state: &DshWebUiManager,
     api: &DshApiClient,
     task_id: &str,
@@ -1670,8 +1671,8 @@ async fn consume_session_events(
     }
 }
 
-async fn start_task_session_stream(
-    app: &AppHandle,
+async fn start_task_session_stream<R: Runtime>(
+    app: &AppHandle<R>,
     state: &DshWebUiManager,
     task_id: &str,
     api: &DshApiClient,
@@ -1762,49 +1763,52 @@ async fn start_task_session_stream(
 #[tauri::command]
 pub async fn run_dsh_task(
     app: AppHandle,
-    state: State<'_, DshWebUiManager>,
     task_id: String,
-    agent: String,
-    project_path: String,
+    _agent: String,
+    _project_path: String,
     prompt: String,
-    session_id: Option<String>,
+    _session_id: Option<String>,
     workspace_id: Option<String>,
-    agent_preset: Option<String>,
+    _agent_preset: Option<String>,
     prompt_mode: Option<String>,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    permission_mode: Option<String>,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _permission_mode: Option<String>,
     images: Option<Vec<String>>,
     client_time_zone: Option<String>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    run_dsh_task_core(
-        app,
-        &state,
-        task_id,
-        agent,
-        project_path,
-        prompt,
-        session_id,
-        workspace_id,
-        agent_preset,
-        prompt_mode,
-        selected_model,
-        reasoning_effort,
-        permission_mode,
-        images,
-        client_time_zone,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：dsh 的启动/续跑都走 core 的 `start`（续跑 = 记录里带 dshSessionId 的
+    // 再连），执行器的 dsh 分支分发 `run_dsh_task_core`。会话 id、agent、preset 等以记录为
+    // 唯一真相源；窗口事实是本命令独有的输入，原样交给 core。`prompt` 作为 override 原样
+    // 传递——续跑路径 JS 发的就是空串（不回放旧消息），与内核今天收到的逐字节一致。
+    crate::core_adapter::launch_via_core(
+        &app,
+        &task_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        Some(prompt),
+        false,
+        aeroric_core::tasks::Attachments {
+            images: images.unwrap_or_default(),
+            texts: Vec::new(),
+        },
+        None,
+        Some(aeroric_core::tasks::DshWindowFacts {
+            workspace_id,
+            prompt_mode,
+            client_time_zone,
+        }),
     )
-    .await
 }
 
 /// `run_dsh_task` 的内核。`LegacyTaskExecutor` 从 `app.state::<DshWebUiManager>()` 拿到
 /// 引用后只能调这个 —— 调上面那个命令会把 `TaskService → executor → command →
 /// TaskService` 接成递归(P2-05 Action 4)。参数与实参名一字未改。
-pub(crate) async fn run_dsh_task_core(
-    app: AppHandle,
+pub(crate) async fn run_dsh_task_core<R: Runtime>(
+    app: AppHandle<R>,
     state: &DshWebUiManager,
+    run: crate::run_registry::RunKey,
     task_id: String,
     agent: String,
     project_path: String,
@@ -1853,6 +1857,13 @@ pub(crate) async fn run_dsh_task_core(
             agent_preset.as_deref(),
         )
         .await?;
+    // The run core minted is now addressable by the host's own registry: every status
+    // report this task produces derives its generation from `runs.resource_key`, and
+    // without this registration it would fall back to UNMINTED and be dropped by core's
+    // staleness guard as older than the generation `start()` just minted.
+    app.state::<crate::TaskManager>()
+        .runs
+        .register(&task_id, run.generation());
     state.active_sessions.lock().insert(
         task_id.clone(),
         ActiveDshSession {
@@ -1867,9 +1878,9 @@ pub(crate) async fn run_dsh_task_core(
         .ok_or_else(|| "Could not resolve the DSH session log path".to_string())?;
     crate::session_dsh::register_dsh_session_with_preset(
         &app,
-        // dsh 的启动路径还没有 core 的代可用（它的 launch 走自己的命令，见
-        // `legacy_task_executor` 的 dsh 拒绝分支），所以登记在未 Minted 键上。
-        &crate::run_registry::RunKey::unminted(&task_id),
+        // 执行器分发带来的 core 代：dsh 的运行与 pty 的运行一样按 (task, generation) 登记，
+        // ADR-025 的寻址与 ADR-034 的存活判定都读同一张账。
+        &run,
         &task_id,
         &session_id,
         &session_path,
@@ -1952,6 +1963,7 @@ pub(crate) async fn run_dsh_task_core(
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
+            retire_dsh_runs(&app, &task_id);
             crate::core_adapter::report_task_status_with_reason(
                 &app,
                 &task_id,
@@ -1960,6 +1972,23 @@ pub(crate) async fn run_dsh_task_core(
             );
             Err(error)
         }
+    }
+}
+
+/// 任务级结算（ADR-025 规则 2 的形状，与 `complete_dsh_task_core` 的清账同源）：
+/// 把这个任务名下所有代的 dsh 运行从宿主 run registry 退掉。晚退不会让状态变错
+/// （Runtime 来源的观察不受存活闸约束），不退则 `has_live_run` 永远为真。
+fn retire_dsh_runs<R: Runtime>(app: &AppHandle<R>, task_id: &str) {
+    let task_manager = app.state::<crate::TaskManager>();
+    let runs: Vec<_> = task_manager
+        .dsh_sessions
+        .lock()
+        .keys()
+        .filter(|run| run.id() == task_id)
+        .cloned()
+        .collect();
+    for run in runs {
+        task_manager.runs.retire(run.id(), run.generation());
     }
 }
 
@@ -2080,6 +2109,9 @@ pub(crate) async fn complete_dsh_task_core<R: Runtime>(
         .filter_map(|run| task_manager.dsh_sessions.lock().remove(run))
         .map(|info| info.session_path)
         .collect();
+    for run in &dsh_runs {
+        task_manager.runs.retire(run.id(), run.generation());
+    }
     for path in &dsh_paths {
         task_manager.release_session_path_if_unreferenced(path);
     }
@@ -3024,7 +3056,7 @@ fn dsh_permission_preset(mode: &str) -> Result<&'static str, String> {
 /// Dispatch a single parsed frame from the host-wide `/api/remote.mux` downlink.
 /// Each frame type maps to a `dsh-host-*` Tauri event so the frontend
 /// can react to session/workspace lifecycle changes without polling.
-fn dispatch_host_frame(app: &AppHandle, payload: &Value) {
+fn dispatch_host_frame<R: Runtime>(app: &AppHandle<R>, payload: &Value) {
     let frame_type = payload
         .get("type")
         .and_then(Value::as_str)
@@ -3103,8 +3135,8 @@ impl WaterfallRegistry {
 
 /// Emit one waterfall request as the approval / question Tauri event the
 /// frontend already listens for, and record it so the reply can be routed.
-fn dispatch_waterfall_request(
-    app: &AppHandle,
+fn dispatch_waterfall_request<R: Runtime>(
+    app: &AppHandle<R>,
     registry: &Mutex<WaterfallRegistry>,
     event_id: &str,
     event: &str,
@@ -3162,7 +3194,11 @@ fn dispatch_waterfall_request(
 
 /// The Host withdrew a pending request (turn aborted, peer answered it).
 /// Emit the matching `*_RESOLVED` event so the dialog closes.
-fn dispatch_waterfall_cancel(app: &AppHandle, registry: &Mutex<WaterfallRegistry>, event_id: &str) {
+fn dispatch_waterfall_cancel<R: Runtime>(
+    app: &AppHandle<R>,
+    registry: &Mutex<WaterfallRegistry>,
+    event_id: &str,
+) {
     let Some(entry) = registry.lock().remove(event_id) else {
         return;
     };

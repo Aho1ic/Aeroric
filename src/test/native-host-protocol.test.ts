@@ -293,7 +293,7 @@ describe("the rules every client shares", () => {
 
   it("publishes the method surface ADR-002 froze", () => {
     const names: string[] = methodSurface.methods.map((m: Row) => m.name);
-    expect(methodSurface.count).toBe(533);
+    expect(methodSurface.count).toBe(532);
     expect(methodSurface.surfaceProvenance.prefixDerivedAliases).toBe(109);
     // Q10: every name on the surface either has a caller literal or states who decides.
     expect(methodSurface.surfaceProvenance["uncalled-no-evidence"]).toBe(0);

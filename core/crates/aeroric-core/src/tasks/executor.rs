@@ -40,6 +40,17 @@ pub struct DshWindowFacts {
     pub client_time_zone: Option<String>,
 }
 
+/// The per-window facts only the *calling command* has, threaded through `start`/`resume`
+/// into the `LaunchRequest` (wiring §12: the command layer feeds them, nothing else in core
+/// can invent per-window truth). `Default` is the core-semantic entries' answer — no view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostWindowFacts {
+    /// The view's terminal size; the PTY opens at this instead of the driver default.
+    pub terminal_size: Option<(u16, u16)>,
+    /// DSH-only window facts; `None` for every other family.
+    pub dsh: Option<DshWindowFacts>,
+}
+
 /// What to run, with the choice of channel already made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchRequest {

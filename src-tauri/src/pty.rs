@@ -1567,44 +1567,39 @@ fn agent_process_cwd(project_path: &str, is_codex: bool) -> PathBuf {
 #[tauri::command]
 pub async fn run_task(
     app: AppHandle,
-    task_manager: State<'_, TaskManager>,
     task_id: String,
-    project_path: String,
+    _project_path: String,
     prompt: String,
-    created_at: Option<i64>,
-    agent: String,
-    permission_mode: String,
+    _created_at: Option<i64>,
+    _agent: String,
+    _permission_mode: String,
     images: Option<Vec<String>>,
     texts: Option<Vec<String>>,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    run_task_core(
-        app,
-        &task_manager,
-        RunKey::unminted(&task_id),
-        task_id,
-        project_path,
-        prompt,
-        created_at,
-        agent,
-        permission_mode,
-        images,
-        texts,
-        selected_model,
-        reasoning_effort,
-        speed,
-        force_prompt_injection,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：命令体只做三件事——寄存终端 channel、把窗口事实交给 core、按
+    // gateway 的模式三分递交。下划线的参数保留在线上（JS 调用点一字不改），但记录是
+    // 它们的唯一真相源（ADR-027）：core 从它即将覆盖写入的那份记录里逐项重取。
+    crate::core_adapter::launch_via_core(
+        &app,
+        &task_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        Some(prompt),
+        force_prompt_injection.unwrap_or(false),
+        aeroric_core::tasks::Attachments {
+            images: images.unwrap_or_default(),
+            texts: texts.unwrap_or_default(),
+        },
+        cols.zip(rows),
+        None,
     )
-    .await
 }
 
 /// `run_task` 的内核。拆出来不是为了重构,而是为了方向:`LegacyTaskExecutor` 只能调这个,
@@ -2502,38 +2497,29 @@ pub(crate) async fn reset_task_process_core<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn resume_task(
     app: AppHandle,
-    task_manager: State<'_, TaskManager>,
     task_id: String,
-    project_path: String,
-    agent: String,
+    _project_path: String,
+    _agent: String,
     session_id: String,
     _prompt: String,
-    permission_mode: String,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _permission_mode: String,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    resume_task_core(
-        app,
-        &task_manager,
-        RunKey::unminted(&task_id),
-        task_id,
-        project_path,
-        agent,
-        session_id,
-        _prompt,
-        permission_mode,
-        selected_model,
-        reasoning_effort,
-        speed,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：与 `run_task` 同一形状。会话 id 是这里的实参——core 的 resume 入口
+    // 按它构造续跑请求；`persistBeforeLaunch` 的落盘在 core 的 begin 里先于 spawn 完成。
+    crate::core_adapter::resume_via_core(
+        &app,
+        &task_id,
+        &session_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        cols.zip(rows),
     )
-    .await
 }
 
 /// `resume_task` 的内核。拆它的理由与 `run_task_core` 同一条:`LegacyTaskExecutor` 只能调

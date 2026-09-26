@@ -350,7 +350,7 @@ export interface Task {
   sessionFamily?: ProtocolFamily;
   /**
    * ADR-028:这个任务当初是按哪一族起起来的,钉进记录后不随 profile 改动追溯存量任务。
-   * 必须声明在这一侧:save_project_tasks 是整份覆盖,而 serde 静默丢未知字段,
+   * 必须声明在这一侧:任务表曾由整份覆盖写保存,而 serde 静默丢未知字段,
    * 所以这里少一个字段就等于客户端每次保存都把 core 钉好的启动族抹掉。
    */
   launchFamily?: ProtocolFamily;

@@ -973,7 +973,6 @@ pub fn run() {
             storage::load_projects,
             storage::save_projects,
             storage::load_project_tasks,
-            storage::save_project_tasks,
             storage::read_task_terminal_history,
             storage::delete_task_terminal_histories,
             remote::remote_server_status,

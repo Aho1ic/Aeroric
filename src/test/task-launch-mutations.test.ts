@@ -54,6 +54,7 @@ describe("launchLocalTask", () => {
       writeErrorToTerminal: vi.fn(),
       terminalSize: { cols: 80, rows: 24 },
       onFailed: vi.fn(),
+      adoptRows: vi.fn(),
     };
     launchLocalTask(deps, {
       task: task("t1", { agent: "dsh" }),

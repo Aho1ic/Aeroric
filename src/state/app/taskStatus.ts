@@ -1,10 +1,6 @@
 import type { Task, TaskStatus } from "../../types";
 import { isTerminalTaskStatus } from "../../types";
-import {
-  persistProjectTasks,
-  flushProjectTasks,
-  shouldIgnoreTaskStatusTransition,
-} from "../../appProjectState";
+import { shouldIgnoreTaskStatusTransition } from "../../appProjectState";
 
 export type UpdateTaskStatusDeps = {
   showToast: (msg: string, kind?: "error" | "warning" | "success") => void;
@@ -53,18 +49,6 @@ export function applyTaskStatusTransition(
   };
 }
 
-export function persistTaskStatusChange(
-  deps: UpdateTaskStatusDeps,
-  allTasks: Task[],
-  taskId: string,
-  status: TaskStatus,
-): void {
-  const task = allTasks.find((t) => t.id === taskId);
-  if (!task) return;
-  persistProjectTasks(task.projectId, allTasks, deps.showToast, deps.formatSaveTasksError);
-  if (status === "done") {
-    void flushProjectTasks(task.projectId).catch((error: unknown) => {
-      console.error("Failed to flush completed task", error);
-    });
-  }
-}
+// `persistTaskStatusChange` 已随快照写退役删除（§12 ④）：状态持久化的唯一写者是
+// core 的观察通道（ADR-023/035），本文件只剩纯状态机 `applyTaskStatusTransition`
+// 供视图层使用。

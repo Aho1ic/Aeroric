@@ -3,7 +3,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { Project, SshConnection, Task, TaskStatus } from "../types";
 import { createFakeCore } from "./taskIntentFakeCore";
 import { flushAllProjectIntents } from "../taskIntentQueue";
-import { flushAllProjectTasks } from "../appProjectState";
 
 // App.tsx 的启动链路（load_projects → normalizeSshProjectNames → load_project_tasks →
 // get_active_task_ids → normalizeInterruptedTasksOnStartup → persist）此前完全没有测试覆盖。
@@ -187,7 +186,7 @@ afterEach(async () => {
   // （taskIntentAdoption 的过渡守卫）。不等完，上一个用例的落盘会漂进下一个用例的
   // invokeMock 调用表里——`does not rewrite` 那条曾经就是这么红的。
   await flushAllProjectIntents().catch(() => {});
-  await flushAllProjectTasks().catch(() => {});
+  await flushAllProjectIntents().catch(() => {});
   vi.restoreAllMocks();
 });
 

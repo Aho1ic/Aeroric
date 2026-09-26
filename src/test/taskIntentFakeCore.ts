@@ -11,9 +11,22 @@ import {
   toggleTaskStarInList,
 } from "../state/app/taskMutations";
 import { updateTodoTaskInList } from "../state/app/taskNaming";
+import { applyTaskStatusTransition } from "../state/app/taskStatus";
 import type { TaskIntent, TaskIntentOutcome } from "../taskIntentQueue";
+import type { TaskStatus } from "../types";
 
 type AnyTask = Task & Record<string, unknown>;
+
+/** 换体后的七条启动/续跑命令——命令名与 JS 参数不变，落盘与 spawn 都在命令体内完成。 */
+const LAUNCH_COMMANDS = new Set([
+  "run_task",
+  "run_remote_task",
+  "run_wsl_task",
+  "run_dsh_task",
+  "resume_task",
+  "resume_remote_task",
+  "resume_wsl_task",
+]);
 
 function sessionPathOf(task: Task): string | null {
   const family = task.sessionFamily ?? (task.sessionCodexLike ? "codex" : "claude");
@@ -30,6 +43,13 @@ export interface FakeCore {
   invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
   savedTasksFor: (projectId: string) => Task[];
   store: Record<string, Task[]>;
+  /** 真观察通道的镜像（接线 §12 ③）：core 决策并提交，announce 由测试的事件桥单独驱动。 */
+  observeTaskStatus: (
+    projectId: string,
+    taskId: string,
+    status: TaskStatus,
+    failureReason?: string,
+  ) => { changed: boolean };
 }
 
 export function createFakeCore(
@@ -245,23 +265,65 @@ export function createFakeCore(
     };
   }
 
+  /** 换体后的启动命令镜像：真命令体由 core 的 begin 先落 pending 再 spawn，返回权威快照。 */
+  function launchMirror(args?: Record<string, unknown>): TaskIntentOutcome {
+    const taskId = String(args?.taskId);
+    const pid = Object.keys(store).find((project) =>
+      store[project].some((row) => row.id === taskId),
+    );
+    if (!pid) throw new Error(`fake core: no project owns task ${taskId}`);
+    // prepare_for_launch 的镜像：pending + 清 attentionRequestedAt（Resume 还清 failureReason）。
+    store[pid] = store[pid].map((row) =>
+      row.id === taskId
+        ? ({ ...row, status: "pending", attentionRequestedAt: undefined, failureReason: undefined } as Task)
+        : row,
+    );
+    commit(pid);
+    return {
+      tasks: store[pid].map((r) => ({ ...r })),
+      revision: String(Object.keys(lastSaved).length),
+      changed: true,
+      committedByCore: true,
+    };
+  }
+
   async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
     if (command === "apply_task_intent") {
       return applyIntent(String(args?.projectId), args?.intent as TaskIntent);
     }
-    if (command === "save_project_tasks") {
-      const projectId = String(args?.projectId);
-      const rows = (args?.tasks ?? []) as Task[];
-      store[projectId] = rows.map((r) => ({ ...r }));
-      lastSaved[projectId] = rows.map((r) => ({ ...r }));
-      return undefined;
+    // `save_project_tasks` 已退役（§12 ④）：装配层任何一次整表快照写都会在这里炸出来，
+    // 而不是悄悄走第二条车道。
+    if (LAUNCH_COMMANDS.has(command)) {
+      return launchMirror(args);
     }
     throw new Error(`fake core: unexpected command ${command}`);
   }
+
+  const observeTaskStatus = (
+    projectId: string,
+    taskId: string,
+    status: TaskStatus,
+    failureReason?: string,
+  ) => {
+    const { tasks, changed } = applyTaskStatusTransition(
+      store[projectId] ?? [],
+      taskId,
+      status,
+      undefined,
+      failureReason,
+      now(),
+    );
+    if (changed) {
+      store[projectId] = tasks;
+      commit(projectId);
+    }
+    return { changed };
+  };
 
   return {
     invoke,
     store,
     savedTasksFor: (projectId) => lastSaved[projectId] ?? [],
+    observeTaskStatus,
   };
 }

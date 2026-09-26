@@ -24,6 +24,13 @@
 //                      they are checked rather than reviewed. The command names come from the
 //                      frozen inventory, so a newly added command is covered without editing this
 //                      file.
+//   Wiring §12 ④       the whole-table snapshot writer is retired: `save_project_tasks` is gone
+//                      from the registry, and no production web source persists or flushes whole
+//                      task tables. Every remaining task write travels the intent lane, the
+//                      launch outcome, or the observation channel — all core-owned — so "one
+//                      writer" is countable instead of reviewed. Test files are excluded by a
+//                      stated rule, and the fake core in the assembly tests rejects the retired
+//                      command outright.
 //
 // Each rule carries a positive control: if the scan cannot show it read the text it claims to
 // have read, the check fails rather than passing on an empty corpus.
@@ -48,6 +55,17 @@ export function rustFiles(dir, root = repoRoot) {
     const relative = path.posix.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...rustFiles(relative, root));
     else if (entry.name.endsWith(".rs")) out.push(relative);
+  }
+  return out.sort();
+}
+
+/** Every `.ts`/`.tsx` file under `dir`, recursively, as repo-relative paths. */
+export function webFiles(dir, root = repoRoot) {
+  const out = [];
+  for (const entry of readdirSync(path.join(root, dir), { withFileTypes: true })) {
+    const relative = path.posix.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...webFiles(relative, root));
+    else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) out.push(relative);
   }
   return out.sort();
 }
@@ -311,6 +329,52 @@ export function adapterInvariantProblems(files, commandNames = []) {
   return problems;
 }
 
+/**
+ * Wiring §12 ④: the snapshot write path is retired. Production web sources must not name the
+ * retired command or the queue helpers that fed it, and the registration must be gone from the
+ * host. Two presence controls keep the corpus honest: the adoption bridge the launches use, and
+ * the exit flush that replaced the snapshot queue.
+ */
+export function snapshotWriteProblems(webFiles, libText) {
+  const production = webFiles.filter(({ name }) => !/(?:\.test\.|^src\/test\/|^mobile\/)/.test(name));
+  if (!webFiles.length) {
+    return ["wiring §12: no web sources scanned — absence proves nothing"];
+  }
+  if (production.length < 50) {
+    return [`wiring §12: only ${production.length} production web files scanned — the corpus is too thin to claim absence`];
+  }
+  const byName = (suffix, needle) =>
+    production.some(({ name, text }) => name.endsWith(suffix) && text.includes(needle));
+  if (!byName("state/app/taskIntentAdoption.ts", "replaceProjectRows")) {
+    return ["wiring §12: the adoption bridge was not found in the scan — refusing to pass an unreadable corpus"];
+  }
+  if (!byName("taskFlush.ts", "flushAllProjectIntents")) {
+    return ["wiring §12: the exit flush no longer drains the intent lane — the scan cannot see the replacement"];
+  }
+  const forbidden = [
+    /\bpersistProjectTasks\s*\(/,
+    /\bpersistProjectTasksQuietly\s*\(/,
+    /\bflushProjectTasks\s*\(/,
+    /\bflushAllProjectTasks\s*\(/,
+    /\bsaveProjectTasks\b/,
+    /\bsave_project_tasks\b/,
+  ];
+  const problems = [];
+  for (const file of production) {
+    for (const pattern of forbidden) {
+      const match = pattern.exec(file.text);
+      if (match) {
+        const line = file.text.slice(0, match.index).split("\n").length;
+        problems.push(`wiring §12: ${file.name}:${line} still names the retired snapshot write path (${match[0].trim()}) — task rows have exactly one writer, core`);
+      }
+    }
+  }
+  if (libText && /\bsave_project_tasks\b/.test(libText)) {
+    problems.push("wiring §12: lib.rs still registers save_project_tasks — the whole-table writer must be retired from the registry, not just uncalled");
+  }
+  return problems;
+}
+
 /** The command names from the frozen inventory — the set the executor must never call. */
 export function inventoryCommandNames(root = repoRoot) {
   const map = JSON.parse(readFileSync(path.join(root, COMMAND_MAP), "utf8"));
@@ -327,13 +391,18 @@ function main() {
     console.error(`adapter-invariants: only ${files.length} rust files found under ${TAURI_SRC} — the scan target is wrong, not clean`);
     process.exit(1);
   }
-  const problems = adapterInvariantProblems(files, inventoryCommandNames());
+  const web = [...webFiles("src").map((name) => ({ name, text: readFileSync(path.join(repoRoot, name), "utf8") }))];
+  const libText = files.find((file) => file.name === `${TAURI_SRC}/lib.rs`)?.text;
+  const problems = [
+    ...adapterInvariantProblems(files, inventoryCommandNames()),
+    ...snapshotWriteProblems(web, libText),
+  ];
   for (const problem of problems) console.error(`  - ${problem}`);
   if (problems.length) {
-    console.error(`adapter-invariants: ${problems.length} problem(s) — ADR-020/021/023/031/032 and Action 4 are load-bearing, see docs/native/adr/`);
+    console.error(`adapter-invariants: ${problems.length} problem(s) — ADR-020/021/023/031/032, Action 4 and wiring §12 are load-bearing, see docs/native/adr/`);
     process.exit(1);
   }
-  console.log(`adapter-invariants: ${files.length} files, ADR-020/021/023/031/032 and Action 4 hold`);
+  console.log(`adapter-invariants: ${files.length} rust + ${web.length} web files, ADR-020/021/023/031/032, Action 4 and wiring §12 hold`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

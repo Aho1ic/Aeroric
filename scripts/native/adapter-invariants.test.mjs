@@ -7,7 +7,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { adapterInvariantProblems, codeOnly, enclosingFunction, rustFiles } from "./adapter-invariants.mjs";
+import {
+  adapterInvariantProblems,
+  codeOnly,
+  enclosingFunction,
+  rustFiles,
+  snapshotWriteProblems,
+} from "./adapter-invariants.mjs";
 
 const PTY = "src-tauri/src/pty.rs";
 const LIB = "src-tauri/src/lib.rs";
@@ -16,6 +22,52 @@ const SESSION = "src-tauri/src/session.rs";
 const EXECUTOR = "src-tauri/src/legacy_task_executor.rs";
 /** Names the no-recursion rule is judged against; the real run loads them from the inventory. */
 const COMMANDS = ["run_task", "resume_task", "save_project_tasks"];
+
+/** A corpus that satisfies wiring §12's presence controls, with one file free for mutations. */
+function webCorpus(mutate = null) {
+  const files = [
+    { name: "src/state/app/taskIntentAdoption.ts", text: "export function sendTaskIntent() { replaceProjectRows(prev, id, rows); }" },
+    { name: "src/taskFlush.ts", text: "await Promise.all([flushAllProjectIntents(), flushProjects()]);" },
+    ...Array.from({ length: 60 }, (_, i) => ({ name: `src/mod/file${i}.ts`, text: "export const ok = true;" })),
+  ];
+  return mutate ? files.map((file) => (file.name === mutate.name ? { ...file, text: mutate.text } : file)) : files;
+}
+
+test("wiring §12: a retired snapshot call site is named by file and line", () => {
+  const problems = snapshotWriteProblems(webCorpus({ name: "src/mod/file0.ts", text: "persistProjectTasks(pid, allTasks);" }), null);
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], /src\/mod\/file0\.ts:1 still names the retired snapshot write path/);
+});
+
+test("wiring §12: each retired spelling is its own problem — the flush helpers count too", () => {
+  for (const text of ["flushProjectTasks(pid);", "flushAllProjectTasks();", "PERSISTENCE_COMMANDS.saveProjectTasks", 'invoke("save_project_tasks")']) {
+    const problems = snapshotWriteProblems(webCorpus({ name: "src/mod/file0.ts", text }), null);
+    assert.equal(problems.length, 1, `${text}: ${problems.join("\n")}`);
+  }
+});
+
+test("wiring §12: test files are exempt, by a stated rule rather than a silent exclusion", () => {
+  const problems = snapshotWriteProblems(webCorpus({ name: "src/test/task-persistence.test.ts", text: "persistProjectTasks(pid, rows);" }), null);
+  assert.deepEqual(problems, [], "the corpus itself carries the exclusion rule: /\.test\.|^src\/test\//");
+});
+
+test("wiring §12: the registration must be gone from lib.rs, not merely uncalled", () => {
+  const problems = snapshotWriteProblems(webCorpus(), "storage::save_project_tasks,");
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], /lib\.rs still registers save_project_tasks/);
+});
+
+test("wiring §12: the presence controls refuse an unreadable or thin corpus", () => {
+  assert.match(snapshotWriteProblems([], null)[0], /no web sources scanned/);
+  assert.match(
+    snapshotWriteProblems([{ name: "src/a.ts", text: "" }], null)[0],
+    /too thin to claim absence/,
+  );
+  const noBridge = webCorpus().filter((file) => file.name !== "src/state/app/taskIntentAdoption.ts");
+  assert.match(snapshotWriteProblems(noBridge, null)[0], /adoption bridge was not found/);
+  const noFlush = webCorpus().map((file) => (file.name === "src/taskFlush.ts" ? { ...file, text: "" } : file));
+  assert.match(snapshotWriteProblems(noFlush, null)[0], /exit flush no longer drains the intent lane/);
+});
 
 /** A source tree that satisfies all three rules, so every mutation below is attributable to the
  *  one line it changes rather than to scaffolding. */

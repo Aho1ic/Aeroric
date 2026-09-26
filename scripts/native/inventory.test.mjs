@@ -28,12 +28,12 @@ function tempTree(mutateMap) {
 test("the committed inventory matches the live registration site", () => {
   const result = check({ repoRoot });
   assert.equal(result.ok, true, result.problems.slice(0, 5).join("\n"));
-  assert.equal(result.registered, 661);
-  assert.equal(result.mapped, 661);
+  assert.equal(result.registered, 660);
+  assert.equal(result.mapped, 660);
   assert.equal(result.features, 26);
   assert.equal(result.events, 38);
   assert.equal(result.panels, 19);
-  assert.equal(result.definitionsResolved, 661);
+  assert.equal(result.definitionsResolved, 660);
   assert.equal(result.dynamicSites, 5);
 });
 
@@ -185,7 +185,7 @@ test("an unknown feature id must fail", () => {
 test("parseRegistry stops at the block end and ignores comment lines", () => {
   const lib = readFileSync(path.join(repoRoot, "src-tauri/src/lib.rs"), "utf8");
   const parsed = parseRegistry(lib);
-  assert.equal(parsed.entries.length, 661);
+  assert.equal(parsed.entries.length, 660);
   assert.ok(parsed.entries.every((e) => e.rustPath && !e.rustPath.startsWith("//")));
   assert.throws(() => parseRegistry("no macro here"), /generate_handler/);
 });
@@ -218,7 +218,7 @@ test("attribute pairing beats a raw grep count, which overcounts", () => {
   // guard test's own assertion strings; pairing them to fn signatures does not.
   const readFile = (p) => readFileSync(p, "utf8");
   const definitions = parseCommandDefinitions(path.join(repoRoot, "src-tauri", "src"), readFile);
-  assert.equal(definitions.size, 661, "pairing must recover exactly the registered set");
+  assert.equal(definitions.size, 660, "pairing must recover exactly the registered set");
 
   const scan = (dir) => readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
     const full = path.join(dir, entry.name);

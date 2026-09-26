@@ -1685,39 +1685,35 @@ pub async fn kill_ssh_shell(
 #[tauri::command]
 pub async fn run_remote_task(
     app: AppHandle,
-    task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    connection: SshConnection,
-    remote_project_path: String,
+    _connection: SshConnection,
+    _remote_project_path: String,
     prompt: String,
-    agent: String,
-    permission_mode: String,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _agent: String,
+    _permission_mode: String,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    run_remote_task_core(
-        app,
-        &task_manager,
-        task_id,
-        connection,
-        remote_project_path,
-        prompt,
-        agent,
-        permission_mode,
-        selected_model,
-        reasoning_effort,
-        speed,
-        force_prompt_injection,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：连接与远端路径由 core 从记录/项目里解析（`working_directory`），
+    // 连接对象本身留在线上不改 JS 调用点；下划线参数的唯一真相源是记录（ADR-027）。
+    crate::core_adapter::launch_via_core(
+        &app,
+        &task_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        Some(prompt),
+        force_prompt_injection.unwrap_or(false),
+        // 附件是本地专属：远端启动在 JS 侧就拒绝（`remoteProjectNoAttachments`），
+        // 这条命令面上根本没有 images/texts 参数。
+        aeroric_core::tasks::Attachments::default(),
+        cols.zip(rows),
+        None,
     )
-    .await
 }
 
 /// `run_remote_task` 的内核。抽它的唯一理由是方向:`LegacyTaskExecutor` 只能调这个,
@@ -1801,37 +1797,28 @@ pub(crate) async fn run_remote_task_core<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn resume_remote_task(
     app: AppHandle,
-    task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    connection: SshConnection,
-    remote_project_path: String,
-    agent: String,
+    _connection: SshConnection,
+    _remote_project_path: String,
+    _agent: String,
     session_id: String,
-    permission_mode: String,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _permission_mode: String,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    resume_remote_task_core(
-        app,
-        &task_manager,
-        task_id,
-        connection,
-        remote_project_path,
-        agent,
-        session_id,
-        permission_mode,
-        selected_model,
-        reasoning_effort,
-        speed,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：与 `run_remote_task` 同一形状；连接在执行器侧同步解析（补记三十六）。
+    crate::core_adapter::resume_via_core(
+        &app,
+        &task_id,
+        &session_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        cols.zip(rows),
     )
-    .await
 }
 
 /// 见 `run_remote_task_core`:同一条递归禁令,同一次未改动的搬运。

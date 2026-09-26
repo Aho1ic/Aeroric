@@ -13,9 +13,8 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFakeCore } from "./taskIntentFakeCore";
+import { createFakeCore, type FakeCore } from "./taskIntentFakeCore";
 import { flushAllProjectIntents } from "../taskIntentQueue";
-import { flushAllProjectTasks } from "../appProjectState";
 import type { Project, Task, TaskStatus } from "../types";
 
 interface Subscription {
@@ -221,7 +220,7 @@ async function emit(event: string, payload: unknown): Promise<void> {
   for (const subscription of subscriptionsFor(event)) subscription.handler({ payload });
 }
 
-let activeFake: { savedTasksFor: (projectId: string) => Task[] } | null = null;
+let activeFake: FakeCore | null = null;
 
 function savedTaskSnapshots(projectId: string): Task[][] {
   const legacy = invokeMock.mock.calls
@@ -299,7 +298,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await flushAllProjectIntents().catch(() => {});
-  await flushAllProjectTasks().catch(() => {});
+  await flushAllProjectIntents().catch(() => {});
   cleanup();
   vi.restoreAllMocks();
 });
@@ -414,10 +413,12 @@ describe("App 装配层:task-status / task-session 接线", () => {
     renderApp();
     await waitForSubscriptions();
 
+    // 接线 §12 ③ 之后状态落盘在 core 的观察通道：fake 的 observeTaskStatus 镜像
+    // "core 决策并提交"，emit 只驱动视图。装配层的两条断言因此各管一半——盘上是
+    // 观察写的，视图是事件喂的；事件不再有第二条写盘车道。
     await emit("task-status", { task_id: "t-1", status: "failed", failure_reason: "exit code 1" });
+    activeFake?.observeTaskStatus("p1", "t-1", "failed", "exit code 1");
 
-    // 过渡期启动修复走意图车道、事件状态走快照车道，两条各自落盘；等的是**内容**里
-    // 出现 failed 的那一次，而不是"第一次有快照"（旧世界两件事被同一次防抖合并）。
     const saved = await waitFor(() => {
       const s = savedTaskNow("p1", "t-1");
       if (s?.status !== "failed") throw new Error("failed 还没有落到最新快照");
@@ -443,6 +444,9 @@ describe("App 装配层:task-status / task-session 接线", () => {
     await waitForSubscriptions();
     await waitForSavedTask("p1", "t-1", "detached", (saved) => saved.status === "detached");
 
+    // 迟到观察先过 core（镜像）：guard 拒绝的观察不落盘、不宣布。
+    activeFake?.observeTaskStatus("p1", "t-1", "running");
+    activeFake?.observeTaskStatus("p1", "t-1", "input_required");
     await emit("task-status", { task_id: "t-1", status: "running" });
     await emit("task-status", { task_id: "t-1", status: "input_required" });
     /* 被忽略的事件在盘上不留痕迹(内容相同,fingerprint 跳过保存)。要证明它们
@@ -450,6 +454,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
        setTasks、事件按序处理 —— t-2 落成 done 时,前面两条已被同一 handler 处理完。
        原来的 600ms 真实睡眠是负向断言 + 真实等待:负载慢 → 多余的 effect 还没跑完
        就断言了,就算把守卫删掉也照绿(假绿),同时还净烧 600ms 挂钟。 */
+    activeFake?.observeTaskStatus("p1", "t-2", "done");
     await emit("task-status", { task_id: "t-2", status: "done" });
     await waitForSavedTask("p1", "t-2", "done", (saved) => saved.status === "done");
 
@@ -462,6 +467,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
     expect(everSeen).toEqual([]);
 
     // 终态方向不设限:detached → done 必须放行,否则任务永远停在 detached。
+    activeFake?.observeTaskStatus("p1", "t-1", "done");
     await emit("task-status", { task_id: "t-1", status: "done" });
     await waitForSavedTask("p1", "t-1", "done", (saved) => saved.status === "done");
   });
@@ -478,6 +484,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
     renderApp();
     await waitForSubscriptions();
 
+    activeFake?.observeTaskStatus("p1", "t-1", "failed", "boom");
     await emit("task-status", { task_id: "t-1", status: "failed", failure_reason: "boom" });
     const first = (
       await waitForSavedTask(
@@ -488,6 +495,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
       )
     ).completedAt as number;
 
+    activeFake?.observeTaskStatus("p1", "t-1", "cancelled");
     await emit("task-status", { task_id: "t-1", status: "cancelled" });
     await waitForSavedTask("p1", "t-1", "cancelled", (saved) => saved.status === "cancelled");
 
@@ -504,6 +512,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
     renderApp();
     await waitForSubscriptions();
 
+    activeFake?.observeTaskStatus("p1", "t-1", "done");
     await emit("task-status", { task_id: "t-1", status: "done" });
     await waitForSavedTask(
       "p1",
@@ -512,6 +521,7 @@ describe("App 装配层:task-status / task-session 接线", () => {
       (saved) => (saved.completedAt ?? 0) > 0,
     );
 
+    activeFake?.observeTaskStatus("p1", "t-1", "running");
     await emit("task-status", { task_id: "t-1", status: "running" });
     await waitForSavedTask("p1", "t-1", "running", (saved) => saved.status === "running");
 

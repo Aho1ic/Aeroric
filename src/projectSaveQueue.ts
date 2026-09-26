@@ -5,8 +5,8 @@ import { PERSISTENCE_COMMANDS } from "./lib/api/sftpCommands";
 /**
  * 全进程唯一的项目落盘链。
  *
- * `projects.json` 只有一个 `save_projects` 入口，而它是**整份覆盖写**：`save_project_tasks`
- * 好歹按项目分文件，这份是所有项目一个文件。`createProjectPersister` 只在自己的 promise 链里
+ * `projects.json` 只有一个 `save_projects` 入口，而它是**整份覆盖写**：任务侧好歹按项目
+ * 分文件，这份是所有项目一个文件。`createProjectPersister` 只在自己的 promise 链里
  * 排序，所以两个实例同时存在时，"谁最后落盘"取决于两条链各自的调度，而退出前的 flush 只能
  * 等其中一条 —— 另一条里排着的快照是用户刚做的改动。
  *

@@ -1,13 +1,9 @@
-//! 切换期间的采纳桥：意图成功 ⇒ 权威行替换该项目的内存行，
-//! 并**顺手刷新旧快照队列里该项目的待发内容**。
+//! 采纳桥：意图成功 ⇒ 权威行替换该项目的内存行，仅此而已。
 //!
-//! 刷新这一半是过渡守卫：#7/#15 还在发整表快照（它们随执行器接线同刀退役，
-//! 见 `docs/native/reviews/tauri-adapter.md` §11）。没有这一步，一条比采纳更早
-//! 排进快照队列的陈旧整表会在防抖窗口后把刚落的意图结果抹掉——正是 ADR-022
-//! 要关的那个窗口在过渡期的新形状。快照写路径退役时，这两行一起删。
+//! 旧快照队列的过渡守卫（采纳后顺手刷新队列待发内容）随整表快照写退役一起删掉了：
+//! 现在没有第二个写者，采纳后的内存行就是权威行。
 
 import type { Task } from "../../types";
-import { persistProjectTasksQuietly } from "../../appProjectState";
 import {
   queueTaskIntent,
   replaceProjectRows,
@@ -24,7 +20,7 @@ export function sendTaskIntent(opts: {
   formatError?: (error: string, projectId: string) => string;
   operationKey?: string;
   onAdopted?: (rows: Task[]) => void;
-  /** quiet 启动路径用：错误只进 console，不弹 toast（对齐 persistProjectTasksQuietly）。 */
+  /** quiet 启动路径用：错误只进 console，不弹 toast（对齐旧 persistProjectTasksQuietly）。 */
   quiet?: boolean;
 }): void {
   queueTaskIntent(
@@ -34,11 +30,7 @@ export function sendTaskIntent(opts: {
       operationKey: opts.operationKey,
       onAdopt: (rows) => {
         const taskRows = rows as Task[];
-        opts.setTasks((prev) => {
-          const merged = replaceProjectRows(prev, opts.projectId, taskRows);
-          persistProjectTasksQuietly(opts.projectId, merged);
-          return merged;
-        });
+        opts.setTasks((prev) => replaceProjectRows(prev, opts.projectId, taskRows));
         opts.onAdopted?.(taskRows);
       },
       onError: (msg) => {

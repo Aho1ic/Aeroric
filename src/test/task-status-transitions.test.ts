@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyTaskStatusTransition, persistTaskStatusChange } from "../state/app/taskStatus";
+import { applyTaskStatusTransition } from "../state/app/taskStatus";
 import type { Task } from "../types";
 
 vi.mock("../appProjectState", () => ({
-  persistProjectTasks: vi.fn(),
-  flushProjectTasks: vi.fn(async () => undefined),
   shouldIgnoreTaskStatusTransition: () => false,
 }));
 
@@ -74,25 +72,5 @@ describe("applyTaskStatusTransition", () => {
     const result = applyTaskStatusTransition(prev, "t1", "running", undefined, undefined, 1);
     expect(result.changed).toBe(false);
     expect(result.tasks).toBe(prev);
-  });
-});
-
-describe("persistTaskStatusChange", () => {
-  it("flushes only for done", async () => {
-    const appState = await import("../appProjectState");
-    const persist = vi.mocked(appState.persistProjectTasks);
-    const flush = vi.mocked(appState.flushProjectTasks);
-    persist.mockClear();
-    flush.mockClear();
-    const tasks = [task("t1", { status: "done" })];
-    persistTaskStatusChange(
-      { showToast: vi.fn(), formatSaveTasksError: (e) => e },
-      tasks,
-      "t1",
-      "done",
-    );
-    expect(persist).toHaveBeenCalledOnce();
-    await Promise.resolve();
-    expect(flush).toHaveBeenCalledOnce();
   });
 });

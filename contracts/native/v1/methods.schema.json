@@ -22,7 +22,7 @@
     "notebook": 73,
     "operations": 3,
     "platform": 2,
-    "project": 6,
+    "project": 5,
     "providers": 1,
     "remote": 9,
     "router": 6,
@@ -110,7 +110,7 @@
       "open"
     ]
   },
-  "count": 533,
+  "count": 532,
   "excluded": {
     "hostLocalOsUi": "19 client-adapter commands carry no wire name; CLI answers INTERACTIVE_UI_REQUIRED (ADR-003)",
     "prefixTwins": "109 remote_/wsl_ twins carry no method name of their own (ADR-006); they are aliases whose host must also check the alias's own capability gate"
@@ -2767,24 +2767,6 @@
       "legacyCommand": "load_project_tasks",
       "mutating": true,
       "name": "project.load_project_tasks",
-      "promotion": "caller-literal",
-      "requiresCapability": null,
-      "requiresTriageDecision": false,
-      "service": "project",
-      "takesTarget": true
-    },
-    {
-      "callerEvidence": null,
-      "category": "domain_rpc",
-      "checkModule": "projects",
-      "coreService": "storage+projects",
-      "featureIds": [
-        "F01",
-        "F02"
-      ],
-      "legacyCommand": "save_project_tasks",
-      "mutating": true,
-      "name": "project.save_project_tasks",
       "promotion": "caller-literal",
       "requiresCapability": null,
       "requiresTriageDecision": false,
@@ -9318,13 +9300,13 @@
       "takesTarget": true
     }
   ],
-  "mutatingCount": 413,
+  "mutatingCount": 412,
   "protocolVersion": 1,
   "readCount": 120,
   "source": "docs/native/command-map.json + meta.rpc_resolution (ADR-002), re-derived independently by export-schema",
   "surfaceProvenance": {
     "adr": "ADR-006: prefix twins left the method surface; see `twinAliases`",
-    "caller-literal": 450,
+    "caller-literal": 449,
     "how": "each row carries `promotion`: how its name was earned in the G16 triage",
     "prefixDerivedAliases": 109,
     "requiresTriageDecision": 59,

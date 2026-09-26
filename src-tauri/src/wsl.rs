@@ -1501,39 +1501,34 @@ pub async fn kill_wsl_shell(
 #[tauri::command]
 pub async fn run_wsl_task(
     app: AppHandle,
-    task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    distribution: String,
-    linux_project_path: String,
+    _distribution: String,
+    _linux_project_path: String,
     prompt: String,
-    agent: String,
-    permission_mode: String,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _agent: String,
+    _permission_mode: String,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     force_prompt_injection: Option<bool>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    run_wsl_task_core(
-        app,
-        &task_manager,
-        task_id,
-        distribution,
-        linux_project_path,
-        prompt,
-        agent,
-        permission_mode,
-        selected_model,
-        reasoning_effort,
-        speed,
-        force_prompt_injection,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：分发目标由 core 从记录与项目解析（`WorkingDirectory::Wsl`）。
+    crate::core_adapter::launch_via_core(
+        &app,
+        &task_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        Some(prompt),
+        force_prompt_injection.unwrap_or(false),
+        // 附件是本地专属：远端启动在 JS 侧就拒绝（`remoteProjectNoAttachments`），
+        // 这条命令面上根本没有 images/texts 参数。
+        aeroric_core::tasks::Attachments::default(),
+        cols.zip(rows),
+        None,
     )
-    .await
 }
 
 /// `run_wsl_task` 的内核。理由与 `pty::run_task_core` 相同:执行器只能调内核,不能调命令
@@ -1608,37 +1603,28 @@ pub(crate) async fn run_wsl_task_core<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn resume_wsl_task(
     app: AppHandle,
-    task_manager: State<'_, crate::TaskManager>,
     task_id: String,
-    distribution: String,
-    linux_project_path: String,
-    agent: String,
+    _distribution: String,
+    _linux_project_path: String,
+    _agent: String,
     session_id: String,
-    permission_mode: String,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    speed: Option<String>,
+    _permission_mode: String,
+    _selected_model: Option<String>,
+    _reasoning_effort: Option<String>,
+    _speed: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
-) -> Result<(), String> {
-    resume_wsl_task_core(
-        app,
-        &task_manager,
-        task_id,
-        distribution,
-        linux_project_path,
-        agent,
-        session_id,
-        permission_mode,
-        selected_model,
-        reasoning_effort,
-        speed,
-        cols,
-        rows,
-        on_output,
+) -> Result<crate::core_adapter::TaskWriteOutcome, String> {
+    // 接线（§12 ③）：与 `run_wsl_task` 同一形状。
+    crate::core_adapter::resume_via_core(
+        &app,
+        &task_id,
+        &session_id,
+        crate::pty::OutputSink::Channel(on_output),
+        true,
+        cols.zip(rows),
     )
-    .await
 }
 
 /// 见 `run_wsl_task_core`。

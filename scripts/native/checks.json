@@ -10,7 +10,7 @@
       "commands run from the repository root resolved from this file's location"
     ],
     "floors": {
-      "adapter-invariants-unit@tauri-adapter": 23,
+      "adapter-invariants-unit@tauri-adapter": 28,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 10,
       "extraction-unit@skeleton": 9,
@@ -22,7 +22,7 @@
       "protocol-rust@protocol": 49,
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
-      "src-tauri-lib-tests@tauri-adapter": 2478,
+      "src-tauri-lib-tests@tauri-adapter": 2479,
       "storage-core-rust@storage": 81,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
@@ -32,7 +32,7 @@
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 78,
       "tasks-status-machine-rust@tasks": 56,
-      "adapter-acceptance-real-kernel@tauri-adapter": 10,
+      "adapter-acceptance-real-kernel@tauri-adapter": 18,
       "adapter-event-payload-contract@tauri-adapter": 5,
       "adapter-intent-queue@tauri-adapter": 9
     },
@@ -857,13 +857,13 @@
     },
     "tauri-adapter": {
       "registeredBy": "P2-05",
-      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、src-tauri 的 fmt 与 clippy（本轮查明这两条此前从未被任何脚本跑过）、`pnpm typecheck`（vitest 不做类型检查，二者不重叠）、以及 src-tauri `--lib` 的用例计数地板——ADR-020 写明的\"测试没了也报错\"安全网就是靠它。**尚未生效，按规矩登记在这里而不是伪装成通过**：ADR-022（保存队列只排队意图）与 ADR-024（分组名单一次性导入）要等 Action 3 的 store 改造；ADR-023 **已生效**：两个家族的 `emitters` 都已经是 1（`task-status` 曾 23、`task-session` 曾 7），由 adapter-invariants 的 ADR-023 规则逐家族断言\"恰好一行、且必须在 core_adapter.rs\"，4 条负例防它空转；那 28 处 legacy 发射点已在步骤 F 三批里删完。**但本 ADR 只完成\"唯一发射者\"这一半**：`apply_resolved_session` 的写路径与状态观察的 commit 同批，都要等 Action 3 的 store 切换才接上（ADR-035）；ADR-027 的只读实例状态可查询与\"不退临时目录\"：地基已在 bf798a3 到位（`install_core_services` 于 setup 注入 `CoreGateway`/`TaskService`/`OutputSinkMailbox`，macOS 上真的取写者租约，第二实例只读且说得出目录与持有者已有用例实测），本模块因此已有两条 ADR-027 检查：行为侧 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`、源码侧 `core-adapter-never-relocates-data-dir`。ADR-027 决策 4 的**常驻**指示仍未生效——toast 会消失而只读是整场会话的状态，按该 ADR 自己写明的\"复用 StartupDegradation ≠ 已满足持续可见\"。ADR-026（元数据重放一次、状态 op 一律不重放）**也未生效，且我上一版把它的阻塞原因写错了**：全仓没有任何重放实现，而 ADR-026 通篇讲的是\"写权移交之后宿主才会第一次拿到 `REVISION_CONFLICT`\"，所以真正的前置是 Action 3 的 store 改造，不是 managed state。这条更正留在这里而不是悄悄改掉。",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、两工作区 fmt 与 clippy、`pnpm typecheck`、src-tauri `--lib` 用例计数地板（接线 §12 后 2479）。**ADR-023 完全生效**：两个家族 emitters = 1，且观察通道的写半边已按 mode() 三分接上（writer 提交、deferred 经桥落盘、只读只决策），`core-observer-does-not-write-yet` 守卫随接线 §12 撤销——它防的那件事（两个写者并存）已由整表快照写退役 + 接线 §12 ④ 的可数断言接管。**ADR-022 完全生效**：21 处调用点全部离开快照车道，`adapter-invariants` 第六条规则断言生产 web 源的快照写调用点 == 0。ADR-024（分组一次性导入）**仍未生效**，按规矩挂账：分组名单仍由前端 localStorage 权威，一次性导入归 P3-01 之后的 Action 3 收尾。ADR-026 的重放半边在意图队列里（元数据重放一次、状态 op 永不重放），冲突处置的宿主侧验收待真实 REVISION_CONFLICT 出现后补证据。G18 未裁决，归 P3-02。",
       "cases": [
         {
           "name": "adapter-invariants-unit",
           "kind": "test",
           "parse": "node-test",
-          "minCases": 23,
+          "minCases": 28,
           "timeoutMs": 300000,
           "argv": [
             "node",
@@ -881,13 +881,13 @@
             "node",
             "scripts/native/adapter-invariants.mjs"
           ],
-          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则五条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
+          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则六条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）、接线 §12 ④（生产 web 源不得再命名整表快照写路径与它的三个 flush 包装，lib.rs 不得再注册那条整表写命令；正控要求扫描到采纳桥与退出排空两处替换物，测试文件按明示规则豁免）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
         },
         {
           "name": "adapter-acceptance-real-kernel",
           "kind": "test",
           "parse": "rust",
-          "minCases": 10,
+          "minCases": 18,
           "timeoutMs": 900000,
           "argv": [
             "cargo",
@@ -906,7 +906,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2478,
+          "minCases": 2479,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
@@ -918,7 +918,7 @@
             "--",
             "--test-threads=1"
           ],
-          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。"
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。"
         },
         {
           "name": "src-tauri-cargo-fmt",
@@ -1046,35 +1046,6 @@
             ]
           ],
           "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
-          "timeoutMs": 120000
-        },
-        {
-          "name": "core-observer-does-not-write-yet",
-          "kind": "absent",
-          "argv": [
-            "rg",
-            "-n",
-            "--no-ignore",
-            "service\\.observe\\(",
-            "src-tauri/src/core_adapter.rs"
-          ],
-          "controls": [
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "decide_observation",
-              "src-tauri/src/core_adapter.rs"
-            ],
-            [
-              "rg",
-              "-q",
-              "--no-ignore",
-              "TaskRuntimeObserver for CoreRuntimeObserver",
-              "src-tauri/src/core_adapter.rs"
-            ]
-          ],
-          "$note": "ADR-035 与 INV-03 的交叉点。观察通道今天**只决策不落盘**：macOS 上 gateway 已经拿着写者租约，而 `storage.rs` 仍是真正保存任务表的那份代码，所以从 announce 路径提交会让两个 writer 在没有对账协议的情况下写同一个 tasks.json。把 `decide_observation` 换成 `observe` 是 Action 3 存储改造那一步的动作，必须先过评审，所以这里挡着。两条正控各防一类假绿：一条证明扫描真读到 core_adapter.rs 且非写入口确实在用（路径写错时 rg 也返回 1），一条证明观察通道本体存在——整个 `CoreRuntimeObserver` 被删掉的话这条 absent 会因为无物可查而永远绿。",
           "timeoutMs": 120000
         }
       ]

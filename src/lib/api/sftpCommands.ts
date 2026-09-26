@@ -48,10 +48,9 @@ export const DOCKER_COMMANDS = {
   tagImage: "docker_tag_image",
 } as const;
 
-/** 项目/任务落盘（App 权威源）。 */
+/** 项目落盘（任务侧的整表快照写已随 core 接线退役）。 */
 export const PERSISTENCE_COMMANDS = {
   saveProjects: "save_projects",
-  saveProjectTasks: "save_project_tasks",
 } as const;
 
 /** 系统文件管理器 / 路径打开。 */

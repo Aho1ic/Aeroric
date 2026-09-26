@@ -34,7 +34,9 @@ use crate::storage::projects;
 use crate::storage::runtime;
 use crate::storage::tasks as task_storage;
 use crate::tasks::events::TaskNotification;
-use crate::tasks::executor::{settled_by_exit, ExecutorFailure, LiveRuns, TaskEvent, TaskExecutor};
+use crate::tasks::executor::{
+    settled_by_exit, ExecutorFailure, HostWindowFacts, LiveRuns, TaskEvent, TaskExecutor,
+};
 use crate::tasks::launch_plan::{self, Completion};
 use crate::tasks::operations::{Claim, Claimed, OperationKind, OperationLedger};
 use crate::tasks::reducer;
@@ -800,6 +802,11 @@ impl TaskService {
     /// Start a `todo`, or a freshly created immediate task. `persist_before_launch` is the
     /// remote-launch contract: the save must be durable *and* still be the newest word
     /// before a process exists.
+    ///
+    /// `window` carries the two facts only the calling window has (wiring §12) — the view's
+    /// terminal size and, for DSH, its per-window launch facts. The request is the single
+    /// description of the launch, so these ride on it rather than on any host-side side
+    /// table; tests with no view pass [`HostWindowFacts::default`].
     pub fn start(
         &self,
         project: &Record,
@@ -809,6 +816,7 @@ impl TaskService {
         prompt_override: Option<String>,
         inject_prompt_into_terminal: bool,
         attachments: Attachments,
+        host_facts: HostWindowFacts,
     ) -> Result<Applied, TaskError> {
         self.start_as(
             project,
@@ -818,6 +826,7 @@ impl TaskService {
             prompt_override,
             inject_prompt_into_terminal,
             attachments,
+            host_facts,
             Persist::Commit,
         )
     }
@@ -833,6 +842,7 @@ impl TaskService {
         prompt_override: Option<String>,
         inject_prompt_into_terminal: bool,
         attachments: Attachments,
+        host_facts: HostWindowFacts,
     ) -> Result<Applied, TaskError> {
         self.start_as(
             project,
@@ -842,6 +852,7 @@ impl TaskService {
             prompt_override,
             inject_prompt_into_terminal,
             attachments,
+            host_facts,
             Persist::ViaHost,
         )
     }
@@ -855,6 +866,7 @@ impl TaskService {
         prompt_override: Option<String>,
         inject_prompt_into_terminal: bool,
         attachments: Attachments,
+        host_facts: HostWindowFacts,
         persist: Persist,
     ) -> Result<Applied, TaskError> {
         self.begin(
@@ -866,7 +878,7 @@ impl TaskService {
             &attachments,
             persist,
             |service, record, project, generation| {
-                let request = launch_plan::launch_request(
+                let mut request = launch_plan::launch_request(
                     record,
                     project,
                     service.families.as_ref(),
@@ -876,13 +888,12 @@ impl TaskService {
                     attachments.texts.clone(),
                     inject_prompt_into_terminal,
                     prompt_override,
-                    // The DSH window facts arrive through the command entry (wiring §12
-                    // step two); nothing else in core can invent per-window truth.
-                    None,
+                    host_facts.dsh,
                 )
                 .ok_or_else(|| {
                     TaskError::Unaddressable(project.id().unwrap_or_default().to_string())
                 })?;
+                request.terminal_size = host_facts.terminal_size;
                 service.executor.launch(&request).map_err(|failure| {
                     service.abandon_launch(
                         record,
@@ -899,6 +910,11 @@ impl TaskService {
     /// Continue a settled task. Resolving *which* session to continue is a host
     /// responsibility (it reads the filesystem and the agent homes); deciding that an
     /// unresolvable session must not silently become a new conversation is this service's.
+    ///
+    /// The view's terminal size rides along (`None` in tests): without it every resumed
+    /// PTY would open at the driver default and visibly resize, which is a behaviour
+    /// change dressed as an omission. DSH never goes through here — its "resume" is a run
+    /// command; see the executor.
     pub fn resume(
         &self,
         project: &Record,
@@ -906,6 +922,7 @@ impl TaskService {
         session_id: &str,
         operation_key: &str,
         persist_before_launch: bool,
+        terminal_size: Option<(u16, u16)>,
     ) -> Result<Applied, TaskError> {
         self.resume_as(
             project,
@@ -913,6 +930,7 @@ impl TaskService {
             session_id,
             operation_key,
             persist_before_launch,
+            terminal_size,
             Persist::Commit,
         )
     }
@@ -931,6 +949,7 @@ impl TaskService {
         session_id: &str,
         operation_key: &str,
         persist_before_launch: bool,
+        terminal_size: Option<(u16, u16)>,
     ) -> Result<Applied, TaskError> {
         self.resume_as(
             project,
@@ -938,6 +957,7 @@ impl TaskService {
             session_id,
             operation_key,
             persist_before_launch,
+            terminal_size,
             Persist::ViaHost,
         )
     }
@@ -949,6 +969,7 @@ impl TaskService {
         session_id: &str,
         operation_key: &str,
         persist_before_launch: bool,
+        terminal_size: Option<(u16, u16)>,
         persist: Persist,
     ) -> Result<Applied, TaskError> {
         let blocked = self
@@ -994,7 +1015,7 @@ impl TaskService {
                     session_owner::apply_resolved_session(record, &owner, Some(session_id), None);
                 // The record in the list has to be the one carrying the session, so the write
                 // and the request agree about which transcript is being continued.
-                let request = launch_plan::resume_request(
+                let mut request = launch_plan::resume_request(
                     &with_session,
                     project,
                     service.families.as_ref(),
@@ -1005,6 +1026,7 @@ impl TaskService {
                 .ok_or_else(|| {
                     TaskError::Unaddressable(project.id().unwrap_or_default().to_string())
                 })?;
+                request.terminal_size = terminal_size;
                 service.executor.resume(&request).map_err(|failure| {
                     service.abandon_launch(
                         &with_session,

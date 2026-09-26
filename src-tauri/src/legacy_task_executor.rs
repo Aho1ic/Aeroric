@@ -7,13 +7,13 @@
 //! `TaskService` once the writer role is handed over — that loop is why every body was split
 //! into a wrapper plus a kernel first.
 //!
+//! The DSH branch dispatches `run_dsh_task_core` (wiring §12): the request carries the
+//! three per-window facts (`DshWindowFacts`) and the session id comes from the record, so
+//! the only remaining shape question is the working directory — DSH is local-only, and a
+//! remote one is refused by name rather than guessed at.
+//!
 //! What is deliberately **not** here yet:
 //!
-//! - The DSH channel. `run_dsh_task_core` needs `workspace_id`, `prompt_mode` and
-//!   `client_time_zone`, and a `LaunchRequest` carries none of them (they are per-window facts
-//!   the webview supplies). Refusing with a named reason is not a placeholder: the DSH family
-//!   keeps starting through its own command until P3-05 makes the DSH host a core service, and
-//!   a silent no-op here would look like a successful launch.
 //! - Run addressing. `cancel`/`complete` still speak the old task-id-only vocabulary; the
 //!   `(task_id, generation)` rekey (ADR-020 + ADR-025) replaces these with "newest registered
 //!   generation" for resource calls and "every live generation" for intents, and `RunRegistry`
@@ -133,14 +133,12 @@ impl<R: tauri::Runtime> LegacyTaskExecutor<R> {
     }
 }
 
-/// DSH 是**整条**拒绝，不是逐字段拒绝。三个每窗口事实现在都进得了 `LaunchRequest`（`DshWindowFacts`），
-/// 所以这条理由不能再说是"端口表达不了"——真正的缺口是**这个执行器还没分发 webui 的启动体**。措辞
-/// 因此只陈述两件可查的事：dsh 今天由 `run_dsh_task` 那条命令自己启动，那条命令收这三个窗口参数；
-/// 分发 `run_dsh_task_core` 是 P3-05 的事。点名三个事实，门禁可查、用户在 UI 上读到的也不是抽象话。
+/// dsh 只在本地工作区上运行：`run_dsh_task_core` 把 `project_path` 直接交给 webui
+/// `create_session`，一个 SSH/WSL 工作区的 dsh 任务不是"换个路径"能表达的事，按名拒绝
+/// 而不是猜。
 fn dsh_refusal_reason() -> String {
-    "this executor does not launch dsh yet: dsh runs over the webui's own dsh launch command, \
-     which takes the window-scoped workspace_id / prompt_mode / client_time_zone, and \
-     dispatching the webui launch body from here is P3-05's step"
+    "a dsh task runs on a local workspace, and this launch request carried a remote one; \
+     the webui launch body cannot address a remote path"
         .to_string()
 }
 
@@ -183,9 +181,66 @@ fn permission_is_carried_verbatim(mode: PermissionMode, wire: &str) -> bool {
 impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
     fn launch(&self, request: &LaunchRequest) -> Execution<()> {
         if request.family == ProtocolFamily::Dsh {
-            return Err(ExecutorFailure::Unsupported {
-                reason: dsh_refusal_reason(),
+            let project_path = match request.working_directory.clone() {
+                WorkingDirectory::Local { path } => path,
+                _ => {
+                    return Err(ExecutorFailure::Unsupported {
+                        reason: dsh_refusal_reason(),
+                    })
+                }
+            };
+            let channel = self.channel_for(&request.operation_key)?;
+            let app = self.app.clone();
+            let task_id = request.task_id.clone();
+            let agent = request.agent.clone();
+            // Core minted this run's identity; the kernel registers the session and the
+            // host's run registry under it (ADR-020/025), so this task's status reports
+            // carry a generation core's staleness guard admits.
+            let run = RunKey::minted(&task_id, request.generation);
+            let prompt = launch_prompt(request);
+            let session_id = request.session_id.clone();
+            let (workspace_id, prompt_mode, client_time_zone) = match &request.dsh_window {
+                Some(facts) => (
+                    facts.workspace_id.clone(),
+                    facts.prompt_mode.clone(),
+                    facts.client_time_zone.clone(),
+                ),
+                None => (None, None, None),
+            };
+            let agent_preset = request.dsh_agent_preset.clone();
+            let selected_model = request.selected_model.clone();
+            let reasoning_effort = request.reasoning_effort.clone();
+            // The dsh kernel takes the permission preset as `Option<String>`: `None` means
+            // no `/permission` command at all, which is what an unrecognised stored spelling
+            // must stay equal to.
+            let permission_mode = (!request.permission_mode_wire.is_empty())
+                .then(|| request.permission_mode_wire.clone());
+            let images = optional_attachments(request.images.clone());
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<DshWebUiManager>();
+                let result = crate::dsh_webui::run_dsh_task_core(
+                    app.clone(),
+                    &state,
+                    run,
+                    task_id,
+                    agent,
+                    project_path,
+                    prompt,
+                    session_id,
+                    workspace_id,
+                    agent_preset,
+                    prompt_mode,
+                    selected_model,
+                    reasoning_effort,
+                    permission_mode,
+                    images,
+                    client_time_zone,
+                    channel,
+                )
+                .await;
+                report_detached("launch", result);
             });
+            return Ok(());
         }
         let channel = self.channel_for(&request.operation_key)?;
         let app = self.app.clone();
@@ -213,7 +268,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         app.clone(),
                         &task_manager,
                         RunKey::minted(&task_id, generation),
-                        task_id,
+                        task_id.clone(),
                         path,
                         prompt,
                         created_at,
@@ -230,7 +285,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("launch", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -244,7 +299,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                     let result = crate::ssh::run_remote_task_core(
                         app.clone(),
                         &task_manager,
-                        task_id,
+                        task_id.clone(),
                         connection,
                         remote_path,
                         prompt,
@@ -259,7 +314,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("launch", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -269,7 +324,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                     let result = crate::wsl::run_wsl_task_core(
                         app.clone(),
                         &task_manager,
-                        task_id,
+                        task_id.clone(),
                         distribution,
                         path,
                         prompt,
@@ -284,7 +339,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("launch", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -322,7 +377,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         app.clone(),
                         &task_manager,
                         RunKey::minted(&task_id, generation),
-                        task_id,
+                        task_id.clone(),
                         path,
                         agent,
                         session_id,
@@ -336,7 +391,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("resume", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -350,7 +405,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                     let result = crate::ssh::resume_remote_task_core(
                         app.clone(),
                         &task_manager,
-                        task_id,
+                        task_id.clone(),
                         connection,
                         remote_path,
                         agent,
@@ -364,7 +419,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("resume", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -374,7 +429,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                     let result = crate::wsl::resume_wsl_task_core(
                         app.clone(),
                         &task_manager,
-                        task_id,
+                        task_id.clone(),
                         distribution,
                         path,
                         agent,
@@ -388,7 +443,7 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
                         channel,
                     )
                     .await;
-                    report_detached("resume", result);
+                    report_launch_detached(&app, &task_id, result);
                 });
                 Ok(())
             }
@@ -476,6 +531,33 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
 fn report_detached(stage: &str, result: Result<(), String>) {
     if let Err(reason) = result {
         eprintln!("[aeroric] legacy_task_executor {stage} failed after the handoff: {reason}");
+    }
+}
+
+/// A launch/resume kernel that failed **after** the port returned `Ok` has no caller left to
+/// hand the error to — the port is synchronous, the kernel is not (§4.8). Before the wiring,
+/// the command awaited the kernel and its `Err` reached JS, whose `reportLaunchFailure` marked
+/// the task failed; dropping that on the floor now would strand the row on `pending` with the
+/// process never having existed. The observer owns exactly this: a failed *launch* is a failed
+/// task, with the kernel's own words as the reason — the same shape `abandon_launch` gives the
+/// synchronous refusals. The dsh kernel self-reports its launch-phase failures and must not be
+/// double-reported here.
+fn report_launch_detached<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    result: Result<(), String>,
+) {
+    match result {
+        Ok(()) => {}
+        Err(reason) => {
+            eprintln!("[aeroric] legacy_task_executor launch failed after the handoff: {reason}");
+            crate::core_adapter::report_task_status_with_reason(
+                app,
+                task_id,
+                "failed",
+                Some(&reason),
+            );
+        }
     }
 }
 
@@ -628,15 +710,13 @@ mod tests {
     }
 
     #[test]
-    fn the_dsh_refusal_still_names_the_three_window_facts() {
-        // A silent no-op here would report a launch that never happened, so the reason has to be
-        // specific enough for a gate to check and a user to read. The three facts are what the
-        // webui command takes; the message no longer claims a `LaunchRequest` cannot carry them,
-        // because since `DshWindowFacts` it can — what it lacks is the dispatch.
+    fn the_dsh_refusal_is_about_the_workspace_not_the_facts() {
+        // Since the dispatch exists, the only remaining refusal shape is a dsh task on a
+        // remote working directory — and the reason has to say that, not gesture at facts
+        // the request now carries.
         let reason = dsh_refusal_reason();
-        for fact in ["workspace_id", "prompt_mode", "client_time_zone"] {
-            assert!(reason.contains(fact), "{fact} must be named: {reason}");
-        }
+        assert!(reason.contains("local workspace"), "{reason}");
+        assert!(reason.contains("remote"), "{reason}");
     }
 
     #[test]

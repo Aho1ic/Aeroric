@@ -31,4 +31,4 @@ export {
   resumeLocalTask,
   type TaskLaunchDeps,
 } from "./taskLaunch";
-export { applyTaskStatusTransition, persistTaskStatusChange } from "./taskStatus";
+export { applyTaskStatusTransition } from "./taskStatus";

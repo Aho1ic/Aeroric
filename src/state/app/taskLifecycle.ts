@@ -4,7 +4,6 @@ import type { ProjectViewState } from "../../appProjectState";
 import { resolveProjectLocation } from "../../types";
 import type { ProtocolFamily } from "../../types";
 import { agentDisplayLabel, agentFamily, familyFromCodexLike } from "../../agents";
-import { persistProjectTasks, flushProjectTasks } from "../../appProjectState";
 import { flushProjectIntents } from "../../taskIntentQueue";
 import { sendTaskIntent } from "./taskIntentAdoption";
 import { withTimeout, TASK_FLUSH_TIMEOUT_MS } from "../../taskFlush";
@@ -82,12 +81,9 @@ export function applyResolvedTaskSession(
 }
 
 async function flushProjectTasksForRemoteLaunch(projectId: string): Promise<void> {
-  // 过渡期两条落盘车道都要等：意图队列（切换过的站点）与旧快照队列（#7/#15 随
-  // 执行器接线才退役）。见 docs/native/reviews/tauri-adapter.md §11。
+  // 任务快照队列已随接线退役：落盘的唯一车道是意图队列（§12 ④）。
   await withTimeout(
-    Promise.all([flushProjectIntents(projectId), flushProjectTasks(projectId)]).then(
-      () => undefined,
-    ),
+    flushProjectIntents(projectId).then(() => undefined),
     TASK_FLUSH_TIMEOUT_MS,
     "Timed out while saving the task. The remote request was rejected.",
   );
@@ -141,7 +137,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
   const t = deps.translateRef.current;
   const agentOptions = deps.agentOptionsRef.current;
 
-  function invokeRunTask(
+  async function invokeRunTask(
     task: Task,
     projectPath: string,
     images: string[],
@@ -150,7 +146,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     promptOverride?: string,
   ) {
     deps.manuallyCompletedDshTasksRef.current.delete(task.id);
-    launchLocalTask(deps.launchDeps(), {
+    await launchLocalTask(deps.launchDeps(), {
       task,
       projectPath,
       images,
@@ -161,14 +157,14 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     });
   }
 
-  function invokeRemoteRunTask(
+  async function invokeRemoteRunTask(
     task: Task,
     connection: SshConnection,
     remoteProjectPath: string,
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    launchSshTask(deps.launchDeps(), {
+    await launchSshTask(deps.launchDeps(), {
       task,
       connection,
       remoteProjectPath,
@@ -177,14 +173,14 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     });
   }
 
-  function invokeWslRunTask(
+  async function invokeWslRunTask(
     task: Task,
     distribution: string,
     linuxProjectPath: string,
     injectPromptIntoTerminal = false,
     promptOverride?: string,
   ) {
-    launchWslTask(deps.launchDeps(), {
+    await launchWslTask(deps.launchDeps(), {
       task,
       distribution,
       linuxProjectPath,
@@ -193,12 +189,12 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     });
   }
 
-  function invokeResumeTask(task: Task, project: Project, sessionId: string) {
+  async function invokeResumeTask(task: Task, project: Project, sessionId: string) {
     deps.manuallyCompletedDshTasksRef.current.delete(task.id);
     const projectLocation = resolveProjectLocation(project);
     const launch = deps.launchDeps();
     if (resolveTaskSessionOwner(task, deps.agentOptionsRef.current).family === "dsh") {
-      resumeDshTask(launch, {
+      await resumeDshTask(launch, {
         task,
         projectPath: task.worktreePath ?? project.path,
         sessionId,
@@ -219,7 +215,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
         );
         return;
       }
-      resumeSshTask(launch, {
+      await resumeSshTask(launch, {
         task,
         connection,
         remoteProjectPath: projectLocation.remotePath,
@@ -228,7 +224,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       return;
     }
     if (projectLocation.kind === "wsl") {
-      resumeWslTask(launch, {
+      await resumeWslTask(launch, {
         task,
         distribution: projectLocation.distribution,
         linuxProjectPath: projectLocation.linuxPath,
@@ -236,7 +232,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       });
       return;
     }
-    resumeLocalTask(launch, {
+    await resumeLocalTask(launch, {
       task,
       projectPath: task.worktreePath ?? project.path,
       sessionId,
@@ -414,7 +410,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     deps.resetTaskTerminal(taskId);
 
     if (projectLocation.kind === "ssh") {
-      invokeRemoteRunTask(
+      await invokeRemoteRunTask(
         baseTask,
         remoteConnection!,
         projectLocation.remotePath,
@@ -423,7 +419,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       return baseTask;
     }
     if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(
+      await invokeWslRunTask(
         baseTask,
         projectLocation.distribution,
         projectLocation.linuxPath,
@@ -496,7 +492,9 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       worktreeBranch,
       baseBranch: resolvedBaseBranch,
     };
-    invokeRunTask(
+    // 远程"先落盘再响应"的契约在命令体内成立（core 先 persist_launch 再 spawn），
+    // 所以这里等 invoke 完成——响应发出时权威行已在盘上。
+    await invokeRunTask(
       launchedTask,
       worktreePath ?? project.path,
       images,
@@ -510,6 +508,11 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
     task: Task,
     { persistBeforeLaunch = false }: TaskLaunchOptions = {},
   ): Promise<boolean> {
+    // #7 的乐观写只剩视图这一半：`todo → pending` 的持久化与"spawn 前落盘"都由 core 的
+    // `start()`（persist_launch 先于 spawn）承担——launch 命令返回的 TaskWriteOutcome 是
+    // 权威快照，采纳它而不落盘（§12 待答问题选①）。persistBeforeLaunch 因此不再需要
+    // flush+身份门：落盘在命令体内，core 是权威，"保存期间被改"的拒绝没有宿主侧主语了。
+    void persistBeforeLaunch;
     const sourceTask = deps.tasksRef.current.find((item) => item.id === task.id) ?? task;
     const project = deps.projectsRef.current.find((p) => p.id === sourceTask.projectId);
     if (!project) return false;
@@ -519,41 +522,9 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       status: "pending",
       attentionRequestedAt: undefined,
     };
-    deps.setTasks((prev) => {
-      const next = prev.map((item) => (item.id === sourceTask.id ? pendingTask : item));
-      persistProjectTasks(
-        sourceTask.projectId,
-        next,
-        deps.showToastRef.current,
-        deps.formatSaveTasksErrorRef.current,
-      );
-      return next;
-    });
-
-    if (persistBeforeLaunch) {
-      try {
-        await flushProjectTasksForRemoteLaunch(sourceTask.projectId);
-        if (deps.tasksRef.current.find((item) => item.id === sourceTask.id) !== pendingTask) {
-          throw new Error("Task changed while saving; the remote request was rejected.");
-        }
-      } catch (error) {
-        deps.setTasks((prev) => {
-          const next = prev.map((current) =>
-            current.id === sourceTask.id
-              ? rollbackTaskMutation(current, sourceTask, pendingTask)
-              : current,
-          );
-          persistProjectTasks(
-            sourceTask.projectId,
-            next,
-            deps.showToastRef.current,
-            deps.formatSaveTasksErrorRef.current,
-          );
-          return next;
-        });
-        throw error;
-      }
-    }
+    deps.setTasks((prev) =>
+      prev.map((item) => (item.id === sourceTask.id ? pendingTask : item)),
+    );
 
     deps.resetTaskTerminal(sourceTask.id);
     deps.updateProjectView(sourceTask.projectId, {
@@ -575,14 +546,14 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
         );
         return false;
       }
-      invokeRemoteRunTask(pendingTask, connection, projectLocation.remotePath);
+      await invokeRemoteRunTask(pendingTask, connection, projectLocation.remotePath);
       return true;
     }
     if (projectLocation.kind === "wsl") {
-      invokeWslRunTask(pendingTask, projectLocation.distribution, projectLocation.linuxPath);
+      await invokeWslRunTask(pendingTask, projectLocation.distribution, projectLocation.linuxPath);
       return true;
     }
-    invokeRunTask(pendingTask, pendingTask.worktreePath ?? project.path, []);
+    await invokeRunTask(pendingTask, pendingTask.worktreePath ?? project.path, []);
     return true;
   }
 
@@ -727,13 +698,16 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       }
     }
 
+    // dsh 的续跑 = 带记录里 dshSessionId 的再启动，而那条会话字段来自 #9 的复合意图
+    // ——launch 读记录之前必须让意图先落盘（与 #12 的 await-flush 同一先例；空队列零开销）。
+    await flushProjectTasksForRemoteLaunch(task.projectId);
     deps.resetTaskTerminal(taskId);
     deps.setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
     if (persistBeforeLaunch) {
-      invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
+      await invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
     } else {
       deps.pendingTaskStartsRef.current[taskId] = () => {
-        invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
+        void invokeResumeTask(adoptedRow ?? taskWithSession, project, session.sessionId!);
       };
     }
     return true;

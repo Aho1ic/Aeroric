@@ -559,11 +559,23 @@ impl<R: tauri::Runtime> TaskEventSink for TauriEventSink<R> {
 pub(crate) struct CoreRuntimeObserver<R: tauri::Runtime> {
     service: Arc<TaskService>,
     sink: Arc<TauriEventSink<R>>,
+    /// Fixed at start-up, when the lease was won or lost: the write half of every
+    /// observation routes on it. ADR-021 makes this a platform fact before any event
+    /// exists, so it cannot change under a running observer.
+    mode: CoreMode,
 }
 
 impl<R: tauri::Runtime> CoreRuntimeObserver<R> {
-    pub(crate) fn new(service: Arc<TaskService>, sink: Arc<TauriEventSink<R>>) -> Self {
-        Self { service, sink }
+    pub(crate) fn new(
+        service: Arc<TaskService>,
+        sink: Arc<TauriEventSink<R>>,
+        mode: CoreMode,
+    ) -> Self {
+        Self {
+            service,
+            sink,
+            mode,
+        }
     }
 }
 
@@ -581,14 +593,20 @@ impl<R: tauri::Runtime> TaskRuntimeObserver for CoreRuntimeObserver<R> {
         };
         let notification = match project {
             Some(project_id) => {
-                // `decide_observation`, not `observe`, and deliberately: on macOS the gateway
-                // already *is* the writer while `storage.rs` is still the code that saves the
-                // task table. Committing from here would put two writers on one `tasks.json`
-                // with no reconciliation protocol in place (INV-03). Attaching the commit is
-                // part of the store cutover (Action 3), and the gate case
-                // `core-observer-does-not-write-yet` turns red if this starts calling `observe`
-                // before that switch has been reviewed.
-                match self.service.decide_observation(&project_id, event.clone()) {
+                // The write half routes on the start-up mode, not on `is_writer()` alone:
+                // ADR-021's deferred platform hands the decision to core and the *bytes* to
+                // the bridge, while ADR-027's refused instance gets a decision and an
+                // announcement with no write anywhere — one reducer, three destinations.
+                let decided = match self.mode {
+                    CoreMode::Writer => self.service.observe(&project_id, event.clone()),
+                    CoreMode::HandoverDeferred => {
+                        self.service.observe_via_host(&project_id, event.clone())
+                    }
+                    CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
+                        self.service.decide_observation(&project_id, event.clone())
+                    }
+                };
+                match decided {
                     Ok((outcome, _)) => outcome.notification_for(&task_id),
                     Err(error) => {
                         eprintln!(
@@ -757,6 +775,7 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>
 
     let gateway = CoreGateway::at_startup(version);
     let context = gateway.context().clone();
+    let mode = gateway.mode();
     app.manage(gateway);
 
     let mailbox = Arc::new(crate::legacy_task_executor::OutputSinkMailbox::new());
@@ -779,6 +798,7 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>
             let observer: Arc<dyn TaskRuntimeObserver> = Arc::new(CoreRuntimeObserver::new(
                 Arc::clone(&service),
                 Arc::new(TauriEventSink::new(app.clone())),
+                mode,
             ));
             app.manage(service);
             app.manage(observer);
@@ -1112,10 +1132,6 @@ fn project_record_for(
 ///    mailbox 取；反过来做就把"进程已经起来、字节没人收"变成一种可能的结果。
 /// 3. **拒绝要把 channel 取回来**。留在 mailbox 里没人认领的 channel 不是"什么都没发生"，它是那个
 ///    窗口再也收不到输出的原因——`parked()` 这个计数存在就是为了能发现这种残留。
-#[allow(
-    dead_code,
-    reason = "§12 步骤②b 的入口先行：七条命令体要等 #7/#8/#15 快照退役的那一刀才换（互锁见 §12），在此之前它只有下面的用例真跑，没有前端字面量"
-)]
 pub(crate) fn launch_via_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
@@ -1124,6 +1140,8 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
     prompt_override: Option<String>,
     inject_prompt_into_terminal: bool,
     attachments: aeroric_core::tasks::Attachments,
+    terminal_size: Option<(u16, u16)>,
+    dsh_window: Option<aeroric_core::tasks::DshWindowFacts>,
 ) -> Result<TaskWriteOutcome, String> {
     use tauri::Manager;
 
@@ -1136,6 +1154,10 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
     let operation_key = uuid::Uuid::new_v4().to_string();
     mailbox.park(&operation_key, sink);
 
+    let window = aeroric_core::tasks::HostWindowFacts {
+        terminal_size,
+        dsh: dsh_window,
+    };
     let started = match mode {
         CoreMode::Writer => service.start(
             &project,
@@ -1145,6 +1167,7 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
             prompt_override,
             inject_prompt_into_terminal,
             attachments,
+            window,
         ),
         CoreMode::HandoverDeferred => service.start_via_host(
             &project,
@@ -1154,6 +1177,7 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
             prompt_override,
             inject_prompt_into_terminal,
             attachments,
+            window,
         ),
         CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
             mailbox.take(&operation_key);
@@ -1189,16 +1213,13 @@ pub(crate) fn launch_via_core<R: tauri::Runtime>(
 /// 一具身体与另一具的分工也钉在这里：`resume` **只写状态那一段**。宿主解析出的 session id 不由
 /// 这条入口落盘——那是 `ResumeWithSession` 那条复合意图的职责（Q70），拆开投两次就会留下"会话已挂、
 /// 状态未改"的中间态。
-#[allow(
-    dead_code,
-    reason = "§12 步骤②c 的入口先行：三条 `resume_*` 命令体与 #7/#8/#15 快照退役同刀才换（互锁见 §12），在此之前它只有下面的用例真跑"
-)]
 pub(crate) fn resume_via_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
     session_id: &str,
     sink: crate::pty::OutputSink,
     persist_before_launch: bool,
+    terminal_size: Option<(u16, u16)>,
 ) -> Result<TaskWriteOutcome, String> {
     use tauri::Manager;
 
@@ -1217,6 +1238,7 @@ pub(crate) fn resume_via_core<R: tauri::Runtime>(
             session_id,
             &operation_key,
             persist_before_launch,
+            terminal_size,
         ),
         CoreMode::HandoverDeferred => service.resume_via_host(
             &project,
@@ -1224,6 +1246,7 @@ pub(crate) fn resume_via_core<R: tauri::Runtime>(
             session_id,
             &operation_key,
             persist_before_launch,
+            terminal_size,
         ),
         CoreMode::ReadOnlyBusy | CoreMode::ReadOnlyLocation => {
             mailbox.take(&operation_key);

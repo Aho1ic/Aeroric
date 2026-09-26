@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use aeroric_core::tasks::executor::{ObservationOrigin, TaskEvent};
+use aeroric_core::tasks::executor::{HostWindowFacts, ObservationOrigin, TaskEvent};
 use aeroric_core::tasks::operations::{LedgerState, OperationKind};
 use aeroric_core::tasks::service::TaskError;
 use serde_json::json;
@@ -31,6 +31,7 @@ fn the_same_attempt_retried_spawns_exactly_one_process() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("the first attempt");
     let error = service
@@ -42,6 +43,7 @@ fn the_same_attempt_retried_spawns_exactly_one_process() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("the retry of the same attempt");
     assert!(
@@ -78,6 +80,7 @@ fn a_refused_retry_costs_no_generation_so_a_stale_event_stays_stale() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     assert_eq!(service.generation("t1"), 1);
@@ -90,7 +93,8 @@ fn a_refused_retry_costs_no_generation_so_a_stale_event_stays_stale() {
                 true,
                 None,
                 false,
-                Attachments::default()
+                Attachments::default(),
+                HostWindowFacts::default(),
             ),
             Err(TaskError::AlreadyClaimed { .. })
         ));
@@ -151,6 +155,7 @@ fn two_windows_starting_the_same_task_at_once_are_serialised_by_the_claim() {
                 None,
                 false,
                 Attachments::default(),
+                HostWindowFacts::default(),
             )
         }));
     }
@@ -187,6 +192,7 @@ fn a_claim_survives_the_process_so_a_restart_cannot_double_spawn() {
                 None,
                 false,
                 Attachments::default(),
+                HostWindowFacts::default(),
             )
             .expect("started, still waiting for the terminal");
         assert!(!service.open_claims("t1").is_empty());
@@ -203,6 +209,7 @@ fn a_claim_survives_the_process_so_a_restart_cannot_double_spawn() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect_err("the previous process never finished this attempt");
     assert!(
@@ -235,6 +242,7 @@ fn cancelling_reopens_the_task_for_a_genuine_new_attempt() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     assert!(matches!(
@@ -245,7 +253,8 @@ fn cancelling_reopens_the_task_for_a_genuine_new_attempt() {
             true,
             None,
             false,
-            Attachments::default()
+            Attachments::default(),
+            HostWindowFacts::default(),
         ),
         Err(TaskError::AlreadyClaimed { .. })
     ));
@@ -259,6 +268,7 @@ fn cancelling_reopens_the_task_for_a_genuine_new_attempt() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 2 is a new intent, not a retry");
     assert_eq!(executor.launches().len(), 2);
@@ -317,6 +327,7 @@ fn a_late_terminal_ready_from_an_older_run_settles_nothing() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 1");
     service.cancel(&project, "t1").expect("cancel 1");
@@ -329,6 +340,7 @@ fn a_late_terminal_ready_from_an_older_run_settles_nothing() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 2");
     assert_eq!(service.open_claims("t1").len(), 1);
@@ -410,6 +422,7 @@ fn the_record_copy_is_a_mirror_and_never_the_authority() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("run 0 is ours to start");
     let rows: Vec<serde_json::Value> =
@@ -439,6 +452,7 @@ fn an_empty_ledger_file_is_written_once_and_read_back_as_empty() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("started");
     service
@@ -493,6 +507,7 @@ fn two_distinct_operation_keys_on_one_task_both_reach_the_executor() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("first attempt");
     service
@@ -504,6 +519,7 @@ fn two_distinct_operation_keys_on_one_task_both_reach_the_executor() {
             None,
             false,
             Attachments::default(),
+            HostWindowFacts::default(),
         )
         .expect("a second, deliberately different attempt");
     assert_eq!(executor.launches().len(), 2, "two windows, two processes");

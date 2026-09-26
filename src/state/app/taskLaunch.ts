@@ -2,18 +2,38 @@ import { invoke } from "../../lib/api/invoke";
 import type { SshConnection, Task } from "../../types";
 import { taskCommandByKind } from "../../lib/api/session";
 import { DSH_TASK_COMMANDS } from "../../lib/api/worktree";
+import type { TaskIntentOutcome } from "../../taskIntentQueue";
 
 export type TaskLaunchDeps = {
   createOutputChannel: (taskId: string) => unknown;
   writeErrorToTerminal: (taskId: string, text: string) => void;
   terminalSize: { cols: number; rows: number };
   onFailed: (taskId: string, message: string) => void;
+  /** 启动入口的采纳（§12 待答问题选①）：命令返回的权威快照替换内存行，不落盘。 */
+  adoptRows: (projectId: string, rows: Task[]) => void;
 };
 
 function reportLaunchFailure(deps: TaskLaunchDeps, taskId: string, err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   deps.writeErrorToTerminal(taskId, `\r\nError: ${msg}\r\n`);
   deps.onFailed(taskId, msg);
+}
+
+/// 接线后的启动共用尾段：命令体内 core 先落盘再 spawn，返回的 outcome 就是权威快照
+/// ——采纳它而不落盘；失败走既有 reportLaunchFailure（onFailed 只改内存，盘上的
+/// failed 行由 core 的 abandon_launch / 观察通道负责）。
+async function launchInvoke(
+  deps: TaskLaunchDeps,
+  task: Task,
+  cmd: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const outcome = await invoke<TaskIntentOutcome>(cmd, args);
+    if (outcome?.tasks) deps.adoptRows(task.projectId, outcome.tasks);
+  } catch (err) {
+    reportLaunchFailure(deps, task.id, err);
+  }
 }
 
 export type LocalRunInput = {
@@ -26,7 +46,7 @@ export type LocalRunInput = {
   isDsh: boolean;
 };
 
-export function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
+export async function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
   const {
     task,
     projectPath,
@@ -37,7 +57,7 @@ export function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
     isDsh,
   } = input;
   if (isDsh) {
-    invoke(DSH_TASK_COMMANDS.run, {
+    await launchInvoke(deps, task, DSH_TASK_COMMANDS.run, {
       taskId: task.id,
       agent: task.agent,
       projectPath,
@@ -50,10 +70,10 @@ export function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
       images,
       clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       onOutput: deps.createOutputChannel(task.id),
-    }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+    });
     return;
   }
-  invoke(taskCommandByKind("local", "run"), {
+  await launchInvoke(deps, task, taskCommandByKind("local", "run"), {
     taskId: task.id,
     projectPath,
     prompt: promptOverride ?? task.prompt,
@@ -69,10 +89,10 @@ export function launchLocalTask(deps: TaskLaunchDeps, input: LocalRunInput) {
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
-export function launchSshTask(
+export async function launchSshTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -89,7 +109,7 @@ export function launchSshTask(
     injectPromptIntoTerminal = false,
     promptOverride,
   } = input;
-  invoke(taskCommandByKind("ssh", "run"), {
+  await launchInvoke(deps, task, taskCommandByKind("ssh", "run"), {
     taskId: task.id,
     connection,
     remoteProjectPath,
@@ -103,10 +123,10 @@ export function launchSshTask(
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
-export function launchWslTask(
+export async function launchWslTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -123,7 +143,7 @@ export function launchWslTask(
     injectPromptIntoTerminal = false,
     promptOverride,
   } = input;
-  invoke(taskCommandByKind("wsl", "run"), {
+  await launchInvoke(deps, task, taskCommandByKind("wsl", "run"), {
     taskId: task.id,
     distribution,
     linuxProjectPath,
@@ -137,7 +157,7 @@ export function launchWslTask(
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
 export type CancelTarget =
@@ -162,7 +182,7 @@ export function cancelTaskInvoke(taskId: string, target: CancelTarget): Promise<
   });
 }
 
-export function resumeDshTask(
+export async function resumeDshTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -171,7 +191,7 @@ export function resumeDshTask(
   },
 ) {
   const { task, projectPath, sessionId } = input;
-  invoke(DSH_TASK_COMMANDS.run, {
+  await launchInvoke(deps, task, DSH_TASK_COMMANDS.run, {
     taskId: task.id,
     agent: task.agent,
     projectPath,
@@ -186,10 +206,10 @@ export function resumeDshTask(
     images: [],
     clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
-export function resumeSshTask(
+export async function resumeSshTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -199,7 +219,7 @@ export function resumeSshTask(
   },
 ) {
   const { task, connection, remoteProjectPath, sessionId } = input;
-  invoke(taskCommandByKind("ssh", "resume"), {
+  await launchInvoke(deps, task, taskCommandByKind("ssh", "resume"), {
     taskId: task.id,
     connection,
     remoteProjectPath,
@@ -212,10 +232,10 @@ export function resumeSshTask(
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
-export function resumeWslTask(
+export async function resumeWslTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -225,7 +245,7 @@ export function resumeWslTask(
   },
 ) {
   const { task, distribution, linuxProjectPath, sessionId } = input;
-  invoke(taskCommandByKind("wsl", "resume"), {
+  await launchInvoke(deps, task, taskCommandByKind("wsl", "resume"), {
     taskId: task.id,
     distribution,
     linuxProjectPath,
@@ -238,10 +258,10 @@ export function resumeWslTask(
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }
 
-export function resumeLocalTask(
+export async function resumeLocalTask(
   deps: TaskLaunchDeps,
   input: {
     task: Task;
@@ -250,7 +270,7 @@ export function resumeLocalTask(
   },
 ) {
   const { task, projectPath, sessionId } = input;
-  invoke(taskCommandByKind("local", "resume"), {
+  await launchInvoke(deps, task, taskCommandByKind("local", "resume"), {
     taskId: task.id,
     projectPath,
     agent: task.agent,
@@ -263,5 +283,5 @@ export function resumeLocalTask(
     cols: deps.terminalSize.cols,
     rows: deps.terminalSize.rows,
     onOutput: deps.createOutputChannel(task.id),
-  }).catch((err: unknown) => reportLaunchFailure(deps, task.id, err));
+  });
 }

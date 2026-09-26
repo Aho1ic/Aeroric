@@ -51,7 +51,7 @@ import {
 } from "./state/app/useAppMaintenance";
 import { discardTaskWorktree, mergeTaskWorktree } from "./state/app/worktreeOps";
 import { createTaskLifecycleActions } from "./state/app/taskLifecycle";
-import { flushProjectIntents } from "./taskIntentQueue";
+import { flushProjectIntents, replaceProjectRows } from "./taskIntentQueue";
 import { sendTaskIntent } from "./state/app/taskIntentAdoption";
 import {
   deleteTasks as deleteTasksImpl,
@@ -64,7 +64,6 @@ import { handleSwitchTaskConfig as switchTaskConfigImpl } from "./state/app/task
 import {
   applyTaskStatusTransition,
   cancelTaskInvoke,
-  persistTaskStatusChange,
   type TaskLaunchDeps,
 } from "./state/app";
 import {
@@ -474,6 +473,10 @@ function AppShell() {
       writeErrorToTerminal: tm.writeErrorToTerminal,
       terminalSize: tm.terminalSizeRef.current,
       onFailed: (taskId, message) => updateTaskStatus(taskId, "failed", undefined, message),
+      // 启动采纳（§12 ①）：run/resume 命令返回的权威快照替换内存行，不落盘——
+      // core 已经写过了。
+      adoptRows: (projectId, rows) =>
+        setTasks((prev) => replaceProjectRows(prev, projectId, rows)),
     };
   }
 
@@ -986,23 +989,16 @@ function AppShell() {
     extra?: Pick<Task, "attentionRequestedAt">,
     failureReason?: string,
   ) {
+    // 状态的落盘属于 core 的观察通道（ADR-023/035）：这条入口只剩视图层的状态机迁移，
+    // 不再持久化任何东西——`persistTaskStatusChange` 随快照写退役删除（§12 ④）。
     setTasks((prev) => {
-      const {
-        tasks: next,
-        changed,
-        task,
-      } = applyTaskStatusTransition(prev, taskId, status, extra, failureReason);
-      if (changed && task) {
-        persistTaskStatusChange(
-          {
-            showToast: showToastRef.current,
-            formatSaveTasksError: formatSaveTasksErrorRef.current,
-          },
-          next,
-          taskId,
-          status,
-        );
-      }
+      const { tasks: next, changed } = applyTaskStatusTransition(
+        prev,
+        taskId,
+        status,
+        extra,
+        failureReason,
+      );
       return changed ? next : prev;
     });
   }
