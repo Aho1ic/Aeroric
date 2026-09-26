@@ -45,7 +45,8 @@ pub(crate) fn omp_home_for(agent: &str) -> Result<PathBuf, String> {
 ///
 /// 文件名的 `*` 是 omp 的 tool 通配(`discovery/builtin.ts:707` 按 basename 去
 /// 扩展名解析);实际的事件订阅走 `pi.on`,与文件名里的 tool 无关。
-const OMP_HOOK_SCRIPT: &str = include_str!("aeroric-omp-hook.js");
+// hook 脚本的单一资源来源在 core(切片四);宿主只别名消费。
+use aeroric_core::agents::managed_home::AERORIC_OMP_HOOK_SCRIPT as OMP_HOOK_SCRIPT;
 
 /// 托管 config.yml 的受管内容。只写已核实的 omp settings 键:
 /// - `compaction.asyncEnabled: false`:关闭后台投机压缩,避免非预期的 token 消耗。

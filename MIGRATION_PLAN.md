@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十五次更新）：P3-02 切片三已落地（补记九十）——env 层顺序操作表进 core(`EnvOp` 三段计划,`combined_omp_env_ops` 把"setup_omp_env 后于 setup_env"变成结构),宿主三函数机械重放(旧测试=等价证明);OMP 三条不变量进 core `agents/omp.rs`(hook 扩展名/willContinue fail-closed/--mode 永不产出),宿主 omp_home 消费 `OMP_HOOK_FILE_NAME`。** core **321**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 剩余**:`managed_home/` 迁入 → SwitchEvidence/G18 → `grill-me [agents]`。
+**当前状态（2026-09-26，第二十六次更新）：P3-02 切片四已落地（补记九十一）——hook 脚本资源迁入 core `agents/managed_home/`(单一来源,宿主 re-export 消费)+ hooks.rs 纯构造半边(Claude settings JSON/Codex TOML 注入块)迁 core;托管 home 的 I/O 安装逻辑留待与 P3-06 CLI 数据面同刀(范围决定记底稿 §4-4)。** core **321**/0、src-tauri **2465**/0、门禁矩阵全绿、全量 `pnpm test` 376/5483 绿。**P3-02 收口前最后一片(§4-5)**:SwitchEvidence/`adopt_session_for_agent` 真实实现 + G18 裁决 → `grill-me [agents]`。
 
+**（上一轮口径——第二十五次更新，2026-09-26）：P3-02 切片三已落地（补记九十）——env 层顺序操作表进 core(`EnvOp` 三段计划,`combined_omp_env_ops` 把"setup_omp_env 后于 setup_env"变成结构),宿主三函数机械重放(旧测试=等价证明);OMP 三条不变量进 core `agents/omp.rs`(hook 扩展名/willContinue fail-closed/--mode 永不产出),宿主 omp_home 消费 `OMP_HOOK_FILE_NAME`。**
 **（上一轮口径——第二十四次更新，2026-09-26）：P3-02 切片二已落地（补记八十九）——四族计划函数进 core(claude/codex/dsh/omp_plan),宿主 8 个 builder/add 函数收敛为 4 个机械翻译命令,parity fixtures 18 case 由旧宿主路径冻结、core 重放逐字节相等、宿主同 fixtures 等价守卫;`pnpm native:check agents` 注册(1 case/2)。**
 **（上一轮口径——第二十三次更新，2026-09-26）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。**
 **（上一轮口径——第二十二次更新，2026-09-26）：P3-01 accepted（补记八十七 + 评审 `reviews/runtime.md`），下一任务＝P3-02（原样迁移四族命令构造与托管配置）。**
@@ -1689,6 +1690,15 @@ grill-me
 > 3. **OMP 三条不变量进 core `agents/omp.rs`**(错了会静默坏的形状必须可失败):① `omp_hook_extension_is_loadable` 只认 `.js`/`.ts`,`.mjs` 反例(1.4.7 开发期真踩过:目录扫描能看到、hook 永不加载、任务永远 running);② `omp_hook_source_guards_will_continue` 检测源码里的精确短路(`willContinue === true` → return),宿主 `omp_home` 在写盘前 fail-closed 断言(没有短路的 hook 会让角标在自动续跑前闪灭——INV-07);③ `omp_plan` 永不产出 `--mode` 的性质测试(全权限档×thinking×resume 组合;INV-05/07)。**真实消费点**:宿主 `omp_home` 的安装路径改用 core 的 `OMP_HOOK_FILE_NAME` 常量。
 > 4. **账目**：core **321**/0(+7:environment 4 + omp 3)、src-tauri 串行 **2465**/0(旧测试原样通过=重放等价证明;净增减为零)、门禁矩阵全绿(skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 13 条→freeze→noop、params **659**)、typecheck/fmt/clippy 全净、全量 `pnpm test` **376/5483 绿**。
 > 5. **下一步(按底稿 §4-4/5)**:`managed_home/` 迁入(omp_home/dsh_home/hooks 安装逻辑;include_str! hook 随迁到单一资源来源)→ SwitchEvidence/`adopt_session_for_agent` 真实实现 + G18 裁决 → `grill-me [agents]` 收口。
+
+> **【补记九十一 @ 2026-09-26，P3-02 切片四：hook 资源与纯构造函数迁入 managed_home/】**（底稿 §4-4 完结——本片范围按实际收敛：hook 资源单一来源 + hooks.rs 的纯构造半边；omp/dsh 托管 home 的 I/O 安装逻辑(1046+537 行)留待与 P3-06 的 CLI 数据面同刀,理由见 4）
+>
+> 1. **hook 资源单一来源**:`aeroric-hook.mjs`/`aeroric-omp-hook.js` 以 git mv 迁入 `core/crates/aeroric-core/src/agents/managed_home/`,core 侧 `resources.rs` 用 include_str! 暴露为 `AERORIC_HOOK_SCRIPT`/`AERORIC_OMP_HOOK_SCRIPT`;宿主 hooks.rs/omp_home.rs 改为 re-export 别名消费——"两份会漂移的拷贝"从此不存在,改动脚本只动 core 目录下的文件。前端 omp-hook 测试的 import 路径同步(加 `@ts-expect-error`:无类型声明的 JS 资源)。
+> 2. **纯构造半边迁 core**:`claude_hooks.rs`(CLAUDE_EVENTS/hook_command 的 POSIX 单引号与 Windows PowerShell 双形态/build_claude_settings_value/with_claude_fast_mode/is_aeroric_managed/uninject_claude_value + AERORIC_MARKER_FIELD 两常量)与 `codex_hooks.rs`(CODEX_BEGIN/END/EVENTS/build_codex_block/toml_quote/inject_codex_text/uninject_codex_text);hooks.rs 只剩 I/O 包装(路径解析/原子写/install 状态),经 re-export 消费。12 条纯函数测试随体留在宿主测试模块经 re-export 照跑——等价证明而不是重写。
+> 3. **顺序陷阱实录**:build_codex_block 在文件里紧邻 toml_quote,迁移切片按"片段边界"删除时 toml_quote 被前一片段连带吞掉、codex_hooks_fragment_path 的签名也被 toml_quote 的 end-marker 吞掉——clippy 的 unused-import 与 E0425 连环暴露,逐个归位。教训照旧:迁移切片的边界要以"函数+其 doc 注释"为原子,不能按行区间。
+> 4. **托管 home 的 I/O 安装逻辑不在此片的理由**:omp/dsh_home 的安装器依赖宿主路径解析(~/.aeroric 根)、`atomic_write_private` 与 install 状态缓存,而 core 侧对应物(paths/atomic 的 managed-home 视角)要等 P3-06 的 CLI 数据面定形——现在硬搬会出现"core 里的宿主路径假设",那正是 INV-02 要防的。范围决定记进底稿 §4-4。
+> 5. **账目**：core **321**/0(不变:纯函数迁移不增测试,managed_home 由宿主 12 条既有测试经 re-export 覆盖)、src-tauri 串行 **2465**/0(不变)、门禁矩阵全绿(skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、agents 1/2、doctor 18/18、contracts 12 份逐字节、inventory pin 重定位 6 条→freeze→noop、params **659**)、typecheck 净(修 omp-hook 测试 import 的 TS7016)、全量 `pnpm test` **376/5483 绿**、fmt/clippy 全净。
+> 6. **下一步(§4-5,P3-02 收口前最后一片)**:SwitchEvidence/`adopt_session_for_agent` 真实实现(core 的 switch_config 已定义为输入;宿主 session.rs:1684 的现有实现作为事实来源核对)+ G18 裁决(claude_gpt55 的 launch 族三站点证据已齐:React 无条件 codex/Rust 读用户脚本/会话侧 claude)→ `grill-me [agents]` 收尾拷问轮。
 
 
 

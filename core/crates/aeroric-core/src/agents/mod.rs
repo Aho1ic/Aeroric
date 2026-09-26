@@ -7,6 +7,7 @@
 
 pub mod environment;
 pub mod launch;
+pub mod managed_home;
 pub mod omp;
 
 pub use environment::{

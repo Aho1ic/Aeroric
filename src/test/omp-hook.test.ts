@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // 被测对象是随 Rust 二进制 include_str! 打包进 omp 托管 home 的那份真脚本,
 // 不是复刻件:改了它这里立刻能看出来。
-import aeroricOmpHook from "../../src-tauri/src/aeroric-omp-hook.js";
+// @ts-expect-error 无类型声明的 JS 资源(单一来源在 core managed_home;被测对象是随 Rust 二进制打包的那份)
+import aeroricOmpHook from "../../core/crates/aeroric-core/src/agents/managed_home/aeroric-omp-hook.js";
 import type { OmpExtensionContext } from "../../src-tauri/src/aeroric-omp-hook.js";
 
 type Handler = (event: unknown, ctx: OmpExtensionContext | undefined) => Promise<void>;

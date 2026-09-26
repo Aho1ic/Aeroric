@@ -27,34 +27,17 @@ use crate::storage::atomic_write;
 const CODEX_HOOK_MIN_VERSION: &str = "0.131.0";
 const CLAUDE_HOOK_MIN_VERSION: &str = "2.1.87";
 
-const HOOK_SCRIPT: &str = include_str!("aeroric-hook.mjs");
-
-const AERORIC_MARKER_FIELD: &str = "_aeroric_managed";
-const LEGACY_CLAUDE_MARKER_FIELD: &str = concat!("_ne", "zha_managed");
-
-const CODEX_BEGIN: &str = "# >>> aeroric-managed-begin (do not edit; managed by Aeroric) >>>";
-const CODEX_END: &str = "# <<< aeroric-managed-end <<<";
-
-const CLAUDE_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "Notification",
-    // PostToolUse:工具执行成功后触发(ask 模式下即用户审批通过后),
-    // 用于把 input_required 复位回 running——UserPromptSubmit 在工具审批时不触发。
-    "PostToolUse",
-    "Stop",
-    "SubagentStop",
-];
-
-const CODEX_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PermissionRequest",
-    // 见 CLAUDE_EVENTS 的 PostToolUse 说明;Codex 自 0.124 起同样支持。
-    "PostToolUse",
-    "Stop",
-    "SubagentStop",
-];
+// hook 脚本的单一资源来源在 core(`agents::managed_home::resources`);宿主只别名消费。
+// 纯构造函数已迁 core,宿主 I/O 包装经 re-export 消费。
+use aeroric_core::agents::managed_home::{
+    build_claude_settings_value, build_codex_block, inject_codex_text, uninject_claude_value,
+    uninject_codex_text, with_claude_fast_mode, AERORIC_HOOK_SCRIPT as HOOK_SCRIPT, CODEX_BEGIN,
+    CODEX_END,
+};
+#[cfg(test)]
+use aeroric_core::agents::managed_home::{
+    is_aeroric_managed, toml_quote, AERORIC_MARKER_FIELD, CLAUDE_EVENTS, CODEX_EVENTS,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct HookInstallStatus {
@@ -144,17 +127,6 @@ pub fn aeroric_claude_settings_path() -> Result<PathBuf, String> {
     Ok(hooks_dir()?.join("claude-settings.json"))
 }
 
-/// Add Claude fast mode to a settings object without changing the hook
-/// structure supplied by Aeroric. Keeping this in a file avoids Windows
-/// CreateProcess argument escaping for inline JSON.
-fn with_claude_fast_mode(mut value: Value) -> Result<Value, String> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| "Claude settings must be a JSON object".to_string())?;
-    object.insert("fastMode".to_string(), Value::Bool(true));
-    Ok(value)
-}
-
 /// Resolve the one settings file Claude should receive for a launch.
 ///
 /// Claude accepts a JSON file path for `--settings`; using one path is also
@@ -202,46 +174,11 @@ pub fn claude_settings_path_for_launch(
     Ok(Some(path))
 }
 
-/// 构造 hook 调用命令。始终写入 Node 的绝对路径，避免 Agent 子 shell 与桌面
-/// 进程看到不同 PATH。Windows 统一经系统 PowerShell 调用，兼容 cmd/PowerShell
-/// 两种 hook 执行宿主；Unix 使用 POSIX 单引号。
-fn hook_command(node_path: &str, script: &str) -> String {
-    #[cfg(windows)]
-    {
-        let quote = |value: &str| value.replace('\'', "''");
-        format!(
-            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& '{}' '{}'\"",
-            quote(node_path),
-            quote(script)
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
-        format!("{} {}", quote(node_path), quote(script))
-    }
-}
-
 /// 构造仅含 Aeroric hooks 的 Claude settings 值。只放 `hooks`(数组型,Claude 会
 /// 跨来源 merge + 按 command 去重),不含任何标量 key,因此不会覆盖用户配置。
 ///
 /// MCP 不走这里:Claude 的 settings.json 没有 `mcpServers` 顶层键(实测经
 /// `--settings` 传入会被忽略),MCP 服务器只能经 `--mcp-config <file>` 加载。
-/// 见 `crate::mcp::claude_mcp_config_path_for_launch`。
-fn build_claude_settings_value(node_path: &str, script: &str) -> Value {
-    let entry = serde_json::json!({
-        "hooks": [{ "type": "command", "command": hook_command(node_path, script) }],
-    });
-    let mut hooks = Map::new();
-    for event in CLAUDE_EVENTS {
-        hooks.insert((*event).to_string(), Value::Array(vec![entry.clone()]));
-    }
-
-    let mut settings_object = Map::new();
-    settings_object.insert("hooks".to_string(), Value::Object(hooks));
-    Value::Object(settings_object)
-}
-
 /// 写入 Aeroric 自有 Claude settings 文件。用 serde_json 序列化——Windows 路径里的
 /// 反斜杠会被正确转义;且传给 Claude 的是纯文件路径,不经历命令行字符串转义,
 /// 跨平台(含 Windows CreateProcess)安全。
@@ -259,39 +196,6 @@ fn write_claude_settings(node_path: &str, script: &str) -> Result<PathBuf, Strin
 // 现版本走命令行 `--settings`,不再写用户 settings.json;以下函数仅用于清理
 // 旧版本曾注入用户 settings.json 的 `_aeroric_managed` 条目。
 
-fn is_aeroric_managed(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|obj| {
-            obj.get(AERORIC_MARKER_FIELD)
-                .or_else(|| obj.get(LEGACY_CLAUDE_MARKER_FIELD))
-        })
-        .and_then(|v| v.as_str())
-        .is_some()
-}
-
-/// 从 settings JSON 对象上移除 Aeroric hooks。
-fn uninject_claude_value(mut root: Value) -> Value {
-    let Some(root_obj) = root.as_object_mut() else {
-        return root;
-    };
-    let Some(hooks) = root_obj.get_mut("hooks").and_then(|v| v.as_object_mut()) else {
-        return root;
-    };
-    // 收集要清空的 event 数组名
-    let event_keys: Vec<String> = hooks
-        .iter()
-        .filter_map(|(k, v)| v.as_array().map(|_| k.clone()))
-        .collect();
-    for key in event_keys {
-        if let Some(arr) = hooks.get_mut(&key).and_then(|v| v.as_array_mut()) {
-            arr.retain(|entry| !is_aeroric_managed(entry));
-        }
-    }
-    // 不删除空数组也不删除 hooks 对象本身,保留用户既有结构
-    root
-}
-
 fn uninject_claude_settings_at(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
@@ -308,46 +212,6 @@ fn uninject_claude_settings_at(path: &Path) -> Result<(), String> {
 }
 
 // ── Codex (TOML) 注入与卸载 ──────────────────────────────────────────────────
-
-fn build_codex_block(node_path: &str, script: &str) -> String {
-    let mut out = String::new();
-    out.push_str(CODEX_BEGIN);
-    out.push('\n');
-    for event in CODEX_EVENTS {
-        out.push_str(&format!("[[hooks.{}]]\n", event));
-        out.push_str(&format!("[[hooks.{}.hooks]]\n", event));
-        out.push_str("type = \"command\"\n");
-        // Codex 的 `command` 只能是字符串(无 args 数组),在 Windows 上经
-        // toml_quote 负责把命令中的引号与路径反斜杠转义成合法 TOML。
-        out.push_str(&format!(
-            "command = {}\n",
-            toml_quote(&hook_command(node_path, script))
-        ));
-        out.push('\n');
-    }
-    out.push_str(CODEX_END);
-    out.push('\n');
-    out
-}
-
-/// 安全地把字符串转成 TOML basic string 字面量。
-fn toml_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
 
 /// 自定义 codex-like Agent 的 hook 片段文件。
 ///
@@ -369,78 +233,6 @@ fn write_codex_hooks_fragment(node_path: &str, script: &str) -> Result<PathBuf, 
 }
 
 /// 将 Aeroric 块写入(或更新)指定 TOML 内容。
-fn inject_codex_text(existing: &str, node_path: &str, script: &str) -> String {
-    let block = build_codex_block(node_path, script);
-    if let (Some(begin), Some(end)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END)) {
-        if begin < end {
-            let end_line_end = existing[end..]
-                .find('\n')
-                .map(|n| end + n + 1)
-                .unwrap_or(existing.len());
-            // 计算 begin 之前需要保留的部分(剔除紧邻的换行让结果整洁)
-            let before = &existing[..begin];
-            let after = &existing[end_line_end..];
-            let mut out = String::with_capacity(before.len() + block.len() + after.len());
-            out.push_str(before);
-            if !before.is_empty() && !before.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(&block);
-            if !after.is_empty() && !after.starts_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(after);
-            return out;
-        }
-    }
-
-    // 没有 marker,追加在文件末尾
-    let mut out = String::with_capacity(existing.len() + block.len() + 2);
-    out.push_str(existing);
-    if !existing.is_empty() && !existing.ends_with('\n') {
-        out.push('\n');
-    }
-    if !existing.is_empty() {
-        out.push('\n');
-    }
-    out.push_str(&block);
-    out
-}
-
-/// 从 TOML 内容里移除 Aeroric 块。
-fn uninject_codex_text(existing: &str) -> String {
-    let (Some(begin), Some(end)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END)) else {
-        return existing.to_string();
-    };
-    if begin >= end {
-        return existing.to_string();
-    }
-    let end_line_end = existing[end..]
-        .find('\n')
-        .map(|n| end + n + 1)
-        .unwrap_or(existing.len());
-    let before = &existing[..begin];
-    let after = &existing[end_line_end..];
-    let mut out = String::with_capacity(before.len() + after.len());
-    out.push_str(before);
-    // 跳过 before 末尾若有多余空行,保持文件整洁
-    while out.ends_with("\n\n") {
-        out.pop();
-    }
-    if !after.is_empty() {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(after.trim_start_matches('\n'));
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-    } else if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
 fn inject_codex_config_at(path: &Path, node_path: &str, script: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {}", parent.display(), e))?;
