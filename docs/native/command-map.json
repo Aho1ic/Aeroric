@@ -903,7 +903,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:299",
+      "definition_resolved": "src-tauri/src/lib.rs:300",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -936,7 +936,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:307",
+      "definition_resolved": "src-tauri/src/lib.rs:308",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -969,7 +969,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:313",
+      "definition_resolved": "src-tauri/src/lib.rs:314",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1002,7 +1002,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:319",
+      "definition_resolved": "src-tauri/src/lib.rs:320",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1456,7 +1456,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:360",
+      "definition_resolved": "src-tauri/src/fs.rs:328",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1491,7 +1491,7 @@
         "F07"
       ],
       "notes": "reclassified by name pattern from module default",
-      "definition_resolved": "src-tauri/src/fs.rs:309",
+      "definition_resolved": "src-tauri/src/fs.rs:310",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1504,6 +1504,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle!",
         "path: String",
         "project_path: String"
       ]
@@ -1525,7 +1526,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:455",
+      "definition_resolved": "src-tauri/src/fs.rs:423",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1559,7 +1560,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:497",
+      "definition_resolved": "src-tauri/src/fs.rs:465",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1593,7 +1594,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:538",
+      "definition_resolved": "src-tauri/src/fs.rs:506",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1766,7 +1767,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:558",
+      "definition_resolved": "src-tauri/src/fs.rs:526",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1800,7 +1801,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:579",
+      "definition_resolved": "src-tauri/src/fs.rs:547",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1834,7 +1835,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:641",
+      "definition_resolved": "src-tauri/src/fs.rs:609",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1868,7 +1869,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:748",
+      "definition_resolved": "src-tauri/src/fs.rs:716",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1903,7 +1904,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:771",
+      "definition_resolved": "src-tauri/src/fs.rs:739",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1938,19 +1939,21 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:859",
+      "definition_resolved": "src-tauri/src/fs.rs:779",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
       "reachable": true,
-      "params": []
+      "params": [
+        "app: tauri::AppHandle!"
+      ]
     },
     {
       "command": "list_project_files",
@@ -1969,7 +1972,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:1065",
+      "definition_resolved": "src-tauri/src/fs.rs:979",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -2002,7 +2005,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/fs.rs:1133",
+      "definition_resolved": "src-tauri/src/fs.rs:1047",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24847,7 +24850,7 @@
     "event_name @ src-tauri/src/dsh_webui.rs:3079",
     "event_name @ src-tauri/src/dsh_webui.rs:3192",
     "event_name @ src-tauri/src/dsh_webui.rs:3209",
-    "action.event_name() @ src-tauri/src/lib.rs:232",
+    "action.event_name() @ src-tauri/src/lib.rs:233",
     "event_name @ src-tauri/src/pty.rs:501"
   ],
   "event_dynamic_listen_sites": [],

@@ -63,6 +63,7 @@ mod protocol_decode;
     reason = "P2-05: constructed by the TaskService wiring step"
 )]
 mod legacy_task_executor;
+mod platform_adapter;
 mod pty;
 mod remote;
 mod remote_fs;
@@ -442,6 +443,8 @@ pub fn run() {
             Ok(())
         })
         .manage(TaskManager::default())
+        .manage(std::sync::Arc::new(platform_adapter::HostPlatformServices)
+            as std::sync::Arc<dyn aeroric_core::runtime::PlatformServices>)
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
         .manage(remote::RemoteState::new())

@@ -3,6 +3,7 @@ use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
+use tauri::Manager;
 
 /// 目录项。字段名一律下划线,前端 `src/components/file-explorer/types.ts` 的
 /// `FsEntry` 逐字段镜像这份形状 —— 结构体上没有 `rename_all`,所以 serde 发出去的
@@ -306,51 +307,18 @@ fn previewable_image_mime_type(path: &Path) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub async fn open_in_system_file_manager(path: String, project_path: String) -> Result<(), String> {
+pub async fn open_in_system_file_manager(
+    app: tauri::AppHandle,
+    path: String,
+    project_path: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // 路径校验是 webview 请求的安全边界,留在命令体;OS 调用走平台服务端口。
         let target = validate_path_within(&path, &project_path, true)?;
-        let is_dir = target.is_dir();
-
-        #[cfg(target_os = "macos")]
-        let status = {
-            let mut command = Command::new("open");
-            if is_dir {
-                command.arg(&target);
-            } else {
-                command.arg("-R").arg(&target);
-            }
-            command.status()
-        };
-
-        #[cfg(target_os = "windows")]
-        let status = {
-            let mut command = Command::new("explorer");
-            if is_dir {
-                command.arg(&target);
-            } else {
-                command.arg(format!("/select,{}", target.display()));
-            }
-            command.status()
-        };
-
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let status = {
-            let folder = if is_dir {
-                target.as_path()
-            } else {
-                target
-                    .parent()
-                    .ok_or_else(|| "Cannot resolve parent directory".to_string())?
-            };
-            Command::new("xdg-open").arg(folder).status()
-        };
-
-        let status = status.map_err(|e| format!("Failed to launch system file manager: {}", e))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("System file manager exited with status {}", status))
-        }
+        let services = app.state::<std::sync::Arc<dyn aeroric_core::runtime::PlatformServices>>();
+        services
+            .reveal_in_file_manager(&target)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -807,59 +775,16 @@ pub async fn copy_paths_to_directory(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn parse_clipboard_file_paths_output(raw: &str) -> Vec<String> {
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && *line != "missing value")
-        .map(ToString::to_string)
-        .collect()
-}
-
-#[cfg(target_os = "macos")]
-fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
-    let script = r#"
-use framework "AppKit"
-use scripting additions
-set pb to current application's NSPasteboard's generalPasteboard()
-set urls to pb's readObjectsForClasses:{current application's NSURL} options:(missing value)
-if urls is missing value then return ""
-set out to {}
-repeat with u in urls
-  set p to (u's |path|()) as text
-  if p is not "missing value" then set end of out to p
-end repeat
-set AppleScript's text item delimiters to linefeed
-return out as text
-"#;
-    let mut cmd = Command::new("osascript");
-    for line in script
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        cmd.arg("-e").arg(line);
-    }
-    crate::subprocess::configure_background_command(&mut cmd);
-    let output = cmd.output().map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(parse_clipboard_file_paths_output(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
-    Ok(Vec::new())
-}
-
 #[tauri::command]
-pub async fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(read_clipboard_file_paths_sync)
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn read_clipboard_file_paths(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<std::sync::Arc<dyn aeroric_core::runtime::PlatformServices>>();
+        services
+            .read_clipboard_file_paths()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -900,17 +825,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn parses_clipboard_file_paths_output() {
-        assert_eq!(
-            parse_clipboard_file_paths_output("/Users/me/a.txt\n/Users/me/Folder\n\n"),
-            vec![
-                "/Users/me/a.txt".to_string(),
-                "/Users/me/Folder".to_string()
-            ]
-        );
     }
 
     #[test]

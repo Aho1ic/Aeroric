@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十次更新）：P3-01 切片四已落地（补记八十五）——10 个任务作用域 watcher 站点全部经 `WatcherSupervisor`（会话六站按 (task,gen) 去重；reader/退出监控/转录走 spawn_unique 仅记账），token 检查点逐站落位，shutdown 升级为有界拆除；`tests/runtime_lifecycle.rs` 5 条判据全绿并注册 `pnpm native:check runtime`（P3-01 三条计划判据全部有机器守着）。** core **309**/0、src-tauri **2466**/0、tauri-adapter 12/2527、全量 `pnpm test` 376/5483 绿。**P3-01 剩余**：切片五（宿主 `platform_adapter.rs` + `PlatformServices` 端口）→ `grill-me [runtime]` 收尾。
+**当前状态（2026-09-26，第二十一次更新）：P3-01 切片五已落地（补记八十六）——`PlatformServices` 端口 + 宿主 `platform_adapter.rs::HostPlatformServices`(reveal/clipboard 两条命令改经端口,OS 调用体迁入;`reveal_args` 纯函数三平台各一条测试),src-tauri **2467**/0、core **309**/0、门禁矩阵全绿。** P3-01 三条验收两项有证据(lifecycle 门禁 1/5、tauri 零命中),只剩 `grill-me [runtime]` 收尾拷问轮,通过后 P3-01 收口、进 P3-02。
 
+**（上一轮口径——第二十次更新，2026-09-26）：P3-01 切片四已落地（补记八十五）——10 个任务作用域 watcher 站点全部经 `WatcherSupervisor`（会话六站按 (task,gen) 去重；reader/退出监控/转录走 spawn_unique 仅记账），token 检查点逐站落位，shutdown 升级为有界拆除；`tests/runtime_lifecycle.rs` 5 条判据全绿并注册 `pnpm native:check runtime`（P3-01 三条计划判据全部有机器守着）。** core **309**/0、src-tauri **2466**/0、tauri-adapter 12/2527、全量 `pnpm test` 376/5483 绿。
 **（上一轮口径——第十九次更新，2026-09-26）：P3-01 切片三已落地（补记八十四）——TaskRegistry 一次性 move 进 core，宿主变 Deref 委托壳（316 处字段访问点零改动），core **304**/0、src-tauri **2466**/0、全量 `pnpm test` 376/5483 绿、门禁矩阵全绿（tauri-adapter 12/2527 含真内核验收 19 条经壳通过）。**
 **（上一轮口径——第十八次更新，2026-09-26）：P3-01 切片二已落地（补记八十三）——`subprocess.rs` 迁入 core，core **290**/0、src-tauri **2476**/0（地板与 runner.floors 两处同改并读回）。** 一次守卫口径收窄（`lease-refusal-never-kills-a-foreign-pid` 改点租约决策面，理由在 case `$note`）；一次假红归因（observer 用例单跑/复跑不复现）。**下一片＝切片三：`TaskRegistry` move**（底稿 §6-3：14 张表 + `RunRegistry` + 锁序表搬进 core，宿主 `TaskManager` 变委托壳，43 处 `state::<TaskManager>` 读取点改道；禁双真相源，与锁序负例、"双开不覆盖句柄"回归同刀）。
 
@@ -1645,6 +1646,14 @@ grill-me
 > 6. **门禁注册**：`pnpm native:check runtime`（模块 `runtime`，case `runtime-lifecycle-rust`，minCases 5 = 文件内 5 条测试，floor 两处同改读回）。P3-01 的三条计划判据至此全部有机器守着。
 > 7. **账目**：core **309**/0（+5 lifecycle）、src-tauri 串行 **2466**/0（无增减：站点转换零新增用例）、门禁矩阵全绿（skeleton 20/113、tauri-adapter 12/2527、storage 5/259、protocol 6/98、tasks 7/151、projects 5/21、doctor 18/18、contracts 12 份逐字节、runtime 1/5）、inventory pin 重定位 **50** 条（行号随接管漂移）→ freeze → freeze-check 字节 noop、params 仍 **659**、typecheck 绿、全量 `pnpm test` **376 files/5483 绿**（空闲机单跑）。
 > 8. **下一步（P3-01 收尾）**：切片五——宿主 `platform_adapter.rs` + `PlatformServices` 端口同刀；然后 `grill-me [runtime]` 收尾拷问轮，P3-01 可收口。
+
+> **【补记八十六 @ 2026-09-26，P3-01 切片五：PlatformServices 端口与宿主平台适配器】**（底稿 §6-5 完结；P3-01 剩收尾拷问轮）
+>
+> 1. **端口随消费者落地**：`core::runtime::ports` 新增 `PlatformServices`（`reveal_in_file_manager` + `read_clipboard_file_paths` 两方法）与 `PlatformError`（`Io`/`Unsupported`/`InteractiveUiRequired`——最后一个是 §2.1 的口径:headless CLI 对必须有窗口的服务答这个错误而不是假装成功）。**第一个真实消费者是两条既有命令**:`open_in_system_file_manager` 与 `read_clipboard_file_paths` 过去把 OS 调用内联在命令体里,现在改经端口;系统 dialog 等待它的第一个调用者(方法表只随消费者生长,切片一的纪律不变)。
+> 2. **OS 调用体迁入 `src-tauri/src/platform_adapter.rs::HostPlatformServices`**(逐字节同语义):reveal 的三种 OS 形状(macOS `open[-R]`/Windows `explorer[/select]`/Linux `xdg-open` 父目录)与剪贴板的 osascript 读取。**参数表抽成纯函数** `reveal_args` 按平台 cfg 各一条测试(macos: 文件 `-R`/目录直接打开;linux: 文件开父目录)——不必真的拉起文件管理器就能钉住三种 OS 的形状。剪贴板解析测试随体迁入。`validate_path_within` 是 webview 请求的安全边界,**留在命令体**不进端口实现。
+> 3. **接线形状**:`lib.rs` setup 里 `manage(Arc<dyn PlatformServices>)`,两条命令从 state 解析——命令新增 `app: AppHandle` 形参,JS 调用点零改动。inventory 的 `rust_internal_refs` 如实漂移(read_clipboard 0→1,它现在真引用平台服务了),`--freeze-reachability` 重算;`definition_resolved` 重定位 **17** 条;params 仍 **659**。
+> 4. **账目**：src-tauri `--lib` 串行 **2467**/0(platform_adapter 2 条新测试 − fs.rs 剪贴板解析测试随体迁入 = 净 +1;`src-tauri-lib-tests` 地板 2466→**2467** 两处同改读回)、core **309**/0(不变)、门禁矩阵全绿(skeleton 20/113、tauri-adapter 12/**2528**、runtime 1/5、storage 5/259、protocol 6/98、tasks 7/151、projects 5/21、doctor 18/18、contracts 12 份逐字节)、typecheck 绿、全量 `pnpm test` **376 files/5483 绿**。
+> 5. **P3-01 验收对照**:① `tests/runtime_lifecycle.rs` + `pnpm native:check runtime` = 切片四已落(5 判据);② core 三 crate tauri 零命中 = 切片一起保持;③ `grill-me [runtime]` = 本条之后进行。
 
 
 

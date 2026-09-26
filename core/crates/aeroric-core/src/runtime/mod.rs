@@ -24,7 +24,7 @@ pub mod subprocess;
 
 pub use events::{NullSink, TaskEventSink, TaskNotification};
 pub use manager::{ShutdownReport, SuperviserError, WatcherSupervisor};
-pub use ports::Runtime;
+pub use ports::{PlatformError, PlatformServices, Runtime};
 pub use registry::{
     cancel_initial_input_signal, cancel_initial_input_signal_for_run,
     clear_initial_input_signal_if_current, notify_initial_input_session_ready,
