@@ -55,8 +55,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ### 续跑指令（暂停后从这里继续）
 
-**当前状态（2026-09-26，第二十二次更新）：P3-01 accepted（补记八十七 + 评审 `reviews/runtime.md`），下一任务＝P3-02（原样迁移四族命令构造与托管配置）。** 收尾拷问轮 Q75/Q76 用户未及答复，按推荐项记账并标注：ADR-018 宿主入口改挂 P3-06/07（CLI 与宿主同刀）、确认 UI 维持 P5-03、ProcessSpawner trait 化与 ADR-024 维持推迟。**P3-02 动工锚点**：Input = `pty.rs::{build_*_cmd,add_*_launch_args,setup_omp_env}` + `app_settings/{launch_spec,agent_env,agent_scripts,builtin,custom_agents}.rs` 等；验收 = `pnpm native:check agents` 比较迁移前后 argv/env/cwd（差异须 ADR 逐项说明）、OMP 7 档 thinking、hook `.js/.ts` 反例、SwitchEvidence/`adopt_session_for_agent` 真实实现（P2-04 Q43 移交项）、`grill-me [agents]`。
+**当前状态（2026-09-26，第二十三次更新）：P3-02 首片已落地（补记八十八）——权限/effort 映射表 move 进 core `agents/launch.rs`（宿主 re-export），`LaunchPlan` 纯数据类型进门禁测试；core **312**/0、src-tauri **2465**/0（地板 2465 两处读回）、门禁矩阵全绿。** 侦察底稿＝`docs/native/extraction/agents-launch.md`（builder 薄/映射纯/顺序硬约束三判断）。**P3-02 剩余（按底稿 §4-2/3/4/5）**：builder 计划半边进 core + parity fixtures → env 层 + OMP 反例 → managed_home 迁入 → SwitchEvidence/G18 → `pnpm native:check agents` 注册 + `grill-me [agents]`。
 
+**（上一轮口径——第二十二次更新，2026-09-26）：P3-01 accepted（补记八十七 + 评审 `reviews/runtime.md`），下一任务＝P3-02（原样迁移四族命令构造与托管配置）。**
 **（上一轮口径——第二十一次更新，2026-09-26）：P3-01 切片五已落地（补记八十六）——`PlatformServices` 端口 + 宿主 `platform_adapter.rs::HostPlatformServices`(reveal/clipboard 两条命令改经端口,OS 调用体迁入;`reveal_args` 纯函数三平台各一条测试),src-tauri **2467**/0、core **309**/0、门禁矩阵全绿。**
 **（上一轮口径——第二十次更新，2026-09-26）：P3-01 切片四已落地（补记八十五）——10 个任务作用域 watcher 站点全部经 `WatcherSupervisor`（会话六站按 (task,gen) 去重；reader/退出监控/转录走 spawn_unique 仅记账），token 检查点逐站落位，shutdown 升级为有界拆除；`tests/runtime_lifecycle.rs` 5 条判据全绿并注册 `pnpm native:check runtime`（P3-01 三条计划判据全部有机器守着）。** core **309**/0、src-tauri **2466**/0、tauri-adapter 12/2527、全量 `pnpm test` 376/5483 绿。
 **（上一轮口径——第十九次更新，2026-09-26）：P3-01 切片三已落地（补记八十四）——TaskRegistry 一次性 move 进 core，宿主变 Deref 委托壳（316 处字段访问点零改动），core **304**/0、src-tauri **2466**/0、全量 `pnpm test` 376/5483 绿、门禁矩阵全绿（tauri-adapter 12/2527 含真内核验收 19 条经壳通过）。**
@@ -1662,6 +1663,13 @@ grill-me
 > 2. **Q75 → 按推荐项 (A) 记账**：ADR-018 确认闸宿主入口从"P3-01"改挂 **P3-06/P3-07**（与 headless CLI 的 `INTERACTIVE_UI_REQUIRED` 同刀设计，确认 UI 维持 P5-03）。**用户本轮未及答复**——两项均为零回归的记账决定（不写代码），按推荐项收口并在评审文档标注"异议可在 P3-06/07 动工前重开"，不冒充用户确认。
 > 3. **Q76 → 按推荐项 (A) 记账**：ProcessSpawner trait 化维持推迟（消费面已被 subprocess 迁入 + TaskRegistry 实质覆盖）；ADR-024 维持"Action 3 收尾"挂账。
 > 4. **Phase 3 出口进度**：P3-01 是六任务之首（runtime/agents/terminal/sessions/dsh/IPC 宿主），它的 runtime 底座（TaskRegistry + supervisor + 平台端口）正是后续五任务的承接面；G18 与 SwitchEvidence 移交项随 P3-02 兑现。
+
+> **【补记八十八 @ 2026-09-26，P3-02 首片：映射表迁入 core + LaunchPlan 类型】**（侦察底稿＝`docs/native/extraction/agents-launch.md`）
+>
+> 1. **侦察先行的形状判断**：四个 `build_*_cmd` 本体很薄——真正的"计划"早在 `AgentLaunchSpec`（launch_spec.rs 从用户配置解析 program+args），builder 只做权限档注入与托管 env；**顺序硬约束**：`setup_omp_env` 必须后于 `setup_env`（login-shell 合并可能带回 `PI_PROFILE` 把托管 home 作废——AGENTS.md 的已记教训，代码注释原样携带）。`agent_family_maps.rs`（132 行）零依赖纯净，是首刀。
+> 2. **落地**：映射表五函数 + 2 条测试 move 进 `core/crates/aeroric-core/src/agents/launch.rs`；宿主 `agent_family_maps.rs` 变 re-export（pty/ssh/legacy_task_executor 四处路径不变）。core 新增 **`LaunchPlan{program,args,cwd,env,unset_env}`** 纯数据类型（计划 Action 1 的"计划与执行分离"）——`unset_env` 独立于 `env` 是 omp 不变量的形状要求（`PI_PROFILE`/`OMP_PROFILE` 必须从继承环境**移除**而非覆盖）；一条用例钉住 env 有序 + 双列表独立。
+> 3. **账目**：core **312**/0（+3）、src-tauri 串行 **2465**/0（−2 搬家；地板 2467→**2465** 两处同改读回）、门禁矩阵全绿（skeleton 20/113、tauri-adapter 12/2526、runtime 1/5、doctor 18/18、contracts 12 份逐字节、inventory consistent+freeze-check noop）、fmt/clippy/typecheck 净、全量 `pnpm test` **376/5483 绿**。一次门禁红归因：tauri-adapter 首跑 1 case 红、单独复跑 12/2526 全绿——负载敏感家族（连跑两轮门禁的窗口），按既有口径记录不复现。
+> 4. **下一步（按底稿 §4-2/3）**：builder 的**计划半边**进 core（产出 LaunchPlan，宿主变机械翻译）+ parity fixtures 由旧宿主路径亲自算出、core 重放；然后 env 层顺序约束与 OMP 反例、`managed_home/` 迁入、SwitchEvidence/G18。`pnpm native:check agents` 在 suite 成形后注册。
 
 
 

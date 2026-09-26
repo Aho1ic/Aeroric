@@ -5,6 +5,7 @@
 //! is the cross-process single writer, and `storage` reads and writes the file layout
 //! the shipping client already uses — including the fields this crate does not model.
 
+pub mod agents;
 pub mod clock;
 pub mod context;
 pub mod location;
