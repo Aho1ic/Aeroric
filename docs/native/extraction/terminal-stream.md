@@ -73,3 +73,16 @@
 - **门禁与反例**：`terminal-unit-rust` 地板 25→35；新增 `terminal-pty-exit-rust`（10，串行）与 `host-exit-settlement-goes-through-core`（禁 `had_agent_session` / `if exit_ok ||` / `status == "failed"`，5 条正控）。两次变异各有命中（守卫 1 关掉 ⇒ 集成红；家族表统一 ⇒ 集成＋单元各红一条）。其中一条正控当场抓到我自己写错的正则（写成 `remove_pty_handles_if_current(run, &child_handle)`，宿主实际是 `(run, child_handle)`）——正控拒绝把"读不到"当成"没有"，这条纪律又一次真的生效。
 - **这条守卫说不了的话**："`settle_exit` 恰好被调用一次"是**计数**，absent 型 case 断不了；已写进该 case 的 `$note` 并归 P3-03 收尾（gate 脚本，照 `scripts/native/adapter-invariants.mjs` 那种）。
 - **宿主测试写真实 `~/.aeroric`**：`tauri-adapter` 窗口内 `remote-audit.log` + 3 个 `agent-credentials/*` 被写（mtime 10:44:18–10:45:00，当时 Aeroric.app 未在跑）。本切片零触碰 `app_settings/*`、`remote/audit.rs`，但**未做基线对照**，按待查项记，不写成"确认无关"。
+
+## 10. 切片四A 实施结果（2026-09-27，补记九十六）：重放映射了结 §8 第 1 条
+
+落点：`core/src/terminal/replay.rs`（8 条单元）+ `tests/terminal_replay.rs`（4 条，含真 PTY）+ 门禁 +1 case。本片零 src-tauri 改动。
+
+- **三条规则**：① 字节 offset 是唯一的续看凭证（`plan_replay` 只对 `ResumePoint::Bytes` 给无缝）；② 码元游标**不做换算**，只如实 `Reset{UnitsNotAnchorable}`；③ 追平不上必须具名：`Compacted{earliest}` / `UnknownStream` / `CursorBeyondStream{next_offset}` / `UnitsNotAnchorable`。推进游标只能靠 `resume_after()`，无缝与重置同算法。
+- **"码元→字节没有换算"是实测不是论断**：`😀中`（7 字节 / 整段 3 码元）逐切点的分帧之和 = 3,5,4,3,3,5,4,3。1/2/5/6 破坏可加性；而 cut 3 落在 emoji 内部却**同样等于 3** —— 相等也反推不出对齐，所以任何"按码元猜字节"的实现早晚在某个切点上静默漏读或重复。
+- **真 PTY 侧的完整路径**：2 MiB 输出 > 1 MiB 窗口 ⇒ offset 0 必得 `Compacted`+追平点；从追平点按 64 KiB 逐帧取到末端，与测试侧 oracle **逐字节相等**（`frames > 8` 反空转）；取完后是合法的末端空帧。
+- **并发边界**：一条持续发布的流上只按 `resume_after()` 推进 ⇒ 已交付字节恒等于"已发布的前缀"，收尾追到末端与整条序列一字不差。这就是 Action 4 那句"snapshot 与 live 的边界用锁/单线程序列化保证"的可执行形式。
+- **一条刻意保留的不对称**（记给 grill 轮）：`ByteStream` 在**第一次 publish** 时才建立 ⇒ "还没输出"与"已退场"同答 `UnknownStream`。后果可接受（空视图重置，客户端仍从 0 问）；消掉它要给 `TerminalService` 加开流入口并改宿主 reader 一处（附带一次 pin 重定位），不顺手做。
+- **两次变异**：gap 谎成 `Seamless` ⇒ 集成①＋单元各红；把码元游标当字节偏移 ⇒ 单元 `a_utf16_cursor_never_becomes_a_guess` 红，**集成侧没红**（只在退场流上测非零码元游标，那里 `read_from` 本就先失败）——4B 要补一条活流上的码元游标断言。
+- **门禁纪律的两条事实**：`runner.floors` 缺条目时 `doctor` 仍 18/18，真守卫是 `inventory --check`（1 inconsistency）+ `skeleton` 门禁（红）——实测确认；改 `checks.json` 的脚本必须先 `json.loads` 验证再落盘（本轮写坏过一次，靠 `git checkout ff1fd07 -- scripts/native/checks.json` 还原）。
+- **计数**：`terminal-core` 6 case/**63**（unit 地板 35→**43** ＝ 7 stream + 6 lease + 12 pty + 10 exit + 8 replay）；core workspace **384**/0；`-p aeroric-core` 口径 **334**；clippy/fmt 干净。§8 第 3 条那两条口径仍未合并（收尾轮）。

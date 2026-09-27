@@ -37,8 +37,9 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
       "agent-launch-parity-rust@agents": 2,
-      "terminal-unit-rust@terminal-core": 35,
+      "terminal-unit-rust@terminal-core": 43,
       "terminal-pty-bytes-rust@terminal-core": 6,
+      "terminal-replay-rust@terminal-core": 4,
       "terminal-pty-exit-rust@terminal-core": 10
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
@@ -1126,8 +1127,8 @@
             "--",
             "terminal::"
           ],
-          "minCases": 35,
-          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 25 = 7 stream + 6 lease + 12 pty。后续切片(replay/history/executor)追加时同改地板。",
+          "minCases": 43,
+          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 43 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay(切片四A)。后续切片(history/executor)追加时同改地板。",
           "timeoutMs": 300000
         },
         {
@@ -1152,75 +1153,96 @@
           "timeoutMs": 600000
         },
         {
-  "name": "terminal-pty-exit-rust",
-  "kind": "test",
-  "parse": "rust",
-  "argv": [
-    "cargo",
-    "test",
-    "--manifest-path",
-    "core/Cargo.toml",
-    "--locked",
-    "-p",
-    "aeroric-core",
-    "--test",
-    "pty_exit",
-    "--",
-    "--test-threads=1"
-  ],
-  "minCases": 10,
-  "$note": "P3-03 切片三:退出结算的唯一决策面 + 每条来源只结算一次。真 PTY 上的真进程(node 替身新增 exit/signal/eof/child/orphan/interactive 模式;`FAKE_EXIT_CODE`/`FAKE_SIGNAL`/`FAKE_LIVE_MS` 旋钮)。测试侧走的是**同三段生产守卫**(remove_pty_handles_if_current → settle_marks_for_exit → settle_exit),只把 report_task_status 换成记账 —— 记账不去重,所以两次结算就是两条。10 条各自成来源:正常退出(含重复通知被守卫 1 吞掉)/ 非零码引用真实码 / SIGTERM 致死 / EOF 未至就先结算且 EOF 之后不再来一次(替身留一个继承 tty 的后代)/ 两代重叠只有最后退出那代结算 / 取消打整个进程组并 reap 后仍只结算一次且不给状态词 / 迟到 hook 走**真** TaskService(ADR-034;存活由真进程经 ADR-036 端口回答,另有反空转对照)/ 家族差异在真事实上成立(dsh/omp 码驱动 ≠ claude/codex 会话驱动)/ 替身能力自证。两次变异实证:关掉守卫 1 ⇒ 第一条红;把『有 session 就 done』统一套到 dsh/omp ⇒ 集成与单元各红一条。一条实测口径(反直觉,已写进用例注释):portable-pty 把信号致死折成 `exit_code=1`(vendor 的 From<std::process::ExitStatus> 里 `code()` 为 None ⇒ unwrap_or(1)),信号名只剩在 Display 里 —— 是否把『死于 SIGTERM』变成用户可见文案属文案改动,待 grill 轮。串行跑:每条用例各开一个真 PTY + node 进程。",
-  "timeoutMs": 600000
-},
+          "name": "terminal-replay-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "terminal_replay",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 4,
+          "$note": "P3-03 切片四A:重放映射与 snapshot/live 边界,4 条各钉一件事:①真 PTY 2 MiB 输出走完整路径 —— offset 0 拿到明确的 Compacted + 追平点,从追平点按 64 KiB 逐帧取到末端与真 PTY 读到的字节**逐字节相等**,取完后是合法的末端空帧;②并发发布下只靠 resume_after() 推进游标 —— 已交付字节必须正好是已发布的前缀(不重不漏),这是 Action 4『首订阅 snapshot 与 live 的边界用锁/单线程序列化保证』的可执行形式;③FIFO 只挤最老的已收尾流,退场过的流对两种游标都如实回答 UnknownStream(而不是『从 0 起一切完整』),并同时断新近收尾的流仍在册 —— 免得退场方向反过来时用例还全绿;④保留线落在 emoji 第 3 个字节上时按字节原样交出(不重新对齐/不替换/不吞),且这段 from_utf8 必然失败 —— 解码只是消费方的投影。串行跑:①要开真 PTY + node 替身。一条已知不对称写进 replay.rs 模块头:流是在第一次 publish 时才建立,所以『还没输出』与『已退场』同答 UnknownStream,②的订阅者因此先等到流存在;要消掉这层歧义需要给 TerminalService 加开流入口并改宿主 reader,记给 grill 轮。",
+          "timeoutMs": 600000
+        },
         {
-  "name": "host-exit-settlement-goes-through-core",
-  "kind": "absent",
-  "argv": [
-    "rg",
-    "-n",
-    "--no-ignore",
-    "had_agent_session|if exit_ok \\|\\||status == \"failed\"",
-    "src-tauri/src/pty.rs"
-  ],
-  "controls": [
-    [
-      "rg",
-      "-q",
-      "--no-ignore",
-      "aeroric_core::terminal::settle_exit\\(&aeroric_core::terminal::ExitFacts",
-      "src-tauri/src/pty.rs"
-    ],
-    [
-      "rg",
-      "-q",
-      "--no-ignore",
-      "ExitDecision::NoStatus",
-      "src-tauri/src/pty.rs"
-    ],
-    [
-      "rg",
-      "-q",
-      "--no-ignore",
-      "reason\\.host_sentence\\(\\)",
-      "src-tauri/src/pty.rs"
-    ],
-    [
-      "rg",
-      "-q",
-      "--no-ignore",
-      "remove_pty_handles_if_current\\(run, child_handle\\)",
-      "src-tauri/src/pty.rs"
-    ],
-    [
-      "rg",
-      "-q",
-      "--no-ignore",
-      "SessionEvidence::PlaceholderOnly",
-      "src-tauri/src/pty.rs"
-    ]
-  ],
-  "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制:本 case 只能断言『形状还在 + 旧形状没了』,**不能断言 `settle_exit` 恰好被调用一次**——那是计数,属门禁工具改动,要接进 scripts/native/adapter-invariants.mjs 那种 gate 脚本,记在 P3-03 收尾。"
-},
+          "name": "terminal-pty-exit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "pty_exit",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 10,
+          "$note": "P3-03 切片三:退出结算的唯一决策面 + 每条来源只结算一次。真 PTY 上的真进程(node 替身新增 exit/signal/eof/child/orphan/interactive 模式;`FAKE_EXIT_CODE`/`FAKE_SIGNAL`/`FAKE_LIVE_MS` 旋钮)。测试侧走的是**同三段生产守卫**(remove_pty_handles_if_current → settle_marks_for_exit → settle_exit),只把 report_task_status 换成记账 —— 记账不去重,所以两次结算就是两条。10 条各自成来源:正常退出(含重复通知被守卫 1 吞掉)/ 非零码引用真实码 / SIGTERM 致死 / EOF 未至就先结算且 EOF 之后不再来一次(替身留一个继承 tty 的后代)/ 两代重叠只有最后退出那代结算 / 取消打整个进程组并 reap 后仍只结算一次且不给状态词 / 迟到 hook 走**真** TaskService(ADR-034;存活由真进程经 ADR-036 端口回答,另有反空转对照)/ 家族差异在真事实上成立(dsh/omp 码驱动 ≠ claude/codex 会话驱动)/ 替身能力自证。两次变异实证:关掉守卫 1 ⇒ 第一条红;把『有 session 就 done』统一套到 dsh/omp ⇒ 集成与单元各红一条。一条实测口径(反直觉,已写进用例注释):portable-pty 把信号致死折成 `exit_code=1`(vendor 的 From<std::process::ExitStatus> 里 `code()` 为 None ⇒ unwrap_or(1)),信号名只剩在 Display 里 —— 是否把『死于 SIGTERM』变成用户可见文案属文案改动,待 grill 轮。串行跑:每条用例各开一个真 PTY + node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "host-exit-settlement-goes-through-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "had_agent_session|if exit_ok \\|\\||status == \"failed\"",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::settle_exit\\(&aeroric_core::terminal::ExitFacts",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "ExitDecision::NoStatus",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "reason\\.host_sentence\\(\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "remove_pty_handles_if_current\\(run, child_handle\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "SessionEvidence::PlaceholderOnly",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制:本 case 只能断言『形状还在 + 旧形状没了』,**不能断言 `settle_exit` 恰好被调用一次**——那是计数,属门禁工具改动,要接进 scripts/native/adapter-invariants.mjs 那种 gate 脚本,记在 P3-03 收尾。"
+        },
         {
           "name": "host-reader-publishes-raw-bytes-before-decode",
           "kind": "absent",

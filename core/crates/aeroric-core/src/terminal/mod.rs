@@ -10,6 +10,7 @@
 pub mod exit;
 pub mod lease;
 pub mod pty;
+pub mod replay;
 pub mod stream;
 
 pub use exit::{settle_exit, ExitDecision, ExitFacts, ExitReason, SessionEvidence};
@@ -17,5 +18,8 @@ pub use lease::{ControlLease, LeaseError, LeaseHandle};
 pub use pty::{
     PublishOutcome, TerminalService, Utf8Projection, TERMINAL_MAX_FINISHED_STREAMS,
     TERMINAL_MAX_LIVE_STREAMS, TERMINAL_REPLAY_WINDOW_BYTES,
+};
+pub use replay::{
+    plan_replay, projected_utf16_units, ReplayFrame, ReplayPlan, ResetReason, ResumePoint,
 };
 pub use stream::{ByteStream, StreamChunk, StreamError, TerminalIdentity};
