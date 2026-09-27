@@ -348,7 +348,7 @@ pub struct TaskRegistry {
         Mutex<HashMap<RunKey, Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
     /// Addressed to "the next run of this id", not to a run: a resize that arrives before the
     /// process exists has no generation to name, which is why every entry here carries
-    /// [`RunKey::UNMINTED`] and `register_pty_handles` reads it back under that
+    /// [`RunKey::UNMINTED`] and `register_pty_session` reads it back under that
     /// key whatever it is about to register.
     pub pending_pty_sizes: Mutex<HashMap<RunKey, (u16, u16)>>,
     pub cancelled_tasks: Mutex<HashSet<String>>,
@@ -565,6 +565,44 @@ impl TaskRegistry {
         runs.sort();
         runs.dedup();
         runs
+    }
+
+    /// PTY 会话注册的唯一入口(P3-03 切片四D 自宿主 `register_pty_handles` 逐字迁移)。
+    /// A staged resize is addressed to "the next run of this id", which is why it is read back
+    /// under the unminted key whatever this run's generation turns out to be.
+    pub fn register_pty_session(
+        &self,
+        run: &RunKey,
+        master: Box<dyn portable_pty::MasterPty + Send>,
+        writer: Box<dyn std::io::Write + Send>,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+    ) -> Result<Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>, String> {
+        let mut masters = self.pty_masters.lock();
+        let mut pending_sizes = self.pending_pty_sizes.lock();
+        if let Some((cols, rows)) = pending_sizes.remove(&RunKey::unminted(run.id())) {
+            master
+                .resize(portable_pty::PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        masters.insert(run.clone(), Arc::new(parking_lot::Mutex::new(master)));
+        drop(pending_sizes);
+        drop(masters);
+        self.pty_writers
+            .lock()
+            .insert(run.clone(), Arc::new(parking_lot::Mutex::new(writer)));
+        let child_handle = Arc::new(parking_lot::Mutex::new(child));
+        self.child_handles
+            .lock()
+            .insert(run.clone(), Arc::clone(&child_handle));
+        // Registered only once all three handles exist: `runs` is what ADR-025's addressing reads,
+        // and a run that is half-registered would be addressable but unwritable.
+        self.runs.register(run.id(), run.generation());
+        Ok(child_handle)
     }
 
     /// Atomically remove one run from all PTY maps (masters, writers, children) and retire it.

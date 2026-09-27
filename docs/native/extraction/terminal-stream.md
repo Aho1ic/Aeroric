@@ -108,3 +108,17 @@
 - **变异实证**：C1 `needs_compaction` 的 `>` 翻成 `>=` ⇒ 2 条单元红；C2 宿主重新注入本地 `fn utf8_tail_bytes` ⇒ 守卫 FAIL，还原字节一致。守卫首版禁形误伤刻意保留的委托壳——按补记九十五先例改注释措辞并加严禁形（`is_char_boundary` 注释里也不许），不放宽扫描。
 - **纪律实录**：新 test case 漏配 `runner.floors` 条目 ⇒ `inventory --check` 报 inconsistency（"真守卫是 inventory --check 不是 doctor"第三次实证）；storage.rs 5 条 pin 重定位到当前真实声明行（367/384/406/582/592），`--check` 回读全绿收尾。
 - **计数**：`terminal-core` 10 case/**89**；core workspace **403**/0（22 二进制）；`-p aeroric-core` 口径 **353**；tauri-adapter 12/2526（src-tauri 2465＝地板）。未做：executor.rs + 四方调用点（四D）、grill 收尾轮、CPU/RSS 采样。
+
+## 13. 切片四D 实施结果（2026-09-27，补记九十九）：PTY 装配唯一启动体 + 四方 acquire/release 盘点
+
+落点：`core/src/terminal/executor.rs`（`activate_pty_session` + `PtySessionHandles`，2 条真 PTY 单元）+ `runtime/registry.rs::register_pty_session`（宿主注册函数逐字迁移）+ 宿主 **7 个站点**换调 core（local launch / local resume / open-shell / SSH 任务 / SSH 终端 / WSL 任务 / WSL shell）+ 门禁 `terminal-core` 10→**11 case**（`single-pty-activation-mechanics` 守卫；unit 地板 58→**60**）。
+
+- **Action 6"不保留两份同 target 的启动 body"的落地形状**：spawn→丢 slave→reader→writer→按 RunKey 注册（未铸造键暂存 resize 排水）这五步机械此前在宿主有**七份逐字相同**的拷贝；现在唯一一份在 core，注册本体在 TaskRegistry（句柄表是它的字段）。SSH/WSL 与 shell 的**命令构造与编排**留在原分支（SSH/WSL 分支本体留 P7、DSH 留 P3-05）——它们只是不再各自手写装配步骤。
+- **四方 acquire/release 盘点（Action 3 的收尾记账，按约定如实标注现状而不是宣称完成）**：
+  - **legacy（Tauri，今天）**：不取得控制租约——`send_input`/`resize_pty` 直接写 PTY（resize 已过 core `decide_resize` 前台表）。这是迁移期行为不变的如实记账，不是缺口：提前给 legacy 接租约=改变旧客户端行为（INV-04）。cutover（P8-05）后由宿主唯一入口统一 acquire。
+  - **native（P5-01）**：TerminalCoordinator 视图聚焦时 `take_control(Foreground)`，失焦/切模式按 §2.4 顺序 release；被顶替者 `NotHolder`、隐藏视图拿不到租约——core 侧反例已就位（切片四B）。
+  - **CLI（P3-07）**：计划原文"task input 对 PTY 要求有效控制租约"，attach 的 SIGWINCH→resize 走宿主命令=前台表；acquire/release 接入与验收在 P3-07。
+  - **mobile（P8-03）**：终端流订阅只读免租约（terminal_hub 现语义）；多设备抢控制权显式确认、失效设备不能继续输入（P8-03 验收原文），经同一 acquire 面。
+- **变异实证**：D1 注册时跳过暂存排水（`filter(|_| false)`）⇒ executor 用例红；D2 宿主重新出现 `.spawn_command(` ⇒ 守卫 FAIL，还原字节一致。
+- **两条过程教训（照实记）**：① 宿主文件在 pin 重定位**之后**又被 `cargo fmt` 重排（+2 行）⇒ `--check` 的 fn 声明回读抓出 38 处错位——**pin 重定位必须是包括 fmt 在内的最后一次编辑之后做的事**；② 又一次踩了"管道后读 `$?` 读到的是 head 的退出码"（补记九同款），D2 变异首跑因此假绿，改用 `rg -c; rc=$?` 后才拿到真判据。
+- **计数**：`terminal-core` 11 case/**91**；core workspace **405**/0（22 二进制）；`-p aeroric-core` 口径 **355**；tauri-adapter 12/2526（src-tauri 2465＝地板）。四C/四D 之后 terminal 的 core 侧原件齐了：stream/lease/pty/exit/replay/input/history/executor。

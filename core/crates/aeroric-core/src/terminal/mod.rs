@@ -7,6 +7,7 @@
 //!
 //! 迁移对照与切片顺序见 `docs/native/extraction/terminal-stream.md`。
 
+pub mod executor;
 pub mod exit;
 pub mod history;
 pub mod input;
@@ -15,6 +16,7 @@ pub mod pty;
 pub mod replay;
 pub mod stream;
 
+pub use executor::{activate_pty_session, PtySessionHandles};
 pub use exit::{settle_exit, ExitDecision, ExitFacts, ExitReason, SessionEvidence};
 pub use history::{
     skip_leading_utf8_continuations, utf8_tail_bytes, HistoryRetention,

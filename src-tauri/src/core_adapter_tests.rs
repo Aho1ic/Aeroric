@@ -425,7 +425,7 @@ fn is_terminal(status: &str) -> bool {
 /// those probes capture stdout through a pipe. Two reasons that distinction matters, both
 /// measured rather than assumed here: an undiscriminating script scores a probe as a launch, and
 /// a script that then waits for the gate **deadlocks the launch**, because the version probe is
-/// awaited synchronously on the way to `register_pty_handles`.
+/// awaited synchronously on the way to `register_pty_session`.
 fn write_fake_agent(script: &Path, marker: &Path, gate: &Path) {
     let body = format!(
         "#!/bin/sh\nif [ ! -t 1 ]; then exit 0; fi\n         printf 'spawn\\n' >> '{}'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\nexit 0\n",

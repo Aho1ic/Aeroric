@@ -366,7 +366,7 @@ fn terminal_stream_snapshot_live_input_and_resize() {
     {
         let tm = handle.state::<crate::TaskManager>();
         tm.stage_pending_size(&task_id, (120, 40));
-        // Registered the way `register_pty_handles` would: ADR-025's addressing reads the run
+        // Registered the way `register_pty_session` would: ADR-025's addressing reads the run
         // ledger, so a writer injected without it would be unaddressable.
         tm.runs
             .register(&task_id, crate::run_registry::RunKey::UNMINTED);

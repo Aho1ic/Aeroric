@@ -1006,25 +1006,14 @@ fn spawn_wsl_task_pty<R: tauri::Runtime>(
             pixel_height: 0,
         })
         .map_err(|error| error.to_string())?;
-    let child = pair
-        .slave
-        .spawn_command(pty_command_from_spec(spec))
-        .map_err(|error| error.to_string())?;
-    drop(pair.slave);
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| error.to_string())?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| error.to_string())?;
-    let child_handle = crate::pty::register_pty_handles(
+    let aeroric_core::terminal::PtySessionHandles {
+        child: child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(
+        pair,
+        pty_command_from_spec(spec),
         task_manager,
         &crate::run_registry::RunKey::unminted(task_id),
-        pair.master,
-        writer,
-        child,
     )?;
     task_manager
         .wsl_active_ids
@@ -1442,25 +1431,14 @@ pub async fn open_wsl_shell(
             pixel_height: 0,
         })
         .map_err(|error| error.to_string())?;
-    let child = pair
-        .slave
-        .spawn_command(pty_command_from_spec(spec))
-        .map_err(|error| error.to_string())?;
-    drop(pair.slave);
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| error.to_string())?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| error.to_string())?;
-    crate::pty::register_pty_handles(
+    let aeroric_core::terminal::PtySessionHandles {
+        child: _child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(
+        pair,
+        pty_command_from_spec(spec),
         &task_manager,
         &crate::run_registry::RunKey::unminted(&shell_id),
-        pair.master,
-        writer,
-        child,
     )?;
     task_manager
         .wsl_active_ids

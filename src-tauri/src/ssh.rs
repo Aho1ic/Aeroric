@@ -1383,16 +1383,14 @@ fn spawn_remote_task_pty<R: tauri::Runtime>(
         })
         .map_err(|e| e.to_string())?;
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle = crate::pty::register_pty_handles(
+    let aeroric_core::terminal::PtySessionHandles {
+        child: child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(
+        pair,
+        cmd,
         task_manager,
         &crate::run_registry::RunKey::unminted(task_id),
-        pair.master,
-        writer,
-        child,
     )?;
 
     crate::core_adapter::report_task_status(&app, task_id, "running");
@@ -1617,19 +1615,14 @@ pub async fn open_ssh_shell(
         })
         .map_err(|e| e.to_string())?;
 
-    let child = pair
-        .slave
-        .spawn_command(build_ssh_command(&connection, shell_os))
-        .map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer: Box<dyn Write + Send> = pair.master.take_writer().map_err(|e| e.to_string())?;
-    crate::pty::register_pty_handles(
+    let aeroric_core::terminal::PtySessionHandles {
+        child: _child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(
+        pair,
+        build_ssh_command(&connection, shell_os),
         &task_manager,
         &crate::run_registry::RunKey::unminted(&shell_id),
-        pair.master,
-        writer,
-        child,
     )?;
     let hint_filter = host_key_failure_hint_filter(&connection);
     let output_filter = if connection_can_auto_sudo(&connection) {

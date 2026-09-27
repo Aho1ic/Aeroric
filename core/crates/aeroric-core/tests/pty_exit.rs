@@ -168,7 +168,7 @@ impl Harness {
         let run = RunKey::minted(&self.task_id, generation);
         let identity = TerminalIdentity::new(self.task_id.clone(), generation);
 
-        // 与宿主 register_pty_handles 同形:句柄进表、代进 runs(ADR-025 靠它寻址)。
+        // 与 core 的 TaskRegistry::register_pty_session 同形:句柄进表、代进 runs(ADR-025 靠它寻址)。
         self.registry
             .child_handles
             .lock()

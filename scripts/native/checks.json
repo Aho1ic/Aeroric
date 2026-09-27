@@ -37,7 +37,7 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
       "agent-launch-parity-rust@agents": 2,
-      "terminal-unit-rust@terminal-core": 58,
+      "terminal-unit-rust@terminal-core": 60,
       "terminal-pty-bytes-rust@terminal-core": 6,
       "terminal-lease-rust@terminal-core": 4,
       "terminal-replay-rust@terminal-core": 4,
@@ -1129,8 +1129,8 @@
             "--",
             "terminal::"
           ],
-          "minCases": 58,
-          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 58 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history(切片四C)。后续切片(executor)追加时同改地板。",
+          "minCases": 60,
+          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 60 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history + 2 executor(切片四D)。",
           "timeoutMs": 300000
         },
         {
@@ -1399,6 +1399,56 @@
             ]
           ],
           "$note": "P3-03 切片四C 的宿主侧守卫:历史压实的策略(尾切、续字节跳过、高水位判定)只有 core 一份实现。禁形 = 宿主里重新出现本地的 `fn utf8_tail_bytes` 或任何内联的字符边界判定(`is_char_boundary`——注释里也不许,判定本体只许在 core);正控 = 三个调用点(目录巡检、str 委托、追加压实)与读侧跳过都必须经 core 的原件,`needs_compaction` 证明判定走的是同一张表。宿主的文件 I/O、原子重写与权限收紧不属于策略,留在原地。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "single-pty-activation-mechanics",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\.spawn_command\\(|\\.try_clone_reader\\(|\\.take_writer\\(",
+            "src-tauri/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/ssh.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/wsl.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "spawn_command",
+              "core/crates/aeroric-core/src/terminal/executor.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "register_pty_session",
+              "core/crates/aeroric-core/src/runtime/registry.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四D 的守卫:Action 6『不保留两份同 target 的启动 body』的可数形状——spawn→丢 slave→reader→writer→注册这五步装配机械此前在宿主有七份逐字相同拷贝(local launch/local resume/open-shell/SSH 任务/SSH 终端/WSL 任务/WSL shell),现在唯一一份在 core 的 terminal::executor::activate_pty_session,注册本体是 TaskRegistry::register_pty_session。禁形 = 宿主任何地方再出现这三个机械调用;正控 = 三个宿主文件都在调 core 装配体,且 core 两侧原件真实在位。命令构造(build_*_cmd/pty_command_from_spec/build_ssh_command)与 SSH/WSL 分支编排不属于机械,留在原处(P7 才换分支本体)。",
           "timeoutMs": 120000
         }
       ]

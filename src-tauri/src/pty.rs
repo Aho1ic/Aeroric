@@ -397,46 +397,6 @@ fn setup_aeroric_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, is_co
     apply_env_ops(cmd, &ops);
 }
 
-/// 将 PTY master/writer/child 注册到 TaskManager 的三个 HashMap 中。
-pub(crate) fn register_pty_handles(
-    task_manager: &TaskManager,
-    run: &RunKey,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-) -> Result<Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>, String> {
-    let mut masters = task_manager.pty_masters.lock();
-    let mut pending_sizes = task_manager.pending_pty_sizes.lock();
-    // A staged resize is addressed to "the next run of this id", which is why it is read back
-    // under the unminted key whatever this run's generation turns out to be.
-    if let Some((cols, rows)) = pending_sizes.remove(&RunKey::unminted(run.id())) {
-        master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    masters.insert(run.clone(), Arc::new(parking_lot::Mutex::new(master)));
-    drop(pending_sizes);
-    drop(masters);
-    task_manager
-        .pty_writers
-        .lock()
-        .insert(run.clone(), Arc::new(parking_lot::Mutex::new(writer)));
-    let child_handle = Arc::new(parking_lot::Mutex::new(child));
-    task_manager
-        .child_handles
-        .lock()
-        .insert(run.clone(), Arc::clone(&child_handle));
-    // Registered only once all three handles exist: `runs` is what ADR-025's addressing reads,
-    // and a run that is half-registered would be addressable but unwritable.
-    task_manager.runs.register(run.id(), run.generation());
-    Ok(child_handle)
-}
-
 /// PTY 输出的合并策略。
 ///
 /// 只有两档,由 `agent()` / `interactive()` 构造 —— 曾经存在的 `Immediate`(每次
@@ -1839,11 +1799,10 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
         cmd.env(key, value);
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
+    let aeroric_core::terminal::PtySessionHandles {
+        child: child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)?;
 
     crate::core_adapter::report_task_status(&app, &task_id, "running");
 
@@ -2586,11 +2545,10 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
         cmd.env(key, value);
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child_handle = register_pty_handles(task_manager, &run, pair.master, writer, child)?;
+    let aeroric_core::terminal::PtySessionHandles {
+        child: child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)?;
 
     crate::core_adapter::report_task_status(&app, &task_id, "running");
 
@@ -2797,16 +2755,14 @@ pub async fn open_shell(
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    register_pty_handles(
+    let aeroric_core::terminal::PtySessionHandles {
+        child: _child_handle,
+        reader,
+    } = aeroric_core::terminal::activate_pty_session(
+        pair,
+        cmd,
         &task_manager,
         &RunKey::unminted(&shell_id),
-        pair.master,
-        writer,
-        child,
     )?;
 
     // Shell 退出后清理 TaskManager 中的残留句柄
