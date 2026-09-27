@@ -1926,7 +1926,7 @@ grill-me
 >
 > **六、未运行 / 未做**（不得记为通过）：`grill-me [terminal-core]`（**收尾轮**，三条待裁决：信号文案/UnknownStream 分流/`settle_exit` 计数守卫，另加两条新挂账：① `activate_pty_session` 的错误统一为 String 是沿用宿主现状，要不要改 typed 错误归 P3-05 接 executor 时定；② 四方租约的宿主统一入口归 P8-05）；100 MiB 的 CPU/RSS 采样；`pnpm typecheck` 与全量 `pnpm test` 复跑（TS 车道未动，tauri-adapter 内 `ts-typecheck` 绿；收尾轮补对照）；四A 的活流码元游标集成断言；`~/.aeroric` 真实终端会话手测；两条 core 计数口径合并（属门禁工具改动）。
 >
-> **提交状态**：见下一行补记的提交状态行（不 push、无 tag、不发 release，INV-01）。
+> **提交状态**：本切片已合成本地提交 **`2e53828`**（13 files：executor.rs、mod.rs、registry.rs、pty.rs、ssh.rs、wsl.rs、core_adapter_tests.rs、lan_roundtrip_tests.rs、pty_exit.rs、checks.json、command-map.json、MIGRATION_PLAN.md、terminal-stream.md；不 push、无 tag、不发 release，INV-01）。
 
 
 
