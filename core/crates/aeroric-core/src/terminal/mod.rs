@@ -7,10 +7,12 @@
 //!
 //! 迁移对照与切片顺序见 `docs/native/extraction/terminal-stream.md`。
 
+pub mod exit;
 pub mod lease;
 pub mod pty;
 pub mod stream;
 
+pub use exit::{settle_exit, ExitDecision, ExitFacts, ExitReason, SessionEvidence};
 pub use lease::{ControlLease, LeaseError, LeaseHandle};
 pub use pty::{
     PublishOutcome, TerminalService, Utf8Projection, TERMINAL_MAX_FINISHED_STREAMS,

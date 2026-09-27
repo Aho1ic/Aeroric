@@ -32,8 +32,8 @@
 
 ## 5. 门禁对照
 
-- `pnpm native:check terminal-core`:**已注册**(补记九十四,原计划随 §4-2 之后一片注册,实际提前一片——本切片就产出了 `tests/pty_bytes.rs`,§3.2 不允许"用例存在但没人跑")。3 case / 31 用例。
-- core 基线:321 → 切片一 334 → 切片二 **352**(实测 18 个测试二进制求和,非推算)。
+- `pnpm native:check terminal-core`:**已注册**（补记九十四提前一片注册,本切片产出 `tests/pty_bytes.rs`,§3.2 不允许测试存在而没人跑）。切片三之后 = **5 case / 51 用例**:`terminal-unit-rust` 35 + `terminal-pty-bytes-rust` 6 + `terminal-pty-exit-rust` 10,另两条是宿主源码守卫。
+- core 基线:321 → 切片一 334 → 切片二 352 → 切片三 **372**(实测 18+ 个测试二进制求和,非推算)。`-p aeroric-core` 那条口径同步走:284 → 302 → **322**。
 
 ## 6. 切片一实施结果(2026-09-27,补记九十三)
 
@@ -58,6 +58,18 @@
 
 ## 8. 切片三/四必须带上的三条口径
 
-1. **两套 offset 不是同一个东西**:`src/terminalRingBuffer.ts` 的绝对偏移是 **JS 字符串长度 = UTF-16 计数**,core 的 offset 是**原始字节计数**;非 ASCII 输出下两者不等。跨端"按 cursor offset 续看"(P5-01)必须先有显式映射,否则重连必然重复或漏读。`terminal/replay.rs` 落地时定义,别拖到 P5-01 才发现。
+1. **两套 offset 不是同一个东西**:`src/terminalRingBuffer.ts` 的绝对偏移是 **JS 字符串长度 = UTF-16 计数**,core 的 offset 是**原始字节计数**;非 ASCII 输出下两者不等。跨端"按 cursor offset 续看"(P5-01)必须先有显式映射,否则重连必然重复或漏读。`terminal/replay.rs` 落地时定义,别拖到 P5-01 才发现。 **切片三未动它**(本片不含 replay 代码),已升格为切片四的硬性出口条件并写进 §续跑指令。
 2. **`cargo fmt --all` 的正确用法**:门禁 argv 是 `cargo fmt --check --all --manifest-path core/Cargo.toml`(core 工作区)与不带 `--all` 的 src-tauri 版。手工加 `--all` 到别的路径会把 `../dbx/vendor/wry` 的 examples 清单拖进遍历(15 条 `Error: file ... does not exist`);本轮核实零写入 dbx、其脏文件数仍是基线 38,但**这不是可以重复利用的余地**——用门禁 argv,或先确认路径不越界。
 3. **两条 core 计数口径仍是两条**:`storage-core-rust` 的地板 81 测的是 `cargo test -p aeroric-core`(今天 302),而 P3 各补记记的是 workspace 全量(今天 352)。`terminal-core` 注册时没有顺手抬那条假地板——合并它属于门禁工具改动,谁做都要连同 `minCases == runner.floors` 的同改规矩一起,别在终端切片里顺手改。
+
+## 9. 切片三实施结果（2026-09-27，补记九十五）
+
+落点：`core/src/terminal/exit.rs`（唯一决策面，10 条单元）、宿主 `pty.rs::finalize_task_exit` 换形、`tests/pty_exit.rs`（10 条真 PTY 真进程）、`tests/fixtures/fake-agent.mjs` 扩 `exit`/`signal`/`eof`/`child`/`orphan`/`interactive`、门禁 `terminal-core` +2 case。
+
+- **决策面**：`ExitFacts` → `ExitDecision{NoStatus|Done|Failed{reason}}`；`SessionEvidence{Absent|PlaceholderOnly|Real}` 由宿主如实上报，家族差异只在 `session_counts_as_success_for_family` 一处。reason 用枚举不用字符串，宿主文案经 `host_sentence()` 逐字保住——core 未入账路径 `tasks::settled_by_exit` 那句措辞与它不同，合并属文案改动，交 grill 轮。
+- **命名冲突**：新类型最初也叫 `ExitSettlement`，与 `TaskRegistry::settle_marks_for_exit`（registry.rs:329）同名，而宿主同一函数 6 行之内两处都要用。改的是**未提交的新类型** → `ExitDecision`。
+- **宿主没变的地方**：三段守卫次序、取消/手动完成的早退与清理、ADR-031 的会话路径反查释放、`cleanup_task_events` 在取消路径上仍被跳过（既有不对称）。
+- **两条与计划预期相反的事实**：① portable-pty 把信号致死折成 `exit_code=1`（`From<std::process::ExitStatus>` 里 `code()` 为 None ⇒ `unwrap_or(1)`），信号名只剩在 `Display`（macOS `strsignal` 给的是 `Terminated: 15`）——决策面看不见"哪个信号"，SIGTERM 与非零退出在表里同一个形状；② "EOF 早于进程退出"的窗口造不出来（替身关掉 tty 的 0/1/2 之后，reader 仍在进程退出那一刻才拿到 EOF），改用 `orphan` 形状（组长先退、后代以 `stdio:inherit` 继续持有 tty）证同一件事：结算**先于** EOF 发生，EOF 到了也不会再来一次。
+- **门禁与反例**：`terminal-unit-rust` 地板 25→35；新增 `terminal-pty-exit-rust`（10，串行）与 `host-exit-settlement-goes-through-core`（禁 `had_agent_session` / `if exit_ok ||` / `status == "failed"`，5 条正控）。两次变异各有命中（守卫 1 关掉 ⇒ 集成红；家族表统一 ⇒ 集成＋单元各红一条）。其中一条正控当场抓到我自己写错的正则（写成 `remove_pty_handles_if_current(run, &child_handle)`，宿主实际是 `(run, child_handle)`）——正控拒绝把"读不到"当成"没有"，这条纪律又一次真的生效。
+- **这条守卫说不了的话**："`settle_exit` 恰好被调用一次"是**计数**，absent 型 case 断不了；已写进该 case 的 `$note` 并归 P3-03 收尾（gate 脚本，照 `scripts/native/adapter-invariants.mjs` 那种）。
+- **宿主测试写真实 `~/.aeroric`**：`tauri-adapter` 窗口内 `remote-audit.log` + 3 个 `agent-credentials/*` 被写（mtime 10:44:18–10:45:00，当时 Aeroric.app 未在跑）。本切片零触碰 `app_settings/*`、`remote/audit.rs`，但**未做基线对照**，按待查项记，不写成"确认无关"。

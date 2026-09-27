@@ -6,13 +6,31 @@
 // 它是"原始字节优先"这条验收的对方证人:测试把读到的字节自己记一份 oracle,
 // 再和 core 字节流里的内容比 hash。
 //
-// 模式由环境变量给(留给后续切片复用同一替身):
-//   FAKE_MODE      fidelity(默认)/ nasty
-//   FAKE_STRESS_MIB fidelity 的输出量(MiB)
+// 模式与旋钮都由环境变量给(后续切片复用同一替身):
+//   FAKE_MODE           fidelity(默认)/ nasty / exit / signal / eof / child / orphan / interactive
+//   FAKE_STRESS_MIB     fidelity 的输出量(MiB)
+//   FAKE_EXIT_CODE      exit / eof / interactive 的退出码(默认 0)
+//   FAKE_SIGNAL         signal 模式给自己发的信号名(默认 SIGTERM)
+//   FAKE_LIVE_MS        eof 模式关掉 tty fd 之后还要活多久(默认 700)
 //
 // 不用 process.stdout 的字符串层:那会先把非法字节替换掉,替身就废了。
 
+import { spawn } from 'node:child_process';
+import { closeSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const envInt = (name, fallback) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value)) throw new Error(`${name} 需要整数,实际 ${raw}`);
+  return value;
+};
+
+/// 关掉 tty 之后不能再走 process.exit:它会同步 flush stdout,而 fd 已经不在了。
+const reallyExit = (code) => process.reallyExit(code);
 
 async function write(chunk) {
   const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -56,9 +74,97 @@ async function nasty() {
   process.exit(0);
 }
 
+// ── 退出结算切片(§4-3)用的模式 ──────────────────────────────────────────
+
+/// 正常退出 / 指定码退出:替身以 FAKE_EXIT_CODE 结束,退出码是测试要看的事实。
+async function exitMode() {
+  const code = envInt('FAKE_EXIT_CODE', 0);
+  await write(`[fake-agent] exiting code=${code}\n`);
+  reallyExit(code);
+}
+
+/// 信号致死:默认动作直接终止进程,**不经过** process.exit,所以父侧看到的
+/// 状态与"非零退出"不是一回事(这就是 SIGTERM 那条来源要单独有用例的理由)。
+async function signalMode() {
+  const name = process.env.FAKE_SIGNAL || 'SIGTERM';
+  await write(`[fake-agent] signalling self ${name}\n`);
+  process.kill(process.pid, name);
+  await sleep(5000);
+  // 走到这里说明信号没带走进程(名字不可信号或被处理器吃掉了)。
+  await write(`[fake-agent] survived ${name}\n`);
+  reallyExit(0);
+}
+
+/// EOF 早于进程结束:把子进程手里的 tty fd 全关掉,PTY 主端就此读到 EOF,
+/// 而进程还活着。用来钉住"reader 收尾不是结算来源"。
+async function eofMode() {
+  const live = envInt('FAKE_LIVE_MS', 700);
+  const code = envInt('FAKE_EXIT_CODE', 0);
+  await write(`[fake-agent] before-eof live=${live}ms code=${code}\n`);
+  await sleep(150); // 让上面这行确实被读到,别和关闭动作抢顺序
+  closeSync(0);
+  closeSync(1);
+  closeSync(2);
+  await sleep(live);
+  reallyExit(code);
+}
+
+/// 带后代的运行:后代继承同一个进程组且不持有这个 tty(stdio 全 ignore),
+/// 所以"杀掉正确的进程组"只有真的把后代一起带走才算数。
+async function childMode() {
+  const descendant = spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { stdio: 'ignore' },
+  );
+  await write(`[fake-agent] self=${process.pid} descendant=${descendant.pid}\n`);
+  setInterval(() => {}, 1000);
+}
+
+/// 组长先退出、后代**继承**这个 tty 并继续活着:reader 的 EOF 由此被推到很久之后
+/// (要等整个组被带走),而退出结算在 EOF 之前就必须已经发生且只有一次。
+async function orphanMode() {
+  const holder = spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { stdio: 'inherit' },
+  );
+  await write(`[fake-agent] leader=${process.pid} holder=${holder.pid}\n`);
+  await sleep(envInt('FAKE_LIVE_MS', 150));
+  reallyExit(envInt('FAKE_EXIT_CODE', 0));
+}
+
+/// 报告尺寸 + 等待输入(§4-4 的 resize/input 两片都要它):每次 SIGWINCH 都重新
+/// 报一次,输入按行回显 ack,`quit` 结束。
+async function interactiveMode() {
+  const size = () => `${process.stdout.rows}x${process.stdout.columns}`;
+  await write(`[fake-agent] size=${size()}\n`);
+  process.stdout.on('resize', () => {
+    void write(`[fake-agent] resized=${size()}\n`);
+  });
+  const lines = createInterface({ input: process.stdin });
+  for await (const line of lines) {
+    if (line === 'quit') break;
+    await write(`[fake-agent] ack=${line}\n`);
+  }
+  reallyExit(envInt('FAKE_EXIT_CODE', 0));
+}
+
 const mode = process.env.FAKE_MODE || 'fidelity';
 if (mode === 'nasty') {
   await nasty();
+} else if (mode === 'exit') {
+  await exitMode();
+} else if (mode === 'signal') {
+  await signalMode();
+} else if (mode === 'eof') {
+  await eofMode();
+} else if (mode === 'child') {
+  await childMode();
+} else if (mode === 'orphan') {
+  await orphanMode();
+} else if (mode === 'interactive') {
+  await interactiveMode();
 } else {
   const mib = Number.parseInt(process.env.FAKE_STRESS_MIB || '4', 10);
   const total = await fidelity(mib);

@@ -151,7 +151,7 @@ fn finalize_task_exit<R: tauri::Runtime>(
         } => (cancelled, manually_completed),
     };
 
-    let had_agent_session;
+    let session_evidence;
     {
         // Per-run teardown (ADR-020), and the claims go through ADR-031's reverse lookup at the
         // end — never "remove the entry, free the path" as one step.
@@ -163,23 +163,41 @@ fn finalize_task_exit<R: tauri::Runtime>(
         let dsh_path = dsh_info.map(|info| info.session_path);
         let omp_info = tm.omp_sessions.lock().remove(run);
         let omp_path = omp_info.map(|info| info.session_path);
-        had_agent_session = match family {
-            crate::app_settings::AgentFamily::Codex => codex_path.is_some(),
-            // dsh/omp 的状态完全由退出码驱动:会话文件存在不代表任务成功
-            // (非零退出 = failed,即使 transcript 已经写入)。omp 的交互式 TUI
-            // 正常退出为 0(`runInteractiveMode` 返回后自然结束),所以非零退出
-            // 一定是真崩溃,不该被"已写过会话文件"掩盖。这与 Claude 的处理相反
-            // 是刻意的:Claude 走 lazy attach 占位条目,只能靠会话真实性反推。
-            crate::app_settings::AgentFamily::Dsh => false,
-            crate::app_settings::AgentFamily::Omp => false,
-            crate::app_settings::AgentFamily::Claude => {
-                // lazy attach 注入的占位条目不算"曾真正建立过会话"，
-                // 否则 Claude 异常退出会被误标为 done。
-                claude_info
-                    .as_ref()
-                    .map(|info| !info.is_placeholder)
-                    .unwrap_or(false)
+        // 家族差异的**判定**已搬到 core(§P3-03 验收:"不能统一'有 session 就 done'"),
+        // 这里只如实上报这一代运行留下过什么条目:
+        // - Codex/Dsh/Omp:有条目就是 Real,没有就是 Absent(这两个码驱动家族里
+        //   core 的规则压根不看这个字段,报上去只为事实完整)。
+        // - Claude:lazy attach 注入的占位条目报 PlaceholderOnly,**不算**真正建立过
+        //   会话——否则 Claude 异常退出会被误标 done。
+        session_evidence = match family {
+            crate::app_settings::AgentFamily::Codex => {
+                if codex_path.is_some() {
+                    aeroric_core::terminal::SessionEvidence::Real
+                } else {
+                    aeroric_core::terminal::SessionEvidence::Absent
+                }
             }
+            crate::app_settings::AgentFamily::Dsh => {
+                if dsh_path.is_some() {
+                    aeroric_core::terminal::SessionEvidence::Real
+                } else {
+                    aeroric_core::terminal::SessionEvidence::Absent
+                }
+            }
+            crate::app_settings::AgentFamily::Omp => {
+                if omp_path.is_some() {
+                    aeroric_core::terminal::SessionEvidence::Real
+                } else {
+                    aeroric_core::terminal::SessionEvidence::Absent
+                }
+            }
+            crate::app_settings::AgentFamily::Claude => match claude_info.as_ref() {
+                Some(info) if info.is_placeholder => {
+                    aeroric_core::terminal::SessionEvidence::PlaceholderOnly
+                }
+                Some(_) => aeroric_core::terminal::SessionEvidence::Real,
+                None => aeroric_core::terminal::SessionEvidence::Absent,
+            },
         };
         for path in [codex_path, claude_path, dsh_path, omp_path]
             .into_iter()
@@ -189,28 +207,36 @@ fn finalize_task_exit<R: tauri::Runtime>(
         }
     }
 
-    if is_cancelled || is_manually_completed {
-        let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
-        crate::dsh_home::cleanup_task_model_patch(task_id);
-        return;
-    }
-
-    let status = if exit_ok || had_agent_session {
-        "done"
-    } else {
-        "failed"
-    };
-    // The reason wording stays here: it is user-visible text this function has always produced
-    // (and core's own exit rule says something different), so it rides along in the observation
-    // rather than being re-derived downstream.
-    if status == "failed" {
-        let reason = match exit_code {
-            Some(code) => format!("Process exited with code {}", code),
-            None => "Process exited with non-zero status".to_string(),
-        };
-        crate::core_adapter::report_task_status_with_reason(app, task_id, status, Some(&reason));
-    } else {
-        crate::core_adapter::report_task_status(app, task_id, status);
+    // 唯一决策面:退出事实进,结算结论出。取消/手动完成不发状态(且照旧跳过
+    // `cleanup_task_events`——那条不对称是既有行为)。
+    let settlement = aeroric_core::terminal::settle_exit(&aeroric_core::terminal::ExitFacts {
+        family: crate::core_adapter::SettingsFamilies::of(family),
+        exit_ok,
+        exit_code,
+        session: session_evidence,
+        cancelled: is_cancelled,
+        manually_completed: is_manually_completed,
+    });
+    match settlement {
+        aeroric_core::terminal::ExitDecision::NoStatus => {
+            let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
+            crate::dsh_home::cleanup_task_model_patch(task_id);
+            return;
+        }
+        aeroric_core::terminal::ExitDecision::Done => {
+            crate::core_adapter::report_task_status(app, task_id, "done");
+        }
+        // The reason wording stays host-side (`host_sentence`): it is user-visible text this
+        // function has always produced, and core's unrecorded lane (`settled_by_exit`) still
+        // words it differently — unifying the two sentences is a copy change for the grill round.
+        aeroric_core::terminal::ExitDecision::Failed { reason } => {
+            crate::core_adapter::report_task_status_with_reason(
+                app,
+                task_id,
+                "failed",
+                Some(&reason.host_sentence()),
+            );
+        }
     }
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));

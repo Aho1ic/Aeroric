@@ -350,7 +350,7 @@ impl SettingsFamilies {
         }
     }
 
-    fn of(family: crate::app_settings::AgentFamily) -> ProtocolFamily {
+    pub(crate) fn of(family: crate::app_settings::AgentFamily) -> ProtocolFamily {
         use crate::app_settings::AgentFamily as Host;
         match family {
             Host::Claude => ProtocolFamily::Claude,
