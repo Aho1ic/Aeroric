@@ -37,8 +37,9 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
       "agent-launch-parity-rust@agents": 2,
-      "terminal-unit-rust@terminal-core": 43,
+      "terminal-unit-rust@terminal-core": 51,
       "terminal-pty-bytes-rust@terminal-core": 6,
+      "terminal-lease-rust@terminal-core": 4,
       "terminal-replay-rust@terminal-core": 4,
       "terminal-pty-exit-rust@terminal-core": 10
     },
@@ -1127,8 +1128,8 @@
             "--",
             "terminal::"
           ],
-          "minCases": 43,
-          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 43 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay(切片四A)。后续切片(history/executor)追加时同改地板。",
+          "minCases": 51,
+          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 51 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input(切片四B)。后续切片(history/executor)追加时同改地板。",
           "timeoutMs": 300000
         },
         {
@@ -1150,6 +1151,27 @@
           ],
           "minCases": 6,
           "$note": "P3-03 验收第一条的真实 PTY 证据,替身是 tests/fixtures/fake-agent.mjs(node;`AERORIC_FAKE_AGENT_NODE` 可覆盖)。四件事各自成条:①4 MiB 混排(CJK+emoji+ANSI+NUL)端到端,未截断区间与读到的字节逐字节 + sha256 双比对,且有反空转断言证明确有帧把多字节序列劈在边界上;②100 MiB 连续输出走真 PTY(实测 102418 帧),保留量正好封顶 1 MiB、hash 相等;③nasty 模式(非法 UTF-8 + 结尾半个字符)证明新投影不卡流、不留活扣,并把**迁移前那段算法原样重放**当对照——旧实现在第一个非法字节后彻底卡住且永远扣着尾巴,这一条是缺陷复现而不是推测;④2 MiB vs 8 MiB 两档保留量相同 = 内存不随总输出线性增长。串行跑:每条用例各开一个真 PTY + 一个 node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "terminal-lease-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "terminal_lease",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 4,
+          "$note": "P3-03 切片四B:输入/resize 控制租约与隐藏 view 禁写,4 条全跑真 PTY + 真进程(interactive 替身自己报尺寸、每次 SIGWINCH 再报一次、按行回显 ack)。①20 次 resize 混进隐藏视图/0×0/畸形,断『应用 11 / 忽略 9』这张表数(表变了先红,免得最后一句换含义)、内核侧 get_size()==最后一次前台尺寸、进程侧自己报出 50x200、且被拒形状一次都没打到 PTY;②被顶替的控制者不但过不了闸门,而且**真的到不了 agent**(用后续两次写入的有序回显做栅栏,再断 ghost 从未出现,排除时序运气);③一次被拒的隐藏取得动作不得动到现有控制权——这条防的是一个具体错法(先 acquire 再判 focus),单元侧也补了同一条断言,不必开 PTY 就能红;④两个只读订阅者共享同一条流、都不需要租约、也不影响持有者写入。串行跑:每条用例各开一个真 PTY + node 进程。",
           "timeoutMs": 600000
         },
         {
@@ -1277,6 +1299,42 @@
             ]
           ],
           "$note": "Action 1 那句\"reader 首先发布原始 bytes,legacy Tauri sink 才增量解码\"在宿主侧的可执行形状。`spawn_pty_reader` 要 Wry 运行时才能真跑,所以宿主这条管道靠源码守卫钉:旧的急解码形状(`let mut leftover` / `valid_up_to` / `from_utf8(&combined`)不得复现,新形状(publish 先于 push、投影原件来自 core)必须在。三条正控证明 rg 读得到这个文件、且模式确实匹配的是产品代码而不是注释。局限如实记录:守卫证明的是\"调用了这两件原件\",顺序正确性由 core 侧用例 + 这条守卫共同围堵,完整端到端仍要 P5-01 的真终端会话。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "host-resize-rules-come-from-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "cols < 2 \\|\\| rows < 2",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::decide_resize\\(",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::ViewFocus::Foreground",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "stage_pending_size\\(task_id",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四B 的宿主侧守卫:resize 的畸形尺寸裁决已上收 core 的 `decide_resize` 一张表,宿主只保留信箱事实(有没有活跃 master、暂存到下一次运行)。禁形 = 内联的 `cols < 2 || rows < 2` 判定;正控 = 裁决必须经 core、焦点显式按前台(旧命令层没有视图焦点概念)、`stage_pending_size` 信箱仍在宿主(窗口/进程事实,core 不猜)。局限如实记录:守卫断的是『形状』;『20 次 resize 最终尺寸正确、被拒形状一次都没打到 PTY』由 terminal-lease-rust 的真 PTY 用例承担。",
           "timeoutMs": 120000
         }
       ]

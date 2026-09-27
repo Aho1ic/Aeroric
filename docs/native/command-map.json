@@ -1297,7 +1297,7 @@
       "rust_path": "pty::send_input",
       "registered_at": "src-tauri/src/lib.rs:491",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2710"
+        "src-tauri/src/pty.rs:2718"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1310,7 +1310,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2736",
+      "definition_resolved": "src-tauri/src/pty.rs:2744",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1333,7 +1333,7 @@
       "rust_path": "pty::resize_pty",
       "registered_at": "src-tauri/src/lib.rs:492",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2719"
+        "src-tauri/src/pty.rs:2727"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1346,7 +1346,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2745",
+      "definition_resolved": "src-tauri/src/pty.rs:2753",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1370,7 +1370,7 @@
       "rust_path": "pty::open_shell",
       "registered_at": "src-tauri/src/lib.rs:493",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2729"
+        "src-tauri/src/pty.rs:2737"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1383,7 +1383,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2755",
+      "definition_resolved": "src-tauri/src/pty.rs:2763",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1409,7 +1409,7 @@
       "rust_path": "pty::kill_shell",
       "registered_at": "src-tauri/src/lib.rs:494",
       "definition_candidates": [
-        "src-tauri/src/pty.rs:2808"
+        "src-tauri/src/pty.rs:2816"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -1422,7 +1422,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2834",
+      "definition_resolved": "src-tauri/src/pty.rs:2842",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

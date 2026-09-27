@@ -86,3 +86,14 @@
 - **两次变异**：gap 谎成 `Seamless` ⇒ 集成①＋单元各红；把码元游标当字节偏移 ⇒ 单元 `a_utf16_cursor_never_becomes_a_guess` 红，**集成侧没红**（只在退场流上测非零码元游标，那里 `read_from` 本就先失败）——4B 要补一条活流上的码元游标断言。
 - **门禁纪律的两条事实**：`runner.floors` 缺条目时 `doctor` 仍 18/18，真守卫是 `inventory --check`（1 inconsistency）+ `skeleton` 门禁（红）——实测确认；改 `checks.json` 的脚本必须先 `json.loads` 验证再落盘（本轮写坏过一次，靠 `git checkout ff1fd07 -- scripts/native/checks.json` 还原）。
 - **计数**：`terminal-core` 6 case/**63**（unit 地板 35→**43** ＝ 7 stream + 6 lease + 12 pty + 10 exit + 8 replay）；core workspace **384**/0；`-p aeroric-core` 口径 **334**；clippy/fmt 干净。§8 第 3 条那两条口径仍未合并（收尾轮）。
+
+## 11. 切片四B 实施结果（2026-09-27，补记九十七）：resize 裁决上收 core、控制租约接宿主
+
+落点：`core/src/terminal/input.rs`（8 条单元）+ `tests/terminal_lease.rs`（4 条真 PTY）+ 宿主 `pty.rs::resize_task_pty` 裁决上收 + 门禁 6→**8 case**（`terminal-lease-rust` 4、`host-resize-rules-come-from-core` 守卫；unit 地板 43→**51**）。
+
+- **分工口径**："谁能改这条 PTY"归 core（`decide_resize` 具名表：HiddenView/ZeroExtent/Malformed/Apply，隐藏视图优先；`take_control`/`check_write` 把"隐藏视图连租约都拿不到、被顶替者写入 `NotHolder`、只读订阅免租约"变成可数规则）；"有没有活跃 master、暂存到下一次运行"仍在宿主——core 不猜窗口/进程事实。信箱三处（`stage_pending_size`、`register_pty_handles` 对 `unminted` 键排水、reset 丢弃）一字未动。
+- **行为等价是可数的**：旧内联判定与 `decide_resize(·, Foreground)` 的忽略集相同（`rows==0` 被 `rows<2` 蕴含），边界 2 与 10_000 本身合法——单元四条边界逐值钉住。`HiddenView` 行是给 P5-01 native coordinator 备的，旧命令层没有焦点概念一律按前台。
+- **真 PTY 证据**：20 次 resize（混隐藏/0×0/畸形）断"应用 11／忽略 9"表数、内核 `get_size()` 与**进程侧 SIGWINCH 自报**同为最后一次前台 (50,200)、被拒形状零到达；顶替控制者用两次有序回显做栅栏证明 ghost 从未到 agent；被拒的隐藏取得不动现有控制权；两读者共享一条流。
+- **pin 事故（守卫第一次在真实工作上开火）**：本片宿主 Δ=+8（12 增 4 删），首遍按 +7 迁 8 条 pin ⇒ `--freeze-check` 照样 noop、**`--check` 的 fn 声明回读报 4 条 inconsistency**。结论：`--freeze`/`--freeze-check` 都不校验行号正确性，重定位必须以 `--check` 全绿收尾。
+- **变异实证**：(A) 摘掉 `decide_resize` 的隐藏视图早退 ⇒ 单元 `a_hidden_view_is_rejected…` 红 + 集成 `twenty_resizes…` 红（lease 路径用例仍绿＝`take_control` 自己的焦点闸独立成立）；(B) 宿主换回内联形状 ⇒ 守卫禁形命中（FAIL）且 `decide_resize` 正控同时消失，还原字节一致。
+- **计数**：`terminal-core` 8 case/**75**；core workspace **396**/0（22 二进制）；`-p aeroric-core` 口径 **346**；tauri-adapter 12/2526（src-tauri 2465＝地板）。未做：history.rs（四C）、executor.rs + 四方调用点（四D）、grill 收尾轮、CPU/RSS 采样。

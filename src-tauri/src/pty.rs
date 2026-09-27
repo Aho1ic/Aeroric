@@ -2695,10 +2695,18 @@ pub(crate) fn resize_task_pty(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    // 兜底：拒绝畸形尺寸。FitAddon 在容器 display:none 时可能算出 cols=2，前端
-    // 三层防御漏掉的话，会把 Claude Code / Codex 这类全屏 TUI 通过 SIGWINCH
-    // 排版打散到一字一行且不可恢复。前端任何路径有 bug，这里也得挡住。
-    if cols < 2 || rows < 2 || cols > 10_000 || rows > 10_000 {
+    // 兜底：拒绝畸形尺寸。FitAddon 在容器 display:none 时可能算出退化尺寸，前端
+    // 三层防御漏掉的话，会把全屏 TUI 通过 SIGWINCH 排版打散到一字一行且不可恢复。
+    // 裁决表已上收 core（P3-03 切片四B）：隐藏视图/零尺寸/越界各有具名理由，边界
+    // （2 与上限本身合法）与这里原来的判定逐值相同，对调用方仍然是“忽略而不是
+    // 报错”。旧命令层没有视图焦点概念，一律按前台；隐藏视图的禁写在 native
+    // coordinator（P5-01）取得焦点事实之后才可能生效。
+    let request = aeroric_core::terminal::PtySizeRequest { rows, cols };
+    let focus = aeroric_core::terminal::ViewFocus::Foreground;
+    if matches!(
+        aeroric_core::terminal::decide_resize(request, focus),
+        aeroric_core::terminal::ResizeDecision::Ignored(_)
+    ) {
         return Ok(());
     }
     let master = task_manager.master_for(task_id);
