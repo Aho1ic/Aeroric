@@ -122,3 +122,11 @@
 - **变异实证**：D1 注册时跳过暂存排水（`filter(|_| false)`）⇒ executor 用例红；D2 宿主重新出现 `.spawn_command(` ⇒ 守卫 FAIL，还原字节一致。
 - **两条过程教训（照实记）**：① 宿主文件在 pin 重定位**之后**又被 `cargo fmt` 重排（+2 行）⇒ `--check` 的 fn 声明回读抓出 38 处错位——**pin 重定位必须是包括 fmt 在内的最后一次编辑之后做的事**；② 又一次踩了"管道后读 `$?` 读到的是 head 的退出码"（补记九同款），D2 变异首跑因此假绿，改用 `rg -c; rc=$?` 后才拿到真判据。
 - **计数**：`terminal-core` 11 case/**91**；core workspace **405**/0（22 二进制）；`-p aeroric-core` 口径 **355**；tauri-adapter 12/2526（src-tauri 2465＝地板）。四C/四D 之后 terminal 的 core 侧原件齐了：stream/lease/pty/exit/replay/input/history/executor。
+
+## 14. 收尾轮·自主部分（2026-09-27，补记一百）
+
+- **四A 覆盖不均了结**：terminal_replay 第 5 条在**活流**上钉住码元游标拒收的完整契约——`Reset{from:0, reason:UnitsNotAnchorable, bytes=现存窗口}`（重置视图+补屏，不是空手而回——四A 的候选断言把 bytes 写成空是错的，真跑当场纠正）；`resume_after()`=窗口末端、末端合法空帧；唯一无缝例外＝units 0 且保留线 0。变异 E（吞掉重绘窗口）被它当场抓住。地板 4→**5**。
+- **CPU/RSS 证据**（验收"压力结果与 CPU/RSS 在证据中"）：200ms 采样 21 样本——测试进程 RSS 峰值 **6.0 MiB**（对照 100 MiB 吞吐=有界）、node 替身 50.9 MiB、测试 CPU ~99% 单线程、102434 帧/6.8s/保留 1024 KiB。
+- **§8 第 3 条了结**：`storage-core-rust` minCases/floors 81→**356**（包口径=机器地板，workspace 406=叙事口径不做地板；此后新增 core 用例必须同批抬）。
+- **复跑对照**：typecheck 绿；全量 `pnpm test` 376/5483 绿（与切片三基线同数）。
+- **剩余（用户在场）**：grill-me [terminal-core] 收尾拷问（三条待裁决+两条新挂账，见补记一百）、`~/.aeroric` 真实终端会话手测；完成后 P3-03 才标 accepted。

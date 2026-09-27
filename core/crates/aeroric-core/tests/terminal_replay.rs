@@ -304,3 +304,74 @@ fn a_window_that_started_mid_character_is_handed_over_as_bytes_not_as_text() {
         other => panic!("从保留线起读应当无缝:{other:?}"),
     }
 }
+
+#[test]
+fn a_live_stream_refuses_a_units_cursor_before_any_conversion_is_tried() {
+    // 四A 记下的覆盖不均:集成侧当时只在**已退场**流上测码元游标——那里
+    // `read_from` 本来就先失败,拒收分支根本没执行到。这条在**活流**(多字节内容、
+    // 未收尾)上断同一件事:码元游标永远拿不到字节、拿不到猜出来的位置,
+    // `resume_after()` 落回字节车道 0,客户端重置视图后照常续看。
+    let service = TerminalService::new();
+    let identity = TerminalIdentity::new("live-units-cursor", 1);
+    let mut published: Vec<u8> = Vec::new();
+    for index in 0..40u32 {
+        let block = format!("frame-{index:02}-😀中文\r\n").into_bytes();
+        service.publish(&identity, &block);
+        published.extend_from_slice(&block);
+    }
+    // 流还活着:没 mark_finished,bounds 在册且末端就是已发布量。
+    assert_eq!(
+        service
+            .bounds(&identity)
+            .expect("live stream in registry")
+            .1,
+        published.len() as u64
+    );
+
+    // 拒收的形状:重置视图**并**交出现存窗口的全部内容供客户端重绘(from=0、
+    // 理由=UnitsNotAnchorable)。绝不做的是换算出一个字节位置假装无缝。
+    // 本流 ~900 B 远小于 1 MiB 窗口,所以交出的就是整条发布序列。
+    for units in [1u64, 5, 100] {
+        let plan = plan_replay(
+            &service,
+            &identity,
+            ResumePoint::UnitsFromStart(units),
+            4096,
+        );
+        match &plan {
+            ReplayPlan::Reset {
+                from,
+                bytes,
+                reason,
+            } => {
+                assert_eq!(*from, 0);
+                assert_eq!(*reason, ResetReason::UnitsNotAnchorable);
+                assert_eq!(bytes, &published, "重置必须带上现存窗口供重绘");
+            }
+            other => panic!("码元游标 {units} 绝不能被当成无缝续看:{other:?}"),
+        }
+        // 重绘之后订阅者已经站在窗口末端:resume_after() 落在发布末端,
+        // 从那里按字节续看得到合法的末端空帧(而不是再次 Reset)。
+        let cursor = plan.resume_after();
+        assert_eq!(
+            cursor,
+            ResumePoint::Bytes(published.len() as u64),
+            "拒收后的续看凭证 = 已重绘字节数之后的字节 offset"
+        );
+        let plan = plan_replay(&service, &identity, cursor, 64);
+        assert!(
+            matches!(plan, ReplayPlan::Seamless { ref bytes, .. } if bytes.is_empty()),
+            "活流末端应答合法空帧:{plan:?}"
+        );
+    }
+
+    // 唯一诚实的无缝例外:码元 0 且保留线仍在 0(客户端什么都没渲染过)。
+    assert_eq!(
+        plan_replay(&service, &identity, ResumePoint::UnitsFromStart(0), 4096),
+        ReplayPlan::Seamless {
+            offset: 0,
+            bytes: published.clone(),
+        },
+        "units=0 且整段历史都在:字节 0 就是真凭证,如实无缝"
+    );
+}
