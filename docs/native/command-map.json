@@ -8849,7 +8849,7 @@
       "rust_path": "storage::load_projects",
       "registered_at": "src-tauri/src/lib.rs:707",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:363"
+        "src-tauri/src/storage.rs:367"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8862,7 +8862,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:363",
+      "definition_resolved": "src-tauri/src/storage.rs:367",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8881,7 +8881,7 @@
       "rust_path": "storage::save_projects",
       "registered_at": "src-tauri/src/lib.rs:708",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:380"
+        "src-tauri/src/storage.rs:384"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8894,7 +8894,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:380",
+      "definition_resolved": "src-tauri/src/storage.rs:384",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8915,7 +8915,7 @@
       "rust_path": "storage::load_project_tasks",
       "registered_at": "src-tauri/src/lib.rs:709",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:402"
+        "src-tauri/src/storage.rs:406"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8928,7 +8928,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:402",
+      "definition_resolved": "src-tauri/src/storage.rs:406",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8986,7 +8986,7 @@
       "rust_path": "storage::read_task_terminal_history",
       "registered_at": "src-tauri/src/lib.rs:710",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:571"
+        "src-tauri/src/storage.rs:582"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -8999,7 +8999,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:571",
+      "definition_resolved": "src-tauri/src/storage.rs:582",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9020,7 +9020,7 @@
       "rust_path": "storage::delete_task_terminal_histories",
       "registered_at": "src-tauri/src/lib.rs:711",
       "definition_candidates": [
-        "src-tauri/src/storage.rs:581"
+        "src-tauri/src/storage.rs:592"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9033,7 +9033,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:581",
+      "definition_resolved": "src-tauri/src/storage.rs:592",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

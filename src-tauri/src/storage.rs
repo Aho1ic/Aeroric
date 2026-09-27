@@ -8,7 +8,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 static PROJECTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-const MAX_TERMINAL_HISTORY_BYTES: usize = 8 * 1024 * 1024;
+
+// 数值与"为什么要有 slack"的裁定都在 core 的 terminal::history(P3-03 切片四C 把
+// 压实策略上收成一份);这两个别名只是让本文件既有的调用点不必跟着改名。
+const MAX_TERMINAL_HISTORY_BYTES: usize = aeroric_core::terminal::history::HISTORY_MAX_BYTES;
 
 /// 压实前允许文件长到上限之上多少。
 ///
@@ -20,7 +23,8 @@ const MAX_TERMINAL_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 ///
 /// 4 MB:文件上界变成 12 MB（磁盘代价可接受）,而压实频率降到原来的约 1/128
 /// （按 32 KB 片段算）。读侧本来只取末 MAX_TERMINAL_HISTORY_BYTES,读语义不变。
-const TERMINAL_HISTORY_COMPACT_SLACK_BYTES: usize = 4 * 1024 * 1024;
+const TERMINAL_HISTORY_COMPACT_SLACK_BYTES: usize =
+    aeroric_core::terminal::history::HISTORY_COMPACT_SLACK_BYTES;
 
 // ── Data types (mirror TypeScript interfaces) ────────────────────────────────
 
@@ -487,21 +491,31 @@ fn compact_oversized_histories_in(
     max_bytes: usize,
     slack_bytes: usize,
 ) -> Result<usize, String> {
-    let high_water = (max_bytes as u64).saturating_add(slack_bytes as u64);
+    let retention = aeroric_core::terminal::HistoryRetention {
+        max_bytes,
+        slack_bytes,
+    };
     let mut compacted = 0usize;
     for entry in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         let path = entry.path();
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if !metadata.is_file() || metadata.len() <= high_water {
+        // 目录巡检的"超标才压"= 追加判定表 incoming=0 的同一问(core 一份实现)。
+        if !metadata.is_file() || !retention.needs_compaction(metadata.len(), 0) {
             continue;
         }
         // 逐个失败互不影响:一个文件权限异常不该让整轮清理停下。
-        let Ok((_, tail)) = read_terminal_history_tail_bytes(&path, max_bytes as u64) else {
+        let Ok((_, tail)) = read_terminal_history_tail_bytes(&path, retention.disk_tail_bytes(0))
+        else {
             continue;
         };
-        if atomic_write_private_bytes(&path, utf8_tail_bytes(&tail, max_bytes)).is_ok() {
+        if atomic_write_private_bytes(
+            &path,
+            aeroric_core::terminal::history::utf8_tail_bytes(&tail, max_bytes),
+        )
+        .is_ok()
+        {
             compacted += 1;
         }
     }
@@ -547,12 +561,9 @@ fn read_terminal_history_tail_bytes(path: &Path, max_bytes: u64) -> Result<(u64,
         .map_err(|e| e.to_string())?;
     let mut bytes = Vec::with_capacity((total - start) as usize);
     file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    // 掐头去掉截断的 UTF-8 续字节(0b10xxxxxx)
-    let skip = bytes
-        .iter()
-        .take(4)
-        .take_while(|b| (**b & 0b1100_0000) == 0b1000_0000)
-        .count();
+    // 掐头去掉截断的 UTF-8 续字节(0b10xxxxxx);上限 4 = 合法序列的最大字节数,
+    // 判定本体在 core 的 terminal::history(与写侧共用同一份"什么是续字节")。
+    let skip = aeroric_core::terminal::history::skip_leading_utf8_continuations(&bytes, 4);
     if skip > 0 {
         bytes.drain(..skip);
     }
@@ -637,29 +648,11 @@ fn finish_atomic_rename(tmp: &Path, path: &Path) -> Result<(), String> {
 }
 
 fn utf8_tail(content: &str, max_bytes: usize) -> &str {
-    if content.len() <= max_bytes {
-        return content;
-    }
-    let mut start = content.len() - max_bytes;
-    while start < content.len() && !content.is_char_boundary(start) {
-        start += 1;
-    }
-    &content[start..]
-}
-
-/// `utf8_tail` 的字节版:取末 `max_bytes` 字节并把起点推到 UTF-8 字符边界。
-///
-/// 只推起点、不做校验:传进来的两段（文件尾部 + 新片段）各自已在字符边界上,
-/// 拼接后仍然是边界对齐的,这里唯一的职责是二次裁剪后不要切在字符中间。
-fn utf8_tail_bytes(bytes: &[u8], max_bytes: usize) -> &[u8] {
-    if bytes.len() <= max_bytes {
-        return bytes;
-    }
-    let mut start = bytes.len() - max_bytes;
-    while start < bytes.len() && (bytes[start] & 0b1100_0000) == 0b1000_0000 {
-        start += 1;
-    }
-    &bytes[start..]
+    // 判定本体在 core 的 terminal::history(字节版);对合法 UTF-8,"续字节推进"与
+    // "逐字符边界推进"逐字节等价,等价性由 core 侧 oracle 用例钉住。这里只是把
+    // 返回的字节切片重新锚回 &str,不再内联任何边界判定。
+    let kept = aeroric_core::terminal::history::utf8_tail_bytes(content.as_bytes(), max_bytes);
+    &content[content.len() - kept.len()..]
 }
 
 /// 追加终端历史,并把文件保持在 `max_bytes + slack_bytes` 以内。
@@ -673,10 +666,13 @@ fn append_terminal_history_file(
     max_bytes: usize,
     slack_bytes: usize,
 ) -> Result<(), String> {
+    let retention = aeroric_core::terminal::HistoryRetention {
+        max_bytes,
+        slack_bytes,
+    };
     let metadata = fs::metadata(path).ok();
     let existing_len = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-    let high_water = (max_bytes as u64).saturating_add(slack_bytes as u64);
-    if existing_len.saturating_add(data.len() as u64) <= high_water {
+    if !retention.needs_compaction(existing_len, data.len()) {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
         #[cfg(not(windows))]
@@ -694,10 +690,13 @@ fn append_terminal_history_file(
     }
 
     let incoming = utf8_tail(data, max_bytes);
-    let retained_bytes = max_bytes.saturating_sub(incoming.len());
-    let (_, mut compacted) = read_terminal_history_tail_bytes(path, retained_bytes as u64)?;
+    let (_, mut compacted) =
+        read_terminal_history_tail_bytes(path, retention.disk_tail_bytes(incoming.len()))?;
     compacted.extend_from_slice(incoming.as_bytes());
-    atomic_write_private_bytes(path, utf8_tail_bytes(&compacted, max_bytes))
+    atomic_write_private_bytes(
+        path,
+        aeroric_core::terminal::history::utf8_tail_bytes(&compacted, max_bytes),
+    )
 }
 
 /// 已存在的文件是否还需要收紧权限。缺 metadata（文件不存在）时交给 open 的 mode。

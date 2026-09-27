@@ -37,11 +37,12 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
       "agent-launch-parity-rust@agents": 2,
-      "terminal-unit-rust@terminal-core": 51,
+      "terminal-unit-rust@terminal-core": 58,
       "terminal-pty-bytes-rust@terminal-core": 6,
       "terminal-lease-rust@terminal-core": 4,
       "terminal-replay-rust@terminal-core": 4,
-      "terminal-pty-exit-rust@terminal-core": 10
+      "terminal-pty-exit-rust@terminal-core": 10,
+      "terminal-history-rust@terminal-core": 7
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1128,8 +1129,8 @@
             "--",
             "terminal::"
           ],
-          "minCases": 51,
-          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 51 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input(切片四B)。后续切片(history/executor)追加时同改地板。",
+          "minCases": 58,
+          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 58 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history(切片四C)。后续切片(executor)追加时同改地板。",
           "timeoutMs": 300000
         },
         {
@@ -1335,6 +1336,69 @@
             ]
           ],
           "$note": "P3-03 切片四B 的宿主侧守卫:resize 的畸形尺寸裁决已上收 core 的 `decide_resize` 一张表,宿主只保留信箱事实(有没有活跃 master、暂存到下一次运行)。禁形 = 内联的 `cols < 2 || rows < 2` 判定;正控 = 裁决必须经 core、焦点显式按前台(旧命令层没有视图焦点概念)、`stage_pending_size` 信箱仍在宿主(窗口/进程事实,core 不猜)。局限如实记录:守卫断的是『形状』;『20 次 resize 最终尺寸正确、被拒形状一次都没打到 PTY』由 terminal-lease-rust 的真 PTY 用例承担。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "terminal-history-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "terminal::history"
+          ],
+          "minCases": 7,
+          "$note": "P3-03 切片四C:磁盘终端历史的压实策略上收 core(terminal/history.rs),与 stream.rs 的内存 replay 窗口同归 terminal/ 一个 owner——『有界 replay 与 history compaction 共享一个 owner』(Action 4)的落地形状。7 条单元:①上限内原样;②切点永不落进多字节序列中间;③str 版 is_char_boundary 算法原样重放当 oracle,合法 UTF-8 上与字节版逐字节相等(迁移前宿主两份近重复实现由此钉住);④读侧 take(4) 跳过语义原样重放当 oracle,含全续字节垃圾的上限封顶;⑤高水位表(恰好压线=追加、+1=压实);⑥压实回 max 而非 max+slack;⑦目录巡检与追加路径是同一张表(incoming=0)。文件 I/O 与目录遍历仍在宿主 storage.rs(适配层),宿主 4 条既有 terminal_history 测试原样跑通=行为不变。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "host-history-policy-comes-from-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "fn utf8_tail_bytes|is_char_boundary",
+            "src-tauri/src/storage.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::history::utf8_tail_bytes",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "skip_leading_utf8_continuations",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "HistoryRetention",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "needs_compaction",
+              "src-tauri/src/storage.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四C 的宿主侧守卫:历史压实的策略(尾切、续字节跳过、高水位判定)只有 core 一份实现。禁形 = 宿主里重新出现本地的 `fn utf8_tail_bytes` 或任何内联的字符边界判定(`is_char_boundary`——注释里也不许,判定本体只许在 core);正控 = 三个调用点(目录巡检、str 委托、追加压实)与读侧跳过都必须经 core 的原件,`needs_compaction` 证明判定走的是同一张表。宿主的文件 I/O、原子重写与权限收紧不属于策略,留在原地。",
           "timeoutMs": 120000
         }
       ]

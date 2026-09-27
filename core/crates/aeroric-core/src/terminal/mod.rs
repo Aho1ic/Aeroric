@@ -8,6 +8,7 @@
 //! 迁移对照与切片顺序见 `docs/native/extraction/terminal-stream.md`。
 
 pub mod exit;
+pub mod history;
 pub mod input;
 pub mod lease;
 pub mod pty;
@@ -15,6 +16,10 @@ pub mod replay;
 pub mod stream;
 
 pub use exit::{settle_exit, ExitDecision, ExitFacts, ExitReason, SessionEvidence};
+pub use history::{
+    skip_leading_utf8_continuations, utf8_tail_bytes, HistoryRetention,
+    HISTORY_COMPACT_SLACK_BYTES, HISTORY_MAX_BYTES,
+};
 pub use input::{
     check_write, decide_resize, take_control, InputRejection, PtySizeRequest, ResizeDecision,
     ResizeRejection, ViewFocus, MAX_PTY_DIM, MIN_PTY_DIM,

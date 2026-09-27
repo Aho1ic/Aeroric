@@ -97,3 +97,14 @@
 - **pin 事故（守卫第一次在真实工作上开火）**：本片宿主 Δ=+8（12 增 4 删），首遍按 +7 迁 8 条 pin ⇒ `--freeze-check` 照样 noop、**`--check` 的 fn 声明回读报 4 条 inconsistency**。结论：`--freeze`/`--freeze-check` 都不校验行号正确性，重定位必须以 `--check` 全绿收尾。
 - **变异实证**：(A) 摘掉 `decide_resize` 的隐藏视图早退 ⇒ 单元 `a_hidden_view_is_rejected…` 红 + 集成 `twenty_resizes…` 红（lease 路径用例仍绿＝`take_control` 自己的焦点闸独立成立）；(B) 宿主换回内联形状 ⇒ 守卫禁形命中（FAIL）且 `decide_resize` 正控同时消失，还原字节一致。
 - **计数**：`terminal-core` 8 case/**75**；core workspace **396**/0（22 二进制）；`-p aeroric-core` 口径 **346**；tauri-adapter 12/2526（src-tauri 2465＝地板）。未做：history.rs（四C）、executor.rs + 四方调用点（四D）、grill 收尾轮、CPU/RSS 采样。
+
+## 12. 切片四C 实施结果（2026-09-27，补记九十八）：history 压实策略上收 core、共享 owner
+
+落点：`core/src/terminal/history.rs`（7 条单元）+ 宿主 `storage.rs` 三调用点消费 core（文件 I/O 留宿主）+ 门禁 8→**10 case**（`terminal-history-rust` 7、`host-history-policy-comes-from-core` 守卫；unit 地板 51→**58**）。
+
+- **Action 4 前半句的落地形状**：迁移前"尾切 + 续字节跳过 + 高水位判定"在宿主 storage.rs 有**三份近似重复**（str 版 `utf8_tail`、字节版 `utf8_tail_bytes`、读路径内联 `take(4).take_while`），算术又在两条调用点各写一遍。现在 core 一份实现：`HistoryRetention::LEGACY`（8 MiB 保留 + 4 MiB slack，理由注释随迁）、`needs_compaction`（追加与目录巡检＝同一问，巡检＝incoming 0）、`disk_tail_bytes`（压实回 max 而非 max+slack——摊薄成立的前提）、`utf8_tail_bytes`、`skip_leading_utf8_continuations`（读路径传 4）。
+- **两条有界面的差异是刻意的**：replay 窗口按原始字节切、截断点落在字符中间就如实交出（四A 用例钉着）；磁盘历史对齐后才落盘（读者直接当文本）。共享的是"保留尾部、丢头部、对丢失如实"的形状，不是参数——不要"统一"。
+- **行为不变**：宿主 4 条既有 `terminal_history_*` 测试原样跑通；core 侧把迁移前的 str 版 is_char_boundary 算法与读侧 take(4) 语义**原样重放当 oracle**，合法 UTF-8 上逐字节相等。
+- **变异实证**：C1 `needs_compaction` 的 `>` 翻成 `>=` ⇒ 2 条单元红；C2 宿主重新注入本地 `fn utf8_tail_bytes` ⇒ 守卫 FAIL，还原字节一致。守卫首版禁形误伤刻意保留的委托壳——按补记九十五先例改注释措辞并加严禁形（`is_char_boundary` 注释里也不许），不放宽扫描。
+- **纪律实录**：新 test case 漏配 `runner.floors` 条目 ⇒ `inventory --check` 报 inconsistency（"真守卫是 inventory --check 不是 doctor"第三次实证）；storage.rs 5 条 pin 重定位到当前真实声明行（367/384/406/582/592），`--check` 回读全绿收尾。
+- **计数**：`terminal-core` 10 case/**89**；core workspace **403**/0（22 二进制）；`-p aeroric-core` 口径 **353**；tauri-adapter 12/2526（src-tauri 2465＝地板）。未做：executor.rs + 四方调用点（四D）、grill 收尾轮、CPU/RSS 采样。
