@@ -1907,7 +1907,7 @@ grill-me
 >
 > **六、未运行 / 未做**（不得记为通过）：`grill-me [terminal-core]`（收尾轮，三条待裁决不变）；100 MiB 的 CPU/RSS 采样；`pnpm typecheck` 与全量 `pnpm test` 复跑（TS 车道未动，tauri-adapter 内 `ts-typecheck` 绿；收尾轮补对照）；`terminal/executor.rs` + 四方 acquire/release 调用点（切片四D）；四A 的活流码元游标集成断言；`~/.aeroric` 真实终端会话手测。
 >
-> **提交状态**：见下方补记的提交状态行（不 push、无 tag、不发 release，INV-01）。
+> **提交状态**：本切片已合成本地提交 **`a053b42`**（7 files／547+／45−：history.rs、mod.rs、storage.rs、checks.json、command-map.json、MIGRATION_PLAN.md、terminal-stream.md；不 push、无 tag、不发 release，INV-01）。
 
 
 
