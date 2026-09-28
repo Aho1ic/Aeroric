@@ -2241,7 +2241,9 @@ grill-me
 >
 > **三、抬完复跑，9/9 模块的地板今天全部等于实测**：`protocol` **6/98**、`tasks` **7/151**、`tauri-adapter` **12/2526**（`adapter-acceptance-real-kernel` 19/19、`src-tauri-lib-tests` 2465/2465）、`storage` **5/361**、`projects` **5/21**、`runtime` **1/5**、`agents` **1/2**、`skeleton` **22/142**、`terminal-core` **13/107**，全部 exit 0；`inventory --check` consistent。**这同时补掉了 补记一百十四 记为"未复跑"的那几条**（`terminal-core`/`protocol`/`storage`/`tauri-adapter` 本轮都真跑了），所以今天的绿灯是全模块当日实测，不是引用昨天。
 >
-> **四、留给下游的一条口径**：地板"抬到实测"只在**该测试集平台无关**时安全。判据是查有没有挂在 `#[test]` 上的 `#[cfg(unix)]/#[cfg(windows)]`——**函数体内的 cfg 不算**（它改断言不改条数）。真出现平台相关用例时不要下调地板迁就，走 `docs/native/baseline.md` 里 P7-01 的既有归属（per-platform floors 或按测试名集合断言）。，然后按 §5.1 的 11 行清单开工，具名前置＝P2-01 下传的 36 条 pending topic 接线在本 Task 闭合。
+> **四、留给下游的一条口径**：地板"抬到实测"只在**该测试集平台无关**时安全。判据是查有没有挂在 `#[test]` 上的 `#[cfg(unix)]/#[cfg(windows)]`——**函数体内的 cfg 不算**（它改断言不改条数）。真出现平台相关用例时不要下调地板迁就，走 `docs/native/baseline.md` 里 P7-01 的既有归属（per-platform floors 或按测试名集合断言）。
+>
+> **五、同日把静态面与全量面也测齐了**（这些正是 F2 说"没有任何门禁 case 覆盖"的部分，所以只能人工测、也必须留档）：`pnpm typecheck` exit 0；两 crate `cargo fmt --check` exit 0（core 带 `--all`、src-tauri 不带，照门禁 argv）；两 crate `cargo clippy --all-targets --locked -- -D warnings` exit 0；**全量 `pnpm test` 376 files／**5483 tests** 全绿、exit 0、墙钟 355.87 s**（数字取自当天 `Tests  5483 passed (5483)` 那一行，不是引用昨天）。结论与 P2-05 期同数，说明本任务链的宿主读循环与门禁改动没动前端套件。全部连同 9 个模块的逐条计数写进 `docs/native/baseline.md` 的「Native gate baseline — measured 2026-09-28」一节。，然后按 §5.1 的 11 行清单开工，具名前置＝P2-01 下传的 36 条 pending topic 接线在本 Task 闭合。
 
 - **Input**：`session.rs`、`session/{parse,approval,export}.rs`、`session_dsh.rs`、`session_omp.rs`、`event_watcher.rs`、`usage.rs`、`usage_index.rs`、`analytics.rs`；`src/taskSession.ts`。
 - **Action**：

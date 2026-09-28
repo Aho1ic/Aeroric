@@ -231,3 +231,41 @@ local `pnpm native:check` above. Tracked as `docs/native/feature-matrix.json` **
 | 真实 `~/.aeroric` | 目录树 411,846 个文件里 **`runtime.json` / `project-groups.json` / `task-operations.json` 一个都不存在** —— 这才是可复查的口径：core 从未写过真实数据目录。2 秒窗口内另有两处漂移（`usage-statistics.sqlite3` 与一个 terminal-history 日志），是产品自身在写；证据 `.artifacts/native/real-home-p204-window.json`。**不写"真实目录零漂移"**：产品在本机常在写，任何零漂移说法都必须先说明是"core 没写"而不是"目录没动" |
 | 反例 | 9 次（M1–M9）：改坏实现 → 门禁必须红 → 还原并逐文件 `cmp` 确认字节一致。M7/M8 各自钉住一条设计选择，见 `reviews/tasks.md` §5 |
 | 自曝 | M4 首次跑时忘了备份 `operations.rs`，改坏后无备份可还原，只能逐字符反向替换 + 当场验证 8/8 转绿。教训：**反例脚本必须先 cp 备份、后改文件**，备份清单要和被改文件清单对得上 |
+
+## Native gate baseline — measured 2026-09-28 (MIGRATION_PLAN 补记一百十五)
+
+All nine `native:check` modules were run on this machine the same day, and the case counts below
+are what the runner printed (`ok (N cases, min M)`), not prose carried forward. **Every floor now
+equals its measured count** — five had been sitting below (`protocol-rust` 50/49,
+`protocol-swift-golden` 20/19, `protocol-ts-golden` 21/20, `tasks-idempotency-rust` 10/8,
+`adapter-acceptance-real-kernel` 19/18), i.e. deleting one test at those five sites would not have
+gone red. Each raise was preceded by a platform-stability check: `task_idempotency.rs` has zero
+`cfg(`, `aeroric-protocol` has zero platform `cfg`, and `core_adapter_tests.rs`' only cfg is a
+`#[cfg(unix)] { chmod }` **inside a helper body**, not on a `#[test]`, so the counts are identical
+on every target. If a genuinely platform-gated test ever appears, raise per-platform floors or assert
+test-name sets (P7-01) — never lower a floor to match.
+
+| Module | cases / executed |
+|---|---|
+| `skeleton` | 22 / 142 |
+| `protocol` | 6 / 98 |
+| `storage` | 5 / 361 |
+| `projects` | 5 / 21 |
+| `tasks` | 7 / 151 |
+| `tauri-adapter` | 12 / 2526 (incl. `src-tauri-lib-tests` 2465, serial) |
+| `runtime` | 1 / 5 |
+| `agents` | 1 / 2 |
+| `terminal-core` | 13 / 107 |
+
+Static and non-gated surfaces, same day: `pnpm typecheck` exit 0; `cargo fmt --check` exit 0 for
+both `core` (with `--all`) and `src-tauri` (without `--all`, per the gate's own argv);
+`cargo clippy --all-targets --locked -- -D warnings` exit 0 for both workspaces;
+`pnpm native:inventory --check` consistent (`taskStates=51/12accepted`), `--freeze-check` a byte
+noop; `pnpm native:contracts --check` 12 documents byte-exact; `pnpm native:digest --check` 7 shards;
+`pnpm native:doctor` 18/18; `git diff --check` clean.
+
+**Full `pnpm test` (376 files / 5483 tests, exit 0, 355.87 s wall)** was run deliberately here
+because **no gate case executes it** (finding F2, owned by P10-05): a TS test that no module names is
+invisible to every `native:check`. This is the fourth full-suite run recorded in this file, and it
+matches the P2-05-era numbers (376 files / 5483 tests) — the migration's host-side reader and gate
+changes have not moved the frontend suite.
