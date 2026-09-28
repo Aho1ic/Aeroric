@@ -541,3 +541,64 @@ test("frozen params must match the source, and an absent key is a failure", () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- gap ledger: an `open` gap may not be owned only by Tasks that already closed (T1 round) ----
+// The class of failure this pins: a gap names an owner, that owner's Task gets accepted, and the
+// ledger is never re-read — the risk stops being anyone's without a single red signal.
+
+function gapTree(mutateGap) {
+  const { dir, cleanup } = tempTree();
+  const matrixPath = path.join(dir, "docs/native/feature-matrix.json");
+  const matrix = JSON.parse(readFileSync(matrixPath, "utf8"));
+  const gap = matrix.gaps.find((g) => g.id === "G04");
+  mutateGap(gap);
+  writeFileSync(matrixPath, `${JSON.stringify(matrix, null, 2)}\n`);
+  return { dir, cleanup };
+}
+
+const gapProblems = (dir) => check({ repoRoot: dir, sourceRoot: repoRoot }).problems.filter((p) => p.startsWith("G04:"));
+
+test("an open gap whose only owner Task is already accepted must fail", () => {
+  const { dir, cleanup } = gapTree((g) => { g.task_ids = "P2-01"; });
+  try {
+    const found = gapProblems(dir).filter((p) => /status open but every named Task/.test(p));
+    assert.equal(found.length, 1, `expected exactly one owner problem, got: ${gapProblems(dir).join(" | ")}`);
+    assert.match(found[0], /\(P2-01\) is accepted/);
+    assert.match(found[0], /改派给真正欠它的 Task/);
+  } finally { cleanup(); }
+});
+
+test("…and naming who accepts the risk is what silences it, not silence", () => {
+  const { dir, cleanup } = gapTree((g) => { g.task_ids = "P2-01"; g.accepted_by = "用户 2026-09-28 接受，风险随 P8-05 演练一并复核"; });
+  try {
+    assert.deepEqual(gapProblems(dir), [], `accepted_by must be the escape hatch: ${gapProblems(dir).join(" | ")}`);
+  } finally { cleanup(); }
+});
+
+test("a range in task_ids cannot answer who still owes the work", () => {
+  const { dir, cleanup } = gapTree((g) => { g.task_ids = "P2-02~P2-05"; });
+  try {
+    assert.match(gapProblems(dir).join("\n"), /task_ids "P2-02~P2-05" is a range/);
+  } finally { cleanup(); }
+});
+
+test("an owner that is not a Task heading in the plan must fail", () => {
+  const { dir, cleanup } = gapTree((g) => { g.task_ids = "P99-99"; });
+  try {
+    assert.match(gapProblems(dir).join("\n"), /names P99-99, which is not a Task heading/);
+  } finally { cleanup(); }
+});
+
+test("an ownerless gap is refused rather than read as nobody's problem", () => {
+  const { dir, cleanup } = gapTree((g) => { g.task_ids = ""; });
+  try {
+    assert.match(gapProblems(dir).join("\n"), /no task_ids — §1.2 forbids an entry without an owner/);
+  } finally { cleanup(); }
+});
+
+test("the committed gap ledger passes the owner rule", () => {
+  // Positive control: five new rules are worthless if nothing satisfies them today.
+  const result = check({ repoRoot });
+  assert.equal(result.ok, true, result.problems.slice(0, 5).join("\n"));
+  assert.deepEqual(result.problems.filter((p) => /^G\d+:/.test(p)), []);
+});

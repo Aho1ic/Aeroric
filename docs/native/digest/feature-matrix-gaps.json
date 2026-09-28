@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "e3b52e11e5c26ed046e5474c7305ad528348a730a21ed72ac1b2a4ce0349b176",
+  "sourceSha256": "e407b7267384642756886d54b734495ddaff5700f35511efe11ab9789a188c97",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -28,12 +28,13 @@
       {
         "id": "G03",
         "finding": "三个 app-lifetime 线程无关停路径：event_watcher.rs:66、usage_index.rs:1048、notebook/sync/daemon.rs:404；lib.rs:1189 的 RunEvent::Exit 只关 LocalRouter 与 DSH",
-        "evidence": "lib.rs:436-438 启动点；B.5 表",
-        "requirement": "核心必须持有可取消 token 并 join",
-        "task_ids": "P3-01",
-        "owner": "core:runtime",
+        "evidence": "2026-09-28 实测三处 `thread::spawn(move || run_loop(app))`：event_watcher.rs:66、usage_index.rs:1047、notebook/sync/daemon.rs:402；lib.rs:1181 的 RunEvent::Exit 只 block_on LocalRouterManager.shutdown() 与 DshWebUiManager.shutdown_all()（原记 lib.rs:1189，已漂 8 行）",
+        "requirement": "持有线程的 Task 必须接 core 的可取消 token 并 join；shutdown 两次安全",
+        "task_ids": "P3-04, P7-06",
+        "owner": "core:sessions (event_watcher + usage_index) + core:notebook (sync daemon)",
         "test": "tests/runtime_lifecycle.rs：shutdown 两次安全；启动两次不重复 watcher",
-        "status": "open"
+        "status": "open",
+        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。"
       },
       {
         "id": "G04",
@@ -47,13 +48,14 @@
       },
       {
         "id": "G05",
-        "finding": "React 持有后端不知道的权威状态：pendingTaskStartsRef（延迟启动闭包）、manuallyCompletedDshTasksRef（抑制后端状态事件）、remoteTaskMutationQueuesRef（串行队列）、taskId.ts 铸 ID、projectMutations 合成 project id 与 orderIndex",
-        "evidence": "App.tsx:202-205；taskPersistence/projectMutations:83,116",
-        "requirement": "这些必须变成 host 侧状态，否则无头入口语义不完整",
-        "task_ids": "P2-02~P2-05",
-        "owner": "core:storage+tasks+projects",
+        "finding": "React 仍持有后端不知道的权威状态，2026-09-28 逐条核对后剩三处：`pendingTaskStartsRef`（App.tsx:201，延迟启动闭包，:1086 消费）→ P3-07 的无头入口必须能复现；`manuallyCompletedDshTasksRef`（App.tsx:204，抑制后端状态事件，:376 作为 isManuallyCompletedDsh 注入）→ P3-05；`remoteTaskMutationQueuesRef`（App.tsx:202 的串行 Promise 队列）→ P8-03。原列五项中的两项**不是缺陷**：`taskId.ts` 铸 ID 正是 ADR-013 定的「调用方给 uuidv7」；`projectMutations` 合成 project id 与 orderIndex 的权威已在 P2-03 的 core reorder/group 里。",
+        "evidence": "App.tsx:201/202/204/376/1086（当天 grep 计数 14 处引用）；taskId.ts:5 uuidv7、:10 兜底串；projectMutations.ts:87/93/121/127 orderIndex 仍在客户端合成",
+        "requirement": "这三处必须变成 host 侧状态或有 host 侧等价判决，否则无头入口语义不完整",
+        "task_ids": "P3-07, P3-05, P8-03",
+        "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
         "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
-        "status": "open"
+        "status": "open",
+        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。"
       },
       {
         "id": "G06",

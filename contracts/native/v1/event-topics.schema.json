@@ -9,7 +9,7 @@
   "derivation": {
     "exceptions": "only rows carrying `source` may break the rule, and `source` must name a document line.",
     "legacyDirection": "what the frozen emitters/listeners prove about the OLD channel (`unproven` = neither side is Rust); plannedDirection is what v1 will do, and only mapped rows may state it.",
-    "ownerOfPending": "P3-04 wires the bridge; every pending row must become mapped or not-forwarded before P3-04 exits.",
+    "ownerOfPending": "每行 pending 的 Task 就是它的接线责任人：发射点在哪，桥就谁接（2026-09-28 T1=A 按 command-map.json 的 events[].emitters[] 实际发射点重排，见 docs/native/extraction/event-topics-pending.md）。pending: P3-04 只剩 sessions/usage 两条，P3-04 不再是全表的收口人。",
     "rule": "topic = <first segment of the legacy channel>.<remaining segments joined with _>; a one-segment channel lands under events."
   },
   "legacyChannels": 38,
@@ -29,9 +29,9 @@
         "aeroric:app-settings-changed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-03",
+      "plannedDirection": "pending: P8-03",
+      "status": "pending: P8-03",
       "topic": "aeroric.app_settings_changed"
     },
     {
@@ -43,9 +43,9 @@
         "agent-operation-changed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-02",
+      "plannedDirection": "pending: P8-02",
+      "status": "pending: P8-02",
       "topic": "agent.operation_changed"
     },
     {
@@ -58,9 +58,9 @@
       ],
       "legacyDirection": "core-to-client",
       "legacyOrphan": "emitted-without-listener",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-02",
+      "plannedDirection": "pending: P8-02",
+      "status": "pending: P8-02",
       "topic": "agent.tool_install_progress"
     },
     {
@@ -73,9 +73,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-06",
+      "plannedDirection": "pending: P3-06",
+      "status": "pending: P3-06",
       "topic": "app.exit_requested"
     },
     {
@@ -88,9 +88,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-06",
+      "plannedDirection": "pending: P3-06",
+      "status": "pending: P3-06",
       "topic": "app.restart_requested"
     },
     {
@@ -102,9 +102,9 @@
         "dbx-production-confirm-requested"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P7-04",
+      "plannedDirection": "pending: P7-04",
+      "status": "pending: P7-04",
       "topic": "dbx.production_confirm_requested"
     },
     {
@@ -116,9 +116,9 @@
         "dbx-transfer-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P7-04",
+      "plannedDirection": "pending: P7-04",
+      "status": "pending: P7-04",
       "topic": "dbx.transfer_progress"
     },
     {
@@ -130,9 +130,9 @@
         "dsh-approval-requested"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.approval_requested"
     },
     {
@@ -144,9 +144,9 @@
         "dsh-approval-resolved"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.approval_resolved"
     },
     {
@@ -159,9 +159,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_agent_error"
     },
     {
@@ -174,9 +174,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_archived_sessions_changed"
     },
     {
@@ -189,9 +189,9 @@
       ],
       "legacyDirection": "core-to-client",
       "legacyOrphan": "emitted-without-listener",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_remote_event"
     },
     {
@@ -204,9 +204,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_session_added"
     },
     {
@@ -219,9 +219,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_session_removed"
     },
     {
@@ -234,9 +234,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_session_status"
     },
     {
@@ -249,9 +249,9 @@
       ],
       "legacyDirection": "core-to-client",
       "legacyOrphan": "emitted-without-listener",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_stream_error"
     },
     {
@@ -264,9 +264,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_workspace_changed"
     },
     {
@@ -279,9 +279,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_workspace_order_changed"
     },
     {
@@ -294,9 +294,9 @@
       ],
       "legacyDirection": "unproven",
       "legacyOrphan": "listened-without-emitter",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.host_workspace_removed"
     },
     {
@@ -308,9 +308,9 @@
         "dsh-question-requested"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.question_requested"
     },
     {
@@ -322,9 +322,9 @@
         "dsh-question-resolved"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.question_resolved"
     },
     {
@@ -336,9 +336,9 @@
         "dsh-session-event"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.session_event"
     },
     {
@@ -350,9 +350,9 @@
         "dsh-session-jobs"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.session_jobs"
     },
     {
@@ -364,9 +364,9 @@
         "dsh-session-projection"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.session_projection"
     },
     {
@@ -378,9 +378,9 @@
         "dsh-session-queue"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.session_queue"
     },
     {
@@ -392,9 +392,9 @@
         "dsh-session-subscribed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P3-05",
+      "plannedDirection": "pending: P3-05",
+      "status": "pending: P3-05",
       "topic": "dsh.session_subscribed"
     },
     {
@@ -406,9 +406,9 @@
         "lsp://diagnostics"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P6-03",
+      "plannedDirection": "pending: P6-03",
+      "status": "pending: P6-03",
       "topic": "lsp.diagnostics"
     },
     {
@@ -420,9 +420,9 @@
         "notebook-rag-index-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P7-06",
+      "plannedDirection": "pending: P7-06",
+      "status": "pending: P7-06",
       "topic": "notebook.rag_index_progress"
     },
     {
@@ -434,9 +434,9 @@
         "notebook-sync-updated"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P7-06",
+      "plannedDirection": "pending: P7-06",
+      "status": "pending: P7-06",
       "topic": "notebook.sync_updated"
     },
     {
@@ -448,9 +448,9 @@
         "project-pinned-changed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-03",
+      "plannedDirection": "pending: P8-03",
+      "status": "pending: P8-03",
       "topic": "project.pinned_changed"
     },
     {
@@ -462,9 +462,9 @@
         "remote-device-paired"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-03",
+      "plannedDirection": "pending: P8-03",
+      "status": "pending: P8-03",
       "topic": "remote.device_paired"
     },
     {
@@ -476,9 +476,9 @@
         "remote-task-request"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-03",
+      "plannedDirection": "pending: P8-03",
+      "status": "pending: P8-03",
       "topic": "remote.task_request"
     },
     {
@@ -490,9 +490,9 @@
         "remote-terminal-resized"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-03",
+      "plannedDirection": "pending: P8-03",
+      "status": "pending: P8-03",
       "topic": "remote.terminal_resized"
     },
     {
@@ -576,9 +576,9 @@
         "weekly-report-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-04",
+      "plannedDirection": "pending: P8-04",
+      "status": "pending: P8-04",
       "topic": "weekly.report_progress"
     }
   ],

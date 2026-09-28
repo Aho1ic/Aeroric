@@ -36,3 +36,27 @@
 - `events.schema.json` 的角色收窄为「旧通道清点」（emitters/listeners/orphan/`disposition`），v1 的对外 topic 由新工件承担；两者都要过覆盖检查。
 - 归属：P3-04 之前由 P2-01 起持续补全；`pending` 条目在进入 P3-04 时必须清零或转为 `not-forwarded` + 原因。
 - 与 ADR-006 同一原则：**映射表内的改动不是协议变更，发布/删除 topic 才是**。
+
+## 修正案（2026-09-28，T1 由用户拍板 A：按发射点改派）
+
+上面「后果」一节最后一条把 36 个 `pending` 全押给 P3-04（"进入 P3-04 时必须清零或转为 not-forwarded"）。
+这条**前提被实测推翻**：按 `command-map.json` 的 `events[].emitters[]` 实际发射点统计，真属 sessions/usage 面的
+只有 2 条（`task.session` @ `core_adapter.rs:538`、`usage.statistics_updated` @ `usage_index.rs:1047`），
+其余 34 条的发射点分布在 `dsh_webui`(11) / `dsh-host-*` 动态发射(8) / `remote`(5) / `database`(2) /
+`notebook`(2) / `report`(1) / `lsp`(1) / `agent_ops`+`agent_tools`(2) / `app-*` 动态(2)。逐条证据与可重跑探针见
+`docs/native/extraction/event-topics-pending.md`。
+
+改派后的形状：**每行 `pending:` 的 Task 就是它的接线责任人——发射点在哪，桥就谁接**。
+`event-topics.json` 的 `derivation.ownerOfPending` 已从"P3-04 wires the bridge"改成这条规则，
+`status`/`plannedDirection`/`payload` 三列同批改写，`contracts/native/v1/event-topics.schema.json` 随之重生成
+（`--write` 报 `1 changed`，`--check` 逐字节复绿；三方断言的计数 `topics 39 / mapped 3 / pending 36 /
+legacyDirectionUnproven 11` 全部不变，所以 `protocol` 门禁 6 case／98 用例仍绿——**改派不是重新计数**）。
+
+不变的部分，逐条强调：topic 词表、派生规则、`mapped` 行必须带文档行号 + `verbatim|reshaped:` 的判定、
+以及"改映射表不是协议变更、发布/删除 topic 才是"（ADR-006 同一原则）**一律未动**。校验器仍禁止 `pending`
+行提前装作已决，所以改派**不会**把未决伪装成闭合；它只把"谁欠这笔"写对。
+
+一条连带后果：`G01` 的 `task_ids` 原写 `P2-01, P3-05`，而其 `agent-tool-install-progress` 一行的发射点在
+`agent_tools.rs:606`（属 P8-02 的 Input 面 `agent_tools/`），事件级 note 又点名 P3-02 处置——两份工件各指一个
+Task。本次按新规则把 `agent.operation_changed` / `agent.tool_install_progress` 两条改派 **P8-02**，
+`G01` 的"要么有订阅者要么删除"仍需在 P8-02 出口逐条交代；该矛盾已在 `MIGRATION_PLAN.md` 补记一百十二 记账。

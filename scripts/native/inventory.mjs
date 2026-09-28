@@ -402,6 +402,8 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
   // of the mirror are checked: the plan table against the JSON carrier, the carrier against the
   // committed columns.
   let taskStates = null;
+  let taskStatuses = null;
+  let taskUniverseIds = null;
   try {
     const bundle = carrierCrossCheck({
       repoRoot,
@@ -411,8 +413,36 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
     });
     problems.push(...bundle.problems);
     taskStates = { tasks: bundle.stats.tasks, accepted: bundle.stats.accepted, rows: bundle.stats.rows };
+    taskStatuses = bundle.carrier.statuses;
+    taskUniverseIds = new Set(bundle.table.universe.map((u) => u.task));
   } catch (error) {
     problems.push(`task-status carrier unreadable: ${error.message}`);
+  }
+
+  // ---- gap ledger: an `open` gap may not be owned only by Tasks that already closed (T1 round, 2026-09-28) ----
+  // Same failure class as F3: the ledger recorded an owner, the owner's Task was accepted, and nothing
+  // re-read the ledger afterwards, so the risk simply stopped being anyone's.
+  if (taskStatuses && taskUniverseIds) {
+    for (const gap of matrix.gaps ?? []) {
+      const raw = String(gap.task_ids ?? "").trim();
+      const ids = raw.match(/P\d+-\d+/g) ?? [];
+      if (!raw) {
+        problems.push(`${gap.id}: gap with no task_ids — §1.2 forbids an entry without an owner`);
+        continue;
+      }
+      if (raw.includes("~")) {
+        problems.push(`${gap.id}: task_ids "${raw}" is a range; a range cannot answer "who still owes this" — name the open Tasks`);
+      }
+      for (const id of ids) {
+        if (!taskUniverseIds.has(id)) problems.push(`${gap.id}: task_ids names ${id}, which is not a Task heading in MIGRATION_PLAN.md`);
+      }
+      if (gap.status === "open" && ids.length) {
+        const pending = ids.filter((id) => taskStatuses.get(id) !== "accepted");
+        if (!pending.length && !gap.accepted_by) {
+          problems.push(`${gap.id}: status open but every named Task (${ids.join(", ")}) is accepted — 改派给真正欠它的 Task，或写明 accepted_by 谁接受这笔风险`);
+        }
+      }
+    }
   }
 
   return {
