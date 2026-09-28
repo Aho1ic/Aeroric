@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "001bca5f52b9fa144d1d5d2a151902cb38a8a33de178f3060819cfe1d2f180de",
+  "sourceSha256": "e3b52e11e5c26ed046e5474c7305ad528348a730a21ed72ac1b2a4ce0349b176",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -16,7 +16,15 @@
         "positive_test": "tests/projects.rs 同输入同结果；未跑窗口也能列出保存的项目",
         "negative_test": "重复打开同一 path 不得新建；中文/空格路径、大小写、丢失远程连接的 orderIndex 稳定",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "accepted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "accepted",
+          "N": "unstarted"
+        },
+        "reviews": [
+          "reviews/projects.md"
+        ]
       },
       {
         "id": "F02",
@@ -29,7 +37,15 @@
         "positive_test": "tests/task_lifecycle.rs 完整转换表；start/resume/cancel 无 GUI 可执行",
         "negative_test": "同 ID 重试只 spawn 一次；持久化失败不得启动进程",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "accepted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "accepted",
+          "N": "unstarted"
+        },
+        "reviews": [
+          "reviews/tasks.md"
+        ]
       },
       {
         "id": "F03",
@@ -42,7 +58,15 @@
         "positive_test": "tests/agent_launch.rs 4 族×3 权限档×prompt 空/非空×resume/new",
         "negative_test": "OMP 收到 ultra 归一到 max 且不外发；存在 PI_PROFILE 时仍指向 managed home",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "accepted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "accepted",
+          "N": "unstarted"
+        },
+        "reviews": [
+          "reviews/agents.md"
+        ]
       },
       {
         "id": "F04",
@@ -55,7 +79,15 @@
         "positive_test": "tests/{pty_bytes,terminal_replay,pty_exit}.rs 端到端未截断区间 bytes hash 相等",
         "negative_test": "跨帧中文/emoji/非法 UTF-8/NUL；20 次 resize 末值正确；隐藏终端无写权限",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "in_progress",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "in_progress",
+          "N": "unstarted"
+        },
+        "reviews": [
+          "reviews/terminal-core.md"
+        ]
       },
       {
         "id": "F05",
@@ -68,7 +100,13 @@
         "positive_test": "tests/{session_discovery,session_resume,hook_reader}.rs",
         "negative_test": "OMP 等待超旧 DSH deadline 仍可绑定；同一文件不得给两个 task",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F06",
@@ -81,7 +119,13 @@
         "positive_test": "tests/{dsh_host,dsh_approvals,dsh_reconnect}.rs + fake DSH server",
         "negative_test": "无窗口时审批保持等待不得自动同意；网络重放不得二次批准",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F07",
@@ -94,7 +138,13 @@
         "positive_test": "tests/{files,search_replace,file_history}.rs",
         "negative_test": "symlink escape、../、写时外部修改拒绝覆盖；替换预览后版本不符不得提交",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F08",
@@ -107,7 +157,13 @@
         "positive_test": "tests/{lsp_protocol,dap_protocol,run_config}.rs + fake LSP/DAP",
         "negative_test": "中文/emoji 位置换算；过时 diagnostics 丢弃；断开 debug 不误杀其他任务",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F09",
@@ -120,7 +176,13 @@
         "positive_test": "tests/git_service.rs 临时 repo + 本地 bare remote",
         "negative_test": "参数以 - 开头/换行/空格文件名不得成为选项注入；取消 commit 后 index 不变",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F10",
@@ -133,7 +195,13 @@
         "positive_test": "tests/worktree_lifecycle.rs create→task→diff→merge",
         "negative_test": "worktreeDiscarded 后禁用 resume/merge/discard；不得重建同名目录覆盖用户文件",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F11",
@@ -146,7 +214,13 @@
         "positive_test": "tests/{ssh_host_keys,sftp_transfer,remote_workspace}.rs",
         "negative_test": "hostkey changed 必须失败等待确认；断线后可能已执行的命令先查询不得重放 rm/mv",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F12",
@@ -159,7 +233,13 @@
         "positive_test": "tests/platform_capabilities.rs",
         "negative_test": "macOS capability wsl=false，UI 点不到 wsl.exe；旧 JSON 不丢 distribution/linuxPath",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "not-declared",
+        "side_states": {
+          "C": "unstarted",
+          "K": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F13",
@@ -172,7 +252,13 @@
         "positive_test": "tests/infrastructure.rs fake CLI 全覆盖",
         "negative_test": "无 daemon 显示不可用不得弹 sudo；端口释放前确认 PID 启动身份",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F14",
@@ -185,7 +271,13 @@
         "positive_test": "tests/{database_query,database_grid,database_confirmation}.rs 临时 SQLite 真实读写",
         "negative_test": "两窗口确认不得串 SQL；一次批准只绑定单个 operationId+SQL hash",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F15",
@@ -198,7 +290,13 @@
         "positive_test": "tests/notebook_contract.rs + 搬移后的既有 import/archive 测试",
         "negative_test": "ZIP ../、symlink、超大解压不得写出测试 vault；旧笔记内容 hash 不被格式化改变",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F16",
@@ -211,7 +309,13 @@
         "positive_test": "tests/{notebook_sync,rag_pipeline,storage_backends}.rs",
         "negative_test": "重复 index 不重复计费；凭据不得出现在事件快照；Keychain 错误不得降级明文",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F17",
@@ -224,7 +328,14 @@
         "positive_test": "tests/extensions.rs + tests/settings_services.rs",
         "negative_test": "扫描文件不等于执行扩展；安装失败不得留半配置；MCP 校验失败回滚",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted",
+          "A": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F18",
@@ -237,7 +348,14 @@
         "positive_test": "tests/remote_headless.rs 只跑 serve 时 fake 客户端可 list/create/cancel",
         "negative_test": "v2/v3 与 relay v1 版本边界不得互串；失效设备不得继续输入",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted",
+          "K": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F19",
@@ -250,7 +368,13 @@
         "positive_test": "tests/maintenance.rs fake clock 验时区/幂等/重试",
         "negative_test": "ad-hoc 重签后不得虚假显示永久授权；不得后台静默 tccutil reset",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "unstarted",
+        "side_states": {
+          "C": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F20",
@@ -263,7 +387,13 @@
         "positive_test": "tests/adapter_contract.rs",
         "negative_test": "缺 capability 时控件禁用且 server 同样拒绝；不得抓 TUI 文本伪装 adapter",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "A": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F21",
@@ -276,7 +406,13 @@
         "positive_test": "tests/agent_work_graph.rs",
         "negative_test": "两 session 同为 T1 不得串状态；out-of-order 不得复活终态",
         "status": "planned-new-capability-no-existing-command",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "A": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F22",
@@ -289,7 +425,13 @@
         "positive_test": "tests/workflow_safety.rs",
         "negative_test": "副作用步骤不自动重试；main-only policy 拦截 branch/push",
         "status": "planned-new-capability-no-existing-command",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "A": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F23",
@@ -302,7 +444,13 @@
         "positive_test": "tests/{acp_contract,sandbox_fail_closed,oauth_owner,media_limits}.rs",
         "negative_test": "不支持音频时拒绝而非丢附件；无有效 sandbox backend 不得运行工具",
         "status": "planned-new-capability-no-existing-command",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "A": "unstarted",
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F24",
@@ -315,7 +463,12 @@
         "positive_test": "ModeSwitchTests.swift + src/test/interaction-mode.test.tsx + tests/settings_mode.rs",
         "negative_test": "100 次切换后 spawnCount=1、generation/sessionId 不变、原始输出顺序不变",
         "status": "planned-new-capability-no-existing-command",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F25",
@@ -328,7 +481,12 @@
         "positive_test": "ThemePolicyTests.swift + AccessibilityTests/AppearanceTests/KeyboardTests",
         "negative_test": "Reduce Transparency 后背景不透明且可读；destructive 操作可键盘取消",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "not-declared",
+        "native_state": "unstarted",
+        "side_states": {
+          "N": "unstarted"
+        },
+        "reviews": []
       },
       {
         "id": "F26",
@@ -341,7 +499,12 @@
         "positive_test": "tests/cli_headless.rs + scripts/native/smoke-headless.mjs",
         "negative_test": "cargo tree -p aeroric-cli 不含 Tauri；attach 异常路径必须恢复 termios",
         "status": "planned",
-        "final_state": "unstarted"
+        "core_state": "unstarted",
+        "native_state": "not-declared",
+        "side_states": {
+          "C": "unstarted"
+        },
+        "reviews": []
       }
     ]
   }

@@ -130,3 +130,17 @@
 - **§8 第 3 条了结**：`storage-core-rust` minCases/floors 81→**356**（包口径=机器地板，workspace 406=叙事口径不做地板；此后新增 core 用例必须同批抬）。
 - **复跑对照**：typecheck 绿；全量 `pnpm test` 376/5483 绿（与切片三基线同数）。
 - **剩余（用户在场）**：grill-me [terminal-core] 收尾拷问（三条待裁决+两条新挂账，见补记一百）、`~/.aeroric` 真实终端会话手测；完成后 P3-03 才标 accepted。
+
+## 15. 收尾轮·grill 提问轮与通用验收审计（2026-09-27，补记一百零二）
+
+评审工件：`docs/native/reviews/terminal-core.md`（provenance／五轴自查／四条新事实／frontier 六问／预登记复验清单）。本轮零代码改动。
+
+**新查明的四条事实（出处见评审工件 §2）**：vendor `ExitStatus` 的私有 `signal`（`lib.rs:164-226`，公开面只有 `success()`/`exit_code()`，vendor 是仓内跟踪的 path 依赖 `src-tauri/Cargo.toml:142`）；失败文案端到端零解析（唯一内容敏感点 `agentRuntimeRecovery.ts:6-21` 的 `includes("claude")`，改文案会红 4 处断言）；core 回放面零生产读取者（宿主只 `publish` `pty.rs:568` + `mark_finished` `:623`）；真实语料只读旁证。
+
+**真实语料旁证**（`/tmp/realhistory/probe.mjs`，判定口径逐字抄自 `terminal/history.rs`，只读）：156 文件 / **139.12 MiB**；超 12 MiB 高水位 **0** 个（`needs_compaction(size,0)` 判"巡检无需压实"）；slack 带（>8 且 ≤12 MiB）**14** 个，最大 11.54 MiB；**8 MiB 读切点落在字符中间的真实文件 1 个（skip=2）**；掐头后仍需 lossy **0**；全文含非法 UTF-8 **0**；`utf8_tail_bytes(最大文件, 8MiB)` 从 3 707 933 起保留正好 8.00 MiB 且合法。对照 `storage.rs:469` 当年记下的"900 MB / 198 个文件、其中 11 个超标"——同一目录今天是 139 MB / 156 个、超标 0 个：**压实与删除在真实使用里确实生效**（这是历史对照，非本模块的因果证明）。口径限制：旁证在 node 里重放那两个纯函数，不是进程内调用 Rust 实现；覆盖不了 GUI 交互面。
+
+**审计发现一（§3.1 #8，已作为具名移交项写进 P5-01）**：本地协议 v1 的在册终端方法只有 `send_input`/`resize_pty`/`read_task_terminal_history`/`delete_task_terminal_histories`（`contracts/native/v1/methods.schema.json`），core 的 `read_from`/`bounds`/`plan_replay`/`acquire_control`/`release_control`/`decide_resize` **没有任何协议入口**。P5-01 的"按 cursor 补流／按 host replay 重建"与 P3-07 的 `task input` 租约入口因此需要一个带 `ResumePoint` 语义的新方法；ADR-006 冻结过参数表 ⇒ 先立 ADR 再动 schema，不能在下游顺手加。
+
+**审计发现二（对本轮 Q3 推荐的自我更正）**：`check.mjs` 只有 `absent`/`forbid`/`test` 三种 kind，`absent` 断"命中为空"、`forbid` 的 `mustContain` 是子串（`"1"` 会放过 `"12"`）⇒ **表达不了"恰好 1 次"**。计数守卫的正确先例是 `adapter-invariants`：gate 脚本（可复用其 `codeOnly()` `:98` 排除注释与字符串、`enclosingFunction()` `:74` 定位所属函数）+ `.test.mjs` 负例 + `kind:"test"`/`parse:"node-test"`/`minCases` 的 case。答复 Q3 时按 A′ 执行；零运行时代码、零 pin 影响。
+
+**门禁实测（本轮真实输出）**：`pnpm native:check terminal-core` **11 case／92** exit 0；`contracts --check` 12 份逐字节；`inventory --check` consistent（660/660/660）；`doctor` 18/18；`git diff --check` 干净；新文件 `git diff --no-index --check` 输出 0 字节。

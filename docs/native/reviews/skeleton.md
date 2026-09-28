@@ -171,3 +171,69 @@ Rounds 11–13 added, beyond the cases listed above: `extraction-docs-current` �
 and 5 category-derivation negatives inside `inventory-unit`. Round 13 also made this review's own
 tooling claims honest in `adr/001-native-boundary.md`: its "`grill-me` unavailable → blocks Phase 1"
 and "AGENTS.md native rules deferred" rows were stale and are corrected there.
+
+## Late-phase audit of the gate runner itself (2026-09-27, MIGRATION_PLAN 补记一百零四)
+
+Two defects in the tooling this module owns (`scripts/native/check.mjs`, §3.2's unified script
+interface). Neither affects today's per-module verdicts; both are on the path to the final gate,
+which is why they are recorded here instead of being fixed by a drive-by edit (§3.1 #1: a task
+touches only its listed files; new dependencies go to the owning task).
+
+**F1 — `native:check all` cannot run the matrix, ever.** Proved, not inferred:
+
+- Today: `node scripts/native/check.mjs all` → `NOT READY: 38/43 planned modules are not
+  gate-ready (…)`, **exit 3**. That branch is correct and intended (P10-05 owns the first full gate).
+- The readiness check, though, is a *pre-flight only*: control then falls through to
+  `config.modules[module]` with `module === "all"`, and there is no `all` key in `modules`
+  (registered set is 9 modules). Temp-copy probe (`/tmp/allprobe`, a copy of `scripts/native/`
+  with `plannedModules` emptied so the pre-flight passes, `modules` untouched):
+  `native:check all — unknown module. Registered: agents, projects, protocol, runtime, skeleton,
+  storage, tasks, tauri-adapter, terminal-core` / **EXIT=2**. The repo's own rule
+  (`Refusing to treat an unmapped module as success.`) is what fires.
+- Consequence: when the 43 planned modules are finally all gate-ready, the command §3.2 defines
+  as "矩阵中全部必选模块、旧 Tauri/TS 回归、契约、平台兼容、签名检查" still does not execute
+  anything. And the tempting "fix" — registering a module literally named `all` in `checks.json`
+  with a hand-copied case list — is exactly the two things §3.2 and P10-05 forbid ("不能把 `all`
+  偷改为'当前碰巧存在的测试'" / "不能靠删除矩阵行使总数达标").
+- Required shape of the fix (owner: P10-05, before its acceptance can be attempted): when
+  `module === "all"`, derive the run set from `Object.keys(config.modules)` after the readiness
+  pre-flight, execute every registered module, aggregate failures, and fail if the derived set is
+  empty or drops a registered/planned module. Negative tests belong in `gate-runner-unit`
+  (floor 9) using the existing `tempTree()` discipline: all-ready config runs N>0 modules and
+  exits 0; a config where the derived set is empty must fail; a red child module must fail `all`.
+
+**F2 — two rows of §3.2's `all` have no registered case at all.** Enumerated the command surface
+of all 68 registered cases (`node -e` over `checks.json`): `pnpm vitest run <named file>` appears
+under protocol/projects/tasks/tauri-adapter, and `pnpm typecheck` under tauri-adapter, so
+per-feature TS coverage exists — but **no case runs the full `pnpm test`**, and **no case runs
+`cargo check --target …`**. So:
+
+- The "旧 Tauri/TS 回归" half of `all` is only covered feature-by-feature: a TS test file that no
+  module names is invisible to every gate. The 376 files / 5483 tests number quoted in most
+  补记 entries is a *manual habit*, not a machine gate — honest status, but it must not be read as
+  coverage.
+- The "平台兼容" half has zero gate coverage. P2-05 recorded that the Linux/Windows `cfg` branches
+  were only ever verified by hand (`cargo check --target`), and nothing kept that from rotting
+  since. This belongs to P7-02 (WSL 与跨平台运行时保留) as a registered case, not to memory.
+
+Both rows are cross-checked against the plan: see `MIGRATION_PLAN.md` P10-05 移交项 and P7-02.
+
+**F3 — §1.2 / §6.1 要求的"最终状态"字段结构性未满足，且正在静默腐烂（2026-09-27）。** 全部实测（`node -e` 直接读 `docs/native/feature-matrix.json`）：
+
+- `status` 分布：`planned` ×22 + `planned-new-capability-no-existing-command` ×4；**`final_state` = `unstarted` ×26，一条未动过**。
+- 这与已发生的事实矛盾：F01（P2-03 **accepted**）、F02（P2-04 **accepted**）、F03（P3-02 **accepted**）、F04（P3-03 实现面收口、门禁 11/92）——四行的核心半边都已交付，矩阵仍说 `unstarted`。
+- **`review` 根本没有这个字段**：26 行的键集是 `id, capability, existing_or_reference_evidence, target, task_ids, owner, commands_mapped, positive_test, negative_test, status, final_state`，而 §6.1 那条勾选要求"F01–F26 的所有子项有 owner、文件、测试、**review**、最终状态"。`docs/native/reviews/` 下已有 **8** 份模块评审（skeleton / protocol / storage / projects / tasks / tauri-adapter / runtime / agents），数据在，**矩阵与它零关联**。
+- **门禁看不见它**：`inventory.mjs` 对 features 只做两件事——`:111` 校验命令引用的 `F` 号存在于矩阵、`:402` 数一行 `features.length` 打进日志（`features=26`）。**没有任何一条检查读过 `status` / `final_state`**，所以它腐烂至今、`inventory --check` 一路 consistent。
+- **根因是结构性的，不是"忘了填"**：逐 Task 的权威状态（`accepted` / `in_progress`）**没有任何机器可读载体**——它只活在本文 §进度总表 的 prose 表格里；`checks.json` 只有 `registeredBy: P2-03`（模块→任务，不含状态），`.trellis` 只到 Phase 粒度（`phase-1/2` 的 status 今天才由补记一百零三补上，见父任务 D17）。**没人能从现有工件里派生出 `final_state`**，所以手填的列一次性冻结了。
+
+**要求的修法（照本仓 D14/D16 的先例：让生成器取代手维护列，而不是再手改一遍）**：
+
+1. 建一个逐 Task 状态的**规范源**（最小形状：`docs/native/task-status.json`，每行 `{task, status, accepted_on, review}`），由 `inventory.mjs` 与本文 §进度总表 **交叉校验**——表格改了 JSON 没改就 FAIL（照 `extraction.mjs` 的 `--check` 双向回读口径，并带字节级 noop 断言）。
+2. `feature-matrix.json` 的行改为**派生字段**：`final_state` 拆成 `core_state` / `native_state`（按 `target` 的 C/N 两半边各由对应 Task 状态推出），新增 `reviews: [...]` 关联实际存在的评审文件；`inventory --check` 拒绝"行里写了未存在的 review 路径"与"Task accepted 而 core_state 仍 unstarted"两类漂移。
+3. 门禁：`skeleton` 模块新增一条 case（或扩 `inventory-unit`，现地板 40）含 ≥4 条负例——漂移必红、未存在路径必红、空派生集必红、"读不到规范源就报错"不许退化成"当作没变化"（D12 的同一条纪律）。
+
+**处置**：**不顺手改**（§3.1 #1；它需要新工件 + schema 变更 + 门禁 case，超出 P3-03 的文件面）。已作为 **Q7** 提交用户排期，并已在本文 §6.1 那条勾选旁写明"今天不可当进度读"。在修法落地前，任何"矩阵显示 unstarted"或"矩阵显示 X 条 planned"都**不得**被引用成迁移进度证据——进度证据只有 §进度总表 与各模块 review。
+
+**F3 已闭合（2026-09-28，补记一百零九，用户 Q7 答复 A）。** 上面三条修法逐条落地：① 规范源 `docs/native/task-status.json`（51 条 Task）与 `inventory.mjs` 双向交叉校验，`--check` 与 `--freeze` 都读它，`--freeze` 在镜像输入互相矛盾时**拒绝写出**；② `final_state` 从 26 行删除，代之以 `core_state`/`native_state`/`side_states`/`reviews` 四列（`--freeze` 派生、字节级 noop 断言覆盖），哨兵词表分 `not-declared`（该行 target 不含这一半）与 `no-task-declared`（含而无 Task，判为输入不一致）；③ `skeleton` 新增 case `task-status-unit`（`minCases`=`runner.floors`=18，12 条反例，首条即 D12"读不到规范源必须报错"）。当天实测：`skeleton` **21 case／136** exit 0、`--check` consistent（`taskStates=51/12accepted`）、`--freeze-check` exit 0、`digest --check` 重切后 exit 0、`terminal-core` 13/107 不动。
+
+两条留给下游的事实：**(a) 派生表本身会错**——上一会话写的 `meta.side_phases` 不含 Phase 6/9 与 K/A 的第二 Phase，`--check` 当场报 10 条 `side 'C' has no Task among`；现按 26 行全枚举改死并把判据写进 `meta.side_phases_evidence`，findings 非空即拒绝冻结，这类错从此是红的。**(b) 我写的第一版负例是空洞的**——三条反例只直接调 `carrierCrossCheck`，没走 `--check`，于是"摘掉 problems.push" 的变异体首轮 18 条全绿；改成经 `check()` 断言各自分支原文后拿到 **3 红**。同批查明：临时树里 `result.ok===false` 单独当断言不成立（缺 `src-tauri` 源文件本就会因 `stale source path` 变红），一律改断具体消息文本。证据与逐条对照在 `docs/native/reviews/terminal-core.md` §4.2。

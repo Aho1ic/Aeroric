@@ -34,11 +34,19 @@ pub enum SessionEvidence {
 
 /// 一次退出的全部事实。`exit_ok`/`exit_code` 的取值口径与 portable-pty 的
 /// `ExitStatus` 一致:成功即 `exit_ok = true` 且 `exit_code = None`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `signal` 是 Q1 裁决(B)带进来的**事实**,不是文案:portable-pty 把信号死亡折成
+/// `code = 1`,今天用户在宿主那句里只看得见那个 1。core 从今往后知道"是被哪个信号
+/// 打死的",而 [`ExitReason::host_sentence`] 仍逐字产出迁移前那句——旧客户端零变化,
+/// 如实渲染留给原生客户端(P4/P5)。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExitFacts {
     pub family: ProtocolFamily,
     pub exit_ok: bool,
     pub exit_code: Option<u32>,
+    /// 平台报告致死信号时的 `strsignal(3)` 原文(macOS 的 SIGTERM ⇒ `"Terminated: 15"`)。
+    /// `None` 意味着"没有信号事实",不等于"确定不是信号致死"。
+    pub signal: Option<String>,
     pub session: SessionEvidence,
     /// 用户取消过这一次运行。
     pub cancelled: bool,
@@ -58,27 +66,60 @@ impl ExitFacts {
 }
 
 /// 非零退出的原因。**枚举不是字符串**:渲染口径目前两侧不同,见模块头。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitReason {
-    /// 有明确退出码。
+    /// 有明确退出码,且没有信号事实。
     Code(u32),
-    /// 非零但没有码(被信号终止等)。
+    /// 非零但没有码(平台既没给出码、也没报告信号)。
     NonZeroWithoutCode,
+    /// 死于信号(Q1 裁决 B:事实进 core,旧文案一字不动)。
+    ///
+    /// `name` 是平台给的原样信号名;`legacy_code` 是 portable-pty 折平后的那个码
+    /// (信号死亡时实测恒为 `Some(1)`)。它按**原样**存,所以 [`Self::host_sentence`]
+    /// 能产出与迁移前逐字相同的句子,而 [`Self::signal_name`] 把丢不掉的事实交给原生渲染。
+    TerminatedBySignal {
+        name: String,
+        legacy_code: Option<u32>,
+    },
 }
 
 impl ExitReason {
     /// 宿主管道今天用的文案(逐字保持,包括首字母大写)。
+    ///
+    /// 三条分支的产出与"信号事实进 core 之前"**完全同字**:折平的码照常报成
+    /// `code N`,没码的照常报成 `non-zero status`。这不是巧合,是由
+    /// `host_wording_is_unchanged_by_the_signal_fact` 那条用例对着旧表逐输入比出来的。
     pub fn host_sentence(&self) -> String {
         match self {
             ExitReason::Code(code) => format!("Process exited with code {code}"),
             ExitReason::NonZeroWithoutCode => "Process exited with non-zero status".to_string(),
+            ExitReason::TerminatedBySignal { legacy_code, .. } => match legacy_code {
+                Some(code) => format!("Process exited with code {code}"),
+                None => "Process exited with non-zero status".to_string(),
+            },
+        }
+    }
+
+    /// 原生客户端的权威文案(Q4 裁决 A):今天与宿主那句同源同字。
+    ///
+    /// 定权威**不等于**当场合并文案——SSH/WSL 的兄弟句具名归 P7,core 任务车道
+    /// (`crate::tasks::settled_by_exit`)那句小写的属 P2-04 领地,两处都不在这里偷偷改。
+    pub fn canonical_sentence(&self) -> String {
+        self.host_sentence()
+    }
+
+    /// 平台报告的信号名,只在真收到过信号事实时有值。渲染成什么话是 P4/P5 的决定。
+    pub fn signal_name(&self) -> Option<&str> {
+        match self {
+            ExitReason::TerminatedBySignal { name, .. } => Some(name),
+            _ => None,
         }
     }
 }
 
 /// 一次退出的结算结果。三个变体就是全部可能——`(Done, 带理由)` 这种自相矛盾的
 /// 形状不该存在,所以调用方不需要为它写兜底分支。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitDecision {
     /// 取消/手动完成:标记已消费,**不发状态**。
     NoStatus,
@@ -108,9 +149,23 @@ pub fn settle_exit(facts: &ExitFacts) -> ExitDecision {
         return ExitDecision::Done;
     }
     let reason = match facts.exit_code {
-        Some(code) if code != 0 => ExitReason::Code(code),
+        Some(code) if code != 0 => match facts.signal.as_deref() {
+            Some(name) => ExitReason::TerminatedBySignal {
+                name: name.to_string(),
+                legacy_code: Some(code),
+            },
+            None => ExitReason::Code(code),
+        },
         // `exit_ok == false` 却没有码(或码是 0 这对矛盾输入):被信号杀,或平台给不出码。
-        _ => ExitReason::NonZeroWithoutCode,
+        // 有信号事实时仍走 TerminatedBySignal,但 `legacy_code: None` 让文案停在
+        // 迁移前那句 `non-zero status`——事实与文案各归各的。
+        _ => match facts.signal.as_deref() {
+            Some(name) => ExitReason::TerminatedBySignal {
+                name: name.to_string(),
+                legacy_code: None,
+            },
+            None => ExitReason::NonZeroWithoutCode,
+        },
     };
     ExitDecision::Failed { reason }
 }
@@ -124,6 +179,7 @@ mod tests {
             family,
             exit_ok: true,
             exit_code: None,
+            signal: None,
             session: SessionEvidence::Absent,
             cancelled: false,
             manually_completed: false,
@@ -135,7 +191,22 @@ mod tests {
             family,
             exit_ok: false,
             exit_code: code,
+            signal: None,
             session,
+            cancelled: false,
+            manually_completed: false,
+        }
+    }
+
+    /// 信号致死的事实面:portable-pty 那边码被折成 1,信号名走 `signal`。
+    /// `name = None` 表示"没有信号事实",用于对照旧形状。
+    fn death(family: ProtocolFamily, name: Option<&str>, legacy_code: Option<u32>) -> ExitFacts {
+        ExitFacts {
+            family,
+            exit_ok: false,
+            exit_code: legacy_code,
+            signal: name.map(str::to_string),
+            session: SessionEvidence::Absent,
             cancelled: false,
             manually_completed: false,
         }
@@ -228,6 +299,7 @@ mod tests {
                     family: *family,
                     exit_ok: false,
                     exit_code: Some(143),
+                    signal: None,
                     session: SessionEvidence::Real,
                     cancelled,
                     manually_completed: completed,
@@ -251,9 +323,12 @@ mod tests {
             SessionEvidence::Absent,
         ));
         assert_eq!(settlement.task_status(), Some(TaskStatus::Failed));
-        assert_eq!(reason_of(settlement), ExitReason::NonZeroWithoutCode);
+        // `ExitReason` 从 Q1=B 起能持有信号名,于是它和 `ExitDecision` 都不再是 `Copy`:
+        // 结论取一次,后续断言都用这个绑定。
+        let reason = reason_of(settlement);
+        assert_eq!(reason, ExitReason::NonZeroWithoutCode);
         assert_eq!(
-            reason_of(settlement).host_sentence(),
+            reason.host_sentence(),
             "Process exited with non-zero status"
         );
     }
@@ -268,6 +343,107 @@ mod tests {
         assert_eq!(
             ExitReason::NonZeroWithoutCode.host_sentence(),
             "Process exited with non-zero status"
+        );
+    }
+
+    /// 逐字照抄"信号事实进 core **之前**"的那张表:`settle_exit` 的旧形状 + 旧
+    /// `host_sentence`。用途只有一个——给下面的等价性用例当对照,不许任何人凭记忆
+    /// 说"文案肯定没变"。
+    fn sentence_before_the_signal_fact(code: Option<u32>) -> String {
+        match code {
+            Some(code) if code != 0 => format!("Process exited with code {code}"),
+            _ => "Process exited with non-zero status".to_string(),
+        }
+    }
+
+    #[test]
+    fn host_wording_is_unchanged_by_the_signal_fact() {
+        // Q1 裁决 B 的机器形态:事实可以进 core,旧客户端那句必须逐字不动。
+        // Dsh + 无会话 + 无标记 ⇒ 一定走 failed 车道,家族差异不干扰本对照。
+        for code in [None, Some(0), Some(1), Some(2), Some(137)] {
+            for name in [None, Some("Terminated: 15"), Some("Killed")] {
+                let settlement = settle_exit(&death(ProtocolFamily::Dsh, name, code));
+                let reason = reason_of(settlement);
+                assert_eq!(
+                    reason.host_sentence(),
+                    sentence_before_the_signal_fact(code),
+                    "code={code:?} signal={name:?}:文案与迁移前不同,违背 Q1=B"
+                );
+                // 事实不许丢:有信号名时必须是带名字的变体,不是折平的 Code。
+                assert_eq!(reason.signal_name(), name);
+                assert_eq!(
+                    matches!(reason, ExitReason::TerminatedBySignal { .. }),
+                    name.is_some(),
+                    "信号事实的归类与 name 不一致"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_sigterm_death_keeps_the_signal_name_and_still_says_code_one() {
+        // 真机口径:portable-pty 把 SIGTERM 致死折成 code 1,所以用户今天看到
+        // "Process exited with code 1"。core 现在知道它是 "Terminated: 15"。
+        let reason = reason_of(settle_exit(&death(
+            ProtocolFamily::Omp,
+            Some("Terminated: 15"),
+            Some(1),
+        )));
+        assert_eq!(
+            reason,
+            ExitReason::TerminatedBySignal {
+                name: "Terminated: 15".to_string(),
+                legacy_code: Some(1),
+            }
+        );
+        assert_eq!(reason.signal_name(), Some("Terminated: 15"));
+        assert_eq!(reason.host_sentence(), "Process exited with code 1");
+    }
+
+    #[test]
+    fn a_signal_death_without_any_code_still_reports_failed_and_names_the_signal() {
+        let reason = reason_of(settle_exit(&death(
+            ProtocolFamily::Claude,
+            Some("Killed"),
+            None,
+        )));
+        assert_eq!(reason.signal_name(), Some("Killed"));
+        assert_eq!(
+            reason.host_sentence(),
+            "Process exited with non-zero status"
+        );
+    }
+
+    #[test]
+    fn no_signal_fact_still_produces_the_plain_code_variant() {
+        // 反例:没有信号事实时不得凭空造出 TerminatedBySignal。
+        assert_eq!(
+            reason_of(settle_exit(&crashed(
+                ProtocolFamily::Dsh,
+                Some(1),
+                SessionEvidence::Absent
+            ))),
+            ExitReason::Code(1)
+        );
+    }
+
+    #[test]
+    fn the_capitalized_sentence_is_the_native_authority() {
+        // Q4 裁决 A:原生客户端认 `Process exited with code N`。今天它与宿主那句同源同字;
+        // SSH/WSL 的兄弟句具名归 P7,core 任务车道那句小写属 P2-04,两处均不在这里改。
+        for reason in [
+            ExitReason::Code(3),
+            ExitReason::NonZeroWithoutCode,
+            ExitReason::TerminatedBySignal {
+                name: "Terminated: 15".to_string(),
+                legacy_code: Some(1),
+            },
+        ] {
+            assert_eq!(reason.canonical_sentence(), reason.host_sentence());
+        }
+        assert_eq!(
+            ExitReason::Code(3).canonical_sentence(),
+            "Process exited with code 3"
         );
     }
 
@@ -299,6 +475,7 @@ mod tests {
                         family: *family,
                         exit_ok,
                         exit_code: if exit_ok { None } else { Some(7) },
+                        signal: None,
                         session,
                         cancelled: false,
                         manually_completed: false,

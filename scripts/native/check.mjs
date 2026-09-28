@@ -88,6 +88,34 @@ if (module === "all") {
     console.error("P10-05 owns the first full gate; 'all' must never shrink to whatever happens to exist now.");
     process.exit(3);
   }
+
+  // §3.2 defines `all` as the complete matrix, so the run set is DERIVED from what is
+  // registered. Before this, the pre-flight fell through to `config.modules["all"]`, which
+  // does not exist, so `all` printed "unknown module" and exited 2 — the command could never
+  // run anything, no matter how complete the matrix became. A module literally named "all"
+  // is refused by gate-config (it would recurse here), so the only honest source is `modules`.
+  const derived = Object.keys(config.modules).filter((name) => name !== "all");
+  if (!derived.length) {
+    console.error("native:check all — no registered module to run; an empty matrix is not a pass.");
+    process.exit(1);
+  }
+
+  const self = fileURLToPath(import.meta.url);
+  const failed = [];
+  for (const name of derived) {
+    const cases = config.modules[name].cases ?? [];
+    const budget = cases.reduce((sum, c) => sum + (c.timeoutMs ?? config.runner.defaultTimeoutMs), 0) + 60_000;
+    process.stdout.write(`\n══ native:check ${name} ══\n`);
+    const child = await run([process.execPath, self, name], budget);
+    process.stdout.write(redact(`${child.stdout}${child.stderr}`).text);
+    if (child.code !== 0) failed.push(`${name} (exit ${child.code})`);
+  }
+  if (failed.length) {
+    console.error(`\nnative:check all: ${failed.length}/${derived.length} module(s) failed: ${failed.join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`\nnative:check all: all ${derived.length} registered module(s) passed`);
+  process.exit(0);
 }
 
 const entry = config.modules[module];

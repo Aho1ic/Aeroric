@@ -153,3 +153,15 @@ env -u PI_PROFILE -u OMP_PROFILE \
 - 它的输出**不写进** `knowledge/`、`contracts/`、parity 表或门禁 case：派生链的每一环都必须能被门禁重算，委派 agent 不在链上。
 - 它的产物若要引用进计划，必须先声明回查方式与命中率（`MIGRATION_PLAN.md` 续跑指令第 2 条就是这么写的）。
 - 不做 git 操作、不提交、不 push；也不碰 `~/.aeroric`（真实数据目录）。
+
+## 8. 工具状态整段重测（2026-09-27，MIGRATION_PLAN 补记一百零四）
+
+§5 的表写于 2026-09-21，其中两项**环境已经变了**，按"§0.3 在环境变化后须整段重写"的同一条规矩在此回填（`MIGRATION_PLAN.md` §0.3 已同步重写）。当天真实命令与 rc 全在 §0.3 表里，此处只记差异与影响：
+
+| 工具 | §5 旧值 | 2026-09-27 实测 | 影响 |
+|---|---|---|---|
+| `python3` | 3.9.6（`/usr/bin/python3`，Xcode shim） | **3.13.2**，`/opt/miniconda3/bin/python3` | 全部 `.trellis/scripts/*.py` 今天跑在 conda python 上；`task.py validate/current/start` 实测成功（父任务 9/4、phase-3 7/4）。**不是**同一解释器了，日后 python 相关故障排查别按 3.9.6 假设 |
+| `node` | v25.9.0 | **v22.23.1**（`~/.local/bin/node` → `~/.hermes/node/bin/node`） | 所有 `scripts/native/*.mjs` 与门禁跑在它上面且当天全绿；major 版本降了，`--test-reporter=tap` 行为已随 `skeleton`/`inventory-unit` 等实测有效 |
+| `xcodegen` | 已安装 2.46.0 | 2.46.0（`/opt/homebrew/bin/xcodegen`） | 无变化；`macos/AeroricNative.xcodeproj` 当下**不在磁盘上**（`.gitignore:71` 视为派生物），`project.yml` 也不存在 ⇒ P4-01 的 `native:generate` 无当日证据 |
+| `grill-me` / `grilling` | §4 记"本会话不可调用（装错目录）"，后由用户批准拷入 `~/.claude/skills`（→ `~/.mirasim/skills`） | **真实可用**：`Skill(skill="grilling")` 本轮已实际调用（P3-03 收尾轮，`docs/native/reviews/terminal-core.md` §0） | §4/§4.4 的 `BLOCKED: grill-me entrypoint unavailable` 处置已成历史，仅对 P1-05 当时成立 |
+| `trellis` | 0.6.15 | 0.6.15，并打印 `⚠️ update available: 0.6.15 → 0.6.16` | 提示存在 ≠ 授权 `trellis update`（原约束沿用） |

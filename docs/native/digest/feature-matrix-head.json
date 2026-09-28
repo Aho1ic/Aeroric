@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-head.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "001bca5f52b9fa144d1d5d2a151902cb38a8a33de178f3060819cfe1d2f180de",
+  "sourceSha256": "e3b52e11e5c26ed046e5474c7305ad528348a730a21ed72ac1b2a4ce0349b176",
   "capBytes": 32768,
   "payload": {
     "meta": {
@@ -61,6 +61,13 @@
         "methods": 641,
         "services": 23,
         "host_local_unnamed": 19
+      },
+      "derived_columns": {
+        "rule": "core_state/native_state/side_states/reviews 由 docs/native/task-status.json 派生（scripts/native/task-status.mjs::deriveFeatureStates），禁止手改；final_state 已删除，它正是 F3 里腐烂的那一列。取值词表：unstarted|blocked|in_progress|accepted（一条边取其所依赖 Task 中最低秩的状态），`not-declared`=该行的 target 里根本没有这一半，`no-task-declared`=行了这一半但派生表里找不到 Task（属输入不一致，--freeze 会拒绝写出）。",
+        "carrier": "docs/native/task-status.json",
+        "plan_table": "MIGRATION_PLAN.md §进度总表",
+        "generated_from_rows": 26,
+        "sides_without_declared_task": 0
       }
     }
   }

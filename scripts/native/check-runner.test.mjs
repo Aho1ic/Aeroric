@@ -214,3 +214,67 @@ test("every registered test case declares a reporter the runner can read", () =>
     }
   }
 });
+
+// ---- F1 (MIGRATION_PLAN 补记一百零六): `all` must run the derived matrix, not fall through.
+// Measured before the fix: with every planned module ready, `native:check all` printed
+// "unknown module" and exited 2, because the pre-flight fell through to config.modules["all"].
+
+function runAllAgainst(modules, plannedModules) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-gate-all-"));
+  try {
+    mkdirSync(path.join(dir, "scripts/native"), { recursive: true });
+    for (const source of ["check.mjs", "gate-config.mjs"]) {
+      cpSync(path.join(repoRoot, "scripts/native", source), path.join(dir, "scripts/native", source));
+    }
+    const config = JSON.parse(JSON.stringify(committed));
+    config.modules = modules;
+    config.plannedModules = plannedModules ?? { $comment: "probe" };
+    writeFileSync(path.join(dir, "scripts/native/checks.json"), JSON.stringify(config, null, 2) + "\n");
+    return spawnSync(process.execPath, [path.join(dir, "scripts/native/check.mjs"), "all"], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const greenModule = { registeredBy: "test", cases: [{ name: "green", kind: "gate", argv: ["node", "-e", "0"] }] };
+const redModule = { registeredBy: "test", cases: [{ name: "red", kind: "gate", argv: ["node", "-e", "process.exit(1)"] }] };
+
+test("'all' runs every registered module once the matrix is complete", () => {
+  const result = runAllAgainst({ alpha: greenModule, beta: greenModule });
+  assert.equal(result.status, 0, `expected a full-matrix pass, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stdout, /native:check alpha/);
+  assert.match(result.stdout, /native:check beta/);
+  assert.match(result.stdout, /all 2 registered module\(s\) passed/);
+});
+
+test("a red child module makes 'all' red and names it", () => {
+  const result = runAllAgainst({ alpha: greenModule, beta: redModule });
+  assert.notEqual(result.status, 0, "a failing module must not pass the full gate");
+  assert.match(result.stderr + result.stdout, /beta \(exit 1\)/);
+  assert.match(result.stderr + result.stdout, /1\/2 module\(s\) failed/);
+});
+
+test("'all' refuses an empty derived matrix instead of passing vacuously", () => {
+  const result = runAllAgainst({});
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no registered module to run/);
+});
+
+test("a hand-registered module named 'all' is refused (§3.2 forbids the shortcut)", () => {
+  assert.match(moduleGateProblem("all", { cases: [goodCase] }), /must not be a hand-maintained module/);
+});
+
+test("'all' still refuses while the committed matrix is incomplete", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-gate-notready-"));
+  try {
+    mkdirSync(path.join(dir, "scripts/native"), { recursive: true });
+    for (const source of ["check.mjs", "gate-config.mjs", "checks.json"]) {
+      cpSync(path.join(repoRoot, "scripts/native", source), path.join(dir, "scripts/native", source));
+    }
+    const result = spawnSync(process.execPath, [path.join(dir, "scripts/native/check.mjs"), "all"], { encoding: "utf8" });
+    assert.equal(result.status, 3, `committed matrix is incomplete, so 'all' must stay NOT READY:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /NOT READY/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -18,6 +18,8 @@ function tempTree(mutateMap) {
   mkdirSync(path.join(dir, "src-tauri/src"), { recursive: true });
   cpSync(path.join(repoRoot, "src-tauri/src/lib.rs"), path.join(dir, "src-tauri/src/lib.rs"));
   cpSync(path.join(repoRoot, "docs/native/feature-matrix.json"), path.join(dir, "docs/native/feature-matrix.json"));
+  cpSync(path.join(repoRoot, "docs/native/task-status.json"), path.join(dir, "docs/native/task-status.json"));
+  cpSync(path.join(repoRoot, "docs/native/reviews"), path.join(dir, "docs/native/reviews"), { recursive: true });
   cpSync(path.join(repoRoot, "scripts/native/checks.json"), path.join(dir, "scripts/native/checks.json"));
   const map = JSON.parse(readFileSync(mapPath, "utf8"));
   mutateMap?.(map);
@@ -235,6 +237,13 @@ test("attribute pairing beats a raw grep count, which overcounts", () => {
 function freezeFixture(overrides = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-freeze-"));
   mkdirSync(path.join(dir, "docs/native"), { recursive: true });
+  // `--freeze` now re-derives the feature matrix from the task-status carrier, and refuses to run
+  // when it cannot read one side of that mirror. The synthetic tree therefore has to carry the real
+  // mirror inputs; only command-map.json is fake here.
+  cpSync(path.join(repoRoot, "docs/native/feature-matrix.json"), path.join(dir, "docs/native/feature-matrix.json"));
+  cpSync(path.join(repoRoot, "docs/native/task-status.json"), path.join(dir, "docs/native/task-status.json"));
+  cpSync(path.join(repoRoot, "docs/native/reviews"), path.join(dir, "docs/native/reviews"), { recursive: true });
+  cpSync(path.join(repoRoot, "MIGRATION_PLAN.md"), path.join(dir, "MIGRATION_PLAN.md"));
   const map = {
     meta: { counts: { events: 1, panels: 1 } },
     events: [{

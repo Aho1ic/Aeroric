@@ -1,0 +1,352 @@
+{
+  "meta": {
+    "generated": "2026-09-28",
+    "task": "P3-03 收尾轮 Q7 的 F3 修法落地（补记一百零九）",
+    "authoritative_source": "本文 §进度总表 与本文件互为镜像：scripts/native/task-status.mjs::crossCheckTaskStatus 逐 Task 比对，任一侧改了另一侧没改就 FAIL（F3 修法 ①）",
+    "rule": "status 只能取 pending|in_progress|blocked|accepted（与 §5.3 模板一致）；accepted_on 只在 accepted 时有值；review 是 docs/native/ 下的相对路径或 null。feature-matrix.json 的 core_state/native_state/side_states/reviews 四列由本文件派生，禁止手改（改了会被 inventory --check 判红）。",
+    "side_phases": {
+      "C": [
+        2,
+        3,
+        6,
+        7,
+        8,
+        10
+      ],
+      "N": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "K": [
+        7,
+        8
+      ],
+      "A": [
+        8,
+        9
+      ]
+    },
+    "side_phases_evidence": "这张表的判据是'该 Phase 的 Task 动的是哪半边'：Phase 2/3 抽 core 服务（C），Phase 4/5 建 Swift 客户端与原生界面（N），Phase 6/7/8 一个 Task 同时新建 core 模块与 AeroricUI 视图（C+N，其中 7/8 还各自保留 K 跨平台实现、8 还引入外部能力适配 A），Phase 9 是 adapter + 原生视图（A+N），Phase 10 两端都验（C+N）。§进度总表 与 scripts/native/inventory.mjs 的 --check 会逐行核对：任一 target 字母在这一列里找不到 Task，就报 `side 'X' has no Task among …`，不放过空边。核对基线（26 行全枚举，2026-09-28）：F01–F06=2|3→5，F07–F16=6|7，F12=7 的 C+K，F17=8 的 C+N+A，F18=8 的 C+N+K，F19=8，F20–F23=9 的 A+N，F24=5 的 N，F25=4|10 的 N，F26=3|8 的 C。",
+    "side_legend": "N=原生界面 C=核心/CLI A=外部 Agent 能力适配 K=保留跨平台实现（§1.2 marker_legend）",
+    "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
+    "counts": {
+      "tasks": 51,
+      "accepted": 12,
+      "in_progress": 1,
+      "pending": 38
+    }
+  },
+  "tasks": [
+    {
+      "task": "P1-01",
+      "status": "accepted",
+      "accepted_on": "2026-09-21",
+      "review": null
+    },
+    {
+      "task": "P1-02",
+      "status": "accepted",
+      "accepted_on": "2026-09-21",
+      "review": null
+    },
+    {
+      "task": "P1-03",
+      "status": "accepted",
+      "accepted_on": "2026-09-21",
+      "review": null
+    },
+    {
+      "task": "P1-04",
+      "status": "accepted",
+      "accepted_on": "2026-09-21",
+      "review": "reviews/skeleton.md"
+    },
+    {
+      "task": "P1-05",
+      "status": "accepted",
+      "accepted_on": "2026-09-21",
+      "review": "reviews/skeleton.md"
+    },
+    {
+      "task": "P2-01",
+      "status": "accepted",
+      "accepted_on": "2026-09-22",
+      "review": "reviews/protocol.md"
+    },
+    {
+      "task": "P2-02",
+      "status": "accepted",
+      "accepted_on": "2026-09-22",
+      "review": "reviews/storage.md"
+    },
+    {
+      "task": "P2-03",
+      "status": "accepted",
+      "accepted_on": "2026-09-22",
+      "review": "reviews/projects.md"
+    },
+    {
+      "task": "P2-04",
+      "status": "accepted",
+      "accepted_on": "2026-09-23",
+      "review": "reviews/tasks.md"
+    },
+    {
+      "task": "P2-05",
+      "status": "accepted",
+      "accepted_on": "2026-09-26",
+      "review": "reviews/tauri-adapter.md"
+    },
+    {
+      "task": "P3-01",
+      "status": "accepted",
+      "accepted_on": "2026-09-26",
+      "review": "reviews/runtime.md"
+    },
+    {
+      "task": "P3-02",
+      "status": "accepted",
+      "accepted_on": "2026-09-27",
+      "review": "reviews/agents.md"
+    },
+    {
+      "task": "P3-03",
+      "status": "in_progress",
+      "accepted_on": null,
+      "review": "reviews/terminal-core.md"
+    },
+    {
+      "task": "P3-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P3-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P3-06",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P3-07",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P4-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P4-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P4-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P4-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P5-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P5-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P5-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P5-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P5-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P6-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P6-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P6-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P6-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P6-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P7-06",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P8-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P8-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P8-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P8-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P8-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P9-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P9-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P9-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P9-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P10-01",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P10-02",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P10-03",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P10-04",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    },
+    {
+      "task": "P10-05",
+      "status": "pending",
+      "accepted_on": null,
+      "review": null
+    }
+  ]
+}

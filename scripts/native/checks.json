@@ -14,7 +14,7 @@
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 10,
       "extraction-unit@skeleton": 9,
-      "gate-runner-unit@skeleton": 24,
+      "gate-runner-unit@skeleton": 29,
       "invariants-unit@skeleton": 13,
       "inventory-unit@skeleton": 40,
       "projects-core-rust@projects": 16,
@@ -23,7 +23,7 @@
       "protocol-swift-golden@protocol": 19,
       "protocol-ts-golden@protocol": 20,
       "src-tauri-lib-tests@tauri-adapter": 2465,
-      "storage-core-rust@storage": 356,
+      "storage-core-rust@storage": 361,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 8,
       "tasks-parity-is-derived-from-client@tasks": 3,
@@ -37,12 +37,14 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
       "agent-launch-parity-rust@agents": 2,
-      "terminal-unit-rust@terminal-core": 60,
+      "terminal-unit-rust@terminal-core": 65,
       "terminal-pty-bytes-rust@terminal-core": 6,
       "terminal-lease-rust@terminal-core": 4,
       "terminal-replay-rust@terminal-core": 5,
       "terminal-pty-exit-rust@terminal-core": 10,
-      "terminal-history-rust@terminal-core": 7
+      "terminal-history-rust@terminal-core": 7,
+      "terminal-invariants-unit@terminal-core": 10,
+      "task-status-unit@skeleton": 18
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -350,8 +352,8 @@
             "scripts/native/check-runner.test.mjs"
           ],
           "parse": "node-test",
-          "minCases": 24,
-          "$note": "门禁自己也要被测过：实测反例是注册了 `cases: []` 的模块会打印「0 case(s) passed」并 exit 0（P2-01 一旦注册 protocol 就会踩到），且 `all` 只看模块键存不存在、不看有没有 case——而它的报错文字恰恰声称在查后者。规则抽到 gate-config.mjs，因为 check.mjs 是带顶层副作用的脚本、import 即执行。",
+          "minCases": 29,
+          "$note": "门禁自己也要被测过：实测反例是注册了 `cases: []` 的模块会打印「0 case(s) passed」并 exit 0（P2-01 一旦注册 protocol 就会踩到），且 `all` 只看模块键存不存在、不看有没有 case——而它的报错文字恰恰声称在查后者。规则抽到 gate-config.mjs，因为 check.mjs 是带顶层副作用的脚本、import 即执行。**补记一百零六 又查出同一条命令的更深一层**：pre-flight 之后控制流直接落到 `config.modules[\"all\"]`（不存在），所以矩阵全 ready 那天 `all` 只会报 `unknown module` 并 exit 2、一条 case 都不跑；现在 `all` 的运行集**从 `modules` 派生**并逐模块 spawn 自己，另加一条拒绝——手工注册一个叫 `all` 的模块当捷径既会漂移又会递归，故 `moduleGateProblem(\"all\", …)` 直接拒。地板 24→**29** 的五条里四条是变异实证（对 `git show HEAD:` 的旧 runner 精确重放：#25/#26/#27/#28 变红），第五条「committed 矩阵未完整时 `all` 仍 exit 3」在新旧两边都绿——它是 pre-flight 不回退的钉子，不是修复的覆盖面，照实记。",
           "timeoutMs": 300000
         },
         {
@@ -366,6 +368,20 @@
           "parse": "node-test",
           "minCases": 10,
           "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "task-status-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/task-status.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 18,
+          "$note": "F3 的修法（Q7）进门禁：§进度总表、docs/native/task-status.json、feature-matrix.json 的派生列三方互查，18 条里 12 条是反例。关键一条是 D12——规范源读不到必须报错，不得退化成「当作没变化」；实测形状：删掉 carrier 后 check() 报 `task-status carrier unreadable`，写成空数组时报「refusing to treat an empty carrier」。派生列禁止手改（final_state 这一列已删），--freeze 在镜像输入互相矛盾时拒绝写出（把 side_phases 的 Phase 6 摘掉就会撞上）。",
           "timeoutMs": 300000
         }
       ]
@@ -497,7 +513,7 @@
             "-p",
             "aeroric-core"
           ],
-          "minCases": 356,
+          "minCases": 361,
           "$note": "单一写入者存储层 + P2-03 项目层 + 本 case 实际覆盖的整个 aeroric-core 包(paths/clock/context/location/storage_lock 与 storage/*、projects/*、tasks/*、terminal/* 全部 lib+integration 用例)。P3-03 收尾轮(补记一百)把口径合并:argv 跑的是 `cargo test -p aeroric-core`(整个包),所以地板必须是包口径的实测真值 355——81 是 P2-03 时代的真值,自 P2-05 起 case 范围悄悄长成整个包后它就成了假地板(补记六十五点名,挂账到收尾轮)。**两条 core 计数口径的关系**:本条机器地板=包口径(-p aeroric-core,355);MIGRATION_PLAN.md 每片记录的 workspace 全量(405)=包口径+aeroric-protocol 的用例,是叙事口径不是机器地板。此后每片新增 core 用例时,除各自模块地板外**必须同批抬这条**(漏抬时本 case 直接红)。",
           "timeoutMs": 900000
         },
@@ -1129,7 +1145,7 @@
             "--",
             "terminal::"
           ],
-          "minCases": 60,
+          "minCases": 65,
           "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 60 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history + 2 executor(切片四D)。",
           "timeoutMs": 300000
         },
@@ -1264,7 +1280,7 @@
               "src-tauri/src/pty.rs"
             ]
           ],
-          "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制:本 case 只能断言『形状还在 + 旧形状没了』,**不能断言 `settle_exit` 恰好被调用一次**——那是计数,属门禁工具改动,要接进 scripts/native/adapter-invariants.mjs 那种 gate 脚本,记在 P3-03 收尾。"
+          "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制已被补上:本 case 仍只断形状,计数由同模块的 terminal-invariants-src / terminal-invariants-unit 两条 case 承担(补记一百零六)。"
         },
         {
           "name": "host-reader-publishes-raw-bytes-before-decode",
@@ -1450,6 +1466,30 @@
           ],
           "$note": "P3-03 切片四D 的守卫:Action 6『不保留两份同 target 的启动 body』的可数形状——spawn→丢 slave→reader→writer→注册这五步装配机械此前在宿主有七份逐字相同拷贝(local launch/local resume/open-shell/SSH 任务/SSH 终端/WSL 任务/WSL shell),现在唯一一份在 core 的 terminal::executor::activate_pty_session,注册本体是 TaskRegistry::register_pty_session。禁形 = 宿主任何地方再出现这三个机械调用;正控 = 三个宿主文件都在调 core 装配体,且 core 两侧原件真实在位。命令构造(build_*_cmd/pty_command_from_spec/build_ssh_command)与 SSH/WSL 分支编排不属于机械,留在原处(P7 才换分支本体)。",
           "timeoutMs": 120000
+        },
+        {
+          "name": "terminal-invariants-src",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/terminal-invariants.mjs"
+          ],
+          "$note": "P3-03 收尾轮的计数守卫(补记一百零六):`settle_exit` 在宿主必须**恰好被调用一次**,且那唯一一处必须在 `finalize_task_exit` 内;core 必须**恰好定义一次** `pub fn settle_exit`。为什么单独一条:`host-exit-settlement-goes-through-core` 是 absent 形状,只能断形状在/旧形状没了,断不了次数(它自己的 $note 就把这条列为口径限制并记在收尾)。命中前先过 codeOnly()(注释与字符串里的 settle_exit( 不算),语料读不到直接报错——D12 那条纪律:「没读到」不等于「没有」。变异实证:对 /tmp 假仓(宿主两处调用)判出 found 2 并点名两处。",
+          "timeoutMs": 180000
+        },
+        {
+          "name": "terminal-invariants-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/terminal-invariants.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 10,
+          "$note": "计数守卫自己的 10 条反例:一处合格 / 两处必红且点名 / 零处必红(宿主自己又决定了) / 注释里的提及不算命中(正控:不剥注释就会假绿) / 字符串里的提及同样不算 / 唯一调用挪出 finalize_task_exit 必红 / core 定义缺失必红 / core 两处定义必红 / 宿主语料为空必红 / core 文件读不到必红。",
+          "timeoutMs": 300000
         }
       ]
     }

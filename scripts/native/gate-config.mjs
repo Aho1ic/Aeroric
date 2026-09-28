@@ -35,6 +35,12 @@ export function missingOutputTokens(testCase, haystack) {
 }
 
 export function moduleGateProblem(name, entry) {
+  // §3.2 lets nobody redefine `all`. The tempting "fix" for the matrix was to register a module
+  // literally named "all" with a hand-copied case list — that both drifts from the matrix and
+  // recurses (check.mjs spawns itself per module). Derive the run set from `modules` instead.
+  if (name === "all") {
+    return `all: "all" is derived from the registered matrix, so it must not be a hand-maintained module (§3.2)`;
+  }
   if (!entry) return `${name}: not registered in checks.json`;
   if (!Array.isArray(entry.cases)) return `${name}: "cases" is missing or not an array`;
   if (entry.cases.length === 0) return `${name}: registered with zero cases — a gate that runs nothing cannot certify anything`;

@@ -192,6 +192,16 @@ impl ExitStatus {
     pub fn exit_code(&self) -> u32 {
         self.code
     }
+
+    /// The signal name this status was constructed with, if the process was killed
+    /// by a signal rather than exiting with a code. `From<std::process::ExitStatus>`
+    /// fills it from `strsignal(3)`, so on macOS a SIGTERM death reports
+    /// `"Terminated: 15"` — the name the platform actually gave, not a synthesized
+    /// `"SIGTERM"`. Aeroric uses this to keep the signal fact in its own core layer
+    /// while leaving `code` (and therefore the legacy user-visible sentence) alone.
+    pub fn signal(&self) -> Option<&str> {
+        self.signal.as_deref()
+    }
 }
 
 impl From<std::process::ExitStatus> for ExitStatus {

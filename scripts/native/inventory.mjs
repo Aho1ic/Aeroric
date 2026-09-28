@@ -11,6 +11,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { carrierCrossCheck, freezeFeatureMatrix } from "./task-status.mjs";
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -395,6 +396,25 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
   }
   void drift;
 
+  // ---- task-status carrier ⇄ §进度总表 ⇄ feature-matrix derived columns (F3, closed by Q7) ----
+  // The matrix's delivery columns used to be hand-written and read by nobody, so 26 rows sat on
+  // `unstarted` long after three of their Tasks were accepted. They are derived now, and both sides
+  // of the mirror are checked: the plan table against the JSON carrier, the carrier against the
+  // committed columns.
+  let taskStates = null;
+  try {
+    const bundle = carrierCrossCheck({
+      repoRoot,
+      read,
+      matrix,
+      planText: read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8"),
+    });
+    problems.push(...bundle.problems);
+    taskStates = { tasks: bundle.stats.tasks, accepted: bundle.stats.accepted, rows: bundle.stats.rows };
+  } catch (error) {
+    problems.push(`task-status carrier unreadable: ${error.message}`);
+  }
+
   return {
     ok: problems.length === 0,
     registered: registry.entries.length,
@@ -407,6 +427,7 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
     dynamicSites: sites.length,
     invokeLiterals: invokeLiterals.length,
     unreachable: liveUnreachable,
+    taskStates,
     problems,
   };
 }
@@ -819,6 +840,7 @@ const PANEL_SOURCE_KEYS = ["key", "via", "at"];
  */
 export function freeze({
   repoRoot = defaultRoot,
+  sourceRoot,
   readFileSync: read = readFileSync,
   writeFileSync: put = writeFileSync,
   live,
@@ -873,24 +895,49 @@ export function freeze({
   map.meta.counts.command_params_annotated = annotated;
   map.meta.counts.events = merged.length;
   map.meta.counts.panels = panels.length;
+
+  // The feature matrix's delivery columns are derived, never hand-written (F3/Q7). `--freeze-check`
+  // compares them byte for byte as well, so a status flip that was recorded in one artifact but not
+  // the other cannot pass as "nothing changed".
+  const matrixPath = path.join(repoRoot, "docs/native/feature-matrix.json");
+  const matrixDoc = JSON.parse(read(matrixPath, "utf8"));
+  const bundle = carrierCrossCheck({
+    repoRoot,
+    read: (p) => read(p, "utf8"),
+    matrix: matrixDoc,
+    planText: read(path.join(sourceRoot ?? repoRoot, "MIGRATION_PLAN.md"), "utf8"),
+  });
+  if (bundle.inputProblems.length) {
+    throw new Error(`refusing to freeze while the mirror inputs disagree:\n  ${bundle.inputProblems.slice(0, 10).join("\n  ")}`);
+  }
+  const matrixFreeze = freezeFeatureMatrix({
+    repoRoot,
+    read: (p) => read(p, "utf8"),
+    dryRun: true,
+    derived: bundle.derived,
+  });
+
   const extraFields = (entries, derivedKeys) =>
     [...new Set(entries.flatMap((e) => Object.keys(e)).filter((k) => !derivedKeys.has(k)))].sort().join(", ") || "none";
   const serialized = `${JSON.stringify(map, null, 2)}\n`;
   if (dryRun) {
-    const changed = serialized !== original;
+    const changed = serialized !== original || matrixFreeze.changed;
     console.log(`freeze --check: the frozen file ${changed ? "DIFFERS from what --freeze would write" : "is exactly what --freeze would write"}`);
+    if (matrixFreeze.changed) console.log(`  docs/native/feature-matrix.json derived columns also differ (${matrixFreeze.rows} row(s)).`);
     if (changed) {
       console.log(`  events[${extraFields(merged, new Set(EVENT_SOURCE_KEYS))}] panels[${extraFields(map.panels, new Set(PANEL_SOURCE_KEYS))}] are human-owned and were carried through;`);
       console.log(`  run \`node scripts/native/inventory.mjs --freeze\` to refresh, and inspect the diff before accepting it.`);
     }
-    return { changed, events: merged.length, panels: panels.length };
+    return { changed, events: merged.length, panels: panels.length, matrixChanged: matrixFreeze.changed };
   }
   put(mapPath, serialized);
+  if (matrixFreeze.changed) put(matrixPath, matrixFreeze.serialized);
   console.log(`froze ${merged.length} event channel(s), ${panels.length} settings panel(s) into docs/native/command-map.json`);
+  if (matrixFreeze.changed) console.log(`re-derived ${matrixFreeze.rows} feature-matrix row(s) from docs/native/task-status.json`);
   console.log(`  human-authored fields carried through: events[${extraFields(merged, new Set(EVENT_SOURCE_KEYS))}] panels[${extraFields(map.panels, new Set(PANEL_SOURCE_KEYS))}]`);
   const dyn = (unresolved.dynamic_emitters ?? []).length;
   if (dyn) console.log(`  ${dyn} dynamic emit site(s) recorded verbatim, not guessed`);
-  return { map, events: merged.length, panels: panels.length };
+  return { map, events: merged.length, panels: panels.length, matrixChanged: matrixFreeze.changed };
 }
 
 /** Freeze reachability using the same index the checker recomputes. */
@@ -954,7 +1001,7 @@ if (isMain) {
     console.error(`inventory: ${error.message}`);
     process.exit(1);
   }
-  console.log(`inventory: registered=${result.registered} mapped=${result.mapped} features=${result.features} gaps=${result.gaps} events=${result.events} panels=${result.panels} definitions=${result.definitionsResolved} dynamicSites=${result.dynamicSites} invokeLiterals=${result.invokeLiterals} unreachable=${result.unreachable}`);
+  console.log(`inventory: registered=${result.registered} mapped=${result.mapped} features=${result.features} gaps=${result.gaps} events=${result.events} panels=${result.panels} definitions=${result.definitionsResolved} dynamicSites=${result.dynamicSites} invokeLiterals=${result.invokeLiterals} unreachable=${result.unreachable} taskStates=${result.taskStates ? `${result.taskStates.tasks}/${result.taskStates.accepted}accepted` : "unreadable"}`);
   if (!result.ok) {
     console.error(result.problems.slice(0, 40).map((p) => `  - ${p}`).join("\n"));
     if (result.problems.length > 40) console.error(`  … ${result.problems.length - 40} more`);

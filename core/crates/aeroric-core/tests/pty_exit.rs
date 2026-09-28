@@ -264,11 +264,13 @@ impl Harness {
             } else {
                 Some(status.exit_code())
             },
+            signal: status.signal().map(str::to_string),
             session: evidence,
             cancelled,
             manually_completed,
         });
-        self.ledger.record(&agent.run, decision);
+        // Q1=B 之后 `ExitDecision` 不再 `Copy`(它可能持有信号名),记账走克隆,返回值仍是原件。
+        self.ledger.record(&agent.run, decision.clone());
         Finalized::Settled(decision)
     }
 }
@@ -445,18 +447,24 @@ fn a_sigterm_death_settles_once_as_failed_and_the_signal_is_flattened_to_a_code(
     assert!(!status.success());
     // 实测口径(与直觉相反,所以写下依据):portable-pty 把"死于信号"折成
     // `code = 1` —— `src-tauri/vendor/portable-pty/src/lib.rs:197-223` 里
-    // `status.code()` 对信号死亡是 None,于是 `unwrap_or(1)`;信号只存在于 Display 里。
-    // **core 的决策面因此看不见"死于哪个信号",只看得到一个 1。**
+    // `status.code()` 对信号死亡是 None,于是 `unwrap_or(1)`。
+    // Q1 裁决(B,待追认)之前信号只活在 `Display` 里,core 的决策面只看得到一个 1;
+    // 现在 vendor 有了公开访问器,**事实进 core,折平的码与用户可见文案一字未动**。
     assert_eq!(
         status.exit_code(),
         1,
         "portable-pty 的信号致死码口径变了(实测 {}),要重查整条 reason 文案",
         status.exit_code()
     );
-    // 信号名在 macOS 上经 `strsignal` 是 "Terminated: 15",所以只有 Display 记得它。
+    // 信号名在 macOS 上经 `strsignal` 是 "Terminated: 15":Display 记得它,访问器也记得它。
     assert!(
         format!("{status}").contains("Terminated: 15"),
         "Display 里连信号编号都没了,说明依赖换了形状:实际 {status}"
+    );
+    assert_eq!(
+        status.signal(),
+        Some("Terminated: 15"),
+        "vendor 的信号访问器不再报出平台原名,Q1=B 的事实面就断了"
     );
     assert_eq!(
         h.finalize(
@@ -466,14 +474,17 @@ fn a_sigterm_death_settles_once_as_failed_and_the_signal_is_flattened_to_a_code(
             &status
         ),
         Finalized::Settled(ExitDecision::Failed {
-            reason: ExitReason::Code(1)
+            reason: ExitReason::TerminatedBySignal {
+                name: "Terminated: 15".to_string(),
+                legacy_code: Some(1),
+            }
         })
     );
     assert_eq!(h.ledger.settles().len(), 1, "信号致死同样只结算一次");
     assert_eq!(
         h.ledger.reason_of(0).as_deref(),
         Some("Process exited with code 1"),
-        "用户今天看到的就是这句:信号被抹平成 code 1。迁移前一字如此,本切片没改文案;要不要换成「死于 SIGTERM」是文案改动,交 grill 轮。"
+        "用户今天看到的仍是这句:信号被抹平成 code 1。Q1=B 只把事实交给 core,不改旧文案;如实渲染归原生客户端(P4/P5)。"
     );
 }
 
@@ -779,6 +790,7 @@ fn the_family_difference_survives_a_real_nonzero_exit() {
                 family,
                 exit_ok: status.success(),
                 exit_code: Some(status.exit_code()),
+                signal: status.signal().map(str::to_string),
                 session: SessionEvidence::Real,
                 cancelled: false,
                 manually_completed: false,

@@ -131,6 +131,9 @@ fn finalize_task_exit<R: tauri::Runtime>(
     family: crate::app_settings::AgentFamily,
     exit_ok: bool,
     exit_code: Option<u32>,
+    // 平台报告的致死信号名(Q1=B:事实交给 core,文案仍由 `host_sentence` 逐字保持)。
+    // 用行注释而非 `///`:rustc 不允许文档注释挂在函数参数上。
+    exit_signal: Option<String>,
     child_handle: &Arc<parking_lot::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
 ) {
     let tm = app.state::<TaskManager>();
@@ -213,6 +216,7 @@ fn finalize_task_exit<R: tauri::Runtime>(
         family: crate::core_adapter::SettingsFamilies::of(family),
         exit_ok,
         exit_code,
+        signal: exit_signal,
         session: session_evidence,
         cancelled: is_cancelled,
         manually_completed: is_manually_completed,
@@ -673,6 +677,7 @@ fn spawn_exit_monitor<R: tauri::Runtime>(
                     family,
                     exit_ok,
                     exit_code,
+                    status.signal().map(str::to_string),
                     &child_handle,
                 );
                 return;
