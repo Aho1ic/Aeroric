@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "8bfe4ac47f3d7c13285f6de57fb16efd4bafb358965c7ad44e1f5089e5f4b86c",
+  "sourceSha256": "e22ca103b7a06c8e881b8aa437d2eb13debe0edd963d025620e95015f205ceda",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -72,12 +72,13 @@
       {
         "id": "G07",
         "finding": "remote/server.rs:393 在存在任一已配对设备或任一配置的公网 endpoint 时绑定 0.0.0.0（默认端口 6790）",
-        "evidence": "ListenerScope 选择见 remote/mod.rs:290-299",
+        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略",
         "requirement": "host 侧必须保留同等保守的 scope 判定，不得因原生 IPC 改造而放宽",
         "task_ids": "P3-06, P8-03",
         "owner": "core:host+remote",
         "test": "tests/ipc_auth.rs 断言 host 绝不监听 TCP 0.0.0.0；remote 能力只在显式开启时暴露",
-        "status": "open"
+        "status": "open",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G08",
@@ -123,42 +124,47 @@
       {
         "id": "G12",
         "finding": "get_active_task_ids 的真实来源是 Tauri 进程内 TaskManager；external host 模式下旧客户端不得读到空 map",
-        "evidence": "lib.rs 注册项 pty::get_active_task_ids；P8-05 Action 3",
+        "evidence": "2026-09-28 复核：`pty::get_active_task_ids` 仍注册在 `lib.rs:488`，来源仍是进程内 `TaskManager`。本条的真正闭合点在 P8-05 的 external host 模式（Action 3 要求 snapshot 从 host 来，而不是空的旧 TaskManager）",
         "requirement": "cutover 后 snapshot 必须来自 host",
         "task_ids": "P8-05",
         "owner": "host+desktop",
         "test": "tests/host_cutover.rs：三客户端同时改任务不丢更新",
-        "status": "open"
+        "status": "open",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G13",
         "finding": "omp_session_allowed_roots 放行 ~/.aeroric/agent-homes/*/sessions 全部托管档案，而函数注释承诺「Phase 7 接入时按 agent 校验」，两者不一致",
-        "evidence": "src-tauri/src/session_omp.rs:110-128（注释 :110-111 与 :117-119）",
+        "evidence": "2026-09-28 复核：不一致**仍然存在且成因写在代码里**。`omp_session_allowed_roots` 在 `session_omp.rs:118`，函数注释 :116-117 承诺「自定义 omp 档案…Phase 7 接入时按 agent 校验」，而 :123-129 直接 `read_dir(~/.aeroric/agent-homes)` 放行全部托管档案的 sessions；:124-125 给的现实理由是「校验只拿到 family 拿不到档案 id」。原记 :110-128 已漂到 :114-129",
         "requirement": "迁移到 core 时按 task 持久化的 agent id 精确取根，取消全量放行；ADR-001 §5.5 已登记为待收口项",
         "task_ids": "P3-02, P3-04",
         "owner": "core:agents::managed_home::omp + sessions",
         "test": "tests/omp_invariants.rs：两个不同 omp 档案的会话文件互相不可见；越出所属档案目录的路径必须被 allowed-roots 拒绝",
-        "status": "open"
+        "status": "open",
+        "retriage_note": "P3-04 侧的解除路径已写明（`docs/native/extraction/sessions.md` 手写约束第 2 条）：core 的 OMP 发现根只许 `~/.aeroric/agent-homes/**`，外部历史分支 capability 默认 false（INV-06 / ADR-001 §5），按 agent 校验在 core 里可做（档案 id 就在路径段上），legacy 客户端保持现状不删。gap 仍 open，owner 仍是 P3-02+P3-04",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G14",
         "finding": "新增的 core/ workspace 完全不在现有 CI 覆盖内：仓库根没有 Cargo.toml，.github/workflows/checks.yml 的 fmt/clippy/test/audit 作业全部按 --manifest-path 指定 src-tauri、remote-protocol、remote-relay；eslint/prettier 的 glob 也只覆盖 src、packages、mobile。core/ 与 macos/ 在 P10-04 的 native-macos-checks.yml 之前只能靠本地 pnpm native:check 兜住。",
-        "evidence": "ls Cargo.toml → 不存在；checks.yml:161,164,167 fmt；:170,175,180 clippy；:186,192,197,202 test；:153,158 cargo audit；package.json lint/format:check 的 glob",
+        "evidence": "2026-09-28 复核，逐条仍成立：仓库根 `Cargo.toml` 不存在；`checks.yml` 有 10 处 `--manifest-path` 且**无一处指向 core/Cargo.toml**、全文无 `swift`；`package.json` 的 lint glob 仍是 `src packages mobile/app mobile/src`",
         "requirement": "在 P10-04 建立原生 CI 之前，任何声称 core『已过 CI』的说法都不成立；P7-02 要求给 checks.yml 增加 core 的 Windows/Linux 检查，那一步必须真正落地而不是留在计划里",
         "task_ids": "P7-02, P10-04",
         "owner": "ci",
         "test": "P10-04 的 native CI 必须对两架构跑 cargo fmt --check / clippy -D warnings / cargo test --locked / swift test，并保留旧有八产物矩阵",
-        "status": "open"
+        "status": "open",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G15",
         "finding": "prefixCommand 的 git 展开会生成 4 个未注册命令名：remote_git_checkout_branch / wsl_git_checkout_branch / remote_git_create_branch / wsl_git_create_branch。GIT_MIRRORS(checkoutBranch/createBranch) 明确声明了这三个 target 的字段，但 src-tauri/src/lib.rs 从未注册它们",
-        "evidence": "src/lib/api/git.ts:25-34 声明 ssh/wsl 字段；grep 注册表无这四名；当前调用方 src/components/task-panel/BranchBar.tsx:64,391 只用 .local，所以是潜伏缺陷而非已可见故障",
+        "evidence": "2026-09-28 复核：4 个名字在 `src/lib/api/git.ts` 里以字面量出现，`lib.rs` 中 4 个都查无注册；`BranchBar.tsx` 只用 `.local`（grep `remote_git|wsl_git` 0 命中）⇒ 仍是潜伏缺陷而非已可见故障",
         "requirement": "P6-04 必须二选一：注册 remote/wsl 的分支创建与切换命令（并在 P7-01 的 SSH 回归里跑通），或删除 GIT_MIRRORS 里的 ssh/wsl 字段并在 UI 上显式禁用远程分支操作。不得留一个会拼出不存在命令的字段",
         "task_ids": "P6-04, P7-01",
         "owner": "core:git + ui:Git",
         "test": "inventory.mjs --check 的 dynamic site 断言已把集合钉死（新增/删除未注册名都会失败）；P6-04 的真临时 bare remote 测试必须覆盖『对 ssh target 请求创建分支』这一条",
-        "status": "open"
+        "status": "open",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G16",
