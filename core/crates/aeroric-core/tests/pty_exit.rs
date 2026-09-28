@@ -430,7 +430,7 @@ fn a_nonzero_exit_settles_failed_once_and_quotes_the_code_the_process_actually_r
 }
 
 #[test]
-fn a_sigterm_death_settles_once_as_failed_and_the_signal_is_flattened_to_a_code() {
+fn a_sigterm_death_settles_once_as_failed_and_names_the_signal_while_the_wording_stays_flat() {
     let h = Harness::new("sigterm");
     let mut agent = h.spawn(1, "signal", &[("FAKE_SIGNAL", "SIGTERM")]);
     agent.wait_for_text("[fake-agent] signalling self SIGTERM");
@@ -448,7 +448,7 @@ fn a_sigterm_death_settles_once_as_failed_and_the_signal_is_flattened_to_a_code(
     // 实测口径(与直觉相反,所以写下依据):portable-pty 把"死于信号"折成
     // `code = 1` —— `src-tauri/vendor/portable-pty/src/lib.rs:197-223` 里
     // `status.code()` 对信号死亡是 None,于是 `unwrap_or(1)`。
-    // Q1 裁决(B,待追认)之前信号只活在 `Display` 里,core 的决策面只看得到一个 1;
+    // Q1 取 B(2026-09-28 由用户追认)之前信号只活在 `Display` 里,core 的决策面只看得到一个 1;
     // 现在 vendor 有了公开访问器,**事实进 core,折平的码与用户可见文案一字未动**。
     assert_eq!(
         status.exit_code(),

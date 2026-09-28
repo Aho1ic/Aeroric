@@ -141,6 +141,25 @@
 
 代价:约 120 行 gate 脚本 + 4 条负例;**零运行时代码改动、零 `command-map` pin 影响**(只读宿主源码)。若你选 C(不做),`$note` 那条"口径限制"就保留原样,P3-03 仍标 accepted 但"恰好一次"只有真 PTY 用例守着、没有静态防回归。
 
+## 6. 收口前复核（2026-09-28，补记一百十六）——逐条对今天的实测，不复述补记
+
+§5 那张表写于 2026-09-27，此后 Q1/Q4 落地、四条追认、Q5 确认、Q7 结案，所以两行判据已过期；本轮按**当天真实命令输出**重做一遍，并把"只差 GUI 一项"这件事变成可核对的形状。
+
+| 验收条目 | 判定（今天） | 证据（当天可重跑） |
+|---|---|---|
+| Acceptance 1 跨帧中文/emoji/ANSI、非法 UTF-8、NUL、100 MiB 端到端 hash 相等；有界内存 | ✅ | `terminal-pty-bytes-rust` **6/6**（`raw_bytes_from_a_real_pty_are_byte_for_byte_in_the_core_stream`、`a_hundred_mebibytes_through_a_real_pty_keep_their_hash_intact_and_bounded`、`nasty_bytes_neither_stall_the_projection_nor_vanish_from_the_stream`、`replay_memory_does_not_grow_with_total_output`、`the_real_pty_path_reports_no_registry_pressure`、`the_fake_agent_dependency_is_actually_present`——最后一条是**反空转**：先证明 node 替身真在跑）；RSS 峰值 6.0 MiB 对 100 MiB 吞吐（补记一百 ②） |
+| Acceptance 2 cancel 杀对的进程组并 reap；五种来源各只结算一次；家族差异不被"有 session 就 done"覆盖 | ✅（机器面） | `terminal-pty-exit-rust` **10/10**（`a_clean_exit_of_a_real_process_settles_done_exactly_once`、`a_nonzero_exit_settles_failed_once_and_quotes_the_code_the_process_actually_returned`、`a_sigterm_death_settles_once_as_failed_and_names_the_signal_while_the_wording_stays_flat`、`a_late_hook_report_after_a_real_exit_cannot_resurrect_the_task`）+ 静态计数守卫 `terminal-invariants-src/-unit`（1+10） |
+| Acceptance 3 断线重订阅无重复/漏读；过期得具名 gap/reset；20 次 resize 终尺寸正确；隐藏终端无写权限 | ✅ | `terminal-replay-rust` **5/5**（`a_window_that_started_mid_character_is_handed_over_as_bytes_not_as_text`、`a_retired_stream_is_reported_as_unknown_instead_of_a_lie_about_history`、`a_live_stream_refuses_a_units_cursor_before_any_conversion_is_tried`）+ `terminal-lease-rust` **4/4**（`twenty_resizes_leave_the_last_foreground_size_and_never_a_rejected_one`、`a_superseded_controller_cannot_reach_the_agent_while_the_current_one_can`、`a_refused_hidden_attempt_does_not_steal_the_lease`） |
+| Acceptance 4 调用 `grill-me [terminal-core]` + 压力与 CPU/RSS 在证据里 | ✅ **共识已达成**（追认于 补记一百一十） | 提问轮 `2befb12` 基线 + 收尾轮 Q1–Q8 全部有答复；Q7 结案于 补记一百零九 |
+| §3.1 #8（每新增 core 服务同步 command-map／本地协议／CLI 可达性） | ⚠ **具名移交，非本模块缺口** | 见 §5.1 发现一；已写进 P5-01 与 P3-07 的具名前置（先立 ADR 再改 `methods.schema.json`）+ Q2 追加的 `UnknownStream` 拆分（`NotStarted`/`Evicted`） |
+| Action 3 的"legacy 今天不取租约" | ⚠ 归属**已落死** | Q5-② 确认归 P8-05；已写进本文 P8-05 小节的移交项（含"宿主只剩一条 acquire/release 通道"要做成可数断言） |
+
+**当日门禁矩阵**（全 9 模块，见 `docs/native/baseline.md`）：`terminal-core` **13/107**、`skeleton` 22/142、`protocol` 6/98、`storage` 5/361、`tasks` 7/151、`projects` 5/21、`tauri-adapter` 12/2526、`runtime` 1/5、`agents` 1/2，全 exit 0；`inventory --check` consistent、`--freeze-check` 字节 noop、`contracts --check` 12 份逐字节、`doctor` 18/18、`pnpm typecheck` 0、两 crate `clippy --all-targets -D warnings` 0、`cargo fmt --check` 0、全量 `pnpm test` 376 files／5483 tests 0。
+
+**本轮顺手改掉的一处（由逐条核对撞出来，不是顺手大改）**：`pty_exit.rs:433` 的测试名还写着 `…_and_the_signal_is_flattened_to_a_code`，而它自 补记一百零八 起**同时断言 `status.signal() == Some("Terminated: 15")`**——名字描述的正是被推翻的旧行为。改名为 `…_and_names_the_signal_while_the_wording_stays_flat`，并把同一函数里那句"Q1 裁决(B,待追认)"更新为"2026-09-28 由用户追认"（全文 `待追认` 仅此一处，`grep -rn 待追认 core src-tauri scripts` 复核）。改名后 `terminal-core` 复跑 13/107、`terminal-pty-exit-rust` 仍 10/10（计数不变），`cargo fmt --check` 与门禁 argv 一致。
+
+**结论**：四条 Acceptance 的**机器面全部 ✅**；未闭合的只剩各轮【执行状态】都列在「未运行/未做」里的同一项——Q6 的人工观察（resize 真传导／cancel 真带走进程组／断线重连观感），需要用户在真机 GUI 做，Agent 无法代做（本机 `osascript` 键入被系统拒绝）。它一记档，本模块四条验收连同人工面全部有证据，可标 accepted。
+
 ## 附录 A:§2.4 真实语料旁证的脚本全文
 
 原件写在 `/tmp/realhistory/probe.mjs`(机器本地、不入库,且本轮结束已清理)。为避免"引用一个已不存在的文件",此处全文内联,任何人可原样重跑复现 §2.4 的每个数字。它是**只读**的:不写文件、不改权限、不启动 App;判定口径逐字抄自 `core/crates/aeroric-core/src/terminal/history.rs`(`utf8_tail_bytes` / `skip_leading_utf8_continuations` / `HistoryRetention::LEGACY` 的 8 MiB + 4 MiB)。
