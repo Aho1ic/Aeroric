@@ -23,7 +23,8 @@
 | `P3-04` | 1 |
 | `P8-04` | 1 |
 
-**属于 sessions/usage 面的只有 1 条**（`usage.statistics_updated`，发射点 `usage_index.rs:1003`）。其余 35 条的 Rust 发射点根本不在本 Task 的文件面：11 条在 `dsh_webui`（P3-05 的宿主本体尚未迁）、5 条在 `remote`（P8-03）、2 条 `database`（P7-04）、2 条 `notebook`（P7-05/06）、`report`/`lsp` 各 1 条，**3 条的发射点位于已经 accepted 的 Task 的模块里**（`agent_ops` ×2 → P3-02、`core_adapter` ×1 → P2-05），另有 **10 条在冻结清单里没有 Rust 发射点**（动态发射），必须先定性才谈得上接线。
+**属于 sessions/usage 面的只有 1 条**（`usage.statistics_updated`，发射点 `usage_index.rs:1003`）。
+> **2026-09-28 补记一百十三 就地更正**：实施 T1=A 时把 **2 条**留在 P3-04——上面这 1 条，加上 `task.session`（发射点 `core_adapter.rs:538`，属已 accepted 的 P2-05 模块，但 payload 是会话内容，改派给尚未开工的 Task 更诚实）。其余 34 条全部离队。原文保留，因为「当时只数到 1 条」正是这张表被重排的起因。其余 35 条的 Rust 发射点根本不在本 Task 的文件面：11 条在 `dsh_webui`（P3-05 的宿主本体尚未迁）、5 条在 `remote`（P8-03）、2 条 `database`（P7-04）、2 条 `notebook`（P7-05/06）、`report`/`lsp` 各 1 条，**3 条的发射点位于已经 accepted 的 Task 的模块里**（`agent_ops` ×2 → P3-02、`core_adapter` ×1 → P2-05），另有 **10 条在冻结清单里没有 Rust 发射点**（动态发射），必须先定性才谈得上接线。
 
 好消息是这 36 条**全部**能在 `command-map.json` 的 38 条事件里找到条目（`<无冻结条目>` 命中 0）——缺的不是映射表，是归属决定。
 
