@@ -19,20 +19,20 @@
       "inventory-unit@skeleton": 46,
       "projects-core-rust@projects": 16,
       "projects-parity-is-derived-from-client@projects": 2,
-      "protocol-rust@protocol": 49,
-      "protocol-swift-golden@protocol": 19,
-      "protocol-ts-golden@protocol": 20,
+      "protocol-rust@protocol": 50,
+      "protocol-swift-golden@protocol": 20,
+      "protocol-ts-golden@protocol": 21,
       "src-tauri-lib-tests@tauri-adapter": 2465,
       "storage-core-rust@storage": 361,
       "swift-package-smoke@skeleton": 12,
-      "tasks-idempotency-rust@tasks": 8,
+      "tasks-idempotency-rust@tasks": 10,
       "tasks-parity-is-derived-from-client@tasks": 3,
       "protocol-ts-vocabulary@protocol": 7,
       "projects-save-single-queue@projects": 3,
       "tasks-parity-rust@tasks": 4,
       "tasks-reducer-unit-rust@tasks": 78,
       "tasks-status-machine-rust@tasks": 56,
-      "adapter-acceptance-real-kernel@tauri-adapter": 18,
+      "adapter-acceptance-real-kernel@tauri-adapter": 19,
       "adapter-event-payload-contract@tauri-adapter": 5,
       "adapter-intent-queue@tauri-adapter": 9,
       "runtime-lifecycle-rust@runtime": 5,
@@ -433,7 +433,7 @@
             "-p",
             "aeroric-protocol"
           ],
-          "minCases": 49,
+          "minCases": 50,
           "timeoutMs": 900000
         },
         {
@@ -448,7 +448,7 @@
             "--filter",
             "ProtocolGoldenTests"
           ],
-          "minCases": 19,
+          "minCases": 20,
           "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
           "timeoutMs": 900000
         },
@@ -462,7 +462,7 @@
             "run",
             "src/test/native-host-protocol.test.ts"
           ],
-          "minCases": 20,
+          "minCases": 21,
           "timeoutMs": 900000
         },
         {
@@ -790,7 +790,7 @@
             "--test",
             "task_idempotency"
           ],
-          "minCases": 8,
+          "minCases": 10,
           "$note": "同 ID 重试只 spawn 一次：认领键是 (taskId, kind, generation) 且**先查重再取号**——先取号会让每次重试拿到新键，'只 spawn 一次' 就成了没有机制的口号。另含：4 线程并发只有一个通过、认领跨进程存活（重启后重试仍被拒）、cancel 之后才允许下一次真实启动、迟到的 TerminalReady 不能释放当前一代的认领、FutureGeneration 是报错而不是静默丢弃。地板 8。",
           "timeoutMs": 900000
         },
@@ -935,7 +935,7 @@
           "name": "adapter-acceptance-real-kernel",
           "kind": "test",
           "parse": "rust",
-          "minCases": 18,
+          "minCases": 19,
           "timeoutMs": 900000,
           "argv": [
             "cargo",
