@@ -49,3 +49,20 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 7. **usage 三件套的验收重点是"重放不重复计费"。** `usage_index.rs:1418` 的注释写明续扫只读新增尾段、已封存前缀既不重复计数也不丢；`:1608` 的 `a_claude_dedup_group_is_never_split_by_the_cursor` 守住 dedup 组不被游标劈开，`:527` 解释了为什么必须收成一条。P3-04 Action 4 直接复用这两条判据；terminal 文字一律不作计费依据（INV-12）。另有一处**必须收成一份**的分叉风险：`analytics.rs:58/72/84` 用**内容嗅探**回答"这份转录属于哪个家族"（`:264` 就用它选解析路径，`is_zstd_usage_log` 在 `:1073`），而 `session/parse.rs` 是按家族**显式分派**的解析器（`parse_claude_session`/`parse_codex_session` 等 9 处引用）；`agent_usage.rs`/`usage.rs` 里没有第三份判定，但这两套口径一旦各自进 core，改一处就会与另一处分叉——P3-04 落 `sessions/{claude,codex,dsh,omp}.rs` 时应当让内容嗅探只做一次并复用同一答案。
 
 8. **DSH 转录有两种物理形态，且切换会留旧产物。** `session_dsh.rs:36`/`:38` 是 `session.jsonl` 与 `session.jsonl.zstd` 两个常量，后缀由插件的 `compression` 决定（`:9-10`：Aeroric 受管 patch 请求 `none`，插件默认却是 `zstd`）；`:111-115` 说明**从 zstd 切回 none 之后同一 root 里旧的压缩产物仍然存在**，所以读侧必须两形都试。core 里新增解压依赖之前先看这里用的是哪个 crate，别引入第二个 zstd 实现。
+
+## 九、G04 的行号与"是否可取消"复核（2026-09-28，补记一百十四）
+
+G04 原文：「per-task 会话 watcher 线程（`session.rs:1845/1847`、`session_dsh.rs:630`、`session_omp.rs:300`）无显式取消，仅靠 loop 退出」。当天逐站回源，**结论：三个引用站点全部过期，且这笔账已完成大半**。真实状态：
+
+| 站点 | 今天的位置 | 监督状态 |
+|---|---|---|
+| DSH 会话发现 watcher | `session_dsh.rs:621` `spawn_dsh_session_watcher`（原记 :630，漂 9 行） | `supervisor.spawn_supervised` + 循环首行 `if token.is_cancelled() { return }` ✓ |
+| OMP 会话发现 watcher | `session_omp.rs:299` `spawn_omp_session_watcher`（原记 :300，漂 1 行） | 同上，且按 `watch:omp-session:<task>:<gen>` 去重 ✓ |
+| claude/codex 转录 watcher | `session.rs:1851` / `:1860` | `supervisor.spawn_unique` —— **仅记账、不看 token**（注释自陈"每代一份，自终止"，:1849） |
+| 状态会话 watcher | `session.rs:1926`、`:2138`、`:2227` | `spawn_supervised` + token ✓ |
+| resume 会话 watcher | `session.rs:2360` | `spawn_supervised` 但闭包签名是 `move |_token|` —— **拿到了 token 却从不检查**，形状上可取消、实质等同仅记账 |
+| claude lazy attach | `session.rs:1999`（在 `spawn_claude_lazy_session_attach`，定义 :1991） | **裸 `thread::spawn`，完全不经监督者**；这是本 Task 唯一真正要补取消的一站 |
+
+因此 P3-04 在 G04 上的实际工作量从"三站"缩到"一站真补（:1999）+ 两站补 token 检查（:1851/:1860 的 `spawn_unique` 语义要不要升级为可取消，是设计选择不是缺陷）+ 一站形同虚设（:2360 的 `_token`）"。
+
+**一条通用口径**：`spawn_supervised(name, |token| …)` 的**形状**不等于可取消——判据只能是闭包里真的读 `token.is_cancelled()`。以后任何"已接监督者"的声称，都要按这一条逐站验，不看函数名。（同一个坑在 P2-05 以另一种形式出现过：`Arc::ptr_eq` 从判定依据降为 `debug_assert` 安全网，形状还在、语义已变。）

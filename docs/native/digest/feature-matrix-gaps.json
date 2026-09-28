@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "e407b7267384642756886d54b734495ddaff5700f35511efe11ab9789a188c97",
+  "sourceSha256": "49980a119f0d3487800e52b05da8efb2fef60dc5fa4f4313c2bc167e3fa48406",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -38,13 +38,14 @@
       },
       {
         "id": "G04",
-        "finding": "per-task 会话 watcher 线程（session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300）无显式取消，仅靠 loop 退出",
-        "evidence": "B.5 表",
-        "requirement": "owner 必须是 task generation 而非窗口",
+        "finding": "per-task 会话 watcher 的取消覆盖不均（2026-09-28 逐站回源，原三个引用站点全部过期）：`session.rs:1999` 的 spawn_claude_lazy_session_attach 仍是**裸 thread::spawn、不经监督者**；`session.rs:1851/1860` 走 spawn_unique（注释自陈仅记账、自终止）；`session.rs:2360` 用 spawn_supervised 但闭包是 `move |_token|`——拿到 token 却从不检查，形同虚设。已完成的部分：DSH(`session_dsh.rs:621`)、OMP(`session_omp.rs:299`)、状态 watcher (`session.rs:1926/2138/2227`) 六站均查 `token.is_cancelled()` 并按 (task,generation) 去重",
+        "evidence": "逐站表与口径见 docs/native/extraction/sessions.md §九（含「监督形状 ≠ 可取消，判据是闭包里真读 token」这条）",
+        "requirement": "剩下的裸 spawn 必须进监督者并持 token；`_token` 未用的那一站要么真检查、要么改回 spawn_unique 并说明自终止依据",
         "task_ids": "P3-04",
         "owner": "core:sessions",
         "test": "退出后 late watcher 不得改新会话；无 GUI 时 watcher 仍收敛",
-        "status": "open"
+        "status": "open",
+        "retriage_note": "原判据引用的 session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300 全部漂移（分别漂到 :1999 一带、:621、:299），且「无显式取消」在今天只对 1 站成立——P3-01 切片四（补记八十五）已把六站接进 WatcherSupervisor。owner 仍是 P3-04（未开工），故本条不改派，只把事实改准。"
       },
       {
         "id": "G05",

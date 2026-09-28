@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-head.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "e407b7267384642756886d54b734495ddaff5700f35511efe11ab9789a188c97",
+  "sourceSha256": "49980a119f0d3487800e52b05da8efb2fef60dc5fa4f4313c2bc167e3fa48406",
   "capBytes": 32768,
   "payload": {
     "meta": {
