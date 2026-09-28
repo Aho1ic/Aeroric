@@ -258,6 +258,26 @@
           "timeoutMs": 300000
         },
         {
+          "name": "extraction-docs-current-sessions",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=session",
+            "--module=session_dsh",
+            "--module=session_omp",
+            "--module=event_watcher",
+            "--module=usage",
+            "--module=agent_usage",
+            "--module=usage_index",
+            "--module=analytics",
+            "--check",
+            "docs/native/extraction/sessions.md"
+          ],
+          "$note": "P3-04（sessions/usage/watcher）的 §5.1 展开先行交付：11 个文件 / 13 个 command wrapper / 11 226 行，逐行可从源码重导，与 command-map.json 交叉校验。文档下方的 8 条手写约束不在重导覆盖内（tableDrift 只比表格行），但每条都在 2026-09-28 当场回源：OMP 三根中只有 agent-homes 可进 core（session_omp.rs:127/136/142-145 对照 INV-06 与 ADR-001 §5）、dsh 的时限窗实际在 session.rs:1876-1890 而非 session_dsh.rs（那里 grep deadline|timeout 0 命中）、引用解析阶梯的计划行号 549-615 已漂到 taskLifecycle.ts:574/592/607、claimed_session_paths 保持路径粒度（ADR-020 §3，站点 session.rs:97 + lib.rs:118/1278/1287/1293/1310）、DSH 转录 raw/zstd 两形并存且切回 none 会留旧产物（session_dsh.rs:36/38/9-10/111-115）。落点目录按正文归并成 sessions/，不照 destination 列建六个平行目录。",
+          "timeoutMs": 120000
+        },
+        {
           "name": "extraction-unit",
           "kind": "test",
           "argv": [
