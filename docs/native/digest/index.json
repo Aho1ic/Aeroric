@@ -27,8 +27,8 @@
     },
     {
       "path": "docs/native/feature-matrix.json",
-      "bytes": 39638,
-      "sha256": "49980a119f0d3487800e52b05da8efb2fef60dc5fa4f4313c2bc167e3fa48406",
+      "bytes": 41313,
+      "sha256": "8bfe4ac47f3d7c13285f6de57fb16efd4bafb358965c7ad44e1f5089e5f4b86c",
       "shards": [
         {
           "file": "docs/native/digest/feature-matrix-head.json",
@@ -40,7 +40,7 @@
         },
         {
           "file": "docs/native/digest/feature-matrix-gaps.json",
-          "bytes": 16938
+          "bytes": 18617
         }
       ]
     }

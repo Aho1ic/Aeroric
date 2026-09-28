@@ -624,13 +624,14 @@
     },
     {
       "id": "G06",
-      "finding": "后端依赖 React 计时器的正确性：350ms per-project 去抖持久化、10s flush 上限、30min 自动清理、DSH host 事件订阅随 tasks 渲染启停",
-      "evidence": "src/taskPersistence.ts:34；taskFlush.ts:3；useAppMaintenance.ts:95；useAppStartup.ts:81-97",
+      "finding": "后端仍依赖 React 计时器的三处（2026-09-28 逐条回源，原列四项已闭合一项）：`taskFlush.ts:4` 的 `TASK_FLUSH_TIMEOUT_MS = 10_000`、`useAppMaintenance.ts:92` 的 `window.setInterval(…, 30 * 60 * 1000)` 自动清理、以及 DSH host 事件订阅随 tasks 渲染启停（`useAppStartup.ts` 一带，本轮未逐行核对，标注为待核）。**已闭合：原列的第一项「350ms per-project 去抖持久化」不复存在**——载体 `src/taskPersistence.ts` 由 P2-05 §12 接线删除，`src/taskIntentQueue.ts:4` 明写「不做 350 ms 快照合并」、`:237` 把微任务窗口称为旧防抖的意图版",
+      "evidence": "taskFlush.ts:4；useAppMaintenance.ts:92；src/taskIntentQueue.ts:4,237（闭合证据）；原 evidence 里的 src/taskPersistence.ts:34 已随文件删除而失效（P2-05 补记八十）",
       "requirement": "改为 host 每次 mutation 即写；计时器归 core",
       "task_ids": "P2-02, P2-04, P8-04",
       "owner": "core:storage+maintenance",
       "test": "崩溃夹在步骤中间须对账为 interrupted 而非重新 spawn；无窗口时清理仍按 opt-in 运行",
-      "status": "open"
+      "status": "open",
+      "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。"
     },
     {
       "id": "G07",
@@ -654,13 +655,14 @@
     },
     {
       "id": "G09",
-      "finding": "26 个非组件模块（App.tsx、18 个 hooks 等）绕过 src/lib/api/ 直接 import @tauri-apps/api/core",
-      "evidence": "B.5 报告 (a) 清单",
+      "finding": "非组件模块绕过 `src/lib/api/` 直接 import `@tauri-apps/api/core`——**2026-09-28 实测 29 个**（口径：`src/` 下 `.ts`/`.tsx`，排除 `.test.`/`__tests__` 与 `/components/`，按文件计数；「含测试」口径是 188，「不排除组件」也是 29）。原记的 26 个来自 B.5 报告，而该报告未随仓分发，数字已无从复算——这正是本仓点名过的「计数没有存下推导它的东西」那一类，改为附口径可重跑",
+      "evidence": "本轮口径可重跑：遍历 src/ 过滤 @tauri-apps/api/core；样例 src/App.tsx、src/customThemes.ts、src/taskIntentQueue.ts、src/projectSaveQueue.ts、src/dshWebUi.ts、src/utils/fonts.ts",
       "requirement": "原生客户端只允许经 AeroricClient 出口发 RPC",
       "task_ids": "P2-05, P4-02",
       "owner": "client",
       "test": "eslint/脚本规则：Swift 与 React 均不得出现裸 invoke 入口；反例文件必须报错",
-      "status": "open"
+      "status": "open",
+      "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。"
     },
     {
       "id": "G10",
