@@ -2275,7 +2275,7 @@ grill-me
 >
 > **二、为什么给 gap 加 `verified_on`**：新加的 accepted-only 规则挡得住"owner 全关门"，挡不住"owner 还活着但主张已过期"——今天 G06 就是后者（350ms 那半早已随 `src/taskPersistence.ts` 删除而闭合）。`verified_on` 是把"这条账最后一次对着源码核是什么时候"变成工件里的字段，而不是某次会话的记忆。加字段后 `inventory --check` consistent、`skeleton` **22/142** 仍绿（gaps 计数与结构未变）。
 >
-> **三、状态**：10 条 `open` gap 里今天核完 7 条（G03/G04/G05/G06/G09/G13/G07 + G12/G14/G15 的确认），**剩 G08/G10 之外的 `triaged-*` 状态与 pending-owner 类未逐条回源**，且这些各有其归属。台账现在的形状：5 条带 `retriage_note`（改判记录）、5 条带 `verified_on`、2 条 finding 已重写为当天事实。
+> **三、状态（精确）：今天把 **10 条 `open` gap 全部逐条回源完毕**——G03/G04/G05（补记一百十三～一百十四：改派与站点数对）、G06/G09（补记一百十七：主张已变 / 计数与口径重写）、G07/G12/G13/G14/G15（补记一百十八：措辞改准或确认仍成立）。**未逐条回源的是另外 7 条非 open 状态的**：`G01`/`G02`/`G11`/`G16`（`triaged-*`，其"已定性"本身由 inventory 机器断言守着）、`G08`/`G10`（`closed-by-tool`）、`G17`（`decided-adr-005-awaiting-p3-05-evidence`，41 条 dsh 证据归 P3-05 出口）。这 7 条各有归属，本轮不冒充核过。台账现在的形状：5 条带 `retriage_note`（改判记录）、5 条带 `verified_on`、2 条 finding 已重写为当天事实。
 >
 > **四、实测**：`digest --write/--check` exit 0（gaps 段变了，7 片重切）；`inventory --check` consistent；`pnpm native:check skeleton` **22 case／142 用例** exit 0；`git diff --check` 干净。零代码改动。
 - **Input**：`session.rs`、`session/{parse,approval,export}.rs`、`session_dsh.rs`、`session_omp.rs`、`event_watcher.rs`、`usage.rs`、`usage_index.rs`、`analytics.rs`；`src/taskSession.ts`。

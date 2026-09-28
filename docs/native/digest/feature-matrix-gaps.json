@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "e22ca103b7a06c8e881b8aa437d2eb13debe0edd963d025620e95015f205ceda",
+  "sourceSha256": "66c2b3e1d7e7c9fa203e5e268c83954a11f65a9d538172a378d5742f8f2b3d59",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -34,7 +34,8 @@
         "owner": "core:sessions (event_watcher + usage_index) + core:notebook (sync daemon)",
         "test": "tests/runtime_lifecycle.rs：shutdown 两次安全；启动两次不重复 watcher",
         "status": "open",
-        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。"
+        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G04",
@@ -45,7 +46,8 @@
         "owner": "core:sessions",
         "test": "退出后 late watcher 不得改新会话；无 GUI 时 watcher 仍收敛",
         "status": "open",
-        "retriage_note": "原判据引用的 session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300 全部漂移（分别漂到 :1999 一带、:621、:299），且「无显式取消」在今天只对 1 站成立——P3-01 切片四（补记八十五）已把六站接进 WatcherSupervisor。owner 仍是 P3-04（未开工），故本条不改派，只把事实改准。"
+        "retriage_note": "原判据引用的 session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300 全部漂移（分别漂到 :1999 一带、:621、:299），且「无显式取消」在今天只对 1 站成立——P3-01 切片四（补记八十五）已把六站接进 WatcherSupervisor。owner 仍是 P3-04（未开工），故本条不改派，只把事实改准。",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G05",
@@ -56,7 +58,8 @@
         "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
         "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
         "status": "open",
-        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。"
+        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G06",
@@ -67,7 +70,8 @@
         "owner": "core:storage+maintenance",
         "test": "崩溃夹在步骤中间须对账为 interrupted 而非重新 spawn；无窗口时清理仍按 opt-in 运行",
         "status": "open",
-        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。"
+        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G07",
@@ -99,7 +103,8 @@
         "owner": "client",
         "test": "eslint/脚本规则：Swift 与 React 均不得出现裸 invoke 入口；反例文件必须报错",
         "status": "open",
-        "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。"
+        "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。",
+        "verified_on": "2026-09-28"
       },
       {
         "id": "G10",
