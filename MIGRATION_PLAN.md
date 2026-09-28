@@ -2236,6 +2236,10 @@ grill-me
 
 ### Task P3-05 — 将 DSH 结构化宿主变成核心服务
 
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **19 条** v1 event topic 的接线——dsh.approval_requested、dsh.approval_resolved、dsh.question_requested、dsh.question_resolved、dsh.session_event、dsh.session_jobs、dsh.session_projection、dsh.session_queue、dsh.session_subscribed、dsh.host_remote_event、dsh.host_stream_error、dsh.host_agent_error、dsh.host_session_added、dsh.host_session_removed、dsh.host_session_status、dsh.host_workspace_changed、dsh.host_workspace_order_changed、dsh.host_workspace_removed、dsh.host_archived_sessions_changed。其中 8 条 `dsh.host_*` 在冻结清单里**没有具名 Rust 发射点**（动态发射，常量在 `event_names.rs`），必须先定性才能桥接；`dsh-host-remote-event`/`dsh-host-stream-error` 还同时挂在 `G01`（无监听者）名下。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
+
 - **Input**：`src-tauri/src/dsh_webui.rs`、`dsh_webui/{startup,commands,dto,api_client,remote_mux,protocol_inventory,terminal_render}.rs`、`dsh_protocol.rs`、`dsh_plugins.rs`；`src/dshProtocol.ts`、`dshSessionFeatures.ts`。
 - **Action**：
   1. 新建 `core/crates/aeroric-core/src/agents/dsh_host/{mod,startup,client,dispatcher,state,approvals,questions,attachments,projection}.rs`，逐文件提取现有 DSH host 所有权、API 调用与状态 reducer。
@@ -2250,6 +2254,10 @@ grill-me
   - **调用 `grill-me [dsh]`**，重点复核 existing DSH resume/continue 差异与权限路由。
 
 ### Task P3-06 — 实现认证 UDS 宿主与事件重同步
+
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **2 条** v1 event topic 的接线——app.exit_requested、app.restart_requested。legacy 发射点在 app-lifetime 编排里（`lib.rs:1169` 的 ExitRequested 与 `:1181` 的 Exit，今天 Exit 只 block_on LocalRouter 与 DSH），与本 Task Action 5 的 readiness/shutdown 同场；另与 `G03`（三处 `thread::spawn(run_loop)` 无关停路径）相关。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
 
 - **Input**：§2.2–2.3；P3-01～05；`remote/event_log.rs`、`remote/terminal_frames.rs` 仅作行为参考。
 - **Action**：
@@ -2488,6 +2496,10 @@ grill-me
 
 ### Task P6-03 — LSP、诊断、运行/测试、DAP 与预览
 
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **1 条** v1 event topic 的接线——lsp.diagnostics（旧通道 `lsp://diagnostics`，是唯一带 `://` 的通道名，落到 v1 点号词表时要在 `source` 里写明派生例外）。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
+
 - **Input**：`src-tauri/src/{lsp,dap,run_config,diagnostics,formatter}.rs`、`lsp/`、`dap/`；`src/lib/api/lsp.ts`、`ProjectPage.tsx` 中 run/debug 接线。
 - **Action**：
   1. 新建 core `ide/{mod,lsp,dap,run_config,diagnostics,test_runner,preview}.rs`；保留协议 parser 子模块，使用 projectTarget 而非仅本地 path。
@@ -2587,6 +2599,10 @@ grill-me
 
 ### Task P7-04 — DBX 数据库能力与原生数据网格
 
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **2 条** v1 event topic 的接线——dbx.production_confirm_requested、dbx.transfer_progress。两条都是审批/进度面，payload 必须带 operationId，与 §2.3 的 `request`/`task.cancel` 语义区分对齐。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
+
 - **Input**：`src-tauri/src/database/` 的 connections/query/grid/schema/import_export/redis/mongo/transfer/legacy_sqlite/connection_secrets/dbx_state；`scripts/prepare-dbx.sh`、Cargo patches。
 - **Action**：
   1. 在 core 新建 `database/` 对应同名模块，逐个搬移业务；原 command 同名保留为 adapter。DBX 初始化不是 AppHandle 的职责；降级内存库要有显式 diagnostics，不能悄悄当持久连接库。
@@ -2616,6 +2632,10 @@ grill-me
   - **调用 `grill-me [notebook]`**。
 
 ### Task P7-06 — 笔记同步、RAG 与存储后端
+
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **2 条** v1 event topic 的接线——notebook.rag_index_progress、notebook.sync_updated。旧通道 `notebook-rag-index-progress` 的常量在 `notebook/rag/commands.rs:35`，与 `report.rs:28` 的 `PROGRESS_EVENT` 同名不同值（第十一次补记的符号表教训），桥接时按文件内解析取值。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
 
 - **Input**：`notebook/{sync,rag}/`；`storage_backend*.rs`、`storage_conn.rs`、`storage_oauth.rs`、`secrets.rs`、`app_settings/schema.rs` embedding 设置。
 - **Action**：
@@ -2652,6 +2672,10 @@ grill-me
 
 ### Task P8-02 — provider、proxy、local router 与凭据边界
 
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **2 条** v1 event topic 的接线——agent.operation_changed（`agent_ops.rs:190`）、agent.tool_install_progress（`agent_tools.rs:606`，`listeners: []`、`orphan: emitted-without-listener`、`disposition: redundant-channel`）。本 Task 的 Input 明列 `agent_ops.rs` 与 `agent_tools/`，所以这两条归它；**并须交代 `G01`**：该 gap 的 `task_ids` 写的是 `P2-01, P3-05`，而事件级 note 点名 P3-02 处置——两份工件各指一个 Task，出口时必须给出「有订阅者」或「删 emit」的单一决定，不得再传一次。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
+
 - **Input**：`src-tauri/src/app_settings/` 全部配置/模型/版本模块、`local_router/`、`local_router_commands.rs`、`agent_ops.rs`、`agent_tools/`、`node_runtime.rs`。
 - **Action**：
   1. 新建 core `settings/`、`providers/`、`local_router/`、`operations/` 的对应模块；保留 local router cache/stream/transforms/circuit breaker/usage 的既有测试。
@@ -2665,6 +2689,10 @@ grill-me
   - **调用 `grill-me [provider-services]`**。
 
 ### Task P8-03 — 远程/mobile 彻底脱离 React 任务请求中转
+
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **5 条** v1 event topic 的接线——remote.device_paired、remote.task_request、remote.terminal_resized、aeroric.app_settings_changed（发射点在 `remote/agent_config_rpc.rs:29`，虽然通道名以 `aeroric:` 开头）、project.pinned_changed（发射点在 `remote/` 里，不在 storage/projects）。`remote.task_request` 这条与 §3.1 #8「domain 执行不得依赖 React listener」直接对撞，是本 Task 的必过项。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
 
 - **Input**：`src-tauri/src/remote/` 全部模块；`packages/remote-contracts`；`remote-protocol`、`remote-relay`；`src/state/app/useRemoteTaskRequests.ts`、mobile 现有协议测试。
 - **Action**：
@@ -2680,6 +2708,10 @@ grill-me
   - **调用 `grill-me [remote]`**；headless 仍依赖 `remote-task-request` 的实现不准通过。
 
 ### Task P8-04 — 统计、通知、清理、周报、权限与更新
+
+
+> **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **1 条** v1 event topic 的接线——weekly.report_progress（旧通道常量 `PROGRESS_EVENT` @ `report.rs:28`，见上一条的同名不同值教训）。
+> 每条 `pending` 行在出口必须变成 `mapped`（带 `source` 文档行号 + `verbatim`/`reshaped:` 的 payload 判定）或 `not-forwarded: <原因>`；校验器现禁止 pending 行提前装作已决，所以「先接线再说」在这张表上骗不过门禁。归属判据是 `command-map.json` 的 `events[].emitters[]` 实际发射点（T1=A，2026-09-28，补记一百十三），改派记录在 `docs/native/adr/007-event-topic-namespace.md` 修正案与 `docs/native/extraction/event-topics-pending.md`。
 
 - **Input**：`src-tauri/src/{analytics,agent_usage,usage_index,report,notification,startup_diagnostics}.rs`、`permissions/`；`src/taskCleanup.ts`、`weeklyReport.ts`、Release 页面。
 - **Action**：
