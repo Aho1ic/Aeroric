@@ -1,6 +1,6 @@
 use aeroric_core::runtime::ShutdownToken;
 use aeroric_core::tasks::TaskSessionFacts;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -583,136 +583,17 @@ fn process_claude_session_line<R: tauri::Runtime>(
 // 改名）由 core 的类型逐字携带，金样测试在 `core/crates/aeroric-core/tests/session_parsers.rs`。
 pub(crate) use aeroric_core::sessions::{SessionContent, SessionMessage};
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionMessagePage {
-    messages: Vec<SessionMessage>,
-    next_cursor: Option<u64>,
-    has_more: bool,
-}
-
-const SESSION_MESSAGE_PAGE_LINES: usize = 1_000;
-const SESSION_MESSAGE_READ_CHUNK_BYTES: u64 = 64 * 1024;
-
-/// 从 `cursor` 之前反向读取最多 `limit` 条完整 JSONL 记录。
-/// 返回的行仍按时间正序排列，`next_cursor` 指向本页最早一行的字节起点。
-fn read_session_page_lines(
-    path: &Path,
-    cursor: Option<u64>,
-    limit: usize,
-) -> Result<(Vec<String>, Option<u64>, bool), String> {
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
-    let file_len = file.metadata().map_err(|error| error.to_string())?.len();
-    let end = cursor.unwrap_or(file_len).min(file_len);
-    if end == 0 || limit == 0 {
-        return Ok((Vec::new(), None, false));
-    }
-
-    let mut start = end;
-    let mut bytes = Vec::new();
-    loop {
-        let next_start = start.saturating_sub(SESSION_MESSAGE_READ_CHUNK_BYTES);
-        let chunk_len = (start - next_start) as usize;
-        let mut chunk = vec![0u8; chunk_len];
-        file.seek(SeekFrom::Start(next_start))
-            .map_err(|error| error.to_string())?;
-        file.read_exact(&mut chunk)
-            .map_err(|error| error.to_string())?;
-        chunk.extend(bytes);
-        bytes = chunk;
-        start = next_start;
-
-        let complete_line_count = bytes
-            .split(|byte| *byte == b'\n')
-            .enumerate()
-            .filter(|(index, line)| {
-                (start == 0 || *index > 0) && !line.iter().all(u8::is_ascii_whitespace)
-            })
-            .count();
-        if complete_line_count >= limit || start == 0 {
-            break;
-        }
-    }
-
-    let mut ranges = Vec::new();
-    let mut line_start = 0usize;
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte != b'\n' {
-            continue;
-        }
-        if (start == 0 || line_start > 0)
-            && !bytes[line_start..index].iter().all(u8::is_ascii_whitespace)
-        {
-            ranges.push((line_start, index));
-        }
-        line_start = index + 1;
-    }
-    if line_start < bytes.len()
-        && (start == 0 || line_start > 0)
-        && !bytes[line_start..].iter().all(u8::is_ascii_whitespace)
-    {
-        ranges.push((line_start, bytes.len()));
-    }
-
-    if ranges.is_empty() && start == 0 {
-        return Ok((Vec::new(), None, false));
-    }
-
-    let first = ranges.len().saturating_sub(limit);
-    let selected = &ranges[first..];
-    let page_start = selected
-        .first()
-        .map(|(range_start, _)| start + *range_start as u64)
-        .unwrap_or(end);
-    let mut lines = Vec::with_capacity(selected.len());
-    for (range_start, range_end) in selected {
-        let line = std::str::from_utf8(&bytes[*range_start..*range_end])
-            .map_err(|error| format!("Session file is not valid UTF-8: {error}"))?;
-        lines.push(line.trim_end_matches('\r').to_string());
-    }
-    let has_more = page_start > 0;
-
-    Ok((lines, has_more.then_some(page_start), has_more))
-}
-
-/// 单次读取会话记录时保留的最大行数(按尾部保留)。长会话的 JSONL 可达数百 MB,
-/// 整体读进内存会让桌面进程 RSS 随会话线性膨胀;Agent 交接与 UI 回看都只需要最近的
-/// 上下文,因此只保留尾部。取 20000 行:够覆盖一次交接所需的近期对话,又把峰值
-/// 内存钳在可控范围。
-const MAX_SESSION_LINES: usize = 20_000;
-
-/// 流式读取 JSONL,只在内存里保留最后 `MAX_SESSION_LINES` 行。
-///
-/// 格式探测(`is_codex_format`)只看**开头**若干行,而尾部窗口可能已经把它们丢掉,
-/// 所以这里在流式扫描时顺便对前 `SESSION_FORMAT_DETECTION_LINES` 行做探测,
-/// 把结论单独返回,避免为了探测而全量驻留。
-fn read_session_tail(path: &Path) -> Result<(Vec<String>, bool), String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(file);
-    // VecDeque 做固定容量环形窗口,超出容量时从头部弹出,保证尾部 N 行。
-    let mut tail: VecDeque<String> = VecDeque::with_capacity(MAX_SESSION_LINES.min(1024));
-    let mut scanned = 0usize;
-    let mut detected_codex = false;
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if scanned < SESSION_FORMAT_DETECTION_LINES {
-            scanned += 1;
-            if !detected_codex && line_is_codex_format(&line) {
-                detected_codex = true;
-            }
-        }
-        if tail.len() == MAX_SESSION_LINES {
-            tail.pop_front();
-        }
-        tail.push_back(line);
-    }
-
-    Ok((Vec::from(tail), detected_codex))
-}
+// 读取层的两个入口、页类型与三组上限常量已随 P3-04 第四片迁入 core
+// `aeroric_core::sessions::history`（补记二百四十四），行为逐字保真。**路径校验仍在本文件**：
+// `validate_session_path_for` 依赖宿主 `AgentFamily` 与允许根（唯一真相，同第二片
+// 「家目录由调用方注入」的形状）——core 拿到的是已过闸门后的 canonical 路径。
+// re-export 保持 `crate::session::…` 的路径与原可见性不变（`session/export.rs` 等
+// `use super::…` 的引用点不受影响）。
+#[cfg(test)]
+use aeroric_core::sessions::history::MAX_SESSION_LINES;
+pub(crate) use aeroric_core::sessions::history::{
+    read_session_page_lines, read_session_tail, SessionMessagePage, SESSION_MESSAGE_PAGE_LINES,
+};
 
 /// Codex app-server 目前无法原生恢复 `history_mode = "paginated"` 的会话。
 /// 只扫描头部格式探测窗口：`session_meta` 是 Codex rollout 的首部记录，
@@ -921,49 +802,14 @@ pub async fn recover_task_session(
     .map_err(|error| error.to_string())?
 }
 
-const SESSION_FORMAT_DETECTION_LINES: usize = 200;
-
-/// 单行是否带 Codex 专有的事件标记。供整段探测与流式探测共用。
-fn line_is_codex_format(line: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .and_then(|val| {
-            val.get("type")
-                .and_then(|v| v.as_str())
-                .map(|kind| matches!(kind, "session_meta" | "event_msg"))
-        })
-        .unwrap_or(false)
-}
-
-fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
-    lines
-        .iter()
-        .take(SESSION_FORMAT_DETECTION_LINES)
-        .any(|line| line_is_codex_format(line.as_ref()))
-}
-
-fn parse_session_messages(lines: &[String], prefer_codex: bool) -> Vec<SessionMessage> {
-    parse_session_messages_with_format(lines, prefer_codex, is_codex_format(lines))
-}
-
-/// 与 `parse_session_messages` 相同,但允许调用方给出已经算好的格式探测结论。
-/// 尾部截断读取时,开头的 `session_meta` 行可能已不在 `lines` 里,必须由流式扫描
-/// 阶段的探测结果补上,否则 Codex 会话会被误判成 Claude 格式而解析为空。
-fn parse_session_messages_with_format(
-    lines: &[String],
-    prefer_codex: bool,
-    detected_codex: bool,
-) -> Vec<SessionMessage> {
-    let primary_is_codex = detected_codex || prefer_codex;
-    let mut messages = Vec::new();
-    parse_session_lines(lines, primary_is_codex, &mut messages);
-
-    if messages.is_empty() && primary_is_codex != detected_codex {
-        parse_session_lines(lines, detected_codex, &mut messages);
-    }
-
-    messages
-}
+// 格式探测窗与两个探测/分派函数同样随第四片迁入 core `aeroric_core::sessions::parser`
+// （补记二百四十四）。`is_codex_format` 是内容嗅探的唯一答案源——手写约束 7 要求
+// 「嗅探只做一次并复用同一答案」，宿主其余引用点都从这里走；`usage` 族另一份
+// 按内容判族的探针在 `analytics.rs`，其归属随 Q1 留给 P8-04。
+pub(crate) use aeroric_core::sessions::parser::{
+    is_codex_format, parse_session_messages, parse_session_messages_with_format,
+    SESSION_FORMAT_DETECTION_LINES,
+};
 
 fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<String> {
     let file = File::open(path).ok()?;

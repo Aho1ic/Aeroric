@@ -1,9 +1,10 @@
-//! 会话层（P3-04）：解析（首片）＋发现路径（第二片：discovery／dsh／omp 三个纯函数面）。
+//! 会话层（P3-04）：解析（首片）＋发现路径（第二片）＋dsh／omp 读侧（第三片）＋分页／尾部窗口读取层与格式探测（第四片：history）。
 //!
 //! 内容逐字来自宿主 `src-tauri/src/session.rs` ＋ `src-tauri/src/session/parse.rs`，
 //! 行为一行未改：两家 agent 的落盘格式不同，所以有 Claude／Codex 两套平行的解析器，
-//! 由 [`parser::parse_session_lines`] 按 `is_codex` 分派。全是纯函数，不读盘 ——
-//! 调用方负责把文件读成行再递进来（路径校验与读取上限属后续 history 片，Action 1）。
+//! 由 [`parser::parse_session_lines`] 按 `is_codex` 分派。读上限族（页 1 000 行、尾部
+//! 20 000 行、探测窗 200 行）随第四片进 [`history`]；**路径校验留在宿主**
+//! `validate_session_path_for`——它依赖宿主 `AgentFamily` 与允许根（唯一真相）。
 //!
 //! 类型 [`SessionMessage`]／[`SessionContent`] 的 serde 形状是旧客户端的在网契约
 //! （`tag = "type"`、snake_case 变体、`messageId`／`mediaType` 改名），金样测试按
@@ -18,6 +19,7 @@ pub mod claude;
 pub mod codex;
 pub mod discovery;
 pub mod dsh;
+pub mod history;
 pub mod omp;
 pub mod parser;
 

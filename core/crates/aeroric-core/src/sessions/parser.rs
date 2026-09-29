@@ -62,3 +62,49 @@ pub fn attachment_from_value(value: &serde_json::Value) -> Option<SessionContent
         source,
     })
 }
+
+/// 格式探测只看文件**开头**这么多行（宿主 `session.rs` 的同名常量逐字迁移，第四片）。
+pub const SESSION_FORMAT_DETECTION_LINES: usize = 200;
+
+/// 单行是否带 Codex 专有的事件标记。供整段探测与流式探测共用。
+pub fn line_is_codex_format(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|val| {
+            val.get("type")
+                .and_then(|v| v.as_str())
+                .map(|kind| matches!(kind, "session_meta" | "event_msg"))
+        })
+        .unwrap_or(false)
+}
+
+/// 在探测窗内找得到 Codex 事件标记，就算 Codex 格式。
+pub fn is_codex_format<S: AsRef<str>>(lines: &[S]) -> bool {
+    lines
+        .iter()
+        .take(SESSION_FORMAT_DETECTION_LINES)
+        .any(|line| line_is_codex_format(line.as_ref()))
+}
+
+pub fn parse_session_messages(lines: &[String], prefer_codex: bool) -> Vec<SessionMessage> {
+    parse_session_messages_with_format(lines, prefer_codex, is_codex_format(lines))
+}
+
+/// 与 `parse_session_messages` 相同,但允许调用方给出已经算好的格式探测结论。
+/// 尾部截断读取时,开头的 `session_meta` 行可能已不在 `lines` 里,必须由流式扫描
+/// 阶段的探测结果补上,否则 Codex 会话会被误判成 Claude 格式而解析为空。
+pub fn parse_session_messages_with_format(
+    lines: &[String],
+    prefer_codex: bool,
+    detected_codex: bool,
+) -> Vec<SessionMessage> {
+    let primary_is_codex = detected_codex || prefer_codex;
+    let mut messages = Vec::new();
+    parse_session_lines(lines, primary_is_codex, &mut messages);
+
+    if messages.is_empty() && primary_is_codex != detected_codex {
+        parse_session_lines(lines, detected_codex, &mut messages);
+    }
+
+    messages
+}
