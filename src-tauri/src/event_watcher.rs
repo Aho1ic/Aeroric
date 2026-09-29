@@ -18,15 +18,12 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use serde::Deserialize;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::session::{ClaudeSessionInfo, CodexSessionInfo};
@@ -36,24 +33,15 @@ use crate::TaskManager;
 /// 间隔——即便漏掉某次文件事件,最坏也在此间隔内被重新扫描到。
 const FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Deserialize)]
-struct HookEvent {
-    #[serde(default)]
-    task_id: String,
-    #[serde(default)]
-    agent: String,
-    #[serde(default)]
-    event: String,
-    #[serde(default)]
-    session_id: String,
-    #[serde(default)]
-    transcript_path: String,
-    #[serde(default)]
-    tool_name: String,
-    /// 新版由启动器显式传入,旧版事件没有此字段,回退到 agent == "codex"。
-    #[serde(default)]
-    codex_like: Option<bool>,
-}
+// `HookEvent`、行增量解析与读侧状态机 `HookEventReader` 已随 P3-04 第六片迁入 core
+// `aeroric_core::sessions::hooks`（补记二百四十六，Action 3「无 AppHandle 的
+// HookEventReader」）；本文件只剩带 `AppHandle` 的一侧：dispatch、登记去重、emit
+// 节流。`codex_like` 缺省字段回退 `app_settings::is_codex_like_agent` 的判定留在
+// 这里（那张名录表是宿主唯一真相）。
+#[cfg(test)]
+pub(crate) use aeroric_core::sessions::hooks::parse_events_and_offset;
+pub(crate) use aeroric_core::sessions::hooks::HookEvent;
+use aeroric_core::sessions::hooks::HookEventReader;
 
 fn event_is_codex_like(ev: &HookEvent) -> bool {
     ev.codex_like
@@ -89,7 +77,7 @@ fn run_loop<R: tauri::Runtime>(app: AppHandle<R>) {
             Some(w)
         });
 
-    let mut offsets: HashMap<PathBuf, u64> = HashMap::new();
+    let mut reader = HookEventReader::new(events_root.clone());
 
     loop {
         // 等待文件系统事件:事件驱动 → 空闲时几乎零唤醒,有写入时近乎即时唤醒;
@@ -105,75 +93,12 @@ fn run_loop<R: tauri::Runtime>(app: AppHandle<R>) {
             thread::sleep(FALLBACK_INTERVAL);
         }
 
-        let Ok(entries) = fs::read_dir(&events_root) else {
-            continue;
-        };
-        let mut seen: Vec<PathBuf> = Vec::new();
-        for entry in entries.flatten() {
-            let dir = entry.path();
-            if !dir.is_dir() {
-                continue;
-            }
-            let file = dir.join("events.jsonl");
-            if !file.is_file() {
-                continue;
-            }
-            seen.push(file.clone());
-            let offset = *offsets.entry(file.clone()).or_insert(0);
-            if let Some(new_offset) = read_and_dispatch(&app, &file, offset) {
-                offsets.insert(file, new_offset);
-            }
-        }
-        // 清理已消失的文件 offset
-        offsets.retain(|path, _| seen.iter().any(|p| p == path));
-    }
-}
-
-fn read_and_dispatch<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    path: &PathBuf,
-    offset: u64,
-) -> Option<u64> {
-    let mut file = fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    if size <= offset {
-        return Some(offset);
-    }
-    file.seek(SeekFrom::Start(offset)).ok()?;
-    // 按字节读,不要求整段是合法 UTF-8:hook 写入的 events.jsonl 混进非法字节时,
-    // read_to_string 会在中间失败、offset 永不前进,watcher 每轮原地重读整段。
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-
-    let (events, new_offset) = parse_events_and_offset(&buf, offset);
-    for ev in &events {
-        dispatch(app, ev);
-    }
-    Some(new_offset)
-}
-
-/// 从本次读到的字节里解析完整行的事件,返回 (事件列表, 应推进到的 offset)。
-///
-/// 每行单独做 `String::from_utf8_lossy`:非法 UTF-8 只影响所在行(该行 JSON 大概率
-/// 解析失败被跳过),绝不会让 offset 停滞 —— 只要行以 \n 结尾,无论解析成败都推进
-/// 到该行末尾;残行(无 \n)留待下次循环,保持增量读取语义不变。
-fn parse_events_and_offset(buf: &[u8], offset: u64) -> (Vec<HookEvent>, u64) {
-    let mut events = Vec::new();
-    let mut last_complete_end = 0usize;
-    for (idx, byte) in buf.iter().enumerate() {
-        if *byte != b'\n' {
-            continue;
-        }
-        let line = String::from_utf8_lossy(&buf[last_complete_end..idx]);
-        last_complete_end = idx + 1;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(ev) = serde_json::from_str::<HookEvent>(&line) {
-            events.push(ev);
+        // 逐文件读增量、offset 表与消失清理在 core 的 HookEventReader 里；
+        // 顺序与旧循环一致（read_dir 序、文件内行序），dispatch 时机不变。
+        for ev in reader.scan() {
+            dispatch(&app, &ev);
         }
     }
-    (events, offset + last_complete_end as u64)
 }
 
 fn dispatch<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent) {

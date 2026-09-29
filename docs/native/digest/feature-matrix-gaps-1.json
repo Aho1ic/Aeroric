@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-1.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "07bc7bc8767853cf531298201616e684956c204f30af45aa1530daa471c04041",
+  "sourceSha256": "97766f99a6eb584a81777a4fca502d531ff13ccf15aa6057c031efd0c03b9b13",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -31,15 +31,15 @@
       },
       {
         "id": "G03",
-        "finding": "三个 app-lifetime 线程无关停路径：`event_watcher.rs:66`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`lib.rs:1181-1186` 的 `RunEvent::Exit` 只 block_on `LocalRouterManager::shutdown()` 与 `DshWebUiManager::shutdown_all()`，三者都不在内",
-        "evidence": "2026-09-28 二次回源（本轮同时纠正本条 finding 与 evidence 各自反向漂移的问题）：三处 `thread::spawn(move || run_loop(app))` 实测在 `event_watcher.rs:66`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`RunEvent::Exit` 块在 `lib.rs:1181-1186`（此前 finding 记 :1189——那是 macOS `RunEvent::Reopen` 的 `#[cfg]` 行，evidence 记 :1181 才对；而 evidence 曾记 :1047/:402 已漂到 :1048/:404）。三处闭包内均无任何取消检查，`grep -c is_cancelled` 在这三个文件里为 0 2026-09-29 逐站复跑（同一判据：只看该行是不是 app-lifetime spawn、这三文件 `is_cancelled` 是否为 0）：`event_watcher.rs:66`／`usage_index.rs:1048`／`notebook/sync/daemon.rs:404` **三行都是同一形状 `thread::spawn(move || run_loop(app));`**，`is_cancelled` 在三文件里 **0 命中**（正控：同一正则在宿主 `src-tauri/src` 其它文件有命中）；`lib.rs:1181-1186` 关停块今天仍只做 LocalRouter ＋ DSH 两件事。**行号一字未漂**。",
+        "finding": "三个 app-lifetime 线程无关停路径：`event_watcher.rs:54`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`lib.rs:1181-1186` 的 `RunEvent::Exit` 只 block_on `LocalRouterManager::shutdown()` 与 `DshWebUiManager::shutdown_all()`，三者都不在内",
+        "evidence": "2026-09-28 二次回源（本轮同时纠正本条 finding 与 evidence 各自反向漂移的问题）：三处 `thread::spawn(move || run_loop(app))` 实测在 `event_watcher.rs:66`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`RunEvent::Exit` 块在 `lib.rs:1181-1186`（此前 finding 记 :1189——那是 macOS `RunEvent::Reopen` 的 `#[cfg]` 行，evidence 记 :1181 才对；而 evidence 曾记 :1047/:402 已漂到 :1048/:404）。三处闭包内均无任何取消检查，`grep -c is_cancelled` 在这三个文件里为 0 2026-09-29 逐站复跑（同一判据：只看该行是不是 app-lifetime spawn、这三文件 `is_cancelled` 是否为 0）：`event_watcher.rs:66`／`usage_index.rs:1048`／`notebook/sync/daemon.rs:404` **三行都是同一形状 `thread::spawn(move || run_loop(app));`**，`is_cancelled` 在三文件里 **0 命中**（正控：同一正则在宿主 `src-tauri/src` 其它文件有命中）；`lib.rs:1181-1186` 关停块今天仍只做 LocalRouter ＋ DSH 两件事。**行号一字未漂**。 2026-09-30 六片重锚（补记二百四十六）：HookEventReader 读侧上收后 `event_watcher.rs` 386→315 行，本站 `thread::spawn(move || run_loop(app))` 实测 :66→**:54**（`start()` 在 :51）；`usage_index.rs:1048`／`daemon.rs:404` 未动。关停语义仍在等第七片（接 WatcherSupervisor）与 P7-06。",
         "requirement": "持有线程的 Task 必须接 core 的可取消 token 并 join；shutdown 两次安全",
         "task_ids": "P3-04, P7-06",
         "owner": "core:sessions (event_watcher + usage_index) + core:notebook (sync daemon)",
         "test": "tests/runtime_lifecycle.rs：shutdown 两次安全；启动两次不重复 watcher",
         "status": "open",
         "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。 【2026-09-28 二次回源】本条出现过一种新的失效形状：**同一条 gap 的 finding 与 evidence 被不同轮次各自编辑，漂移方向相反**——finding 的 `lib.rs:1189` 错而 evidence 的 :1181 对，evidence 的 :1047/:402 错而 finding 的 :1048/:404 对。任何一侧单独读都会得到错的站点。判据：**回源一条 gap 时必须同批重写 finding+evidence，然后对每个 file:line 当场 grep 复核**（本轮三个线程站点的 `is_cancelled` 命中数一并数了，都是 0）。 同日 2026-09-29 复核：见 evidence 追加段。",
-        "verified_on": "2026-09-29"
+        "verified_on": "2026-09-30"
       },
       {
         "id": "G04",

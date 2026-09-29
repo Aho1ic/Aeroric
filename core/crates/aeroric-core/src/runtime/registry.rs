@@ -826,9 +826,12 @@ mod registry_tests {
         let (first, _rx1) = std::sync::mpsc::channel();
         let (second, _rx2) = std::sync::mpsc::channel();
         // 版本戳是进程全局单调计数,不能假设绝对值;性质是"每次登记严格递增"。
+        // （断言只写严格递增：并发跑 lib tests 时,同二进制里别的登记测试会推高
+        // 全局计数,把「差恰为 1」变成执行顺序依赖——2026-09-30 门禁实测抓到一次
+        // v4=1/v5=3 的假红,补记二百四十六。）
         let v4 = register_initial_input_signal(&registry, &RunKey::minted("task-1", 4), first);
         let v5 = register_initial_input_signal(&registry, &RunKey::minted("task-1", 5), second);
-        assert_eq!(v5, v4 + 1);
+        assert!(v5 > v4, "严格递增：{v4} -> {v5}");
         clear_initial_input_signal_if_current(
             &registry.initial_input_signals,
             &RunKey::minted("task-1", 4),

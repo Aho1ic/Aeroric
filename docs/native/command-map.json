@@ -20597,7 +20597,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/hooks.rs:477",
+      "definition_resolved": "src-tauri/src/hooks.rs:482",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20628,7 +20628,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/hooks.rs:485",
+      "definition_resolved": "src-tauri/src/hooks.rs:490",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20659,7 +20659,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/hooks.rs:501",
+      "definition_resolved": "src-tauri/src/hooks.rs:506",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -20690,7 +20690,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/hooks.rs:512",
+      "definition_resolved": "src-tauri/src/hooks.rs:517",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

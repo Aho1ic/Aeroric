@@ -56,21 +56,26 @@ fn home_dir() -> Result<PathBuf, String> {
     crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())
 }
 
+// 事件路径布局四件已随 P3-04 第六片迁入 core `aeroric_core::sessions::hooks`
+// （补记二百四十六，第 12 项定 ①：这里成为唯一真相）。薄包装只做一件事：
+// 注入宿主自己解析的用户目录（同第二片的家目录关系）；id 校验与
+// `Invalid task id` 文案由 core 逐字携带。其余部分（settings 注入、
+// 安装/卸载、readiness）仍归 P8-01，未随本片迁移。
+
 pub fn hooks_dir() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".aeroric").join("hooks"))
+    Ok(aeroric_core::sessions::hooks::hooks_dir(&home_dir()?))
 }
 
 pub fn script_path() -> Result<PathBuf, String> {
-    Ok(hooks_dir()?.join("aeroric-hook.mjs"))
+    Ok(aeroric_core::sessions::hooks::hook_script_path(&home_dir()?))
 }
 
 pub fn events_root() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".aeroric").join("events"))
+    Ok(aeroric_core::sessions::hooks::events_root(&home_dir()?))
 }
 
 pub fn events_dir_for(task_id: &str) -> Result<PathBuf, String> {
-    crate::storage::validate_storage_id(task_id, "task")?;
-    Ok(events_root()?.join(task_id))
+    aeroric_core::sessions::hooks::events_dir_for(&home_dir()?, task_id)
 }
 
 fn claude_settings_path() -> Result<PathBuf, String> {
