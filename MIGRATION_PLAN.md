@@ -1842,7 +1842,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 > **三、本轮形状的工具坑三条**：① 我把接线块 append 到文件尾，落进 `#[cfg(test)] mod tests` 之后 ⇒ E0732「items after a test module」两文件同犯，hoist 修复；② 迁移后 lib/test 两目标的 unused-import 判定分裂（File／BufRead／Value／SessionContent／SystemTime／SessionMessage 6 处），照 `write_export_markdown` 的既有先例用 `#[cfg(test)]` 导入分流——`cargo check` 不带 `--all-targets` 看不见测试侧用量，本仓 rc 陷阱的又一实例；③ 一次 range 编辑吞掉了 `omp_message_line` helper 与两处边界（PUT 区间覆盖了未显示的相邻行），整函数重写恢复——**教训：改被折叠视图遮挡的文件，优先整函数锚定重写，不猜行号**。
 > **四、行号与工件随动**：DSH watcher 543→**138**（register 591→186）、OMP watcher 234→**189**（`session.rs` 本轮未动）；G04 finding/evidence 与 §九 横幅按三片第三次重锚（全部带 `assert count==1`）；extraction `--write` 重导＋`--check` 绿；`storage-core-rust` 地板 377→**384**（两处同批）。
 > **五、当日实测**：`session_dsh_omp` **7/7**；core `-p aeroric-core` **384/0**（377＋7）；宿主 `--lib` 隔离 **2465 passed／0 failed（53.47 s）**，临时根收 6 文件与上两轮同形；`storage` **5/384 rc 0**、`skeleton` **22/177 rc 0**、`doctor` 18/18；两 workspace `cargo fmt --check`＋`clippy --all-targets -D warnings` rc 0（一次 tail 管道把 rc 101 报成 0——当场识破，规矩重述：**管道吃 rc，逐条单读**）；`inventory --freeze/--check`、`digest --write/--check` 14 片／20 825 B、`git diff --check` 全 rc 0。**未跑**：全量 `pnpm test`（零 TS/契约改动，`contracts` 字节未动）、`protocol`/`terminal-core` 等其余模块（代码面未触）、Swift 侧。
-> **六、状态**：P3-04 `in_progress`，三片已落地（解析、发现路径、dsh/omp 读侧+解析）。剩余：`history`（`SessionMessagePage`／分页读取上收，手写约束的路径校验与读取上限随迁）、`resume/export`、Action 3 的 `HookEventReader`（hooks 布局按第 12 项 ①）、Action 2 的 watcher generation 语义（G04 的 lazy-attach 裸 spawn 一站在这收）——`sessions` 门禁模块注册仍按 Q6 不动。
+> **六、自报一条流程漏（当日补上）**：第三片提交按路径 `core/crates` 暂存，而 **`core/Cargo.lock` 在 `core/` 根**——zstd 的 86 行锁变更没进 `c3b70b9`，`git status` 当场露出，以随批件 `ed33c77` 补交（历史不重写）。这条与 `patches-match-src-tauri`/check-patches 无关（zstd 非 patch），但和「提交前看一遍 `git status --short`」的老规矩同源：**add 的粒度用目录前缀时，锁文件与清单永远在更上一层。**
+
+> **七、状态**：P3-04 `in_progress`，三片已落地（解析、发现路径、dsh/omp 读侧+解析）。剩余：`history`（`SessionMessagePage`／分页读取上收，手写约束的路径校验与读取上限随迁）、`resume/export`、Action 3 的 `HookEventReader`（hooks 布局按第 12 项 ①）、Action 2 的 watcher generation 语义（G04 的 lazy-attach 裸 spawn 一站在这收）——`sessions` 门禁模块注册仍按 Q6 不动。
 
 
 
