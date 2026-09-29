@@ -375,3 +375,98 @@ fn output_ring_truncates_on_char_boundary_and_details_concatenate_once() {
     );
     assert!(msg.ends_with(&detail), "detail 必须拼上: {msg}");
 }
+
+#[test]
+fn webui_status_and_recovery_serde_shapes_are_the_wire_contract() {
+    use aeroric_core::agents::dsh_host::state::{DshRuntimeRecovery, WebUiStatus};
+    assert_eq!(
+        serde_json::to_string(&WebUiStatus::Starting).unwrap(),
+        "\"starting\""
+    );
+    assert_eq!(
+        serde_json::to_string(&WebUiStatus::Running).unwrap(),
+        "\"running\""
+    );
+    for v in ["stopped", "error"] {
+        assert_eq!(
+            serde_json::from_str::<WebUiStatus>(&format!("\"{v}\"")).unwrap(),
+            match v {
+                "stopped" => WebUiStatus::Stopped,
+                _ => WebUiStatus::Error,
+            }
+        );
+    }
+    // DshRuntimeRecovery 字段名无 rename——前端读的就是这四个 snake 键。
+    let rec: DshRuntimeRecovery = serde_json::from_str(
+        r#"{"restarted":true,"reconnected_sessions":2,"cancelled_turns":1,"errors":["e"]}"#,
+    )
+    .unwrap();
+    assert!(rec.restarted && rec.reconnected_sessions == 2 && rec.errors.len() == 1);
+    assert_eq!(
+        serde_json::to_string(&DshRuntimeRecovery::default()).unwrap(),
+        r#"{"restarted":false,"reconnected_sessions":0,"cancelled_turns":0,"errors":[]}"#
+    );
+}
+
+#[test]
+fn internal_command_echo_machine_keeps_its_two_asymmetric_rules() {
+    use aeroric_core::agents::dsh_host::state::{
+        is_command_echo_event, take_internal_command_echo, InternalCommandEcho,
+    };
+    use std::collections::HashMap;
+    let run = |name: &str| json!({"event":{"type":"command/run","data":{"name":name}}});
+    let done = json!({"event":{"type":"command/done"}});
+    assert!(!is_command_echo_event(
+        &json!({"event":{"type":"assistant/delta"}})
+    ));
+    assert!(is_command_echo_event(&run("permission")));
+
+    let mut pending: HashMap<String, InternalCommandEcho> = HashMap::from([(
+        "t1".to_string(),
+        InternalCommandEcho {
+            name: "permission".to_string(),
+            saw_run: false,
+        },
+    )]);
+    // 名字不配 ⇒ 不吞、登记原样留着等真 run。
+    assert!(!take_internal_command_echo(
+        &mut pending,
+        "t1",
+        &run("other")
+    ));
+    assert_eq!(pending["t1"].name, "permission");
+    // 配对的 run ⇒ 吞并置位。
+    assert!(take_internal_command_echo(
+        &mut pending,
+        "t1",
+        &run("permission")
+    ));
+    // 规则①：第二次同名 run 不吞（saw_run 已置）。
+    assert!(!take_internal_command_echo(
+        &mut pending,
+        "t1",
+        &run("permission")
+    ));
+    // 未登记任务的一切 command 帧 ⇒ false。
+    assert!(!take_internal_command_echo(
+        &mut pending,
+        "t9",
+        &run("permission")
+    ));
+    // 规则②的镜像在下一段验证：先 done 不吞不清。这里先正常收尾 done ⇒ 吞且删登记。
+    assert!(take_internal_command_echo(&mut pending, "t1", &done));
+    assert!(!pending.contains_key("t1"), "done 必须终结一次性登记");
+
+    // 规则②：done 早于 run 到达 ⇒ 不吞，且**登记不被清除**（真 run 还能来）。
+    let mut pending: HashMap<String, InternalCommandEcho> = HashMap::from([(
+        "t2".to_string(),
+        InternalCommandEcho {
+            name: "goal".to_string(),
+            saw_run: false,
+        },
+    )]);
+    assert!(!take_internal_command_echo(&mut pending, "t2", &done));
+    assert!(pending.contains_key("t2"), "提前的 done 不得连登记一起吞掉");
+    assert!(take_internal_command_echo(&mut pending, "t2", &run("goal")));
+    assert!(take_internal_command_echo(&mut pending, "t2", &done));
+}

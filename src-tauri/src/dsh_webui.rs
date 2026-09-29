@@ -65,25 +65,12 @@ const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// 就当成升级占用,回一条能看懂的错误。
 const DSH_LIFECYCLE_BUSY_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WebUiStatus {
-    Starting,
-    Running,
-    Stopped,
-    Error,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DshWebUiState {
-    pub agent: String,
-    pub port: u16,
-    pub url: Option<String>,
-    pub pid: Option<u32>,
-    pub status: WebUiStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
+// 状态形状与内部命令回显状态机已随 P3-05 第六片迁入 core
+// `aeroric_core::agents::dsh_host::state`（补记二百五十五）：三个 serde 形状与
+// 状态机转移逐字同形；取锁时序由「预筛＋状态机」两段函数保真（见下方方法体）。
+// re-export 保持原路径与原可见性不变（`app_settings::commands` 的引用点一字不动）。
+pub(crate) use aeroric_core::agents::dsh_host::state::InternalCommandEcho;
+pub use aeroric_core::agents::dsh_host::state::{DshRuntimeRecovery, DshWebUiState, WebUiStatus};
 
 struct WebUiProcess {
     child: Child,
@@ -144,14 +131,6 @@ struct ActiveDshSession {
     on_output: Channel<String>,
 }
 
-/// 一条等待被吞掉的内部命令回显。`command/run` 按命令名匹配,随后的
-/// `command/done` 一并吞掉——任务生命周期锁保证这期间不会有用户命令插进来。
-#[derive(Debug, Clone)]
-struct InternalCommandEcho {
-    name: String,
-    saw_run: bool,
-}
-
 pub(crate) struct SuspendedDshRuntime {
     _lifecycle_guard: OwnedMutexGuard<()>,
     agent: String,
@@ -165,14 +144,6 @@ impl SuspendedDshRuntime {
     pub(crate) fn was_running(&self) -> bool {
         self.was_running
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DshRuntimeRecovery {
-    pub restarted: bool,
-    pub reconnected_sessions: usize,
-    pub cancelled_turns: usize,
-    pub errors: Vec<String>,
 }
 
 impl DshWebUiManager {
@@ -414,40 +385,13 @@ impl DshWebUiManager {
 
     /// 这个 `session/event` 是否是被登记的内部命令回显。
     fn is_internal_command_echo(&self, task_id: &str, payload: &Value) -> bool {
-        let Some(event) = payload.get("event") else {
-            return false;
-        };
-        let event_type = event
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !matches!(event_type, "command/run" | "command/done") {
+        use aeroric_core::agents::dsh_host::state;
+        // 预筛在取锁之前——非 command 帧一次锁都不碰（与迁移前的锁时序一致）。
+        if !state::is_command_echo_event(payload) {
             return false;
         }
         let mut pending = self.internal_commands.lock();
-        let Some(entry) = pending.get_mut(task_id) else {
-            return false;
-        };
-        if event_type == "command/run" {
-            let name = event
-                .get("data")
-                .and_then(|data| data.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if entry.saw_run || name != entry.name {
-                return false;
-            }
-            entry.saw_run = true;
-            return true;
-        }
-        // 命令的结果行紧跟在 run 之后,吞掉它就结束这条登记。反过来,还没见到
-        // 配对的 run 就先到的 done 属于别的命令:吞掉它会连登记一起清掉,真正
-        // 的引导命令回显反而会漏进终端。
-        if !entry.saw_run {
-            return false;
-        }
-        pending.remove(task_id);
-        true
+        state::take_internal_command_echo(&mut pending, task_id, payload)
     }
 
     async fn stop_process(child: &mut Child) -> Result<(), String> {
