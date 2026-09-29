@@ -149,3 +149,35 @@ fn rpc_envelope_decodes_value_and_keeps_both_error_wordings_verbatim() {
         "DSH API m rejected the request: unknown DSH API error"
     );
 }
+
+#[test]
+fn pinned_inventory_keeps_generation_anchors_and_excludes_retired_names() {
+    // 第三片钉面：三 pin 值＝快照对账基准（G17）；现用帧表不得重新收进 DSH-14 退役名；
+    // `REMOTE_EVENTS.zip(REMOTE_EVENT_MODES)` 是宿主 `snapshot()` 的硬前提——长度必须成对。
+    use aeroric_core::agents::dsh_host::client::{
+        PACKAGE_VERSION, PROTOCOL_VERSION, REMOTE_EVENTS, REMOTE_EVENT_MODES, RPC_METHODS,
+        SOURCE_COMMIT, STREAM_CONTROL_FRAMES, STREAM_DOWNLINK_FRAMES, STREAM_FOLLOW_FRAMES,
+    };
+    assert_eq!(SOURCE_COMMIT, "c291e7961a515f6d7af9304e7fd1d257929aef26");
+    assert_eq!(PACKAGE_VERSION, "0.1.5-rc.2");
+    assert_eq!(PROTOCOL_VERSION, 2);
+    assert!(RPC_METHODS.contains(&"session.list") && RPC_METHODS.len() >= 60);
+    assert_eq!(
+        REMOTE_EVENTS.len(),
+        REMOTE_EVENT_MODES.len(),
+        "snapshot() 按 zip 配对，长度错位就静默吞尾"
+    );
+    for retired in [
+        "session/event",
+        "session/subscribed",
+        "approval/requested",
+        "stream/error",
+    ] {
+        assert!(
+            !STREAM_FOLLOW_FRAMES.contains(&retired)
+                && !STREAM_CONTROL_FRAMES.contains(&retired)
+                && !STREAM_DOWNLINK_FRAMES.contains(&retired),
+            "退役 firehose 名 {retired} 不得回流现用帧表"
+        );
+    }
+}
