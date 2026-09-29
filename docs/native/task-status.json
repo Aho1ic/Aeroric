@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-09-29",
+    "generated": "2026-09-30",
     "task": "P3-03 收口记档（①=正常 ②=正常，补记二百四十）＋ P3-04 开工（Q1=留 P8-04）",
     "authoritative_source": "本文 §进度总表 与本文件互为镜像：scripts/native/task-status.mjs::crossCheckTaskStatus 逐 Task 比对，任一侧改了另一侧没改就 FAIL（F3 修法 ①）",
     "rule": "status 只能取 pending|in_progress|blocked|accepted（与 §5.3 模板一致）；accepted_on 只在 accepted 时有值；review 是 docs/native/ 下的相对路径或 null。feature-matrix.json 的 core_state/native_state/side_states/reviews 四列由本文件派生，禁止手改（改了会被 inventory --check 判红）。",
@@ -36,8 +36,8 @@
     "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
     "counts": {
       "tasks": 51,
-      "accepted": 13,
-      "in_progress": 1,
+      "accepted": 14,
+      "in_progress": 0,
       "pending": 37
     }
   },
@@ -122,9 +122,9 @@
     },
     {
       "task": "P3-04",
-      "status": "in_progress",
-      "accepted_on": null,
-      "review": null
+      "status": "accepted",
+      "accepted_on": "2026-09-30",
+      "review": "reviews/sessions.md"
     },
     {
       "task": "P3-05",

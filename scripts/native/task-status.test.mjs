@@ -58,7 +58,14 @@ test("the committed carrier, the plan table and the derived columns all agree to
   const bundle = crossCheckIn(repoRoot);
   assert.deepEqual(bundle.problems, [], problemText(bundle.problems));
   assert.equal(bundle.stats.tasks, 51);
-  assert.equal(bundle.stats.accepted, 13);
+  // `accepted` 是进度变量——每个合法验收都会 +1，绝对值断言会在验收日把门禁钉红
+  // （2026-09-30 P3-04 accepted 当日实测：14 !== 13，补记二百四十八）。正控的正确形状：
+  // 独立重算载体的 tally 与 reader 的统计比对（证明读者真找到了行），再加下界（防止 0）。
+  assert.equal(
+    bundle.stats.accepted,
+    readJson(repoRoot, CARRIER).tasks.filter((t) => t.status === "accepted").length,
+  );
+  assert.ok(bundle.stats.accepted >= 14, "the reader must be finding the accepted rows");
   assert.equal(bundle.stats.rows, 26);
   assert.equal(bundle.findings.length, 0, `every declared side must have a Task: ${bundle.findings.join("; ")}`);
 });
@@ -79,7 +86,11 @@ test("inventory --check really runs the cross-check, not just the unit tests", (
   const result = check({ repoRoot });
   assert.equal(result.ok, true, problemText(result.problems.slice(0, 5)));
   assert.equal(result.taskStates.tasks, 51);
-  assert.equal(result.taskStates.accepted, 13);
+  assert.equal(
+    result.taskStates.accepted,
+    readJson(repoRoot, CARRIER).tasks.filter((t) => t.status === "accepted").length,
+  );
+  assert.ok(result.taskStates.accepted >= 14);
 });
 
 test("a missing carrier must be an error, never 'nothing changed'", () => {
@@ -138,10 +149,13 @@ test("`accepted` without a date, and a date without `accepted`, are both refused
     () => loadTaskStatus({ repoRoot, read: () => JSON.stringify({ meta: base.meta, tasks: [...base.tasks.filter((t) => t.task !== "P2-04"), missing] }) }),
     /P2-04: accepted without accepted_on/,
   );
-  const premature = base.tasks.map((t) => (t.task === "P3-04" ? { ...t, accepted_on: "2026-09-29" } : t));
+  // 第二段曾钉 P3-04（in_progress 现势）——P3-04 结案后该载体失效（补记二百四十八）。
+  // 正确形状：动态取第一个非 accepted 的 Task 做「提前日期」突变。
+  const live = base.tasks.find((t) => t.status !== "accepted");
+  const premature = base.tasks.map((t) => (t.task === live.task ? { ...t, accepted_on: "2026-09-29" } : t));
   assert.throws(
     () => loadTaskStatus({ repoRoot, read: () => JSON.stringify({ meta: base.meta, tasks: premature }) }),
-    /P3-04: carries accepted_on but is 'in_progress'/,
+    new RegExp(live.task + ": carries accepted_on but is '" + live.status + "'"),
   );
 });
 
@@ -229,7 +243,11 @@ test("a hand-edited meta.counts summary is caught against the entries", () => {
         return JSON.stringify({ meta: { ...base.meta, counts: { ...base.meta.counts, accepted: 99 } }, tasks: base.tasks });
       },
     }),
-    /meta\.counts\.accepted says 99 but the entries below tally 13/,
+    // tally 数字同样是进度现势——由载体独立计数构造期望串（补记二百四十八）。
+    new RegExp(
+      "meta\\.counts\\.accepted says 99 but the entries below tally " +
+        readJson(repoRoot, CARRIER).tasks.filter((t) => t.status === "accepted").length,
+    ),
   );
 });
 

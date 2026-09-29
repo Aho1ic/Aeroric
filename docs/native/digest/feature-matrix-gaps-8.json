@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-8.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "2488739c593baae8eb6b2add0c392311be3dcc75755679ef64e1e3ffa965dabb",
+  "sourceSha256": "8c509b984f2aa4ecb52e6e650069e3e02883fdfc8b70bb8e3b4cf9cde0cb99b3",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -9,12 +9,12 @@
         "id": "G36",
         "status": "open",
         "decision_item": 25,
-        "task_ids": "P3-04",
+        "task_ids": "P10-05",
         "finding": "**（先记账：机制本身不是本轮新发现——补记一百二十九（2026-09-28）§九 已经写下「`max_total_bytes` 在 `.trellis/scripts` 下无任何消费者」与「`max_file_bytes` 只在 `task.py validate` 打一条非阻断警告」两条结论。本条的新内容是把**当天体积**与**已腐烂的旧数**钉下来，并把调用链复算到行号。）** 2026-09-29 实测 phase-3 注入载荷：`implement.jsonl`（8 条／79 830 B）＋ `check.jsonl`（**4** 条／49 496 B）＝被引用文件合计 **129 326 B**，对默认 `max_total_bytes = 131072` 是 **98.7%**，余量只剩 **1 746 B**；unique 被引用文件 **12** 个、两份清单无交集、最大单项 `extraction/sessions.md` 25 883 B 仍在 `max_file_bytes = 32768` 之内（所以今天连那条非阻断警告都不会出现）。调用链今天复算到行号：`config.py:286/297/306` 定义并解析三上限，`grep -rn \"max_total_bytes\" .trellis/scripts/` **只命中这三处**；唯一消费者 `task_context.py:252` 只取 `max_file_bytes` ⇒ `max_total_bytes`／`max_artifact_bytes` 在自带脚本内**无实现点**，`config.yaml:146` 注释承诺的「overflow degrades to index lines」在本仓可见代码里落不了地。而 `task_context.py:299-307` 显示单文件超限走 print warning、**不累计 errors** ⇒ `validate` 仍 exit 0、仍打 `✓ (N entries)`。**同时本文 §进度总表 P3-04 那行原写的 173 461 B／132.3% 今天反向腐烂**（`check.jsonl` 6→4 条把总量拉回线内），该句还写着\"本仓没有任何代码消费该总量限制\"，精确说法应是\"**解析了但无消费点**\"。",
         "requirement": "P3-04 开工自证照 补记一百二十九 §九 已定的路线做，判据用今天的数：① 复测被引用文件合计与余量（今天 129 326 B／98.7%）；② **实测子代理收到的是正文还是索引行**——自带脚本里没有总量执行点，`validate` 绿与载荷是否降级**完全无关**，唯一观测面就是接收端；③ 谁守这一半：(a) 在 `scripts/native/` 加一条 case 核对每个 phase 清单合计（超限即红、≥2 负例）＝**门禁面扩张，须用户点头**；(b) 取消 `.trellis/config.yaml:143-146` 的注释把上限显式化，并写明总量与 artifact 上限在自带脚本里无消费点；(c) 削载荷——**`extraction/*.md` 没有分片机制**（`digest.mjs` 只切 `feature-matrix.json` 与 `command-map.json`），所以只能拆文档后只引用所需那片、或把条目摘掉，**不存在\"改指它的分片\"这个选项**（本文答题纸第 25 项原来那么写了，已同日更正）。",
         "evidence": "2026-09-29 可复跑：读两个 `.jsonl` 的 `file` 字段逐个 `stat` 求和（口径＝**被引用文件**体积；清单自身只有 1 310 B／728 B，拿它当载荷会得出 1.9% 这种荒谬数）⇒ unique 12 个文件、两份清单无交集、合计 129 326 B、超单文件上限者 0。调用链证据：`grep -rn \"get_context_injection_limits\" .trellis/scripts/` ⇒ 仅 `task_context.py:24` 导入、`:252` 使用且取 `max_file_bytes`；`grep -rn \"max_total_bytes\" .trellis/scripts/` ⇒ 仅 `config.py:286/297/306` 三处（定义与文档串），无读取者；`max_artifact_bytes` 同样只出现在 `config.py:296/305`。`task_context.py:299-307` 源码显示单文件超限走 print warning、不累计 errors。`TRELLIS_CONTEXT_ID=qoder-native-macos-20260921-aeroric python3 .trellis/scripts/task.py validate 09-21-native-phase-3` ⇒ **rc 0，`implement.jsonl ✓ (8 entries)`、`check.jsonl ✓ (4 entries)`**。",
-        "verified_on": "2026-09-29",
-        "retriage_note": "补记二百一十四 立项、补记二百一十五 登记、补记二百一十七 之后于 **补记二百一十八 重写两度**：第一次把机制说成\"没有任何代码读总量\"（应为\"解析了但无消费点\"）并把 `validate` 说成只看可解析与存在性（漏了它那条不影响退出码的单文件警告）；第二次**承认机制早在 补记一百二十九（2026-09-28）§九 就已记录**，本条的新内容只有当日体积、旧数反向腐烂与行号级调用链。owner 仍记 P3-04。"
+        "verified_on": "2026-09-30",
+        "retriage_note": "2026-09-30 补记二百四十八：P3-04 的「开工自证」半边已做完（当日 headroom 实测与「正文还是索引行只能由接收端观测」的口径写进评审与 §九）；剩余的接收端观测与总量执行点属交接面，改派 P10-05——与 G37/G38 同批治理。phase-3 注入今日 129 483 B＝98.8%，七片未再增长。"
       },
       {
         "id": "G37",

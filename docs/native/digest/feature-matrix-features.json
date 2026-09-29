@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "2488739c593baae8eb6b2add0c392311be3dcc75755679ef64e1e3ffa965dabb",
+  "sourceSha256": "8c509b984f2aa4ecb52e6e650069e3e02883fdfc8b70bb8e3b4cf9cde0cb99b3",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -100,13 +100,15 @@
         "positive_test": "tests/{session_discovery,session_resume,hook_reader}.rs",
         "negative_test": "OMP 等待超旧 DSH deadline 仍可绑定；同一文件不得给两个 task",
         "status": "planned",
-        "core_state": "in_progress",
+        "core_state": "accepted",
         "native_state": "unstarted",
         "side_states": {
-          "C": "in_progress",
+          "C": "accepted",
           "N": "unstarted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/sessions.md"
+        ]
       },
       {
         "id": "F06",

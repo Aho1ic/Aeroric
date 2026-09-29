@@ -161,13 +161,15 @@
       "positive_test": "tests/{session_discovery,session_resume,hook_reader}.rs",
       "negative_test": "OMP 等待超旧 DSH deadline 仍可绑定；同一文件不得给两个 task",
       "status": "planned",
-      "core_state": "in_progress",
+      "core_state": "accepted",
       "native_state": "unstarted",
       "side_states": {
-        "C": "in_progress",
+        "C": "accepted",
         "N": "unstarted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/sessions.md"
+      ]
     },
     {
       "id": "F06",
@@ -718,12 +720,12 @@
       "finding": "omp_session_allowed_roots 放行 ~/.aeroric/agent-homes/*/sessions 全部托管档案，而函数注释承诺「Phase 7 接入时按 agent 校验」，两者不一致",
       "evidence": "2026-09-28 复核：不一致**仍然存在且成因写在代码里**。`omp_session_allowed_roots` 在 `session_omp.rs:118`，函数注释 :116-117 承诺「自定义 omp 档案…Phase 7 接入时按 agent 校验」，而 :123-129 直接 `read_dir(~/.aeroric/agent-homes)` 放行全部托管档案的 sessions；:124-125 给的现实理由是「校验只拿到 family 拿不到档案 id」。原记 :110-128 已漂到 :114-129  2026-09-29 复跑，并把三处行号钉准：`omp_session_allowed_roots` 在 `src-tauri/src/session_omp.rs:118`；**文档注释 :114-117** 仍写着\"自定义 omp 档案…Phase 7 接入时按 agent 校验\"；而**函数体 :127-134 实际是遍历 `~/.aeroric/agent-homes/*` 并把每个档案的 `sessions` 全放行**，其旁边的**行内注释 :124-126 给了一个真实理由**（\"校验只拿到 family 拿不到档案 id，放行全部 Aeroric 托管 home\"）⇒ 精确形状是**同一个函数里两份互相矛盾的自述**（文档注释承诺收紧、行内注释为放宽辩护），而不是单纯\"没实现\"；另外 **:136-139 还追加了非托管根 `~/.omp/agent/sessions` 与 `~/.omp/profiles/*/agent/sessions`**，这一支正是 `AGENTS.md`／ADR-001 §5 规定\"留在宿主、core 不得继承\"的读根。本条主张与出处今日全部成立，行号未漂。",
       "requirement": "迁移到 core 时按 task 持久化的 agent id 精确取根，取消全量放行；ADR-001 §5.5 已登记为待收口项",
-      "task_ids": "P3-02, P3-04",
+      "task_ids": "P5-04",
       "owner": "core:agents::managed_home::omp + sessions",
       "test": "tests/omp_invariants.rs：两个不同 omp 档案的会话文件互相不可见；越出所属档案目录的路径必须被 allowed-roots 拒绝",
       "status": "open",
-      "retriage_note": "P3-04 侧的解除路径已写明（`docs/native/extraction/sessions.md` 手写约束第 2 条）：core 的 OMP 发现根只许 `~/.aeroric/agent-homes/**`，外部历史分支 capability 默认 false（INV-06 / ADR-001 §5），按 agent 校验在 core 里可做（档案 id 就在路径段上），legacy 客户端保持现状不删。gap 仍 open，owner 仍是 P3-02+P3-04 同日 2026-09-29 复核：见 evidence 追加段。",
-      "verified_on": "2026-09-29"
+      "retriage_note": "2026-09-30 补记二百四十八：P3-02/P3-04 均 accepted 而本条未闭合——P3-04 七片按手写约束 2 只做了 managed/external 根的拆分＋capability 门，agent id 精确取根没做（legacy 全量放行是其现存行为，迁移不借道收紧也不删）。真正的欠方是新增的 core 读取消费者：P5-04 原生会话消息/轨迹上收时按 task 持久化的 agent id 取根，正是该收口点。已写进 P5-04 小节具名前置。",
+      "verified_on": "2026-09-30"
     },
     {
       "id": "G14",
@@ -958,12 +960,12 @@
       "id": "G36",
       "status": "open",
       "decision_item": 25,
-      "task_ids": "P3-04",
+      "task_ids": "P10-05",
       "finding": "**（先记账：机制本身不是本轮新发现——补记一百二十九（2026-09-28）§九 已经写下「`max_total_bytes` 在 `.trellis/scripts` 下无任何消费者」与「`max_file_bytes` 只在 `task.py validate` 打一条非阻断警告」两条结论。本条的新内容是把**当天体积**与**已腐烂的旧数**钉下来，并把调用链复算到行号。）** 2026-09-29 实测 phase-3 注入载荷：`implement.jsonl`（8 条／79 830 B）＋ `check.jsonl`（**4** 条／49 496 B）＝被引用文件合计 **129 326 B**，对默认 `max_total_bytes = 131072` 是 **98.7%**，余量只剩 **1 746 B**；unique 被引用文件 **12** 个、两份清单无交集、最大单项 `extraction/sessions.md` 25 883 B 仍在 `max_file_bytes = 32768` 之内（所以今天连那条非阻断警告都不会出现）。调用链今天复算到行号：`config.py:286/297/306` 定义并解析三上限，`grep -rn \"max_total_bytes\" .trellis/scripts/` **只命中这三处**；唯一消费者 `task_context.py:252` 只取 `max_file_bytes` ⇒ `max_total_bytes`／`max_artifact_bytes` 在自带脚本内**无实现点**，`config.yaml:146` 注释承诺的「overflow degrades to index lines」在本仓可见代码里落不了地。而 `task_context.py:299-307` 显示单文件超限走 print warning、**不累计 errors** ⇒ `validate` 仍 exit 0、仍打 `✓ (N entries)`。**同时本文 §进度总表 P3-04 那行原写的 173 461 B／132.3% 今天反向腐烂**（`check.jsonl` 6→4 条把总量拉回线内），该句还写着\"本仓没有任何代码消费该总量限制\"，精确说法应是\"**解析了但无消费点**\"。",
       "requirement": "P3-04 开工自证照 补记一百二十九 §九 已定的路线做，判据用今天的数：① 复测被引用文件合计与余量（今天 129 326 B／98.7%）；② **实测子代理收到的是正文还是索引行**——自带脚本里没有总量执行点，`validate` 绿与载荷是否降级**完全无关**，唯一观测面就是接收端；③ 谁守这一半：(a) 在 `scripts/native/` 加一条 case 核对每个 phase 清单合计（超限即红、≥2 负例）＝**门禁面扩张，须用户点头**；(b) 取消 `.trellis/config.yaml:143-146` 的注释把上限显式化，并写明总量与 artifact 上限在自带脚本里无消费点；(c) 削载荷——**`extraction/*.md` 没有分片机制**（`digest.mjs` 只切 `feature-matrix.json` 与 `command-map.json`），所以只能拆文档后只引用所需那片、或把条目摘掉，**不存在\"改指它的分片\"这个选项**（本文答题纸第 25 项原来那么写了，已同日更正）。",
       "evidence": "2026-09-29 可复跑：读两个 `.jsonl` 的 `file` 字段逐个 `stat` 求和（口径＝**被引用文件**体积；清单自身只有 1 310 B／728 B，拿它当载荷会得出 1.9% 这种荒谬数）⇒ unique 12 个文件、两份清单无交集、合计 129 326 B、超单文件上限者 0。调用链证据：`grep -rn \"get_context_injection_limits\" .trellis/scripts/` ⇒ 仅 `task_context.py:24` 导入、`:252` 使用且取 `max_file_bytes`；`grep -rn \"max_total_bytes\" .trellis/scripts/` ⇒ 仅 `config.py:286/297/306` 三处（定义与文档串），无读取者；`max_artifact_bytes` 同样只出现在 `config.py:296/305`。`task_context.py:299-307` 源码显示单文件超限走 print warning、不累计 errors。`TRELLIS_CONTEXT_ID=qoder-native-macos-20260921-aeroric python3 .trellis/scripts/task.py validate 09-21-native-phase-3` ⇒ **rc 0，`implement.jsonl ✓ (8 entries)`、`check.jsonl ✓ (4 entries)`**。",
-      "verified_on": "2026-09-29",
-      "retriage_note": "补记二百一十四 立项、补记二百一十五 登记、补记二百一十七 之后于 **补记二百一十八 重写两度**：第一次把机制说成\"没有任何代码读总量\"（应为\"解析了但无消费点\"）并把 `validate` 说成只看可解析与存在性（漏了它那条不影响退出码的单文件警告）；第二次**承认机制早在 补记一百二十九（2026-09-28）§九 就已记录**，本条的新内容只有当日体积、旧数反向腐烂与行号级调用链。owner 仍记 P3-04。"
+      "verified_on": "2026-09-30",
+      "retriage_note": "2026-09-30 补记二百四十八：P3-04 的「开工自证」半边已做完（当日 headroom 实测与「正文还是索引行只能由接收端观测」的口径写进评审与 §九）；剩余的接收端观测与总量执行点属交接面，改派 P10-05——与 G37/G38 同批治理。phase-3 注入今日 129 483 B＝98.8%，七片未再增长。"
     },
     {
       "id": "G37",
