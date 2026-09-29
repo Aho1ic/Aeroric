@@ -1,4 +1,4 @@
-//! 会话转录的解析层（P3-04 首片：`session/parse.rs` 的迁移落点）。
+//! 会话层（P3-04）：解析（首片）＋发现路径（第二片：discovery／dsh／omp 三个纯函数面）。
 //!
 //! 内容逐字来自宿主 `src-tauri/src/session.rs` ＋ `src-tauri/src/session/parse.rs`，
 //! 行为一行未改：两家 agent 的落盘格式不同，所以有 Claude／Codex 两套平行的解析器，
@@ -16,6 +16,9 @@
 
 pub mod claude;
 pub mod codex;
+pub mod discovery;
+pub mod dsh;
+pub mod omp;
 pub mod parser;
 
 /// 一条已解析的会话消息。字段与宿主 `session.rs:671` 逐字对应。

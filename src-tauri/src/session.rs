@@ -142,91 +142,19 @@ fn session_modified_at(path: &Path) -> SystemTime {
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-// ── Codex 会话监视器 ──────────────────────────────────────────────────────────
+// ── Codex／Claude 会话发现根（第二片已迁 core，补记二百四十二）────────────────
+// 规则原文收在 `aeroric_core::sessions::discovery`（只收 rollout-*.jsonl／递归收任意
+// *.jsonl／档案根-`.tmp`-cache 不在任何根里）。core 不碰全局 home，
+// 这三个需要 `platform::home_dir()` 的组合入口保留同名薄包装。
+use aeroric_core::sessions::discovery::{
+    collect_jsonl_files, collect_session_files_from_roots, encode_claude_project_path,
+};
 
 fn codex_sessions_roots(project_path: &str) -> Vec<PathBuf> {
-    let mut roots = vec![PathBuf::from(project_path).join(".codex").join("sessions")];
-    if let Some(home) = crate::platform::home_dir() {
-        let home_root = home.join(".codex").join("sessions");
-        if !roots.iter().any(|root| root == &home_root) {
-            roots.push(home_root);
-        }
-        append_custom_agent_session_roots(&mut roots, &home, project_path, true);
-    }
-    roots
-}
-
-fn append_custom_agent_session_roots(
-    roots: &mut Vec<PathBuf>,
-    home: &Path,
-    project_path: &str,
-    is_codex: bool,
-) {
-    let agent_homes = home.join(".aeroric").join("agent-homes");
-    let Ok(entries) = fs::read_dir(agent_homes) else {
-        return;
-    };
-    let encoded_project = encode_claude_project_path(project_path);
-    for entry in entries.flatten() {
-        let agent_home = entry.path();
-        if !agent_home.is_dir() {
-            continue;
-        }
-        let root = if is_codex {
-            agent_home.join("sessions")
-        } else {
-            agent_home.join("projects").join(&encoded_project)
-        };
-        if !roots.iter().any(|existing| existing == &root) {
-            roots.push(root);
-        }
-    }
-}
-
-fn collect_session_files_from_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for root in roots {
-        collect_session_files(root, &mut files);
-    }
-    files
-}
-
-fn collect_session_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_session_files(&path, out);
-            continue;
-        }
-
-        let is_rollout_jsonl = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
-            .unwrap_or(false);
-
-        if is_rollout_jsonl {
-            out.push(path);
-        }
-    }
-}
-
-fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, out);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
-            out.push(path);
-        }
-    }
+    aeroric_core::sessions::discovery::codex_sessions_roots(
+        crate::platform::home_dir().as_deref(),
+        project_path,
+    )
 }
 
 /// transcript 是否应据这次 Codex 工具调用判定"等待用户审批"。
@@ -519,29 +447,11 @@ fn sync_waiting_for_user<R: tauri::Runtime>(
 
 // ── Claude Code 会话监视器 ────────────────────────────────────────────────────
 
-fn encode_claude_project_path(project_path: &str) -> String {
-    project_path
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
 fn claude_sessions_dirs_for_project(project_path: &str) -> Vec<PathBuf> {
-    let Some(home) = crate::platform::home_dir() else {
-        return Vec::new();
-    };
-    let mut roots = vec![home
-        .join(".claude")
-        .join("projects")
-        .join(encode_claude_project_path(project_path))];
-    append_custom_agent_session_roots(&mut roots, &home, project_path, false);
-    roots
+    aeroric_core::sessions::discovery::claude_sessions_dirs_for_project(
+        crate::platform::home_dir().as_deref(),
+        project_path,
+    )
 }
 
 /// 某个具体 Agent 写 transcript 的目录。
@@ -558,12 +468,12 @@ fn claude_sessions_dir_for_agent_in(
     agent: &str,
     project_path: &str,
 ) -> Option<PathBuf> {
-    let encoded_project = encode_claude_project_path(project_path);
-    let config_root = match crate::app_settings::custom_agent_home_dir_name(agent) {
-        Some(name) => home.join(".aeroric").join("agent-homes").join(name),
-        None => home.join(".claude"),
-    };
-    Some(config_root.join("projects").join(encoded_project))
+    // agent→档案名判定留在宿主 app_settings（唯一真相）；core 只收注入结果。
+    aeroric_core::sessions::discovery::claude_sessions_dir_for_agent_in(
+        home,
+        crate::app_settings::custom_agent_home_dir_name(agent).as_deref(),
+        project_path,
+    )
 }
 
 fn claude_sessions_dir_for_agent(agent: &str, project_path: &str) -> Option<PathBuf> {
@@ -2865,11 +2775,21 @@ mod tests {
         let project_path = "/tmp/example project";
 
         let mut codex_roots = Vec::new();
-        append_custom_agent_session_roots(&mut codex_roots, &home, project_path, true);
+        aeroric_core::sessions::discovery::append_custom_agent_session_roots(
+            &mut codex_roots,
+            &home,
+            project_path,
+            true,
+        );
         assert_eq!(codex_roots, vec![agent_home.join("sessions")]);
 
         let mut claude_roots = Vec::new();
-        append_custom_agent_session_roots(&mut claude_roots, &home, project_path, false);
+        aeroric_core::sessions::discovery::append_custom_agent_session_roots(
+            &mut claude_roots,
+            &home,
+            project_path,
+            false,
+        );
         assert_eq!(
             claude_roots,
             vec![agent_home

@@ -23,8 +23,8 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 | 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
 | 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | Struct ExportTaskMeta, export_session_markdown_inner(), format_timestamp_ms(), sanitize_md_inline(), validate_export_output_path(), write_export_markdown() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
 | 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
-| 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | Const DSH_SESSION_FORMAT_VERSION, Const DSH_TRANSCRIPT_RAW, Const DSH_TRANSCRIPT_ZSTD, discover_dsh_session_since(), dsh_agent_owning_session(), dsh_encode_segment(), dsh_project_key(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), dsh_transcript_in(), line_is_dsh_header(), newest_dsh_session_since(), parse_dsh_session_lines() +6 more (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
-| 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_session_id_from_file_name(), omp_sessions_dir_for(), parse_omp_session_lines(), read_omp_session_header(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
+| 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | discover_dsh_session_since(), dsh_agent_owning_session(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), line_is_dsh_header(), newest_dsh_session_since(), parse_dsh_session_lines(), read_compressed_dsh_lines(), read_dsh_session_header(), read_dsh_session_lines(), register_dsh_session(), register_dsh_session_with_preset(), spawn_dsh_session_watcher() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
+| 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_sessions_dir_for(), parse_omp_session_lines(), read_omp_session_header(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
 | 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | Enum UsageSource, Struct ClaudeUsageData, Struct CodexRpcClient, Struct CodexUsageData, Struct UsageSnapshot, Struct UsageWindow, read_usage_snapshot() (3 test items excluded) | `metrics/usage.rs` | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | Struct AgentUsageSnapshot, Struct AgentUsageStats, load_agent_usage_snapshot(), record_agent_config_usage() (8 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer |
@@ -34,7 +34,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **10726**, command wrappers: **13**, test items excluded from the symbol lists: **125**
+- files: **11**, lines: **10508**, command wrappers: **13**, test items excluded from the symbol lists: **125**
 - files carrying `AppHandle`/`State`: **6**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
@@ -50,7 +50,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 2. **OMP 的读取根进 core 必须收窄，且不得顺手删旧行为。** 今天 `session_omp.rs` 往发现列表里推三类根：托管档案 `~/.aeroric/agent-homes`（`:127`）、用户自己跑过系统 omp 的 `~/.omp/agent/sessions`（`:136`）、以及 `~/.omp/profiles/<name>/agent/sessions` 的档案枚举（`:142-145`，注释自己写明对应上游 `dirs.ts::resolveActiveAgentDirOverride` 的语义）。AGENTS.md 的 "Native OMP session history boundary" 与 INV-06 已定：**新 core 只许 `~/.aeroric/agent-homes/**`，外部历史导入分支 capability 默认 false**，只有满足 ADR-001 §5 的评审才能开启。搬这两支时既不借迁移静默扩权限，也不删旧客户端的现存行为。
 
-3. **"omp 无超时"与"dsh 有超时"这两句要分开验，后者的落点不在 `session_dsh.rs`。** omp 是 mtime 比较：`session_omp.rs:208-240`，`modified_ms <= since_ms` 直接跳过（`:178` 的注释解释懒会话为什么不能被窗口漏掉）。而 grep `deadline|timeout` 在 `session_dsh.rs` **0 命中**——真正的时限窗在 `session.rs:1876-1890`：`start_elapsed >= 1500ms`、`first_output_elapsed >= 1s`、`start_elapsed >= 8s` 三档结算条件。**动 P3-04 之前必须先判清这张窗属于哪个家族、删掉它会不会改变 done/input_required 的时机**；照 AGENTS.md 那句"不像 dsh 那样有 deadline"直接给 omp 造一个补偿性超时，是拿文字推断替代行为。
+3. **"omp 无超时"与"dsh 有超时"这两句要分开验，后者的落点不在 `session_dsh.rs`。** omp 是 mtime 比较：`session_omp.rs:208-240`，`modified_ms <= since_ms` 直接跳过（`:178` 的注释解释懒会话为什么不能被窗口漏掉）。而 grep `deadline|timeout` 在 `session_dsh.rs` **0 命中**——真正的时限窗在 `session.rs:1758-1772`（2026-09-29 当日重锚：原记 :1876-1890，两片共 −118；判据同补记二百四十二）：`start_elapsed >= 1500ms`、`first_output_elapsed >= 1s`、`start_elapsed >= 8s` 三档结算条件。**动 P3-04 之前必须先判清这张窗属于哪个家族、删掉它会不会改变 done/input_required 的时机**；照 AGENTS.md 那句"不像 dsh 那样有 deadline"直接给 omp 造一个补偿性超时，是拿文字推断替代行为。
 
 4. **`claimed_session_paths` 保持路径粒度，是 ADR-020 §3 写明的例外，不随重键改。** 站点：`session.rs:97` 取锁，`lib.rs:1278`（登记）、`:1287`/`:1293`（反查是否仍被引用）、`:1310`（释放）；锁序声明在 `lib.rs:118`——嵌套方向只有一个，`claimed_session_paths` → 会话表。会话四张表已按 `(task_id, generation)` 键（P2-05 重键 wave 2），claim 仍按路径。P3-04 的验收"同一文件不能给两个 task"就靠这条路径级排他，改成任务粒度即失效。
 
@@ -70,6 +70,10 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 > `:1999`→**:1971**（定义 `:1991`→**:1963**）、时限窗 `:1876-1890`→**:1848-1862**。
 > `session_dsh.rs:621`、`session_omp.rs:299` 与「手写约束」第 4 条 `session.rs:97` 不在删除块之下，未动。
 > 原表照 09-28 读数保留（历史证据不回填），以本横幅定位。
+> **同夜二次重锚（补记二百四十二）**：第二片把发现根迁入 core 后 `session.rs` 又整体 **−90**：
+> **:1823/:1832→:1733/:1742**、**:1898/:2110/:2199→:1808/:2020/:2109**、**:2332→:2242**、**:1971→:1881**（定义 :1963→**:1873**）、
+> 时限窗 **:1848-1862→:1758-1772**；`session_dsh.rs`（剪短 78 行）watcher **:621→:543**、
+> `session_omp.rs`（剪短 65 行）watcher **:299→:234**。:97 claim 取锁点不在删除块之下，未动。
 
 G04 原文：「per-task 会话 watcher 线程（`session.rs:1845/1847`、`session_dsh.rs:630`、`session_omp.rs:300`）无显式取消，仅靠 loop 退出」。当天逐站回源，**结论：三个引用站点全部过期，且这笔账已完成大半**。真实状态：
 

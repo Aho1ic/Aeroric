@@ -69,41 +69,12 @@ pub(crate) fn register_omp_session<R: tauri::Runtime>(
 /// home 内 `-<relative>`、系统 temp 内 `-tmp<relative>`、其余 `--<absolute>--`;
 /// `/` `\` `:` 替换为 `-`(18.1.10 无 UTF-16 转义)。
 pub(crate) fn omp_project_dir_name(project_path: &Path) -> String {
-    let canonical_cwd = project_path
-        .canonicalize()
-        .unwrap_or_else(|_| project_path.to_path_buf());
-    let home = crate::platform::home_dir().map(|home| home.canonicalize().unwrap_or(home));
-    let temp_root = std::env::temp_dir()
-        .canonicalize()
-        .unwrap_or(std::env::temp_dir());
-
-    let encode_relative = |prefix: &str, relative: &Path| -> String {
-        let encoded = relative.to_string_lossy().replace(['/', '\\', ':'], "-");
-        format!("{prefix}{encoded}")
-    };
-    let encode_absolute = |absolute: &Path| -> String {
-        let stripped = absolute
-            .to_string_lossy()
-            .trim_start_matches(['/', '\\'])
-            .replace(['/', '\\', ':'], "-");
-        format!("--{stripped}--")
-    };
-
-    if let Some(home) = home.as_ref() {
-        if let Ok(relative) = canonical_cwd.strip_prefix(home) {
-            if relative.as_os_str().is_empty() {
-                return "-".to_string();
-            }
-            return encode_relative("-", relative);
-        }
-    }
-    if let Ok(relative) = canonical_cwd.strip_prefix(&temp_root) {
-        if relative.as_os_str().is_empty() {
-            return "-tmp".to_string();
-        }
-        return encode_relative("-tmp", relative);
-    }
-    encode_absolute(&canonical_cwd)
+    // 编码规则原文已随 P3-04 第二片迁入 core `aeroric_core::sessions::omp`
+    // （补记二百四十二）；core 不碰全局 home，这里注入平台值，行为逐字不变。
+    aeroric_core::sessions::omp::omp_project_dir_name(
+        crate::platform::home_dir().as_deref(),
+        project_path,
+    )
 }
 
 /// omp 族 agent 的会话根目录(托管 home 优先)。
@@ -111,66 +82,30 @@ pub(crate) fn omp_sessions_dir_for(agent: &str) -> Result<PathBuf, String> {
     Ok(crate::omp_home::omp_home_for(agent)?.join("sessions"))
 }
 
-/// 会话读取的路径白名单:内建 omp 的托管 home sessions + 用户自己的
-/// `~/.omp/agent/sessions`(用户可能手动用系统 omp 在同一项目里跑过会话)。
-/// 自定义 omp 档案(home 为 `agent-homes/{id}`)的路径读取走 task 里持久化的
-/// session 路径,Phase 7 接入时按 agent 校验。
+/// 会话读取的路径白名单：内建 omp 的托管 home sessions + 全部受管档案的 sessions，
+/// 外加用户直接跑系统 omp 的两支外部历史根。
+///
+/// 根收集本身已随第二片迁进 core：`omp_managed_session_roots`（`agent-homes/*` 扫描，
+/// 原样不做 `is_dir()` 过滤）与 `omp_external_history_session_roots`（`~/.omp/agent/sessions`
+/// ＋ `~/.omp/profiles/*/agent/sessions`）。**组合留在这里是权限边界的载体**——旧客户端
+/// 行为包含外部历史两支（AGENTS.md『Native OMP session history boundary』：新 core 消费方
+/// capability 默认 false，开启需 ADR-001 §5 评审；借迁移删旧行为或静默扩权限都不允许）。
 pub(crate) fn omp_session_allowed_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(managed) = crate::omp_home::omp_home_for("omp") {
         roots.push(managed.join("sessions"));
     }
-    // 自定义 omp 档案(Phase 7)的会话在各自 home(agent-homes/{id}/sessions);
-    // 校验只拿到 family 拿不到档案 id,放行全部 Aeroric 托管 home 的 sessions
-    // ——这些目录都在 ~/.aeroric 隔离目录内,且仅用于 omp 族的会话读取。
-    if let Some(root) =
-        crate::platform::home_dir().map(|home| home.join(".aeroric").join("agent-homes"))
-    {
-        if let Ok(entries) = fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                roots.push(entry.path().join("sessions"));
-            }
-        }
-    }
-    if let Some(default_dir) = crate::platform::home_dir() {
-        roots.push(default_dir.join(".omp").join("agent").join("sessions"));
-        roots.extend(omp_profile_session_roots(&default_dir));
+    if let Some(home) = crate::platform::home_dir() {
+        roots.extend(aeroric_core::sessions::omp::omp_managed_session_roots(
+            &home,
+        ));
+        roots.extend(aeroric_core::sessions::omp::omp_external_history_session_roots(&home));
     }
     roots
 }
 
-/// `<home>/.omp/profiles/<name>/agent/sessions` —— profile 作用域的会话目录。
-///
-/// 用户在 shell rc 里 export 过 `PI_PROFILE` / `OMP_PROFILE` 时,omp 的 agent dir
-/// 变成 `~/.omp/profiles/<name>/agent`(上游 `dirs.ts::resolveActiveAgentDirOverride`
-/// 让 profile 优先于 `PI_CODING_AGENT_DIR`),会话就落在那底下而非托管 home。
-///
-/// 漏掉这一支,历史视图会在 `session.rs` 的 allowed-roots 校验处拒掉真实存在的
-/// 会话文件,前端表现为"加载很久之后失败"。
-///
-/// 只放行 `<profile>/agent/sessions` 这一层,不是整个 `~/.omp`。
-fn omp_profile_session_roots(home: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(entries) = fs::read_dir(home.join(".omp").join("profiles")) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                roots.push(entry.path().join("agent").join("sessions"));
-            }
-        }
-    }
-    roots
-}
-
-/// 从文件名提取会话 id:`<ISO时间戳>_<uuidv7>.jsonl` 的 `_` 之后一段。
-pub(crate) fn omp_session_id_from_file_name(path: &Path) -> Option<String> {
-    let file_name = path.file_name()?.to_string_lossy();
-    let stem = file_name.strip_suffix(".jsonl")?;
-    let (_, id) = stem.split_once('_')?;
-    if id.is_empty() {
-        return None;
-    }
-    Some(id.to_string())
-}
+// `<ISO时间戳>_<uuidv7>.jsonl` 取 id 的纯函数已随第二片迁入 core；re-export 保路径。
+pub(crate) use aeroric_core::sessions::omp::omp_session_id_from_file_name;
 
 /// 解析前端传来的会话引用(`ompSessionId ?? ompSessionPath`,两种形态都可能)
 /// 为 `(session_id, path)`。resume 时 `omp_sessions` 已被 `finalize_task_exit`
@@ -543,15 +478,16 @@ mod tests {
         // 非目录项不得变成 root。
         fs::write(profiles.join("stray.txt"), b"x").unwrap();
 
-        let roots = omp_profile_session_roots(&home);
+        let roots = aeroric_core::sessions::omp::omp_external_history_session_roots(&home);
 
         for name in ["sota", "just", "zzz"] {
             let expected = profiles.join(name).join("agent").join("sessions");
             assert!(roots.contains(&expected), "missing root for profile {name}");
         }
+        // 新函数比旧 helper 多一项固定的 `~/.omp/agent/sessions`（宿主组合根需要它）。
         assert_eq!(
             roots.len(),
-            3,
+            4,
             "stray file must not become a root: {roots:?}"
         );
 
@@ -563,7 +499,11 @@ mod tests {
     fn absent_profiles_dir_yields_no_roots() {
         let home =
             std::env::temp_dir().join(format!("aeroric-omp-noprof-{}", uuid::Uuid::new_v4()));
-        assert!(omp_profile_session_roots(&home).is_empty());
+        assert_eq!(
+            aeroric_core::sessions::omp::omp_external_history_session_roots(&home),
+            vec![home.join(".omp").join("agent").join("sessions")],
+            "无 profiles 目录时只剩固定的外部根一项，不得 panic"
+        );
     }
 
     #[test]
