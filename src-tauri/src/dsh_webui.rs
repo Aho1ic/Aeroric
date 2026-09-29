@@ -26,10 +26,7 @@ mod startup;
 mod terminal_render;
 
 use crate::event_names::{
-    DSH_APPROVAL_REQUESTED, DSH_APPROVAL_RESOLVED, DSH_HOST_AGENT_ERROR,
-    DSH_HOST_ARCHIVED_SESSIONS_CHANGED, DSH_HOST_REMOTE_EVENT, DSH_HOST_SESSION_ADDED,
-    DSH_HOST_SESSION_REMOVED, DSH_HOST_SESSION_STATUS, DSH_HOST_STREAM_ERROR,
-    DSH_HOST_WORKSPACE_CHANGED, DSH_HOST_WORKSPACE_ORDER_CHANGED, DSH_HOST_WORKSPACE_REMOVED,
+    DSH_APPROVAL_REQUESTED, DSH_APPROVAL_RESOLVED, DSH_HOST_REMOTE_EVENT, DSH_HOST_STREAM_ERROR,
     DSH_QUESTION_REQUESTED, DSH_QUESTION_RESOLVED, DSH_SESSION_EVENT, DSH_SESSION_JOBS,
     DSH_SESSION_PROJECTION, DSH_SESSION_QUEUE, DSH_SESSION_SUBSCRIBED,
 };
@@ -3056,25 +3053,15 @@ fn dsh_permission_preset(mode: &str) -> Result<&'static str, String> {
 /// Dispatch a single parsed frame from the host-wide `/api/remote.mux` downlink.
 /// Each frame type maps to a `dsh-host-*` Tauri event so the frontend
 /// can react to session/workspace lifecycle changes without polling.
+///
+/// P3-05 第一片（补记二百五十）：10 臂映射表迁入 core
+/// `aeroric_core::agents::dsh_host::dispatcher::host_frame_event_name`——本函数只剩
+/// `emit` 这半截宿主句柄地盘；「未知帧静默丢弃」＝ core 返 `None` 的早退，逐字保留。
 fn dispatch_host_frame<R: Runtime>(app: &AppHandle<R>, payload: &Value) {
-    let frame_type = payload
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    let event_name = match frame_type {
-        "host/session-added" => DSH_HOST_SESSION_ADDED,
-        "host/session-removed" => DSH_HOST_SESSION_REMOVED,
-        "host/session-status" => DSH_HOST_SESSION_STATUS,
-        "host/agent-error" => DSH_HOST_AGENT_ERROR,
-        "host/workspace-changed" => DSH_HOST_WORKSPACE_CHANGED,
-        "host/workspace-removed" => DSH_HOST_WORKSPACE_REMOVED,
-        "host/workspace-order-changed" => DSH_HOST_WORKSPACE_ORDER_CHANGED,
-        "host/archived-sessions-changed" => DSH_HOST_ARCHIVED_SESSIONS_CHANGED,
-        "host/remote-event" => DSH_HOST_REMOTE_EVENT,
-        "stream/error" => DSH_HOST_STREAM_ERROR,
-        // Forward-compatibility: silently drop unknown frame types.
-        _ => return,
+    let Some(event_name) =
+        aeroric_core::agents::dsh_host::dispatcher::host_frame_event_name(payload)
+    else {
+        return;
     };
     let _ = app.emit(event_name, payload);
 }

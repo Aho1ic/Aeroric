@@ -13583,7 +13583,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1017",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1014",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13618,7 +13618,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1025",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1022",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13653,7 +13653,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1063",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1060",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13758,7 +13758,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1764",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1761",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13806,7 +13806,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1999",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1996",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13846,7 +13846,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2048",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2045",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13881,7 +13881,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2134",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2131",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -14170,7 +14170,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2145",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2142",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14204,7 +14204,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2160",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2157",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14238,7 +14238,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2173",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2170",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15895,7 +15895,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3413",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3400",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15930,7 +15930,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3426",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3413",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15964,7 +15964,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3603",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3590",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15999,7 +15999,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3497",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3484",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24176,7 +24176,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1516"
+        "src-tauri/src/dsh_webui.rs:1513"
       ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:40"
@@ -24202,7 +24202,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1521"
+        "src-tauri/src/dsh_webui.rs:1518"
       ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:89"
@@ -24218,7 +24218,7 @@
       "rust_consts": [
         {
           "symbol": "DSH_HOST_AGENT_ERROR",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24235,14 +24235,14 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_AGENT_ERROR (src-tauri/src/event_names.rs:24). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_AGENT_ERROR (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:20). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-archived-sessions-changed",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_ARCHIVED_SESSIONS_CHANGED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24259,19 +24259,19 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_ARCHIVED_SESSIONS_CHANGED (src-tauri/src/event_names.rs:28). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_ARCHIVED_SESSIONS_CHANGED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:24). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-remote-event",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_REMOTE_EVENT",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3328"
+        "src-tauri/src/dsh_webui.rs:3315"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24285,7 +24285,7 @@
       "rust_consts": [
         {
           "symbol": "DSH_HOST_SESSION_ADDED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24302,14 +24302,14 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_ADDED (src-tauri/src/event_names.rs:21). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_SESSION_ADDED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:17). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-session-removed",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_SESSION_REMOVED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24326,14 +24326,14 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_REMOVED (src-tauri/src/event_names.rs:22). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_SESSION_REMOVED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:18). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-session-status",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_SESSION_STATUS",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24350,22 +24350,22 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_STATUS (src-tauri/src/event_names.rs:23). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_SESSION_STATUS (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:19). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-stream-error",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_STREAM_ERROR",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3151",
-        "src-tauri/src/dsh_webui.rs:3277",
-        "src-tauri/src/dsh_webui.rs:3355",
-        "src-tauri/src/dsh_webui.rs:3372"
+        "src-tauri/src/dsh_webui.rs:3138",
+        "src-tauri/src/dsh_webui.rs:3264",
+        "src-tauri/src/dsh_webui.rs:3342",
+        "src-tauri/src/dsh_webui.rs:3359"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24379,7 +24379,7 @@
       "rust_consts": [
         {
           "symbol": "DSH_HOST_WORKSPACE_CHANGED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24396,14 +24396,14 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_CHANGED (src-tauri/src/event_names.rs:25). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_WORKSPACE_CHANGED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:21). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-workspace-order-changed",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_WORKSPACE_ORDER_CHANGED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24420,14 +24420,14 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_ORDER_CHANGED (src-tauri/src/event_names.rs:27). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_WORKSPACE_ORDER_CHANGED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:23). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-workspace-removed",
       "rust_consts": [
         {
           "symbol": "DSH_HOST_WORKSPACE_REMOVED",
-          "at": "src-tauri/src/event_names.rs"
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"
         }
       ],
       "ts_consts": [
@@ -24444,7 +24444,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_REMOVED (src-tauri/src/event_names.rs:26). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:36-45 的 10 臂表，P3-05 第一片迁入，补记二百五十), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3066（映射迁走后只剩宿主 wrapper，dsh_webui.rs:3060-3067）; name held by DSH_HOST_WORKSPACE_REMOVED (core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs:22). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-question-requested",
@@ -24461,7 +24461,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1526"
+        "src-tauri/src/dsh_webui.rs:1523"
       ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:62"
@@ -24487,7 +24487,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1531"
+        "src-tauri/src/dsh_webui.rs:1528"
       ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:95"
@@ -24508,7 +24508,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1458"
+        "src-tauri/src/dsh_webui.rs:1455"
       ],
       "listeners": [
         "src/hooks/useDshSessionFeatures.ts:98"
@@ -24529,7 +24529,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1541"
+        "src-tauri/src/dsh_webui.rs:1538"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:117"
@@ -24550,8 +24550,8 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1546",
-        "src-tauri/src/dsh_webui.rs:1746"
+        "src-tauri/src/dsh_webui.rs:1543",
+        "src-tauri/src/dsh_webui.rs:1743"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:115"
@@ -24572,7 +24572,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1536"
+        "src-tauri/src/dsh_webui.rs:1533"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:118"
@@ -24593,7 +24593,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1511"
+        "src-tauri/src/dsh_webui.rs:1508"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:120"
@@ -24847,9 +24847,9 @@
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:485",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:494",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:500",
-    "event_name @ src-tauri/src/dsh_webui.rs:3079",
-    "event_name @ src-tauri/src/dsh_webui.rs:3192",
-    "event_name @ src-tauri/src/dsh_webui.rs:3209",
+    "event_name @ src-tauri/src/dsh_webui.rs:3066",
+    "event_name @ src-tauri/src/dsh_webui.rs:3179",
+    "event_name @ src-tauri/src/dsh_webui.rs:3196",
     "action.event_name() @ src-tauri/src/lib.rs:237",
     "event_name @ src-tauri/src/pty.rs:462"
   ],

@@ -3,8 +3,10 @@
 //! 第一片:权限/effort → 启动参数映射表(自宿主 `agent_family_maps.rs` move)
 //! 与 [`LaunchPlan`] 纯数据类型。后续切片逐族迁入 `claude`/`codex`/`dsh`/`omp`
 //! 的命令构造、`managed_home/` 的托管 home/config/hook 安装,以及
-//! `environment.rs` 的 login-shell 环境合并。
+//! `environment.rs` 的 login-shell 环境合并。P3-05 起 [`dsh_host`] 把 DSH 结构化
+//! 宿主按职责片迁入同一模块树。
 
+pub mod dsh_host;
 pub mod environment;
 pub mod launch;
 pub mod managed_home;

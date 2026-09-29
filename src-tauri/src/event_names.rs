@@ -18,13 +18,10 @@ pub(crate) const DSH_APPROVAL_RESOLVED: &str = "dsh-approval-resolved";
 pub(crate) const DSH_QUESTION_RESOLVED: &str = "dsh-question-resolved";
 
 // ── dsh host 下行帧 → 前端事件(前端 `DSH_HOST_*_EVENT`)───────────────────────
-pub(crate) const DSH_HOST_SESSION_ADDED: &str = "dsh-host-session-added";
-pub(crate) const DSH_HOST_SESSION_REMOVED: &str = "dsh-host-session-removed";
-pub(crate) const DSH_HOST_SESSION_STATUS: &str = "dsh-host-session-status";
-pub(crate) const DSH_HOST_AGENT_ERROR: &str = "dsh-host-agent-error";
-pub(crate) const DSH_HOST_WORKSPACE_CHANGED: &str = "dsh-host-workspace-changed";
-pub(crate) const DSH_HOST_WORKSPACE_REMOVED: &str = "dsh-host-workspace-removed";
-pub(crate) const DSH_HOST_WORKSPACE_ORDER_CHANGED: &str = "dsh-host-workspace-order-changed";
-pub(crate) const DSH_HOST_ARCHIVED_SESSIONS_CHANGED: &str = "dsh-host-archived-sessions-changed";
-pub(crate) const DSH_HOST_REMOTE_EVENT: &str = "dsh-host-remote-event";
-pub(crate) const DSH_HOST_STREAM_ERROR: &str = "dsh-host-stream-error";
+// 这 10 个常量已随 P3-05 第一片迁入 core `aeroric_core::agents::dsh_host::dispatcher`
+// （补记二百五十），re-export 保持 `crate::event_names::…` 路径与原可见性不变；
+// 「与前端 `DSH_HOST_*_EVENT` 逐字对账、改名两侧同动」的契约口径随字符串一起迁，
+// 10 臂映射表的测试在 `core/crates/aeroric-core/tests/dsh_dispatcher.rs`。
+pub(crate) use aeroric_core::agents::dsh_host::dispatcher::{
+    DSH_HOST_REMOTE_EVENT, DSH_HOST_STREAM_ERROR,
+};

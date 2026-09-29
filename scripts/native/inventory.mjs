@@ -562,7 +562,11 @@ function occurrences(files, read, startRegex, consts) {
 }
 /// Files whose string constants are event names by declaration; elsewhere a
 /// constant is only a name→value lookup, never an event in its own right.
+/// P3-05 第一片（补记二百五十）：`DSH_HOST_*` 十个常量随 10 臂映射迁入 core 的
+/// dsh_host dispatcher，故声明文件与 Rust 语料都要能看见 core 侧真身——
+/// 宿主 `event_names.rs` 只剩 re-export（不再有字符串常量）。
 const EVENT_CONSTANT_FILES = ["src-tauri/src/event_names.rs", "src/tauriEvents.ts", "src/appRemoteEvents.ts"];
+const CORE_EVENT_CONSTANT_FILES = ["core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"];
 
 function collectConsts(files, read, regex) {
   const perFile = new Map();
@@ -608,9 +612,15 @@ function isTestFile(file) {
  */
 export function extractEvents({ repoRoot = defaultRoot, readFileSync: read = readFileSync } = {}) {
   const rustFiles = listRustFiles(path.join(repoRoot, "src-tauri", "src"), (dir) => listRustFiles(dir, { readFileSync: read })).filter((f) => !isTestFile(f));
+  // P3-05: the dsh_host core module hosts event constants and (later) typed sinks;
+  // its non-test .rs files join the Rust corpus so symbol→value resolution works.
+  for (const rel of CORE_EVENT_CONSTANT_FILES) {
+    const abs = path.join(repoRoot, rel);
+    if (existsSync(abs) && !isTestFile(abs)) rustFiles.push(abs);
+  }
   const readText = (f) => read(f, "utf8");
   const rel = (f) => path.relative(repoRoot, f).split(path.sep).join("/");
-  const rustSources = rustFiles.map((f) => rel(f));
+  const rustSources = [...new Set(rustFiles.map((f) => rel(f)))];
   const webFiles = listSourceFiles(path.join(repoRoot, "src"), [".ts", ".tsx"], read).filter((f) => !isTestFile(f)).map(rel);
 
   const rustConsts = collectConsts(rustSources, readText, RUST_STRING_CONST);
@@ -632,7 +642,7 @@ export function extractEvents({ repoRoot = defaultRoot, readFileSync: read = rea
     const bucket = file.startsWith("src/") ? "ts_consts" : "rust_consts";
     for (const [symbol, entry] of consts.perFile.get(file) ?? []) touch(entry.value)[bucket].push({ symbol, at: entry.at });
   };
-  for (const file of EVENT_CONSTANT_FILES) declaredConsts(file, file.startsWith("src/") ? tsConsts : rustConsts);
+  for (const file of [...EVENT_CONSTANT_FILES, ...CORE_EVENT_CONSTANT_FILES]) declaredConsts(file, file.startsWith("src/") ? tsConsts : rustConsts);
 
   const dynamic = { dynamic_emitters: [], dynamic_listeners: [] };
   for (const hit of emits.dynamic) dynamic.dynamic_emitters.push(`${hit.identifier} @ ${hit.at}`);

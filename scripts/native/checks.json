@@ -24,7 +24,7 @@
       "protocol-swift-golden@protocol": 20,
       "protocol-ts-golden@protocol": 21,
       "src-tauri-lib-tests@tauri-adapter": 2465,
-      "storage-core-rust@storage": 412,
+      "storage-core-rust@storage": 415,
       "swift-package-smoke@skeleton": 12,
       "tasks-idempotency-rust@tasks": 10,
       "tasks-parity-is-derived-from-client@tasks": 3,
@@ -564,7 +564,7 @@
             "-p",
             "aeroric-core"
           ],
-          "minCases": 412,
+          "minCases": 415,
           "$note": "单一写入者存储层 + P2-03 项目层 + 本 case 实际覆盖的整个 aeroric-core 包(paths/clock/context/location/storage_lock 与 storage/*、projects/*、tasks/*、terminal/* 全部 lib+integration 用例)。P3-03 收尾轮(补记一百)把口径合并:argv 跑的是 `cargo test -p aeroric-core`(整个包),所以地板必须是包口径的实测真值 355——81 是 P2-03 时代的真值,自 P2-05 起 case 范围悄悄长成整个包后它就成了假地板(补记六十五点名,挂账到收尾轮)。**两条 core 计数口径的关系**:本条机器地板=包口径(-p aeroric-core,355);MIGRATION_PLAN.md 每片记录的 workspace 全量(405)=包口径+aeroric-protocol 的用例,是叙事口径不是机器地板。此后每片新增 core 用例时,除各自模块地板外**必须同批抬这条**(漏抬时本 case 直接红)。",
           "timeoutMs": 900000
         },
