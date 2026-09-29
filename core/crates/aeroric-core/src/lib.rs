@@ -12,6 +12,7 @@ pub mod location;
 pub mod paths;
 pub mod projects;
 pub mod runtime;
+pub mod sessions;
 pub mod storage;
 pub mod storage_lock;
 pub mod tasks;

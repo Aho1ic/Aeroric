@@ -19,10 +19,10 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 | # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
 |---|---|---|---|---|---|---|
-| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | Enum SessionContent, Struct RecoveredSession, Struct SessionMessage, Struct SessionMessagePage, adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher() +6 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | Struct RecoveredSession, Struct SessionMessagePage, adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher(), spawn_claude_lazy_session_attach(), spawn_codex_session_recovery() +4 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
 | 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | Struct ExportTaskMeta, export_session_markdown_inner(), format_timestamp_ms(), sanitize_md_inline(), validate_export_output_path(), write_export_markdown() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
-| 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | append_assistant_content(), append_codex_user_message(), attachment_from_value(), claude_assistant_blocks(), claude_user_content(), json_value_to_display(), parse_claude_session(), parse_claude_session_line(), parse_codex_session(), parse_codex_session_line(), parse_session_line(), parse_session_lines() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
+| 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | Const DSH_SESSION_FORMAT_VERSION, Const DSH_TRANSCRIPT_RAW, Const DSH_TRANSCRIPT_ZSTD, discover_dsh_session_since(), dsh_agent_owning_session(), dsh_encode_segment(), dsh_project_key(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), dsh_transcript_in(), line_is_dsh_header(), newest_dsh_session_since(), parse_dsh_session_lines() +6 more (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_session_id_from_file_name(), omp_sessions_dir_for(), parse_omp_session_lines(), read_omp_session_header(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
@@ -34,7 +34,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **11226**, command wrappers: **13**, test items excluded from the symbol lists: **125**
+- files: **11**, lines: **10726**, command wrappers: **13**, test items excluded from the symbol lists: **125**
 - files carrying `AppHandle`/`State`: **6**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
@@ -63,6 +63,13 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 8. **DSH 转录有两种物理形态，且切换会留旧产物。** `session_dsh.rs:36`/`:38` 是 `session.jsonl` 与 `session.jsonl.zstd` 两个常量，后缀由插件的 `compression` 决定（`:9-10`：Aeroric 受管 patch 请求 `none`，插件默认却是 `zstd`）；`:111-115` 说明**从 zstd 切回 none 之后同一 root 里旧的压缩产物仍然存在**，所以读侧必须两形都试。core 里新增解压依赖之前先看这里用的是哪个 crate，别引入第二个 zstd 实现。
 
 ## 九、G04 的行号与"是否可取消"复核（2026-09-28，补记一百十四）
+
+> **2026-09-29 下午重锚（补记二百四十一）**：P3-04 首片把 `SessionMessage`／`SessionContent` 从
+> `session.rs` 迁入 core，该文件 `:670` 以下整体 **−28 行**。下表与「手写约束」第 3 条引用的映射：
+> `:1851/:1860`→**:1823/:1832**、`:1926/:2138/:2227`→**:1898/:2110/:2199**、`:2360`→**:2332**、
+> `:1999`→**:1971**（定义 `:1991`→**:1963**）、时限窗 `:1876-1890`→**:1848-1862**。
+> `session_dsh.rs:621`、`session_omp.rs:299` 与「手写约束」第 4 条 `session.rs:97` 不在删除块之下，未动。
+> 原表照 09-28 读数保留（历史证据不回填），以本横幅定位。
 
 G04 原文：「per-task 会话 watcher 线程（`session.rs:1845/1847`、`session_dsh.rs:630`、`session_omp.rs:300`）无显式取消，仅靠 loop 退出」。当天逐站回源，**结论：三个引用站点全部过期，且这笔账已完成大半**。真实状态：
 

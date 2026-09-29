@@ -667,13 +667,11 @@ fn process_claude_session_line<R: tauri::Runtime>(
 
 // ── Session messages (for conversation view) ──────────────────────────────────
 
-#[derive(serde::Serialize, Clone, Debug)]
-pub(crate) struct SessionMessage {
-    pub(crate) role: String,
-    pub(crate) content: Vec<SessionContent>,
-    #[serde(rename = "messageId", skip_serializing_if = "Option::is_none")]
-    pub(crate) message_id: Option<String>,
-}
+// 两个类型已随 P3-04 首片迁至 core `aeroric_core::sessions`（2026-09-29，补记二百四十一）。
+// 这条 re-export 保持 `crate::session::{SessionMessage, SessionContent}` 的路径与原
+// 可见性不变；serde 形状（`tag = "type"`、snake_case 变体、`messageId`／`mediaType`
+// 改名）由 core 的类型逐字携带，金样测试在 `core/crates/aeroric-core/tests/session_parsers.rs`。
+pub(crate) use aeroric_core::sessions::{SessionContent, SessionMessage};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -681,32 +679,6 @@ pub struct SessionMessagePage {
     messages: Vec<SessionMessage>,
     next_cursor: Option<u64>,
     has_more: bool,
-}
-
-#[derive(serde::Serialize, Clone, Debug)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum SessionContent {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: String,
-    },
-    ToolResult {
-        id: String,
-        output: String,
-    },
-    Thinking {
-        thinking: String,
-    },
-    Attachment {
-        name: String,
-        #[serde(rename = "mediaType")]
-        media_type: String,
-        source: String,
-    },
 }
 
 const SESSION_MESSAGE_PAGE_LINES: usize = 1_000;

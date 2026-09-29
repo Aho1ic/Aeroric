@@ -60,3 +60,12 @@ legacyDirectionUnproven 11` 全部不变，所以 `protocol` 门禁 6 case／98 
 `agent_tools.rs:606`（属 P8-02 的 Input 面 `agent_tools/`），事件级 note 又点名 P3-02 处置——两份工件各指一个
 Task。本次按新规则把 `agent.operation_changed` / `agent.tool_install_progress` 两条改派 **P8-02**，
 `G01` 的"要么有订阅者要么删除"仍需在 P8-02 出口逐条交代；该矛盾已在 `MIGRATION_PLAN.md` 补记一百十二 记账。
+
+
+## 修正案二（2026-09-29，Q1 由用户拍板「留 P8-04」）
+
+T1=A 留给 P3-04 的两条 pending 中，`usage.statistics_updated`（发射点 `usage_index.rs:1003`）随
+Q1＝留 P8-04 改派 **P8-04**——用量族代码今天不迁，事件的 v1 桥接只能跟着它的发射方走。
+`task.session`（payload 是会话内容）留在 **P3-04**，它是本 Task 出口唯一还欠的 pending 行。
+三方计数（topics 39／mapped 3／pending 36／legacyChannels 38／reshapedPayloads 3／legacyDirectionUnproven 11）
+不变；`contracts --write` 报 1 changed／12，`--check` 逐字节。出处：`MIGRATION_PLAN.md` 补记二百四十。

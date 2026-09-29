@@ -21,6 +21,11 @@
 | `P6-03` | 1 |
 | `P2-05（accepted）` | 1 |
 | `P3-04` | 1 |
+
+> **2026-09-29 更正指针（补记二百四十／ADR-007 修正案二）**：本表是 09-28 快照。当日 T1=A 实施时
+> `task.session` 也留给了 P3-04（所以「表内记 1」与「实际欠 2」的差在补记一百十三 已写明）；今日
+> Q1＝留 P8-04 之后，`usage.statistics_updated` 已改派 P8-04，P3-04 现欠 2 条中的 1 条（`task.session`）。
+> 机器权威以 `docs/native/event-topics.json` 为准。
 | `P8-04` | 1 |
 
 > **2026-09-28 补记一百二十 就地更正**：本表里的 `待判` **10 条当日已定性并落归属**——8 条 `dsh.host_*` → `pending: P3-05`、2 条 `app.*_requested` → `pending: P3-06`（§进度总表 与 `docs/native/event-topics.json` 为准）。

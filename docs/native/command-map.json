@@ -8335,7 +8335,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:892",
+      "definition_resolved": "src-tauri/src/session.rs:864",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8371,7 +8371,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:924",
+      "definition_resolved": "src-tauri/src/session.rs:896",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8408,7 +8408,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:974",
+      "definition_resolved": "src-tauri/src/session.rs:946",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8444,7 +8444,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:873",
+      "definition_resolved": "src-tauri/src/session.rs:845",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8480,7 +8480,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:996",
+      "definition_resolved": "src-tauri/src/session.rs:968",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8518,7 +8518,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:1684",
+      "definition_resolved": "src-tauri/src/session.rs:1656",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8554,7 +8554,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:2379",
+      "definition_resolved": "src-tauri/src/session.rs:2351",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

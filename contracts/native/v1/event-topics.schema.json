@@ -563,9 +563,9 @@
         "usage-statistics-updated"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P3-04",
-      "plannedDirection": "pending: P3-04",
-      "status": "pending: P3-04",
+      "payload": "pending: P8-04",
+      "plannedDirection": "pending: P8-04",
+      "status": "pending: P8-04",
       "topic": "usage.statistics_updated"
     },
     {
