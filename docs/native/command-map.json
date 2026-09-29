@@ -13583,7 +13583,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1014",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1015",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13618,7 +13618,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1022",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1023",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13653,7 +13653,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1060",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1061",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13758,7 +13758,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1761",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1762",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13806,7 +13806,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:1996",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:1997",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13846,7 +13846,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2045",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2046",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13881,7 +13881,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2131",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2132",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -14170,7 +14170,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2142",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2143",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14204,7 +14204,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2157",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2158",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -14238,7 +14238,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:2170",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:2171",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15895,7 +15895,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3331",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3332",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15930,7 +15930,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3344",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3345",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15964,7 +15964,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3521",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3522",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15999,7 +15999,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3415",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3416",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24257,7 +24257,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3246"
+        "src-tauri/src/dsh_webui.rs:3247"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24348,10 +24348,10 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3092",
-        "src-tauri/src/dsh_webui.rs:3195",
-        "src-tauri/src/dsh_webui.rs:3273",
-        "src-tauri/src/dsh_webui.rs:3290"
+        "src-tauri/src/dsh_webui.rs:3093",
+        "src-tauri/src/dsh_webui.rs:3196",
+        "src-tauri/src/dsh_webui.rs:3274",
+        "src-tauri/src/dsh_webui.rs:3291"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24480,7 +24480,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1455"
+        "src-tauri/src/dsh_webui.rs:1456"
       ],
       "listeners": [
         "src/hooks/useDshSessionFeatures.ts:98"
@@ -24501,7 +24501,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1538"
+        "src-tauri/src/dsh_webui.rs:1539"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:117"
@@ -24522,8 +24522,8 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1543",
-        "src-tauri/src/dsh_webui.rs:1743"
+        "src-tauri/src/dsh_webui.rs:1544",
+        "src-tauri/src/dsh_webui.rs:1744"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:115"
@@ -24544,7 +24544,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1533"
+        "src-tauri/src/dsh_webui.rs:1534"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:118"
@@ -24565,7 +24565,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:1508"
+        "src-tauri/src/dsh_webui.rs:1509"
       ],
       "listeners": [
         "src/hooks/useDshLiveSessions.ts:120"
@@ -24819,13 +24819,13 @@
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:485",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:494",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:500",
-    "DSH_APPROVAL_REQUESTED @ src-tauri/src/dsh_webui.rs:1513",
-    "DSH_APPROVAL_RESOLVED @ src-tauri/src/dsh_webui.rs:1518",
-    "DSH_QUESTION_REQUESTED @ src-tauri/src/dsh_webui.rs:1523",
-    "DSH_QUESTION_RESOLVED @ src-tauri/src/dsh_webui.rs:1528",
-    "event_name @ src-tauri/src/dsh_webui.rs:3066",
-    "event_name @ src-tauri/src/dsh_webui.rs:3114",
-    "event_name @ src-tauri/src/dsh_webui.rs:3131",
+    "DSH_APPROVAL_REQUESTED @ src-tauri/src/dsh_webui.rs:1514",
+    "DSH_APPROVAL_RESOLVED @ src-tauri/src/dsh_webui.rs:1519",
+    "DSH_QUESTION_REQUESTED @ src-tauri/src/dsh_webui.rs:1524",
+    "DSH_QUESTION_RESOLVED @ src-tauri/src/dsh_webui.rs:1529",
+    "event_name @ src-tauri/src/dsh_webui.rs:3067",
+    "event_name @ src-tauri/src/dsh_webui.rs:3115",
+    "event_name @ src-tauri/src/dsh_webui.rs:3132",
     "action.event_name() @ src-tauri/src/lib.rs:237",
     "event_name @ src-tauri/src/pty.rs:462"
   ],

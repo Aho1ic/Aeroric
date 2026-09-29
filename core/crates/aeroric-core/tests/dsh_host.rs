@@ -283,3 +283,95 @@ fn registry_consumes_once_and_clear_resets_generation_scoped_state() {
     assert_eq!(reg.client_id(), None);
     assert!(reg.all_pending().is_empty());
 }
+
+#[test]
+fn startup_url_gate_admits_only_plain_loopback_origins() {
+    use aeroric_core::agents::dsh_host::startup::{
+        dsh_web_command_args, parse_dsh_web_startup_url,
+    };
+    // 前缀不匹配的行：Ok(None)，抽干继续。
+    assert_eq!(parse_dsh_web_startup_url("serving on :8080").unwrap(), None);
+    assert_eq!(
+        parse_dsh_web_startup_url("  dsh web: http://localhost:41234/")
+            .unwrap()
+            .unwrap()
+            .0,
+        "http://localhost:41234"
+    );
+    let (base, port) = parse_dsh_web_startup_url("dsh web: http://127.0.0.1:55/")
+        .unwrap()
+        .unwrap();
+    assert_eq!((base.as_str(), port), ("http://127.0.0.1:55", 55));
+    // IPv6 loopback 的 base 必须带方括号（否则 URL 重新解析就错位）。
+    assert_eq!(
+        parse_dsh_web_startup_url("dsh web: http://[::1]:9/")
+            .unwrap()
+            .unwrap()
+            .0,
+        "http://[::1]:9"
+    );
+    // 六条拒绝臂逐条点名（这是全部 RPC/WS 的 base，放窄不放宽）。
+    let err = |line: &str| parse_dsh_web_startup_url(line).unwrap_err();
+    assert!(err("dsh web: https://localhost:1/").contains("non-HTTP"));
+    assert!(err("dsh web: http://example.com:80/").contains("non-loopback"));
+    assert!(err("dsh web: http://user@localhost:80/").contains("unsupported startup URL shape"));
+    assert!(err("dsh web: http://localhost:80/a").contains("unsupported startup URL shape"));
+    assert!(err("dsh web: http://localhost:80/?x=1").contains("unsupported startup URL shape"));
+    assert!(err("dsh web: http://localhost:80/#f").contains("unsupported startup URL shape"));
+    assert!(err("dsh web: http://localhost/").contains("has no port"));
+    assert!(err("dsh web: http://localhost:0/").contains("port 0"));
+    assert!(err("dsh web: not a url").contains("invalid startup URL"));
+    // 参数臂：headless 四件套，--no-open 不许丢（丢了每次拉起舞会弹系统浏览器）。
+    assert_eq!(dsh_web_command_args(), ["web", "--port", "0", "--no-open"]);
+}
+
+#[test]
+fn output_ring_truncates_on_char_boundary_and_details_concatenate_once() {
+    use aeroric_core::agents::dsh_host::startup::{
+        append_bounded_output, attach_startup_output, exited_dsh_web_error, startup_output_detail,
+        DshWebStartupOutput, DSH_WEB_OUTPUT_LIMIT,
+    };
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    // 多字节行 ×N：环必须钳在上限且不切半字符（drain 到 char 边界）。
+    let mut buf = String::new();
+    for i in 0..2000 {
+        append_bounded_output(&mut buf, &format!("行-{i}-é中文"));
+        assert!(buf.len() <= DSH_WEB_OUTPUT_LIMIT + 64, "峰值 {}", buf.len());
+        assert!(buf.is_char_boundary(buf.len()));
+    }
+    assert!(buf.len() <= DSH_WEB_OUTPUT_LIMIT);
+    let out = Arc::new(Mutex::new(DshWebStartupOutput::default()));
+    assert_eq!(startup_output_detail(&out), "", "空缓冲不产噪声");
+    {
+        let mut g = out.lock();
+        g.stderr.push_str("boom\n");
+        g.stdout.push_str("noise\n");
+    }
+    let detail = startup_output_detail(&out);
+    assert_eq!(
+        detail, "stderr:\nboom\nstdout:\nnoise",
+        "stderr 先行是原文顺序"
+    );
+    // attach：detail 已在 error 里就不重复贴（同一真相只出现一次）。
+    let joined = attach_startup_output("x".to_string(), &out);
+    assert_eq!(joined, format!("x\n{detail}"));
+    let once = attach_startup_output(joined.clone(), &out);
+    assert_eq!(once, joined, "二次 attach 必须幂等");
+    // exited 文案：status 的 Display 形插进括号（ExitStatus 没有公开构造器，用
+    // 「必然失败的进程」取——mac/linux 走 false，Windows 走 cmd /C exit 1；
+    // 用例数两侧一致，不踩「exact-count 地板 × cfg(test)」的已知坑）。
+    #[cfg(unix)]
+    let status = std::process::Command::new("false").status().unwrap();
+    #[cfg(not(unix))]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "exit 1"])
+        .status()
+        .unwrap();
+    let msg = exited_dsh_web_error(status, &out);
+    assert!(
+        msg.starts_with("DSH Web exited before becoming ready ("),
+        "{msg}"
+    );
+    assert!(msg.ends_with(&detail), "detail 必须拼上: {msg}");
+}

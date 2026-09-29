@@ -12,3 +12,4 @@
 pub mod approvals;
 pub mod client;
 pub mod dispatcher;
+pub mod startup;

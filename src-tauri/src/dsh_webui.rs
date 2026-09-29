@@ -3,7 +3,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+// `std::net::IpAddr` 的 loopback 判定随启动 URL 闸门迁入 core（补记二百五十四）。
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::{sleep, Duration, Instant};
-use url::{Host, Url};
+// `url::{Host, Url}` 的启动 URL 判定已迁 core（补记二百五十四）；WS 地址构造在 `remote_mux`。
 use uuid::Uuid;
 
 mod api_client;
@@ -55,7 +55,8 @@ use terminal_render::{
 };
 
 const DSH_WEB_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-const DSH_WEB_OUTPUT_LIMIT: usize = 16 * 1024;
+// `DSH_WEB_OUTPUT_LIMIT` 随启动判定面迁入 core `agents::dsh_host::startup`（补记二百五十四），
+// 经 `startup` 子模块 re-export 消费——两处同值定义就是分叉种子。
 /// 等 lifecycle 锁最多等多久才改口告诉用户「在升级」。
 ///
 /// 这把锁平时只被 start/stop 短暂占用,毫秒级就能拿到;但 `suspend_for_upgrade`

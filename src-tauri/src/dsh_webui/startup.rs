@@ -9,60 +9,18 @@
 
 use super::*;
 
-/// 传给 `dsh` 的子命令参数(在用户配置的 `launch.args` 之后)。
-///
-/// `--no-open`:我们只把 `dsh web` 当 headless RPC 后端,会话跑在 Aeroric 自己的
-/// 终端里。上游 web-app 的 `openBrowser` 默认为 true,不带这个 flag 每次拉起后端
-/// 都会顺带弹一个系统浏览器 —— 看起来就像"启动终端跳去了网页版"。
-/// `printUrl` 在 web-app 的 cordis.patch.yml 里硬编码 true、与 `openBrowser` 相互
-/// 独立,所以这里照常能读到启动 URL 那行。
-pub(super) fn dsh_web_command_args() -> [&'static str; 4] {
-    ["web", "--port", "0", "--no-open"]
-}
-
-#[derive(Default)]
-pub(super) struct DshWebStartupOutput {
-    stdout: String,
-    stderr: String,
-}
-
-pub(super) fn append_bounded_output(target: &mut String, line: &str) {
-    target.push_str(line);
-    target.push('\n');
-    if target.len() <= DSH_WEB_OUTPUT_LIMIT {
-        return;
-    }
-    let remove_at_least = target.len() - DSH_WEB_OUTPUT_LIMIT;
-    let split = target
-        .char_indices()
-        .find_map(|(index, _)| (index >= remove_at_least).then_some(index))
-        .unwrap_or(target.len());
-    target.drain(..split);
-}
-
-pub(super) fn startup_output_detail(output: &Arc<Mutex<DshWebStartupOutput>>) -> String {
-    let output = output.lock();
-    let mut sections = Vec::new();
-    if !output.stderr.trim().is_empty() {
-        sections.push(format!("stderr:\n{}", output.stderr.trim()));
-    }
-    if !output.stdout.trim().is_empty() {
-        sections.push(format!("stdout:\n{}", output.stdout.trim()));
-    }
-    sections.join("\n")
-}
-
-pub(super) fn attach_startup_output(
-    error: String,
-    output: &Arc<Mutex<DshWebStartupOutput>>,
-) -> String {
-    let detail = startup_output_detail(output);
-    if detail.is_empty() || error.contains(&detail) {
-        error
-    } else {
-        format!("{error}\n{detail}")
-    }
-}
+// 启动 URL 闸门、输出环与错误文案拼接已随 P3-05 第五片迁入 core
+// `aeroric_core::agents::dsh_host::startup`（补记二百五十四）：信任闸门（http＋loopback
+// ＋根路径＋无凭据/query/fragment＋实端口）与 16 KiB UTF-8 边界安全截断是判定面，
+// 归 core；下方留驻的 drain/wait/check_health/ensure_* 是进程生命周期 I/O，归宿主。
+// re-export 保持 `pub(super)` 原路径（dsh_webui.rs 的导入点一字不动）。
+pub(super) use aeroric_core::agents::dsh_host::startup::{
+    append_bounded_output, attach_startup_output, dsh_web_command_args, exited_dsh_web_error,
+    parse_dsh_web_startup_url, startup_output_detail, DshWebStartupOutput,
+};
+// lib 目标无人引用 limit（只有下方 cfg(test) 的截断测试要）——lib/test 分流见 243 先例。
+#[cfg(test)]
+pub(super) use aeroric_core::agents::dsh_host::startup::DSH_WEB_OUTPUT_LIMIT;
 
 async fn finish_dsh_web_output_drains(
     stdout: tokio::task::JoinHandle<()>,
@@ -72,52 +30,6 @@ async fn finish_dsh_web_output_drains(
         let _ = tokio::join!(stdout, stderr);
     })
     .await;
-}
-
-pub(super) fn parse_dsh_web_startup_url(line: &str) -> Result<Option<(String, u16)>, String> {
-    let Some(value) = line.trim().strip_prefix("dsh web:").map(str::trim) else {
-        return Ok(None);
-    };
-    let parsed = Url::parse(value)
-        .map_err(|error| format!("DSH Web reported an invalid startup URL {value:?}: {error}"))?;
-    if parsed.scheme() != "http" {
-        return Err(format!("DSH Web reported a non-HTTP startup URL: {value}"));
-    }
-    let host = parsed
-        .host()
-        .ok_or_else(|| format!("DSH Web startup URL has no host: {value}"))?;
-    let loopback = match &host {
-        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
-        Host::Ipv4(address) => IpAddr::V4(*address).is_loopback(),
-        Host::Ipv6(address) => IpAddr::V6(*address).is_loopback(),
-    };
-    if !loopback {
-        return Err(format!(
-            "DSH Web reported a non-loopback startup URL: {value}"
-        ));
-    }
-    if !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(format!(
-            "DSH Web reported an unsupported startup URL shape: {value}"
-        ));
-    }
-    let port = parsed
-        .port()
-        .ok_or_else(|| format!("DSH Web startup URL has no port: {value}"))?;
-    if port == 0 {
-        return Err("DSH Web reported port 0 instead of its allocated port".to_string());
-    }
-    let base_url = match host {
-        Host::Domain(domain) => format!("http://{domain}:{port}"),
-        Host::Ipv4(address) => format!("http://{address}:{port}"),
-        Host::Ipv6(address) => format!("http://[{address}]:{port}"),
-    };
-    Ok(Some((base_url, port)))
 }
 
 async fn drain_dsh_web_output<R>(
@@ -180,18 +92,6 @@ async fn drain_dsh_web_output<R>(
                 Ok(None) => {}
             }
         }
-    }
-}
-
-pub(super) fn exited_dsh_web_error(
-    status: std::process::ExitStatus,
-    output: &Arc<Mutex<DshWebStartupOutput>>,
-) -> String {
-    let detail = startup_output_detail(output);
-    if detail.is_empty() {
-        format!("DSH Web exited before becoming ready ({status})")
-    } else {
-        format!("DSH Web exited before becoming ready ({status})\n{detail}")
     }
 }
 
