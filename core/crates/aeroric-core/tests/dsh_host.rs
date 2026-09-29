@@ -181,3 +181,105 @@ fn pinned_inventory_keeps_generation_anchors_and_excludes_retired_names() {
         );
     }
 }
+
+#[test]
+fn waterfall_verdicts_map_arms_and_pin_event_strings() {
+    use aeroric_core::agents::dsh_host::approvals::{
+        waterfall_request_kind, waterfall_resolved_event, WaterfallKind,
+    };
+    let (kind, name) = waterfall_request_kind("permission/request").unwrap();
+    assert!(matches!(kind, WaterfallKind::Approval));
+    assert_eq!(name, "dsh-approval-requested");
+    let (kind, name) = waterfall_request_kind("user-questions/request").unwrap();
+    assert!(matches!(kind, WaterfallKind::Question));
+    assert_eq!(name, "dsh-question-requested");
+    // 未知臂＝None，由宿主发 stream/error（不得静默吞的形状在宿主侧，判定面在此）。
+    assert!(waterfall_request_kind("permission/answered").is_none());
+    assert_eq!(
+        waterfall_resolved_event(WaterfallKind::Approval),
+        "dsh-approval-resolved"
+    );
+    assert_eq!(
+        waterfall_resolved_event(WaterfallKind::Question),
+        "dsh-question-resolved"
+    );
+}
+
+#[test]
+fn session_id_prefers_session_key_then_agent_fallback() {
+    use aeroric_core::agents::dsh_host::approvals::waterfall_session_id;
+    assert_eq!(
+        waterfall_session_id(&json!({"sessionId":"s1","agentId":"a1"})).as_deref(),
+        Some("s1")
+    );
+    assert_eq!(
+        waterfall_session_id(&json!({"agentId":"a1"})).as_deref(),
+        Some("a1")
+    );
+    assert_eq!(waterfall_session_id(&json!({"sessionId":7})), None);
+    assert_eq!(waterfall_session_id(&json!({})), None);
+}
+
+#[test]
+fn request_frame_stamps_ids_without_clobbering_session_payload() {
+    use aeroric_core::agents::dsh_host::approvals::stamp_waterfall_frame;
+    let frame = stamp_waterfall_frame(
+        &json!({"type":"permission/request","sessionId":"mine"}),
+        "ev-1",
+        Some("gen-9".to_string()),
+        Some("other".to_string()),
+    );
+    assert_eq!(frame["eventId"], json!("ev-1"));
+    assert_eq!(frame["clientId"], json!("gen-9"));
+    assert_eq!(
+        frame["sessionId"],
+        json!("mine"),
+        "or_insert 语义：payload 自带的 sessionId 不被补位值覆盖"
+    );
+    // client_id 缺位不注入；sessionId 缺位则补。
+    let frame = stamp_waterfall_frame(&json!({"a":1}), "ev-2", None, Some("s2".to_string()));
+    assert!(frame.get("clientId").is_none());
+    assert_eq!(frame["sessionId"], json!("s2"));
+    // 非 object payload 原样返回（宿主原 `as_object_mut` 分支）。
+    assert_eq!(
+        stamp_waterfall_frame(&json!(null), "ev-3", None, None),
+        json!(null)
+    );
+}
+
+#[test]
+fn registry_consumes_once_and_clear_resets_generation_scoped_state() {
+    use aeroric_core::agents::dsh_host::approvals::{
+        PendingWaterfall, WaterfallKind, WaterfallRegistry,
+    };
+    let mut reg = WaterfallRegistry::default();
+    assert_eq!(reg.client_id(), None);
+    reg.set_client_id("gen-1".to_string());
+    reg.insert(
+        "ev-1".to_string(),
+        PendingWaterfall {
+            kind: WaterfallKind::Approval,
+            session_id: Some("s1".to_string()),
+        },
+    );
+    // take-and-consume：第一次 remove 拿到，第二次 None——网络重放不得二次批准。
+    let first = reg.remove("ev-1").expect("first consume");
+    assert!(matches!(first.kind, WaterfallKind::Approval));
+    assert_eq!(first.session_id.as_deref(), Some("s1"));
+    assert!(reg.remove("ev-1").is_none(), "重放必须拿不到");
+    // 幂等兜底路由：unknown eventId 时 reply 路径读 all_pending().next()。
+    reg.insert(
+        "ev-2".to_string(),
+        PendingWaterfall {
+            kind: WaterfallKind::Question,
+            session_id: None,
+        },
+    );
+    let pending = reg.all_pending();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].session_id.is_none());
+    // 载体重连：client_id 与 pending 同代清空（默认值的两半一起归零）。
+    reg.clear();
+    assert_eq!(reg.client_id(), None);
+    assert!(reg.all_pending().is_empty());
+}

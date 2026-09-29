@@ -3066,59 +3066,12 @@ fn dispatch_host_frame<R: Runtime>(app: &AppHandle<R>, payload: &Value) {
     let _ = app.emit(event_name, payload);
 }
 
-/// One in-flight approval / question request, keyed by its `eventId`.
-///
-/// The reply must quote both the `eventId` and the `clientId` from the ready
-/// frame of the generation that raised it, so the id is tracked alongside the
-/// pending set rather than being re-derived at reply time.
-#[derive(Debug, Clone)]
-pub(crate) struct PendingWaterfall {
-    pub(crate) kind: WaterfallKind,
-    pub(crate) session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WaterfallKind {
-    Approval,
-    Question,
-}
-
-/// The pending-waterfall map plus the current generation's `clientId`.
-///
-/// `clientId` lives here because it is generation-scoped exactly like the
-/// pending entries: both are cleared when the carrier reconnects.
-#[derive(Debug, Default)]
-pub(crate) struct WaterfallRegistry {
-    client_id: Option<String>,
-    pending: HashMap<String, PendingWaterfall>,
-}
-
-impl WaterfallRegistry {
-    fn set_client_id(&mut self, client_id: String) {
-        self.client_id = Some(client_id);
-    }
-
-    pub(crate) fn client_id(&self) -> Option<&str> {
-        self.client_id.as_deref()
-    }
-
-    fn clear(&mut self) {
-        self.client_id = None;
-        self.pending.clear();
-    }
-
-    fn insert(&mut self, event_id: String, entry: PendingWaterfall) {
-        self.pending.insert(event_id, entry);
-    }
-
-    pub(crate) fn remove(&mut self, event_id: &str) -> Option<PendingWaterfall> {
-        self.pending.remove(event_id)
-    }
-
-    pub(crate) fn all_pending(&self) -> Vec<&PendingWaterfall> {
-        self.pending.values().collect()
-    }
-}
+// `PendingWaterfall`／`WaterfallKind`／`WaterfallRegistry` 三件已随 P3-05 第四片迁入
+// core `aeroric_core::agents::dsh_host::approvals`（补记二百五十三）：`remove` 的
+// take-and-consume 防重放形状、`clear` 随代重置、`all_pending` 的幂等兜底路由语义
+// 由 core 测试钉住；`Mutex` 包裹与全部调用点留宿主（含 `commands.rs` 的 reply 路径
+// 读 `entry.session_id`）。re-export 保持原路径与 `pub(crate)` 可见性。
+pub(crate) use aeroric_core::agents::dsh_host::approvals::WaterfallRegistry;
 
 /// Emit one waterfall request as the approval / question Tauri event the
 /// frontend already listens for, and record it so the reply can be routed.
@@ -3129,29 +3082,23 @@ fn dispatch_waterfall_request<R: Runtime>(
     event: &str,
     payload: &Value,
 ) {
-    let (kind, event_name) = match event {
-        "permission/request" => (WaterfallKind::Approval, DSH_APPROVAL_REQUESTED),
-        "user-questions/request" => (WaterfallKind::Question, DSH_QUESTION_REQUESTED),
+    use aeroric_core::agents::dsh_host::approvals::{
+        stamp_waterfall_frame, waterfall_request_kind, waterfall_session_id, PendingWaterfall,
+    };
+    // 判定与帧构造在 core（P3-05 第四片）；宿主只剩两种 emit。
+    let Some((kind, event_name)) = waterfall_request_kind(event) else {
         // Unknown waterfall events must not be silently swallowed: the Host
         // blocks until it is answered, so surface it instead of stalling.
-        _ => {
-            let _ = app.emit(
-                DSH_HOST_STREAM_ERROR,
-                json!({
-                    "type": "stream/error",
-                    "error": format!("Unsupported DSH waterfall event {event}"),
-                }),
-            );
-            return;
-        }
+        let _ = app.emit(
+            DSH_HOST_STREAM_ERROR,
+            json!({
+                "type": "stream/error",
+                "error": format!("Unsupported DSH waterfall event {event}"),
+            }),
+        );
+        return;
     };
-
-    let session_id = payload
-        .get("sessionId")
-        .or_else(|| payload.get("agentId"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-
+    let session_id = waterfall_session_id(payload);
     let client_id = {
         let mut registry = registry.lock();
         registry.insert(
@@ -3163,19 +3110,7 @@ fn dispatch_waterfall_request<R: Runtime>(
         );
         registry.client_id().map(str::to_string)
     };
-
-    let mut frame = payload.clone();
-    if let Some(object) = frame.as_object_mut() {
-        object.insert("eventId".to_string(), Value::String(event_id.to_string()));
-        if let Some(client_id) = client_id {
-            object.insert("clientId".to_string(), Value::String(client_id));
-        }
-        if let Some(session_id) = session_id {
-            object
-                .entry("sessionId".to_string())
-                .or_insert(Value::String(session_id));
-        }
-    }
+    let frame = stamp_waterfall_frame(payload, event_id, client_id, session_id);
     let _ = app.emit(event_name, &frame);
 }
 
@@ -3186,20 +3121,16 @@ fn dispatch_waterfall_cancel<R: Runtime>(
     registry: &Mutex<WaterfallRegistry>,
     event_id: &str,
 ) {
+    use aeroric_core::agents::dsh_host::approvals::{
+        waterfall_cancel_frame, waterfall_resolved_event,
+    };
     let Some(entry) = registry.lock().remove(event_id) else {
         return;
     };
-    let event_name = match entry.kind {
-        WaterfallKind::Approval => DSH_APPROVAL_RESOLVED,
-        WaterfallKind::Question => DSH_QUESTION_RESOLVED,
-    };
+    let event_name = waterfall_resolved_event(entry.kind);
     let _ = app.emit(
         event_name,
-        json!({
-            "eventId": event_id,
-            "sessionId": entry.session_id,
-            "cancelled": true,
-        }),
+        waterfall_cancel_frame(event_id, entry.session_id),
     );
 }
 

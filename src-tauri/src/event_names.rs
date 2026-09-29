@@ -11,11 +11,11 @@ pub(crate) const DSH_SESSION_QUEUE: &str = "dsh-session-queue";
 pub(crate) const DSH_SESSION_JOBS: &str = "dsh-session-jobs";
 pub(crate) const DSH_SESSION_PROJECTION: &str = "dsh-session-projection";
 
-// ── dsh 审批/提问(前端 `DSH_*_EVENT`)──────────────────────────────────────────
-pub(crate) const DSH_APPROVAL_REQUESTED: &str = "dsh-approval-requested";
-pub(crate) const DSH_QUESTION_REQUESTED: &str = "dsh-question-requested";
-pub(crate) const DSH_APPROVAL_RESOLVED: &str = "dsh-approval-resolved";
-pub(crate) const DSH_QUESTION_RESOLVED: &str = "dsh-question-resolved";
+// 审批/提问四个事件名随 P3-05 第四片迁入 core `agents::dsh_host::approvals`
+// （补记二百五十三，与两臂判定表同文件同源）；re-export 保持路径与可见性不变。
+pub(crate) use aeroric_core::agents::dsh_host::approvals::{
+    DSH_APPROVAL_REQUESTED, DSH_APPROVAL_RESOLVED, DSH_QUESTION_REQUESTED, DSH_QUESTION_RESOLVED,
+};
 
 // ── dsh host 下行帧 → 前端事件(前端 `DSH_HOST_*_EVENT`)───────────────────────
 // 这 10 个常量已随 P3-05 第一片迁入 core `aeroric_core::agents::dsh_host::dispatcher`
