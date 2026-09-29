@@ -14,6 +14,7 @@ workspace = true
 aeroric-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+zstd = "0.13" # 与宿主 src-tauri 同 crate 同版本——手写约束 8：不得引入第二个 zstd 实现
 sha2 = "0.10.9"
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -24,3 +25,6 @@ portable-pty = { workspace = true }
 # Windows 分支只用 std 的 creation_flags,不引入 windows-sys。
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+zstd = "0.13"

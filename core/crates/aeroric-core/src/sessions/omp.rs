@@ -98,3 +98,235 @@ pub fn omp_external_history_session_roots(home: &Path) -> Vec<PathBuf> {
     }
     roots
 }
+
+// ── 读侧与解析（第三片，2026-09-29 补记二百四十三）──────────────────────────
+// 逐字迁移自宿主 `src-tauri/src/session_omp.rs`，行为零改动。
+
+use serde_json::Value;
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
+
+use crate::sessions::SessionContent;
+use crate::sessions::SessionMessage;
+
+/// 读取 omp 会话文件头(`{type:"session",id,...}` 行)的会话 id。
+/// 只流式读前 4 行:title 槽固定 256 字节,header 必然在其中,避免整读大文件。
+pub fn read_omp_session_header(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    for line in BufReader::new(file).lines().take(4) {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) == Some("session") {
+            return value.get("id").and_then(Value::as_str).map(str::to_string);
+        }
+    }
+    None
+}
+
+/// 解析 omp 会话 JSONL 行为 Aeroric 的会话消息。
+///
+/// 布局:首行 256 字节 title 槽、次行 header(`{type:"session",...}`)、之后为
+/// append-only entry 树。entry 里的 `message` 对象与 omp RPC 的 AgentMessage 同构:
+/// - user:content 为字符串或 `[{type:"text",...},{type:"image",...}]` 数组
+/// - assistant:content 数组含 `{type:"text"|"thinking"|"toolCall",...}`
+/// - toolResult:content 数组(文本项拼接为输出)
+///
+/// compaction/model_usage 等非消息 entry 与空行跳过;entry 树按文件线性序展示
+/// (omp 的分支树在 Aeroric 中平铺,与 claude/codex 解析的处理一致)。
+pub fn parse_omp_session_lines<S: AsRef<str>>(lines: &[S]) -> Result<Vec<SessionMessage>, String> {
+    let mut messages = Vec::new();
+    for line in lines {
+        let line = line.as_ref();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        let message_id = value.get("id").and_then(Value::as_str).map(str::to_string);
+        let content = match role {
+            "user" => parse_omp_user_content(message),
+            "assistant" => parse_omp_assistant_content(message),
+            "toolResult" => parse_omp_tool_result_content(message),
+            // developer 等其它角色按原样跳过,避免会话视图出现无法渲染的条目。
+            _ => continue,
+        };
+        if content.is_empty() {
+            continue;
+        }
+        messages.push(SessionMessage {
+            role: role.to_string(),
+            content,
+            message_id,
+        });
+    }
+    Ok(messages)
+}
+
+fn parse_omp_user_content(message: &Value) -> Vec<SessionContent> {
+    match message.get("content") {
+        // 空字符串/空文本项不渲染空气泡。
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            vec![SessionContent::Text { text: text.clone() }]
+        }
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                    (!text.trim().is_empty()).then_some(SessionContent::Text {
+                        text: text.to_string(),
+                    })
+                }
+                // 图片附件只保留占位元数据,不内联 base64。
+                Some("image") => Some(SessionContent::Attachment {
+                    name: "image".to_string(),
+                    media_type: item
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png")
+                        .to_string(),
+                    source: "inline-image".to_string(),
+                }),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_omp_assistant_content(message: &Value) -> Vec<SessionContent> {
+    let Some(Value::Array(items)) = message.get("content") else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                (!text.trim().is_empty()).then_some(SessionContent::Text {
+                    text: text.to_string(),
+                })
+            }
+            Some("thinking") => {
+                let thinking = item
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                (!thinking.trim().is_empty()).then_some(SessionContent::Thinking {
+                    thinking: thinking.to_string(),
+                })
+            }
+            Some("toolCall") => {
+                let input = match item.get("arguments") {
+                    Some(Value::String(raw)) => raw.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                Some(SessionContent::ToolUse {
+                    id: item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string(),
+                    input,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn parse_omp_tool_result_content(message: &Value) -> Vec<SessionContent> {
+    let tool_call_id = message
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let output = match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("text") => item.get("text").and_then(Value::as_str).map(str::to_string),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    // 空输出不渲染空 result 卡片;返回空 vec 让外层把整条消息过滤掉。
+    if output.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![SessionContent::ToolResult {
+        id: tool_call_id,
+        output,
+    }]
+}
+
+/// 在一个会话目录里挑 mtime 晚于 `since_ms` 的最新 `.jsonl`。
+///
+/// `claimed` 非空时跳过其中的路径。会话恢复入口按时间兜底发现,不该过滤(那条路径本来就是
+/// 它自己的);watcher 必须过滤,否则同项目下的第二个任务会认领第一个任务的会话。
+///
+/// 接目录而不接 `(agent, project_path)`:目录解析要读真实 home,接进来就没法在测试里
+/// 摆出「一条已认领 + 一条更旧的未认领」这个局面,而那正是要防的那个 bug。
+pub fn newest_omp_session_in_dir(
+    dir: &Path,
+    since_ms: u128,
+    claimed: Option<&HashSet<String>>,
+) -> Option<(String, PathBuf)> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if claimed.is_some_and(|claimed| claimed.contains(path.to_string_lossy().as_ref())) {
+            continue;
+        }
+        // 单个条目元数据异常只跳过,不能让整个发现流程返回 None。
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(modified_ms) = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+        else {
+            continue;
+        };
+        if modified_ms <= since_ms {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(best_time, _)| modified > *best_time)
+        {
+            best = Some((modified, path));
+        }
+    }
+    let (_, path) = best?;
+    let session_id = omp_session_id_from_file_name(&path)?;
+    Some((session_id, path))
+}
