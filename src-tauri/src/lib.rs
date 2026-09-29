@@ -1179,6 +1179,19 @@ pub fn run() {
             }
         }
         if let tauri::RunEvent::Exit = event {
+            // G03 的 event_watcher 站点＋Action 2 的收口（P3-04 第七片，补记二百四十七）：
+            // 监督者统一翻 token 并有界 join（默认 5s 宽限；阻塞在 syscall 的 PTY reader
+            // 类循环被 detach，不把拆除挂死）。放在 LocalRouter/DSH 之前——watcher 线程
+            // 还可能写事件/发 emit，先静默再关服务。usage_index 与 notebook daemon 两站
+            // 仍各自裸线程（G03 具名归属 P8-04／P7-06）。
+            let supervisor = Arc::clone(&app_handle.state::<TaskManager>().supervisor);
+            let report = supervisor.shutdown();
+            if report.detached > 0 {
+                eprintln!(
+                    "[aeroric] watcher shutdown detached {} thread(s) past grace",
+                    report.detached
+                );
+            }
             let manager = app_handle.state::<local_router_commands::LocalRouterManager>();
             tauri::async_runtime::block_on(manager.shutdown());
             let webui_manager = app_handle.state::<dsh_webui::DshWebUiManager>();

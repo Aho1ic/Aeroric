@@ -1,7 +1,8 @@
 //! 监听 hook 脚本写入的 events.jsonl,把事件投递给前端。
 //!
 //! 工作机制:
-//! - 一个长驻线程,200ms 轮询 `~/.aeroric/events/<task_id>/events.jsonl`
+//! - 一个经 WatcherSupervisor 登记的长驻循环（名 `watch:hook-events`，第七片起
+//!   有停机路径：Exit 统一取消 token），扫描 `~/.aeroric/events/<task_id>/events.jsonl`
 //! - 每个文件维护 byte offset,只读增量行
 //! - 解析每行 JSON 后,按 event 字段 dispatch:
 //!   * SessionStart → 注册 session 到 TaskManager + emit `task-session`
@@ -19,6 +20,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
@@ -49,12 +51,20 @@ fn event_is_codex_like(ev: &HookEvent) -> bool {
 }
 
 pub fn start(app: AppHandle) {
-    // 在独立的长驻线程上跑轮询循环。不能用 tokio::spawn_blocking——
-    // setup() 闭包运行在主线程,此时尚无 Tokio runtime 上下文,会 panic。
-    thread::spawn(move || run_loop(app));
+    // 第七片（G03 的本站＋Action 2）：长驻循环进监督者在册——Exit 块
+    // （`lib.rs` 的 `RunEvent::Exit`）调 `supervisor.shutdown()` 翻本 token，
+    // run_loop 每轮至多 FALLBACK_INTERVAL 检查一次并返回。此前这是
+    // `thread::spawn` 裸线程、app-lifetime 无关停路径的形状。
+    // 仍不能用 tokio::spawn_blocking——setup() 闭包在主线程,无 runtime 上下文。
+    let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+    if let Err(error) =
+        supervisor.spawn_supervised("watch:hook-events", move |token| run_loop(app, token))
+    {
+        eprintln!("[aeroric] hook event watcher registration failed: {error:?}");
+    }
 }
 
-fn run_loop<R: tauri::Runtime>(app: AppHandle<R>) {
+fn run_loop<R: tauri::Runtime>(app: AppHandle<R>, token: aeroric_core::runtime::ShutdownToken) {
     use notify::{RecursiveMode, Watcher};
 
     let events_root = match crate::hooks::events_root() {
@@ -80,6 +90,9 @@ fn run_loop<R: tauri::Runtime>(app: AppHandle<R>) {
     let mut reader = HookEventReader::new(events_root.clone());
 
     loop {
+        if token.is_cancelled() {
+            return;
+        }
         // 等待文件系统事件:事件驱动 → 空闲时几乎零唤醒,有写入时近乎即时唤醒;
         // 兜底超时确保即便漏事件最坏也在 FALLBACK_INTERVAL 内重扫。watcher 不可用则轮询。
         if watcher_opt.is_some() {

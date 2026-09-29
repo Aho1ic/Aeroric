@@ -1,10 +1,22 @@
 {
   "shard": "feature-matrix-gaps-3.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "97766f99a6eb584a81777a4fca502d531ff13ccf15aa6057c031efd0c03b9b13",
+  "sourceSha256": "2488739c593baae8eb6b2add0c392311be3dcc75755679ef64e1e3ffa965dabb",
   "capBytes": 32768,
   "payload": {
     "gaps": [
+      {
+        "id": "G16",
+        "finding": "93/660 已注册命令在活代码内无可达性证据（2026-09-28 复算：reachable 567 / unreachable **93**，与冻结值一致）。不相交划分今日实测：**28 前缀派生 / 8 前缀派生+测试 / 4 仅测试证据 / 53 完全无证据**（原记 6/6，两条桶之间漂了 2 条；28 与 53 未变）。53 条里 `dsh_webui` 占 41，模块不可达合计 42（41 零证据 + 1 仅测试证据）。**修订 2** 保持：初版把测试目录整块排除，导致只在测试里被断言调用的命令被误判为『未接线』（`discover_tests`/`run_tests` 实际是接线的，`src/test/test-explorer-panel.test.tsx` 断言 invoke 收到 \"run_tests\"）。现测试证据作为弱信号 `test_only_literal` 保留，前缀派生记为 `prefix_derived_of`。",
+        "evidence": "scripts/native/inventory.mjs extractReachability()（可重算并被 --check 逐条比对）；结果冻结在 docs/native/command-map.json 每条命令的 reachability/reachable 与 meta.reachability（`unreachable_by_module` 十四项合计 93）。2026-09-28 用 map 里每条的 `prefix_derived_of`/`test_only_literal` 两个布尔直接重算四桶得 28/8/4/53。requirement 里的『81 条带 rpc_method 提案者』是 P1-04 时点口径：今天 `rpc_method` 非空 641/660（空 19），641 恰等于 ADR-006 冻结的 532 方法 + 109 别名  2026-09-29 用工具自己的判据复跑（**可达性是 `command.reachable` 这个布尔字段，不是 `reachability` 对象里的某个状态串**——我第一版把 `reachability` 当字符串读，得到 660 条全落进同一个桶的假结果）：`reachable=567／unreachable=93`，与 `meta.counts` 逐字相同；不可达按模块前三＝`dsh_webui:42`、`lsp:12`、`remote_git:10` ⇒ 本条的不相交划分今日无需改数。",
+        "requirement": "P2-01 冻结 methods.schema.json 前：81 条带 rpc_method 提案者中 40 条已有解释（须建模为『1 方法 + target 参数』而非丢弃或复制），**剩余 41 条完全无证据者必须逐条判定**才能进契约。`list_dsh_agent_presets`、`upgrade_agent_versions`、`discover_tests`/`run_tests` 系列**不得当作可删**。",
+        "task_ids": "P2-01, P8-03",
+        "owner": "protocol + core:dsh_host/ide/git/connections",
+        "test": "inventory --check 已把 4 个 reachability 字段与 unreachable 总数变成双向漂移断言（18 例含 11 负向）；P2-01 冻结 schema 前须给出 93 条的逐条归类，未归类者不得进 capability 列表",
+        "status": "triaged-rev2-awaiting-p3-05-p8-03",
+        "verified_on": "2026-09-29",
+        "retriage_note": "状态词 `triaged-rev2-awaiting-phase-2` 已经过期：它的宿主 Task P2-01 于 2026-09-22 accepted，而本条按用户 T1=A 改派后的实际欠账人是 P3-05（dsh 41 条逐条 caller 证据）与 P8-03（remote_/wsl_ 前缀面），故状态词改为 `triaged-rev2-awaiting-p3-05-p8-03`。93 与 53 两个数复算成立，中间两桶由 6/6 变 8/4。 2026-09-29 复跑成立并钉死判据。"
+      },
       {
         "id": "G17",
         "finding": "42 条 `dsh_webui::*` typed Tauri 命令在活代码里不可达（其中 **41 条零证据 + 1 条仅测试证据**）；React 的 DSH 层实际经 `/api/remote.mux` WebSocket 下行直连 dsh-web（src/dshProtocol.ts:14-24）。权威能力清单是 src-tauri/src/dsh_webui/protocol_inventory.rs 钉死的 **10 张表 / 246 项字面量 / live 198 项 = 117 个不重复名字 / 48 项显式 RETIRED**（`RPC_METHODS` 62、`REMOTE_METHODS` 87、`REMOTE_EVENTS` 19、`REMOTE_EVENT_MODES` 19、流帧 3/4/4；`RPC_METHODS` 62 项全是 `REMOTE_METHODS` 的子集），SOURCE_COMMIT c291e7961a515f6d7af9304e7fd1d257929aef26、PACKAGE_VERSION 0.1.5-rc.2、PROTOCOL_VERSION 2——不是这 42 条命令（2026-09-22 拷问定案：typed 全量入表 + 逐条 caller 证据；原「42 typed vs 1 mux」的二选一被实测否定——remote_mux 不是分发器，41 条与上游 117 个不重复名字零匹配。见 ADR-005。）",
@@ -36,16 +48,6 @@
         "requirement": "§3.1 #7 必须在宿主套件上真的成立，且这条要按「会写坏用户数据」的等级修：① 三个测试的夹具 id 换成不可能与真实目录冲突的名字（或干脆用带 uuid 的 id），并把「边车路径来自 profile id」这件事在测试里显式覆盖；② 根治是给 `aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类）——**不能**用 `HOME=` 重定向：2026-09-28 实测 `HOME=/tmp/fakehome cargo test` 因 rustup 报 `no default is configured` 而 exit 1，是无效控制；③ 建议让 `agent_api_key_path` 在非测试上下文之外可读检查（例如把「测试写真实凭据目录」做成一条门禁断言），使这类形状在开发机上当场暴露而不是靠人复盘；④ 验收判据必须是**内容级**的：跑完整 `--lib` 前后 `~/.aeroric/agent-credentials/**` 的 sha256 集合与 `remote-audit.log` 的事件计数都不变（mtime 单独不足以判定，因为它会被同轮的恢复动作掩盖）。P3-06 迁移时该写副作用不得原样搬进 core。⑤ 出口判据再加两条**目录级**断言：跑完整 `--lib` 前后，`agent-credentials/` 的**文件数**与**隐藏 `.tmp` 个数**都不变（今天的实况是 101 个文件对 78 个 profile、24 个遗留 tmp，说明只比 sha256 会漏掉「新增垃圾」这一半）。",
         "verified_on": "2026-09-29",
         "retriage_note": "新发现，不是改判；同时是 2026-09-28 本轮的一次自我更正：先前依据 7 分钟空转对照得出「凭据写入嫌疑已排除」是**错的**——那个对照按构造不含测试运行，只能证明常驻 App 不周期性重写，对「测试是否写凭据」没有发言权。判据换成同一轮的门禁运行前/后配对读数才成立。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
-      },
-      {
-        "id": "G21",
-        "status": "open",
-        "task_ids": "P8-04, P3-06",
-        "finding": "宿主测试还写用户的**真实使用统计数据库**与**真实 terminal-history**：`~/.aeroric/usage-statistics.sqlite3`（当前 79 122 432 B，另有 `-wal`/`-shm`）在普查里被 **9 个过滤组**改动（agent_assist、custom_themes、node_runtime、notification、remote_git、remote_os、ssh、wsl_git、tests），`~/.aeroric/terminal-history/`（151 条目）被 `remote` 与 `tests` 两组改动。§3.1 #7 明写测试不得改 production DB，这条是正面违反；且 SQLite 的 WAL 被测试写过之后，**用户真实统计数据的完整性取决于测试夹具是否只做行级写入**——本轮只证明「文件被改」，未证写了哪些行。**2026-09-28 就地更正逐组归因**：`cargo test --lib -- <名字>` 的过滤是**整条路径的子串匹配**，所以那 9 个组名不等于 9 个肇事模块——`tests` 过滤器实际跑了**全部 2465 条**（它匹配一切 `X::tests::y` 路径，而不是当时记的 15 条），`ssh` 跑了 82 条（自有 64），`remote` 跑了 309 条（自有 98）；只有 agent_assist(13)、custom_themes(10)、node_runtime(1)、notification(11)、remote_git(9)、remote_os(18)、wsl_git(11) 七组「过滤即其自有测试」，归因成立。**结论不变**：真实统计库确实被测试跑动过（全量那一组就是决定性证据），**变的是「谁干的」这条定位质量**——逐组普查的方法必须改用带尾缀 `::` 的过滤器，否则下一轮会把子串命中当成模块归属。",
-        "evidence": "2026-09-28 逐组普查（方法与判据见 `docs/native/baseline.md`）：82 组过滤运行，每组前后对 `~/.aeroric` depth-1 快照取 (mtime_ns,size) 差；开始前 20 s 空转对照 **0 变化**（App pid 50882 全程在跑）。usage DB 的 mtime 从 `1790577605927860005` 推进到 `1790577655623003863` 而 size 恒 79 122 432（页内改写/复用，未涨），`-wal`/`-shm` 同批出现与消失。**同日晚些的静态复核（不跑任何测试）**：用 `cargo test --lib -- --list --format terse` 取出全部 2465 条真名，比较「组名的子串命中数」与「该顶层模块自有测试数」，82 组里有 **28 组过匹配**、合计 **3 583 次多余执行**；`tests` 一组 15 自有 vs 2 465 命中（＝整份套件），故当时那句「`tests` 只有 15 条测试却写四类载体」是方法缺陷，真实含义是「**整套 `--lib` 跑完会同时改这四类载体**」。  2026-09-29 只读统计（不跑任何测试、不写任何东西）：`~/.aeroric/usage-statistics.sqlite3` 今日 **80 441 344 B**（昨日记 79 122 432 B，+1.3 MB），`~/.aeroric/terminal-history` 条目 **153**（昨日 151）。两处增长与宿主测试无关——常驻 App 自己就在写（`baseline.md` 记过 8 秒空闲窗口里 `terminal-history` mtime 仍前进）；**\"哪 9 个过滤组会改它\"这一半今天没重测**，重测需要跑普查，属行政项 B。",
-        "requirement": "与 G19/G20 同一个根：给宿主测试一个可注入的存储根（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1）。出口判据按内容而不是 mtime：跑完整 `--lib` 前后 usage DB 的**行级读数**（表计数/关键聚合值）、`remote-audit.log` 事件计数、`agent-credentials/**` 的 sha256 集合都不变。P8-04（统计/通知/清理）迁移 usage 统计服务时必须把落点做成可注入，并顺手回答本轮未证的问题：**这些测试往真实统计库里写了哪些行**（现在只知道文件被改）。**方法侧新增一条**：任何按模块过滤宿主测试的检查（含候选门禁⑥ 的原型）必须写 `-- <module>::`，并把 cargo 报的「执行条数」与「该模块自有条数」一起记进证据，两者不等就是归因失效信号。",
-        "verified_on": "2026-09-29",
-        "retriage_note": "新发现，不是改判：来自本轮为回答「G20 是不是唯一的凭据危害」而做的全组普查，答案是否——同一根因下共有四类真实载体被写。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
       }
     ]
   }

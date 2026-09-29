@@ -1395,6 +1395,13 @@ pub(crate) fn register_and_watch_session<R: tauri::Runtime>(
 /// 监听 PTY 输出流，通过 `/status` 响应获取 Session ID。
 /// Claude 启动后 1.5 秒发送 `/status`；Codex 则在收到首个输出后再等待 1 秒，
 /// 避免 session 尚未创建时过早查询。
+///
+/// 家族判定（P3-04 第七片结掉 `sessions.md` 手写约束 3 留的问题）：这张三档窗
+/// 属于 **claude/codex 的 `/status` 发现节流**，不是「dsh 的创建 deadline」——
+/// `session_dsh.rs` 里 `deadline|timeout` 0 命中（发现 watcher 只按任务存活/绑定
+/// 停止），omp 侧是纯 mtime 窗口（`session_omp.rs` 的 `<= since`，不设创建时限，
+/// 「OMP 等待超过旧 DSH deadline 仍可绑定」因此以「本不存在时限」的形状成立）。
+/// 删这张窗会提前 `/status`、改变 done/input_required 的时机，逐字保留。
 fn should_send_status_command(
     status_sent: bool,
     is_codex: bool,
@@ -1521,7 +1528,16 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
     project_path: String,
     agent: String,
 ) {
-    thread::spawn(move || {
+    // Action 2/G04：本站是会话层唯一的裸 `thread::spawn`——第七片起进监督者，
+    // 按 `watch:claude-lazy-attach:<task>:<gen>` 登记名，等待循环每轮首查 token。
+    // 自终止条件不变（240×500ms／任务退出／已绑定）；取消时 `break` 走与任务退出
+    // 同一条占位/claim 清理路径（不是提前 return）——语义上「取消＝清理」而非泄漏。
+    let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
+    let watcher_name = format!("watch:claude-lazy-attach:{}:{}", task_id, run.generation());
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
+        if token.is_cancelled() {
+            return;
+        }
         let Some(sessions_dir) = claude_sessions_dir_for_agent(&agent, &project_path) else {
             return;
         };
@@ -1574,6 +1590,9 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
         // 后台等文件真正出现（500ms × 240 = 2 分钟，或任务结束）。
         let mut attached = false;
         for _ in 0..240 {
+            if token.is_cancelled() {
+                break;
+            }
             // child_handles 是判断进程存活的唯一可靠信号；这里不能用 is_task_active，
             // 因为我们刚注入的占位条目会被它跳过（设计如此），改成直接看进程在不在更准确。
             let alive = {
@@ -1690,6 +1709,9 @@ pub(crate) fn spawn_claude_lazy_session_attach<R: tauri::Runtime>(
             }
         }
     });
+    if let Err(error) = spawn_result {
+        eprintln!("[aeroric] lazy session attach registration failed: {error:?}");
+    }
 }
 
 /// 监听 PTY 输出流，通过 `/status` 响应获取 Session ID。
@@ -1880,9 +1902,17 @@ pub(crate) fn spawn_resume_session_watcher<R: tauri::Runtime>(
     agent: String,
 ) {
     // 切片四:按 (task, generation) 去重登记;token 一路穿到转录循环。
+    // G04 收口（第七片）：body 是同步一次、自终止（它启动的转录 watcher 自己持
+    // token），此前 `move |_token|` 拿而不查、形同虚设——现在入口真查：取消即放弃
+    // 登记。这就是「退出后 late watcher 不改新会话」的落点：监督者取消语义由 core
+    // `tests/runtime_lifecycle.rs` 钉住，generation 键表由 registry 两代测试钉住，
+    // 本入口检查由 `scripts/native/watcher-discipline.mjs` 源守卫守形。
     let supervisor = Arc::clone(&app.state::<TaskManager>().supervisor);
     let watcher_name = format!("watch:resume-session:{}:{}", task_id, run.generation());
-    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |_token| {
+    let spawn_result = supervisor.spawn_supervised(&watcher_name, move |token| {
+        if token.is_cancelled() {
+            return;
+        }
         register_and_watch_session(
             &app,
             &run,

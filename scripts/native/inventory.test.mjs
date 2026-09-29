@@ -578,6 +578,13 @@ function gapTree(mutateGap) {
   const matrixPath = path.join(dir, "docs/native/feature-matrix.json");
   const matrix = JSON.parse(readFileSync(matrixPath, "utf8"));
   const gap = matrix.gaps.find((g) => g.id === "G04");
+  // The carriers must not inherit the ledger's CURRENT disposition: these tests probe the
+  // gap-ownership rules, and G04 was legitimately closed by 补记二百四十七 (its task_ids
+  // still name P3-04). Normalise the fields the rules read before mutating, so the negative
+  // fixtures stay deterministic no matter what the committed ledger says today — the same
+  // class this repo calls "don't re-pin tests that assert old wording".
+  gap.status = "open";
+  delete gap.accepted_by;
   mutateGap(gap);
   writeFileSync(matrixPath, `${JSON.stringify(matrix, null, 2)}\n`);
   return { dir, cleanup };

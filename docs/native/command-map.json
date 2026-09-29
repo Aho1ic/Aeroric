@@ -8554,7 +8554,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:1904",
+      "definition_resolved": "src-tauri/src/session.rs:1934",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

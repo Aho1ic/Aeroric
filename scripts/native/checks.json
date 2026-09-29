@@ -45,7 +45,8 @@
       "terminal-pty-exit-rust@terminal-core": 10,
       "terminal-history-rust@terminal-core": 7,
       "terminal-invariants-unit@terminal-core": 10,
-      "task-status-unit@skeleton": 18
+      "task-status-unit@skeleton": 18,
+      "watcher-discipline-unit@skeleton": 11
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -408,6 +409,30 @@
           "parse": "node-test",
           "minCases": 18,
           "$note": "F3 的修法（Q7）进门禁：§进度总表、docs/native/task-status.json、feature-matrix.json 的派生列三方互查，18 条里 12 条是反例。关键一条是 D12——规范源读不到必须报错，不得退化成「当作没变化」；实测形状：删掉 carrier 后 check() 报 `task-status carrier unreadable`，写成空数组时报「refusing to treat an empty carrier」。派生列禁止手改（final_state 这一列已删），--freeze 在镜像输入互相矛盾时拒绝写出（把 side_phases 的 Phase 6 摘掉就会撞上）。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "watcher-discipline-src",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/watcher-discipline.mjs"
+          ],
+          "$note": "P3-04 第七片源守卫(补记二百四十七):会话层不得回到裸 thread::spawn、move |_token| 拿而不查、Exit 块漏 supervisor.shutdown() 或把它挪到关服务之后;三个登记名各恰好一处;lazy-attach 区域必须两处 token 检查(入口 return + 循环 break)。行为面由 core runtime_lifecycle 与 registry 两代测试钉,本条守接线形状。",
+          "timeoutMs": 60000
+        },
+        {
+          "name": "watcher-discipline-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/watcher-discipline.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 11,
+          "$note": "守卫自己的 11 条:正锚(真语料必须过)+读不到语料报错不是静默+spawn 复现红且点名+注释里的 spawn 不算+|_token| 复现红+resume 入口检查删除红+lazy 循环检查删除红+shutdown 缺失红+顺序反了红+登记名重复红+run_loop 不查 token 红。",
           "timeoutMs": 300000
         }
       ]

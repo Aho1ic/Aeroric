@@ -1,10 +1,21 @@
 {
   "shard": "feature-matrix-gaps-6.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "97766f99a6eb584a81777a4fca502d531ff13ccf15aa6057c031efd0c03b9b13",
+  "sourceSha256": "2488739c593baae8eb6b2add0c392311be3dcc75755679ef64e1e3ffa965dabb",
   "capBytes": 32768,
   "payload": {
     "gaps": [
+      {
+        "id": "G27",
+        "status": "open",
+        "decision_item": 16,
+        "task_ids": "P3-04, P10-05",
+        "finding": "core 的**任务账本持久化错误会被静默丢掉，而且丢在返回 `Ok` 的公开 API 里**。`core/crates/aeroric-core/src/tasks/service.rs` 今天有 **9 个丢弃点**（**口径先说清**：语句本身含 `persist` 的只有 **8** 处，第 9 处是 :1433 的 `let _ = self.acknowledge(task_id);`——它丢掉的是 `acknowledge` 的 `Result`，而 `acknowledge` 内部又在 :2503 把 `persist` 的错误吞掉），跨 **4 个签名带 `Result` 的公开方法**：`cancel`（:1690）、`reconcile`（:2466）、`acknowledge`（:2503）、`switch_config`（:1315 与 :1435，另外 :1433 还把 `self.acknowledge(..)` 的 `Result` 整个丢掉）；其余 3 处（`settle` :1209、`settle_by_generation` :1202、`abandon_launch` :1244）在单元返回值的内部helper里，错误同样到此为止。**更关键的是没有任何补救机制**：整个 core（`tasks/*`、`storage/*`）里 `flush`／`dirty`／重试一个都搜不到，所以丢了就是丢了——下一次成功写入之前，内存与磁盘就是分叉的。",
+        "evidence": "2026-09-28 静态扫描（零运行、零写入）：在 `core/crates/aeroric-core/src`、`aeroric-host`、`aeroric-protocol` 的**生产区**（第一个 `#[cfg(test)]` 之前，并跳过注释行）找 `let _ = ` 共 **24 处**，逐个回查所在函数签名后分类：**合法** 11 处（`Drop` 里的 `unlock`、channel `Sender::send` 语义即\"没监听者就算了\"、`child.kill()`／`handle.join()` 的 best-effort、`set_permissions` 加固、`sync_dir` 与清理用的 `remove_file`、两处 `let _ = 变量;` 只是消警告）；**丢掉账本持久化错误** 9 处（上面点名的那些）；其余 4 处是权限/加固类。后果不是理论性的：`cancel` 自己的注释写明\"一个活过 cancel 的 claim 会把下一次合法 start 锁住\"（:1686-1687），而它恰恰把 `persist` 的错误丢掉后返回 `Ok(CancelTargetInfo{..})` ⇒ **如果这次写盘失败，重启后 claim 复活，正是它声称在防的事**。另一处 `acknowledge`（:2499 起）签名是 `Result<bool, StorageError>`，注释说\"用户已经看过了\"，但写盘失败时仍回 `Ok(true)` ⇒ 确认状态可能不回盘。 【口径澄清，2026-09-28 补记一百六十七；2026-09-29 补记一百八十一 再补：同一份代码有三种合法数法——丢弃点 9 ／ 含 `persist` 的语句 8 ／ 返回 `Result` 的公开方法内 5，引用时必须带口径，否则会被读成台账腐烂（本轮就现场误读过一次）】9 个丢弃点逐条回查所在签名后：**返回 `Result` 的公开方法里是 6 个丢弃点、跨 4 个方法**（`switch_config` 3 点：:1315/:1433/:1435，`cancel` :1690，`reconcile` :2466，`acknowledge` :2503），其余 3 点在非 `Result` 签名内（`settle_by_generation` :1202、`settle` :1209、`abandon_launch` :1244）。本条原文「其中 4 处在返回 Result 的公开方法里」数的是**方法数**不是**站点数**，引用时须写明口径；:1433 是跨行丢弃（`let _ =` 与 `persist` 不在同一行），同行计数只会得 8。",
+        "requirement": "先定语义再改代码（属协议/设计问题，不擅动）：**①** 账本持久化失败**必须可见** ⇒ 给这几个 `Result` 方法接上真实错误（`acknowledge` 已是 `Result<_, StorageError>`，`cancel`／`switch_config` 需要一个新的错误变体或复用 `TaskError::Storage`），并明确单元返回的 helper（`settle*`／`abandon_launch`）如何把错误交给调用者；这条会牵动 ADR-026（状态类操作不自动重放）与 ADR-035（观察与落盘解耦）的口径，因此要一并写明。**②** 或者反过来认定这是**有意的 write-behind**——那就必须补上今天完全没有的机制：脏标记 ＋ 退出前 flush ＋ \"写失败可观测\"（事件或日志），并且用一条测试钉住\"persist 失败后重启，状态不会退回旧值\"。**③** 无论选哪个，都建议加一条机器判据：`rg \"let _ = .*persist\" core/crates/aeroric-core/src/tasks` 的数量只能降不能升（今天基线 9）。这属门禁面扩张（新 forbid/absent case），因此登记为**表态清单第 16 项**，不擅自注册。",
+        "retriage_note": "新发现，不是改判：来自「已 accepted 的门禁基线今天重验通过后，顺手扫 core 生产码的形状」——同一轮先确认 core 生产区**没有** `todo!/unimplemented!/unreachable!/panic!`（0 处），再按签名分类 `let _ =` 才看见这 9 处。与 `G24`（宿主真实家目录可写面）同属\"错误/写入的静默面\"，但那是宿主测试卫生，这是 core 的可靠性语义。",
+        "verified_on": "2026-09-29"
+      },
       {
         "id": "G28",
         "status": "open",
