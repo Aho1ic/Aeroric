@@ -283,3 +283,11 @@ console.log(JSON.stringify({
 **缺的东西换了位置，而不是不存在**：`grep -rn plan_replay src-tauri/src` 与 `grep -rn ResumePoint src-tauri/src` 今天都是**零命中（exit 1）**，而宿主对 `aeroric_core` 有 139 行引用。⇒ core 的重放面**至今没有任何生产调用方**，本地协议 v1 里也没有方法条目——这正是 补记一百零二 的「发现一」，具名移交 `P5-01`（typed activation error／`ResumePoint` 方法）与 `P3-07`（租约协议入口）。所以观测协议 ① 真正只剩两件事给人看：**重置之后的画面观感**（残影／叠字／是否跳回顶部），以及**宿主走的那条老路径**（`invoke(TASK_PROCESS_COMMANDS.reset)` ＋ `resumeTask`）在真实会话里的行为——它执行的并不是上面四条用例所在的代码。
 
 **对记档的后果**：P3-03 判 accepted 时，① 不再整条写成「人工观察，非机器证据」，改成记作**人工观感观察**、并同时列出机制面的四条实名用例（见上表）；②（重排观感）照旧写「机制已被 `twenty_resizes_…` 逐条证明，人工只判观感」。**这条更正顺带挡掉一次下游浪费**：若照旧记账，`P5-01` 会以为 core 侧重放实现缺失而重做一遍。
+
+## 7. GUI 人工观察记档与 P3-03 收口（2026-09-29，补记二百四十）
+
+用户按 `MIGRATION_PLAN.md` 补记一百八十三 写下的观测协议手测，回报：**`①=正常 ②=正常`**。记档口径照本文 272 行那节（补记一百九十三）与 §4.2 末句：
+
+- **① 重连观感**：记作**人工观感观察**，不整条写成「非机器证据」——机制面有四条实名用例（`terminal_replay.rs::replaying_a_real_pty_stream_from_the_catchup_point_loses_and_repeats_nothing`、`terminal_replay.rs::a_live_stream_refuses_a_units_cursor_before_any_conversion_is_tried`、`terminal_lease.rs::two_readers_share_one_stream_without_touching_the_lease`、`task_lifecycle.rs::a_dsh_resume_is_planned_without_the_original_prompt` 与 `a_via_host_resume_stores_the_pending_and_leaves_the_session_to_the_intent`）。宿主侧接线缺口（`plan_replay`/`ResumePoint` 零调用、协议 v1 无重放面入口）仍具名移交 P5-01／P3-07，与本记档无关。
+- **② TUI 重排观感**：记作**人工观察，非机器证据**；机制已被 `terminal_lease.rs::twenty_resizes_leave_the_last_foreground_size_and_never_a_rejected_one` 逐条证明，人工只判观感。
+- **判定**：§6 机器面四条 ✅ ＋ 观感两项到手 ⇒ **P3-03 = accepted（2026-09-29）**。三处同步（§进度总表／`docs/native/task-status.json`／`inventory --freeze`）已于当日执行，实测读数见 MIGRATION_PLAN.md 补记二百四十。

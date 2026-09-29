@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "3c313294cb10dcdc4a9ff4f470015d2be9fbe0e85527b2e761f89ed7985b5b02",
+  "sourceSha256": "f5789937a88bda648977ac89c40e8103de7d2925184e6eb421b97d21da0ce6ca",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -79,10 +79,10 @@
         "positive_test": "tests/{pty_bytes,terminal_replay,pty_exit}.rs 端到端未截断区间 bytes hash 相等",
         "negative_test": "跨帧中文/emoji/非法 UTF-8/NUL；20 次 resize 末值正确；隐藏终端无写权限",
         "status": "planned",
-        "core_state": "in_progress",
+        "core_state": "accepted",
         "native_state": "unstarted",
         "side_states": {
-          "C": "in_progress",
+          "C": "accepted",
           "N": "unstarted"
         },
         "reviews": [
@@ -100,10 +100,10 @@
         "positive_test": "tests/{session_discovery,session_resume,hook_reader}.rs",
         "negative_test": "OMP 等待超旧 DSH deadline 仍可绑定；同一文件不得给两个 task",
         "status": "planned",
-        "core_state": "unstarted",
+        "core_state": "in_progress",
         "native_state": "unstarted",
         "side_states": {
-          "C": "unstarted",
+          "C": "in_progress",
           "N": "unstarted"
         },
         "reviews": []

@@ -58,7 +58,7 @@ test("the committed carrier, the plan table and the derived columns all agree to
   const bundle = crossCheckIn(repoRoot);
   assert.deepEqual(bundle.problems, [], problemText(bundle.problems));
   assert.equal(bundle.stats.tasks, 51);
-  assert.equal(bundle.stats.accepted, 12);
+  assert.equal(bundle.stats.accepted, 13);
   assert.equal(bundle.stats.rows, 26);
   assert.equal(bundle.findings.length, 0, `every declared side must have a Task: ${bundle.findings.join("; ")}`);
 });
@@ -68,7 +68,7 @@ test("the derived columns are what a finished core Task looks like", () => {
   const matrix = readJson(repoRoot, MATRIX);
   const byId = new Map(matrix.features.map((f) => [f.id, f]));
   assert.equal(byId.get("F01").core_state, "accepted");
-  assert.equal(byId.get("F04").core_state, "in_progress");
+  assert.equal(byId.get("F04").core_state, "accepted");
   assert.equal(byId.get("F04").native_state, "unstarted");
   assert.deepEqual(byId.get("F04").reviews, ["reviews/terminal-core.md"]);
   assert.equal(matrix.features.some((f) => "final_state" in f), false, "the hand-written column is gone");
@@ -79,7 +79,7 @@ test("inventory --check really runs the cross-check, not just the unit tests", (
   const result = check({ repoRoot });
   assert.equal(result.ok, true, problemText(result.problems.slice(0, 5)));
   assert.equal(result.taskStates.tasks, 51);
-  assert.equal(result.taskStates.accepted, 12);
+  assert.equal(result.taskStates.accepted, 13);
 });
 
 test("a missing carrier must be an error, never 'nothing changed'", () => {
@@ -138,10 +138,10 @@ test("`accepted` without a date, and a date without `accepted`, are both refused
     () => loadTaskStatus({ repoRoot, read: () => JSON.stringify({ meta: base.meta, tasks: [...base.tasks.filter((t) => t.task !== "P2-04"), missing] }) }),
     /P2-04: accepted without accepted_on/,
   );
-  const premature = base.tasks.map((t) => (t.task === "P3-03" ? { ...t, accepted_on: "2026-09-28" } : t));
+  const premature = base.tasks.map((t) => (t.task === "P3-04" ? { ...t, accepted_on: "2026-09-29" } : t));
   assert.throws(
     () => loadTaskStatus({ repoRoot, read: () => JSON.stringify({ meta: base.meta, tasks: premature }) }),
-    /P3-03: carries accepted_on but is 'in_progress'/,
+    /P3-04: carries accepted_on but is 'in_progress'/,
   );
 });
 
@@ -229,7 +229,7 @@ test("a hand-edited meta.counts summary is caught against the entries", () => {
         return JSON.stringify({ meta: { ...base.meta, counts: { ...base.meta.counts, accepted: 99 } }, tasks: base.tasks });
       },
     }),
-    /meta\.counts\.accepted says 99 but the entries below tally 12/,
+    /meta\.counts\.accepted says 99 but the entries below tally 13/,
   );
 });
 

@@ -140,10 +140,10 @@
       "positive_test": "tests/{pty_bytes,terminal_replay,pty_exit}.rs 端到端未截断区间 bytes hash 相等",
       "negative_test": "跨帧中文/emoji/非法 UTF-8/NUL；20 次 resize 末值正确；隐藏终端无写权限",
       "status": "planned",
-      "core_state": "in_progress",
+      "core_state": "accepted",
       "native_state": "unstarted",
       "side_states": {
-        "C": "in_progress",
+        "C": "accepted",
         "N": "unstarted"
       },
       "reviews": [
@@ -161,10 +161,10 @@
       "positive_test": "tests/{session_discovery,session_resume,hook_reader}.rs",
       "negative_test": "OMP 等待超旧 DSH deadline 仍可绑定；同一文件不得给两个 task",
       "status": "planned",
-      "core_state": "unstarted",
+      "core_state": "in_progress",
       "native_state": "unstarted",
       "side_states": {
-        "C": "unstarted",
+        "C": "in_progress",
         "N": "unstarted"
       },
       "reviews": []
@@ -952,7 +952,7 @@
       "requirement": "前半（修复范围＝②）已闭合。**仍欠的是第 24 项的附带一问**：`pnpm lint`／`pnpm format:check` 要不要纳入门禁面\n（各一条 case ＋\"0 warning 才算绿\"的地板）——那是门禁面扩张，用户未表态，本轮没有新增任何 case。\n因此今天两条腿靠的是人工执行：任何\"CI 前端腿有守卫\"的说法都不成立（与 `F2` 同族；`G14` 记的 lint glob 止于\n`src packages mobile`、CI 之外没有任何 native case 也原样成立）。",
       "evidence": "2026-09-29 全部逐条实测（修复前→修复后）：`pnpm lint` rc 1→**0**；`pnpm format:check` rc 1／17 文件→rc **0**；\n`pnpm exec tsc --noEmit` rc **0**；`src/test/native-host-protocol` 拼写更正：真名 `src/test/native-host-protocol.test.ts`，\n`it(` 声明 **21→21**、`expect(` **145→145**（同一条断言都不许多不许少，这是\"收紧类型不得弱化判定\"的机器形状），\nvitest 单文件 **21 passed**、`native:check protocol` **6 case／98 用例**（`protocol-ts-golden` 地板 21 未动）。\n`any` 的消除方式是声明 `EnvelopeContract`／`MethodSurface`／`EventSurface`／`TopicSurface` 等契约 interface +\n复用 `src/lib/nativeHostProtocol.ts` 已导出的 `Frame` 联合做窄化，**零 `any`、零 `as any`、零 `eslint-disable`**；\n`src/`＋`packages/` 全树 `: any` 计数 **0**。prettier 只跑那 17 个路径，`git diff` 里没有第 18 个 src 文件。",
       "verified_on": "2026-09-29",
-      "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。"
+      "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。\n2026-09-29 补记二百四十：**追认结案**——用户答追认组＝两处都追认（第 24 项按 ②、污染源用例按 ①），本条 finding 里「用户答第 24 项＝②」从 Agent 代决升格为用户原话的同义复述；剩余开放面仍只有附带一问（lint/format 是否入门禁面），owner 不变。"
     },
     {
       "id": "G36",
@@ -991,7 +991,7 @@
       "id": "G39",
       "status": "open",
       "task_ids": "P3-06",
-      "finding": "把两条污染源用例改成默认 opt-in 之后（**该选择的依据待追认**：`ask` 回包截断，Agent 未看到用户选项原文，本轮按推荐项 ① 执行），**默认门禁不再覆盖宿主 `--lib` 2 465 条与真内核适配器验收 19 条**。这不是假设：2026-09-29 实测 `pnpm native:check tauri-adapter` 现在打 `10 case(s) passed, 42 test cases executed (2 opt-in skip: adapter-acceptance-real-kernel, src-tauri-lib-tests)`，墙钟从 235 s 降到 17 s；同一轮真实 `~/.aeroric` 前后快照 5 个文件＋3 个凭据边车**逐字节相同**、`invite-created` 计数不变（1 982→1 982）⇒ 污染源确实被关掉了。代价是覆盖面：这 2 484 条用例今天在任何默认绿里都不存在，而 P2-05／P3-01／P3-02／P3-03 多条已 accepted 的验收都曾把它们当证据。",
+      "finding": "把两条污染源用例改成默认 opt-in 之后（**该选择的依据待追认**：`ask` 回包截断，Agent 未看到用户选项原文，本轮按推荐项 ① 执行），**默认门禁不再覆盖宿主 `--lib` 2 465 条与真内核适配器验收 19 条**。这不是假设：2026-09-29 实测 `pnpm native:check tauri-adapter` 现在打 `10 case(s) passed, 42 test cases executed (2 opt-in skip: adapter-acceptance-real-kernel, src-tauri-lib-tests)`，墙钟从 235 s 降到 17 s；同一轮真实 `~/.aeroric` 前后快照 5 个文件＋3 个凭据边车**逐字节相同**、`invite-created` 计数不变（1 982→1 982）⇒ 污染源确实被关掉了。代价是覆盖面：这 2 484 条用例今天在任何默认绿里都不存在，而 P2-05／P3-01／P3-02／P3-03 多条已 accepted 的验收都曾把它们当证据。〔2026-09-29 补记二百四十：**该选择已获追认**（污染源用例默认 opt-in＝①，用户答复「两处都追认」）；覆盖面代价与本条 requirement 均不变，P3-06 出口四步照旧。〕",
       "requirement": "P3-06 出口必须把这两条**恢复成默认必选**，顺序固定：① 给 `storage::aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1），让宿主套件整体落 scratch 根；② 用 `AERORIC_ALLOW_REAL_HOME_TESTS=1` 跑一轮，按**内容**证明隔离成功（`remote-audit.log` 事件计数、`agent-credentials/**` sha256 集合、usage DB 行级读数都不变，见 `G24` 的 28 目标清单）；③ 删掉 `optInEnv` 标记并把 `checks.json` 的 `runner.rules` 第 3 条恢复成无条件成立；④ 同批把 `tauri-adapter` 的期望读数从 10/42 抬回 12/2 526。在此之前，任何引用“门禁全绿”的文字都必须写明这两条是 opt-in 未跑——`extraction` 之外的散文没有机器提醒，靠的是 `gate-runner-unit` 里那条“committed gate exactly the two real-home writers are opt-in”的集合断言（它同时禁止把别的用例标成 opt-in）。",
       "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。",
       "verified_on": "2026-09-29"

@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-7.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "3c313294cb10dcdc4a9ff4f470015d2be9fbe0e85527b2e761f89ed7985b5b02",
+  "sourceSha256": "f5789937a88bda648977ac89c40e8103de7d2925184e6eb421b97d21da0ce6ca",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -57,7 +57,7 @@
         "requirement": "前半（修复范围＝②）已闭合。**仍欠的是第 24 项的附带一问**：`pnpm lint`／`pnpm format:check` 要不要纳入门禁面\n（各一条 case ＋\"0 warning 才算绿\"的地板）——那是门禁面扩张，用户未表态，本轮没有新增任何 case。\n因此今天两条腿靠的是人工执行：任何\"CI 前端腿有守卫\"的说法都不成立（与 `F2` 同族；`G14` 记的 lint glob 止于\n`src packages mobile`、CI 之外没有任何 native case 也原样成立）。",
         "evidence": "2026-09-29 全部逐条实测（修复前→修复后）：`pnpm lint` rc 1→**0**；`pnpm format:check` rc 1／17 文件→rc **0**；\n`pnpm exec tsc --noEmit` rc **0**；`src/test/native-host-protocol` 拼写更正：真名 `src/test/native-host-protocol.test.ts`，\n`it(` 声明 **21→21**、`expect(` **145→145**（同一条断言都不许多不许少，这是\"收紧类型不得弱化判定\"的机器形状），\nvitest 单文件 **21 passed**、`native:check protocol` **6 case／98 用例**（`protocol-ts-golden` 地板 21 未动）。\n`any` 的消除方式是声明 `EnvelopeContract`／`MethodSurface`／`EventSurface`／`TopicSurface` 等契约 interface +\n复用 `src/lib/nativeHostProtocol.ts` 已导出的 `Frame` 联合做窄化，**零 `any`、零 `as any`、零 `eslint-disable`**；\n`src/`＋`packages/` 全树 `: any` 计数 **0**。prettier 只跑那 17 个路径，`git diff` 里没有第 18 个 src 文件。",
         "verified_on": "2026-09-29",
-        "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。"
+        "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。\n2026-09-29 补记二百四十：**追认结案**——用户答追认组＝两处都追认（第 24 项按 ②、污染源用例按 ①），本条 finding 里「用户答第 24 项＝②」从 Agent 代决升格为用户原话的同义复述；剩余开放面仍只有附带一问（lint/format 是否入门禁面），owner 不变。"
       }
     ]
   }

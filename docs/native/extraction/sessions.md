@@ -13,7 +13,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 > 1. 新建 `core/crates/aeroric-core/src/sessions/{mod,discovery,registry,parser,claude,codex,dsh,omp,history,resume,export}.rs`，迁移对应行为，保留既有路径校验与读取上限。
 > 2. 懒发现 watcher 属于 task generation，停止条件是对应任务结束/已绑定，不是 UI 的超时；OMP 不设会话创建 deadline。
 > 3. 将 hook watcher 改成无 `AppHandle` 的 `HookEventReader`，保留 partial JSONL、截断、轮转、重复 SessionStart、claimed path 排他性。
-> 4. 新建 `metrics/{mod,usage,index,analytics}.rs`，只对权威 usage record 累计；terminal 文字不作为计费依据，重放不能重复计数。
+> 4. 新建 `metrics/{mod,usage,index,analytics}.rs`，只对权威 usage record 累计；terminal 文字不作为计费依据，重放不能重复计数。〔**2026-09-29 Q1＝留 P8-04**：本条整体移出 P3-04，归属改派 P8-04；「重放不重复计数」原则随迁移在该 Task 重列。〕
 > 5. `SessionPage` 返回稳定 message/tool ID、cursor、source family、unknown content；UI 不读会话文件；跨族 handoff 生成新会话且记录来源，不冒充 native resume。
 >
 
