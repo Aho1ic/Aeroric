@@ -1,6 +1,16 @@
 # Module review — projects (Phase 2, Task P2-03)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 **Gate status：`PASS` —— P2-03 accepted（2026-09-22）。** 验收第四条已真实执行：`grillme-matt:grill-with-docs [projects]`，Q27～Q34 八个答案全部落成 ADR-013 + 代码 + 两侧断言（见「门禁第三轮」）。**一处遗留**：分组清单与 localStorage 的合并规则按决定留给 P2-05 验收。
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P2-03** accepted_on＝2026-09-22 ⇒ 当天最后一个提交＝`7e1f2957d8c1c477bc45718db248bbb041ad0ab2`（7e1f295，2026-09-22，「feat(protocol): P2-01 收口——ADR-008 闭合 error detail 白名单、AD」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## 交付物
 
@@ -87,3 +97,13 @@
 ## 回滚
 
 纯新增：`projects/` 两个模块 + 一个 test 文件 + 知识表 + 一个 TS 测试 + 一个产物 + `checks.json` 的 `projects` 模块与两条地板，以及 `node-builtins.d.ts` 补的两个 `node:fs` 声明。产品侧（`src/**` 运行时、`src-tauri/**`）**一行未改**：本轮只是把旧行为读成期望值，没有把写入责任移走，React 仍然拥有项目状态。回滚 = 删上述文件 + 从 `checks.json` 撤下 `projects` 并把 `"projects": "P2-03"` 放回 `plannedModules` + `contracts.mjs --write` 复原产物目录。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：无独立 provenance 小节；pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 见上面锚点节，权威出处 `docs/native/reference-provenance.md` ⇒ **当时未记**。
+- **实际调用入口**：「写代码时"顺手决定"过、后来交给门禁拍板的六件事」一节逐条写了发问与交门禁的动作。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：文中 Q27～Q34 与 Q36，共 9 个标号；六件事一节是问答的主体。
+- **证据**：「证据（实测）」一节，另有「交付物」提供反查入口。
+- **问题级别**：**未使用级别词汇**（事后判读）：最高一档是「已按 P2-02 门禁下传的要求做到的部分」里的**跨模块契约分歧级**（不阻断，但会被下游当真），无崩溃／数据丢失级；「反例验证（P2-03 这一段 5 次）」5 次全部当场翻红后修回。**接受人**：中低风险项留在「未决／排期」由后续 Task 认领，**本文不代用户接受**。
+- **修复后复验**：2026-09-29 同日 `native:check projects` **5／21 exit 0**；本文自带的历次改坏—修回对账在「反例验证」一节。

@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
 import { useI18n } from "../i18n";
-import {
-  readOnlyStorageDegradation,
-  readStartupDegradations,
-} from "../state/startupDiagnostics";
+import { readOnlyStorageDegradation, readStartupDegradations } from "../state/startupDiagnostics";
 import type { StartupDegradation } from "../types";
 
 /**

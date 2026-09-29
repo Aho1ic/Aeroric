@@ -9,7 +9,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { absenceControlFailure, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
+import { absenceControlFailure, caseSkipReason, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
 
 // Secrets will start flowing past this point at P7-04 (DBX connection strings),
 // P8-02 (provider keys) and P8-03 (pairing material). "It is gitignored" is not a
@@ -154,10 +154,19 @@ function run(argv, timeoutMs) {
 mkdirSync(artifactsDir, { recursive: true });
 let failures = 0;
 const summary = [];
+const skipped = [];
 
 for (const testCase of entry.cases) {
   const timeoutMs = testCase.timeoutMs ?? config.runner.defaultTimeoutMs;
   process.stdout.write(`▶ ${testCase.name} … `);
+  const reason = caseSkipReason(testCase, process.env);
+  if (reason) {
+    // Opt-in cases are the only skips the runner makes. Saying so on every line, and never
+    // counting the skip as a pass, is what keeps §3.2's "a skipped required case fails" true.
+    console.log(`SKIP (opt-in): ${reason}`);
+    skipped.push({ name: testCase.name, reason });
+    continue;
+  }
   const { code, stdout, stderr } = await run(testCase.argv, timeoutMs);
   const logName = `${module}--${testCase.name}.log`;
   const raw = `$ ${testCase.argv.join(" ")}\nexit=${code}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`;
@@ -221,9 +230,12 @@ for (const testCase of entry.cases) {
 }
 
 const totalCases = summary.reduce((sum, s) => sum + (s.cases ?? 0), 0);
-writeFileSync(path.join(artifactsDir, `check-${module}.json`), JSON.stringify({ module, failures, totalCases, summary }, null, 2));
+writeFileSync(path.join(artifactsDir, `check-${module}.json`), JSON.stringify({ module, failures, totalCases, skipped, summary }, null, 2));
+const skipNote = skipped.length ? ` (${skipped.length} opt-in skip: ${skipped.map((s) => s.name).join(", ")})` : "";
 if (failures) {
-  console.error(`\nnative:check ${module}: ${failures} case(s) failed, ${totalCases} test cases executed`);
+  console.error(`\nnative:check ${module}: ${failures} case(s) failed, ${totalCases} test cases executed${skipNote}`);
   process.exit(1);
 }
-console.log(`\nnative:check ${module}: ${entry.cases.length} case(s) passed, ${totalCases} test cases executed`);
+// "passed" must never count a skip: the module-level run used to print 12 case(s) passed while
+// two of them had just rewritten the user's real credential sidecars.
+console.log(`\nnative:check ${module}: ${entry.cases.length - skipped.length} case(s) passed, ${totalCases} test cases executed${skipNote}`);

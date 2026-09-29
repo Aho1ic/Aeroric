@@ -176,9 +176,7 @@ export function createTaskIntentQueue(
   }
 
   function report(entry: Entry, projectId: string, error: unknown): void {
-    const text = entry.formatError
-      ? entry.formatError(String(error), projectId)
-      : String(error);
+    const text = entry.formatError ? entry.formatError(String(error), projectId) : String(error);
     (entry.onError ?? defaultOnError ?? ((m) => console.error(m)))(text);
   }
 
@@ -241,7 +239,7 @@ export function createTaskIntentQueue(
       setTimeout(() => {
         timers.delete(projectId);
         void startDrain(projectId);
-      }, 0)
+      }, 0),
     );
   }
 
@@ -257,9 +255,7 @@ export function createTaskIntentQueue(
       };
       const queue = queueFor(projectId);
       if (opts.operationKey) {
-        const pendingIndex = queue.findIndex(
-          (item) => item.operationKey === opts.operationKey,
-        );
+        const pendingIndex = queue.findIndex((item) => item.operationKey === opts.operationKey);
         if (pendingIndex >= 0) {
           queue[pendingIndex] = entry;
           return;
@@ -317,8 +313,7 @@ export function createTaskIntentQueue(
 }
 
 export const taskIntentQueue: TaskIntentQueue = createTaskIntentQueue(
-  (projectId, intent) =>
-    invoke<TaskIntentOutcome>("apply_task_intent", { projectId, intent }),
+  (projectId, intent) => invoke<TaskIntentOutcome>("apply_task_intent", { projectId, intent }),
   (msg) => console.error(msg),
 );
 

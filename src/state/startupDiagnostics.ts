@@ -29,8 +29,6 @@ export function readStartupDegradations(): Promise<StartupDegradation[]> {
  * not light the badge — a badge that fires on the wrong record would tell the user their edits
  * are lost when they are being saved.
  */
-export function readOnlyStorageDegradation(
-  rows: StartupDegradation[],
-): StartupDegradation | null {
+export function readOnlyStorageDegradation(rows: StartupDegradation[]): StartupDegradation | null {
   return rows.find((row) => row.component === "storage-lease") ?? null;
 }

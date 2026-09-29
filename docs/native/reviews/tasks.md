@@ -1,5 +1,7 @@
 # Module review — `tasks` (Task P2-04)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 - **Reviewed**: 2026-09-22
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-04
 - **Code**: `core/crates/aeroric-core/src/tasks/{mod,reducer,session_owner,launch_plan,executor,operations,service,handoff,cleanup}.rs`,
@@ -10,6 +12,14 @@
   `contracts/native/v1/fixtures/task-transitions.json`
 - **Gate**: `pnpm native:check tasks` → **7 cases / 99 test cases**
 - **Gate status**: **PASS —— P2-04 accepted（2026-09-23）**；`grill-me [tasks]` 已真实调用，Q35～Q43 九个答案落成 ADR-014～019 + 代码 + 反例
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P2-04** accepted_on＝2026-09-23 ⇒ 当天最后一个提交＝`bf57afaf88dd190d1fa8a514e271c1ac1134ea83`（bf57afa，2026-09-23，「feat(native): P2-05 执行器与运行身份落地——Tauri adapter 的宿主侧收口到一半」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## 1. 验收标准
 
@@ -79,3 +89,13 @@
 - 回归：`storage` 5/177、`projects` 4/18、`protocol` 5/88、`skeleton` 20/113、`doctor` 18/18。
 - 全量 `pnpm test` 与 `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib` 见 §6 实测输出。
 - 真实 `~/.aeroric`：本轮不写真实目录（所有测试都在临时目录），口径沿用 `reviews/storage.md`。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：无独立 provenance 小节；pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 见上面锚点节，权威出处 `docs/native/reference-provenance.md` ⇒ **当时未记**。
+- **实际调用入口**：§3 的问答即调用内容（标题带日期与 Q 范围）；发送原文未记档。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：§3「门禁问答（Q35～Q43，2026-09-23）」9 条 ＋ §4「必须问过的六件事（原 frontier，已全部走完）」。
+- **证据**：§1「验收标准」＋§2「交付形状」＋§5「反例与门禁自证」。
+- **问题级别**：**未使用级别词汇**（事后判读）：§5 的结论属**门禁有效性级**（反例确实能翻红，不是空跑）；§6「度量口径」是记录级更正；无崩溃／数据丢失级发现。**接受人**：本文无待接受项。
+- **修复后复验**：2026-09-29 同日 `native:check tasks` **7／151 exit 0**；当时的改坏—修回对账在 §5。

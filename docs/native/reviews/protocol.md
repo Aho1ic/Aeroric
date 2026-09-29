@@ -1,7 +1,17 @@
 # Module review — protocol (Phase 2, Task P2-01)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 **Gate status: `PASS` — P2-01 accepted（2026-09-22）。** 两轮 `grillme-matt:grill-with-docs` 真实调用：第一轮 Q8～Q11，第二轮 Q12～Q13，六个答案**全部落成工件 + 断言 + 反例**（见「门禁第二轮」与「反例验证」）。ADR-006 的收敛已发布（532 方法 + 109 别名）、ADR-007 的 topic 表已建并被生成器校验、G16 的 17 条已逐条定性（无证据名字归零）。三方全绿：`protocol` 5 case／85 用例、`skeleton` 20 case／113 用例、`contracts --check` 逐字节、`native:doctor` 18/18、clippy `-D warnings`、`tsc --noEmit`、`cargo fmt --check`。
 遗留的账都有名有姓：**32 条 pending 别名 → P3-06/P7-02**、**36 条 pending topic → P3-04**、**41 条 `pending: P3-05` 的 dsh 证据 → P3-05 出口**、宿主 target 路由与握手实现 → P3-06。这些是排期决定，不是本任务的未闭合缺口。
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P2-01** accepted_on＝2026-09-22 ⇒ 当天最后一个提交＝`7e1f2957d8c1c477bc45718db248bbb041ad0ab2`（7e1f295，2026-09-22，「feat(protocol): P2-01 收口——ADR-008 闭合 error detail 白名单、AD」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## 交付物（已完成，均已进门禁）
 
@@ -87,3 +97,13 @@
 - 提问前查到的事实（写进 ADR，免得后人凭感觉读）：`mustNotContain` 全仓只出现在生成器、契约与 1 条 TS 断言里，**没有任何执行方**；`HostCapabilities` 有 `protocolVersion`/`buildVersion`/`dataFormat` 三字段但无任何比较逻辑；`packages/remote-contracts` 无版本常量。
 - 落地清单：`ErrorDetail` + `detail_allowed_keys()` + `handshake_allows_peer()`（Rust）、`ERROR_DETAIL_ALLOWED_KEYS` + `isAllowedErrorDetailKey` + `handshakeAllowsPeer`（TS）、`ProtocolCodec.errorDetailAllowedKeys` + `handshakeAllowsPeer`（Swift）、`envelope.schema.json` 新增 `versionPolicy` 与 `errorDetail` 两节、ADR-008/009、`CONTEXT.md` 5 条新术语。
 - 计数：`protocol` 5 case／**85** 用例（rust 48 / swift 18 / ts 19），三处地板与 `minCases` 在同一次编辑里抬齐。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：无独立 provenance 小节；pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 见上面锚点节，权威出处 `docs/native/reference-provenance.md` ⇒ **当时未记**。
+- **实际调用入口**：「门禁第二轮的实际调用与证据」写了调用；「Why/Actual invocation」形态只有 `skeleton` 有，本文这节是命令级描述。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：文中 Q8～Q13 共 6 个标号，散在「第二轮追加的实测」与各契约比对小节。
+- **证据**：「证据（全部为实测输出，非推断）」一节。
+- **问题级别**：**未使用级别词汇**（事后判读）：最高一档是「三方比对真正抓到的缺陷」的**契约一致性级**（同一条契约上的分歧），无数据丢失级；「ADR-007 落地时的反例验证」四条规则各改坏一次 ⇒ 四条复红后修回。**接受人**：「未决与后续（P2-01 收口前必须清零）」列出的项由门禁把关，未表态项不视为已接受。
+- **修复后复验**：2026-09-29 同日 `native:check protocol` **6／98 exit 0**；逐轮复验记在「第二轮」「ADR-007 反例」两节。

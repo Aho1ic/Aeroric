@@ -203,11 +203,12 @@ const carriedOver: Record<string, string[]> = {
   // codex_like/family), but it has always been on the wire, so it stays.
   [TASK_SESSION]: ["agent_preset"],
   [TASK_STATUS]: [],
-    };
+};
 
-const contractRows = JSON.parse(
-  source("contracts/native/v1/events.schema.json"),
-).events as { name: string; disposition: string }[];
+const contractRows = JSON.parse(source("contracts/native/v1/events.schema.json")).events as {
+  name: string;
+  disposition: string;
+}[];
 
 describe("P2-05 adapter contract: task-status / task-session survive the handover unchanged", () => {
   it("the event names are the ones the client listens for and the contract records", () => {
@@ -295,7 +296,10 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
     ];
     for (const [event, builder] of cases) {
       const constant = event === TASK_STATUS ? "TASK_STATUS_EVENT" : "TASK_SESSION_EVENT";
-      const declared = new Set([...clientKeys(constant).required, ...clientKeys(constant).optional]);
+      const declared = new Set([
+        ...clientKeys(constant).required,
+        ...clientKeys(constant).optional,
+      ]);
       const carried = carriedOver[event] ?? [];
       for (const key of carried) {
         expect(
@@ -311,7 +315,10 @@ describe("P2-05 adapter contract: task-status / task-session survive the handove
         ...carried,
       ]);
       const invented = corePayloadKeys(builder).filter((key) => !known.has(key));
-      expect(invented, `${builder} adds ${invented.join(", ")} that no shipping event carries`).toEqual([]);
+      expect(
+        invented,
+        `${builder} adds ${invented.join(", ")} that no shipping event carries`,
+      ).toEqual([]);
     }
   });
 });

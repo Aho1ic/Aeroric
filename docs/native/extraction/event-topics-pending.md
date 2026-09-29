@@ -23,6 +23,9 @@
 | `P3-04` | 1 |
 | `P8-04` | 1 |
 
+> **2026-09-28 补记一百二十 就地更正**：本表里的 `待判` **10 条当日已定性并落归属**——8 条 `dsh.host_*` → `pending: P3-05`、2 条 `app.*_requested` → `pending: P3-06`（§进度总表 与 `docs/native/event-topics.json` 为准）。
+> 原表保留，因为「扫描看不见发射点 ⇒ 不敢定归属」正是这张表当时的判断依据；而 §三 查明发射点一直都在，只是走的是变量发射。
+
 **属于 sessions/usage 面的只有 1 条**（`usage.statistics_updated`，发射点 `usage_index.rs:1003`）。
 > **2026-09-28 补记一百十三 就地更正**：实施 T1=A 时把 **2 条**留在 P3-04——上面这 1 条，加上 `task.session`（发射点 `core_adapter.rs:538`，属已 accepted 的 P2-05 模块，但 payload 是会话内容，改派给尚未开工的 Task 更诚实）。其余 34 条全部离队。原文保留，因为「当时只数到 1 条」正是这张表被重排的起因。其余 35 条的 Rust 发射点根本不在本 Task 的文件面：11 条在 `dsh_webui`（P3-05 的宿主本体尚未迁）、5 条在 `remote`（P8-03）、2 条 `database`（P7-04）、2 条 `notebook`（P7-05/06）、`report`/`lsp` 各 1 条，**3 条的发射点位于已经 accepted 的 Task 的模块里**（`agent_ops` ×2 → P3-02、`core_adapter` ×1 → P2-05），另有 **10 条在冻结清单里没有 Rust 发射点**（动态发射），必须先定性才谈得上接线。
 
@@ -69,20 +72,21 @@
 | `usage.statistics_updated` | `usage-statistics-updated` | core-to-client | `usage_index` | 1/1 | P3-04 |
 | `weekly.report_progress` | `weekly-report-progress` | core-to-client | `report` | 2/1 | P8-04 |
 
-## 三、那 10 条「无 Rust 发射点」的（必须先逐条定性）
+> 表里 10 行 `unproven / 无 Rust 发射点 / 待判` 的**当天实况**（补记一百二十，逐条核到行号，详见 §三）：`发射模块` 应为 `dsh_webui(动态)` ×8、`lib(动态)` ×2；`方向` 属"发射方存在、订阅方存在"，只是发射名不是字面量；`归属` 已落 `P3-05` ×8 与 `P3-06` ×2。**这张表是按 09-28 早上的派生状态冻结的审计快照，不做回填**——回填会让「谁在什么时候不知道什么」这条链断掉。
 
-清单里它们 `disposition` 记为动态发射，`--check` 只断动态站点数量不漂移，因此**没人欠它们一个归属**。P2-01 当时登记的动态站点共 29 处，含 `lib.rs:198` 的 `action.event_name()`、`dsh_webui.rs:3007` 的 10 路帧映射、`pty.rs:504` 的 `OutputSink::Event`，以及 `AgentInstallStage::*` 那批实为进度回调的名字：
+## 三、那 11 条「无 Rust 发射点」的 —— 2026-09-28 已逐条定性：**全部都有 Rust 发射方**
 
-- `app.exit_requested` ← `app-exit-requested`
-- `app.restart_requested` ← `app-restart-requested`
-- `dsh.host_agent_error` ← `dsh-host-agent-error`
-- `dsh.host_archived_sessions_changed` ← `dsh-host-archived-sessions-changed`
-- `dsh.host_session_added` ← `dsh-host-session-added`
-- `dsh.host_session_removed` ← `dsh-host-session-removed`
-- `dsh.host_session_status` ← `dsh-host-session-status`
-- `dsh.host_workspace_changed` ← `dsh-host-workspace-changed`
-- `dsh.host_workspace_order_changed` ← `dsh-host-workspace-order-changed`
-- `dsh.host_workspace_removed` ← `dsh-host-workspace-removed`
+补记一百十二 写这一节时按 `command-map.json` 的 `events[].emitters[]` 数出 10 条「无 Rust 发射点」，并标注「必须先逐条定性」。本轮把 11 条（原 10 条 + `shell-output`，它已随 `terminal.output` 改派故当时没列进这一节）逐条回源，结论是**这个标签是扫描口径，不是运行时事实**：`emitters[]` 只匹配**字面量**发射，而这三族都把事件名放在变量／返回值／结构体字段里，所以扫描看不见。真实发射点（本轮全部当场核到行号，并已回写 `command-map.json` 的 `events[].note`）：
+
+| 族 | 通道 | 发射机制 | 声明处 | emit 处 | 前端订阅 |
+|---|---|---|---|---|---|
+| DSH 宿主帧 | 8 条 `dsh-host-*`（session-added / session-removed / session-status / agent-error / workspace-changed / workspace-removed / workspace-order-changed / archived-sessions-changed） | `dispatch_host_frame` 的 **10 臂** frame→event 映射 | `event_names.rs:21-28` | `dsh_webui.rs:3066-3075`（表）＋ `:3079`（`app.emit(event_name, payload)`，全族仅此一处） | `src/hooks/useDshHostEvents.ts:106-127` 订 8 条 |
+| 退出授权 | `app-exit-requested`、`app-restart-requested` | `ExitAction::event_name()` 返回 `&'static str` | `lib.rs:177-178`（两条 match 臂） | `lib.rs:237` `app.emit(action.event_name(), ())` | `src/state/app/useAppShellHooks.ts:126/129` |
+| 本地 shell 输出 | `shell-output`（v1 侧已更名 `terminal.output`） | `OutputSink::Event{event_name}` 结构体字段 | 名字绑在 `pty.rs:2786` | `pty.rs:462`（sink 分派在 `:455`） | `src/components/ShellTerminalPanel.tsx:155` |
+
+**三点要下游知道的**：① 那张 10 臂表里另有两条（`dsh-host-remote-event`、`dsh-host-stream-error`）**没有任何订阅者**，它们不在这个名单里是因为它们的发射点在别处也有直接字面量发射、被登记者记到了那几行——这正是 `G01` 的三条孤儿，**和这张表同源**，所以 P3-05 处置时**至少**要动那张表；但这二条另有 5 处以常量名的直接 `app.emit(`（`remote-event` 在 `:3328`、`stream-error` 在 `:3151/:3277/:3355/:3372`），删除或改向都得一并交代——也正因如此它们的 `emitters[]` 非空而那 8 条为空：扫描认得常量名发射，认不得穿过 `match` 的变量发射。② 本节旧版的三个引用行号（`lib.rs:198`、`dsh_webui.rs:3007`、`pty.rs:504`）**全部已漂**，按符号找才靠得住。③ P2-01 登记的动态站点总数 **29 处**今天复算未变（`--freeze` 会原样重印这句：`29 dynamic emit site(s) recorded verbatim, not guessed`）。
+
+**归属**：把派生本身改成「认得变量发射」（`inventory.mjs` 解析常量值 + `export-schema.rs` 允许由此产生的 `legacyDirection`）会改动契约产物，本轮**只记账不代改**。已按 §3.1 #1 写具名前置：**8 条归 P3-05**（DSH 宿主本体尚未迁）、**2 条 `app-*` 归 P3-06**、`shell-output` 归 P5-01（v1 侧 `terminal.output` 的形状改造）。表的当前状态由 `docs/native/event-topics.json` 的 `derivation.emittersZeroMeans` 一行说明，随 `native:contracts` 进契约产物。
 
 ## 四、三条最尖锐的：发射点在已 accepted 的 Task 里
 

@@ -61,12 +61,12 @@ test("editing the canonical digest without re-cutting fails the check", () => {
 
 test("a hand-edited shard payload fails the check", () => {
   const { dir, cleanup } = tempCopy();
-  const file = "docs/native/digest/feature-matrix-gaps.json";
+  const file = "docs/native/digest/feature-matrix-gaps-1.json";
   const shard = readJson(dir, file);
   shard.payload.gaps.pop();
   writeJson(dir, file, shard);
   const { problems } = runShards({ repoRoot: dir });
-  assert.match(problems.join("\n"), /feature-matrix-gaps\.json: payload does not match/);
+  assert.match(problems.join("\n"), /feature-matrix-gaps-1\.json: payload does not match/);
   cleanup();
 });
 
@@ -99,4 +99,74 @@ test("the catch-all never double-claims a key an explicit shard owns", () => {
   const { problems, shards } = shardPlanFor(spec, { blob: 1, other: 2 });
   assert.deepEqual(problems, []);
   assert.deepEqual(Object.keys(shards.find((s2) => s2.name === "x-head.json").payload), ["other"]);
+});
+test("a chunked part is cut into ordered shards that reconstruct the canonical array", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { gaps: ["gaps"] }, chunks: { gaps: 3 } };
+  const rows = Array.from({ length: 9 }, (_, i) => ({ id: i, body: "x".repeat(50) }));
+  const { problems, shards } = shardPlanFor(spec, { gaps: rows });
+  assert.deepEqual(problems, []);
+  assert.deepEqual(shards.map((s2) => s2.name), ["x-gaps-1.json", "x-gaps-2.json", "x-gaps-3.json"]);
+  const back = shards.flatMap((s2) => s2.payload.gaps);
+  assert.deepEqual(back, rows, "chunks must concatenate back to the canonical array, in order");
+  assert.ok(shards.every((s2) => s2.payload.gaps.length > 0), "no shard may be empty");
+});
+
+test("more chunks than rows is refused rather than silently producing empty shards", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { gaps: ["gaps"] }, chunks: { gaps: 3 } };
+  const { problems, shards } = shardPlanFor(spec, { gaps: [1, 2] });
+  assert.match(problems.join("\n"), /cannot split 2 row\(s\) of "gaps" into 3 shards/);
+  assert.deepEqual(shards.map((s2) => s2.name), ["x-gaps.json"], "the unfulfillable split must not half-apply");
+});
+
+test("chunking a non-array key is refused", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { gaps: ["gaps"] }, chunks: { gaps: 2 } };
+  const { problems } = shardPlanFor(spec, { gaps: { not: "an array" } });
+  assert.match(problems.join("\n"), /canonical key "gaps" is not an array/);
+});
+
+test("chunking a part that claims two keys is refused", () => {
+  const spec = { source: "x.json", prefix: "x", parts: { mixed: ["a", "b"] }, chunks: { mixed: 2 } };
+  const { problems } = shardPlanFor(spec, { a: [1], b: [2] });
+  assert.match(problems.join("\n"), /declared chunked but claims 2 keys/);
+});
+
+test("a chunk that loses a row fails the reconstruction assertion, not just the payload compare", () => {
+  const { dir, cleanup } = tempCopy();
+  const file = "docs/native/digest/feature-matrix-gaps-2.json";
+  const shard = readJson(dir, file);
+  shard.payload.gaps.pop();
+  writeJson(dir, file, shard);
+  const { problems } = runShards({ repoRoot: dir });
+  const all = problems.join("\n");
+  assert.match(all, /feature-matrix-gaps-2\.json: payload does not match/);
+  assert.match(all, /the shard files on disk do not reconstruct the canonical digest/);
+  cleanup();
+});
+
+test("the gaps array ships in eight shards, all with injection headroom", () => {
+  const { problems, rows, index } = runShards({ repoRoot });
+  assert.deepEqual(problems, []);
+  const names = rows.map((r) => r.file);
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-1.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-2.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-3.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-4.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-5.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-6.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-7.json"), names.join(" "));
+  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-8.json"), names.join(" "));
+  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps.json"), "the unsplit shard must be gone, not left behind as a stale copy");
+  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps-9.json"), "a 9th shard means the constant moved without this expectation");
+  for (const row of rows.filter((r) => /gaps/.test(r.file))) {
+    assert.ok(row.bytes < 32768 * 0.8, `${row.file} is at ${row.bytes} B — headroom is the point of chunking`);
+  }
+  const fm = index.sources.find((s2) => s2.path === "docs/native/feature-matrix.json");
+  assert.equal(fm.shards.filter((s2) => /gaps/.test(s2.file)).length, 8);
+});
+test("a shard the plan no longer emits is reported instead of lingering", () => {
+  const { dir, cleanup } = tempCopy();
+  writeJson(dir, "docs/native/digest/feature-matrix-gaps-9.json", { shard: "x", payload: { gaps: [] } });
+  const { problems } = runShards({ repoRoot: dir });
+  assert.match(problems.join("\n"), /feature-matrix-gaps-9\.json: stale shard/);
+  cleanup();
 });

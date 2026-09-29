@@ -110,10 +110,10 @@ ls ~/.claude/skills/grill-me/SKILL.md ~/.claude/skills/grilling/SKILL.md
 
 | 工具 | 状态 | 版本 / 备注 |
 |---|---|---|
-| XcodeGen | **已安装**（用户授权 `brew install xcodegen`） | `2.46.0`，`/opt/homebrew/bin/xcodegen`。P1-04 / P4-01 的 `pnpm native:generate` 必须锁定该版本并在 §3.2 的 argv 数组里以绝对路径或经 PATH 校验调用 |
+| XcodeGen | **已安装**（用户授权 `brew install xcodegen`） | `2.46.0`，`/opt/homebrew/bin/xcodegen`。P1-04 / P4-01 的 `pnpm native:generate` 必须锁定该版本并在 §3.2 的 argv 数组里以绝对路径或经 PATH 校验调用。**2026-09-28 起这个「锁定」有机检**：`scripts/native/doctor.mjs` 的 XcodeGen 检查带 `match: /2\.46\.0/`，版本一变 `native:doctor` 即 `MISS` + exit 1（此前它只断 exit 0，任何版本都算通过） |
 | Xcode / Swift | 许可已由用户自行接受 | `Xcode 27.0 (27A266a)`，`Apple Swift 6.4`，target `arm64-apple-macosx27.0.0` |
 | Rust | 可用，链接已实测通过 | `rustc` / `cargo` 1.93.0，`~/.cargo/bin` |
-| Node / pnpm | 可用 | v25.9.0 / 10.33.0，锁文件一致 |
+| Node / pnpm | 可用 | v25.9.0 / 10.33.0，锁文件一致 —— **此行的 Node 版本已过时**，以 §8（2026-09-27 重测：v22.23.1，`~/.hermes/node/bin/node`）为准；保留原文只作时间线 |
 | python3（Trellis 脚本用） | 可用 | 3.9.6（`/usr/bin/python3`，Xcode shim；许可未接受时同样退出 69） |
 | Trellis CLI | 可用 | `0.6.15`（注意：`MIGRATION_PLAN.md` §0.3 写的是 0.6.16，环境已变化） |
 | Homebrew / gh | 存在 | brew 6.0.19；`gh` 未用于本文件结论（来源核对走未认证 GitHub API + raw） |
@@ -165,3 +165,57 @@ env -u PI_PROFILE -u OMP_PROFILE \
 | `xcodegen` | 已安装 2.46.0 | 2.46.0（`/opt/homebrew/bin/xcodegen`） | 无变化；`macos/AeroricNative.xcodeproj` 当下**不在磁盘上**（`.gitignore:71` 视为派生物），`project.yml` 也不存在 ⇒ P4-01 的 `native:generate` 无当日证据 |
 | `grill-me` / `grilling` | §4 记"本会话不可调用（装错目录）"，后由用户批准拷入 `~/.claude/skills`（→ `~/.mirasim/skills`） | **真实可用**：`Skill(skill="grilling")` 本轮已实际调用（P3-03 收尾轮，`docs/native/reviews/terminal-core.md` §0） | §4/§4.4 的 `BLOCKED: grill-me entrypoint unavailable` 处置已成历史，仅对 P1-05 当时成立 |
 | `trellis` | 0.6.15 | 0.6.15，并打印 `⚠️ update available: 0.6.15 → 0.6.16` | 提示存在 ≠ 授权 `trellis update`（原约束沿用） |
+
+## 9. Digest 分片机制（`scripts/native/digest.mjs`）—— 2026-09-28 首次成文
+
+**为什么要存在**：Trellis 的 `context_injection.max_file_bytes` 默认 **32 768 B**（`.trellis/config.yaml` 里整块是注释，所以走 `common/config.py` 的默认值），超限的文件会被注入器截断。`docs/native/feature-matrix.json`（2026-09-29 工作树实测 **138 178 B**，同一文件在 HEAD `797e06c` 里是 43 275 B ⇒ 未提交批次的增长本身就在顶预算）与 `docs/native/command-map.summary.json`（**33 296 B**）都超，直接列进 `implement.jsonl`／`check.jsonl` 就是 补记一百二十二 记下的 Deviation D8（台账被静默砍半）。`digest.mjs` 把这两份大工件切成**逐片不超限**的小片，供注入清单引用。
+
+**片名怎么读，不在这份文档里枚举**：固定的几片是 `command-map-{head,modules,surfaces,unreachable}.json`、`feature-matrix-{head,features}.json`，外加 `feature-matrix-gaps-1..N.json`——**N 由台账体积决定，会长**（2026-09-28 一天内 N 从 2 变到 3 再变到 4）。所以当前片名、每片字节与 headroom 一律就地读：`docs/native/digest/index.json`，或 `node scripts/native/digest.mjs --check`。`index.json` 同时记 `capBytes: 32768` 与两个源各自的 sha256。**同一条规矩适用于注入清单**：`.trellis/tasks/*/check.jsonl`、`implement.jsonl` 里引用 gaps 时一律指向 `docs/native/digest/index.json`，**不得枚举 `gaps-N.json` 片名**——片数由台账体积驱动，枚举必然腐烂（2026-09-29 就抓到 10 份清单指着已删的未分片旧名，已照此改法收敛）。
+
+> **本节不写死分片数量与体积**：它们随台账增删变动（2026-09-28 一天里最大片就从 20 827 → 21 926 → 23 486 → 24 743 → 26 959 B，同一张表被同日新登记的 gap 连续作废四次）。抬 `chunks.gaps` 的时机不由人判断——`digest-unit` 里那条「每片必须 < 80% 上限」的用例会**直接判红**并点名是哪一片（截至 2026-09-29 已行使过七次否决：第一次把 `gaps` 切成 2 片，其后 `G23` 2→3、`G27` 3→4、`G32` 4→5、`G37` 5→6；第 6 次**没有任何登记**，只是给全部 open gap 盖 `verified_on` 就把 gaps-2 推到 26 393 B＝80.5%（6→7）；第 7 次是 2026-09-29 第 14 项定 ② 之后关闭 `G25` 并登记 `G39`（7→8，gaps-2 到 26 436 B＝80.7%）⇒ **一进一出、净增一条也吃掉一格**，"台账条数差不多"不等于"体积差不多"），所以正确动作只有一句：照它报的那片把 N 加一，再同步 `.trellis` 注入清单、`digest.test.mjs` 的分片数期望与本节。
+
+**两个被切的源**：`docs/native/command-map.summary.json`（33 296 B）→ 4 片；`docs/native/feature-matrix.json`（**本身就超单文件上限**）→ `head`＋`features`＋`gaps-1..N`，其中 `gaps` 数组按顺序自动分块、**N 只读 `index.json` 或 `digest --check`，本节不写**（这里原先写死的"→ 4 片"和源的字节数都已被同日台账增长作废）。**块边界与每块条数随体积移动**——本节先写「今天 12＋9」就被同日的 `G22` 作废（实测已是 13＋8＝21 条），所以结论是：任何文档与注入清单都**不得枚举「某条 gap 落在哪一片」**，要读两片文件本身或 `digest --check` 的输出。
+
+**四条硬保证**（各由 `digest.test.mjs` 的一条负例守着，`digest-unit` 现 17 用例）：
+1. 任一目标片超 32 768 B ⇒ 报红拒绝写（不是静默截断）。
+2. **从磁盘上的片重组 canonical** 并对不上源文件的 sha256 ⇒ 报红（曾经只比「计划载荷」，对手工改过的片全盲）。
+3. 计划不再产出的同名片留在盘上 ⇒ 孤儿片报红（注入清单**按路径**读文件，留着就是永久毒饵）。
+4. `pnpm native:digest --check` 这类「同时给两个模式」的请求 ⇒ CLI 直接 exit 2 拒绝，因为 `package.json` 的别名自带 `--write`，`--check` 展开成 `--write --check` 会**一直在写**（补记一百二十三）。
+
+**进门禁的方式**：`skeleton` 模块两条 case —— `digest-shards-current`（`node scripts/native/digest.mjs --check`，gate）与 `digest-unit`（`node --test digest.test.mjs`，minCases 17）。日常改完台账的动线：编辑源工件 → `node scripts/native/digest.mjs --write` → 同脚本 `--check` → `native:check skeleton`。**分片文件属于门禁工具面（§3.2／P1-04 那一族），不由任何产品 Task 逐个列出**——这也是它们此前在 `MIGRATION_PLAN.md` 里查无此名的原因，本节即其归属。
+
+**清单腐烂有现成的检查器，跑就行（2026-09-29 实测）**：`python3 .trellis/scripts/task.py validate <dir>` 逐行解析任务目录的 `implement.jsonl`／`check.jsonl`，`file` 字段指向的路径不存在就打印 `File not found: <path>` 并 **exit 1**；同一条命令还会对超过 `max_file_bytes` 的被引用文件打印 `… injection will truncate it`（只警告、不失败，这正是本节第 4 条要防的静默截断）。今天全库 27 个任务目录跑一遍 ⇒ **24 rc=0／3 rc=1**，12 个不存在的路径全在 `.trellis/spec/**`（包目录与 `index.md` 在、被点名的分篇 guideline 从未写过）；负控（临时目录里写一条已删除的 `digest/feature-matrix-gaps.json`）⇒ 第 1 行被点名、rc=1。**本仓没有任何门禁读 `.trellis/`（`.gitignore:74`），所以清单腐烂只能靠人跑这条命令发现**——动过注入清单后的例行动作：`for d in .trellis/tasks/*/; do python3 .trellis/scripts/task.py validate "$d"; done`，迁移相关目录要求 rc=0，非迁移目录的已知断链逐条豁免并记档（台账 `G23` 第三个面）。
+
+## 10. `native:*` 别名 ↔ 实现脚本 ↔ 门禁覆盖（2026-09-28 逐条实测）
+
+此前工具文档只用 pnpm 别名说话，**从没写过实现这些别名的文件名**：`build.mjs`／`dev.mjs`／`generate.mjs`／`ui-test.mjs`
+在 `docs/native/` 与 `MIGRATION_PLAN.md` 里按文件名搜都命中 0 次，所以按文件找实现的人（以及 §3.1 #1 的归属回查）会点不出出处。本表补上这层映射；exit code 与状态今天重测。
+
+| 别名 | 实现脚本 | 被门禁 case 引用 | 今天实测 |
+|---|---|---|---|
+| `native:build` | `scripts/native/build.mjs` | 否 | exit **78** `NOT READY — implemented by Task P4-01`（11 行纯桩，只 `console.error` 再退出） |
+| `native:dev` | `scripts/native/dev.mjs` | 否 | exit **78**，同上 |
+| `native:generate` | `scripts/native/generate.mjs` | 否 | exit **78**，理由写明 `macos/project.yml` 还不存在；版本锁另由 `doctor.mjs` 的 `match: /2\.46\.0/` 守（§5） |
+| `native:ui-test` | `scripts/native/ui-test.mjs` | 否 | exit **78**，理由是 `AeroricNative.xcodeproj` 与 UI tests target 由 P4-01 创建 |
+| `native:check` | `scripts/native/check.mjs` | —（它就是门禁执行器） | 按模块运行；`all` 在 38/43 计划模块未 ready 时**拒绝运行**（exit 3），首个真全矩阵属 P10-05 |
+| `native:contracts` | `scripts/native/contracts.mjs` | 是 | `--check` 12 份契约逐字节比对；`--write` 才重生成 |
+| `native:digest` | `scripts/native/digest.mjs --write` | 是（`digest-shards-current` 直调 `--check`） | **别名自带 `--write`**，所以 `pnpm native:digest --check` 会展开成 `--write --check`；CLI 现在拒绝同时给两个模式（exit 2）。要「只查不写」请直调 `node scripts/native/digest.mjs --check`（§9） |
+| `native:doctor` | `scripts/native/doctor.mjs` | **否** | 18/18；属 F2 那一族——没有任何 gate case 跑它，所以它绿不代表门禁绿 |
+| `native:inventory` | `scripts/native/inventory.mjs` | 是 | `--check` 一致性；`--freeze` 派生交付列；`--freeze-check` 字节 noop 校验 |
+
+要点：**四个 NOT READY 桩「不进门禁」是设计而非缺口**（§3.2 禁止恒 exit 0 的占位；P1-04 Action 5），但 `native:doctor` 不在门禁里是**缺口**，与 F2（没有 case 跑全量 `pnpm test`／`cargo check --target`）同族，归 P10-05 收。
+
+## 11. 命令台账的两个指针字段：只能引用 `definition_resolved`（2026-09-28 补记一百六十六 实测）
+
+`docs/native/command-map.json` 的每条命令同时带 **两个** 指向源码的字段，它们**不是同一个东西**：
+
+| 字段 | 语义 | 门禁怎么守 | 能不能引用 |
+| --- | --- | --- | --- |
+| `definition_resolved` | 该命令 `fn` **声明所在行** | `inventory.mjs` 的 G10 会读那一行并断言 `\bfn\s+<命令名>\b` 真的在里面（`inventory.mjs:196-198`） | **能**——660/660 都被机器钉在声明行 |
+| `definition_candidates` | 扫描期命中的**候选行**（分辨率低） | 只在 `inventory.mjs:116` 校验**文件存在**，不校验行 | **不能**当定义位置引用 |
+
+当日测到的规模与形状：660 条里 **55 条** 的 `resolved` 与 `candidates[0]` 不是同一行，候选行实测落在三种错误位置上——注册宏所在的那一行（`hide_main_window`：候选 `lib.rs:556` 其实是 `generate_handler!` 列表里的一条 `lsp::` 登记项，真值 `lib.rs:304`）、函数体内部（`adopt_session_for_agent`：候选 `:1696` 在体内，真值 `:1684`）、以及签名参数行（`run_task`：候选 `pty.rs:1421` 是 `texts: Option<...>` 参数，真值 `pty.rs:1412`）。
+
+同批还量到两条可直接引用的事实：**`#[tauri::command]` 字面出现 660 处／66 个文件**，与 `generate_handler!` 及台账同为 **660**，且**没有一个带属性的命令未登记**（＝不存在"死命令"）；**`definition_unique === false` 只有 1 条**（`skills::list_skills`，仍解析到 `skills.rs:1190`）——P8-01 动 skills 时要单独确认这一条为何非唯一。
+
+口径提醒：以上"三方都是 660"是**用两套独立仪器**量的——台账与注册表的一致性 `inventory --check` 本来就双向检查（`registered but not mapped` / `mapped but not registered`），但**属性行数 660** 是从 Rust 源码直接 `grep` 出来的第二仪器。若只信前者，就是拿工具自己的输出证明工具没错。

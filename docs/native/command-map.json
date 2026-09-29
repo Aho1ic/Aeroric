@@ -24108,7 +24108,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via ExitAction::event_name() (lib.rs:198) — dynamic, recorded"
+      "note": "emitted via `ExitAction::event_name()` — the arm is `ExitAction::Exit => \"app-exit-requested\"` at src-tauri/src/lib.rs:177, single emit `app.emit(action.event_name(), ())` at lib.rs:237. 2026-09-28 重导：原记 lib.rs:198 已漂；发射名是函数返回值，扫描看不到所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "app-restart-requested",
@@ -24127,7 +24127,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via ExitAction::event_name() (lib.rs:198) — dynamic, recorded"
+      "note": "emitted via `ExitAction::event_name()` — the arm is `ExitAction::Restart => \"app-restart-requested\"` at src-tauri/src/lib.rs:178, single emit `app.emit(action.event_name(), ())` at lib.rs:237. 2026-09-28 重导：原记 lib.rs:198 已漂；发射名是函数返回值，扫描看不到所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dbx-production-confirm-requested",
@@ -24235,7 +24235,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_AGENT_ERROR (src-tauri/src/event_names.rs:24). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-archived-sessions-changed",
@@ -24259,7 +24259,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_ARCHIVED_SESSIONS_CHANGED (src-tauri/src/event_names.rs:28). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-remote-event",
@@ -24302,7 +24302,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_ADDED (src-tauri/src/event_names.rs:21). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-session-removed",
@@ -24326,7 +24326,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_REMOVED (src-tauri/src/event_names.rs:22). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-session-status",
@@ -24350,7 +24350,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_SESSION_STATUS (src-tauri/src/event_names.rs:23). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-stream-error",
@@ -24396,7 +24396,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_CHANGED (src-tauri/src/event_names.rs:25). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-workspace-order-changed",
@@ -24420,7 +24420,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_ORDER_CHANGED (src-tauri/src/event_names.rs:27). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-host-workspace-removed",
@@ -24444,7 +24444,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via the 10-way frame map in dsh_webui.rs:3007 — dynamic, recorded"
+      "note": "emitted through the 10-arm frame map in `dispatch_host_frame` (src-tauri/src/dsh_webui.rs:3066-3075), single emit `app.emit(event_name, payload)` at dsh_webui.rs:3079; name held by DSH_HOST_WORKSPACE_REMOVED (src-tauri/src/event_names.rs:26). 2026-09-28 重导：原记 dsh_webui.rs:3007 已漂；发射名是变量，扫描按字面量匹配所以 `emitters` 恒空——不是没有发射方。"
     },
     {
       "name": "dsh-question-requested",
@@ -24744,7 +24744,7 @@
       "gap_id": null,
       "orphan": "listened-without-emitter",
       "target": null,
-      "note": "emitted via OutputSink::Event{event_name} (pty.rs:504) — dynamic, recorded"
+      "note": "emitted via `OutputSink::Event{event_name}` — the name is a literal bound at src-tauri/src/pty.rs:2786 (`event_name: \"shell-output\"`), the emit is `app.emit(event_name, …)` at pty.rs:462. 2026-09-28 重导：原记 pty.rs:504 已漂；发射名穿过结构体字段，扫描因此看不到。"
     },
     {
       "name": "task-session",

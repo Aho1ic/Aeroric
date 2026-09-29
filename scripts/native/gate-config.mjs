@@ -34,6 +34,19 @@ export function missingOutputTokens(testCase, haystack) {
   return (testCase.mustContain ?? []).filter((token) => !String(haystack).includes(String(token)));
 }
 
+/** Cases that write the user's real `~/.aeroric` are opt-in: they run only when the named
+ *  environment variable is exactly `1`. Measured reason (2026-09-29, ledger `G19`/`G20`/`G24`):
+ *  the module-level `pnpm native:check tauri-adapter` executed `src-tauri-lib-tests` and
+ *  `adapter-acceptance-real-kernel`, which rewrote three real `agent-credentials/*` sidecars
+ *  (mtime 13:42:36, same batch) and appended forged `invite-created` rows to the real remote
+ *  access audit log. A skip is only honest if it says *why* and is printed every run — an
+ *  unexplained "optional" flag is precisely how coverage disappears without anyone noticing. */
+export function caseSkipReason(testCase, env = process.env) {
+  if (!testCase?.optInEnv) return null;
+  if (String(env?.[testCase.optInEnv] ?? "") === "1") return null;
+  return `${testCase.name}: opt-in only (set ${testCase.optInEnv}=1 to run) — ${testCase.optInReason}`;
+}
+
 export function moduleGateProblem(name, entry) {
   // §3.2 lets nobody redefine `all`. The tempting "fix" for the matrix was to register a module
   // literally named "all" with a hand-copied case list — that both drifts from the matrix and
@@ -62,6 +75,16 @@ export function moduleGateProblem(name, entry) {
   const unassertive = entry.cases.filter((c) => c.kind === "forbid" && (!Array.isArray(c.mustContain) || c.mustContain.length === 0));
   if (unassertive.length) {
     return `${name}: ${unassertive.length} "forbid" case(s) declare no mustContain (${unassertive.map((c) => c.name).join(", ")}) — an empty listing would pass them`;
+  }
+  const unexplained = entry.cases.filter(
+    (c) => c.optInEnv && (typeof c.optInReason !== "string" || !c.optInReason.trim()),
+  );
+  if (unexplained.length) {
+    return `${name}: ${unexplained.length} opt-in case(s) declare no optInReason (${unexplained.map((c) => c.name).join(", ")}) — an unexplained optional case is how coverage vanishes silently`;
+  }
+  const badEnv = entry.cases.filter((c) => c.optInEnv && !/^[A-Z][A-Z0-9_]{2,}$/.test(String(c.optInEnv)));
+  if (badEnv.length) {
+    return `${name}: ${badEnv.length} opt-in case(s) have a malformed optInEnv (${badEnv.map((c) => c.name).join(", ")})`;
   }
   return null;
 }

@@ -1,0 +1,94 @@
+{
+  "shard": "feature-matrix-gaps-1.json",
+  "from": "docs/native/feature-matrix.json",
+  "sourceSha256": "3c313294cb10dcdc4a9ff4f470015d2be9fbe0e85527b2e761f89ed7985b5b02",
+  "capBytes": 32768,
+  "payload": {
+    "gaps": [
+      {
+        "id": "G01",
+        "finding": "三个事件被后端 emit 但 React 从不 listen：agent-tool-install-progress / dsh-host-remote-event / dsh-host-stream-error（2026-09-28 复算：三者仍在发射、src/ + packages/ + mobile/ 三个字面量各 0 命中。注意『无发射点』不成立——三者都有真实 Rust 发射方，缺的只有订阅者）",
+        "evidence": "行号一律取 `.emit(` 那一行（与 command-map.json 的 emitters[] 同基；常量写在下一行参数位时相差 1）。agent-tool-install-progress：常量 `agent_tools.rs:25`、emit `agent_tools.rs:606`、`orphan: emitted-without-listener`、`disposition: redundant-channel`。dsh-host-remote-event：常量 `event_names.rs:29`、经 `dispatch_host_frame` 的 10 臂映射（`dsh_webui.rs:3066-3075`，emit `:3079`），另有**以常量名直接发射**的站点被登记者在 `:3328`。dsh-host-stream-error：常量 `event_names.rs:30`、同一张映射表，以常量名直接发射记在 `:3151/:3277/:3355/:3372`。前端订阅簇只有 8 条 `dsh-host-*`（src/hooks/useDshHostEvents.ts:106-127），`src/tauriEvents.ts` 声明的 18 个名字里没有这两条；2026-09-28 实测 src/、packages/、mobile/ 三个通道名字面量命中均为 0。注意这两条是**双路发射**：既是那张 10 臂表的两个臂（`:3066-3075`→emit `:3079`），又各另有 1 处／4 处以常量名直接 `app.emit(`；扫描认得常量名发射、认不得穿过 match 的变量发射，所以这二者的 `emitters[]` 非空而那 8 条为空。因此 P3-05 的处置面是**一张表 + 五处直发**，不是只有表  2026-09-29 复跑（判据＝宿主侧有该事件名、前端 `src/**.{ts,tsx}` 里 0 个文件引用）：`agent-tool-install-progress` 只在 `src-tauri/src/agent_tools.rs` 出现、`dsh-host-remote-event` 与 `dsh-host-stream-error` 只在 `event_names.rs` 有常量（发射经 `dsh_webui.rs:3066-3075` 的 10 臂映射按常量名发，所以字面量搜不到发射点），**前端引用文件数全为 0** ⇒ 三条孤儿今日原样。补一条口径：台账 `event-topics.json` 里 legacy 名匹配 `dsh-host-*` 的 topic 今天共 **10 条**（全部 `pending: P3-05`、全部 `legacyOrphan`），而前端 `DSH_HOST_*_EVENT` 订了 **8** 条，差集正是本条点名的 `remote-event` 与 `stream-error`——**\"10 条 topic／10 臂映射／8 条订阅\"三个数各自都成立，§进度总表 P3-05 那行过去把 8 当成 topic 数写，已同日改准。**",
+        "requirement": "每个事件要么有订阅者要么删除，不得静默丢弃",
+        "task_ids": "P2-01, P3-05",
+        "owner": "protocol+core:dsh_host",
+        "test": "node scripts/native/inventory.mjs --check 逐条断言：orphan 事件必须有 disposition + gap_id，否则门禁失败；inventory.test.mjs 的『孤立事件未定性必须失败』是这条规则的负向测试",
+        "status": "triaged-in-inventory",
+        "verified_on": "2026-09-29",
+        "retriage_note": "原 evidence 的 dsh_webui.rs:3252,3079,3201,3279,3296 五个行号已全部漂移且指向 payload 构造点而非发射点。改为记发射函数与订阅簇两个权威位置并声明行号口径（`.emit(` 行，与 command-map 的 emitters[] 同基）。本轮另查明：这三条里两条的发射面与 `dsh.host_*` 那 8 条同源（同一张 10 臂映射表），所以 P3-05 处置时**至少**要动那张表；但这二条另有 5 处以常量名的直接发射（`:3328` 与 `:3151/:3277/:3355/:3372`），删除或改向都得一并交代。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G02",
+        "finding": "9 个事件名以字符串字面量绕过 event_names.rs（2026-09-28 复算：仍是 **9 个不同名字、13 处字面量 emit**——task-status ×4、remote-terminal-resized ×2，其余七个各 ×1）；前端另有 **11 处** `listen(字面量)` 绕过 tauriEvents.ts（该文件声明 18 个名字），src/test/app-event-wiring.test.tsx:115 起维护第三份手写名单",
+        "evidence": "Rust 侧九个名字：task-status、remote-terminal-resized、task-session、lsp://diagnostics、dbx-transfer-progress、remote-device-paired、remote-task-request、aeroric:app-settings-changed、project-pinned-changed（计数口径＝`.emit`/`.emit_to` 首参为字符串字面量且该名字不在 event_names.rs 的 19 个常量值里，排除 src-tauri/vendor）。前端十一处：ProjectPage.tsx(lsp://diagnostics)、ShellTerminalPanel.tsx(shell-output)、app-settings/RemoteAccessPanel.tsx(remote-device-paired)、hooks/useDshLiveSessions.ts ×4(dsh-session-jobs/-projection/-queue/-subscribed)、hooks/useDshSessionFeatures.ts(dsh-session-event)、hooks/useUsageStatistics.ts(usage-statistics-updated)、lib/databaseApi.ts(dbx-transfer-progress)、state/app/useAppTauriEvents.ts(dbx-production-confirm-requested)  2026-09-29 按原判据复跑，四个数一字未动：`event_names.rs` 常量值 **19**；绕过它的字面量 emit **9 个不同名字／13 个站点**（`task-status`×4、`remote-terminal-resized`×2，其余七个各×1；明细含 `lsp://diagnostics`、`aeroric:app-settings-changed` 这类**带冒号/斜杠的名字**）；前端 `listen(字面量)` **11 处**；`tauriEvents.ts` 声明 **18** 个名字。**本轮自己的两次假阴性值得记**：① 只匹配同一行的 `emit(\"` ⇒ 得 **4 个名字／5 个站点**；② 改成跨行但名字字符类漏掉 `:` 与 `/` ⇒ 得 **7／11**（丢的正是 `lsp://diagnostics` 与 `aeroric:app-settings-changed`）。⇒ 复跑这条的判据必须写成\"`.emit`/`.emit_to` 首参为字符串字面量、且该名字不在 `event_names.rs` 的 19 个常量值里、排除 `src-tauri/vendor`、允许跨行\"。",
+        "requirement": "迁移期间三方名单必须一致，且新协议层只能引用常量",
+        "task_ids": "P2-01",
+        "owner": "protocol",
+        "test": "inventory.mjs 现按『字面量 / 常量 / 歧义 / 动态』四类分别登记 38 条事件的来源与 29 处动态 emit 站点；--check 对 stale 路径与 dynamic 漂移报错",
+        "status": "triaged-in-inventory",
+        "verified_on": "2026-09-29",
+        "retriage_note": "两个计数（9 与 11）经复算成立，但原 finding 里的 task-status ×18、task-session ×6 在任何口径下都复算不出：今天字面量 emit 是 ×4 与 ×1，全字符串出现次数是 24 与 4，且多数落在 P2-05 之后新增的 core_adapter_tests.rs(11) 与 remote/lan_roundtrip_tests.rs(6) 里。第三份名单行号 106→115。口径与逐条名单已写进 evidence，免得下次再靠散文数字。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G03",
+        "finding": "三个 app-lifetime 线程无关停路径：`event_watcher.rs:66`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`lib.rs:1181-1186` 的 `RunEvent::Exit` 只 block_on `LocalRouterManager::shutdown()` 与 `DshWebUiManager::shutdown_all()`，三者都不在内",
+        "evidence": "2026-09-28 二次回源（本轮同时纠正本条 finding 与 evidence 各自反向漂移的问题）：三处 `thread::spawn(move || run_loop(app))` 实测在 `event_watcher.rs:66`、`usage_index.rs:1048`、`notebook/sync/daemon.rs:404`；`RunEvent::Exit` 块在 `lib.rs:1181-1186`（此前 finding 记 :1189——那是 macOS `RunEvent::Reopen` 的 `#[cfg]` 行，evidence 记 :1181 才对；而 evidence 曾记 :1047/:402 已漂到 :1048/:404）。三处闭包内均无任何取消检查，`grep -c is_cancelled` 在这三个文件里为 0 2026-09-29 逐站复跑（同一判据：只看该行是不是 app-lifetime spawn、这三文件 `is_cancelled` 是否为 0）：`event_watcher.rs:66`／`usage_index.rs:1048`／`notebook/sync/daemon.rs:404` **三行都是同一形状 `thread::spawn(move || run_loop(app));`**，`is_cancelled` 在三文件里 **0 命中**（正控：同一正则在宿主 `src-tauri/src` 其它文件有命中）；`lib.rs:1181-1186` 关停块今天仍只做 LocalRouter ＋ DSH 两件事。**行号一字未漂**。",
+        "requirement": "持有线程的 Task 必须接 core 的可取消 token 并 join；shutdown 两次安全",
+        "task_ids": "P3-04, P7-06",
+        "owner": "core:sessions (event_watcher + usage_index) + core:notebook (sync daemon)",
+        "test": "tests/runtime_lifecycle.rs：shutdown 两次安全；启动两次不重复 watcher",
+        "status": "open",
+        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。 【2026-09-28 二次回源】本条出现过一种新的失效形状：**同一条 gap 的 finding 与 evidence 被不同轮次各自编辑，漂移方向相反**——finding 的 `lib.rs:1189` 错而 evidence 的 :1181 对，evidence 的 :1047/:402 错而 finding 的 :1048/:404 对。任何一侧单独读都会得到错的站点。判据：**回源一条 gap 时必须同批重写 finding+evidence，然后对每个 file:line 当场 grep 复核**（本轮三个线程站点的 `is_cancelled` 命中数一并数了，都是 0）。 同日 2026-09-29 复核：见 evidence 追加段。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G04",
+        "finding": "per-task 会话 watcher 的取消覆盖不均（2026-09-28 逐站回源，原三个引用站点全部过期）：`session.rs:1999` 的 spawn_claude_lazy_session_attach 仍是**裸 thread::spawn、不经监督者**；`session.rs:1851/1860` 走 spawn_unique（注释自陈仅记账、自终止）；`session.rs:2360` 用 spawn_supervised 但闭包是 `move |_token|`——拿到 token 却从不检查，形同虚设。已完成的部分：DSH(`session_dsh.rs:632`)、OMP(`session_omp.rs:310`)、状态 watcher (`session.rs:1926/2138/2227`) 六站均查 `token.is_cancelled()` 并按 (task,generation) 去重",
+        "evidence": "逐站表与口径见 docs/native/extraction/sessions.md §九（含「监督形状 ≠ 可取消，判据是闭包里真读 token」这条） 2026-09-29 逐站复跑：`session.rs:1999` 确为裸 `thread::spawn(move || {`；`:1851/:1860` 均为 `supervisor.spawn_unique(`；`:2360` 为 `spawn_supervised(&watcher_name, move |_token| …`（拿到 token 不检查）；`:1926/:2138/:2227` 均为 `move |token|` 真检查。**七个引用点全部命中，行号未漂**。",
+        "requirement": "剩下的裸 spawn 必须进监督者并持 token；`_token` 未用的那一站要么真检查、要么改回 spawn_unique 并说明自终止依据",
+        "task_ids": "P3-04",
+        "owner": "core:sessions",
+        "test": "退出后 late watcher 不得改新会话；无 GUI 时 watcher 仍收敛",
+        "status": "open",
+        "retriage_note": "原判据引用的 session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300 全部漂移（分别漂到 :1999 一带、:621、:299），且「无显式取消」在今天只对 1 站成立——P3-01 切片四（补记八十五）已把六站接进 WatcherSupervisor。owner 仍是 P3-04（未开工），故本条不改派，只把事实改准。 【2026-09-28 二次回源】DSH/OMP 两站行号又各漂 11 行（:621→:632、:299→:310），实质判定不变（两处闭包都真查 `token.is_cancelled()`）；`session.rs:1999` 的裸 `thread::spawn` 与 `:2360` 的 `move |_token|` 复算仍在原位。 同日 2026-09-29 复核：见 evidence 追加段。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G05",
+        "finding": "React 仍持有后端不知道的权威状态，2026-09-28 逐条核对后剩三处：`pendingTaskStartsRef`（App.tsx:201，延迟启动闭包，:1086 消费）→ P3-07 的无头入口必须能复现；`manuallyCompletedDshTasksRef`（App.tsx:204，抑制后端状态事件，:376 作为 isManuallyCompletedDsh 注入）→ P3-05；`remoteTaskMutationQueuesRef`（App.tsx:202 的串行 Promise 队列）→ P8-03。原列五项中的两项**不是缺陷**：`taskId.ts` 铸 ID 正是 ADR-013 定的「调用方给 uuidv7」；`projectMutations` 合成 project id 与 orderIndex 的权威已在 P2-03 的 core reorder/group 里。",
+        "evidence": "App.tsx:201/202/204/376/1086（当天 grep 计数 14 处引用）；taskId.ts:5 uuidv7、:10 兜底串；projectMutations.ts:87/93/121/127 orderIndex 仍在客户端合成 2026-09-29 逐行复跑：`App.tsx:201`＝`const pendingTaskStartsRef = useRef<Record<string, () => void>>({})`、`:202`＝`remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>())`、`:204`＝`manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set())`；`:1086` 仍是 `const startTask = pendingTaskStartsRef.current[taskId]`、`:376` 仍以 `isManuallyCompletedDsh: (taskId) => …has(taskId)` 注入。三处权威状态与行号一字未漂。",
+        "requirement": "这三处必须变成 host 侧状态或有 host 侧等价判决，否则无头入口语义不完整",
+        "task_ids": "P3-07, P3-05, P8-03",
+        "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
+        "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
+        "status": "open",
+        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G06",
+        "finding": "后端的行为仍由 React 决定，2026-09-28 逐条回源后剩三处：`src/taskFlush.ts:4` 的 `TASK_FLUSH_TIMEOUT_MS = 10_000`、`src/state/app/useAppMaintenance.ts:92` 的 `window.setInterval(…, 30 * 60 * 1000)` 自动清理、以及 DSH 宿主事件订阅的开关由 React 判——`src/state/app/useAppStartup.ts:90-105` 的 `useDshHostEventsSubscription(tasks, agentOptionsRef)`（`src/App.tsx:333` 调用）每次 `tasks` 变化都判一次『有没有活跃 dsh 任务』，据此 invoke `DSH_TASK_COMMANDS.startHostEvents` 或 `stopHostEvents`。**已闭合：原列的第一项「350ms per-project 去抖持久化」不复存在**——载体 `src/taskPersistence.ts` 由 P2-05 §12 接线删除，`src/taskIntentQueue.ts:4` 明写「不做 350 ms 快照合并」、`:237` 把微任务窗口称为旧防抖的意图版",
+        "evidence": "src/taskFlush.ts:4；src/state/app/useAppMaintenance.ts:92；useAppStartup.ts:90-105 + App.tsx:333（DSH 订阅开关，2026-09-28 核）；src/taskIntentQueue.ts:4,237（闭合证据）；原 evidence 里的 src/taskPersistence.ts:34 已随文件删除而失效（P2-05 补记八十） 2026-09-29 复跑：`src/taskFlush.ts:4`＝`export const TASK_FLUSH_TIMEOUT_MS = 10_000`；`src/state/app/useAppMaintenance.ts:92`＝`window.setInterval(() => void runCleanup(), 30 * 60 * 1000)`；DSH 订阅开关函数 `useDshHostEventsSubscription(tasks, agentOptionsRef)` 定义在 `useAppStartup.ts:90` 起、由 `src/App.tsx:333` 调用。三处计时/开关全部命中，行号未漂。",
+        "requirement": "改为 host 每次 mutation 即写；计时器归 core",
+        "task_ids": "P2-02, P2-04, P8-04",
+        "owner": "core:storage+maintenance",
+        "test": "崩溃夹在步骤中间须对账为 interrupted 而非重新 spawn；无窗口时清理仍按 opt-in 运行",
+        "status": "open",
+        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。第三条（DSH 订阅）本轮从『待核』改为准事实：**它不是计时器，是渲染驱动的宿主订阅开关**，且判据依赖前端 `agentFamily` 派生表——家系表变了宿主事件流会整条关断，这一点比『缺一个计时器』更接近 G05 的权威外溢。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G07",
+        "finding": "remote/server.rs:393 在存在任一已配对设备或任一配置的公网 endpoint 时绑定 0.0.0.0（默认端口 6790）",
+        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。",
+        "requirement": "host 侧必须保留同等保守的 scope 判定，不得因原生 IPC 改造而放宽",
+        "task_ids": "P3-06, P8-03",
+        "owner": "core:host+remote",
+        "test": "tests/ipc_auth.rs 断言 host 绝不监听 TCP 0.0.0.0；remote 能力只在显式开启时暴露",
+        "status": "open",
+        "verified_on": "2026-09-29",
+        "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立（引用已改准，非缺陷更正）"
+      }
+    ]
+  }
+}

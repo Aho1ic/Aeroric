@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import type { Project } from "../types";
 import { resolveProjectLocation, sshProjectPath, wslProjectPath } from "../types";
-import { deriveProjectName, normalizeRemotePath, normalizeWslProjectPath, upsertWslProject } from "../appProjectState";
+import {
+  deriveProjectName,
+  normalizeRemotePath,
+  normalizeWslProjectPath,
+  upsertWslProject,
+} from "../appProjectState";
 import { applyProjectOrder, normalizeProjectOrder, sortProjectsForRail } from "../projectOrder";
 import {
   groupProjectsForRail,
@@ -68,13 +73,22 @@ const CASES: Case[] = [
     name: "equal order indexes keep their original order",
     operation: "sortProjectsForRail",
     input: {
-      projects: [P({ id: "x", orderIndex: 1 }), P({ id: "y", orderIndex: 1 }), P({ id: "z", orderIndex: 1 })],
+      projects: [
+        P({ id: "x", orderIndex: 1 }),
+        P({ id: "y", orderIndex: 1 }),
+        P({ id: "z", orderIndex: 1 }),
+      ],
     },
   },
   {
     name: "a non-numeric order index is treated as missing",
     operation: "normalizeProjectOrder",
-    input: { projects: [P({ id: "s", orderIndex: "3" as unknown as number }), P({ id: "t", orderIndex: 0 })] },
+    input: {
+      projects: [
+        P({ id: "s", orderIndex: "3" as unknown as number }),
+        P({ id: "t", orderIndex: 0 }),
+      ],
+    },
   },
   {
     name: "a fractional order index survives untouched",
@@ -85,7 +99,11 @@ const CASES: Case[] = [
     name: "reordering by ids drops unknown ids and re-indexes the rest",
     operation: "applyProjectOrder",
     input: {
-      projects: [P({ id: "a", orderIndex: 0 }), P({ id: "b", orderIndex: 1 }), P({ id: "c", orderIndex: 2 })],
+      projects: [
+        P({ id: "a", orderIndex: 0 }),
+        P({ id: "b", orderIndex: 1 }),
+        P({ id: "c", orderIndex: 2 }),
+      ],
       orderedProjectIds: ["c", "ghost", "a"],
     },
   },
@@ -128,7 +146,11 @@ const CASES: Case[] = [
     name: "merge reports each group once",
     operation: "mergeProjectGroupNames",
     input: {
-      projects: [P({ id: "a", group: "Work" }), P({ id: "b", group: "Play" }), P({ id: "c", group: "Work" })],
+      projects: [
+        P({ id: "a", group: "Work" }),
+        P({ id: "b", group: "Play" }),
+        P({ id: "c", group: "Work" }),
+      ],
       configuredNames: ["Play"],
     },
   },
@@ -146,7 +168,10 @@ const CASES: Case[] = [
     name: "opening a new local project prepends and re-indexes",
     operation: "upsertLocalProject",
     input: {
-      projects: [P({ id: "1", path: "/repo/one", orderIndex: 0 }), P({ id: "2", path: "/repo/two", orderIndex: 1 })],
+      projects: [
+        P({ id: "1", path: "/repo/one", orderIndex: 0 }),
+        P({ id: "2", path: "/repo/two", orderIndex: 1 }),
+      ],
       path: "/repo/three",
       now: 1_700_000_009_999,
     },
@@ -155,7 +180,10 @@ const CASES: Case[] = [
     name: "reopening the same path touches it and keeps its place",
     operation: "upsertLocalProject",
     input: {
-      projects: [P({ id: "1", path: "/repo/one", orderIndex: 0 }), P({ id: "2", path: "/repo/two", orderIndex: 1 })],
+      projects: [
+        P({ id: "1", path: "/repo/one", orderIndex: 0 }),
+        P({ id: "2", path: "/repo/two", orderIndex: 1 }),
+      ],
       path: "/repo/two",
       now: 1_700_000_010_000,
     },
@@ -177,7 +205,11 @@ const CASES: Case[] = [
   {
     name: "case-differing paths stay distinct",
     operation: "upsertLocalProject",
-    input: { projects: [P({ id: "1", path: "/Repo/One", orderIndex: 0 })], path: "/repo/one", now: 1_700_000_013_000 },
+    input: {
+      projects: [P({ id: "1", path: "/Repo/One", orderIndex: 0 })],
+      path: "/repo/one",
+      now: 1_700_000_013_000,
+    },
   },
   {
     name: "ssh upsert matches on connection and path, not on the ssh:// string",
@@ -225,7 +257,10 @@ const CASES: Case[] = [
     name: "touch leaves the order alone",
     operation: "touchProjectInList",
     input: {
-      projects: [P({ id: "a", orderIndex: 0, lastOpenedAt: 1 }), P({ id: "b", orderIndex: 1, lastOpenedAt: 2 })],
+      projects: [
+        P({ id: "a", orderIndex: 0, lastOpenedAt: 1 }),
+        P({ id: "b", orderIndex: 1, lastOpenedAt: 2 }),
+      ],
       projectId: "b",
       now: 1_700_000_017_000,
     },
@@ -239,7 +274,11 @@ const CASES: Case[] = [
     name: "renaming a group moves every member and reports the change",
     operation: "renameProjectGroupInList",
     input: {
-      projects: [P({ id: "a", group: "Work" }), P({ id: "b", group: "Play" }), P({ id: "c", group: "Work" })],
+      projects: [
+        P({ id: "a", group: "Work" }),
+        P({ id: "b", group: "Play" }),
+        P({ id: "c", group: "Work" }),
+      ],
       oldName: "Work",
       nextName: "  Work 2026  ",
     },
@@ -257,7 +296,10 @@ const CASES: Case[] = [
   {
     name: "clearing a group empties its members",
     operation: "clearProjectGroupFromList",
-    input: { projects: [P({ id: "a", group: "Work" }), P({ id: "b", group: "Play" })], groupName: "Work" },
+    input: {
+      projects: [P({ id: "a", group: "Work" }), P({ id: "b", group: "Play" })],
+      groupName: "Work",
+    },
   },
   {
     name: "renaming a project keeps every other field",
@@ -286,15 +328,47 @@ const CASES: Case[] = [
   {
     name: "removing an avatar clears the key",
     operation: "setProjectAvatarInList",
-    input: { projects: [P({ id: "a", avatar: { emoji: "x" } })], projectId: "a", avatar: undefined },
+    input: {
+      projects: [P({ id: "a", avatar: { emoji: "x" } })],
+      projectId: "a",
+      avatar: undefined,
+    },
   },
-  { name: "deriveProjectName takes the last segment", operation: "deriveProjectName", input: { path: "/repo/app/" } },
-  { name: "deriveProjectName handles windows separators", operation: "deriveProjectName", input: { path: "C:\\repo\\app\\" } },
-  { name: "deriveProjectName keeps a bare separator as-is", operation: "deriveProjectName", input: { path: "/" } },
-  { name: "deriveProjectName keeps an empty path", operation: "deriveProjectName", input: { path: "" } },
-  { name: "normalizeRemotePath makes a path absolute", operation: "normalizeRemotePath", input: { path: " srv/app " } },
-  { name: "sshProjectPath prefixes the connection id", operation: "sshProjectPath", input: { connectionId: "c-1", remotePath: "/a/b" } },
-  { name: "wslProjectPath encodes the distribution", operation: "wslProjectPath", input: { distribution: "a b", linuxPath: "/x" } },
+  {
+    name: "deriveProjectName takes the last segment",
+    operation: "deriveProjectName",
+    input: { path: "/repo/app/" },
+  },
+  {
+    name: "deriveProjectName handles windows separators",
+    operation: "deriveProjectName",
+    input: { path: "C:\\repo\\app\\" },
+  },
+  {
+    name: "deriveProjectName keeps a bare separator as-is",
+    operation: "deriveProjectName",
+    input: { path: "/" },
+  },
+  {
+    name: "deriveProjectName keeps an empty path",
+    operation: "deriveProjectName",
+    input: { path: "" },
+  },
+  {
+    name: "normalizeRemotePath makes a path absolute",
+    operation: "normalizeRemotePath",
+    input: { path: " srv/app " },
+  },
+  {
+    name: "sshProjectPath prefixes the connection id",
+    operation: "sshProjectPath",
+    input: { connectionId: "c-1", remotePath: "/a/b" },
+  },
+  {
+    name: "wslProjectPath encodes the distribution",
+    operation: "wslProjectPath",
+    input: { distribution: "a b", linuxPath: "/x" },
+  },
   {
     name: "resolveProjectLocation defaults to local",
     operation: "resolveProjectLocation",
@@ -313,7 +387,12 @@ const CASES: Case[] = [
   {
     name: "resolveProjectLocation reads an ssh location",
     operation: "resolveProjectLocation",
-    input: { project: { ...P({ id: "s" }), location: { kind: "ssh", connectionId: "c", remotePath: "/r" } } },
+    input: {
+      project: {
+        ...P({ id: "s" }),
+        location: { kind: "ssh", connectionId: "c", remotePath: "/r" },
+      },
+    },
   },
 ];
 
@@ -394,9 +473,17 @@ function run(theCase: Case): unknown {
       return { project: r.project, projects: r.projects };
     }
     case "assignProjectGroup":
-      return assignProjectGroup(i.projects as Project[], i.projectId as string, i.groupName as string | null);
+      return assignProjectGroup(
+        i.projects as Project[],
+        i.projectId as string,
+        i.groupName as string | null,
+      );
     case "renameProjectGroupInList":
-      return renameProjectGroupInList(i.projects as Project[], i.oldName as string, i.nextName as string);
+      return renameProjectGroupInList(
+        i.projects as Project[],
+        i.oldName as string,
+        i.nextName as string,
+      );
     case "clearProjectGroupFromList":
       return clearProjectGroupFromList(i.projects as Project[], i.groupName as string);
     case "renameProjectInList":
@@ -406,7 +493,11 @@ function run(theCase: Case): unknown {
     case "toggleProjectPinnedInList":
       return toggleProjectPinnedInList(i.projects as Project[], i.projectId as string);
     case "setProjectAvatarInList":
-      return setProjectAvatarInList(i.projects as Project[], i.projectId as string, i.avatar as never);
+      return setProjectAvatarInList(
+        i.projects as Project[],
+        i.projectId as string,
+        i.avatar as never,
+      );
     case "deriveProjectName":
       return deriveProjectName(i.path as string);
     case "normalizeRemotePath":
@@ -454,7 +545,9 @@ describe("project behaviour is derived from the shipping client", () => {
       expect(storedNames.has(theCase.name), `${theCase.name} is not in the table`).toBe(true);
     }
     expect(CASES.length).toBe(stored.cases.length);
-    const declared = new Set(stored.cases.filter((row) => row.coreExpected !== undefined).map((row) => row.name));
+    const declared = new Set(
+      stored.cases.filter((row) => row.coreExpected !== undefined).map((row) => row.name),
+    );
     for (const name of Object.keys(CORE_DIVERGENCE)) {
       expect(declared.has(name), `${name} is declared as a divergence but not stored`).toBe(true);
     }

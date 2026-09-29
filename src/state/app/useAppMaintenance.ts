@@ -24,22 +24,21 @@ export function useStartupDegradationToasts(refs: MaintenanceRefs): void {
   const refsRef = useRef(refs);
   refsRef.current = refs;
   useEffect(() => {
-    readStartupDegradations()
-      .then((degradations) => {
-        for (const degradation of degradations) {
-          const isMemory = degradation.fallback === ":memory:";
-          const translate = refsRef.current.translateRef.current;
-          refsRef.current.showToastRef.current(
-            isMemory
-              ? translate("toast.startupDegradedMemory", { reason: degradation.reason })
-              : translate("toast.startupDegradedFallbackDir", {
-                  fallback: degradation.fallback,
-                  reason: degradation.reason,
-                }),
-            "warning",
-          );
-        }
-      })
+    readStartupDegradations().then((degradations) => {
+      for (const degradation of degradations) {
+        const isMemory = degradation.fallback === ":memory:";
+        const translate = refsRef.current.translateRef.current;
+        refsRef.current.showToastRef.current(
+          isMemory
+            ? translate("toast.startupDegradedMemory", { reason: degradation.reason })
+            : translate("toast.startupDegradedFallbackDir", {
+                fallback: degradation.fallback,
+                reason: degradation.reason,
+              }),
+          "warning",
+        );
+      }
+    });
   }, []);
 }
 

@@ -4,7 +4,8 @@
     "rule": "topic = <first segment of the legacy channel>.<remaining segments joined with _>; a one-segment channel lands under events.",
     "exceptions": "only rows carrying `source` may break the rule, and `source` must name a document line.",
     "legacyDirection": "what the frozen emitters/listeners prove about the OLD channel (`unproven` = neither side is Rust); plannedDirection is what v1 will do, and only mapped rows may state it.",
-    "ownerOfPending": "每行 pending 的 Task 就是它的接线责任人：发射点在哪，桥就谁接（2026-09-28 T1=A 按 command-map.json 的 events[].emitters[] 实际发射点重排，见 docs/native/extraction/event-topics-pending.md）。pending: P3-04 只剩 sessions/usage 两条，P3-04 不再是全表的收口人。"
+    "ownerOfPending": "每行 pending 的 Task 就是它的接线责任人：发射点在哪，桥就谁接（2026-09-28 T1=A 按 command-map.json 的 events[].emitters[] 实际发射点重排，见 docs/native/extraction/event-topics-pending.md）。pending: P3-04 只剩 sessions/usage 两条，P3-04 不再是全表的收口人。",
+    "emittersZeroMeans": "evidence.emitters 只数字面量发射，因此 11 条经变量或结构体字段发射的旧通道会被记成 `legacyOrphan: listened-without-emitter`——那是扫描口径，不是运行时事实。真实发射点逐条记在 `docs/native/command-map.json` 的 events[].note（2026-09-28 重导并对过行号）：`dispatch_host_frame` 的 10 臂映射 → 8 条 `dsh-host-*`（dsh_webui.rs:3066-3075，emit 在 :3079）、`ExitAction::event_name()` → `app-exit-requested`/`app-restart-requested`（lib.rs:177-178，emit 在 :237）、`OutputSink::Event{event_name}` → `shell-output`（名字绑在 pty.rs:2786，emit 在 :462）。改派生本身（让扫描认得变量发射）归 P3-05（其中 8 条的宿主本体）与 P3-06（app 两条），本轮只记账不代改。"
   },
   "count": 39,
   "legacyChannels": 38,

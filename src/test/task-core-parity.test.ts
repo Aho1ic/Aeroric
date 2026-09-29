@@ -23,10 +23,7 @@ import { describe, expect, it } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import {
-  applyResolvedTaskSession,
-  rollbackTaskMutation,
-} from "../state/app/taskLifecycle";
+import { applyResolvedTaskSession, rollbackTaskMutation } from "../state/app/taskLifecycle";
 import { applyTaskStatusTransition } from "../state/app/taskStatus";
 import {
   archiveTasksInList,
@@ -58,9 +55,7 @@ import type { AutoCleanupSettings } from "../components/app-settings/types";
 
 // vitest runs from the repository root, the same convention `project-core-parity.test.ts`
 // uses, so the generated table has one spelling on both sides of the gate.
-const KNOWLEDGE = resolve(
-  "core/crates/aeroric-protocol/knowledge/task-parity-cases.json",
-);
+const KNOWLEDGE = resolve("core/crates/aeroric-protocol/knowledge/task-parity-cases.json");
 
 const WRITE = process.env.AERORIC_WRITE_TASK_EXPECTATIONS === "1";
 
@@ -112,8 +107,24 @@ const BUILT_IN_OPTIONS = BUILT_IN_AGENT_IDS.map((id) => {
 
 const OPTIONS: AgentOption[] = [
   ...BUILT_IN_OPTIONS,
-  { value: "my-claude", label: "My Claude", configFile: "", configLang: "json", codexLike: false, family: "claude", custom: true },
-  { value: "my-codex", label: "My Codex", configFile: "", configLang: "toml", codexLike: true, family: "codex", custom: true },
+  {
+    value: "my-claude",
+    label: "My Claude",
+    configFile: "",
+    configLang: "json",
+    codexLike: false,
+    family: "claude",
+    custom: true,
+  },
+  {
+    value: "my-codex",
+    label: "My Codex",
+    configFile: "",
+    configLang: "toml",
+    codexLike: true,
+    family: "codex",
+    custom: true,
+  },
 ] as AgentOption[];
 
 /** Read through the client's own predicate, so the flag cannot drift from the rule. */
@@ -497,13 +508,34 @@ for (const [name, row] of Object.entries(sessionRecords)) {
 }
 
 const resumeRecords: Record<string, { task: Row; target: string }> = {
-  builtinsTrustEachOther: { task: task({ id: "r1", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }), target: "claude_gpt55" },
-  customNeedsSameId: { task: task({ id: "r2", agent: "my-claude", claudeSessionId: "c", sessionFamily: "claude" }), target: "claude" },
-  customToSameCustom: { task: task({ id: "r3", agent: "my-codex", codexSessionId: "x", sessionFamily: "codex" }), target: "my-codex" },
-  dshToDsh: { task: task({ id: "r4", agent: "dsh", dshSessionId: "d", sessionFamily: "dsh" }), target: "dsh" },
-  ompToOmp: { task: task({ id: "r5", agent: "omp", ompSessionId: "o", sessionFamily: "omp" }), target: "omp" },
-  crossFamily: { task: task({ id: "r6", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }), target: "codex" },
-  adoptCase: { task: task({ id: "r7", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }), target: "my-claude" },
+  builtinsTrustEachOther: {
+    task: task({ id: "r1", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }),
+    target: "claude_gpt55",
+  },
+  customNeedsSameId: {
+    task: task({ id: "r2", agent: "my-claude", claudeSessionId: "c", sessionFamily: "claude" }),
+    target: "claude",
+  },
+  customToSameCustom: {
+    task: task({ id: "r3", agent: "my-codex", codexSessionId: "x", sessionFamily: "codex" }),
+    target: "my-codex",
+  },
+  dshToDsh: {
+    task: task({ id: "r4", agent: "dsh", dshSessionId: "d", sessionFamily: "dsh" }),
+    target: "dsh",
+  },
+  ompToOmp: {
+    task: task({ id: "r5", agent: "omp", ompSessionId: "o", sessionFamily: "omp" }),
+    target: "omp",
+  },
+  crossFamily: {
+    task: task({ id: "r6", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }),
+    target: "codex",
+  },
+  adoptCase: {
+    task: task({ id: "r7", agent: "claude", claudeSessionId: "c", sessionFamily: "claude" }),
+    target: "my-claude",
+  },
 };
 
 for (const [name, item] of Object.entries(resumeRecords)) {
@@ -544,10 +576,18 @@ add({
 
 /* ---------------------------------------------------------------- resolved session */
 
-const sessionShapes: Array<[string, Row, { agent: string; codexLike: boolean; family?: string }, Row]> = [
+const sessionShapes: Array<
+  [string, Row, { agent: string; codexLike: boolean; family?: string }, Row]
+> = [
   [
     "apply:codex fills only codex fields",
-    task({ id: "a", agent: "codex", claudeSessionId: "stale", dshSessionId: "d", ompSessionId: "o" }),
+    task({
+      id: "a",
+      agent: "codex",
+      claudeSessionId: "stale",
+      dshSessionId: "d",
+      ompSessionId: "o",
+    }),
     { agent: "codex", codexLike: true, family: "codex" },
     { sessionId: "x-1", sessionPath: "/x.jsonl" },
   ],
@@ -622,7 +662,14 @@ const retentionRows: Row[] = [
   task({ id: "starred", status: "done", createdAt: 0, completedAt: 0, starred: true }),
   task({ id: "archived", status: "done", createdAt: 0, completedAt: 0, archivedAt: 1 }),
   task({ id: "worktree", status: "done", createdAt: 0, completedAt: 0, worktreePath: "/w" }),
-  task({ id: "worktree-discarded", status: "done", createdAt: 0, completedAt: 0, worktreePath: "/w", worktreeDiscarded: true }),
+  task({
+    id: "worktree-discarded",
+    status: "done",
+    createdAt: 0,
+    completedAt: 0,
+    worktreePath: "/w",
+    worktreeDiscarded: true,
+  }),
   task({ id: "recent", status: "done", createdAt: 0, completedAt: localTime(2026, 9, 13, 12) }),
   task({ id: "legacy-no-completed", status: "done", createdAt: 0 }),
   task({ id: "empty-worktree", status: "done", createdAt: 0, completedAt: 0, worktreePath: "" }),
@@ -653,20 +700,51 @@ add({
 });
 
 for (const [name, value] of Object.entries({
-  intervalDue: settings({ mode: "interval", interval_days: 7, last_run_at: localTime(2026, 9, 7, 12) }),
-  intervalAlmost: settings({ mode: "interval", interval_days: 7, last_run_at: localTime(2026, 9, 8, 12) }),
+  intervalDue: settings({
+    mode: "interval",
+    interval_days: 7,
+    last_run_at: localTime(2026, 9, 7, 12),
+  }),
+  intervalAlmost: settings({
+    mode: "interval",
+    interval_days: 7,
+    last_run_at: localTime(2026, 9, 8, 12),
+  }),
   intervalNoRun: settings({ mode: "interval", interval_days: 7 }),
   disabled: settings({ enabled: false, mode: "interval", last_run_at: 0 }),
-  weeklyPast: settings({ mode: "weekly", weekday: 0, hour: 20, last_run_at: localTime(2026, 9, 11, 9) }),
-  weeklySameSlot: settings({ mode: "weekly", weekday: 0, hour: 20, last_run_at: localTime(2026, 9, 13, 20, 5) }),
-  weeklyBeforeSlot: settings({ mode: "weekly", weekday: 0, hour: 20, last_run_at: localTime(2026, 9, 7, 10) }),
-  weeklyCatchUp: settings({ mode: "weekly", weekday: 0, hour: 20, last_run_at: localTime(2026, 9, 6, 21) }),
+  weeklyPast: settings({
+    mode: "weekly",
+    weekday: 0,
+    hour: 20,
+    last_run_at: localTime(2026, 9, 11, 9),
+  }),
+  weeklySameSlot: settings({
+    mode: "weekly",
+    weekday: 0,
+    hour: 20,
+    last_run_at: localTime(2026, 9, 13, 20, 5),
+  }),
+  weeklyBeforeSlot: settings({
+    mode: "weekly",
+    weekday: 0,
+    hour: 20,
+    last_run_at: localTime(2026, 9, 7, 10),
+  }),
+  weeklyCatchUp: settings({
+    mode: "weekly",
+    weekday: 0,
+    hour: 20,
+    last_run_at: localTime(2026, 9, 6, 21),
+  }),
   weeklyNoRun: settings({ mode: "weekly", weekday: 0, hour: 20 }),
 })) {
   const now =
-    name === "weeklyBeforeSlot" ? localTime(2026, 9, 13, 19, 59)
-      : name === "weeklyCatchUp" ? localTime(2026, 9, 14, 9)
-        : name === "weeklySameSlot" ? localTime(2026, 9, 13, 23)
+    name === "weeklyBeforeSlot"
+      ? localTime(2026, 9, 13, 19, 59)
+      : name === "weeklyCatchUp"
+        ? localTime(2026, 9, 14, 9)
+        : name === "weeklySameSlot"
+          ? localTime(2026, 9, 13, 23)
           : localTime(2026, 9, 13, 20, 1);
   add({
     id: `cleanup:${name}`,
@@ -740,7 +818,14 @@ function runCase(op: string, input: Record<string, unknown>): unknown {
   const tasks = () => (input.tasks as Row[]).map(asTask);
   switch (op) {
     case "applyTaskStatusTransition": {
-      const { tasks: list, taskId, status, extra, failureReason, now } = input as {
+      const {
+        tasks: list,
+        taskId,
+        status,
+        extra,
+        failureReason,
+        now,
+      } = input as {
         tasks: Row[];
         taskId: string;
         status: TaskStatus;
@@ -776,7 +861,11 @@ function runCase(op: string, input: Record<string, unknown>): unknown {
     case "renameTaskInList":
       return renameTaskInList(tasks(), input.taskId as string, input.name as string);
     case "rollbackTaskMutation":
-      return rollbackTaskMutation(asTask(input.current), asTask(input.previous), asTask(input.applied));
+      return rollbackTaskMutation(
+        asTask(input.current),
+        asTask(input.previous),
+        asTask(input.applied),
+      );
     case "applyResolvedTaskSession":
       return applyResolvedTaskSession(
         asTask(input.task),
@@ -786,10 +875,7 @@ function runCase(op: string, input: Record<string, unknown>): unknown {
     case "resolveTaskSessionOwner":
       return resolveTaskSessionOwner(asTask(input.task), input.options as AgentOption[]);
     case "getTaskSessionFieldsByFamily":
-      return getTaskSessionFieldsByFamily(
-        asTask(input.task),
-        input.family as never,
-      );
+      return getTaskSessionFieldsByFamily(asTask(input.task), input.family as never);
     case "hasTaskSession":
       return hasTaskSession(asTask(input.task));
     case "hasTaskSessionPath":
@@ -820,10 +906,7 @@ function runCase(op: string, input: Record<string, unknown>): unknown {
     case "expiredTaskIds":
       return expiredTaskIds(tasks(), input.settings as AutoCleanupSettings, input.nowMs as number);
     case "shouldRunCleanup":
-      return shouldRunCleanup(
-        input.settings as AutoCleanupSettings,
-        input.nowMs as number,
-      );
+      return shouldRunCleanup(input.settings as AutoCleanupSettings, input.nowMs as number);
     case "stripTerminalControlSequences":
       return stripTerminalControlSequences(input.value as string);
     case "sanitizeTerminalHistoryForHandoff":
@@ -835,7 +918,12 @@ function runCase(op: string, input: Record<string, unknown>): unknown {
 
 const computed = CASES.map((item) => ({ ...item, expected: runCase(item.op, item.input) }));
 
-function keyOf(item: { id: string; op: string; input: Record<string, unknown>; expected?: unknown }) {
+function keyOf(item: {
+  id: string;
+  op: string;
+  input: Record<string, unknown>;
+  expected?: unknown;
+}) {
   return JSON.stringify({ id: item.id, op: item.op, input: item.input, expected: item.expected });
 }
 

@@ -135,7 +135,10 @@ interface Fixture {
   onInvoke?: (command: string, args?: Record<string, unknown>) => unknown | undefined;
 }
 
-let activeFake: { savedTasksFor: (projectId: string) => Task[]; store: Record<string, Task[]> } | null = null;
+let activeFake: {
+  savedTasksFor: (projectId: string) => Task[];
+  store: Record<string, Task[]>;
+} | null = null;
 
 // 整表快照写退役后，任务侧的落盘调用点 = 意图 + 换体后的启动命令（命令体内 core 先落盘）。
 const TASK_SAVE_COMMANDS = new Set([
@@ -796,7 +799,12 @@ describe("remote-task-request:create", () => {
     expect(realReplies()).toHaveLength(2);
     expect(realReplies().every((reply) => reply.accepted)).toBe(true);
     const finalTasks = finalTasksFor("p1");
-    expect(invokeMock.mock.calls.some(([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1"), "并发创建必须真的落过盘").toBe(true);
+    expect(
+      invokeMock.mock.calls.some(
+        ([c, a]) => isTaskSave(c) && (a as { projectId?: string })?.projectId === "p1",
+      ),
+      "并发创建必须真的落过盘",
+    ).toBe(true);
     expect(finalTasks.map((item) => item.prompt)).toEqual(
       expect.arrayContaining(["first task", "second task"]),
     );

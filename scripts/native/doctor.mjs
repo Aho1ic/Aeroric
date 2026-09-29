@@ -34,7 +34,13 @@ check("Node", ["node", "--version"]);
 check("pnpm", ["pnpm", "--version"]);
 check("python3 for Trellis scripts", ["python3", "--version"]);
 check("Trellis CLI", ["trellis", "--version"]);
-check("XcodeGen (needed by native:generate)", ["xcodegen", "--version"]);
+check(
+  "XcodeGen (needed by native:generate, version pinned in docs/native/tooling.md §5)",
+  ["xcodegen", "--version"],
+  // Three documents promise P4-01 must use this exact generator version; without the match this check
+  // accepted any exit-0, so a brew upgrade would silently change what native:generate emits.
+  { match: /2\.46\.0/ },
+);
 
 const dbxPinPath = path.join(repoRoot, "scripts", "dbx-ref.txt");
 if (existsSync(dbxPinPath)) {

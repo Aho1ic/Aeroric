@@ -147,11 +147,16 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
     }
     if (frozen.orphan !== current.orphan) problems.push(`${frozen.name}: orphan state drifted (frozen ${frozen.orphan}, live ${current.orphan})`);
   }
-  const liveDynamicEmits = (live.unresolved.dynamic_emitters ?? []).length;
-  const frozenDynamicEmits = (map.event_dynamic_emit_sites ?? []).length;
-  if (liveDynamicEmits !== frozenDynamicEmits) {
-    problems.push(`dynamic emit sites drifted: frozen ${frozenDynamicEmits}, live ${liveDynamicEmits} — re-run --freeze after reviewing why a name became unresolvable`);
-  }
+  problems.push(...dynamicSiteProblems({
+    kind: "dynamic emit sites",
+    live: live.unresolved.dynamic_emitters,
+    frozen: map.event_dynamic_emit_sites,
+  }));
+  problems.push(...dynamicSiteProblems({
+    kind: "dynamic listen sites",
+    live: live.unresolved.dynamic_listeners,
+    frozen: map.event_dynamic_listen_sites,
+  }));
 
   // ---- settings panels ----
   const livePanels = extractPanels({ repoRoot: scanRoot });
@@ -166,6 +171,14 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
   for (const panel of frozenPanels) {
     if (!panel.target_scene || !panel.task_ids) problems.push(`panel ${panel.key}: missing target_scene or task_ids`);
   }
+  // A frozen `at` is a citation. Before this line the count and the keys were checked
+  // but not the citation, so a panel could keep "pointing at" a line it no longer is.
+  problems.push(...panelDriftProblems(livePanels, frozenPanels));
+  problems.push(...moduleTableProblems({
+    commands: map.commands ?? [],
+    table: map.modules,
+    categoryResolution: map.meta?.category_resolution,
+  }));
 
   // ---- G10: every command must resolve to one real definition in its module ----
   for (const command of mapped.values()) {
@@ -294,6 +307,13 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
         problems.push(`${command.rust_path}: wire leaf is not the legacy command name "${command.command}" (ADR-002 keeps them verbatim equal)`);
       }
     }
+    // Read the plan ONCE for every task-heading lookup below. The loops that follow run over
+    // ~660 command rows and used to `read()` the whole plan (≈1 MB today) per `pending:` row, which made
+    // `inventory-unit` swing 5–16 s on FS-cache warmth and time out at the 300 s case budget.
+    // Headings are matched at line start: prose that quotes "### Task P#-#" must not satisfy the check.
+    const taskHeadings = new Set(
+      [...read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8").matchAll(/^### Task (P\d+-\d+) /gm)].map((m) => m[1]),
+    );
     const seenModules = new Set(map.commands.map((c) => c.rust_path.split("::")[0]));
     for (const mod of Object.keys(rpcRes.module_to_service)) {
       if (!seenModules.has(mod)) problems.push(`rpc_resolution maps module "${mod}" that no longer has commands`);
@@ -307,7 +327,7 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
       } else if (evidence.startsWith("pending:")) {
         const task = evidence.slice("pending:".length).trim();
         if (!/^P\d+-\d+$/.test(task)) problems.push(`${command.rust_path}: pending caller evidence must name a task id, got "${task}"`);
-        else if (!new RegExp(`### Task ${task} `).test(read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8"))) {
+        else if (!taskHeadings.has(task)) {
           problems.push(`${command.rust_path}: pending evidence points at ${task}, which is not a Task in MIGRATION_PLAN.md`);
         }
       } else if (!evidence.startsWith("proven:")) {
@@ -335,7 +355,7 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
       if (evidence.startsWith("pending:")) {
         const task = evidence.slice("pending:".length).trim().split(/\s/)[0];
         if (!/^P\d+-\d+$/.test(task)) problems.push(`${command.rust_path}: pending evidence must name a task id, got "${task}"`);
-        else if (!new RegExp(`### Task ${task} `).test(read(path.join(planRoot, "MIGRATION_PLAN.md"), "utf8"))) {
+        else if (!taskHeadings.has(task)) {
           problems.push(`${command.rust_path}: pending evidence points at ${task}, which is not a Task in MIGRATION_PLAN.md`);
         }
       } else if (!evidence.startsWith("proven:")) {
@@ -443,6 +463,7 @@ export function check({ repoRoot = defaultRoot, sourceRoot, readFile, names } = 
         }
       }
     }
+    problems.push(...panelTaskIdProblems(map.panels ?? [], taskUniverseIds));
   }
 
   return {
@@ -643,6 +664,94 @@ function walkAny(dir, extensions, out = []) {
 const INVOKE_START = /(?<![A-Za-z0-9_$])(?:invoke|invokeCancellable)(?![A-Za-z0-9_$])/g;
 
 /** Command-name string literals passed straight to invoke() from the frontend. */
+/**
+ * The three accountability helpers below exist as pure functions on purpose: the
+ * negative tests must be able to feed them a contradiction directly. A throwaway
+ * tree cannot reproduce "the live scan found 29 sites and the frozen file lists 29
+ * different ones" — that is exactly the state a count-only check passes.
+ */
+export function dynamicSiteProblems({ kind, live, frozen }) {
+  const problems = [];
+  const l = [...new Set(live ?? [])];
+  const f = [...new Set(frozen ?? [])];
+  if (!f.length && l.length) return [`${kind}: no frozen sites recorded — run --freeze`];
+  const missing = l.filter((s) => !f.includes(s));
+  const extra = f.filter((s) => !l.includes(s));
+  if (missing.length) {
+    problems.push(`${kind}: ${missing.length} live site(s) absent from the frozen list — ${missing.slice(0, 3).join(" | ")}`);
+  }
+  if (extra.length) {
+    problems.push(`${kind}: ${extra.length} frozen site(s) not reproduced by the live scan — ${extra.slice(0, 3).join(" | ")} (a drifted file:line inside one of these strings reads as "recorded verbatim" while pointing nowhere)`);
+  }
+  return problems;
+}
+
+/** Panels: `key`/`via`/`at` are derived, the rest is the human routing decision. */
+export function panelDriftProblems(livePanels, frozenPanels) {
+  const live = new Map((livePanels ?? []).map((p) => [p.key, p]));
+  const problems = [];
+  for (const panel of frozenPanels ?? []) {
+    const found = live.get(panel.key);
+    if (!found) continue;
+    for (const field of ["via", "at"]) {
+      if (panel[field] !== found[field]) {
+        problems.push(`panel ${panel.key}: ${field} drifted (frozen ${JSON.stringify(panel[field])}, live ${JSON.stringify(found[field])}) — re-run --freeze`);
+      }
+    }
+  }
+  return problems;
+}
+
+export function panelTaskIdProblems(panels, universe) {
+  const problems = [];
+  for (const panel of panels ?? []) {
+    for (const id of String(panel.task_ids ?? "").match(/P\d+-\d+/g) ?? []) {
+      if (!universe.has(id)) {
+        problems.push(`panel ${panel.key}: task_ids names ${id}, which is not a Task heading in MIGRATION_PLAN.md`);
+      }
+    }
+  }
+  return problems;
+}
+
+/**
+ * The `modules` rollup is a summary of the command rows, so every column of it must be
+ * a value its own rows actually carry. Deliberately convention-free: a root-level
+ * command (no `::`) is `(crate_root)` in this table but its own key in
+ * `category_resolution.module_default`, and that disagreement is an open question —
+ * so those modules are skipped rather than forced into either answer.
+ */
+export function moduleTableProblems({ commands, table, categoryResolution }) {
+  const problems = [];
+  const byModule = new Map();
+  for (const command of commands ?? []) {
+    const mod = String(command.rust_path ?? "").split("::")[0];
+    if (!String(command.rust_path ?? "").includes("::")) continue;
+    if (!byModule.has(mod)) byModule.set(mod, []);
+    byModule.get(mod).push(command);
+  }
+  for (const [mod, entry] of Object.entries(table ?? {})) {
+    const rows = byModule.get(mod);
+    if (!rows) continue;
+    for (const field of ["category", "core_service", "swift_scene", "check_module"]) {
+      const claimed = entry?.[field];
+      if (claimed === undefined || claimed === null) {
+        problems.push(`modules.${mod}: column "${field}" is missing although ${rows.length} command row(s) carry it`);
+        continue;
+      }
+      const actual = new Set(rows.map((r) => r[field]).filter((v) => v !== undefined && v !== null));
+      if (!actual.has(claimed)) {
+        problems.push(`modules.${mod}.${field} ${JSON.stringify(claimed)} is not a value any of its ${rows.length} command rows carry (seen: ${[...actual].slice(0, 4).map((v) => JSON.stringify(v)).join(", ")})`);
+      }
+    }
+    const def = categoryResolution?.module_default?.[mod];
+    if (def !== undefined && entry?.category !== def) {
+      problems.push(`modules.${mod}.category ${JSON.stringify(entry?.category)} contradicts the audited module_default ${JSON.stringify(def)}`);
+    }
+  }
+  return problems;
+}
+
 export function extractInvokeLiterals({ repoRoot = defaultRoot } = {}) {
   const out = [];
   for (const file of walkAny(path.join(repoRoot, "src"), [".ts", ".tsx"]).filter((f) => !isTestFile(relOf(repoRoot, f)))) {

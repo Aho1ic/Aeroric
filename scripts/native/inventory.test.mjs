@@ -4,7 +4,18 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writ
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { check, extractSignature, freeze, parseCommandDefinitions, parseRegistry, renderParams } from "./inventory.mjs";
+import {
+  check,
+  dynamicSiteProblems,
+  moduleTableProblems,
+  extractSignature,
+  freeze,
+  parseCommandDefinitions,
+  panelDriftProblems,
+  panelTaskIdProblems,
+  parseRegistry,
+  renderParams,
+} from "./inventory.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mapPath = path.join(repoRoot, "docs/native/command-map.json");
@@ -131,12 +142,28 @@ test("a panel with no native target must fail", () => {
   } finally { cleanup(); }
 });
 
-test("drift in the recorded dynamic emit sites must fail", () => {
+test("an emptied dynamic emit site list is reported instead of passing vacuously", () => {
   const { dir, cleanup } = tempTree((map) => { map.event_dynamic_emit_sites = []; });
   try {
     const result = check({ repoRoot: dir, sourceRoot: repoRoot });
     assert.equal(result.ok, false);
-    assert.ok(result.problems.some((p) => p.includes("dynamic emit sites drifted")), result.problems.join("|"));
+    assert.ok(result.problems.some((p) => p.includes("dynamic emit sites: no frozen sites recorded")), result.problems.join("|"));
+  } finally { cleanup(); }
+});
+
+test("rewriting one dynamic emit site\u2019s path fails even though the count is unchanged", () => {
+  // The old check compared two lengths, so this state — same number of sites, one of
+  // them pointing at a path that does not exist — was invisible.
+  const { dir, cleanup } = tempTree((map) => {
+    assert.ok(map.event_dynamic_emit_sites.length > 1, "fixture expected several recorded sites");
+    map.event_dynamic_emit_sites[0] = map.event_dynamic_emit_sites[0].replace("@ src-tauri/", "@ ../dbx/src-tauri/");
+  });
+  try {
+    const result = check({ repoRoot: dir, sourceRoot: repoRoot });
+    const hits = result.problems.filter((p) => p.includes("dynamic emit sites"));
+    assert.ok(hits.length, result.problems.join("|"));
+    assert.ok(hits.some((p) => /not reproduced by the live scan/.test(p)), hits.join("|"));
+    assert.ok(!/frozen 29, live 29/.test(hits.join("|")), "a count-only report means the set compare never ran");
   } finally { cleanup(); }
 });
 
@@ -601,4 +628,74 @@ test("the committed gap ledger passes the owner rule", () => {
   const result = check({ repoRoot });
   assert.equal(result.ok, true, result.problems.slice(0, 5).join("\n"));
   assert.deepEqual(result.problems.filter((p) => /^G\d+:/.test(p)), []);
+});
+test("a frozen dynamic site whose file:line moved is caught even though the count matches", () => {
+  const live = ["Stage::Detecting @ src-tauri/src/agent_tools.rs:1812"];
+  const frozen = ["Stage::Detecting @ ../dbx/src-tauri/src/agent_tools.rs:1812"];
+  const problems = dynamicSiteProblems({ kind: "dynamic emit sites", live, frozen });
+  assert.equal(problems.length, 2, problems.join("\n"));
+  assert.match(problems.join("\n"), /1 live site\(s\) absent/);
+  assert.match(problems.join("\n"), /1 frozen site\(s\) not reproduced/);
+});
+
+test("identical dynamic site sets raise nothing", () => {
+  const s = ["A @ f.rs:1", "B @ f.rs:2"];
+  assert.deepEqual(dynamicSiteProblems({ kind: "dynamic listen sites", live: s, frozen: [...s] }), []);
+});
+
+test("an empty frozen site list is reported instead of passing vacuously", () => {
+  assert.match(dynamicSiteProblems({ kind: "dynamic emit sites", live: ["A @ f.rs:1"], frozen: [] }).join("\n"),
+    /no frozen sites recorded/);
+});
+
+test("a panel citation that no longer matches the registry is reported", () => {
+  const live = [{ key: "general", via: "literal", at: "src/x/panelRegistry.tsx:185" }];
+  const frozen = [{ key: "general", via: "literal", at: "src/x/panelRegistry.tsx:99999" }];
+  assert.match(panelDriftProblems(live, frozen).join("\n"), /panel general: at drifted/);
+});
+
+test("panel task_ids must name a real Task heading", () => {
+  const universe = new Set(["P5-02", "P5-05"]);
+  const problems = panelTaskIdProblems([{ key: "general", task_ids: "P99-99, P5-02" }], universe);
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], /panel general: task_ids names P99-99/);
+});
+
+test("a derived panel field is not flagged when only the human routing columns differ", () => {
+  const live = [{ key: "general", via: "literal", at: "src/x/panelRegistry.tsx:185" }];
+  const frozen = [{ key: "general", via: "literal", at: "src/x/panelRegistry.tsx:185", target_scene: "X", task_ids: "P5-02" }];
+  assert.deepEqual(panelDriftProblems(live, frozen), []);
+});
+test("a module summary claiming a value none of its rows carry is reported", () => {
+  const commands = [
+    { rust_path: "pty::run_task", category: "domain_rpc", core_service: "runtime+terminal", swift_scene: "A", check_module: "terminal-core" },
+    { rust_path: "pty::kill_shell", category: "domain_rpc", core_service: "runtime+terminal", swift_scene: "A", check_module: "terminal-core" },
+  ];
+  const table = { pty: { category: "bogus", core_service: "runtime+terminal", swift_scene: "A", check_module: "terminal-core" } };
+  const problems = moduleTableProblems({ commands, table, categoryResolution: { module_default: { pty: "domain_rpc" } } });
+  assert.ok(problems.some((p) => /modules\.pty\.category "bogus" is not a value any of its 2 command rows carry/.test(p)), problems.join("\n"));
+  assert.ok(problems.some((p) => /contradicts the audited module_default/.test(p)), problems.join("\n"));
+});
+
+test("a drifted module core_service is reported even though the command rows are untouched", () => {
+  const commands = [{ rust_path: "git::git_status", category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" }];
+  const table = { git: { category: "domain_rpc", core_service: "nonexistent::service", swift_scene: "S", check_module: "git" } };
+  const problems = moduleTableProblems({ commands, table, categoryResolution: { module_default: { git: "domain_rpc" } } });
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], /modules\.git\.core_service/);
+});
+
+test("a module with a genuinely diverse column still passes when it names one of its values", () => {
+  const commands = [
+    { rust_path: "git::git_status", category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" },
+    { rust_path: "git::git_worktree_add", category: "domain_rpc", core_service: "git::worktree", swift_scene: "S", check_module: "worktree" },
+  ];
+  const table = { git: { category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" } };
+  assert.deepEqual(moduleTableProblems({ commands, table, categoryResolution: { module_default: { git: "domain_rpc" } } }), []);
+});
+
+test("root-level commands are skipped instead of forcing the open convention question", () => {
+  const commands = [{ rust_path: "hide_main_window", category: "host_local_os_ui", core_service: "platform", swift_scene: "S", check_module: "shell" }];
+  const problems = moduleTableProblems({ commands, table: { "(crate_root)": { category: "domain_rpc" } }, categoryResolution: { module_default: {} } });
+  assert.deepEqual(problems, [], "the crate-root disagreement is F5\u2019s open decision, not this check\u2019s");
 });

@@ -1,18 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { absenceControlFailure, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
+import { absenceControlFailure, caseSkipReason, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const goodCase = { name: "does-something", kind: "gate", argv: ["node", "-e", "0"] };
 const committed = JSON.parse(readFileSync(path.join(repoRoot, "scripts", "native", "checks.json"), "utf8"));
 
 /** Run the real runner in a throwaway tree against a module defined on the fly. */
-function runGateAgainst(moduleName, definition) {
+function runGateAgainst(moduleName, definition, extraEnv) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-gate-"));
   try {
     mkdirSync(path.join(dir, "scripts/native"), { recursive: true });
@@ -22,7 +22,10 @@ function runGateAgainst(moduleName, definition) {
     const config = JSON.parse(JSON.stringify(committed));
     config.modules[moduleName] = definition;
     writeFileSync(path.join(dir, "scripts/native/checks.json"), JSON.stringify(config, null, 2) + "\n");
-    return spawnSync(process.execPath, [path.join(dir, "scripts/native/check.mjs"), moduleName], { encoding: "utf8" });
+    return spawnSync(process.execPath, [path.join(dir, "scripts/native/check.mjs"), moduleName], {
+      encoding: "utf8",
+      env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -276,5 +279,120 @@ test("'all' still refuses while the committed matrix is incomplete", () => {
     assert.match(result.stderr, /NOT READY/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Opt-in skips. Measured hole (2026-09-29, ledger G19/G20/G24): the module-level
+// `native:check tauri-adapter` ran `src-tauri-lib-tests` + `adapter-acceptance-real-kernel`,
+// which rewrote three real `~/.aeroric/agent-credentials/*` sidecars and appended forged
+// `invite-created` rows to the real remote-access audit log. The gate must be able to say
+// "this case only runs on a scratch home" without ever turning a skip into a pass.
+const optedIn = (marker) => ({
+  name: "opt-in-writer", kind: "gate",
+  argv: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)},"ran")`],
+  optInEnv: "AERORIC_ALLOW_REAL_HOME_TESTS",
+  optInReason: "writes the real ~/.aeroric",
+});
+
+test("an opt-in case is skipped while its switch is unset, and the skip is disclosed", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-optin-"));
+  const marker = path.join(dir, "ran");
+  try {
+    const result = runGateAgainst("optin", { cases: [goodCase, optedIn(marker)] });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /SKIP \(opt-in\): opt-in-writer/);
+    assert.match(result.stdout, /set AERORIC_ALLOW_REAL_HOME_TESTS=1 to run/);
+    assert.match(result.stdout, /writes the real ~\/\.aeroric/);
+    assert.ok(!existsSync(marker), "the opt-in case executed without its switch");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a skipped opt-in case is never counted among the passed ones", () => {
+  // Pins the regression this replaces: the summary line printed `entry.cases.length`, so a
+  // module could report "12 case(s) passed" while two of them rewrote the user's home.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-optin2-"));
+  const marker = path.join(dir, "ran");
+  try {
+    const result = runGateAgainst("optin_count", { cases: [goodCase, optedIn(marker)] });
+    assert.match(result.stdout, /native:check optin_count: 1 case\(s\) passed/);
+    assert.doesNotMatch(result.stdout, /2 case\(s\) passed/);
+    assert.match(result.stdout, /1 opt-in skip: opt-in-writer/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("setting the switch to 1 runs the opt-in case for real", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-optin3-"));
+  const marker = path.join(dir, "ran");
+  try {
+    const result = runGateAgainst("optin_on", { cases: [optedIn(marker)] }, { AERORIC_ALLOW_REAL_HOME_TESTS: "1" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.doesNotMatch(result.stdout, /SKIP/);
+    assert.ok(existsSync(marker), "the switch did not actually enable the case");
+    assert.match(result.stdout, /native:check optin_on: 1 case\(s\) passed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("only the literal 1 opts in: 0/true/empty/yes all keep the case skipped", () => {
+  // `AERORIC_ALLOW_REAL_HOME_TESTS=0` is truthy to a bare `if (env.VAR)`, and `true` is what
+  // someone types when they mean yes. Neither may reach into the real home.
+  for (const value of ["0", "true", "", "yes"]) {
+    const reason = caseSkipReason({ name: "n", optInEnv: "E", optInReason: "r" }, { E: value });
+    assert.match(reason ?? "null", /opt-in only/, `value ${JSON.stringify(value)} must not opt in`);
+  }
+  assert.equal(caseSkipReason({ name: "n", optInEnv: "E", optInReason: "r" }, { E: "1" }), null);
+  assert.equal(caseSkipReason({ name: "n" }, {}), null);
+});
+
+test("an opt-in case that cannot say why is refused, as is a malformed variable name", () => {
+  assert.match(
+    moduleGateProblem("m", { cases: [{ name: "n", argv: ["node", "-e", "0"], optInEnv: "AERORIC_ALLOW_REAL_HOME_TESTS" }] }),
+    /no optInReason/,
+  );
+  assert.match(
+    moduleGateProblem("m", { cases: [{ name: "n", argv: ["node", "-e", "0"], optInEnv: "lowercase", optInReason: "r" }] }),
+    /malformed optInEnv/,
+  );
+});
+
+test("a red required case still fails the module even when an opt-in case is skipped", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "aeroric-optin4-"));
+  const marker = path.join(dir, "ran");
+  try {
+    const result = runGateAgainst("optin_red", {
+      cases: [{ name: "must-fail", kind: "gate", argv: [process.execPath, "-e", "process.exit(1)"] }, optedIn(marker)],
+    });
+    assert.equal(result.status, 1, "a skip must never mask a failure");
+    // The failure summary goes to stderr (console.error); the per-case skip line goes to stdout.
+    assert.match(`${result.stdout}${result.stderr}`, /1 case\(s\) failed/);
+    assert.match(result.stdout, /SKIP \(opt-in\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("in the committed gate exactly the two real-home writers are opt-in, with a reason", () => {
+  // Pins the *set*, not just the shape: widening opt-in silently is how a gate loses teeth,
+  // and dropping the flag reopens the credential rewrite this change exists to stop.
+  const flagged = [];
+  for (const [module, entry] of Object.entries(committed.modules)) {
+    for (const testCase of entry.cases ?? []) {
+      if (testCase.optInEnv) flagged.push(`${testCase.name}@${module}`);
+    }
+  }
+  assert.deepEqual(flagged.sort(), [
+    "adapter-acceptance-real-kernel@tauri-adapter",
+    "src-tauri-lib-tests@tauri-adapter",
+  ]);
+  for (const name of ["src-tauri-lib-tests", "adapter-acceptance-real-kernel"]) {
+    const testCase = committed.modules["tauri-adapter"].cases.find((c) => c.name === name);
+    assert.equal(testCase.optInEnv, "AERORIC_ALLOW_REAL_HOME_TESTS");
+    assert.match(testCase.optInReason, /~\/\.aeroric/);
+    assert.ok(committed.runner.floors[`${name}@tauri-adapter`] >= testCase.minCases, `${name} floor must stay declared`);
   }
 });

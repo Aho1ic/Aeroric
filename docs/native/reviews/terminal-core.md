@@ -1,5 +1,15 @@
 # tauri → native 迁移评审记录:terminal-core(Task P3-03)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- **P3-03** 仍是 in_progress，没有「accepted_on」字段；可用的两个锚点＝提问轮当天最后一个提交 `2befb12bf4dcdacdd09f42ca0621ec254ef9b987`（2befb12，2026-09-27）与本文撰写时 HEAD `797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c，2026-09-28）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
+
 ## 0. 调用证据(§4.1/§4.2 要求的 provenance)
 
 | 项 | 值 |
@@ -160,6 +170,15 @@
 
 **结论**：四条 Acceptance 的**机器面全部 ✅**；未闭合的只剩各轮【执行状态】都列在「未运行/未做」里的同一项——Q6 的人工观察（resize 真传导／cancel 真带走进程组／断线重连观感），需要用户在真机 GUI 做，Agent 无法代做（本机 `osascript` 键入被系统拒绝）。它一记档，本模块四条验收连同人工面全部有证据，可标 accepted。
 
+## §6 那句「三项人工观察」已被收窄为两项（2026-09-29 更正指针，出处 `MIGRATION_PLAN.md` 补记一百八十三；原判读日期 2026-09-28 补记一百十六，保留不改）
+
+上面 §6 结论写的三项人工观察（resize 真传导／cancel 真带走进程组／断线重连观感）中，**前两项当天就已被机器覆盖**（`MIGRATION_PLAN.md` 补记一百三十七 逐条核对过断言本体），所以 Q6 真正还欠用户的人工观察只剩两项。今天复核这两条测试仍在门禁射程内（`terminal-lease-rust` 4 条、`terminal-pty-exit-rust` 10 条，2026-09-29 `check.mjs terminal-core` 13／107 exit 0）：
+
+- **resize 真传导**＝`core/crates/aeroric-core/tests/terminal_lease.rs::twenty_resizes_leave_the_last_foreground_size_and_never_a_rejected_one`。真 PTY ＋ 真子进程，替身 agent 每次 `SIGWINCH` **自己再报一次尺寸**；断言内核侧 `(50, 200)`、进程侧 `wait_for("resized=50x200")` 且最后一行确为该值、20 次混合请求「应用 11／忽略 9」逐条对齐裁决表、被拒形状 `0x0／24x1／1x1／10001x80／80x24` **一次都没出现在 agent 的回报里**。⇒ 机制层面不需要眼睛确认；用户只需看**真 agent 的 TUI 重排好不好看**。
+- **cancel 带走整组**＝`core/crates/aeroric-core/tests/pty_exit.rs::cancelling_kills_the_whole_process_group_and_that_exit_settles_no_status`。`forkpty` 起带后代的替身（mode `"child"`），先断言它自成进程组，SIGTERM 打给整组，**先 reap 再轮询组是否还活着**，最终断言 `!signal_process_group(pid, 0)`。⇒ 这条**比人工观察更强**，因为肉眼看进程列表看不出后代有没有被一起带走。
+
+**剩下的两项（只有用户能看，记档必须写成「人工观察，非机器证据」）**：① 重连体感——core 的终端测试里没有任何 `reconnect`／`attach` 命名的用例，机器面缺口已具名移交 P5-01（typed activation error ＋ `ResumePoint` 方法）与 P3-07（租约协议入口）；② TUI 重排观感。**观测步骤与回答格式已写进 `MIGRATION_PLAN.md` 的「非表态类的两项」段落**（本文不复述，避免两处真相）。
+
 ## 附录 A:§2.4 真实语料旁证的脚本全文
 
 原件写在 `/tmp/realhistory/probe.mjs`(机器本地、不入库,且本轮结束已清理)。为避免"引用一个已不存在的文件",此处全文内联,任何人可原样重跑复现 §2.4 的每个数字。它是**只读**的:不写文件、不改权限、不启动 App;判定口径逐字抄自 `core/crates/aeroric-core/src/terminal/history.rs`(`utf8_tail_bytes` / `skip_leading_utf8_continuations` / `HistoryRetention::LEGACY` 的 8 MiB + 4 MiB)。
@@ -239,3 +258,28 @@ console.log(JSON.stringify({
 ```
 
 运行方式(2026-09-27 用的就是这条):`node probe.mjs`。当天输出的实测值即 §2.4 表里的数:156 files / 139.12 MiB / needsCompaction_now 0 / inSlackBand 14 / readCutLandedMidCharacter 1 / maxBytesSkipped 2 / tailStillNeededLossyAfterSkip 0 / wholeFileHadIllegalUtf8 0 / largest 11.54 MiB / tailOfLargest from 3 707 933 kept 8.00 MiB valid。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：§0「调用证据(§4.1/§4.2 要求的 provenance)」——九份里唯一自带该字段的一节（含 pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 与技能来源）。
+- **实际调用入口**：§0 同时记了入口与发送内容；§4.1 记了 Q1／Q4 落地后的复验调用。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：§3 Frontier（Q1～Q8 的问答与归属）＋ §4.1「补记一百零八的复验落地」。
+- **证据**：§2「本轮新查明的四条事实(逐条附出处)」＋§5「通用验收对照审计(§3.1 全八条 + Action 1–6 + Acceptance 1–4)」＋附录 A 脚本全文。
+- **问题级别**：**未使用统一级别标签**（事后判读）：最高一档是 §5.1——**core 的读面／租约面在本地协议 v1 没有方法条目**（下游 P5-01 的功能阻断级前置，已移交并在计划里点名）；次一档 §5.2「我自己给 Q3 的推荐机制是错的（已更正）」属记录级。**接受人**：Q1／Q4 已由用户追认，Q2／Q5／Q6／Q7 已答复；两项人工观察仍等人（协议在 `MIGRATION_PLAN.md` 补记一百八十三）。
+- **修复后复验**：2026-09-29 `native:check terminal-core` **13／107 exit 0**；§6 是 2026-09-28 的收口前复核，「§6 那句『三项人工观察』已被收窄为两项」给出更正指针与两条实名用例。
+
+## ①「重连」的证据性质更正（2026-09-29，出处 `MIGRATION_PLAN.md` 补记一百九十三；上面 §6 与 §6 之后那节收窄为两项的判读都要读这条指针）
+
+先前从本文传给计划的一句话是「core 侧无任何 reconnect 用例，这一项只能人工」。**那是按测试函数命名去搜出来的错判。** `grep -n reconnect` 在 `core/crates/aeroric-core/tests/` 只命中 task 面（dsh resume），而重放面的用例标题用的是「断线重订阅」这个词——`terminal_replay.rs` 的文件头第一句本身就写着：「P3-03 切片四的验收面:断线重订阅不重不漏、缓冲过期得到明确的 gap/reset、首订阅的 snapshot 与 live 边界由单线程序列化保证。」按**断言本体**重查，观测协议 ① 的机制面有四条实名覆盖：
+
+| 观测协议 ① 的判据 | 覆盖它的用例 | 断言的是什么 |
+| --- | --- | --- |
+| a 重复行 ／ b 漏读却没有任何提示 | `terminal_replay.rs::replaying_a_real_pty_stream_from_the_catchup_point_loses_and_repeats_nothing` | 真 PTY 2 MiB 输出：追平点后每一帧的 `offset` 必须等于 `earliest ＋ 已交付字节数`，逐帧拼起来与真 PTY 尾巴**逐字节**相同；取完之后是合法的末端空 `Seamless`，而不是谎称还有历史 |
+| c 缓冲过期要给明确 gap-reset | 同上一条的第 ① 段 ＋ `terminal_replay.rs::a_live_stream_refuses_a_units_cursor_before_any_conversion_is_tried` | 落后于保留线的游标只能得到 `Reset{from: earliest, reason: Compacted{earliest}}`；旧前端的码元游标**不许被换算成猜出来的字节位置**（猜了就会重复渲染或静默漏一段） |
+| d 光标／`Ctrl-C`／翻页键是否仍归同一条 PTY | `terminal_lease.rs::two_readers_share_one_stream_without_touching_the_lease` | 两个各自推进游标的只读订阅者读到**同一条流**（`assert_eq!(a,b)`，且里面确有 `ack=shared` 回显），而持有者的 `check_write` 仍是 `Ok`——断言原文就是「两次读不该把控制权弄丢」 |
+| 重连不得把原始消息再放一遍 | `task_lifecycle.rs::a_dsh_resume_is_planned_without_the_original_prompt`、`task_lifecycle.rs::a_via_host_resume_stores_the_pending_and_leaves_the_session_to_the_intent` | resume 计划里不带原 prompt（断言原文「reconnecting must not replay the message」）；pending 只在被要求的那一次落地 |
+
+**缺的东西换了位置，而不是不存在**：`grep -rn plan_replay src-tauri/src` 与 `grep -rn ResumePoint src-tauri/src` 今天都是**零命中（exit 1）**，而宿主对 `aeroric_core` 有 139 行引用。⇒ core 的重放面**至今没有任何生产调用方**，本地协议 v1 里也没有方法条目——这正是 补记一百零二 的「发现一」，具名移交 `P5-01`（typed activation error／`ResumePoint` 方法）与 `P3-07`（租约协议入口）。所以观测协议 ① 真正只剩两件事给人看：**重置之后的画面观感**（残影／叠字／是否跳回顶部），以及**宿主走的那条老路径**（`invoke(TASK_PROCESS_COMMANDS.reset)` ＋ `resumeTask`）在真实会话里的行为——它执行的并不是上面四条用例所在的代码。
+
+**对记档的后果**：P3-03 判 accepted 时，① 不再整条写成「人工观察，非机器证据」，改成记作**人工观感观察**、并同时列出机制面的四条实名用例（见上表）；②（重排观感）照旧写「机制已被 `twenty_resizes_…` 逐条证明，人工只判观感」。**这条更正顺带挡掉一次下游浪费**：若照旧记账，`P5-01` 会以为 core 侧重放实现缺失而重做一遍。

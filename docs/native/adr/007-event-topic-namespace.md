@@ -41,7 +41,7 @@
 
 上面「后果」一节最后一条把 36 个 `pending` 全押给 P3-04（"进入 P3-04 时必须清零或转为 not-forwarded"）。
 这条**前提被实测推翻**：按 `command-map.json` 的 `events[].emitters[]` 实际发射点统计，真属 sessions/usage 面的
-只有 2 条（`task.session` @ `core_adapter.rs:538`、`usage.statistics_updated` @ `usage_index.rs:1047`），
+只有 2 条（`task.session` @ `core_adapter.rs:538`、`usage.statistics_updated` @ `usage_index.rs:1048`），
 其余 34 条的发射点分布在 `dsh_webui`(11) / `dsh-host-*` 动态发射(8) / `remote`(5) / `database`(2) /
 `notebook`(2) / `report`(1) / `lsp`(1) / `agent_ops`+`agent_tools`(2) / `app-*` 动态(2)。逐条证据与可重跑探针见
 `docs/native/extraction/event-topics-pending.md`。

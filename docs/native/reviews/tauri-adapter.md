@@ -1,10 +1,20 @@
 # Module review — `tauri-adapter` (Task P2-05)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 - **Reviewed**: 2026-09-23
 - **Design source**: `MIGRATION_PLAN.md` §Phase 2 · Task P2-05
 - **Code（本模块目前唯一已合并部分）**: `src-tauri/src/storage_location.rs`、`src-tauri/src/storage.rs::windows_private_acl_receipt`、`src-tauri/src/lib.rs` 的 `mod storage_location;`
 - **Gate**: `pnpm native:check tauri-adapter` —— **已注册并全绿**（9 case／2488 用例：`adapter-invariants-src` + `adapter-invariants-unit`（地板 11）+ `adapter-acceptance-real-kernel`（地板 6，P2-05 验收 #2 的证据本身 + 启动接线实跑一遍，串行跑）+ `src-tauri-lib-tests`（地板 2466）+ `adapter-event-payload-contract`（地板 5，Action 5 点名的 TS 侧载荷契约）+ src-tauri/core `cargo fmt --check` + src-tauri `clippy --all-targets -D warnings` + `pnpm typecheck`）。脚本：`scripts/native/adapter-invariants.mjs` / `.test.mjs`；用例：`src-tauri/src/core_adapter_tests.rs`、`src/test/native-core-adapter.test.ts`
 - **Gate status**: 拷问**已闭合两轮**——Q44～Q57 → ADR-020～029、Q59～Q61 → ADR-030/031/032、Q62～Q63 → ADR-033/034（2026-09-24 第三轮，Q62 再次否掉窄路推荐）。收口提交 `1279520`/`bf57afa`/`cef9e15`/`88d3646`，不 push、不 tag。**任务仍未 accepted，但原因变了**：§1 的三条验收**现在全部有证据**（#2 见 §4c，2026-09-24 按用户拍板的 B 路补上），剩下的不是缺证据，而是还有活没干完——ADR-023 的那 8 处 legacy 发射点还在，执行器还没接进产品路径（前置是 Action 3 + ADR-022，属排期）。
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P2-05** accepted_on＝2026-09-26 ⇒ 当天最后一个提交＝`005ff23ef51e39be99daddcebcb8632f0ffe92b4`（005ff23，2026-09-26，「docs(plan): 补记九十——env 顺序操作表与 OMP 不变量落地」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## 1. 验收标准（引计划原文）
 
@@ -387,3 +397,32 @@ TaskNotification → sink` 的映射。机制层没有未关的前置了。
 **Q74（Phase 2 Gate 带两条挂账关闭）→ 用户选 (A)**：① **ADR-024**（`project-groups.json` 唯一真相源 + localStorage 一次性幂等导入）全仓零实现、今天分组仍由 localStorage 权威（=迁移前行为），**转具名挂账：P3-01 之后的 Action 3 收尾**；② **ADR-026** 记"机制已在意图队列测试钉死（元数据重放一次、状态 op 永不重放），生产真实 REVISION_CONFLICT 出现后的宿主侧证据待现"。G18 维持归 P3-02，不在本轮重开。
 
 **Gate 裁定（§4.2 四条判据对照）**：实际调用证据存在（本节 Q73/Q74 + §2 的 Q44～Q72）；必选测试通过（tauri-adapter 12 case/2540，含 src-tauri 串行 2479/0、真内核验收 19 条；core 279/0；全量 pnpm test 376/5483；contracts 12 份逐字节；inventory consistent）；无未解决的崩溃/数据丢失/安全越界/功能阻断问题；中低风险明确由谁接受（上列四条挂账各有具名归属）。**P2-05 标 accepted，Phase 2 Gate 通过。**
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：无独立 provenance 小节；pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 见上面锚点节，权威出处 `docs/native/reference-provenance.md` ⇒ **当时未记**（十三节里只有 §12 提到发问动作）。
+- **实际调用入口**：§2 与 §13 两处写了实际调用（Q44～Q54 一轮、Q73／Q74 收口一轮）；§12 是动手前的最后校准记录。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：§2「门禁问答（Q44～Q54）」＋§13「接线收尾拷问轮（2026-09-26，Q73/Q74 → P2-05 accepted、Phase 2 Gate 通过）」；全文合计 26 个 Q 标号。
+- **证据**：§5 发射面逐站点清单、§9／§10／§11 的落地台账（本文是九份里最长的一份，证据按节内命令与输出行文）。
+- **问题级别**：**未使用级别词汇**（事后判读）：最高一档是 §6——**「`src-tauri --lib` 的『负载敏感』是一条我造成的真缺陷」**（工具自伤级，2026-09-25 结题）；次一档是 §3「事实修正」三条（侦察阶段报错误判、实现时才发现）。**接受人**：§4「待办与阻塞（按依赖序）」的项交后续 Task，本文不代接受。
+- **修复后复验**：2026-09-29 **逐条**复跑 `tauri-adapter`（`check.mjs` 不支持按 case 过滤，改按 `checks.json` 原 argv 单条执行，`absent` 型按判据 rc=1 计通过）⇒ **10 PASS／0 FAIL／2 SKIP**；跳过的正是会写真实 `~/.aeroric` 的 `src-tauri-lib-tests`（2 465 条）与 `adapter-acceptance-real-kernel`（19 条），仍等行政 B 项（`docs/native/baseline.md` 同日节）。
+
+## 14. 2026-09-29 回源更正（评审快照不重写，只补路标；出处 `MIGRATION_PLAN.md` 补记二百三十）
+
+今天把九份评审载体的 `path:line` 引用整体复算一遍（判据＝按 10 个候选根解析、再退回 basename 索引；
+**行数一律用 `wc -l`**）：载体共 130 条引用 ⇒ **唯一且行号在范围内 123／裸文件名多义 3／越界 4／查无此人 0**。
+四条越界全在本文，且都来自 2026-09-25 那份快照，本节只标注不改写原文：
+
+| 本文位置 | 原写法 | 今天的真相 |
+|---|---|---|
+| :326（§10 表 #11） | `appProjectState.ts:189-202` 描述"启动归一：`running/…→detached/interrupted` ＋ `attentionRequestedAt ?? interruptedAt`" | 文件今天 **189** 行（`wc -l`），`:189-202` 越界；所述逻辑实际在 **`src/appProjectState.ts:153`／:167／:176**（`interruptedAt` 定义与两处使用）。今天 :183-189 是另一对纯谓词 `shouldIgnoreTaskStatusTransition`／`isLiveTerminalTaskStatus`，**不是**这一格描述的东西 |
+| :330（§10 表 #15） | `taskStatus.ts:64`＝"唯一的状态机写点"，带 `status`+`attentionRequestedAt`+`completedAt`+`failureReason` | 文件今天 **54** 行；该模块现在只有 `applyTaskStatusTransition`（:11 起）与 `attentionRequestedAt` 计算（:25），**并且 :52 的注释明写 `persistTaskStatusChange` 已随 §12 ④ 快照写退役删除** ⇒ 这一格描述的 persist 语义已经不存在，不是行号漂 |
+| :338（§11） | `flush(projectId)` 四个调用点之一＝`taskStatus.ts:66`（仅 `done`） | 同上，越界且语义已迁走：`flush` 现在住在 **`src/taskIntentQueue.ts:271`（定义）／:302／:334**，另有 **`src/appProjectState.ts:131`** 的 `queuedProjectPersist.flush()` |
+| :364（§11 表） | 再引 `taskStatus.ts:64` | 同一处越界，结论同上 |
+
+另有 3 条属"裸文件名多义"（:216 `mod.rs:854`、:259 `service.rs:373`、:345 `service.rs:212`）：句子上下文能认出根，
+但只有写成仓库相对路径才可机检——这正是答题纸第 3 项（候选门禁③）要求先立词法规则的理由。
+
+**一条流程结论**：评审载体是带日期的快照，锚点会随改造腐烂；`G31` 那条"七字段结构要不要上门禁"如果选上门禁，
+"载体的 `path:line` 必须在当日行数内"应与 §5.1 工件的 `extraction-docs-current*` 一起进去（门禁面扩张，等用户点头，本轮没动 `checks.json`）。

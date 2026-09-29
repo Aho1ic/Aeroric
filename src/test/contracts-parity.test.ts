@@ -69,8 +69,8 @@ describe("published vocabulary vs the TypeScript unions", () => {
    * ADR-026 的"冲突时谁能重放"按这份分类执行，两侧各抄一份就是口号。
    */
   it("keeps TaskIntentOp and the metadata/state split identical to taskIntents", () => {
-    const published = JSON.parse(readFileSync(resolve(process.cwd(), ENVELOPE), "utf8"))
-      .constants.taskIntents;
+    const published = JSON.parse(readFileSync(resolve(process.cwd(), ENVELOPE), "utf8")).constants
+      .taskIntents;
     expect(published, `${ENVELOPE} 里没有 constants.taskIntents`).toBeTruthy();
     expect(published.ops.length, "产物读空即正控失败").toBeGreaterThanOrEqual(14);
 

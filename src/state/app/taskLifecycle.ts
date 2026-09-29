@@ -522,9 +522,7 @@ export function createTaskLifecycleActions(deps: TaskLifecycleDeps) {
       status: "pending",
       attentionRequestedAt: undefined,
     };
-    deps.setTasks((prev) =>
-      prev.map((item) => (item.id === sourceTask.id ? pendingTask : item)),
-    );
+    deps.setTasks((prev) => prev.map((item) => (item.id === sourceTask.id ? pendingTask : item)));
 
     deps.resetTaskTerminal(sourceTask.id);
     deps.updateProjectView(sourceTask.projectId, {

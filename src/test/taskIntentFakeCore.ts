@@ -275,7 +275,12 @@ export function createFakeCore(
     // prepare_for_launch 的镜像：pending + 清 attentionRequestedAt（Resume 还清 failureReason）。
     store[pid] = store[pid].map((row) =>
       row.id === taskId
-        ? ({ ...row, status: "pending", attentionRequestedAt: undefined, failureReason: undefined } as Task)
+        ? ({
+            ...row,
+            status: "pending",
+            attentionRequestedAt: undefined,
+            failureReason: undefined,
+          } as Task)
         : row,
     );
     commit(pid);

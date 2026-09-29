@@ -87,3 +87,12 @@ changed yet and no user directory has been written. "Inert" is not the same as
 tracked edit whose removal has a consequence (the planning artifacts stop being
 committable). That property stops holding at P2-05, where the Tauri client starts
 routing through the embedded core.
+
+## 8. 2026-09-29 回源更正（MIGRATION_PLAN 补记二百三十四）
+
+两条行话指向今天还不存在的东西，都写在本文档自己的表里。它们不是错误——是把未来写成了现在时，下一个读者会照着去找。
+
+1. **Switch inventory 的 P3–P7 行写着「they only accept a test `--data-dir`」**。今天**没有任何二进制接受 `--data-dir`**：`core/crates/aeroric-cli/src/main.rs` 是 6 行（`wc -l`；`split('\n')`＝7；271 B）的 `exit(2)` 桩；`core/crates/aeroric-host/src` 只有 `lib.rs`，`Cargo.toml` 没有 `[[bin]]`；两棵树里 `clap`／`env::var`／`args()` 命中 **0**。`AppPaths::with_data_dir`（`core/crates/aeroric-core/src/paths.rs:47`）是留给 P3-07 的 API 而不是入口，**生产调用者 0**（`aeroric-core/src` 内每一处调用都在 `#[cfg(test)]` 之下，逐文件核过）。所以这一行的保护**今天成立的原因是"没有可启动的新入口"**，不是旋钮本身；断点在 P3-07，已作为具名前置写进 MIGRATION_PLAN §进度总表 的 P3-07 行：`--data-dir` 落地时必须同时规定缺省语义（不给就 `exit 2`，或显式确认后才准指向真实 `~/.aeroric`），否则 `AppPaths::from_user_home` 的兼容缺省（`paths.rs:38`，P2-02 已接受）会让这条边界在实现那天自动失效。
+2. **P8-05 onwards 行写着「set the embedded/external choice back to embedded in `src-tauri/src/core_adapter.rs`」**。该文件今天 `embedded`／`external`（不分大小写）命中 **0**。它有的枚举是 `CoreMode{Writer, HandoverDeferred, ReadOnlyBusy, ReadOnlyLocation}`——ADR-021／027／010 的**写入者角色**，不是运行时选择。那个互斥旋钮由 **MIGRATION_PLAN Task P8-05 Action 2** 创建。在那之前，"把选择调回 embedded"是指向未来的指令，不是可以现在就拧的开关。
+
+同时钉住三条**有实物**的，不需要更正：规则 3 的 `interrupted` 由 core `tasks/operations.rs:399/407` 与 `tasks/reducer.rs:550/555`（`interrupted_with_child`）产出，协议层 `task.rs:243/302` 定词并断言其属终态，`knowledge/task-parity-cases.json` 有 **68** 处、含 `transition:*->interrupted` 三条命名用例，Swift 金标 `ProtocolGoldenTests.swift:309`，React `appProjectState.ts:171/175` 与 mobile `SessionPane.tsx:183` 消费同一个词。规则 2 的备份语义在 `storage/tasks.rs:178`（`*.json.bak`）、`storage/atomic.rs:139`、`storage/projects.rs:51`、`storage/runtime.rs:172`，真实 DB 备份 API 的先例是 `src-tauri/src/database/connections.rs:756` 的 `.backup(DatabaseName::Main, …)`；停写由 `storage_lock.rs` 的租约与 `context.rs:255/278` 强制。规则 1 与本文 §6.2 第二条一字对应。规则 2 提到的演练脚本 `scripts/native/migration-rehearsal.mjs` 今天不存在（P8-05 Action 4 创建）——本文「Rehearsal path to execute later (not executed now)」那节本来就这么写的，同批尚不存在的还有 `scripts/native/prepare-tauri-host.mjs` 与 `src-tauri/tauri.macos.conf.json`，`checks.json` 也还没有 `cli`／`cutover` 两个模块（今天是 9 个模块）。

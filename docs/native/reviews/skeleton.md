@@ -1,11 +1,22 @@
 # Module review — skeleton (Phase 1, Task P1-04/P1-05)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 **Gate status: `PASS` — accepted 2026-09-22.** 原头部长期写着 `BLOCKED: grill-me entrypoint not loaded in this session`，那是**技能装好之前的旧状态**：`grill-me` 链路先经 `Skill(grilling)`、后经用户安装的 `grillme-matt` 插件各真实跑过一轮（见下文 Actual invocation 与第十四次补记），Q1／Q5／Q6／Q7 也已逐一拍板并落成 ADR-002～005 + 门禁断言。这条过期声明本身就说明「阻塞字样没人回写」是什么现象，故原文保留在此句内而不删除。
 
 Per `MIGRATION_PLAN.md` §4.1 and §5.4, this file records the real state instead of
 substituting an agent self-review for the tool call. The skeleton may not be
 declared accepted, and the Phase 1 gate stays open, until an actual `grill-me`
 invocation is recorded in §"Actual invocation" below.
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P1-04** accepted_on＝2026-09-21 ⇒ 当天最后一个提交＝`ca69a4bc278f5d230744464aff475c0feaf052e0`（ca69a4b，2026-09-21，「fix(sftp): drop unused Windows merge-check helper that f」）
+- Task **P1-05** accepted_on＝2026-09-21 ⇒ 当天最后一个提交＝`ca69a4bc278f5d230744464aff475c0feaf052e0`（ca69a4b，2026-09-21，「fix(sftp): drop unused Windows merge-check helper that f」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## Tool provenance
 
@@ -238,4 +249,32 @@ Both rows are cross-checked against the plan: see `MIGRATION_PLAN.md` P10-05 移
 
 两条留给下游的事实：**(a) 派生表本身会错**——上一会话写的 `meta.side_phases` 不含 Phase 6/9 与 K/A 的第二 Phase，`--check` 当场报 10 条 `side 'C' has no Task among`；现按 26 行全枚举改死并把判据写进 `meta.side_phases_evidence`，findings 非空即拒绝冻结，这类错从此是红的。**(b) 我写的第一版负例是空洞的**——三条反例只直接调 `carrierCrossCheck`，没走 `--check`，于是"摘掉 problems.push" 的变异体首轮 18 条全绿；改成经 `check()` 断言各自分支原文后拿到 **3 红**。同批查明：临时树里 `result.ok===false` 单独当断言不成立（缺 `src-tauri` 源文件本就会因 `stale source path` 变红），一律改断具体消息文本。证据与逐条对照在 `docs/native/reviews/terminal-core.md` §4.2。
 
-**F4 — 台账里"owner 已关门"这一整类失效（2026-09-28，T1 轮）。** 同一个失效模式的第四个实例：`feature-matrix.json` 的 17 条 gap 有 `task_ids`（人写）、Task 有状态（`docs/native/task-status.json` 才有），但**没有任何一条检查把两者对上**，所以 `G03` 挂着已 accepted 的 P3-01、`G05` 干脆写成一条区间 `P2-02~P2-05`（四个 Task 现在全部 accepted）而两条 gap 都还是 `open`——`inventory --check` 一路 consistent。修法照 F3 的先例（生成/校验取代人记）：`check()` 里加四条判据，`open` 而 owner 全 accepted 且无 `accepted_by` 即红、`~` 区间即红、点到不存在的 `### Task` 即红、空 owner 即红；`accepted_by` 是**具名逃生门**，谁接受风险必须写进工件。负例 6 条进 `inventory-unit`（地板同批 40→**46**），变异 `if (false && …)` 恰好红 1 条守它的用例。**当场被规则逼出两笔真实改判**：G03 按当天核对重派 P3-04+P7-06（三处 `thread::spawn(run_loop)` 仍在 `event_watcher.rs:66`/`usage_index.rs:1047`/`notebook/sync/daemon.rs:402`，P3-01 交的是机制不是这三站），G05 按当天 grep 把五项核成"三处仍在 + 两处不是缺陷（`taskId.ts` 铸 uuidv7＝ADR-013、`orderIndex` 权威在 P2-03）"并点名 P3-07/P3-05/P8-03。**一条自曝**：新负例首跑 45/46，红的是我自己的正则 `/P2-01\(.*\) is accepted/`（括号实际包的是整份 id 列表），改正则而非改规则。另记一处**同类但更尖锐**的矛盾：`G01.task_ids` 写 `P2-01, P3-05`，而 `agent-tool-install-progress` 的事件级 note 点名 P3-02 处置，两份工件各指一个 Task——已按新规则派给 P8-02 并写进 ADR-007 修正案。
+**F6 — 「被 --freeze 照带的字段」是第二个盲区家族：9 条注入抓到 3 条，已当场闭合（2026-09-28，补记一百二十五）。** 注入矩阵第二轮专打这一族：`--freeze` 设计上要把人写字段原样带过去，代价是这些字段从此再没人核对。实测红：panel `target_scene` 清空、删一条动态站点、`events[].gap_id=G99`、`commands[].feature_ids=F99`、`task-status.json` review 指向不存在文件、topic `legacyChannels` 未知（`contracts --check`）。实测盲：`panels[].at` 行号（exit 0）、`panels[].task_ids=P9-99`（exit 0）、**`event_dynamic_emit_sites` 的路径被改写但条数不变（exit 0，旧判据只比 `.length`）**。闭合方式：`inventory.mjs` 加三个纯函数（`dynamicSiteProblems` 集合双向比对／`panelDriftProblems` 派生列 `key,via,at` 与 `extractPanels` 对账／`panelTaskIdProblems` 复用 gap 的 Task universe），负例 +6，旧用例中那条**断言旧形状（只比两个计数）**的拆成「空清单不得空转」＋「改写路径但条数不变必须红」；`inventory-unit` `minCases` 与 `runner.floors` 同批 46→53（实测 `ok (53 cases, min 53)`）。复注入三条全部 exit 1 且给出精确证据，`command-map.json` `cmp` 还原一致。**先证数据没错再补守卫**：`git show HEAD:` 副本逐条回源 ⇒ panel `at` 19/19、动态站点 29/29 命中（第一版脚本把常量派生的 `ALL_AGENT_CONFIGS_NAV_KEY` 误判 stale，读 `extractPanels` 后确认是判据粗糙）。所以这轮修的是「守不住未来」。
+
+**F5 — 门禁有效性矩阵：12 条注入变异，10 红 2 盲（2026-09-28，补记一百二十四）。** 不再用「读代码判断它会红」，而是对每个派生工件注入错值、跑它自己的 checker、取退出码、`cmp` 还原。覆盖：契约产物、`commands[]` 的 category／definition_resolved／check_module／rpc_method、`task_ids` 区间、`task-status.json` 状态翻转、派生列 core_state／side_states／reviews（这些消息还直接给出 `--freeze` 补救）——**10 条全部当场红**。两条盲的：**`command-map.json` 顶层 `modules` 表的 `category` 与 `core_service` 改成错值，`inventory --check` 仍 exit 0**。这张表 53 条、被切成 `digest/command-map-modules.json`（15 405 B）注入 phase-3 会话，是 §5.1 展开与下游路由的读取面，却是同文件里唯一没有派生断言的表；今天它恰好自洽（52 模块 × 4 列全命中其命令行值／`module_default`）。更深一层：`modules` 用 `(crate_root)` 收纳根级命令，而 `category_resolution.module_default` 把这 4 条根级命令逐条当成模块（`module_default["(crate_root)"]` 不存在）——**两种「模块身份」粒度不一致**，所以任何朴素断言要么因这 4 条永久红，要么被人放松成「匹配任意一个」而失去意义。处置：不代定口径，已写进 §进度总表 P3-05 行与 Task P4-02 移交项；判据本身等口径确定后一并实现（四列：`category` 必须等于 `module_default`，其余三列必须命中其命令行的值集合）。刻意不新建 gap 编号（`G18` 在散文里已被家族 pin 占用）。
+
+**F4 — 台账里"owner 已关门"这一整类失效（2026-09-28，T1 轮）。** 同一个失效模式的第四个实例：`feature-matrix.json` 的 17 条 gap 有 `task_ids`（人写）、Task 有状态（`docs/native/task-status.json` 才有），但**没有任何一条检查把两者对上**，所以 `G03` 挂着已 accepted 的 P3-01、`G05` 干脆写成一条区间 `P2-02~P2-05`（四个 Task 现在全部 accepted）而两条 gap 都还是 `open`——`inventory --check` 一路 consistent。修法照 F3 的先例（生成/校验取代人记）：`check()` 里加四条判据，`open` 而 owner 全 accepted 且无 `accepted_by` 即红、`~` 区间即红、点到不存在的 `### Task` 即红、空 owner 即红；`accepted_by` 是**具名逃生门**，谁接受风险必须写进工件。负例 6 条进 `inventory-unit`（地板同批 40→**46**），变异 `if (false && …)` 恰好红 1 条守它的用例。**当场被规则逼出两笔真实改判**：G03 按当天核对重派 P3-04+P7-06（三处 `thread::spawn(run_loop)` 仍在 `event_watcher.rs:66`/`usage_index.rs:1048`/`notebook/sync/daemon.rs:404`，P3-01 交的是机制不是这三站），G05 按当天 grep 把五项核成"三处仍在 + 两处不是缺陷（`taskId.ts` 铸 uuidv7＝ADR-013、`orderIndex` 权威在 P2-03）"并点名 P3-07/P3-05/P8-03。**一条自曝**：新负例首跑 45/46，红的是我自己的正则 `/P2-01\(.*\) is accepted/`（括号实际包的是整份 id 列表），改正则而非改规则。另记一处**同类但更尖锐**的矛盾：`G01.task_ids` 写 `P2-01, P3-05`，而 `agent-tool-install-progress` 的事件级 note 点名 P3-02 处置，两份工件各指一个 Task——已按新规则派给 P8-02 并写进 ADR-007 修正案。
+
+## absent 门禁「牙齿」电池（2026-09-29 实测，登记 `G30`）
+
+**为什么做**：`gate-config.mjs:56-60` 强制每条 `kind:"absent"` case 都带 `controls`，但那只证明「被扫的语料读得到」；**没有任何机器检查证明那条「禁止正则」还会开火**。正则改错一个转义、删掉一个 alternation 分支，这条 case 就变成永不 FAIL 的空门禁，`pnpm native:check` 整模块照样全绿——这正是「门禁绿 ≠ 约束还在」的形状。
+
+**怎么复跑（规则可机械重建，不依赖任何临时脚本）**：① 从 `scripts/native/checks.json` 取每条 absent case 的 `pattern` 与 targets；② 按**顶层 `|`**（括号深度为 0 处）切分 alternation 分支；③ 每个分支渲染成一条「真实违规写法」——`\.` `\(` `\)` `\[` `\]` `\|` `\s` `\"` 还原为字面量、`[a-z-]+`→`abc`、`(_os)?`→`_os`、`\b` 删（零宽）、开头的 `^` 删（样本写第 0 列）；渲染后仍含 `( ) [ ] ? * + { } |` 的分支改用手写样本；④ 对样本文件跑 `rg -n --no-ignore <原 pattern> <样本>`，**期望 rc=0**（不命中＝这条分支没牙齿）；⑤ 再跑该 case 自己声明的 `controls`，期望 rc=0。
+
+**今天的实测（2026-09-29）**：14 条 case／**58 个顶层分支**——41 个由上面那条规则自动渲染，17 个走手写样本（14 条不同的手写样本共展开 20 条，其中 `\.emit\(`／`\bAppHandle\b`／`\bWebviewWindow\b` 在 `projects` 与 `tasks` 两条 case 各跑一次）⇒ **64 条 canary，64 条全部命中，0 条分支无法渲染**；顺带把这 14 条 case 声明的 **44 条 `controls` 全部重跑，44/44 仍命中**。所以**今天不存在空门禁**，`host-exit-settlement-goes-through-core` 那类「宿主不得自己判状态」的禁正则也都还在射程内。手写样本依次是：`tauri = "2"`、`wry = { version = "0.45" }`、`webkit2gtk = "2.40"`、`cocoa = "0.26"`、`objc2 = "0.5"`、`tauri-plugin-shell = "2"`、`env::var("HOME")`、`env::var_os("HOME")`、`child.kill();`、`Command::new("kill").arg("-9").spawn()`、`app.emit("evt", payload)`、`invoke("some_command")`、`String::from_utf8(&combined[..]).unwrap()`、`if exit_ok || timed_out { settle() }`、`if cols < 2 || rows < 2 { return Err(Frozen) }`、`let p = pty.spawn_command(cfg)?;`、`let r = stream.try_clone_reader();`、`let w = stream.take_writer();`、`let w: WebviewWindow = 1;`、`fn x(handle: AppHandle) {}`。
+
+**顺带量到的一处结构性弱点（今天不是活漏洞）**：`skeleton/inv02-core-manifest-denylist` 的 pattern 以 `^` 锚定，依赖键必须写在第 0 列。仓库当前风格确实写在 0 列——`core/crates/aeroric-core/Cargo.toml:25-26` 是 `[target.'cfg(unix)'.dependencies]` 紧接未缩进的 `libc = "0.2"`，而 `rg -n --no-ignore '^[[:space:]]+(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)[[:space:]]*=' core/` → 0 命中。但对照实验证明缩进写法会静默逃逸：同一行加四个空格缩进 → `rg` rc=1（扫不到），去掉缩进 → rc=0（命中）。
+
+**修法已登记为 `G30`**（owner：`P3-04` 落第一刀、`P10-05` 收口）：给每条 absent case 增加 `canaries` 字段并由 `check.mjs` 在真实扫描之前逐条跑——**canary 不命中即该 case FAIL**（禁止把「扫不到」当成「干净」），`gate-config.mjs` 的校验器像今天强制 `controls` 一样强制 `canaries` 非空；同批把 denylist 锚定改成 `^\s*(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)\s*=`。负例 ≥4 条：删掉 `canaries` 报错、canary 永不命中 ⇒ case 变红、缩进依赖键能被抓到、把禁正则改错 ⇒ 对应变红而不是变绿。
+
+**本轮门禁复跑**：`node scripts/native/check.mjs skeleton` → **22 case／160 用例 exit 0**（台账从 28 扩到 29 条 gap 之后，`digest-shards-current` 与 headroom 两条仍在射程内；最大片 24 033 B／32 768 B 上限＝73%）。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：「Tool provenance」表（来源仓库、MIT、pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7`）——与 `terminal-core` 并列的两个自带者。
+- **实际调用入口**：「Actual invocation」一节，且「Why the invocation failed」把**第一次调用失败**原样留着（不是只留成功的那次）。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：各节的 Q1～Q7 与 F1／F2 处置；门禁面问题的问答都在这里。
+- **证据**：各节命令与 exit／case 数；「absent 门禁『牙齿』电池」给了可重跑的规则与 20 个手样。
+- **问题级别**：**九份里唯一写了级别的一份**：Late-phase audit 的「Finding raised by the review itself (severity: medium, pre-existing, now gated)」(第 127 行)。**接受人**：F1 已修并由用户追认；F2 明确移交 `P10-05`／`P7-02`，未代接受。
+- **修复后复验**：2026-09-29 `native:check skeleton` **22／160 exit 0**（含 `digest-unit` 17 条——上一轮台账改动正是被它拦下的一次红，补记一百八十九）。

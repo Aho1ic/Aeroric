@@ -112,7 +112,9 @@ export function storageRejectionIsRetryable(code: string): boolean {
 }
 
 export function asErrorCode(text: string): ErrorCode {
-  return (WIRE_ERROR_CODES as readonly string[]).includes(text) ? (text as WireErrorCode) : "UNKNOWN";
+  return (WIRE_ERROR_CODES as readonly string[]).includes(text)
+    ? (text as WireErrorCode)
+    : "UNKNOWN";
 }
 
 export function isQuantity(value: unknown): value is Quantity {
@@ -229,7 +231,10 @@ export function decodeLine(bytes: Uint8Array): Frame {
 export function parseFrame(value: unknown): Frame {
   const frame = record(value, "frame");
   if (frame.v !== PROTOCOL_VERSION) {
-    fail("malformed", `frame carries v=${JSON.stringify(frame.v)}, this build speaks v${PROTOCOL_VERSION}`);
+    fail(
+      "malformed",
+      `frame carries v=${JSON.stringify(frame.v)}, this build speaks v${PROTOCOL_VERSION}`,
+    );
   }
   if (typeof frame.event === "string") {
     if (!isQuantity(frame.seq)) fail("malformed", "event seq must be a decimal string");

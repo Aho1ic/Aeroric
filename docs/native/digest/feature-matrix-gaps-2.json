@@ -1,0 +1,118 @@
+{
+  "shard": "feature-matrix-gaps-2.json",
+  "from": "docs/native/feature-matrix.json",
+  "sourceSha256": "3c313294cb10dcdc4a9ff4f470015d2be9fbe0e85527b2e761f89ed7985b5b02",
+  "capBytes": 32768,
+  "payload": {
+    "gaps": [
+      {
+        "id": "G08",
+        "finding": "前端 invoke 调用点里仍有大量裸命令字符串，命令名由变量给出的站点必须登记为封闭枚举。2026-09-28 复算：工具口径（`extractInvokeLiterals`：排除测试文件、名字须匹配 `^[a-z0-9_]+$`、按括号深度扫调用点）报 **invokeLiterals=423**；本轮另用一个较宽的行的正则测得调用点 569 / 裸字符串 421 / 非字面量 148，**这两个数不同基、不得互相校正**（正则漏掉跨行带嵌套泛型的调用，工具的多行扫描才是准的）。原记的『257/365 且另有 5 处变量拼接』已不描述当前树。",
+        "evidence": "闭合机制：command-map.json `dynamic_invoke_sites` 五条（src/lib/api/git.ts:105 possible=69、src/lib/api/lsp.ts:15 possible=8、ShortcutsPanel.tsx:129 / CleanupReportPanel.tsx:94 / RemoteAccessPanel.tsx:433 各 possible=2），`inventory.mjs` 的 G08 段逐条比对 possible_commands 与已注册名，未注册者必须在 `known_unregistered` 里点名（git.ts 四条＝G15）。新增的第三种命名方式是 30 张 `*COMMANDS` 常量表（71 个成员）：2026-09-28 实测成员全部命中已注册命令，未注册 0 个。权威计数直接读 `pnpm native:inventory --check` 末行的 invokeLiterals/dynamicSites/unreachable  2026-09-29 现读 `inventory --check` 的机检值（工具自己算的，不是我的正则）：`registered=660 mapped=660 invokeLiterals=423 dynamicSites=5 unreachable=93 events=38 panels=19 definitions=660 taskStates=51/12accepted`，与本条记录的冻结口径逐字相同 ⇒ 闭包工具仍然会把这半边守住。",
+        "requirement": "动态名必须在 command-map 中登记为封闭枚举，否则覆盖率不可证",
+        "task_ids": "P1-04",
+        "owner": "inventory.mjs",
+        "test": "command-map.json dynamic_invoke_sites：5 个动态点已展开为封闭枚举（83 个名字），inventory.mjs --check 断言每个点的文件行号仍存在、枚举非空、且『生成名未在 660 注册表内』的集合必须与 known_unregistered 逐字相等，漂移即失败",
+        "status": "closed-by-tool",
+        "verified_on": "2026-09-29",
+        "retriage_note": "status 仍为 closed-by-tool：那 5 处确实被 `dynamic_invoke_sites` + `--check` 机检着。三处口径要更正——① 257/365 与『5 处』是 P1-04 时点数字；② 闭合只覆盖『工具认得的 5 个变量站点』，前端此后普遍改用的常量表命名（30 张表 / 71 成员）不在 `dynamic_invoke_sites` 里，它今天 0 例外是靠本轮探针实测的，没有门禁守着——已作为具名候选门禁记下，是否现在立由用户定；③ 记数一律用工具口径，正则口径见 finding 里的不同基声明。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G09",
+        "finding": "非组件模块绕过 `src/lib/api/` 直接 import `@tauri-apps/api/core`——**2026-09-28 实测 29 个**（口径：`src/` 下 `.ts`/`.tsx`，排除 `.test.`/`__tests__` 与 `/components/`，按文件计数；「含测试」口径是 188，「不排除组件」也是 29）。原记的 26 个来自 B.5 报告，而该报告未随仓分发，数字已无从复算——这正是本仓点名过的「计数没有存下推导它的东西」那一类，改为附口径可重跑",
+        "evidence": "本轮口径可重跑：遍历 src/ 过滤 @tauri-apps/api/core；样例 src/App.tsx、src/customThemes.ts、src/taskIntentQueue.ts、src/projectSaveQueue.ts、src/dshWebUi.ts、src/utils/fonts.ts  2026-09-29 按原口径重跑（`rg -l \"@tauri-apps/api/core\" src --glob \"*.ts\" --glob \"*.tsx\"` 再去掉 `.test.`／`__tests__`／`/components/`，按文件计）＝**29 个**，与昨日逐字相同；对照口径\"什么都不排除\"＝**188** 个文件，同样复现。样例前六个：`src/dshWebUi.ts`、`src/hooks/useTerminalManager.ts`、`src/hooks/useAgentVersions.tsx`、`src/utils/fonts.ts`、`src/hooks/useAgentUsage.ts`、`src/hooks/useCancellableInvoke.ts`。",
+        "requirement": "原生客户端只允许经 AeroricClient 出口发 RPC",
+        "task_ids": "P2-05, P4-02",
+        "owner": "client",
+        "test": "eslint/脚本规则：Swift 与 React 均不得出现裸 invoke 入口；反例文件必须报错",
+        "status": "open",
+        "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G10",
+        "finding": "skills::list_skills 存在同名多定义，按命令名解析源文件会取错。2026-09-28 复算：同名另一处 `dsh_webui.rs:2783` 是一个 trait 方法（`async fn list_skills(&self, session_id)`），它以**另一个命令名**注册（`dsh_webui::list_dsh_skills`，lib.rs:895），所以冲突只发生在 Rust fn 名层面、不在 Tauri 命令名层面",
+        "evidence": "command-map.json `meta.known_ambiguities` + `meta.ambiguous_definitions`；该条目 `registered_at: src-tauri/src/lib.rs:1062`（`skills::list_skills`）、`definition_resolved: src-tauri/src/skills.rs:1190`、`resolution: module-subtree-unique`、`definition_candidates` 只有 1 项。2026-09-28 实测两处定义：skills.rs:1190（`pub async fn list_skills()`）与 dsh_webui.rs:2783（trait 方法）  2026-09-29 复跑：`src-tauri/src/skills.rs:1190` 是命令 `pub async fn list_skills()`，`src-tauri/src/dsh_webui.rs:2783` 是同名的 trait 方法 `async fn list_skills(&self, session_id: &str)` ⇒ \"按命令名解析源文件会取错\"这条注解仍必要（两个定义、同一末段名）。",
+        "requirement": "P2-01 前按 rust_path 精确消歧",
+        "task_ids": "P1-04, P2-01",
+        "owner": "inventory.mjs",
+        "test": "command-map.json 每条命令带 definition_resolved + resolution=module-subtree-unique（660/660 唯一）；inventory.mjs --check 重新读该文件该行，断言那一行确实是该 fn 的声明，指错文件即失败",
+        "status": "closed-by-tool",
+        "verified_on": "2026-09-29",
+        "retriage_note": "原 evidence 的第二候选行号 2711 已漂到 2783，且没说明它以另一个命令名注册——那句话才是『按命令名解析不会取错』的真正理由。工具消歧经复算成立；但 `definition_unique: false` 与 `definition_candidates` 只有一项并置，读起来自相矛盾，接手者需要这条注解。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G11",
+        "finding": "19 个 settings panel 中仅 1 条带平台门控：`src/components/app-settings/panelRegistry.tsx:263` 的 `platforms: [\"windows\"]`（wsl 面板），过滤在 :328 `(entry) => !entry.platforms || entry.platforms.includes(platform)`；未写 platforms 者＝全平台可见，permissions 亦属此列。唯一非测试消费者是 src/components/AppSettingsDialog.tsx:25",
+        "evidence": "panelRegistry.tsx 内 `id:` 条目 19 条（实测计数）、`platforms` 声明 1 处（:263）+ 类型字段 1 处（:62）+ 过滤器 1 处（:328）；消费者：AppSettingsDialog.tsx:25 与 src/test/app-settings-panel-registry.test.tsx:11  2026-09-29 复跑：`command-map.json` 的 `panels` 数组长度 **19**（与 inventory 现读 `panels=19` 一致），全文件里 `platforms:` 门控只有 **1** 处＝`src/components/app-settings/panelRegistry.tsx:263` 的 `platforms: [\"windows\"]` ⇒ \"19 个面板仅 1 条平台门控\"原样成立。",
+        "requirement": "原生设置页必须复刻同一门控语义，不得在 macOS 显示 WSL 面板",
+        "task_ids": "P5-05",
+        "owner": "ui:Settings",
+        "test": "inventory.mjs --check 断言 panelRegistry.tsx 的 19 个 key 与 command-map.json 的 panels 集合双向相等，且每条有 target_scene + task_ids；负向测试『面板缺失必须失败』『面板无原生落点必须失败』",
+        "status": "triaged-in-inventory",
+        "verified_on": "2026-09-29",
+        "retriage_note": "主张与行号全部复算命中（原记 326-330 与实际过滤器 :328 同处一段）。两处精度补充：evidence 此前没给文件全路径；『AppSettingsDialog 是唯一消费者』要限定为『唯一非测试消费者』，registry 另有一个测试导入方。 2026-09-29 复跑成立并钉死判据。"
+      },
+      {
+        "id": "G12",
+        "finding": "get_active_task_ids 的真实来源是 Tauri 进程内 TaskManager；external host 模式下旧客户端不得读到空 map",
+        "evidence": "2026-09-28 复核：`pty::get_active_task_ids` 仍注册在 `lib.rs:488`，来源仍是进程内 `TaskManager`。本条的真正闭合点在 P8-05 的 external host 模式（Action 3 要求 snapshot 从 host 来，而不是空的旧 TaskManager）  2026-09-29 复跑定义点：`get_active_task_ids` 今天不在 `remote/`，而在 **`src-tauri/src/pty.rs:2060`** `pub async fn get_active_task_ids(task_manager: State<'_, TaskManager>, …)`——第二行参数就是进程内 `TaskManager`，与本条\"真实来源是 Tauri 进程内 TaskManager\"逐字吻合 ⇒ external host 模式下它必然读到空 map 的推理仍成立（P8-05 的四派租约入口要解决的就是这个）。",
+        "requirement": "cutover 后 snapshot 必须来自 host",
+        "task_ids": "P8-05",
+        "owner": "host+desktop",
+        "test": "tests/host_cutover.rs：三客户端同时改任务不丢更新",
+        "status": "open",
+        "verified_on": "2026-09-29",
+        "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
+      },
+      {
+        "id": "G13",
+        "finding": "omp_session_allowed_roots 放行 ~/.aeroric/agent-homes/*/sessions 全部托管档案，而函数注释承诺「Phase 7 接入时按 agent 校验」，两者不一致",
+        "evidence": "2026-09-28 复核：不一致**仍然存在且成因写在代码里**。`omp_session_allowed_roots` 在 `session_omp.rs:118`，函数注释 :116-117 承诺「自定义 omp 档案…Phase 7 接入时按 agent 校验」，而 :123-129 直接 `read_dir(~/.aeroric/agent-homes)` 放行全部托管档案的 sessions；:124-125 给的现实理由是「校验只拿到 family 拿不到档案 id」。原记 :110-128 已漂到 :114-129  2026-09-29 复跑，并把三处行号钉准：`omp_session_allowed_roots` 在 `src-tauri/src/session_omp.rs:118`；**文档注释 :114-117** 仍写着\"自定义 omp 档案…Phase 7 接入时按 agent 校验\"；而**函数体 :127-134 实际是遍历 `~/.aeroric/agent-homes/*` 并把每个档案的 `sessions` 全放行**，其旁边的**行内注释 :124-126 给了一个真实理由**（\"校验只拿到 family 拿不到档案 id，放行全部 Aeroric 托管 home\"）⇒ 精确形状是**同一个函数里两份互相矛盾的自述**（文档注释承诺收紧、行内注释为放宽辩护），而不是单纯\"没实现\"；另外 **:136-139 还追加了非托管根 `~/.omp/agent/sessions` 与 `~/.omp/profiles/*/agent/sessions`**，这一支正是 `AGENTS.md`／ADR-001 §5 规定\"留在宿主、core 不得继承\"的读根。本条主张与出处今日全部成立，行号未漂。",
+        "requirement": "迁移到 core 时按 task 持久化的 agent id 精确取根，取消全量放行；ADR-001 §5.5 已登记为待收口项",
+        "task_ids": "P3-02, P3-04",
+        "owner": "core:agents::managed_home::omp + sessions",
+        "test": "tests/omp_invariants.rs：两个不同 omp 档案的会话文件互相不可见；越出所属档案目录的路径必须被 allowed-roots 拒绝",
+        "status": "open",
+        "retriage_note": "P3-04 侧的解除路径已写明（`docs/native/extraction/sessions.md` 手写约束第 2 条）：core 的 OMP 发现根只许 `~/.aeroric/agent-homes/**`，外部历史分支 capability 默认 false（INV-06 / ADR-001 §5），按 agent 校验在 core 里可做（档案 id 就在路径段上），legacy 客户端保持现状不删。gap 仍 open，owner 仍是 P3-02+P3-04 同日 2026-09-29 复核：见 evidence 追加段。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G14",
+        "finding": "新增的 core/ workspace 完全不在现有 CI 覆盖内：仓库根没有 Cargo.toml，.github/workflows/checks.yml 的 fmt/clippy/test/audit 作业全部按 --manifest-path 指定 src-tauri、remote-protocol、remote-relay；eslint/prettier 的 glob 也只覆盖 src、packages、mobile。core/ 与 macos/ 在 P10-04 的 native-macos-checks.yml 之前只能靠本地 pnpm native:check 兜住。",
+        "evidence": "2026-09-28 复核，逐条仍成立：仓库根 `Cargo.toml` 不存在；`checks.yml` 有 10 处 `--manifest-path` 且**无一处指向 core/Cargo.toml**、全文无 `swift`；`package.json` 的 lint glob 仍是 `src packages mobile/app mobile/src`  2026-09-29 复跑：仓库根 `Cargo.toml` 仍不存在（`ls` 报 No such file）；`checks.yml` 里 `manifest-path` 出现 **10** 次，而 **引用 `core/` 路径 0 次、引用 `macos/` 0 次**；`native-macos-checks.yml`（P10-04 的交付）仍不存在；根 `package.json:14` 的 lint glob 仍是 `src packages mobile/app mobile/src`。⇒ 本条\"core 与 macos 零 CI 覆盖\"当日仍成立，且新增一条可复跑判据（数 manifest-path 与 core/macos 引用次数，不要只写\"全部按 --manifest-path 限定\"）。",
+        "requirement": "在 P10-04 建立原生 CI 之前，任何声称 core『已过 CI』的说法都不成立；P7-02 要求给 checks.yml 增加 core 的 Windows/Linux 检查，那一步必须真正落地而不是留在计划里",
+        "task_ids": "P7-02, P10-04",
+        "owner": "ci",
+        "test": "P10-04 的 native CI 必须对两架构跑 cargo fmt --check / clippy -D warnings / cargo test --locked / swift test，并保留旧有八产物矩阵",
+        "status": "open",
+        "verified_on": "2026-09-29",
+        "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
+      },
+      {
+        "id": "G15",
+        "finding": "prefixCommand 的 git 展开会生成 4 个未注册命令名：remote_git_checkout_branch / wsl_git_checkout_branch / remote_git_create_branch / wsl_git_create_branch。GIT_MIRRORS(checkoutBranch/createBranch) 明确声明了这三个 target 的字段，但 src-tauri/src/lib.rs 从未注册它们",
+        "evidence": "2026-09-28 复核：4 个名字在 `src/lib/api/git.ts` 里以字面量出现，`lib.rs` 中 4 个都查无注册；`BranchBar.tsx` 只用 `.local`（grep `remote_git|wsl_git` 0 命中）⇒ 仍是潜伏缺陷而非已可见故障  2026-09-29 复跑：四个未注册命令名 `remote_git_checkout_branch`／`wsl_git_checkout_branch`／`remote_git_create_branch`／`wsl_git_create_branch` 在 `src-tauri/src` 的命中**全为 0**（一个都没有注册过）；而前端侧声明在 `src/lib/api/git.ts:25`（`checkoutBranch`）与 `:30`（`createBranch`），逐字命中 ⇒ 展开面与注册面的缺口今日原样存在。",
+        "requirement": "P6-04 必须二选一：注册 remote/wsl 的分支创建与切换命令（并在 P7-01 的 SSH 回归里跑通），或删除 GIT_MIRRORS 里的 ssh/wsl 字段并在 UI 上显式禁用远程分支操作。不得留一个会拼出不存在命令的字段",
+        "task_ids": "P6-04, P7-01",
+        "owner": "core:git + ui:Git",
+        "test": "inventory.mjs --check 的 dynamic site 断言已把集合钉死（新增/删除未注册名都会失败）；P6-04 的真临时 bare remote 测试必须覆盖『对 ssh target 请求创建分支』这一条",
+        "status": "open",
+        "verified_on": "2026-09-29",
+        "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
+      },
+      {
+        "id": "G16",
+        "finding": "93/660 已注册命令在活代码内无可达性证据（2026-09-28 复算：reachable 567 / unreachable **93**，与冻结值一致）。不相交划分今日实测：**28 前缀派生 / 8 前缀派生+测试 / 4 仅测试证据 / 53 完全无证据**（原记 6/6，两条桶之间漂了 2 条；28 与 53 未变）。53 条里 `dsh_webui` 占 41，模块不可达合计 42（41 零证据 + 1 仅测试证据）。**修订 2** 保持：初版把测试目录整块排除，导致只在测试里被断言调用的命令被误判为『未接线』（`discover_tests`/`run_tests` 实际是接线的，`src/test/test-explorer-panel.test.tsx` 断言 invoke 收到 \"run_tests\"）。现测试证据作为弱信号 `test_only_literal` 保留，前缀派生记为 `prefix_derived_of`。",
+        "evidence": "scripts/native/inventory.mjs extractReachability()（可重算并被 --check 逐条比对）；结果冻结在 docs/native/command-map.json 每条命令的 reachability/reachable 与 meta.reachability（`unreachable_by_module` 十四项合计 93）。2026-09-28 用 map 里每条的 `prefix_derived_of`/`test_only_literal` 两个布尔直接重算四桶得 28/8/4/53。requirement 里的『81 条带 rpc_method 提案者』是 P1-04 时点口径：今天 `rpc_method` 非空 641/660（空 19），641 恰等于 ADR-006 冻结的 532 方法 + 109 别名  2026-09-29 用工具自己的判据复跑（**可达性是 `command.reachable` 这个布尔字段，不是 `reachability` 对象里的某个状态串**——我第一版把 `reachability` 当字符串读，得到 660 条全落进同一个桶的假结果）：`reachable=567／unreachable=93`，与 `meta.counts` 逐字相同；不可达按模块前三＝`dsh_webui:42`、`lsp:12`、`remote_git:10` ⇒ 本条的不相交划分今日无需改数。",
+        "requirement": "P2-01 冻结 methods.schema.json 前：81 条带 rpc_method 提案者中 40 条已有解释（须建模为『1 方法 + target 参数』而非丢弃或复制），**剩余 41 条完全无证据者必须逐条判定**才能进契约。`list_dsh_agent_presets`、`upgrade_agent_versions`、`discover_tests`/`run_tests` 系列**不得当作可删**。",
+        "task_ids": "P2-01, P8-03",
+        "owner": "protocol + core:dsh_host/ide/git/connections",
+        "test": "inventory --check 已把 4 个 reachability 字段与 unreachable 总数变成双向漂移断言（18 例含 11 负向）；P2-01 冻结 schema 前须给出 93 条的逐条归类，未归类者不得进 capability 列表",
+        "status": "triaged-rev2-awaiting-p3-05-p8-03",
+        "verified_on": "2026-09-29",
+        "retriage_note": "状态词 `triaged-rev2-awaiting-phase-2` 已经过期：它的宿主 Task P2-01 于 2026-09-22 accepted，而本条按用户 T1=A 改派后的实际欠账人是 P3-05（dsh 41 条逐条 caller 证据）与 P8-03（remote_/wsl_ 前缀面），故状态词改为 `triaged-rev2-awaiting-p3-05-p8-03`。93 与 53 两个数复算成立，中间两桶由 6/6 变 8/4。 2026-09-29 复跑成立并钉死判据。"
+      }
+    ]
+  }
+}

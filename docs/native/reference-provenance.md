@@ -59,6 +59,34 @@ written for this repository. Append a row **before** the copy lands, not after.
 Only the two skill texts were taken, at a pinned revision, fetched with `curl -fsS` rather than
 transcribed. No code was copied from that repository.
 
+**Pin re-verified byte-for-byte 2026-09-29 (补记二百二十四).** The nine `docs/native/reviews/*.md` carriers all
+answer §4.2's "tool 来源/revision" field with *the same* handle `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` pointing
+back here; **7 of 9** then add "当时未记" (all but `skeleton.md` and `terminal-core.md` — `grep -c "当时未记"` per
+carrier gives 1/1/1/1/0/1/1/1/0), so this row is the only place that claim can be checked. Re-runnable
+recipe (four GETs, no credentials, public raw endpoints):
+
+```bash
+B=https://raw.githubusercontent.com/mattpocock/skills/c55ee46073ed923f86ce59a5eb3b6d895095d1b7/skills/productivity
+for p in grill-me/SKILL.md grilling/SKILL.md grill-me/agents/openai.yaml grilling/agents/openai.yaml; do
+  curl -fsS -o /tmp/up "$B/$p" && shasum -a 256 /tmp/up | cut -c1-12
+  shasum -a 256 ".claude/skills/$p" | cut -c1-12
+done
+```
+
+Today every pair is identical: `caaf8b8de168` 157 B (`grill-me/SKILL.md`), `10ff989e7498` 1 987 B
+(`grilling/SKILL.md`), `c061e39c3e0f` 137 B and `1411d7df7d99` 113 B (the two `agents/openai.yaml`). All four
+returned HTTP 200, so **the pinned revision is still fetchable and the installed copy has not drifted**.
+The same four hashes were also taken from the *global* skill root `~/.mirasim/skills/…` (the path that
+`~/.claude/skills` symlinks to — `lrwxr-xr-x … /Users/macbook/.claude/skills -> ../.mirasim/skills`; the project's
+own `.claude/skills/` is a real directory, not that symlink) and match the upstream files exactly —
+**three copies (upstream / project / global) agree byte-for-byte**.
+Note the installed set is **four files**, while §4 above says "only the two skill texts" — the two
+`agents/openai.yaml` (137 B / 113 B) are byte-identical to files that exist at those same pinned paths upstream,
+so they came along with the skill directories (this row proves *content identity*, not the install command).
+The wording above is not wrong about *code* (none was copied from that repository), but "two texts" understates
+the file count, so a future reader should take this row as the authoritative inventory:
+**4 files, all from `skills/productivity/{grill-me,grilling}/`, same revision.**
+
 ## 5. Planned dependencies — must be re-verified at introduction time
 
 Not yet added; each needs its licence, version and provenance recorded here **before** it

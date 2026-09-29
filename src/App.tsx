@@ -61,11 +61,7 @@ import {
 } from "./state/app/taskDeleteDone";
 import { generateTaskName, updateTodoTaskInList } from "./state/app/taskNaming";
 import { handleSwitchTaskConfig as switchTaskConfigImpl } from "./state/app/taskSwitch";
-import {
-  applyTaskStatusTransition,
-  cancelTaskInvoke,
-  type TaskLaunchDeps,
-} from "./state/app";
+import { applyTaskStatusTransition, cancelTaskInvoke, type TaskLaunchDeps } from "./state/app";
 import {
   archiveTasksInList,
   renameTaskInList,
@@ -475,8 +471,7 @@ function AppShell() {
       onFailed: (taskId, message) => updateTaskStatus(taskId, "failed", undefined, message),
       // 启动采纳（§12 ①）：run/resume 命令返回的权威快照替换内存行，不落盘——
       // core 已经写过了。
-      adoptRows: (projectId, rows) =>
-        setTasks((prev) => replaceProjectRows(prev, projectId, rows)),
+      adoptRows: (projectId, rows) => setTasks((prev) => replaceProjectRows(prev, projectId, rows)),
     };
   }
 

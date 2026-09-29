@@ -1,0 +1,64 @@
+{
+  "shard": "feature-matrix-gaps-7.json",
+  "from": "docs/native/feature-matrix.json",
+  "sourceSha256": "3c313294cb10dcdc4a9ff4f470015d2be9fbe0e85527b2e761f89ed7985b5b02",
+  "capBytes": 32768,
+  "payload": {
+    "gaps": [
+      {
+        "id": "G31",
+        "status": "open",
+        "decision_item": 20,
+        "task_ids": "P3-04, P10-05",
+        "finding": "§4.2 明文要求每份评审载体保存七项（tool 来源/revision、实际调用入口、**审查 commit/diff hash**、问答、证据、问题级别、修复后复验结果），但**九份 `docs/native/reviews/*.md` 没有一份在当时记过被审查仓库的 commit**——0/9。本轮（2026-09-29）已经用 `git log -1 --until=<accepted_on>T23:59:59` 把 commit 反查补齐并逐份插入一节，**但「diff hash」这一格仍然补不回来**：acceptance 往往在脏树上完成（今天这份文档就是在 33 个未提交文件的状态下写的），未提交内容没有任何事后可重建的句柄。后果是「这次评审到底看了哪一版代码」只能靠日期近似，不能证明。",
+        "evidence": "普查于本轮插入之前：`grep -o '\\b[0-9a-f]{40}\\b' docs/native/reviews/*.md` 去重后只有 **1 个不同值、2 处出现**，且都是外部技能 pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7`（`docs/native/reference-provenance.md:56` 记的 `mattpocock/skills` MIT 上游 commit；本仓 `git cat-file -t` 对它报 could not get object info，属预期）。本轮反查得到的仓库锚点：`ca69a4bc278f5d230744464aff475c0feaf052e0`（P1-04／P1-05，2026-09-21）、`7e1f2957d8c1c477bc45718db248bbb041ad0ab2`（P2-01／02／03，09-22）、`bf57afaf88dd190d1fa8a514e271c1ac1134ea83`（P2-04，09-23）、`005ff23ef51e39be99daddcebcb8632f0ffe92b4`（P2-05／P3-01，09-26）、`2befb12bf4dcdacdd09f42ca0621ec254ef9b987`（P3-02，09-27 与 P3-03 提问轮）、撰写时 HEAD `797e06c3c35ce9b28b53be3f0149894e6e038a8a`；插入后新节里共 31 个 40 位串，其中 **20 个经 `git cat-file -e <h>^{commit}` ＋ `git merge-base --is-ancestor <h> HEAD` 双验可达**，其余 11 个就是上面那个外部 pin 的重复出现。另外用关键词粗查其余六项：`skeleton.md` 七项齐，其余八份至少缺 1 项，最集中的是「问题级别」（4/9 未出现该词）与「修复后复验」（7/9 未出现）——**这条是软判据，只能提示复核，不能当定罪依据**（载体可能用别的词表达同一件事）。 【2026-09-29 收紧量法并补上落点】按关键词粗查是**空转判据**：九份全 7/7 命中（`grill|来源|证据|级别|复验` 在任何位置都能撞到），而八份里「复验」的唯一一次出现就是本轮自己插入的 §4.2 横幅——**仪器把补丁当成了证据**。换成严格判据（字段必须作为标题或 `- **字段名**：` 标签行出现）后真相是：**「问题级别」显式标签 0/9**（只有 `skeleton.md:127` 一处英文 `severity: medium`）、自带 provenance 小节的只有 `skeleton`／`terminal-core` 两份。收法不是重述内容而是**加地图**：九份各追加一节「§4.2 七字段落点」，七行带标签、逐行写明该字段落在本文哪一节、哪一格当时是空的（commit 仍标事后反查、diff 句柄明写补不回来），级别与接受人一律标 **事后判读**，未表态的中低风险项一律写「本文不代用户接受」；合计约 15 KB。两条复算：严格判据下 **9/9 × 7/7**，节内所有「…」指针**全部能在本文解析**（一条因把标题里的 `**` 抄进引文而解析失败，已改为逐字照抄 `skeleton.md:127`）；`reviews/*.md` **不被任何注入清单引用**（27 个目录 50 份清单全查），所以 `tauri-adapter.md` 72 538 B 虽达单文件上限的 221% 也不会被截断——**这条前提以后要一起复查，不再被引用≠永远不被引用**。 **2026-09-29 锚点普查（本仓可达性那一半第一次有数；口径＝逐载体去重后的\"引用条数\"，同一 commit 被两份载体各引一次算两条）**：把 9 份评审载体里的 40 位十六进制句柄逐条 `git cat-file -t` ＋ `git merge-base --is-ancestor … HEAD`：**18 条本仓引用全部解析成功且都是 HEAD 的祖先（腐烂 0）**，另有 **9 条是同一个外部 pin** `c55ee46…`（`mattpocock/skills`，本仓当然解析不了，属设计而非缺陷），载体每份各引一次；该 pin 今天用 4 次 `curl` 复验，`grill-me`／`grilling` 的 SKILL.md 与两份 `agents/openai.yaml` **与上游、工程内副本、`~/.mirasim/skills` 全局副本三方逐字节相同**（`caaf8b8de168`／`10ff989e7498`／`c061e39c3e0f`／`1411d7df7d99`），配方已写进 `docs/native/reference-provenance.md` §4。**注意别把这条读成\"锚点语义可靠\"**：载体自己写明锚点是 `git log -1 --until` **事后反查**，只覆盖当时已提交的树，\"是 HEAD 祖先\"证明句柄存在且可达，**不证明评审时的工作树就是那个提交**（未提交部分事后不可重建）。",
+        "requirement": "今后的每一次 `grill-me` **当场**记三样：`git rev-parse HEAD`、`git status --porcelain` 的文件数与路径摘要、以及脏树的可复现句柄——首选 **确定性 patch 句柄**：`git diff | git hash-object --stdin`（2026-09-29 实测同一工作树连跑两次都得 `ce1b5441bb3ab3575aa27b804361ec9d7dd4539e`，且**不写对象、不改工作树**——跑完 `git status --porcelain` 仍是同样 33 个文件）。**它只覆盖 tracked 修改**：本批有 4 个未跟踪新分片是 `git diff` 看不见的，所以必须与 `git status --porcelain` 的计数＋路径清单并列才构成完整句柄。备选 `git stash create`（实测当场产出 `da3173e55f4f6a6ec9bc8499a6b26acde197625b`，跑完 `git status` 摘要不变、`git stash list` 前后都是 4 条 ⇒ 确属非侵入），但它是 **dangling 对象、会被 gc 回收**，只有当场把 hash 抄进载体才有意义；`git stash store` 会改用户的 stash 列表（共享状态），默认不用。同时把这条变成机器可核：`inventory.mjs --check` 增加文本规则——每份 `docs/native/reviews/<module>.md` 必须含 ≥1 个 40 位 hex，且该对象在本仓 `cat-file -e` 可达（外部 pin 走 `reference-provenance.md` 的白名单，不计入），缺失或不可达即报 problem。落点＝`MIGRATION_PLAN.md` §4.2 执行段 ＋ `scripts/native/inventory.mjs` ＋ `scripts/native/inventory.test.mjs`（负例 ≥2：载体无任何 hex ⇒ 红；hex 不可达 ⇒ 红）。本轮不实现：§4.2 执行段与门禁代码都属门禁面，等 P3-04 或用户点头。 并同批加一条可机检的**结构规则**（比 hex 更便宜）：每份 `docs/native/reviews/<module>.md` 必须含七行 `- **字段名**：` 标签（七项字段名固定），且节内以「」引出的标题指针必须能在本文解析；负例 ≥2（缺一行 ⇒ 红；指针指向不存在的标题 ⇒ 红）。今天的判据实现是 `/tmp` 里的一次性脚本，**正因为不在仓里，九份才会以「关键词全命中」的假绿状态过了这么多天**。",
+        "verified_on": "2026-09-29",
+        "retriage_note": "undefined 同日补：§4.2 七字段里\"审查 commit 锚点\"与\"tool 来源/revision\"两格今天首次拿到可复跑普查（18 条本仓引用 0 腐烂 ＋ 9 外部 pin 三方逐字节一致），若第 20 项选择上门禁，这就是负例基线：句柄不存在／句柄存在但不是 HEAD 祖先／把外部 pin 当本仓句柄判红。"
+      },
+      {
+        "id": "G32",
+        "status": "open",
+        "decision_item": 21,
+        "task_ids": "P3-04, P10-05",
+        "finding": "金样 fixture 落进 `core/crates/aeroric-core/tests/fixtures/sessions/` 之后，**只有\"带斜杠的绝对路径\"这一类真实身份会被现有门禁挡住**：编码后的 cwd（`-Users-…`、`--Users-…--`）与真实项目名／非 ASCII 目录名**今天没有任何 case 会拦**。而实测显示 94% 的可见转录同时带着这几类身份——所以\"把真实语料拷进 fixture\"这个动作本身，就是隐私外泄的单点。",
+        "evidence": "2026-09-29 分层抽样（可见路径全库 1 026 份，取 54 份，每份最多读 2 MiB，只统计命中不打印内容）：绝对家目录 `/Users/…` **51/54＝94%**；非 ASCII 项目祖先目录名 51/54；任一真实项目目录名 51/54；含 `gitBranch` 值 21/54＝39%；横线编码的家目录形态 5/54。门禁 `core-discovers-no-real-home` 的 argv 模式是 `home_dir|dirs::home|env::var(_os)?\\(\\s*\"HOME|USERPROFILE|/Users/`、目标 `core/crates/aeroric-core/{src,tests}` ⇒ 斜杠式绝对路径确实被覆盖（这正是 94% 那一类），但**横线编码形态里没有 `/Users/` 子串，正则放行**，项目名／非 ASCII 同样不在模式内。凭据面另测 166 份：凭据键名 0、`sk-`/`ghp_`/`xox` 样式字串 0——第一版正则曾报 89% 误判，因为它把 `input_tokens`／`cache_read_input_tokens` 这类**用量计数键**当成了凭据，收紧键名集合后归零。",
+        "requirement": "新增一条 `absent` case **`fixtures-carry-no-real-paths`**：目标 `core/crates/aeroric-core/tests/fixtures`，模式至少覆盖 `/Users/`、`-Users-`、`--Users-`、非 ASCII 目录痕迹（以及可选：把本机真实项目名与 git 分支值作为参数注入的白名单反查），命中即 FAIL；并按 `G30` 的同一机制自带 canaries（每个分支一条\"真实路径写进 fixture\"的样例，保证这条 case 有牙齿）。配套的人工零命中清单已写进 `docs/native/extraction/sessions.md` 的新节「金样脱敏规范」（含逐字段脱敏变换表：编码目录名、`cwd`、`gitBranch`、id／uuid、时间戳、以及**保字节长度的自由文本替换**——长度必须保住，否则 UTF-8 边界与分页金样的行为就变了）。落点＝`scripts/native/checks.json`＋`inventory.mjs`；本轮只登记，等 P3-04 落第一批金样时一并实现（owner 已写 `P3-04, P10-05`）。",
+        "verified_on": "2026-09-29"
+      },
+      {
+        "id": "G33",
+        "status": "open",
+        "decision_item": 22,
+        "task_ids": "P8-05",
+        "finding": "**宿主源码注释用现在时宣称一件没发生的事**：`src-tauri/src/lib.rs:143-145` 的字段注释写「控制租约(input/resize)也按 `(task_id, generation)` 从这里分发」，而实测宿主对 core 的租约面**零调用**——`grep -rn \"take_control|check_write|ControlLease|LeaseHandle\" src-tauri/src/` → **0 命中（exit 1）**，被接上的只有 `decide_resize`（`src-tauri/src/pty.rs:2670`，1 处）。⇒ 四方（native/legacy/mobile/CLI）终端控制租约的**实现有、机器证据有**（`terminal_lease.rs` 四条真 PTY 用例，今天仍在 `terminal-core` 13／107 绿着跑过），**但一个生产调用方都没有**；真实键入路径仍由宿主旧逻辑决定。这与 `G22` 同族（\"说明面把未来/未发生说成现状\"），只是这一次说「已存在」的是**被版本控制的源码注释**，因此 `git status` 与门禁都看得见文件、却没人核对这句话。",
+        "requirement": "P8-05 收口时二选一，**不许保留现在时错述**：① 真正把 `take_control`／`check_write` 接进宿主写入路径（也就是把本 Task 已有的「四方统一 acquire」移交项落成代码），或 ② 先把该注释改成「租约面由 core 提供，宿主尚未接入（P8-05）」。若选 ①：插入行会让 `terminal-invariants-src` 一类**按行号 pin** 的用例错位，必须同批重定位（补记一百零八 有先例）。本轮**未代改**——按 §3.1 #1 属 P8-05 文件面，且 `src-tauri/src/lib.rs` 不在 P3-03 的可改清单里。",
+        "evidence": "2026-09-29 接线普查（`grep -rno \"aeroric_core::terminal::[A-Za-z_]*\" src-tauri/src/` 按符号计数，五个文件：`wsl.rs`／`lib.rs`／`ssh.rs`／`storage.rs`／`pty.rs`）：**已接**＝`SessionEvidence` 9／`activate_pty_session` 7／`PtySessionHandles` 7／`terminal::history` 6／`ExitDecision` 3／`HistoryRetention` 2／`settle_exit` 1／`decide_resize` 1／`ViewFocus` 1／`TerminalService` 1／`TerminalIdentity` 1／`PublishOutcome` 1；**未接（0 命中）**＝`plan_replay`／`ResumePoint`／`read_from`／`take_control`／`check_write`／`ControlLease`／`LeaseHandle`。写面确属生产路径：`pty.rs:541-573`（`TerminalIdentity::new` ＋ `Utf8Projection` ＋ `PublishOutcome::RefusedFull` 分支）位于 `pty.rs:2818` 的第一个 `#[cfg(test)]` **之前**。协议 v1 同向确认：`contracts/native/v1/methods.schema.json` 的 `coreService` 取值统计里**没有 terminal**（database 95／notebook 73／settings 42／git 36／files 12／remote 9／**sessions 7**／local_router 6 —— `sessions=7` 是本次检索的正控，与 补记一百二十七 量的 7 条会话方法吻合），也没有任何方法名含 replay／lease。⇒ **core 的字节流今天在被宿主写入（1 MiB 保留与历史压实是活的），但没人向它要过重放帧、也没人向它申请过写权限**；这条把 `P5-01`（读面方法）与 `P8-05`（租约入口）的前置从\"要不要建\"精确成\"只缺接线\"。",
+        "verified_on": "2026-09-29",
+        "retriage_note": "本轮（补记一百九十四）由 ① 重连观察性质的更正顺带量出：查\"有没有用例\"要用断言本体，查\"有没有接上\"要用符号跨目录 grep——两个问题是两回事。"
+      },
+      {
+        "id": "G34",
+        "status": "open",
+        "decision_item": 23,
+        "task_ids": "P3-06",
+        "finding": "**core 有 4 个公开 API 到今天没有任何调用方**：`tasks::plan_start`（`launch_plan.rs:350`）与 `storage::load_runtime` 在 core＋宿主里**只出现在自己的定义行**（直接 grep：core 命中 1＝定义、宿主 0）；`tasks::has_task_session_path` 与 `projects::is_hidden` 只被 core 自己的测试调用（core 2＝定义＋1 处测试、宿主 0）。四者都是 `pub`，所以编译器不会报 `dead_code`——`src-tauri/src/core_adapter.rs:29-31` 那句「未接入产品路径的项各带逐项 `dead_code` allowance」讲的是**宿主侧**，core 的 `pub` API 天然免检，因此零调用不会以任何告警形式浮出来。 **溯源补充（2026-09-29 查重）**：同一个\"形状\"早在 补记一百零一（2026-09-28）就为 **terminal 面**记录在案——那条写着「宿主只有 `publish`／`mark_finished`，`read_from`／`plan_replay`／`bounds`／`acquire_control` **零调用点**」。⇒ core 里\"公开但零调用方\"的 API 今天**至少横跨两个面、共 8 个符号**（terminal 4 ＋ 本条 4）。**但两条刻意不合并**：terminal 那 4 个的根因是**协议 v1 没有入口**（承接 `P5-01`／`P3-07`，已写进 P3-03 的具名移交项），本条这 4 个的根因是**实现先行、没有消费者**（承接 `P3-06`）；合并会把一条的出口判据错套到另一条上。",
+        "requirement": "由 P3-06（切换读路径）在出口时对这四项逐条定性，只允许三种结论：① 接线后被真实调用（给出调用点）；② 由别的 Task 消费（改写 owner 并点名消费方）；③ 未被任何生产路径需要 ⇒ 删除或降为 `pub(crate)`。**不接受\"先留着以后用\"**——`§3.1 #1` 的范围纪律与 INV 类\"公开面即承诺\"合起来要求公开 API 有具名消费者。复跑判据就是本条的两台仪器：按符号在 core＋宿主各 grep 一次，并把 `aeroric_core::` 路径锚定作为唯一可辩护的\"已接线\"判据。",
+        "evidence": "2026-09-29 实测（两台仪器一致）。**方法上的教训要一起读**：本轮先试过\"拿符号名在宿主全文计数\"，`projects` 报出宿主在用 11 项，与 补记一百九十五 的路径锚定结果（0 项）**直接冲突**——原因是 `remove`／`rename`／`text`／`is_hidden` 这类名字在宿主里有同名的自有函数，非锚定计数必然虚高。那台仪器作废；只有「零引用」一侧仍然可信（0 不会因为同名而变成非 0，且 core 与宿主两侧同时为 0）。⇒ 结论：**衡量\"接线\"必须锚定 `aeroric_core::` 路径或 `use aeroric_core::…` 导入**，裸符号计数只能用来发现零引用。",
+        "verified_on": "2026-09-29",
+        "retriage_note": "补记一百九十六 登记；owner 暂记 P3-06（切换读路径），若 P3-04/P3-07 认领需同步本条 task_ids 与计划里的小节点名。 2026-09-29 查重：机制形状早见于 补记一百零一（terminal 面 4 个符号），本条只覆盖 tasks/storage/projects 的 4 个，两条保持分离。"
+      },
+      {
+        "id": "G35",
+        "status": "decided-option-2-landed",
+        "decision_item": 24,
+        "task_ids": "P10-05",
+        "finding": "CI 的两条前端腿此前红着：`pnpm lint` rc 1／1 条 warning（`src/test/native-host-protocol.test.ts:36:27` `no-explicit-any`），`pnpm format:check` rc 1／17 个文件，且逐文件对照 `origin/main` 证明没有一条是继承旧债。**2026-09-29 用户答第 24 项＝② 之后两条都已转绿**：`pnpm exec prettier --write` 只跑那 17 个路径（`--check` 由 rc 1 → rc 0），`src/test/native-host-protocol.test.ts` 的 `type Row = Record<string, any>` 整体删除，改为按 `contracts/native/v1/*.json` 实际字段声明 interface ＋ 用协议模块导出的 `Frame` 联合窄化。实测：`pnpm lint` rc 0、`pnpm exec tsc --noEmit` rc 0、该文件 `it(` 21→21、`expect(` 145→145、vitest 21 passed、`native:check protocol` 6／98（`protocol-ts-golden` 地板 21 未动）。",
+        "requirement": "前半（修复范围＝②）已闭合。**仍欠的是第 24 项的附带一问**：`pnpm lint`／`pnpm format:check` 要不要纳入门禁面\n（各一条 case ＋\"0 warning 才算绿\"的地板）——那是门禁面扩张，用户未表态，本轮没有新增任何 case。\n因此今天两条腿靠的是人工执行：任何\"CI 前端腿有守卫\"的说法都不成立（与 `F2` 同族；`G14` 记的 lint glob 止于\n`src packages mobile`、CI 之外没有任何 native case 也原样成立）。",
+        "evidence": "2026-09-29 全部逐条实测（修复前→修复后）：`pnpm lint` rc 1→**0**；`pnpm format:check` rc 1／17 文件→rc **0**；\n`pnpm exec tsc --noEmit` rc **0**；`src/test/native-host-protocol` 拼写更正：真名 `src/test/native-host-protocol.test.ts`，\n`it(` 声明 **21→21**、`expect(` **145→145**（同一条断言都不许多不许少，这是\"收紧类型不得弱化判定\"的机器形状），\nvitest 单文件 **21 passed**、`native:check protocol` **6 case／98 用例**（`protocol-ts-golden` 地板 21 未动）。\n`any` 的消除方式是声明 `EnvelopeContract`／`MethodSurface`／`EventSurface`／`TopicSurface` 等契约 interface +\n复用 `src/lib/nativeHostProtocol.ts` 已导出的 `Frame` 联合做窄化，**零 `any`、零 `as any`、零 `eslint-disable`**；\n`src/`＋`packages/` 全树 `: any` 计数 **0**。prettier 只跑那 17 个路径，`git diff` 里没有第 18 个 src 文件。",
+        "verified_on": "2026-09-29",
+        "retriage_note": "2026-09-29 补记二百三十七：**本条的执行依据是\"待追认\"**——`ask` 的回包在 Agent 可见窗口里被截断，Agent 没有看到用户选项原文，\n因此本轮按三个收法里最彻底的 ②（格式化 17 个路径 ＋ 消除那条 `any`）执行；若用户选的其实是 ①或③，prettier 部分是机械改动可整体回滚，\n类型化部分（`src/test/native-host-protocol.test.ts`）也可单独回滚而不影响别的文件。finding 里\"用户答第 24 项＝②\"这句是 Agent 的代决，不是用户原话。\n另：首句的\"红着\"已被本轮推翻，按不回填规矩保留原话并当场改写；本条保持 open 只因为后半（门禁面）未决，owner 不变。"
+      }
+    ]
+  }
+}

@@ -114,13 +114,21 @@ describe("createTaskIntentQueue", () => {
       return outcome(projectId, ["t1"]);
     });
 
-    queue.enqueue("p1", { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 }, {
-      operationKey: "diff-run-42",
-    });
+    queue.enqueue(
+      "p1",
+      { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 },
+      {
+        operationKey: "diff-run-42",
+      },
+    );
     // 还没发出 ⇒ 同键换载荷不换位置（今天的 `pendingRef` 语义在队列内的化身）。
-    queue.enqueue("p1", { op: "recordDiffStats", taskId: "t1", additions: 9, deletions: 9 }, {
-      operationKey: "diff-run-42",
-    });
+    queue.enqueue(
+      "p1",
+      { op: "recordDiffStats", taskId: "t1", additions: 9, deletions: 9 },
+      {
+        operationKey: "diff-run-42",
+      },
+    );
     queue.enqueue("p1", rename("t1", "不同键照常排队"));
     await queue.flush("p1");
 
@@ -139,16 +147,27 @@ describe("createTaskIntentQueue", () => {
       return outcome(projectId, ["t1"]);
     });
 
-    queue.enqueue("p1", { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 }, {
-      operationKey: "k",
-    });
+    queue.enqueue(
+      "p1",
+      { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 },
+      {
+        operationKey: "k",
+      },
+    );
     await queue.flush("p1");
-    queue.enqueue("p1", { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 }, {
-      operationKey: "k",
-    });
+    queue.enqueue(
+      "p1",
+      { op: "recordDiffStats", taskId: "t1", additions: 1, deletions: 1 },
+      {
+        operationKey: "k",
+      },
+    );
     await queue.flush("p1");
 
-    expect(sent.length, "落过盘的键不再是'排着的同键'——幂等属于事实层，不靠队列抹掉第二次真写").toBe(2);
+    expect(
+      sent.length,
+      "落过盘的键不再是'排着的同键'——幂等属于事实层，不靠队列抹掉第二次真写",
+    ).toBe(2);
   });
 
   it("flushAll drains projects enqueued while another project's flush is in flight", async () => {
@@ -171,9 +190,8 @@ describe("createTaskIntentQueue", () => {
   });
 
   it("mirrors the contract's split: ten metadata ops are replay-eligible, the vocabulary has fourteen", () => {
-    const published = JSON.parse(
-      readFileSync("contracts/native/v1/envelope.schema.json", "utf8"),
-    ).constants.taskIntents;
+    const published = JSON.parse(readFileSync("contracts/native/v1/envelope.schema.json", "utf8"))
+      .constants.taskIntents;
     expect([...METADATA_TASK_INTENT_OPS].sort()).toEqual([...published.metadata].sort());
     expect(published.ops.length).toBe(14);
   });

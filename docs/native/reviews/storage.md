@@ -1,6 +1,16 @@
 # Module review — storage (Phase 2, Task P2-02)
 
+> **数字口径（2026-09-29 加，审计出处 `MIGRATION_PLAN.md` 补记一百七十九）**：本文件里的 case 数／用例数／`minCases` 一律是**验收当天的快照**，只作证据留档，不是今天的地板值——模块在此之后被别的 Task 扩过。要看今天的数字：现场跑 `node scripts/native/check.mjs <module>`，或读 `scripts/native/checks.json` 各 case 的 `minCases`（`inventory --check` 会核对地板与冻结清单一致）。**既不要把这里的旧数字当成回归证据，也不要为了两边对齐而去改任何一份带日期的记录。**
+
 **Gate status：`PASS` —— P2-02 accepted（2026-09-22）。** 验收第四条要求的 `grill-me [storage]` 已真实调用：第三轮 Q14～Q26 十三个答案，全部落成 ADR-010/011/012、CONTEXT 术语、代码与门禁断言（见「门禁第三轮」）。**两处语义按门禁结论下传给 P2-03/P2-04/P2-05/P3-06**，本模块不宣称它们已生效：`revision`/内容指纹的实际强制、以及真实 `statfs`/Windows ACE 的实现。
+
+## 审查 commit 锚点（2026-09-29 反查补齐；§4.2 要求的这个字段当时没有记）
+
+`MIGRATION_PLAN.md` §4.2 明文要求每份评审保存七项——**tool 来源/revision、实际调用入口、审查 commit/diff hash、问答、证据、问题级别、修复后复验结果**。本轮插入本节之前全量普查 `docs/native/reviews/`：**40 位十六进制串只有 2 处（插入之后本节自己会再引入锚点，那是预期结果），且两处都是外部技能 pin**（`c55ee46073ed923f86ce59a5eb3b6d895095d1b7`＝`mattpocock/skills` 的 grill-me，见 `docs/native/reference-provenance.md`）⇒ **九份载体没有一份记过被审查仓库的 commit**。这一节用 `git log -1 --until=<日期>T23:59:59` 反查补齐，**是事后重建，不是当时的记录**。
+
+- Task **P2-02** accepted_on＝2026-09-22 ⇒ 当天最后一个提交＝`7e1f2957d8c1c477bc45718db248bbb041ad0ab2`（7e1f295，2026-09-22，「feat(protocol): P2-01 收口——ADR-008 闭合 error detail 白名单、AD」）
+
+**局限（必须一起读）**：反查锚点只覆盖**当时已提交**的树；acceptance 常在脏树上完成，未提交部分**无法事后重建**，所以 §4.2 要的「diff hash」这一格今天仍然是空的。缺口已登记为 `G31`：今后的每一次 `grill-me` 必须**当场**写 `git rev-parse HEAD` ＋ `git status --porcelain` 的文件数与路径摘要（`docs/native/reviews/*` 的内容不被任何 case 解析，机器无法事后追补）。本文撰写时 HEAD＝`797e06c3c35ce9b28b53be3f0149894e6e038a8a`（797e06c 2026-09-28 11:04:54 +0800）。
 
 ## 交付物（Action 1–5 对应关系）
 
@@ -54,6 +64,16 @@
 
 变异一律用 `cp` 备份 + `cp` 还原，`diff` 确认逐字节回到原状；未使用 `git checkout/stash/reset`。
 
+## Acceptance 第二条四类反例的证据位置（2026-09-29 审计补，见 MIGRATION_PLAN.md 补记一百七十八）
+
+验收原文要求「symlink、权限错误、原子写中断、磁盘写失败有反例」。逐类回溯到具体测试名，是因为上面的变异表只覆盖了四类中的三类——**symlink 在这一份评审里一个字都没出现**（`grep -ci symlink docs/native/reviews/storage.md` 补记前为 0），不是缺测试，是缺记录：
+
+- **symlink**：`a_symlink_to_the_same_directory_is_the_same_lease`（`core/crates/aeroric-core/tests/storage_lock.rs:200-226`，`#[cfg(unix)]`）。它不走"改坏生产码"这条路，而是双向争锁：先用真实目录 `AppPaths::with_data_dir(&root, Some(&real))` 拿到 `DataDirectoryLease`，再用指向同一目录的 `Some(&link)` 以另一个 owner 竞争，断言 `.err()` 必须是 `LeaseError::AlreadyInUse`，expect 文案即 "following a symlink must not grant a second writer"（`:221`）。实测 `cargo test --manifest-path core/Cargo.toml --locked -p aeroric-core --test storage_lock` → exit 0，`4 passed; 1 ignored`（ignored 是持有者子进程 `lease_holder_child`），该用例在 `storage-core-rust` 的 `minCases` 计数之内。
+- **权限错误 / 磁盘写失败**：上表「`writer_eligible()` 改成永远 `Ok`」那一行，对应「非本地卷、Unknown、无权限回执、云同步根各一条」的 location + storage_lock 拒绝用例；另有一条目录形态错误的 `an_unusable_directory_is_a_distinct_refusal`（`:239`，文件占住目录位，断言 `UnusableDirectory | NotWritable`）。
+- **原子写中断**：上表「`verify_still_held()` 开头短路成 `Ok(())`」那一行的 `a_replaced_lock_file_stops_the_writer`。
+
+这条补齐后，Acceptance 的每一条都能从评审文本直接跳到测试名与行号；此前的缺口属于记录不完整，不影响结论。
+
 ## 本轮发现并处理的缺陷
 
 1. **一条用例断言的对象根本不存在**：`a_non_array_document_is_refused_rather_than_read_as_empty` 只创建了 `projects/p2/` 目录，从未写入被断言的那份坏 `tasks.json`——缺文件会被读成 `Ok(vec![])`，断言的是它没制造的状态。补齐 fixture 后用上表第 1 行证明它现在真的会红。教训：**「测试通过」不等于「测试在测这件事」**，clippy 的 `err_expect` 改写只是恰好把它顶了出来。
@@ -102,3 +122,13 @@
 ## 回滚
 
 全部为新增文件 + 三处 src-tauri 机械改动（`Cargo.toml` 依赖、`Cargo.lock`、`storage.rs` 一处委托、`lib.rs` 一行 `mod`）与 `checks.json` 的 `storage` 模块注册；`docs/native/command-map.json` 只有 11 行行号。没有动过任何用户数据文件，也没有改签名基线（INV-09）或前端。回滚 = 删新增文件、还原上述 5 个改动、从 `checks.json` 撤下 `storage` 模块并把 `"storage": "P2-02"` 放回 `plannedModules`。
+
+## §4.2 七字段落点（2026-09-29 反查补齐，出处 `MIGRATION_PLAN.md` 补记一百九十二；本节只回答「每个字段落在本文哪一处、哪一格当时是空的」，不重述内容）
+
+- **tool 来源/revision**：无独立 provenance 小节；pin `c55ee46073ed923f86ce59a5eb3b6d895095d1b7` 见上面锚点节，权威出处 `docs/native/reference-provenance.md` ⇒ **当时未记**。
+- **实际调用入口**：「门禁第三轮的实际调用与落点（Q14～Q26…）」一节写了调用动作与落点文件。
+- **审查 commit/diff hash**：见上面「审查 commit 锚点」一节——commit 由 `git log -1 --until` **事后反查**，diff 句柄**当时没记、今天补不回来**（缺口＝`G31`）。
+- **问答**：Q14～Q26 共 13 条，集中在上面那一节。
+- **证据**：「证据（全部为实测输出，非推断）」；14 次改坏的对照表在「反例验证（14 次改坏，每次只改一处）」。
+- **问题级别**：**未使用级别词汇**（事后判读）：最高一档是「本轮发现并处理的缺陷」第 1 条——**一条用例断言的对象根本不存在（测试通过 ≠ 测试在测这件事）**，属**证据有效性级**而非崩溃级；「与计划的一处口径更正」为记录级。**接受人**：「未决与后续（不得被读成已完成）」列出的项仍未接受，本文不代签。
+- **修复后复验**：2026-09-29 同日 `native:check storage` **5／361 exit 0**；「Acceptance 第二条四类反例的证据位置」给出四类反例今天各落在哪条用例（补记一百七十八 审计补）。

@@ -6,19 +6,31 @@
 
 Cross-checked: 13 command wrappers counted here against 13 matching entries in `command-map.json`.
 
-| # | source | destination | commands | moved symbols (top-level public) | per-file hazards to verify |
-|---|---|---|---|---|---|
-| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | Enum SessionContent, Struct RecoveredSession, Struct SessionMessage, Struct SessionMessagePage, adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher() +6 more (42 test items excluded) | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
-| 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | credential owner |
-| 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | Struct ExportTaskMeta, export_session_markdown_inner(), format_timestamp_ms(), sanitize_md_inline(), validate_export_output_path(), write_export_markdown() (0 test items excluded) | — |
-| 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | append_assistant_content(), append_codex_user_message(), attachment_from_value(), claude_assistant_blocks(), claude_user_content(), json_value_to_display(), parse_claude_session(), parse_claude_session_line(), parse_codex_session(), parse_codex_session_line(), parse_session_line(), parse_session_lines() (0 test items excluded) | — |
-| 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | Const DSH_SESSION_FORMAT_VERSION, Const DSH_TRANSCRIPT_RAW, Const DSH_TRANSCRIPT_ZSTD, discover_dsh_session_since(), dsh_agent_owning_session(), dsh_encode_segment(), dsh_project_key(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), dsh_transcript_in(), line_is_dsh_header(), newest_dsh_session_since(), parse_dsh_session_lines() +6 more (9 test items excluded) | AppHandle/State; credential owner |
-| 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_session_id_from_file_name(), omp_sessions_dir_for(), parse_omp_session_lines(), read_omp_session_header(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | AppHandle/State; credential owner |
-| 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | AppHandle/State; spawns task/thread (needs a cancellation token) |
-| 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | Enum UsageSource, Struct ClaudeUsageData, Struct CodexRpcClient, Struct CodexUsageData, Struct UsageSnapshot, Struct UsageWindow, read_usage_snapshot() (3 test items excluded) | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
-| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | Struct AgentUsageSnapshot, Struct AgentUsageStats, load_agent_usage_snapshot(), record_agent_config_usage() (8 test items excluded) | command-layer |
-| 10 | `src-tauri/src/usage_index.rs` | `core/crates/aeroric-core/usage_index/usage_index-root.rs` | 1 | latest_updated_at(), load_requests(), refresh_index(), refresh_usage_statistics_index(), start() (21 test items excluded) | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
-| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | Enum UsageAgent, Struct SessionMetrics, Struct UsageRequest, Struct UsageStatistics, Struct UsageStatisticsBreakdown, Struct UsageStatisticsDay, Struct UsageStatisticsTotals, claude_context_window_for_model(), collect_jsonl_files(), is_codex_session(), is_dsh_session(), is_omp_session(), is_zstd_usage_log(), parse_claude_usage_requests(), parse_codex_usage_requests() +8 more (23 test items excluded) | command-layer; spawns task/thread (needs a cancellation token); credential owner |
+<!-- generated:start — `scripts/native/extraction.mjs` owns everything between the two markers; everything outside them is hand-written and survives `--write` -->
+> **落点以这一段为准（2026-09-29 表态项 14 定为 ②）**：下表 `destination` 列是生成器按 `core/crates/aeroric-core/<模块>/<文件>` 机械推导的**镜像**——它只保证"每个源文件都有一条"，不承诺落点（全列还缺 `src/` 那一层）。一个宿主文件被拆成多个职责文件时"同名 1:1"本来就不存在，所以 `Action 给定的落点` 列只在 basename 相同才算命名，否则写 `unmapped`，**不做猜测**。真正授权搬迁的是所属 Task 的 Action 原文，逐字抄在下面（`--check` 连这几行一起比对）。
+>
+> **Task P3-04 — Action 原文（机械抽取）**
+> 1. 新建 `core/crates/aeroric-core/src/sessions/{mod,discovery,registry,parser,claude,codex,dsh,omp,history,resume,export}.rs`，迁移对应行为，保留既有路径校验与读取上限。
+> 2. 懒发现 watcher 属于 task generation，停止条件是对应任务结束/已绑定，不是 UI 的超时；OMP 不设会话创建 deadline。
+> 3. 将 hook watcher 改成无 `AppHandle` 的 `HookEventReader`，保留 partial JSONL、截断、轮转、重复 SessionStart、claimed path 排他性。
+> 4. 新建 `metrics/{mod,usage,index,analytics}.rs`，只对权威 usage record 累计；terminal 文字不作为计费依据，重放不能重复计数。
+> 5. `SessionPage` 返回稳定 message/tool ID、cursor、source family、unknown content；UI 不读会话文件；跨族 handoff 生成新会话且记录来源，不冒充 native resume。
+>
+
+| # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
+|---|---|---|---|---|---|---|
+| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | Enum SessionContent, Struct RecoveredSession, Struct SessionMessage, Struct SessionMessagePage, adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher() +6 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
+| 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | Struct ExportTaskMeta, export_session_markdown_inner(), format_timestamp_ms(), sanitize_md_inline(), validate_export_output_path(), write_export_markdown() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
+| 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | append_assistant_content(), append_codex_user_message(), attachment_from_value(), claude_assistant_blocks(), claude_user_content(), json_value_to_display(), parse_claude_session(), parse_claude_session_line(), parse_codex_session(), parse_codex_session_line(), parse_session_line(), parse_session_lines() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
+| 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | Const DSH_SESSION_FORMAT_VERSION, Const DSH_TRANSCRIPT_RAW, Const DSH_TRANSCRIPT_ZSTD, discover_dsh_session_since(), dsh_agent_owning_session(), dsh_encode_segment(), dsh_project_key(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), dsh_transcript_in(), line_is_dsh_header(), newest_dsh_session_since(), parse_dsh_session_lines() +6 more (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
+| 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_session_id_from_file_name(), omp_sessions_dir_for(), parse_omp_session_lines(), read_omp_session_header(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
+| 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
+| 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | Enum UsageSource, Struct ClaudeUsageData, Struct CodexRpcClient, Struct CodexUsageData, Struct UsageSnapshot, Struct UsageWindow, read_usage_snapshot() (3 test items excluded) | `metrics/usage.rs` | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | Struct AgentUsageSnapshot, Struct AgentUsageStats, load_agent_usage_snapshot(), record_agent_config_usage() (8 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer |
+| 10 | `src-tauri/src/usage_index.rs` | `core/crates/aeroric-core/usage_index/usage_index-root.rs` | 1 | latest_updated_at(), load_requests(), refresh_index(), refresh_usage_statistics_index(), start() (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
+| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | Enum UsageAgent, Struct SessionMetrics, Struct UsageRequest, Struct UsageStatistics, Struct UsageStatisticsBreakdown, Struct UsageStatisticsDay, Struct UsageStatisticsTotals, claude_context_window_for_model(), collect_jsonl_files(), is_codex_session(), is_dsh_session(), is_omp_session(), is_zstd_usage_log(), parse_claude_usage_requests(), parse_codex_usage_requests() +8 more (23 test items excluded) | `metrics/analytics.rs` | command-layer; spawns task/thread (needs a cancellation token); credential owner |
+<!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
@@ -66,3 +78,53 @@ G04 原文：「per-task 会话 watcher 线程（`session.rs:1845/1847`、`sessi
 因此 P3-04 在 G04 上的实际工作量从"三站"缩到"一站真补（:1999）+ 两站补 token 检查（:1851/:1860 的 `spawn_unique` 语义要不要升级为可取消，是设计选择不是缺陷）+ 一站形同虚设（:2360 的 `_token`）"。
 
 **一条通用口径**：`spawn_supervised(name, |token| …)` 的**形状**不等于可取消——判据只能是闭包里真的读 `token.is_cancelled()`。以后任何"已接监督者"的声称，都要按这一条逐站验，不看函数名。（同一个坑在 P2-05 以另一种形式出现过：`Arc::ptr_eq` 从判定依据降为 `debug_assert` 安全网，形状还在、语义已变。）
+
+## destination 列的语义（2026-09-29 由表态项第 14 项定为 ②；手写节）
+
+**规则**：`destination` 列是生成器按"模块名＝目录名"机械推导的**镜像，不是迁移落点**。两处系统性失真，
+实测过才写下：① 全列缺 `src/` 那一层（真实 crate 源码根是 `core/crates/aeroric-core/src/`）；② 一个宿主
+文件被 Action 拆成多个职责文件时"同名 1:1"根本不存在（本表 11 行里只有 `export` 一行同名）。所以
+`--write` 不修这两处——**修法是把权威搬进来，而不是把镜像修得更像真的**：表上方生成区里现在逐字抄着
+所属 Task 的 Action 原文，`--check` 连那几行一起比对；表内新增的 **`Action 给定的落点`** 列只在 basename
+相同才算命名，否则写 `unmapped`，**不做猜测**。规范性落点以 Action 为准（§5.1 第 3 条的示例路径带着
+`src/`，那才是规则原文）。
+
+**本表今日实际算出的格子**（`--task=P3-04`，机械派生，无人工映射表）：
+
+- 命中名字的 4 行：`session/export.rs` → `core/crates/aeroric-core/src/sessions/export.rs`；
+  `usage.rs` → `metrics/usage.rs`；`usage_index.rs` → `metrics/index.rs`；`analytics.rs` → `metrics/analytics.rs`。
+- 其余 7 行 `unmapped`：`session.rs`、`session/approval.rs`、`session/parse.rs`、`session_dsh.rs`、
+  `session_omp.rs`、`event_watcher.rs`、`agent_usage.rs`——Action 给的是**一组职责文件**（`sessions/{mod,
+  discovery,registry,parser,claude,codex,dsh,omp,history,resume,export}.rs`），不是一个同名文件。这正是
+  ②拒绝伪造的东西：8/11 无 1:1（今日实测 7/11 命中 4 行，差一行是因为 `session_omp.rs`/`session_dsh.rs`
+  与 Action 的 `omp.rs`/`dsh.rs` 不同名）。
+- `agent_usage.rs` 那一格还额外挂着一个**未决的归属**：Action 里没有它的名字，Input 的认领人是 Q1
+  （用量族随 P3-04 还是留 P8-04），答完才谈得上落点。
+- `event_watcher.rs` 那一格的答案已经在了：2026-09-29 第 12 项定为 **①**，hook 的事件路径布局随
+  Action 3 的 `HookEventReader` 进本 Task 并成为唯一真相，`src-tauri/src/hooks.rs`（今日实测 843 行／
+  18 条测试）其余部分仍归 P8-01。
+
+**一条本轮的自报（同一件事的第二个坑）**：本节的上一版是 2026-09-29 由 `--write` **删掉的**——当时生成器
+会连生成区之外的散文一起覆盖，`sessions.md` 从 147 行／25 883 B 掉到 30 行，`手写约束` 八条与下面三节
+普查全部消失。同日已把生成器改成只写 `<!-- generated:start/end -->` 之间的内容，无标记的文件**拒绝覆盖**
+（负例进 `extraction-unit`）。丢失的三节按 补记一百八十六／一百八十七／一百八十八 重铺到
+**[`sessions-corpus.md`](./sessions-corpus.md)**，并且**刻意不进 Trellis 注入清单**——phase-3 注入当日实测
+129 552 B＝`max_total_bytes` 131 072 的 98.8%（余量 1 520 B，登记为 `G36`），三节约 12 KB 放回必然越界，
+而该上限在全仓没有任何消费者（唯一读者 `task_context.py:252` 只取 `max_file_bytes`），越界表现为无警告的
+静默降级。原 `手写约束` 第 1 条（"落点目录叫 `sessions/`，不要建六个平行目录"）随本次覆盖一并丢失，
+已按同一记录重铺在其原位置之前？——不，**重铺在下一节**，位置与原序不同，这是本轮唯一一处结构变形。
+
+## 手写约束（重铺，2026-09-29）
+
+1. **落点目录叫 `sessions/`，不叫上表机械推出来的 `session/`。** P3-04 正文要求的是
+   `core/crates/aeroric-core/src/sessions/{mod,discovery,registry,parser,claude,codex,dsh,omp,history,resume,export}.rs`。
+   搬迁时按正文归并，**不要**真建出 `session/`、`session_dsh/`、`session_omp/`、`usage/`、`usage_index/`、
+   `analytics/` 六个平行目录——那正是 §5.1 "不得把缩写当成另一个新工程" 禁止的形状，也会把一个模块拆成
+   七个真相源。上表的 destination 是生成器按"模块名＝目录名"机械产生的，是**索引**不是**方案**。
+
+## 普查三节的位置
+
+「真实语料普查」「发现层覆盖普查」「金样脱敏规范」现在在
+**[`sessions-corpus.md`](./sessions-corpus.md)**（含规模、四种目录形态、五种转录方言、两种非转录形态、
+18 份金样取材规则、三条发现层硬结论、逐字段脱敏变换表与入库后的零命中清单）。P3-04 首片落金样之前必须
+先读它；它不进注入清单的理由写在开头。
