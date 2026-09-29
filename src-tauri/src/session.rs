@@ -2,7 +2,7 @@ use aeroric_core::runtime::ShutdownToken;
 use aeroric_core::tasks::TaskSessionFacts;
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -37,12 +37,9 @@ pub(crate) use aeroric_core::runtime::registry::{
     ClaudeSessionInfo, CodexSessionInfo, OmpSessionInfo,
 };
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoveredSession {
-    session_id: String,
-    session_path: String,
-}
+// `RecoveredSession` 已随 P3-04 第五片迁入 core `aeroric_core::sessions::resume`（补记二百四十五）；
+// 字段升 `pub`（迁移后宿主命令仍要构造它），serde `camelCase` 输出逐字节不变。
+pub use aeroric_core::sessions::resume::RecoveredSession;
 
 // ── 公共辅助函数 ──────────────────────────────────────────────────────────────
 
@@ -147,7 +144,7 @@ fn session_modified_at(path: &Path) -> SystemTime {
 // *.jsonl／档案根-`.tmp`-cache 不在任何根里）。core 不碰全局 home，
 // 这三个需要 `platform::home_dir()` 的组合入口保留同名薄包装。
 use aeroric_core::sessions::discovery::{
-    collect_jsonl_files, collect_session_files_from_roots, encode_claude_project_path,
+    collect_session_files_from_roots, encode_claude_project_path,
 };
 
 fn codex_sessions_roots(project_path: &str) -> Vec<PathBuf> {
@@ -595,42 +592,13 @@ pub(crate) use aeroric_core::sessions::history::{
     read_session_page_lines, read_session_tail, SessionMessagePage, SESSION_MESSAGE_PAGE_LINES,
 };
 
-/// Codex app-server 目前无法原生恢复 `history_mode = "paginated"` 的会话。
-/// 只扫描头部格式探测窗口：`session_meta` 是 Codex rollout 的首部记录，
-/// 而旧版文件可能没有 `history_mode`，这两种情况都保持历史的原生 resume 行为。
-fn session_file_supports_native_resume(path: &Path, is_codex: bool) -> Result<bool, String> {
-    if !is_codex {
-        return Ok(true);
-    }
-
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    for line in BufReader::new(file)
-        .lines()
-        .take(SESSION_FORMAT_DETECTION_LINES)
-    {
-        let line = line.map_err(|error| error.to_string())?;
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
-            continue;
-        }
-        let history_mode = value
-            .get("payload")
-            .and_then(|payload| payload.get("history_mode"))
-            .and_then(serde_json::Value::as_str);
-        return Ok(!history_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("paginated")));
-    }
-
-    Ok(true)
-}
-
-fn ensure_session_can_be_adopted(path: &Path, is_codex: bool) -> Result<(), String> {
-    if session_file_supports_native_resume(path, is_codex)? {
-        return Ok(());
-    }
-    Err("Codex paginated sessions cannot be adopted for native resume yet".to_string())
-}
+// 恢复层的判定与会话 id 解析已随 P3-04 第五片迁入 core `aeroric_core::sessions::resume`
+// （补记二百四十五），错误文案 `Codex paginated sessions cannot be adopted for native
+// resume yet` 随迁（宿主与 core 两侧测试各自钉住）。re-export 保持原路径与原可见性。
+pub(crate) use aeroric_core::sessions::resume::{
+    ensure_session_can_be_adopted, is_uuid_like, resolve_session_id_from_file,
+    session_file_supports_native_resume,
+};
 
 #[tauri::command]
 pub async fn session_supports_native_resume(
@@ -806,188 +774,30 @@ pub async fn recover_task_session(
 // （补记二百四十四）。`is_codex_format` 是内容嗅探的唯一答案源——手写约束 7 要求
 // 「嗅探只做一次并复用同一答案」，宿主其余引用点都从这里走；`usage` 族另一份
 // 按内容判族的探针在 `analytics.rs`，其归属随 Q1 留给 P8-04。
+#[cfg(test)]
+use aeroric_core::sessions::parser::parse_session_messages;
 pub(crate) use aeroric_core::sessions::parser::{
-    is_codex_format, parse_session_messages, parse_session_messages_with_format,
-    SESSION_FORMAT_DETECTION_LINES,
+    is_codex_format, parse_session_messages_with_format,
 };
 
-fn resolve_session_id_from_file(path: &Path, is_codex: bool) -> Option<String> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .take(SESSION_FORMAT_DETECTION_LINES)
-    {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if is_codex {
-            let event_type = value.get("type").and_then(|v| v.as_str());
-            if event_type == Some("session_meta") {
-                if let Some(id) = value
-                    .get("payload")
-                    .and_then(|p| p.get("id"))
-                    .and_then(|v| v.as_str())
-                    .filter(|id| !id.trim().is_empty())
-                {
-                    return Some(id.to_string());
-                }
-            }
-        } else if let Some(id) = value
-            .get("sessionId")
-            .or_else(|| value.get("session_id"))
-            .and_then(|v| v.as_str())
-            .filter(|id| !id.trim().is_empty())
-        {
-            return Some(id.to_string());
-        }
-    }
-
-    let stem = path.file_stem().and_then(|name| name.to_str())?;
-    if !is_codex && is_uuid_like(stem) {
-        return Some(stem.to_string());
-    }
-
-    if is_codex {
-        if let Some(rest) = stem.strip_prefix("rollout-") {
-            if let Some(candidate) = rest.get(20..) {
-                if is_uuid_like(candidate) {
-                    return Some(candidate.to_string());
-                }
-            }
-        }
-        if is_uuid_like(stem) {
-            return Some(stem.to_string());
-        }
-    }
-
-    None
-}
-
-fn session_started_at_ms(path: &Path) -> Option<i64> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .take(SESSION_FORMAT_DETECTION_LINES)
-    {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        let timestamp = value
-            .get("timestamp")
-            .or_else(|| {
-                value
-                    .get("payload")
-                    .and_then(|payload| payload.get("timestamp"))
-            })
-            .and_then(serde_json::Value::as_str);
-        if let Some(timestamp) = timestamp {
-            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp) {
-                return Some(parsed.timestamp_millis());
-            }
-        }
-    }
-
-    fs::metadata(path)
-        .ok()
-        .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok())
-        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as i64)
-}
-
-fn session_matches_project(path: &Path, project_path: &str, is_codex: bool) -> bool {
-    if !is_codex {
-        return true;
-    }
-    let expected = Path::new(project_path)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(project_path));
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .take(SESSION_FORMAT_DETECTION_LINES)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
-        .filter_map(|value| {
-            value
-                .get("payload")
-                .and_then(|payload| payload.get("cwd"))
-                .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from)
-        })
-        .any(|cwd| cwd.canonicalize().unwrap_or(cwd) == expected)
-}
-
-fn first_user_message(path: &Path, is_codex: bool) -> Option<String> {
-    let lines = BufReader::new(File::open(path).ok()?)
-        .lines()
-        .map_while(Result::ok)
-        .take(2_000)
-        .collect::<Vec<_>>();
-    parse_session_messages(&lines, is_codex)
-        .into_iter()
-        .find(|message| message.role == "user")
-        .and_then(|message| {
-            message
-                .content
-                .into_iter()
-                .find_map(|content| match content {
-                    SessionContent::Text { text } if !text.trim().is_empty() => Some(text),
-                    _ => None,
-                })
-        })
-}
-
+// 会话 id 解析、起算时间、cwd 匹配、首条用户消息与 `recover_session` 一族已随第五片
+// 迁入 core `aeroric_core::sessions::resume`（补记二百四十五）。唯一形状变化由下面这个
+// 薄包装承载：**`home` 由宿主注入**（`core-discovers-no-real-home`），roots 规则复用
+// 第二片的 discovery；两处调用点（`recover_task_session` 命令与 codex 恢复 watcher）
+// 一字不改。
 fn recover_session(
     project_path: &str,
     prompt: &str,
     created_at: i64,
     is_codex: bool,
 ) -> Option<RecoveredSession> {
-    let mut files = if is_codex {
-        collect_session_files_from_roots(&codex_sessions_roots(project_path))
-    } else {
-        let mut files = Vec::new();
-        for root in claude_sessions_dirs_for_project(project_path) {
-            collect_jsonl_files(&root, &mut files);
-        }
-        files
-    };
-    let normalized_prompt = prompt.trim();
-    files.retain(|path| session_matches_project(path, project_path, is_codex));
-
-    files
-        .into_iter()
-        .filter_map(|path| {
-            let started_at = session_started_at_ms(&path)?;
-            let delta = started_at.abs_diff(created_at);
-            if delta > 15 * 60 * 1_000 {
-                return None;
-            }
-            let prompt_match = if normalized_prompt.is_empty() {
-                true
-            } else {
-                first_user_message(&path, is_codex)
-                    .map(|message| message.trim().contains(normalized_prompt))
-                    .unwrap_or(false)
-            };
-            if !prompt_match {
-                return None;
-            }
-            let session_id = resolve_session_id_from_file(&path, is_codex)?;
-            Some((
-                delta,
-                RecoveredSession {
-                    session_id,
-                    session_path: path.to_string_lossy().into_owned(),
-                },
-            ))
-        })
-        .min_by_key(|(delta, _)| *delta)
-        .map(|(_, recovered)| recovered)
+    aeroric_core::sessions::resume::recover_session(
+        crate::platform::home_dir().as_deref(),
+        project_path,
+        prompt,
+        created_at,
+        is_codex,
+    )
 }
 
 // ── 会话摘要提取（供任务命名等上下文感知功能复用） ─────────────────────────────
@@ -1257,19 +1067,6 @@ fn strip_ansi(s: &str) -> String {
         }
     }
     result
-}
-
-fn is_uuid_like(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    parts.len() == 5
-        && parts[0].len() == 8
-        && parts[1].len() == 4
-        && parts[2].len() == 4
-        && parts[3].len() == 4
-        && parts[4].len() == 12
-        && parts
-            .iter()
-            .all(|p| p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 fn find_claude_session_file(session_id: &str, project_path: &str) -> Option<PathBuf> {

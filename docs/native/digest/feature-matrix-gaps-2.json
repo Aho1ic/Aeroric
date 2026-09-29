@@ -1,10 +1,22 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "c416884082a365d8aa5d56b8909d4f759c3262da934a438b07595889859a29e9",
+  "sourceSha256": "07bc7bc8767853cf531298201616e684956c204f30af45aa1530daa471c04041",
   "capBytes": 32768,
   "payload": {
     "gaps": [
+      {
+        "id": "G07",
+        "finding": "remote/server.rs:393 在存在任一已配对设备或任一配置的公网 endpoint 时绑定 0.0.0.0（默认端口 6790）",
+        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。",
+        "requirement": "host 侧必须保留同等保守的 scope 判定，不得因原生 IPC 改造而放宽",
+        "task_ids": "P3-06, P8-03",
+        "owner": "core:host+remote",
+        "test": "tests/ipc_auth.rs 断言 host 绝不监听 TCP 0.0.0.0；remote 能力只在显式开启时暴露",
+        "status": "open",
+        "verified_on": "2026-09-29",
+        "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立（引用已改准，非缺陷更正）"
+      },
       {
         "id": "G08",
         "finding": "前端 invoke 调用点里仍有大量裸命令字符串，命令名由变量给出的站点必须登记为封闭枚举。2026-09-28 复算：工具口径（`extractInvokeLiterals`：排除测试文件、名字须匹配 `^[a-z0-9_]+$`、按括号深度扫调用点）报 **invokeLiterals=423**；本轮另用一个较宽的行的正则测得调用点 569 / 裸字符串 421 / 非字面量 148，**这两个数不同基、不得互相校正**（正则漏掉跨行带嵌套泛型的调用，工具的多行扫描才是准的）。原记的『257/365 且另有 5 处变量拼接』已不描述当前树。",

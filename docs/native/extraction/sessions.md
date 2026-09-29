@@ -19,9 +19,9 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 | # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
 |---|---|---|---|---|---|---|
-| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | Struct RecoveredSession, adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher(), spawn_claude_lazy_session_attach(), spawn_codex_session_recovery(), spawn_resume_session_watcher() +3 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher(), spawn_claude_lazy_session_attach(), spawn_codex_session_recovery(), spawn_resume_session_watcher(), spawn_status_session_watcher() +2 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
-| 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | Struct ExportTaskMeta, export_session_markdown_inner(), format_timestamp_ms(), sanitize_md_inline(), validate_export_output_path(), write_export_markdown() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
+| 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | export_session_markdown_inner() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
 | 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | discover_dsh_session_since(), dsh_agent_owning_session(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), newest_dsh_session_since(), register_dsh_session(), register_dsh_session_with_preset(), spawn_dsh_session_watcher() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_sessions_dir_for(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
@@ -34,7 +34,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **9773**, command wrappers: **13**, test items excluded from the symbol lists: **125**
+- files: **11**, lines: **9376**, command wrappers: **13**, test items excluded from the symbol lists: **125**
 - files carrying `AppHandle`/`State`: **6**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
@@ -50,7 +50,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 2. **OMP 的读取根进 core 必须收窄，且不得顺手删旧行为。** 今天 `session_omp.rs` 往发现列表里推三类根：托管档案 `~/.aeroric/agent-homes`（`:127`）、用户自己跑过系统 omp 的 `~/.omp/agent/sessions`（`:136`）、以及 `~/.omp/profiles/<name>/agent/sessions` 的档案枚举（`:142-145`，注释自己写明对应上游 `dirs.ts::resolveActiveAgentDirOverride` 的语义）。AGENTS.md 的 "Native OMP session history boundary" 与 INV-06 已定：**新 core 只许 `~/.aeroric/agent-homes/**`，外部历史导入分支 capability 默认 false**，只有满足 ADR-001 §5 的评审才能开启。搬这两支时既不借迁移静默扩权限，也不删旧客户端的现存行为。
 
-3. **"omp 无超时"与"dsh 有超时"这两句要分开验，后者的落点不在 `session_dsh.rs`。** omp 是 mtime 比较：`session_omp.rs:208-240`，`modified_ms <= since_ms` 直接跳过（`:178` 的注释解释懒会话为什么不能被窗口漏掉）。而 grep `deadline|timeout` 在 `session_dsh.rs` **0 命中**——真正的时限窗在 `session.rs:1604-1618`（2026-09-29 当日重锚：原记 :1876-1890，四片共 −272；判据同补记二百四十二）：`start_elapsed >= 1500ms`、`first_output_elapsed >= 1s`、`start_elapsed >= 8s` 三档结算条件。**动 P3-04 之前必须先判清这张窗属于哪个家族、删掉它会不会改变 done/input_required 的时机**；照 AGENTS.md 那句"不像 dsh 那样有 deadline"直接给 omp 造一个补偿性超时，是拿文字推断替代行为。
+3. **"omp 无超时"与"dsh 有超时"这两句要分开验，后者的落点不在 `session_dsh.rs`。** omp 是 mtime 比较：`session_omp.rs:208-240`，`modified_ms <= since_ms` 直接跳过（`:178` 的注释解释懒会话为什么不能被窗口漏掉）。而 grep `deadline|timeout` 在 `session_dsh.rs` **0 命中**——真正的时限窗在 `session.rs:1401-1415`（2026-09-29 当日重锚：原记 :1876-1890，五片共 −475；判据同补记二百四十二）：`start_elapsed >= 1500ms`、`first_output_elapsed >= 1s`、`start_elapsed >= 8s` 三档结算条件。**动 P3-04 之前必须先判清这张窗属于哪个家族、删掉它会不会改变 done/input_required 的时机**；照 AGENTS.md 那句"不像 dsh 那样有 deadline"直接给 omp 造一个补偿性超时，是拿文字推断替代行为。
 
 4. **`claimed_session_paths` 保持路径粒度，是 ADR-020 §3 写明的例外，不随重键改。** 站点：`session.rs:97` 取锁，`lib.rs:1278`（登记）、`:1287`/`:1293`（反查是否仍被引用）、`:1310`（释放）；锁序声明在 `lib.rs:118`——嵌套方向只有一个，`claimed_session_paths` → 会话表。会话四张表已按 `(task_id, generation)` 键（P2-05 重键 wave 2），claim 仍按路径。P3-04 的验收"同一文件不能给两个 task"就靠这条路径级排他，改成任务粒度即失效。
 
@@ -78,7 +78,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 > **三片（补记二百四十三）再锚**：读侧/解析迁走后 `session_dsh.rs` 797→429 行（watcher **:543→:138**、register :591→:186）、
 > `session_omp.rs` 751→538 行（watcher **:234→:189**）。`session.rs` 本轮未动，其上两组行号维持二片读数。
 >
-> **四片（补记二百四十四）再锚**：history 分页／读取层迁走后 `session.rs` 3317→**3163**（−154）：**:1733/:1742→:1579/:1588**、**:1808/:2020/:2109→:1654/:1866/:1955**、**:2242→:2088**、**:1881→:1727**（定义 :1873→**:1719**）、时限窗 **:1758-1772→:1604-1618**（起 :1604、条件行 :1616/:1618）。`session_dsh.rs`／`session_omp.rs` 本轮未动。
+> **四片（补记二百四十四）再锚**：history 分页／读取层迁走后 `session.rs` 3317→**3163**（−154）：**:1733/:1742→:1579/:1588**、**:1808/:2020/:2109→:1654/:1866/:1955**、**:2242→:2088**、**:1881→:1727**（定义 :1873→**:1719**）、时限窗 **:1758-1772→:1604-1618**（起 :1604、条件行 :1616/:1618）。`session_dsh.rs`／`session_omp.rs` 本轮未动。（**五片（补记二百四十五）再锚**：resume/export 上收后 `session.rs` 3163→**2960**（−203）：**:1579/:1588→:1376/:1385**、**:1654/:1866/:1955→:1451/:1663/:1752**、**:2088→:1885**、**:1727→:1524**（定义 :1719→**:1516**）、时限窗 **:1604-1618→:1401-1415**。）
 
 G04 原文：「per-task 会话 watcher 线程（`session.rs:1845/1847`、`session_dsh.rs:630`、`session_omp.rs:300`）无显式取消，仅靠 loop 退出」。当天逐站回源，**结论：三个引用站点全部过期，且这笔账已完成大半**。真实状态：
 

@@ -8335,7 +8335,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:655",
+      "definition_resolved": "src-tauri/src/session.rs:623",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8371,7 +8371,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:687",
+      "definition_resolved": "src-tauri/src/session.rs:655",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8408,7 +8408,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:737",
+      "definition_resolved": "src-tauri/src/session.rs:705",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8444,7 +8444,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:636",
+      "definition_resolved": "src-tauri/src/session.rs:604",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8480,7 +8480,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:759",
+      "definition_resolved": "src-tauri/src/session.rs:727",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8518,7 +8518,7 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:1412",
+      "definition_resolved": "src-tauri/src/session.rs:1209",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8554,12 +8554,12 @@
       "feature_ids": [
         "F05"
       ],
-      "definition_resolved": "src-tauri/src/session.rs:2107",
+      "definition_resolved": "src-tauri/src/session.rs:1904",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,

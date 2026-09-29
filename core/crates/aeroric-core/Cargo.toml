@@ -20,6 +20,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }
 portable-pty = { workspace = true }
+chrono = "0.4" # 与宿主同 crate 同版本（sessions/resume 的 RFC3339 起算与 export 的时间戳格式化，第五片）
 
 # runtime::subprocess(P3-01 切片二自宿主迁入)只在 unix 分支调 libc(setpgid/kill);
 # Windows 分支只用 std 的 creation_flags,不引入 windows-sys。
