@@ -112,3 +112,40 @@ fn payload_beyond_type_does_not_change_the_mapping() {
         "整帧原样转发是宿主 emit 的语义；映射只看 type"
     );
 }
+
+#[test]
+fn rpc_envelope_decodes_value_and_keeps_both_error_wordings_verbatim() {
+    // 与宿主 re-export 上的两条既有测试同一判据——core API 直接钉，防止
+    // 未来某次「只改宿主」的漂移绕过。
+    use aeroric_core::agents::dsh_host::client::decode_result_value;
+    assert_eq!(
+        decode_result_value(
+            json!({"result":{"ok":true,"value":{"id":7}}}),
+            "session.list"
+        )
+        .unwrap(),
+        json!({"id":7})
+    );
+    assert_eq!(
+        decode_result_value(json!({"result":{"ok":true}}), "x").unwrap(),
+        json!(null),
+        "缺 value 默认 Null 是既有语义"
+    );
+    assert_eq!(
+        decode_result_value(json!({}), "session.list").unwrap_err(),
+        "DSH API session.list response has no result"
+    );
+    assert_eq!(
+        decode_result_value(
+            json!({"result":{"ok":false,"error":{"message":"denied"}}}),
+            "session.list"
+        )
+        .unwrap_err(),
+        "DSH API session.list rejected the request: denied"
+    );
+    // error 缺 message ⇒ "unknown DSH API error" 兜底。
+    assert_eq!(
+        decode_result_value(json!({"result":{"ok":false,"error":{}}}), "m").unwrap_err(),
+        "DSH API m rejected the request: unknown DSH API error"
+    );
+}

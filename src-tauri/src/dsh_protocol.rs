@@ -1,27 +1,17 @@
-use serde_json::Value;
-
-/// Decode the stable DSH HTTP RPC result envelope while preserving its legacy
-/// defaults and error wording.
-pub(crate) fn decode_result_value(body: Value, method: &str) -> Result<Value, String> {
-    let result = body
-        .get("result")
-        .ok_or_else(|| format!("DSH API {method} response has no result"))?;
-    if result.get("ok").and_then(Value::as_bool) != Some(true) {
-        let message = result
-            .get("error")
-            .and_then(|error| error.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown DSH API error");
-        return Err(format!("DSH API {method} rejected the request: {message}"));
-    }
-    Ok(result.get("value").cloned().unwrap_or(Value::Null))
-}
+// DSH HTTP RPC 信封的解码已随 P3-05 第二片迁入 core
+// `aeroric_core::agents::dsh_host::client::decode_result_value`（补记二百五十一）；
+// re-export 保持 `crate::dsh_protocol::…` 路径与原可见性不变（唯一消费点
+// `dsh_webui/api_client.rs:68`），错误文案与缺省 `Null` 语义逐字随迁。
+pub(crate) use aeroric_core::agents::dsh_host::client::decode_result_value;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
+    // 以下两条是宿主既有测试，经 re-export 原样跑在 core 实现上
+    // （「旧客户端零回归」的机器形状：一条不少、文案逐字）。core 侧金样在
+    // `core/crates/aeroric-core/tests/dsh_host.rs`。
     #[test]
     fn decodes_success_value_and_defaults_missing_value_to_null() {
         assert_eq!(
