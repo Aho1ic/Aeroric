@@ -10,6 +10,7 @@ pub mod clock;
 pub mod context;
 pub mod events;
 pub mod location;
+pub mod location_probe;
 pub mod paths;
 pub mod projects;
 pub mod runtime;
