@@ -2,6 +2,9 @@
 // `aeroric_core::agents::dsh_host::client::decode_result_value`（补记二百五十一）；
 // re-export 保持 `crate::dsh_protocol::…` 路径与原可见性不变（唯一消费点
 // `dsh_webui/api_client.rs:68`），错误文案与缺省 `Null` 语义逐字随迁。
+// api_client 上收 core 后，宿主 lib 侧唯一消费点消失；re-export 只服务本文件
+// cfg(test) 的解码测试（原址保真，与 protocol_inventory 同一口径）。
+#[cfg(test)]
 pub(crate) use aeroric_core::agents::dsh_host::client::decode_result_value;
 
 #[cfg(test)]

@@ -3,6 +3,9 @@
 // 不变（唯一消费点 `dto.rs` 的 `snapshot()`）。下方 RETIRED 三表与对账测试是宿主测试面，
 // 原址保留——它们经 re-export 跑在同一份现用表上（「测试搬家必须 re-export 原址保真」，
 // 与 `dsh_protocol.rs` 同一口径，补记二百五十一）。
+// snapshot() 已上收 core `dto`，现用表在宿主 lib 里没了消费者；re-export 只服务
+// 本文件 cfg(test) 的对账测试（RETIRED 三表与现用表跑同一份数据，原址保真）。
+#[cfg(test)]
 pub(super) use aeroric_core::agents::dsh_host::client::{
     PACKAGE_VERSION, PROTOCOL_VERSION, REMOTE_EVENTS, REMOTE_EVENT_MODES, REMOTE_METHODS,
     RPC_METHODS, SOURCE_COMMIT, STREAM_CONTROL_FRAMES, STREAM_DOWNLINK_FRAMES,

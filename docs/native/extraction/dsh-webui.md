@@ -20,26 +20,26 @@ Cross-checked: 66 command wrappers counted here against 66 matching entries in `
 
 | # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
 |---|---|---|---|---|---|---|
-| 1 | `src-tauri/src/dsh_webui.rs` | `core/crates/aeroric-core/dsh_webui/dsh_webui-root.rs` | 14 | Struct DshSessionLogExport, Struct DshWebUiManager, Struct SuspendedDshRuntime, cancel_dsh_task(), cancel_dsh_task_core(), complete_dsh_task(), complete_dsh_task_core(), export_dsh_session_log(), get_dsh_webui_status(), list_dsh_agent_preset_details(), list_dsh_agent_presets(), pick_dsh_host_directory(), prompt_dsh_task(), run_dsh_task(), run_dsh_task_core() +5 more (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; cfg(windows) branch; cfg(unix) branch; spawns task/thread (needs a cancellation token); credential owner |
-| 2 | `src-tauri/src/dsh_webui/api_client.rs` | `core/crates/aeroric-core/dsh_webui/api_client.rs` | 0 | Const DSH_HTTP_ERROR_SNIPPET_BYTES, Struct DshApiClient, bounded_utf8_prefix() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
+| 1 | `src-tauri/src/dsh_webui.rs` | `core/crates/aeroric-core/dsh_webui/dsh_webui-root.rs` | 14 | Struct DshSessionLogExport, Struct DshWebUiManager, Struct SuspendedDshRuntime, cancel_dsh_task(), cancel_dsh_task_core(), complete_dsh_task(), complete_dsh_task_core(), export_dsh_session_log(), get_dsh_webui_status(), list_dsh_agent_preset_details(), list_dsh_agent_presets(), pick_dsh_host_directory(), prompt_dsh_task(), run_dsh_task(), run_dsh_task_core() +5 more (20 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; cfg(windows) branch; cfg(unix) branch; spawns task/thread (needs a cancellation token); credential owner |
+| 2 | `src-tauri/src/dsh_webui/api_client.rs` | `core/crates/aeroric-core/dsh_webui/api_client.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 3 | `src-tauri/src/dsh_webui/build_readiness.rs` | `core/crates/aeroric-core/dsh_webui/build_readiness.rs` | 0 | Const DSH_BUILD_FAILURE_SIGNATURES, checkout_not_built_error(), declared_lib_artifacts(), dsh_checkout_missing_artifacts(), dsh_package_dirs(), explain_dsh_web_failure(), looks_like_incomplete_build() (7 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 | 4 | `src-tauri/src/dsh_webui/commands.rs` | `core/crates/aeroric-core/dsh_webui/commands.rs` | 52 | archive_dsh_session(), clear_dsh_goals(), complete_dsh_goal(), copy_dsh_agent_preset(), create_dsh_goal(), create_dsh_host_directory(), create_dsh_workspace(), delete_dsh_message_feedback(), delete_dsh_workspace(), describe_dsh_credentials(), describe_dsh_host(), discover_dsh_llm_models(), edit_dsh_goal(), execute_dsh_command(), fork_dsh_session() +39 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token) |
-| 5 | `src-tauri/src/dsh_webui/dto.rs` | `core/crates/aeroric-core/dsh_webui/dto.rs` | 0 | Struct DshCredentialView, Struct DshDirectoryEntry, Struct DshDirectoryListing, Struct DshDiscoveredModel, Struct DshGlobalModels, Struct DshGoal, Struct DshHostInfo, Struct DshModelCatalogFailure, Struct DshModelGroup, Struct DshModelInfo, Struct DshModelReasoning, Struct DshModelSelection, Struct DshPresetInfo, Struct DshPresetList, Struct DshPresetReadResult +16 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
+| 5 | `src-tauri/src/dsh_webui/dto.rs` | `core/crates/aeroric-core/dsh_webui/dto.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 6 | `src-tauri/src/dsh_webui/protocol_inventory.rs` | `core/crates/aeroric-core/dsh_webui/protocol_inventory.rs` | 0 | Const RETIRED_APIPROXY_METHODS, Const RETIRED_HOST_FRAMES, Const RETIRED_MUX_FRAMES (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
-| 7 | `src-tauri/src/dsh_webui/remote_mux.rs` | `core/crates/aeroric-core/dsh_webui/remote_mux.rs` | 0 | Const REMOTE_EVENT_RESULT_ENDPOINT, Const REMOTE_EVENT_STREAM_ENDPOINT, Const REMOTE_STREAM_MUX_PATH, Enum RemoteEventItem, Struct DshMuxStream, Struct DshRemoteMux, parse_remote_event_item(), remote_event_result_args(), remote_mux_url() (12 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | spawns task/thread (needs a cancellation token) |
+| 7 | `src-tauri/src/dsh_webui/remote_mux.rs` | `core/crates/aeroric-core/dsh_webui/remote_mux.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 8 | `src-tauri/src/dsh_webui/startup.rs` | `core/crates/aeroric-core/dsh_webui/startup.rs` | 0 | check_health(), ensure_dsh_webui(), ensure_dsh_webui_locked() (5 test items excluded) | `core/crates/aeroric-core/src/agents/dsh_host/startup.rs` | spawns task/thread (needs a cancellation token) |
 | 9 | `src-tauri/src/dsh_webui/terminal_render.rs` | `core/crates/aeroric-core/dsh_webui/terminal_render.rs` | 0 | — (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 <!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
-- files: **9**, lines: **8047**, command wrappers: **66**, test items excluded from the symbol lists: **77**
+- files: **9**, lines: **5555**, command wrappers: **66**, test items excluded from the symbol lists: **64**
 - files carrying `AppHandle`/`State`: **3**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
 - files with `cfg(windows)`: **1**; with `cfg(unix)`: **1**
-- files that spawn (need an explicit cancellation/reap owner before extraction): **4**
-- files touching credentials: **2**
+- files that spawn (need an explicit cancellation/reap owner before extraction): **3**
+- files touching credentials: **1**
 
 ## destination 列的语义（2026-09-29 由表态项第 14 项定为 ②；手写节，`--check` 不比对）
 

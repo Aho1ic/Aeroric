@@ -9,10 +9,13 @@
 //! 落盘 I/O 留宿主**；10 条 `dsh-host-*` topic 的接线出口（`mapped` 或
 //! `not-forwarded`）在本 Task 收（T1=A 改派，见 `event-topics-pending.md`）。
 
+pub mod api;
 pub mod approvals;
 pub mod attachments;
 pub mod client;
 pub mod dispatcher;
+pub mod dto;
 pub mod projection;
+pub mod remote_mux;
 pub mod startup;
 pub mod state;
