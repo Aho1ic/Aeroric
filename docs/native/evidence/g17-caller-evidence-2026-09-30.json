@@ -1,0 +1,337 @@
+[
+ {
+  "command": "stop_dsh_webui",
+  "rpc": "dsh.stop_dsh_webui",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "get_dsh_webui_status",
+  "rpc": "dsh.get_dsh_webui_status",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "get_dsh_protocol_capabilities",
+  "rpc": "dsh.get_dsh_protocol_capabilities",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "invoke_dsh_remote",
+  "rpc": "dsh.invoke_dsh_remote",
+  "rpc_in_inventory": false,
+  "frontend_files": [
+   "src/dshProtocol.ts",
+   "src/test/dsh-protocol-snapshot.test.ts"
+  ],
+  "host_files_beyond_registration": [
+   "src-tauri/src/dsh_webui/protocol_inventory.rs"
+  ],
+  "mux_generic": false
+ },
+ {
+  "command": "list_dsh_agent_preset_details",
+  "rpc": "dsh.list_dsh_agent_preset_details",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "set_dsh_web_default_preset",
+  "rpc": "dsh.set_dsh_web_default_preset",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "list_dsh_sessions",
+  "rpc": "dsh.list_dsh_sessions",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "rename_dsh_session",
+  "rpc": "dsh.rename_dsh_session",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "fork_dsh_session",
+  "rpc": "dsh.fork_dsh_session",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "search_dsh_sessions",
+  "rpc": "dsh.search_dsh_sessions",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "list_dsh_workspaces",
+  "rpc": "dsh.list_dsh_workspaces",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "create_dsh_workspace",
+  "rpc": "dsh.create_dsh_workspace",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "rename_dsh_workspace",
+  "rpc": "dsh.rename_dsh_workspace",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "delete_dsh_workspace",
+  "rpc": "dsh.delete_dsh_workspace",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "reorder_dsh_workspaces",
+  "rpc": "dsh.reorder_dsh_workspaces",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "move_dsh_session_in_workspace",
+  "rpc": "dsh.move_dsh_session_in_workspace",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "archive_dsh_session",
+  "rpc": "dsh.archive_dsh_session",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "describe_dsh_credentials",
+  "rpc": "dsh.describe_dsh_credentials",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "set_dsh_credential",
+  "rpc": "dsh.set_dsh_credential",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [
+   "src-tauri/src/dsh_webui/commands.rs"
+  ],
+  "mux_generic": false
+ },
+ {
+  "command": "unset_dsh_credential",
+  "rpc": "dsh.unset_dsh_credential",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "list_dsh_llm_providers",
+  "rpc": "dsh.list_dsh_llm_providers",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "discover_dsh_llm_models",
+  "rpc": "dsh.discover_dsh_llm_models",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "get_dsh_subagent_history",
+  "rpc": "dsh.get_dsh_subagent_history",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "prompt_dsh_subagent",
+  "rpc": "dsh.prompt_dsh_subagent",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "interrupt_dsh_subagent",
+  "rpc": "dsh.interrupt_dsh_subagent",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "create_dsh_goal",
+  "rpc": "dsh.create_dsh_goal",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "edit_dsh_goal",
+  "rpc": "dsh.edit_dsh_goal",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "pause_dsh_goal",
+  "rpc": "dsh.pause_dsh_goal",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "resume_dsh_goal",
+  "rpc": "dsh.resume_dsh_goal",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "complete_dsh_goal",
+  "rpc": "dsh.complete_dsh_goal",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "clear_dsh_goals",
+  "rpc": "dsh.clear_dsh_goals",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "describe_dsh_host",
+  "rpc": "dsh.describe_dsh_host",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "list_dsh_host_directory",
+  "rpc": "dsh.list_dsh_host_directory",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "create_dsh_host_directory",
+  "rpc": "dsh.create_dsh_host_directory",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "select_dsh_session_preset",
+  "rpc": "dsh.select_dsh_session_preset",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "read_dsh_agent_preset",
+  "rpc": "dsh.read_dsh_agent_preset",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "open_dsh_settings_document",
+  "rpc": "dsh.open_dsh_settings_document",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "replace_dsh_settings",
+  "rpc": "dsh.replace_dsh_settings",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "mutate_dsh_settings",
+  "rpc": "dsh.mutate_dsh_settings",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "update_dsh_settings",
+  "rpc": "dsh.update_dsh_settings",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ },
+ {
+  "command": "pick_dsh_host_directory",
+  "rpc": "dsh.pick_dsh_host_directory",
+  "rpc_in_inventory": false,
+  "frontend_files": [],
+  "host_files_beyond_registration": [],
+  "mux_generic": false
+ }
+]
