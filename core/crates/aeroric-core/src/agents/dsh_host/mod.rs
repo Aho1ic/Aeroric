@@ -15,6 +15,8 @@ pub mod attachments;
 pub mod client;
 pub mod dispatcher;
 pub mod dto;
+pub mod executor;
+pub mod ports;
 pub mod projection;
 pub mod remote_mux;
 pub mod startup;
