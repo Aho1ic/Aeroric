@@ -853,14 +853,24 @@ fn settings_mapping_primitives_default_reset_and_normalize() {
     .unwrap();
     let shell = section(&doc, "shell");
     assert!(shell.is_some());
-    assert_eq!(positive_u64(shell, "timeoutMs", DEFAULT_SHELL_TIMEOUT_MS), 5);
+    assert_eq!(
+        positive_u64(shell, "timeoutMs", DEFAULT_SHELL_TIMEOUT_MS),
+        5
+    );
     assert_eq!(
         positive_u64(shell, "zeroKey", DEFAULT_SHELL_TIMEOUT_MS),
         DEFAULT_SHELL_TIMEOUT_MS,
         "0 不是合法值——回退（fallback 语义正是防 0 除零/无限流）"
     );
-    assert_eq!(positive_u64(shell, "missing", DEFAULT_SHELL_TIMEOUT_MS), DEFAULT_SHELL_TIMEOUT_MS);
-    assert_eq!(optional_string(shell, "textKey").as_deref(), Some("padded"), "trim 语义");
+    assert_eq!(
+        positive_u64(shell, "missing", DEFAULT_SHELL_TIMEOUT_MS),
+        DEFAULT_SHELL_TIMEOUT_MS
+    );
+    assert_eq!(
+        optional_string(shell, "textKey").as_deref(),
+        Some("padded"),
+        "trim 语义"
+    );
     assert_eq!(optional_string(shell, "blank"), None, "纯空白＝没有值");
     assert!(section(&doc, "nope").is_none());
 
@@ -873,7 +883,10 @@ fn settings_mapping_primitives_default_reset_and_normalize() {
     );
     let fresh = section_mut(&mut doc, "brand-new").unwrap();
     assert!(fresh.is_empty(), "缺失节以空 mapping 落位");
-    assert!(section_mut(&mut doc, "shell").is_err(), "标量节必须拒绝而非静默覆盖");
+    assert!(
+        section_mut(&mut doc, "shell").is_err(),
+        "标量节必须拒绝而非静默覆盖"
+    );
     let mut notmap: YamlValue = serde_yaml_ng::from_str("- 1\n").unwrap();
     assert_eq!(
         section_mut(&mut notmap, "a").unwrap_err(),

@@ -23,6 +23,7 @@ portable-pty = { workspace = true }
 chrono = "0.4" # 与宿主同 crate 同版本（sessions/resume 的 RFC3339 起算与 export 的时间戳格式化，第五片）
 url = "2" # 与宿主同 crate 同版本（dsh_host/startup 的启动 URL 闸门，P3-05 第五片）
 serde_yaml_ng = "0.10" # 与宿主同 crate 同版本（dsh_host/client 的插件 patch/dump 线数据解析，P3-05 第十一片；纯解析零 I/O）
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] } # grill [dsh] D1（补记二百六十四，2026-09-30 用户决策）：core 自此持网络出口，`DshApiClient` 上收用；feature 集与宿主 `src-tauri/Cargo.toml:46` 逐字一致，不造第二套传输
 
 # runtime::subprocess(P3-01 切片二自宿主迁入)只在 unix 分支调 libc(setpgid/kill);
 # Windows 分支只用 std 的 creation_flags,不引入 windows-sys。
