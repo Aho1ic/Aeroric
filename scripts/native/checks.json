@@ -19,6 +19,7 @@
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 17,
       "event-replay-rust@host": 3,
+      "executor-pty-rust@host": 1,
       "extraction-unit@skeleton": 19,
       "gate-runner-unit@skeleton": 36,
       "host-lib-rust@host": 20,
@@ -1646,6 +1647,24 @@
           ],
           "minCases": 4,
           "$note": "二次启动 lock 步拒绝（step 1 前缀可分类）/ready 帧经真管道含 Action 4 全字段/crash 等价 drop 后残留 socket 清绑重启。"
+        },
+        {
+          "name": "executor-pty-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "executor_pty"
+          ],
+          "minCases": 1,
+          "$note": "b1.1 判据：fake agent 经 TaskService 全链（create→start→真 PTY→exit→observe）结算 done＋字节环含输出＋句柄/台账退场。floor 从 2026-10-01 现测 1 起。"
         }
       ]
     }

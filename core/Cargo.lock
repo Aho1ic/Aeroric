@@ -48,6 +48,7 @@ dependencies = [
  "aeroric-protocol",
  "futures-util",
  "libc",
+ "portable-pty",
  "serde",
  "serde_json",
  "sha2",

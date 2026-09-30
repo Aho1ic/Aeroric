@@ -1,0 +1,333 @@
+//! `CliPtyExecutor` —— 无头 host 的 PTY 执行体（P3-07 b1.1，补记二百九十一的
+//! 装配清单）。
+//!
+//! 形状是「材料全在 core，这里只装配」：命令构造（`agents::launch` 四 plan）、
+//! 会话装配（`terminal::executor::activate_pty_session`）、字节环
+//! （`terminal::pty::TerminalService`——attach/events 的读点就是这里落的环）、
+//! 句柄账（`runtime::registry::TaskRegistry`）、状态判定（`TaskService::observe`
+//! 的 `TaskEvent::Exit`——**executor 不自己判状态**，单一 owner 不变）。
+//!
+//! 构造环（executor 要回报、service 要 executor）按补记二百九十一的定案解：
+//! `service: Mutex<Weak<TaskService>>` 回链，serve 装配后 `attach`；回链断开时
+//! 退出事件**不静默丢**——EventLog 仍发 `task-status`，载荷带
+//! `serviceUnwired: true`，是「拒绝是明说的」同族。
+//!
+//! 与宿主 `pty::run_task_core` 的**具名差**（fake-agent 场景不需要、⑦ 评审
+//! 对账）：hooks/mcp/managed_home 装配、login-shell env 与 guard ops、
+//! session-evidence 的 settle 分支（`settle_exit` 的「会话算成功」半边）、
+//! prompt 注入（inject_prompt_into_terminal 的打字机路径）、终端历史落盘。
+//! dsh 家族在此返回 `Unsupported`（它的启动走 `dsh_host::executor`，③c 接审批面）。
+
+use std::io::Read as _;
+use std::sync::{Arc, Mutex, Weak};
+
+use aeroric_core::agents::launch::{claude_plan, codex_plan, omp_plan, LaunchInput};
+use aeroric_core::context::CoreContext;
+use aeroric_core::events::EventLog;
+use aeroric_core::runtime::manager::WatcherSupervisor;
+use aeroric_core::runtime::registry::{RunKey, TaskRegistry};
+use aeroric_core::tasks::executor::{
+    CancelTarget, Execution, ExecutorFailure, LaunchRequest, LiveRuns, ResetOutcome, ResumeRequest,
+    TaskEvent, TaskExecutor,
+};
+use aeroric_core::tasks::{ProtocolFamily, TaskService, WorkingDirectory};
+use aeroric_core::terminal::executor::activate_pty_session;
+use aeroric_core::terminal::pty::TerminalService;
+use aeroric_core::terminal::stream::TerminalIdentity;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use serde_json::{json, Value};
+
+pub struct CliPtyExecutor {
+    context: Arc<CoreContext>,
+    registry: Arc<TaskRegistry>,
+    terminal: Arc<TerminalService>,
+    log: Arc<EventLog>,
+    #[allow(dead_code)] // 任务托管在 b1.2 的 run 等待面接入；reader/exit 线程先直 spawn
+    supervisor: Arc<WatcherSupervisor>,
+    service: Mutex<Weak<TaskService>>,
+}
+
+impl CliPtyExecutor {
+    pub fn new(
+        context: Arc<CoreContext>,
+        registry: Arc<TaskRegistry>,
+        terminal: Arc<TerminalService>,
+        log: Arc<EventLog>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            context,
+            registry,
+            terminal,
+            log,
+            supervisor: Arc::new(WatcherSupervisor::new()),
+            service: Mutex::new(Weak::new()),
+        })
+    }
+
+    /// serve 装配在 `TaskService::new` 之后回链（构造环的唯一解开点）。
+    pub fn attach(&self, service: &Arc<TaskService>) {
+        *self.service.lock().expect("lock") = Arc::downgrade(service);
+    }
+
+    /// agent → 程序与固定参数：settings.yaml 的 custom_agents 优先，内建回退
+    /// 到「程序名＝agent id」（PATH 解析）。与宿主 launch_spec 的差具名在模块头。
+    fn resolve_launch(&self, agent: &str) -> LaunchInput {
+        let settings = aeroric_core::storage::load_settings(&self.context)
+            .ok()
+            .and_then(|outcome| outcome.found());
+        if let Some(fields) = settings.as_ref() {
+            if let Some(profile) = fields
+                .get("custom_agents")
+                .and_then(Value::as_array)
+                .and_then(|list| {
+                    list.iter()
+                        .find(|profile| profile["id"].as_str() == Some(agent))
+                })
+            {
+                let program = profile["path"]
+                    .as_str()
+                    .filter(|p| !p.trim().is_empty())
+                    .unwrap_or(agent)
+                    .to_string();
+                let args = profile["args"]
+                    .as_array()
+                    .map(|args| {
+                        args.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return LaunchInput { program, args };
+            }
+        }
+        LaunchInput::new(agent)
+    }
+}
+
+fn to_command_builder(plan: aeroric_core::agents::launch::LaunchPlan) -> CommandBuilder {
+    let mut c = CommandBuilder::new(&plan.program);
+    c.args(&plan.args);
+    if let Some(cwd) = &plan.cwd {
+        c.cwd(cwd);
+    }
+    for (key, value) in &plan.env {
+        c.env(key, value);
+    }
+    for key in &plan.unset_env {
+        c.env_remove(key);
+    }
+    c
+}
+
+impl TaskExecutor for CliPtyExecutor {
+    fn launch(&self, request: &LaunchRequest) -> Execution<()> {
+        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
+                    .to_string(),
+            });
+        };
+        if request.family == ProtocolFamily::Dsh {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "dsh tasks run through dsh_host::executor with the transport ports; \
+                         the approval surface lands in P3-07 ③c"
+                    .to_string(),
+            });
+        }
+        let input = self.resolve_launch(&request.agent);
+        let mut plan = match request.family {
+            ProtocolFamily::Claude => claude_plan(
+                &input,
+                &request.permission_mode_wire,
+                &request.agent,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+            ),
+            ProtocolFamily::Codex => codex_plan(
+                &input,
+                &request.permission_mode_wire,
+                &path,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+                request.speed.as_deref(),
+            ),
+            ProtocolFamily::Omp => omp_plan(
+                &input,
+                &request.permission_mode_wire,
+                &[],
+                &path,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+                request.session_id.as_deref(),
+                &[],
+            ),
+            ProtocolFamily::Dsh => unreachable!("rejected above"),
+        };
+        plan = plan.cwd(path);
+        let command = to_command_builder(plan);
+
+        let pty_system = native_pty_system();
+        let (cols, rows) = request.terminal_size.unwrap_or((120, 30));
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| ExecutorFailure::Spawn {
+                reason: format!("cannot open a pty: {e}"),
+            })?;
+        let run = RunKey::minted(&request.task_id, request.generation);
+        let handles = activate_pty_session(pair, command, &self.registry, &run).map_err(|e| {
+            ExecutorFailure::Spawn {
+                reason: e.to_string(),
+            }
+        })?;
+
+        // reader：阻塞读进字节环。线程随进程退出消亡；supervisor 托管的
+        // 取消面在 b1.2（run 等待 settled 时随 shutdown 一起收）。
+        let terminal = Arc::clone(&self.terminal);
+        let identity = TerminalIdentity::new(request.task_id.clone(), request.generation);
+        let mut reader = handles.reader;
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8 * 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        terminal.publish(&identity, &buf[..n]);
+                    }
+                }
+            }
+        });
+
+        // exit：wait 到进程结束→经回链 observe（状态判定在 TaskService，
+        // 不在这里）；回链断开时 EventLog 照发、载荷自证未接线。
+        struct ExitCtx {
+            registry: Arc<TaskRegistry>,
+            log: Arc<EventLog>,
+            service: Mutex<Weak<TaskService>>,
+        }
+        let ctx = Arc::new(ExitCtx {
+            registry: Arc::clone(&self.registry),
+            log: Arc::clone(&self.log),
+            service: Mutex::new(self.service.lock().expect("lock").clone()),
+        });
+        let task_id = request.task_id.clone();
+        let project_id = request.project_id.clone();
+        let generation = request.generation;
+        let child = handles.child;
+        std::thread::spawn(move || {
+            let code = match child.lock().wait() {
+                Ok(status) => Some(status.exit_code() as i32),
+                Err(_) => Some(-1),
+            };
+            // 退场先于上报（宿主 `run_task_core` 的 cleanup→status 顺序照抄）：
+            // done 一旦可见，`has_live_run` 必须已是 false——反序会让观察者
+            // 在窗口期把「已终结」误判成「还活着」（ADR-034 的存活闸读的就是
+            // 这本账；Exit 事件本身是 Runtime 来源，不受闸约束，先 retire 安全）。
+            let run = RunKey::minted(&task_id, generation);
+            ctx.registry.remove_pty_handles(&run);
+            ctx.registry.runs.retire(&task_id, generation);
+            let service = ctx.service.lock().expect("lock").upgrade();
+            match service {
+                Some(service) => {
+                    let _ = service.observe(
+                        &project_id,
+                        TaskEvent::Exit {
+                            task_id: task_id.clone(),
+                            generation,
+                            code: if code == Some(-1) { None } else { code },
+                        },
+                    );
+                }
+                None => {
+                    ctx.log.append(
+                        "task-status",
+                        json!({
+                            "taskId": task_id,
+                            "generation": generation,
+                            "code": code,
+                            "serviceUnwired": true,
+                        }),
+                    );
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// resume＝带 `session_id` 的再连（ADR-029 的 handoff 语义由调用方
+    /// TaskService 决定）；b1.1 只有 claude/codex 的 plan 吃 resume——
+    /// omp 走 `omp_plan` 的 resume 参数。形状与 launch 同路径。
+    fn resume(&self, request: &ResumeRequest) -> Execution<()> {
+        if request.family == ProtocolFamily::Dsh {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "dsh has no native resume; the continuation is a handoff into a new \
+                         session, which core decides (ADR-029)"
+                    .to_string(),
+            });
+        }
+        // b1.2 把 ResumeRequest 组装回 LaunchRequest 形状后共用装配；
+        // 现在显式拒绝而不是半接线——「等待语义/注入差一」的 resume 假成功
+        // 比拒绝危险（P3-05 的 resume 判据同族）。
+        Err(ExecutorFailure::Unsupported {
+            reason: "headless resume lands with the run-wait surface (P3-07 b1.2)".to_string(),
+        })
+    }
+
+    fn cancel(&self, task_id: &str, _target: &CancelTarget) -> Execution<()> {
+        // 取消意图先记账（settle 判定读它），再对当前代发 kill。
+        self.registry
+            .cancelled_tasks
+            .lock()
+            .insert(task_id.to_string());
+        if let Some(child) = self.registry.child_for(task_id) {
+            let _ = child.lock().kill();
+        }
+        Ok(())
+    }
+
+    fn complete(&self, task_id: &str, _working_directory: &str) -> Execution<()> {
+        self.registry
+            .manually_completed_tasks
+            .lock()
+            .insert(task_id.to_string());
+        if let Some(child) = self.registry.child_for(task_id) {
+            let _ = child.lock().kill();
+        }
+        Ok(())
+    }
+
+    /// 退场账：台账 retire＋取消/完成标记清除。session 归属字段回 Default——
+    /// 会话文件跟踪（claude/codex jsonl 归属）在 CLI host 是 ⑦ 的具名缺口，
+    /// **不假装有**：字段空＝客户端 mergeResetTaskSession 保持原归属。
+    fn reset(&self, task_id: &str) -> Result<ResetOutcome, ExecutorFailure> {
+        self.registry.runs.retire_task(task_id);
+        self.registry.cancelled_tasks.lock().remove(task_id);
+        self.registry
+            .manually_completed_tasks
+            .lock()
+            .remove(task_id);
+        Ok(ResetOutcome::default())
+    }
+}
+
+/// 存活判定读同一张句柄账（ADR-036：core 问、账在持有者）。
+pub struct RegistryLiveRuns {
+    registry: Arc<TaskRegistry>,
+}
+
+impl RegistryLiveRuns {
+    pub fn new(registry: Arc<TaskRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+impl LiveRuns for RegistryLiveRuns {
+    fn has_live_run(&self, task_id: &str) -> bool {
+        self.registry.child_for(task_id).is_some()
+    }
+}
