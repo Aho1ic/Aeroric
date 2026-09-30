@@ -586,3 +586,68 @@ fn permission_preset_maps_three_modes_and_refuses_the_rest() {
         "Unsupported DSH permission mode \"root\""
     );
 }
+
+#[test]
+fn terminal_wrap_moves_whole_words_and_collapses_blank_runs() {
+    use aeroric_core::agents::dsh_host::projection::TerminalWrap;
+    let mut w = TerminalWrap::default();
+    // 低于 MIN_WRAP_COLS 的宽度不软换：原样透传（交给 xterm 硬折）。
+    w.set_cols(10);
+    assert_eq!(w.push("alpha beta gamma"), "alpha beta gamma");
+    // 打开换行：短词整词搬运、超长词在行末硬折，字符一个不丢。
+    w.set_cols(20);
+    let out = w.push("short averylongwordthatwillnotfit");
+    let flushed = w.flush();
+    let full = out.clone() + &flushed;
+    assert!(out.starts_with("short "), "空格先落地: {out:?}");
+    assert!(full.contains("\r\n"), "超长词必须产生折行: {full:?}");
+    assert_eq!(
+        full.replace("\r\n", ""),
+        "short averylongwordthatwillnotfit",
+        "软换行只插 CRLF，不得增减内容字符"
+    );
+    assert!(!out.contains("\n\n"), "不产生空行: {out:?}");
+    // 连续空行最多留一个、首屏空行丢弃：喂三段空行为独立机器验证。
+    let mut fresh = TerminalWrap::default();
+    fresh.set_cols(40);
+    assert_eq!(fresh.push("\r\n\r\n\r\n"), "", "首屏之前的空行全部丢掉");
+    let seen = fresh.push("content\r\n\r\n\r\nnext");
+    // 尾词 "next" 按设计滞留待续，flush 后才落地。
+    let seen_full = seen + &fresh.flush();
+    assert!(
+        seen_full.contains("content\r\n\r\nnext"),
+        "三换行压成一空行: {seen_full:?}"
+    );
+}
+
+#[test]
+fn reasoning_fold_closes_summary_and_counts_lines() {
+    use aeroric_core::agents::dsh_host::projection::ReasoningFold;
+    let mut fold = ReasoningFold::default();
+    assert_eq!(fold.take_row(), None, "没推理就不打行");
+    fold.push("想清楚了");
+    fold.push("更多字\r\n第二行");
+    let row = fold.take_row().expect("有内容必须出行");
+    assert!(row.starts_with("\r\n"), "{row:?}");
+    assert!(row.contains("✻ Thinking · 想清楚了更多字"), "{row:?}");
+    assert!(row.contains("2 lines"), "跨行计数: {row:?}");
+    // take_row 即 reset：同一实例再收一段是全新的折叠。
+    fold.push("第二段");
+    let row2 = fold.take_row().unwrap();
+    assert!(
+        row2.contains("第二段") && !row2.contains("lines"),
+        "第二条不带旧行号: {row2:?}"
+    );
+    // 96 字符后加省略号且不再增长（剥 ANSI 后核长=前缀+97）。
+    use aeroric_core::agents::dsh_host::projection::plain_single_line;
+    let mut long = ReasoningFold::default();
+    long.push(&"字".repeat(200));
+    let row3 = long.take_row().unwrap();
+    let visible = plain_single_line(row3.replace("\r\n", " ").as_str());
+    assert!(visible.contains('…'), "超 96 必带省略号: {visible}");
+    assert_eq!(
+        visible.chars().count(),
+        "✻ Thinking · ".chars().count() + 97,
+        "96+省略号封顶"
+    );
+}
