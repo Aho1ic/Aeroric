@@ -182,13 +182,15 @@
       "positive_test": "tests/{dsh_host,dsh_approvals,dsh_reconnect}.rs + fake DSH server",
       "negative_test": "无窗口时审批保持等待不得自动同意；网络重放不得二次批准",
       "status": "planned",
-      "core_state": "in_progress",
+      "core_state": "accepted",
       "native_state": "unstarted",
       "side_states": {
-        "C": "in_progress",
+        "C": "accepted",
         "N": "unstarted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/dsh.md"
+      ]
     },
     {
       "id": "F07",
