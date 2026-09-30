@@ -63,3 +63,34 @@ async fn a_valid_request_still_works_after_a_sibling_connection_died() {
         aeroric_protocol::envelope::Frame::Success(_)
     ));
 }
+
+#[tokio::test]
+async fn a_slow_client_holding_a_half_frame_blocks_nobody_else() {
+    // 验收「slow client 不阻塞其他客户端」的正面断言：一条连接停在半帧
+    // （写了 `{` 不写完也不关），另一条照常握手＋调用。每连接独立任务的
+    // 形状在这里过真机。
+    let harness = Harness::start("frames").await;
+    let (_slow_reader, mut slow_writer) = harness.connect().await;
+    slow_writer
+        .write_all(b"{\"v\":1,")
+        .await
+        .expect("half frame parked");
+    // 不 flush 后的半帧已在内核缓冲；不读、不关——它就是慢客户端。
+
+    let (mut reader, mut writer) = harness.connect().await;
+    let frame = Harness::handshake(&mut reader, &mut writer, &harness.token, "fast").await;
+    assert!(matches!(
+        frame,
+        aeroric_protocol::envelope::Frame::Success(_)
+    ));
+    let frame = Harness::call(
+        &mut reader,
+        &mut writer,
+        &Harness::request("2", "events.since", serde_json::json!({"after":"0"})),
+    )
+    .await;
+    assert!(matches!(
+        frame,
+        aeroric_protocol::envelope::Frame::Success(_)
+    ));
+}

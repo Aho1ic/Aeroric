@@ -26,7 +26,7 @@
       "invariants-unit@skeleton": 13,
       "inventory-unit@skeleton": 57,
       "ipc-auth-rust@host": 4,
-      "ipc-frames-rust@host": 4,
+      "ipc-frames-rust@host": 5,
       "projects-core-rust@projects": 16,
       "projects-parity-is-derived-from-client@projects": 2,
       "projects-save-single-queue@projects": 3,
@@ -1608,7 +1608,7 @@
             "--test",
             "ipc_frames"
           ],
-          "minCases": 4,
+          "minCases": 5,
           "$note": "帧层三拒绝一律断连不降级：overlong 凑行前封顶/partial 不猜/malformed 断；坏连接不阻塞好连接。"
         },
         {
