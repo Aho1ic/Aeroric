@@ -25,7 +25,8 @@ pub struct CallContext {
     pub connection: Arc<tokio::sync::Mutex<Connection>>,
 }
 
-type Handler = Arc<
+/// dispatcher 对 handler 的类型别名（services.rs 的注册点用它标注闭包）。
+pub type Handler = Arc<
     dyn Fn(Request, Arc<CallContext>) -> futures_util::future::BoxFuture<'static, Frame>
         + Send
         + Sync,
@@ -143,9 +144,16 @@ pub struct HostServices {
 }
 
 impl HostServices {
-    /// 只装配**实现完整**的方法：handshake 与 events.since。
-    pub fn new(token: Arc<HostToken>, log: Arc<EventLog>) -> Arc<Self> {
+    /// 只装配**实现完整**的方法：handshake、events.since，与 ③a 的
+    /// 只读/幂等登记服务（project/task——`context` 是启动序列的产物，
+    /// 所有 handler 共享同一份写租约）。
+    pub fn new(
+        token: Arc<HostToken>,
+        log: Arc<EventLog>,
+        context: Arc<aeroric_core::context::CoreContext>,
+    ) -> Arc<Self> {
         let mut set = ServiceSet::new();
+        crate::services::register_read_services(&mut set, context);
         {
             let token = Arc::clone(&token);
             set.register(
@@ -258,7 +266,13 @@ mod tests {
             std::path::PathBuf::from("/tmp").join(format!("ah-disp-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let token = Arc::new(HostToken::load_or_create(&dir.join("host.token")).expect("token"));
-        let services = HostServices::new(token, Arc::new(EventLog::default()));
+        let services = HostServices::new(
+            token,
+            Arc::new(EventLog::default()),
+            Arc::new(aeroric_core::context::CoreContext::read_only(
+                aeroric_core::paths::AppPaths::from_user_home("/nonexistent-test-home"),
+            )),
+        );
         let context = Arc::new(CallContext {
             services: Arc::clone(&services.services),
             connection: Arc::new(tokio::sync::Mutex::new(Connection::new())),

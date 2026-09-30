@@ -79,6 +79,7 @@ impl Harness {
         let services = HostServices::new(
             Arc::clone(&started.token),
             Arc::new(aeroric_core::events::EventLog::default()),
+            Arc::clone(&started.context),
         );
         let running = Some(aeroric_host::startup::serve(started, Arc::clone(&services)));
         Self {

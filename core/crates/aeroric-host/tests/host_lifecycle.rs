@@ -146,6 +146,7 @@ async fn graceful_shutdown_unlinks_the_socket_and_frees_the_lease() {
     let services = aeroric_host::dispatcher::HostServices::new(
         std::sync::Arc::clone(&started.token),
         std::sync::Arc::new(aeroric_core::events::EventLog::default()),
+        std::sync::Arc::clone(&started.context),
     );
     let running = aeroric_host::startup::serve(started, services);
     assert!(socket.exists(), "serve 期间 socket 在位");

@@ -52,8 +52,9 @@ pub struct ReadyInfo {
 }
 
 /// 启动完成后的持有物：context（内含写租约，drop 即释放）、listener 与 token。
+/// context 是 `Arc`：serve 循环与每个 handler 共享同一份（写租约只有一份）。
 pub struct StartedHost {
-    pub context: CoreContext,
+    pub context: Arc<CoreContext>,
     pub listener: tokio::net::UnixListener,
     pub runtime: RuntimeMetadata,
     pub socket_path: PathBuf,
@@ -85,7 +86,12 @@ pub async fn run_startup(
     protocol_hash: &str,
 ) -> Result<StartedHost, StartupError> {
     // 1. lock —— 写租约（连卷探测），失败即「另一个写者持有着」，绝不排队等。
-    let context = CoreContext::acquire(options.paths.clone(), clock, owner, probe)?;
+    let context = Arc::new(CoreContext::acquire(
+        options.paths.clone(),
+        clock,
+        owner,
+        probe,
+    )?);
 
     // 2. data compat —— schema 版本判定（load 自带 UnsupportedSchema/Corrupt 拒绝）。
     let outcome = load_runtime(&context).map_err(|e| StartupError::DataCompat(e.to_string()))?;
@@ -196,6 +202,7 @@ pub fn serve(started: StartedHost, services: Arc<crate::dispatcher::HostServices
             socket_path,
             token: _token,
         } = started;
+        let _ = &context;
         // 活跃连接计数：shutdown 的 drain 判据。计数归零或 5 s 超时——
         // 超时后**照样**走清理（僵连接不许拖住租约释放，让位比等它诚实）。
         let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));

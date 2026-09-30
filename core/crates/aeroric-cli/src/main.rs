@@ -4,7 +4,7 @@
 mod args;
 mod client;
 
-use args::{exit, Cli, Command};
+use args::{exit, Cli, Command, ProjectCmd, TaskCmd};
 use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
@@ -24,9 +24,9 @@ async fn dispatch(cli: Cli) -> i32 {
         // ③/④/⑤ 片的落地面。未接线前每命令显式失败，数字用 CONNECT：
         // 能力在计划里，不在树里。
         Command::Events { after } => events(&cli.data_dir, &after).await,
-        Command::Project(_)
-        | Command::Run { .. }
-        | Command::Task(_)
+        Command::Project(cmd) => project(&cli.data_dir, cmd).await,
+        Command::Task(cmd) => task(&cli.data_dir, cmd).await,
+        Command::Run { .. }
         | Command::Session(_)
         | Command::Approval(_)
         | Command::Rpc { .. }
@@ -164,6 +164,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             let services = HostServices::new(
                 Arc::clone(&started.token),
                 Arc::new(aeroric_core::events::EventLog::default()),
+                Arc::clone(&started.context),
             );
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
@@ -256,6 +257,78 @@ async fn events(data_dir: &Path, after: &str) -> i32 {
         }
         Err(e) => {
             eprintln!("aeroric-cli events: {e}");
+            e.exit_code()
+        }
+    }
+}
+
+// ── project / task：③a 只读与幂等登记的客户端面 ──────────────────────────
+
+async fn connect(data_dir: &Path) -> Result<client::HostClient, client::ClientError> {
+    client::HostClient::connect(data_dir, &uuid::Uuid::new_v4().to_string()).await
+}
+
+async fn project(data_dir: &Path, cmd: ProjectCmd) -> i32 {
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli project: {e}");
+            return e.exit_code();
+        }
+    };
+    let (method, params) = match &cmd {
+        ProjectCmd::List => ("project.list", serde_json::json!({})),
+        // ADR-013：id 由调用方铸，同一次 `open` 的重发复用同一 newId＝幂等。
+        ProjectCmd::Open { path } => (
+            "project.open",
+            serde_json::json!({
+                "path": path.to_string_lossy(),
+                "newId": uuid::Uuid::new_v4().to_string(),
+            }),
+        ),
+    };
+    match client.call(method, params).await {
+        Ok(result) => {
+            println!("{result}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("aeroric-cli project: {e}");
+            e.exit_code()
+        }
+    }
+}
+
+async fn task(data_dir: &Path, cmd: TaskCmd) -> i32 {
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli task: {e}");
+            return e.exit_code();
+        }
+    };
+    let (method, params) = match &cmd {
+        TaskCmd::List { project } => (
+            "task.list",
+            match project {
+                Some(path) => serde_json::json!({ "projectPath": path.to_string_lossy() }),
+                None => serde_json::json!({}),
+            },
+        ),
+        TaskCmd::Get { task_id } => ("task.get", serde_json::json!({ "taskId": task_id })),
+        // cancel/complete/resume/input 是执行面——③b/④ 注册后接线。
+        _ => {
+            eprintln!("aeroric-cli task: this verb is not wired yet (P3-07 ③b/④)");
+            return exit::CONNECT;
+        }
+    };
+    match client.call(method, params).await {
+        Ok(result) => {
+            println!("{result}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("aeroric-cli task: {e}");
             e.exit_code()
         }
     }
