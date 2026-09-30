@@ -214,3 +214,134 @@ async fn a_fake_agent_launch_settles_done_and_retires_its_handles() {
     drop(context);
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_run_settles_cancelled_not_done() {
+    // cancel 的终局是 cancelled：kill 生效、exit 线程消费标记、
+    // observe 写 Cancelled——任何一环退化（覆盖成 done、标记没消费、
+    // kill 打空）都会在这里红。真机 e2e 排查时 done/cancelled 竞合过，
+    // 判据必须先钉在测试层（补记二百九十二）。
+    let root = scratch_home();
+    let script = root.join("slow-agent.sh");
+    std::fs::write(&script, "#!/bin/sh\necho SLOW\nsleep 30\nexit 0\n").expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let paths = AppPaths::from_user_home(root.join("home"));
+    let context = Arc::new(
+        CoreContext::acquire(
+            paths.clone(),
+            Arc::new(aeroric_core::clock::SystemClock),
+            &LeaseOwner {
+                application: "exec-test".to_string(),
+                version: "0-test".to_string(),
+            },
+            &LocalProbe,
+        )
+        .expect("writer context"),
+    );
+    std::fs::write(
+        paths.settings_file(),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "custom_agents": [{ "id": "slow", "path": script.to_string_lossy(), "args": [] }]
+        }))
+        .expect("settings"),
+    )
+    .expect("write settings");
+
+    let registry = Arc::new(TaskRegistry::default());
+    let terminal = Arc::new(TerminalService::new());
+    let log = Arc::new(EventLog::default());
+    let executor = CliPtyExecutor::new(
+        Arc::clone(&context),
+        Arc::clone(&registry),
+        Arc::clone(&terminal),
+        Arc::clone(&log),
+    );
+    let service = Arc::new(
+        TaskService::new(
+            Arc::clone(&context),
+            Arc::new(FakeFamilies),
+            executor.clone() as Arc<_>,
+            Arc::new(RegistryLiveRuns::new(Arc::clone(&registry))),
+        )
+        .expect("task service"),
+    );
+    executor.attach(&service);
+
+    let project_dir = root.join("workspace");
+    std::fs::create_dir_all(&project_dir).expect("workspace");
+    let projects = ProjectService::new(Arc::clone(&context));
+    let (upserted, _) = projects
+        .open_local(
+            &project_dir.to_string_lossy(),
+            "project-1",
+            context.clock.now_ms() as i64,
+        )
+        .expect("open project");
+    let project = upserted.project;
+    service
+        .create(
+            &project,
+            NewTask {
+                id: "task-slow".to_string(),
+                project_id: "project-1".to_string(),
+                prompt: "be slow".to_string(),
+                agent: "slow".to_string(),
+                permission_mode: "ask".to_string(),
+                immediate: true,
+                selected_model: None,
+                reasoning_effort: None,
+                speed: None,
+                dsh_agent_preset: None,
+                images: Vec::new(),
+                texts: Vec::new(),
+            },
+        )
+        .expect("create");
+    service
+        .start(
+            &project,
+            "task-slow",
+            "op-slow",
+            true,
+            None,
+            false,
+            Attachments {
+                images: Vec::new(),
+                texts: Vec::new(),
+            },
+            aeroric_core::tasks::executor::HostWindowFacts {
+                terminal_size: None,
+                dsh: None,
+            },
+        )
+        .expect("start");
+
+    // 给 spawn 与 reader 一点时间，然后取消。
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    service.cancel(&project, "task-slow").expect("cancel");
+
+    // 轮询到 cancelled（上限 5 s：kill 生效的话 exit 线程毫秒级结算）。
+    let mut status = String::new();
+    for _ in 0..100 {
+        let stamped = service.load("project-1").expect("load");
+        status = stamped
+            .records
+            .first()
+            .and_then(|record| record.0.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if status == "cancelled" || status == "done" || status == "failed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(status, "cancelled", "cancel 的终局不能被退出码结算覆盖");
+    drop(service);
+    drop(context);
+    std::fs::remove_dir_all(&root).ok();
+}

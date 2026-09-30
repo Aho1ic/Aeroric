@@ -69,6 +69,31 @@ impl CliPtyExecutor {
         *self.service.lock().expect("lock") = Arc::downgrade(service);
     }
 
+    /// 杀一条任务的运行：**pty 前台组 killpg 优先**——`child.kill()` 只杀直接
+    /// 子进程，脚本里继承 pty fd 的后代（`sleep`、node 包装层）会活着把
+    /// `wait` 拖到自然退出（cancel 回归实测拖满 30 s）；`tcgetpgrp(master)`
+    /// 给的是 pty 前台组，SIGKILL 整组，再补直接子进程 kill 兜底
+    /// （组号取不到时至少杀到壳）。
+    pub fn kill_run(&self, task_id: &str) {
+        #[cfg(unix)]
+        {
+            if let Some(master) = self.registry.master_for(task_id) {
+                let pgid = master.lock().process_group_leader();
+                drop(master);
+                if let Some(pgid) = pgid {
+                    // SAFETY: pgid 来自 tcgetpgrp（>0 才是有效组）；killpg 对
+                    // 已消失的组返回 ESRCH，无副作用。
+                    unsafe {
+                        libc::killpg(pgid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+        if let Some(child) = self.registry.child_for(task_id) {
+            let _ = child.lock().kill();
+        }
+    }
+
     /// agent → 程序与固定参数：settings.yaml 的 custom_agents 优先，内建回退
     /// 到「程序名＝agent id」（PATH 解析）。与宿主 launch_spec 的差具名在模块头。
     fn resolve_launch(&self, agent: &str) -> LaunchInput {
@@ -209,11 +234,13 @@ impl TaskExecutor for CliPtyExecutor {
             registry: Arc<TaskRegistry>,
             log: Arc<EventLog>,
             service: Mutex<Weak<TaskService>>,
+            family: ProtocolFamily,
         }
         let ctx = Arc::new(ExitCtx {
             registry: Arc::clone(&self.registry),
             log: Arc::clone(&self.log),
             service: Mutex::new(self.service.lock().expect("lock").clone()),
+            family: request.family,
         });
         let task_id = request.task_id.clone();
         let project_id = request.project_id.clone();
@@ -231,15 +258,59 @@ impl TaskExecutor for CliPtyExecutor {
             let run = RunKey::minted(&task_id, generation);
             ctx.registry.remove_pty_handles(&run);
             ctx.registry.runs.retire(&task_id, generation);
+            // 结算走宿主同一条判据链（settle_exit），标记在此消费：
+            // - cancel 意图：宿主侧状态由前端先写（G05 的 React 权威面），CLI host
+            //   没有前端——**executor 是写 Cancelled 的人**（origin=Runtime，
+            //   ObservationOrigin 的注释点名 cancel 归它）；
+            // - complete 意图：`TaskService::complete` 已把状态写成 done，退出不再动；
+            // - 普通退出：settle_exit 判 Done/Failed（session 证据 CLI b1.2 恒
+            //   Absent、信号事实 portable-pty 给不出——两处缺口在 ⑦ 具名）。
+            let cancelled = ctx.registry.cancelled_tasks.lock().remove(&task_id);
+            let completed = ctx
+                .registry
+                .manually_completed_tasks
+                .lock()
+                .remove(&task_id);
+            let settled = if cancelled {
+                Some((aeroric_core::tasks::TaskStatus::Cancelled, None))
+            } else if completed {
+                None
+            } else {
+                use aeroric_core::terminal::exit::{
+                    settle_exit, ExitDecision, ExitFacts, SessionEvidence,
+                };
+                match settle_exit(&ExitFacts {
+                    family: ctx.family,
+                    exit_ok: code == Some(0),
+                    exit_code: code.and_then(|c| u32::try_from(c).ok()),
+                    signal: None,
+                    session: SessionEvidence::Absent,
+                    cancelled: false,
+                    manually_completed: false,
+                }) {
+                    ExitDecision::NoStatus => None,
+                    ExitDecision::Done => Some((aeroric_core::tasks::TaskStatus::Done, None)),
+                    ExitDecision::Failed { reason } => Some((
+                        aeroric_core::tasks::TaskStatus::Failed,
+                        Some(reason.host_sentence()),
+                    )),
+                }
+            };
+            let Some((status, failure_reason)) = settled else {
+                return;
+            };
             let service = ctx.service.lock().expect("lock").upgrade();
             match service {
                 Some(service) => {
                     let _ = service.observe(
                         &project_id,
-                        TaskEvent::Exit {
+                        TaskEvent::Status {
                             task_id: task_id.clone(),
                             generation,
-                            code: if code == Some(-1) { None } else { code },
+                            status,
+                            attention_requested_at_ms: None,
+                            failure_reason,
+                            origin: aeroric_core::tasks::executor::ObservationOrigin::Runtime,
                         },
                     );
                 }
@@ -249,7 +320,7 @@ impl TaskExecutor for CliPtyExecutor {
                         json!({
                             "taskId": task_id,
                             "generation": generation,
-                            "code": code,
+                            "status": format!("{status:?}"),
                             "serviceUnwired": true,
                         }),
                     );
@@ -279,14 +350,12 @@ impl TaskExecutor for CliPtyExecutor {
     }
 
     fn cancel(&self, task_id: &str, _target: &CancelTarget) -> Execution<()> {
-        // 取消意图先记账（settle 判定读它），再对当前代发 kill。
+        // 取消意图先记账（exit 线程消费它结算 cancelled），再杀进程。
         self.registry
             .cancelled_tasks
             .lock()
             .insert(task_id.to_string());
-        if let Some(child) = self.registry.child_for(task_id) {
-            let _ = child.lock().kill();
-        }
+        self.kill_run(task_id);
         Ok(())
     }
 
@@ -295,9 +364,7 @@ impl TaskExecutor for CliPtyExecutor {
             .manually_completed_tasks
             .lock()
             .insert(task_id.to_string());
-        if let Some(child) = self.registry.child_for(task_id) {
-            let _ = child.lock().kill();
-        }
+        self.kill_run(task_id);
         Ok(())
     }
 

@@ -144,16 +144,38 @@ pub struct HostServices {
 }
 
 impl HostServices {
-    /// 只装配**实现完整**的方法：handshake、events.since，与 ③a 的
-    /// 只读/幂等登记服务（project/task——`context` 是启动序列的产物，
-    /// 所有 handler 共享同一份写租约）。
+    /// 只装配**实现完整**的方法：handshake、events.since、③a 的只读/幂等登记
+    /// （project/task），以及 b1.2 传入 `service` 时的执行三方法（run/cancel/
+    /// complete）。`context` 是启动序列的产物，所有 handler 共享同一份写租约。
     pub fn new(
         token: Arc<HostToken>,
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
     ) -> Arc<Self> {
+        Self::assemble(token, log, context, None)
+    }
+
+    /// b1.2：执行服务全装配（serve 在 `TaskService::new` + `attach` 之后调用）。
+    pub fn with_tasks(
+        token: Arc<HostToken>,
+        log: Arc<EventLog>,
+        context: Arc<aeroric_core::context::CoreContext>,
+        service: Arc<aeroric_core::tasks::TaskService>,
+    ) -> Arc<Self> {
+        Self::assemble(token, log, context, Some(service))
+    }
+
+    fn assemble(
+        token: Arc<HostToken>,
+        log: Arc<EventLog>,
+        context: Arc<aeroric_core::context::CoreContext>,
+        service: Option<Arc<aeroric_core::tasks::TaskService>>,
+    ) -> Arc<Self> {
         let mut set = ServiceSet::new();
-        crate::services::register_read_services(&mut set, context);
+        crate::services::register_read_services(&mut set, Arc::clone(&context));
+        if let Some(service) = service {
+            crate::services::register_task_services(&mut set, service, context);
+        }
         {
             let token = Arc::clone(&token);
             set.register(

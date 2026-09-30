@@ -26,8 +26,13 @@ async fn dispatch(cli: Cli) -> i32 {
         Command::Events { after } => events(&cli.data_dir, &after).await,
         Command::Project(cmd) => project(&cli.data_dir, cmd).await,
         Command::Task(cmd) => task(&cli.data_dir, cmd).await,
-        Command::Run { .. }
-        | Command::Session(_)
+        Command::Run {
+            project,
+            agent,
+            prompt_file,
+            json,
+        } => run(&cli.data_dir, &project, &agent, &prompt_file, json).await,
+        Command::Session(_)
         | Command::Approval(_)
         | Command::Rpc { .. }
         | Command::Attach { .. } => {
@@ -161,10 +166,38 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 .to_string();
             let redactor = Arc::new(aeroric_host::diagnostics::Redactor::new([token_plain]));
             install_redacted_panic_hook(&redactor);
-            let services = HostServices::new(
-                Arc::clone(&started.token),
-                Arc::new(aeroric_core::events::EventLog::default()),
+            // b1.2 执行装配：registry/字节环/executor/TaskService 全家＋attach 回链。
+            let registry = Arc::new(aeroric_core::runtime::registry::TaskRegistry::default());
+            let terminal = Arc::new(aeroric_core::terminal::pty::TerminalService::new());
+            let log = Arc::new(aeroric_core::events::EventLog::default());
+            let executor = aeroric_host::executor::CliPtyExecutor::new(
                 Arc::clone(&started.context),
+                Arc::clone(&registry),
+                Arc::clone(&terminal),
+                Arc::clone(&log),
+            );
+            let task_service = match aeroric_core::tasks::TaskService::new(
+                Arc::clone(&started.context),
+                Arc::new(aeroric_host::families::SettingsFamiliesCli::new(
+                    Arc::clone(&started.context),
+                )),
+                Arc::clone(&executor) as Arc<_>,
+                Arc::new(aeroric_host::executor::RegistryLiveRuns::new(Arc::clone(
+                    &registry,
+                ))),
+            ) {
+                Ok(service) => Arc::new(service),
+                Err(e) => {
+                    eprintln!("aeroric-cli serve: cannot build the task service: {e}");
+                    return exit::CONNECT;
+                }
+            };
+            executor.attach(&task_service);
+            let services = HostServices::with_tasks(
+                Arc::clone(&started.token),
+                log,
+                Arc::clone(&started.context),
+                task_service,
             );
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
@@ -262,6 +295,136 @@ async fn events(data_dir: &Path, after: &str) -> i32 {
     }
 }
 
+// ── run：create+start 后等待 settled（Action 2 的默认语义） ──────────────
+
+/// 轮询上限：10 分钟。到点仍非终态＝「等待语义未闭环」的具名出口——
+/// 报 3（连接族）并在 stderr 说明，不装成任务失败（4）也不装成成功（0）。
+const RUN_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+async fn run(data_dir: &Path, project: &Path, agent: &str, prompt_file: &Path, json: bool) -> i32 {
+    let prompt = if prompt_file == Path::new("-") {
+        use std::io::Read as _;
+        let mut buf = String::new();
+        if std::io::stdin().read_to_string(&mut buf).is_err() {
+            eprintln!("aeroric-cli run: cannot read stdin");
+            return exit::USAGE;
+        }
+        buf
+    } else {
+        match std::fs::read_to_string(prompt_file) {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("aeroric-cli run: cannot read the prompt file: {e}");
+                return exit::USAGE;
+            }
+        }
+    };
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli run: {e}");
+            return e.exit_code();
+        }
+    };
+    let started = match client
+        .call(
+            "task.run",
+            serde_json::json!({
+                "projectPath": project.to_string_lossy(),
+                "agent": agent,
+                "prompt": prompt,
+                "taskId": task_id,
+            }),
+        )
+        .await
+    {
+        Ok(started) => started,
+        Err(e) => {
+            eprintln!("aeroric-cli run: {e}");
+            return e.exit_code();
+        }
+    };
+    if json {
+        println!("{started}");
+    }
+    // 等待本轮进入 settled/terminal：done|failed 终态、input_required 交还人工。
+    let deadline = tokio::time::Instant::now() + RUN_WAIT_LIMIT;
+    loop {
+        let status = match client
+            .call("task.get", serde_json::json!({ "taskId": task_id }))
+            .await
+        {
+            Ok(response) => response["task"]["status"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            Err(e) => {
+                eprintln!("aeroric-cli run: {e}");
+                return e.exit_code();
+            }
+        };
+        match status.as_str() {
+            "done" => {
+                if !json {
+                    println!("task {task_id}: done");
+                }
+                return exit::OK;
+            }
+            "failed" => {
+                if !json {
+                    eprintln!("task {task_id}: failed");
+                }
+                return exit::TASK_FAILED;
+            }
+            "input_required" => {
+                if !json {
+                    eprintln!("task {task_id}: needs a human (input_required)");
+                }
+                return exit::NEEDS_HUMAN;
+            }
+            "cancelled" => {
+                if !json {
+                    eprintln!("task {task_id}: cancelled");
+                }
+                return exit::CANCELLED;
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!(
+                "aeroric-cli run: task {task_id} still `{status}` after {}s — the wait                  surface timed out (not a task verdict)",
+                RUN_WAIT_LIMIT.as_secs()
+            );
+            return exit::CONNECT;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn settle_verdict(data_dir: &Path, method: &str, task_id: &str) -> i32 {
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli {method}: {e}");
+            return e.exit_code();
+        }
+    };
+    match client
+        .call(method, serde_json::json!({ "taskId": task_id }))
+        .await
+    {
+        Ok(result) => {
+            println!("{result}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("aeroric-cli {method}: {e}");
+            e.exit_code()
+        }
+    }
+}
+
 // ── project / task：③a 只读与幂等登记的客户端面 ──────────────────────────
 
 async fn connect(data_dir: &Path) -> Result<client::HostClient, client::ClientError> {
@@ -316,9 +479,15 @@ async fn task(data_dir: &Path, cmd: TaskCmd) -> i32 {
             },
         ),
         TaskCmd::Get { task_id } => ("task.get", serde_json::json!({ "taskId": task_id })),
-        // cancel/complete/resume/input 是执行面——③b/④ 注册后接线。
+        TaskCmd::Cancel { task_id } => {
+            return settle_verdict(data_dir, "task.cancel", task_id).await;
+        }
+        TaskCmd::Complete { task_id } => {
+            return settle_verdict(data_dir, "task.complete", task_id).await;
+        }
+        // resume/input 是后续片（b1.3/④）——显式拒绝不装可用。
         _ => {
-            eprintln!("aeroric-cli task: this verb is not wired yet (P3-07 ③b/④)");
+            eprintln!("aeroric-cli task: this verb is not wired yet (P3-07 b1.3/④)");
             return exit::CONNECT;
         }
     };
