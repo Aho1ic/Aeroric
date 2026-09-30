@@ -1014,7 +1014,8 @@ fn spawn_wsl_task_pty<R: tauri::Runtime>(
         pty_command_from_spec(spec),
         task_manager,
         &crate::run_registry::RunKey::unminted(task_id),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     task_manager
         .wsl_active_ids
         .lock()
@@ -1439,7 +1440,8 @@ pub async fn open_wsl_shell(
         pty_command_from_spec(spec),
         &task_manager,
         &crate::run_registry::RunKey::unminted(&shell_id),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     task_manager
         .wsl_active_ids
         .lock()

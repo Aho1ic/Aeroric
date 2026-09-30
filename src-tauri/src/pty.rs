@@ -1807,7 +1807,8 @@ pub(crate) async fn run_task_core<R: tauri::Runtime>(
     let aeroric_core::terminal::PtySessionHandles {
         child: child_handle,
         reader,
-    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)?;
+    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)
+        .map_err(|e| e.to_string())?;
 
     crate::core_adapter::report_task_status(&app, &task_id, "running");
 
@@ -2553,7 +2554,8 @@ pub(crate) async fn resume_task_core<R: tauri::Runtime>(
     let aeroric_core::terminal::PtySessionHandles {
         child: child_handle,
         reader,
-    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)?;
+    } = aeroric_core::terminal::activate_pty_session(pair, cmd, task_manager, &run)
+        .map_err(|e| e.to_string())?;
 
     crate::core_adapter::report_task_status(&app, &task_id, "running");
 
@@ -2768,7 +2770,8 @@ pub async fn open_shell(
         cmd,
         &task_manager,
         &RunKey::unminted(&shell_id),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
 
     // Shell 退出后清理 TaskManager 中的残留句柄
     let app_cleanup = app.clone();

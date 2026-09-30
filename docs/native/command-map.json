@@ -1085,7 +1085,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2344",
+      "definition_resolved": "src-tauri/src/pty.rs:2345",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1131,7 +1131,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2004",
+      "definition_resolved": "src-tauri/src/pty.rs:2005",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1168,7 +1168,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2050",
+      "definition_resolved": "src-tauri/src/pty.rs:2051",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1205,7 +1205,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2060",
+      "definition_resolved": "src-tauri/src/pty.rs:2061",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1239,7 +1239,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2140",
+      "definition_resolved": "src-tauri/src/pty.rs:2141",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1274,7 +1274,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2206",
+      "definition_resolved": "src-tauri/src/pty.rs:2207",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1310,7 +1310,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2707",
+      "definition_resolved": "src-tauri/src/pty.rs:2709",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1346,7 +1346,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2716",
+      "definition_resolved": "src-tauri/src/pty.rs:2718",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1383,7 +1383,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2726",
+      "definition_resolved": "src-tauri/src/pty.rs:2728",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1422,7 +1422,7 @@
         "F04",
         "F26"
       ],
-      "definition_resolved": "src-tauri/src/pty.rs:2803",
+      "definition_resolved": "src-tauri/src/pty.rs:2806",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9379,7 +9379,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1549",
+      "definition_resolved": "src-tauri/src/ssh.rs:1550",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9410,7 +9410,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1541",
+      "definition_resolved": "src-tauri/src/ssh.rs:1542",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9443,7 +9443,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1562",
+      "definition_resolved": "src-tauri/src/ssh.rs:1563",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9476,7 +9476,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1569",
+      "definition_resolved": "src-tauri/src/ssh.rs:1570",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9509,7 +9509,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1576",
+      "definition_resolved": "src-tauri/src/ssh.rs:1577",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9548,7 +9548,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1675",
+      "definition_resolved": "src-tauri/src/ssh.rs:1677",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9582,7 +9582,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1691",
+      "definition_resolved": "src-tauri/src/ssh.rs:1693",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9628,7 +9628,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1803",
+      "definition_resolved": "src-tauri/src/ssh.rs:1805",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9673,7 +9673,7 @@
       "feature_ids": [
         "F11"
       ],
-      "definition_resolved": "src-tauri/src/ssh.rs:1894",
+      "definition_resolved": "src-tauri/src/ssh.rs:1896",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9775,7 +9775,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1074",
+      "definition_resolved": "src-tauri/src/wsl.rs:1075",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9806,7 +9806,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1110",
+      "definition_resolved": "src-tauri/src/wsl.rs:1111",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9837,7 +9837,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1117",
+      "definition_resolved": "src-tauri/src/wsl.rs:1118",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9870,7 +9870,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1124",
+      "definition_resolved": "src-tauri/src/wsl.rs:1125",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9903,7 +9903,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1131",
+      "definition_resolved": "src-tauri/src/wsl.rs:1132",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9934,7 +9934,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1138",
+      "definition_resolved": "src-tauri/src/wsl.rs:1139",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9967,7 +9967,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1174",
+      "definition_resolved": "src-tauri/src/wsl.rs:1175",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10001,7 +10001,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1207",
+      "definition_resolved": "src-tauri/src/wsl.rs:1208",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10036,7 +10036,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1254",
+      "definition_resolved": "src-tauri/src/wsl.rs:1255",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -10071,7 +10071,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1284",
+      "definition_resolved": "src-tauri/src/wsl.rs:1285",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10105,7 +10105,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1294",
+      "definition_resolved": "src-tauri/src/wsl.rs:1295",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10139,7 +10139,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1319",
+      "definition_resolved": "src-tauri/src/wsl.rs:1320",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10174,7 +10174,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1346",
+      "definition_resolved": "src-tauri/src/wsl.rs:1347",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10207,7 +10207,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1369",
+      "definition_resolved": "src-tauri/src/wsl.rs:1370",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10241,7 +10241,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1390",
+      "definition_resolved": "src-tauri/src/wsl.rs:1391",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10281,7 +10281,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1473",
+      "definition_resolved": "src-tauri/src/wsl.rs:1475",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10315,7 +10315,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1492",
+      "definition_resolved": "src-tauri/src/wsl.rs:1494",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10361,7 +10361,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1594",
+      "definition_resolved": "src-tauri/src/wsl.rs:1596",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -10406,7 +10406,7 @@
       "feature_ids": [
         "F12"
       ],
-      "definition_resolved": "src-tauri/src/wsl.rs:1679",
+      "definition_resolved": "src-tauri/src/wsl.rs:1681",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

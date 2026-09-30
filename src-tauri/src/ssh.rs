@@ -1391,7 +1391,8 @@ fn spawn_remote_task_pty<R: tauri::Runtime>(
         cmd,
         task_manager,
         &crate::run_registry::RunKey::unminted(task_id),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
 
     crate::core_adapter::report_task_status(&app, task_id, "running");
 
@@ -1623,7 +1624,8 @@ pub async fn open_ssh_shell(
         build_ssh_command(&connection, shell_os),
         &task_manager,
         &crate::run_registry::RunKey::unminted(&shell_id),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let hint_filter = host_key_failure_hint_filter(&connection);
     let output_filter = if connection_can_auto_sudo(&connection) {
         let writer = task_manager

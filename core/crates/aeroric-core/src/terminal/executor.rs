@@ -32,20 +32,44 @@ pub struct PtySessionHandles {
 /// 步骤次序是迁移前七个站点逐字相同的那份:spawn 命令、drop slave、克隆 reader、
 /// 取 writer、注册(暂存 resize 在注册时按未铸造键排水)。任何新分支都不许再
 /// 自己写这五步;步骤次序或错误映射要改,只能改这里,七个分支同时生效。
+/// 装配失败的四类来源。`Display` 逐字透传底层消息（迁移前的 `e.to_string()`
+/// 就是这些文案，宿主 command 的字符串契约不因 typed 而变）；typed 的收益是
+/// **调用点可以按变体区分**（spawn 失败与登记失败是两回事），而不是继续
+/// 在一个 `String` 里靠子串匹配。
+#[derive(Debug, thiserror::Error)]
+pub enum ActivateError {
+    #[error("{0}")]
+    Spawn(String),
+    #[error("{0}")]
+    Reader(String),
+    #[error("{0}")]
+    Writer(String),
+    #[error("{0}")]
+    Register(String),
+}
+
 pub fn activate_pty_session(
     pair: portable_pty::PtyPair,
     command: portable_pty::CommandBuilder,
     registry: &TaskRegistry,
     run: &RunKey,
-) -> Result<PtySessionHandles, String> {
+) -> Result<PtySessionHandles, ActivateError> {
     let child = pair
         .slave
         .spawn_command(command)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ActivateError::Spawn(e.to_string()))?;
     drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let child = registry.register_pty_session(run, pair.master, writer, child)?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| ActivateError::Reader(e.to_string()))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| ActivateError::Writer(e.to_string()))?;
+    let child = registry
+        .register_pty_session(run, pair.master, writer, child)
+        .map_err(ActivateError::Register)?;
     Ok(PtySessionHandles { child, reader })
 }
 
@@ -105,6 +129,34 @@ mod tests {
             "reader 读到的不是 echo 的输出: {:?}",
             String::from_utf8_lossy(&buf[..n])
         );
+    }
+
+    /// 装配失败按来源分型:spawn 不存在的命令必须落 `Spawn` 变体,且
+    /// `Display` 逐字＝底层 io 消息（宿主 command 的字符串契约不因 typed 改变）。
+    #[test]
+    fn spawn_failure_is_typed_and_keeps_the_verbatim_message() {
+        let registry = TaskRegistry::default();
+        let run = RunKey::minted("activate-missing", 1);
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("/definitely-not-a-real-binary-a7x9");
+        cmd.env("PATH", ""); // 排除任何 PATH 命中
+        let error = match activate_pty_session(pair, cmd, &registry, &run) {
+            Err(error) => error,
+            Ok(_) => panic!("不存在的二进制必须让装配失败"),
+        };
+        assert!(
+            matches!(error, ActivateError::Spawn(_)),
+            "spawn 失败必须落 Spawn 变体，实得 {error:?}"
+        );
+        // 失败即退场：runs 台账与三张句柄表都不留痕。
+        assert!(registry.resource_run("activate-missing").is_none());
     }
 
     /// 未暂存尺寸时注册不得改动 master 的实际尺寸;同时注销后资源全部退场。
