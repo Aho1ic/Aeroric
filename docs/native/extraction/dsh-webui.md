@@ -28,12 +28,12 @@ Cross-checked: 66 command wrappers counted here against 66 matching entries in `
 | 6 | `src-tauri/src/dsh_webui/protocol_inventory.rs` | `core/crates/aeroric-core/dsh_webui/protocol_inventory.rs` | 0 | Const RETIRED_APIPROXY_METHODS, Const RETIRED_HOST_FRAMES, Const RETIRED_MUX_FRAMES (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 7 | `src-tauri/src/dsh_webui/remote_mux.rs` | `core/crates/aeroric-core/dsh_webui/remote_mux.rs` | 0 | Const REMOTE_EVENT_RESULT_ENDPOINT, Const REMOTE_EVENT_STREAM_ENDPOINT, Const REMOTE_STREAM_MUX_PATH, Enum RemoteEventItem, Struct DshMuxStream, Struct DshRemoteMux, parse_remote_event_item(), remote_event_result_args(), remote_mux_url() (12 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | spawns task/thread (needs a cancellation token) |
 | 8 | `src-tauri/src/dsh_webui/startup.rs` | `core/crates/aeroric-core/dsh_webui/startup.rs` | 0 | check_health(), ensure_dsh_webui(), ensure_dsh_webui_locked() (5 test items excluded) | `core/crates/aeroric-core/src/agents/dsh_host/startup.rs` | spawns task/thread (needs a cancellation token) |
-| 9 | `src-tauri/src/dsh_webui/terminal_render.rs` | `core/crates/aeroric-core/dsh_webui/terminal_render.rs` | 0 | Const ANSI_BOLD, Const ANSI_DIM, Const ANSI_GREEN, Const ANSI_RED, Const ANSI_RESET, Const MIN_WRAP_COLS, Enum WordPart, Struct ReasoningFold, Struct TerminalWrap, clip_fragment(), count_content_lines(), diff_rows(), fold_summary(), normalize_terminal_text(), plain_single_line() +7 more (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
+| 9 | `src-tauri/src/dsh_webui/terminal_render.rs` | `core/crates/aeroric-core/dsh_webui/terminal_render.rs` | 0 | Const ANSI_GREEN, Const ANSI_RED, Const MIN_WRAP_COLS, Enum WordPart, Struct ReasoningFold, Struct TerminalWrap, diff_rows(), normalize_terminal_text(), render_tool_event_view(), split_ansi_sequences(), terminal_char_width() (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 <!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
-- files: **9**, lines: **8912**, command wrappers: **66**, test items excluded from the symbol lists: **77**
+- files: **9**, lines: **8788**, command wrappers: **66**, test items excluded from the symbol lists: **77**
 - files carrying `AppHandle`/`State`: **4**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**

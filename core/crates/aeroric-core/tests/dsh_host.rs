@@ -470,3 +470,69 @@ fn internal_command_echo_machine_keeps_its_two_asymmetric_rules() {
     assert!(take_internal_command_echo(&mut pending, "t2", &run("goal")));
     assert!(take_internal_command_echo(&mut pending, "t2", &done));
 }
+
+#[test]
+fn plain_single_line_peels_csi_osc_tabs_and_control_bytes() {
+    use aeroric_core::agents::dsh_host::projection::{plain_single_line, view_str};
+    assert_eq!(plain_single_line("\x1b[31mred\x1b[0m"), "red");
+    // OSC 以 BEL 收尾。
+    assert_eq!(plain_single_line("\x1b]0;title\x07after"), "after");
+    // OSC 以 ESC \ 收尾。
+    assert_eq!(plain_single_line("\x1b]8;;url\x1b\\tail"), "tail");
+    // 孤立的 ESC+单字符也吃掉；tab 变空格；控制字符**直接丢弃**（BEL 不留空格——
+    // 首版预期我写成 "a b c"，实测实现是 "a bc"，243/244 同型：错的是预期不是实现）。
+    assert_eq!(plain_single_line("\x1bM a\tb\x07c"), "a bc");
+    assert_eq!(plain_single_line("  padded  "), "padded");
+    assert_eq!(plain_single_line("中文\x1b[1m粗\x1b[0m"), "中文粗");
+    // view_str：空串当缺位（harness 对空白标题的处理）。
+    let v = json!({"a":"x","b":"","c":7});
+    assert_eq!(view_str(&v, "a"), Some("x"));
+    assert_eq!(view_str(&v, "b"), None);
+    assert_eq!(view_str(&v, "c"), None);
+    assert_eq!(view_str(&v, "d"), None);
+}
+
+#[test]
+fn echo_and_fold_rows_keep_the_terminal_shapes() {
+    use aeroric_core::agents::dsh_host::projection::{
+        clip_fragment, count_content_lines, fold_summary, plural, push_line, user_prompt_echo,
+        ANSI_RESET, FOLD_SUMMARY_CHARS,
+    };
+    // 斜杠命令交给 command/run 回显，这里必须 None（双回显就是 bug）。
+    assert!(user_prompt_echo("/permission full_access", 0).is_none());
+    assert!(user_prompt_echo("   ", 0).is_none());
+    let one = user_prompt_echo("看这个", 1).unwrap();
+    assert!(
+        one.starts_with("\r\n"),
+        "xterm convertEol:false，行首显式 CRLF"
+    );
+    assert!(one.contains("❯"), "{one}");
+    assert!(one.contains("· 1 image"), "{one}");
+    let many = user_prompt_echo("两行\n续行", 12).unwrap();
+    assert!(
+        many.contains("两行\r\n  续行"),
+        "续行两格缩进对齐 ❯: {many}"
+    );
+    assert!(many.contains("· 12 images"), "{many}");
+    // clip：第 96 个字符保留、97 起换 …（按字符不按字节，中文安全）。
+    let s96: String = "字".repeat(FOLD_SUMMARY_CHARS);
+    assert_eq!(clip_fragment(&s96), s96);
+    let clipped = clip_fragment(&format!("{s96}额外"));
+    assert!(clipped.ends_with('…') && clipped.chars().count() == FOLD_SUMMARY_CHARS + 1);
+    // fold：取第一条**有内容**的行且剥色。
+    assert_eq!(
+        fold_summary("\n  \n\x1b[32m内容\x1b[0m\n更多"),
+        Some("内容".to_string())
+    );
+    assert_eq!(fold_summary("\x1b[0m\n \n"), None);
+    assert_eq!(count_content_lines("a\n\n \nb\n"), 2);
+    assert_eq!(plural(1, "line", "lines"), "line");
+    assert_eq!(plural(2, "line", "lines"), "lines");
+    // push_line：空 style 不加 RESET；CRLF 收尾。
+    let mut out = String::new();
+    push_line(&mut out, "", "plain");
+    assert_eq!(out, "plain\r\n");
+    let mut out2 = String::new();
+    push_line(&mut out2, "\x1b[2m", "dim");
+    assert_eq!(out2, format!("\x1b[2mdim{ANSI_RESET}\r\n"));
+}

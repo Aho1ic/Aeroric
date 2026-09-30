@@ -363,142 +363,18 @@ pub(super) fn terminal_char_width(character: char) -> usize {
 /// Minimal ANSI styling for the tool render-intent output. The dsh stream lands
 /// in an xterm view configured with `convertEol: false`, so every line this
 /// module writes terminates with an explicit CRLF.
-pub(super) const ANSI_RESET: &str = "\x1b[0m";
-pub(super) const ANSI_DIM: &str = "\x1b[2m";
-pub(super) const ANSI_BOLD: &str = "\x1b[1m";
 pub(super) const ANSI_GREEN: &str = "\x1b[32m";
 pub(super) const ANSI_RED: &str = "\x1b[31m";
 
-/// Widest folded fragment the bridge prints. Rows stay well inside a narrow
-/// split pane, so a folded summary never wraps into a second terminal line.
-const FOLD_SUMMARY_CHARS: usize = 96;
-
-/// Non-empty string field, matching how the harness treats a blank title.
-pub(super) fn view_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-}
-
-pub(super) fn push_line(out: &mut String, style: &str, text: &str) {
-    out.push_str(style);
-    out.push_str(text);
-    if !style.is_empty() {
-        out.push_str(ANSI_RESET);
-    }
-    out.push_str("\r\n");
-}
-
-/// 用户输入在终端里的回显行。Web API 会话没有 PTY,终端不会自动回显,不自己
-/// 打一行的话发出去的内容在终端里完全看不到。
-///
-/// 斜杠命令由 `command/run` 事件负责回显,这里跳过,避免同一条输入出现两次。
-pub(super) fn user_prompt_echo(prompt: &str, image_count: usize) -> Option<String> {
-    let text = prompt.trim();
-    if text.starts_with('/') {
-        return None;
-    }
-    if text.is_empty() && image_count == 0 {
-        return None;
-    }
-    let attachment = match image_count {
-        0 => String::new(),
-        1 => format!(" {ANSI_DIM}· 1 image{ANSI_RESET}"),
-        count => format!(" {ANSI_DIM}· {count} images{ANSI_RESET}"),
-    };
-    // 续行缩进两格,与首行的 "❯ " 对齐。
-    let body = text
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\n', "\r\n  ");
-    let mut out = String::from("\r\n");
-    push_line(
-        &mut out,
-        "",
-        &format!("{ANSI_BOLD}❯{ANSI_RESET} {body}{attachment}"),
-    );
-    Some(out)
-}
-
-/// Drop ANSI escape sequences and control bytes from one line. Tool output is
-/// frequently styled, and a folded row that carried a cursor move or a
-/// half-open colour span would corrupt every row printed after it.
-pub(super) fn plain_single_line(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut characters = line.chars().peekable();
-    while let Some(character) = characters.next() {
-        if character != '\x1b' {
-            if character == '\t' {
-                out.push(' ');
-            } else if !character.is_control() {
-                out.push(character);
-            }
-            continue;
-        }
-        match characters.peek() {
-            // CSI: parameters and intermediates, terminated by a final byte.
-            Some('[') => {
-                let _ = characters.next();
-                for next in characters.by_ref() {
-                    if ('\x40'..='\x7e').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            // OSC: terminated by BEL or by ST (ESC \).
-            Some(']') => {
-                let _ = characters.next();
-                let mut saw_escape = false;
-                for next in characters.by_ref() {
-                    if saw_escape || next == '\x07' {
-                        break;
-                    }
-                    saw_escape = next == '\x1b';
-                }
-            }
-            _ => {
-                let _ = characters.next();
-            }
-        }
-    }
-    out.trim().to_string()
-}
-
-pub(super) fn clip_fragment(text: &str) -> String {
-    if text.chars().count() <= FOLD_SUMMARY_CHARS {
-        return text.to_string();
-    }
-    let mut clipped: String = text.chars().take(FOLD_SUMMARY_CHARS).collect();
-    clipped.push('…');
-    clipped
-}
-
-/// Reduce a possibly long, possibly styled body to the single line a folded row
-/// can carry: the first line with content, stripped of control bytes and
-/// clipped. `None` means the body had nothing to say.
-pub(super) fn fold_summary(text: &str) -> Option<String> {
-    text.split('\n')
-        .map(plain_single_line)
-        .find(|line| !line.is_empty())
-        .map(|line| clip_fragment(&line))
-}
-
-/// Lines with content, used as a folded row's size hint. Blank lines are the
-/// padding of a body that is not being printed, so they are not counted.
-pub(super) fn count_content_lines(text: &str) -> usize {
-    text.split('\n')
-        .filter(|line| !line.trim().is_empty())
-        .count()
-}
-
-pub(super) fn plural(count: usize, one: &'static str, many: &'static str) -> &'static str {
-    if count == 1 {
-        one
-    } else {
-        many
-    }
-}
+// 行生成八件与 ANSI 三常量、折叠宽度已随 P3-05 第七片迁入 core
+// `aeroric_core::agents::dsh_host::projection`（补记二百五十六）；Action 2 的边界
+// 随注释迁走（DSH projection 只是适配输出、不得借用到 OMP）。re-export 保持
+// `pub(super)` 原路径——`render_tool_event_view`、`dsh_webui.rs` 与下方测试模块
+// 的引用点一字不动；有状态的 `TerminalWrap`/`ReasoningFold` 留宿主。
+pub(super) use aeroric_core::agents::dsh_host::projection::{
+    count_content_lines, fold_summary, plural, push_line, user_prompt_echo, view_str, ANSI_BOLD,
+    ANSI_DIM, ANSI_RESET, FOLD_SUMMARY_CHARS,
+};
 
 /// One folded reasoning row per assistant block.
 ///

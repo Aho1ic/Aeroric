@@ -12,5 +12,6 @@
 pub mod approvals;
 pub mod client;
 pub mod dispatcher;
+pub mod projection;
 pub mod startup;
 pub mod state;
