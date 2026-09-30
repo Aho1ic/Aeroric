@@ -1,22 +1,13 @@
-//! dsh 的 web 后端事件 → 终端文本。
+//! dsh 的 web 后端事件 → 终端文本：**本文件的实现面已全量迁入 core**。
 //!
-//! 从 `dsh_webui.rs` 拆出来的一整块:软换行状态机(`TerminalWrap`)、ANSI 切分与
-//! 列宽计算、以及把工具调用 / 工具结果 / 推理块折成终端行的那批渲染器。
-//!
-//! 为什么能整块搬走:这 800 多行对 `AppHandle`、`DshApiClient`、
-//! `DshWebUiManager` 全都没有引用 —— 输入是 `&str` / `&Value`,输出是 `String`。
-//! 唯一碰到应用状态的是 `sync_wrap_cols`(要读 pty 尺寸),它留在父模块。
+//! P3-05 第七～十片（补记二百五十九）把行生成、两台状态机、文本 helpers 与渲染分支
+//! 逐片搬进 `aeroric_core::agents::dsh_host::projection`——原模块头自证的「对宿主
+//! 句柄/API client/manager 全无引用」现在整体成立。本文件只剩两件事：
+//! ① re-export 保持 `dsh_webui.rs` 与各引用点路径、可见性一字不动；
+//! ② 既有测试模块原址保留，经 re-export 跑在 core 实现上（2465 精确相等口径）。
 //!
 //! 可见性:只有父模块真正用到的才 `pub(super)`,其余保持私有 —— 让编译器继续
 //! 盯着"哪些只有测试在用"。
-
-use serde_json::Value;
-
-/// Minimal ANSI styling for the tool render-intent output. The dsh stream lands
-/// in an xterm view configured with `convertEol: false`, so every line this
-/// module writes terminates with an explicit CRLF.
-pub(super) const ANSI_GREEN: &str = "\x1b[32m";
-pub(super) const ANSI_RED: &str = "\x1b[31m";
 
 // 行生成八件与 ANSI 三常量、折叠宽度已随 P3-05 第七片迁入 core
 // `aeroric_core::agents::dsh_host::projection`（补记二百五十六）；Action 2 的边界
@@ -24,8 +15,10 @@ pub(super) const ANSI_RED: &str = "\x1b[31m";
 // `pub(super)` 原路径——`render_tool_event_view`、`dsh_webui.rs` 与下方测试模块
 // 的引用点一字不动；有状态的 `TerminalWrap`/`ReasoningFold` 留宿主。
 pub(super) use aeroric_core::agents::dsh_host::projection::{
-    count_content_lines, fold_summary, plural, push_line, user_prompt_echo, view_str,
-    ReasoningFold, TerminalWrap, ANSI_BOLD, ANSI_DIM, ANSI_RESET,
+    fold_summary, user_prompt_echo, ReasoningFold, TerminalWrap, ANSI_DIM, ANSI_RESET,
+};
+pub(super) use aeroric_core::agents::dsh_host::projection::{
+    render_tool_event_view, ANSI_GREEN, ANSI_RED,
 };
 // lib 目标只剩测试引用这五个（渲染分支留在本文件、normalize/wrap 断言在下方测试模块）——
 // lib/test 分流照 `dsh_protocol`/`DSH_WEB_OUTPUT_LIMIT` 先例，补记二百五十八。
@@ -33,292 +26,10 @@ pub(super) use aeroric_core::agents::dsh_host::projection::{
 pub(super) use aeroric_core::agents::dsh_host::projection::{
     normalize_terminal_text, terminal_char_width,
 };
-
-/// Split a single-file change into signed rows. `old_text` of `None` is the
-/// harness's `oldText: null` — a create or an overwrite, with no before-image to
-/// compare against, so every line reads as an addition.
-pub(super) fn diff_rows(old_text: Option<&str>, new_text: &str) -> Vec<(char, String)> {
-    let next: Vec<&str> = new_text.split('\n').collect();
-    let Some(old_text) = old_text else {
-        return next
-            .iter()
-            .map(|line| ('+', line.trim_end_matches('\r').to_string()))
-            .collect();
-    };
-    let prev: Vec<&str> = old_text.split('\n').collect();
-    // A common prefix/suffix trim keeps the counted hunk tight without pulling a
-    // full LCS diff into the backend; results already arrive as focused hunks.
-    let mut head = 0;
-    while head < prev.len() && head < next.len() && prev[head] == next[head] {
-        head += 1;
-    }
-    let mut tail = 0;
-    while tail < prev.len() - head
-        && tail < next.len() - head
-        && prev[prev.len() - 1 - tail] == next[next.len() - 1 - tail]
-    {
-        tail += 1;
-    }
-    let mut rows = Vec::new();
-    for line in &prev[head..prev.len() - tail] {
-        rows.push(('-', line.trim_end_matches('\r').to_string()));
-    }
-    for line in &next[head..next.len() - tail] {
-        rows.push(('+', line.trim_end_matches('\r').to_string()));
-    }
-    rows
-}
-
-/// Name the files a change touches without printing any of it: the exact path
-/// when a change is single-file, a count otherwise. `None` means the harness
-/// sent a `diff` view with nothing usable in it.
-fn diff_paths_fragment(diffs: &[Value]) -> Option<String> {
-    let paths: Vec<&str> = diffs
-        .iter()
-        .filter_map(|diff| view_str(diff, "path"))
-        .collect();
-    match paths.as_slice() {
-        [] => None,
-        [path] => {
-            let created = diffs
-                .first()
-                .is_some_and(|diff| diff.get("oldText").is_some_and(Value::is_null));
-            Some(if created {
-                format!("{path} (new file)")
-            } else {
-                (*path).to_string()
-            })
-        }
-        paths => Some(format!("{} files", paths.len())),
-    }
-}
-
-/// Render a pending-call view as one folded row: the tool's title plus a
-/// single-line hint of what it is about to do. dsh web shows the same header on
-/// a collapsed card and keeps the body — the full command, the proposed hunks,
-/// the raw input — behind a disclosure. A terminal has no disclosure, so the
-/// body is left to the session record and the insights trajectory.
-fn render_tool_call_view(view: &Value) -> Option<String> {
-    let title = view_str(view, "title")?;
-    let mut kind = String::new();
-    let mut detail: Vec<String> = Vec::new();
-    match view.get("card").and_then(Value::as_str)? {
-        "terminal" => {
-            if let Some(description) = view_str(view, "description").and_then(fold_summary) {
-                detail.push(description);
-            }
-        }
-        "diff" => {
-            let diffs = view.get("diffs").and_then(Value::as_array)?;
-            if let Some(paths) = diff_paths_fragment(diffs) {
-                detail.push(paths);
-            }
-        }
-        "generic" => {
-            // rawInput is deliberately not printed: it is the unparsed tool
-            // input and can be large. The insights trajectory shows it in full.
-            if let Some(label) = view_str(view, "kind") {
-                kind = format!(" {ANSI_DIM}({label}){ANSI_RESET}");
-            }
-            if let Some(location) = view
-                .get("locations")
-                .and_then(Value::as_array)
-                .and_then(|locations| locations.first())
-            {
-                if let Some(path) = view_str(location, "path") {
-                    let line = location
-                        .get("line")
-                        .and_then(Value::as_i64)
-                        .map(|line| format!(":{line}"))
-                        .unwrap_or_default();
-                    detail.push(format!("{path}{line}"));
-                }
-            }
-        }
-        _ => return None,
-    }
-    let mut row = format!("{ANSI_BOLD}▸ {title}{ANSI_RESET}{kind}");
-    if !detail.is_empty() {
-        row.push_str(&format!(" {ANSI_DIM}· {}{ANSI_RESET}", detail.join(" · ")));
-    }
-    let mut out = String::from("\r\n");
-    push_line(&mut out, "", &row);
-    Some(out)
-}
-
-/// Render a completed-call view as one folded row that closes the call row
-/// printed just above it: a state glyph, the harness's replacement title when
-/// it sends one, and a one-line verdict. Bodies are summarized rather than
-/// printed — dsh web keeps them collapsed on the same row, and a terminal that
-/// dumped every command's output, every hunk and every matched line drowned the
-/// conversation it was supposed to frame.
-fn render_tool_result_view(view: &Value) -> Option<String> {
-    let card = view.get("card").and_then(Value::as_str)?;
-    let mut failed = false;
-    let mut detail: Vec<String> = Vec::new();
-    match card {
-        "terminal" => {
-            // exitCode and signal are mutually exclusive; a signal is the
-            // stronger statement about how the run ended, so it wins.
-            if let Some(signal) = view_str(view, "signal") {
-                failed = true;
-                detail.push(signal.to_string());
-            } else if let Some(code) = view
-                .get("exitCode")
-                .and_then(Value::as_i64)
-                .filter(|code| *code != 0)
-            {
-                failed = true;
-                detail.push(format!("exit {code}"));
-            }
-            let output = view
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match fold_summary(output) {
-                Some(summary) => {
-                    detail.push(summary);
-                    let lines = count_content_lines(output);
-                    if lines > 1 {
-                        detail.push(format!("{lines} lines"));
-                    }
-                }
-                None => detail.push("no output".to_string()),
-            }
-        }
-        "diff" => {
-            let diffs = view.get("diffs").and_then(Value::as_array)?;
-            let paths = diff_paths_fragment(diffs)?;
-            let (mut added, mut removed) = (0usize, 0usize);
-            for diff in diffs {
-                let Some(new_text) = diff.get("newText").and_then(Value::as_str) else {
-                    continue;
-                };
-                for (sign, _) in diff_rows(diff.get("oldText").and_then(Value::as_str), new_text) {
-                    if sign == '+' {
-                        added += 1;
-                    } else {
-                        removed += 1;
-                    }
-                }
-            }
-            detail.push(format!("{paths} +{added} -{removed}"));
-        }
-        "search" => match view.get("shape").and_then(Value::as_str)? {
-            "matches" => {
-                let files = view.get("files").and_then(Value::as_array)?;
-                let hits: usize = files
-                    .iter()
-                    .map(|file| {
-                        file.get("matches")
-                            .and_then(Value::as_array)
-                            .map_or(0, Vec::len)
-                    })
-                    .sum();
-                let scope = match files.as_slice() {
-                    [file] => view_str(file, "path").unwrap_or("1 file").to_string(),
-                    files => format!("{} files", files.len()),
-                };
-                detail.push(format!(
-                    "{hits} {} in {scope}",
-                    plural(hits, "match", "matches")
-                ));
-            }
-            "paths" => {
-                let paths: Vec<&str> = view
-                    .get("paths")
-                    .and_then(Value::as_array)?
-                    .iter()
-                    .filter_map(|path| path.as_str().filter(|path| !path.is_empty()))
-                    .collect();
-                detail.push(match paths.as_slice() {
-                    [path] => (*path).to_string(),
-                    paths => format!("{} paths", paths.len()),
-                });
-            }
-            _ => return None,
-        },
-        "read" => {
-            let path = view_str(view, "path")?;
-            let lines = view.get("lines").and_then(Value::as_array)?;
-            let total = view.get("totalLines").and_then(Value::as_i64).unwrap_or(0);
-            let offset = view.get("offset").and_then(Value::as_i64).unwrap_or(1);
-            detail.push(format!(
-                "{path} — {} of {total} lines from {offset}",
-                lines.len()
-            ));
-        }
-        "web" => match view.get("kind").and_then(Value::as_str)? {
-            "search" => {
-                if let Some(answer) = view_str(view, "answer").and_then(fold_summary) {
-                    detail.push(answer);
-                }
-                let sources = view.get("sources").and_then(Value::as_array)?;
-                detail.push(format!(
-                    "{} {}",
-                    sources.len(),
-                    plural(sources.len(), "source", "sources")
-                ));
-            }
-            "fetch" => {
-                let url = view_str(view, "url")?;
-                let status = view.get("statusCode").and_then(Value::as_i64)?;
-                failed = !(200..400).contains(&status);
-                detail.push(format!("{status} {url}"));
-            }
-            _ => return None,
-        },
-        // A generic result view carries only a replacement title; without one it
-        // says nothing the raw event does not already carry.
-        "generic" => {
-            view_str(view, "title")?;
-        }
-        _ => return None,
-    }
-    if view.get("truncated") == Some(&Value::Bool(true)) {
-        detail.push("truncated by the harness".to_string());
-    }
-    let glyph = if failed {
-        format!("{ANSI_RED}✖{ANSI_RESET}")
-    } else {
-        format!("{ANSI_GREEN}✔{ANSI_RESET}")
-    };
-    let mut row = format!("  {glyph}");
-    if let Some(title) = view_str(view, "title") {
-        row.push_str(&format!(" {title}"));
-    }
-    if !detail.is_empty() {
-        row.push_str(&format!(" {ANSI_DIM}· {}{ANSI_RESET}", detail.join(" · ")));
-    }
-    let mut out = String::new();
-    push_line(&mut out, "", &row);
-    Some(out)
-}
-
-/// Render the host-computed render intent riding a `tool/call` or `tool/result`
-/// delivery. dsh derives one `view` per delivery (never persisting it) and its
-/// own web UI draws it as a card; the terminal gets the same information as
-/// styled lines. `None` means the view was absent, addressed the other event
-/// kind, or used a shape this renderer does not know — the caller then falls
-/// back to the raw event, which is what dsh specifies for a UI without the
-/// matching capability.
-pub(super) fn render_tool_event_view(payload: &Value, expected: &str) -> Option<String> {
-    let envelope = payload.get("view")?;
-    if envelope.get("for").and_then(Value::as_str)? != expected {
-        return None;
-    }
-    let view = envelope.get("view")?;
-    match expected {
-        "call" => render_tool_call_view(view),
-        "result" => render_tool_result_view(view),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn call_payload(view: Value) -> Value {
         json!({ "event": { "type": "tool/call" }, "view": { "for": "call", "view": view } })

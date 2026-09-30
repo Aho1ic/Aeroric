@@ -651,3 +651,90 @@ fn reasoning_fold_closes_summary_and_counts_lines() {
         "96+省略号封顶"
     );
 }
+
+#[test]
+fn render_envelope_routes_by_for_and_refuses_unknown_shapes() {
+    use aeroric_core::agents::dsh_host::projection::{plain_single_line, render_tool_event_view};
+    // view 缺失 / for 不匹配 / 未知 card：全部 None＝回退 raw event（dsh 对无该
+    // 能力 UI 的规定行为），不得造行。
+    assert!(render_tool_event_view(
+        &json!({"view":{"for":"call","view":{"card":"terminal"}}}),
+        "result"
+    )
+    .is_none());
+    // for 不匹配 ⇒ None（call 投递不带 result envelope）。
+    assert!(render_tool_event_view(
+        &json!({"view":{"for":"result","view":{"card":"terminal","title":"t"}}}),
+        "call"
+    )
+    .is_none());
+    // 未知 card ⇒ None＝回退 raw event。
+    assert!(render_tool_event_view(
+        &json!({"view":{"for":"call","view":{"card":"hologram","title":"t"}}}),
+        "call"
+    )
+    .is_none());
+    // terminal call 行：标题加粗臂＋description 折叠（剥 ANSI 后核可见文本）。
+    let row = render_tool_event_view(
+        &json!({"view":{"for":"call","view":{"card":"terminal","title":"Run tests","description":"第一行说明\n第二行不要"}}}),
+        "call",
+    )
+    .unwrap();
+    assert!(row.starts_with("\r\n"), "call 行前间隔 CRLF: {row:?}");
+    let visible = plain_single_line(&row);
+    assert_eq!(visible, "▸ Run tests · 第一行说明", "{visible:?}");
+}
+
+#[test]
+fn result_rows_summarize_diff_search_and_exit_states() {
+    use aeroric_core::agents::dsh_host::projection::{plain_single_line, render_tool_event_view};
+    use serde_json::Value;
+    let result = |v: Value| {
+        render_tool_event_view(&json!({"view": {"for": "result", "view": v}}), "result").unwrap()
+    };
+    // diff：head/tail 修剪后的 hunk 计数 + 新文件标注。
+    let diff = result(json!({
+        "card":"diff",
+        "diffs":[{"path":"a.rs","oldText":null,"newText":"x\ny\n"}],
+    }));
+    assert_eq!(
+        plain_single_line(&diff),
+        "✔ · a.rs (new file) +3 -0",
+        "尾部 \\n 也是一行空文本"
+    );
+    // search/matches：hits 复数与 scope 单文件路径。
+    let search = result(json!({
+        "card":"search","shape":"matches",
+        "files":[{"path":"src/x.rs","matches":[{},{},{}]}],
+    }));
+    assert_eq!(plain_single_line(&search), "✔ · 3 matches in src/x.rs");
+    // terminal 失败：signal 压过 exitCode、无输出臂、truncated 注记。
+    let fail = result(json!({
+        "card":"terminal","signal":"SIGKILL","truncated":true,
+    }));
+    assert_eq!(
+        plain_single_line(&fail),
+        "✖ · SIGKILL · no output · truncated by the harness"
+    );
+    // exitCode 非 0 也是失败；output 折叠＋行数尾巴。
+    let code = result(json!({
+        "card":"terminal","exitCode":2,"output":"boom\nline2\n",
+    }));
+    assert_eq!(plain_single_line(&code), "✖ · exit 2 · boom · 2 lines");
+}
+
+#[test]
+fn diff_rows_counts_hunks_without_lcs_and_flags_creates() {
+    use aeroric_core::agents::dsh_host::projection::diff_rows;
+    // old=None：全行加法（create/overwrite 无 before-image）。
+    assert_eq!(
+        diff_rows(None, "a\nb"),
+        vec![('+', "a".to_string()), ('+', "b".to_string())]
+    );
+    // 公共头尾修剪后只剩中间 hunk；\r 被剥。
+    let rows = diff_rows(Some("keep\nold\nkeep2\r"), "keep\nnew\nkeep2\r");
+    assert_eq!(
+        rows,
+        vec![('-', "old".to_string()), ('+', "new".to_string())]
+    );
+}
