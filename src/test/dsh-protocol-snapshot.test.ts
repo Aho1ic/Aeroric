@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import { DSH_PROTOCOL_SNAPSHOT } from "../dshProtocol";
 
 /**
- * `src/dshProtocol.ts` 与 `src-tauri/src/dsh_webui/protocol_inventory.rs` 是两份
+ * `src/dshProtocol.ts` 与 core `agents/dsh_host/client.rs` 的协议清单是两份
+ * （清单声明自宿主 `protocol_inventory.rs` 上收 core，P3-05 第三片；宿主只剩 re-export 壳，
+ *  本测试因此直接读真身——读壳会"missing Rust const"，252 片断点即此。）
  * 逐项平行的清单:前端渲染兼容性诊断,后端 `DshProtocolCapabilities::snapshot()`
  * 也向 UI 报同一批数据。上游改一个方法名就要改两处,漏一处不会被编译或既有测试
  * 发现 —— 历史上 `sourceCommit` 就曾指向一个本地不存在的提交。这里把"两份必须
@@ -18,8 +20,14 @@ import { DSH_PROTOCOL_SNAPSHOT } from "../dshProtocol";
  */
 
 // jsdom 环境下 import.meta.url 不是 file: URL,改从项目根解析(同 z-layers.test.ts)。
-const INVENTORY_PATH = "src-tauri/src/dsh_webui/protocol_inventory.rs";
-const inventorySource = readFileSync(resolve(process.cwd(), INVENTORY_PATH), "utf8");
+const INVENTORY_PATH = "core/crates/aeroric-core/src/agents/dsh_host/client.rs";
+// RETIRED 三表按 252 片的口径留在宿主 `protocol_inventory.rs`（原址保真），
+// live 表在 core——两边都要进同一个解析语料，否则"不许回归"黑名单与
+// 覆盖反查（allRustSliceNames）会各瞎一半。
+const RETIRED_PATH = "src-tauri/src/dsh_webui/protocol_inventory.rs";
+const inventorySource = [INVENTORY_PATH, RETIRED_PATH]
+  .map((rel) => readFileSync(resolve(process.cwd(), rel), "utf8"))
+  .join("\n");
 
 /** 去掉行注释,避免注释里的字符串字面量被当成清单条目。 */
 function withoutLineComments(source: string): string {
