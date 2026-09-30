@@ -24163,39 +24163,53 @@
     },
     {
       "name": "dsh-approval-requested",
-      "rust_consts": [],
+      "rust_consts": [
+        {
+          "symbol": "DSH_APPROVAL_REQUESTED",
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/approvals.rs"
+        }
+      ],
       "ts_consts": [
         {
           "symbol": "DSH_APPROVAL_REQUESTED_EVENT",
           "at": "src/tauriEvents.ts"
         }
       ],
-      "emitters": [],
+      "emitters": [
+        "src-tauri/src/dsh_webui.rs:1173"
+      ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:40"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": "listened-without-emitter",
+      "orphan": null,
       "target": null,
       "note": null
     },
     {
       "name": "dsh-approval-resolved",
-      "rust_consts": [],
+      "rust_consts": [
+        {
+          "symbol": "DSH_APPROVAL_RESOLVED",
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/approvals.rs"
+        }
+      ],
       "ts_consts": [
         {
           "symbol": "DSH_APPROVAL_RESOLVED_EVENT",
           "at": "src/tauriEvents.ts"
         }
       ],
-      "emitters": [],
+      "emitters": [
+        "src-tauri/src/dsh_webui.rs:1178"
+      ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:89"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": "listened-without-emitter",
+      "orphan": null,
       "target": null,
       "note": null
     },
@@ -24434,39 +24448,53 @@
     },
     {
       "name": "dsh-question-requested",
-      "rust_consts": [],
+      "rust_consts": [
+        {
+          "symbol": "DSH_QUESTION_REQUESTED",
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/approvals.rs"
+        }
+      ],
       "ts_consts": [
         {
           "symbol": "DSH_QUESTION_REQUESTED_EVENT",
           "at": "src/tauriEvents.ts"
         }
       ],
-      "emitters": [],
+      "emitters": [
+        "src-tauri/src/dsh_webui.rs:1183"
+      ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:62"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": "listened-without-emitter",
+      "orphan": null,
       "target": null,
       "note": null
     },
     {
       "name": "dsh-question-resolved",
-      "rust_consts": [],
+      "rust_consts": [
+        {
+          "symbol": "DSH_QUESTION_RESOLVED",
+          "at": "core/crates/aeroric-core/src/agents/dsh_host/approvals.rs"
+        }
+      ],
       "ts_consts": [
         {
           "symbol": "DSH_QUESTION_RESOLVED_EVENT",
           "at": "src/tauriEvents.ts"
         }
       ],
-      "emitters": [],
+      "emitters": [
+        "src-tauri/src/dsh_webui.rs:1188"
+      ],
       "listeners": [
         "src/hooks/useDshHostEvents.ts:95"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": "listened-without-emitter",
+      "orphan": null,
       "target": null,
       "note": null
     },
@@ -24819,10 +24847,6 @@
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:485",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:494",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:500",
-    "DSH_APPROVAL_REQUESTED @ src-tauri/src/dsh_webui.rs:1173",
-    "DSH_APPROVAL_RESOLVED @ src-tauri/src/dsh_webui.rs:1178",
-    "DSH_QUESTION_REQUESTED @ src-tauri/src/dsh_webui.rs:1183",
-    "DSH_QUESTION_RESOLVED @ src-tauri/src/dsh_webui.rs:1188",
     "event_name @ src-tauri/src/dsh_webui.rs:1857",
     "event_name @ src-tauri/src/dsh_webui.rs:1905",
     "event_name @ src-tauri/src/dsh_webui.rs:1922",
