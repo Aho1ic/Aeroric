@@ -14,7 +14,12 @@ workspace = true
 aeroric-core = { workspace = true }
 sha2 = "0.10.9" # 与 core 同版：ready 帧的 data-dir 标识哈希
 aeroric-protocol = { workspace = true }
+futures-util = "0.3" # 与宿主/core 同版：handler 的 BoxFuture
 serde = { workspace = true }
+uuid = { version = "1", features = ["v4"] } # 与 core/宿主同版：host token 的随机源
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2" # 与 core 同口径：peer-UID 的 getpeereid/SO_PEERCRED

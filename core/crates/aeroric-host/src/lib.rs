@@ -2,8 +2,11 @@
 //! deliberately no second daemon. Startup order is lock -> data compat ->
 //! runtime -> listener -> ready (P3-06).
 
+pub mod auth;
 pub mod codec;
+pub mod dispatcher;
 pub mod startup;
+pub mod subscriptions;
 pub mod uds;
 
 pub fn is_library_only() -> bool {

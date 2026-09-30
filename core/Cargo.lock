@@ -43,11 +43,14 @@ version = "0.1.0"
 dependencies = [
  "aeroric-core",
  "aeroric-protocol",
+ "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
