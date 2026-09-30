@@ -6,7 +6,7 @@
 //! - **零 async_trait**：core 无 async-trait 依赖，两个天生异步的端口
 //!   （[`DshHostPorts::ensure_webui`]、[`DshHostPorts::start_stream`]）以
 //!   [`BoxFuture`] 返回保持对象安全；其余端口全同步。
-//! - **`tauri::ipc::Channel` 不进 core**：输出通道经 [`OutputSink`] 类型擦除，
+//! - **宿主 IPC channel（`ipc::Channel`）不进 core**：输出通道经 [`OutputSink`] 擦除，
 //!   宿主在 thin 调用点用 `Channel::send` 包一层。活跃会话表
 //!   （`DshWebUiManager::active_sessions`）仍归宿主——core 只把 sink 交回去。
 //! - **进程与文件地盘不伪装成纯逻辑**：dsh-web 进程的 ensure（端口 4）与
@@ -25,7 +25,7 @@ pub use futures_util::future::BoxFuture;
 pub type OutputSink = Arc<dyn Fn(String) + Send + Sync>;
 
 /// [`DshHostPorts::register_session`] 的事实包：core 解析出 session 路径后，
-/// 登记归宿主（`session_dsh::register_dsh_session_with_preset` 带 AppHandle
+/// 登记归宿主（`session_dsh::register_dsh_session_with_preset` 带 app handle
 /// 与 emit，属宿主地盘）。generation 是 `RunKey` 的 core 侧可表达部分。
 #[derive(Debug, Clone)]
 pub struct DshSessionRegistration {
@@ -105,7 +105,7 @@ pub trait DshHostPorts: Send + Sync {
     /// "Could not resolve the DSH session log path"。
     fn session_path(&self, agent: &str, project_path: &str, session_id: &str) -> Option<String>;
 
-    /// 宿主 `register_dsh_session_with_preset`（带 AppHandle/emit 的登记面）。
+    /// 宿主 `register_dsh_session_with_preset`（带 app handle/emit 的登记面）。
     fn register_session(&self, facts: &DshSessionRegistration);
 
     /// 宿主 `sync_terminal_cols`：流开始前把当前终端列数推给 dsh-web。

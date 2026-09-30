@@ -216,28 +216,35 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
             let permission_mode = (!request.permission_mode_wire.is_empty())
                 .then(|| request.permission_mode_wire.clone());
             let images = optional_attachments(request.images.clone());
+            // kernel 接线（补记二百六十八，D4 生效）：dsh 启动编排已上收 core
+            // `dsh_host::executor::run_dsh_task`，本分支只剩「取 facts → 包 sink →
+            // 分派」；`RunKey::minted` 的代经 `generation` 数字传给端口，宿主登记面
+            // 在 adapter 的 `register_session`/`register_run` 里重建。
+            let _ = run; // RunKey 的 (task, generation) 事实经 launch 字段下传。
+            let sink: crate::dsh_webui::OutputSink = std::sync::Arc::new(move |text: String| {
+                let _ = channel.send(text);
+            });
+            let launch = aeroric_core::agents::dsh_host::executor::DshLaunch {
+                generation: request.generation,
+                task_id,
+                agent,
+                project_path,
+                prompt,
+                session_id,
+                workspace_id,
+                agent_preset,
+                prompt_mode,
+                selected_model,
+                reasoning_effort,
+                permission_mode,
+                images,
+                client_time_zone,
+            };
             tauri::async_runtime::spawn(async move {
-                let state = app.state::<DshWebUiManager>();
-                let result = crate::dsh_webui::run_dsh_task_core(
-                    app.clone(),
-                    &state,
-                    run,
-                    task_id,
-                    agent,
-                    project_path,
-                    prompt,
-                    session_id,
-                    workspace_id,
-                    agent_preset,
-                    prompt_mode,
-                    selected_model,
-                    reasoning_effort,
-                    permission_mode,
-                    images,
-                    client_time_zone,
-                    channel,
-                )
-                .await;
+                let ports = crate::dsh_webui::DshPortsAdapter::new(app.clone());
+                let result =
+                    aeroric_core::agents::dsh_host::executor::run_dsh_task(&ports, launch, sink)
+                        .await;
                 report_detached("launch", result);
             });
             return Ok(());

@@ -20,7 +20,7 @@ Cross-checked: 66 command wrappers counted here against 66 matching entries in `
 
 | # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
 |---|---|---|---|---|---|---|
-| 1 | `src-tauri/src/dsh_webui.rs` | `core/crates/aeroric-core/dsh_webui/dsh_webui-root.rs` | 14 | Struct DshSessionLogExport, Struct DshWebUiManager, Struct SuspendedDshRuntime, cancel_dsh_task(), cancel_dsh_task_core(), complete_dsh_task(), complete_dsh_task_core(), export_dsh_session_log(), get_dsh_webui_status(), list_dsh_agent_preset_details(), list_dsh_agent_presets(), pick_dsh_host_directory(), prompt_dsh_task(), run_dsh_task(), run_dsh_task_core() +5 more (20 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; cfg(windows) branch; cfg(unix) branch; spawns task/thread (needs a cancellation token); credential owner |
+| 1 | `src-tauri/src/dsh_webui.rs` | `core/crates/aeroric-core/dsh_webui/dsh_webui-root.rs` | 14 | Struct DshPortsAdapter, Struct DshSessionLogExport, Struct DshWebUiManager, Struct SuspendedDshRuntime, cancel_dsh_task(), cancel_dsh_task_core(), complete_dsh_task(), complete_dsh_task_core(), export_dsh_session_log(), get_dsh_webui_status(), list_dsh_agent_preset_details(), list_dsh_agent_presets(), pick_dsh_host_directory(), prompt_dsh_task(), run_dsh_task() +5 more (20 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; cfg(windows) branch; cfg(unix) branch; spawns task/thread (needs a cancellation token); credential owner |
 | 2 | `src-tauri/src/dsh_webui/api_client.rs` | `core/crates/aeroric-core/dsh_webui/api_client.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 3 | `src-tauri/src/dsh_webui/build_readiness.rs` | `core/crates/aeroric-core/dsh_webui/build_readiness.rs` | 0 | Const DSH_BUILD_FAILURE_SIGNATURES, checkout_not_built_error(), declared_lib_artifacts(), dsh_checkout_missing_artifacts(), dsh_package_dirs(), explain_dsh_web_failure(), looks_like_incomplete_build() (7 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 | 4 | `src-tauri/src/dsh_webui/commands.rs` | `core/crates/aeroric-core/dsh_webui/commands.rs` | 52 | archive_dsh_session(), clear_dsh_goals(), complete_dsh_goal(), copy_dsh_agent_preset(), create_dsh_goal(), create_dsh_host_directory(), create_dsh_workspace(), delete_dsh_message_feedback(), delete_dsh_workspace(), describe_dsh_credentials(), describe_dsh_host(), discover_dsh_llm_models(), edit_dsh_goal(), execute_dsh_command(), fork_dsh_session() +39 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token) |
@@ -33,7 +33,7 @@ Cross-checked: 66 command wrappers counted here against 66 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **9**, lines: **5555**, command wrappers: **66**, test items excluded from the symbol lists: **64**
+- files: **9**, lines: **5536**, command wrappers: **66**, test items excluded from the symbol lists: **64**
 - files carrying `AppHandle`/`State`: **3**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**

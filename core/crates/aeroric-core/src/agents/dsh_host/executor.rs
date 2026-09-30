@@ -2,7 +2,7 @@
 //!
 //! 自宿主 `dsh_webui.rs::run_dsh_task_core` verbatim 上收：编排顺序、错误文案、
 //! 注释语义一行没改；改动的只有三类机械项——
-//! 1. `AppHandle<R>`/`State<DshWebUiManager>`/`Channel<String>` 全部换成
+//! 1. 宿主 app handle / managed state / IPC channel（`Channel<String>`）全部换成
 //!    [`DshHostPorts`] 端口调用（宿主地盘清单见 ports.rs 的逐端口出处）；
 //! 2. `crate::run_registry::RunKey` 拆成 `task_id + generation`（core 不持宿主
 //!    RunKey）；

@@ -127,7 +127,9 @@ pub struct DshWebUiManager {
 struct ActiveDshSession {
     session_id: String,
     base_url: String,
-    on_output: Channel<String>,
+    // kernel 片（补记二百六十八）：输出通道擦除为 core `OutputSink`——
+    // `tauri::ipc::Channel` 不再进 dsh 状态表，core executor 经端口交回 sink。
+    on_output: OutputSink,
 }
 
 pub(crate) struct SuspendedDshRuntime {
@@ -271,7 +273,7 @@ impl DshWebUiManager {
             .unwrap_or_default();
         if !pending.is_empty() {
             if let Some(active) = &active {
-                let _ = active.on_output.send(pending);
+                (active.on_output)(pending);
             }
         }
         (active, true)
@@ -291,7 +293,7 @@ impl DshWebUiManager {
         &self,
         task_id: &str,
         session_id: &str,
-        on_output: &Channel<String>,
+        on_output: &OutputSink,
         text: &str,
     ) -> bool {
         let completed_tasks = self.completed_tasks.lock();
@@ -324,7 +326,7 @@ impl DshWebUiManager {
     /// 同时落一份终端历史。DSH 会话没有 PTY,`spawn_pty_reader` 那条持久化路径
     /// (`pty.rs`)永远不会被走到;不在这里补写,任务结束后 `read_task_terminal_history`
     /// 就是空的,结构化 transcript 一旦读不出来,兜底终端只能给用户一片空白。
-    fn send_terminal_text_for_task(&self, task_id: &str, on_output: &Channel<String>, text: &str) {
+    fn send_terminal_text_for_task(&self, task_id: &str, on_output: &OutputSink, text: &str) {
         let wrapped = {
             let mut wraps = self.terminal_wraps.lock();
             let wrap = wraps.entry(task_id.to_string()).or_default();
@@ -336,7 +338,7 @@ impl DshWebUiManager {
         let _ = crate::storage::append_task_terminal_history(task_id, &wrapped);
         // 手机远程终端流 tee,与 PTY 路径对齐:无订阅者时近零开销。
         crate::remote::terminal_hub::hub().publish(task_id, &wrapped);
-        let _ = on_output.send(wrapped);
+        on_output(wrapped);
     }
 
     /// 丢弃换行状态。新一轮任务启动时列宽和光标列都要从零开始。
@@ -991,20 +993,20 @@ fn event_is_stream_delta(payload: &Value) -> bool {
 
 fn emit_session_event_output(
     payload: &Value,
-    on_output: &Channel<String>,
+    on_output: &OutputSink,
     fold: &mut ReasoningFold,
     wrap: &mut TerminalWrap,
 ) {
     if let Some(output) = session_event_terminal_output(payload, fold) {
         let wrapped = wrap.push(&output);
         if !wrapped.is_empty() {
-            let _ = on_output.send(wrapped);
+            on_output(wrapped);
         }
     }
     if !event_is_stream_delta(payload) {
         let flushed = wrap.flush();
         if !flushed.is_empty() {
-            let _ = on_output.send(flushed);
+            on_output(flushed);
         }
     }
 }
@@ -1078,7 +1080,7 @@ fn dispatch_mux_frame<R: Runtime>(
     envelope: &Value,
     task_id: &str,
     watched_session_id: &str,
-    on_output: &Channel<String>,
+    on_output: &OutputSink,
 ) -> Result<(), String> {
     let completed_tasks = state.completed_tasks.lock();
     if completed_tasks.contains(task_id) {
@@ -1247,7 +1249,7 @@ async fn consume_session_events<R: Runtime>(
     api: &DshApiClient,
     task_id: &str,
     session_id: &str,
-    on_output: &Channel<String>,
+    on_output: &OutputSink,
     events_open: oneshot::Sender<Result<(), String>>,
     mut abort: oneshot::Receiver<()>,
 ) -> Result<(), String> {
@@ -1332,7 +1334,7 @@ async fn start_task_session_stream<R: Runtime>(
     task_id: &str,
     api: &DshApiClient,
     session_id: &str,
-    on_output: &Channel<String>,
+    on_output: &OutputSink,
 ) -> Result<(), String> {
     if !state.stream_is_current(task_id, session_id) {
         return Ok(());
@@ -1457,180 +1459,172 @@ pub async fn run_dsh_task(
     )
 }
 
-/// `run_dsh_task` 的内核。`LegacyTaskExecutor` 从 `app.state::<DshWebUiManager>()` 拿到
-/// 引用后只能调这个 —— 调上面那个命令会把 `TaskService → executor → command →
-/// TaskService` 接成递归(P2-05 Action 4)。参数与实参名一字未改。
-pub(crate) async fn run_dsh_task_core<R: Runtime>(
+/// kernel 接线（补记二百六十八）：core `DshHostPorts` 端口簇的宿主实现。
+/// 每个端口经 `app.state()` 现取现用（manager 字段全 `Arc`，同步端口零克隆压力）；
+/// 两个异步端口（`ensure_webui`/`start_stream`）把 `AppHandle` clone 进
+/// `BoxFuture`，在 future 作用域内取 `State`，不持借用跨 await。
+pub(crate) struct DshPortsAdapter<R: tauri::Runtime> {
     app: AppHandle<R>,
-    state: &DshWebUiManager,
-    run: crate::run_registry::RunKey,
-    task_id: String,
-    agent: String,
-    project_path: String,
-    prompt: String,
-    session_id: Option<String>,
-    workspace_id: Option<String>,
-    agent_preset: Option<String>,
-    prompt_mode: Option<String>,
-    selected_model: Option<String>,
-    reasoning_effort: Option<String>,
-    permission_mode: Option<String>,
-    images: Option<Vec<String>>,
-    client_time_zone: Option<String>,
-    on_output: Channel<String>,
-) -> Result<(), String> {
-    // 只有内置官方 dsh 配置带 reasoning 元数据的模型目录;提供方 / 自定义提供方
-    // 档案只做模型选择,即使前端回传了强度也一律丢弃。
-    let reasoning_effort = if agent == "dsh" {
-        reasoning_effort
-    } else {
-        None
-    };
-    let task_lifecycle_lock = state.task_lifecycle_lock(&task_id);
-    let _task_lifecycle_guard = task_lifecycle_lock.lock().await;
-    state.clear_completed_task(&task_id);
-    state.cancelled_tasks.lock().remove(&task_id);
-    state.reasoning_folds.lock().remove(&task_id);
-    state.clear_terminal_wrap(&task_id);
-    state.clear_internal_command(&task_id);
-    // 全新会话才清空终端历史(对齐 `pty::run_task`);带 session_id 进来的是恢复,
-    // 历史要留着,否则兜底终端会把之前那一段丢掉。
-    if session_id.is_none() {
-        let _ = crate::storage::truncate_task_terminal_history(&task_id);
-        crate::remote::terminal_hub::hub().reset_for_truncate(&task_id);
-    }
-    let web = ensure_dsh_webui(&agent, state).await?;
-    let base_url = web
-        .url
-        .ok_or_else(|| "DSH Web URL is unavailable".to_string())?;
-    let api = DshApiClient::new(base_url.clone())?;
-    let (session_id, resolved_preset) = api
-        .create_session(
-            &project_path,
-            session_id.as_deref(),
-            workspace_id.as_deref(),
-            agent_preset.as_deref(),
-        )
-        .await?;
-    // The run core minted is now addressable by the host's own registry: every status
-    // report this task produces derives its generation from `runs.resource_key`, and
-    // without this registration it would fall back to UNMINTED and be dropped by core's
-    // staleness guard as older than the generation `start()` just minted.
-    app.state::<crate::TaskManager>()
-        .runs
-        .register(&task_id, run.generation());
-    state.active_sessions.lock().insert(
-        task_id.clone(),
-        ActiveDshSession {
-            session_id: session_id.clone(),
-            base_url: base_url.clone(),
-            on_output: on_output.clone(),
-        },
-    );
-    // 任务结束后活跃会话表会清空,归属另记一份,会话详情才找得回这个实例。
-    state.remember_session_host(&session_id, &base_url);
-    let session_path = crate::session_dsh::dsh_session_path_for(&agent, &project_path, &session_id)
-        .ok_or_else(|| "Could not resolve the DSH session log path".to_string())?;
-    crate::session_dsh::register_dsh_session_with_preset(
-        &app,
-        // 执行器分发带来的 core 代：dsh 的运行与 pty 的运行一样按 (task, generation) 登记，
-        // ADR-025 的寻址与 ADR-034 的存活判定都读同一张账。
-        &run,
-        &task_id,
-        &session_id,
-        &session_path,
-        resolved_preset.as_deref(),
-    );
-    let result: Result<(), String> = async {
-        state.sync_terminal_cols(&app, &task_id);
-        start_task_session_stream(&app, state, &task_id, &api, &session_id, &on_output).await?;
-        let models = api.models(&session_id).await?;
-        if selected_model.is_some() || reasoning_effort.is_some() {
-            let current = &models.current;
-            let model = selected_model.unwrap_or_else(|| current.model.clone());
-            let provider = models
-                .groups
-                .iter()
-                .find(|group| group.models.iter().any(|item| item.id == model))
-                .map(|group| group.id.clone())
-                .unwrap_or_else(|| current.provider.clone());
-            let reasoning_effort =
-                supported_dsh_reasoning_effort(&models, &model, reasoning_effort);
-            api.select_model(
-                &session_id,
-                &DshModelSelection {
-                    provider,
-                    model,
-                    reasoning_effort,
-                },
-            )
-            .await?;
-        }
-        if let Some(mode) = permission_mode.as_deref() {
-            let preset = dsh_permission_preset(mode)?;
-            // 权限预设是参数传递,不是用户输入:先登记,让 `/permission <preset>`
-            // 和它的结果行不出现在终端最前面两行。
-            state.expect_internal_command(&task_id, "permission");
-            let command = api
-                .execute_command(&session_id, &format!("/permission {preset}"))
-                .await?;
-            if command.is_null() {
-                state.clear_internal_command(&task_id);
-                return Err(
-                    "DSH permission command is unavailable in this agent preset".to_string()
-                );
-            }
-        }
-        if prompt.trim().is_empty() {
-            // "Start terminal" with no prompt: the session is live and waiting
-            // for the composer, which is an interactive state, not a finished
-            // task. Completion stays an explicit user action.
-            crate::core_adapter::report_task_status(&app, &task_id, "input_required");
-            return Ok(());
-        }
-        crate::core_adapter::report_task_status(&app, &task_id, "pending");
-        let image_count = images.as_ref().map_or(0, Vec::len);
-        if let Some(echo) = user_prompt_echo(&prompt, image_count) {
-            state.send_terminal_text_for_task(&task_id, &on_output, &echo);
-        }
-        let admitted = api
-            .prompt(
-                &session_id,
-                &prompt,
-                prompt_mode.as_deref().unwrap_or("queue"),
-                images,
-                client_time_zone.as_deref(),
-            )
-            .await?;
-        if let Some(text) = admitted
-            .get("command")
-            .and_then(|command| command.get("text"))
-            .and_then(Value::as_str)
-        {
-            state.send_terminal_text_for_task(&task_id, &on_output, &format!("\r\n{text}\r\n"));
-            // A slash command answers inline without opening a turn, so no
-            // turn/end will follow: settle the task as waiting for the user.
-            crate::core_adapter::report_task_status(&app, &task_id, "input_required");
-        }
-        Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            retire_dsh_runs(&app, &task_id);
-            crate::core_adapter::report_task_status_with_reason(
-                &app,
-                &task_id,
-                "failed",
-                Some(error.as_str()),
-            );
-            Err(error)
-        }
+}
+
+impl<R: tauri::Runtime> DshPortsAdapter<R> {
+    pub(crate) fn new(app: AppHandle<R>) -> Self {
+        Self { app }
     }
 }
 
-/// 任务级结算（ADR-025 规则 2 的形状，与 `complete_dsh_task_core` 的清账同源）：
+impl<R: tauri::Runtime> aeroric_core::agents::dsh_host::ports::DshHostPorts for DshPortsAdapter<R> {
+    fn lifecycle_lock(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.app
+            .state::<DshWebUiManager>()
+            .task_lifecycle_lock(task_id)
+    }
+
+    fn clear_prerun_state(&self, task_id: &str) {
+        let manager = self.app.state::<DshWebUiManager>();
+        manager.clear_completed_task(task_id);
+        manager.cancelled_tasks.lock().remove(task_id);
+        manager.reasoning_folds.lock().remove(task_id);
+        manager.clear_terminal_wrap(task_id);
+        manager.clear_internal_command(task_id);
+    }
+
+    fn truncate_history_for_new_session(&self, task_id: &str) {
+        let _ = crate::storage::truncate_task_terminal_history(task_id);
+        crate::remote::terminal_hub::hub().reset_for_truncate(task_id);
+    }
+
+    fn ensure_webui(
+        &self,
+        agent: &str,
+    ) -> aeroric_core::agents::dsh_host::ports::BoxFuture<'_, Result<String, String>> {
+        let app = self.app.clone();
+        let agent = agent.to_string();
+        Box::pin(async move {
+            let state = app.state::<DshWebUiManager>();
+            let web = ensure_dsh_webui(&agent, &state).await?;
+            web.url
+                .ok_or_else(|| "DSH Web URL is unavailable".to_string())
+        })
+    }
+
+    fn register_run(&self, task_id: &str, generation: u64) {
+        self.app
+            .state::<crate::TaskManager>()
+            .runs
+            .register(task_id, generation);
+    }
+
+    fn register_active_session(
+        &self,
+        task_id: &str,
+        session_id: &str,
+        base_url: &str,
+        sink: OutputSink,
+    ) {
+        self.app
+            .state::<DshWebUiManager>()
+            .active_sessions
+            .lock()
+            .insert(
+                task_id.to_string(),
+                ActiveDshSession {
+                    session_id: session_id.to_string(),
+                    base_url: base_url.to_string(),
+                    on_output: sink,
+                },
+            );
+    }
+
+    fn remember_session_host(&self, session_id: &str, base_url: &str) {
+        self.app
+            .state::<DshWebUiManager>()
+            .remember_session_host(session_id, base_url);
+    }
+
+    fn session_path(&self, agent: &str, project_path: &str, session_id: &str) -> Option<String> {
+        crate::session_dsh::dsh_session_path_for(agent, project_path, session_id)
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn register_session(
+        &self,
+        facts: &aeroric_core::agents::dsh_host::ports::DshSessionRegistration,
+    ) {
+        let run = crate::run_registry::RunKey::minted(&facts.task_id, facts.generation);
+        crate::session_dsh::register_dsh_session_with_preset(
+            &self.app,
+            // 执行器分发带来的 core 代：dsh 的运行与 pty 的运行一样按 (task, generation) 登记，
+            // ADR-025 的寻址与 ADR-034 的存活判定都读同一张账。
+            &run,
+            &facts.task_id,
+            &facts.session_id,
+            std::path::Path::new(&facts.session_path),
+            facts.resolved_preset.as_deref(),
+        );
+    }
+
+    fn sync_terminal_cols(&self, task_id: &str) {
+        self.app
+            .state::<DshWebUiManager>()
+            .sync_terminal_cols(&self.app, task_id);
+    }
+
+    fn start_stream(
+        &self,
+        request: aeroric_core::agents::dsh_host::ports::DshStreamRequest,
+    ) -> aeroric_core::agents::dsh_host::ports::BoxFuture<'_, Result<(), String>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let state = app.state::<DshWebUiManager>();
+            let api = DshApiClient::new(request.base_url.clone())?;
+            start_task_session_stream(
+                &app,
+                &state,
+                &request.task_id,
+                &api,
+                &request.session_id,
+                &request.sink,
+            )
+            .await
+        })
+    }
+
+    fn expect_internal_command(&self, task_id: &str, kind: &str) {
+        self.app
+            .state::<DshWebUiManager>()
+            .expect_internal_command(task_id, kind);
+    }
+
+    fn clear_internal_command(&self, task_id: &str) {
+        self.app
+            .state::<DshWebUiManager>()
+            .clear_internal_command(task_id);
+    }
+
+    fn send_terminal(&self, task_id: &str, sink: &OutputSink, text: &str) {
+        self.app
+            .state::<DshWebUiManager>()
+            .send_terminal_text_for_task(task_id, sink, text);
+    }
+
+    fn report_status(&self, task_id: &str, status: &str, reason: Option<&str>) {
+        match reason {
+            Some(reason) => crate::core_adapter::report_task_status_with_reason(
+                &self.app,
+                task_id,
+                status,
+                Some(reason),
+            ),
+            None => crate::core_adapter::report_task_status(&self.app, task_id, status),
+        }
+    }
+
+    fn retire_runs(&self, task_id: &str) {
+        retire_dsh_runs(&self.app, task_id);
+    }
+}
+
 /// 把这个任务名下所有代的 dsh 运行从宿主 run registry 退掉。晚退不会让状态变错
 /// （Runtime 来源的观察不受存活闸约束），不退则 `has_live_run` 永远为真。
 fn retire_dsh_runs<R: Runtime>(app: &AppHandle<R>, task_id: &str) {
@@ -1843,7 +1837,7 @@ pub async fn set_dsh_web_default_preset(
 // 私有 re-export 保持模块内裸名调用点一字不动；`prompt()` 的 content 组装＋requestId
 // 铸造＋async RPC 留本文件（判定与投递的分界）。上方原 doc 是指向早已迁走的
 // agent helper 的孤儿（描述的函数不存在于本处），随切除一并移除并留痕于此。
-use aeroric_core::agents::dsh_host::approvals::dsh_permission_preset;
+pub(crate) use aeroric_core::agents::dsh_host::ports::OutputSink;
 
 // ── New Tauri commands ────────────────────────────────────────────────────────
 
@@ -2541,15 +2535,7 @@ mod tests {
     fn normalizes_multiline_assistant_chunks_before_sending_them() {
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let captured = received.clone();
-        let channel = Channel::new(move |body| {
-            let tauri::ipc::InvokeResponseBody::Json(json) = body else {
-                panic!("terminal text must use a JSON channel payload");
-            };
-            captured
-                .lock()
-                .push(serde_json::from_str(&json).expect("channel payload is a string"));
-            Ok(())
-        });
+        let sink: OutputSink = Arc::new(move |text| captured.lock().push(text));
         emit_session_event_output(
             &json!({
                 "event": {
@@ -2568,7 +2554,7 @@ mod tests {
                     }
                 }
             }),
-            &channel,
+            &sink,
             &mut ReasoningFold::default(),
             &mut TerminalWrap::default(),
         );
@@ -2616,19 +2602,14 @@ mod tests {
         })
     }
 
-    fn capture_terminal_channel() -> (Channel<String>, Arc<Mutex<Vec<String>>>) {
+    fn capture_terminal_sink() -> (OutputSink, Arc<Mutex<Vec<String>>>) {
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let captured = received.clone();
-        let channel = Channel::new(move |body| {
-            let tauri::ipc::InvokeResponseBody::Json(json) = body else {
-                panic!("terminal text must use a JSON channel payload");
-            };
-            captured
-                .lock()
-                .push(serde_json::from_str(&json).expect("channel payload is a string"));
-            Ok(())
-        });
-        (channel, received)
+        // kernel 片改型（补记二百六十八）：捕获从 Channel 的 JSON body 解码换成
+        // sink 直收 String。原「JSON channel payload」断言验证的是 tauri IPC 信封
+        // 而非 dsh 投影行为，随擦除一并退役。
+        let sink: OutputSink = Arc::new(move |text| captured.lock().push(text));
+        (sink, received)
     }
 
     /// 持久事件整段到达,所以答案必须**当场**落地,不再攒行尾单词。
@@ -2639,17 +2620,17 @@ mod tests {
     /// 卡在换行状态里,直到下一个事件偶然到来才显示。
     #[test]
     fn flushes_the_answer_as_soon_as_the_message_lands() {
-        let (channel, received) = capture_terminal_channel();
+        let (sink, received) = capture_terminal_sink();
         let mut fold = ReasoningFold::default();
         let mut wrap = TerminalWrap::default();
         wrap.set_cols(40);
-        emit_session_event_output(&text_chunk("Answer"), &channel, &mut fold, &mut wrap);
+        emit_session_event_output(&text_chunk("Answer"), &sink, &mut fold, &mut wrap);
         assert_eq!(*received.lock(), vec!["Answer".to_string()]);
 
         // 随后的 turn/end 不该把同一段答案再冲一遍。
         emit_session_event_output(
             &json!({ "event": { "type": "turn/end", "data": { "reason": { "kind": "completed" } } } }),
-            &channel,
+            &sink,
             &mut fold,
             &mut wrap,
         );
@@ -2863,7 +2844,7 @@ mod tests {
     #[test]
     fn resolves_a_session_host_after_its_task_is_gone() {
         let manager = DshWebUiManager::new();
-        let output = Channel::new(|_| Ok(()));
+        let output: OutputSink = Arc::new(|_: String| {});
         manager.active_sessions.lock().insert(
             "task-1".to_string(),
             ActiveDshSession {
@@ -2928,7 +2909,7 @@ mod tests {
     #[test]
     fn completing_a_task_detaches_its_stream_once() {
         let manager = DshWebUiManager::new();
-        let output = Channel::new(|_| Ok(()));
+        let output: OutputSink = Arc::new(|_: String| {});
         let (abort_tx, mut abort_rx) = oneshot::channel();
         manager.cancelled_tasks.lock().insert("task-1".to_string());
         manager.active_sessions.lock().insert(
