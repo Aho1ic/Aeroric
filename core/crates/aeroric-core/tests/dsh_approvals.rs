@@ -208,3 +208,68 @@ async fn broken_webui_startup_short_circuits_before_any_rpc() {
         "ensure 失败走 `?` 早退，不经失败结算块"
     );
 }
+
+// ── 验收行 2：无 GUI 经 typed 方法回答审批（补记二百七十二） ──────────────
+//
+// 这三条全部是**同步纯逻辑**用例——没有 AppHandle、没有窗口、没有 emit，
+// 证明「回答审批」这件事在 core 就能完成；「无回答时保持等待」由结构证明：
+// registry 唯一退场口是 take/宿主撤回，坏请求在 consume 之前就被拒绝，
+// 等待态不会被错误输入吃掉。
+
+use aeroric_core::agents::dsh_host::approvals::{
+    take_waterfall_answer, PendingWaterfall, WaterfallKind, WaterfallRegistry,
+};
+use serde_json::json;
+
+fn registry_with_pending() -> WaterfallRegistry {
+    let mut registry = WaterfallRegistry::default();
+    registry.set_client_id("gen-1".to_string());
+    registry.insert(
+        "ev-1".to_string(),
+        PendingWaterfall {
+            kind: WaterfallKind::Approval,
+            session_id: Some("s1".to_string()),
+        },
+    );
+    registry
+}
+
+#[test]
+fn answers_a_pending_approval_without_any_window() {
+    let mut registry = registry_with_pending();
+    let answer = take_waterfall_answer(
+        &mut registry,
+        "gen-1",
+        "ev-1",
+        &json!({ "kind": "allow", "value": true }),
+    )
+    .expect("typed answer must work headless");
+    assert_eq!(answer.session_hint.as_deref(), Some("s1"));
+    assert_eq!(answer.args["eventId"], "ev-1");
+    assert_eq!(answer.args["clientId"], "gen-1");
+    assert_eq!(answer.args["outcome"]["kind"], "allow");
+    assert!(registry.all_pending().is_empty(), "回答即消费");
+}
+
+#[test]
+fn duplicate_answer_never_resurrects_the_pending_entry() {
+    let mut registry = registry_with_pending();
+    take_waterfall_answer(&mut registry, "gen-1", "ev-1", &json!({ "kind": "allow" }))
+        .expect("first answer");
+    // 重放：consume-once 后拿不到 entry，只给幂等路由提示；本地账不回滚，
+    // 网关侧的再次批准拒绝由 wire 语义承担（registry 测试 251 钉过）。
+    let replay = take_waterfall_answer(&mut registry, "gen-1", "ev-1", &json!({ "kind": "allow" }))
+        .expect("replay stays routable");
+    assert!(replay.session_hint.is_none());
+    assert!(registry.all_pending().is_empty());
+}
+
+#[test]
+fn missing_kind_is_refused_before_any_consumption() {
+    let mut registry = registry_with_pending();
+    let error = take_waterfall_answer(&mut registry, "gen-1", "ev-1", &json!({}))
+        .expect_err("outcome without kind must be refused");
+    assert_eq!(error, "DSH event outcome must carry a kind");
+    // 等待态完好：坏输入没吃掉 pending——「无回答时保持等待」的可观测面。
+    assert_eq!(registry.all_pending().len(), 1);
+}

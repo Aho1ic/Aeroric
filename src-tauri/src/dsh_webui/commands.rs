@@ -639,22 +639,18 @@ pub async fn respond_dsh_remote_event(
     event_id: String,
     outcome: Value,
 ) -> Result<(), String> {
-    if outcome.get("kind").and_then(Value::as_str).is_none() {
-        return Err("DSH event outcome must carry a kind".to_string());
-    }
-    let session_id = {
+    // 本地判定与构帧已上收 core typed 方法（P3-05 验收行 2，补记二百七十二）；
+    // 这里只剩 api 路由——session→base_url→fallback 链读宿主活跃表。
+    let answer = {
         let mut registry = state.pending_waterfalls.lock();
-        match registry.remove(&event_id) {
-            Some(entry) => entry.session_id,
-            // The Host accepts answers for unknown-but-alive generations
-            // (idempotent replays); keep routing by an active pending entry.
-            None => registry
-                .all_pending()
-                .into_iter()
-                .next()
-                .and_then(|entry| entry.session_id.clone()),
-        }
+        aeroric_core::agents::dsh_host::approvals::take_waterfall_answer(
+            &mut registry,
+            &client_id,
+            &event_id,
+            &outcome,
+        )?
     };
+    let session_id = answer.session_hint;
     let api = match session_id {
         Some(session_id) => get_dsh_api_for_session(&state, &session_id).await?,
         None => {
@@ -673,7 +669,7 @@ pub async fn respond_dsh_remote_event(
     let _ = api
         .remote_call(
             crate::dsh_webui::remote_mux::REMOTE_EVENT_RESULT_ENDPOINT,
-            crate::dsh_webui::remote_mux::remote_event_result_args(&client_id, &event_id, outcome),
+            answer.args,
         )
         .await?;
     Ok(())

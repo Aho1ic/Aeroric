@@ -144,3 +144,46 @@ pub fn waterfall_cancel_frame(event_id: &str, session_id: Option<String>) -> Val
         "cancelled": true,
     })
 }
+
+/// 用户应答的本地判定＋构帧（P3-05 验收行 2「无 GUI 可经 typed 方法回答审批」）。
+/// 自宿主 `respond_dsh_remote_event` verbatim 上收三段：kind 校验（拒绝发生在
+/// consume **之前**——坏请求不得吃掉 pending）、take-and-consume（重放拿不到
+/// entry，走 `all_pending().next()` 的幂等路由提示）、`$events/result` 构帧。
+/// **api 路由留在宿主**（session→base_url→fallback 链读宿主活跃表）；
+/// 「无回答时保持等待」由结构保证：registry 是纯数据，唯一的退场口就是这个
+/// take 和宿主撤回时的 `remove`——没有 timer，也没有自动同意路径。
+pub fn take_waterfall_answer(
+    registry: &mut WaterfallRegistry,
+    client_id: &str,
+    event_id: &str,
+    outcome: &Value,
+) -> Result<WaterfallAnswer, String> {
+    if outcome.get("kind").and_then(Value::as_str).is_none() {
+        return Err("DSH event outcome must carry a kind".to_string());
+    }
+    let session_hint = match registry.remove(event_id) {
+        Some(entry) => entry.session_id,
+        // The Host accepts answers for unknown-but-alive generations
+        // (idempotent replays); keep routing by an active pending entry.
+        None => registry
+            .all_pending()
+            .into_iter()
+            .next()
+            .and_then(|entry| entry.session_id.clone()),
+    };
+    Ok(WaterfallAnswer {
+        session_hint,
+        args: crate::agents::dsh_host::remote_mux::remote_event_result_args(
+            client_id,
+            event_id,
+            outcome.clone(),
+        ),
+    })
+}
+
+/// [`take_waterfall_answer`] 的产物：路由提示（宿主据此选 api）＋wire args。
+#[derive(Debug)]
+pub struct WaterfallAnswer {
+    pub session_hint: Option<String>,
+    pub args: Value,
+}
