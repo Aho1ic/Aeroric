@@ -9,6 +9,8 @@
 
 #![allow(dead_code)]
 
+pub mod dsh_fake;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
