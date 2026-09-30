@@ -21,8 +21,8 @@
       "event-replay-rust@host": 3,
       "extraction-unit@skeleton": 19,
       "gate-runner-unit@skeleton": 36,
-      "host-lib-rust@host": 17,
-      "host-lifecycle-rust@host": 3,
+      "host-lib-rust@host": 20,
+      "host-lifecycle-rust@host": 4,
       "invariants-unit@skeleton": 13,
       "inventory-unit@skeleton": 57,
       "ipc-auth-rust@host": 4,
@@ -1570,7 +1570,7 @@
             "aeroric-host",
             "--lib"
           ],
-          "minCases": 17,
+          "minCases": 20,
           "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)。floor 从 2026-09-30 现测起算（补记二百七十八）。"
         },
         {
@@ -1642,7 +1642,7 @@
             "--test",
             "host_lifecycle"
           ],
-          "minCases": 3,
+          "minCases": 4,
           "$note": "二次启动 lock 步拒绝（step 1 前缀可分类）/ready 帧经真管道含 Action 4 全字段/crash 等价 drop 后残留 socket 清绑重启。"
         }
       ]

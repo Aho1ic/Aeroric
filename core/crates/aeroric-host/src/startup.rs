@@ -193,9 +193,12 @@ pub fn serve(started: StartedHost, services: Arc<crate::dispatcher::HostServices
             context,
             listener,
             runtime: _runtime,
-            socket_path: _socket,
+            socket_path,
             token: _token,
         } = started;
+        // 活跃连接计数：shutdown 的 drain 判据。计数归零或 5 s 超时——
+        // 超时后**照样**走清理（僵连接不许拖住租约释放，让位比等它诚实）。
+        let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         loop {
             tokio::select! {
                 _ = &mut rx => break,
@@ -212,16 +215,43 @@ pub fn serve(started: StartedHost, services: Arc<crate::dispatcher::HostServices
                             crate::subscriptions::Connection::new(),
                         )),
                     });
-                    tokio::spawn(crate::dispatcher::serve_connection(
-                        tokio::io::BufReader::new(read),
-                        write,
-                        context,
-                    ));
+                    live.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let live_join = Arc::clone(&live);
+                    tokio::spawn(async move {
+                        crate::dispatcher::serve_connection(
+                            tokio::io::BufReader::new(read),
+                            write,
+                            context,
+                        )
+                        .await;
+                        live_join.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    });
                 }
             }
         }
-        // listener 与 context（内含写租约）在这里 drop：关停即让位。
+        // 退出序（Action 5 的 host 侧当前射程：无自有子进程、无独立 storage
+        // 写缓冲——flush 归写者路径的原子写；watcher 取消归连接 drain）：
+        // 1) 不再 accept（上面已 break）；2) drain 活跃连接或超时；
+        // 3) listener 关闭＋租约释放；4) socket 文件清理（正常退出不留残留，
+        //    crash 残留由下次启动的探活路径处理——两条路都有主）。
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if live.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                break;
+            }
+            if tokio::time::timeout_at(
+                deadline,
+                tokio::time::sleep(std::time::Duration::from_millis(20)),
+            )
+            .await
+            .is_err()
+            {
+                break;
+            }
+        }
+        drop(listener);
         drop(context);
+        std::fs::remove_file(&socket_path).ok();
     });
     RunningHost { shutdown: tx }
 }

@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod codec;
+pub mod diagnostics;
 pub mod dispatcher;
 pub mod startup;
 pub mod subscriptions;

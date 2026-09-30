@@ -137,3 +137,33 @@ async fn after_shutdown_a_fresh_startup_reclaims_the_stale_socket() {
 }
 
 use std::os::unix::io::FromRawFd;
+
+#[tokio::test]
+async fn graceful_shutdown_unlinks_the_socket_and_frees_the_lease() {
+    let root = fresh_root("drain");
+    let started = startup_for(&root, None).await.expect("first");
+    let socket = started.socket_path.clone();
+    let services = aeroric_host::dispatcher::HostServices::new(
+        std::sync::Arc::clone(&started.token),
+        std::sync::Arc::new(aeroric_core::events::EventLog::default()),
+    );
+    let running = aeroric_host::startup::serve(started, services);
+    assert!(socket.exists(), "serve 期间 socket 在位");
+    running.shutdown();
+    // unlink 发生在 serve 任务的退出序里：轮询等它（上限 2 s，正常 <100 ms）。
+    let mut gone = false;
+    for _ in 0..100 {
+        if !socket.exists() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(gone, "正常退出必须清理 socket 文件");
+    // 租约已释放：重启在 lock 步就能过（不再被第二条测试的 AlreadyLive 挡）。
+    let restarted = startup_for(&root, None)
+        .await
+        .expect("restart after clean shutdown");
+    drop(restarted);
+    std::fs::remove_dir_all(&root).ok();
+}
