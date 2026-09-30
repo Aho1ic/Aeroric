@@ -345,3 +345,143 @@ async fn a_cancelled_run_settles_cancelled_not_done() {
     drop(context);
     std::fs::remove_dir_all(&root).ok();
 }
+
+fn req(id: &str, method: &str, params: serde_json::Value) -> aeroric_protocol::envelope::Request {
+    aeroric_protocol::envelope::Request {
+        v: 1,
+        id: id.to_string(),
+        method: method.to_string(),
+        params,
+        idempotency_key: None,
+        extra: Default::default(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_history_reads_the_record_transcript_via_the_family_parser() {
+    // ④ 的读侧闭环：record 带 sessionPath → session.history 经家族分派解析。
+    // fake claude jsonl 两行（user/assistant），断言消息数与角色。
+    let root = scratch_home();
+    let paths = AppPaths::from_user_home(root.join("home"));
+    std::fs::create_dir_all(paths.data_dir()).expect("data");
+    let transcript = root.join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"问\"}]}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"答\"}]}}\n",
+    )
+    .expect("transcript");
+    let context = Arc::new(
+        CoreContext::acquire(
+            paths.clone(),
+            Arc::new(aeroric_core::clock::SystemClock),
+            &LeaseOwner {
+                application: "exec-test".to_string(),
+                version: "0-test".to_string(),
+            },
+            &LocalProbe,
+        )
+        .expect("writer context"),
+    );
+    // 直写 projects/tasks：一条带 sessionPath 的记录（绕开执行面，读侧自洽）。
+    std::fs::write(
+        paths.data_dir().join("projects.json"),
+        serde_json::to_vec_pretty(&serde_json::json!([
+            { "id": "p1", "name": "p1", "path": "/tmp/p1" }
+        ]))
+        .expect("projects"),
+    )
+    .expect("write projects");
+    std::fs::create_dir_all(paths.data_dir().join("projects").join("p1")).expect("project dir");
+    std::fs::write(
+        paths
+            .data_dir()
+            .join("projects")
+            .join("p1")
+            .join("tasks.json"),
+        serde_json::to_vec_pretty(&serde_json::json!([
+            {
+                "id": "t1", "projectId": "p1", "prompt": "问", "agent": "claude",
+                "permissionMode": "ask", "status": "done",
+                "sessionPath": transcript.to_string_lossy()
+            }
+        ]))
+        .expect("tasks"),
+    )
+    .expect("write tasks");
+
+    let registry = Arc::new(TaskRegistry::default());
+    let terminal = Arc::new(TerminalService::new());
+    let log = Arc::new(EventLog::default());
+    let executor = CliPtyExecutor::new(
+        Arc::clone(&context),
+        Arc::clone(&registry),
+        Arc::clone(&terminal),
+        Arc::clone(&log),
+    );
+    let families = Arc::new(aeroric_host::families::SettingsFamiliesCli::new(
+        Arc::clone(&context),
+    ));
+    let service = Arc::new(
+        TaskService::new(
+            Arc::clone(&context),
+            families.clone() as Arc<_>,
+            executor.clone() as Arc<_>,
+            Arc::new(RegistryLiveRuns::new(Arc::clone(&registry))),
+        )
+        .expect("service"),
+    );
+    let assembled = aeroric_host::dispatcher::HostServices::with_tasks(
+        Arc::new(
+            aeroric_host::auth::HostToken::load_or_create(&paths.data_dir().join("host.token"))
+                .expect("token"),
+        ),
+        log,
+        Arc::clone(&context),
+        service,
+        families,
+        executor,
+    );
+    let call = Arc::new(aeroric_host::dispatcher::CallContext {
+        services: Arc::clone(&assembled.services),
+        connection: Arc::new(tokio::sync::Mutex::new(
+            aeroric_host::subscriptions::Connection::new(),
+        )),
+    });
+    let token = std::fs::read_to_string(paths.data_dir().join("host.token"))
+        .expect("read token")
+        .trim()
+        .to_string();
+    let frame = aeroric_host::dispatcher::dispatch(
+        req(
+            "h",
+            "handshake",
+            serde_json::json!({ "token": token, "clientId": "c" }),
+        ),
+        Arc::clone(&call),
+    )
+    .await;
+    assert!(matches!(
+        frame,
+        aeroric_protocol::envelope::Frame::Success(_)
+    ));
+    let frame = aeroric_host::dispatcher::dispatch(
+        req(
+            "1",
+            "session.history",
+            serde_json::json!({ "taskId": "t1" }),
+        ),
+        call,
+    )
+    .await;
+    match frame {
+        aeroric_protocol::envelope::Frame::Success(success) => {
+            let messages = success.result["messages"].as_array().expect("messages");
+            assert_eq!(messages.len(), 2, "claude 两行必须解析为两条消息");
+            assert_eq!(messages[0]["role"], "user");
+            assert_eq!(messages[1]["role"], "assistant");
+        }
+        other => panic!("expected success, got {other:?}"),
+    }
+    drop(context);
+    std::fs::remove_dir_all(&root).ok();
+}

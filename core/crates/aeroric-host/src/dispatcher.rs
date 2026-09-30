@@ -152,17 +152,26 @@ impl HostServices {
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
     ) -> Arc<Self> {
-        Self::assemble(token, log, context, None)
+        Self::assemble(token, log, context, None, None, None)
     }
 
-    /// b1.2：执行服务全装配（serve 在 `TaskService::new` + `attach` 之后调用）。
+    /// b1.2/b1.3：执行服务全装配（serve 在 `TaskService::new` + `attach` 之后调用）。
     pub fn with_tasks(
         token: Arc<HostToken>,
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
         service: Arc<aeroric_core::tasks::TaskService>,
+        families: Arc<dyn aeroric_core::tasks::AgentFamilies>,
+        executor: Arc<crate::executor::CliPtyExecutor>,
     ) -> Arc<Self> {
-        Self::assemble(token, log, context, Some(service))
+        Self::assemble(
+            token,
+            log,
+            context,
+            Some(service),
+            Some(families),
+            Some(executor),
+        )
     }
 
     fn assemble(
@@ -170,11 +179,19 @@ impl HostServices {
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
         service: Option<Arc<aeroric_core::tasks::TaskService>>,
+        families: Option<Arc<dyn aeroric_core::tasks::AgentFamilies>>,
+        executor: Option<Arc<crate::executor::CliPtyExecutor>>,
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
         crate::services::register_read_services(&mut set, Arc::clone(&context));
-        if let Some(service) = service {
-            crate::services::register_task_services(&mut set, service, context);
+        if let (Some(service), Some(families), Some(executor)) = (service, families, executor) {
+            crate::services::register_task_services(
+                &mut set,
+                Arc::clone(&service),
+                Arc::clone(&context),
+                executor,
+            );
+            crate::services::register_session_services(&mut set, service, context, families);
         }
         {
             let token = Arc::clone(&token);

@@ -32,10 +32,13 @@ async fn dispatch(cli: Cli) -> i32 {
             prompt_file,
             json,
         } => run(&cli.data_dir, &project, &agent, &prompt_file, json).await,
-        Command::Session(_)
-        | Command::Approval(_)
-        | Command::Rpc { .. }
-        | Command::Attach { .. } => {
+        Command::Session(cmd) => session(&cli.data_dir, cmd).await,
+        Command::Rpc {
+            method,
+            params_file,
+            ..
+        } => rpc(&cli.data_dir, &method, params_file.as_deref()).await,
+        Command::Approval(_) | Command::Attach { .. } => {
             eprintln!(
                 "aeroric-cli: this subcommand is not wired yet (P3-07 lands it slice by slice; \
                  see MIGRATION_PLAN.md)"
@@ -176,11 +179,12 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 Arc::clone(&terminal),
                 Arc::clone(&log),
             );
+            let families = Arc::new(aeroric_host::families::SettingsFamiliesCli::new(
+                Arc::clone(&started.context),
+            ));
             let task_service = match aeroric_core::tasks::TaskService::new(
                 Arc::clone(&started.context),
-                Arc::new(aeroric_host::families::SettingsFamiliesCli::new(
-                    Arc::clone(&started.context),
-                )),
+                families.clone() as Arc<_>,
                 Arc::clone(&executor) as Arc<_>,
                 Arc::new(aeroric_host::executor::RegistryLiveRuns::new(Arc::clone(
                     &registry,
@@ -198,6 +202,8 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 log,
                 Arc::clone(&started.context),
                 task_service,
+                families,
+                executor,
             );
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
@@ -485,6 +491,21 @@ async fn task(data_dir: &Path, cmd: TaskCmd) -> i32 {
         TaskCmd::Complete { task_id } => {
             return settle_verdict(data_dir, "task.complete", task_id).await;
         }
+        TaskCmd::Input { task_id, text_file } => {
+            let Ok(text) = std::fs::read_to_string(text_file) else {
+                eprintln!(
+                    "aeroric-cli task input: cannot read {}",
+                    text_file.display()
+                );
+                return exit::USAGE;
+            };
+            return call_print(
+                data_dir,
+                "task.input",
+                serde_json::json!({ "taskId": task_id, "text": text }),
+            )
+            .await;
+        }
         // resume/input 是后续片（b1.3/④）——显式拒绝不装可用。
         _ => {
             eprintln!("aeroric-cli task: this verb is not wired yet (P3-07 b1.3/④)");
@@ -605,4 +626,73 @@ mod tests {
             assert!(help.contains(token), "help must list `{token}`");
         }
     }
+}
+
+// ── session / rpc：④ 的读侧与通用口 ──────────────────────────────────────
+
+async fn call_print(data_dir: &Path, method: &str, params: serde_json::Value) -> i32 {
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli: {e}");
+            return e.exit_code();
+        }
+    };
+    match client.call(method, params).await {
+        Ok(result) => {
+            println!("{result}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("aeroric-cli: {e}");
+            e.exit_code()
+        }
+    }
+}
+
+async fn session(data_dir: &Path, cmd: args::SessionCmd) -> i32 {
+    use args::SessionCmd;
+    match cmd {
+        SessionCmd::List { .. } => {
+            call_print(data_dir, "session.list", serde_json::json!({})).await
+        }
+        SessionCmd::History { task_id } => {
+            call_print(
+                data_dir,
+                "session.history",
+                serde_json::json!({ "taskId": task_id }),
+            )
+            .await
+        }
+        SessionCmd::Export { task_id, out } => {
+            call_print(
+                data_dir,
+                "session.export",
+                serde_json::json!({ "taskId": task_id, "out": out.to_string_lossy() }),
+            )
+            .await
+        }
+    }
+}
+
+/// `rpc METHOD [--params-file PATH]`：已注册方法的通用口（Action 6——**只到
+/// host 注册表为止**，未注册方法得到 UnsupportedCapability，不是任意代码执行）。
+async fn rpc(data_dir: &Path, method: &str, params_file: Option<&Path>) -> i32 {
+    let params = match params_file {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(value) => value,
+                Err(e) => {
+                    eprintln!("aeroric-cli rpc: params file is not valid JSON: {e}");
+                    return exit::USAGE;
+                }
+            },
+            Err(e) => {
+                eprintln!("aeroric-cli rpc: cannot read the params file: {e}");
+                return exit::USAGE;
+            }
+        },
+        None => serde_json::json!({}),
+    };
+    call_print(data_dir, method, params).await
 }

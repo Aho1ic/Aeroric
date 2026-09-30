@@ -45,6 +45,7 @@ pub struct CliPtyExecutor {
     #[allow(dead_code)] // 任务托管在 b1.2 的 run 等待面接入；reader/exit 线程先直 spawn
     supervisor: Arc<WatcherSupervisor>,
     service: Mutex<Weak<TaskService>>,
+    leases: Mutex<std::collections::HashMap<String, aeroric_core::terminal::lease::ControlLease>>,
 }
 
 impl CliPtyExecutor {
@@ -61,12 +62,45 @@ impl CliPtyExecutor {
             log,
             supervisor: Arc::new(WatcherSupervisor::new()),
             service: Mutex::new(Weak::new()),
+            leases: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
     /// serve 装配在 `TaskService::new` 之后回链（构造环的唯一解开点）。
     pub fn attach(&self, service: &Arc<TaskService>) {
         *self.service.lock().expect("lock") = Arc::downgrade(service);
+    }
+
+    /// 一次性输入：顶替式拿租约（宿主语义——`acquire` 就是顶替，前台优先）、
+    /// 过写闸、写 PTY writer、释放。attach（⑤）长期持有时，CLI input 会顶掉
+    /// 它——与宿主「前台窗口优先」同规则，票据机制保证过期 handle 的 release
+    /// 是 no-op，不会把 attach 的控制权误关。
+    pub fn input(&self, task_id: &str, text: &str) -> Result<(), String> {
+        use std::io::Write as _;
+        let run = self
+            .registry
+            .resource_run(task_id)
+            .ok_or_else(|| "the task has no live run on this host".to_string())?;
+        let writer = self
+            .registry
+            .pty_writers
+            .lock()
+            .get(&run)
+            .cloned()
+            .ok_or_else(|| "the run has no writer (already retired?)".to_string())?;
+        let mut leases = self.leases.lock().expect("lock");
+        let lease = leases.entry(task_id.to_string()).or_default();
+        let handle = lease.acquire();
+        let written = lease
+            .write_gate(&handle)
+            .map_err(|e| format!("lease gate refused the write: {e:?}"))
+            .and_then(|()| {
+                let mut w = writer.lock();
+                w.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+                w.flush().map_err(|e| e.to_string())
+            });
+        let _ = lease.release(&handle);
+        written
     }
 
     /// 杀一条任务的运行：**pty 前台组 killpg 优先**——`child.kill()` 只杀直接
