@@ -569,7 +569,9 @@
       "side_states": {
         "C": "unstarted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/host.md"
+      ]
     }
   ],
   "gaps": [
