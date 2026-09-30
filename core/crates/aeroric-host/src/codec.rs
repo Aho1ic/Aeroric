@@ -59,7 +59,8 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
     }
 }
 
-/// 写一帧（protocol 编码 + `\n` 定界 + flush）。
+/// 写一帧（`encode_line` **自带**行尾 `\n`，不再补——补了就是流里的空行，
+/// 下一帧读到即 `FrameError::Empty` 断连）+ flush。
 pub async fn write_frame<W: AsyncWrite + Unpin>(
     writer: &mut W,
     frame: &Frame,
@@ -67,10 +68,6 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
     let line = encode_line(frame).map_err(|e| CodecError::Io(e.to_string()))?;
     writer
         .write_all(line.as_bytes())
-        .await
-        .map_err(|e| CodecError::Io(e.to_string()))?;
-    writer
-        .write_all(b"\n")
         .await
         .map_err(|e| CodecError::Io(e.to_string()))?;
     writer
