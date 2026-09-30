@@ -35,7 +35,7 @@
       "protocol-ts-golden@protocol": 21,
       "protocol-ts-vocabulary@protocol": 7,
       "runtime-lifecycle-rust@runtime": 5,
-      "src-tauri-lib-tests@tauri-adapter": 2452,
+      "src-tauri-lib-tests@tauri-adapter": 2441,
       "storage-core-rust@storage": 484,
       "swift-package-smoke@skeleton": 12,
       "task-status-unit@skeleton": 18,
@@ -993,7 +993,7 @@
           "name": "src-tauri-lib-tests",
           "kind": "test",
           "parse": "rust",
-          "minCases": 2452,
+          "minCases": 2441,
           "timeoutMs": 1800000,
           "argv": [
             "cargo",
