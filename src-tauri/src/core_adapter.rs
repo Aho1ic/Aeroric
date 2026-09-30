@@ -340,16 +340,6 @@ impl CoreGateway {
 pub(crate) struct SettingsFamilies;
 
 impl SettingsFamilies {
-    fn built_in_session_family(agent: &str) -> Option<ProtocolFamily> {
-        match agent {
-            "claude" | "claude_gpt55" => Some(ProtocolFamily::Claude),
-            "codex" => Some(ProtocolFamily::Codex),
-            "dsh" => Some(ProtocolFamily::Dsh),
-            "omp" => Some(ProtocolFamily::Omp),
-            _ => None,
-        }
-    }
-
     pub(crate) fn of(family: crate::app_settings::AgentFamily) -> ProtocolFamily {
         use crate::app_settings::AgentFamily as Host;
         match family {
@@ -360,22 +350,15 @@ impl SettingsFamilies {
         }
     }
 
-    /// A custom profile's session family: an explicit `family`, else the legacy
-    /// `codex_like` boolean. Same precedence as `config_bundles.rs:100-108`.
-    fn custom_session_family(profile_family: &str, codex_like: bool) -> ProtocolFamily {
-        Self::of(
-            crate::app_settings::AgentFamily::parse(profile_family.trim())
-                .unwrap_or_else(|| crate::app_settings::AgentFamily::from_codex_like(codex_like)),
-        )
-    }
-
-    /// An agent neither side knows. `src/agents.ts:170-178` treats anything not literally
-    /// `claude` as codex, so reproducing that is what "no behaviour change" means here.
-    fn unknown_session_family(agent: &str) -> ProtocolFamily {
-        if agent == "claude" {
-            ProtocolFamily::Claude
-        } else {
-            ProtocolFamily::Codex
+    /// `AgentFamily` 的反向拼写——喂 core 判定的 `FamilyProfile.family` 字段
+    /// （b1.0：判定本体在 `aeroric_core::agents::families`，宿主只剩数据源）。
+    fn family_str(family: crate::app_settings::AgentFamily) -> &'static str {
+        use crate::app_settings::AgentFamily as Host;
+        match family {
+            Host::Claude => "claude",
+            Host::Codex => "codex",
+            Host::Dsh => "dsh",
+            Host::Omp => "omp",
         }
     }
 }
@@ -383,52 +366,45 @@ impl SettingsFamilies {
 impl AgentFamilies for SettingsFamilies {
     fn launch_family(&self, agent: &str) -> ProtocolFamily {
         let spec = crate::app_settings::get_agent_launch_spec(agent);
-        match Self::of(spec.family) {
-            ProtocolFamily::Dsh => ProtocolFamily::Dsh,
-            ProtocolFamily::Omp => ProtocolFamily::Omp,
-            // `pty.rs:1625,1808` chooses `build_codex_cmd` vs `build_claude_cmd` on this
-            // flag, so for the two CLI families the flag *is* the launch family.
-            _ if spec.codex_like => ProtocolFamily::Codex,
-            _ => ProtocolFamily::Claude,
-        }
+        aeroric_core::agents::families::launch_family(
+            aeroric_core::agents::families::FamilyProfile {
+                family: Self::family_str(spec.family),
+                codex_like: spec.codex_like,
+            },
+        )
     }
 
     fn session_family(&self, agent: &str) -> ProtocolFamily {
-        if let Some(family) = Self::built_in_session_family(agent) {
-            return family;
+        use aeroric_core::agents::families as f;
+        if let Some(built) = f::built_in_session_family(agent) {
+            return built;
         }
         match crate::app_settings::load_settings_internal()
             .custom_agents
             .iter()
             .find(|profile| profile.id == agent)
         {
-            Some(profile) => Self::custom_session_family(&profile.family, profile.codex_like),
-            None => Self::unknown_session_family(agent),
+            Some(profile) => f::custom_session_family(f::FamilyProfile {
+                family: &profile.family,
+                codex_like: profile.codex_like,
+            }),
+            None => f::unknown_session_family(agent),
         }
     }
 
     fn is_builtin(&self, agent: &str) -> bool {
-        Self::built_in_session_family(agent).is_some()
+        aeroric_core::agents::families::is_builtin(agent)
     }
 
     /// ADR-029. `claude_gpt55` is Claude in *format* but codex in *capability*: the client
     /// compares `agentOption("claude_gpt55").family` (= codex) against the record's family, so
-    /// a `claude` task switches to it by handoff rather than by `--resume`. Reproducing that
-    /// conclusion is the point; "which folder holds the jsonl" is `session_family`'s question.
+    /// a `claude` task switches to it by handoff rather than by `--resume`. 判定表在 core
+    /// （b1.0）；custom profile 落 `session_family`（能力与格式一致）。
     fn native_resume_family(&self, agent: &str) -> ProtocolFamily {
-        match agent {
-            "claude_gpt55" => ProtocolFamily::Codex,
-            "claude" => ProtocolFamily::Claude,
-            "codex" => ProtocolFamily::Codex,
-            "dsh" => ProtocolFamily::Dsh,
-            "omp" => ProtocolFamily::Omp,
-            // A custom profile carries one family, so capability and format agree for it —
-            // that is what the client does today, and nothing here invents a third answer.
-            _ => self.session_family(agent),
-        }
+        aeroric_core::agents::families::built_in_native_resume_family(agent)
+            .unwrap_or_else(|| self.session_family(agent))
     }
 }
-
 #[cfg(test)]
 mod family_tests {
     use super::SettingsFamilies;
@@ -458,48 +434,6 @@ mod family_tests {
             );
         }
         assert!(!SettingsFamilies.is_builtin("my-codex"));
-    }
-
-    #[test]
-    fn a_profile_without_an_explicit_family_falls_back_to_codex_like() {
-        // The compatibility window ADR-028 keeps: `family` was added later, and an empty
-        // one must not silently mean "claude" for a profile that says it is codex-like.
-        assert_eq!(
-            SettingsFamilies::custom_session_family("", true),
-            ProtocolFamily::Codex
-        );
-        assert_eq!(
-            SettingsFamilies::custom_session_family("", false),
-            ProtocolFamily::Claude
-        );
-        // An explicit family wins over the boolean, including for the two odd cases.
-        assert_eq!(
-            SettingsFamilies::custom_session_family("dsh", true),
-            ProtocolFamily::Dsh
-        );
-        assert_eq!(
-            SettingsFamilies::custom_session_family("  omp  ", false),
-            ProtocolFamily::Omp,
-            "surrounding spaces are trimmed, matching how the client normalises it"
-        );
-        // An unrecognised spelling is not a licence to guess: it degrades through
-        // codex_like, exactly like the legacy parse-or-derive chain.
-        assert_eq!(
-            SettingsFamilies::custom_session_family("martian", true),
-            ProtocolFamily::Codex
-        );
-    }
-
-    #[test]
-    fn an_unknown_agent_is_codex_unless_it_is_literally_claude() {
-        assert_eq!(
-            SettingsFamilies::unknown_session_family("brand-new"),
-            ProtocolFamily::Codex
-        );
-        assert_eq!(
-            SettingsFamilies::unknown_session_family("claude"),
-            ProtocolFamily::Claude
-        );
     }
 }
 

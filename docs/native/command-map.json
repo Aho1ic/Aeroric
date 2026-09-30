@@ -8962,7 +8962,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/core_adapter.rs:1092",
+      "definition_resolved": "src-tauri/src/core_adapter.rs:1026",
       "resolution": "module-subtree-unique",
       "params": [
         "app: tauri::AppHandle!",
@@ -24756,7 +24756,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:538"
+        "src-tauri/src/core_adapter.rs:472"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:53"
@@ -24777,7 +24777,7 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/core_adapter.rs:532"
+        "src-tauri/src/core_adapter.rs:466"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:43"
