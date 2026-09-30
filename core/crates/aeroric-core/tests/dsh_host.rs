@@ -738,3 +738,105 @@ fn diff_rows_counts_hunks_without_lcs_and_flags_creates() {
         vec![('-', "old".to_string()), ('+', "new".to_string())]
     );
 }
+
+#[test]
+fn plugin_patch_protocol_round_trips_and_defaults_enabled() {
+    use aeroric_core::agents::dsh_host::client::{
+        is_dsh_plugin_package, plugin_enabled_from_patch, plugin_id, update_plugin_patch,
+    };
+    assert!(is_dsh_plugin_package("@deepseek-ai/dsh-foo"));
+    assert!(is_dsh_plugin_package("dsh-foo"));
+    assert!(!is_dsh_plugin_package("lodash"));
+    assert_eq!(plugin_id("@deepseek-ai/dsh-web-pwsh"), "web-pwsh");
+    assert_eq!(plugin_id("dsh-a"), "a");
+    assert_eq!(plugin_id("other"), "other");
+    // 空内容＝无 patch：任何包默认 enabled（Ok(true) 分支）。
+    assert!(plugin_enabled_from_patch("", "@deepseek-ai/dsh-a").unwrap());
+    // 关闭再打开：patch 文本往返，disabled 键是唯一状态。
+    let off = update_plugin_patch("", "dsh-a", false).unwrap();
+    assert!(off.contains("id: a"), "{off}");
+    assert!(off.contains("disabled: true"), "{off}");
+    assert!(!plugin_enabled_from_patch(&off, "dsh-a").unwrap());
+    let on = update_plugin_patch(&off, "dsh-a", true).unwrap();
+    assert!(on.contains("disabled: false"), "{on}");
+    assert!(plugin_enabled_from_patch(&on, "dsh-a").unwrap());
+    // 非 sequence 的 patch 响亮拒绝（不静默当空表）。
+    assert_eq!(
+        update_plugin_patch("a: 1", "dsh-b", true).unwrap_err(),
+        "Aeroric DSH plugin patch must be a YAML sequence"
+    );
+}
+
+#[test]
+fn config_dump_rows_become_plugins_and_group_rows_are_skipped() {
+    use aeroric_core::agents::dsh_host::client::{parse_dsh_config_dump, platform_default_enabled};
+    assert!(platform_default_enabled("bash-sandbox") != cfg!(windows));
+    assert!(platform_default_enabled("pwsh-sandbox") == cfg!(windows));
+    assert!(platform_default_enabled("anything-else"));
+    let dump = "---\n- id: tool-a\n  name: cordis:alpha\n- id: grp\n  name: group-x\n  group: true\n- id: tool-b\n  name: '@deepseek-ai/beta'\n  disabled: true\n";
+    let plugins = parse_dsh_config_dump(dump).unwrap();
+    assert_eq!(plugins.len(), 2, "group 行不算插件");
+    let a = &plugins[0];
+    assert_eq!(
+        (a.entry_id.as_str(), a.name.as_str(), a.version.as_str()),
+        ("tool-a", "cordis:alpha", "bundled")
+    );
+    assert!(a.enabled && a.built_in, "cordis: 前缀即 built_in");
+    assert_eq!(a.fiber_phase.as_deref(), Some("active"));
+    let b = &plugins[1];
+    assert!(!b.enabled && b.fiber_phase.is_none(), "禁用行不给 phase");
+    assert!(b.built_in, "@deepseek-ai/ 前缀即 built_in");
+    assert_eq!(parse_dsh_config_dump("").unwrap().len(), 0);
+}
+
+#[test]
+fn merge_prefers_runtime_rows_and_keeps_config_only_tail() {
+    use aeroric_core::agents::dsh_host::client::{
+        merge_runtime_plugins, DshPlugin, DshRuntimePlugin,
+    };
+    let configured = vec![
+        DshPlugin {
+            name: "Meta".into(),
+            version: "1.2.3".into(),
+            enabled: true,
+            description: Some("desc".into()),
+            entry_id: "e1".into(),
+            module_name: "m1".into(),
+            fiber_phase: Some("active".into()),
+            built_in: true,
+        },
+        DshPlugin {
+            name: "OnlyConfig".into(),
+            version: "bundled".into(),
+            enabled: false,
+            description: None,
+            entry_id: "e9".into(),
+            module_name: "m9".into(),
+            fiber_phase: None,
+            built_in: false,
+        },
+    ];
+    let runtime = vec![DshRuntimePlugin {
+        entry_id: "e1".into(),
+        module_name: "live-m1".into(),
+        enabled: false,
+        fiber_phase: None,
+    }];
+    let merged = merge_runtime_plugins(configured, runtime);
+    assert_eq!(merged.len(), 2);
+    let head = &merged[0];
+    assert_eq!(
+        (head.entry_id.as_str(), head.name.as_str()),
+        ("e1", "Meta"),
+        "元数据取配置、状态取 live"
+    );
+    assert_eq!(head.module_name, "live-m1", "module 名以 live 为准");
+    assert!(!head.enabled, "live 的 disabled 压过配置");
+    assert_eq!(head.fiber_phase, None, "live 无 phase 不继承配置的");
+    assert_eq!(
+        head.description.as_deref(),
+        Some("desc"),
+        "description 从配置兜底"
+    );
+    assert_eq!(merged[1].entry_id, "e9", "只在配置里的插件收尾");
+}

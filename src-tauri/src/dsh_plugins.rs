@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command as NativeCommand;
@@ -15,136 +14,26 @@ const DEFAULT_MAX_PARALLEL_TOOL_CALLS: u64 = 10;
 const DEFAULT_WEB_SEARCH_MAX_USES: u64 = 5;
 const DEFAULT_AGENT_PRESET: &str = "standard";
 
-fn is_dsh_plugin_package(package: &str) -> bool {
-    package.starts_with("@deepseek-ai/dsh-") || package.starts_with("dsh-")
-}
+// 插件线数据形状（patch 协议／config dump／pluginInventory 条目／合并）已随
+// P3-05 第十一片迁入 core `agents::dsh_host::client`（补记二百六十）；私有 use 保持
+// 本文件裸名调用点一字不动。YAML 值在 core 侧叫 YamlValue（与 RPC 的 serde_json::Value
+// 区分），宿主无冲突、维持 `Value`。
+use aeroric_core::agents::dsh_host::client::{
+    is_dsh_plugin_package, merge_runtime_plugins, parse_dsh_config_dump, plugin_enabled_from_patch,
+    plugin_id, update_plugin_patch, yaml_key, DshPlugin, DshRuntimePlugin,
+};
 
-fn plugin_id(package: &str) -> &str {
-    package
-        .strip_prefix("@deepseek-ai/dsh-")
-        .or_else(|| package.strip_prefix("dsh-"))
-        .unwrap_or(package)
-}
-
-fn yaml_key(key: &str) -> Value {
-    Value::String(key.to_string())
-}
-
-fn plugin_patch_rows(content: &str) -> Result<Vec<Value>, String> {
-    if content.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    match serde_yaml_ng::from_str::<Value>(content)
-        .map_err(|error| format!("Failed to parse Aeroric DSH plugin patch: {error}"))?
-    {
-        Value::Null => Ok(Vec::new()),
-        Value::Sequence(rows) => Ok(rows),
-        _ => Err("Aeroric DSH plugin patch must be a YAML sequence".to_string()),
-    }
-}
-
-fn row_id(row: &Value) -> Option<&str> {
-    row.as_mapping()?.get(yaml_key("id"))?.as_str()
-}
-
-fn plugin_enabled_from_patch(content: &str, package: &str) -> Result<bool, String> {
-    let id = plugin_id(package);
-    let Some(row) = plugin_patch_rows(content)?
-        .into_iter()
-        .find(|row| row_id(row) == Some(id))
-    else {
-        return Ok(true);
-    };
-    Ok(!row
-        .as_mapping()
-        .and_then(|mapping| mapping.get(yaml_key("disabled")))
-        .and_then(Value::as_bool)
-        .unwrap_or(false))
-}
-
-fn update_plugin_patch(content: &str, package: &str, enabled: bool) -> Result<String, String> {
-    let id = plugin_id(package);
-    let mut rows = plugin_patch_rows(content)?;
-    let disabled_key = yaml_key("disabled");
-    if let Some(row) = rows.iter_mut().find(|row| row_id(row) == Some(id)) {
-        let mapping = row
-            .as_mapping_mut()
-            .ok_or_else(|| "DSH plugin patch row must be a mapping".to_string())?;
-        mapping.insert(disabled_key, Value::Bool(!enabled));
-    } else {
-        let mut mapping = Mapping::new();
-        mapping.insert(yaml_key("id"), Value::String(id.to_string()));
-        mapping.insert(disabled_key, Value::Bool(!enabled));
-        rows.push(Value::Mapping(mapping));
-    }
-    serde_yaml_ng::to_string(&Value::Sequence(rows))
-        .map_err(|error| format!("Failed to serialize Aeroric DSH plugin patch: {error}"))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshPlugin {
-    pub name: String,
-    pub version: String,
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub entry_id: String,
-    pub module_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fiber_phase: Option<String>,
-    pub built_in: bool,
-}
-
-fn platform_default_enabled(entry_id: &str) -> bool {
-    match entry_id {
-        "bash-sandbox" | "tool-bash" => !cfg!(windows),
-        "pwsh-sandbox" | "tool-pwsh" => cfg!(windows),
-        _ => true,
-    }
-}
-
-fn parse_dsh_config_dump(content: &str) -> Result<Vec<DshPlugin>, String> {
-    if content.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = serde_yaml_ng::from_str::<Value>(content)
-        .map_err(|error| format!("Failed to parse DSH Web profile config dump: {error}"))?
-        .as_sequence()
-        .cloned()
-        .ok_or_else(|| "DSH Web profile config dump must be a YAML sequence".to_string())?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            let mapping = row.as_mapping()?;
-            if mapping
-                .get(yaml_key("group"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                return None;
-            }
-            let entry_id = mapping.get(yaml_key("id"))?.as_str()?.to_string();
-            let module_name = mapping.get(yaml_key("name"))?.as_str()?.to_string();
-            let enabled = mapping
-                .get(yaml_key("disabled"))
-                .and_then(Value::as_bool)
-                .map(|disabled| !disabled)
-                .unwrap_or_else(|| platform_default_enabled(&entry_id));
-            Some(DshPlugin {
-                name: module_name.clone(),
-                version: "bundled".to_string(),
-                enabled,
-                description: None,
-                entry_id,
-                module_name: module_name.clone(),
-                fiber_phase: enabled.then(|| "active".to_string()),
-                built_in: module_name.starts_with("@deepseek-ai/")
-                    || module_name.starts_with("cordis:"),
-            })
-        })
-        .collect())
+async fn list_runtime_plugins(base_url: String) -> Result<Vec<DshRuntimePlugin>, String> {
+    let value = crate::dsh_webui::DshApiClient::new(base_url)?
+        .remote_call("pluginInventory/list", serde_json::json!({}))
+        .await?;
+    serde_json::from_value(
+        value
+            .get("entries")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+    )
+    .map_err(|error| format!("DSH pluginInventory.list payload was invalid: {error}"))
 }
 
 fn command_for_agent(agent: &str, home: &Path) -> Command {
@@ -224,61 +113,6 @@ async fn list_profile_dependencies(home: &Path) -> Result<Vec<DshPlugin>, String
         }
     }
     Ok(plugins)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DshRuntimePlugin {
-    entry_id: String,
-    module_name: String,
-    enabled: bool,
-    fiber_phase: Option<String>,
-}
-
-async fn list_runtime_plugins(base_url: String) -> Result<Vec<DshRuntimePlugin>, String> {
-    let value = crate::dsh_webui::DshApiClient::new(base_url)?
-        .remote_call("pluginInventory/list", serde_json::json!({}))
-        .await?;
-    serde_json::from_value(
-        value
-            .get("entries")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
-    )
-    .map_err(|error| format!("DSH pluginInventory.list payload was invalid: {error}"))
-}
-
-fn merge_runtime_plugins(
-    configured: Vec<DshPlugin>,
-    runtime: Vec<DshRuntimePlugin>,
-) -> Vec<DshPlugin> {
-    let mut configured_by_id: HashMap<String, DshPlugin> = configured
-        .into_iter()
-        .map(|plugin| (plugin.entry_id.clone(), plugin))
-        .collect();
-    let mut merged = Vec::with_capacity(runtime.len() + configured_by_id.len());
-    for live in runtime {
-        let fallback = configured_by_id.remove(&live.entry_id);
-        merged.push(DshPlugin {
-            name: fallback
-                .as_ref()
-                .map(|plugin| plugin.name.clone())
-                .unwrap_or_else(|| live.module_name.clone()),
-            version: fallback
-                .as_ref()
-                .map(|plugin| plugin.version.clone())
-                .unwrap_or_else(|| "bundled".to_string()),
-            enabled: live.enabled,
-            description: fallback.and_then(|plugin| plugin.description),
-            entry_id: live.entry_id,
-            built_in: live.module_name.starts_with("@deepseek-ai/")
-                || live.module_name.starts_with("cordis:"),
-            module_name: live.module_name,
-            fiber_phase: live.fiber_phase,
-        });
-    }
-    merged.extend(configured_by_id.into_values());
-    merged
 }
 
 #[tauri::command]
