@@ -566,7 +566,14 @@ function occurrences(files, read, startRegex, consts) {
 /// dsh_host dispatcher，故声明文件与 Rust 语料都要能看见 core 侧真身——
 /// 宿主 `event_names.rs` 只剩 re-export（不再有字符串常量）。
 const EVENT_CONSTANT_FILES = ["src-tauri/src/event_names.rs", "src/tauriEvents.ts", "src/appRemoteEvents.ts"];
-const CORE_EVENT_CONSTANT_FILES = ["core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs"];
+const CORE_EVENT_CONSTANT_FILES = [
+  "core/crates/aeroric-core/src/agents/dsh_host/dispatcher.rs",
+  // 补记二百七十一次：waterfall 四常量（approval/question 的 requested/resolved）
+  // 声明随第八片入 approvals.rs，清单漏登记——宿主 emit 点解析不到符号后掉进
+  // dynamic 桶，contracts 的 emitters 1→0、orphan 翻成 listened-without-emitter。
+  // 断点在第八片，266 前没人跑 protocol/projects/tasks 的 contracts-current 所以一直没红。
+  "core/crates/aeroric-core/src/agents/dsh_host/approvals.rs",
+];
 
 function collectConsts(files, read, regex) {
   const perFile = new Map();
