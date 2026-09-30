@@ -1,16 +1,16 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "d70d0dc7b77212e3bd0e44f703c7d42da57eaf83bbac58e000a034a9775d8c1b",
+  "sourceSha256": "3fd7b0f6303b04886083bac30a90f4060ac5efb202862f1fbc0a522d397708e4",
   "capBytes": 32768,
   "payload": {
     "gaps": [
       {
         "id": "G07",
         "finding": "remote/server.rs:393 在存在任一已配对设备或任一配置的公网 endpoint 时绑定 0.0.0.0（默认端口 6790）",
-        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。",
+        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。 2026-09-30 P3-06 侧闭合：aeroric-host 的监听面只有 UDS（`uds::bind_listener` 全模块无 TCP 构造，codec/serve 只吃 UnixStream；`AlreadyLive` 探活挡抢绑）——「不得因原生 IPC 改造而放宽」在 host 库侧成立。P8-03 侧（remote/server.rs 的 0.0.0.0 scope 判定）仍开放，owner 收窄为 P8-03。补记二百八十。",
         "requirement": "host 侧必须保留同等保守的 scope 判定，不得因原生 IPC 改造而放宽",
-        "task_ids": "P3-06, P8-03",
+        "task_ids": "P8-03",
         "owner": "core:host+remote",
         "test": "tests/ipc_auth.rs 断言 host 绝不监听 TCP 0.0.0.0；remote 能力只在显式开启时暴露",
         "status": "open",
@@ -112,6 +112,18 @@
         "status": "open",
         "verified_on": "2026-09-29",
         "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
+      },
+      {
+        "id": "G16",
+        "finding": "93/660 已注册命令在活代码内无可达性证据（2026-09-28 复算：reachable 567 / unreachable **93**，与冻结值一致）。不相交划分今日实测：**28 前缀派生 / 8 前缀派生+测试 / 4 仅测试证据 / 53 完全无证据**（原记 6/6，两条桶之间漂了 2 条；28 与 53 未变）。53 条里 `dsh_webui` 占 41，模块不可达合计 42（41 零证据 + 1 仅测试证据）。**修订 2** 保持：初版把测试目录整块排除，导致只在测试里被断言调用的命令被误判为『未接线』（`discover_tests`/`run_tests` 实际是接线的，`src/test/test-explorer-panel.test.tsx` 断言 invoke 收到 \"run_tests\"）。现测试证据作为弱信号 `test_only_literal` 保留，前缀派生记为 `prefix_derived_of`。",
+        "evidence": "scripts/native/inventory.mjs extractReachability()（可重算并被 --check 逐条比对）；结果冻结在 docs/native/command-map.json 每条命令的 reachability/reachable 与 meta.reachability（`unreachable_by_module` 十四项合计 93）。2026-09-28 用 map 里每条的 `prefix_derived_of`/`test_only_literal` 两个布尔直接重算四桶得 28/8/4/53。requirement 里的『81 条带 rpc_method 提案者』是 P1-04 时点口径：今天 `rpc_method` 非空 641/660（空 19），641 恰等于 ADR-006 冻结的 532 方法 + 109 别名  2026-09-29 用工具自己的判据复跑（**可达性是 `command.reachable` 这个布尔字段，不是 `reachability` 对象里的某个状态串**——我第一版把 `reachability` 当字符串读，得到 660 条全落进同一个桶的假结果）：`reachable=567／unreachable=93`，与 `meta.counts` 逐字相同；不可达按模块前三＝`dsh_webui:42`、`lsp:12`、`remote_git:10` ⇒ 本条的不相交划分今日无需改数。",
+        "requirement": "P2-01 冻结 methods.schema.json 前：81 条带 rpc_method 提案者中 40 条已有解释（须建模为『1 方法 + target 参数』而非丢弃或复制），**剩余 41 条完全无证据者必须逐条判定**才能进契约。`list_dsh_agent_presets`、`upgrade_agent_versions`、`discover_tests`/`run_tests` 系列**不得当作可删**。",
+        "task_ids": "P2-01, P8-03",
+        "owner": "protocol + core:dsh_host/ide/git/connections",
+        "test": "inventory --check 已把 4 个 reachability 字段与 unreachable 总数变成双向漂移断言（18 例含 11 负向）；P2-01 冻结 schema 前须给出 93 条的逐条归类，未归类者不得进 capability 列表",
+        "status": "triaged-rev2-awaiting-p3-05-p8-03",
+        "verified_on": "2026-09-29",
+        "retriage_note": "状态词 `triaged-rev2-awaiting-phase-2` 已经过期：它的宿主 Task P2-01 于 2026-09-22 accepted，而本条按用户 T1=A 改派后的实际欠账人是 P3-05（dsh 41 条逐条 caller 证据）与 P8-03（remote_/wsl_ 前缀面），故状态词改为 `triaged-rev2-awaiting-p3-05-p8-03`。93 与 53 两个数复算成立，中间两桶由 6/6 变 8/4。 2026-09-29 复跑成立并钉死判据。"
       }
     ]
   }

@@ -7,7 +7,7 @@ mod common;
 
 use common::dsh_fake::{session_created, FakeDshServer, MockPorts};
 
-use aeroric_core::agents::dsh_host::executor::{run_dsh_task, DshLaunch};
+use aeroric_core::agents::dsh_host::executor::{run_dsh_task_core, DshLaunch};
 use serde_json::json;
 
 fn mk_launch(prompt: &str) -> DshLaunch {
@@ -65,7 +65,7 @@ async fn resume_launch_reuses_session_and_keeps_history() {
     let mut launch = mk_launch("continue please");
     launch.session_id = Some("s9".to_string());
 
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("resumed launch settles");
 
@@ -103,7 +103,7 @@ async fn provider_profile_drops_reasoning_effort_entirely() {
     launch.agent = "custom-provider".to_string();
     launch.reasoning_effort = Some("high".to_string());
 
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("provider profile launch settles");
 
@@ -128,7 +128,7 @@ async fn model_selection_resolves_provider_from_catalog() {
     let mut launch = mk_launch("hi");
     launch.selected_model = Some("m-basic".to_string());
 
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("model selection settles");
 
@@ -156,7 +156,7 @@ async fn unknown_model_falls_back_to_current_provider() {
     let mut launch = mk_launch("hi");
     launch.selected_model = Some("ghost-model".to_string());
 
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("unknown model still selects via current provider");
 
@@ -185,7 +185,7 @@ async fn effort_survives_only_when_catalog_lists_it() {
     let ports = MockPorts::new(&server.url.clone());
     let mut launch = mk_launch("hi");
     launch.reasoning_effort = Some("low".to_string());
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("supported effort launch settles");
     let request = server.payload_of("session/selectModel", 0);
@@ -205,7 +205,7 @@ async fn effort_survives_only_when_catalog_lists_it() {
     let ports = MockPorts::new(&server.url.clone());
     let mut launch = mk_launch("hi");
     launch.reasoning_effort = Some("xhigh".to_string());
-    run_dsh_task(&ports, launch, ports.sink())
+    run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect("unsupported effort still settles");
     let request = server.payload_of("session/selectModel", 0);

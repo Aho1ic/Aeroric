@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-8.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "d70d0dc7b77212e3bd0e44f703c7d42da57eaf83bbac58e000a034a9775d8c1b",
+  "sourceSha256": "3fd7b0f6303b04886083bac30a90f4060ac5efb202862f1fbc0a522d397708e4",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -40,12 +40,12 @@
       },
       {
         "id": "G39",
-        "status": "open",
+        "status": "closed",
         "task_ids": "P3-06",
         "finding": "把两条污染源用例改成默认 opt-in 之后（**该选择的依据待追认**：`ask` 回包截断，Agent 未看到用户选项原文，本轮按推荐项 ① 执行），**默认门禁不再覆盖宿主 `--lib` 2 465 条与真内核适配器验收 19 条**。这不是假设：2026-09-29 实测 `pnpm native:check tauri-adapter` 现在打 `10 case(s) passed, 42 test cases executed (2 opt-in skip: adapter-acceptance-real-kernel, src-tauri-lib-tests)`，墙钟从 235 s 降到 17 s；同一轮真实 `~/.aeroric` 前后快照 5 个文件＋3 个凭据边车**逐字节相同**、`invite-created` 计数不变（1 982→1 982）⇒ 污染源确实被关掉了。代价是覆盖面：这 2 484 条用例今天在任何默认绿里都不存在，而 P2-05／P3-01／P3-02／P3-03 多条已 accepted 的验收都曾把它们当证据。〔2026-09-29 补记二百四十：**该选择已获追认**（污染源用例默认 opt-in＝①，用户答复「两处都追认」）；覆盖面代价与本条 requirement 均不变，P3-06 出口四步照旧。〕",
         "requirement": "P3-06 出口必须把这两条**恢复成默认必选**，顺序固定：① 给 `storage::aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1），让宿主套件整体落 scratch 根；② 用 `AERORIC_ALLOW_REAL_HOME_TESTS=1` 跑一轮，按**内容**证明隔离成功（`remote-audit.log` 事件计数、`agent-credentials/**` sha256 集合、usage DB 行级读数都不变，见 `G24` 的 28 目标清单）；③ 删掉 `optInEnv` 标记并把 `checks.json` 的 `runner.rules` 第 3 条恢复成无条件成立；④ 同批把 `tauri-adapter` 的期望读数从 10/42 抬回 12/2 526。在此之前，任何引用“门禁全绿”的文字都必须写明这两条是 opt-in 未跑——`extraction` 之外的散文没有机器提醒，靠的是 `gate-runner-unit` 里那条“committed gate exactly the two real-home writers are opt-in”的集合断言（它同时禁止把别的用例标成 opt-in）。",
-        "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。",
-        "verified_on": "2026-09-29"
+        "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。 2026-09-30 P3-06 收口：`storage::aeroric_dir()` 成为唯一根且读序三层——测试 SLOT（install_scratch_home）> `AERORIC_HOME`（runner 每轮注入的 scratch）> 真实家；notification.rs/app_settings 的两份逐字重复实现并一（覆盖只进一份＝止血止一半）。门禁两条（src-tauri-lib-tests 2452、adapter-acceptance-real-kernel 19）从 opt-in 恢复默认必选（check.mjs 的 case.env `<scratch>` 哨兵＝mkdtemp 注入+跑后清理）。当日实测：tauri-adapter 12/2513 全绿；真实家对账——remote-audit.log 行数与哈希不动、agent-credentials 边车哈希不动、terminal-history 文件数不动（usage DB 行级 +9 经核为在跑客户端的正常采集，非测试签名——签名判据全零）。事故如实记：修复窗口内一次未隔离的 `cargo test --lib` 直跑写了真实家（audit +3 伪造 invite 事件、usage +25 行）——正是 G19/G20 描述的污染形态的活体复现，此后所有宿主套件跑批一律走 runner 注入或 HOME=mktemp 隔离。补记二百八十。",
+        "verified_on": "2026-09-30"
       }
     ]
   }

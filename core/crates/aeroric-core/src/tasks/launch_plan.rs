@@ -339,37 +339,6 @@ pub fn merge_reset_session(record: &Record, snapshot: &ResetOutcome) -> Record {
     next
 }
 
-/// The whole point of this module in one call: everything a host needs to run one task,
-/// already resolved. Built by [`crate::tasks::service`] and handed to the executor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlannedLaunch {
-    pub request: LaunchRequest,
-    pub continuation: ContinuationMode,
-}
-
-pub fn plan_start(
-    record: &Record,
-    project: &Record,
-    families: &dyn AgentFamilies,
-    generation: u64,
-) -> Option<PlannedLaunch> {
-    Some(PlannedLaunch {
-        request: launch_request(
-            record,
-            project,
-            families,
-            "op-key",
-            generation,
-            Vec::new(),
-            Vec::new(),
-            false,
-            None,
-            None,
-        )?,
-        continuation: ContinuationMode::Start,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

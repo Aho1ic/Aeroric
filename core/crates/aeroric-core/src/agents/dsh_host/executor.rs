@@ -1,5 +1,9 @@
 //! dsh 启动编排（P3-05 kernel 片，补记二百六十四 D1/D2 的执行体）。
 //!
+//! 名字保留 `_core` 后缀：Action 4 的方向扫描（executor 必须委托 `*_core`
+//! 启动体、不得回调 command wrapper）按后缀认人，`run_dsh_task` 这个名字属于
+//! 宿主 command wrapper（`dsh_webui::run_dsh_task`）。
+//!
 //! 自宿主 `dsh_webui.rs::run_dsh_task_core` verbatim 上收：编排顺序、错误文案、
 //! 注释语义一行没改；改动的只有三类机械项——
 //! 1. 宿主 app handle / managed state / IPC channel（`Channel<String>`）全部换成
@@ -43,7 +47,7 @@ pub struct DshLaunch {
 /// reasoning 门 → lifecycle 锁 → 清账 → 新会话截断 → ensure → create_session
 /// → 登记三件 → {cols → stream → models → select → permission → 空 prompt
 /// 早退 → pending → echo → prompt → 斜杠命令早退} → 失败结算。
-pub async fn run_dsh_task(
+pub async fn run_dsh_task_core(
     ports: &dyn DshHostPorts,
     launch: DshLaunch,
     sink: OutputSink,

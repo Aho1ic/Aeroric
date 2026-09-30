@@ -10,7 +10,7 @@ mod common;
 
 use common::dsh_fake::{catalog, session_created, FakeDshServer, MockPorts};
 
-use aeroric_core::agents::dsh_host::executor::{run_dsh_task, DshLaunch};
+use aeroric_core::agents::dsh_host::executor::{run_dsh_task_core, DshLaunch};
 
 fn mk_launch(task_id: &str, prompt: &str) -> DshLaunch {
     DshLaunch {
@@ -47,7 +47,7 @@ async fn wired() -> (FakeDshServer, MockPorts) {
 #[tokio::test]
 async fn launch_delivers_prompt_with_wire_contract() {
     let (server, ports) = wired().await;
-    run_dsh_task(&ports, mk_launch("t1", "hi"), ports.sink())
+    run_dsh_task_core(&ports, mk_launch("t1", "hi"), ports.sink())
         .await
         .expect("launch must settle ok");
 
@@ -93,7 +93,7 @@ async fn permission_command_unavailable_settles_failed_and_retires() {
     let mut launch = mk_launch("t1", "hi");
     launch.permission_mode = Some("full_access".to_string());
 
-    let error = run_dsh_task(&ports, launch, ports.sink())
+    let error = run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect_err("null permission result must fail the launch");
     assert_eq!(
@@ -133,7 +133,7 @@ async fn slash_command_answer_settles_input_required_after_pending() {
             serde_json::json!({ "accepted": true, "command": { "text": "/help did stuff" } }),
         ),
     );
-    run_dsh_task(&ports, mk_launch("t1", "/help"), ports.sink())
+    run_dsh_task_core(&ports, mk_launch("t1", "/help"), ports.sink())
         .await
         .expect("inline command answer is a success path");
 
@@ -153,7 +153,7 @@ async fn slash_command_answer_settles_input_required_after_pending() {
 #[tokio::test]
 async fn empty_prompt_starts_interactive_without_pending() {
     let (server, ports) = wired().await;
-    run_dsh_task(&ports, mk_launch("t1", "   "), ports.sink())
+    run_dsh_task_core(&ports, mk_launch("t1", "   "), ports.sink())
         .await
         .expect("terminal-only start is ok");
 
@@ -172,7 +172,7 @@ async fn image_rejection_fails_before_wire_and_retires() {
     // 白名单外的 data url：parse_prompt_image 在构造 content 时就拒绝。
     launch.images = Some(vec!["data:application/pdf;base64,AAA".to_string()]);
 
-    let error = run_dsh_task(&ports, launch, ports.sink())
+    let error = run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect_err("unsupported image type must fail the launch");
     assert!(!error.is_empty());
@@ -193,7 +193,7 @@ async fn broken_webui_startup_short_circuits_before_any_rpc() {
     let mut launch = mk_launch("t1", "hi");
     launch.agent = "broken".to_string();
 
-    let error = run_dsh_task(&ports, launch, ports.sink())
+    let error = run_dsh_task_core(&ports, launch, ports.sink())
         .await
         .expect_err("ensure_webui failure must propagate verbatim");
     assert_eq!(error, "DSH Web URL is unavailable");

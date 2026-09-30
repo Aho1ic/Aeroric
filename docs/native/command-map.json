@@ -8862,7 +8862,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:367",
+      "definition_resolved": "src-tauri/src/storage.rs:390",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8894,7 +8894,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:384",
+      "definition_resolved": "src-tauri/src/storage.rs:407",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8928,7 +8928,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:406",
+      "definition_resolved": "src-tauri/src/storage.rs:429",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -8999,7 +8999,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:582",
+      "definition_resolved": "src-tauri/src/storage.rs:605",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9033,7 +9033,7 @@
         "F01",
         "F02"
       ],
-      "definition_resolved": "src-tauri/src/storage.rs:592",
+      "definition_resolved": "src-tauri/src/storage.rs:615",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13763,7 +13763,7 @@
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 1,
+        "rust_internal_refs": 0,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16468,7 +16468,7 @@
         "F12",
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/platform/mod.rs:424",
+      "definition_resolved": "src-tauri/src/platform/mod.rs:432",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16500,7 +16500,7 @@
         "F12",
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/platform/mod.rs:395",
+      "definition_resolved": "src-tauri/src/platform/mod.rs:403",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

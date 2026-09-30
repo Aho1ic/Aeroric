@@ -131,6 +131,14 @@ pub(crate) fn install_scratch_home(root: std::path::PathBuf) -> ScratchHome {
     scratch::install(root)
 }
 
+/// `Some` while a test has installed a scratch home (the SLOT). `storage::aeroric_dir`
+/// consults this **before** `AERORIC_HOME`: a test's own fixture root must not be
+/// shadowed by the gate runner's process-wide override (P3-06 / G39 收口).
+#[cfg(test)]
+pub(crate) fn scratch_home_installed() -> Option<PathBuf> {
+    scratch::home_dir()
+}
+
 pub(crate) fn login_shell_env() -> &'static [(String, String)] {
     imp::login_shell_env()
 }

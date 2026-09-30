@@ -35,10 +35,9 @@ pub(super) fn agent_upgrade_lock() -> &'static tokio::sync::Mutex<()> {
     AGENT_UPGRADE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+// G24 收口：并三为一（见 `storage::aeroric_dir` 的注释）。
 pub(super) fn aeroric_dir() -> Result<PathBuf, String> {
-    let home =
-        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(home.join(".aeroric"))
+    crate::storage::aeroric_dir()
 }
 
 pub(super) fn agent_scripts_dir() -> Result<PathBuf, String> {

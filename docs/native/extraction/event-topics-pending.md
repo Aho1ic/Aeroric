@@ -43,8 +43,8 @@
 | `aeroric.app_settings_changed` | `aeroric:app-settings-changed` | core-to-client | `remote` | 1/1 | P8-03 |
 | `agent.operation_changed` | `agent-operation-changed` | core-to-client | `agent_ops` | 1/1 | P3-02（accepted） |
 | `agent.tool_install_progress` | `agent-tool-install-progress` | core-to-client | `agent_tools` | 1/0 | P3-02（accepted） |
-| `app.exit_requested` | `app-exit-requested` | unproven | `无 Rust 发射点` | 0/1 | 待判 |
-| `app.restart_requested` | `app-restart-requested` | unproven | `无 Rust 发射点` | 0/1 | 待判 |
+| `app.exit_requested` | `app-exit-requested` | not-forwarded | `死订阅：Rust 侧无发射点（lib.rs 的 ExitRequested 是 Tauri 窗口回调，不 emit 本事件）；原生退出由 supervisor/`RunningHost::shutdown` 生命周期驱动，不过 IPC 线` | 0/1 | P3-06 判定（2026-09-30） |
+| `app.restart_requested` | `app-restart-requested` | not-forwarded | `死订阅：同 exit_requested——重启决策属 supervisor（P3-07 CLI 的 restart 子命令是活路径），事件本身无发射点` | 0/1 | P3-06 判定（2026-09-30） |
 | `dbx.production_confirm_requested` | `dbx-production-confirm-requested` | core-to-client | `database` | 1/1 | P7-04 |
 | `dbx.transfer_progress` | `dbx-transfer-progress` | core-to-client | `database` | 1/1 | P7-04 |
 | `dsh.approval_requested` | `dsh-approval-requested` | core-to-client | `dsh_webui` | 1/1 | P3-05 |

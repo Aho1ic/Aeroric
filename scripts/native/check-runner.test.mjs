@@ -376,23 +376,22 @@ test("a red required case still fails the module even when an opt-in case is ski
   }
 });
 
-test("in the committed gate exactly the two real-home writers are opt-in, with a reason", () => {
-  // Pins the *set*, not just the shape: widening opt-in silently is how a gate loses teeth,
-  // and dropping the flag reopens the credential rewrite this change exists to stop.
+test("in the committed gate no case is opt-in, and the two former real-home writers run by default on a scratch root", () => {
+  // G39 收口（P3-06，2026-09-30）：止血期的 opt-in 形态已被根覆盖变量取代——
+  // `storage::aeroric_dir()` 认测试 SLOT > `AERORIC_HOME` > 真实家，runner 对
+  // 这两条注入 `AERORIC_HOME=<scratch>`（每轮 mkdtemp、跑后清理）。
+  // pin 的是集合与形状：新增 opt-in 或丢掉 scratch 注入都必须在这里红。
   const flagged = [];
   for (const [module, entry] of Object.entries(committed.modules)) {
     for (const testCase of entry.cases ?? []) {
       if (testCase.optInEnv) flagged.push(`${testCase.name}@${module}`);
     }
   }
-  assert.deepEqual(flagged.sort(), [
-    "adapter-acceptance-real-kernel@tauri-adapter",
-    "src-tauri-lib-tests@tauri-adapter",
-  ]);
+  assert.deepEqual(flagged, [], "opt-in 通道已退役：任何 case 再挂 optInEnv 即门禁失牙");
   for (const name of ["src-tauri-lib-tests", "adapter-acceptance-real-kernel"]) {
     const testCase = committed.modules["tauri-adapter"].cases.find((c) => c.name === name);
-    assert.equal(testCase.optInEnv, "AERORIC_ALLOW_REAL_HOME_TESTS");
-    assert.match(testCase.optInReason, /~\/\.aeroric/);
+    assert.equal(testCase.env?.AERORIC_HOME, "<scratch>", `${name} 必须带 scratch 注入`);
     assert.ok(committed.runner.floors[`${name}@tauri-adapter`] >= testCase.minCases, `${name} floor must stay declared`);
   }
 });
+;

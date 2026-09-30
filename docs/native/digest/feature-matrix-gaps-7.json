@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-7.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "d70d0dc7b77212e3bd0e44f703c7d42da57eaf83bbac58e000a034a9775d8c1b",
+  "sourceSha256": "3fd7b0f6303b04886083bac30a90f4060ac5efb202862f1fbc0a522d397708e4",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -39,13 +39,13 @@
       },
       {
         "id": "G34",
-        "status": "open",
+        "status": "closed-by-decision",
         "decision_item": 23,
         "task_ids": "P3-06",
         "finding": "**core 有 4 个公开 API 到今天没有任何调用方**：`tasks::plan_start`（`launch_plan.rs:350`）与 `storage::load_runtime` 在 core＋宿主里**只出现在自己的定义行**（直接 grep：core 命中 1＝定义、宿主 0）；`tasks::has_task_session_path` 与 `projects::is_hidden` 只被 core 自己的测试调用（core 2＝定义＋1 处测试、宿主 0）。四者都是 `pub`，所以编译器不会报 `dead_code`——`src-tauri/src/core_adapter.rs:29-31` 那句「未接入产品路径的项各带逐项 `dead_code` allowance」讲的是**宿主侧**，core 的 `pub` API 天然免检，因此零调用不会以任何告警形式浮出来。 **溯源补充（2026-09-29 查重）**：同一个\"形状\"早在 补记一百零一（2026-09-28）就为 **terminal 面**记录在案——那条写着「宿主只有 `publish`／`mark_finished`，`read_from`／`plan_replay`／`bounds`／`acquire_control` **零调用点**」。⇒ core 里\"公开但零调用方\"的 API 今天**至少横跨两个面、共 8 个符号**（terminal 4 ＋ 本条 4）。**但两条刻意不合并**：terminal 那 4 个的根因是**协议 v1 没有入口**（承接 `P5-01`／`P3-07`，已写进 P3-03 的具名移交项），本条这 4 个的根因是**实现先行、没有消费者**（承接 `P3-06`）；合并会把一条的出口判据错套到另一条上。",
         "requirement": "由 P3-06（切换读路径）在出口时对这四项逐条定性，只允许三种结论：① 接线后被真实调用（给出调用点）；② 由别的 Task 消费（改写 owner 并点名消费方）；③ 未被任何生产路径需要 ⇒ 删除或降为 `pub(crate)`。**不接受\"先留着以后用\"**——`§3.1 #1` 的范围纪律与 INV 类\"公开面即承诺\"合起来要求公开 API 有具名消费者。复跑判据就是本条的两台仪器：按符号在 core＋宿主各 grep 一次，并把 `aeroric_core::` 路径锚定作为唯一可辩护的\"已接线\"判据。",
-        "evidence": "2026-09-29 实测（两台仪器一致）。**方法上的教训要一起读**：本轮先试过\"拿符号名在宿主全文计数\"，`projects` 报出宿主在用 11 项，与 补记一百九十五 的路径锚定结果（0 项）**直接冲突**——原因是 `remove`／`rename`／`text`／`is_hidden` 这类名字在宿主里有同名的自有函数，非锚定计数必然虚高。那台仪器作废；只有「零引用」一侧仍然可信（0 不会因为同名而变成非 0，且 core 与宿主两侧同时为 0）。⇒ 结论：**衡量\"接线\"必须锚定 `aeroric_core::` 路径或 `use aeroric_core::…` 导入**，裸符号计数只能用来发现零引用。",
-        "verified_on": "2026-09-29",
+        "evidence": "2026-09-29 实测（两台仪器一致）。**方法上的教训要一起读**：本轮先试过\"拿符号名在宿主全文计数\"，`projects` 报出宿主在用 11 项，与 补记一百九十五 的路径锚定结果（0 项）**直接冲突**——原因是 `remove`／`rename`／`text`／`is_hidden` 这类名字在宿主里有同名的自有函数，非锚定计数必然虚高。那台仪器作废；只有「零引用」一侧仍然可信（0 不会因为同名而变成非 0，且 core 与宿主两侧同时为 0）。⇒ 结论：**衡量\"接线\"必须锚定 `aeroric_core::` 路径或 `use aeroric_core::…` 导入**，裸符号计数只能用来发现零引用。 2026-09-30 P3-06 收口逐条三选一：① `storage::load_runtime`＝已接线，调用点 `aeroric-host/src/startup.rs` 第 2/3 步（data compat＋runtime 事实进 ready 帧）；② `tasks::plan_start`＝删除（连同 `PlannedLaunch`——真零消费者含测试，且 doc 声称 'Built by crate::tasks::service' 与事实分叉：service 从不叫它，op-key/空附件硬编码＝CLI 想象壳；ContinuationMode 有真实消费保留）；③④ `tasks::has_task_session_path`/`projects::is_hidden`＝finding 修正后保留——「无生产调用方」属实，但二者有 P2-04 parity harness 的设计消费者（task_parity.rs:309 的 hasTaskSessionPath、projects.rs:612 的 is_hidden），删除会拆契约镜像；parity 是合法消费面，本条按「已接线（测试面）＋点名」记账。补记二百八十。",
+        "verified_on": "2026-09-30",
         "retriage_note": "补记一百九十六 登记；owner 暂记 P3-06（切换读路径），若 P3-04/P3-07 认领需同步本条 task_ids 与计划里的小节点名。 2026-09-29 查重：机制形状早见于 补记一百零一（terminal 面 4 个符号），本条只覆盖 tasks/storage/projects 的 4 个，两条保持分离。"
       },
       {

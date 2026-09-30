@@ -231,7 +231,30 @@ pub struct Task {
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
+/// 宿主全部可写载体的唯一根（G24 的「一个点，不是 51 个点」）。
+///
+/// `AERORIC_HOME` 是应用自己认的覆盖变量（P3-06 收口，G19/G20/G21/G24/G39 的
+/// 共同前置）：生产默认不变（真实 `$HOME/.aeroric`），门禁 runner 把它指向
+/// 每轮新建的 scratch 根。`HOME=` 重定向实测无效——rustup 读 `$HOME/.rustup`
+/// 会 exit 1（G24 原文），所以是专用变量而不是复用 HOME。
+/// 纯空白值按未设置处理（`AERORIC_HOME=" "` 不该把宿主写进相对路径）。
 pub(crate) fn aeroric_dir() -> Result<PathBuf, String> {
+    // 读序是三层，从高到低：
+    // 1. 测试 SLOT（`install_scratch_home`）——测试自己的 fixture 根，
+    //    不许被 runner 的进程级覆盖影掉（G39 收口时 core_adapter_tests 的
+    //    9 条红就是这条优先级立的规矩）。
+    #[cfg(test)]
+    if let Some(scratch) = crate::platform::scratch_home_installed() {
+        return Ok(scratch.join(".aeroric"));
+    }
+    // 2. `AERORIC_HOME`——门禁 runner 每轮注入的 scratch 根。
+    if let Some(override_dir) = std::env::var("AERORIC_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Ok(PathBuf::from(override_dir));
+    }
+    // 3. 真实家（生产默认）。
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     Ok(home.join(".aeroric"))

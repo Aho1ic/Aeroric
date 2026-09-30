@@ -190,10 +190,10 @@ const UPDATE_HELPER_FAILED: &str = "failed";
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
+// G24 收口：本模块与 `app_settings` 各有一份逐字相同的 `aeroric_dir`——
+// 覆盖变量若只进 `storage` 那份，另两处照写真实家（止血止一半）。三处并一处。
 fn aeroric_dir() -> Result<PathBuf, String> {
-    let home =
-        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(home.join(".aeroric"))
+    crate::storage::aeroric_dir()
 }
 
 fn store_path() -> Result<PathBuf, String> {

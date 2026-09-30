@@ -5,8 +5,9 @@
 // `all` is the complete gate and only becomes runnable at P10-05.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { absenceControlFailure, caseSkipReason, countCases, missingOutputTokens, moduleGateProblem } from "./gate-config.mjs";
@@ -131,10 +132,10 @@ if (entryProblem) {
 }
 
 
-function run(argv, timeoutMs) {
+function run(argv, timeoutMs, env = process.env) {
   return new Promise((resolve) => {
     const [command, ...args] = argv;
-    const child = spawn(command, args, { cwd: repoRoot, shell: false });
+    const child = spawn(command, args, { cwd: repoRoot, shell: false, env });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -167,7 +168,20 @@ for (const testCase of entry.cases) {
     skipped.push({ name: testCase.name, reason });
     continue;
   }
-  const { code, stdout, stderr } = await run(testCase.argv, timeoutMs);
+  // `case.env` with the `<scratch>` sentinel gets a fresh temp dir per run
+  // (P3-06 / G39): the host suite writes its data root through the single
+  // `AERORIC_HOME` override, so the default gate no longer touches the real
+  // `~/.aeroric` and the two formerly opt-in cases return to required.
+  let scratch = null;
+  const childEnv = { ...process.env };
+  if (testCase.env && testCase.env.AERORIC_HOME === "<scratch>") {
+    scratch = mkdtempSync(path.join(tmpdir(), "aeroric-scratch-"));
+    childEnv.AERORIC_HOME = scratch;
+  }
+  const { code, stdout, stderr } = await run(testCase.argv, timeoutMs, childEnv);
+  if (scratch) {
+    rmSync(scratch, { recursive: true, force: true });
+  }
   const logName = `${module}--${testCase.name}.log`;
   const raw = `$ ${testCase.argv.join(" ")}\nexit=${code}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`;
   const { text: safe, hits } = redact(raw);

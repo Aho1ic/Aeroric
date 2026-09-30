@@ -242,9 +242,10 @@ impl<R: tauri::Runtime> TaskExecutor for LegacyTaskExecutor<R> {
             };
             tauri::async_runtime::spawn(async move {
                 let ports = crate::dsh_webui::DshPortsAdapter::new(app.clone());
-                let result =
-                    aeroric_core::agents::dsh_host::executor::run_dsh_task(&ports, launch, sink)
-                        .await;
+                let result = aeroric_core::agents::dsh_host::executor::run_dsh_task_core(
+                    &ports, launch, sink,
+                )
+                .await;
                 report_detached("launch", result);
             });
             return Ok(());
