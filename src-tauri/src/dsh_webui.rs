@@ -2948,52 +2948,16 @@ impl DshApiClient {
     }
 }
 
+// prompt 投递判定三件已随 P3-05 第八片迁入 core：`normalize_prompt_mode`／
+// `parse_prompt_image` 进 `agents::dsh_host::attachments`，`dsh_permission_preset`
+// 进 `agents::dsh_host::approvals`（权限路由入口，grill [dsh] 点名面）——补记二百五十七。
+// 私有 re-export 保持模块内裸名调用点一字不动；`prompt()` 的 content 组装＋requestId
+// 铸造＋async RPC 留本文件（判定与投递的分界）。上方原 doc 是指向早已迁走的
+// agent helper 的孤儿（描述的函数不存在于本处），随切除一并移除并留痕于此。
+use aeroric_core::agents::dsh_host::approvals::dsh_permission_preset;
+use aeroric_core::agents::dsh_host::attachments::{normalize_prompt_mode, parse_prompt_image};
+
 // ── New Tauri commands ────────────────────────────────────────────────────────
-
-/// Helper: get a running DSH web API client for the default "dsh" agent.
-fn normalize_prompt_mode(mode: &str) -> Result<&str, String> {
-    match mode {
-        "queue" | "steer" => Ok(mode),
-        other => Err(format!(
-            "Unsupported DSH prompt mode {other:?}; expected queue or steer"
-        )),
-    }
-}
-
-fn parse_prompt_image(value: &str) -> Result<(&str, &str), String> {
-    let (media_type, data) = if let Some(rest) = value.strip_prefix("data:") {
-        let (metadata, data) = rest
-            .split_once(',')
-            .ok_or_else(|| "Invalid DSH image data URL".to_string())?;
-        let media_type = metadata
-            .strip_suffix(";base64")
-            .ok_or_else(|| "DSH image data URL must use base64 encoding".to_string())?;
-        (media_type, data)
-    } else {
-        value
-            .split_once(':')
-            .ok_or_else(|| "Invalid DSH image payload".to_string())?
-    };
-    if !matches!(
-        media_type,
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
-    ) {
-        return Err(format!("Unsupported DSH image media type {media_type:?}"));
-    }
-    if data.is_empty() {
-        return Err("DSH image payload is empty".to_string());
-    }
-    Ok((media_type, data))
-}
-
-fn dsh_permission_preset(mode: &str) -> Result<&'static str, String> {
-    match mode {
-        "ask" => Ok("read-only"),
-        "auto_edit" => Ok("workspace-write"),
-        "full_access" => Ok("danger-full-access"),
-        other => Err(format!("Unsupported DSH permission mode {other:?}")),
-    }
-}
 
 /// Dispatch a single parsed frame from the host-wide `/api/remote.mux` downlink.
 /// Each frame type maps to a `dsh-host-*` Tauri event so the frontend

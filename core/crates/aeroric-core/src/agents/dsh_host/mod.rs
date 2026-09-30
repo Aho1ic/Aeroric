@@ -10,6 +10,7 @@
 //! `not-forwarded`）在本 Task 收（T1=A 改派，见 `event-topics-pending.md`）。
 
 pub mod approvals;
+pub mod attachments;
 pub mod client;
 pub mod dispatcher;
 pub mod projection;

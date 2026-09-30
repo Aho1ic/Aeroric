@@ -536,3 +536,53 @@ fn echo_and_fold_rows_keep_the_terminal_shapes() {
     push_line(&mut out2, "\x1b[2m", "dim");
     assert_eq!(out2, format!("\x1b[2mdim{ANSI_RESET}\r\n"));
 }
+
+#[test]
+fn prompt_image_accepts_both_shapes_with_a_four_type_whitelist() {
+    use aeroric_core::agents::dsh_host::attachments::{normalize_prompt_mode, parse_prompt_image};
+    assert_eq!(
+        parse_prompt_image("data:image/png;base64,QUJD").unwrap(),
+        ("image/png", "QUJD")
+    );
+    assert_eq!(
+        parse_prompt_image("image/jpeg:raw-bytes").unwrap(),
+        ("image/jpeg", "raw-bytes")
+    );
+    let err = |v: &str| parse_prompt_image(v).unwrap_err();
+    assert_eq!(
+        err("data:image/png,non-b64"),
+        "DSH image data URL must use base64 encoding"
+    );
+    assert_eq!(err("data:image/png;base64"), "Invalid DSH image data URL");
+    assert_eq!(err("no-colon-here"), "Invalid DSH image payload");
+    assert_eq!(
+        err("application/pdf:x"),
+        "Unsupported DSH image media type \"application/pdf\""
+    );
+    assert_eq!(err("data:image/gif;base64,"), "DSH image payload is empty");
+    // mode：两臂过、其余带期望值拒绝（文案是 toast 面）。
+    assert_eq!(normalize_prompt_mode("queue").unwrap(), "queue");
+    assert_eq!(normalize_prompt_mode("steer").unwrap(), "steer");
+    assert_eq!(
+        normalize_prompt_mode("yolo").unwrap_err(),
+        "Unsupported DSH prompt mode \"yolo\"; expected queue or steer"
+    );
+}
+
+#[test]
+fn permission_preset_maps_three_modes_and_refuses_the_rest() {
+    use aeroric_core::agents::dsh_host::approvals::dsh_permission_preset;
+    assert_eq!(dsh_permission_preset("ask").unwrap(), "read-only");
+    assert_eq!(
+        dsh_permission_preset("auto_edit").unwrap(),
+        "workspace-write"
+    );
+    assert_eq!(
+        dsh_permission_preset("full_access").unwrap(),
+        "danger-full-access"
+    );
+    assert_eq!(
+        dsh_permission_preset("root").unwrap_err(),
+        "Unsupported DSH permission mode \"root\""
+    );
+}

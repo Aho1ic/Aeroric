@@ -15895,7 +15895,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3276",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3240",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15930,7 +15930,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3289",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3253",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -15964,7 +15964,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3466",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3430",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -15999,7 +15999,7 @@
       "feature_ids": [
         "F06"
       ],
-      "definition_resolved": "src-tauri/src/dsh_webui.rs:3360",
+      "definition_resolved": "src-tauri/src/dsh_webui.rs:3324",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24257,7 +24257,7 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3191"
+        "src-tauri/src/dsh_webui.rs:3155"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24348,10 +24348,10 @@
       ],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/dsh_webui.rs:3037",
-        "src-tauri/src/dsh_webui.rs:3140",
-        "src-tauri/src/dsh_webui.rs:3218",
-        "src-tauri/src/dsh_webui.rs:3235"
+        "src-tauri/src/dsh_webui.rs:3001",
+        "src-tauri/src/dsh_webui.rs:3104",
+        "src-tauri/src/dsh_webui.rs:3182",
+        "src-tauri/src/dsh_webui.rs:3199"
       ],
       "listeners": [],
       "disposition": "needs-native-consumer",
@@ -24823,9 +24823,9 @@
     "DSH_APPROVAL_RESOLVED @ src-tauri/src/dsh_webui.rs:1463",
     "DSH_QUESTION_REQUESTED @ src-tauri/src/dsh_webui.rs:1468",
     "DSH_QUESTION_RESOLVED @ src-tauri/src/dsh_webui.rs:1473",
-    "event_name @ src-tauri/src/dsh_webui.rs:3011",
-    "event_name @ src-tauri/src/dsh_webui.rs:3059",
-    "event_name @ src-tauri/src/dsh_webui.rs:3076",
+    "event_name @ src-tauri/src/dsh_webui.rs:2975",
+    "event_name @ src-tauri/src/dsh_webui.rs:3023",
+    "event_name @ src-tauri/src/dsh_webui.rs:3040",
     "action.event_name() @ src-tauri/src/lib.rs:237",
     "event_name @ src-tauri/src/pty.rs:462"
   ],

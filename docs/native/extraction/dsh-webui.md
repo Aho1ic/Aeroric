@@ -33,7 +33,7 @@ Cross-checked: 66 command wrappers counted here against 66 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **9**, lines: **8788**, command wrappers: **66**, test items excluded from the symbol lists: **77**
+- files: **9**, lines: **8752**, command wrappers: **66**, test items excluded from the symbol lists: **77**
 - files carrying `AppHandle`/`State`: **4**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**

@@ -74,6 +74,17 @@ impl WaterfallRegistry {
     }
 }
 
+/// 权限档 → dsh preset 名的映射（原宿主 `dsh_permission_preset` 逐字）：这是
+/// **权限路由的入口判定**，`grill-me [dsh]` 点名要复核的面，判定归 core、
+/// 把它写进 `session.setPermissionMode` 的 RPC 留宿主。
+pub fn dsh_permission_preset(mode: &str) -> Result<&'static str, String> {
+    match mode {
+        "ask" => Ok("read-only"),
+        "auto_edit" => Ok("workspace-write"),
+        "full_access" => Ok("danger-full-access"),
+        other => Err(format!("Unsupported DSH permission mode {other:?}")),
+    }
+}
 /// 下行 `permission/request`／`user-questions/request` 两臂 →（类型, 事件名）。
 /// `None`＝未知 waterfall 事件：宿主**不得静默吞**（Host 会等答案等到卡死），
 /// 由宿主侧发 `stream/error`——那个 emit 留宿主。
