@@ -524,6 +524,75 @@ async fn task(data_dir: &Path, cmd: TaskCmd) -> i32 {
     }
 }
 
+// ── session / rpc：④ 的读侧与通用口 ──────────────────────────────────────
+
+async fn call_print(data_dir: &Path, method: &str, params: serde_json::Value) -> i32 {
+    let mut client = match connect(data_dir).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("aeroric-cli: {e}");
+            return e.exit_code();
+        }
+    };
+    match client.call(method, params).await {
+        Ok(result) => {
+            println!("{result}");
+            exit::OK
+        }
+        Err(e) => {
+            eprintln!("aeroric-cli: {e}");
+            e.exit_code()
+        }
+    }
+}
+
+async fn session(data_dir: &Path, cmd: args::SessionCmd) -> i32 {
+    use args::SessionCmd;
+    match cmd {
+        SessionCmd::List { .. } => {
+            call_print(data_dir, "session.list", serde_json::json!({})).await
+        }
+        SessionCmd::History { task_id } => {
+            call_print(
+                data_dir,
+                "session.history",
+                serde_json::json!({ "taskId": task_id }),
+            )
+            .await
+        }
+        SessionCmd::Export { task_id, out } => {
+            call_print(
+                data_dir,
+                "session.export",
+                serde_json::json!({ "taskId": task_id, "out": out.to_string_lossy() }),
+            )
+            .await
+        }
+    }
+}
+
+/// `rpc METHOD [--params-file PATH]`：已注册方法的通用口（Action 6——**只到
+/// host 注册表为止**，未注册方法得到 UnsupportedCapability，不是任意代码执行）。
+async fn rpc(data_dir: &Path, method: &str, params_file: Option<&Path>) -> i32 {
+    let params = match params_file {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(value) => value,
+                Err(e) => {
+                    eprintln!("aeroric-cli rpc: params file is not valid JSON: {e}");
+                    return exit::USAGE;
+                }
+            },
+            Err(e) => {
+                eprintln!("aeroric-cli rpc: cannot read the params file: {e}");
+                return exit::USAGE;
+            }
+        },
+        None => serde_json::json!({}),
+    };
+    call_print(data_dir, method, params).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::args::Cli;
@@ -626,73 +695,4 @@ mod tests {
             assert!(help.contains(token), "help must list `{token}`");
         }
     }
-}
-
-// ── session / rpc：④ 的读侧与通用口 ──────────────────────────────────────
-
-async fn call_print(data_dir: &Path, method: &str, params: serde_json::Value) -> i32 {
-    let mut client = match connect(data_dir).await {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("aeroric-cli: {e}");
-            return e.exit_code();
-        }
-    };
-    match client.call(method, params).await {
-        Ok(result) => {
-            println!("{result}");
-            exit::OK
-        }
-        Err(e) => {
-            eprintln!("aeroric-cli: {e}");
-            e.exit_code()
-        }
-    }
-}
-
-async fn session(data_dir: &Path, cmd: args::SessionCmd) -> i32 {
-    use args::SessionCmd;
-    match cmd {
-        SessionCmd::List { .. } => {
-            call_print(data_dir, "session.list", serde_json::json!({})).await
-        }
-        SessionCmd::History { task_id } => {
-            call_print(
-                data_dir,
-                "session.history",
-                serde_json::json!({ "taskId": task_id }),
-            )
-            .await
-        }
-        SessionCmd::Export { task_id, out } => {
-            call_print(
-                data_dir,
-                "session.export",
-                serde_json::json!({ "taskId": task_id, "out": out.to_string_lossy() }),
-            )
-            .await
-        }
-    }
-}
-
-/// `rpc METHOD [--params-file PATH]`：已注册方法的通用口（Action 6——**只到
-/// host 注册表为止**，未注册方法得到 UnsupportedCapability，不是任意代码执行）。
-async fn rpc(data_dir: &Path, method: &str, params_file: Option<&Path>) -> i32 {
-    let params = match params_file {
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(value) => value,
-                Err(e) => {
-                    eprintln!("aeroric-cli rpc: params file is not valid JSON: {e}");
-                    return exit::USAGE;
-                }
-            },
-            Err(e) => {
-                eprintln!("aeroric-cli rpc: cannot read the params file: {e}");
-                return exit::USAGE;
-            }
-        },
-        None => serde_json::json!({}),
-    };
-    call_print(data_dir, method, params).await
 }
