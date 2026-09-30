@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
 use std::fs;
 use std::path::Path;
@@ -7,12 +6,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 use tokio::process::Command;
 
-const WEB_PROFILE: &str = "web";
-const DEFAULT_SHELL_TIMEOUT_MS: u64 = 60_000;
-const DEFAULT_SHELL_MAX_OUTPUT_BYTES: u64 = 64_000;
-const DEFAULT_MAX_PARALLEL_TOOL_CALLS: u64 = 10;
-const DEFAULT_WEB_SEARCH_MAX_USES: u64 = 5;
-const DEFAULT_AGENT_PRESET: &str = "standard";
+const WEB_PROFILE: &str = "web"; // settings 形状族、DEFAULT_* 常量与 YAML mapping 读写原语已随 P3-05 第十二片迁入
+                                 // core `agents::dsh_host::client`（补记二百六十一）；私有 use 保持本文件裸名调用点
+                                 // 一字不动。形状字段升 pub＝跨 crate 构造可见性（serde 输出逐字节不变，
+                                 // DshWebUiState 同先例）。文件 I/O 与 update 编排留本文件。
+use aeroric_core::agents::dsh_host::client::{
+    optional_string, positive_u64, section, section_mut, AgentLoopUpdate, DshAgentLoopSettings,
+    DshAgentPreset, DshSettingsSnapshot, DshShellSettings, DshWebSearchSettings, ShellUpdate,
+    WebSearchUpdate, DEFAULT_AGENT_PRESET, DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+    DEFAULT_SHELL_MAX_OUTPUT_BYTES, DEFAULT_SHELL_TIMEOUT_MS, DEFAULT_WEB_SEARCH_MAX_USES,
+};
 
 // 插件线数据形状（patch 协议／config dump／pluginInventory 条目／合并）已随
 // P3-05 第十一片迁入 core `agents::dsh_host::client`（补记二百六十）；私有 use 保持
@@ -239,68 +242,6 @@ async fn get_installed_version(profile_dir: &Path, package: &str) -> Result<Stri
         .to_string())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshShellSettings {
-    timeout_ms: u64,
-    max_output_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshAgentLoopSettings {
-    max_parallel_tool_calls: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshWebSearchSettings {
-    base_url: String,
-    max_uses: u64,
-    api_key_configured: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshAgentPreset {
-    id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DshSettingsSnapshot {
-    shell: DshShellSettings,
-    agent_loop: DshAgentLoopSettings,
-    web_search: DshWebSearchSettings,
-    default_preset: String,
-    custom_presets: Vec<DshAgentPreset>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ShellUpdate {
-    timeout_ms: u64,
-    max_output_bytes: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentLoopUpdate {
-    max_parallel_tool_calls: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WebSearchUpdate {
-    base_url: String,
-    max_uses: u64,
-    api_key: Option<String>,
-}
-
 fn read_settings_document(home: &Path) -> Result<Value, String> {
     let path = home.join("settings.yaml");
     let content = fs::read_to_string(&path).unwrap_or_default();
@@ -345,46 +286,6 @@ fn write_settings_document(home: &Path, document: &Value) -> Result<(), String> 
         .map_err(|error| format!("Failed to serialize dsh settings.yaml: {error}"))?;
     crate::storage::atomic_write_private(&home.join("settings.yaml"), &content)
         .map_err(|error| format!("Failed to write dsh settings.yaml: {error}"))
-}
-
-fn section<'a>(document: &'a Value, key: &str) -> Option<&'a Mapping> {
-    document.as_mapping()?.get(yaml_key(key))?.as_mapping()
-}
-
-fn section_mut<'a>(document: &'a mut Value, key: &str) -> Result<&'a mut Mapping, String> {
-    let root = document
-        .as_mapping_mut()
-        .ok_or_else(|| "dsh settings.yaml must contain a YAML mapping".to_string())?;
-    let key_value = yaml_key(key);
-    if !root.contains_key(&key_value) {
-        root.insert(key_value.clone(), Value::Mapping(Mapping::new()));
-    }
-    let value = root
-        .get_mut(&key_value)
-        .ok_or_else(|| format!("dsh settings section {key} is unavailable"))?;
-    if matches!(value, Value::Null) {
-        *value = Value::Mapping(Mapping::new());
-    }
-    value
-        .as_mapping_mut()
-        .ok_or_else(|| format!("dsh settings section {key} must contain a YAML mapping"))
-}
-
-fn positive_u64(mapping: Option<&Mapping>, key: &str, fallback: u64) -> u64 {
-    mapping
-        .and_then(|value| value.get(yaml_key(key)))
-        .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
-        .unwrap_or(fallback)
-}
-
-fn optional_string(mapping: Option<&Mapping>, key: &str) -> Option<String> {
-    mapping
-        .and_then(|value| value.get(yaml_key(key)))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 fn credential_configured(home: &Path, agent: &str) -> bool {

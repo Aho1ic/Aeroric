@@ -13305,7 +13305,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:119",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:122",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13339,7 +13339,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:163",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:166",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13375,7 +13375,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:189",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:192",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13410,7 +13410,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:195",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:198",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -13446,7 +13446,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:579",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:480",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13480,7 +13480,7 @@
         "F17"
       ],
       "notes": "reclassified by name pattern from module default",
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:592",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:493",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13513,7 +13513,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:628",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:529",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -13549,7 +13549,7 @@
       "feature_ids": [
         "F17"
       ],
-      "definition_resolved": "src-tauri/src/dsh_plugins.rs:710",
+      "definition_resolved": "src-tauri/src/dsh_plugins.rs:611",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

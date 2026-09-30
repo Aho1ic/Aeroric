@@ -429,3 +429,125 @@ pub fn merge_runtime_plugins(
     merged.extend(configured_by_id.into_values());
     merged
 }
+
+// ── 第十二片（补记二百六十一）：settings 形状族与 YAML mapping helpers，
+// 机械迁自宿主 dsh_plugins.rs。settings.yaml 的文档形状（快照/局部更新）、
+// DEFAULT_* 五常量与 mapping 读写原语是 wire 数据面；文件读、legacy 修复备份、
+// 凭证侧车与 update 落盘（read/write_settings_document、credential_configured、
+// settings_snapshot_at、update_* 编排）是 I/O，全部留宿主。
+// 形状字段从模块私有升 `pub`＝宿主构造点跨 crate 可见性需要同步（serde 输出
+// 逐字节不变；DshWebUiState/RecoveredSession 同先例）。
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshShellSettings {
+    pub timeout_ms: u64,
+    pub max_output_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshAgentLoopSettings {
+    pub max_parallel_tool_calls: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshWebSearchSettings {
+    pub base_url: String,
+    pub max_uses: u64,
+    pub api_key_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshAgentPreset {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DshSettingsSnapshot {
+    pub shell: DshShellSettings,
+    pub agent_loop: DshAgentLoopSettings,
+    pub web_search: DshWebSearchSettings,
+    pub default_preset: String,
+    pub custom_presets: Vec<DshAgentPreset>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellUpdate {
+    pub timeout_ms: u64,
+    pub max_output_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLoopUpdate {
+    pub max_parallel_tool_calls: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchUpdate {
+    pub base_url: String,
+    pub max_uses: u64,
+    pub api_key: Option<String>,
+}
+
+pub const DEFAULT_SHELL_TIMEOUT_MS: u64 = 60_000;
+pub const DEFAULT_SHELL_MAX_OUTPUT_BYTES: u64 = 64_000;
+pub const DEFAULT_MAX_PARALLEL_TOOL_CALLS: u64 = 10;
+pub const DEFAULT_WEB_SEARCH_MAX_USES: u64 = 5;
+pub const DEFAULT_AGENT_PRESET: &str = "standard";
+
+pub fn section<'a>(document: &'a YamlValue, key: &str) -> Option<&'a serde_yaml_ng::Mapping> {
+    document.as_mapping()?.get(yaml_key(key))?.as_mapping()
+}
+
+pub fn section_mut<'a>(
+    document: &'a mut YamlValue,
+    key: &str,
+) -> Result<&'a mut serde_yaml_ng::Mapping, String> {
+    let root = document
+        .as_mapping_mut()
+        .ok_or_else(|| "dsh settings.yaml must contain a YAML mapping".to_string())?;
+    let key_value = yaml_key(key);
+    if !root.contains_key(&key_value) {
+        root.insert(
+            key_value.clone(),
+            YamlValue::Mapping(serde_yaml_ng::Mapping::new()),
+        );
+    }
+    let value = root
+        .get_mut(&key_value)
+        .ok_or_else(|| format!("dsh settings section {key} is unavailable"))?;
+    if matches!(value, YamlValue::Null) {
+        *value = YamlValue::Mapping(serde_yaml_ng::Mapping::new());
+    }
+    value
+        .as_mapping_mut()
+        .ok_or_else(|| format!("dsh settings section {key} must contain a YAML mapping"))
+}
+
+pub fn positive_u64(mapping: Option<&serde_yaml_ng::Mapping>, key: &str, fallback: u64) -> u64 {
+    mapping
+        .and_then(|value| value.get(yaml_key(key)))
+        .and_then(YamlValue::as_u64)
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback)
+}
+
+pub fn optional_string(mapping: Option<&serde_yaml_ng::Mapping>, key: &str) -> Option<String> {
+    mapping
+        .and_then(|value| value.get(yaml_key(key)))
+        .and_then(YamlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}

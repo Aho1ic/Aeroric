@@ -840,3 +840,43 @@ fn merge_prefers_runtime_rows_and_keeps_config_only_tail() {
     );
     assert_eq!(merged[1].entry_id, "e9", "只在配置里的插件收尾");
 }
+
+#[test]
+fn settings_mapping_primitives_default_reset_and_normalize() {
+    use aeroric_core::agents::dsh_host::client::{
+        optional_string, positive_u64, section, section_mut, DEFAULT_SHELL_TIMEOUT_MS,
+    };
+    use serde_yaml_ng::Value as YamlValue;
+    let doc: YamlValue = serde_yaml_ng::from_str(
+        "shell:\n  timeoutMs: 5\n  zeroKey: 0\n  textKey:  padded \n  blank: '  '\n",
+    )
+    .unwrap();
+    let shell = section(&doc, "shell");
+    assert!(shell.is_some());
+    assert_eq!(positive_u64(shell, "timeoutMs", DEFAULT_SHELL_TIMEOUT_MS), 5);
+    assert_eq!(
+        positive_u64(shell, "zeroKey", DEFAULT_SHELL_TIMEOUT_MS),
+        DEFAULT_SHELL_TIMEOUT_MS,
+        "0 不是合法值——回退（fallback 语义正是防 0 除零/无限流）"
+    );
+    assert_eq!(positive_u64(shell, "missing", DEFAULT_SHELL_TIMEOUT_MS), DEFAULT_SHELL_TIMEOUT_MS);
+    assert_eq!(optional_string(shell, "textKey").as_deref(), Some("padded"), "trim 语义");
+    assert_eq!(optional_string(shell, "blank"), None, "纯空白＝没有值");
+    assert!(section(&doc, "nope").is_none());
+
+    // section_mut：缺失创建、Null 归一为 mapping、非 mapping 响亮拒绝。
+    let mut doc: YamlValue = serde_yaml_ng::from_str("agent-loop: ~\nshell: 7\n").unwrap();
+    let created = section_mut(&mut doc, "agent-loop").unwrap();
+    created.insert(
+        aeroric_core::agents::dsh_host::client::yaml_key("x"),
+        YamlValue::Bool(true),
+    );
+    let fresh = section_mut(&mut doc, "brand-new").unwrap();
+    assert!(fresh.is_empty(), "缺失节以空 mapping 落位");
+    assert!(section_mut(&mut doc, "shell").is_err(), "标量节必须拒绝而非静默覆盖");
+    let mut notmap: YamlValue = serde_yaml_ng::from_str("- 1\n").unwrap();
+    assert_eq!(
+        section_mut(&mut notmap, "a").unwrap_err(),
+        "dsh settings.yaml must contain a YAML mapping"
+    );
+}
