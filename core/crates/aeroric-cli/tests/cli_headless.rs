@@ -546,7 +546,7 @@ fn serve_sigterm_kills_running_task_children_even_hup_immune() {
     let scratch = Scratch::new();
     let data_dir = scratch.0.join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
-    let mut server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+    let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
         .arg("--data-dir")
         .arg(&data_dir)
         .arg("serve")
