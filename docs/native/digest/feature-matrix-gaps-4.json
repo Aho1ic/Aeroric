@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-4.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "01a625e9447baeb9ae8f8bc3d047c853ed6fbeb4bcf65458d9da3da84d1aa89d",
+  "sourceSha256": "2ce955eb9127f42ca876ab932219b1c4605e0a29548cd651bde8ce112fcb457d",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -17,14 +17,14 @@
       },
       {
         "id": "G22",
-        "status": "open",
+        "status": "closed",
         "decision_item": 7,
         "task_ids": "P4-02, P4-03",
         "finding": "**两份「agent 先读的说明书」用现在时宣称一个从未存在过的文件**：`AGENTS.md:31` 写「shared native styling … live in `AeroricUI/Design/NativeSelection.swift`」，`.trellis/spec/aeroric-macos/frontend/index.md:40` 写「shared styling lives in `AeroricUI/Design/NativeSelection.swift`」。实测该文件**从来没存在过**：`git log -- macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift` 为空，`AeroricUI/Design/` 目录不存在，整个 `AeroricUI` target 今天只有 `PackageSmoke.swift`。**权威决策文档本身是对的**——ADR-001 §4 写的是「统一封装放在 …（P4-03）」，计划 P4-03 Action 1 也写明「**新建** `AeroricUI/Design/{ThemeTokens,NativeMaterial,GlassPanel,WindowAppearance,NativeSelection}.swift`」；错的只有那两处把未来位置说成现状的说明书文本。 【同一条目今日再扩两处，都是 `AGENTS.md` 落后于代码】③ `AGENTS.md:145` 写 `src-tauri/src/aeroric-omp-hook.js`，但该文件已被 **`3b349cf`「P3-02 切片四——hook 资源单一来源与纯构造半边迁入 core managed_home」删除**，现在真身在 `core/crates/aeroric-core/src/agents/managed_home/aeroric-omp-hook.js`（`aeroric-hook.mjs` 同批迁入同目录）。**肇事 Task 已 accepted（2026-09-27）**，这属于「Task 关掉了、说明书没跟着改」的 F3 同族残留——迁移把文件搬进 core，却没人把 `AGENTS.md` 的 omp 段改过来。④ `AGENTS.md:123` 说 omp 的一次性 `--mode rpc-ui` 模型探测在 `app_settings.rs`，而 `src-tauri/src/app_settings.rs` 已**不存在**（它被拆成 `app_settings/` 目录），探测今天真身在 `src-tauri/src/app_settings/builtin.rs:206-221`（调用侧 `commands.rs:646`）。**同段第 ⑤ 处不算缺陷**：`omp_rpc.rs` 也已在 `d8dca51` 删除，但那句是**过去时**叙述「该通道已被移除」，属正确的历史指称——记下来是为了区分「陈述已删」与「宣称现存」。",
         "evidence": "2026-09-28 实测。影响面：Phase 4 期间任何按 AGENTS.md 行事的实现者会去找这个文件，找不到就只有两条出路——自己新建它（＝替 P4-03 认领了一个 Action，违反 §3.1 #1 的「只改本 Task 列出的文件」），或者绕过规则在每个调用点自绘选中态（＝AGENTS.md 与 ADR-001 §2 明令禁止的行为）。**为什么没有任何门禁能发现**：两个文件都被 gitignore（`.gitignore:33` 忽略 `AGENTS.md`，`:74` 忽略 `.trellis/`），所以 `git status` 看不见、`inventory --check` 不比对、`native:check` 全矩阵也不读它们——与「计划点名但从没人创建的文件对每个门禁不可见」同族，只是这一次说它存在的是**说明书本体**而不是计划。修法照抄 ADR-001 §4 的括注即可（那里已经带了 `(P4-03)` 限定词）。 【证据法】两条都用 `git log --diff-filter=AD --name-status -- <path>` 复原：`src-tauri/src/aeroric-omp-hook.js` 由 `d8dca51` 添加、由 `3b349cf` 删除（同 commit 新增 core 侧副本）；`src-tauri/src/app_settings.rs` 只有一串 M 记录后变成目录。核心判据：**说明书里的现在时句子指着一个不存在的文件＝缺陷；过去时句子指着已删除的文件＝正常历史记录**。本轮先跑了一遍 60 条路径引用的粗筛，报了 29 条「找不到」——逐条回查后**大部分是我的解析器造成的假阳性**（`config.yml`/`mcp.json` 是 `~/.aeroric/agent-homes/omp` 运行时文件；`main.ts`/`dirs.ts`/`extensions/loader.ts`/`session-paths.ts` 是上游 `@oh-my-pi` 包内的证据文件，本来就不在本仓；guide 类文档里的 `scripts/path/file.py`、`cli_adapter.py` 是示例而非指称）。**真缺陷只剩这 3 处现存性错述**（NativeSelection.swift、aeroric-omp-hook.js 的目录、app_settings.rs），已按此收敛，不把 29 这个数当发现写进去。  2026-09-29 复跑：`AGENTS.md:31` 仍是现在时 `live in AeroricUI/Design/NativeSelection.swift`；`.trellis/spec/aeroric-macos/frontend/index.md:40` 仍是 `shared styling lives in …NativeSelection.swift`；`rg --files -g \"NativeSelection.swift\"` ＝ **0**、`git log --oneline -- \"*NativeSelection.swift\"` ＝ **0** ⇒ \"从未存在过\"今日原样成立，两处说明书行号也未漂。",
         "requirement": "由 P4-02/P4-03 收口：在 P4-03 真正落地该文件之前，把两处措辞改成「将统一放在 `AeroricUI/Design/NativeSelection.swift`（P4-03 新建；在那之前不要另起炉灶，也不要在调用点自绘选中态）」。**本轮未代改**——`AGENTS.md` 与 `.trellis/spec/` 是用户批准过的文本（ADR-001 §5 记录的正是在 P1-04 把该规则段追加进 `AGENTS.md` 的批准），改它属于「修改说明书」而不是「补一条台账」，需要用户点头；若同意，改动各一行、不触碰 React 侧 `AnimatedSelection.tsx` 原规则。另建议 P4-01/P4-02 把「计划与说明书里点名的文件是否存在」并入自己的出口检查，因为这类缺陷在仓库门禁之外。 修的时候三处一起（同一份文件、同一次改动，避免第四次留下半新的 `AGENTS.md`）：`NativeSelection.swift` 加 `(P4-03 新建)` 限定词、omp hook 路径改指 `core/crates/aeroric-core/src/agents/managed_home/aeroric-omp-hook.js`、`app_settings.rs` 改 `app_settings/builtin.rs`。另建议加一条流程纪律（属 P10-05 的门禁面或 §3.1）：**把代码文件迁出/拆分的那个 Task，出口必须同步 `AGENTS.md` 与 `.trellis/spec/`**——这两个面被 gitignore，任何门禁都看不见它们落后；本轮的 ③ 就是 P3-02 关闭时没做这步留下的。",
-        "verified_on": "2026-09-29",
-        "retriage_note": "新发现，不是改判：来自一次「ADR 引用的文件到底存不存在」的全量核对（91 条带行号的 ADR 引用），行号零腐烂，但顺带在这两份说明书里抓到一处现在时误述。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
+        "verified_on": "2026-10-01",
+        "retriage_note": "新发现，不是改判：来自一次「ADR 引用的文件到底存不存在」的全量核对（91 条带行号的 ADR 引用），行号零腐烂，但顺带在这两份说明书里抓到一处现在时误述。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01（P4-03 收口）闭环：NativeSelection.swift 已创建于 macos/AeroricKit/Sources/AeroricUI/Design/（NativeSegmentedPicker＋NativeSelectionList，只封装系统控件样式/键盘/a11y），AGENTS.md 与 macOS spec 的现在时描述转为事实，措辞将来时化不再需要用户编辑（decision_item 7 撤销）；门禁 native-selection-no-hand-drawn-state 护住\"不新绘活动底纹\"。评审 docs/native/reviews/native-design.md §4。"
       },
       {
         "id": "G23",
