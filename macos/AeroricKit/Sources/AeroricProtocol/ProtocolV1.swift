@@ -224,6 +224,16 @@ public struct RequestFrame: Equatable, Sendable {
     public var idempotencyKey: String?
     public var params: JSONValue
     public var additional: [String: JSONValue]
+
+    /// Public memberwise init: the client layer synthesizes requests
+    /// (HostConnection.request), which lives across the package boundary.
+    public init(id: String, method: String, idempotencyKey: String? = nil, params: JSONValue, additional: [String: JSONValue] = [:]) {
+        self.id = id
+        self.method = method
+        self.idempotencyKey = idempotencyKey
+        self.params = params
+        self.additional = additional
+    }
 }
 
 public struct SuccessFrame: Equatable, Sendable {
@@ -244,6 +254,16 @@ public struct EventFrame: Equatable, Sendable {
     public var seq: Quantity
     public var data: JSONValue
     public var additional: [String: JSONValue]
+
+    /// Public memberwise init: clients synthesize events from replay rows
+    /// (EventReducer), which live across the package boundary.
+    public init(event: String, epoch: String, seq: Quantity, data: JSONValue, additional: [String: JSONValue] = [:]) {
+        self.event = event
+        self.epoch = epoch
+        self.seq = seq
+        self.data = data
+        self.additional = additional
+    }
 }
 
 public enum Frame: Equatable, Sendable {

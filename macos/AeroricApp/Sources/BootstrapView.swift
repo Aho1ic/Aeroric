@@ -2,8 +2,12 @@ import SwiftUI
 
 /// Bootstrap surface (P4-01 Action 6): shows the injected environment and the
 /// build/wire identifiers so a cold launch can be verified mechanically by
-/// `pnpm native:ui-test` (`AppLaunchTests`). Business UI arrives with P4-04;
-/// connection state arrives with P4-02.
+/// `pnpm native:ui-test` (`AppLaunchTests`). Business UI arrives with P4-04.
+///
+/// P4-02 adds the live connection row: `ConnectionStore.phaseText` mirrors the
+/// supervisor phase (launching → connecting → ready / reconnecting / failed),
+/// so the cold-launch test can assert the wire is being driven, not just that
+/// the window renders.
 struct BootstrapView: View {
     let services: AppServices
 
@@ -31,6 +35,14 @@ struct BootstrapView: View {
                         .help(dataDirectory)
                         .accessibilityIdentifier("bootstrap.data-dir")
                 }
+            }
+            LabeledContent("connection") {
+                Text(services.connectionStore.phaseText)
+                    .accessibilityIdentifier("bootstrap.connection")
+            }
+            LabeledContent("application") {
+                Text(services.applicationStore.environmentTag)
+                    .accessibilityIdentifier("bootstrap.application")
             }
         }
         .padding(32)

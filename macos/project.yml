@@ -54,10 +54,12 @@ targets:
     dependencies:
       # Single compilation of shared Swift sources (P4-01 Action 2): the app
       # links the local package and never recompiles AeroricKit sources into a
-      # second target. Only AeroricProtocol for now — P4-02 links AeroricClient
-      # when the real client lands, P4-03 links AeroricUI with design parts.
+      # second target. P4-02 links AeroricClient (actor IPC + supervisor);
+      # P4-03 links AeroricUI with design parts.
       - package: AeroricKit
         product: AeroricProtocol
+      - package: AeroricKit
+        product: AeroricClient
     settings:
       base:
         PRODUCT_NAME: AeroricNative

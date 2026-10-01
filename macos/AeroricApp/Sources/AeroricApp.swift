@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct AeroricNativeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @State private var services: AppServices
 
     init() {
@@ -17,6 +18,14 @@ struct AeroricNativeApp: App {
     var body: some Scene {
         WindowGroup {
             BootstrapView(services: services)
+                // The supervisor owns its own run loop; startSupervisor is
+                // idempotent, so re-activation after sleep/logout is a no-op
+                // while it is already up.
+                .task { await services.startSupervisor() }
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .active else { return }
+                    Task { await services.startSupervisor() }
+                }
         }
     }
 }
