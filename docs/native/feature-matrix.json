@@ -570,6 +570,7 @@
         "C": "unstarted"
       },
       "reviews": [
+        "reviews/cli.md",
         "reviews/host.md"
       ]
     }
@@ -632,7 +633,7 @@
       "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
       "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
       "status": "open",
-      "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
+      "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01 P3-07 ⑦ 分片落判：pendingTaskStartsRef 片闭合——无头 `task.run` 一次 RPC 建+启动＝无 pending 窗口（smoke-headless 全程无 listener run→done＋executor_pty 3/0）；G05 整条仍 open（P3-05 片在其小节无分片落判记录、P8-03 片未开工），owner 不变。",
       "verified_on": "2026-09-29"
     },
     {

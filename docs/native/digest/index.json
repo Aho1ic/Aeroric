@@ -27,8 +27,8 @@
     },
     {
       "path": "docs/native/feature-matrix.json",
-      "bytes": 179858,
-      "sha256": "e9bd3c5776a9a8e4472eb37c6e3fd2363c2494ab52e915af848a1c6ff4e41aaa",
+      "bytes": 180194,
+      "sha256": "01a625e9447baeb9ae8f8bc3d047c853ed6fbeb4bcf65458d9da3da84d1aa89d",
       "shards": [
         {
           "file": "docs/native/digest/feature-matrix-head.json",
@@ -36,11 +36,11 @@
         },
         {
           "file": "docs/native/digest/feature-matrix-features.json",
-          "bytes": 20931
+          "bytes": 20959
         },
         {
           "file": "docs/native/digest/feature-matrix-gaps-1.json",
-          "bytes": 20770
+          "bytes": 21080
         },
         {
           "file": "docs/native/digest/feature-matrix-gaps-2.json",
