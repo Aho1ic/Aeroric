@@ -1007,13 +1007,15 @@
     },
     {
       "id": "G40",
-      "finding": "用户硬边界（2026-10-01 两轮明令）：pnpm native:ui-test 在本机触发 Xcode XCUITest 键盘合成机制向系统新建测试专用输入源（XCTest input method）——Agent 永久禁跑本机 UI 测试；UI 验收执行权移交用户（用户本人运行＋Agent 记档，P3-03 Q6 先例）。",
-      "requirement": "任何 Task 的 native:ui-test 验收一律由用户本人运行并回报；Agent 只记录结果与退出码，不得自行执行 xcodebuild test/AeroricNativeUITests。",
+      "finding": "['用户硬边界（2026-10-01）：pnpm native:ui-test 触发 Xcode XCUITest 键盘合成机制向系统新建测试专用输入源（XCTest input method）。用户先两轮明令禁止；同日用户在知悉根因后明确同意该副作用并指示继续运行 UI 测试——G40 由\"禁跑\"改记为\"知情同意，Agent 可运行 native:ui-test\"（本条保留作审计痕迹）。']",
+      "requirement": [
+        "native:ui-test 可由 Agent 正常执行；若用户再次明令禁止，立即停跑并把本条改回禁跑口径。"
+      ],
       "task_ids": [
         "P4-04"
       ],
       "owner": "user",
-      "status": "open"
+      "status": "resolved"
     }
   ]
 }
