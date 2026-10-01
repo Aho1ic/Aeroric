@@ -37,8 +37,8 @@
     "counts": {
       "tasks": 51,
       "accepted": 20,
-      "in_progress": 0,
-      "pending": 31
+      "in_progress": 1,
+      "pending": 30
     }
   },
   "tasks": [
@@ -164,7 +164,7 @@
     },
     {
       "task": "P4-04",
-      "status": "pending",
+      "status": "in_progress",
       "accepted_on": null,
       "review": null
     },
