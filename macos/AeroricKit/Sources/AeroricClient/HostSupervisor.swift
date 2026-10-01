@@ -98,10 +98,48 @@ enum SupervisorEvent: Sendable {
 ///   Tasks are NEVER restarted by the supervisor — it only owns the host
 ///   process ("不重复启动 task" is enforced here by construction: no task
 ///   identifiers exist in this layer).
+/// Lock-protected slot holding the live child handle outside the actor, so a
+/// synchronous terminate is available to `applicationWillTerminate` (which
+/// runs on the main thread with NO async context; awaiting an actor from a
+/// semaphore-blocked main thread deadlocks — measured 2026-10-01: the
+/// semaphore waited out and every quit orphaned the serve, which then held
+/// the data-dir lock against every later launch).
+final class LiveChildSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var child: ChildHandle?
+
+    func store(_ handle: ChildHandle?) {
+        lock.lock()
+        child = handle
+        lock.unlock()
+        Self.trace("store pid=\(handle?.pid ?? -1)")
+    }
+
+    static func trace(_ line: String) {
+        let url = URL(fileURLWithPath: "/tmp/aeroric-slot-trace")
+        let stamped = "\(Date().timeIntervalSince1970) \(line)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            _ = try? handle.write(contentsOf: Data(stamped.utf8))
+        } else {
+            try? Data(stamped.utf8).write(to: url)
+        }
+    }
+
+    func load() -> ChildHandle? {
+        lock.lock()
+        defer { lock.unlock() }
+        return child
+    }
+}
+
 public actor HostSupervisor {
     public private(set) var phase: SupervisorPhase = .idle
     /// Ready line of the most recent successful spawn attempt (cleared on stop).
     public private(set) var currentReadyInfo: ReadyInfo?
+    /// Mirror of the actor's `child`, for the synchronous process-exit path.
+    private let liveChild = LiveChildSlot()
     private let config: SupervisorConfig
     private let onChange: @Sendable (SupervisorPhase) -> Void
     private let configureConnection: @Sendable (HostConnection) async -> Void
@@ -127,12 +165,24 @@ public actor HostSupervisor {
         }
     }
 
+    /// Synchronous SIGTERM for `applicationWillTerminate`: no async context
+    /// exists there, and blocking the main thread on an actor call deadlocks
+    /// (the orphaned-serve root cause, 2026-10-01). Reads the live child
+    /// through the lock-protected slot and kills it; the actor's own
+    /// bookkeeping is irrelevant at process exit.
+    public nonisolated func terminateChildForProcessExit() {
+        let child = liveChild.load()
+        LiveChildSlot.trace("processExit terminate pid=\(child?.pid ?? -1)")
+        child?.terminate()
+    }
+
     /// Terminates the child (SIGTERM, then SIGKILL after a grace period) and
     /// closes the connection. The run loop observes `stopped` and exits.
     public func stop() async {
         stopped = true
         runTask?.cancel()
         runTask = nil
+        liveChild.store(nil)
         await connection?.close()
         connection = nil
         child?.terminate()
@@ -169,6 +219,7 @@ public actor HostSupervisor {
     private func attemptOnce() async throws {
         let child = try spawnChild()
         self.child = child
+        liveChild.store(child)
         defer { if self.child === child { self.child = nil } }
 
         let readyLine = await readReadyLine(fd: child.readyReadFD, timeout: config.readyTimeout)
@@ -429,6 +480,27 @@ final class ChildHandle: @unchecked Sendable {
             throw SpawnFailure.posix(errno)
         }
         defer { posix_spawnattr_destroy(&attributes) }
+        // The child inherits the SPAWNING THREAD's signal mask. Swift
+        // Concurrency / AppKit worker threads block delivery signals, and a
+        // serve spawned from one of those threads inherits a mask with
+        // SIGTERM blocked — the signal then sits pending forever and the
+        // child cannot be terminated (measured 2026-10-01: SIGTERM was a
+        // no-op on such a serve, both from the supervisor and manually;
+        // SIGKILL was the only thing that worked, and the hung serve held
+        // the data-dir lock against every later spawn). Reset the mask to
+        // empty and the terminate signals to their defaults so the child is
+        // always killable, no matter which thread ran this spawn.
+        var inheritMask = sigset_t()
+        sigemptyset(&inheritMask)
+        posix_spawnattr_setsigmask(&attributes, &inheritMask)
+        var defaultSignals = sigset_t()
+        sigemptyset(&defaultSignals)
+        for signalNumber in [SIGTERM, SIGINT, SIGHUP, SIGQUIT] {
+            sigaddset(&defaultSignals, signalNumber)
+        }
+        posix_spawnattr_setsigdefault(&attributes, &defaultSignals)
+        posix_spawnattr_setflags(&attributes,
+                                 Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
 
         let result: Int32 = cArgs.withUnsafeBufferPointer { argvBuffer in
             cEnv.withUnsafeBufferPointer { envBuffer in

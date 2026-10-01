@@ -9,16 +9,16 @@ import AppKit
 /// * Closing the last window does NOT terminate the app: it stays in the Dock
 ///   so reopen can bring the window back (macOS convention for
 ///   document-less apps).
-/// * On termination the supervisor is stopped: the spawned `aeroric-cli
-///   serve` child must die WITH the app. An orphaned serve keeps holding the
-///   data-dir `.write.lock` (the lock module reports its holder but never
-///   kills by pid, by design), so every later launch's serve loses lock
-///   acquisition, exits instantly, and the supervisor reconnect-loops
-///   forever — measured 2026-10-01: one quit-without-stop left the lock held
-///   for every launch after it. `applicationWillTerminate` has no async
-///   context, so the stop is awaited on a bounded semaphore; the SIGTERM
-///   lands in the first moments and bookkeeping past that is cut short by
-///   process exit.
+/// * On termination the supervisor's serve child must die WITH the app. An
+///   orphaned serve keeps holding the data-dir `.write.lock` (the lock module
+///   reports its holder but never kills by pid, by design), so every later
+///   launch's serve loses lock acquisition, exits instantly, and the
+///   supervisor reconnect-loops forever. The teardown is a SYNCHRONOUS kill
+///   through `terminateChildForProcessExit()` — the first version awaited
+///   `stopSupervisor()` on a bounded semaphore, which deadlocked: the Task
+///   inherits the main actor and the main thread was the one blocked, so
+///   every quit orphaned the serve (measured 2026-10-01, one quit poisoned
+///   the shared scratch for every launch after it).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var services: AppServices?
 
@@ -31,12 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        guard let services else { return }
-        let stopped = DispatchSemaphore(value: 0)
-        Task { [services] in
-            await services.stopSupervisor()
-            stopped.signal()
-        }
-        _ = stopped.wait(timeout: .now() + .seconds(2))
+        try? "willTerminate fired".write(to: URL(fileURLWithPath: "/tmp/aeroric-terminate-marker"), atomically: true, encoding: .utf8)
+        services?.terminateHostForProcessExit()
+        try? "terminateHostForProcessExit returned".write(to: URL(fileURLWithPath: "/tmp/aeroric-terminate-marker2"), atomically: true, encoding: .utf8)
     }
 }

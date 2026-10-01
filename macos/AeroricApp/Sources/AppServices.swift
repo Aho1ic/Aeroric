@@ -127,6 +127,17 @@ final class AppServices {
         await supervisor.start()
     }
 
+    /// Synchronous host teardown for `applicationWillTerminate` (P4-04). The
+    /// delegate runs on the main thread with no async context; awaiting the
+    /// actor from a blocked main thread deadlocks, so the child is killed
+    /// through the supervisor's nonisolated sync path instead. The run loop's
+    /// own cleanup paths stay primary while the process is alive.
+    func terminateHostForProcessExit() {
+        let marker = "terminateHostForProcessExit: supervisor=\(supervisor != nil)"
+        try? marker.write(to: URL(fileURLWithPath: "/tmp/aeroric-term-trace"), atomically: true, encoding: .utf8)
+        supervisor?.terminateChildForProcessExit()
+    }
+
     func stopSupervisor() async {
         guard let supervisor else { return }
         self.supervisor = nil

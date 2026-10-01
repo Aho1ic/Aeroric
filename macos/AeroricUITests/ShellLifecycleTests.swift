@@ -15,6 +15,10 @@ final class ShellLifecycleTests: XCTestCase {
         app.launchEnvironment["AERORIC_ENV"] = runnerEnvironment["AERORIC_ENV"] ?? "ui-test"
         if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
             app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
+            // TEMPORARY (G41): capture the serve child's stderr — its startup
+            // log names the step it hangs on under testmanagerd.
+            app.launchEnvironment["AERORIC_SERVE_STDERR_LOG"] =
+                dataDirectory + "/serve-stderr.log"
         }
         if !projects.isEmpty {
             app.launchEnvironment["AERORIC_TEST_OPEN_PROJECT"] =

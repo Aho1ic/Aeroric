@@ -41,6 +41,22 @@ await (async () => {
 })();
 mkdirSync(SCRATCH, { recursive: true });
 
+// Kill any serve orphaned by a hard-killed app instance of a PREVIOUS run
+// (an alive orphan holds the scratch's write lock and live socket, so every
+// supervisor attempt in this run would die on lock acquisition — measured
+// 2026-10-01). Scoped to this scratch's data-dir argument, never broader.
+{
+  const { execFileSync } = await import("node:child_process");
+  try {
+    const out = execFileSync("pgrep", ["-f", `aeroric-cli --data-dir ${SCRATCH}`], { encoding: "utf8" });
+    const pids = out.split("\n").filter((x) => /^\d+$/.test(x.trim()));
+    for (const pid of pids) {
+      try { process.kill(Number(pid), "SIGTERM"); } catch { /* already gone */ }
+    }
+    if (pids.length) console.log(`native:ui-test: terminated ${pids.length} orphaned serve(s) of the scratch`);
+  } catch { /* pgrep found nothing */ }
+}
+
 const environment = {
   ...process.env,
   TEST_RUNNER_AERORIC_DATA_DIR: SCRATCH,

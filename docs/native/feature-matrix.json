@@ -1019,12 +1019,20 @@
     },
     {
       "id": "G41",
-      "finding": "XCUITest 环境双层故障（2026-10-01，重启后复现）：①场景装配间歇缺失——部分启动中 SwiftUI WindowGroup 内容从未实例化（.task 不执行、AX 零窗口、System Events 外部实证零窗口、sample 实证主线程健康空转事件循环），随单次开机内累计启动数（约 10-15 次）加剧，重启复位；②在画出来的启动中 supervisor 也常无法 ready——钩子日志实证 `give up: never ready; phase=reconnecting (attempt 6, next in 9151 ms)`（约 2.5s/次快速失败，serve stderr 被 posix_spawn 丢弃无遗言），而同一 app 经 launchservices `open --env` 实测 ready＋侧栏行全在。",
-      "requirement": "P4-04 收口前须查清 serve 在 testmanagerd 管辖启动下快速退出的原因：已铺好两件诊断——钩子向 `<dataDir>/test-hook.log` 记 phase 变化与 open 错误；`AERORIC_SERVE_STDERR_LOG=<file>` 环境变量使 serve stderr 追加落盘（HostSupervisor spawn）。下次会话：重启系统（复位场景装配预算）→单跑一个钩子测试并设 AERORIC_SERVE_STDERR_LOG→读 serve 遗言→根修→全套 6 例。或由用户手测剩余 3 例（两窗口选择独立/侧栏键盘选择/标识符静止态）。",
+      "finding": [
+        "XCUITest 环境故障（2026-10-01/02 两日排查）。已根修两层：①applicationWillTerminate 信号量等 MainActor Task＝主线程自锁死锁，每次退出都孤儿化 serve（其持数据目录写锁，后续启动全部抢锁秒败）→改为 LiveChildSlot+nonisolated terminateChildForProcessExit 同步直达；②GUI app 的并发工作线程阻塞 SIGTERM，posix_spawn 子进程继承阻塞掩码→SIGTERM 永远 pending、serve 杀不死（spawn 脚本+阻塞掩码对照实验实锤）→spawnattr SETSIGMASK 清空+SETSIGDEF 重置 SIGTERM/SIGINT/SIGHUP/SIGQUIT。修复后 launchservices 探针实证退出即杀 serve（slot trace：store→processExit terminate→死亡）。**剩余第三层**：testmanagerd 管辖启动下 serve 偶发起停后卡在 ready 行之前（钩子日志：connecting 15s→reconnecting attempt 1→give up），且场景装配间歇缺失随开机内累计启动数加剧（约 10-15 次预算）、重启复位。serve stderr 落盘已自动接线（launchApp 设 AERORIC_SERVE_STDERR_LOG=数据目录/serve-stderr.log），下次新开机会话一轮单测即得死因。"
+      ],
+      "requirement": [
+        "下次会话：重启系统（复位场景装配预算）→跑一次 native:ui-test（或单跑 testShellIdentifiersPresentAtRest）→读数据目录下 serve-stderr.log 定位 serve 卡住的启动步骤→根修→全套 6 例绿→grill-me [shell]→三处同步申报 Phase 4 Gate。P4-04 实现与非 GUI 门禁已全绿（bcebf59），GUI 侧 3/6 已验（AppLaunch、settings ⌘,/⌘W、显示主窗口恢复）。"
+      ],
       "task_ids": [
+        [
+          "P4-04"
+        ]
+      ],
+      "owner": [
         "P4-04"
       ],
-      "owner": "P4-04",
       "status": "open"
     }
   ]
