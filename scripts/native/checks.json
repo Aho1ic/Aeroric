@@ -16,6 +16,8 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "adapter-invariants-unit@tauri-adapter": 28,
       "agent-launch-parity-rust@agents": 2,
+      "cli-headless-rust@cli": 4,
+      "cli-unit-rust@cli": 4,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 17,
       "event-replay-rust@host": 3,
@@ -1665,6 +1667,95 @@
           ],
           "minCases": 3,
           "$note": "b1.1 判据：fake agent 经 TaskService 全链（create→start→真 PTY→exit→observe）结算 done＋字节环含输出＋句柄/台账退场。floor 从 2026-10-01 现测 1 起。"
+        }
+      ]
+    },
+    "cli": {
+      "registeredBy": "P3-07",
+      "cases": [
+        {
+          "name": "cli-no-tauri-deps",
+          "kind": "forbid",
+          "argv": [
+            "cargo",
+            "tree",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli"
+          ],
+          "forbid": [
+            "tauri v",
+            "tauri-"
+          ],
+          "mustContain": [
+            "aeroric-cli v0.1.0"
+          ],
+          "$note": "P3-07 验收行：cargo tree -p aeroric-cli 不含 Tauri。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "cli-help-matches-contract",
+          "kind": "gate",
+          "argv": [
+            "cargo",
+            "run",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--",
+            "--help"
+          ],
+          "$note": "P3-07 验收行：aeroric-cli --help 列出确定命令树与参数接口。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "cli-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--bin",
+            "aeroric-cli"
+          ],
+          "minCases": 4,
+          "$note": "aeroric-cli 单元测试：命令树与退出码契约（4 条）。"
+        },
+        {
+          "name": "cli-headless-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--test",
+            "cli_headless"
+          ],
+          "minCases": 4,
+          "$note": "P3-07 验收行：真实 CLI 子进程的 mutation 拒写、非 TTY 拒绝与 approval/task 闭环（3 条）＋ SIGTERM 杀死 attach 后本地 termios 恢复（真 PTY 机器判据）。"
+        },
+        {
+          "name": "cli-smoke-headless",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/smoke-headless.mjs"
+          ],
+          "$note": "P3-07 Action 5：创建 temp data-dir/fake project/fake agent，运行 serve、run、input、cancel、resume、history 并清理退出。"
         }
       ]
     }
