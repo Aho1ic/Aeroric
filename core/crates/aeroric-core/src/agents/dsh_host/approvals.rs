@@ -72,6 +72,10 @@ impl WaterfallRegistry {
     pub fn all_pending(&self) -> Vec<&PendingWaterfall> {
         self.pending.values().collect()
     }
+
+    pub fn entries(&self) -> Vec<(String, PendingWaterfall)> {
+        self.pending.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
 }
 
 /// 权限档 → dsh preset 名的映射（原宿主 `dsh_permission_preset` 逐字）：这是

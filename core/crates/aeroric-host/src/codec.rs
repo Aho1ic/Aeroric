@@ -84,14 +84,18 @@ mod tests {
     use tokio::net::unix::OwnedReadHalf;
     use tokio::net::{UnixListener, UnixStream};
 
+    static PAIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     async fn pair() -> (BufReader<OwnedReadHalf>, UnixStream, std::path::PathBuf) {
+        let count = PAIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::path::PathBuf::from("/tmp").join(format!(
-            "ahc-{}-{}",
+            "ahc-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
-                .as_nanos()
+                .as_nanos(),
+            count
         ));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("s.sock");

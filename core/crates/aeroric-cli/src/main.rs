@@ -2,9 +2,10 @@
 //! 其余子命令都是 host 的 RPC 客户端。桌面 Tauri 不经这里（它是另一个前端）。
 
 mod args;
+mod attach;
 mod client;
 
-use args::{exit, Cli, Command, ProjectCmd, TaskCmd};
+use args::{exit, ApprovalCmd, Cli, Command, ProjectCmd, TaskCmd};
 use clap::Parser;
 use std::path::Path;
 use std::sync::Arc;
@@ -38,13 +39,8 @@ async fn dispatch(cli: Cli) -> i32 {
             params_file,
             ..
         } => rpc(&cli.data_dir, &method, params_file.as_deref()).await,
-        Command::Approval(_) | Command::Attach { .. } => {
-            eprintln!(
-                "aeroric-cli: this subcommand is not wired yet (P3-07 lands it slice by slice; \
-                 see MIGRATION_PLAN.md)"
-            );
-            exit::CONNECT
-        }
+        Command::Attach { task_id } => attach::attach(&cli.data_dir, &task_id).await,
+        Command::Approval(cmd) => approval(&cli.data_dir, cmd).await,
     }
 }
 
@@ -203,7 +199,9 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 Arc::clone(&started.context),
                 task_service,
                 families,
-                executor,
+                Arc::clone(&executor),
+                terminal,
+                registry,
             );
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
@@ -506,10 +504,13 @@ async fn task(data_dir: &Path, cmd: TaskCmd) -> i32 {
             )
             .await;
         }
-        // resume/input 是后续片（b1.3/④）——显式拒绝不装可用。
-        _ => {
-            eprintln!("aeroric-cli task: this verb is not wired yet (P3-07 b1.3/④)");
-            return exit::CONNECT;
+        TaskCmd::Resume { task_id } => {
+            return call_print(
+                data_dir,
+                "task.resume",
+                serde_json::json!({ "taskId": task_id }),
+            )
+            .await;
         }
     };
     match client.call(method, params).await {
@@ -591,6 +592,46 @@ async fn rpc(data_dir: &Path, method: &str, params_file: Option<&Path>) -> i32 {
         None => serde_json::json!({}),
     };
     call_print(data_dir, method, params).await
+}
+
+async fn approval(data_dir: &Path, cmd: ApprovalCmd) -> i32 {
+    match cmd {
+        ApprovalCmd::List => call_print(data_dir, "approval.list", serde_json::json!({})).await,
+        ApprovalCmd::Respond {
+            event_id,
+            outcome_file,
+        } => {
+            let raw = match std::fs::read_to_string(&outcome_file) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!(
+                        "aeroric-cli approval respond: cannot read outcome file {}: {e}",
+                        outcome_file.display()
+                    );
+                    return exit::USAGE;
+                }
+            };
+            let outcome: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(val) => val,
+                Err(e) => {
+                    eprintln!(
+                        "aeroric-cli approval respond: outcome file is not valid JSON {}: {e}",
+                        outcome_file.display()
+                    );
+                    return exit::USAGE;
+                }
+            };
+            call_print(
+                data_dir,
+                "approval.respond",
+                serde_json::json!({
+                    "eventId": event_id,
+                    "outcome": outcome,
+                }),
+            )
+            .await
+        }
+    }
 }
 
 #[cfg(test)]

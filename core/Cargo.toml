@@ -20,7 +20,7 @@ aeroric-host = { path = "crates/aeroric-host" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "process", "io-util", "net", "fs", "signal"] } # signal：aeroric-cli serve 的 SIGINT/SIGTERM 优雅关停（P3-07 ②b）
+tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "process", "io-util", "net", "fs", "signal", "io-std"] } # signal/io-std：aeroric-cli serve 的优雅关停与 attach 的 stdin/stdout 中继（P3-07）
 base64 = "0.22"
 parking_lot = "0.12"
 portable-pty = { path = "../src-tauri/vendor/portable-pty" }

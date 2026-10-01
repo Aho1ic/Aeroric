@@ -75,7 +75,7 @@ impl CliPtyExecutor {
     /// 过写闸、写 PTY writer、释放。attach（⑤）长期持有时，CLI input 会顶掉
     /// 它——与宿主「前台窗口优先」同规则，票据机制保证过期 handle 的 release
     /// 是 no-op，不会把 attach 的控制权误关。
-    pub fn input(&self, task_id: &str, text: &str) -> Result<(), String> {
+    pub fn input(&self, task_id: &str, bytes: &[u8]) -> Result<(), String> {
         use std::io::Write as _;
         let run = self
             .registry
@@ -96,11 +96,43 @@ impl CliPtyExecutor {
             .map_err(|e| format!("lease gate refused the write: {e:?}"))
             .and_then(|()| {
                 let mut w = writer.lock();
-                w.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+                w.write_all(bytes).map_err(|e| e.to_string())?;
                 w.flush().map_err(|e| e.to_string())
             });
         let _ = lease.release(&handle);
         written
+    }
+
+    /// 尺寸变更：与 input 同一条 lease 闸（前台窗口优先），过闸才碰 master。
+    pub fn resize(&self, task_id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        let run = self
+            .registry
+            .resource_run(task_id)
+            .ok_or_else(|| "the task has no live run on this host".to_string())?;
+        let master = self
+            .registry
+            .master_for(task_id)
+            .ok_or_else(|| "the run has no master (already retired?)".to_string())?;
+        let mut leases = self.leases.lock().expect("lock");
+        let lease = leases.entry(task_id.to_string()).or_default();
+        let handle = lease.acquire();
+        let resized = lease
+            .write_gate(&handle)
+            .map_err(|e| format!("lease gate refused the resize: {e:?}"))
+            .and_then(|()| {
+                master
+                    .lock()
+                    .resize(portable_pty::PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|e| e.to_string())
+            });
+        let _ = lease.release(&handle);
+        let _ = run;
+        resized
     }
 
     /// 杀一条任务的运行：**pty 前台组 killpg 优先**——`child.kill()` 只杀直接
@@ -179,55 +211,21 @@ fn to_command_builder(plan: aeroric_core::agents::launch::LaunchPlan) -> Command
     c
 }
 
-impl TaskExecutor for CliPtyExecutor {
-    fn launch(&self, request: &LaunchRequest) -> Execution<()> {
-        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
-            return Err(ExecutorFailure::Unsupported {
-                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
-                    .to_string(),
-            });
-        };
-        if request.family == ProtocolFamily::Dsh {
-            return Err(ExecutorFailure::Unsupported {
-                reason: "dsh tasks run through dsh_host::executor with the transport ports; \
-                         the approval surface lands in P3-07 ③c"
-                    .to_string(),
-            });
-        }
-        let input = self.resolve_launch(&request.agent);
-        let mut plan = match request.family {
-            ProtocolFamily::Claude => claude_plan(
-                &input,
-                &request.permission_mode_wire,
-                &request.agent,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-            ),
-            ProtocolFamily::Codex => codex_plan(
-                &input,
-                &request.permission_mode_wire,
-                &path,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-                request.speed.as_deref(),
-            ),
-            ProtocolFamily::Omp => omp_plan(
-                &input,
-                &request.permission_mode_wire,
-                &[],
-                &path,
-                request.selected_model.as_deref(),
-                request.reasoning_effort.as_deref(),
-                request.session_id.as_deref(),
-                &[],
-            ),
-            ProtocolFamily::Dsh => unreachable!("rejected above"),
-        };
-        plan = plan.cwd(path);
+impl CliPtyExecutor {
+    /// plan 之后的装配全链（launch 与 resume 共用：openpty→activate→reader→exit）。
+    /// 步骤次序只此一份——分叉出第二份装配就是第二个真相。
+    fn spawn_plan_core(
+        &self,
+        plan: aeroric_core::agents::launch::LaunchPlan,
+        task_id: &str,
+        project_id: &str,
+        generation: u64,
+        terminal_size: Option<(u16, u16)>,
+        family: ProtocolFamily,
+    ) -> Execution<()> {
         let command = to_command_builder(plan);
-
         let pty_system = native_pty_system();
-        let (cols, rows) = request.terminal_size.unwrap_or((120, 30));
+        let (cols, rows) = terminal_size.unwrap_or((120, 30));
         let pair = pty_system
             .openpty(PtySize {
                 rows,
@@ -238,7 +236,7 @@ impl TaskExecutor for CliPtyExecutor {
             .map_err(|e| ExecutorFailure::Spawn {
                 reason: format!("cannot open a pty: {e}"),
             })?;
-        let run = RunKey::minted(&request.task_id, request.generation);
+        let run = RunKey::minted(task_id, generation);
         let handles = activate_pty_session(pair, command, &self.registry, &run).map_err(|e| {
             ExecutorFailure::Spawn {
                 reason: e.to_string(),
@@ -248,7 +246,7 @@ impl TaskExecutor for CliPtyExecutor {
         // reader：阻塞读进字节环。线程随进程退出消亡；supervisor 托管的
         // 取消面在 b1.2（run 等待 settled 时随 shutdown 一起收）。
         let terminal = Arc::clone(&self.terminal);
-        let identity = TerminalIdentity::new(request.task_id.clone(), request.generation);
+        let identity = TerminalIdentity::new(task_id.to_string(), generation);
         let mut reader = handles.reader;
         std::thread::spawn(move || {
             let mut buf = [0u8; 8 * 1024];
@@ -274,11 +272,10 @@ impl TaskExecutor for CliPtyExecutor {
             registry: Arc::clone(&self.registry),
             log: Arc::clone(&self.log),
             service: Mutex::new(self.service.lock().expect("lock").clone()),
-            family: request.family,
+            family,
         });
-        let task_id = request.task_id.clone();
-        let project_id = request.project_id.clone();
-        let generation = request.generation;
+        let task_id = task_id.to_string();
+        let project_id = project_id.to_string();
         let child = handles.child;
         std::thread::spawn(move || {
             let code = match child.lock().wait() {
@@ -363,6 +360,62 @@ impl TaskExecutor for CliPtyExecutor {
         });
         Ok(())
     }
+}
+
+impl TaskExecutor for CliPtyExecutor {
+    fn launch(&self, request: &LaunchRequest) -> Execution<()> {
+        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
+                    .to_string(),
+            });
+        };
+        if request.family == ProtocolFamily::Dsh {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "dsh tasks run through dsh_host::executor with the transport ports; \
+                         the approval surface lands in P3-07 ③c"
+                    .to_string(),
+            });
+        }
+        let input = self.resolve_launch(&request.agent);
+        let mut plan = match request.family {
+            ProtocolFamily::Claude => claude_plan(
+                &input,
+                &request.permission_mode_wire,
+                &request.agent,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+            ),
+            ProtocolFamily::Codex => codex_plan(
+                &input,
+                &request.permission_mode_wire,
+                &path,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+                request.speed.as_deref(),
+            ),
+            ProtocolFamily::Omp => omp_plan(
+                &input,
+                &request.permission_mode_wire,
+                &[],
+                &path,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+                request.session_id.as_deref(),
+                &[],
+            ),
+            ProtocolFamily::Dsh => unreachable!("rejected above"),
+        };
+        plan = plan.cwd(path);
+        self.spawn_plan_core(
+            plan,
+            &request.task_id,
+            &request.project_id,
+            request.generation,
+            request.terminal_size,
+            request.family,
+        )
+    }
 
     /// resume＝带 `session_id` 的再连（ADR-029 的 handoff 语义由调用方
     /// TaskService 决定）；b1.1 只有 claude/codex 的 plan 吃 resume——
@@ -375,12 +428,58 @@ impl TaskExecutor for CliPtyExecutor {
                     .to_string(),
             });
         }
-        // b1.2 把 ResumeRequest 组装回 LaunchRequest 形状后共用装配；
-        // 现在显式拒绝而不是半接线——「等待语义/注入差一」的 resume 假成功
-        // 比拒绝危险（P3-05 的 resume 判据同族）。
-        Err(ExecutorFailure::Unsupported {
-            reason: "headless resume lands with the run-wait surface (P3-07 b1.2)".to_string(),
-        })
+        let WorkingDirectory::Local { path } = request.working_directory.clone() else {
+            return Err(ExecutorFailure::Unsupported {
+                reason: "the headless host runs local workspaces only; SSH/WSL land in P7-01/02"
+                    .to_string(),
+            });
+        };
+        let input = self.resolve_launch(&request.agent);
+        let mut plan = match request.family {
+            ProtocolFamily::Claude => {
+                let mut p = claude_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &request.agent,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                );
+                p = p.arg("--resume").arg(&request.session_id);
+                p
+            }
+            ProtocolFamily::Codex => {
+                let mut p = codex_plan(
+                    &input,
+                    &request.permission_mode_wire,
+                    &path,
+                    request.selected_model.as_deref(),
+                    request.reasoning_effort.as_deref(),
+                    request.speed.as_deref(),
+                );
+                p = p.arg("resume").arg(&request.session_id);
+                p
+            }
+            ProtocolFamily::Omp => omp_plan(
+                &input,
+                &request.permission_mode_wire,
+                &[],
+                &path,
+                request.selected_model.as_deref(),
+                request.reasoning_effort.as_deref(),
+                Some(&request.session_id),
+                &[],
+            ),
+            ProtocolFamily::Dsh => unreachable!("rejected above"),
+        };
+        plan = plan.cwd(path);
+        self.spawn_plan_core(
+            plan,
+            &request.task_id,
+            &request.project_id,
+            request.generation,
+            request.terminal_size,
+            request.family,
+        )
     }
 
     fn cancel(&self, task_id: &str, _target: &CancelTarget) -> Execution<()> {

@@ -253,6 +253,8 @@ pub fn register_task_services(
     service: std::sync::Arc<TaskService>,
     context: std::sync::Arc<aeroric_core::context::CoreContext>,
     executor: std::sync::Arc<crate::executor::CliPtyExecutor>,
+    terminal: std::sync::Arc<aeroric_core::terminal::pty::TerminalService>,
+    registry: std::sync::Arc<aeroric_core::runtime::registry::TaskRegistry>,
 ) {
     {
         let service = std::sync::Arc::clone(&service);
@@ -279,6 +281,28 @@ pub fn register_task_services(
         );
     }
     {
+        let terminal = std::sync::Arc::clone(&terminal);
+        let registry = std::sync::Arc::clone(&registry);
+        set.register(
+            "task.output",
+            std::sync::Arc::new(move |request, _call| {
+                let terminal = std::sync::Arc::clone(&terminal);
+                let registry = std::sync::Arc::clone(&registry);
+                Box::pin(async move { task_output(request, &terminal, &registry) })
+            }),
+        );
+    }
+    {
+        let executor = std::sync::Arc::clone(&executor);
+        set.register(
+            "task.resize",
+            std::sync::Arc::new(move |request, _call| {
+                let executor = std::sync::Arc::clone(&executor);
+                Box::pin(async move { task_resize(request, &executor) })
+            }),
+        );
+    }
+    {
         let executor = std::sync::Arc::clone(&executor);
         set.register(
             "task.input",
@@ -297,6 +321,18 @@ pub fn register_task_services(
                 let service = std::sync::Arc::clone(&service);
                 let context = std::sync::Arc::clone(&context);
                 Box::pin(async move { task_settle_verdict(request, service, context, true) })
+            }),
+        );
+    }
+    {
+        let service = std::sync::Arc::clone(&service);
+        let context = std::sync::Arc::clone(&context);
+        set.register(
+            "task.resume",
+            std::sync::Arc::new(move |request, _call| {
+                let service = std::sync::Arc::clone(&service);
+                let context = std::sync::Arc::clone(&context);
+                Box::pin(async move { task_resume(request, service, context) })
             }),
         );
     }
@@ -471,15 +507,112 @@ fn task_input(request: Request, executor: &crate::executor::CliPtyExecutor) -> F
             "task.input requires params.taskId",
         );
     };
-    let Some(text) = request.params.get("text").and_then(Value::as_str) else {
+    // `bytes`（base64）优先于 `text`：attach 的任意按键序列（Alt、NUL、Latin-1）
+    // 经 base64 无损；`text` 留给脚本化调用的可读性。
+    use base64::Engine as _;
+    let payload: Vec<u8> = if let Some(b64) = request.params.get("bytes").and_then(Value::as_str) {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(bytes) => bytes,
+            Err(e) => return failure(id, ErrorCode::InvalidArgument, &format!("bad base64: {e}")),
+        }
+    } else if let Some(text) = request.params.get("text").and_then(Value::as_str) {
+        text.as_bytes().to_vec()
+    } else {
         return failure(
             id,
             ErrorCode::InvalidArgument,
-            "task.input requires params.text",
+            "task.input requires params.bytes (base64) or params.text",
         );
     };
-    match executor.input(task_id, text) {
-        Ok(()) => ok(&request, json!({ "written": text.chars().count() })),
+    let written = payload.len();
+    match executor.input(task_id, &payload) {
+        Ok(()) => ok(&request, json!({ "written": written })),
+        Err(e) => failure(id, ErrorCode::NotFound, &e),
+    }
+}
+
+/// `task.output {taskId, offset}`：字节环的 RPC 读面（attach 的转发源）。
+/// `gap:true` = 流已退场（进程结束后环不在），客户端改走 `session.history`
+/// 拉全量——**环是直播面，不是历史面**（P3-03 的分界在 wire 上的投影）。
+/// `OutOfRange` 是「追平」（返回空 chunk + 当前末端），不是错误。
+fn task_output(
+    request: Request,
+    terminal: &aeroric_core::terminal::pty::TerminalService,
+    registry: &aeroric_core::runtime::registry::TaskRegistry,
+) -> Frame {
+    use aeroric_core::terminal::stream::{StreamError, TerminalIdentity};
+    use base64::Engine as _;
+    let id = request.id.clone();
+    let Some(task_id) = request
+        .params
+        .get("taskId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "task.output requires params.taskId",
+        );
+    };
+    let offset = request
+        .params
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let Some(run) = registry.resource_run(task_id) else {
+        return ok(
+            &request,
+            json!({ "gap": true, "reason": "no live run on this host; use session.history" }),
+        );
+    };
+    let identity = TerminalIdentity::new(task_id, run.generation());
+    match terminal.read_from(&identity, offset, 64 * 1024) {
+        Ok(chunk) => ok(
+            &request,
+            json!({
+                "bytes": base64::engine::general_purpose::STANDARD.encode(&chunk.bytes),
+                "nextOffset": offset + chunk.bytes.len() as u64,
+                "gap": false,
+            }),
+        ),
+        Err(StreamError::OutOfRange { next_offset }) => ok(
+            &request,
+            json!({ "bytes": "", "nextOffset": next_offset.min(offset), "gap": false }),
+        ),
+        Err(StreamError::UnknownStream) => ok(
+            &request,
+            json!({ "gap": true, "reason": "stream retired; use session.history" }),
+        ),
+    }
+}
+
+fn task_resize(request: Request, executor: &crate::executor::CliPtyExecutor) -> Frame {
+    let id = request.id.clone();
+    let Some(task_id) = request
+        .params
+        .get("taskId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "task.resize requires params.taskId",
+        );
+    };
+    let (Some(cols), Some(rows)) = (
+        request.params.get("cols").and_then(Value::as_u64),
+        request.params.get("rows").and_then(Value::as_u64),
+    ) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "task.resize requires params.cols and params.rows (numbers)",
+        );
+    };
+    match executor.resize(task_id, cols as u16, rows as u16) {
+        Ok(()) => ok(&request, json!({ "cols": cols, "rows": rows })),
         Err(e) => failure(id, ErrorCode::NotFound, &e),
     }
 }
@@ -527,6 +660,250 @@ fn task_settle_verdict(
             &format!("the settle verdict failed: {e}"),
         ),
     }
+}
+
+fn task_resume(
+    request: Request,
+    service: std::sync::Arc<TaskService>,
+    context: std::sync::Arc<aeroric_core::context::CoreContext>,
+) -> Frame {
+    let id = request.id.clone();
+    let Some(task_id) = request
+        .params
+        .get("taskId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "task.resume requires params.taskId",
+        );
+    };
+    let Some(project) = find_project_of_task(&context, task_id) else {
+        return failure(
+            id,
+            ErrorCode::NotFound,
+            "no task with that id in any known project",
+        );
+    };
+    let terminal_size = request
+        .params
+        .get("terminalSize")
+        .and_then(Value::as_array)
+        .and_then(|pair| {
+            Some((
+                pair.first()?.as_u64()? as u16,
+                pair.get(1)?.as_u64()? as u16,
+            ))
+        });
+    let session_id = request
+        .params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            let tasks = service.load(project.id().unwrap_or_default()).ok()?.records;
+            let record = tasks
+                .iter()
+                .find(|r| mutations::text(r, "id") == Some(task_id))?;
+            mutations::text(record, "sessionId")
+                .or_else(|| mutations::text(record, "sessionPath"))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "default-session".to_string());
+    let operation_key = format!("cli-resume-{task_id}");
+    match service.resume(
+        &project,
+        task_id,
+        &session_id,
+        &operation_key,
+        true,
+        terminal_size,
+    ) {
+        Ok(applied) => {
+            let status = applied
+                .records
+                .iter()
+                .find(|record| mutations::text(record, "id") == Some(task_id))
+                .and_then(|record| mutations::text(record, "status"))
+                .unwrap_or("running")
+                .to_string();
+            ok(
+                &request,
+                json!({
+                    "taskId": task_id,
+                    "projectId": project.id(),
+                    "sessionId": session_id,
+                    "status": status,
+                }),
+            )
+        }
+        Err(e) => failure(
+            id,
+            ErrorCode::IoError,
+            &format!("cannot resume the task: {e}"),
+        ),
+    }
+}
+
+use aeroric_core::agents::dsh_host::approvals::{
+    take_waterfall_answer, PendingWaterfall, WaterfallKind, WaterfallRegistry,
+};
+
+#[derive(Debug, Default)]
+pub struct HostApprovals {
+    pub registry: WaterfallRegistry,
+    pub resolved_events: std::collections::HashSet<String>,
+}
+
+pub fn register_approval_services(
+    set: &mut ServiceSet,
+    approvals: std::sync::Arc<std::sync::Mutex<HostApprovals>>,
+) {
+    {
+        let approvals = std::sync::Arc::clone(&approvals);
+        set.register(
+            "approval.list",
+            std::sync::Arc::new(move |request, _call| {
+                let approvals = std::sync::Arc::clone(&approvals);
+                Box::pin(async move { approval_list(request, &approvals) })
+            }),
+        );
+    }
+    {
+        let approvals = std::sync::Arc::clone(&approvals);
+        set.register(
+            "approval.respond",
+            std::sync::Arc::new(move |request, _call| {
+                let approvals = std::sync::Arc::clone(&approvals);
+                Box::pin(async move { approval_respond(request, &approvals) })
+            }),
+        );
+    }
+    {
+        let approvals = std::sync::Arc::clone(&approvals);
+        set.register(
+            "approval.test_request",
+            std::sync::Arc::new(move |request, _call| {
+                let approvals = std::sync::Arc::clone(&approvals);
+                Box::pin(async move { approval_test_request(request, &approvals) })
+            }),
+        );
+    }
+}
+
+fn approval_list(
+    request: Request,
+    approvals: &std::sync::Arc<std::sync::Mutex<HostApprovals>>,
+) -> Frame {
+    let guard = approvals.lock().expect("lock approvals");
+    let items: Vec<Value> = guard
+        .registry
+        .entries()
+        .into_iter()
+        .map(|(event_id, entry)| {
+            json!({
+                "eventId": event_id,
+                "kind": match entry.kind {
+                    WaterfallKind::Approval => "approval",
+                    WaterfallKind::Question => "question",
+                },
+                "sessionId": entry.session_id,
+            })
+        })
+        .collect();
+    ok(&request, json!({ "approvals": items }))
+}
+
+fn approval_respond(
+    request: Request,
+    approvals: &std::sync::Arc<std::sync::Mutex<HostApprovals>>,
+) -> Frame {
+    let id = request.id.clone();
+    let Some(event_id) = request
+        .params
+        .get("eventId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "approval.respond requires params.eventId",
+        );
+    };
+    let Some(outcome) = request.params.get("outcome").and_then(Value::as_object) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "approval.respond requires params.outcome (JSON object)",
+        );
+    };
+    let outcome_val = Value::Object(outcome.clone());
+    let mut guard = approvals.lock().expect("lock approvals");
+    if guard.resolved_events.contains(event_id) {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("approval request '{event_id}' has already been resolved or expired"),
+        );
+    }
+    if !guard.registry.entries().iter().any(|(k, _)| k == event_id) {
+        return failure(
+            id,
+            ErrorCode::NotFound,
+            &format!("approval request '{event_id}' not found"),
+        );
+    }
+    let client_id = guard
+        .registry
+        .client_id()
+        .unwrap_or("cli-default")
+        .to_string();
+    match take_waterfall_answer(&mut guard.registry, &client_id, event_id, &outcome_val) {
+        Ok(answer) => {
+            guard.resolved_events.insert(event_id.to_string());
+            ok(
+                &request,
+                json!({
+                    "accepted": true,
+                    "eventId": event_id,
+                    "sessionHint": answer.session_hint,
+                    "args": answer.args,
+                }),
+            )
+        }
+        Err(e) => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("cannot answer approval: {e}"),
+        ),
+    }
+}
+
+fn approval_test_request(
+    request: Request,
+    approvals: &std::sync::Arc<std::sync::Mutex<HostApprovals>>,
+) -> Frame {
+    let id = request.id.clone();
+    let Some(event_id) = request.params.get("eventId").and_then(Value::as_str) else {
+        return failure(id, ErrorCode::InvalidArgument, "eventId required");
+    };
+    let kind = match request.params.get("kind").and_then(Value::as_str) {
+        Some("question") => WaterfallKind::Question,
+        _ => WaterfallKind::Approval,
+    };
+    let session_id = request
+        .params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut guard = approvals.lock().expect("lock approvals");
+    guard
+        .registry
+        .insert(event_id.to_string(), PendingWaterfall { kind, session_id });
+    ok(&request, json!({ "inserted": event_id }))
 }
 
 // ── ④：session 三方法＋task.input（lease 控制的写入口） ──────────────────

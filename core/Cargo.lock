@@ -9,7 +9,9 @@ dependencies = [
  "aeroric-core",
  "aeroric-host",
  "aeroric-protocol",
+ "base64 0.22.1",
  "clap",
+ "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -46,6 +48,7 @@ version = "0.1.0"
 dependencies = [
  "aeroric-core",
  "aeroric-protocol",
+ "base64 0.22.1",
  "futures-util",
  "libc",
  "portable-pty",
@@ -165,6 +168,12 @@ dependencies = [
  "fs_extra",
  "pkg-config",
 ]
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64"
@@ -644,7 +653,7 @@ version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -1255,7 +1264,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "futures-core",
  "futures-util",

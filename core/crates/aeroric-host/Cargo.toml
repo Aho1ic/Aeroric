@@ -16,6 +16,7 @@ sha2 = "0.10.9" # 与 core 同版：ready 帧的 data-dir 标识哈希
 aeroric-protocol = { workspace = true }
 futures-util = "0.3" # 与宿主/core 同版：handler 的 BoxFuture
 portable-pty = { workspace = true } # 与 core 同 workspace pin：executor 装配要 openpty
+base64 = "0.22" # task.output 的二进制帧走 base64（ANSI/UTF-8 混合字节不能裸进 JSON string）
 serde = { workspace = true }
 uuid = { version = "1", features = ["v4"] } # 与 core/宿主同版：host token 的随机源
 serde_json = { workspace = true }

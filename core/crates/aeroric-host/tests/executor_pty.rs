@@ -62,7 +62,11 @@ fn scratch_home() -> PathBuf {
 
 fn write_fake_agent(root: &Path) -> PathBuf {
     let script = root.join("fake-agent.sh");
-    std::fs::write(&script, "#!/bin/sh\necho HELLO-FROM-FAKE-AGENT\nexit 0\n").expect("script");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho HELLO-FROM-FAKE-AGENT\nstty size\nexit 0\n",
+    )
+    .expect("script");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -198,6 +202,10 @@ async fn a_fake_agent_launch_settles_done_and_retires_its_handles() {
     assert!(
         text.contains("HELLO-FROM-FAKE-AGENT"),
         "字节环没收到脚本输出: {text:?}"
+    );
+    assert!(
+        text.lines().any(|line| line.trim() == "24 80"),
+        "PTY must preserve the caller's initial rows/cols: {text:?}"
     );
 
     // 句柄账退场：child 表与 runs 台账都不再认这条任务。
@@ -440,6 +448,8 @@ async fn session_history_reads_the_record_transcript_via_the_family_parser() {
         service,
         families,
         executor,
+        terminal,
+        registry,
     );
     let call = Arc::new(aeroric_host::dispatcher::CallContext {
         services: Arc::clone(&assembled.services),

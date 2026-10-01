@@ -141,6 +141,7 @@ pub struct HostServices {
     pub token: Arc<HostToken>,
     pub log: Arc<EventLog>,
     pub services: Arc<ServiceSet>,
+    pub approvals: Arc<std::sync::Mutex<crate::services::HostApprovals>>,
 }
 
 impl HostServices {
@@ -152,7 +153,7 @@ impl HostServices {
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
     ) -> Arc<Self> {
-        Self::assemble(token, log, context, None, None, None)
+        Self::assemble(token, log, context, None, None, None, None, None)
     }
 
     /// b1.2/b1.3：执行服务全装配（serve 在 `TaskService::new` + `attach` 之后调用）。
@@ -163,6 +164,8 @@ impl HostServices {
         service: Arc<aeroric_core::tasks::TaskService>,
         families: Arc<dyn aeroric_core::tasks::AgentFamilies>,
         executor: Arc<crate::executor::CliPtyExecutor>,
+        terminal: Arc<aeroric_core::terminal::pty::TerminalService>,
+        registry: Arc<aeroric_core::runtime::registry::TaskRegistry>,
     ) -> Arc<Self> {
         Self::assemble(
             token,
@@ -171,6 +174,8 @@ impl HostServices {
             Some(service),
             Some(families),
             Some(executor),
+            Some(terminal),
+            Some(registry),
         )
     }
 
@@ -181,15 +186,25 @@ impl HostServices {
         service: Option<Arc<aeroric_core::tasks::TaskService>>,
         families: Option<Arc<dyn aeroric_core::tasks::AgentFamilies>>,
         executor: Option<Arc<crate::executor::CliPtyExecutor>>,
+        terminal: Option<Arc<aeroric_core::terminal::pty::TerminalService>>,
+        registry: Option<Arc<aeroric_core::runtime::registry::TaskRegistry>>,
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
         crate::services::register_read_services(&mut set, Arc::clone(&context));
-        if let (Some(service), Some(families), Some(executor)) = (service, families, executor) {
+        let approvals = Arc::new(std::sync::Mutex::new(
+            crate::services::HostApprovals::default(),
+        ));
+        crate::services::register_approval_services(&mut set, Arc::clone(&approvals));
+        if let (Some(service), Some(families), Some(executor), Some(terminal), Some(registry)) =
+            (service, families, executor, terminal, registry)
+        {
             crate::services::register_task_services(
                 &mut set,
                 Arc::clone(&service),
                 Arc::clone(&context),
                 executor,
+                terminal,
+                registry,
             );
             crate::services::register_session_services(&mut set, service, context, families);
         }
@@ -217,6 +232,7 @@ impl HostServices {
             token,
             log,
             services: Arc::new(set),
+            approvals,
         })
     }
 }
