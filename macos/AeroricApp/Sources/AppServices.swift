@@ -158,13 +158,50 @@ final class AppServices {
     func openInjectedTestProjectsIfRequested() async {
         guard let raw = ProcessInfo.processInfo.environment["AERORIC_TEST_OPEN_PROJECT"],
               !raw.isEmpty else { return }
-        for _ in 0..<200 {
+        // TEMPORARY DIAGNOSTIC (P4-04): the hook's RPC failures are invisible
+        // under XCUITest (no app stderr), so the hook narrates to
+        // `<dataDir>/test-hook.log`. Remove once the row flow is green.
+        func hookLog(_ line: String) {
+            let url = dataDirectory.appendingPathComponent("test-hook.log")
+            let stamped = "\(Date().timeIntervalSince1970) \(line)\n"
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                _ = try? handle.write(contentsOf: Data(stamped.utf8))
+            } else {
+                try? Data(stamped.utf8).write(to: url)
+            }
+        }
+        // Ready can arrive late on a busy machine; each open retries because
+        // a transient `not connected` (phase flips between poll and call)
+        // must not leave the sidebar empty for the whole test.
+        let paths = raw.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        hookLog("hook start; paths=\(paths)")
+        var lastPhase = ""
+        for _ in 0..<300 {
             if attachedConnection != nil, case .ready = connectionStore.phase { break }
+            if connectionStore.phaseText != lastPhase {
+                lastPhase = connectionStore.phaseText
+                hookLog("phase: \(lastPhase)")
+            }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        guard attachedConnection != nil else { return }
-        for path in raw.split(separator: ":", omittingEmptySubsequences: true) {
-            _ = try? await openProject(at: String(path))
+        guard attachedConnection != nil else {
+            hookLog("give up: never ready; phase=\(connectionStore.phaseText)")
+            return
+        }
+        for path in paths {
+            for attempt in 0..<5 {
+                do {
+                    let entry = try await openProject(at: path)
+                    hookLog("opened \(path) as \(entry.id)")
+                    break
+                } catch {
+                    hookLog("open \(path) attempt \(attempt) failed: \(error)")
+                    if attempt == 4 { break }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
         }
     }
 

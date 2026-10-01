@@ -407,7 +407,18 @@ final class ChildHandle: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&fileActions, readyPipe[1], 3)
         posix_spawn_file_actions_addclose(&fileActions, readyPipe[1])
         posix_spawn_file_actions_addopen(&fileActions, 1, "/dev/null", O_WRONLY, 0)
-        posix_spawn_file_actions_addopen(&fileActions, 2, "/dev/null", O_WRONLY, 0)
+        // serve's stderr goes to /dev/null by default (P4-01 baseline). When
+        // AERORIC_SERVE_STDERR_LOG is set (UI-test diagnostics only), it is
+        // appended to that file instead — the 2026-10-01 "supervisor never
+        // ready under testmanagerd" investigation had no way to see why the
+        // child exited fast because stderr was unwritable-by-design.
+        if let stderrLog = ProcessInfo.processInfo.environment["AERORIC_SERVE_STDERR_LOG"],
+           !stderrLog.isEmpty {
+            posix_spawn_file_actions_addopen(&fileActions, 2, stderrLog,
+                                             O_WRONLY | O_CREAT | O_APPEND, 0o600)
+        } else {
+            posix_spawn_file_actions_addopen(&fileActions, 2, "/dev/null", O_WRONLY, 0)
+        }
         posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory)
 
         var attributes: UnsafeMutableRawPointer? = nil
