@@ -1023,7 +1023,7 @@
         "XCUITest 环境故障（2026-10-01/02 两日排查）。已根修两层：①applicationWillTerminate 信号量等 MainActor Task＝主线程自锁死锁，每次退出都孤儿化 serve（其持数据目录写锁，后续启动全部抢锁秒败）→改为 LiveChildSlot+nonisolated terminateChildForProcessExit 同步直达；②GUI app 的并发工作线程阻塞 SIGTERM，posix_spawn 子进程继承阻塞掩码→SIGTERM 永远 pending、serve 杀不死（spawn 脚本+阻塞掩码对照实验实锤）→spawnattr SETSIGMASK 清空+SETSIGDEF 重置 SIGTERM/SIGINT/SIGHUP/SIGQUIT。修复后 launchservices 探针实证退出即杀 serve（slot trace：store→processExit terminate→死亡）。**剩余第三层**：testmanagerd 管辖启动下 serve 偶发起停后卡在 ready 行之前（钩子日志：connecting 15s→reconnecting attempt 1→give up），且场景装配间歇缺失随开机内累计启动数加剧（约 10-15 次预算）、重启复位。serve stderr 落盘已自动接线（launchApp 设 AERORIC_SERVE_STDERR_LOG=数据目录/serve-stderr.log），下次新开机会话一轮单测即得死因。"
       ],
       "requirement": [
-        "下次会话（必须先重启系统复位环境）：直接跑一次 `pnpm native:ui-test`——修复后链路已实证（钩子 2s 内 opened 两项目、projects.json 持久化、5/6 最佳轮）；若个别用例仍因零窗失败，读数据目录 serve-stderr.log 与测试日志 Sparse tree（幽灵窗口=main-AppWindow-1/-2）定位。全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。实现与两层根修已入库（bcebf59/6e771f6/b5dd0b9）。"
+        "下次会话（必须先重启系统复位 testmanagerd 场景装配状态——每轮开机预算约 15-25 次 XCUITest 启动）：直接跑一次 `pnpm native:ui-test`（已改逐测试独立会话＋失败换新会话重试，全套约 12-18 次启动）。全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。链路已全部实证：钩子 2s 开两项目＋projects.json 持久化（r8）；侧栏键盘选择/值断言/两窗口独立各自在 r6/r9/r10 分别通过；最佳轮 5/6（r9）。实现与三层根修全部入库（bcebf59/6e771f6/b5dd0b9/14a286a）。"
       ],
       "task_ids": [
         [
