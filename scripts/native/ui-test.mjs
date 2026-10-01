@@ -47,7 +47,7 @@ const environment = {
   TEST_RUNNER_AERORIC_ENV: "ui-test",
 };
 
-console.log(`native:ui-test: running AppLaunchTests (scratch data dir: ${SCRATCH})`);
+console.log(`native:ui-test: running AeroricNativeUITests (AppLaunchTests + ShellLifecycleTests; scratch data dir: ${SCRATCH})`);
 const test = spawnSync(
   "xcodebuild",
   [

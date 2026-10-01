@@ -1,5 +1,6 @@
 import AeroricClient
 import AeroricProtocol
+import AeroricUI
 import Foundation
 import Observation
 
@@ -30,7 +31,7 @@ final class AppServices {
 
     let connectionStore = ConnectionStore()
     let applicationStore: ApplicationStore
-    let workspaceStore = WorkspaceStore()
+    let projectStore = ProjectStore()
 
     private(set) var supervisor: HostSupervisor?
     /// The live channel; retained so the sink stays wired between attempts.
@@ -142,4 +143,91 @@ final class AppServices {
         }
         return forwarded
     }
+
+    enum ProjectError: Error {
+        case notConnected
+        case malformedReply
+    }
+
+    /// UI-test hook (P4-04 acceptance: per-window selection needs real
+    /// sidebar rows, and `NSOpenPanel` cannot be driven from XCUITest).
+    /// `AERORIC_TEST_OPEN_PROJECT="path1:path2"` opens the listed directories
+    /// through the real `project.open` RPC once the host is ready. Unset in
+    /// every plain launch — production behaviour is untouched, and the paths
+    /// only ever point at the run's scratch data dir.
+    func openInjectedTestProjectsIfRequested() async {
+        guard let raw = ProcessInfo.processInfo.environment["AERORIC_TEST_OPEN_PROJECT"],
+              !raw.isEmpty else { return }
+        for _ in 0..<200 {
+            if attachedConnection != nil, case .ready = connectionStore.phase { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard attachedConnection != nil else { return }
+        for path in raw.split(separator: ":", omittingEmptySubsequences: true) {
+            _ = try? await openProject(at: String(path))
+        }
+    }
+
+    /// Opens a project through the host (`project.open`). ADR-013: the
+    /// caller mints the request id, so the app-side `newId` travels in
+    /// params and the host echoes the confirmed entry back.
+    @discardableResult
+    func openProject(at path: String) async throws -> ProjectStore.ProjectEntry {
+        guard let connection = attachedConnection else {
+            throw ProjectError.notConnected
+        }
+        let newId = UUID().uuidString
+        let frame = try await connection.request(
+            "project.open",
+            params: .object(["path": .string(path), "newId": .string(newId)])
+        )
+        guard
+            let id = frame.result["project"]?["id"], case let .string(projectId) = id,
+            let rawPath = frame.result["project"]?["path"], case let .string(projectPath) = rawPath
+        else {
+            throw ProjectError.malformedReply
+        }
+        return projectStore.upsertProject(id: projectId, path: projectPath)
+    }
 }
+
+// MARK: - Shell state injection (P4-04)
+
+/// Maps the client's `SupervisorPhase` onto the shell's snapshot enum at the
+/// injection boundary (AeroricUI has no client dependency, INV-02).
+extension AppServices: WorkspaceStateProviding {
+    var phaseSnapshot: ConnectionPhaseSnapshot {
+        switch connectionStore.phase {
+        case .idle: .idle
+        case .connecting: .connecting
+        case .ready: .ready
+        case let .degraded(reason): .degraded(reason: reason)
+        // Attempt/delay stay in `phaseText`; the snapshot is deliberately
+        // detail-free so the shell never re-formats supervisor internals.
+        case let .reconnecting(attempt, nextDelayMs): .reconnecting
+        case let .incompatible(reason): .incompatible(reason: reason)
+        case .stopped: .stopped
+        }
+    }
+
+    var phaseText: String { connectionStore.phaseText }
+    var environmentLabel: String { configuration.environmentLabel }
+    var protocolVersionText: String { "v\(protocolVersion)" }
+    var applicationTag: String { applicationStore.environmentTag }
+
+    var sidebarItems: [SidebarItem] {
+        projectStore.projects.map {
+            SidebarItem(id: $0.id, title: URL(fileURLWithPath: $0.path).lastPathComponent)
+        }
+    }
+
+    var paletteCommands: [PaletteCommand] {
+        [
+            PaletteCommand(id: "task.new", title: "新建任务"),
+            PaletteCommand(id: "project.open", title: "打开项目…"),
+            PaletteCommand(id: "settings.show", title: "设置…"),
+        ]
+    }
+}
+
+extension AppServices: SettingsStateProviding {}

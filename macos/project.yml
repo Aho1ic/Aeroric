@@ -30,6 +30,12 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     GENERATE_INFOPLIST_FILE: NO
+    # Xcode 27 builds Debug app code into a separate debug.dylib
+    # (ENABLE_DEBUG_DYLIB). With SwiftUI @main + NSApplicationDelegateAdaptor
+    # that build creates an app whose scene system never instantiates
+    # WindowGroup content (zero windows in AX and in tests), so the debug
+    # dylib mode is disabled project-wide.
+    ENABLE_DEBUG_DYLIB: NO
     # No-account local build baseline (P4-01 Action 4). DEVELOPMENT_TEAM stays
     # empty, manual style with the ad-hoc identity, no hardened runtime, no
     # sandbox. A runnable bundle is signed explicitly, inside-out, by

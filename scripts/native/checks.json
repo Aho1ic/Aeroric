@@ -57,7 +57,8 @@
       "watcher-discipline-unit@skeleton": 11,
       "swift-client-unit@swift-client": 28,
       "swift-client-tsan@swift-client": 28,
-      "native-design-unit@native-design": 14
+      "native-design-unit@native-design": 14,
+      "shell-unit@shell": 24
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1926,6 +1927,112 @@
             ]
           ],
           "$note": "ADR-001 §4 第 2 条的机械形态：NativeSelection.swift 只封装系统控件的样式/键盘/a11y，不得新绘活动底纹（.background/.overlay/自绘 isActive）——选中态由系统 Picker(.segmented)/List(selection:) 绘制。两条正控证明系统选中态真实在用（禁形若恒真则说明封装里连系统控件都没有）。GlassPanel 的 hairline overlay 不在本文件，不受影响。",
+          "timeoutMs": 120000
+        }
+      ]
+    },
+    "shell": {
+      "cases": [
+        {
+          "name": "shell-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricUIUnitTests"
+          ],
+          "parse": "swift",
+          "minCases": 24,
+          "$note": "P4-04 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4（P4-03 14）＋ShellPolicyTests 10（DetailState.resolve 四态映射×6＋filterCommands×4）＝24。与 native-design-unit 同 filter 同 argv，各自地板独立（下限语义：native-design floor 14 不因用例池涨到 24 而需要改）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "shell-no-web-navigation",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "WKWebView|WebView\\(|loadHTMLString|loadRequest|SFSafariViewController",
+            "macos/AeroricKit/Sources/AeroricUI/Shell"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct WorkspaceRootView",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceRootView.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "enum DetailState",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceDetail.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct TitleBar",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/TitleBar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "statusbar\\.phase",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/StatusBar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "func filterCommands",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+            ]
+          ],
+          "$note": "P4-04 验收第 2 条\"无 React 根页面/远程网页承载主导航\"的机械形态：Shell 目录不得引入任何 Web 视图承载（WKWebView/WebView/loadHTMLString/loadRequest/SFSafariViewController）——主导航全部为 SwiftUI 原生（六条正控证明六个 Shell 文件真实在位）。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "shell-no-hand-drawn-selection",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\b(isSelected|isActive|selectionBackground|activeBackground)\\b",
+            "macos/AeroricKit/Sources/AeroricUI/Shell"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+            ]
+          ],
+          "$note": "ADR-001 §4 第 2 条在 Shell 的机械形态：侧栏与命令面板的选中态一律由系统 List(selection:) 绘制，禁手绘活动底纹（isSelected/isActive/selectionBackground/activeBackground 命名即暴露手绘意图）。禁形刻意缩窄到选中态特征词——Shell 目录合法的材质 .background(.thinMaterial)/.overlay 与布局 overlay（拖拽手柄、palette 遮罩）不拦（G09 教训：宽禁形误伤合法用法）。两条正控证明两处系统 List(selection:) 真实在用。",
           "timeoutMs": 120000
         }
       ]
