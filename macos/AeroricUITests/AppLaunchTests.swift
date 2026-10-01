@@ -42,6 +42,12 @@ final class AppLaunchTests: XCTestCase {
             app.staticTexts["bootstrap.build"].waitForExistence(timeout: 5),
             "bootstrap.build missing"
         )
+        // P4-02: the connection row exists from first paint (its text is the
+        // supervisor phase, which may legitimately still be "launching").
+        XCTAssertTrue(
+            app.staticTexts["bootstrap.connection"].waitForExistence(timeout: 5),
+            "bootstrap.connection missing"
+        )
 
         app.terminate()
         // Cold start + identifiers + close — the whole P4-01 UI surface.

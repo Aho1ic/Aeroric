@@ -54,7 +54,9 @@
       "terminal-pty-exit-rust@terminal-core": 10,
       "terminal-replay-rust@terminal-core": 5,
       "terminal-unit-rust@terminal-core": 65,
-      "watcher-discipline-unit@skeleton": 11
+      "watcher-discipline-unit@skeleton": 11,
+      "swift-client-unit@swift-client": 28,
+      "swift-client-tsan@swift-client": 28
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1756,6 +1758,44 @@
             "scripts/native/smoke-headless.mjs"
           ],
           "$note": "P3-07 Action 5：创建 temp data-dir/fake project/fake agent，运行 serve、run、input、cancel、resume、history 并清理退出。"
+        }
+      ]
+    },
+    "swift-client": {
+      "cases": [
+        {
+          "name": "swift-client-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricClientTests"
+          ],
+          "parse": "swift",
+          "minCases": 28,
+          "$note": "P4-02 AeroricClient 门禁地板：EventReducer 10＋HostConnection 10＋Supervisor 4＋PackageSmoke(AeroricClientTests 内) 4＝28。--filter 让地板只随该 filter 变化（与 swift-package-smoke 同口径）；注意 `--filter AeroricClientTests` 也会跑 AeroricClientTests 里的 PackageSmokeTests 子集，别把全包 12 例口径混进来。教训：ProtocolCodec.encodeLine 返回值自带行尾 \\n，任何发送方再补 \\n 会产生空帧 → splitter 吐空行 → decodeLine 直接 fault——发送侧一律禁止二次加换行。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "swift-client-tsan",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--sanitize",
+            "thread",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricClientTests"
+          ],
+          "parse": "swift",
+          "minCases": 28,
+          "$note": "同 swift-client-unit 的 28 例，叠加 --sanitize thread：HostConnection actor＋SocketTransport 阻塞泵线程＋ChildHandle WNOHANG reaper 的竞态门禁。独立成 case 而非并入 unit——TSan 慢 5~10 倍且报错类别不同，混跑会把两类失败搅在一起。",
+          "timeoutMs": 900000
         }
       ]
     }

@@ -686,7 +686,7 @@ test("a module summary claiming a value none of its rows carry is reported", () 
 
 test("a drifted module core_service is reported even though the command rows are untouched", () => {
   const commands = [{ rust_path: "git::git_status", category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" }];
-  const table = { git: { category: "domain_rpc", core_service: "nonexistent::service", swift_scene: "S", check_module: "git" } };
+  const table = { git: { category: "domain_rpc", core_service: "nonexistent::service", rpc_namespace: "git", swift_scene: "S", check_module: "git" } };
   const problems = moduleTableProblems({ commands, table, categoryResolution: { module_default: { git: "domain_rpc" } } });
   assert.equal(problems.length, 1, problems.join("\n"));
   assert.match(problems[0], /modules\.git\.core_service/);
@@ -697,12 +697,12 @@ test("a module with a genuinely diverse column still passes when it names one of
     { rust_path: "git::git_status", category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" },
     { rust_path: "git::git_worktree_add", category: "domain_rpc", core_service: "git::worktree", swift_scene: "S", check_module: "worktree" },
   ];
-  const table = { git: { category: "domain_rpc", core_service: "git", swift_scene: "S", check_module: "git" } };
+  const table = { git: { category: "domain_rpc", core_service: "git", rpc_namespace: "git", swift_scene: "S", check_module: "git" } };
   assert.deepEqual(moduleTableProblems({ commands, table, categoryResolution: { module_default: { git: "domain_rpc" } } }), []);
 });
 
 test("root-level commands are skipped instead of forcing the open convention question", () => {
   const commands = [{ rust_path: "hide_main_window", category: "host_local_os_ui", core_service: "platform", swift_scene: "S", check_module: "shell" }];
-  const problems = moduleTableProblems({ commands, table: { "(crate_root)": { category: "domain_rpc" } }, categoryResolution: { module_default: {} } });
-  assert.deepEqual(problems, [], "the crate-root disagreement is F5\u2019s open decision, not this check\u2019s");
+  const problems = moduleTableProblems({ commands, table: { "(crate_root)": { category: "host_local_os_ui", core_service: "platform", rpc_namespace: "host", swift_scene: "S", check_module: "shell" } }, categoryResolution: { module_default: { hide_main_window: "host_local_os_ui" } } });
+  assert.deepEqual(problems, [], "root-level commands roll up under the (crate_root) bucket; module_default is keyed by command name, never by the bucket");
 });
