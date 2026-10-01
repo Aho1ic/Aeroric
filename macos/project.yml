@@ -1,0 +1,90 @@
+# AeroricNative — native macOS preview app (MIGRATION_PLAN.md Task P4-01).
+#
+# Structural reference only: ../primuse/project.yml (options / configFiles /
+# targets / schemes shape). Nothing is copied verbatim — this is a single
+# macOS app plus a UI test bundle, with no entitlements, no CloudKit, no
+# App Groups, no push, no store provisioning (P4-01 Action 4).
+#
+# The generated macos/AeroricNative.xcodeproj is a derived artifact
+# (.gitignore); project.yml and Config/*.xcconfig are the committed sources
+# and the .pbxproj is never hand-edited. P10-04 decides the final bundle
+# identifier / display name merge.
+name: AeroricNative
+options:
+  bundleIdPrefix: com.aeroric
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"  # spec hard rule: matches macos/AeroricKit/Package.swift
+  defaultConfig: Debug
+# 自定义配置名必须先在此声明（XcodeGen 2.46.0 的 configs 是顶层键：
+# config 名 → debug/release 变体归类），否则 configFiles 键校验失败。
+configs:
+  Debug: debug
+  ReleaseLocal: release
+configFiles:
+  Debug: Config/Debug.xcconfig
+  ReleaseLocal: Config/ReleaseLocal.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    # No-account local build baseline (P4-01 Action 4). DEVELOPMENT_TEAM stays
+    # empty, manual style with the ad-hoc identity, no hardened runtime, no
+    # sandbox. A runnable bundle is signed explicitly, inside-out, by
+    # scripts/native/sign-local.sh (driven by build.mjs); the linker's
+    # temporary signature on a CODE_SIGNING_ALLOWED=NO build is never treated
+    # as the app signature.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: NO
+    ENABLE_APP_SANDBOX: NO
+packages:
+  AeroricKit:
+    path: AeroricKit
+targets:
+  AeroricNative:
+    type: application
+    platform: macOS
+    sources:
+      - path: AeroricApp/Sources
+      - path: AeroricApp/Resources
+    dependencies:
+      # Single compilation of shared Swift sources (P4-01 Action 2): the app
+      # links the local package and never recompiles AeroricKit sources into a
+      # second target. Only AeroricProtocol for now — P4-02 links AeroricClient
+      # when the real client lands, P4-03 links AeroricUI with design parts.
+      - package: AeroricKit
+        product: AeroricProtocol
+    settings:
+      base:
+        PRODUCT_NAME: AeroricNative
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.native.dev
+        INFOPLIST_FILE: AeroricApp/Info.plist
+  AeroricNativeUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: AeroricUITests
+    dependencies:
+      - target: AeroricNative
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aeroric.native.dev.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AeroricNative
+schemes:
+  AeroricNative:
+    build:
+      targets:
+        AeroricNative: all
+        AeroricNativeUITests: [test]
+    run:
+      config: Debug
+      executable: AeroricNative
+    test:
+      config: Debug
+      targets:
+        - AeroricNativeUITests

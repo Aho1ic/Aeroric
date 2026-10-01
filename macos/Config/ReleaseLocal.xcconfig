@@ -1,0 +1,7 @@
+// ReleaseLocal configuration deltas (P4-01): locally built optimized variant
+// with the same no-account signing baseline as Debug (project.yml
+// settings.base). Nothing here requests provisioning; a distribution-ready
+// configuration is P10-03/P10-04 scope, not this file.
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+ONLY_ACTIVE_ARCH = NO

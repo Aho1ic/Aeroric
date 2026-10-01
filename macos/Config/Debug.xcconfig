@@ -1,0 +1,10 @@
+// Debug configuration deltas for the native preview app (P4-01).
+// The no-account signing baseline (empty team, Manual + "-", hardened runtime
+// off, sandbox off) lives once in project.yml settings.base; this file only
+// carries Debug-specific build behaviour. P10-03/P10-04 own any future
+// distribution configuration.
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+GCC_OPTIMIZATION_LEVEL = 0
+ENABLE_TESTABILITY = YES
+ONLY_ACTIVE_ARCH = YES
