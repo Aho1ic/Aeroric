@@ -26,8 +26,11 @@ final class AppLaunchTests: XCTestCase {
             "bootstrap.environment missing after cold launch"
         )
         if let expectedEnvironment = runnerEnvironment["AERORIC_ENV"] {
+            // macOS SwiftUI static texts carry the visible text in `value`;
+            // `label` is empty (verified via AX tree dump 2026-10-01).
+            let actualEnvironment = (environmentLabel.value as? String) ?? environmentLabel.label
             XCTAssertEqual(
-                environmentLabel.label, expectedEnvironment,
+                actualEnvironment, expectedEnvironment,
                 "injected AERORIC_ENV did not reach the app"
             )
         }
