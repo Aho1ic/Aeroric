@@ -680,9 +680,9 @@
       "task_ids": "P2-05, P4-02",
       "owner": "client",
       "test": "eslint/脚本规则：Swift 与 React 均不得出现裸 invoke 入口；反例文件必须报错",
-      "status": "open",
-      "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
-      "verified_on": "2026-09-29"
+      "status": "closed",
+      "retriage_note": "P2-05 之后数量增加而非减少（26→29，新增如 `taskIntentQueue.ts`、`projectSaveQueue.ts` 这些本应走 api 层的队列模块）。owner 不变（P2-05 已 accepted 的是发射面移交，裸 invoke 入口这条规则归 P4-02 的反例门禁）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01（P4-02 收口）闭合：tauri 侧原 finding 随 Tauri 移除消失（P4 系列验收）；迁移侧等价守卫当场建——checks.json swift-client 模块 absent case `client-socket-io-single-exit`（AeroricClient 唯一 RPC 出口＝HostConnection.swift，SocketTransport 阻塞泵与 Darwin.connect 在 :56/:165），三条正控防恒真假绿，当日三 case 全绿。评审 docs/native/reviews/client.md §4。",
+      "verified_on": "2026-10-01"
     },
     {
       "id": "G10",

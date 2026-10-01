@@ -1796,6 +1796,44 @@
           "minCases": 28,
           "$note": "同 swift-client-unit 的 28 例，叠加 --sanitize thread：HostConnection actor＋SocketTransport 阻塞泵线程＋ChildHandle WNOHANG reaper 的竞态门禁。独立成 case 而非并入 unit——TSan 慢 5~10 倍且报错类别不同，混跑会把两类失败搅在一起。",
           "timeoutMs": 900000
+        },
+        {
+          "name": "client-socket-io-single-exit",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "--glob",
+            "!HostConnection.swift",
+            "socket\\(|Darwin\\.connect|Darwin\\.socket|CFSocket|NWConnection",
+            "macos/AeroricKit/Sources/AeroricClient"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "Darwin\\.connect",
+              "macos/AeroricKit/Sources/AeroricClient/HostConnection.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "JSONLFrameSplitter",
+              "macos/AeroricKit/Sources/AeroricClient/JSONLCodec.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct SupervisorConfig",
+              "macos/AeroricKit/Sources/AeroricClient/HostSupervisor.swift"
+            ]
+          ],
+          "$note": "G09（P4-02 收口当场建）：AeroricClient 的 socket I/O 唯一出口＝HostConnection.swift（SocketTransport 阻塞泵与 Darwin.connect 在 :56/:165）。其余文件（RequestRegistry/EventReducer/HostSupervisor/JSONLCodec/ReconnectPolicy/PackageSmoke/State Store）不得直接开套接字——禁形限定到真套接字调用（Darwin.socket/connect、socket(、CFSocket、NWConnection），actor 方法调用如 connection.connect() 不属禁形。新增传输面只能从 HostConnection 走，否则请求路由、重连相位与事件泵会各自造一套连接语义。三条正控：①唯一出口真实在（否则守卫恒真）；②③被扫模块真实内容（排除路径写错致 rg 读空）。",
+          "timeoutMs": 120000
         }
       ]
     }
