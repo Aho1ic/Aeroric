@@ -60,6 +60,10 @@ targets:
         product: AeroricProtocol
       - package: AeroricKit
         product: AeroricClient
+      # P4-03 links AeroricUI (design parts: tokens / material / glass /
+      # window appearance / native selection).
+      - package: AeroricKit
+        product: AeroricUI
     settings:
       base:
         PRODUCT_NAME: AeroricNative

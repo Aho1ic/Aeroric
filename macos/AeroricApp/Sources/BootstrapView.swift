@@ -1,4 +1,5 @@
 import SwiftUI
+import AeroricUI
 
 /// Bootstrap surface (P4-01 Action 6): shows the injected environment and the
 /// build/wire identifiers so a cold launch can be verified mechanically by
@@ -8,6 +9,11 @@ import SwiftUI
 /// supervisor phase (launching → connecting → ready / reconnecting / failed),
 /// so the cold-launch test can assert the wire is being driven, not just that
 /// the window renders.
+///
+/// P4-03 wires the design layer for its first real render: the transparent
+/// title-bar chrome (`WindowAppearance`), the AppKit material baseline
+/// (`NativeMaterial`) and one `GlassPanel` shell — enough to verify the
+/// material actually reacts to window activation and appearance changes.
 struct BootstrapView: View {
     let services: AppServices
 
@@ -15,17 +21,22 @@ struct BootstrapView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Aeroric Native Preview")
                 .font(.title2.weight(.semibold))
-            LabeledContent("environment") {
-                Text(services.configuration.environmentLabel)
-                    .accessibilityIdentifier("bootstrap.environment")
-            }
-            LabeledContent("protocol") {
-                Text("v\(services.protocolVersion)")
-                    .accessibilityIdentifier("bootstrap.protocol")
-            }
-            LabeledContent("build") {
-                Text(services.buildIdentifier)
-                    .accessibilityIdentifier("bootstrap.build")
+            GlassPanel(preference: .glass) {
+                VStack(alignment: .leading, spacing: 12) {
+                    LabeledContent("environment") {
+                        Text(services.configuration.environmentLabel)
+                            .accessibilityIdentifier("bootstrap.environment")
+                    }
+                    LabeledContent("protocol") {
+                        Text("v\(services.protocolVersion)")
+                            .accessibilityIdentifier("bootstrap.protocol")
+                    }
+                    LabeledContent("build") {
+                        Text(services.buildIdentifier)
+                            .accessibilityIdentifier("bootstrap.build")
+                    }
+                }
+                .padding(16)
             }
             if let dataDirectory = services.configuration.dataDirectoryPath {
                 LabeledContent("data dir") {
@@ -47,5 +58,7 @@ struct BootstrapView: View {
         }
         .padding(32)
         .frame(minWidth: 460, minHeight: 260)
+        .background(NativeMaterial.underWindowBackground.ignoresSafeArea())
+        .background(WindowAppearance())
     }
 }
