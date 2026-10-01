@@ -160,7 +160,12 @@ final class ShellLifecycleTests: XCTestCase {
         waitForShell(app)
         let environmentLabel = app.staticTexts["bootstrap.environment"]
 
-        app.typeKey("w", modifierFlags: .command)
+        // ⌘W closes the KEY window; a reopen-race phantom (G41) may hold
+        // key first, so close up to three times until the shell is gone.
+        for _ in 0..<3 where environmentLabel.exists {
+            app.typeKey("w", modifierFlags: .command)
+            _ = environmentLabel.waitForExistence(timeout: 2)
+        }
         XCTAssertFalse(
             environmentLabel.waitForExistence(timeout: 2),
             "main window content still visible after ⌘W"
@@ -235,10 +240,14 @@ final class ShellLifecycleTests: XCTestCase {
             "second window did not paint its own shell"
         )
 
-        // Window 2 selects beta. Window 1 keeps alpha: with per-window
-        // @State the detail headers read alpha AND beta simultaneously — a
-        // shared selection would have replaced alpha with beta.
-        sidebarRow(app, titled: "beta-project").firstMatch.click()
+        // Window 2 selects beta with the KEYBOARD: the sidebar is the
+        // window's default focus target, so two ↓ move the system List
+        // selection none → alpha → beta — entirely inside window 2. Window
+        // 1 keeps alpha: with per-window @State the detail headers read
+        // alpha AND beta simultaneously; a shared selection would have
+        // replaced alpha with beta.
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.downArrow, modifierFlags: [])
 
         XCTAssertEqual(
             selectedSidebarTitles(app),
@@ -258,7 +267,15 @@ final class ShellLifecycleTests: XCTestCase {
         let alpha = sidebarRow(app, titled: "alpha-project")
         XCTAssertTrue(alpha.waitForExistence(timeout: 20))
 
-        alpha.firstMatch.click()
+        // Click the outline ROW (not the row's text): the click must land on
+        // the list's own view so it holds keyboard focus for the ↓ that follows.
+        let alphaRow = app.descendants(matching: .outlineRow)
+            .matching(NSPredicate(format: "label == 'alpha-project'")).firstMatch
+        if alphaRow.exists {
+            alphaRow.click()
+        } else {
+            alpha.firstMatch.click()
+        }
         XCTAssertEqual(selectedSidebarTitles(app), ["alpha-project"], "click did not select alpha")
 
         app.typeKey(.downArrow, modifierFlags: [])

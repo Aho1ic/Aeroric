@@ -66,6 +66,24 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
             )
         }
         .background(NativeMaterial.underWindowBackground.ignoresSafeArea())
+        // Keyboard behavior for the sidebar (ADR-001 §4 concerns chrome, not
+        // behavior): the system List draws the selection, these window-level
+        // key equivalents only move the binding — measured 2026-10-02, the
+        // sidebar List neither exposes selection via AX isSelected nor moves
+        // List(selection:) on arrow keys by itself. Hidden buttons are the
+        // CommandPalette escape-button precedent. Disabled while the palette
+        // is presented so typing there never moves the sidebar.
+        .background {
+            Group {
+                Button("") { moveSidebarSelection(.up) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+                    .hidden()
+                Button("") { moveSidebarSelection(.down) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+                    .hidden()
+            }
+            .disabled(palettePresented)
+        }
         .animation(.easeInOut(duration: DSMotion.normal), value: sidebarVisible)
         .frame(minWidth: 1000, minHeight: 640)
         .focusedValue(\.palettePresentation, $palettePresented)
@@ -86,6 +104,22 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
     private func handleCommand(_ command: PaletteCommand) {
         onCommand(command)
+    }
+
+    private func moveSidebarSelection(_ direction: MoveCommandDirection) {
+        let items = state.sidebarItems
+        guard !items.isEmpty else { return }
+        let currentIndex = selection.flatMap { id in items.firstIndex(where: { $0.id == id }) }
+        switch direction {
+        case .down:
+            let next = currentIndex.map { min($0 + 1, items.count - 1) } ?? 0
+            selection = items[next].id
+        case .up:
+            let previous = currentIndex.map { max($0 - 1, 0) } ?? 0
+            selection = items[previous].id
+        default:
+            break
+        }
     }
 }
 
