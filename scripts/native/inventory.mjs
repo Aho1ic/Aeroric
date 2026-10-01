@@ -732,38 +732,67 @@ export function panelTaskIdProblems(panels, universe) {
 }
 
 /**
- * The `modules` rollup is a summary of the command rows, so every column of it must be
- * a value its own rows actually carry. Deliberately convention-free: a root-level
- * command (no `::`) is `(crate_root)` in this table but its own key in
- * `category_resolution.module_default`, and that disagreement is an open question —
- * so those modules are skipped rather than forced into either answer.
+ * The `modules` rollup is a summary of the command rows, so every column must be
+ * derivable from them. 口径定死于 2026-10-01（补记一百二十四移交项，P4-02 前置）：
+ * bucket by the first segment of `rust_path`; root-level commands (no `::`) share
+ * the single `(crate_root)` bucket, while `category_resolution.module_default`
+ * keys those four commands by command name — different key spaces by design, so
+ * the per-module cross-check below only fires for qualified modules. `category`,
+ * `core_service`, `swift_scene`, `check_module` exist on every command row and
+ * must be a member of the rows' non-null values; `feature_ids` must equal the
+ * union of the rows'. `rpc_namespace` is module-level authored semantics (rows
+ * carry per-command `rpc_method` instead — the two namespaces deliberately
+ * disagree for modules like pty whose methods live under `terminal.`), so it is
+ * only asserted present.
  */
 export function moduleTableProblems({ commands, table, categoryResolution }) {
   const problems = [];
   const byModule = new Map();
   for (const command of commands ?? []) {
-    const mod = String(command.rust_path ?? "").split("::")[0];
-    if (!String(command.rust_path ?? "").includes("::")) continue;
+    const rustPath = String(command.rust_path ?? "");
+    const mod = rustPath.includes("::") ? rustPath.split("::")[0] : "(crate_root)";
     if (!byModule.has(mod)) byModule.set(mod, []);
     byModule.get(mod).push(command);
   }
-  for (const [mod, entry] of Object.entries(table ?? {})) {
-    const rows = byModule.get(mod);
-    if (!rows) continue;
+  for (const [mod, rows] of byModule) {
+    const entry = table?.[mod];
+    if (!entry) {
+      problems.push(`modules: no rollup entry for command module ${JSON.stringify(mod)} (${rows.length} command row(s))`);
+      continue;
+    }
     for (const field of ["category", "core_service", "swift_scene", "check_module"]) {
       const claimed = entry?.[field];
+      const actual = [...new Set(rows.map((r) => r[field]).filter((v) => v !== undefined && v !== null))];
+      if (actual.length === 0) {
+        if (claimed !== undefined && claimed !== null) {
+          problems.push(`modules.${mod}.${field} ${JSON.stringify(claimed)} is claimed although none of its ${rows.length} command row(s) carry the column`);
+        }
+        continue;
+      }
       if (claimed === undefined || claimed === null) {
         problems.push(`modules.${mod}: column "${field}" is missing although ${rows.length} command row(s) carry it`);
         continue;
       }
-      const actual = new Set(rows.map((r) => r[field]).filter((v) => v !== undefined && v !== null));
-      if (!actual.has(claimed)) {
-        problems.push(`modules.${mod}.${field} ${JSON.stringify(claimed)} is not a value any of its ${rows.length} command rows carry (seen: ${[...actual].slice(0, 4).map((v) => JSON.stringify(v)).join(", ")})`);
+      if (!actual.includes(claimed)) {
+        problems.push(`modules.${mod}.${field} ${JSON.stringify(claimed)} is not a value any of its ${rows.length} command rows carry (seen: ${actual.slice(0, 4).map((v) => JSON.stringify(v)).join(", ")})`);
       }
+    }
+    const claimedFeatures = JSON.stringify([...(entry?.feature_ids ?? [])].sort());
+    const actualFeatures = JSON.stringify([...new Set(rows.flatMap((r) => r.feature_ids ?? []))].sort());
+    if (claimedFeatures !== actualFeatures) {
+      problems.push(`modules.${mod}.feature_ids ${claimedFeatures} does not equal the union of its ${rows.length} command row(s) ${actualFeatures}`);
+    }
+    if (!("rpc_namespace" in entry)) {
+      problems.push(`modules.${mod}: authored column "rpc_namespace" is missing`);
     }
     const def = categoryResolution?.module_default?.[mod];
     if (def !== undefined && entry?.category !== def) {
       problems.push(`modules.${mod}.category ${JSON.stringify(entry?.category)} contradicts the audited module_default ${JSON.stringify(def)}`);
+    }
+  }
+  for (const mod of Object.keys(table ?? {})) {
+    if (!byModule.has(mod)) {
+      problems.push(`modules.${JSON.stringify(mod)}: rollup entry has no matching command row(s) (stale)`);
     }
   }
   return problems;

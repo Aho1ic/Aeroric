@@ -140,7 +140,7 @@
       "note": "不可达不等于可删：remote_/wsl_ 镜像变体可能由 prefixCommand 运行时拼接，也可能只被外部客户端使用。删除任何一条之前必须先完成 G16 的逐项定性。"
     },
     "category_resolution": {
-      "rule": "category = override[rust_path] ?? moduleDefault[rust_path 的首段模块]；两者都必须写在这里，否则 inventory --check 失败。分类不是不可核对的手工字段：ADR `001-native-boundary.md` 的类别→归属表规定 host_local_os_ui 不得进 host、platform_specific 在 macOS 要显示不支持原因，所以每条命令的归属必须可追溯到一条模块默认或一条具名例外。",
+      "rule": "category = override[rust_path] ?? moduleDefault[rust_path 的首段模块]；两者都必须写在这里，否则 inventory --check 失败。分类不是不可核对的手工字段：ADR `001-native-boundary.md` 的类别→归属表规定 host_local_os_ui 不得进 host、platform_specific 在 macOS 要显示不支持原因，所以每条命令的归属必须可追溯到一条模块默认或一条具名例外。 modules 汇总表口径（2026-10-01 定死，补记一百二十四移交项）：按 rust_path 首段分桶，无 :: 的根级命令归 `(crate_root)` 单独一行（module_default 对根级命令按命令名记分类，两表键名不同是设计而非矛盾）；category/core_service/swift_scene/check_module 四列存在于每条成员命令行，汇总值必须是成员行非空值的一员；feature_ids 必须等于成员行的并集；rpc_namespace 是模块级作者列（行上只有逐命令的 rpc_method，两者对 pty 等模块刻意不一致），inventory --check 只断言该列在场；全部断言见 inventory.mjs moduleTableProblems。",
       "module_default": {
         "hide_main_window": "host_local_os_ui",
         "exit_app_after_task_flush": "host_local_os_ui",
@@ -387,7 +387,8 @@
       "core_service": "git",
       "rpc_namespace": "git",
       "feature_ids": [
-        "F09"
+        "F09",
+        "F10"
       ],
       "swift_scene": "AeroricUI/Git",
       "check_module": "git"
@@ -883,6 +884,17 @@
       "swift_scene": "AeroricUI/IDE",
       "check_module": "ide",
       "correction": "2026-09-21 复核：discover_tests/run_tests/remote_* 是「运行/测试」产品能力（F08），初版误判为 internal 测试夹具"
+    },
+    "core_adapter": {
+      "category": "domain_rpc",
+      "core_service": "core+tasks",
+      "rpc_namespace": null,
+      "feature_ids": [
+        "F01",
+        "F02"
+      ],
+      "swift_scene": "AeroricUI/Projects",
+      "check_module": "tauri-adapter"
     }
   },
   "commands": [
