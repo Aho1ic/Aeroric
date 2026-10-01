@@ -59,8 +59,11 @@ pub fn parse_family(value: &str) -> Option<ProtocolFamily> {
 /// custom profile 的 session 家族：显式 `family` 优先，否则 legacy 的
 /// `codex_like` 布尔。与 `config_bundles.rs:100-108` 同序。
 pub fn custom_session_family(profile: FamilyProfile<'_>) -> ProtocolFamily {
-    parse_family(profile.family)
-        .unwrap_or(if profile.codex_like { ProtocolFamily::Codex } else { ProtocolFamily::Claude })
+    parse_family(profile.family).unwrap_or(if profile.codex_like {
+        ProtocolFamily::Codex
+    } else {
+        ProtocolFamily::Claude
+    })
 }
 
 /// 两边都不认识的 agent。
@@ -121,16 +124,25 @@ mod tests {
     #[test]
     fn custom_profile_precedence_is_explicit_family_then_codex_like() {
         assert_eq!(
-            custom_session_family(FamilyProfile { family: " dsh ", codex_like: true }),
+            custom_session_family(FamilyProfile {
+                family: " dsh ",
+                codex_like: true
+            }),
             ProtocolFamily::Dsh,
             "显式 family 赢，且两侧空白被 trim（与宿主 parse 前一致）"
         );
         assert_eq!(
-            custom_session_family(FamilyProfile { family: "", codex_like: true }),
+            custom_session_family(FamilyProfile {
+                family: "",
+                codex_like: true
+            }),
             ProtocolFamily::Codex
         );
         assert_eq!(
-            custom_session_family(FamilyProfile { family: "nonsense", codex_like: false }),
+            custom_session_family(FamilyProfile {
+                family: "nonsense",
+                codex_like: false
+            }),
             ProtocolFamily::Claude,
             "认不出的 family 落 legacy 布尔"
         );
@@ -139,17 +151,26 @@ mod tests {
     #[test]
     fn launch_family_reads_the_flag_for_claude_codex_and_names_for_dsh_omp() {
         assert_eq!(
-            launch_family(FamilyProfile { family: "omp", codex_like: true }),
+            launch_family(FamilyProfile {
+                family: "omp",
+                codex_like: true
+            }),
             ProtocolFamily::Omp,
             "omp 名字优先于 flag"
         );
         assert_eq!(
-            launch_family(FamilyProfile { family: "claude", codex_like: true }),
+            launch_family(FamilyProfile {
+                family: "claude",
+                codex_like: true
+            }),
             ProtocolFamily::Codex,
             "claude/codex 之间 flag 就是答案（pty.rs 二选一的镜像）"
         );
         assert_eq!(
-            launch_family(FamilyProfile { family: "", codex_like: false }),
+            launch_family(FamilyProfile {
+                family: "",
+                codex_like: false
+            }),
             ProtocolFamily::Claude
         );
     }
@@ -157,6 +178,9 @@ mod tests {
     #[test]
     fn unknown_agents_mirror_the_client_rule() {
         assert_eq!(unknown_session_family("claude"), ProtocolFamily::Claude);
-        assert_eq!(unknown_session_family("anything-else"), ProtocolFamily::Codex);
+        assert_eq!(
+            unknown_session_family("anything-else"),
+            ProtocolFamily::Codex
+        );
     }
 }

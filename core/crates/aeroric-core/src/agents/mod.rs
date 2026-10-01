@@ -7,8 +7,8 @@
 //! 宿主按职责片迁入同一模块树。
 
 pub mod dsh_host;
-pub mod families;
 pub mod environment;
+pub mod families;
 pub mod launch;
 pub mod managed_home;
 pub mod omp;

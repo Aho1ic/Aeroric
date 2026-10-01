@@ -16,7 +16,7 @@
       "adapter-intent-queue@tauri-adapter": 9,
       "adapter-invariants-unit@tauri-adapter": 28,
       "agent-launch-parity-rust@agents": 2,
-      "cli-headless-rust@cli": 4,
+      "cli-headless-rust@cli": 5,
       "cli-unit-rust@cli": 4,
       "core-rust-skeleton@skeleton": 5,
       "digest-unit@skeleton": 17,
@@ -1745,8 +1745,8 @@
             "--test",
             "cli_headless"
           ],
-          "minCases": 4,
-          "$note": "P3-07 验收行：真实 CLI 子进程的 mutation 拒写、非 TTY 拒绝与 approval/task 闭环（3 条）＋ SIGTERM 杀死 attach 后本地 termios 恢复（真 PTY 机器判据）。"
+          "minCases": 5,
+          "$note": "P3-07 验收行：真实 CLI 子进程的 mutation 拒写、非 TTY 拒绝与 approval/task 闭环（3 条）＋ SIGTERM 杀死 attach 后本地 termios 恢复（真 PTY 机器判据）＋ serve 退出序显式杀 HUP 免疫子进程（Q86 子进程策略）。"
         },
         {
           "name": "cli-smoke-headless",

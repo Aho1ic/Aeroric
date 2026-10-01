@@ -16,7 +16,8 @@
 //! 对账）：hooks/mcp/managed_home 装配、login-shell env 与 guard ops、
 //! session-evidence 的 settle 分支（`settle_exit` 的「会话算成功」半边）、
 //! prompt 注入（inject_prompt_into_terminal 的打字机路径）、终端历史落盘。
-//! dsh 家族在此返回 `Unsupported`（它的启动走 `dsh_host::executor`，③c 接审批面）。
+//! dsh 家族在此返回 `Unsupported`（它的启动走 `dsh_host::executor`，无头宿主不接——
+//! ⑦ 收尾定性；审批面＝core 瀑布经 `approval.list/respond`，已在 ⑤ 注册到 CLI host）。
 
 use std::io::Read as _;
 use std::sync::{Arc, Mutex, Weak};
@@ -157,6 +158,21 @@ impl CliPtyExecutor {
         }
         if let Some(child) = self.registry.child_for(task_id) {
             let _ = child.lock().kill();
+        }
+    }
+
+    /// serve 退出序的子进程策略（P3-06 Q86 具名移交、随本 Task serve 入口落地）：
+    /// 优雅退出时**显式**杀掉全部在飞运行，不指望 master 关闭的隐式 SIGHUP——
+    /// 无视 SIGHUP 的子进程（`trap '' HUP`）不会死。按 task_id 走 kill_run：
+    /// killpg 定址最新代的前台组，旧代残余由进程退出关 master 的 SIGHUP 兜底；
+    /// SIGKILL 强杀 serve 无此路径（OS 语义，子进程孤儿化）。
+    pub fn kill_all_live(&self) {
+        let ids: Vec<String> = {
+            let handles = self.registry.child_handles.lock();
+            handles.keys().map(|run| run.id().to_string()).collect()
+        };
+        for id in ids {
+            self.kill_run(&id);
         }
     }
 
@@ -372,8 +388,8 @@ impl TaskExecutor for CliPtyExecutor {
         };
         if request.family == ProtocolFamily::Dsh {
             return Err(ExecutorFailure::Unsupported {
-                reason: "dsh tasks run through dsh_host::executor with the transport ports; \
-                         the approval surface lands in P3-07 ③c"
+                reason: "dsh launch is a desktop-host path (dsh_host::executor); the headless \
+                         host exposes the approval surface via approval.list/respond instead"
                     .to_string(),
             });
         }

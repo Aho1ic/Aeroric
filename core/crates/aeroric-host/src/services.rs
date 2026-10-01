@@ -491,8 +491,9 @@ fn task_run(
 
 /// `task.input {taskId, text}`：PTY 输入经控制租约（executor 的短顶替写）——
 /// **结构化 Agent 的声明能力路径（dsh prompt 注入等）不在此方法**：dsh 任务
-/// 的后续输入走宿主 `prompt_dsh_task` 的专用口，CLI host 的 dsh 执行面 ③c
-/// 才立；对不认识的协议猜按键是 P3-07 验收行点名禁止的。
+/// 的后续输入走宿主 `prompt_dsh_task` 的专用口，而 CLI host 不接 dsh 启动
+/// （⑦ 收尾定性，见 executor 模块头）；对不认识的协议猜按键是 P3-07 验收行
+/// 点名禁止的。
 fn task_input(request: Request, executor: &crate::executor::CliPtyExecutor) -> Frame {
     let id = request.id.clone();
     let Some(task_id) = request

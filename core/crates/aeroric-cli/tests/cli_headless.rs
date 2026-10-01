@@ -523,3 +523,157 @@ fn sigterm_killed_attach_restores_the_local_termios() {
         libc::close(slave);
     }
 }
+
+/// P3-06 Q86 具名移交的子进程策略（随本 Task serve 入口落地）：serve 优雅
+/// 退出必须**显式**杀掉在飞运行。判据故意选无视 SIGHUP 的进程组合
+/// （`trap '' HUP` 的壳＋`nohup` 的孙进程）——master 关闭的隐式 SIGHUP 杀
+/// 不死它们，只有 kill_all_live 的 SIGKILL 前台组能；否则测试测的是运气。
+#[cfg(unix)]
+#[test]
+fn serve_sigterm_kills_running_task_children_even_hup_immune() {
+    fn processes_matching(needle: &str) -> Vec<String> {
+        let out = Command::new("ps")
+            .args(["axo", "pid=,command="])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|line| line.contains(needle) && !line.contains("ps axo"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    let scratch = Scratch::new();
+    let data_dir = scratch.0.join("data");
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+    let mut server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+    let server_pid = server.id();
+    struct ServerGuard(std::process::Child);
+    impl Drop for ServerGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut guard = ServerGuard(server);
+    let sock = data_dir.join("host.sock");
+    let token = data_dir.join("host.token");
+    let mut ready = false;
+    for _ in 0..100 {
+        if sock.exists() && token.exists() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "serve must become ready within 5s");
+
+    let proj_dir = scratch.0.join("shutdown_proj");
+    std::fs::create_dir_all(&proj_dir).expect("proj");
+    let out = scratch
+        .cli()
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .args(["project", "open", proj_dir.to_str().unwrap()])
+        .output()
+        .expect("project open");
+    assert_eq!(out.status.code(), Some(0));
+
+    // 无视 SIGHUP 的组合：壳 trap '' HUP，孙进程 nohup（SIG_IGN 随 exec 保留）。
+    let agent = scratch.0.join("fake-shutdown.sh");
+    std::fs::write(&agent, "#!/bin/sh\ntrap '' HUP\nnohup sleep 61 &\nwait\n")
+        .expect("agent script");
+    let _ = std::fs::set_permissions(&agent, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+    std::fs::write(
+        data_dir.join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "custom_agents": [
+                { "id": "fake-shutdown", "path": agent, "args": [], "family": "claude", "codex_like": false }
+            ]
+        }))
+        .unwrap(),
+    )
+    .expect("settings");
+    let run_params = scratch.0.join("run-params.json");
+    std::fs::write(
+        &run_params,
+        serde_json::to_string(&serde_json::json!({
+            "projectPath": proj_dir,
+            "agent": "fake-shutdown",
+            "prompt": "stay running",
+            "taskId": "shutdown-task"
+        }))
+        .unwrap(),
+    )
+    .expect("params");
+    let out = scratch
+        .cli()
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .args([
+            "rpc",
+            "task.run",
+            "--params-file",
+            run_params.to_str().unwrap(),
+        ])
+        .output()
+        .expect("rpc task.run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 前置事实：HUP 免疫壳真的在跑（按脚本路径点名，serve 的命令行不含它）。
+    let needle = agent.to_str().unwrap().to_string();
+    let mut live = false;
+    for _ in 0..60 {
+        if !processes_matching(&needle).is_empty() {
+            live = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(live, "the HUP-immune agent must be running before shutdown");
+
+    // SIGTERM → serve 优雅退出（exit 0）→ 子进程必须被显式杀掉。
+    unsafe {
+        libc::kill(server_pid.try_into().expect("pid fits i32"), libc::SIGTERM);
+    }
+    let mut exited = false;
+    for _ in 0..100 {
+        if let Ok(Some(status)) = guard.0.try_wait() {
+            assert_eq!(
+                status.code(),
+                Some(0),
+                "graceful shutdown must exit 0, got {status:?}"
+            );
+            exited = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(exited, "serve must exit after SIGTERM within 5s");
+    let mut gone = false;
+    for _ in 0..60 {
+        if processes_matching(&needle).is_empty() {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        gone,
+        "HUP-immune children must die with serve (explicit kill policy), remaining: {:?}",
+        processes_matching(&needle)
+    );
+}

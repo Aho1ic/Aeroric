@@ -74,7 +74,10 @@ impl WaterfallRegistry {
     }
 
     pub fn entries(&self) -> Vec<(String, PendingWaterfall)> {
-        self.pending.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.pending
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 }
 

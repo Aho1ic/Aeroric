@@ -211,6 +211,9 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 redactor_probe(&redactor)
             );
             running.shutdown();
+            // P3-06 Q86 具名移交的子进程策略：退出前显式杀在飞运行（无头宿主
+            // 不留孤儿；SIGKILL 强杀不走此路径，OS 语义兜底）。
+            executor.kill_all_live();
             exit::OK
         }
     }

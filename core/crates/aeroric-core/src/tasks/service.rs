@@ -497,6 +497,14 @@ pub struct TaskService {
     /// [`TaskService::project_of`].
     task_projects: Mutex<HashMap<String, String>>,
     ledger: Mutex<OperationLedger>,
+    /// 变更串行闸（load→commit 全程持锁）。`commit` 的覆盖租约有个前提：
+    /// "every mutation loads first, so 'the last thing I saw' is by construction
+    /// what is on disk"——这条只在变更的读改写本身不被并发撕开时成立。桌面端
+    /// 由 React 的 mutation 串行队列（G05 第三处）单线程保序；core 里 settle
+    /// 线程与 RPC 线程并发跑同一条链，save→bump 与后随读者的 check_cover 撞窗
+    /// 时，轻则误拒（smoke-headless 首跑绿二跑红的长任务创建），重则陈旧快照
+    /// 盖回 settle 的状态更新。core 侧自己串行化，守卫继续专防外来写者。
+    mutations: Mutex<()>,
 }
 
 impl TaskService {
@@ -520,7 +528,19 @@ impl TaskService {
             live_runs,
             task_projects: Mutex::new(HashMap::new()),
             ledger: Mutex::new(ledger),
+            mutations: Mutex::new(()),
         })
+    }
+
+    /// 变更串行闸的唯一入口：包裹「load→决定→commit」整段的变更流。
+    /// 六个包裹点（`run_intent`/`create`/`begin`/`complete`/`cancel`/
+    /// `apply_observation`）互不嵌套，锁只在最外层持有一次。
+    fn serial<T>(&self, f: impl FnOnce() -> Result<T, TaskError>) -> Result<T, TaskError> {
+        let _guard = self
+            .mutations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        f()
     }
 
     pub fn context(&self) -> &CoreContext {
@@ -686,7 +706,7 @@ impl TaskService {
         if !is_addressable(project) {
             return Err(TaskError::Unaddressable(project_id));
         }
-        self.insert_new_task(&project_id, &spec, Persist::Commit)
+        self.serial(|| self.insert_new_task(&project_id, &spec, Persist::Commit))
     }
 
     /// 建行行的完整形状——具名 `create` 与 `Create` 意图共用这**一个**构造器。
@@ -702,6 +722,20 @@ impl TaskService {
             return Err(TaskError::DuplicateId(spec.id.clone()));
         }
         let now = self.clock().now_ms();
+        let (record, records) = self.build_new_records(project_id, spec, &snapshot.records, now);
+        let applied = self.finish_intent(project_id, records, persist)?;
+        Ok((record, applied))
+    }
+
+    /// 行构造的确定性半边：给定 (spec, 当前快照, 时钟) 就给定同一批 records。
+    /// 从 `insert_new_task` 抽出来只为让上面的重试循环能整体重做一遍。
+    fn build_new_records(
+        &self,
+        project_id: &str,
+        spec: &NewTask,
+        snapshot_records: &[Record],
+        now: u64,
+    ) -> (Record, Vec<Record>) {
         // A newly created task is pinned to all three families (ADR-028, ADR-029): which
         // argument shape starts it, which transcript format it writes, and which CLI's
         // `--resume` can read that transcript. `claude_gpt55` splits all three ways —
@@ -793,10 +827,9 @@ impl TaskService {
             .0
             .insert("createdAt".into(), Value::Number(now.into()));
 
-        let mut records = snapshot.records.clone();
+        let mut records = snapshot_records.to_vec();
         records.insert(0, record.clone());
-        let applied = self.finish_intent(project_id, records, persist)?;
-        Ok((record, applied))
+        (record, records)
     }
 
     /// Start a `todo`, or a freshly created immediate task. `persist_before_launch` is the
@@ -1085,6 +1118,32 @@ impl TaskService {
     /// The shared shape of start and resume: claim → persist → spawn, with the claim
     /// released on every path that never reached a process.
     fn begin(
+        &self,
+        project: &Record,
+        task_id: &str,
+        operation_key: &str,
+        kind: OperationKind,
+        persist_before_launch: bool,
+        attachments: &Attachments,
+        persist: Persist,
+        spawn: impl FnOnce(&Self, &Record, &Record, u64) -> Result<(), TaskError>,
+    ) -> Result<Applied, TaskError> {
+        self.serial(|| {
+            self.begin_under_lock(
+                project,
+                task_id,
+                operation_key,
+                kind,
+                persist_before_launch,
+                attachments,
+                persist,
+                spawn,
+            )
+        })
+    }
+
+    /// `begin` 持串行闸后的实体；`spawn` 闭包在闸内执行（进程诞生有序于一切变更）。
+    fn begin_under_lock(
         &self,
         project: &Record,
         task_id: &str,
@@ -1484,6 +1543,17 @@ impl TaskService {
         event: TaskEvent,
         persist: Persist,
     ) -> Result<(EventOutcome, Applied), TaskError> {
+        self.serial(|| self.apply_observation_under_lock(project_id, event, persist))
+    }
+
+    /// `apply_observation` 持串行闸后的实体——settle 与变更同闸，观察既不误拒
+    /// 也不被陈旧快照覆盖（executor 退出线程走的就是这条路）。
+    fn apply_observation_under_lock(
+        &self,
+        project_id: &str,
+        event: TaskEvent,
+        persist: Persist,
+    ) -> Result<(EventOutcome, Applied), TaskError> {
         let snapshot = self.load(project_id)?;
         let current = self.generation(event.task_id());
         let seen = event.generation();
@@ -1640,6 +1710,15 @@ impl TaskService {
         project: &Record,
         task_id: &str,
     ) -> Result<(Completion, Option<Applied>), TaskError> {
+        self.serial(|| self.complete_under_lock(project, task_id))
+    }
+
+    /// `complete` 持串行闸后的实体。
+    fn complete_under_lock(
+        &self,
+        project: &Record,
+        task_id: &str,
+    ) -> Result<(Completion, Option<Applied>), TaskError> {
         let project_id = project.id().unwrap_or_default().to_string();
         let snapshot = self.load(&project_id)?;
         let record = Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
@@ -1673,6 +1752,15 @@ impl TaskService {
     /// Stop the process. The status is the exit event's to write, not this call's — the
     /// difference between "we asked" and "it happened".
     pub fn cancel(&self, project: &Record, task_id: &str) -> Result<CancelTargetInfo, TaskError> {
+        self.serial(|| self.cancel_under_lock(project, task_id))
+    }
+
+    /// `cancel` 持串行闸后的实体。
+    fn cancel_under_lock(
+        &self,
+        project: &Record,
+        task_id: &str,
+    ) -> Result<CancelTargetInfo, TaskError> {
         let project_id = project.id().unwrap_or_default().to_string();
         let snapshot = self.load(&project_id)?;
         let record = Self::find(&snapshot.records, task_id).ok_or_else(|| TaskError::NotFound {
@@ -2201,7 +2289,7 @@ impl TaskService {
         intent: &TaskIntent,
         persist: Persist,
     ) -> Result<Applied, TaskError> {
-        match intent {
+        self.serial(|| match intent {
             TaskIntent::Rename {
                 task_id,
                 name,
@@ -2337,7 +2425,7 @@ impl TaskService {
             } => self.metadata_one(project_id, task_id, persist, |records| {
                 reducer::edit_todo(records, task_id, prompt, agent, permission_mode)
             }),
-        }
+        })
     }
 
     /// 一条意图的收尾：`Commit` 按 ADR-015 的覆盖基线提交，`DecideOnly` 只把决定后的记录交回去。
