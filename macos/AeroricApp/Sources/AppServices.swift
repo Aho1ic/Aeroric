@@ -133,8 +133,6 @@ final class AppServices {
     /// through the supervisor's nonisolated sync path instead. The run loop's
     /// own cleanup paths stay primary while the process is alive.
     func terminateHostForProcessExit() {
-        let marker = "terminateHostForProcessExit: supervisor=\(supervisor != nil)"
-        try? marker.write(to: URL(fileURLWithPath: "/tmp/aeroric-term-trace"), atomically: true, encoding: .utf8)
         supervisor?.terminateChildForProcessExit()
     }
 

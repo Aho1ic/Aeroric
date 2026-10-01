@@ -31,8 +31,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        try? "willTerminate fired".write(to: URL(fileURLWithPath: "/tmp/aeroric-terminate-marker"), atomically: true, encoding: .utf8)
         services?.terminateHostForProcessExit()
-        try? "terminateHostForProcessExit returned".write(to: URL(fileURLWithPath: "/tmp/aeroric-terminate-marker2"), atomically: true, encoding: .utf8)
     }
 }
