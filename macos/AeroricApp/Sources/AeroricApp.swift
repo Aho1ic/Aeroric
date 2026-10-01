@@ -37,8 +37,8 @@ struct AeroricNativeApp: App {
                     guard phase == .active else { return }
                     Task { await services.startSupervisor() }
                 }
-                // Captures `openWindow` once so menu commands can recreate
-                // the main window after every window is closed (red light).
+                // Captures `openWindow` once so menu commands can recreate the
+                // main window after every window is closed (red light).
                 .background(OpenWindowHook())
         }
         .commands {

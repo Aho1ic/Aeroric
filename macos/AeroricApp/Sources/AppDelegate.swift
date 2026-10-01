@@ -26,8 +26,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// Default reopen handling (P4-01 policy): returning true lets SwiftUI's
+    /// WindowGroup recreate the main window on Dock reopen. NOTE (G41): an
+    /// XCUITest launch can deliver a reopen before the scene connects, which
+    /// creates a second shell window — the tests tolerate that with
+    /// firstMatch queries and value-based selection assertions instead of
+    /// suppressing reopen here (refusing it during startup raced the
+    /// automation-session setup and produced zero-window launches wholesale,
+    /// measured 2026-10-02).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         true
+    }
+
+    /// UI-test launches wipe SwiftUI's persisted scene storage: a hard-killed
+    /// instance's saved window would otherwise be RESTORED next to the fresh
+    /// WindowGroup window — two shell scenes per launch, which broke every
+    /// window-count assertion (measured 2026-10-02). Gated on the injected
+    /// test environment; plain launches keep restoration. (.restorationBehavior
+    /// would be the scene-level switch but needs macOS 15; target is 14.)
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard let environment = ProcessInfo.processInfo.environment["AERORIC_ENV"],
+              !environment.isEmpty,
+              let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+        UserDefaults.standard.removePersistentDomain(forName: bundleIdentifier)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

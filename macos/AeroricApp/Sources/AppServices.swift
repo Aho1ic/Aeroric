@@ -89,6 +89,7 @@ final class AppServices {
     /// a supervisor exists (its own run loop lives until `stopSupervisor`).
     func startSupervisor() async {
         guard supervisor == nil else { return }
+        killStaleTestServesIfRequested()
         let dataDir = dataDirectory
         do {
             try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
@@ -156,6 +157,23 @@ final class AppServices {
     enum ProjectError: Error {
         case notConnected
         case malformedReply
+    }
+
+    /// UI-test hygiene (G41): XCUITest's `terminate()` hard-kills the app
+    /// without running any delegate callback, so the previous test's serve
+    /// can still be alive and holding this data dir's write lock — every
+    /// supervisor attempt in this launch would then die on lock acquisition
+    /// (serve stderr, 2026-10-02). The UI-test RUNNER is sandboxed and
+    /// cannot spawn pkill; this app is not, so the sweep runs here, gated by
+    /// the same hook env var and scoped to this data dir only.
+    private func killStaleTestServesIfRequested() {
+        guard ProcessInfo.processInfo.environment["AERORIC_TEST_OPEN_PROJECT"] != nil else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        process.arguments = ["-f", "aeroric-cli --data-dir \(dataDirectory.path)"]
+        try? process.run()
+        process.waitUntilExit()
+        Thread.sleep(forTimeInterval: 0.3)
     }
 
     /// UI-test hook (P4-04 acceptance: per-window selection needs real

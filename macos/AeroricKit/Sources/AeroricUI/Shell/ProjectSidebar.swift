@@ -13,6 +13,10 @@ public struct ProjectSidebar: View {
     @Binding var selection: String?
     let items: [SidebarItem]
     let width: CGFloat
+    /// Keyboard-focus binding: the owning window focuses the sidebar by
+    /// default (`defaultFocus` in WorkspaceRootView) so the arrow keys drive
+    /// the system List selection without any hand-rolled key handling.
+    @FocusState private var sidebarFocused: Bool
 
     public init(selection: Binding<String?>, items: [SidebarItem], width: CGFloat) {
         self._selection = selection
@@ -36,6 +40,8 @@ public struct ProjectSidebar: View {
                     }
                     .listStyle(.sidebar)
                     .scrollContentBackground(.hidden)
+                    .focused($sidebarFocused)
+                    .defaultFocus($sidebarFocused, true)
                     .accessibilityIdentifier("sidebar.list")
                 }
             }

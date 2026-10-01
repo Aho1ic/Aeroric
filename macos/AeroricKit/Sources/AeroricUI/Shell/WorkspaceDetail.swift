@@ -86,13 +86,33 @@ public enum DetailState: Equatable, Sendable {
 /// launch can never race a state transition.
 public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
     let state: State
+    /// The window's selected sidebar item, if any. Rendered as a visible
+    /// header (below) because macOS List selection state is not AX-queryable
+    /// through XCUITest — a value-backed element is.
+    let selection: String?
 
-    public init(state: State) {
+    public init(state: State, selection: String? = nil) {
         self.state = state
+        self.selection = selection
+    }
+
+    private var selectedTitle: String? {
+        selection.flatMap { id in
+            state.sidebarItems.first(where: { $0.id == id })?.title
+        }
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            if let selectedTitle {
+                Text("已选项目：\(selectedTitle)")
+                    .font(.callout)
+                    .foregroundStyle(Color.dsTextSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("detail.selection")
+            }
             switch DetailState.resolve(state.phaseSnapshot) {
             case .loading:
                 LoadingStateView()

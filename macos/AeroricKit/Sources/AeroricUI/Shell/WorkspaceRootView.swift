@@ -42,7 +42,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 )
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            WorkspaceDetail(state: state)
+            WorkspaceDetail(state: state, selection: selection)
         }
         // The drag handle lives on the whole HStack's overlay so crossing
         // into the detail's scroll views never steals the gesture (the

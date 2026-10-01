@@ -11,36 +11,49 @@ import XCTest
 final class ShellLifecycleTests: XCTestCase {
     private func launchApp(withProjects projects: [URL] = []) -> XCUIApplication {
         let runnerEnvironment = ProcessInfo.processInfo.environment
-        let app = XCUIApplication()
-        app.launchEnvironment["AERORIC_ENV"] = runnerEnvironment["AERORIC_ENV"] ?? "ui-test"
-        if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
-            app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
-            // TEMPORARY (G41): capture the serve child's stderr — its startup
-            // log names the step it hangs on under testmanagerd.
-            app.launchEnvironment["AERORIC_SERVE_STDERR_LOG"] =
-                dataDirectory + "/serve-stderr.log"
-        }
-        if !projects.isEmpty {
-            app.launchEnvironment["AERORIC_TEST_OPEN_PROJECT"] =
-                projects.map(\.path).joined(separator: ":")
-        }
-        // Scene assembly under testmanagerd is intermittent (P4-02
-        // environment precedent; measured 2026-10-01: a launch sometimes runs
-        // the event loop with zero windows and no task execution — the hook
-        // log never appears). Relaunching absorbs it: the app process is
-        // disposable and the scratch data dir is rebuilt by ui-test.mjs.
+        var app = XCUIApplication()
+        // Scene assembly under testmanagerd is intermittent (G41): a launch
+        // sometimes runs the event loop with zero windows and no task
+        // execution. Relaunching absorbs it. terminate() is asynchronous, so
+        // each attempt uses a FRESH XCUIApplication and waits for the previous
+        // process to actually die — relaunching immediately produced two live
+        // instances racing the same RPC channel (measured 2026-10-02, hook
+        // log shows two same-second "hook start" entries).
         var painted = false
-        for attempt in 0..<3 {
+        for attempt in 0..<6 {
+            if attempt > 0 {
+                app.terminate()
+                let deadline = Date().addingTimeInterval(5)
+                while isRunning(app), Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.2)
+                }
+                Thread.sleep(forTimeInterval: 1)
+            }
+            app = XCUIApplication()
+            app.launchEnvironment["AERORIC_ENV"] = runnerEnvironment["AERORIC_ENV"] ?? "ui-test"
+            if let dataDirectory = runnerEnvironment["AERORIC_DATA_DIR"] {
+                app.launchEnvironment["AERORIC_DATA_DIR"] = dataDirectory
+                // TEMPORARY (G41): capture the serve child's stderr — its
+                // startup log names the step it hangs on under testmanagerd.
+                app.launchEnvironment["AERORIC_SERVE_STDERR_LOG"] =
+                    dataDirectory + "/serve-stderr.log"
+            }
+            if !projects.isEmpty {
+                app.launchEnvironment["AERORIC_TEST_OPEN_PROJECT"] =
+                    projects.map(\.path).joined(separator: ":")
+            }
             app.launch()
-            painted = app.staticTexts["bootstrap.environment"].waitForExistence(timeout: 10)
+            painted = app.staticTexts["bootstrap.environment"].firstMatch.waitForExistence(timeout: 10)
             if painted { break }
-            app.terminate()
-            sleep(2)
         }
         if !painted {
             print("SHELL-AXDUMP-BEGIN\n\(app.debugDescription)\nSHELL-AXDUMP-END")
         }
         return app
+    }
+
+    private func isRunning(_ app: XCUIApplication) -> Bool {
+        app.state == .runningForeground || app.state == .runningBackground
     }
 
     /// Two scratch project directories for the sidebar rows. Paths carry no
@@ -83,30 +96,32 @@ final class ShellLifecycleTests: XCTestCase {
         app.staticTexts[title]
     }
 
-    /// Selection state lives on the AX outline ROW (`row 1 of outline 1 of
-    /// scroll area 1 …` per System Events), not on the row's static text —
-    /// the text's `isSelected` never flips (measured 2026-10-01). Probe the
-    /// outline rows and fall back to the text elements.
+    /// Selection probe: macOS List selection is NOT exposed through AX
+    /// isSelected (outline rows and row texts both read isSelected == NO
+    /// after a click — measured 2026-10-01/02), so the shell renders the
+    /// selected project's title into a value-backed element
+    /// (`detail.selection`, one per window). Each window holds its own
+    /// value — the set of values across the app IS the per-window state.
     private func selectedSidebarTitles(_ app: XCUIApplication) -> Set<String> {
-        let rowPredicate = NSPredicate(format: "isSelected == YES AND label != ''")
-        let rows = app.descendants(matching: .outlineRow).matching(rowPredicate)
-            .allElementsBoundByIndex.map(\.label)
-        if !rows.isEmpty { return Set(rows) }
-        let textPredicate = NSPredicate(
-            format: "identifier BEGINSWITH 'sidebar.item.' AND isSelected == YES"
+        let query = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'detail.selection'")
         )
-        return Set(app.staticTexts.matching(textPredicate).allElementsBoundByIndex.map(\.label))
+        var titles: Set<String> = []
+        for element in query.allElementsBoundByIndex {
+            if let value = element.value as? String {
+                // value reads "已选项目：<title>" — keep the title part
+                if let range = value.range(of: "：") {
+                    titles.insert(String(value[range.upperBound...]))
+                }
+            }
+        }
+        return titles
     }
 
-    private func unselectedSidebarRow(_ app: XCUIApplication, titled title: String) -> XCUIElement {
-        let rowPredicate = NSPredicate(
-            format: "label == %@ AND isSelected == NO", title
-        )
-        let rows = app.descendants(matching: .outlineRow).matching(rowPredicate)
-        if rows.firstMatch.exists { return rows.firstMatch }
-        return app.staticTexts.matching(
-            NSPredicate(format: "label == %@ AND isSelected == NO", title)
-        ).firstMatch
+    private func selectionHeaderCount(_ app: XCUIApplication) -> Int {
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'detail.selection'")
+        ).count
     }
 
     /// Acceptance "Cmd+," and "Cmd+W": the shared settings window opens on
@@ -206,32 +221,31 @@ final class ShellLifecycleTests: XCTestCase {
         waitForShell(app)
         XCTAssertTrue(sidebarRow(app, titled: "alpha-project").waitForExistence(timeout: 20))
 
-        // Window 2 via its keyboard shortcut: a real second WindowGroup
-        // scene, still served by the single supervisor/connection.
-        app.typeKey("n", modifierFlags: [.command, .shift])
+        // Window 1 selects alpha first (its own per-window @State).
+        sidebarRow(app, titled: "alpha-project").firstMatch.click()
+        XCTAssertEqual(selectedSidebarTitles(app), ["alpha-project"], "click did not select alpha in window 1")
+
+        // Window 2 via the File-menu command (deterministic; the ⌘⇧N
+        // keystroke raced the key window in earlier runs).
+        let newWindow = fileMenuItem(app, titled: "新建窗口")
+        XCTAssertTrue(newWindow.waitForExistence(timeout: 5), "新建窗口 missing from the File menu")
+        newWindow.click()
         XCTAssertTrue(
             app.descendants(matching: .any)["sidebar.list"].firstMatch.waitForExistence(timeout: 8),
             "second window did not paint its own shell"
         )
 
-        // The key window is window 2: selecting beta here must not disturb
-        // window 1's alpha once we re-select it there.
+        // Window 2 selects beta. Window 1 keeps alpha: with per-window
+        // @State the detail headers read alpha AND beta simultaneously — a
+        // shared selection would have replaced alpha with beta.
         sidebarRow(app, titled: "beta-project").firstMatch.click()
 
-        // Bring window 1 forward by clicking its (currently unselected) row.
-        let unselectedAlpha = unselectedSidebarRow(app, titled: "alpha-project")
-        XCTAssertTrue(
-            unselectedAlpha.waitForExistence(timeout: 5),
-            "expected an unselected alpha-project row in the other window"
-        )
-        unselectedAlpha.click()
-
-        // Two different rows selected at once = two independent selections.
         XCTAssertEqual(
             selectedSidebarTitles(app),
             ["alpha-project", "beta-project"],
             "expected one selected row per window, not a single shared selection"
         )
+        XCTAssertEqual(selectionHeaderCount(app), 2, "expected one header per window")
         app.terminate()
     }
 
