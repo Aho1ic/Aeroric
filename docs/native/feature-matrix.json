@@ -1004,6 +1004,16 @@
       "requirement": "P3-06 出口必须把这两条**恢复成默认必选**，顺序固定：① 给 `storage::aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1），让宿主套件整体落 scratch 根；② 用 `AERORIC_ALLOW_REAL_HOME_TESTS=1` 跑一轮，按**内容**证明隔离成功（`remote-audit.log` 事件计数、`agent-credentials/**` sha256 集合、usage DB 行级读数都不变，见 `G24` 的 28 目标清单）；③ 删掉 `optInEnv` 标记并把 `checks.json` 的 `runner.rules` 第 3 条恢复成无条件成立；④ 同批把 `tauri-adapter` 的期望读数从 10/42 抬回 12/2 526。在此之前，任何引用“门禁全绿”的文字都必须写明这两条是 opt-in 未跑——`extraction` 之外的散文没有机器提醒，靠的是 `gate-runner-unit` 里那条“committed gate exactly the two real-home writers are opt-in”的集合断言（它同时禁止把别的用例标成 opt-in）。",
       "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。 2026-09-30 P3-06 收口：`storage::aeroric_dir()` 成为唯一根且读序三层——测试 SLOT（install_scratch_home）> `AERORIC_HOME`（runner 每轮注入的 scratch）> 真实家；notification.rs/app_settings 的两份逐字重复实现并一（覆盖只进一份＝止血止一半）。门禁两条（src-tauri-lib-tests 2452、adapter-acceptance-real-kernel 19）从 opt-in 恢复默认必选（check.mjs 的 case.env `<scratch>` 哨兵＝mkdtemp 注入+跑后清理）。当日实测：tauri-adapter 12/2513 全绿；真实家对账——remote-audit.log 行数与哈希不动、agent-credentials 边车哈希不动、terminal-history 文件数不动（usage DB 行级 +9 经核为在跑客户端的正常采集，非测试签名——签名判据全零）。事故如实记：修复窗口内一次未隔离的 `cargo test --lib` 直跑写了真实家（audit +3 伪造 invite 事件、usage +25 行）——正是 G19/G20 描述的污染形态的活体复现，此后所有宿主套件跑批一律走 runner 注入或 HOME=mktemp 隔离。补记二百八十。",
       "verified_on": "2026-09-30"
+    },
+    {
+      "id": "G40",
+      "finding": "用户硬边界（2026-10-01 两轮明令）：pnpm native:ui-test 在本机触发 Xcode XCUITest 键盘合成机制向系统新建测试专用输入源（XCTest input method）——Agent 永久禁跑本机 UI 测试；UI 验收执行权移交用户（用户本人运行＋Agent 记档，P3-03 Q6 先例）。",
+      "requirement": "任何 Task 的 native:ui-test 验收一律由用户本人运行并回报；Agent 只记录结果与退出码，不得自行执行 xcodebuild test/AeroricNativeUITests。",
+      "task_ids": [
+        "P4-04"
+      ],
+      "owner": "user",
+      "status": "open"
     }
   ]
 }
