@@ -315,13 +315,15 @@
       "positive_test": "tests/platform_capabilities.rs",
       "negative_test": "macOS capability wsl=false，UI 点不到 wsl.exe；旧 JSON 不丢 distribution/linuxPath",
       "status": "planned",
-      "core_state": "unstarted",
+      "core_state": "accepted",
       "native_state": "not-declared",
       "side_states": {
-        "C": "unstarted",
-        "K": "unstarted"
+        "C": "accepted",
+        "K": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/platforms.md"
+      ]
     },
     {
       "id": "F13",
@@ -762,8 +764,8 @@
       "task_ids": "P7-02, P10-04",
       "owner": "ci",
       "test": "P10-04 的 native CI 必须对两架构跑 cargo fmt --check / clippy -D warnings / cargo test --locked / swift test，并保留旧有八产物矩阵",
-      "status": "open",
-      "verified_on": "2026-09-29",
+      "status": "closed",
+      "verified_on": "2026-10-03",
       "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
     },
     {

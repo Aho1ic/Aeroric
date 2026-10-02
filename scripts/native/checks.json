@@ -76,7 +76,8 @@
    "worktree-lifecycle-rust@worktree": 6,
    "worktree-ui-unit@worktree": 6,
    "ssh-host-keys-rust@connections": 8,
-   "connections-ui-unit@connections": 5
+   "connections-ui-unit@connections": 5,
+   "platform-capabilities-rust@platforms": 5
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2448,6 +2449,29 @@
      "parse": "swift",
      "minCases": 5,
      "$note": "P7-01 ConnectionStoreTests 5 例：ingest/select、无明文密码、host key 待确认、remote cwd 分离、HostKeyPrompt 变体。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "platforms": {
+   "cases": [
+    {
+     "name": "platform-capabilities-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "platform_capabilities"
+     ],
+     "parse": "rust",
+     "minCases": 5,
+     "$note": "P7-02 platform_capabilities.rs 5 用例：macOS wsl=false（client OS 不推断 host 能力）、wsl_project_is_local 判定、settings roundtrip linuxPath 不丢、UNC 转换、wsl git 命令构建。",
      "timeoutMs": 900000
     }
    ]

@@ -16,6 +16,7 @@ pub mod ide;
 pub mod location;
 pub mod location_probe;
 pub mod paths;
+pub mod platform;
 pub mod projects;
 pub mod runtime;
 pub mod sessions;

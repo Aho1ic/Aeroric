@@ -160,6 +160,9 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
+      - name: Check core formatting
+        run: cargo fmt --manifest-path core/Cargo.toml -- --check
+
       - name: Check remote protocol formatting
         run: cargo fmt --manifest-path remote-protocol/Cargo.toml -- --check
 
@@ -169,6 +172,11 @@ jobs:
       - name: Run Clippy
         run: >
           cargo clippy --manifest-path src-tauri/Cargo.toml --locked
+          --all-targets --all-features -- -D warnings
+
+      - name: Run core Clippy
+        run: >
+          cargo clippy --manifest-path core/Cargo.toml --locked
           --all-targets --all-features -- -D warnings
 
       - name: Run remote protocol Clippy
@@ -184,6 +192,9 @@ jobs:
       - name: Run Rust tests
         if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features
+
+      - name: Run core tests
+        run: cargo test --manifest-path core/Cargo.toml --locked --all-targets --all-features
 
       # The Tauri test binary cannot be launched by the Windows hosted runner's
       # native GUI runtime, although it compiles successfully there.

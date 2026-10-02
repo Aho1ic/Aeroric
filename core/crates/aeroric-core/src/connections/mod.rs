@@ -2,3 +2,6 @@
 //! 管理，本模块承载连接配置格式、协议形状、纯校验与队列簿记）。
 pub mod sftp;
 pub mod ssh;
+pub mod wsl;
+pub mod wsl_files;
+pub mod wsl_git;

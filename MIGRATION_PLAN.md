@@ -98,6 +98,12 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 ### ▶ P7-01 步 2（2026-10-02，刀二：Connections 六视图）
 新建 `AeroricUI/Connections/{ConnectionStore,ConnectionViews}.swift`：ConnectionStore（**无明文密码**——只有 hasPassword 布尔，credential owner 在宿主；host key 状态 Trusted/Unknown/Unreachable——**不自动重试为信任**；remote cwd 分离）＋ConnectionList＋SSHConnectionEditor（SecureField 密码不预填/传一次后清内存）＋HostKeyPrompt（**首连/keyChanged 分别提示**——keyChanged 显示旧指纹警告）＋SFTPBrowser（remote cwd 分开显示）＋TransferQueueView（进度/取消/恢复）＋RemoteWorkspaceBanner。新建 `ConnectionStoreTests`(5)。**验证**：AeroricKit 全包 185/0、App BUILD SUCCEEDED。接线中修掉：`kind == .keyChanged` 关联值枚举比较（isKeyChanged computed）。
 
+### ▶ P7-02 步 1（2026-10-03，刀一：core platform/wsl 模块）
+新建 `core/crates/aeroric-core/src/platform/{mod,unix,windows}.rs`＋`connections/{wsl,wsl_files,wsl_git}.rs`：platform（Platform 枚举＋capabilities **macOS wsl=false**——**不得由 client OS 直接推断 host 能力**，wsl_reason 诊断；client_os_declares_wsl 只回答 client OS；detect_path 按 cfg 分支）＋unix/windows（candidate_paths；**Windows 分支不删除**——wsl.exe 前缀保留）＋wsl（WslStatus/Distribution/Settings、`wsl_project_is_local` 判定——macOS 打开 WSL 项目禁止当作本地 path）＋wsl_files（**旧 WSL JSON 读写不丢 distribution/linuxPath**、wsl_path_to_windows_unc）＋wsl_git（wsl.exe -d 命令构建）。新建 `tests/platform_capabilities.rs` 5 用例。**验证**：platform_capabilities 5/5、core 全量 **546/0**、clippy `-D warnings` 0、fmt 干净。接线中修掉：Deserialize unused import、doc comment 位置（use 后置）。
+
+### ▶ P7-02 步 2（2026-10-03，刀二：UnsupportedTargetView＋CI core 检查）
+新建 `AeroricUI/Connections/UnsupportedTargetView.swift`（macOS 打开 WSL 项目保持元数据＋显示需要 Windows 主机——**禁止当作本地 path**）；`.github/workflows/checks.yml` 增 core 三作业（fmt/clippy -D warnings/test --all-targets --all-features，**保持原 Tauri matrix 与 source patches**）。**验证**：CI 命令本地复跑（core fmt/clippy/test --all-features → **650/0**、clippy 0）、AeroricKit 全包 185/0、App BUILD SUCCEEDED。
+
 **标注约定**：
 
 - 状态取值 `pending` / `in_progress` / `blocked` / `accepted`，与 §5.3 模板一致。
@@ -142,7 +148,8 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P6-04 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/git.md`，grill-me [git] 已真实调用、用户答复「接受并收口」。两刀：core git 模块（transport 选项注入守卫＋mutating 串行化＋service 全套）＋Git 十视图。门禁 git 2 case/14 用例、core 527/0、AeroricKit 174/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G15 结案） | 凭据助手/分块操作 → P7 | 2026-10-02 |
 | P7-01 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/connections.md`，grill-me [connections] 已真实调用、用户答复「接受并收口」。两刀：core connections 模块＋Connections 六视图。门禁 connections 2 case/13 用例、core 541/0、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | ssh_executor.rs＋legacy SSH 分支删除 → P7 接线；fake SSH e2e → P10-01 | 2026-10-03 |
 | P6-05 | **accepted — P6-05 Gate 通过 ＝ Phase 6 Gate 通过**（2026-10-02 收口：评审 `docs/native/reviews/worktree.md`，grill-me [worktree] 已真实调用、用户答复「接受并收口＋Gate 通过」。两刀：core worktree 模块（RCE 守卫＋merge-base diffstats＋生命周期判定）＋四视图。门禁 worktree 2 case/12 用例、core 533/0、AeroricKit 180/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。真实 Aeroric 仍 main、无新分支） | P2-05 临时端口 → P7 切 WorktreeService | 2026-10-02 |
-| P7-02 ~ P7-05 | pending | Phase 7 内串行 | — |
+| P7-02 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/platforms.md`，grill-me [platforms] 已真实调用、用户答复「接受并收口」。两刀：core platform/wsl 模块＋UnsupportedTargetView＋CI core 三作业。门禁 platforms 1 case/5 用例、core --all-features 650/0、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G14 结案） | wsl_executor＋legacy 删除 → P7 接线收尾；Windows 真机 smoke → P10-01 | 2026-10-03 |
+| P7-03 ~ P7-05 | pending | Phase 7 内串行 | — |
 | Phase 8 | pending | Phase 7 Gate | — |
 | Phase 9 | pending | Phase 8 Gate | — |
 | Phase 10 | pending | Phase 9 Gate | — |
@@ -169,7 +176,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > **【执行状态】补记三百二十二（2026-10-03）— P7-01 收口。** 步 1 侦察：ssh(3590)/ssh_hostkey(511)/ssh_proxy(559)/sftp(3206) 实现盘清。步 2 刀一：core `connections/{mod,ssh,sftp}.rs`（SshConnection **明文密码 skip_serializing 结构性不出去**＋host key 指纹/scan verbatim＋SshHostKeyStatus **hostkey changed 必须失败等待确认**＋validate_remote_path 拒前导 dash＋TransferQueue 进度/取消/恢复/失败簿记）＋base64 依赖＋`tests/ssh_host_keys.rs` 8 用例（ssh_host_keys 8/8、core 541/0）。步 3 刀二：`AeroricUI/Connections/{ConnectionStore,ConnectionViews}.swift` 六视图（**无明文密码**＋HostKeyPrompt 首连/keyChanged 分别提示＋SecureField 不预填＋remote cwd 分离）＋ConnectionStoreTests(5)（185/0）。步 4：connections 门禁新注册（2 case/13 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [connections] 真实调用（用户：接受并收口）；评审 `reviews/connections.md`＋task-status accepted（counts 32/19）＋inventory --freeze（进度总表 P7-01 行；Phase 7 行改 P7-02~P7-05 range 避免双重状态）＋digest 重写。接线中修掉：hasPassword rename、rsa blob base64 长度、keyChanged 关联值比较、bool 断言。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
 
-**当前状态（2026-10-03，第两百五十次更新＝补记三百二十二）— P7-01 accepted（Phase 7 第一个 Task；core connections 模块＋Connections 六视图；connections 门禁 13 用例）。下一动作＝P7-02（WSL 与跨平台运行时保留——wsl_executor.rs）。**
+> **【执行状态】补记三百二十三（2026-10-03）— P7-02 收口。** 步 1 侦察：wsl(2095)/wsl_fs(334)/wsl_git(1175)/platform(1062) 实现盘清；G14 finding 确认（core/ 不在 CI 覆盖内）。步 2 刀一：core `platform/{mod,unix,windows}.rs`＋`connections/{wsl,wsl_files,wsl_git}.rs`（capabilities **macOS wsl=false**——不得由 client OS 推断 host 能力＋**Windows 分支不删除**＋settings roundtrip linuxPath 不丢＋wsl.exe 命令构建）＋`tests/platform_capabilities.rs` 5 用例（platform_capabilities 5/5、core 546/0）。步 3 刀二：`AeroricUI/Connections/UnsupportedTargetView.swift`＋**checks.yml 增 core 三作业**（fmt/clippy/test --all-features，保持原 Tauri matrix 与 source patches）——CI 命令本地复跑 **650/0**（185/0）。步 4：platforms 门禁新注册（1 case/5 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [platforms] 真实调用（用户：接受并收口；**G14 结案**）；评审 `reviews/platforms.md`＋task-status accepted（counts 33/18）＋G14 closed＋inventory --freeze＋digest 重写。接线中修掉：Deserialize unused、doc comment 位置。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
+
+**当前状态（2026-10-03，第两百五十一次更新＝补记三百二十三）— P7-02 accepted（Phase 7 第二个 Task；core platform/wsl 模块＋UnsupportedTargetView＋CI core 三作业；platforms 门禁 5 用例；G14 结案）。下一动作＝P7-03（Docker、端口与 Conda）。**
 > **（上一轮口径——第两百四十次更新，2026-10-02＝补记三百一十一）—  P4-04 accepted＝Phase 4 Gate 通过；P5-01 accepted（评审 `reviews/native-terminal.md`，grill-me [native-terminal] 真实调用＋G31 三件套；ADR-038 含修正案兑现：宿主三方法＋capability＋UnknownStream 双义拆分；SwiftTerm 1.2.5 钉版＋Terminal 五文件＋17 个新单测；smoke e2e 真链路全绿——plan_replay 28B seamless/续读/租约往返/过期票据 no-op；XCTest UI/手测按 Q96 跳过，资产在库）。下一动作＝P5-02（设置中的原生模式按钮与无损切换）。**
 > **（上一轮口径——第两百三十九次更新，2026-10-02＝补记三百零九）—  P4-04 accepted ＝ Phase 4 Gate 通过（评审 `reviews/shell.md`，grill-me [shell] 真实调用＋G31 三件套；四处真发现根修；Q96 用户裁定跳过 UI 6/6——测试资产保留、G41 accepted_by user、重开＝P10-02）。下一动作＝P5-01（用原生终端 renderer 承接同一 PTY），Phase 5 开工。**
 > **（上一轮口径——第两百三十八次更新，2026-10-02＝补记三百零八）—  P4-04 in_progress（只差一次干净开机后的单轮复测）：ui-test.mjs 已改逐测试独立 xcodebuild 会话＋失败换新会话重试（G41 解法），侧栏键盘选择改窗口级 ↑/↓ 隐藏按钮等价物（CommandPalette 先例；List 不自行响应箭头、AX 也不暴露选中态），值断言 detail.selection 头落地。当日实证：r9 5/6（Sidebar 键盘选择首次通过）、r6 TwoMain 点击流通过、钩子/projects.json 持久化稳定；深夜开机 2h 内 60+ 启动后全零窗（预算枯竭）。恢复＝重启→一轮 native:ui-test→全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。全部基建入库（14a286a）。**
@@ -5121,7 +5130,7 @@ grill-me
   - fake SSH 任务在 Tauri 与独立 CLI 均完成 start→input→resume/cancel；迟到 exit 不覆盖新 generation；没有 GUI 仍可执行。原 WSL executor 在此步仍可达，不被删除 SSH 分支连带移除。
   - **调用 `grill-me [connections]`**。
 
-### Task P7-02 — WSL 与跨平台运行时保留
+### Task P7-02 — WSL 与跨平台运行时保留（**2026-10-03 accepted：评审 `docs/native/reviews/platforms.md`，§4.2 grill-me [platforms] 已真实调用、用户答复「接受并收口」。两刀全落地；门禁 platforms 1 case/5 用例、core --all-features 650/0（本地复跑 CI 命令）、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。**G14 结案**：core/ 进 CI 覆盖（checks.yml 增 core fmt/clippy/test 三作业）。以下为原始规格，保留作为证据**）
 > **具名移交项（补记一百八十二，2026-09-29 台账↔本小节对账）**：`docs/native/feature-matrix.json` 把本 Task 列为 owner、而本小节此前没有点名的 gap 共 **1** 条：`G14`。逐条的 `finding`／`requirement`／`verified_on` 以台账为准（`inventory --check` 每天核对 owner 与 `verified_on` 一致）；开工本 Task 时每条必须落成「已闭合＋证据」或「仍开放＋新 owner」，**不接受只留一句台账引用**。本节只补指针，不复述内容（避免两处真相）。
 
 

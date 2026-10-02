@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-3.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "baafa36216a50a5b34f810f09a745a3b1862fbf2ad918223ce337cbf6f522b06",
+  "sourceSha256": "c596637dfea795837c103cdbdef26df8e52b217727b5448053f1de3393c0da37",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -13,8 +13,8 @@
         "task_ids": "P7-02, P10-04",
         "owner": "ci",
         "test": "P10-04 的 native CI 必须对两架构跑 cargo fmt --check / clippy -D warnings / cargo test --locked / swift test，并保留旧有八产物矩阵",
-        "status": "open",
-        "verified_on": "2026-09-29",
+        "status": "closed",
+        "verified_on": "2026-10-03",
         "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
       },
       {
