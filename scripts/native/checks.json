@@ -55,7 +55,7 @@
       "terminal-replay-rust@terminal-core": 5,
       "terminal-unit-rust@terminal-core": 65,
       "watcher-discipline-unit@skeleton": 11,
-      "swift-client-unit@swift-client": 28,
+      "swift-client-unit@swift-client": 33,
       "swift-client-tsan@swift-client": 28,
       "native-design-unit@native-design": 14,
       "shell-unit@shell": 36,
@@ -1780,7 +1780,7 @@
             "AeroricClientTests"
           ],
           "parse": "swift",
-          "minCases": 28,
+          "minCases": 33,
           "$note": "P4-02 AeroricClient 门禁地板：EventReducer 10＋HostConnection 10＋Supervisor 4＋PackageSmoke(AeroricClientTests 内) 4＝28。--filter 让地板只随该 filter 变化（与 swift-package-smoke 同口径）；注意 `--filter AeroricClientTests` 也会跑 AeroricClientTests 里的 PackageSmokeTests 子集，别把全包 12 例口径混进来。教训：ProtocolCodec.encodeLine 返回值自带行尾 \\n，任何发送方再补 \\n 会产生空帧 → splitter 吐空行 → decodeLine 直接 fault——发送侧一律禁止二次加换行。",
           "timeoutMs": 900000
         },
