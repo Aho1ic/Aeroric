@@ -93,8 +93,23 @@ public final class TaskStore {
         rebuildVisible()
     }
 
-    /// 批量操作（Action 4）：逐项回填结果——成功/失败**分开记账**，
-    /// 不允许一个全局 Toast 吞掉局部失败。
+    // MARK: - 修订冲突（Action：多窗口 revision conflict）
+
+    /// 多窗口写冲突：宿主按 revision 拒绝时记录冲突 id，UI 提示用户
+    /// 重试；**自动刷新后不覆盖其他窗口的变更**（冲突条目不本地覆写）。
+    public private(set) var conflictedTaskIDs: Set<String> = []
+
+    public func recordConflict(taskID: String) {
+        conflictedTaskIDs.insert(taskID)
+    }
+
+    /// 自动刷新（宿主快照重新到达）后清除冲突标记，用户再点重试。
+    public func clearConflict(taskID: String) {
+        conflictedTaskIDs.remove(taskID)
+    }
+
+    // MARK: - 批量操作（Action 4）：逐项回填结果——成功/失败**分开记账**，
+    // 不允许一个全局 Toast 吞掉局部失败。
     public struct BatchOutcome {
         public let succeeded: [String]
         public let failed: [(id: String, reason: String)]
