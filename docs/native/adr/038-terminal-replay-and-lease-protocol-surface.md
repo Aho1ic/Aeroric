@@ -28,3 +28,9 @@ Q2（用户 2026-09-27 拍板 A）同时留了一条**不得 silently 继承**�
 - **轮询节奏是客户端私事**：协议不定义轮询间隔；字节环的 `capacity` 决定「落后多远会被重置」，renderer 的保留线策略归 P5-01 Action 5。
 - **`evicted` 与 `read_task_terminal_history` 的分工写死**：前者是「这一代无可重放」，后者是「跨代的历史转录」——renderer 收到 `evicted` 不得把历史转录塞进屏幕缓冲冒充重放。
 - **`terminal.replay` capability 的宿主开关**：embedded adapter（P2-05）实现进度落后时，不声明该 capability 即可整体拒绝重放面；原生端据此显示降级提示而不是无限等待。
+
+## 修正案（2026-10-02，开工首刀的机制修正——决策不变，入口机制改走 P3-07 先例）
+
+动刀前实测两条事实，推翻决策 4 的「记进 methods.schema.json」路径：①`contracts/native/v1/methods.schema.json` 的 532 条自 P2-01 冻结未动，其唯一来源是 `docs/native/command-map.json`（src-tauri 的 Tauri 命令清单）经 export-schema 派生；②P3-07 的宿主方法（`project.open`/`task.list`/`session.list` 等）**不在 schema 里**——它们注册在宿主 dispatcher（未知方法＝服务端 `UNSUPPORTED_CAPABILITY` 拒绝），CLI 经 `rpc` 通道可达，这正是 §3.1 #8 在原生方法上的既定兑付形状。把原生专属方法塞进 Tauri 派生的冻结清单，等于谎报它们是 Tauri 命令，还要连动 command-map 的生成机制（inventory.mjs 的权威源就是 `src-tauri/src/lib.rs` 的 generate_handler!）。
+
+因此修正：**三条方法的协议入口＝宿主 dispatcher 注册（P3-07 先例）＋宿主 capability 清单声明 `terminal.replay`**（handshake 协商按 capability.rs 模型），**不动 methods.schema.json 与 command-map.json**。决策 1/2/3/5/6 原样生效：方法名、reason 枚举（含 notStarted/evicted 拆分）、租约语义、rpc 可达性、unitsFromStart 降级全部不变。被否掉的方案：扩 export-schema 加「宿主专属方法表」（把冻结清单的生成机制一分为二，三侧交叉断言全部要重写，收益只是让 schema 也列名字——而 schema 的消费者是 Tauri 侧解码器，原生方法它永远用不到）。
