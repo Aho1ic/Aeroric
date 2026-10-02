@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "9ab2c04c07dc5174a128facc299803cb79fc59cd492e3adf70e4f5ae14962ac3",
+  "sourceSha256": "53c814f18d1986e6a3288c6c930320667a199d56730fcef32cce35f78a52f341",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -17,10 +17,10 @@
         "negative_test": "重复打开同一 path 不得新建；中文/空格路径、大小写、丢失远程连接的 orderIndex 稳定",
         "status": "planned",
         "core_state": "accepted",
-        "native_state": "unstarted",
+        "native_state": "in_progress",
         "side_states": {
           "C": "accepted",
-          "N": "unstarted"
+          "N": "in_progress"
         },
         "reviews": [
           "reviews/projects.md"
@@ -38,10 +38,10 @@
         "negative_test": "同 ID 重试只 spawn 一次；持久化失败不得启动进程",
         "status": "planned",
         "core_state": "accepted",
-        "native_state": "unstarted",
+        "native_state": "in_progress",
         "side_states": {
           "C": "accepted",
-          "N": "unstarted"
+          "N": "in_progress"
         },
         "reviews": [
           "reviews/tasks.md"
