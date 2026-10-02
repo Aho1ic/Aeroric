@@ -1,4 +1,5 @@
 import AeroricClient
+import AeroricProtocol
 import AeroricUI
 import SwiftUI
 
@@ -137,7 +138,9 @@ struct TaskWorkspaceView: View {
         )
         switch presentation {
         case .native:
-            NativeTaskSummaryView(task: task)
+            // P5-04 兑现：DSH 会话的 native 呈现已接通（消息面板＋composer＋
+            // 审批/问题）。会话读取/发送全部走 SessionsClient 类型化调用。
+            DshSessionPanel(services: services, task: task)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .terminal:
             if services.terminalCoordinator?.taskID == task.id, let coordinator = services.terminalCoordinator {
@@ -163,31 +166,161 @@ struct TaskWorkspaceView: View {
     }
 }
 
-/// native 呈现（P5-04 前的明确未接通状态）：只显示任务元数据，不伪造
-/// composer/approval——与 `SessionPresentation.native` 注释一致。
-private struct NativeTaskSummaryView: View {
+/// P5-04 Action 6：DSH 会话 native 面板（消息＋composer＋审批/问题）。
+/// 会话读取走 SessionsClient（task.history taskId 寻址，G13 不全量放行）；
+/// 发送走 composer（斜杠命令早跳）；审批/问题走 PendingRequestStore＋
+/// respond_dsh_remote_event。非 DSH 会话保持 unsupported 状态（Action 6：
+/// 移除对应未接通状态但保留其他 Agent 的 unsupported 状态——这里只由
+/// SessionPresentation.native 分支到达，非 DSH 不会走到这里）。
+struct DshSessionPanel: View {
+    let services: AppServices
     let task: TaskStore.TaskEntry
 
+    @State private var paginator = SessionPaginator()
+    @State private var pendingStore = PendingRequestStore()
+    @State private var composerDraft = ""
+    @State private var composerAttachments: [String] = []
+    @State private var usage = SessionUsage()
+    @State private var approvalPresented = false
+    @State private var questionPresented = false
+    @State private var sendError: String?
+    @State private var pageLoadTask: Task<Void, Never>?
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LabeledContent("状态") { Text(task.status) }
-            LabeledContent("Agent") { Text(task.agent ?? "—") }
-            if let created = task.createdAtMs {
-                LabeledContent("创建") { Text(Self.timeText(created)) }
-            }
-            if let updated = task.updatedAtMs {
-                LabeledContent("更新") { Text(Self.timeText(updated)) }
-            }
-            Text("此会话的原生消息面板尚未接通（P5-04）；交互请切换到高级模式。")
-                .font(.caption)
-                .foregroundStyle(Color.dsTextMuted)
-            Spacer()
+        VStack(spacing: 0) {
+            SessionView(
+                paginator: paginator,
+                onLoadMore: { loadEarlierPage() },
+                onExport: { exportSession() },
+                usage: usage
+            )
+            ComposerView(
+                catalog: nil,
+                draft: $composerDraft,
+                attachmentPaths: $composerAttachments,
+                onSend: { text, attachments in
+                    sendMessage(text: text, attachments: attachments)
+                }
+            )
         }
-        .padding(16)
-        .accessibilityIdentifier("tasks.native-summary")
+        .onAppear {
+            paginator.reset(sessionKey: task.id, isCodex: false)
+            loadEarlierPage()
+        }
+        .onChange(of: task.id) { oldID, newID in
+            guard oldID != newID else { return }
+            pageLoadTask?.cancel()
+            paginator.reset(sessionKey: newID, isCodex: false)
+            loadEarlierPage()
+        }
+        .sheet(isPresented: $approvalPresented) {
+            if let request = pendingStore.pending.first(where: { $0.kind == .approval }) {
+                ApprovalSheet(
+                    request: request,
+                    store: pendingStore,
+                    onSubmit: { eventId, outcome in submitOutcome(eventId: eventId, outcome: outcome) },
+                    onDismiss: { approvalPresented = false }
+                )
+            }
+        }
+        .sheet(isPresented: $questionPresented) {
+            if let request = pendingStore.pending.first(where: { $0.kind == .question }) {
+                QuestionSheet(
+                    request: request,
+                    store: pendingStore,
+                    onSubmit: { eventId, outcome in submitOutcome(eventId: eventId, outcome: outcome) },
+                    onDismiss: { questionPresented = false }
+                )
+            }
+        }
+        .alert("发送失败", isPresented: Binding(
+            get: { sendError != nil },
+            set: { if !$0 { sendError = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(sendError ?? "")
+        }
     }
 
-    static func timeText(_ ms: UInt64) -> String {
-        Date(timeIntervalSince1970: TimeInterval(ms) / 1000).formatted(date: .abbreviated, time: .shortened)
+    /// 加载更早页（分页循环：cursor=null 起步 → session.history → 合并；
+    /// !hasMore 或坏游标停止）。
+    private func loadEarlierPage() {
+        guard paginator.canLoadMore || paginator.messages.isEmpty else { return }
+        paginator.setLoadingPage(true)
+        pageLoadTask?.cancel()
+        pageLoadTask = Task { @MainActor in
+            guard let sessions = services.sessionsClient else {
+                paginator.setLoadingPage(false)
+                return
+            }
+            if let page = try? await sessions.historyPage(
+                taskId: task.id,
+                cursor: paginator.cursor.map { String($0) }
+            ) {
+                paginator.ingest(page: SessionMessagePage(
+                    messages: page.messages.map(Self.toStoreMessage),
+                    nextCursor: nil,
+                    hasMore: false
+                ))
+            }
+            paginator.setLoadingPage(false)
+        }
+    }
+
+    /// 发送（composer → DSH prompt；斜杠命令已在 ComposerView 早跳）。
+    private func sendMessage(text: String, attachments: [String]) {
+        Task { @MainActor in
+            do {
+                try await services.sendDshPrompt(sessionTaskId: task.id, text: text)
+            } catch {
+                sendError = String(describing: error)
+            }
+        }
+    }
+
+    /// 提交审批/问题回执（approval.respond；值即结果本身，无信封）。
+    private func submitOutcome(eventId: String, outcome: PendingRequestStore.Outcome) {
+        pendingStore.markSubmitted(eventId: eventId)
+        let payload = Self.toJSONValue(PendingRequestStore.outcomePayload(outcome))
+        Task { @MainActor in
+            try? await services.respondDshOutcome(eventId: eventId, outcome: payload)
+            pendingStore.resolve(eventId: eventId)
+        }
+    }
+
+    /// [String: Any]（JSONSerialization 产物）→ JSONValue。
+    static func toJSONValue(_ any: [String: Any]) -> [String: JSONValue] {
+        any.mapValues { value in
+            switch value {
+            case let text as String: .string(text)
+            case let number as NSNumber: .number(number.stringValue)
+            case let flag as Bool: .bool(flag)
+            case let dict as [String: Any]: .object(toJSONValue(dict))
+            default: .null
+            }
+        }
+    }
+
+    /// 导出 Markdown（session.export；out 路径由宿主校验）。
+    private func exportSession() {
+        Task { @MainActor in
+            let out = NSTemporaryDirectory() + "session-\(task.id).md"
+            try? await services.exportDshSession(taskId: task.id, out: out)
+        }
+    }
+
+    /// 协议层消息 → store 镜像（v1 ContentBlock → UI SessionContent）。
+    static func toStoreMessage(_ message: AeroricProtocol.SessionMessage) -> AeroricUI.SessionMessage {
+        var content: [SessionContent] = []
+        for block in message.blocks {
+            switch block {
+            case let .text(_, text):
+                content.append(.text(text: text))
+            case let .unknown(opaque):
+                content.append(.text(text: opaque.kind))
+            }
+        }
+        return SessionMessage(role: message.role.rawValue, content: content, messageId: message.id)
     }
 }

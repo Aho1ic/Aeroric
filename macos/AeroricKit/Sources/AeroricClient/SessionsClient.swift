@@ -1,0 +1,122 @@
+import AeroricProtocol
+import Foundation
+
+/// P5-04 Action 5：会话/审批的类型化客户端（宿主 `session.list`/
+/// `session.history`/`session.export`/`approval.list`/`approval.respond`，
+/// 复用 HostConnection.request——INV-02 归属：wire 解析只在 AeroricClient）。
+public struct SessionsClient: Sendable {
+    let connection: HostConnection
+
+    public init(connection: HostConnection) {
+        self.connection = connection
+    }
+
+    // MARK: - session.list
+
+    public struct SessionSummary: Sendable, Equatable {
+        public var taskId: String
+        public var projectId: String
+        public var sessionPath: String
+        public var sessionId: String?
+        public var agent: String?
+
+        public init(
+            taskId: String, projectId: String, sessionPath: String,
+            sessionId: String?, agent: String?
+        ) {
+            self.taskId = taskId
+            self.projectId = projectId
+            self.sessionPath = sessionPath
+            self.sessionId = sessionId
+            self.agent = agent
+        }
+    }
+
+    /// session.list：宽容镜像解析（无 taskId 丢弃；空可选不上 store）。
+    public func listSessions() async throws -> [SessionSummary] {
+        let frame = try await connection.request("session.list", params: .null)
+        guard case let .array(items)? = frame.result["sessions"] else { return [] }
+        return items.compactMap { item in
+            guard case let .object(object) = item,
+                  case let .string(taskId)? = object["taskId"],
+                  case let .string(projectId)? = object["projectId"],
+                  case let .string(path)? = object["sessionPath"]
+            else { return nil }
+            let sessionId: String?
+            if case let .string(value)? = object["sessionId"] { sessionId = value } else { sessionId = nil }
+            let agent: String?
+            if case let .string(value)? = object["agent"] { agent = value } else { agent = nil }
+            return SessionSummary(
+                taskId: taskId, projectId: projectId, sessionPath: path,
+                sessionId: sessionId, agent: agent
+            )
+        }
+    }
+
+    // MARK: - session.history（消息分页；与 read_session_message_page 兼容）
+
+    public enum MalformedReply: Error, Equatable {
+        case malformedReply(String)
+    }
+
+    /// session.history（taskId 寻址）：返回 v1 契约的 SessionPage（协议层
+    /// 解码）。G13：宿主按 task 持久化的 agent id 精确取根，客户端只传
+    /// taskId，不做全量放行。
+    public func historyPage(taskId: String, cursor: String?) async throws -> SessionPage {
+        var params: [String: JSONValue] = ["taskId": .string(taskId)]
+        if let cursor {
+            params["cursor"] = .string(cursor)
+        }
+        let frame = try await connection.request("session.history", params: .object(params))
+        guard let page = SessionPage.decode(frame.result) else {
+            throw MalformedReply.malformedReply("session.history reply is not a SessionPage")
+        }
+        return page
+    }
+
+    // MARK: - session.export
+
+    /// session.export：taskId + out（输出路径由用户指定，宿主校验输出路径）。
+    public func exportSession(taskId: String, out: String) async throws {
+        _ = try await connection.request(
+            "session.export",
+            params: .object(["taskId": .string(taskId), "out": .string(out)])
+        )
+    }
+
+    // MARK: - approval.list / approval.respond
+
+    public struct HostApproval: Sendable, Equatable {
+        public var eventId: String
+        public var kind: String
+        public var sessionId: String?
+
+        public init(eventId: String, kind: String, sessionId: String?) {
+            self.eventId = eventId
+            self.kind = kind
+            self.sessionId = sessionId
+        }
+    }
+
+    /// approval.list（host restart/断线恢复的权威查询）。
+    public func listApprovals() async throws -> [HostApproval] {
+        let frame = try await connection.request("approval.list", params: .null)
+        guard case let .array(items)? = frame.result["approvals"] else { return [] }
+        return items.compactMap { item in
+            guard case let .object(object) = item,
+                  case let .string(eventId)? = object["eventId"],
+                  case let .string(kind)? = object["kind"]
+            else { return nil }
+            let sessionId: String?
+            if case let .string(value)? = object["sessionId"] { sessionId = value } else { sessionId = nil }
+            return HostApproval(eventId: eventId, kind: kind, sessionId: sessionId)
+        }
+    }
+
+    /// approval.respond：回执 outcome（值即结果本身，无信封）。
+    public func respondApproval(eventId: String, outcome: [String: JSONValue]) async throws {
+        var params: [String: JSONValue] = ["eventId": .string(eventId)]
+        params["outcome"] = .object(outcome)
+        _ = try await connection.request("approval.respond", params: .object(params))
+    }
+}

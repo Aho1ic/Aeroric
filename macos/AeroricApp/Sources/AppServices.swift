@@ -298,12 +298,44 @@ final class AppServices {
     }
     private var _pendingGenerations: [String: UInt64] = [:]
 
-    /// P5-02 接线：该任务的宿主侧结构化能力是否已验证。快照未带协商
-    /// 结果（P5-04 兑现前的保守默认）→ false＝native 下显示状态卡。
+    // MARK: - P5-04 会话/审批（SessionsClient 接线）
+
+    /// P5-04：会话/审批类型化客户端（连接附着后创建）。
+    var sessionsClient: SessionsClient? {
+        guard let connection = attachedConnection else { return nil }
+        return SessionsClient(connection: connection)
+    }
+
+    /// P5-04：DSH composer 发送（DSH prompt 走 DSH webui 命令通道；宿主
+    /// prompt 投递判定在 core attachments.rs，客户端只传文本）。
+    func sendDshPrompt(sessionTaskId: String, text: String) async throws {
+        guard let connection = attachedConnection else { throw ProjectError.notConnected }
+        _ = try await connection.request(
+            "task.input",
+            params: .object(["taskId": .string(sessionTaskId), "text": .string(text)])
+        )
+    }
+
+    /// P5-04：审批/问题回执（approval.respond；outcome 值即结果本身）。
+    func respondDshOutcome(eventId: String, outcome: [String: JSONValue]) async throws {
+        guard let sessions = sessionsClient else { throw ProjectError.notConnected }
+        try await sessions.respondApproval(eventId: eventId, outcome: outcome)
+    }
+
+    /// P5-04：会话导出（session.export）。
+    func exportDshSession(taskId: String, out: String) async throws {
+        guard let sessions = sessionsClient else { throw ProjectError.notConnected }
+        try await sessions.exportSession(taskId: taskId, out: out)
+    }
+
+    /// P5-03 接线：该任务的宿主侧结构化能力是否已验证。P5-04 兑现：DSH
+    /// 已验证 → native；其他家保守 false（只终端交互）。
     func structuredCapabilitiesVerified(_ task: TaskStore.TaskEntry) -> Bool {
-        // DSH 之外的家（claude/codex/omp）宿主只提供终端交互；结构化
-        // composer 能力协商在 P5-04 落地，这里保守返回 false。
-        return false
+        // P5-04 兑现：DSH 的结构化能力协商已通过（宿主 DshProtocolCapabilities
+        // 快照 + 审批/问题 waterfall + composer 面 P5-04 已接通）；DSH 之外的
+        // 家（claude/codex/omp）宿主只提供终端交互（AGENTS.md：omp 只走原生
+        // PTY），保守 false。
+        return task.agent == "dsh"
     }
 
     /// P5-03 接线：草稿选项集。宿主 capability 回答前＝空集（不伪造
