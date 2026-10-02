@@ -36,9 +36,9 @@
     "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
     "counts": {
       "tasks": 51,
-      "accepted": 30,
+      "accepted": 31,
       "in_progress": 0,
-      "pending": 21
+      "pending": 20
     }
   },
   "tasks": [
@@ -224,9 +224,9 @@
     },
     {
       "task": "P6-05",
-      "status": "pending",
-      "accepted_on": null,
-      "review": null
+      "status": "accepted",
+      "accepted_on": "2026-10-02",
+      "review": "reviews/worktree.md"
     },
     {
       "task": "P7-01",

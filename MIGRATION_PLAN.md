@@ -86,6 +86,12 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 ### ▶ P6-04 步 2（2026-10-02，刀二：Git 十视图）
 新建 `AeroricUI/Git/{GitStore,GitViews}.swift`：GitStore（变更/提交/分支/stash 簿记＋冲突路径高亮＋diff 不截断）＋GitPanel＋ChangeList（staged/unstaged 分节＋冲突高亮）＋StageActions（commit＋**discard All 二段确认**）＋CommitSheet＋HistoryView＋**DiffView**（原始 diff 不截断）＋BranchGraph＋BlameView＋StashView（apply/drop）＋ConflictResolver（ours/theirs 侧提取——**marker 后 label 同行跳行**）。新建 `GitStoreTests`(5)。**验证**：AeroricKit 全包 174/0、App BUILD SUCCEEDED。接线中修掉：DiffView 缺失、ConflictResolver static 调用（Self.）、oursSide 提取含 marker label（HEAD 跳行）。
 
+### ▶ P6-05 步 1（2026-10-02，刀一：core git worktree 模块）
+新建 `core/crates/aeroric-core/src/git/{worktree,worktree_policy}.rs`：worktree_policy（生命周期判定纯函数——`can_create`/`can_merge`/`can_remove`/`discarded_blocks_interaction`/`remote_project_blocks_worktree`、`task_worktree_branch_name`、**同名目录已存在拒绝**、numstat 累计）＋worktree（WorktreeService：create/**同名拒绝**、merge（HEAD==base 直接合并否则 fetch ff 不切走 HEAD；**RCE 守卫** branch/base_branch 首字符检查——refspec 无法靠 `--end-of-options` 保护）、remove（`--force`＋`-D`）、diffstats（**merge-base 而非 base_branch 本身**——避免主仓 base 推进后把别人提交的改动算到本任务头上））。新建 `tests/worktree_lifecycle.rs` 6 用例（create→task→diff→merge roundtrip/reopen 同名拒绝/dirty 拒绝 merge/根外拒绝/policy 判定/task id）。**验证**：worktree_lifecycle 6/6、core 全量 **533/0**、clippy `-D warnings` 0、fmt 干净。接线中修掉：validate_task_id 位置/可见性、PathBuf_alias non_camel_case、unused wt_path_str（remove 的恢复）。
+
+### ▶ P6-05 步 2（2026-10-02，刀二：worktree 四视图）
+新建 `AeroricUI/Git/WorktreeViews.swift`：WorktreePolicy（生命周期判定 Swift 侧词汇表——create/merge/remove/discarded/remote 与 core 同语义）＋WorktreeCreateSheet（显式选择 base branch——尊重目标项目 branch policy，AGENTS main-only 阻止新增分支）＋WorktreeTaskBadge（discarded 禁用交互＋diffstats 展示）＋WorktreeMergeSheet（blocked reason 呈现）＋WorktreeDiscardSheet（二段确认 Toggle）。新建 `WorktreePolicyTests`(6)。**验证**：AeroricKit 全包 180/0、App BUILD SUCCEEDED。
+
 **标注约定**：
 
 - 状态取值 `pending` / `in_progress` / `blocked` / `accepted`，与 §5.3 模板一致。
@@ -128,7 +134,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P6-02 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/editor.md`，grill-me [editor] 已真实调用、用户答复「接受并收口」。两刀：core format/local_history/preview＋Editor 八视图（真实 NSTextView/TextKit 桥）。门禁 editor 2 case/14 用例、core 508/0、AeroricKit 164/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | 行号 ruler 无滚动视图时宿主容器挂；Markdown 复杂内容按 feature-matrix 单独验收；TextKit 真机 QA → P10-02；autosave 调度 → 后续接线 | 2026-10-02 |
 | P6-03 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/ide.md`，grill-me [ide] 已真实调用、用户答复「接受并收口」。两刀：core ide 模块＋IDE 八视图（受陬 WKWebView）。门禁 ide 3 case/15 用例、core 518/0、AeroricKit 169/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。lsp.diagnostics 派生例外写明于评审 §5） | LSP process 真实管理 → P7；真实断点/单步烟测 → P10-01 | 2026-10-02 |
 | P6-04 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/git.md`，grill-me [git] 已真实调用、用户答复「接受并收口」。两刀：core git 模块（transport 选项注入守卫＋mutating 串行化＋service 全套）＋Git 十视图。门禁 git 2 case/14 用例、core 527/0、AeroricKit 174/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G15 结案） | 凭据助手/分块操作 → P7 | 2026-10-02 |
-| P6-05 | pending | Phase 6 内串行 | — |
+| P6-05 | **accepted — P6-05 Gate 通过 ＝ Phase 6 Gate 通过**（2026-10-02 收口：评审 `docs/native/reviews/worktree.md`，grill-me [worktree] 已真实调用、用户答复「接受并收口＋Gate 通过」。两刀：core worktree 模块（RCE 守卫＋merge-base diffstats＋生命周期判定）＋四视图。门禁 worktree 2 case/12 用例、core 533/0、AeroricKit 180/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。真实 Aeroric 仍 main、无新分支） | P2-05 临时端口 → P7 切 WorktreeService | 2026-10-02 |
 | Phase 7 | pending | Phase 6 Gate | — |
 | Phase 8 | pending | Phase 7 Gate | — |
 | Phase 9 | pending | Phase 8 Gate | — |
@@ -152,7 +158,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > **【执行状态】补记三百二十（2026-10-02）— P6-04 收口。** 步 1 侦察：git.rs(3189)/git_path_guard(301) 实现盘清。步 2 刀一：core `git/{mod,service,transport}.rs`（transport **argv＋`--` 选项注入守卫**＋read timeout kill child＋**RepoLocks 同 repo mutating 串行化**；service status porcelain -z verbatim＋全套业务＋**diff 不截断**）＋`tests/git_service.rs` 9 用例（**临时 repo＋本地 bare remote**：untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip/discard/log/branch/stash）（git_service 9/9、core 527/0）。步 3 刀二：`AeroricUI/Git/{GitStore,GitViews}.swift` 十视图（discard All 二段确认＋ConflictResolver ours/theirs 提取）＋GitStoreTests(5)（174/0）。步 4：git 门禁新注册（2 case/14 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [git] 真实调用（用户：接受并收口；**G15 结案**：客户端面闭合——不在 Swift 直接调用 git，宿主接线随 P7）；评审 `reviews/git.md`＋task-status accepted（counts 30/21）＋G15 closed＋inventory --freeze＋digest 重写。接线中修掉：name borrow、unused import、enumerate 丢弃索引、DiffView 缺失、oursSide marker label 跳行。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
 
-**当前状态（2026-10-02，第两百四十八次更新＝补记三百二十）— P6-04 accepted（Phase 6 第四个 Task；core git 模块＋Git 十视图；git 门禁 14 用例；G15 结案）。下一动作＝P6-05（worktree 与任务生命周期联合迁移）——Phase 6 最后一个 Task。**
+> **【执行状态】补记三百二十一（2026-10-02）— P6-05 收口 ＝ Phase 6 Gate 通过。** 步 1 侦察：worktree 函数（create/merge/remove/diffstats）实现盘清。步 2 刀一：core `git/{worktree,worktree_policy}.rs`（WorktreeService create/**同名拒绝**/merge（HEAD==base 直接合并否则 fetch ff；**RCE 守卫**首字符检查）/remove（`--force`＋`-D`）/diffstats（**merge-base**）；生命周期判定纯函数）＋`tests/worktree_lifecycle.rs` 6 用例（worktree_lifecycle 6/6、core 533/0）。步 3 刀二：`AeroricUI/Git/WorktreeViews.swift` 四视图（branch policy main-only 阻止新增分支＋二段确认）＋WorktreePolicyTests(6)（180/0）。步 4：worktree 门禁新注册（2 case/12 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [worktree] 真实调用（用户：接受并收口＋**Phase 6 Gate 通过**——F07 files 17＋editor 14、F08 ide 15、F09 git 14、F10 worktree 12）；评审 `reviews/worktree.md`＋task-status accepted（counts 31/20）＋inventory --freeze＋digest 重写。真实 Aeroric 仍 main、无 aeroric-task/* 分支（测试只在临时仓库）。接线中修掉：validate_task_id 位置/可见性、PathBuf_alias、unused wt_path_str（remove 恢复）。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
+
+**当前状态（2026-10-02，第两百四十九次更新＝补记三百二十一）— P6-05 accepted ＝ Phase 6 Gate 通过（F07–F10 每子能力在册：files 17＋editor 14＋ide 15＋git 14＋worktree 12）。下一动作＝Phase 7 / P7-01（连接、基础设施、数据库与笔记——SSH/WSL/数据库连接与笔记模块）。**
 > **（上一轮口径——第两百四十次更新，2026-10-02＝补记三百一十一）—  P4-04 accepted＝Phase 4 Gate 通过；P5-01 accepted（评审 `reviews/native-terminal.md`，grill-me [native-terminal] 真实调用＋G31 三件套；ADR-038 含修正案兑现：宿主三方法＋capability＋UnknownStream 双义拆分；SwiftTerm 1.2.5 钉版＋Terminal 五文件＋17 个新单测；smoke e2e 真链路全绿——plan_replay 28B seamless/续读/租约往返/过期票据 no-op；XCTest UI/手测按 Q96 跳过，资产在库）。下一动作＝P5-02（设置中的原生模式按钮与无损切换）。**
 > **（上一轮口径——第两百三十九次更新，2026-10-02＝补记三百零九）—  P4-04 accepted ＝ Phase 4 Gate 通过（评审 `reviews/shell.md`，grill-me [shell] 真实调用＋G31 三件套；四处真发现根修；Q96 用户裁定跳过 UI 6/6——测试资产保留、G41 accepted_by user、重开＝P10-02）。下一动作＝P5-01（用原生终端 renderer 承接同一 PTY），Phase 5 开工。**
 > **（上一轮口径——第两百三十八次更新，2026-10-02＝补记三百零八）—  P4-04 in_progress（只差一次干净开机后的单轮复测）：ui-test.mjs 已改逐测试独立 xcodebuild 会话＋失败换新会话重试（G41 解法），侧栏键盘选择改窗口级 ↑/↓ 隐藏按钮等价物（CommandPalette 先例；List 不自行响应箭头、AX 也不暴露选中态），值断言 detail.selection 头落地。当日实证：r9 5/6（Sidebar 键盘选择首次通过）、r6 TwoMain 点击流通过、钩子/projects.json 持久化稳定；深夜开机 2h 内 60+ 启动后全零窗（预算枯竭）。恢复＝重启→一轮 native:ui-test→全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。全部基建入库（14a286a）。**
@@ -5064,7 +5072,7 @@ grill-me
   - 参数以 `-` 开头、换行、空格文件名不成为选项注入；取消 commit 后 index 不被额外改变。
   - **调用 `grill-me [git]`**。
 
-### Task P6-05 — worktree 与任务生命周期联合迁移
+### Task P6-05 — worktree 与任务生命周期联合迁移（**2026-10-02 accepted ＝ Phase 6 Gate 通过：评审 `docs/native/reviews/worktree.md`，§4.2 grill-me [worktree] 已真实调用、用户答复「接受并收口＋Gate 通过」。两刀全落地；门禁 worktree 2 case/12 用例（worktree_lifecycle 6＋WorktreePolicyTests 6）、core 533/0、AeroricKit 180/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。真实 Aeroric 仍 main、无 aeroric-task/* 分支。**Phase 6 Gate（F07–F10）通过**：F07 files 17＋editor 14、F08 ide 15、F09 git 14、F10 worktree 12。以下为原始规格，保留作为证据**）
 
 - **Input**：`src/state/app/worktreeOps.ts`、`src/lib/api/worktree.ts`、`src/taskSession.ts`、Rust git worktree 函数、AGENTS main-only。
 - **Action**：

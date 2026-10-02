@@ -273,13 +273,15 @@
       "positive_test": "tests/worktree_lifecycle.rs create→task→diff→merge",
       "negative_test": "worktreeDiscarded 后禁用 resume/merge/discard；不得重建同名目录覆盖用户文件",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/worktree.md"
+      ]
     },
     {
       "id": "F11",
