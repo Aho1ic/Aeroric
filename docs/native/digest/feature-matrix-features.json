@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "2aae52699dc1887db5c6692855469545197561552df23fc5771f316ed5c0261f",
+  "sourceSha256": "9b6fd60fcb6a372ba36ec2add433bf9bbbb5d5b3184ec75b4f73e10b7a2c5126",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -80,12 +80,13 @@
         "negative_test": "跨帧中文/emoji/非法 UTF-8/NUL；20 次 resize 末值正确；隐藏终端无写权限",
         "status": "planned",
         "core_state": "accepted",
-        "native_state": "in_progress",
+        "native_state": "accepted",
         "side_states": {
           "C": "accepted",
-          "N": "in_progress"
+          "N": "accepted"
         },
         "reviews": [
+          "reviews/native-terminal.md",
           "reviews/terminal-core.md"
         ]
       },

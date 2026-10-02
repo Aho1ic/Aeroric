@@ -141,12 +141,13 @@
       "negative_test": "跨帧中文/emoji/非法 UTF-8/NUL；20 次 resize 末值正确；隐藏终端无写权限",
       "status": "planned",
       "core_state": "accepted",
-      "native_state": "in_progress",
+      "native_state": "accepted",
       "side_states": {
         "C": "accepted",
-        "N": "in_progress"
+        "N": "accepted"
       },
       "reviews": [
+        "reviews/native-terminal.md",
         "reviews/terminal-core.md"
       ]
     },
