@@ -530,11 +530,13 @@
       "negative_test": "100 次切换后 spawnCount=1、generation/sessionId 不变、原始输出顺序不变",
       "status": "planned-new-capability-no-existing-command",
       "core_state": "not-declared",
-      "native_state": "in_progress",
+      "native_state": "accepted",
       "side_states": {
-        "N": "in_progress"
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/mode-switch.md"
+      ]
     },
     {
       "id": "F25",
