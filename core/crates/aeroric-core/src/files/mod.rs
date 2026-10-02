@@ -4,7 +4,10 @@
 //! - [`read_write`]：read/list/create/rename/copy/trash/delete 业务主体。
 //! - [`search`]：rg JSON 解析＋替换 preview/apply（stale match 拒绝不覆盖）。
 //! - [`watch`]：watcher coalesce/overflow → rescan 纯决策＋取消 token。
+pub mod format;
+pub mod local_history;
 pub mod path_policy;
+pub mod preview;
 pub mod read_write;
 pub mod search;
 pub mod watch;

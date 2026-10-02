@@ -65,7 +65,9 @@
    "sessions-ui-unit@sessions-ui": 20,
    "settings-ui-unit@settings-ui": 11,
    "files-core-rust@files": 13,
-   "files-ui-unit@files": 4
+   "files-ui-unit@files": 4,
+   "file-history-rust@editor": 7,
+   "editor-ui-unit@editor": 7
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2223,6 +2225,45 @@
      "parse": "swift",
      "minCases": 4,
      "$note": "P6-01 FileTreeTests 4 例：懒加载首次展开触发、跨项目重置、加载标记、UI 不做路径推断。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "editor": {
+   "cases": [
+    {
+     "name": "file-history-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "file_history"
+     ],
+     "parse": "rust",
+     "minCases": 7,
+     "$note": "P6-02 file_history.rs 7 用例：快照 roundtrip（record/list/read/restore 兜底）、prune、discard、formatter 选型、失败原文不变、preview 判定、scheme 守卫。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "editor-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "DocumentStoreTests"
+     ],
+     "parse": "swift",
+     "minCases": 7,
+     "$note": "P6-02 DocumentStoreTests 7 例：dirty/revision、冲突不可静默覆盖、BOM/CRLF、关 tab dirty、SaveOutcome 路由、scheme 守卫。",
      "timeoutMs": 900000
     }
    ]

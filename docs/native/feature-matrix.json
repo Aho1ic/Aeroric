@@ -209,13 +209,14 @@
       "positive_test": "tests/{files,search_replace,file_history}.rs",
       "negative_test": "symlink escape、../、写时外部修改拒绝覆盖；替换预览后版本不符不得提交",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
       "reviews": [
+        "reviews/editor.md",
         "reviews/files.md"
       ]
     },
