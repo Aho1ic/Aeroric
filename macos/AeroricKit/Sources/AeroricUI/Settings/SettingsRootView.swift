@@ -8,10 +8,22 @@ import SwiftUI
 /// `SettingsSection.swift`.
 public struct SettingsRootView<State: SettingsStateProviding>: View {
     let state: State
+    /// P5-02：模式绑定为 nil 时，application 分区显示未接通占位。
+    let interactionMode: Binding<InteractionMode>?
+    let onInteractionModeSave: ((InteractionMode) -> Void)?
+    let interactionModeSaveError: String?
     @State private var section: SettingsSection = .application
 
-    public init(state: State) {
+    public init(
+        state: State,
+        interactionMode: Binding<InteractionMode>? = nil,
+        onInteractionModeSave: ((InteractionMode) -> Void)? = nil,
+        interactionModeSaveError: String? = nil
+    ) {
         self.state = state
+        self.interactionMode = interactionMode
+        self.onInteractionModeSave = onInteractionModeSave
+        self.interactionModeSaveError = interactionModeSaveError
     }
 
     public var body: some View {
@@ -30,7 +42,15 @@ public struct SettingsRootView<State: SettingsStateProviding>: View {
             Divider().overlay(Color.dsBorder)
             switch section {
             case .application:
-                NotWiredYetView(task: "P5-02（设置中的原生模式切换）")
+                if let interactionMode {
+                    InteractionSettingsView(
+                        mode: interactionMode,
+                        onSave: { onInteractionModeSave?($0) },
+                        saveError: interactionModeSaveError
+                    )
+                } else {
+                    NotWiredYetView(task: "P5-02（设置中的原生模式切换）")
+                }
             case .agents:
                 NotWiredYetView(task: "P5-03/P5-04（Agent 与会话面板）")
             case .about:

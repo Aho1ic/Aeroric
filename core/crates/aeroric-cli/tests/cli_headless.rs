@@ -677,3 +677,226 @@ fn serve_sigterm_kills_running_task_children_even_hup_immune() {
         processes_matching(&needle)
     );
 }
+
+// P5-02 验收：100 次「模式切换」等价的 RPC 面只走重放/租约，绝不触碰
+// 任务协议（start/resume/cancel/reset）——spawn 计数恒 1、generation 与
+// 会话不变、输出顺序不乱。fake agent 每次被 spawn 就往标记文件追加一行。
+#[test]
+fn hundred_mode_switches_leave_the_task_protocol_untouched() {
+    let scratch = Scratch::new();
+    let data_dir = scratch.0.join("data");
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+    let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+    struct ServerGuard(std::process::Child);
+    impl Drop for ServerGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _guard = ServerGuard(server);
+    let sock = data_dir.join("host.sock");
+    let token = data_dir.join("host.token");
+    let mut ready = false;
+    for _ in 0..100 {
+        if sock.exists() && token.exists() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "serve must become ready within 5s");
+
+    let proj_dir = scratch.0.join("switch_proj");
+    std::fs::create_dir_all(&proj_dir).expect("proj");
+    let out = scratch
+        .cli()
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .args(["project", "open", proj_dir.to_str().unwrap()])
+        .output()
+        .expect("project open");
+    assert_eq!(out.status.code(), Some(0));
+
+    // spawn 标记：agent 每次被拉起就追加自己的 pid。
+    let marker = scratch.0.join("spawn-marker.txt");
+    let agent = scratch.0.join("fake-switch.sh");
+    std::fs::write(
+        &agent,
+        format!(
+            "#!/bin/sh\necho $$ >> {}\necho switch-output\nsleep 61\n",
+            marker.to_str().unwrap()
+        ),
+    )
+    .expect("agent script");
+    let _ = std::fs::set_permissions(&agent, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+    std::fs::write(
+        data_dir.join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "custom_agents": [
+                { "id": "fake-switch", "path": agent, "args": [], "family": "claude", "codex_like": false }
+            ]
+        }))
+        .unwrap(),
+    )
+    .expect("settings");
+
+    let run_params = scratch.0.join("run-params.json");
+    std::fs::write(
+        &run_params,
+        serde_json::to_string(&serde_json::json!({
+            "projectPath": proj_dir,
+            "agent": "fake-switch",
+            "prompt": "stay running",
+            "taskId": "switch-task"
+        }))
+        .unwrap(),
+    )
+    .expect("params");
+    let out = scratch
+        .cli()
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .args([
+            "rpc",
+            "task.run",
+            "--params-file",
+            run_params.to_str().unwrap(),
+        ])
+        .output()
+        .expect("rpc task.run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let rpc = |method: &str, params: &serde_json::Value, name: &str| -> serde_json::Value {
+        let params_file = scratch.0.join(format!("{name}-params.json"));
+        std::fs::write(&params_file, params.to_string()).expect("params");
+        let out = scratch
+            .cli()
+            .arg("--data-dir")
+            .arg(&data_dir)
+            .args([
+                "rpc",
+                method,
+                "--params-file",
+                params_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap_or_else(|e| panic!("rpc {method} spawn: {e}"));
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "rpc {method} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap_or_else(|e| {
+            panic!(
+                "rpc {method} output: {e}: {}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    };
+
+    let task_get = rpc(
+        "task.get",
+        &serde_json::json!({ "taskId": "switch-task" }),
+        "get",
+    );
+    let generation: u64 = task_get["task"]["generation"]
+        .as_str()
+        .expect("generation is a decimal string")
+        .parse()
+        .expect("generation parses");
+    let session_id = task_get["task"]["sessionId"].clone();
+
+    // 100 次模式切换的等价 RPC 面：plan_replay（cursor 续读）＋租约一对。
+    let mut cursor: u64 = 0;
+    for i in 0..100 {
+        // 迭代 0 与首字节竞态：notStarted（流尚未创建）是合法应答，轮询到
+        // seamless 为止——模式切换的等待语义在真实客户端里就是这样。
+        let mut tail = serde_json::Value::Null;
+        for attempt in 0..40 {
+            tail = rpc(
+                "terminal.plan_replay",
+                &serde_json::json!({
+                    "taskId": "switch-task",
+                    "generation": generation,
+                    "cursor": { "kind": "bytes", "value": cursor }
+                }),
+                &format!("replay-{i}-{attempt}"),
+            );
+            if tail["reason"]["kind"] != "notStarted" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(tail["kind"], "seamless", "iteration {i}: {}", tail);
+        cursor = tail["resumeAfter"].as_u64().expect("resumeAfter number");
+        let acquire = rpc(
+            "terminal.acquire_control",
+            &serde_json::json!({ "taskId": "switch-task", "generation": generation }),
+            &format!("acquire-{i}"),
+        );
+        let ticket = acquire["ticket"].as_u64().expect("ticket");
+        let release = rpc(
+            "terminal.release_control",
+            &serde_json::json!({ "taskId": "switch-task", "generation": generation, "ticket": ticket }),
+            &format!("release-{i}"),
+        );
+        assert_eq!(release["released"], true, "iteration {i}");
+    }
+
+    // spawn 恒 1：标记文件恰好一行。
+    let marker_lines = std::fs::read_to_string(&marker)
+        .unwrap_or_default()
+        .lines()
+        .count();
+    assert_eq!(marker_lines, 1, "100 次切换后 spawn 计数必须仍是 1");
+
+    // generation 与会话不变。
+    let task_after = rpc(
+        "task.get",
+        &serde_json::json!({ "taskId": "switch-task" }),
+        "get2",
+    );
+    let generation_after: u64 = task_after["task"]["generation"]
+        .as_str()
+        .expect("generation string")
+        .parse()
+        .expect("parses");
+    assert_eq!(generation_after, generation, "generation 不变");
+    assert_eq!(
+        task_after["task"]["sessionId"], session_id,
+        "sessionId 不变"
+    );
+
+    // 输出顺序：计划重放的整段仍以最早输出开头（无截断乱序）。
+    let full = rpc(
+        "terminal.plan_replay",
+        &serde_json::json!({
+            "taskId": "switch-task",
+            "generation": generation,
+            "cursor": { "kind": "bytes", "value": 0 }
+        }),
+        "replay-full",
+    );
+    let bytes = full["bytes"].as_str().expect("bytes b64");
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(bytes)
+        .expect("base64");
+    let text = String::from_utf8_lossy(&decoded);
+    assert!(text.contains("switch-output"), "原始输出仍在场：{text}");
+}
