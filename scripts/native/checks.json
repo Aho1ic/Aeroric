@@ -70,7 +70,9 @@
    "editor-ui-unit@editor": 7,
    "lsp-protocol-rust@ide": 8,
    "dap-protocol-rust@ide": 2,
-   "ide-ui-unit@ide": 5
+   "ide-ui-unit@ide": 5,
+   "git-service-rust@git": 9,
+   "git-ui-unit@git": 5
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2325,6 +2327,45 @@
      "parse": "swift",
      "minCases": 5,
      "$note": "P6-03 IDEStateTests 5 例：断点 diff、诊断 version 守卫、Debug 生命周期、RunConfiguration 守卫、Symbol/Test。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "git": {
+   "cases": [
+    {
+     "name": "git-service-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "git_service"
+     ],
+     "parse": "rust",
+     "minCases": 9,
+     "$note": "P6-04 git_service.rs 9 用例：选项注入守卫、untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip（临时 repo＋本地 bare remote）/discard/log/branch/stash。不触碰 Aeroric 真实暂存区。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "git-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "GitStoreTests"
+     ],
+     "parse": "swift",
+     "minCases": 5,
+     "$note": "P6-04 GitStoreTests 5 例：staged 分节、冲突高亮、commit/branch 簿记、diff 不截断、ours/theirs 提取。",
      "timeoutMs": 900000
     }
    ]

@@ -80,6 +80,12 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 ### ▶ P6-03 步 2（2026-10-02，刀二：IDE 八视图）
 新建 `AeroricUI/IDE/{IDEStores,IDEViews}.swift`：BreakpointStore（mutation 身份 diff——同 file:line 去重、matches 集合语义、未知 adapter 状态诊断）＋DiagnosticsStore（**过时 diagnostics 丢弃**——document version 守卫与 core drop_stale 同语义）＋DebugSessionStore（**8 动作生命周期判定**与 core is_action_allowed 同语义——断开 debug 不误 kill 其他任务：按 debugId 定向）＋ProblemsView＋SymbolOutlineView＋CompletionPanel＋RunConfigurationEditor（非空 name/command 守卫——无效配置保存失败不污染旧配置）＋TestResultsView＋DebugPanel（start/attach/pause/continue/step/stop 控件＋调用栈/scopes/variables/断点）＋WebPreview（**独立受限 WKWebView**——显式批准 URL 才加载、恶意跳转只允许同 host、无 message handler/file access；外部 URL 交系统浏览器）。新建 `IDEStateTests`(5)。**验证**：AeroricKit 全包 169/0、App BUILD SUCCEEDED。接线中修掉：`if let editing` 闭包内不可变赋值（@State shadow 不可变——改 `editing != nil`＋self.editing Binding 写回）。
 
+### ▶ P6-04 步 1（2026-10-02，刀一：core git 模块）
+新建 `core/crates/aeroric-core/src/git/{mod,service,transport}.rs`：transport（**argv＋`--`、选项注入守卫**——`validate_pathspec`/`validate_revision` 拒 `-` 开头/NUL/换行、read timeout kill child 不留持锁进程、**相同 repo mutating 串行化** RepoLocks）＋service（status porcelain -z 解析 verbatim、show_diff/working_diff **不截断**、stage/unstage/commit/commit_allow_empty/log/branches/checkout/create_branch/push/pull/fetch/discard_files/stash 全套/conflict_files/preview/resolve_conflict/blame/branch_graph/commit_detail——push/discard/冲突覆盖需独立确认由调用方 UI 承载）。新建 `tests/git_service.rs` 9 用例（**临时 repo＋本地 bare remote**：untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip/discard/log/branch/stash）。**验证**：git_service 9/9、core 全量 **527/0**、clippy `-D warnings` 0、fmt 干净。接线中修掉：name borrow（E0382）、unused import GitOutput、enumerate 丢弃索引。
+
+### ▶ P6-04 步 2（2026-10-02，刀二：Git 十视图）
+新建 `AeroricUI/Git/{GitStore,GitViews}.swift`：GitStore（变更/提交/分支/stash 簿记＋冲突路径高亮＋diff 不截断）＋GitPanel＋ChangeList（staged/unstaged 分节＋冲突高亮）＋StageActions（commit＋**discard All 二段确认**）＋CommitSheet＋HistoryView＋**DiffView**（原始 diff 不截断）＋BranchGraph＋BlameView＋StashView（apply/drop）＋ConflictResolver（ours/theirs 侧提取——**marker 后 label 同行跳行**）。新建 `GitStoreTests`(5)。**验证**：AeroricKit 全包 174/0、App BUILD SUCCEEDED。接线中修掉：DiffView 缺失、ConflictResolver static 调用（Self.）、oursSide 提取含 marker label（HEAD 跳行）。
+
 **标注约定**：
 
 - 状态取值 `pending` / `in_progress` / `blocked` / `accepted`，与 §5.3 模板一致。
@@ -121,7 +127,8 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P6-01 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/files.md`，grill-me [files] 已真实调用、用户答复「接受并收口＋watcher 要求接真实 watcher——已落实」。三刀＋watcher 追加：core files 模块（path_policy/read_write/search/watch/watcher）＋宿主 9 文件服务＋FilesClient＋Files 七视图＋真实 notify watcher。门禁 files 2 case/17 用例、core 501/0、AeroricKit 157/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | search regex/glob 选项 → P6-03/ide；isGitignored → P6-05/worktree | 2026-10-02 |
 | P6-02 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/editor.md`，grill-me [editor] 已真实调用、用户答复「接受并收口」。两刀：core format/local_history/preview＋Editor 八视图（真实 NSTextView/TextKit 桥）。门禁 editor 2 case/14 用例、core 508/0、AeroricKit 164/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | 行号 ruler 无滚动视图时宿主容器挂；Markdown 复杂内容按 feature-matrix 单独验收；TextKit 真机 QA → P10-02；autosave 调度 → 后续接线 | 2026-10-02 |
 | P6-03 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/ide.md`，grill-me [ide] 已真实调用、用户答复「接受并收口」。两刀：core ide 模块＋IDE 八视图（受陬 WKWebView）。门禁 ide 3 case/15 用例、core 518/0、AeroricKit 169/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。lsp.diagnostics 派生例外写明于评审 §5） | LSP process 真实管理 → P7；真实断点/单步烟测 → P10-01 | 2026-10-02 |
-| P6-04 ~ P6-05 | pending | Phase 6 内串行 | — |
+| P6-04 | **accepted**（2026-10-02 收口：评审 `docs/native/reviews/git.md`，grill-me [git] 已真实调用、用户答复「接受并收口」。两刀：core git 模块（transport 选项注入守卫＋mutating 串行化＋service 全套）＋Git 十视图。门禁 git 2 case/14 用例、core 527/0、AeroricKit 174/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G15 结案） | 凭据助手/分块操作 → P7 | 2026-10-02 |
+| P6-05 | pending | Phase 6 内串行 | — |
 | Phase 7 | pending | Phase 6 Gate | — |
 | Phase 8 | pending | Phase 7 Gate | — |
 | Phase 9 | pending | Phase 8 Gate | — |
@@ -143,7 +150,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > **【执行状态】补记三百一十九（2026-10-02）— P6-03 收口。** 步 1 侦察：lsp(2717)/dap(3397)/run_config(1272)/diagnostics(626) 实现盘清。步 2 刀一：core `ide/{mod,lsp,diagnostics,run_config,dap}.rs`（LSP UTF-16 位置统一转换＋diagnostics 五源 parser＋run_config 校验＋DAP 8 动作生命周期＋preview URL 判定）＋`tests/lsp_protocol.rs` 8＋`tests/dap_protocol.rs` 2（core 518/0）。步 3 刀二：`AeroricUI/IDE/{IDEStores,IDEViews}.swift` 八视图（BreakpointStore diff＋DiagnosticsStore version 守卫＋DebugSessionStore 8 动作＋WebPreview 受限 WKWebView）＋IDEStateTests(5)（169/0）。步 4：ide 门禁新注册（3 case/15 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [ide] 真实调用（用户：接受并收口）；评审 `reviews/ide.md`（**lsp.diagnostics 派生例外写明 §5**：旧通道 `lsp://diagnostics` 落 v1 点号词表，payload verbatim）＋task-status accepted（counts 29/22）＋inventory --freeze＋digest 重写。接线中修掉：CargoSpan/RuffLocation derive、**UTF-16 clamp 语义**（surrogate pair 内返回包含位置字符起点；character=3＝x 的 span 末端→字节 5）、bp clone 借用、`if let editing` 闭包不可变赋值。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
 
-**当前状态（2026-10-02，第两百四十七次更新＝补记三百一十九）— P6-03 accepted（Phase 6 第三个 Task；core ide 模块＋IDE 八视图（受限 WKWebView）；ide 门禁 15 用例；lsp.diagnostics 派生例外写明）。下一动作＝P6-04（Git 全流程及危险操作确认——core `git/` 模块＋`AeroricUI/Git/` 十视图；G15 前置）。**
+> **【执行状态】补记三百二十（2026-10-02）— P6-04 收口。** 步 1 侦察：git.rs(3189)/git_path_guard(301) 实现盘清。步 2 刀一：core `git/{mod,service,transport}.rs`（transport **argv＋`--` 选项注入守卫**＋read timeout kill child＋**RepoLocks 同 repo mutating 串行化**；service status porcelain -z verbatim＋全套业务＋**diff 不截断**）＋`tests/git_service.rs` 9 用例（**临时 repo＋本地 bare remote**：untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip/discard/log/branch/stash）（git_service 9/9、core 527/0）。步 3 刀二：`AeroricUI/Git/{GitStore,GitViews}.swift` 十视图（discard All 二段确认＋ConflictResolver ours/theirs 提取）＋GitStoreTests(5)（174/0）。步 4：git 门禁新注册（2 case/14 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [git] 真实调用（用户：接受并收口；**G15 结案**：客户端面闭合——不在 Swift 直接调用 git，宿主接线随 P7）；评审 `reviews/git.md`＋task-status accepted（counts 30/21）＋G15 closed＋inventory --freeze＋digest 重写。接线中修掉：name borrow、unused import、enumerate 丢弃索引、DiffView 缺失、oursSide marker label 跳行。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
+
+**当前状态（2026-10-02，第两百四十八次更新＝补记三百二十）— P6-04 accepted（Phase 6 第四个 Task；core git 模块＋Git 十视图；git 门禁 14 用例；G15 结案）。下一动作＝P6-05（worktree 与任务生命周期联合迁移）——Phase 6 最后一个 Task。**
 > **（上一轮口径——第两百四十次更新，2026-10-02＝补记三百一十一）—  P4-04 accepted＝Phase 4 Gate 通过；P5-01 accepted（评审 `reviews/native-terminal.md`，grill-me [native-terminal] 真实调用＋G31 三件套；ADR-038 含修正案兑现：宿主三方法＋capability＋UnknownStream 双义拆分；SwiftTerm 1.2.5 钉版＋Terminal 五文件＋17 个新单测；smoke e2e 真链路全绿——plan_replay 28B seamless/续读/租约往返/过期票据 no-op；XCTest UI/手测按 Q96 跳过，资产在库）。下一动作＝P5-02（设置中的原生模式按钮与无损切换）。**
 > **（上一轮口径——第两百三十九次更新，2026-10-02＝补记三百零九）—  P4-04 accepted ＝ Phase 4 Gate 通过（评审 `reviews/shell.md`，grill-me [shell] 真实调用＋G31 三件套；四处真发现根修；Q96 用户裁定跳过 UI 6/6——测试资产保留、G41 accepted_by user、重开＝P10-02）。下一动作＝P5-01（用原生终端 renderer 承接同一 PTY），Phase 5 开工。**
 > **（上一轮口径——第两百三十八次更新，2026-10-02＝补记三百零八）—  P4-04 in_progress（只差一次干净开机后的单轮复测）：ui-test.mjs 已改逐测试独立 xcodebuild 会话＋失败换新会话重试（G41 解法），侧栏键盘选择改窗口级 ↑/↓ 隐藏按钮等价物（CommandPalette 先例；List 不自行响应箭头、AX 也不暴露选中态），值断言 detail.selection 头落地。当日实证：r9 5/6（Sidebar 键盘选择首次通过）、r6 TwoMain 点击流通过、钩子/projects.json 持久化稳定；深夜开机 2h 内 60+ 启动后全零窗（预算枯竭）。恢复＝重启→一轮 native:ui-test→全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。全部基建入库（14a286a）。**
@@ -5038,7 +5047,7 @@ grill-me
   - preview 的恶意跳转/脚本无法调用文件写接口；view 关闭后清理对应 preview 资源。
   - **调用 `grill-me [ide]`**。
 
-### Task P6-04 — Git 全流程及危险操作确认
+### Task P6-04 — Git 全流程及危险操作确认（**2026-10-02 accepted：评审 `docs/native/reviews/git.md`，§4.2 grill-me [git] 已真实调用、用户答复「接受并收口」。两刀全落地；门禁 git 2 case/14 用例（git_service 9＋GitStoreTests 5）、core 527/0、AeroricKit 174/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。**G15 结案**：客户端面闭合（不在 Swift 直接调用 git），宿主接线随 P7。以下为原始规格，保留作为证据**）
 > **具名移交项（补记一百八十二，2026-09-29 台账↔本小节对账）**：`docs/native/feature-matrix.json` 把本 Task 列为 owner、而本小节此前没有点名的 gap 共 **1** 条：`G15`。逐条的 `finding`／`requirement`／`verified_on` 以台账为准（`inventory --check` 每天核对 owner 与 `verified_on` 一致）；开工本 Task 时每条必须落成「已闭合＋证据」或「仍开放＋新 owner」，**不接受只留一句台账引用**。本节只补指针，不复述内容（避免两处真相）。
 
 

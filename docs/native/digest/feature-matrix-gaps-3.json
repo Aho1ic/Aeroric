@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-3.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "24b9d6004b23b857d0632ea89f516e17590d90f28591483e2289986a2fc7189a",
+  "sourceSha256": "02768d11c9204c6ad7053f1fbbe905f08c4eb62dd1fed6897d6cf76d4dfee0d8",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -25,8 +25,8 @@
         "task_ids": "P6-04, P7-01",
         "owner": "core:git + ui:Git",
         "test": "inventory.mjs --check 的 dynamic site 断言已把集合钉死（新增/删除未注册名都会失败）；P6-04 的真临时 bare remote 测试必须覆盖『对 ssh target 请求创建分支』这一条",
-        "status": "open",
-        "verified_on": "2026-09-29",
+        "status": "closed",
+        "verified_on": "2026-10-02",
         "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
       },
       {

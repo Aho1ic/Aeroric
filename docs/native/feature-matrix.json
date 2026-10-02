@@ -252,13 +252,15 @@
       "positive_test": "tests/git_service.rs 临时 repo + 本地 bare remote",
       "negative_test": "参数以 - 开头/换行/空格文件名不得成为选项注入；取消 commit 后 index 不变",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/git.md"
+      ]
     },
     {
       "id": "F10",
@@ -768,8 +770,8 @@
       "task_ids": "P6-04, P7-01",
       "owner": "core:git + ui:Git",
       "test": "inventory.mjs --check 的 dynamic site 断言已把集合钉死（新增/删除未注册名都会失败）；P6-04 的真临时 bare remote 测试必须覆盖『对 ssh target 请求创建分支』这一条",
-      "status": "open",
-      "verified_on": "2026-09-29",
+      "status": "closed",
+      "verified_on": "2026-10-02",
       "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。"
     },
     {

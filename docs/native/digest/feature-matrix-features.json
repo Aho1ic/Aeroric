@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "24b9d6004b23b857d0632ea89f516e17590d90f28591483e2289986a2fc7189a",
+  "sourceSha256": "02768d11c9204c6ad7053f1fbbe905f08c4eb62dd1fed6897d6cf76d4dfee0d8",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -191,13 +191,15 @@
         "positive_test": "tests/git_service.rs 临时 repo + 本地 bare remote",
         "negative_test": "参数以 - 开头/换行/空格文件名不得成为选项注入；取消 commit 后 index 不变",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted"
+          "C": "accepted",
+          "N": "accepted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/git.md"
+        ]
       },
       {
         "id": "F10",
