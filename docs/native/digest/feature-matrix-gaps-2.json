@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "a13c3c0d977f0302793122e47260ff04c86f879e0b8746266890036ee7da618b",
+  "sourceSha256": "33853d09973b7537b0977ab09c8a3c6efdd40accc17d500c9acf53cb6ad79514",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -73,8 +73,8 @@
         "task_ids": "P5-05",
         "owner": "ui:Settings",
         "test": "inventory.mjs --check 断言 panelRegistry.tsx 的 19 个 key 与 command-map.json 的 panels 集合双向相等，且每条有 target_scene + task_ids；负向测试『面板缺失必须失败』『面板无原生落点必须失败』",
-        "status": "triaged-in-inventory",
-        "verified_on": "2026-09-29",
+        "status": "closed",
+        "verified_on": "2026-10-02",
         "retriage_note": "主张与行号全部复算命中（原记 326-330 与实际过滤器 :328 同处一段）。两处精度补充：evidence 此前没给文件全路径；『AppSettingsDialog 是唯一消费者』要限定为『唯一非测试消费者』，registry 另有一个测试导入方。 2026-09-29 复跑成立并钉死判据。"
       },
       {
@@ -97,9 +97,9 @@
         "task_ids": "P5-04",
         "owner": "core:agents::managed_home::omp + sessions",
         "test": "tests/omp_invariants.rs：两个不同 omp 档案的会话文件互相不可见；越出所属档案目录的路径必须被 allowed-roots 拒绝",
-        "status": "open",
+        "status": "closed",
         "retriage_note": "2026-09-30 补记二百四十八：P3-02/P3-04 均 accepted 而本条未闭合——P3-04 七片按手写约束 2 只做了 managed/external 根的拆分＋capability 门，agent id 精确取根没做（legacy 全量放行是其现存行为，迁移不借道收紧也不删）。真正的欠方是新增的 core 读取消费者：P5-04 原生会话消息/轨迹上收时按 task 持久化的 agent id 取根，正是该收口点。已写进 P5-04 小节具名前置。",
-        "verified_on": "2026-09-30"
+        "verified_on": "2026-10-02"
       }
     ]
   }

@@ -62,7 +62,8 @@
    "native-terminal-unit@native-terminal": 12,
    "mode-switch-unit@mode-switch": 9,
    "tasks-ui-unit@tasks-ui": 10,
-   "sessions-ui-unit@sessions-ui": 20
+   "sessions-ui-unit@sessions-ui": 20,
+   "settings-ui-unit@settings-ui": 11
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2161,6 +2162,26 @@
      "parse": "swift",
      "minCases": 20,
      "$note": "P5-04 SessionReducerTests 7＋ApprovalRoutingTests 8＋MessagePaginationTests 5＝20：未知事件不使解码失败、重复 tool_end 不重复 row、eventId 去重/精确清除不串题、提交后 host 确认前不抹条目、游标守卫、10000 条 fixture 线性合并。filter 三套一起跑（与 tasks-ui 单 filter 同口径；| 是 swift test --filter 的正则）。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "settings-ui": {
+   "cases": [
+    {
+     "name": "settings-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "SettingsStoreTests|SettingsCapabilityTests"
+     ],
+     "parse": "swift",
+     "minCases": 11,
+     "$note": "P5-05 SettingsStoreTests 6＋SettingsCapabilityTests 5＝11：G11 19 panel 全映射、wsl windows-only、Secret masked/单次写入不持有、UI-only 分界、保存守卫、OMP 不支持的 effort 不发、升级需显式确认、离线目录提示。",
      "timeoutMs": 900000
     }
    ]

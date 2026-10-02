@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "a13c3c0d977f0302793122e47260ff04c86f879e0b8746266890036ee7da618b",
+  "sourceSha256": "33853d09973b7537b0977ab09c8a3c6efdd40accc17d500c9acf53cb6ad79514",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -61,13 +61,14 @@
         "negative_test": "OMP 收到 ultra 归一到 max 且不外发；存在 PI_PROFILE 时仍指向 managed home",
         "status": "planned",
         "core_state": "accepted",
-        "native_state": "unstarted",
+        "native_state": "accepted",
         "side_states": {
           "C": "accepted",
-          "N": "unstarted"
+          "N": "accepted"
         },
         "reviews": [
-          "reviews/agents.md"
+          "reviews/agents.md",
+          "reviews/settings.md"
         ]
       },
       {
