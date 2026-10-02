@@ -59,7 +59,8 @@
       "swift-client-tsan@swift-client": 28,
       "native-design-unit@native-design": 14,
       "shell-unit@shell": 36,
-      "native-terminal-unit@native-terminal": 12
+      "native-terminal-unit@native-terminal": 12,
+      "mode-switch-unit@mode-switch": 9
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -2099,6 +2100,26 @@
           "$note": "P5-01 Action 1：SwiftTerm 依赖钉 exact 1.2.5（Package.resolved 随提交），防止小版本静默改 delegate 面。（mustContain 一律小写：runner 先把 haystack 小写再做包含判断。）",
           "timeoutMs": 120000,
           "forbid": []
+        }
+      ]
+    },
+    "mode-switch": {
+      "cases": [
+        {
+          "name": "mode-switch-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ModeSwitchTests"
+          ],
+          "parse": "swift",
+          "minCases": 9,
+          "$note": "P5-02 ModeSwitchTests 9 例：迁移默认（导入=advanced/新装=native）、Toggle 映射、保存失败回滚、呈现决策（native+未验证=requiresAdvanced 状态卡）、六步切换序列、同模式 no-op、任务协议禁用法（start/resume/cancel/reset 全禁）。",
+          "timeoutMs": 900000
         }
       ]
     }
