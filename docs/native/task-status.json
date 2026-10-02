@@ -36,8 +36,8 @@
     "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
     "counts": {
       "tasks": 51,
-      "accepted": 23,
-      "in_progress": 1,
+      "accepted": 24,
+      "in_progress": 0,
       "pending": 27
     }
   },
@@ -182,9 +182,9 @@
     },
     {
       "task": "P5-03",
-      "status": "in_progress",
-      "accepted_on": null,
-      "review": null
+      "status": "accepted",
+      "accepted_on": "2026-10-02",
+      "review": "reviews/tasks-ui.md"
     },
     {
       "task": "P5-04",

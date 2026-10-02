@@ -78,13 +78,14 @@
       "negative_test": "重复打开同一 path 不得新建；中文/空格路径、大小写、丢失远程连接的 orderIndex 稳定",
       "status": "planned",
       "core_state": "accepted",
-      "native_state": "in_progress",
+      "native_state": "accepted",
       "side_states": {
         "C": "accepted",
-        "N": "in_progress"
+        "N": "accepted"
       },
       "reviews": [
-        "reviews/projects.md"
+        "reviews/projects.md",
+        "reviews/tasks-ui.md"
       ]
     },
     {
@@ -99,12 +100,13 @@
       "negative_test": "同 ID 重试只 spawn 一次；持久化失败不得启动进程",
       "status": "planned",
       "core_state": "accepted",
-      "native_state": "in_progress",
+      "native_state": "accepted",
       "side_states": {
         "C": "accepted",
-        "N": "in_progress"
+        "N": "accepted"
       },
       "reviews": [
+        "reviews/tasks-ui.md",
         "reviews/tasks.md"
       ]
     },

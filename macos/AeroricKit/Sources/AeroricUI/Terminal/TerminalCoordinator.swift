@@ -74,6 +74,21 @@ public final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         public var bytes: [UInt8]
         public var resumeAfter: UInt64
         public var reasonKind: String?
+
+        /// P5-03 App 接线：跨模块（AppServices）从 ReplayTail 组装用。
+        public init(
+            kind: String,
+            from: UInt64,
+            bytes: [UInt8],
+            resumeAfter: UInt64,
+            reasonKind: String?
+        ) {
+            self.kind = kind
+            self.from = from
+            self.bytes = bytes
+            self.resumeAfter = resumeAfter
+            self.reasonKind = reasonKind
+        }
     }
 
     /// 吃 `terminal.plan_replay` 的应答。返回实际行为（测试断言用）。

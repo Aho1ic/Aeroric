@@ -13,6 +13,8 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
     /// dumb — it dismisses and forwards; the app decides what a command id
     /// does. Ids outside the registered set are ignored by the router.
     let onCommand: (PaletteCommand) -> Void
+    /// P5-03 接线：ready 态正文（透传给 WorkspaceDetail；shell 不解析）。
+    let readyContent: AnyView?
 
     // Per-window state: WindowGroup copies the content view per window, so
     // each window owns its sidebar selection and palette presentation; the
@@ -26,10 +28,12 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
 
     public init(
         state: State,
-        onCommand: @escaping (PaletteCommand) -> Void = { _ in }
+        onCommand: @escaping (PaletteCommand) -> Void = { _ in },
+        readyContent: (() -> AnyView)? = nil
     ) {
         self.state = state
         self.onCommand = onCommand
+        self.readyContent = readyContent?()
     }
 
     public var body: some View {
@@ -42,7 +46,7 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
                 )
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            WorkspaceDetail(state: state, selection: selection)
+            WorkspaceDetail(state: state, selection: selection, readyContent: readyContent)
         }
         // The drag handle lives on the whole HStack's overlay so crossing
         // into the detail's scroll views never steals the gesture (the

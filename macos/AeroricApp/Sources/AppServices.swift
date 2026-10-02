@@ -32,6 +32,19 @@ final class AppServices {
     let connectionStore = ConnectionStore()
     let applicationStore: ApplicationStore
     let projectStore = ProjectStore()
+    /// P5-03：项目/任务镜像（宿主快照 → TaskStore）。
+    let taskStore = TaskStore()
+    /// P5-01/P5-02：模式控制器（迁移默认按旧客户端存在性）。
+    let interactionModeController = InteractionModeController(
+        tauriClientPresent: InteractionModeController.tauriClientPresent
+    )
+    /// P5-03：类型化 workspace 调用（连接附着后创建）。
+    private(set) var workspaceClient: WorkspaceClient?
+    /// P5-01：选中任务的终端轮询任务（attach/detach 管理）。
+    private var terminalPollTask: Task<Void, Never>?
+    private(set) var terminalCoordinator: TerminalCoordinator?
+    /// 终端流的续看簿记（与任务镜像分开）。
+    let terminalStore = TerminalStore()
 
     private(set) var supervisor: HostSupervisor?
     /// The live channel; retained so the sink stays wired between attempts.
@@ -121,6 +134,7 @@ final class AppServices {
                 await MainActor.run {
                     self.attachedConnection = connection
                     self.connectionStore.attach(connection: connection, supervisor: self.supervisor)
+                    self.workspaceClient = WorkspaceClient(connection: connection)
                 }
             }
         )
@@ -174,6 +188,187 @@ final class AppServices {
         try? process.run()
         process.waitUntilExit()
         Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    // MARK: - P5-03 workspace（项目/任务镜像与刷新）
+
+    /// 连接就绪后刷新项目/任务镜像。失败静默（快照轮询下次再来）。
+    func refreshWorkspace() async {
+        guard let client = workspaceClient else { return }
+        if let projects = try? await client.listProjects() {
+            for project in projects {
+                taskStore.upsertProject(id: project.id, path: project.path)
+            }
+        }
+        if let tasks = try? await client.listTasks() {
+            for task in tasks {
+                taskStore.upsertTask(TaskStore.TaskEntry(
+                    id: task.id,
+                    projectID: task.projectID,
+                    title: task.title,
+                    status: task.status,
+                    agent: task.agent,
+                    createdAtMs: task.createdAtMs,
+                    updatedAtMs: task.updatedAtMs,
+                    archived: task.archived,
+                    starred: task.starred
+                ))
+                // 会话句柄（generation）快照带了就缓存，供终端挂载判断。
+                if let generation = task.generation {
+                    pendingGenerations[task.id] = generation
+                }
+            }
+        }
+        // 草稿选项＝宿主 capability 的快照（P5-04 前保守空集；这里只在
+        // 首次刷新时落默认，不覆盖已注入的选项）。
+        if draftOptionsStorage == nil {
+            draftOptionsStorage = .none
+        }
+    }
+
+    /// 创建任务（TaskDraftView 提交）：task.run，taskId 由客户端铸；
+    /// 回执后镜像一个 pending 条目（下轮刷新校正）。
+    @discardableResult
+    func runTask(_ draft: TaskDraft, projectID: String) async throws -> String {
+        guard let client = workspaceClient else {
+            throw ProjectError.notConnected
+        }
+        guard let project = taskStore.projects.first(where: { $0.id == projectID }) else {
+            throw ProjectError.notConnected
+        }
+        let taskId = UUID().uuidString
+        let run = WorkspaceClient.RunRequest(
+            projectPath: project.path,
+            agent: draft.agent,
+            prompt: draft.prompt,
+            taskId: taskId,
+            model: draft.model,
+            effort: draft.effort,
+            permissionMode: draft.permissionMode,
+            worktree: draft.worktree,
+            attachmentPaths: draft.attachmentPaths
+        )
+        let returned = try await client.runTask(run)
+        taskStore.upsertTask(TaskStore.TaskEntry(
+            id: returned,
+            projectID: projectID,
+            title: draft.prompt.split(separator: "\n").first.map(String.init) ?? returned,
+            status: "pending",
+            agent: draft.agent
+        ))
+        return returned
+    }
+
+    func cancelTask(taskId: String) async {
+        guard let client = workspaceClient else { return }
+        try? await client.cancelTask(taskId: taskId)
+    }
+
+    /// P5-03 接线：星标/归档的窗口内即时反馈（镜像翻转）。宿主权威面
+    /// （task.star/task.archive）随下一轮刷新校正；本操作不推断快照。
+    func toggleStar(taskId: String) {
+        if let index = taskStore.tasks.firstIndex(where: { $0.id == taskId }) {
+            var entry = taskStore.tasks[index]
+            entry.starred.toggle()
+            taskStore.upsertTask(entry)
+        }
+    }
+
+    func toggleArchived(taskId: String) {
+        if let index = taskStore.tasks.firstIndex(where: { $0.id == taskId }) {
+            var entry = taskStore.tasks[index]
+            entry.archived.toggle()
+            taskStore.upsertTask(entry)
+        }
+    }
+
+    /// P5-03 接线：任务会话句柄。generation 只有快照带了 sessionId 才有
+    /// 意义（宿主端会话已分配）；缺失返回 nil，UI 不挂终端。
+    func generation(for task: TaskStore.TaskEntry) -> UInt64? {
+        guard task.agent != nil else { return nil }
+        // 会话句柄来自镜像外的权威查询：task.get（快照字段不上 store，
+        // 避免 store 变成会话簿记）。
+        return pendingGenerations[task.id]
+    }
+
+    /// task.get 回填的 generation 缓存（接线视图消费；不进 TaskStore）。
+    var pendingGenerations: [String: UInt64] {
+        get { _pendingGenerations }
+        set { _pendingGenerations = newValue }
+    }
+    private var _pendingGenerations: [String: UInt64] = [:]
+
+    /// P5-02 接线：该任务的宿主侧结构化能力是否已验证。快照未带协商
+    /// 结果（P5-04 兑现前的保守默认）→ false＝native 下显示状态卡。
+    func structuredCapabilitiesVerified(_ task: TaskStore.TaskEntry) -> Bool {
+        // DSH 之外的家（claude/codex/omp）宿主只提供终端交互；结构化
+        // composer 能力协商在 P5-04 落地，这里保守返回 false。
+        return false
+    }
+
+    /// P5-03 接线：草稿选项集。宿主 capability 回答前＝空集（不伪造
+    /// 可用项）；回答后由 refreshWorkspace 填充。
+    var draftOptions: TaskDraft.Options {
+        draftOptionsStorage ?? .none
+    }
+    var draftOptionsStorage: TaskDraft.Options?
+
+    // MARK: - P5-01 终端挂载（plan_replay 轮询 + task.input 回填）
+
+    /// 挂上选中任务的终端轮询：plan_replay（cursor 续读）50ms 一拍，
+    /// 字节喂 coordinator；delegate 输入经 task.input 回填。
+    func attachTerminal(taskId: String, generation: UInt64) {
+        detachTerminal()
+        guard let client = workspaceClient else { return }
+        let coordinator = TerminalCoordinator(taskID: taskId, generation: generation, store: terminalStore)
+        coordinator.attach(holdsLease: true)
+        coordinator.onInput = { [weak self] taskId, generation, data in
+            guard let self, let text = String(data: Data(data), encoding: .utf8) else { return }
+            let bytes = Data(text.utf8)
+            Task { [weak self] in
+                guard let self, let client = self.workspaceClient else { return }
+                // task.input（宿主侧 lease 短顶替语义）。
+                _ = try? await attachedConnection?.request(
+                    "task.input",
+                    params: .object([
+                        "taskId": .string(taskId),
+                        "text": .string(text),
+                        "bytes": .string(bytes.base64EncodedString()),
+                    ])
+                )
+            }
+        }
+        terminalCoordinator = coordinator
+        terminalPollTask = Task { [weak self] in
+            var cursor: TerminalStreamClient.Cursor = .init(bytes: 0)
+            while !Task.isCancelled {
+                if let connection = self?.attachedConnection,
+                   let tail = try? await TerminalStreamClient(connection: connection).planReplay(
+                       taskId: taskId, generation: generation, cursor: cursor
+                   ) {
+                    let coordinator = self?.terminalCoordinator
+                    let tailCopy = tail
+                    await MainActor.run {
+                        coordinator?.ingest(TerminalCoordinator.PlanTail(
+                            kind: tailCopy.kind.rawValue,
+                            from: tailCopy.from,
+                            bytes: tailCopy.bytes,
+                            resumeAfter: tailCopy.resumeAfter,
+                            reasonKind: tailCopy.reasonKind
+                        ))
+                    }
+                    cursor = tail.nextCursor
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+    }
+
+    func detachTerminal() {
+        terminalPollTask?.cancel()
+        terminalPollTask = nil
+        terminalCoordinator?.detach()
+        terminalCoordinator = nil
     }
 
     /// UI-test hook (P4-04 acceptance: per-window selection needs real

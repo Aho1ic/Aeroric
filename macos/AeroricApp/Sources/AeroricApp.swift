@@ -25,7 +25,13 @@ struct AeroricNativeApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            WorkspaceRootView(state: services, onCommand: WorkspaceActions.route(services))
+            WorkspaceRootView(
+                state: services,
+                onCommand: WorkspaceActions.route(services),
+                // P5-03 接线：宿主 ready 后详情列切任务工作区（列表/详情/
+                // 草稿/终端挂载）。
+                readyContent: { AnyView(TaskWorkspaceView(services: services)) }
+            )
                 // The supervisor owns its own run loop; startSupervisor is
                 // idempotent, so re-activation after sleep/logout is a no-op
                 // while it is already up.

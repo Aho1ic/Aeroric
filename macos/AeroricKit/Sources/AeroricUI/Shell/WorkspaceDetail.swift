@@ -90,10 +90,14 @@ public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
     /// header (below) because macOS List selection state is not AX-queryable
     /// through XCUITest — a value-backed element is.
     let selection: String?
+    /// P5-03 接线：ready 态的正文内容（App 侧提供任务工作区视图）。nil
+    /// ＝保持 shell 占位（EmptyStateView），注入后 shell 不解析内容。
+    let readyContent: AnyView?
 
-    public init(state: State, selection: String? = nil) {
+    public init(state: State, selection: String? = nil, readyContent: AnyView? = nil) {
         self.state = state
         self.selection = selection
+        self.readyContent = readyContent
     }
 
     private var selectedTitle: String? {
@@ -117,7 +121,11 @@ public struct WorkspaceDetail<State: WorkspaceStateProviding>: View {
             case .loading:
                 LoadingStateView()
             case .empty:
-                EmptyStateView()
+                if let readyContent {
+                    readyContent
+                } else {
+                    EmptyStateView()
+                }
             case let .disconnected(reason):
                 DisconnectedStateView(reason: reason)
             case let .incompatible(reason):

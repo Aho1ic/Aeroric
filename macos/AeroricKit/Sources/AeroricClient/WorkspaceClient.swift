@@ -71,6 +71,8 @@ public struct WorkspaceClient: Sendable {
         public var archived: Bool
         public var starred: Bool
         public var sessionId: String?
+        /// 十进制字符串（Quantity 约定）；终端轮询寻址用。
+        public var generation: UInt64?
     }
 
     /// 展示标题：记录无 title 字段时取 prompt 首行（展示推导，非业务推断）。
@@ -96,7 +98,8 @@ public struct WorkspaceClient: Sendable {
                 ?? record["completedAt"]?.numberText.flatMap(UInt64.init),
             archived: record["archived"]?.boolValue ?? false,
             starred: record["starred"]?.boolValue ?? false,
-            sessionId: record["sessionId"]?.stringValue
+            sessionId: record["sessionId"]?.stringValue,
+            generation: record["generation"]?.numberText.flatMap(UInt64.init)
         )
     }
 

@@ -55,8 +55,8 @@ public final class TaskStore {
         }
     }
 
-    private(set) var projects: [ProjectEntry] = []
-    private(set) var tasks: [TaskEntry] = []
+    public private(set) var projects: [ProjectEntry] = []
+    public private(set) var tasks: [TaskEntry] = []
     /// 每窗口选中的项目（§2.4：selected project 归窗口）。
     public var selectedProjectID: String?
     /// 窗口局部过滤（TaskListView 消费；不是宿主 archive）。
