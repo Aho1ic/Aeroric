@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "9b6fd60fcb6a372ba36ec2add433bf9bbbb5d5b3184ec75b4f73e10b7a2c5126",
+  "sourceSha256": "712c5c857c66aa4664cc54d2dda22372009676dcf25c8c0da75890b26159cc4c",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -469,9 +469,9 @@
         "negative_test": "100 次切换后 spawnCount=1、generation/sessionId 不变、原始输出顺序不变",
         "status": "planned-new-capability-no-existing-command",
         "core_state": "not-declared",
-        "native_state": "unstarted",
+        "native_state": "in_progress",
         "side_states": {
-          "N": "unstarted"
+          "N": "in_progress"
         },
         "reviews": []
       },

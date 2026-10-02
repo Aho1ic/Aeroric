@@ -530,9 +530,9 @@
       "negative_test": "100 次切换后 spawnCount=1、generation/sessionId 不变、原始输出顺序不变",
       "status": "planned-new-capability-no-existing-command",
       "core_state": "not-declared",
-      "native_state": "unstarted",
+      "native_state": "in_progress",
       "side_states": {
-        "N": "unstarted"
+        "N": "in_progress"
       },
       "reviews": []
     },
