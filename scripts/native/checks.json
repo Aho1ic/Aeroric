@@ -60,7 +60,8 @@
       "native-design-unit@native-design": 14,
       "shell-unit@shell": 36,
       "native-terminal-unit@native-terminal": 12,
-      "mode-switch-unit@mode-switch": 9
+      "mode-switch-unit@mode-switch": 9,
+      "tasks-ui-unit@tasks-ui": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -2119,6 +2120,26 @@
           "parse": "swift",
           "minCases": 9,
           "$note": "P5-02 ModeSwitchTests 9 例：迁移默认（导入=advanced/新装=native）、Toggle 映射、保存失败回滚、呈现决策（native+未验证=requiresAdvanced 状态卡）、六步切换序列、同模式 no-op、任务协议禁用法（start/resume/cancel/reset 全禁）。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "tasks-ui": {
+      "cases": [
+        {
+          "name": "tasks-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "TaskStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P5-03 TaskStoreTests 5 例：镜像不推断（宿主快照权威）、同 id 更新、窗口局部过滤（大小写/空白语义）、批量逐项记账（成功/失败分开，不吞局部失败）、archive/star 镜像不代替过滤。",
           "timeoutMs": 900000
         }
       ]
