@@ -552,7 +552,8 @@
         "N": "unstarted"
       },
       "reviews": [
-        "reviews/native-design.md"
+        "reviews/native-design.md",
+        "reviews/shell.md"
       ]
     },
     {
@@ -1033,7 +1034,9 @@
       "owner": [
         "P4-04"
       ],
-      "status": "open"
+      "status": "accepted",
+      "accepted_by": "user",
+      "accepted_note": "用户裁定(2026-10-02 Q96):UI 6/6 验收跳过,残余风险用户自担;测试资产全保留,重开路径=P10-02 或随时重跑 pnpm native:ui-test。三层根修与全部诊断已入库。"
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-1.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "2ce955eb9127f42ca876ab932219b1c4605e0a29548cd651bde8ce112fcb457d",
+  "sourceSha256": "6b655a49c0e6be68198112ccb2499cd0f4e6feff67c44ea6581065390133b625",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -63,18 +63,6 @@
         "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
         "status": "open",
         "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01 P3-07 ⑦ 分片落判：pendingTaskStartsRef 片闭合——无头 `task.run` 一次 RPC 建+启动＝无 pending 窗口（smoke-headless 全程无 listener run→done＋executor_pty 3/0）；G05 整条仍 open（P3-05 片在其小节无分片落判记录、P8-03 片未开工），owner 不变。",
-        "verified_on": "2026-09-29"
-      },
-      {
-        "id": "G06",
-        "finding": "后端的行为仍由 React 决定，2026-09-28 逐条回源后剩三处：`src/taskFlush.ts:4` 的 `TASK_FLUSH_TIMEOUT_MS = 10_000`、`src/state/app/useAppMaintenance.ts:92` 的 `window.setInterval(…, 30 * 60 * 1000)` 自动清理、以及 DSH 宿主事件订阅的开关由 React 判——`src/state/app/useAppStartup.ts:90-105` 的 `useDshHostEventsSubscription(tasks, agentOptionsRef)`（`src/App.tsx:333` 调用）每次 `tasks` 变化都判一次『有没有活跃 dsh 任务』，据此 invoke `DSH_TASK_COMMANDS.startHostEvents` 或 `stopHostEvents`。**已闭合：原列的第一项「350ms per-project 去抖持久化」不复存在**——载体 `src/taskPersistence.ts` 由 P2-05 §12 接线删除，`src/taskIntentQueue.ts:4` 明写「不做 350 ms 快照合并」、`:237` 把微任务窗口称为旧防抖的意图版",
-        "evidence": "src/taskFlush.ts:4；src/state/app/useAppMaintenance.ts:92；useAppStartup.ts:90-105 + App.tsx:333（DSH 订阅开关，2026-09-28 核）；src/taskIntentQueue.ts:4,237（闭合证据）；原 evidence 里的 src/taskPersistence.ts:34 已随文件删除而失效（P2-05 补记八十） 2026-09-29 复跑：`src/taskFlush.ts:4`＝`export const TASK_FLUSH_TIMEOUT_MS = 10_000`；`src/state/app/useAppMaintenance.ts:92`＝`window.setInterval(() => void runCleanup(), 30 * 60 * 1000)`；DSH 订阅开关函数 `useDshHostEventsSubscription(tasks, agentOptionsRef)` 定义在 `useAppStartup.ts:90` 起、由 `src/App.tsx:333` 调用。三处计时/开关全部命中，行号未漂。",
-        "requirement": "改为 host 每次 mutation 即写；计时器归 core",
-        "task_ids": "P2-02, P2-04, P8-04",
-        "owner": "core:storage+maintenance",
-        "test": "崩溃夹在步骤中间须对账为 interrupted 而非重新 spawn；无窗口时清理仍按 opt-in 运行",
-        "status": "open",
-        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。第三条（DSH 订阅）本轮从『待核』改为准事实：**它不是计时器，是渲染驱动的宿主订阅开关**，且判据依赖前端 `agentFamily` 派生表——家系表变了宿主事件流会整条关断，这一点比『缺一个计时器』更接近 G05 的权威外溢。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
         "verified_on": "2026-09-29"
       }
     ]

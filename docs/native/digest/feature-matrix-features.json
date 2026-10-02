@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "2ce955eb9127f42ca876ab932219b1c4605e0a29548cd651bde8ce112fcb457d",
+  "sourceSha256": "6b655a49c0e6be68198112ccb2499cd0f4e6feff67c44ea6581065390133b625",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -491,7 +491,8 @@
           "N": "unstarted"
         },
         "reviews": [
-          "reviews/native-design.md"
+          "reviews/native-design.md",
+          "reviews/shell.md"
         ]
       },
       {

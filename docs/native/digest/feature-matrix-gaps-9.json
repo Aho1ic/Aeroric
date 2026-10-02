@@ -1,0 +1,73 @@
+{
+  "shard": "feature-matrix-gaps-9.json",
+  "from": "docs/native/feature-matrix.json",
+  "sourceSha256": "6b655a49c0e6be68198112ccb2499cd0f4e6feff67c44ea6581065390133b625",
+  "capBytes": 32768,
+  "payload": {
+    "gaps": [
+      {
+        "id": "G37",
+        "status": "open",
+        "decision_item": 26,
+        "task_ids": "P10-05",
+        "finding": "**计划自身的续跑完整性没有任何仓内仪器**：`MIGRATION_PLAN.md` 每轮都在声明「N 条记录（93…X 连续）」「ladder 严格递减」「答题纸项号 ↔ 台账 `decision_item` 对得上」，但 `grep -ln MIGRATION_PLAN scripts/native/*.mjs` 显示仓内只有三类代码读它——`task-status.mjs`（`### Task P…-…` 标题集合 ＋ §进度总表 行 ⇄ carrier 交叉校验）与 `inventory.mjs`（gap 的 owner/`task_ids`/空 owner 等台账判据），**没有一处检查记录序号连续性、ladder 单调递减、答题纸项号与 `decision_item` 的双向绑定、或加粗/反引号配对**。今天这四项只由三个**放在 `/tmp` 的临时脚本**测过（`/tmp` 重启即清空），所以本文件里那些\"连续/严格递减/0 不符\"的断言在最坏情况下会变成**无从复述也无法复核的口号**——而这份文档是整个迁移唯一的暂停-续跑载体。这与 `G22`／`G23`／`G26` 同族（指令面与工件在断言没有仪器的东西），区别在于这次的断言对象是**计划自己的完整性**。",
+        "requirement": "P10-05 出口时决定并落地（**属门禁面扩张，须用户点头**）：在 `scripts/native/` 加一台 `plan-integrity` 仪器（kind=test 的 case，归 `skeleton` 模块）至少核对四件事——① `【执行状态】补记N` 序列无缺号无重号；② 「上一轮口径——第N次更新」阶梯严格递减且与续跑行编号差一；③ 每条 `decision_item` 都是答题纸真实存在的项号、且**未带该字段的 open gap 必须出现在\"Task 债\"白名单里**（双向，防第 15／16／17／18 项那类错列）；④ 加粗与反引号奇偶（**反引号那条必须先处理三反引号围栏**，否则会把围栏当异常——今天朴素计数报 27 行、加围栏状态机后真值只有 3 行）。配 ≥4 条负例（缺号／阶梯跳号／绑定指向不存在的项／围栏误判）。**过渡要求（不需要新 case）**：在决定之前，本文不再引用任何 `/tmp` 脚本作为证据，改为把**算法**写进文档，任何会话都能照着重建。",
+        "evidence": "2026-09-29 实测：仓内读取面＝`grep -ln \"MIGRATION_PLAN\" scripts/native/*.mjs` ⇒ `build/dev/generate/ui-test/check-runner.test/inventory/task-status(+各自 .test)`，其中真正解析计划正文的只有 `task-status.mjs:315`（Task 标题）、`:432`（进度总表文本）与 `inventory.mjs` 的台账判据；`grep -n \"补记\\|ladder\\|【执行状态】\" scripts/native/*.mjs` 的命中全在注释与测试夹具里，**没有断言**。四项读数（记录序号连续、ladder 差一、绑定不符数、加粗/反引号奇偶）当天全部由 `/tmp` 临时脚本得出＝130 条 93…222 连续／ladder 头＝续跑行号−1 且 0 断裂／绑定 不符=0／加粗异常 22 行＋反引号（围栏外）3 行且全为历史行；分母随登记增长，故不在此固化，复算口径见 requirement 里的四条算法。 **2026-09-29 本条立刻有了第一个具体受害者**：全量普查本文的 `path:line` 引用后发现，`### Task P2-05` 小节里第 五十七次补记 那条\"下一轮从这里接\"仍写着改 `src/taskPersistence.ts:83`，而该文件**早已随 §12 接线删除**（后继 `src/taskIntentQueue.ts` 的文档注释第 1 条就是\"不做 350 ms 快照合并\"），同一句里等的 **Q67 也早已定案**（`docs/native/reviews/tauri-adapter.md` §8＝:265-267：ADR-022 决策 2 把读-改-写归给 `TaskService`）。**这就是\"计划自身的完整性\"缺仪器的代价**：一条历史 hand-off 指针烂在已 accepted 的 Task 小节里，下一轮会照着去找一个不存在的文件、并继续等一个已经有答案的问题。另得出一条分区判据：**历史块不只住在\"执行进度标注\"区，Task 小节内部也有带日期标题的 `第N次补记（YYYY-MM-DD…）` 块**，所以任何\"当前态 vs 历史\"的判据必须按**日期标题**识别，不能按所在小节或行号区间——我第一版就是按区间划的，把这条历史句误判成了现行指令。",
+        "verified_on": "2026-09-29",
+        "retriage_note": "补记二百二十三 登记；owner 记 P10-05（矩阵补全）。登记前先按 补记二百二十一 的教训 grep 过本文：`G31`（评审七字段结构）与 `G26`（§5.1 工件新鲜度）都是**别的对象**，没有一条覆盖\"计划自身的记录/阶梯/绑定完整性\"，所以这不是重复发现。 同日追加：本条由一次本文 `path:line` 全量普查兑现出第一个具体缺陷（P2-05 小节里的已删文件指针）。"
+      },
+      {
+        "id": "G38",
+        "status": "open",
+        "decision_item": 27,
+        "task_ids": "P10-05",
+        "finding": "**门禁 runner 把\"被外部信号杀掉/超时中止的 cargo 用例\"和\"真的有测试失败\"报成同一件事**，而 P10-05 的第一次真·全矩阵运行恰恰最容易被这个混淆误导。2026-09-29 实测到的两例（都是**我**同时开两个 `pnpm native:check` 造成的，`check.mjs` 自己是串行的：`scripts/native/check.mjs:158-161` 逐 case `await run(...)`）：① `storage-core-rust … FAIL (exit 101)` 且汇总打 **`1 case(s) failed, 0 test cases executed`**——\"0 条用例\"就是它压根没跑完的直接信号，可输出里没有任何一条 `test result: FAILED`；② `terminal-pty-bytes-rust … FAIL (exit timeout)`（该 case `timeoutMs=600 000`、`minCases=6`，同机并发跑第二套 cargo 套件时被拖过 10 分钟）。两者**单独重跑全绿**：`terminal-core` 串行 4 次都是 **13 case／107 用例**、`storage` 串行 **5／361**。=> 失效模式不是\"测试脆\"，是**判据无法区分\"红了\"与\"没跑完\"**；`minCases`／`runner.floors` 只会把\"没跑完\"也变成红，改法（抬 timeout / 串行化 / 区分 aborted）是三种完全不同的动作，而日志今天不给你选。",
+        "requirement": "P10-05 出口时决定并落地（**属门禁面，须用户点头**）：让 runner 把三种结局分开报——`PASS`／`FAILED（有 test result 或 panic 行）`／`ABORTED（exit 非 0 但解析到 0 条用例，或 exit timeout）`，并对 ABORTED **不**抬 `minCases` 红（否则一次机器抖动会让人去改测试或改超时）。配套 ≥2 条负例：一条\"exit 101 且 0 用例\"⇒ 判 ABORTED、一条\"有 `test result: FAILED`\"⇒ 判 FAILED。运行纪律（不需改代码、可立即生效）：**门禁模块一律串行跑**，两个 `native:check` 并发会让共享 `target/` 的 cargo 套件互相排队并吃掉 per-case timeout。",
+        "evidence": "2026-09-29 同日全部可复跑：`rg -n \"for \\(const testCase of entry.cases\\}|await run\\(\" scripts/native/check.mjs` ⇒ 模块内 case 串行（:158／:161）；`python3` 读 `checks.json` 得 cargo 类 case 的 timeoutMs 分布（terminal-* 全是 300 000／600 000，其余 rust 900 000，`src-tauri-lib-tests`／`core-clippy`／`src-tauri-clippy` 1 800 000）。并发实验日志：`storage-core-rust … FAIL (exit 101)` ＋ `1 case(s) failed, 0 test cases executed`；`terminal-pty-bytes-rust … FAIL (exit timeout)` 同时 `cargo test -p aeroric-core` 那侧打印 `a_hundred_mebibytes_through_a_real_pty…`／`replay_memory_does_not_grow_with_total_output … has been running for over 60 seconds`。串行复跑读数：skeleton 22／160、protocol 6／98、projects 5／21、tasks 7／151、runtime 1／5、agents 1／2、storage 5／361、terminal-core 13／107（连续 4 次全等）。**本条登记时未改任何门禁代码，也未抬任何 timeout。**",
+        "verified_on": "2026-09-29",
+        "retriage_note": "补记二百三十一 登记。登记前按 补记二百二十一 的教训 grep 过本文与台账：`G30`（absent 型门禁有没有\"牙齿\"）、`G31`（评审载体七字段结构）、`G34`（core 零调用公开 API）、`F2`（\"门禁不跑的东西\"）都不覆盖\"跑动了但被杀掉时的报告形状\"，所以不是重复发现；本轮也没有为了自证而去并发跑第二遍（避免再造一次假红）。"
+      },
+      {
+        "id": "G39",
+        "status": "closed",
+        "task_ids": "P3-06",
+        "finding": "把两条污染源用例改成默认 opt-in 之后（**该选择的依据待追认**：`ask` 回包截断，Agent 未看到用户选项原文，本轮按推荐项 ① 执行），**默认门禁不再覆盖宿主 `--lib` 2 465 条与真内核适配器验收 19 条**。这不是假设：2026-09-29 实测 `pnpm native:check tauri-adapter` 现在打 `10 case(s) passed, 42 test cases executed (2 opt-in skip: adapter-acceptance-real-kernel, src-tauri-lib-tests)`，墙钟从 235 s 降到 17 s；同一轮真实 `~/.aeroric` 前后快照 5 个文件＋3 个凭据边车**逐字节相同**、`invite-created` 计数不变（1 982→1 982）⇒ 污染源确实被关掉了。代价是覆盖面：这 2 484 条用例今天在任何默认绿里都不存在，而 P2-05／P3-01／P3-02／P3-03 多条已 accepted 的验收都曾把它们当证据。〔2026-09-29 补记二百四十：**该选择已获追认**（污染源用例默认 opt-in＝①，用户答复「两处都追认」）；覆盖面代价与本条 requirement 均不变，P3-06 出口四步照旧。〕",
+        "requirement": "P3-06 出口必须把这两条**恢复成默认必选**，顺序固定：① 给 `storage::aeroric_dir()` 一个应用自己认的覆盖变量（`AERORIC_HOME` 一类；`HOME=` 重定向实测无效，rustup 会 exit 1），让宿主套件整体落 scratch 根；② 用 `AERORIC_ALLOW_REAL_HOME_TESTS=1` 跑一轮，按**内容**证明隔离成功（`remote-audit.log` 事件计数、`agent-credentials/**` sha256 集合、usage DB 行级读数都不变，见 `G24` 的 28 目标清单）；③ 删掉 `optInEnv` 标记并把 `checks.json` 的 `runner.rules` 第 3 条恢复成无条件成立；④ 同批把 `tauri-adapter` 的期望读数从 10/42 抬回 12/2 526。在此之前，任何引用“门禁全绿”的文字都必须写明这两条是 opt-in 未跑——`extraction` 之外的散文没有机器提醒，靠的是 `gate-runner-unit` 里那条“committed gate exactly the two real-home writers are opt-in”的集合断言（它同时禁止把别的用例标成 opt-in）。",
+        "evidence": "2026-09-29 实测：`rg -c 'skip' scripts/native/check.mjs` 在改动前为 0（默认跑一切）；改动后 `native:check tauri-adapter` rc 0、10/42＋2 SKIP；`native:check skeleton` 22／173（`gate-runner-unit` 29→36、`extraction-unit` 9→15 两条地板同批抬）；前后快照脚本只读，`changed keys: NONE`。新增 6 条 runner 用例含 3 条负例：env 未设⇒跳过且不计数、env=1⇒真跑、env=0/true/空/yes⇒仍跳过；optInEnv 缺 reason 或变量名非法⇒注册被拒；红用例与跳过并存⇒模块仍红。 2026-09-30 P3-06 收口：`storage::aeroric_dir()` 成为唯一根且读序三层——测试 SLOT（install_scratch_home）> `AERORIC_HOME`（runner 每轮注入的 scratch）> 真实家；notification.rs/app_settings 的两份逐字重复实现并一（覆盖只进一份＝止血止一半）。门禁两条（src-tauri-lib-tests 2452、adapter-acceptance-real-kernel 19）从 opt-in 恢复默认必选（check.mjs 的 case.env `<scratch>` 哨兵＝mkdtemp 注入+跑后清理）。当日实测：tauri-adapter 12/2513 全绿；真实家对账——remote-audit.log 行数与哈希不动、agent-credentials 边车哈希不动、terminal-history 文件数不动（usage DB 行级 +9 经核为在跑客户端的正常采集，非测试签名——签名判据全零）。事故如实记：修复窗口内一次未隔离的 `cargo test --lib` 直跑写了真实家（audit +3 伪造 invite 事件、usage +25 行）——正是 G19/G20 描述的污染形态的活体复现，此后所有宿主套件跑批一律走 runner 注入或 HOME=mktemp 隔离。补记二百八十。",
+        "verified_on": "2026-09-30"
+      },
+      {
+        "id": "G40",
+        "finding": "['用户硬边界（2026-10-01）：pnpm native:ui-test 触发 Xcode XCUITest 键盘合成机制向系统新建测试专用输入源（XCTest input method）。用户先两轮明令禁止；同日用户在知悉根因后明确同意该副作用并指示继续运行 UI 测试——G40 由\"禁跑\"改记为\"知情同意，Agent 可运行 native:ui-test\"（本条保留作审计痕迹）。']",
+        "requirement": [
+          "native:ui-test 可由 Agent 正常执行；若用户再次明令禁止，立即停跑并把本条改回禁跑口径。"
+        ],
+        "task_ids": [
+          "P4-04"
+        ],
+        "owner": "user",
+        "status": "resolved"
+      },
+      {
+        "id": "G41",
+        "finding": [
+          "XCUITest 环境故障（2026-10-01/02 两日排查）。已根修两层：①applicationWillTerminate 信号量等 MainActor Task＝主线程自锁死锁，每次退出都孤儿化 serve（其持数据目录写锁，后续启动全部抢锁秒败）→改为 LiveChildSlot+nonisolated terminateChildForProcessExit 同步直达；②GUI app 的并发工作线程阻塞 SIGTERM，posix_spawn 子进程继承阻塞掩码→SIGTERM 永远 pending、serve 杀不死（spawn 脚本+阻塞掩码对照实验实锤）→spawnattr SETSIGMASK 清空+SETSIGDEF 重置 SIGTERM/SIGINT/SIGHUP/SIGQUIT。修复后 launchservices 探针实证退出即杀 serve（slot trace：store→processExit terminate→死亡）。**剩余第三层**：testmanagerd 管辖启动下 serve 偶发起停后卡在 ready 行之前（钩子日志：connecting 15s→reconnecting attempt 1→give up），且场景装配间歇缺失随开机内累计启动数加剧（约 10-15 次预算）、重启复位。serve stderr 落盘已自动接线（launchApp 设 AERORIC_SERVE_STDERR_LOG=数据目录/serve-stderr.log），下次新开机会话一轮单测即得死因。"
+        ],
+        "requirement": [
+          "下次会话（必须先重启系统复位 testmanagerd 场景装配状态——每轮开机预算约 15-25 次 XCUITest 启动）：直接跑一次 `pnpm native:ui-test`（已改逐测试独立会话＋失败换新会话重试，全套约 12-18 次启动）。全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。链路已全部实证：钩子 2s 开两项目＋projects.json 持久化（r8）；侧栏键盘选择/值断言/两窗口独立各自在 r6/r9/r10 分别通过；最佳轮 5/6（r9）。实现与三层根修全部入库（bcebf59/6e771f6/b5dd0b9/14a286a）。"
+        ],
+        "task_ids": [
+          [
+            "P4-04"
+          ]
+        ],
+        "owner": [
+          "P4-04"
+        ],
+        "status": "accepted",
+        "accepted_by": "user",
+        "accepted_note": "用户裁定(2026-10-02 Q96):UI 6/6 验收跳过,残余风险用户自担;测试资产全保留,重开路径=P10-02 或随时重跑 pnpm native:ui-test。三层根修与全部诊断已入库。"
+      }
+    ]
+  }
+}
