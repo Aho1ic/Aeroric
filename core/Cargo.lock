@@ -24,6 +24,7 @@ name = "aeroric-core"
 version = "0.1.0"
 dependencies = [
  "aeroric-protocol",
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "libc",

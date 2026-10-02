@@ -294,13 +294,15 @@
       "positive_test": "tests/{ssh_host_keys,sftp_transfer,remote_workspace}.rs",
       "negative_test": "hostkey changed 必须失败等待确认；断线后可能已执行的命令先查询不得重放 rm/mv",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/connections.md"
+      ]
     },
     {
       "id": "F12",

@@ -74,7 +74,9 @@
    "git-service-rust@git": 9,
    "git-ui-unit@git": 5,
    "worktree-lifecycle-rust@worktree": 6,
-   "worktree-ui-unit@worktree": 6
+   "worktree-ui-unit@worktree": 6,
+   "ssh-host-keys-rust@connections": 8,
+   "connections-ui-unit@connections": 5
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2407,6 +2409,45 @@
      "parse": "swift",
      "minCases": 6,
      "$note": "P6-05 WorktreePolicyTests 6 例：create/merge/remove/discarded/remote 判定、分支名对齐。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "connections": {
+   "cases": [
+    {
+     "name": "ssh-host-keys-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "ssh_host_keys"
+     ],
+     "parse": "rust",
+     "minCases": 8,
+     "$note": "P7-01 ssh_host_keys.rs 8 用例：指纹/scan 去重/hostkey changed 等待确认/路径注入/sftp 校验/queue 生命周期/密码不进序列化。默认 fake；不连接真实服务器。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "connections-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "ConnectionStoreTests"
+     ],
+     "parse": "swift",
+     "minCases": 5,
+     "$note": "P7-01 ConnectionStoreTests 5 例：ingest/select、无明文密码、host key 待确认、remote cwd 分离、HostKeyPrompt 变体。",
      "timeoutMs": 900000
     }
    ]
