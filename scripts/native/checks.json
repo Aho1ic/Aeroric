@@ -67,7 +67,10 @@
    "files-core-rust@files": 13,
    "files-ui-unit@files": 4,
    "file-history-rust@editor": 7,
-   "editor-ui-unit@editor": 7
+   "editor-ui-unit@editor": 7,
+   "lsp-protocol-rust@ide": 8,
+   "dap-protocol-rust@ide": 2,
+   "ide-ui-unit@ide": 5
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2264,6 +2267,64 @@
      "parse": "swift",
      "minCases": 7,
      "$note": "P6-02 DocumentStoreTests 7 例：dirty/revision、冲突不可静默覆盖、BOM/CRLF、关 tab dirty、SaveOutcome 路由、scheme 守卫。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "ide": {
+   "cases": [
+    {
+     "name": "lsp-protocol-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "lsp_protocol"
+     ],
+     "parse": "rust",
+     "minCases": 8,
+     "$note": "P6-03 lsp_protocol.rs 8 用例：UTF-16 中文/emoji 位置、过时版本丢弃、language id、tsc/eslint parser、run_config 校验/diff、DAP 生命周期、test failure 定位、preview URL。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "dap-protocol-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "dap_protocol"
+     ],
+     "parse": "rust",
+     "minCases": 2,
+     "$note": "P6-03 dap_protocol.rs 2 用例：SessionSnapshot wire roundtrip（crash/restart 生命周期）、DebugConfigDocument roundtrip＋校验（server crash/restart 由 is_action_allowed 的无会话 Start 分支承载）。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "ide-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "IDEStateTests"
+     ],
+     "parse": "swift",
+     "minCases": 5,
+     "$note": "P6-03 IDEStateTests 5 例：断点 diff、诊断 version 守卫、Debug 生命周期、RunConfiguration 守卫、Symbol/Test。",
      "timeoutMs": 900000
     }
    ]

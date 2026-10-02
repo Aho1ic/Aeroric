@@ -231,13 +231,15 @@
       "positive_test": "tests/{lsp_protocol,dap_protocol,run_config}.rs + fake LSP/DAP",
       "negative_test": "中文/emoji 位置换算；过时 diagnostics 丢弃；断开 debug 不误杀其他任务",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/ide.md"
+      ]
     },
     {
       "id": "F09",
