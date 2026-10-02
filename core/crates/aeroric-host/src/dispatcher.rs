@@ -142,6 +142,9 @@ pub struct HostServices {
     pub log: Arc<EventLog>,
     pub services: Arc<ServiceSet>,
     pub approvals: Arc<std::sync::Mutex<crate::services::HostApprovals>>,
+    /// 宿主在 handshake 应答里声明的能力清单（ADR-038：`terminal.replay` 只在
+    /// 装配了终端重放面的宿主上为真；`v == 1` 从不蕴含能力）。
+    pub capabilities: Vec<aeroric_protocol::capability::Capability>,
 }
 
 impl HostServices {
@@ -190,14 +193,22 @@ impl HostServices {
         registry: Option<Arc<aeroric_core::runtime::registry::TaskRegistry>>,
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
+        let mut capabilities: Vec<aeroric_protocol::capability::Capability> = Vec::new();
         crate::services::register_read_services(&mut set, Arc::clone(&context));
         let approvals = Arc::new(std::sync::Mutex::new(
             crate::services::HostApprovals::default(),
         ));
         crate::services::register_approval_services(&mut set, Arc::clone(&approvals));
+        // 先克隆 context：下面的 if-let 分支里 register_session_services 会
+        // 把它 move 走，而重放面还要一份。
+        let replay_context = context.clone();
         if let (Some(service), Some(families), Some(executor), Some(terminal), Some(registry)) =
             (service, families, executor, terminal, registry)
         {
+            // 先克隆给重放面：register_task_services 会把 terminal/registry
+            // move 走。
+            let replay_terminal = Arc::clone(&terminal);
+            let replay_registry = Arc::clone(&registry);
             crate::services::register_task_services(
                 &mut set,
                 Arc::clone(&service),
@@ -206,15 +217,29 @@ impl HostServices {
                 terminal,
                 registry,
             );
-            crate::services::register_session_services(&mut set, service, context, families);
+            crate::services::register_session_services(&mut set, service, replay_context, families);
+            crate::services::register_terminal_replay_services(
+                &mut set,
+                replay_terminal,
+                replay_registry,
+                context,
+            );
+            capabilities.push(aeroric_protocol::capability::Capability {
+                name: "terminal.replay".to_string(),
+                enabled: true,
+                since: Some(1),
+                note: None,
+            });
         }
         {
             let token = Arc::clone(&token);
+            let capabilities = capabilities.clone();
             set.register(
                 crate::subscriptions::Connection::HANDSHAKE_METHOD,
                 Arc::new(move |request, context| {
                     let token = Arc::clone(&token);
-                    Box::pin(async move { handshake(request, token, context).await })
+                    let capabilities = capabilities.clone();
+                    Box::pin(async move { handshake(request, token, capabilities, context).await })
                 }),
             );
         }
@@ -233,11 +258,17 @@ impl HostServices {
             log,
             services: Arc::new(set),
             approvals,
+            capabilities,
         })
     }
 }
 
-async fn handshake(request: Request, token: Arc<HostToken>, context: Arc<CallContext>) -> Frame {
+async fn handshake(
+    request: Request,
+    token: Arc<HostToken>,
+    capabilities: Vec<aeroric_protocol::capability::Capability>,
+    context: Arc<CallContext>,
+) -> Frame {
     let id = request.id.clone();
     let (presented, client_id) = match parse_handshake(&request.params) {
         Ok(parsed) => parsed,
@@ -265,7 +296,12 @@ async fn handshake(request: Request, token: Arc<HostToken>, context: Arc<CallCon
         v: 1,
         id,
         ok: true,
-        result: serde_json::json!({ "clientId": client_id }),
+        result: serde_json::json!({
+            "clientId": client_id,
+            // 能力清单随应答走（ADR-038）：v==1 从不蕴含能力，客户端按这份
+            // 清单决定渲染重放面还是降级提示。
+            "capabilities": capabilities,
+        }),
         extra: Default::default(),
     })
 }

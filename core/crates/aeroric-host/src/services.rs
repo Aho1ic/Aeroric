@@ -944,6 +944,224 @@ fn parse_messages(lines: &[String], family: ProtocolFamily) -> Vec<Value> {
 use aeroric_core::tasks::ProtocolFamily;
 
 #[allow(clippy::type_complexity)]
+/// 终端重放面与租约面（P5-01，ADR-038）：`terminal.plan_replay` 承接回放与
+/// 活流（同一字节环，轮询节奏客户端自持），`terminal.acquire_control`/
+/// `terminal.release_control` 把租约语义上协议。`UnknownStream` 在宿主分类成
+/// `notStarted`（在册未产字节）/`evicted`（流已退场）/`unknownStream`（任务
+/// 不可知）——判定材料（任务注册表、任务记录）在宿主手里，core 不改。
+pub fn register_terminal_replay_services(
+    set: &mut ServiceSet,
+    terminal: std::sync::Arc<aeroric_core::terminal::pty::TerminalService>,
+    registry: std::sync::Arc<aeroric_core::runtime::registry::TaskRegistry>,
+    context: std::sync::Arc<aeroric_core::context::CoreContext>,
+) {
+    {
+        let terminal = std::sync::Arc::clone(&terminal);
+        let registry = std::sync::Arc::clone(&registry);
+        let context = std::sync::Arc::clone(&context);
+        set.register(
+            "terminal.plan_replay",
+            std::sync::Arc::new(move |request, _call| {
+                let terminal = std::sync::Arc::clone(&terminal);
+                let registry = std::sync::Arc::clone(&registry);
+                let context = std::sync::Arc::clone(&context);
+                Box::pin(
+                    async move { terminal_plan_replay(request, &terminal, &registry, &context) },
+                )
+            }),
+        );
+    }
+    {
+        let terminal = std::sync::Arc::clone(&terminal);
+        set.register(
+            "terminal.acquire_control",
+            std::sync::Arc::new(move |request, _call| {
+                let terminal = std::sync::Arc::clone(&terminal);
+                Box::pin(async move { terminal_acquire_control(request, &terminal) })
+            }),
+        );
+    }
+    {
+        let terminal = std::sync::Arc::clone(&terminal);
+        set.register(
+            "terminal.release_control",
+            std::sync::Arc::new(move |request, _call| {
+                let terminal = std::sync::Arc::clone(&terminal);
+                Box::pin(async move { terminal_release_control(request, &terminal) })
+            }),
+        );
+    }
+}
+
+fn terminal_identity_of(request: &Request) -> Option<(String, u64)> {
+    let task_id = request.params.get("taskId")?.as_str()?.trim().to_string();
+    if task_id.is_empty() {
+        return None;
+    }
+    let generation = request.params.get("generation").and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_str()?.parse::<u64>().ok())
+    })?;
+    Some((task_id, generation))
+}
+
+/// 在册且未退场的运行 ⇒ 流还没产出第一字节（notStarted）；任务记录还在但
+/// 流不在册 ⇒ 已被退场（evicted）；两处都查无 ⇒ 任务本身不可知（unknownStream）。
+fn classify_unknown_stream(
+    registry: &aeroric_core::runtime::registry::TaskRegistry,
+    context: &std::sync::Arc<aeroric_core::context::CoreContext>,
+    task_id: &str,
+    generation: u64,
+) -> &'static str {
+    if registry
+        .resource_run(task_id)
+        .is_some_and(|run| run.id() == task_id && run.generation() == generation)
+    {
+        return "notStarted";
+    }
+    if find_project_of_task(context, task_id).is_some() {
+        return "evicted";
+    }
+    "unknownStream"
+}
+
+fn terminal_plan_replay(
+    request: Request,
+    terminal: &aeroric_core::terminal::pty::TerminalService,
+    registry: &aeroric_core::runtime::registry::TaskRegistry,
+    context: &std::sync::Arc<aeroric_core::context::CoreContext>,
+) -> Frame {
+    use aeroric_core::terminal::replay::{plan_replay, ReplayPlan, ResetReason, ResumePoint};
+    use aeroric_core::terminal::stream::TerminalIdentity;
+    use base64::Engine as _;
+    let id = request.id.clone();
+    let Some((task_id, generation)) = terminal_identity_of(&request) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.plan_replay requires params.taskId and params.generation",
+        );
+    };
+    let cursor = request.params.get("cursor").cloned().unwrap_or(Value::Null);
+    let kind = cursor
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("bytes")
+        .to_string();
+    let Some(value) = cursor
+        .get("value")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse::<u64>().ok()))
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.plan_replay requires cursor.value (a byte offset)",
+        );
+    };
+    let max_bytes = request
+        .params
+        .get("maxBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES as u64)
+        .min(aeroric_protocol::terminal::MAX_TERMINAL_CHUNK_BYTES as u64)
+        as usize;
+    let identity = TerminalIdentity::new(&task_id, generation);
+    let resume = match kind.as_str() {
+        "unitsFromStart" => ResumePoint::UnitsFromStart(value),
+        _ => ResumePoint::Bytes(value),
+    };
+    let plan = plan_replay(terminal, &identity, resume, max_bytes);
+    let (kind_out, from, bytes, reason) = match &plan {
+        ReplayPlan::Seamless { offset, bytes } => ("seamless", *offset, bytes, Value::Null),
+        ReplayPlan::Reset {
+            from,
+            bytes,
+            reason,
+        } => {
+            let reason_json = match reason {
+                ResetReason::Compacted { earliest } => {
+                    json!({ "kind": "compacted", "earliest": earliest })
+                }
+                ResetReason::CursorBeyondStream { next_offset } => {
+                    json!({ "kind": "cursorBeyondStream", "nextOffset": next_offset })
+                }
+                // UnknownStream 在宿主分类成两个具名理由（ADR-038 决策 2）：
+                // 在册未产字节 ⇒ notStarted；任务还在但流已退场 ⇒ evicted。
+                ResetReason::UnknownStream => {
+                    let classified =
+                        classify_unknown_stream(registry, context, &task_id, generation);
+                    json!({ "kind": classified })
+                }
+                ResetReason::UnitsNotAnchorable => json!({ "kind": "unitsNotAnchorable" }),
+            };
+            ("reset", *from, bytes, reason_json)
+        }
+    };
+    let ResumePoint::Bytes(resume_after) = plan.resume_after() else {
+        // resume_after 的契约恒为字节游标（core 注释钉死），不可达分支。
+        return failure(id, ErrorCode::IoError, "unreachable: non-byte resume point");
+    };
+    ok(
+        &request,
+        json!({
+            "kind": kind_out,
+            "from": from,
+            "bytes": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "reason": reason,
+            "resumeAfter": resume_after,
+        }),
+    )
+}
+
+fn terminal_acquire_control(
+    request: Request,
+    terminal: &aeroric_core::terminal::pty::TerminalService,
+) -> Frame {
+    use aeroric_core::terminal::stream::TerminalIdentity;
+    let id = request.id.clone();
+    let Some((task_id, generation)) = terminal_identity_of(&request) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.acquire_control requires params.taskId and params.generation",
+        );
+    };
+    let identity = TerminalIdentity::new(task_id, generation);
+    let handle = terminal.acquire_control(&identity);
+    ok(&request, json!({ "ticket": handle.ticket() }))
+}
+
+fn terminal_release_control(
+    request: Request,
+    terminal: &aeroric_core::terminal::pty::TerminalService,
+) -> Frame {
+    use aeroric_core::terminal::lease::LeaseHandle;
+    use aeroric_core::terminal::stream::TerminalIdentity;
+    let id = request.id.clone();
+    let Some((task_id, generation)) = terminal_identity_of(&request) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.release_control requires params.taskId and params.generation",
+        );
+    };
+    let Some(ticket) = request
+        .params
+        .get("ticket")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse::<u64>().ok()))
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.release_control requires params.ticket",
+        );
+    };
+    let identity = TerminalIdentity::new(task_id, generation);
+    let released = terminal.release_control(&identity, &LeaseHandle::from_ticket(ticket));
+    ok(&request, json!({ "released": released }))
+}
+
 pub fn register_session_services(
     set: &mut ServiceSet,
     service: std::sync::Arc<TaskService>,
@@ -1166,5 +1384,155 @@ fn session_export(
     match export_session_markdown(std::path::Path::new(path), out, source, &meta) {
         Ok(()) => ok(&request, json!({ "exported": out })),
         Err(e) => failure(id, ErrorCode::IoError, &e),
+    }
+}
+
+#[cfg(test)]
+mod terminal_replay_tests {
+    use super::*;
+    use aeroric_core::context::CoreContext;
+    use aeroric_core::runtime::registry::TaskRegistry;
+    use aeroric_core::terminal::pty::TerminalService;
+    use aeroric_core::terminal::stream::TerminalIdentity;
+    use aeroric_protocol::envelope::Frame;
+    use base64::Engine as _;
+
+    fn request(params: Value) -> Request {
+        Request {
+            v: 1,
+            id: "t1".into(),
+            method: "terminal.plan_replay".into(),
+            idempotency_key: None,
+            params,
+            extra: Default::default(),
+        }
+    }
+
+    fn result_of(frame: Frame) -> Value {
+        match frame {
+            Frame::Success(success) => success.result,
+            other => panic!("unexpected frame: {other:?}"),
+        }
+    }
+
+    fn temp_context(tag: &str) -> std::sync::Arc<CoreContext> {
+        let dir =
+            std::env::temp_dir().join(format!("aeroric-replay-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::sync::Arc::new(CoreContext::read_only(
+            aeroric_core::paths::AppPaths::with_data_dir(std::path::Path::new("/"), Some(&dir)),
+        ))
+    }
+
+    #[test]
+    fn plan_replay_returns_seamless_bytes_and_a_byte_resume_after() {
+        let terminal = TerminalService::new();
+        let registry = TaskRegistry::default();
+        let context = temp_context("seamless");
+        let identity = TerminalIdentity::new("task-1", 1);
+        let _ = &identity;
+        terminal.publish(&identity, b"hello terminal");
+        let frame = terminal_plan_replay(
+            request(serde_json::json!({
+                "taskId": "task-1", "generation": 1,
+                "cursor": {"kind": "bytes", "value": 0},
+            })),
+            &terminal,
+            &registry,
+            &context,
+        );
+        let result = result_of(frame);
+        assert_eq!(result["kind"], "seamless");
+        assert_eq!(result["from"], 0);
+        assert_eq!(result["resumeAfter"], 14);
+        assert_eq!(
+            result["bytes"],
+            base64::engine::general_purpose::STANDARD.encode(b"hello terminal")
+        );
+    }
+
+    #[test]
+    fn plan_replay_reports_cursor_beyond_the_stream_end() {
+        let terminal = TerminalService::new();
+        let registry = TaskRegistry::default();
+        let context = temp_context("beyond");
+        let identity = TerminalIdentity::new("task-1", 1);
+        let _ = &identity;
+        terminal.publish(&identity, b"abc");
+        let frame = terminal_plan_replay(
+            request(serde_json::json!({
+                "taskId": "task-1", "generation": 1,
+                "cursor": {"kind": "bytes", "value": 99},
+            })),
+            &terminal,
+            &registry,
+            &context,
+        );
+        let result = result_of(frame);
+        assert_eq!(result["kind"], "reset");
+        assert_eq!(result["reason"]["kind"], "cursorBeyondStream");
+        assert_eq!(result["reason"]["nextOffset"], 3);
+        assert_eq!(result["resumeAfter"], 3);
+    }
+
+    #[test]
+    fn plan_replay_classifies_a_registered_live_run_as_not_started() {
+        let terminal = TerminalService::new();
+        let registry = TaskRegistry::default();
+        let context = temp_context("not-started");
+        registry.runs.register("task-live", 3);
+        let frame = terminal_plan_replay(
+            request(serde_json::json!({
+                "taskId": "task-live", "generation": 3,
+                "cursor": {"kind": "bytes", "value": 0},
+            })),
+            &terminal,
+            &registry,
+            &context,
+        );
+        let result = result_of(frame);
+        assert_eq!(result["kind"], "reset");
+        assert_eq!(result["reason"]["kind"], "notStarted");
+    }
+
+    #[test]
+    fn plan_replay_falls_back_to_unknown_when_nothing_knows_the_task() {
+        let terminal = TerminalService::new();
+        let registry = TaskRegistry::default();
+        let context = temp_context("unknown");
+        let frame = terminal_plan_replay(
+            request(serde_json::json!({
+                "taskId": "never-heard-of", "generation": 9,
+                "cursor": {"kind": "bytes", "value": 0},
+            })),
+            &terminal,
+            &registry,
+            &context,
+        );
+        let result = result_of(frame);
+        assert_eq!(result["reason"]["kind"], "unknownStream");
+    }
+
+    #[test]
+    fn lease_tickets_round_trip_through_the_wire_shape() {
+        let terminal = TerminalService::new();
+        let acquired = result_of(terminal_acquire_control(
+            request(serde_json::json!({"taskId": "task-1", "generation": 1})),
+            &terminal,
+        ));
+        let ticket = acquired["ticket"].as_u64().expect("ticket is a number");
+        assert!(ticket > 0);
+        let released = result_of(terminal_release_control(
+            request(serde_json::json!({"taskId": "task-1", "generation": 1, "ticket": ticket})),
+            &terminal,
+        ));
+        assert_eq!(released["released"], true);
+        // 过期票据再放＝no-op 成功（P3-07 语义），不报错。
+        let again = result_of(terminal_release_control(
+            request(serde_json::json!({"taskId": "task-1", "generation": 1, "ticket": ticket})),
+            &terminal,
+        ));
+        assert_eq!(again["released"], false);
     }
 }

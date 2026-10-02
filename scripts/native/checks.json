@@ -24,7 +24,7 @@
       "executor-pty-rust@host": 3,
       "extraction-unit@skeleton": 19,
       "gate-runner-unit@skeleton": 36,
-      "host-lib-rust@host": 20,
+      "host-lib-rust@host": 25,
       "host-lifecycle-rust@host": 4,
       "invariants-unit@skeleton": 13,
       "inventory-unit@skeleton": 57,
@@ -1579,7 +1579,7 @@
             "aeroric-host",
             "--lib"
           ],
-          "minCases": 20,
+          "minCases": 25,
           "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)。floor 从 2026-09-30 现测起算（补记二百七十八）。"
         },
         {

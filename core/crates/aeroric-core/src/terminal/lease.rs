@@ -15,6 +15,19 @@ pub struct LeaseHandle {
     ticket: u64,
 }
 
+impl LeaseHandle {
+    /// 票据值。协议面（ADR-038）只传这个数，租约本体不出 core。
+    pub fn ticket(&self) -> u64 {
+        self.ticket
+    }
+
+    /// 从协议传回的票据重建 handle：`release_control` 以票据语义裁决，
+    /// 重建出的 handle 与当年发出的是同一个值，顶替/释放判定不变。
+    pub fn from_ticket(ticket: u64) -> Self {
+        Self { ticket }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ControlLease {
     /// 已发出的最大票据;只增不减,保证旧 handle 不可能与新票据同号。

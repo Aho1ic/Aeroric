@@ -76,7 +76,8 @@ test("the derived columns are what a finished core Task looks like", () => {
   const byId = new Map(matrix.features.map((f) => [f.id, f]));
   assert.equal(byId.get("F01").core_state, "accepted");
   assert.equal(byId.get("F04").core_state, "accepted");
-  assert.equal(byId.get("F04").native_state, "unstarted");
+  // P5-01 开工后 F04 的原生面进入 in_progress（补记三百一十）。
+  assert.equal(byId.get("F04").native_state, "in_progress");
   assert.deepEqual(byId.get("F04").reviews, ["reviews/terminal-core.md"]);
   assert.equal(matrix.features.some((f) => "final_state" in f), false, "the hand-written column is gone");
   assert.equal(byId.get("F24").core_state, "not-declared", "F24's target is N only");
