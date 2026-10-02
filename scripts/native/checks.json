@@ -58,7 +58,8 @@
       "swift-client-unit@swift-client": 28,
       "swift-client-tsan@swift-client": 28,
       "native-design-unit@native-design": 14,
-      "shell-unit@shell": 24
+      "shell-unit@shell": 36,
+      "native-terminal-unit@native-terminal": 12
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -1945,8 +1946,8 @@
             "AeroricUIUnitTests"
           ],
           "parse": "swift",
-          "minCases": 24,
-          "$note": "P4-04 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4（P4-03 14）＋ShellPolicyTests 10（DetailState.resolve 四态映射×6＋filterCommands×4）＝24。与 native-design-unit 同 filter 同 argv，各自地板独立（下限语义：native-design floor 14 不因用例池涨到 24 而需要改）。",
+          "minCases": 36,
+          "$note": "P4-04/P5-01 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4＋ShellPolicyTests 10（P4-03/04）＋TerminalCoordinatorTests 12（P5-01：cursor 记账/输入策略/租约闸门/100 次 attach-detach/OSC52 与链接策略）＝36。与 native-design-unit 同 filter 同 argv，各自地板独立。",
           "timeoutMs": 900000
         },
         {
@@ -2034,6 +2035,70 @@
           ],
           "$note": "ADR-001 §4 第 2 条在 Shell 的机械形态：侧栏与命令面板的选中态一律由系统 List(selection:) 绘制，禁手绘活动底纹（isSelected/isActive/selectionBackground/activeBackground 命名即暴露手绘意图）。禁形刻意缩窄到选中态特征词——Shell 目录合法的材质 .background(.thinMaterial)/.overlay 与布局 overlay（拖拽手柄、palette 遮罩）不拦（G09 教训：宽禁形误伤合法用法）。两条正控证明两处系统 List(selection:) 真实在用。",
           "timeoutMs": 120000
+        }
+      ]
+    },
+    "native-terminal": {
+      "cases": [
+        {
+          "name": "native-terminal-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "TerminalCoordinatorTests"
+          ],
+          "parse": "swift",
+          "minCases": 12,
+          "$note": "P5-01 TerminalCoordinatorTests 12 例：cursor 记账（seamless/evicted/notStarted）、delegate 输入路由与租约闸门、resize 转发、100 次 attach/detach 记账守恒、OSC52 永不自动写剪贴板、链接 scheme 白名单。与 shell-unit 同 filter 家族、各自地板独立（下限语义）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "native-terminal-no-local-process",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "LocalProcessTerminalView|LocalProcess",
+            "macos/AeroricKit/Sources/AeroricUI/Terminal"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct NativeTerminalView",
+              "macos/AeroricKit/Sources/AeroricUI/Terminal/NativeTerminalView.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "TerminalCoordinator",
+              "macos/AeroricKit/Sources/AeroricUI/Terminal/TerminalCoordinator.swift"
+            ]
+          ],
+          "$note": "P5-01 Action 2 的机械形态：renderer 目录禁用会自行 spawn 的 LocalProcessTerminalView——进程由宿主管理，NSViewRepresentable 只创建渲染器。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "native-terminal-swifterm-pinned",
+          "kind": "forbid",
+          "argv": [
+            "cat",
+            "macos/AeroricKit/Package.swift"
+          ],
+          "mustContain": [
+            "migueldeicaza/swiftterm.git",
+            ".exact(\"1.2.5\")"
+          ],
+          "$note": "P5-01 Action 1：SwiftTerm 依赖钉 exact 1.2.5（Package.resolved 随提交），防止小版本静默改 delegate 面。（mustContain 一律小写：runner 先把 haystack 小写再做包含判断。）",
+          "timeoutMs": 120000,
+          "forbid": []
         }
       ]
     }
