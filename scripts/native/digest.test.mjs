@@ -143,30 +143,25 @@ test("a chunk that loses a row fails the reconstruction assertion, not just the 
   cleanup();
 });
 
-test("the gaps array ships in eight shards, all with injection headroom", () => {
+test("the gaps array ships in nine shards, all with injection headroom", () => {
   const { problems, rows, index } = runShards({ repoRoot });
   assert.deepEqual(problems, []);
   const names = rows.map((r) => r.file);
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-1.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-2.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-3.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-4.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-5.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-6.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-7.json"), names.join(" "));
-  assert.ok(names.includes("docs/native/digest/feature-matrix-gaps-8.json"), names.join(" "));
+  for (let shard = 1; shard <= 9; shard += 1) {
+    assert.ok(names.includes(`docs/native/digest/feature-matrix-gaps-${shard}.json`), names.join(" "));
+  }
   assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps.json"), "the unsplit shard must be gone, not left behind as a stale copy");
-  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps-9.json"), "a 9th shard means the constant moved without this expectation");
+  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps-10.json"), "a 10th shard means the constant moved without this expectation");
   for (const row of rows.filter((r) => /gaps/.test(r.file))) {
     assert.ok(row.bytes < 32768 * 0.8, `${row.file} is at ${row.bytes} B — headroom is the point of chunking`);
   }
   const fm = index.sources.find((s2) => s2.path === "docs/native/feature-matrix.json");
-  assert.equal(fm.shards.filter((s2) => /gaps/.test(s2.file)).length, 8);
+  assert.equal(fm.shards.filter((s2) => /gaps/.test(s2.file)).length, 9);
 });
 test("a shard the plan no longer emits is reported instead of lingering", () => {
   const { dir, cleanup } = tempCopy();
-  writeJson(dir, "docs/native/digest/feature-matrix-gaps-9.json", { shard: "x", payload: { gaps: [] } });
+  writeJson(dir, "docs/native/digest/feature-matrix-gaps-10.json", { shard: "x", payload: { gaps: [] } });
   const { problems } = runShards({ repoRoot: dir });
-  assert.match(problems.join("\n"), /feature-matrix-gaps-9\.json: stale shard/);
+  assert.match(problems.join("\n"), /feature-matrix-gaps-10\.json: stale shard/);
   cleanup();
 });
