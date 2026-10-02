@@ -69,10 +69,11 @@ public struct WorkspaceRootView<State: WorkspaceStateProviding>: View {
         // Keyboard behavior for the sidebar (ADR-001 §4 concerns chrome, not
         // behavior): the system List draws the selection, these window-level
         // key equivalents only move the binding — measured 2026-10-02, the
-        // sidebar List neither exposes selection via AX isSelected nor moves
-        // List(selection:) on arrow keys by itself. Hidden buttons are the
-        // CommandPalette escape-button precedent. Disabled while the palette
-        // is presented so typing there never moves the sidebar.
+        // sidebar List neither exposes its selection state through the
+        // accessibility tree nor moves List(selection:) on arrow keys by
+        // itself. Hidden buttons are the CommandPalette escape-button
+        // precedent. Disabled while the palette is presented so typing there
+        // never moves the sidebar.
         .background {
             Group {
                 Button("") { moveSidebarSelection(.up) }
