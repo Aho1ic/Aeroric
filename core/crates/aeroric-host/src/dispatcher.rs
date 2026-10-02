@@ -202,6 +202,7 @@ impl HostServices {
         // 先克隆 context：下面的 if-let 分支里 register_session_services 会
         // 把它 move 走，而重放面还要一份。
         let replay_context = context.clone();
+        crate::services::register_file_services(&mut set, Arc::clone(&context));
         if let (Some(service), Some(families), Some(executor), Some(terminal), Some(registry)) =
             (service, families, executor, terminal, registry)
         {

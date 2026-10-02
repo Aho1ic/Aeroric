@@ -1387,6 +1387,411 @@ fn session_export(
     }
 }
 
+/// P6-01：文件服务（宿主 command 只做 adapter；业务主体在 core `files/`）。
+/// 路径校验 server 端权威（不依赖客户端过滤 `..`）；projectId → 项目根经
+/// `find_project_of_task` 同款的 record 扫描。
+pub fn register_file_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.read_dir",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_read_dir(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.read_file",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_read_file(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.write_file",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_write_file(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.create_file",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_create(request, context, false) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.create_directory",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_create(request, context, true) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.delete_path",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_delete(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.rename_path",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_rename(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.replace_preview",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_replace_preview(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.apply_replacements",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_apply_replacements(request, context) })
+            }),
+        );
+    }
+}
+
+/// projectId → 项目根（record 的 `path` 字段；与 `find_task_record` 同款扫描）。
+fn find_project_root(context: &Arc<CoreContext>, project_id: &str) -> Option<String> {
+    let projects = aeroric_core::storage::load_projects(context).ok()?;
+    for record in projects {
+        if mutations::text(&record, "id") == Some(project_id) {
+            return mutations::text(&record, "path").map(str::to_string);
+        }
+    }
+    None
+}
+
+fn file_params(request: &Request) -> Result<(String, String), Box<Frame>> {
+    let id = request.id.clone();
+    let Some(project_id) = request
+        .params
+        .get("projectId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return Err(Box::new(failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "requires params.projectId",
+        )));
+    };
+    let Some(relative) = request.params.get("path").and_then(Value::as_str) else {
+        return Err(Box::new(failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "requires params.path",
+        )));
+    };
+    Ok((project_id.to_string(), relative.to_string()))
+}
+
+fn files_read_dir(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    match aeroric_core::files::read_write::read_dir_entries(&root, &relative) {
+        Ok(entries) => ok(&request, serde_json::json!({ "entries": entries })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_read_file(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    match aeroric_core::files::read_write::read_file_content(&root, &relative) {
+        Ok(content) => ok(&request, serde_json::json!({ "content": content })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_write_file(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(content) = request.params.get("content").and_then(Value::as_str) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.content",
+        );
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    match aeroric_core::files::read_write::write_file_content(&root, &relative, content) {
+        Ok(()) => ok(&request, serde_json::json!({ "written": true })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_create(request: Request, context: Arc<CoreContext>, directory: bool) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    let result = if directory {
+        aeroric_core::files::read_write::create_directory(&root, &relative)
+    } else {
+        aeroric_core::files::read_write::create_file(&root, &relative)
+    };
+    match result {
+        Ok(()) => ok(&request, serde_json::json!({ "created": true })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_delete(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    // 删除进废纸篓（不默认永久删除）；显式永久删除走独立的授权路径。
+    match aeroric_core::files::read_write::delete_path(&root, &relative) {
+        Ok(()) => ok(&request, serde_json::json!({ "deleted": true })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_rename(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(new_name) = request.params.get("newName").and_then(Value::as_str) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.newName",
+        );
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    match aeroric_core::files::read_write::rename_path(&root, &relative, new_name) {
+        Ok(()) => ok(&request, serde_json::json!({ "renamed": true })),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+fn files_replace_preview(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(query) = request.params.get("query").and_then(Value::as_str) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.query",
+        );
+    };
+    let Some(replacement) = request.params.get("replacement").and_then(Value::as_str) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.replacement",
+        );
+    };
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    let content = match aeroric_core::files::read_write::read_file_content(&root, &relative) {
+        Ok(content) => content,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    // 单文件 preview：按行匹配 query（大小写不敏感；regex 走 search 面后续接）。
+    let mut intervals: Vec<(u64, u64)> = Vec::new();
+    let lower = content.to_lowercase();
+    let needle = query.to_lowercase();
+    let mut offset = 0usize;
+    while let Some(found) = lower[offset..].find(&needle) {
+        let start = offset + found;
+        intervals.push((start as u64, (start + needle.len()) as u64));
+        offset = start + needle.len();
+    }
+    ok(
+        &request,
+        serde_json::json!({
+            "query": query,
+            "replacement": replacement,
+            "files": [{ "path": relative, "matches": intervals }],
+        }),
+    )
+}
+
+fn files_apply_replacements(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let Some(replacement) = request.params.get("replacement").and_then(Value::as_str) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.replacement",
+        );
+    };
+    let Some(intervals) = request.params.get("matches").and_then(Value::as_array) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params.matches",
+        );
+    };
+    let matches: Vec<(u64, u64)> = intervals
+        .iter()
+        .filter_map(|item| Some((item.get("start")?.as_u64()?, item.get("end")?.as_u64()?)))
+        .collect();
+    let Some(root) = find_project_root(&context, &project_id) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::NotFound,
+            "no project with that id",
+        );
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    let files = vec![aeroric_core::files::search::ReplacePreviewFile {
+        path: relative,
+        matches,
+    }];
+    match aeroric_core::files::search::apply_replacements(&root, replacement, &files) {
+        Ok(summary) => ok(&request, serde_json::json!(summary)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
 #[cfg(test)]
 mod terminal_replay_tests {
     use super::*;

@@ -22,6 +22,8 @@ parking_lot = { workspace = true }
 portable-pty = { workspace = true }
 chrono = "0.4" # 与宿主同 crate 同版本（sessions/resume 的 RFC3339 起算与 export 的时间戳格式化，第五片）
 url = "2" # 与宿主同 crate 同版本（dsh_host/startup 的启动 URL 闸门，P3-05 第五片）
+trash = "=5.2.6" # 与宿主同 crate 同版本（files/delete_path 的回收站删除——不默认永久删除，P6-01）
+notify = "6" # 与宿主同 crate 同版本（files/watcher 的真实 watcher；宿主 event_watcher 同款）
 serde_yaml_ng = "0.10" # 与宿主同 crate 同版本（dsh_host/client 的插件 patch/dump 线数据解析，P3-05 第十一片；纯解析零 I/O）
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] } # grill [dsh] D1（补记二百六十四，2026-09-30 用户决策）：core 自此持网络出口，`DshApiClient` 上收用；feature 集与宿主 `src-tauri/Cargo.toml:46` 逐字一致，不造第二套传输
 uuid = { version = "1", features = ["v4"] } # 与宿主 src-tauri/Cargo.toml:64 逐字一致——dsh transport 的 rpcId 铸造（`DshApiClient::call`，方法群片补记二百六十五 §3）

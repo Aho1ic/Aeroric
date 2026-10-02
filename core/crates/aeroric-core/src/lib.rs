@@ -9,6 +9,7 @@ pub mod agents;
 pub mod clock;
 pub mod context;
 pub mod events;
+pub mod files;
 pub mod location;
 pub mod location_probe;
 pub mod paths;

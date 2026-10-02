@@ -215,7 +215,9 @@
         "C": "unstarted",
         "N": "unstarted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/files.md"
+      ]
     },
     {
       "id": "F08",
