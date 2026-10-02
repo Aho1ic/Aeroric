@@ -270,6 +270,104 @@ async function main() {
     }
     console.log("Approval operations verified.");
 
+    // H. 终端重放面/租约面（P5-01，ADR-038）：plan_replay 承接回放与活流、
+    // acquire/release 租约（过期票据 no-op）。
+    console.log("Exercising terminal replay and lease rpc...");
+    const getGenRes = runCli(["--data-dir", dataDir, "task", "get", taskId]);
+    if (getGenRes.code !== 0) {
+      throw new Error(`task get for generation failed: ${getGenRes.stderr}`);
+    }
+    // generation 在协议里是十进制字符串（Quantity 约定）。
+    const generation = Number(JSON.parse(getGenRes.stdout)?.task?.generation);
+    if (!Number.isFinite(generation) || generation <= 0) {
+      throw new Error(`task.get did not report a usable generation: ${getGenRes.stdout}`);
+    }
+    const replayParamsFile = path.join(scratch, "plan-replay-params.json");
+    writeFileSync(
+      replayParamsFile,
+      JSON.stringify({
+        taskId,
+        generation,
+        cursor: { kind: "bytes", value: 0 },
+      })
+    );
+    const replayRes = runCli([
+      "--data-dir", dataDir, "rpc", "terminal.plan_replay",
+      "--params-file", replayParamsFile,
+    ]);
+    if (replayRes.code !== 0) {
+      throw new Error(`terminal.plan_replay failed: ${replayRes.stderr}`);
+    }
+    const replayJson = JSON.parse(replayRes.stdout);
+    if (replayJson.kind !== "seamless") {
+      throw new Error(`plan_replay kind = ${replayJson.kind}, expected seamless`);
+    }
+    const replayedBytes = Buffer.from(replayJson.bytes ?? "", "base64");
+    if (replayedBytes.length === 0) {
+      throw new Error("plan_replay returned no bytes for a run that produced output");
+    }
+    if (!Number.isFinite(Number(replayJson.resumeAfter)) || Number(replayJson.resumeAfter) <= 0) {
+      throw new Error(`plan_replay resumeAfter unusable: ${replayJson.resumeAfter}`);
+    }
+    console.log(`plan_replay seamless: ${replayedBytes.length} byte(s), resumeAfter ${replayJson.resumeAfter}.`);
+
+    // 活流尾巴：从 resumeAfter 续读——空尾巴也是合法应答（无新字节）。
+    const tailParamsFile = path.join(scratch, "plan-replay-tail.json");
+    writeFileSync(
+      tailParamsFile,
+      JSON.stringify({
+        taskId,
+        generation,
+        cursor: { kind: "bytes", value: Number(replayJson.resumeAfter) },
+      })
+    );
+    const tailRes = runCli([
+      "--data-dir", dataDir, "rpc", "terminal.plan_replay",
+      "--params-file", tailParamsFile,
+    ]);
+    if (tailRes.code !== 0) {
+      throw new Error(`plan_replay tail failed: ${tailRes.stderr}`);
+    }
+    const tailJson = JSON.parse(tailRes.stdout);
+    if (tailJson.kind !== "seamless") {
+      throw new Error(`plan_replay tail kind = ${tailJson.kind}, expected seamless`);
+    }
+    console.log("plan_replay tail from resumeAfter verified.");
+
+    // 租约：acquire 拿票据 → release 成功 → 再 release 同票据＝no-op false。
+    const acquireRes = runCli([
+      "--data-dir", dataDir, "rpc", "terminal.acquire_control",
+      "--params-file", JSON.stringify({ taskId, generation }) && (() => {
+        const p = path.join(scratch, "acquire-params.json");
+        writeFileSync(p, JSON.stringify({ taskId, generation }));
+        return p;
+      })(),
+    ]);
+    if (acquireRes.code !== 0) {
+      throw new Error(`terminal.acquire_control failed: ${acquireRes.stderr}`);
+    }
+    const ticket = JSON.parse(acquireRes.stdout)?.ticket;
+    if (typeof ticket !== "number" || ticket <= 0) {
+      throw new Error(`acquire_control did not mint a ticket: ${acquireRes.stdout}`);
+    }
+    const releaseParamsFile = path.join(scratch, "release-params.json");
+    writeFileSync(releaseParamsFile, JSON.stringify({ taskId, generation, ticket }));
+    const releaseRes = runCli([
+      "--data-dir", dataDir, "rpc", "terminal.release_control",
+      "--params-file", releaseParamsFile,
+    ]);
+    if (releaseRes.code !== 0 || JSON.parse(releaseRes.stdout)?.released !== true) {
+      throw new Error(`release_control failed: ${releaseRes.stdout} ${releaseRes.stderr}`);
+    }
+    const releaseAgain = runCli([
+      "--data-dir", dataDir, "rpc", "terminal.release_control",
+      "--params-file", releaseParamsFile,
+    ]);
+    if (releaseAgain.code !== 0 || JSON.parse(releaseAgain.stdout)?.released !== false) {
+      throw new Error("releasing a stale ticket should succeed with released=false");
+    }
+    console.log("Terminal lease acquire/release verified (stale ticket is a no-op).");
+
     console.log("Headless smoke checks passed cleanly.");
   } finally {
     if (serveProcess && serveProcess.exitCode === null) {
