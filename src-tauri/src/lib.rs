@@ -86,7 +86,6 @@ mod session_omp;
 mod sftp;
 mod sftp_windows;
 mod skills;
-mod sse;
 mod ssh;
 mod ssh_hostkey;
 mod ssh_proxy;

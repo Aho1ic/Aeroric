@@ -117,9 +117,11 @@ const CODEX_AGENT_SCRIPT_MARKER: &str = "# AERORIC_CODEX_WRAPPER_VERSION=6";
 // 旧结构会让没装 Python 的机器连版本都测不出来。
 const CODEX_CHAT_PROXY_MARKER: &str = "# AERORIC_CODEX_CHAT_PROXY_VERSION=8";
 const LOCAL_CHAT_PROXY_BYPASS: &str = "127.0.0.1,localhost,::1";
+// hook 脚本的单一资源来源在 core（与 `agents::managed_home::resources` 同规矩）；
+// P8-02 起 codex_chat_proxy.py 随 app_settings 主体上收 core，宿主只别名消费。
 const CODEX_CHAT_PROXY_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/resources/codex_chat_proxy.py"
+    "/../core/crates/aeroric-core/resources/codex_chat_proxy.py"
 ));
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {

@@ -62,27 +62,34 @@ pub fn client_os_declares_wsl() -> bool {
     cfg!(target_os = "windows")
 }
 
-/// detect_path（与 `platform::detect_path` 同语义；按 cfg 分支）。
+// detect_path（P8-02：由登录 shell imp 分发——`which` 走登录 shell 的 PATH，
+// 与宿主 `src-tauri/src/platform/` 同语义；原纯路径候选版已并入 imp）。
+// ── P8-02：登录 shell 面与 detect_path（与宿主 `src-tauri/src/platform/` 同源
+// 上收；settings 模块的 launch_spec/versions/agent_scripts 消费）。
+
+#[cfg(not(windows))]
+pub(crate) mod login_shell_unix;
+#[cfg(windows)]
+pub(crate) mod login_shell_windows;
+
+#[cfg(not(windows))]
+use self::login_shell_unix as imp;
+#[cfg(windows)]
+use self::login_shell_windows as imp;
+
+pub struct ShellCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+pub fn login_shell_env() -> &'static [(String, String)] {
+    imp::login_shell_env()
+}
+
+pub fn login_shell_path() -> &'static str {
+    imp::login_shell_path()
+}
+
 pub fn detect_path(binary: &str) -> String {
-    if binary.contains('/') {
-        return binary.to_string();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let candidates = [".exe", ".cmd", ".bat"];
-        for ext in candidates {
-            let candidate = format!("{binary}{ext}");
-            if std::path::Path::new(&candidate).exists() {
-                return candidate;
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let candidate = format!("/usr/local/bin/{binary}");
-        if std::path::Path::new(&candidate).exists() {
-            return candidate;
-        }
-    }
-    binary.to_string()
+    imp::detect_path(binary)
 }
