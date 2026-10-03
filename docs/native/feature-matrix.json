@@ -357,13 +357,15 @@
       "positive_test": "tests/{database_query,database_grid,database_confirmation}.rs 临时 SQLite 真实读写",
       "negative_test": "两窗口确认不得串 SQL；一次批准只绑定单个 operationId+SQL hash",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/database.md"
+      ]
     },
     {
       "id": "F15",

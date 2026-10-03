@@ -79,7 +79,9 @@
    "connections-ui-unit@connections": 5,
    "platform-capabilities-rust@platforms": 5,
    "infrastructure-rust@infrastructure": 6,
-   "infrastructure-ui-unit@infrastructure": 5
+   "infrastructure-ui-unit@infrastructure": 5,
+   "database-confirmation-rust@database": 7,
+   "database-ui-unit@database": 4
   },
   "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
  },
@@ -2513,6 +2515,45 @@
      "parse": "swift",
      "minCases": 5,
      "$note": "P7-03 InfrastructureStoreTests 5 例：容器簿记、daemon 原因、Conda 选择、长任务状态、端口。",
+     "timeoutMs": 900000
+    }
+   ]
+  },
+  "database": {
+   "cases": [
+    {
+     "name": "database-confirmation-rust",
+     "kind": "test",
+     "argv": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "core/Cargo.toml",
+      "--locked",
+      "-p",
+      "aeroric-core",
+      "--test",
+      "database_confirmation"
+     ],
+     "parse": "rust",
+     "minCases": 7,
+     "$note": "P7-04 database_confirmation.rs 7 用例：production assessment/confirmation（一次批准绑定 operationId+目标+SQL hash，不对后续所有 SQL 放行）、grid 有界分页、where 守卫。必选 SQLite 读写/事务/取消/导入导出随 dbx-core 契约测试（不接真实数据库）。",
+     "timeoutMs": 900000
+    },
+    {
+     "name": "database-ui-unit",
+     "kind": "test",
+     "argv": [
+      "swift",
+      "test",
+      "--package-path",
+      "macos/AeroricKit",
+      "--filter",
+      "DatabaseStoreTests"
+     ],
+     "parse": "swift",
+     "minCases": 4,
+     "$note": "P7-04 DatabaseStoreTests 4 例：无明文、确认绑定、有界分页、close tab 释放。",
      "timeoutMs": 900000
     }
    ]

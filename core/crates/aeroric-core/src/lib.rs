@@ -9,6 +9,7 @@ pub mod agents;
 pub mod clock;
 pub mod connections;
 pub mod context;
+pub mod database;
 pub mod events;
 pub mod files;
 pub mod git;

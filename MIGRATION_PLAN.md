@@ -110,6 +110,12 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 ### ▶ P7-03 步 2（2026-10-03，刀二：Infrastructure 五视图）
 新建 `AeroricUI/Infrastructure/{InfrastructureStore,InfrastructureViews}.swift`：InfrastructureStore（容器/镜像/端口/Conda 簿记＋daemon 不可用原因＋长任务状态）＋DockerPanel（无 daemon 显示不可用不弹 sudo）＋ImageList＋ContainerDetail（**Remove 二段确认**——只读/破坏显式区分）＋PortInspector（Owner/Stop 二段确认——PID 身份由宿主校验）＋CondaEnvironmentPicker。新建 `InfrastructureStoreTests`(5)。**验证**：AeroricKit 全包 190/0、App BUILD SUCCEEDED。
 
+### ▶ P7-04 步 1（2026-10-03，刀一：core database 模块）
+core Cargo.toml 加 dbx-core（path `../../../../dbx/crates/dbx-core`，default-features=false——与宿主同 path；相对路径三层修正）。新建 `core/crates/aeroric-core/src/database/{mod,query,grid}.rs`：query（**production assessment/confirmation verbatim 上收**——`assess_production_sql`/`assess_production_target` 逐行同 dbx-core production_safety 链；**一次批准绑定 operationId+目标+SQL hash，不对后续所有 SQL 放行**——`confirmation_covers` 纯函数＋`sql_hash` SHA-256）＋grid（**百万行只请求有界页**——`bounded_offset` page/size clamp＋MAX_OFFSET 深分页守卫、`normalize_page_size` 1..=500、where_input 守卫多语句/NUL——编辑使用原 DBX 条件保护不拼 Swift SQL）。新建 `tests/database_confirmation.rs` 7 用例（ConnectionConfig 无 Default 全字段构造——参照 dbx-core production_safety::tests::config）。**验证**：database_confirmation 7/7、core 全量 **559/0**、clippy `-D warnings` 0、fmt 干净。接线中修掉：dbx-core 相对路径、ConnectionConfig 构造（无 Default）、where 守卫语义（任一 `;`＝多语句）、is_production 期望（整条连接即生产时列表留空）。
+
+### ▶ P7-04 步 2（2026-10-03，刀二：Database 十视图）
+新建 `AeroricUI/Database/{DatabaseStore,DatabaseViews}.swift`：DatabaseStore（连接簿记**无明文密码**＋生产确认一次绑定 operationId+目标+SQL hash＋有界页（store 只持有当页）＋close tab 释放）＋DatabaseSidebar＋ConnectionEditor＋SchemaBrowser＋SQLQueryEditor＋**ResultGrid**（LazyVStack 虚拟化只渲染可见行＋分页控件＋NULL 明确）＋StructureEditor＋ImportExportSheet＋RedisBrowser＋MongoBrowser＋**ProductionConfirmationSheet**（生产库写入确认）。新建 `DatabaseStoreTests`(4)。**验证**：AeroricKit 全包 194/0、App BUILD SUCCEEDED。
+
 **标注约定**：
 
 - 状态取值 `pending` / `in_progress` / `blocked` / `accepted`，与 §5.3 模板一致。
@@ -156,7 +162,8 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P6-05 | **accepted — P6-05 Gate 通过 ＝ Phase 6 Gate 通过**（2026-10-02 收口：评审 `docs/native/reviews/worktree.md`，grill-me [worktree] 已真实调用、用户答复「接受并收口＋Gate 通过」。两刀：core worktree 模块（RCE 守卫＋merge-base diffstats＋生命周期判定）＋四视图。门禁 worktree 2 case/12 用例、core 533/0、AeroricKit 180/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。真实 Aeroric 仍 main、无新分支） | P2-05 临时端口 → P7 切 WorktreeService | 2026-10-02 |
 | P7-02 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/platforms.md`，grill-me [platforms] 已真实调用、用户答复「接受并收口」。两刀：core platform/wsl 模块＋UnsupportedTargetView＋CI core 三作业。门禁 platforms 1 case/5 用例、core --all-features 650/0、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G14 结案） | wsl_executor＋legacy 删除 → P7 接线收尾；Windows 真机 smoke → P10-01 | 2026-10-03 |
 | P7-03 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/infrastructure.md`，grill-me [infrastructure] 已真实调用、用户答复「接受并收口」。两刀：core infrastructure 模块＋Infrastructure 五视图。门禁 infrastructure 2 case/11 用例、core 552/0、AeroricKit 190/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | 真 Docker smoke/CLI 执行 → P10-01 | 2026-10-03 |
-| P7-04 ~ P7-05 | pending | Phase 7 内串行 | — |
+| P7-04 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/database.md`，grill-me [database] 已真实调用、用户答复「接受并收口」。两刀：core database 模块（dbx-core 依赖）＋Database 十视图。门禁 database 2 case/11 用例、core 559/0、AeroricKit 194/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。2 条 topic 写明） | Redis/Mongo/transfer 业务主体 → P7 接线；真库 e2e → P10-01 | 2026-10-03 |
+| P7-05 ~ P7-06 | pending | Phase 7 内串行 | — |
 | Phase 8 | pending | Phase 7 Gate | — |
 | Phase 9 | pending | Phase 8 Gate | — |
 | Phase 10 | pending | Phase 9 Gate | — |
@@ -187,7 +194,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > **【执行状态】补记三百二十四（2026-10-03）— P7-03 收口。** 步 1 侦察：docker(596)/ports(788)/conda(255) 实现盘清。步 2 刀一：core `infrastructure/{mod,docker,ports,conda}.rs`（OperationRegistry **长任务 operationId/取消/状态查询**＋Docker 解析 verbatim＋**只读/破坏显式区分**＋daemon_unavailable_reason 不弹 sudo＋**PID 身份判定**避免重用误杀＋conda spawn 环境白名单不能污染 rc）＋`tests/infrastructure.rs` 6 用例（infrastructure 6/6、core 552/0）。步 3 刀二：`AeroricUI/Infrastructure/{InfrastructureStore,InfrastructureViews}.swift` 五视图（daemon 不可用显示＋Remove/Stop 二段确认）＋InfrastructureStoreTests(5)（190/0）。步 4：infrastructure 门禁新注册（2 case/11 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [infrastructure] 真实调用（用户：接受并收口）；评审 `reviews/infrastructure.md`＋task-status accepted（counts 34/17）＋inventory --freeze＋digest 重写。接线中修掉：`env_name_from_path` 三层路径推导。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
 
-**当前状态（2026-10-03，第两百五十二次更新＝补记三百二十四）— P7-03 accepted（Phase 7 第三个 Task；core infrastructure 模块＋Infrastructure 五视图；infrastructure 门禁 11 用例）。下一动作＝P7-04（DBX 数据库能力与原生数据网格）。**
+> **【执行状态】补记三百二十五（2026-10-03）— P7-04 收口。** 步 1 侦察：database/ 13 模块（7262 行）实现盘清；dbx-core 依赖定位。步 2 刀一：core Cargo.toml 加 dbx-core（path 三层修正）＋`database/{mod,query,grid}.rs`（**production assessment/confirmation verbatim 上收**＋**一次批准绑定 operationId+目标+SQL hash**＋grid **有界分页**）＋`tests/database_confirmation.rs` 7 用例（ConnectionConfig 无 Default 全字段构造）（database_confirmation 7/7、core 559/0）。步 3 刀二：`AeroricUI/Database/{DatabaseStore,DatabaseViews}.swift` 十视图（**ResultGrid LazyVStack 虚拟化**＋ProductionConfirmationSheet）＋DatabaseStoreTests(4)（194/0）。步 4：database 门禁新注册（2 case/11 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [database] 真实调用（用户：接受并收口）；评审 `reviews/database.md`（**2 条 topic 写明 §5**：dbx.production_confirm_requested/dbx.transfer_progress，payload 带 operationId）＋task-status accepted（counts 35/16）＋inventory --freeze（进度总表 P7-04 行；range 行补 P7-05~P7-06）＋digest 重写。接线中修掉：dbx-core 相对路径三层、ConnectionConfig 无 Default 全字段构造、where 守卫语义、is_production 期望。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
+
+**当前状态（2026-10-03，第两百五十三次更新＝补记三百二十五）— P7-04 accepted（Phase 7 第四个 Task；core database 模块（dbx-core 依赖）＋Database 十视图；database 门禁 11 用例；2 条 topic 写明）。下一动作＝P7-05（notebook/quick notes 原生读写与内容安全）。**
 > **（上一轮口径——第两百四十次更新，2026-10-02＝补记三百一十一）—  P4-04 accepted＝Phase 4 Gate 通过；P5-01 accepted（评审 `reviews/native-terminal.md`，grill-me [native-terminal] 真实调用＋G31 三件套；ADR-038 含修正案兑现：宿主三方法＋capability＋UnknownStream 双义拆分；SwiftTerm 1.2.5 钉版＋Terminal 五文件＋17 个新单测；smoke e2e 真链路全绿——plan_replay 28B seamless/续读/租约往返/过期票据 no-op；XCTest UI/手测按 Q96 跳过，资产在库）。下一动作＝P5-02（设置中的原生模式按钮与无损切换）。**
 > **（上一轮口径——第两百三十九次更新，2026-10-02＝补记三百零九）—  P4-04 accepted ＝ Phase 4 Gate 通过（评审 `reviews/shell.md`，grill-me [shell] 真实调用＋G31 三件套；四处真发现根修；Q96 用户裁定跳过 UI 6/6——测试资产保留、G41 accepted_by user、重开＝P10-02）。下一动作＝P5-01（用原生终端 renderer 承接同一 PTY），Phase 5 开工。**
 > **（上一轮口径——第两百三十八次更新，2026-10-02＝补记三百零八）—  P4-04 in_progress（只差一次干净开机后的单轮复测）：ui-test.mjs 已改逐测试独立 xcodebuild 会话＋失败换新会话重试（G41 解法），侧栏键盘选择改窗口级 ↑/↓ 隐藏按钮等价物（CommandPalette 先例；List 不自行响应箭头、AX 也不暴露选中态），值断言 detail.selection 头落地。当日实证：r9 5/6（Sidebar 键盘选择首次通过）、r6 TwoMain 点击流通过、钩子/projects.json 持久化稳定；深夜开机 2h 内 60+ 启动后全零窗（预算枯竭）。恢复＝重启→一轮 native:ui-test→全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。全部基建入库（14a286a）。**
@@ -5172,7 +5181,7 @@ grill-me
   - 可选真 Docker smoke 只创建带随机 test label 的临时资源，finally 清理自己的资源。
   - **调用 `grill-me [infrastructure]`**。
 
-### Task P7-04 — DBX 数据库能力与原生数据网格
+### Task P7-04 — DBX 数据库能力与原生数据网格（**2026-10-03 accepted：评审 `docs/native/reviews/database.md`，§4.2 grill-me [database] 已真实调用、用户答复「接受并收口」。两刀全落地；门禁 database 2 case/11 用例（database_confirmation 7＋DatabaseStoreTests 4）、core 559/0、AeroricKit 194/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。**2 条 topic 接线写明于评审 §5**：dbx.production_confirm_requested/dbx.transfer_progress（payload 带 operationId）。以下为原始规格，保留作为证据**）
 
 
 > **具名移交项（补记一百十三，T1=A 按发射点改派）**：本 Task 现在欠 **2 条** v1 event topic 的接线——dbx.production_confirm_requested、dbx.transfer_progress。两条都是审批/进度面，payload 必须带 operationId，与 §2.3 的 `request`/`task.cancel` 语义区分对齐。
