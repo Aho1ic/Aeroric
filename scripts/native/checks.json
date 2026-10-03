@@ -90,7 +90,11 @@
       "storage-backends-rust@notebook-services": 6,
       "sync-ui-unit@notebook-services": 5,
       "extensions-contract-rust@extensions": 7,
-      "extensions-ui-unit@extensions": 5
+      "extensions-ui-unit@extensions": 5,
+      "provider-services-contract-rust@provider-services": 7,
+      "provider-services-rust-operations@provider-services": 9,
+      "provider-services-rust-providers@provider-services": 19,
+      "provider-services-ui-unit@provider-services": 9
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },

@@ -30,13 +30,14 @@
         "agent-operation-changed"
       ],
       "legacyDirection": "core-to-client",
-      "plannedDirection": "pending: P8-02",
-      "payload": "pending: P8-02",
-      "status": "pending: P8-02",
+      "plannedDirection": "core-to-client",
+      "payload": "reshaped: legacy payload is the AgentOperationSnapshot ({operationId, agent, requestedAgent, kind, state, stage, progress, message, errorCode, startedAtMs, finishedAtMs, installResult, upgradeResult}); core operations::report_progress_snapshot/finish_snapshot return the same snapshot for the host to emit (P8-02), so the bridge forwards it verbatim",
+      "status": "mapped",
       "evidence": {
         "emitters": 1,
         "listeners": 1
-      }
+      },
+      "source": "MIGRATION_PLAN.md Task P8-02 (provider/proxy/local-router plane) and core operations::AGENT_OPERATION_EVENT"
     },
     {
       "topic": "agent.tool_install_progress",
@@ -44,14 +45,15 @@
         "agent-tool-install-progress"
       ],
       "legacyDirection": "core-to-client",
-      "plannedDirection": "pending: P8-02",
-      "payload": "pending: P8-02",
-      "status": "pending: P8-02",
+      "plannedDirection": "core-to-client",
+      "payload": "reshaped: legacy payload is {operationId, agent, stage, progress, errorCode, message}; the host emit wrapper forwards the same shape, the backend registry (core operations) is the authoritative copy for late-mounting clients (P8-02)",
+      "status": "mapped",
       "legacyOrphan": "emitted-without-listener",
       "evidence": {
         "emitters": 1,
         "listeners": 0
-      }
+      },
+      "source": "MIGRATION_PLAN.md Task P8-02 and core operations::types::AgentInstallProgress"
     },
     {
       "topic": "app.exit_requested",
