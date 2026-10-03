@@ -24652,13 +24652,15 @@
       "name": "notebook-sync-updated",
       "rust_consts": [],
       "ts_consts": [],
-      "emitters": [],
+      "emitters": [
+        "src-tauri/src/notebook/sync/daemon.rs:43"
+      ],
       "listeners": [
         "src/components/notebook/useNoteSync.ts:266"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": "listened-without-emitter",
+      "orphan": null,
       "target": null,
       "note": null
     },
@@ -24862,8 +24864,7 @@
     "event_name @ src-tauri/src/dsh_webui.rs:1922",
     "action.event_name() @ src-tauri/src/lib.rs:232",
     "super::RAG_INDEX_PROGRESS_TOPIC @ src-tauri/src/notebook/rag/commands.rs:130",
-    "daemon_core::SYNC_EVENT @ src-tauri/src/notebook/sync/daemon.rs:41",
-    "daemon_core::SYNC_UPDATED_TOPIC @ src-tauri/src/notebook/sync/daemon.rs:42",
+    "daemon_core::SYNC_UPDATED_TOPIC @ src-tauri/src/notebook/sync/daemon.rs:44",
     "event_name @ src-tauri/src/pty.rs:462"
   ],
   "event_dynamic_listen_sites": [],

@@ -23,7 +23,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ## ▶ 执行进度标注（Agent 维护，暂停/继续以此为准）
 > **怎么读这份文件（2026-09-29 补记二百零三 加的导航块；行数与体积是当日实测）**：全文 **4 530 行／1.36 MB**，其中**第 63–1402 行是「续跑指令」区里的历史流水（1 340 行＝0.67 MB，占全文 49%）**，规范性正文从 **第 1439 行「## 0. 先纠正迁移起点」** 起、共 3 128 行／0.66 MB。**行号会随每轮标注漂移，所以下面一律给可重跑的 grep 锚点**：
-> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-03，第两百五十五次更新＝补记三百二十七）— P7-06 accepted ＝ Phase 7 Gate 通过（sync/rag/storage_backends 上收 core＋23 原生服务＋五视图；G03 daemon 半边闭合、2 条 topic 接线；notebook-services 门禁 21 用例；F11–F16 全部映射闭合）。下一动作＝Phase 8 首个 Task P8-01（Skill Hub、MCP、hook 与插件配置）。**
+> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-03，第两百五十六次更新＝补记三百二十八）— P8-01 accepted（core extensions 守卫/掩码/信任判定＋六视图＋extensions 门禁 12 用例）。下一动作＝P8-02（provider、proxy、local router 与凭据边界）。**
 > - 51 个 Task 的状态 ＝ `grep -n "^### 进度总表" MIGRATION_PLAN.md` 起的那张表（今天实测表内 51 行、accepted 12）。
 > - 等你表态的全部内容 ＝ 跑 `grep -n "^**一页答题纸" MIGRATION_PLAN.md` 定位（**这里不写行号——写行号一定会烂：本行过去记的"第 217 行"今天实测已在第 247 行**）。现役 **26 项 ＋ Q1–Q7 ＋ 行政 A–D ＋ 2 项人工观察**，每题一行、带可引用的选项 token（**编号 1–9 与 11–27，缺第 10 项**——它已由 补记一百六十四 整条作废，作废说明留在清单里，所以缺号是对的、不是漏项）。**各台账项（19–25＝`G30`–`G36`）的诉求原文在 `docs/native/feature-matrix.json` 的 `gaps[].finding`／`requirement`**，由 `pnpm native:inventory --check` 每天核对 owner 与 `verified_on`；**逐项诉求的人类可读版**在 `grep -n "^\*\*待你表态清单" MIGRATION_PLAN.md` 定位的那一段（今天在第 **176** 行；它不是 `###` 标题而是加粗块，所以按标题 grep 会假称"没有这一节"——我自己就中过一次，见 补记二百一十五）。
 > - 某个 Task 的规格与它的具名移交项 ＝ `grep -n "^### Task P3-04" MIGRATION_PLAN.md`（51 个小节标题实测都在，`### Task P` 命中数＝51）。
@@ -172,7 +172,8 @@ core Cargo.toml 加 dbx-core（path `../../../../dbx/crates/dbx-core`，default-
 | P7-04 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/database.md`，grill-me [database] 已真实调用、用户答复「接受并收口」。两刀：core database 模块（dbx-core 依赖）＋Database 十视图。门禁 database 2 case/11 用例、core 559/0、AeroricKit 194/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。2 条 topic 写明） | Redis/Mongo/transfer 业务主体 → P7 接线；真库 e2e → P10-01 | 2026-10-03 |
 | P7-05 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/notebook.md`，grill-me [notebook] 已真实调用（grill-me→grilling 链）、用户四问全答「接受并收口」。三刀：core notebook 37+20 文件 17,457 行原样上收（适配 4 处）＋宿主 re-export＋44 原生服务＋NotebookClient＋十视图。**搬移测试当场抓回 core local_history 两缺口**（min_interval 限流＋同毫秒 -N 防覆盖）已补。门禁 notebook 3 case/449 用例（contract 12＋搬移单测 428＋UI 9）、core 999/0、host 2011/0（无代理；地板 2439→2011 deliberate）、AeroricKit 203/0、App 构建验签 OK、smoke rc 0、doctor 18/18、contracts 逐字节、inventory consistent） | 十视图挂载 → shell 接线轮/P10-02；attachment_read base64 边界 → 协议演进；rag/sync → P7-06 | 2026-10-03 |
 | P7-06 | **accepted — Phase 7 Gate 通过**（2026-10-03 收口：评审 `docs/native/reviews/notebook-services.md`，grill-me [notebook-services] 已真实调用、用户四问全答「接受并收口」。sync/rag/storage_backends 上收 core（含 StorageConnRepo 参数化、embed ProxyConfig 参数化、daemon 重写）；宿主 23 原生服务＋五视图＋SyncStoreTests；**G03 daemon 半边闭合**（SyncDaemonHandle，usage_index 半边改派 P8-04）；**2 条 topic 接线**（sink 双发）。门禁 notebook-services 4 case/21 用例、core 1560/0、host 1466/0（无代理）、Kit 208/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿） | usage_index.rs:1048 裸 thread::spawn → P8-04（G03 改派）；真云盘/真 embedding e2e → P10-01 | 2026-10-03 |
-| Phase 8 | pending | Phase 7 Gate | — |
+| P8-01 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/extensions.md`，grill-me [extensions] 已真实调用、用户答复「接受并收口」。core extensions/{mod,skills,mcp,hooks,plugins,trust}（守卫/掩码/信任判定/原子安装）＋六视图＋ExtensionStore；门禁 extensions 2 case/12 用例、core 1567/0、host 1466/0、Kit 213/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿） | skills/mcp/hooks/dsh_plugins 的网络与钥匙串半边留宿主命令层；marketplace 抓取未动 | 2026-10-03 |
+| P8-02 ~ P8-05 | pending | P8-01 | — |
 | Phase 9 | pending | Phase 8 Gate | — |
 | Phase 10 | pending | Phase 9 Gate | — |
 
@@ -4999,6 +5000,8 @@ grill-me
 
 > **【执行状态】补记三百二十七（2026-10-03）— P7-06 收口 ＝ Phase 7 Gate 通过。** 刀一 storage_backends：mod/conn/5 后端上收 core（box→box_backend 因关键字；StorageConnRepo 以 data_dir 参数化，0600 凭据分文件语义原样；mount 挂载点 `<data-dir>/mounts/<id>`；build_backend 加 data_dir），宿主 storage_backend.rs/storage_conn.rs 转 shim（5 条 Tauri 命令走 repo）。刀二 sync：9 文件原样移动＋git transport 适配器（READ_TIMEOUT/NETWORK_TIMEOUT＋RepoLocks；git_dir 语义＝rev-parse 非零退出也拒）；**daemon.rs 重写**——纯逻辑 verbatim、run_loop 去 AppHandle（NotebookState/SyncEventSink 注入）、**SyncDaemonHandle 取代裸 thread::spawn（G03 daemon 半边闭合）**、SYNC_UPDATED_TOPIC 常量落 core。刀三 rag：9 文件上收＋ProxyConfig 随 EmbedConfig 参数化（serde default 兼容）＋SearchOptions 补 Deserialize；commands.rs 留宿主，进度 EventSink 双发（v1 topic＋verbatim 旧通道）。刀四：宿主 23 原生服务（service_ctx! 持 CoreContext；block_rag＝current-thread runtime 独线程跑；embedding key 走 SecretStore）＋NotebookClient 扩展＋五视图＋SyncStoreTests(5)。**验证**：notebook-services 门禁 4 case/21 用例（floors 双写）、core 1560/0（含搬移内联测试 ~550＋契约 16）、host 1466/0（无代理；~545 条随 sync/rag/storage 入 core）、Kit 208/0、App 构建验签 OK、smoke rc 0、doctor 18/18、contracts 逐字节。**inventory 收口**：定义 pin 重定位 97 处＋--freeze-reachability（smb 随迁使 create_directory internal ref 归零——真实漂移）；G03 改派 P8-04（daemon 半边闭合写进 note）。**grill-me [notebook-services] 真实调用**（用户四问全答：单客户端互斥约定/代理客户端携带/G03 按计划关一半/接受并收口）。评审 `docs/native/reviews/notebook-services.md`＋task-status accepted（37/51）＋inventory --freeze（F15/F16 转双 accepted，Phase 7 Gate：F11–F16 全闭合）。提交 main（未 push、无 tag、未发 Release，INV-01）。
 
+> **【执行状态】补记三百二十八（2026-10-03）— P8-01 收口。** core `extensions/{mod,skills,mcp,hooks,plugins,trust}.rs`：skills 名/落点守卫（verbatim）＋install_target 双保险；MCP validate_server（空 command/NUL/env 键）＋mask_env（凭据键→••••，空值不掩）；hooks is_hook_script/validate_hook（omp .js/.ts 规则固化）；plugins 目录守卫＋语义版本比较（minimax 回滚判据）；trust verdict（写入范围越界一律拒绝——确认不洗白；builtin+revision→Trusted）；atomic_install（tmp→rename，失败零残留）。六视图＋ExtensionStore（掩码 env 落地、pendingRestartNotice「下次启动生效」提示、trustVerdict 与 core 同语义）。**验证**：extensions 门禁 2 case/12 用例（floors 双写）、core 1567/0、host 1466/0、Kit 213/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿（contracts --write 一次：emitters 计数漂移＝sync 常量定义随 P7-06 入 core，宿主 emit 恢复字面量修复；freeze-reachability 重算）。**grill-me [extensions] 真实调用**（用户：接受并收口）。评审 `docs/native/reviews/extensions.md`＋task-status accepted（38/51）＋inventory freeze。提交 main（未 push、无 tag、未发 Release，INV-01）。
+
 ### Task P5-03 — 项目、任务列表与原生任务编辑器
 
 - **Input**：F01/F02、P2 services、`src/components/RunningView.tsx`、`src/state/app/{taskMutations,projectMutations}.ts`。
@@ -5256,7 +5259,7 @@ grill-me
 
 **出口**：无 GUI 时远程与后台功能也工作；macOS Tauri/SwiftUI/CLI 连接同一 host，可以在备份与同意后接入用户数据。
 
-### Task P8-01 — Skill Hub、MCP、hook 与插件配置
+### Task P8-01 — Skill Hub、MCP、hook 与插件配置（**2026-10-03 accepted：评审 `docs/native/reviews/extensions.md`，grill-me [extensions] 已真实调用、用户答复「接受并收口」。core extensions 五模块（守卫/掩码/信任判定/原子安装）＋六视图＋ExtensionStoreTests(5)＋tests/extensions.rs(7)；门禁 extensions 2 case/12 用例；core 1567/0、host 1466/0、Kit 213/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿。网络/钥匙串半边留宿主命令层。以下为原始规格，保留作为证据**）
 
 - **Input**：`src-tauri/src/{skills,mcp,hooks,dsh_plugins}.rs`、`src/components/app-settings/{SkillsPanel,McpPanel,HooksPanel,DshPluginsPanel}.tsx`；minimax 插件 enable/commit/rollback 参考。
 - **Action**：

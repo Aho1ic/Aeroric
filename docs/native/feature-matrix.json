@@ -427,7 +427,9 @@
         "N": "unstarted",
         "A": "unstarted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/extensions.md"
+      ]
     },
     {
       "id": "F18",

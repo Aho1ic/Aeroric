@@ -88,7 +88,9 @@
       "notebook-sync-contract-rust@notebook-services": 6,
       "rag-pipeline-rust@notebook-services": 4,
       "storage-backends-rust@notebook-services": 6,
-      "sync-ui-unit@notebook-services": 5
+      "sync-ui-unit@notebook-services": 5,
+      "extensions-contract-rust@extensions": 7,
+      "extensions-ui-unit@extensions": 5
     },
     "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
@@ -2696,6 +2698,45 @@
           "parse": "swift",
           "minCases": 5,
           "$note": "P7-06 SyncStoreTests 5 例：冲突决定绑定 seen hash（对不上号作废重问）、退避标签、状态合并、冲突精确清账、store 无凭据字段。",
+          "timeoutMs": 900000
+        }
+      ]
+    },
+    "extensions": {
+      "cases": [
+        {
+          "name": "extensions-contract-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "extensions"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "$note": "P8-01 extensions.rs 7 用例：skill 名/插件目录守卫（穿越/分隔符/NUL）、语义版本比较、MCP 空 command/env 键校验、env secret 掩码、安装失败不留 .tmp（父路径占用注入）、hook .js/.ts 守卫、信任判定（越界写入确认也拒绝）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "extensions-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ExtensionStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P8-01 ExtensionStoreTests 5 例：信任判定与 core 同语义、掩码 env 不进明文字段、重启提示显式清除、hook 扩展名守卫、安装提议清账。",
           "timeoutMs": 900000
         }
       ]

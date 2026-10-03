@@ -37,8 +37,10 @@ pub fn start(app: AppHandle) {
     let sink: daemon_core::SyncEventSink = Arc::new(move || {
         use tauri::Emitter;
         // 旧通道（verbatim 空对象 payload）＋v1 topic。两条都必须发：
-        // React 客户端只认前者，v1 事件面只认后者。
-        let _ = emitter.emit(daemon_core::SYNC_EVENT, ());
+        // React 客户端只认前者，v1 事件面只认后者。旧通道用**字面量**而非
+        // 常量：事件扫描器按 src-tauri 内的字面值找发射点，常量定义已随
+        // P7-06 移入 core（`notebook_sync_updated` 行的 mapped 判据不变）。
+        let _ = emitter.emit("notebook-sync-updated", ());
         let _ = emitter.emit(daemon_core::SYNC_UPDATED_TOPIC, ());
     });
     let handle = daemon_core::start(

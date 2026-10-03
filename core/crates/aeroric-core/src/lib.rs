@@ -11,6 +11,7 @@ pub mod connections;
 pub mod context;
 pub mod database;
 pub mod events;
+pub mod extensions;
 pub mod files;
 pub mod git;
 pub mod ide;
