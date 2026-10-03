@@ -339,13 +339,29 @@ pub fn migrate_legacy_notes(vault: &Path, raw_json: &str) -> Result<MigrationRep
     Ok(report)
 }
 
+/// 进程 home 目录（与宿主 `platform::home_dir` 同语义：unix 用 `HOME`，
+/// Windows 用 `USERPROFILE`）。core 没有 `dirs` 依赖，这里保持同一最小面。
+fn home_dir() -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        std::env::var_os("HOME").map(std::path::PathBuf::from)
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
 /// 全局默认 vault:`~/.aeroric/notebook`。localStorage 迁移的落点。
 ///
 /// 为什么是全局而不是项目级:今天随手记的数据在 localStorage 里,是跨项目
 /// 共享的。迁移后必须还是跨项目共享,否则用户切个项目就以为笔记丢了。
 pub fn default_vault_path() -> Result<PathBuf, String> {
-    let home =
-        crate::platform::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
+    let home = home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
     Ok(home.join(".aeroric").join("notebook"))
 }
 

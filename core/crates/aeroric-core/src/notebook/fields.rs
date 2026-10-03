@@ -59,7 +59,7 @@ pub struct NoteFieldSource {
 }
 
 /// 扫一遍 vault,返回每篇**有 frontmatter 字段**的笔记及其字段。
-pub(crate) fn scan_vault_fields(root: &Path) -> Result<Vec<NoteFieldSource>, String> {
+pub fn scan_vault_fields(root: &Path) -> Result<Vec<NoteFieldSource>, String> {
     let mut out = Vec::new();
     let mut total = 0usize;
     walk_notes(root, &mut |path, content| {
@@ -218,7 +218,7 @@ fn is_field_key(key: &str) -> bool {
 }
 
 /// 按字符截断,超长加省略号。
-fn truncate_chars(value: &str, limit: usize) -> String {
+pub fn truncate_chars(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         return value.to_string();
     }

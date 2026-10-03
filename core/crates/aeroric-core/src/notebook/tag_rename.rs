@@ -101,7 +101,7 @@ pub struct TagRenameReport {
 ///
 /// `old` 按归一化 key 匹配(大小写不敏感,与面板里那一行的聚合口径一致);`new` 是
 /// 要写进文件的**字面文本**,大小写照原样落盘。
-pub(crate) fn rename_vault_tag(
+pub fn rename_vault_tag(
     state: &NotebookState,
     root: &Path,
     old: &str,
@@ -194,7 +194,7 @@ fn rewrite_one(
 /// 遍历和第二趟重读之间、重读和写回之间,都可能有别的编辑挤进来。守卫是那个
 /// `Some(baseline)` 加 `force: false` —— 少了任一个,冲突就变成覆盖,而覆盖是没有
 /// 报错的,用户要等到打开笔记才发现自己的段落不见了。
-pub(super) fn write_rewritten(
+pub fn write_rewritten(
     state: &NotebookState,
     path: &str,
     content: &str,

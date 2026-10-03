@@ -98,7 +98,7 @@ fn run_osascript() -> Result<String, String> {
         }
         cmd.arg("-e").arg(line);
     }
-    crate::subprocess::configure_background_command(&mut cmd);
+    crate::runtime::subprocess::configure_background_command(&mut cmd);
     let output = cmd
         .output()
         .map_err(|error| format!("调用 osascript 失败:{error}"))?;

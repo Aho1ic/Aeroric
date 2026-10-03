@@ -19,29 +19,31 @@
 //! —— 那个宏用自己的语法解析参数列表,聚合宏在那个位置展不开(见文件末尾的注)。
 //! 漏注册由 `command_registration_tests` 守卫。
 
-pub mod attachments;
-pub mod export;
-pub mod fields;
-pub mod fs_ops;
-pub mod html2md;
-pub mod import;
-pub mod links;
-pub mod mentions;
-pub mod migrate;
-pub mod rag;
-pub mod snapshots;
-pub mod state;
-pub mod sync;
-pub mod tag_rename;
-pub mod tags;
-pub mod tasks;
-pub mod trash;
-pub mod user_templates;
-pub mod vault_index;
-mod vault_walk;
+// ── P7-05：业务主体已上收 core（`aeroric_core::notebook`，原样移动）。
+// 这里只 re-export，命令体与 rag/sync（P7-06 迁移）留在宿主。
+// 单元测试随业务一并移进 core（`notebook --lib` 428 条＋`notebook_contract` 12 条）。
+pub use aeroric_core::notebook::attachments;
+pub use aeroric_core::notebook::export;
+pub use aeroric_core::notebook::fields;
+pub use aeroric_core::notebook::fs_ops;
+pub use aeroric_core::notebook::html2md;
+pub use aeroric_core::notebook::import;
+pub use aeroric_core::notebook::links;
+pub use aeroric_core::notebook::mentions;
+pub use aeroric_core::notebook::migrate;
+pub use aeroric_core::notebook::snapshots;
+pub use aeroric_core::notebook::state;
+pub use aeroric_core::notebook::tag_rename;
+pub use aeroric_core::notebook::tags;
+pub use aeroric_core::notebook::tasks;
+pub use aeroric_core::notebook::trash;
+pub use aeroric_core::notebook::user_templates;
+pub use aeroric_core::notebook::vault_index;
+pub use aeroric_core::notebook::vault_walk;
+pub use aeroric_core::notebook::{stat_note, CreatedNote, NoteStat};
 
-#[cfg(test)]
-mod tests;
+pub mod rag;
+pub mod sync;
 
 use state::{FileSig, NotebookState};
 use std::path::Path;
@@ -262,13 +264,6 @@ pub async fn notebook_create_note_in_vault(
     Ok(CreatedNote { path, sig })
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreatedNote {
-    pub path: String,
-    pub sig: FileSig,
-}
-
 #[tauri::command]
 pub async fn notebook_create_folder(
     state: State<'_, NotebookState>,
@@ -445,37 +440,6 @@ pub async fn notebook_attachment_read(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// 一条笔记在磁盘上的元数据。属性面板用。
-///
-/// 面板里那份 `NotebookNote` 不带这些:它的 `updatedAt` 是**打开时**的时间戳,而
-/// 属性面板要回答的是"这个文件现在多大、什么时候改的"。缓冲区里还没保存的编辑
-/// 不该改变这两个数,所以这里直接看盘。
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NoteStat {
-    pub size: u64,
-    pub modified_ms: i64,
-    /// 创建时间。取不到就是 None —— 有些 Linux 文件系统不记它,报一个假的
-    /// 时间比留空更糟。
-    pub created_ms: Option<i64>,
-}
-
-/// 看一个文件的元数据。命令体单独提出来是为了能不经 Tauri `State` 直接测。
-pub(crate) fn stat_note(path: &std::path::Path) -> Result<NoteStat, String> {
-    // `symlink_metadata` 而不是 `metadata`:笔记树不跟进软链,属性面板也不该跟 ——
-    // 否则它报的是链接指向的那个文件的大小,而用户看的是这一条笔记。
-    let meta = std::fs::symlink_metadata(path)
-        .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
-    if meta.is_dir() {
-        return Err(format!("{} is a directory", path.display()));
-    }
-    Ok(NoteStat {
-        size: meta.len(),
-        modified_ms: system_time_ms(meta.modified().ok()).unwrap_or(0),
-        created_ms: system_time_ms(meta.created().ok()),
-    })
-}
-
 /// 读一条笔记的磁盘元数据。
 #[tauri::command]
 pub async fn notebook_note_stat(
@@ -616,14 +580,6 @@ pub async fn notebook_rename_tag(
     tag_rename::rename_vault_tag(&state, &resolved, &old, &new)
 }
 
-/// `SystemTime` → epoch 毫秒。1970 之前的时间戳(时钟错乱、坏归档)取不到就是 None。
-fn system_time_ms(time: Option<std::time::SystemTime>) -> Option<i64> {
-    time?
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_millis()).ok())
-}
-
 // ── 版本历史 ───────────────────────────────────────────────────────────────
 
 /// 列出一条笔记的快照,新的在前。
@@ -635,7 +591,7 @@ fn system_time_ms(time: Option<std::time::SystemTime>) -> Option<i64> {
 pub async fn notebook_list_snapshots(
     state: State<'_, NotebookState>,
     path: String,
-) -> Result<Vec<crate::local_history::LocalHistoryEntry>, String> {
+) -> Result<Vec<aeroric_core::files::local_history::LocalHistoryEntry>, String> {
     snapshots::list(&state, &path)
 }
 
@@ -644,7 +600,7 @@ pub async fn notebook_read_snapshot(
     state: State<'_, NotebookState>,
     path: String,
     entry_id: String,
-) -> Result<crate::local_history::LocalHistorySnapshot, String> {
+) -> Result<aeroric_core::files::local_history::LocalHistorySnapshot, String> {
     snapshots::read(&state, &path, &entry_id)
 }
 
@@ -858,14 +814,7 @@ fn epoch_ms() -> i64 {
 /// 抽成函数是为了能测:命令本身要 Tauri `State`,在单测里构造不出来,而这条判断放在命令体内
 /// 就等于没有测试守着。git 目标混进来的话会一路走到 `find_connection("")` 才失败,用户看到
 /// 的是「找不到存储连接」—— 而真正的问题是他点错了同步方式。
-pub(crate) fn require_cloud_target(remote_id: &str, kind: &str) -> Result<(), String> {
-    if kind == "cloud" {
-        return Ok(());
-    }
-    Err(format!(
-        "Remote {remote_id} is a {kind} target; use the matching sync command"
-    ))
-}
+pub(crate) use aeroric_core::notebook::require_cloud_target;
 
 /// 把一个 vault 绑到一条存储连接上的某个远端目录。
 ///

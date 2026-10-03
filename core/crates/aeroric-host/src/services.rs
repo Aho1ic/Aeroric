@@ -61,7 +61,7 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
 }
 
-fn ok(request: &Request, result: Value) -> Frame {
+pub(crate) fn ok(request: &Request, result: Value) -> Frame {
     Frame::Success(Success {
         v: aeroric_protocol::PROTOCOL_VERSION,
         id: request.id.clone(),

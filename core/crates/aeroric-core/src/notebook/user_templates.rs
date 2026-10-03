@@ -30,7 +30,7 @@ use super::vault_index::{split_frontmatter, unquote_scalar};
 const TEMPLATES_DIR: &str = "templates";
 
 /// 单个模板的读取上限。模板是给人抄格式的骨架,不是数据文件。
-const MAX_BYTES: u64 = 256 * 1024;
+pub const MAX_BYTES: u64 = 256 * 1024;
 
 /// 列表上限。目录里塞了几千个文件时不必全读 —— 面板也放不下。
 const MAX_TEMPLATES: usize = 200;
@@ -50,7 +50,7 @@ pub struct UserTemplate {
 
 /// 从 frontmatter 里取一个标量。缺失或空串都当没有 —— `title:` 写了但留空时
 /// 回落到 stem 比显示一条无名条目有用。
-fn field(front: &str, key: &str) -> Option<String> {
+pub fn field(front: &str, key: &str) -> Option<String> {
     for line in front.lines() {
         // 没有冒号的行跳过就好(YAML 的续行、注释)。用 `?` 提前返回会让它**之后**
         // 的字段全部读不到。
@@ -87,7 +87,7 @@ pub(crate) fn parse_template(stem: &str, content: &str) -> UserTemplate {
 ///
 /// 目录不存在时返回空表而不是报错:绝大多数 vault 没有这个目录,那是正常状态,
 /// 不是错误。
-pub(crate) fn list_user_templates(vault: &Path) -> Vec<UserTemplate> {
+pub fn list_user_templates(vault: &Path) -> Vec<UserTemplate> {
     let dir = private_dir(vault).join(TEMPLATES_DIR);
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();

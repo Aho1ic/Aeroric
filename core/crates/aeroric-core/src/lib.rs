@@ -17,6 +17,7 @@ pub mod ide;
 pub mod infrastructure;
 pub mod location;
 pub mod location_probe;
+pub mod notebook;
 pub mod paths;
 pub mod platform;
 pub mod projects;

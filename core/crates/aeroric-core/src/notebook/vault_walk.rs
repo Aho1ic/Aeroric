@@ -21,7 +21,7 @@ use super::fs_ops::{is_note_file, is_scan_skip_dir};
 pub(crate) const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// 全库上限。和笔记树同一量级,防止 home 目录被挂成 vault 时扫到天荒地老。
-pub(crate) const MAX_FILES: usize = 20_000;
+pub const MAX_FILES: usize = 20_000;
 pub(crate) const MAX_DEPTH: usize = 12;
 
 /// visitor 的回执:还要不要继续走。
@@ -29,7 +29,7 @@ pub(crate) const MAX_DEPTH: usize = 12;
 /// 各档自己的产出上限(单篇多少条、全库多少条)由 visitor 决定 —— 遍历这一层不
 /// 知道"一条链接"或"一个标签"是什么,把额度算进来只会让它同时服务两套语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WalkNext {
+pub enum WalkNext {
     Continue,
     Stop,
 }
@@ -38,7 +38,7 @@ pub(crate) enum WalkNext {
 ///
 /// visitor 返回 `Stop` 时立刻收工。读不动的文件(权限、非 UTF-8、正在被写)静默
 /// 跳过:这些索引都是只读视图,为一个文件报错会让整份结果消失。
-pub(crate) fn walk_notes<F>(root: &Path, visit: &mut F) -> Result<(), String>
+pub fn walk_notes<F>(root: &Path, visit: &mut F) -> Result<(), String>
 where
     F: FnMut(&Path, &str) -> WalkNext,
 {
@@ -47,7 +47,12 @@ where
     Ok(())
 }
 
-fn walk<F>(dir: &Path, depth: usize, files: &mut usize, visit: &mut F) -> Result<WalkNext, String>
+pub fn walk<F>(
+    dir: &Path,
+    depth: usize,
+    files: &mut usize,
+    visit: &mut F,
+) -> Result<WalkNext, String>
 where
     F: FnMut(&Path, &str) -> WalkNext,
 {
@@ -108,7 +113,7 @@ where
 ///
 /// 标签和任务共用这一份:两处不一致的话,frontmatter 里写了 `- [ ]` 的那一篇会在
 /// 任务收集箱里多出一条跳过去什么都没有的任务,而标签档同一篇是干净的。
-pub(crate) fn frontmatter_lines(lines: &[(usize, &str)]) -> usize {
+pub fn frontmatter_lines(lines: &[(usize, &str)]) -> usize {
     if lines.first().map(|(_, line)| line.trim()) != Some("---") {
         return 0;
     }
@@ -122,7 +127,7 @@ pub(crate) fn frontmatter_lines(lines: &[(usize, &str)]) -> usize {
 }
 
 /// 逐行切分,给出每行的起始字节偏移和内容(行尾的 `\r` 摘掉但**算进偏移**)。
-pub(crate) fn line_spans(content: &str) -> impl Iterator<Item = (usize, &str)> {
+pub fn line_spans(content: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut cursor = 0usize;
     content.split('\n').map(move |raw| {
         let base = cursor;
@@ -136,7 +141,7 @@ pub(crate) fn line_spans(content: &str) -> impl Iterator<Item = (usize, &str)> {
 /// 和 `frontmatter_lines` 同一个理由要共用:围栏里的 `- [ ]` 不该出现在收集箱里
 /// (marked 不会为它产复选框,阅读态那里也点不到),而围栏里的 `#include` 不该出现在
 /// 标签云里 —— 两处对"围栏从哪到哪"的答案必须是同一个。
-pub(crate) fn fence_marker(line: &str) -> Option<(char, usize)> {
+pub fn fence_marker(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
     let first = trimmed.chars().next()?;
     if first != '`' && first != '~' {
@@ -159,7 +164,7 @@ pub(crate) fn fence_marker(line: &str) -> Option<(char, usize)> {
 /// 未链接提及那一档也必须说"`` `计划` `` 里的字样不是提及"。两处各写一份的表现是
 /// 「同一行在标签云里干净、在提及列表里却冒出一条」,而这种不一致看起来像其中一档
 /// 扫错了行。
-pub(crate) fn inline_code_spans(line: &str) -> Vec<(usize, usize)> {
+pub fn inline_code_spans(line: &str) -> Vec<(usize, usize)> {
     let bytes = line.as_bytes();
     let mut spans = Vec::new();
     let mut i = 0usize;
@@ -208,7 +213,7 @@ const PREVIEW_CHARS: usize = 160;
 ///
 /// 反链和标签共用同一份截断规则 —— 两处不一致的话同一行在两档里长得不一样,而这
 /// 种差异看起来像"其中一档把内容截错了"。
-pub(crate) fn preview_line(line: &str) -> String {
+pub fn preview_line(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.chars().count() <= PREVIEW_CHARS {
         return trimmed.to_string();

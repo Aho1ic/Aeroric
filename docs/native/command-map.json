@@ -1675,7 +1675,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/local_history.rs:202",
+      "definition_resolved": "src-tauri/src/local_history.rs:154",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1709,7 +1709,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/local_history.rs:212",
+      "definition_resolved": "src-tauri/src/local_history.rs:164",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1744,7 +1744,7 @@
       "feature_ids": [
         "F07"
       ],
-      "definition_resolved": "src-tauri/src/local_history.rs:223",
+      "definition_resolved": "src-tauri/src/local_history.rs:175",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21302,7 +21302,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:64",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:66",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21337,7 +21337,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:73",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:75",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21372,7 +21372,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:81",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:83",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21406,7 +21406,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:92",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:94",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21440,7 +21440,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:101",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:103",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21475,7 +21475,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:113",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:115",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21510,7 +21510,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:123",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:125",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21545,7 +21545,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:132",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:134",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21581,7 +21581,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:144",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:146",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21616,7 +21616,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:155",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:157",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21652,7 +21652,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:165",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:167",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21687,7 +21687,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:178",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:180",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21722,7 +21722,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:186",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:188",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21757,7 +21757,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:199",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:201",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21795,7 +21795,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:210",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:212",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21831,7 +21831,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:251",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:253",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21868,7 +21868,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:226",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:228",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21905,7 +21905,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:273",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:268",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21940,7 +21940,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:288",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:283",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21975,7 +21975,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:310",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:305",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22010,7 +22010,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:320",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:315",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22046,7 +22046,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:331",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:326",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22082,7 +22082,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:342",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:337",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22117,7 +22117,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:365",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:360",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22153,7 +22153,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:377",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:372",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22191,7 +22191,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:407",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:402",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22227,7 +22227,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:420",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:415",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22263,7 +22263,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:439",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:434",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22298,7 +22298,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:481",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:445",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22333,7 +22333,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:495",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:459",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22368,7 +22368,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:510",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:474",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22403,7 +22403,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:526",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:490",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22438,7 +22438,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:539",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:503",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22473,7 +22473,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:553",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:517",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22508,7 +22508,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:570",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:534",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22545,7 +22545,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:590",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:554",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22581,7 +22581,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:609",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:573",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22618,7 +22618,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:635",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:591",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22653,7 +22653,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:643",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:599",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22689,7 +22689,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:653",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:609",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22725,7 +22725,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:671",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:627",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22760,7 +22760,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:688",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:644",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22795,7 +22795,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:715",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:671",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22831,7 +22831,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:726",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:682",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22867,7 +22867,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:737",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:693",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22903,7 +22903,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:748",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:704",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22939,7 +22939,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:762",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:718",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22975,7 +22975,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:773",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:729",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23011,7 +23011,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:784",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:740",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23207,7 +23207,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:810",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:766",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23244,7 +23244,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:799",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:755",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23280,7 +23280,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:822",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:778",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23314,7 +23314,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:835",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:791",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23350,7 +23350,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:874",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:823",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23389,7 +23389,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:894",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:843",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23426,7 +23426,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:910",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:859",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23461,7 +23461,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:931",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:880",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23498,7 +23498,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:976",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:925",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23535,7 +23535,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:1067",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:1016",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23571,7 +23571,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:1003",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:952",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23611,7 +23611,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:1049",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:998",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23647,7 +23647,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:703",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:659",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

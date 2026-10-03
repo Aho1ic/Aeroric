@@ -64,7 +64,7 @@ pub struct NoteTagSource {
 }
 
 /// 扫一遍 vault,返回每篇**含标签**的笔记及其标签出现。
-pub(crate) fn scan_vault_tags(root: &Path) -> Result<Vec<NoteTagSource>, String> {
+pub fn scan_vault_tags(root: &Path) -> Result<Vec<NoteTagSource>, String> {
     let mut out = Vec::new();
     let mut total = 0usize;
     walk_notes(root, &mut |path, content| {
@@ -120,7 +120,7 @@ fn scan_tags(content: &str, remaining: usize) -> Vec<NoteTagRef> {
 /// 重命名那一步再写第二个扫描器。测试已经钉住了它们(含 CRLF 与摘掉末尾 `/` 的情形)。
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub(crate) struct TagHit<'a> {
+pub struct TagHit<'a> {
     pub raw: String,
     pub line: u32,
     pub line_text: &'a str,
@@ -131,7 +131,7 @@ pub(crate) struct TagHit<'a> {
 }
 
 /// 扫全篇的标签出现。索引和跨文件重命名共用这一个入口。
-pub(crate) fn tag_hits(content: &str) -> Vec<TagHit<'_>> {
+pub fn tag_hits(content: &str) -> Vec<TagHit<'_>> {
     let lines: Vec<(usize, &str)> = line_spans(content).collect();
     let skip = frontmatter_lines(&lines);
     let mut out = Vec::new();
@@ -224,7 +224,7 @@ fn line_tags(line: &str) -> Vec<(usize, String, usize)> {
 }
 
 /// 标签正文允许的字符:字母 / 数字(含 CJK,它们是 alphanumeric)、`_`、`-`、`/`。
-fn is_tag_char(ch: char) -> bool {
+pub fn is_tag_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '/'
 }
 
@@ -234,7 +234,7 @@ fn is_tag_char(ch: char) -> bool {
 ///   `#work - 说明` 里少了个空格。
 /// - 纯数字不算:`#1`、`#42` 在 markdown 里几乎总是 issue / 条目编号。Obsidian 也
 ///   是这么定的。
-fn normalize_tag(body: &str) -> Option<&str> {
+pub fn normalize_tag(body: &str) -> Option<&str> {
     let kept = body.trim_end_matches(['/', '-']);
     if kept.is_empty() {
         return None;
@@ -250,7 +250,7 @@ fn normalize_tag(body: &str) -> Option<&str> {
 /// 必须和前端 `noteTags.ts` 的 `normalizeTag` 逐条一致 —— 面板按前端那份聚合出"这一行
 /// 有 3 处",重命名按这份匹配。两边漂移的表现就是那个数字对不上,而这正是本模块要
 /// 根除的那一类缺陷。两边各有一份是因为聚合在前端、改写在后端,共用一份得来回过 IPC。
-pub(crate) fn normalize_key(tag: &str) -> String {
+pub fn normalize_key(tag: &str) -> String {
     tag.trim()
         .trim_start_matches('#')
         .trim_end_matches(['/', '-'])
@@ -263,7 +263,7 @@ pub(crate) fn normalize_key(tag: &str) -> String {
 /// 候选。这样"能不能写"和"写完扫不扫得出来"是同一个问题的两面 —— 换成手写一串
 /// `is_tag_char` 判断的话,任何一处和扫描器不一致都会写出一个自己都找不到的标签,而
 /// 那时文件已经改完了。
-pub(crate) fn validate_tag(input: &str) -> Result<String, String> {
+pub fn validate_tag(input: &str) -> Result<String, String> {
     let candidate = input.trim().trim_start_matches('#').trim();
     if candidate.is_empty() {
         return Err("The new tag is empty".to_string());

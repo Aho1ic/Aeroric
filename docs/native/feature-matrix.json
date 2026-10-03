@@ -378,13 +378,15 @@
       "positive_test": "tests/notebook_contract.rs + 搬移后的既有 import/archive 测试",
       "negative_test": "ZIP ../、symlink、超大解压不得写出测试 vault；旧笔记内容 hash 不被格式化改变",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/notebook.md"
+      ]
     },
     {
       "id": "F16",

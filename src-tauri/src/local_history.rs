@@ -60,54 +60,6 @@ pub(crate) fn record_snapshot_before_write(
     record_snapshot_for_file(CODE_LAYOUT, &root, &file, Some(next_content))
 }
 
-/// 记一条快照。路径由调用方保证已校验 —— 随手记有自己的 vault allowlist,
-/// 不走这里的 `validate_*`。
-pub(crate) fn record_snapshot_in(
-    layout: HistoryLayout,
-    root: &Path,
-    file: &Path,
-    next_content: Option<&str>,
-) -> Result<Option<LocalHistoryEntry>, String> {
-    record_snapshot_for_file(layout, root, file, next_content)
-}
-
-/// 同上,但无视 `min_interval_ms` 强制留一条。
-///
-/// 用于回滚前的兜底快照:限流的存在是为了压掉自动保存的噪音,而回滚是用户
-/// 主动的破坏性操作 —— 恰好落在限流窗口里就丢掉兜底,等于让回滚不可撤销。
-pub(crate) fn force_snapshot_in(
-    layout: HistoryLayout,
-    root: &Path,
-    file: &Path,
-) -> Result<Option<LocalHistoryEntry>, String> {
-    let unthrottled = HistoryLayout {
-        min_interval_ms: 0,
-        ..layout
-    };
-    record_snapshot_for_file(unthrottled, root, file, None)
-}
-
-/// 丢掉某个文件的全部快照。
-///
-/// 只在"彻底删除"路径上用。`file` 可以已经不存在了 —— 快照目录名是相对路径的
-/// hex,算它不需要读盘。
-///
-/// 为什么必须有这一步:快照按**相对路径**归档,不跟着文件走。彻底删除只清掉
-/// 文件本身的话,历史会留在 `.notebook/history/` 里 —— 用户以为内容已经没了,
-/// 而且同名新笔记一出生就会继承上一条的历史。
-pub(crate) fn discard_history_in(
-    layout: HistoryLayout,
-    root: &Path,
-    file: &Path,
-) -> Result<(), String> {
-    let relative_path = relative_file_path(root, file)?;
-    let history_dir = history_dir_for_relative_path(layout, root, &relative_path);
-    if !history_dir.exists() {
-        return Ok(());
-    }
-    fs::remove_dir_all(&history_dir).map_err(|e| e.to_string())
-}
-
 pub(crate) fn list_entries(
     project_path: &str,
     file_path: &str,

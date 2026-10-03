@@ -14,7 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::local_history::{self, HistoryLayout, LocalHistoryEntry, LocalHistorySnapshot};
+use crate::clock::now_ms_u64;
+use crate::files::local_history::{self, HistoryLayout, LocalHistoryEntry, LocalHistorySnapshot};
 
 use super::fs_ops;
 use super::state::{signature_for_bytes, FileSig, NotebookState};
@@ -48,7 +49,8 @@ const _: () = fs_ops::assert_inside_private_dir(NOTE_HISTORY_DIR);
 /// 失败不阻断保存:历史是附加能力,让它把用户的编辑挡在外面是本末倒置。
 /// 但也不静默 —— 走 stderr,免得"历史一直是空的"查不出原因。
 pub fn record_before_save(vault: &Path, file: &Path, next_content: &str) {
-    match local_history::record_snapshot_in(NOTE_LAYOUT, vault, file, Some(next_content)) {
+    match local_history::record_snapshot(NOTE_LAYOUT, vault, file, Some(next_content), now_ms_u64())
+    {
         Ok(_) => {}
         Err(error) => {
             eprintln!(
@@ -65,12 +67,12 @@ pub fn record_before_save(vault: &Path, file: &Path, next_content: &str) {
 /// 位置(快照按相对路径归档,算目录名不需要读盘)。不清的话历史会留在
 /// `.notebook/history/` 里,而同路径的新笔记一出生就继承上一条的历史。
 pub fn discard(vault: &Path, file: &Path) -> Result<(), String> {
-    local_history::discard_history_in(NOTE_LAYOUT, vault, file)
+    local_history::discard_history(NOTE_LAYOUT, vault, file)
 }
 
 pub fn list(state: &NotebookState, path: &str) -> Result<Vec<LocalHistoryEntry>, String> {
     let (vault, file) = resolve_note(state, path)?;
-    local_history::list_entries_in(NOTE_LAYOUT, &vault, &file)
+    local_history::list_entries(NOTE_LAYOUT, &vault, &file)
 }
 
 pub fn read(
@@ -79,7 +81,7 @@ pub fn read(
     entry_id: &str,
 ) -> Result<LocalHistorySnapshot, String> {
     let (vault, file) = resolve_note(state, path)?;
-    local_history::read_entry_in(NOTE_LAYOUT, &vault, &file, entry_id)
+    local_history::read_entry(NOTE_LAYOUT, &vault, &file, entry_id)
 }
 
 /// 回滚的结果。带上新指纹 —— 前端手里的基线是回滚前的,不换掉的话下一次保存
@@ -99,8 +101,8 @@ pub struct RestoredNote {
 /// 不该把用户主动的破坏性操作也一起压掉。
 pub fn restore(state: &NotebookState, path: &str, entry_id: &str) -> Result<RestoredNote, String> {
     let (vault, file) = resolve_note(state, path)?;
-    let snapshot = local_history::read_entry_in(NOTE_LAYOUT, &vault, &file, entry_id)?;
-    if let Err(error) = local_history::force_snapshot_in(NOTE_LAYOUT, &vault, &file) {
+    let snapshot = local_history::read_entry(NOTE_LAYOUT, &vault, &file, entry_id)?;
+    if let Err(error) = local_history::force_snapshot(NOTE_LAYOUT, &vault, &file, now_ms_u64()) {
         // 兜底失败就不回滚:这一步的全部意义就是让回滚可撤销。
         return Err(format!(
             "Cannot snapshot the current note before rollback: {error}"

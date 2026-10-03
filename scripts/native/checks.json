@@ -1,2610 +1,2668 @@
 {
- "$comment": "Authoritative acceptance command matrix for MIGRATION_PLAN.md §3.2. Every entry stores fully expanded argv (no shell strings), a timeout, the minimum non-zero test count and the task that registered it. A runner exiting 0 after executing 0 cases is NOT a pass: check.mjs enforces minCases. Modules land here in the same task that introduces their suite — never batched into Phase 10. Reconstructed 2026-09-21 after an unsafe restore truncated this file to 0 bytes; every case below was re-run to confirm it matches the behaviour measured before the loss.",
- "runner": {
-  "artifactsDir": ".artifacts/native",
-  "defaultTimeoutMs": 900000,
-  "rules": [
-   "argv arrays only; never shell string concatenation",
-   "propagate the real exit code",
-   "unknown module, missing suite, skipped required case and zero executed cases all fail",
-   "a case may be opt-in (optInEnv + a mandatory optInReason); opt-in skips are printed per line, reported in the summary and never counted as passed",
-   "commands run from the repository root resolved from this file's location"
-  ],
-  "floors": {
-   "adapter-acceptance-real-kernel@tauri-adapter": 19,
-   "adapter-event-payload-contract@tauri-adapter": 5,
-   "adapter-intent-queue@tauri-adapter": 9,
-   "adapter-invariants-unit@tauri-adapter": 28,
-   "agent-launch-parity-rust@agents": 2,
-   "cli-headless-rust@cli": 6,
-   "cli-unit-rust@cli": 4,
-   "core-rust-skeleton@skeleton": 5,
-   "digest-unit@skeleton": 17,
-   "event-replay-rust@host": 3,
-   "executor-pty-rust@host": 3,
-   "extraction-unit@skeleton": 19,
-   "gate-runner-unit@skeleton": 36,
-   "host-lib-rust@host": 25,
-   "host-lifecycle-rust@host": 4,
-   "invariants-unit@skeleton": 13,
-   "inventory-unit@skeleton": 57,
-   "ipc-auth-rust@host": 4,
-   "ipc-frames-rust@host": 5,
-   "projects-core-rust@projects": 16,
-   "projects-parity-is-derived-from-client@projects": 2,
-   "projects-save-single-queue@projects": 3,
-   "protocol-rust@protocol": 50,
-   "protocol-swift-golden@protocol": 20,
-   "protocol-ts-golden@protocol": 21,
-   "protocol-ts-vocabulary@protocol": 7,
-   "runtime-lifecycle-rust@runtime": 5,
-   "src-tauri-lib-tests@tauri-adapter": 2439,
-   "storage-core-rust@storage": 488,
-   "swift-package-smoke@skeleton": 12,
-   "task-status-unit@skeleton": 18,
-   "tasks-idempotency-rust@tasks": 10,
-   "tasks-parity-is-derived-from-client@tasks": 3,
-   "tasks-parity-rust@tasks": 4,
-   "tasks-reducer-unit-rust@tasks": 78,
-   "tasks-status-machine-rust@tasks": 56,
-   "terminal-history-rust@terminal-core": 7,
-   "terminal-invariants-unit@terminal-core": 10,
-   "terminal-lease-rust@terminal-core": 4,
-   "terminal-pty-bytes-rust@terminal-core": 6,
-   "terminal-pty-exit-rust@terminal-core": 10,
-   "terminal-replay-rust@terminal-core": 5,
-   "terminal-unit-rust@terminal-core": 65,
-   "watcher-discipline-unit@skeleton": 11,
-   "swift-client-unit@swift-client": 33,
-   "swift-client-tsan@swift-client": 28,
-   "native-design-unit@native-design": 14,
-   "shell-unit@shell": 36,
-   "native-terminal-unit@native-terminal": 12,
-   "mode-switch-unit@mode-switch": 9,
-   "tasks-ui-unit@tasks-ui": 10,
-   "sessions-ui-unit@sessions-ui": 20,
-   "settings-ui-unit@settings-ui": 11,
-   "files-core-rust@files": 13,
-   "files-ui-unit@files": 4,
-   "file-history-rust@editor": 7,
-   "editor-ui-unit@editor": 7,
-   "lsp-protocol-rust@ide": 8,
-   "dap-protocol-rust@ide": 2,
-   "ide-ui-unit@ide": 5,
-   "git-service-rust@git": 9,
-   "git-ui-unit@git": 5,
-   "worktree-lifecycle-rust@worktree": 6,
-   "worktree-ui-unit@worktree": 6,
-   "ssh-host-keys-rust@connections": 8,
-   "connections-ui-unit@connections": 5,
-   "platform-capabilities-rust@platforms": 5,
-   "infrastructure-rust@infrastructure": 6,
-   "infrastructure-ui-unit@infrastructure": 5,
-   "database-confirmation-rust@database": 7,
-   "database-ui-unit@database": 4
+  "$comment": "Authoritative acceptance command matrix for MIGRATION_PLAN.md §3.2. Every entry stores fully expanded argv (no shell strings), a timeout, the minimum non-zero test count and the task that registered it. A runner exiting 0 after executing 0 cases is NOT a pass: check.mjs enforces minCases. Modules land here in the same task that introduces their suite — never batched into Phase 10. Reconstructed 2026-09-21 after an unsafe restore truncated this file to 0 bytes; every case below was re-run to confirm it matches the behaviour measured before the loss.",
+  "runner": {
+    "artifactsDir": ".artifacts/native",
+    "defaultTimeoutMs": 900000,
+    "rules": [
+      "argv arrays only; never shell string concatenation",
+      "propagate the real exit code",
+      "unknown module, missing suite, skipped required case and zero executed cases all fail",
+      "a case may be opt-in (optInEnv + a mandatory optInReason); opt-in skips are printed per line, reported in the summary and never counted as passed",
+      "commands run from the repository root resolved from this file's location"
+    ],
+    "floors": {
+      "adapter-acceptance-real-kernel@tauri-adapter": 19,
+      "adapter-event-payload-contract@tauri-adapter": 5,
+      "adapter-intent-queue@tauri-adapter": 9,
+      "adapter-invariants-unit@tauri-adapter": 28,
+      "agent-launch-parity-rust@agents": 2,
+      "cli-headless-rust@cli": 6,
+      "cli-unit-rust@cli": 4,
+      "core-rust-skeleton@skeleton": 5,
+      "digest-unit@skeleton": 17,
+      "event-replay-rust@host": 3,
+      "executor-pty-rust@host": 3,
+      "extraction-unit@skeleton": 19,
+      "gate-runner-unit@skeleton": 36,
+      "host-lib-rust@host": 25,
+      "host-lifecycle-rust@host": 4,
+      "invariants-unit@skeleton": 13,
+      "inventory-unit@skeleton": 57,
+      "ipc-auth-rust@host": 4,
+      "ipc-frames-rust@host": 5,
+      "projects-core-rust@projects": 16,
+      "projects-parity-is-derived-from-client@projects": 2,
+      "projects-save-single-queue@projects": 3,
+      "protocol-rust@protocol": 50,
+      "protocol-swift-golden@protocol": 20,
+      "protocol-ts-golden@protocol": 21,
+      "protocol-ts-vocabulary@protocol": 7,
+      "runtime-lifecycle-rust@runtime": 5,
+      "src-tauri-lib-tests@tauri-adapter": 2011,
+      "storage-core-rust@storage": 488,
+      "swift-package-smoke@skeleton": 12,
+      "task-status-unit@skeleton": 18,
+      "tasks-idempotency-rust@tasks": 10,
+      "tasks-parity-is-derived-from-client@tasks": 3,
+      "tasks-parity-rust@tasks": 4,
+      "tasks-reducer-unit-rust@tasks": 78,
+      "tasks-status-machine-rust@tasks": 56,
+      "terminal-history-rust@terminal-core": 7,
+      "terminal-invariants-unit@terminal-core": 10,
+      "terminal-lease-rust@terminal-core": 4,
+      "terminal-pty-bytes-rust@terminal-core": 6,
+      "terminal-pty-exit-rust@terminal-core": 10,
+      "terminal-replay-rust@terminal-core": 5,
+      "terminal-unit-rust@terminal-core": 65,
+      "watcher-discipline-unit@skeleton": 11,
+      "swift-client-unit@swift-client": 33,
+      "swift-client-tsan@swift-client": 28,
+      "native-design-unit@native-design": 14,
+      "shell-unit@shell": 36,
+      "native-terminal-unit@native-terminal": 12,
+      "mode-switch-unit@mode-switch": 9,
+      "tasks-ui-unit@tasks-ui": 10,
+      "sessions-ui-unit@sessions-ui": 20,
+      "settings-ui-unit@settings-ui": 11,
+      "files-core-rust@files": 13,
+      "files-ui-unit@files": 4,
+      "file-history-rust@editor": 7,
+      "editor-ui-unit@editor": 7,
+      "lsp-protocol-rust@ide": 8,
+      "dap-protocol-rust@ide": 2,
+      "ide-ui-unit@ide": 5,
+      "git-service-rust@git": 9,
+      "git-ui-unit@git": 5,
+      "worktree-lifecycle-rust@worktree": 6,
+      "worktree-ui-unit@worktree": 6,
+      "ssh-host-keys-rust@connections": 8,
+      "connections-ui-unit@connections": 5,
+      "platform-capabilities-rust@platforms": 5,
+      "infrastructure-rust@infrastructure": 6,
+      "infrastructure-ui-unit@infrastructure": 5,
+      "database-confirmation-rust@database": 7,
+      "database-ui-unit@database": 4,
+      "notebook-contract-rust@notebook": 12,
+      "notebook-lib-rust@notebook": 428,
+      "notebook-ui-unit@notebook": 9
+    },
+    "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
   },
-  "floor_rule": "每个 kind=test 的 case 都必须在 runner.floors 里有 `<name>@<module>` 条目，且 minCases == 地板；地板不得有孤儿条目（孤儿 = 整个测试被删或改名）。降低地板必须与 minCases 在同一次受评审的编辑里一起改——这是对 §3.1 第 6 条的摩擦力与可见性，不是证明：同时改两个数字仍靠 diff 评审。"
- },
- "modules": {
-  "skeleton": {
-   "registeredBy": "P1-04",
-   "cases": [
-    {
-     "name": "core-cargo-check-locked",
-     "kind": "gate",
-     "argv": [
-      "cargo",
-      "check",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked"
-     ],
-     "timeoutMs": 900000
-    },
-    {
-     "name": "core-rust-skeleton",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-protocol",
-      "--test",
-      "skeleton"
-     ],
-     "parse": "rust",
-     "minCases": 5,
-     "timeoutMs": 900000
-    },
-    {
-     "name": "inv02-core-source-scan",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "tauri::|AppHandle|tauri::State|WebviewWindow",
-      "core/crates/aeroric-core/src",
-      "core/crates/aeroric-protocol/src",
-      "core/crates/aeroric-host/src"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub",
-       "core/crates/aeroric-core/src"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub",
-       "core/crates/aeroric-protocol/src"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub",
-       "core/crates/aeroric-host/src"
+  "modules": {
+    "skeleton": {
+      "registeredBy": "P1-04",
+      "cases": [
+        {
+          "name": "core-cargo-check-locked",
+          "kind": "gate",
+          "argv": [
+            "cargo",
+            "check",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked"
+          ],
+          "timeoutMs": 900000
+        },
+        {
+          "name": "core-rust-skeleton",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-protocol",
+            "--test",
+            "skeleton"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "timeoutMs": 900000
+        },
+        {
+          "name": "inv02-core-source-scan",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|AppHandle|tauri::State|WebviewWindow",
+            "core/crates/aeroric-core/src",
+            "core/crates/aeroric-protocol/src",
+            "core/crates/aeroric-host/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-core/src"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-protocol/src"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub",
+              "core/crates/aeroric-host/src"
+            ]
+          ],
+          "$note": "INV-02 的真实守卫。cargo tree 的依赖图扫描在骨架期近乎恒真（图里没有可引入 tauri 的依赖），所以在 P3-01 之前必须由源码扫描顶上来。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "inv02-core-manifest-denylist",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "^(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)\\s*=",
+            "core/Cargo.toml",
+            "core/crates"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "^\\[",
+              "core/Cargo.toml"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "^\\[",
+              "core/crates"
+            ]
+          ],
+          "$note": "依赖图未展开或被 feature 门控隐藏时的早失败兜底：core 的任何 manifest 出现这些依赖名即失败。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "core-no-tauri-deps",
+          "kind": "forbid",
+          "argv": [
+            "cargo",
+            "tree",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked"
+          ],
+          "forbid": [
+            "tauri v",
+            "tauri-",
+            "wry v",
+            "webview",
+            "webkit2gtk",
+            "cocoa v",
+            "objc2 v"
+          ],
+          "stream": "stdout",
+          "mustContain": [
+            "aeroric-core",
+            "aeroric-protocol",
+            "aeroric-host",
+            "aeroric-cli"
+          ],
+          "$note": "stdout only: Cargo prints 'patch ... not used' warnings on stderr and those lines contain the literal path ../src-tauri/vendor/..., which would make an all-output grep fail on a perfectly clean tree。P3-01 切片三起 portable-pty 以 path 依赖进入 core 的依赖树,cargo tree 的 stdout 会带上 .../src-tauri/vendor/... 路径字面量——裸子串 'tauri' 会把一条合法的 vendored 路径误判成依赖。forbid 因此从裸子串改为「包名 + 版本号」形态(cargo tree 的依赖行永远是 '名字 vX.Y.Z'),并把 'tauri-'(覆盖 tauri-runtime/tauri-utils/tauri-plugin 等派生包)与 'wry v' 等同列。这是口径精化:路径子串 ≠ 依赖;正控 (mustContain) 不变。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "swift-package-smoke",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "PackageSmokeTests"
+          ],
+          "parse": "swift",
+          "minCases": 12,
+          "$note": "SwiftPM 6.4 的 `Executed N tests` 每个 bundle 重复输出，求和会把 12 读成 36；只能数 `Test Case '…' passed|failed` 行。 加 `--filter` 是让地板互相独立：P2 之后新增的原生套件不得抬高或掩盖 P1 冒烟套件的数字。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "patches-match-src-tauri",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/check-patches.mjs",
+            "--min-entries",
+            "9"
+          ],
+          "$note": "正控：两侧都必须解析出 ≥9 条 patch。空表比对曾经输出「0 patch entries identical」并 exit 0——删掉或改名的 patch 表就是这样悄悄让 core 与出货客户端解析不同源码的。现也识别 `[patch.\"...\"]` 引号注册表。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "inventory-consistency",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/inventory.mjs",
+            "--check"
+          ],
+          "timeoutMs": 300000
+        },
+        {
+          "name": "extraction-docs-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=database",
+            "--module=notebook",
+            "--task=P7-04",
+            "--task=P7-05",
+            "--check",
+            "docs/native/extraction/database-notebook.md"
+          ],
+          "$note": "§5.1 展开表必须能从源码重导：行数/落点/每文件 wrapper 数与 command-map.json 不一致就失败。首次实跑就暴露本文档两列历史数字是错的（914→782、586→650），因为原来生成它的是一次性代码、无法复现。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "extraction-docs-current-dsh-webui",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=dsh_webui",
+            "--task=P3-05",
+            "--check",
+            "docs/native/extraction/dsh-webui.md"
+          ],
+          "$note": "第 4 块 §5.1 展开，同时证明延后它的理由是假的：dsh_webui 是 9 个文件 / 66 个 wrapper（14 条在同名兄弟文件 + 52 条在 commands.rs），不是「66 个文件」。为它给生成器加了「模块 = 目录 + 兄弟 .rs」的走法。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "extraction-docs-current-remote",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=remote",
+            "--task=P8-03",
+            "--check",
+            "docs/native/extraction/remote.md"
+          ],
+          "$note": "remote/ 的 §5.1 展开（第 3 个模块，本轮解除阻塞：mobile 经 remote RPC 而非 Tauri invoke，0 处 @tauri-apps 引用）。dsh_webui/ 仍等 Q7/G17。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "extraction-docs-current-sessions",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/extraction.mjs",
+            "--module=session",
+            "--module=session_dsh",
+            "--module=session_omp",
+            "--module=event_watcher",
+            "--module=usage",
+            "--module=agent_usage",
+            "--module=usage_index",
+            "--module=analytics",
+            "--task=P3-04",
+            "--check",
+            "docs/native/extraction/sessions.md"
+          ],
+          "$note": "P3-04（sessions/usage/watcher）的 §5.1 展开先行交付：11 个文件 / 13 个 command wrapper / 11 226 行，逐行可从源码重导，与 command-map.json 交叉校验。文档下方的 8 条手写约束不在重导覆盖内（tableDrift 只比表格行），但每条都在 2026-09-28 当场回源：OMP 三根中只有 agent-homes 可进 core（session_omp.rs:127/136/142-145 对照 INV-06 与 ADR-001 §5）、dsh 的时限窗实际在 session.rs:1876-1890 而非 session_dsh.rs（那里 grep deadline|timeout 0 命中）、引用解析阶梯的计划行号 549-615 已漂到 taskLifecycle.ts:574/592/607、claimed_session_paths 保持路径粒度（ADR-020 §3，站点 session.rs:97 + lib.rs:118/1278/1287/1293/1310）、DSH 转录 raw/zstd 两形并存且切回 none 会留旧产物（session_dsh.rs:36/38/9-10/111-115）。落点目录按正文归并成 sessions/，不照 destination 列建六个平行目录。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "extraction-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/extraction.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 19,
+          "$note": "计数语义本身的负例：`#[cfg(test)]` 与 `mod tests {` 分行、字段级 cfg(test) 不得开测试块、带参数的 `#[tokio::test(...)]` 要算、impl 方法不得当顶层导出、漂移检测四种、空模块必须报错而不是产出空表。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "inv09-signing-baseline",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/check-signing-baseline.mjs"
+          ],
+          "$note": "INV-09 此前没有任何守卫：基线 signingIdentity=\"-\" / hardenedRuntime=false 是刻意选择（链接器签名会让 TCC 授权每次重建作废），签名 CI 路径靠 release workflow 现场生成 tauri.macos-signed.json 覆盖回 true。缺键也算违规——Tauri 默认 hardenedRuntime=true，删键等于静默改基线。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "invariants-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/invariants.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 13,
+          "$note": "两条「不得静默改变」的不变量的负例：签名字段被翻转/被删、workflow 不再开回 hardenedRuntime、patch 表被删空、只删一侧、rev 漂移。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "inventory-freeze-is-noop",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/inventory.mjs",
+            "--freeze-check"
+          ],
+          "$note": "『冻结清单』必须真的可复现：--freeze 重写 events/panels 后的字节必须与已提交工件一致。实测反例：修复前跑一次 --freeze 会删掉全部 14 条人工 event note 并把 disposition 从 emitted-dynamically/redundant-channel 重置成 untriaged（714 866 → 713 046 B），而 --check 当时仍报 consistent。合并现在按『只覆盖源派生键』工作，人写的键（含未来新增的）一律保留。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "inventory-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/inventory.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 57,
+          "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "log-redaction-selftest",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/check.mjs",
+            "--redact-selftest"
+          ],
+          "$note": "Q4：日志写入前脱敏。断言 8 类真实形态确实被洗掉——首次运行就抓出两处泄漏（kv 规则吞掉 'Bearer' 却留下 token；带引号的值完全不洗）。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "digest-shards-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/digest.mjs",
+            "--check"
+          ],
+          "$note": "防 D8 重演：Trellis 注入在 32 768 B 处静默截断。摘要分片后每个分片必须能无损还原 canonical（漏 key / 过期 / 被手改 / 超限都算失败），所以分片不能变成丢行的借口。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "gate-runner-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/check-runner.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 36,
+          "$note": "门禁自己也要被测过：实测反例是注册了 `cases: []` 的模块会打印「0 case(s) passed」并 exit 0（P2-01 一旦注册 protocol 就会踩到），且 `all` 只看模块键存不存在、不看有没有 case——而它的报错文字恰恰声称在查后者。规则抽到 gate-config.mjs，因为 check.mjs 是带顶层副作用的脚本、import 即执行。**补记一百零六 又查出同一条命令的更深一层**：pre-flight 之后控制流直接落到 `config.modules[\"all\"]`（不存在），所以矩阵全 ready 那天 `all` 只会报 `unknown module` 并 exit 2、一条 case 都不跑；现在 `all` 的运行集**从 `modules` 派生**并逐模块 spawn 自己，另加一条拒绝——手工注册一个叫 `all` 的模块当捷径既会漂移又会递归，故 `moduleGateProblem(\"all\", …)` 直接拒。地板 24→**29** 的五条里四条是变异实证（对 `git show HEAD:` 的旧 runner 精确重放：#25/#26/#27/#28 变红），第五条「committed 矩阵未完整时 `all` 仍 exit 3」在新旧两边都绿——它是 pre-flight 不回退的钉子，不是修复的覆盖面，照实记。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "digest-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/digest.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 17,
+          "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。2026-09-28 数组分片那批用例又抓到一个更严重的：重建断言只比对计划载荷、没比对磁盘上的片，等于对手工改过的分片全盲；现在从磁盘重组，且计划不再产出的同名孤儿片必须报错。同批还查明 `pnpm native:digest --check` 展开成 `--write --check`，也就是一直在写不在查——CLI 现在拒绝同时给两个模式。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "task-status-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/task-status.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 18,
+          "$note": "F3 的修法（Q7）进门禁：§进度总表、docs/native/task-status.json、feature-matrix.json 的派生列三方互查，18 条里 12 条是反例。关键一条是 D12——规范源读不到必须报错，不得退化成「当作没变化」；实测形状：删掉 carrier 后 check() 报 `task-status carrier unreadable`，写成空数组时报「refusing to treat an empty carrier」。派生列禁止手改（final_state 这一列已删），--freeze 在镜像输入互相矛盾时拒绝写出（把 side_phases 的 Phase 6 摘掉就会撞上）。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "watcher-discipline-src",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/watcher-discipline.mjs"
+          ],
+          "$note": "P3-04 第七片源守卫(补记二百四十七):会话层不得回到裸 thread::spawn、move |_token| 拿而不查、Exit 块漏 supervisor.shutdown() 或把它挪到关服务之后;三个登记名各恰好一处;lazy-attach 区域必须两处 token 检查(入口 return + 循环 break)。行为面由 core runtime_lifecycle 与 registry 两代测试钉,本条守接线形状。",
+          "timeoutMs": 60000
+        },
+        {
+          "name": "watcher-discipline-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/watcher-discipline.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 11,
+          "$note": "守卫自己的 11 条:正锚(真语料必须过)+读不到语料报错不是静默+spawn 复现红且点名+注释里的 spawn 不算+|_token| 复现红+resume 入口检查删除红+lazy 循环检查删除红+shutdown 缺失红+顺序反了红+登记名重复红+run_loop 不查 token 红。",
+          "timeoutMs": 300000
+        }
       ]
-     ],
-     "$note": "INV-02 的真实守卫。cargo tree 的依赖图扫描在骨架期近乎恒真（图里没有可引入 tauri 的依赖），所以在 P3-01 之前必须由源码扫描顶上来。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "inv02-core-manifest-denylist",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "^(tauri|wry|webkit2gtk|cocoa|objc2|tauri-plugin-[a-z-]+)\\s*=",
-      "core/Cargo.toml",
-      "core/crates"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "^\\[",
-       "core/Cargo.toml"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "^\\[",
-       "core/crates"
+    "protocol": {
+      "registeredBy": "P2-01",
+      "cases": [
+        {
+          "name": "contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "Rust 是线协议的唯一来源：本 case 把 export-schema 生成到临时目录并与 contracts/native/v1 逐字节比对。--check 永不写仓库；漂移 = 非零退出。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-protocol"
+          ],
+          "minCases": 50,
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-swift-golden",
+          "kind": "test",
+          "parse": "swift",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ProtocolGoldenTests"
+          ],
+          "minCases": 20,
+          "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-ts-golden",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/native-host-protocol.test.ts"
+          ],
+          "minCases": 21,
+          "timeoutMs": 900000
+        },
+        {
+          "name": "protocol-ts-vocabulary",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/contracts-parity.test.ts"
+          ],
+          "minCases": 7,
+          "timeoutMs": 900000,
+          "$note": "补记六十一：shared.ts 的四个字面量联合（族/状态/权限模式/内建 agent）与 Rust 生成的 envelope.constants 做集合相等。此前这条链条两处都松：没有任何门禁跑这个文件（它只在 pnpm test 里被顺带执行），而产物==Rust 那头虽硬、TS==产物那头根本不存在。两侧各有尺寸门槛正控，防产物读空变永真。补记七十一加第五条：`TaskIntentOp` ↔ `constants.taskIntents.ops` 与 9/4 分类交叉核对（metadata∪state 恰好覆盖 13 条、两侧各数一次）——ADR-037 的词汇表从此是产物事实，TS/宿主各抄一份的第三天会被这条抓到。"
+        },
+        {
+          "name": "contracts-free-of-local-state",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "/Users/|/private/var/|/var/folders/",
+            "contracts"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "protocolVersion",
+              "contracts/native/v1/envelope.schema.json"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "\"legacyCommand\"",
+              "contracts/native/v1/methods.schema.json"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "bytesBase64",
+              "contracts/native/v1/fixtures/terminal.json"
+            ]
+          ],
+          "$note": "契约产物要被三种语言读取：出现本机路径说明它是在某台机器上被就地生成的，换台机器就不可复现。正控保证 rg 不是因为读不到文件才返回 1。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "依赖图未展开或被 feature 门控隐藏时的早失败兜底：core 的任何 manifest 出现这些依赖名即失败。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "core-no-tauri-deps",
-     "kind": "forbid",
-     "argv": [
-      "cargo",
-      "tree",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked"
-     ],
-     "forbid": [
-      "tauri v",
-      "tauri-",
-      "wry v",
-      "webview",
-      "webkit2gtk",
-      "cocoa v",
-      "objc2 v"
-     ],
-     "stream": "stdout",
-     "mustContain": [
-      "aeroric-core",
-      "aeroric-protocol",
-      "aeroric-host",
-      "aeroric-cli"
-     ],
-     "$note": "stdout only: Cargo prints 'patch ... not used' warnings on stderr and those lines contain the literal path ../src-tauri/vendor/..., which would make an all-output grep fail on a perfectly clean tree。P3-01 切片三起 portable-pty 以 path 依赖进入 core 的依赖树,cargo tree 的 stdout 会带上 .../src-tauri/vendor/... 路径字面量——裸子串 'tauri' 会把一条合法的 vendored 路径误判成依赖。forbid 因此从裸子串改为「包名 + 版本号」形态(cargo tree 的依赖行永远是 '名字 vX.Y.Z'),并把 'tauri-'(覆盖 tauri-runtime/tauri-utils/tauri-plugin 等派生包)与 'wry v' 等同列。这是口径精化:路径子串 ≠ 依赖;正控 (mustContain) 不变。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "swift-package-smoke",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "PackageSmokeTests"
-     ],
-     "parse": "swift",
-     "minCases": 12,
-     "$note": "SwiftPM 6.4 的 `Executed N tests` 每个 bundle 重复输出，求和会把 12 读成 36；只能数 `Test Case '…' passed|failed` 行。 加 `--filter` 是让地板互相独立：P2 之后新增的原生套件不得抬高或掩盖 P1 冒烟套件的数字。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "patches-match-src-tauri",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/check-patches.mjs",
-      "--min-entries",
-      "9"
-     ],
-     "$note": "正控：两侧都必须解析出 ≥9 条 patch。空表比对曾经输出「0 patch entries identical」并 exit 0——删掉或改名的 patch 表就是这样悄悄让 core 与出货客户端解析不同源码的。现也识别 `[patch.\"...\"]` 引号注册表。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "inventory-consistency",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/inventory.mjs",
-      "--check"
-     ],
-     "timeoutMs": 300000
-    },
-    {
-     "name": "extraction-docs-current",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/extraction.mjs",
-      "--module=database",
-      "--module=notebook",
-      "--task=P7-04",
-      "--task=P7-05",
-      "--check",
-      "docs/native/extraction/database-notebook.md"
-     ],
-     "$note": "§5.1 展开表必须能从源码重导：行数/落点/每文件 wrapper 数与 command-map.json 不一致就失败。首次实跑就暴露本文档两列历史数字是错的（914→782、586→650），因为原来生成它的是一次性代码、无法复现。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "extraction-docs-current-dsh-webui",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/extraction.mjs",
-      "--module=dsh_webui",
-      "--task=P3-05",
-      "--check",
-      "docs/native/extraction/dsh-webui.md"
-     ],
-     "$note": "第 4 块 §5.1 展开，同时证明延后它的理由是假的：dsh_webui 是 9 个文件 / 66 个 wrapper（14 条在同名兄弟文件 + 52 条在 commands.rs），不是「66 个文件」。为它给生成器加了「模块 = 目录 + 兄弟 .rs」的走法。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "extraction-docs-current-remote",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/extraction.mjs",
-      "--module=remote",
-      "--task=P8-03",
-      "--check",
-      "docs/native/extraction/remote.md"
-     ],
-     "$note": "remote/ 的 §5.1 展开（第 3 个模块，本轮解除阻塞：mobile 经 remote RPC 而非 Tauri invoke，0 处 @tauri-apps 引用）。dsh_webui/ 仍等 Q7/G17。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "extraction-docs-current-sessions",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/extraction.mjs",
-      "--module=session",
-      "--module=session_dsh",
-      "--module=session_omp",
-      "--module=event_watcher",
-      "--module=usage",
-      "--module=agent_usage",
-      "--module=usage_index",
-      "--module=analytics",
-      "--task=P3-04",
-      "--check",
-      "docs/native/extraction/sessions.md"
-     ],
-     "$note": "P3-04（sessions/usage/watcher）的 §5.1 展开先行交付：11 个文件 / 13 个 command wrapper / 11 226 行，逐行可从源码重导，与 command-map.json 交叉校验。文档下方的 8 条手写约束不在重导覆盖内（tableDrift 只比表格行），但每条都在 2026-09-28 当场回源：OMP 三根中只有 agent-homes 可进 core（session_omp.rs:127/136/142-145 对照 INV-06 与 ADR-001 §5）、dsh 的时限窗实际在 session.rs:1876-1890 而非 session_dsh.rs（那里 grep deadline|timeout 0 命中）、引用解析阶梯的计划行号 549-615 已漂到 taskLifecycle.ts:574/592/607、claimed_session_paths 保持路径粒度（ADR-020 §3，站点 session.rs:97 + lib.rs:118/1278/1287/1293/1310）、DSH 转录 raw/zstd 两形并存且切回 none 会留旧产物（session_dsh.rs:36/38/9-10/111-115）。落点目录按正文归并成 sessions/，不照 destination 列建六个平行目录。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "extraction-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/extraction.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 19,
-     "$note": "计数语义本身的负例：`#[cfg(test)]` 与 `mod tests {` 分行、字段级 cfg(test) 不得开测试块、带参数的 `#[tokio::test(...)]` 要算、impl 方法不得当顶层导出、漂移检测四种、空模块必须报错而不是产出空表。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "inv09-signing-baseline",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/check-signing-baseline.mjs"
-     ],
-     "$note": "INV-09 此前没有任何守卫：基线 signingIdentity=\"-\" / hardenedRuntime=false 是刻意选择（链接器签名会让 TCC 授权每次重建作废），签名 CI 路径靠 release workflow 现场生成 tauri.macos-signed.json 覆盖回 true。缺键也算违规——Tauri 默认 hardenedRuntime=true，删键等于静默改基线。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "invariants-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/invariants.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 13,
-     "$note": "两条「不得静默改变」的不变量的负例：签名字段被翻转/被删、workflow 不再开回 hardenedRuntime、patch 表被删空、只删一侧、rev 漂移。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "inventory-freeze-is-noop",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/inventory.mjs",
-      "--freeze-check"
-     ],
-     "$note": "『冻结清单』必须真的可复现：--freeze 重写 events/panels 后的字节必须与已提交工件一致。实测反例：修复前跑一次 --freeze 会删掉全部 14 条人工 event note 并把 disposition 从 emitted-dynamically/redundant-channel 重置成 untriaged（714 866 → 713 046 B），而 --check 当时仍报 consistent。合并现在按『只覆盖源派生键』工作，人写的键（含未来新增的）一律保留。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "inventory-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/inventory.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 57,
-     "$note": "必须显式 --test-reporter=tap：默认 spec reporter 不输出 `# pass N`，countCases 得 0 并被零用例规则判失败（P1-04 真实发生过）。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "log-redaction-selftest",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/check.mjs",
-      "--redact-selftest"
-     ],
-     "$note": "Q4：日志写入前脱敏。断言 8 类真实形态确实被洗掉——首次运行就抓出两处泄漏（kv 规则吞掉 'Bearer' 却留下 token；带引号的值完全不洗）。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "digest-shards-current",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/digest.mjs",
-      "--check"
-     ],
-     "$note": "防 D8 重演：Trellis 注入在 32 768 B 处静默截断。摘要分片后每个分片必须能无损还原 canonical（漏 key / 过期 / 被手改 / 超限都算失败），所以分片不能变成丢行的借口。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "gate-runner-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/check-runner.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 36,
-     "$note": "门禁自己也要被测过：实测反例是注册了 `cases: []` 的模块会打印「0 case(s) passed」并 exit 0（P2-01 一旦注册 protocol 就会踩到），且 `all` 只看模块键存不存在、不看有没有 case——而它的报错文字恰恰声称在查后者。规则抽到 gate-config.mjs，因为 check.mjs 是带顶层副作用的脚本、import 即执行。**补记一百零六 又查出同一条命令的更深一层**：pre-flight 之后控制流直接落到 `config.modules[\"all\"]`（不存在），所以矩阵全 ready 那天 `all` 只会报 `unknown module` 并 exit 2、一条 case 都不跑；现在 `all` 的运行集**从 `modules` 派生**并逐模块 spawn 自己，另加一条拒绝——手工注册一个叫 `all` 的模块当捷径既会漂移又会递归，故 `moduleGateProblem(\"all\", …)` 直接拒。地板 24→**29** 的五条里四条是变异实证（对 `git show HEAD:` 的旧 runner 精确重放：#25/#26/#27/#28 变红），第五条「committed 矩阵未完整时 `all` 仍 exit 3」在新旧两边都绿——它是 pre-flight 不回退的钉子，不是修复的覆盖面，照实记。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "digest-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/digest.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 17,
-     "$note": "负例在临时副本上跑，绝不改动已冻结清单。首次实现即抓出一个假阳性：按引用比较对象让自校验把自己刚写的分片判成不匹配。2026-09-28 数组分片那批用例又抓到一个更严重的：重建断言只比对计划载荷、没比对磁盘上的片，等于对手工改过的分片全盲；现在从磁盘重组，且计划不再产出的同名孤儿片必须报错。同批还查明 `pnpm native:digest --check` 展开成 `--write --check`，也就是一直在写不在查——CLI 现在拒绝同时给两个模式。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "task-status-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/task-status.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 18,
-     "$note": "F3 的修法（Q7）进门禁：§进度总表、docs/native/task-status.json、feature-matrix.json 的派生列三方互查，18 条里 12 条是反例。关键一条是 D12——规范源读不到必须报错，不得退化成「当作没变化」；实测形状：删掉 carrier 后 check() 报 `task-status carrier unreadable`，写成空数组时报「refusing to treat an empty carrier」。派生列禁止手改（final_state 这一列已删），--freeze 在镜像输入互相矛盾时拒绝写出（把 side_phases 的 Phase 6 摘掉就会撞上）。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "watcher-discipline-src",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/watcher-discipline.mjs"
-     ],
-     "$note": "P3-04 第七片源守卫(补记二百四十七):会话层不得回到裸 thread::spawn、move |_token| 拿而不查、Exit 块漏 supervisor.shutdown() 或把它挪到关服务之后;三个登记名各恰好一处;lazy-attach 区域必须两处 token 检查(入口 return + 循环 break)。行为面由 core runtime_lifecycle 与 registry 两代测试钉,本条守接线形状。",
-     "timeoutMs": 60000
-    },
-    {
-     "name": "watcher-discipline-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/watcher-discipline.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 11,
-     "$note": "守卫自己的 11 条:正锚(真语料必须过)+读不到语料报错不是静默+spawn 复现红且点名+注释里的 spawn 不算+|_token| 复现红+resume 入口检查删除红+lazy 循环检查删除红+shutdown 缺失红+顺序反了红+登记名重复红+run_loop 不查 token 红。",
-     "timeoutMs": 300000
-    }
-   ]
-  },
-  "protocol": {
-   "registeredBy": "P2-01",
-   "cases": [
-    {
-     "name": "contracts-current",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/contracts.mjs",
-      "--check"
-     ],
-     "$note": "Rust 是线协议的唯一来源：本 case 把 export-schema 生成到临时目录并与 contracts/native/v1 逐字节比对。--check 永不写仓库；漂移 = 非零退出。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "protocol-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-protocol"
-     ],
-     "minCases": 50,
-     "timeoutMs": 900000
-    },
-    {
-     "name": "protocol-swift-golden",
-     "kind": "test",
-     "parse": "swift",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "ProtocolGoldenTests"
-     ],
-     "minCases": 20,
-     "$note": "Swift 读的是同一批 fixtures；--filter 保证这个 case 的地板只随 golden 用例变化，不被包内其他套件涨跌带走。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "protocol-ts-golden",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/native-host-protocol.test.ts"
-     ],
-     "minCases": 21,
-     "timeoutMs": 900000
-    },
-    {
-     "name": "protocol-ts-vocabulary",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/contracts-parity.test.ts"
-     ],
-     "minCases": 7,
-     "timeoutMs": 900000,
-     "$note": "补记六十一：shared.ts 的四个字面量联合（族/状态/权限模式/内建 agent）与 Rust 生成的 envelope.constants 做集合相等。此前这条链条两处都松：没有任何门禁跑这个文件（它只在 pnpm test 里被顺带执行），而产物==Rust 那头虽硬、TS==产物那头根本不存在。两侧各有尺寸门槛正控，防产物读空变永真。补记七十一加第五条：`TaskIntentOp` ↔ `constants.taskIntents.ops` 与 9/4 分类交叉核对（metadata∪state 恰好覆盖 13 条、两侧各数一次）——ADR-037 的词汇表从此是产物事实，TS/宿主各抄一份的第三天会被这条抓到。"
-    },
-    {
-     "name": "contracts-free-of-local-state",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "/Users/|/private/var/|/var/folders/",
-      "contracts"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "protocolVersion",
-       "contracts/native/v1/envelope.schema.json"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "\"legacyCommand\"",
-       "contracts/native/v1/methods.schema.json"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "bytesBase64",
-       "contracts/native/v1/fixtures/terminal.json"
+    "storage": {
+      "registeredBy": "P2-02",
+      "cases": [
+        {
+          "name": "storage-core-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core"
+          ],
+          "minCases": 488,
+          "$note": "单一写入者存储层 + P2-03 项目层 + 本 case 实际覆盖的整个 aeroric-core 包(paths/clock/context/location/storage_lock 与 storage/*、projects/*、tasks/*、terminal/* 全部 lib+integration 用例)。P3-03 收尾轮(补记一百)把口径合并:argv 跑的是 `cargo test -p aeroric-core`(整个包),所以地板必须是包口径的实测真值 355——81 是 P2-03 时代的真值,自 P2-05 起 case 范围悄悄长成整个包后它就成了假地板(补记六十五点名,挂账到收尾轮)。**两条 core 计数口径的关系**:本条机器地板=包口径(-p aeroric-core,355);MIGRATION_PLAN.md 每片记录的 workspace 全量(405)=包口径+aeroric-protocol 的用例,是叙事口径不是机器地板。此后每片新增 core 用例时,除各自模块地板外**必须同批抬这条**(漏抬时本 case 直接红)。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "storage-core-clippy",
+          "kind": "gate",
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--all-targets",
+            "--locked",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "core/ 与 macos/ 没有 CI，门禁是唯一的强制点：-D warnings 在这里松掉就没人再跑它。不钉 Compiling/Checking 这类输出 token——cargo 缓存命中时它们本就不出现，钉上去只会让 case 随机红；退出码 0 才是「所有 target 都过了 lint」的证据。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "core-discovers-no-real-home",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "home_dir|dirs::home|env::var(_os)?\\(\\s*\"HOME|USERPROFILE|/Users/",
+            "core/crates/aeroric-core/src",
+            "core/crates/aeroric-core/tests"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "fn writer",
+              "core/crates/aeroric-core/src/storage/mod.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "temp_dir",
+              "core/crates/aeroric-core/src/storage/mod.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "AERORIC_LEASE_CHILD_DIR",
+              "core/crates/aeroric-core/tests/storage_lock.rs"
+            ]
+          ],
+          "$note": "INV-03 与「测试不得触碰真实用户目录」的机械形态：家目录只能由调用方注入（AppPaths::from_user_home / with_data_dir），core 自己不许去查 $HOME、home_dir 或写死某台机器的路径。父进程传给子进程的 AERORIC_LEASE_CHILD_* 不在禁止之列，所以模式限定到 HOME 本身。三条正控证明 rg 读得到被扫的文件，且它们确实依赖注入与 temp_dir。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "lease-refusal-never-kills-a-foreign-pid",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\.kill\\(\\)|libc::kill|pkill|killall|SIGKILL|SIGTERM|Command::new\\(\"kill",
+            "core/crates/aeroric-core/src/storage_lock.rs",
+            "core/crates/aeroric-core/src/context.rs",
+            "core/crates/aeroric-core/src/location.rs",
+            "core/crates/aeroric-core/src/storage/"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "AlreadyInUse",
+              "core/crates/aeroric-core/src/storage_lock.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "never kill",
+              "core/crates/aeroric-core/src/storage_lock.rs"
+            ]
+          ],
+          "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：不变量的主语是「租约拒绝的决策面」，不是「core 里不许存在进程管理」。原口径扫描 core 全部源码，在 P2 时代（core 没有进程管理）恰好等价；P3-01 切片二把宿主 subprocess.rs 的进程组终止迁入 core/runtime/subprocess.rs（杀的是 core 自己 spawn 的子进程树，与迁移前宿主侧行为逐字节相同，也从来不在本不变量的主语里），全 core 扫描因此改为点名租约决策面文件。收窄是本次评审过的编辑，不是为了让红牌变绿——两个测试夹具的正控照旧。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "legacy-client-ignores-core-exclusive-files",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "runtime\\.json|project-groups\\.json|task-operations\\.json",
+            "src-tauri/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric-core",
+              "src-tauri/Cargo.toml"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "core_bridge",
+              "src-tauri/src/lib.rs"
+            ]
+          ],
+          "$note": "ADR-012/013：`runtime.json` 与 `project-groups.json` 都是核心独占、可丢弃的状态——旧客户端读不到它们就必须真的不读它们，否则「删掉也不影响」这句前提会被一次 legacy 读取悄悄作废（而 `AppSettings` 是强类型 struct，把它塞进 settings.json 更会在下一次保存时被抹掉）。两条正控证明 src-tauri 确实编译进了 core 与桥接模块，rg 不是因为路径写错才返回 1。 P2-04 追加 task-operations.json：它是 spawn-once 的唯一凭据，旧客户端整表覆盖会把它抹掉。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "契约产物要被三种语言读取：出现本机路径说明它是在某台机器上被就地生成的，换台机器就不可复现。正控保证 rg 不是因为读不到文件才返回 1。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "storage": {
-   "registeredBy": "P2-02",
-   "cases": [
-    {
-     "name": "storage-core-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core"
-     ],
-     "minCases": 488,
-     "$note": "单一写入者存储层 + P2-03 项目层 + 本 case 实际覆盖的整个 aeroric-core 包(paths/clock/context/location/storage_lock 与 storage/*、projects/*、tasks/*、terminal/* 全部 lib+integration 用例)。P3-03 收尾轮(补记一百)把口径合并:argv 跑的是 `cargo test -p aeroric-core`(整个包),所以地板必须是包口径的实测真值 355——81 是 P2-03 时代的真值,自 P2-05 起 case 范围悄悄长成整个包后它就成了假地板(补记六十五点名,挂账到收尾轮)。**两条 core 计数口径的关系**:本条机器地板=包口径(-p aeroric-core,355);MIGRATION_PLAN.md 每片记录的 workspace 全量(405)=包口径+aeroric-protocol 的用例,是叙事口径不是机器地板。此后每片新增 core 用例时,除各自模块地板外**必须同批抬这条**(漏抬时本 case 直接红)。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "storage-core-clippy",
-     "kind": "gate",
-     "argv": [
-      "cargo",
-      "clippy",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--all-targets",
-      "--locked",
-      "--",
-      "-D",
-      "warnings"
-     ],
-     "$note": "core/ 与 macos/ 没有 CI，门禁是唯一的强制点：-D warnings 在这里松掉就没人再跑它。不钉 Compiling/Checking 这类输出 token——cargo 缓存命中时它们本就不出现，钉上去只会让 case 随机红；退出码 0 才是「所有 target 都过了 lint」的证据。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "core-discovers-no-real-home",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "home_dir|dirs::home|env::var(_os)?\\(\\s*\"HOME|USERPROFILE|/Users/",
-      "core/crates/aeroric-core/src",
-      "core/crates/aeroric-core/tests"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "fn writer",
-       "core/crates/aeroric-core/src/storage/mod.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "temp_dir",
-       "core/crates/aeroric-core/src/storage/mod.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "AERORIC_LEASE_CHILD_DIR",
-       "core/crates/aeroric-core/tests/storage_lock.rs"
+    "projects": {
+      "registeredBy": "P2-03",
+      "cases": [
+        {
+          "name": "projects-core-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "projects"
+          ],
+          "minCases": 16,
+          "$note": "P2-03 的两半：41 条 parity 用例重放 `contracts/native/v1/fixtures/projects.json`（期望由旧客户端 TypeScript 亲自算出，其中 2 条是 ADR-013 声明的有意分歧，必须与客户端结果不同且带理由，否则 Rust 用例直接红）+ 15 条服务层用例：一次真实改动推进一格 revision、无效改动与被拒写入不消耗 revision、分组清单是 core 独占文件且不碰 settings.json、reorder 重复 id 去重、本地路径只做无损归一、id 由调用方给且重复 id 拒绝落盘、坏 location 看得见但不可寻址且永远可删。地板 16 = 1 + 15；parity 表另由 projects-parity-is-derived-from-client 在 TS 侧断言。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-parity-is-derived-from-client",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/project-core-parity.test.ts"
+          ],
+          "minCases": 2,
+          "$note": "期望值不是手抄的：这条 case 用真实的 src/projectOrder.ts、projectGroups.ts、appProjectState.ts、state/app/projectMutations.ts 重放知识表里的每一条，一旦产品侧行为变了，这里是红的（而 Rust 侧同一张表的断言在 projects-core-rust）。重派生知识表需要显式环境变量，属于评审动作。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-save-single-queue",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/project-save-single-queue.test.ts"
+          ],
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "Action 3 的第一步（用户已拍板：先让 JS 交出整表快照、再翻 commit）：projects.json 只有一个整份覆盖写点，所以全进程只能有一条落盘链。此前 appProjectState 与 projectsStore 各持一个 createProjectPersister 实例，而 AppOpsProvider 的回退 ops（rename/pin/reorder）走后者，于是 ① App 的 flushProjects() 在 store 那份写还挂着时就返回（退出会丢改动），② 两条链互相覆盖同一个文件。两条用例在双实例下实测为红、共用单例（src/projectSaveQueue.ts）后为绿。"
+        },
+        {
+          "name": "projects-contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "新增的 fixtures/projects.json 必须与 Rust 生成器内嵌的知识表逐字节一致，否则三方读的就不是同一份东西。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "projects-core-has-no-ui-coupling",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState",
+            "core/crates/aeroric-core/src/projects"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub struct ProjectService",
+              "core/crates/aeroric-core/src/projects/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "save_projects",
+              "core/crates/aeroric-core/src/projects/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub fn merge_group_names",
+              "core/crates/aeroric-core/src/projects/mutations.rs"
+            ]
+          ],
+          "$note": "验收原文是「业务操作不调用任何 UI 回调」，所以这条按代码形状检查而不是按词：只拦真实的调用/依赖写法（tauri::、.emit(、window.、addEventListener、localStorage.setItem…），否则注释里那句「没有 window」都会把自己判红。三条正控证明 rg 读到的是这个模块的真实内容。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "INV-03 与「测试不得触碰真实用户目录」的机械形态：家目录只能由调用方注入（AppPaths::from_user_home / with_data_dir），core 自己不许去查 $HOME、home_dir 或写死某台机器的路径。父进程传给子进程的 AERORIC_LEASE_CHILD_* 不在禁止之列，所以模式限定到 HOME 本身。三条正控证明 rg 读得到被扫的文件，且它们确实依赖注入与 temp_dir。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "lease-refusal-never-kills-a-foreign-pid",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "\\.kill\\(\\)|libc::kill|pkill|killall|SIGKILL|SIGTERM|Command::new\\(\"kill",
-      "core/crates/aeroric-core/src/storage_lock.rs",
-      "core/crates/aeroric-core/src/context.rs",
-      "core/crates/aeroric-core/src/location.rs",
-      "core/crates/aeroric-core/src/storage/"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "AlreadyInUse",
-       "core/crates/aeroric-core/src/storage_lock.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "never kill",
-       "core/crates/aeroric-core/src/storage_lock.rs"
+    "tasks": {
+      "registeredBy": "P2-04",
+      "cases": [
+        {
+          "name": "tasks-status-machine-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_lifecycle"
+          ],
+          "minCases": 56,
+          "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。第 42 条 `an_intent_crosses_the_wire_as_op_plus_camel_case_payload`（补记六十六）钉的是意图的**线上词汇**：`op` 做判别式、字段 camelCase，三条反例（蛇形 op 名 / Pascal 判别式 / 蛇形字段）必须解不出；变异是去掉 `#[serde(tag=…)]`，精确红这 1 条，现场形状是外部标签 + 蛇形字段——也就是“宿主一套、core 一套”的默认结局。（34～41 条由补记六十四/六十五加入，当时只改了数字没续写本注，此处一并记：四条具名元数据 op 的语义 + 三条意图 decide/apply 逐字节等价与只读侧决策。）第 43～50 条由补记六十九加入（ADR-037 词汇表补齐）：`the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state` 把三条 op 名（serde 判别式 / 手写 `op_name` / `TASK_INTENT_VOCABULARY` 表）钉成同一拼法并数死 13 与 9/4；`a_create_intent_pins_three_families_at_the_front_of_the_list` 让 `Create` 走具名 `create` 的同一个行构造器（重复 id 拒绝且零写）；`deleting_the_last_row_removes_the_file_and_a_new_create_reopens_it` 落 ADR-037 后果 1 的\"删空 ⇒ 删文件\"，覆盖面发布为缺席；`a_delete_intent_and_the_named_delete_produce_the_same_bytes` 防跳收藏/拒在飞长成两套规则；`normalizing_after_boot_applies_the_four_client_rules_and_is_idempotent` 逐条对照 `appProjectState.ts:171-210` 且二次投递零写；`a_switch_config_intent_merges_only_the_delta_onto_the_authoritative_row` 断言未被点名的键（另一窗口刚写的名）不许被抹；`resume_with_session_sets_one_family_and_pending_clearing_the_two_fields` 与 #21 共用清三设一；`the_new_intents_cross_the_wire_with_their_vocabulary_names` 钉新四条的线上形状（None 整键缺席，不许发 null）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-idempotency-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_idempotency"
+          ],
+          "minCases": 10,
+          "$note": "同 ID 重试只 spawn 一次：认领键是 (taskId, kind, generation) 且**先查重再取号**——先取号会让每次重试拿到新键，'只 spawn 一次' 就成了没有机制的口号。另含：4 线程并发只有一个通过、认领跨进程存活（重启后重试仍被拒）、cancel 之后才允许下一次真实启动、迟到的 TerminalReady 不能释放当前一代的认领、FutureGeneration 是报错而不是静默丢弃。地板 8。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-parity-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "task_parity"
+          ],
+          "minCases": 4,
+          "$note": "283 条由旧客户端 TypeScript 亲自算出的期望在 Rust 侧逐条重放（状态跃迁 90、字段迁移 6、回滚 5、会话归属/字段 44、续跑策略 28、完成命令 9、保留期 3、调度 9、终端清洗 34、其余为谓词矩阵）；另有：契约文件与生成器的知识表内容一致、声明的分歧必须真的不一致、覆盖度自检（9×9 一对都不能少、四个族都要出现）。地板 4。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-reducer-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "tasks::",
+            "--"
+          ],
+          "minCases": 78,
+          "$note": "纯端口层：reducer/session_owner/launch_plan/handoff/cleanup/operations 的单测（注册时为 61 条，现按实测抬到 78：ADR-037 那几轮往 reducer/launch_plan 里加用例时没有同步这条地板，它已经松到抓不到 17 条删除——抬紧而不是继续留着当装饰）（absent≠null 的字段语义、三方字段回滚、会话归属优先级、dsh 续跑空 prompt、spinner/状态栏/400 行去重窗、本地日历分量与周槽、认领去重）。接线步骤②另加一条 `a_dsh_launch_is_expressible_with_only_the_fact_the_webview_actually_sends`：三个每窗口事实必须都是 Option，因为 §10 的 JS 台账量出 dsh 启动点今天只发得出 clientTimeZone 一个。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-parity-is-derived-from-client",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/task-core-parity.test.ts"
+          ],
+          "minCases": 3,
+          "$note": "期望值不是手抄的：这条用真实的 src/state/app/taskStatus.ts、taskMutations.ts、taskLifecycle.ts、taskSession.ts、taskCompletion.ts、taskCleanup.ts、sessionHandoff.ts 重算每一条。产品侧行为一变这里是红的（Rust 侧同一张表在 tasks-parity-rust）。重新派生需要显式环境变量，属于评审动作。builtIn 标志由客户端自己的 isBuiltInAgent 读出后写进用例——第一版把内置 id 写成显示名 'claude-gpt-5.5'（真名是 claude_gpt55），两侧就因为一个字符串分歧过。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-contracts-current",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/contracts.mjs",
+            "--check"
+          ],
+          "$note": "新增 fixtures/task-transitions.json 必须与 Rust 生成器内嵌的知识表内容一致，否则三方读的不是同一份东西。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tasks-core-has-no-ui-coupling",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState|invoke\\(",
+            "core/crates/aeroric-core/src/tasks"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub struct TaskService",
+              "core/crates/aeroric-core/src/tasks/service.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub trait TaskExecutor",
+              "core/crates/aeroric-core/src/tasks/executor.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub fn apply_status_transition",
+              "core/crates/aeroric-core/src/tasks/reducer.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pub trait LocalCalendar",
+              "core/crates/aeroric-core/src/tasks/cleanup.rs"
+            ]
+          ],
+          "$note": "验收原文是 'fake runtime 没有 GUI listener 时 start/resume/cancel 全部可执行'，所以按代码形状查：连 invoke( 都拦（那是旧前端的调用入口），四条正控证明 rg 读到的是这个模块的真实内容。LocalCalendar 是刻意的端口：core 定规则、宿主报时区，与 ADR-010 的探针同一个形状。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "AlreadyInUse 是一条拒绝，不是一纸击杀授权：不变量的主语是「租约拒绝的决策面」，不是「core 里不许存在进程管理」。原口径扫描 core 全部源码，在 P2 时代（core 没有进程管理）恰好等价；P3-01 切片二把宿主 subprocess.rs 的进程组终止迁入 core/runtime/subprocess.rs（杀的是 core 自己 spawn 的子进程树，与迁移前宿主侧行为逐字节相同，也从来不在本不变量的主语里），全 core 扫描因此改为点名租约决策面文件。收窄是本次评审过的编辑，不是为了让红牌变绿——两个测试夹具的正控照旧。两条正控证明拒绝路径与「never kill」这句提示都还在文件里。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "legacy-client-ignores-core-exclusive-files",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "runtime\\.json|project-groups\\.json|task-operations\\.json",
-      "src-tauri/src"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric-core",
-       "src-tauri/Cargo.toml"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "core_bridge",
-       "src-tauri/src/lib.rs"
+    "tauri-adapter": {
+      "registeredBy": "P2-05",
+      "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、两工作区 fmt 与 clippy、`pnpm typecheck`、src-tauri `--lib` 用例计数地板（接线 §12 后 2479）。**ADR-023 完全生效**：两个家族 emitters = 1，且观察通道的写半边已按 mode() 三分接上（writer 提交、deferred 经桥落盘、只读只决策），`core-observer-does-not-write-yet` 守卫随接线 §12 撤销——它防的那件事（两个写者并存）已由整表快照写退役 + 接线 §12 ④ 的可数断言接管。**ADR-022 完全生效**：21 处调用点全部离开快照车道，`adapter-invariants` 第六条规则断言生产 web 源的快照写调用点 == 0。ADR-024（分组一次性导入）**仍未生效**，按规矩挂账：分组名单仍由前端 localStorage 权威，一次性导入归 P3-01 之后的 Action 3 收尾。ADR-026 的重放半边在意图队列里（元数据重放一次、状态 op 永不重放），冲突处置的宿主侧验收待真实 REVISION_CONFLICT 出现后补证据。G18 未裁决，归 P3-02。",
+      "cases": [
+        {
+          "name": "adapter-invariants-unit",
+          "kind": "test",
+          "parse": "node-test",
+          "minCases": 28,
+          "timeoutMs": 300000,
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/adapter-invariants.test.mjs"
+          ],
+          "$note": "三条宿主不变量各自的负例：第二个运行身份来源回归、版本戳泄漏到别的文件/别的函数、反查释放之外出现 claim remove、helper 里不再 remove（口号化）、writer 递交扩到非 macOS、以及\"读不到就报错而不是报干净\"。另含一条防止把方法算成上一个自由函数的归属回归。"
+        },
+        {
+          "name": "adapter-invariants-src",
+          "kind": "gate",
+          "timeoutMs": 180000,
+          "argv": [
+            "node",
+            "scripts/native/adapter-invariants.mjs"
+          ],
+          "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则六条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）、接线 §12 ④（生产 web 源不得再命名整表快照写路径与它的三个 flush 包装，lib.rs 不得再注册那条整表写命令；正控要求扫描到采纳桥与退出排空两处替换物，测试文件按明示规则豁免）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
+        },
+        {
+          "name": "adapter-acceptance-real-kernel",
+          "kind": "test",
+          "parse": "rust",
+          "minCases": 19,
+          "timeoutMs": 900000,
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "core_adapter_tests::",
+            "--",
+            "--test-threads=1"
+          ],
+          "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。第 8 条 `the_wired_service_asks_the_host_about_a_run_core_never_minted`（ADR-036）是这一组里唯一驱动`install_core_services` 真正建出来的那对（`TaskService` + 宿主 `LiveRuns`）的用例：其余场景一律喂 `NoLiveRuns`，所以“接线把端口接错了”在它们那里是隐形的。它登记的是一条 generation 0 的运行——正是产品路径今天的全部。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。",
+          "env": {
+            "AERORIC_HOME": "<scratch>"
+          }
+        },
+        {
+          "name": "src-tauri-lib-tests",
+          "kind": "test",
+          "parse": "rust",
+          "minCases": 2011,
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。→ **2466**（P3-01 切片三：run_registry 的 8 条测试与 pty 的 2 条版本戳测试随 TaskRegistry 本体迁入 core——core 侧 +10，搬家不是消失）。→ **2467**（切片五：platform_adapter.rs 带 2 条纯函数测试入账，fs.rs 的剪贴板解析测试随体迁入 = 净 +1）。→ **2465**（P3-02 首片：agent_family_maps 的 2 条映射表测试随体迁入 core 的 agents::launch——core 侧 +3）。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。 P7-05：notebook 业务随 core 上收，454 条既有单测（tests.rs＋import/*_tests）移入 aeroric-core（notebook --lib 442＋notebook_contract 12，进默认门禁），宿主地板 2465→2011。",
+          "env": {
+            "AERORIC_HOME": "<scratch>"
+          }
+        },
+        {
+          "name": "src-tauri-cargo-fmt",
+          "kind": "gate",
+          "timeoutMs": 300000,
+          "argv": [
+            "cargo",
+            "fmt",
+            "--check",
+            "--manifest-path",
+            "src-tauri/Cargo.toml"
+          ],
+          "$note": "本轮查明：scripts/native 里此前没有任何 fmt 检查，而工作树里确实躺着四个未格式化的文件。"
+        },
+        {
+          "name": "core-cargo-fmt",
+          "kind": "gate",
+          "timeoutMs": 300000,
+          "argv": [
+            "cargo",
+            "fmt",
+            "--check",
+            "--all",
+            "--manifest-path",
+            "core/Cargo.toml"
+          ],
+          "$note": "同上，覆盖 core crate。注意 `core/Cargo.toml` 是 workspace 根，`cargo fmt` 必须带 `--all` 才找得到 targets（不带就以 `Failed to find targets` 失败——那是一台机器上永远红的门禁，比没有门禁更糟）。"
+        },
+        {
+          "name": "core-clippy",
+          "kind": "gate",
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "补上 src-tauri 有、core 没有的那一半：core 此前只跑 fmt、从不跑 clippy，所以 doc_lazy_continuation、needless_borrow 一类 lint 在这里是隐形的——`cargo check` 与 `--lib` 都看不见它们。`--all-targets` 必须带，否则 16 个测试二进制不参与 lint。本机实测 exit 0；stderr 上那一串 unused-patch 警告来自 `../dbx` 与 vendor 的 [patch] 表，不改变退出码（见仓库记忆里的 stderr 陷阱）。"
+        },
+        {
+          "name": "src-tauri-clippy",
+          "kind": "gate",
+          "timeoutMs": 1800000,
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "src-tauri/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "$note": "首次进门禁：`--lib` 全绿的同时这里有 3 处缺安全说明的 unsafe（deny 级，cargo check 看不见）与 13 处 needless_borrow。`--all-targets` 是必须的——不带它测试代码不参与 lint。"
+        },
+        {
+          "name": "ts-typecheck",
+          "kind": "gate",
+          "timeoutMs": 900000,
+          "argv": [
+            "pnpm",
+            "typecheck"
+          ],
+          "$note": "vitest 只转译不类型检查：`expect(a).toEqual(b, msg)` 这类 TS2554 曾长期只被 tsc 看见。TS 证据必须两条一起跑，因此本 case 与 `pnpm test` 不互相替代。"
+        },
+        {
+          "name": "adapter-event-payload-contract",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/native-core-adapter.test.ts"
+          ],
+          "minCases": 5,
+          "timeoutMs": 900000,
+          "$note": "P2-05 Action 5 点名的 TS 侧契约测试（此前根本不存在）。它把 useAppTauriEvents.ts 里 listen<{…}> 的**类型字面量**与 src-tauri 各处 .emit(...) 的 json! 字面量、以及 core_adapter.rs 两个载荷构造函数，三方都从真实源码里扫出来对比，一条键都不手抄。方向是 legacy ⊆ core：那 8 处发射点要被删掉，任何 legacy 带而 core 表达不了的键都会在删除的当下静默消失。首跑即抓出 failure_reason —— 客户端解构它并落进 storage.rs 的持久字段，而 core 的 TaskNotification::Status 当时装不下它，这与 ADR-023『payload 不变』直接冲突，因此端口先长出了 Option 的 failure_reason。可失败性已验证：把载荷构造函数改回不带该键，这条 case 立刻红。正控断言键集合非空，因为本文件第一版只数发射点个数，一个把键集扫成空的括号 bug 仍然全绿。"
+        },
+        {
+          "name": "adapter-intent-queue",
+          "kind": "test",
+          "parse": "vitest",
+          "argv": [
+            "pnpm",
+            "vitest",
+            "run",
+            "src/test/task-intent-queue.test.ts"
+          ],
+          "minCases": 9,
+          "timeoutMs": 900000,
+          "$note": "补记七十一：ADR-022 的意图队列（`src/taskIntentQueue.ts`）的机制用例。钉的是四件事：同项目 FIFO、权威快照经 onAdopt 交回宿主、ADR-026 的两类失败（元数据在 REVISION_CONFLICT 时重放恰好一次；状态 op 永不重放、非冲突错误对两类都只报不重放）、ADR-017 的调用方身份（同 operationKey 在未发出前合并载荷，落过盘后再来一发是新事实不是重试）。最后一条还把 `METADATA_TASK_INTENT_OPS` 与产物 `constants.taskIntents.metadata` 对表——TS 那份分类是镜像，不是第二权威。21 处调用点的切换全部走这一条队列；切换完成之前旧快照队列仍在，两者不共存于同一次落盘。"
+        },
+        {
+          "name": "core-adapter-never-relocates-data-dir",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "resolve_data_dir|DataDir::",
+            "src-tauri/src/core_adapter.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "CoreGateway",
+              "src-tauri/src/core_adapter.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "install_core_services",
+              "src-tauri/src/lib.rs"
+            ]
+          ],
+          "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "ADR-012/013：`runtime.json` 与 `project-groups.json` 都是核心独占、可丢弃的状态——旧客户端读不到它们就必须真的不读它们，否则「删掉也不影响」这句前提会被一次 legacy 读取悄悄作废（而 `AppSettings` 是强类型 struct，把它塞进 settings.json 更会在下一次保存时被抹掉）。两条正控证明 src-tauri 确实编译进了 core 与桥接模块，rg 不是因为路径写错才返回 1。 P2-04 追加 task-operations.json：它是 spawn-once 的唯一凭据，旧客户端整表覆盖会把它抹掉。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "projects": {
-   "registeredBy": "P2-03",
-   "cases": [
-    {
-     "name": "projects-core-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "projects"
-     ],
-     "minCases": 16,
-     "$note": "P2-03 的两半：41 条 parity 用例重放 `contracts/native/v1/fixtures/projects.json`（期望由旧客户端 TypeScript 亲自算出，其中 2 条是 ADR-013 声明的有意分歧，必须与客户端结果不同且带理由，否则 Rust 用例直接红）+ 15 条服务层用例：一次真实改动推进一格 revision、无效改动与被拒写入不消耗 revision、分组清单是 core 独占文件且不碰 settings.json、reorder 重复 id 去重、本地路径只做无损归一、id 由调用方给且重复 id 拒绝落盘、坏 location 看得见但不可寻址且永远可删。地板 16 = 1 + 15；parity 表另由 projects-parity-is-derived-from-client 在 TS 侧断言。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "projects-parity-is-derived-from-client",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/project-core-parity.test.ts"
-     ],
-     "minCases": 2,
-     "$note": "期望值不是手抄的：这条 case 用真实的 src/projectOrder.ts、projectGroups.ts、appProjectState.ts、state/app/projectMutations.ts 重放知识表里的每一条，一旦产品侧行为变了，这里是红的（而 Rust 侧同一张表的断言在 projects-core-rust）。重派生知识表需要显式环境变量，属于评审动作。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "projects-save-single-queue",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/project-save-single-queue.test.ts"
-     ],
-     "minCases": 3,
-     "timeoutMs": 900000,
-     "$note": "Action 3 的第一步（用户已拍板：先让 JS 交出整表快照、再翻 commit）：projects.json 只有一个整份覆盖写点，所以全进程只能有一条落盘链。此前 appProjectState 与 projectsStore 各持一个 createProjectPersister 实例，而 AppOpsProvider 的回退 ops（rename/pin/reorder）走后者，于是 ① App 的 flushProjects() 在 store 那份写还挂着时就返回（退出会丢改动），② 两条链互相覆盖同一个文件。两条用例在双实例下实测为红、共用单例（src/projectSaveQueue.ts）后为绿。"
-    },
-    {
-     "name": "projects-contracts-current",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/contracts.mjs",
-      "--check"
-     ],
-     "$note": "新增的 fixtures/projects.json 必须与 Rust 生成器内嵌的知识表逐字节一致，否则三方读的就不是同一份东西。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "projects-core-has-no-ui-coupling",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState",
-      "core/crates/aeroric-core/src/projects"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub struct ProjectService",
-       "core/crates/aeroric-core/src/projects/service.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "save_projects",
-       "core/crates/aeroric-core/src/projects/service.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub fn merge_group_names",
-       "core/crates/aeroric-core/src/projects/mutations.rs"
+    "runtime": {
+      "registeredBy": "P3-01",
+      "cases": [
+        {
+          "name": "runtime-lifecycle-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "runtime_lifecycle"
+          ],
+          "minCases": 5,
+          "$note": "P3-01 的运行时生命周期验收,计划原文三条判据逐一落地:①启动两次不重复 watcher(监督者按名去重,同名的第二次启动被拒且唯一循环继续工作);②shutdown 两次安全且监督者可重用(第二次是安静 no-op、重启语义成立);③退出监控不能清新 generation(旧代 retire 幂等——重复退出报告 retire 不到任何东西;remove_pty_handles 只带走旧代,新生代句柄完好;结算守卫在另一代在飞时零消费)。另两条是机制钉子:有界拆除(无视 token 的 watcher 在宽限内被 detach 而不是把退出挂死——PTY reader 阻塞在 read 上的形状)与结算幂等(重复结算零消费、各任务标记独立成账)。句柄错配拒绝路径不走测试:remove_pty_handles_if_current 按 ADR-020 合同是 debug_assert!(实现 bug),测试构建走到即 panic。宿主 spawn 站点全部经 WatcherSupervisor(切片四接管),所以在这里钉住=钉住宿主行为。地板 5 = 5 条测试。",
+          "timeoutMs": 300000
+        }
       ]
-     ],
-     "$note": "验收原文是「业务操作不调用任何 UI 回调」，所以这条按代码形状检查而不是按词：只拦真实的调用/依赖写法（tauri::、.emit(、window.、addEventListener、localStorage.setItem…），否则注释里那句「没有 window」都会把自己判红。三条正控证明 rg 读到的是这个模块的真实内容。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "tasks": {
-   "registeredBy": "P2-04",
-   "cases": [
-    {
-     "name": "tasks-status-machine-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "task_lifecycle"
-     ],
-     "minCases": 56,
-     "$note": "P2-04 的状态机端到端（27 条）+ ADR-034 的迟到观察规则（第 28 条 `a_late_observation_from_a_run_that_already_reported_does_not_resurrect_the_task`）+ ADR-035 的两条。新增第 29 条 `a_host_that_was_never_handed_the_writer_role_still_gets_a_decision_and_writes_nothing`：只读 context 上决策成立、tasks.json 逐字节不动、账本文件不得被顺手创建，并配一条\"同一个 context 上 writer 入口必须仍然拒写\"的阳性对照——没有它，\"决策不写盘\"与\"observe 根本不能用\"无法区分。第 30 条 `a_late_report_from_a_still_live_run_is_admitted_even_though_the_row_reads_cancelled` 钉的是判据方向：按\"有无存活代\"而不是\"这一行是否终态\"，一正一反各占一半。可失败性用把守卫改成 `false` 的变异验证：第 28、30 两条同时红。第 31 条 `a_legacy_runs_report_is_held_up_by_the_port_and_by_nothing_else`（ADR-036）钉的是端口真的被问到：同一个 seed 行、只差 `LiveRuns` 的回答，答“活”则 `Applied` 并真的写盘，答不出则 `Dropped` 且一个字都不写；用例还断言端口被调用次数 > 0，否则一个从没被调用的端口也能全绿。变异还原后 31/31。第 32 条 `an_observation_can_be_routed_from_a_task_id_alone`（ADR-035 的 task→project 路由）要求盘上真有两个项目，所以“永远答第一个项目”过不去；两处变异各自验过——扫描换成“第一个非空项目”⇒ `Some(“p1”) ≠ Some(“p2”)`，去掉 delete 的 forget ⇒ 已删的 id 仍答 `Some(“p2”)`。变异还原后 32/32。第 33 条 `the_announcement_rule_is_part_of_the_outcome_not_of_the_sink` 把 ADR-035 的发射判据本身钉在 core 里（changed:false 仍要发、只有 Dropped 静默、失败原因随通知一起来自 core 的那一条 exit 规则），否则判据会被每个宿主各抄一遍。第 42 条 `an_intent_crosses_the_wire_as_op_plus_camel_case_payload`（补记六十六）钉的是意图的**线上词汇**：`op` 做判别式、字段 camelCase，三条反例（蛇形 op 名 / Pascal 判别式 / 蛇形字段）必须解不出；变异是去掉 `#[serde(tag=…)]`，精确红这 1 条，现场形状是外部标签 + 蛇形字段——也就是“宿主一套、core 一套”的默认结局。（34～41 条由补记六十四/六十五加入，当时只改了数字没续写本注，此处一并记：四条具名元数据 op 的语义 + 三条意图 decide/apply 逐字节等价与只读侧决策。）第 43～50 条由补记六十九加入（ADR-037 词汇表补齐）：`the_intent_vocabulary_is_thirteen_names_nine_metadata_and_four_state` 把三条 op 名（serde 判别式 / 手写 `op_name` / `TASK_INTENT_VOCABULARY` 表）钉成同一拼法并数死 13 与 9/4；`a_create_intent_pins_three_families_at_the_front_of_the_list` 让 `Create` 走具名 `create` 的同一个行构造器（重复 id 拒绝且零写）；`deleting_the_last_row_removes_the_file_and_a_new_create_reopens_it` 落 ADR-037 后果 1 的\"删空 ⇒ 删文件\"，覆盖面发布为缺席；`a_delete_intent_and_the_named_delete_produce_the_same_bytes` 防跳收藏/拒在飞长成两套规则；`normalizing_after_boot_applies_the_four_client_rules_and_is_idempotent` 逐条对照 `appProjectState.ts:171-210` 且二次投递零写；`a_switch_config_intent_merges_only_the_delta_onto_the_authoritative_row` 断言未被点名的键（另一窗口刚写的名）不许被抹；`resume_with_session_sets_one_family_and_pending_clearing_the_two_fields` 与 #21 共用清三设一；`the_new_intents_cross_the_wire_with_their_vocabulary_names` 钉新四条的线上形状（None 整键缺席，不许发 null）。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "tasks-idempotency-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "task_idempotency"
-     ],
-     "minCases": 10,
-     "$note": "同 ID 重试只 spawn 一次：认领键是 (taskId, kind, generation) 且**先查重再取号**——先取号会让每次重试拿到新键，'只 spawn 一次' 就成了没有机制的口号。另含：4 线程并发只有一个通过、认领跨进程存活（重启后重试仍被拒）、cancel 之后才允许下一次真实启动、迟到的 TerminalReady 不能释放当前一代的认领、FutureGeneration 是报错而不是静默丢弃。地板 8。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "tasks-parity-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "task_parity"
-     ],
-     "minCases": 4,
-     "$note": "283 条由旧客户端 TypeScript 亲自算出的期望在 Rust 侧逐条重放（状态跃迁 90、字段迁移 6、回滚 5、会话归属/字段 44、续跑策略 28、完成命令 9、保留期 3、调度 9、终端清洗 34、其余为谓词矩阵）；另有：契约文件与生成器的知识表内容一致、声明的分歧必须真的不一致、覆盖度自检（9×9 一对都不能少、四个族都要出现）。地板 4。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "tasks-reducer-unit-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--lib",
-      "tasks::",
-      "--"
-     ],
-     "minCases": 78,
-     "$note": "纯端口层：reducer/session_owner/launch_plan/handoff/cleanup/operations 的单测（注册时为 61 条，现按实测抬到 78：ADR-037 那几轮往 reducer/launch_plan 里加用例时没有同步这条地板，它已经松到抓不到 17 条删除——抬紧而不是继续留着当装饰）（absent≠null 的字段语义、三方字段回滚、会话归属优先级、dsh 续跑空 prompt、spinner/状态栏/400 行去重窗、本地日历分量与周槽、认领去重）。接线步骤②另加一条 `a_dsh_launch_is_expressible_with_only_the_fact_the_webview_actually_sends`：三个每窗口事实必须都是 Option，因为 §10 的 JS 台账量出 dsh 启动点今天只发得出 clientTimeZone 一个。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "tasks-parity-is-derived-from-client",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/task-core-parity.test.ts"
-     ],
-     "minCases": 3,
-     "$note": "期望值不是手抄的：这条用真实的 src/state/app/taskStatus.ts、taskMutations.ts、taskLifecycle.ts、taskSession.ts、taskCompletion.ts、taskCleanup.ts、sessionHandoff.ts 重算每一条。产品侧行为一变这里是红的（Rust 侧同一张表在 tasks-parity-rust）。重新派生需要显式环境变量，属于评审动作。builtIn 标志由客户端自己的 isBuiltInAgent 读出后写进用例——第一版把内置 id 写成显示名 'claude-gpt-5.5'（真名是 claude_gpt55），两侧就因为一个字符串分歧过。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "tasks-contracts-current",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/contracts.mjs",
-      "--check"
-     ],
-     "$note": "新增 fixtures/task-transitions.json 必须与 Rust 生成器内嵌的知识表内容一致，否则三方读的不是同一份东西。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "tasks-core-has-no-ui-coupling",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "tauri::|\\bWebviewWindow\\b|\\bAppHandle\\b|\\.emit\\(|addEventListener|window\\.|document\\.|localStorage\\.setItem|useEffect|useState|invoke\\(",
-      "core/crates/aeroric-core/src/tasks"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub struct TaskService",
-       "core/crates/aeroric-core/src/tasks/service.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub trait TaskExecutor",
-       "core/crates/aeroric-core/src/tasks/executor.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub fn apply_status_transition",
-       "core/crates/aeroric-core/src/tasks/reducer.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pub trait LocalCalendar",
-       "core/crates/aeroric-core/src/tasks/cleanup.rs"
+    "agents": {
+      "registeredBy": "P3-02",
+      "cases": [
+        {
+          "name": "agent-launch-parity-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "agent_launch"
+          ],
+          "minCases": 2,
+          "$note": "P3-02 切片二的 parity 证明:fixtures 的期望由旧宿主路径(build_*_cmd + add_*_launch_args 的 CommandBuilder,经 get_argv/get_env/get_cwd 提取)在迁移前亲自算出并冻结(core tests/fixtures/agent-launch-parity.json,18 case);core 四族计划函数重放逐字节相等。宿主侧另有同 fixtures 的等价守卫(pty.rs agent_launch_parity_fixture_harvest)——迁移后宿主=机械翻译,两侧共用一份真相。第二条测试钉家族特有语义(claude --model 的 agent 门、omp ultra 封顶 max 且不向上游发 ultra)。后续切片(env 层、managed_home、OMP 反例)追加 case 时同步抬 floor。",
+          "timeoutMs": 300000
+        }
       ]
-     ],
-     "$note": "验收原文是 'fake runtime 没有 GUI listener 时 start/resume/cancel 全部可执行'，所以按代码形状查：连 invoke( 都拦（那是旧前端的调用入口），四条正控证明 rg 读到的是这个模块的真实内容。LocalCalendar 是刻意的端口：core 定规则、宿主报时区，与 ADR-010 的探针同一个形状。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "tauri-adapter": {
-   "registeredBy": "P2-05",
-   "$note": "P2-05 的宿主侧门禁。**已生效**：验收 #2 的真内核证据（`adapter-acceptance-real-kernel`）、ADR-020/021/031/032 的机械检查（含逐条负例）、两工作区 fmt 与 clippy、`pnpm typecheck`、src-tauri `--lib` 用例计数地板（接线 §12 后 2479）。**ADR-023 完全生效**：两个家族 emitters = 1，且观察通道的写半边已按 mode() 三分接上（writer 提交、deferred 经桥落盘、只读只决策），`core-observer-does-not-write-yet` 守卫随接线 §12 撤销——它防的那件事（两个写者并存）已由整表快照写退役 + 接线 §12 ④ 的可数断言接管。**ADR-022 完全生效**：21 处调用点全部离开快照车道，`adapter-invariants` 第六条规则断言生产 web 源的快照写调用点 == 0。ADR-024（分组一次性导入）**仍未生效**，按规矩挂账：分组名单仍由前端 localStorage 权威，一次性导入归 P3-01 之后的 Action 3 收尾。ADR-026 的重放半边在意图队列里（元数据重放一次、状态 op 永不重放），冲突处置的宿主侧验收待真实 REVISION_CONFLICT 出现后补证据。G18 未裁决，归 P3-02。",
-   "cases": [
-    {
-     "name": "adapter-invariants-unit",
-     "kind": "test",
-     "parse": "node-test",
-     "minCases": 28,
-     "timeoutMs": 300000,
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/adapter-invariants.test.mjs"
-     ],
-     "$note": "三条宿主不变量各自的负例：第二个运行身份来源回归、版本戳泄漏到别的文件/别的函数、反查释放之外出现 claim remove、helper 里不再 remove（口号化）、writer 递交扩到非 macOS、以及\"读不到就报错而不是报干净\"。另含一条防止把方法算成上一个自由函数的归属回归。"
     },
-    {
-     "name": "adapter-invariants-src",
-     "kind": "gate",
-     "timeoutMs": 180000,
-     "argv": [
-      "node",
-      "scripts/native/adapter-invariants.mjs"
-     ],
-     "$note": "对真实 src-tauri 源码树跑同一组断言；文件数不足即失败，空语料不得算通过。规则六条：ADR-020/032（运行身份只有一个来源）、ADR-031（claim 只在一处释放）、ADR-021（写权只在 macOS 递交）、ADR-023（已移交家族恰好一行发射）、Action 4（调用方向 command → TaskService → executor → *_core，不得回头调 command wrapper，也不得在未委派前 return Ok）、接线 §12 ④（生产 web 源不得再命名整表快照写路径与它的三个 flush 包装，lib.rs 不得再注册那条整表写命令；正控要求扫描到采纳桥与退出排空两处替换物，测试文件按明示规则豁免）。Action 4 的命令名取自 command-map.json 的 660 条注册表，所以新增命令自动纳入；扫描前过一遍 codeOnly，注释里提到 TaskService 既不能让它变红也不能让它变绿。"
-    },
-    {
-     "name": "adapter-acceptance-real-kernel",
-     "kind": "test",
-     "parse": "rust",
-     "minCases": 19,
-     "timeoutMs": 900000,
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--locked",
-      "--lib",
-      "core_adapter_tests::",
-      "--",
-      "--test-threads=1"
-     ],
-     "$note": "P2-05 验收 #2 的证据本身，因此单独成一条而不是藏在 2464 里：真 LegacyTaskExecutor + 真 PTY + 真子进程跑 fake 任务。`--test-threads=1` 是必需的——第 6 条是 `startup_wiring_…`：装进 managed state 的东西必须真被装过一次，否则接线本身从未被执行。这一组要改宿主的全局存储根（见 `platform::install_scratch_home`），并发跑会让别人在窗口里读到我的 home、或让我读到默认 settings.json。全量 `--lib` 也跑这 5 条，两者不互相替代：串行这一条给确定性证据，全量那条证明共存不破坏既有 2459 条。第 8 条 `the_wired_service_asks_the_host_about_a_run_core_never_minted`（ADR-036）是这一组里唯一驱动`install_core_services` 真正建出来的那对（`TaskService` + 宿主 `LiveRuns`）的用例：其余场景一律喂 `NoLiveRuns`，所以“接线把端口接错了”在它们那里是隐形的。它登记的是一条 generation 0 的运行——正是产品路径今天的全部。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。",
-     "env": {
-      "AERORIC_HOME": "<scratch>"
-     }
-    },
-    {
-     "name": "src-tauri-lib-tests",
-     "kind": "test",
-     "parse": "rust",
-     "minCases": 2439,
-     "timeoutMs": 1800000,
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--locked",
-      "--lib",
-      "--",
-      "--test-threads=1"
-     ],
-     "$note": "2412 基线 → 2424（前置①）→ 2430（CoreGateway）→ 2433（ADR-029）→ 2436（TauriEventSink）→ 2441（RunRegistry）→ 2450（执行器）→ 2453（重键 wave 1）→ 2459（ADR-030/031/032）→ 2464（验收 #2 的 5 条真内核用例）→ 2465（载荷契约修复补的 failure_reason 用例）→ 2466（startup_wiring 那条：装到 managed state 的东西必须真被装过）→ 2467（ADR-027 被拒租约那条）→ 2468（ADR-036 那条）→ **2470**（补记五十一观察通道本体那两条）→ **2473**（补记六十六：意图入口的三条——写者侧谁提交、只读侧一个字节都不写、非递交平台的转发那一步落的是什么）→ **2474**（接线步骤②：`Persist::ViaHost` 的宿主桥取代宿主侧 `save_decided_records`，两条——桥按字节存下 core 的决定、只有递交写权的 context 才拿得到通往磁盘的门）→ **2477**（接线步骤②b：`launch_via_core` 入口先行，三条——解析不出项目就不寄存、执行器按名拒绝时落 failed 并收回 channel、只读实例拒绝启动且归还 channel）→ **2478**（②c `resume_via_core`：寄存**之后**被 core 的守卫拒掉时 channel 必须收回且一字节不写——与②b 那条“寄存之前就失败”正好是两种错误路径）。地板就是 ADR-020 点名的安全网：少一条就意味着有断言被改成注释或被删。**这一条改成串行（`--test-threads=1`）的理由**：并行时 `core_adapter_tests` 的 10 个场景会经由 `platform::install_scratch_home` 换掉进程全局的 `home_dir()`，任何在两次路径解析之间被换根的测试都会读到别的目录。这不是推测，是实测到的三个受害者——`app_settings::…wrapper_and_sidecar`（sidecar 写进 live `~/.aeroric`、读回时根已经换成 scratch）、`agent_scripts::…resets_codex_chat_bridge_wrappers_when_setting_is_off`，以及场景自己的状态断言；15 次并行跑红 4 次。串行 66s（并行 18s）换来的是这张安全网不再自己制造噪声。真正的修法是把数据根做成可注入的参数（Action 3），不是继续加锁。→ **2479**（接线 §12：观察者按 mode() 三分——writer 臂提交并宣布的新用例、只读臂宣布而不写的对照用例；净 +1）。→ **2476**（P3-01 切片二：subprocess.rs 连同 3 条真进程测试迁入 core 的 runtime::subprocess，宿主侧改薄 re-export；3 条＝argument_tests 1 条 + unix 真进程 2 条，搬家不是消失，core 侧 +3）。→ **2466**（P3-01 切片三：run_registry 的 8 条测试与 pty 的 2 条版本戳测试随 TaskRegistry 本体迁入 core——core 侧 +10，搬家不是消失）。→ **2467**（切片五：platform_adapter.rs 带 2 条纯函数测试入账，fs.rs 的剪贴板解析测试随体迁入 = 净 +1）。→ **2465**（P3-02 首片：agent_family_maps 的 2 条映射表测试随体迁入 core 的 agents::launch——core 侧 +3）。 G39 收口（P3-06，2026-09-30）：默认必选恢复——runner 为每条注入 AERORIC_HOME=<scratch>（宿主 `storage::aeroric_dir()` 单点认它），真实 `~/.aeroric` 不再被门禁触碰。",
-     "env": {
-      "AERORIC_HOME": "<scratch>"
-     }
-    },
-    {
-     "name": "src-tauri-cargo-fmt",
-     "kind": "gate",
-     "timeoutMs": 300000,
-     "argv": [
-      "cargo",
-      "fmt",
-      "--check",
-      "--manifest-path",
-      "src-tauri/Cargo.toml"
-     ],
-     "$note": "本轮查明：scripts/native 里此前没有任何 fmt 检查，而工作树里确实躺着四个未格式化的文件。"
-    },
-    {
-     "name": "core-cargo-fmt",
-     "kind": "gate",
-     "timeoutMs": 300000,
-     "argv": [
-      "cargo",
-      "fmt",
-      "--check",
-      "--all",
-      "--manifest-path",
-      "core/Cargo.toml"
-     ],
-     "$note": "同上，覆盖 core crate。注意 `core/Cargo.toml` 是 workspace 根，`cargo fmt` 必须带 `--all` 才找得到 targets（不带就以 `Failed to find targets` 失败——那是一台机器上永远红的门禁，比没有门禁更糟）。"
-    },
-    {
-     "name": "core-clippy",
-     "kind": "gate",
-     "timeoutMs": 1800000,
-     "argv": [
-      "cargo",
-      "clippy",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "--all-targets",
-      "--",
-      "-D",
-      "warnings"
-     ],
-     "$note": "补上 src-tauri 有、core 没有的那一半：core 此前只跑 fmt、从不跑 clippy，所以 doc_lazy_continuation、needless_borrow 一类 lint 在这里是隐形的——`cargo check` 与 `--lib` 都看不见它们。`--all-targets` 必须带，否则 16 个测试二进制不参与 lint。本机实测 exit 0；stderr 上那一串 unused-patch 警告来自 `../dbx` 与 vendor 的 [patch] 表，不改变退出码（见仓库记忆里的 stderr 陷阱）。"
-    },
-    {
-     "name": "src-tauri-clippy",
-     "kind": "gate",
-     "timeoutMs": 1800000,
-     "argv": [
-      "cargo",
-      "clippy",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--locked",
-      "--all-targets",
-      "--",
-      "-D",
-      "warnings"
-     ],
-     "$note": "首次进门禁：`--lib` 全绿的同时这里有 3 处缺安全说明的 unsafe（deny 级，cargo check 看不见）与 13 处 needless_borrow。`--all-targets` 是必须的——不带它测试代码不参与 lint。"
-    },
-    {
-     "name": "ts-typecheck",
-     "kind": "gate",
-     "timeoutMs": 900000,
-     "argv": [
-      "pnpm",
-      "typecheck"
-     ],
-     "$note": "vitest 只转译不类型检查：`expect(a).toEqual(b, msg)` 这类 TS2554 曾长期只被 tsc 看见。TS 证据必须两条一起跑，因此本 case 与 `pnpm test` 不互相替代。"
-    },
-    {
-     "name": "adapter-event-payload-contract",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/native-core-adapter.test.ts"
-     ],
-     "minCases": 5,
-     "timeoutMs": 900000,
-     "$note": "P2-05 Action 5 点名的 TS 侧契约测试（此前根本不存在）。它把 useAppTauriEvents.ts 里 listen<{…}> 的**类型字面量**与 src-tauri 各处 .emit(...) 的 json! 字面量、以及 core_adapter.rs 两个载荷构造函数，三方都从真实源码里扫出来对比，一条键都不手抄。方向是 legacy ⊆ core：那 8 处发射点要被删掉，任何 legacy 带而 core 表达不了的键都会在删除的当下静默消失。首跑即抓出 failure_reason —— 客户端解构它并落进 storage.rs 的持久字段，而 core 的 TaskNotification::Status 当时装不下它，这与 ADR-023『payload 不变』直接冲突，因此端口先长出了 Option 的 failure_reason。可失败性已验证：把载荷构造函数改回不带该键，这条 case 立刻红。正控断言键集合非空，因为本文件第一版只数发射点个数，一个把键集扫成空的括号 bug 仍然全绿。"
-    },
-    {
-     "name": "adapter-intent-queue",
-     "kind": "test",
-     "parse": "vitest",
-     "argv": [
-      "pnpm",
-      "vitest",
-      "run",
-      "src/test/task-intent-queue.test.ts"
-     ],
-     "minCases": 9,
-     "timeoutMs": 900000,
-     "$note": "补记七十一：ADR-022 的意图队列（`src/taskIntentQueue.ts`）的机制用例。钉的是四件事：同项目 FIFO、权威快照经 onAdopt 交回宿主、ADR-026 的两类失败（元数据在 REVISION_CONFLICT 时重放恰好一次；状态 op 永不重放、非冲突错误对两类都只报不重放）、ADR-017 的调用方身份（同 operationKey 在未发出前合并载荷，落过盘后再来一发是新事实不是重试）。最后一条还把 `METADATA_TASK_INTENT_OPS` 与产物 `constants.taskIntents.metadata` 对表——TS 那份分类是镜像，不是第二权威。21 处调用点的切换全部走这一条队列；切换完成之前旧快照队列仍在，两者不共存于同一次落盘。"
-    },
-    {
-     "name": "core-adapter-never-relocates-data-dir",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "resolve_data_dir|DataDir::",
-      "src-tauri/src/core_adapter.rs"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "CoreGateway",
-       "src-tauri/src/core_adapter.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "install_core_services",
-       "src-tauri/src/lib.rs"
+    "terminal-core": {
+      "registeredBy": "P3-03",
+      "cases": [
+        {
+          "name": "terminal-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "terminal::"
+          ],
+          "minCases": 65,
+          "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 60 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history + 2 executor(切片四D)。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "terminal-pty-bytes-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "pty_bytes",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 6,
+          "$note": "P3-03 验收第一条的真实 PTY 证据,替身是 tests/fixtures/fake-agent.mjs(node;`AERORIC_FAKE_AGENT_NODE` 可覆盖)。四件事各自成条:①4 MiB 混排(CJK+emoji+ANSI+NUL)端到端,未截断区间与读到的字节逐字节 + sha256 双比对,且有反空转断言证明确有帧把多字节序列劈在边界上;②100 MiB 连续输出走真 PTY(实测 102418 帧),保留量正好封顶 1 MiB、hash 相等;③nasty 模式(非法 UTF-8 + 结尾半个字符)证明新投影不卡流、不留活扣,并把**迁移前那段算法原样重放**当对照——旧实现在第一个非法字节后彻底卡住且永远扣着尾巴,这一条是缺陷复现而不是推测;④2 MiB vs 8 MiB 两档保留量相同 = 内存不随总输出线性增长。串行跑:每条用例各开一个真 PTY + 一个 node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "terminal-lease-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "terminal_lease",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 4,
+          "$note": "P3-03 切片四B:输入/resize 控制租约与隐藏 view 禁写,4 条全跑真 PTY + 真进程(interactive 替身自己报尺寸、每次 SIGWINCH 再报一次、按行回显 ack)。①20 次 resize 混进隐藏视图/0×0/畸形,断『应用 11 / 忽略 9』这张表数(表变了先红,免得最后一句换含义)、内核侧 get_size()==最后一次前台尺寸、进程侧自己报出 50x200、且被拒形状一次都没打到 PTY;②被顶替的控制者不但过不了闸门,而且**真的到不了 agent**(用后续两次写入的有序回显做栅栏,再断 ghost 从未出现,排除时序运气);③一次被拒的隐藏取得动作不得动到现有控制权——这条防的是一个具体错法(先 acquire 再判 focus),单元侧也补了同一条断言,不必开 PTY 就能红;④两个只读订阅者共享同一条流、都不需要租约、也不影响持有者写入。串行跑:每条用例各开一个真 PTY + node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "terminal-replay-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "terminal_replay",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 5,
+          "$note": "P3-03 切片四A 的重放集成证据(4 条)+ 收尾轮补的活流码元游标断言(第 5 条,了结四A 记下的覆盖不均:集成侧原先只在退场流上测码元游标,拒收分支没执行到)。第 5 条钉住的契约:活流上 UnitsFromStart(n>0) ⇒ Reset{from:0, reason:UnitsNotAnchorable, bytes=现存窗口}——重置视图**并**交出窗口供重绘,绝不换算;resume_after() 落在窗口末端,末端应答合法空帧;唯一无缝例外是 units=0 且保留线在 0(客户端什么都没渲染过,字节 0 就是真凭证)。变异 E(把重绘窗口吞成空)由第 5 条当场抓住。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "terminal-pty-exit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "pty_exit",
+            "--",
+            "--test-threads=1"
+          ],
+          "minCases": 10,
+          "$note": "P3-03 切片三:退出结算的唯一决策面 + 每条来源只结算一次。真 PTY 上的真进程(node 替身新增 exit/signal/eof/child/orphan/interactive 模式;`FAKE_EXIT_CODE`/`FAKE_SIGNAL`/`FAKE_LIVE_MS` 旋钮)。测试侧走的是**同三段生产守卫**(remove_pty_handles_if_current → settle_marks_for_exit → settle_exit),只把 report_task_status 换成记账 —— 记账不去重,所以两次结算就是两条。10 条各自成来源:正常退出(含重复通知被守卫 1 吞掉)/ 非零码引用真实码 / SIGTERM 致死 / EOF 未至就先结算且 EOF 之后不再来一次(替身留一个继承 tty 的后代)/ 两代重叠只有最后退出那代结算 / 取消打整个进程组并 reap 后仍只结算一次且不给状态词 / 迟到 hook 走**真** TaskService(ADR-034;存活由真进程经 ADR-036 端口回答,另有反空转对照)/ 家族差异在真事实上成立(dsh/omp 码驱动 ≠ claude/codex 会话驱动)/ 替身能力自证。两次变异实证:关掉守卫 1 ⇒ 第一条红;把『有 session 就 done』统一套到 dsh/omp ⇒ 集成与单元各红一条。一条实测口径(反直觉,已写进用例注释):portable-pty 把信号致死折成 `exit_code=1`(vendor 的 From<std::process::ExitStatus> 里 `code()` 为 None ⇒ unwrap_or(1)),信号名只剩在 Display 里 —— 是否把『死于 SIGTERM』变成用户可见文案属文案改动,待 grill 轮。串行跑:每条用例各开一个真 PTY + node 进程。",
+          "timeoutMs": 600000
+        },
+        {
+          "name": "host-exit-settlement-goes-through-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "had_agent_session|if exit_ok \\|\\||status == \"failed\"",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::settle_exit\\(&aeroric_core::terminal::ExitFacts",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "ExitDecision::NoStatus",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "reason\\.host_sentence\\(\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "remove_pty_handles_if_current\\(run, child_handle\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "SessionEvidence::PlaceholderOnly",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制已被补上:本 case 仍只断形状,计数由同模块的 terminal-invariants-src / terminal-invariants-unit 两条 case 承担(补记一百零六)。"
+        },
+        {
+          "name": "host-reader-publishes-raw-bytes-before-decode",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "let mut leftover|valid_up_to|from_utf8\\(&combined",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "terminal\\.publish\\(&stream_identity",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "projection\\.push\\(chunk\\)",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::Utf8Projection",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "Action 1 那句\"reader 首先发布原始 bytes,legacy Tauri sink 才增量解码\"在宿主侧的可执行形状。`spawn_pty_reader` 要 Wry 运行时才能真跑,所以宿主这条管道靠源码守卫钉:旧的急解码形状(`let mut leftover` / `valid_up_to` / `from_utf8(&combined`)不得复现,新形状(publish 先于 push、投影原件来自 core)必须在。三条正控证明 rg 读得到这个文件、且模式确实匹配的是产品代码而不是注释。局限如实记录:守卫证明的是\"调用了这两件原件\",顺序正确性由 core 侧用例 + 这条守卫共同围堵,完整端到端仍要 P5-01 的真终端会话。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "host-resize-rules-come-from-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "cols < 2 \\|\\| rows < 2",
+            "src-tauri/src/pty.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::decide_resize\\(",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::ViewFocus::Foreground",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "stage_pending_size\\(task_id",
+              "src-tauri/src/pty.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四B 的宿主侧守卫:resize 的畸形尺寸裁决已上收 core 的 `decide_resize` 一张表,宿主只保留信箱事实(有没有活跃 master、暂存到下一次运行)。禁形 = 内联的 `cols < 2 || rows < 2` 判定;正控 = 裁决必须经 core、焦点显式按前台(旧命令层没有视图焦点概念)、`stage_pending_size` 信箱仍在宿主(窗口/进程事实,core 不猜)。局限如实记录:守卫断的是『形状』;『20 次 resize 最终尺寸正确、被拒形状一次都没打到 PTY』由 terminal-lease-rust 的真 PTY 用例承担。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "terminal-history-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "--",
+            "terminal::history"
+          ],
+          "minCases": 7,
+          "$note": "P3-03 切片四C:磁盘终端历史的压实策略上收 core(terminal/history.rs),与 stream.rs 的内存 replay 窗口同归 terminal/ 一个 owner——『有界 replay 与 history compaction 共享一个 owner』(Action 4)的落地形状。7 条单元:①上限内原样;②切点永不落进多字节序列中间;③str 版 is_char_boundary 算法原样重放当 oracle,合法 UTF-8 上与字节版逐字节相等(迁移前宿主两份近重复实现由此钉住);④读侧 take(4) 跳过语义原样重放当 oracle,含全续字节垃圾的上限封顶;⑤高水位表(恰好压线=追加、+1=压实);⑥压实回 max 而非 max+slack;⑦目录巡检与追加路径是同一张表(incoming=0)。文件 I/O 与目录遍历仍在宿主 storage.rs(适配层),宿主 4 条既有 terminal_history 测试原样跑通=行为不变。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "host-history-policy-comes-from-core",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "fn utf8_tail_bytes|is_char_boundary",
+            "src-tauri/src/storage.rs"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "aeroric_core::terminal::history::utf8_tail_bytes",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "skip_leading_utf8_continuations",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "HistoryRetention",
+              "src-tauri/src/storage.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "needs_compaction",
+              "src-tauri/src/storage.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四C 的宿主侧守卫:历史压实的策略(尾切、续字节跳过、高水位判定)只有 core 一份实现。禁形 = 宿主里重新出现本地的 `fn utf8_tail_bytes` 或任何内联的字符边界判定(`is_char_boundary`——注释里也不许,判定本体只许在 core);正控 = 三个调用点(目录巡检、str 委托、追加压实)与读侧跳过都必须经 core 的原件,`needs_compaction` 证明判定走的是同一张表。宿主的文件 I/O、原子重写与权限收紧不属于策略,留在原地。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "single-pty-activation-mechanics",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\.spawn_command\\(|\\.try_clone_reader\\(|\\.take_writer\\(",
+            "src-tauri/src"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/pty.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/ssh.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "activate_pty_session\\(",
+              "src-tauri/src/wsl.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "spawn_command",
+              "core/crates/aeroric-core/src/terminal/executor.rs"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "register_pty_session",
+              "core/crates/aeroric-core/src/runtime/registry.rs"
+            ]
+          ],
+          "$note": "P3-03 切片四D 的守卫:Action 6『不保留两份同 target 的启动 body』的可数形状——spawn→丢 slave→reader→writer→注册这五步装配机械此前在宿主有七份逐字相同拷贝(local launch/local resume/open-shell/SSH 任务/SSH 终端/WSL 任务/WSL shell),现在唯一一份在 core 的 terminal::executor::activate_pty_session,注册本体是 TaskRegistry::register_pty_session。禁形 = 宿主任何地方再出现这三个机械调用;正控 = 三个宿主文件都在调 core 装配体,且 core 两侧原件真实在位。命令构造(build_*_cmd/pty_command_from_spec/build_ssh_command)与 SSH/WSL 分支编排不属于机械,留在原处(P7 才换分支本体)。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "terminal-invariants-src",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/terminal-invariants.mjs"
+          ],
+          "$note": "P3-03 收尾轮的计数守卫(补记一百零六):`settle_exit` 在宿主必须**恰好被调用一次**,且那唯一一处必须在 `finalize_task_exit` 内;core 必须**恰好定义一次** `pub fn settle_exit`。为什么单独一条:`host-exit-settlement-goes-through-core` 是 absent 形状,只能断形状在/旧形状没了,断不了次数(它自己的 $note 就把这条列为口径限制并记在收尾)。命中前先过 codeOnly()(注释与字符串里的 settle_exit( 不算),语料读不到直接报错——D12 那条纪律:「没读到」不等于「没有」。变异实证:对 /tmp 假仓(宿主两处调用)判出 found 2 并点名两处。",
+          "timeoutMs": 180000
+        },
+        {
+          "name": "terminal-invariants-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "scripts/native/terminal-invariants.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 10,
+          "$note": "计数守卫自己的 10 条反例:一处合格 / 两处必红且点名 / 零处必红(宿主自己又决定了) / 注释里的提及不算命中(正控:不剥注释就会假绿) / 字符串里的提及同样不算 / 唯一调用挪出 finalize_task_exit 必红 / core 定义缺失必红 / core 两处定义必红 / 宿主语料为空必红 / core 文件读不到必红。",
+          "timeoutMs": 300000
+        }
       ]
-     ],
-     "$note": "ADR-027 决策 3：拿不到租约时**不得**退到临时目录——两份都看起来健康的数据集是分叉里最接近静默丢数据的一种。宿主唯一的那条退路是 `storage::resolve_data_dir`（以及它返回的 `DataDir`），所以它一旦出现在 adapter 里就是违规。两条正控：一条证明扫描真读到了 core_adapter.rs（不是路径写错才返回 1），一条证明接线真的在 lib.rs 里（否则这个文件可以整体消失而守卫仍绿）。行为侧的等价断言在 `a_refused_lease_is_reported_and_names_the_directory_it_will_not_write`：只读实例记录里的 fallback 必须逐字节等于那个真实目录，不是子串包含——包含关系在'悄悄搬走又把旧名字写进消息'时仍会通过。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "runtime": {
-   "registeredBy": "P3-01",
-   "cases": [
-    {
-     "name": "runtime-lifecycle-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "runtime_lifecycle"
-     ],
-     "minCases": 5,
-     "$note": "P3-01 的运行时生命周期验收,计划原文三条判据逐一落地:①启动两次不重复 watcher(监督者按名去重,同名的第二次启动被拒且唯一循环继续工作);②shutdown 两次安全且监督者可重用(第二次是安静 no-op、重启语义成立);③退出监控不能清新 generation(旧代 retire 幂等——重复退出报告 retire 不到任何东西;remove_pty_handles 只带走旧代,新生代句柄完好;结算守卫在另一代在飞时零消费)。另两条是机制钉子:有界拆除(无视 token 的 watcher 在宽限内被 detach 而不是把退出挂死——PTY reader 阻塞在 read 上的形状)与结算幂等(重复结算零消费、各任务标记独立成账)。句柄错配拒绝路径不走测试:remove_pty_handles_if_current 按 ADR-020 合同是 debug_assert!(实现 bug),测试构建走到即 panic。宿主 spawn 站点全部经 WatcherSupervisor(切片四接管),所以在这里钉住=钉住宿主行为。地板 5 = 5 条测试。",
-     "timeoutMs": 300000
-    }
-   ]
-  },
-  "agents": {
-   "registeredBy": "P3-02",
-   "cases": [
-    {
-     "name": "agent-launch-parity-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "agent_launch"
-     ],
-     "minCases": 2,
-     "$note": "P3-02 切片二的 parity 证明:fixtures 的期望由旧宿主路径(build_*_cmd + add_*_launch_args 的 CommandBuilder,经 get_argv/get_env/get_cwd 提取)在迁移前亲自算出并冻结(core tests/fixtures/agent-launch-parity.json,18 case);core 四族计划函数重放逐字节相等。宿主侧另有同 fixtures 的等价守卫(pty.rs agent_launch_parity_fixture_harvest)——迁移后宿主=机械翻译,两侧共用一份真相。第二条测试钉家族特有语义(claude --model 的 agent 门、omp ultra 封顶 max 且不向上游发 ultra)。后续切片(env 层、managed_home、OMP 反例)追加 case 时同步抬 floor。",
-     "timeoutMs": 300000
-    }
-   ]
-  },
-  "terminal-core": {
-   "registeredBy": "P3-03",
-   "cases": [
-    {
-     "name": "terminal-unit-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--lib",
-      "--",
-      "terminal::"
-     ],
-     "minCases": 65,
-     "$note": "P3-03 切片一/二/三 的 core 终端原件:`ByteStream`(原始字节是真相、offset=字节计数、有界+显式 Gap、跨帧多字节逐字节保真)、`ControlLease`(单控制者、票据单调不复用、被顶替/已释放写入一律 Superseded)、`TerminalService`(按 (task_id,generation) 管流;在写流满了只拒绝并计数,绝不静默清空一条还在写的流——那会让新建的流从 offset 0 谎报历史完整)、`Utf8Projection`(增量解码,不再把非法字节无限期扣住,也不再丢流结尾的半个字符)。地板 60 = 7 stream + 6 lease + 12 pty + 10 exit + 8 replay + 8 input + 7 history + 2 executor(切片四D)。",
-     "timeoutMs": 300000
     },
-    {
-     "name": "terminal-pty-bytes-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "pty_bytes",
-      "--",
-      "--test-threads=1"
-     ],
-     "minCases": 6,
-     "$note": "P3-03 验收第一条的真实 PTY 证据,替身是 tests/fixtures/fake-agent.mjs(node;`AERORIC_FAKE_AGENT_NODE` 可覆盖)。四件事各自成条:①4 MiB 混排(CJK+emoji+ANSI+NUL)端到端,未截断区间与读到的字节逐字节 + sha256 双比对,且有反空转断言证明确有帧把多字节序列劈在边界上;②100 MiB 连续输出走真 PTY(实测 102418 帧),保留量正好封顶 1 MiB、hash 相等;③nasty 模式(非法 UTF-8 + 结尾半个字符)证明新投影不卡流、不留活扣,并把**迁移前那段算法原样重放**当对照——旧实现在第一个非法字节后彻底卡住且永远扣着尾巴,这一条是缺陷复现而不是推测;④2 MiB vs 8 MiB 两档保留量相同 = 内存不随总输出线性增长。串行跑:每条用例各开一个真 PTY + 一个 node 进程。",
-     "timeoutMs": 600000
-    },
-    {
-     "name": "terminal-lease-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "terminal_lease",
-      "--",
-      "--test-threads=1"
-     ],
-     "minCases": 4,
-     "$note": "P3-03 切片四B:输入/resize 控制租约与隐藏 view 禁写,4 条全跑真 PTY + 真进程(interactive 替身自己报尺寸、每次 SIGWINCH 再报一次、按行回显 ack)。①20 次 resize 混进隐藏视图/0×0/畸形,断『应用 11 / 忽略 9』这张表数(表变了先红,免得最后一句换含义)、内核侧 get_size()==最后一次前台尺寸、进程侧自己报出 50x200、且被拒形状一次都没打到 PTY;②被顶替的控制者不但过不了闸门,而且**真的到不了 agent**(用后续两次写入的有序回显做栅栏,再断 ghost 从未出现,排除时序运气);③一次被拒的隐藏取得动作不得动到现有控制权——这条防的是一个具体错法(先 acquire 再判 focus),单元侧也补了同一条断言,不必开 PTY 就能红;④两个只读订阅者共享同一条流、都不需要租约、也不影响持有者写入。串行跑:每条用例各开一个真 PTY + node 进程。",
-     "timeoutMs": 600000
-    },
-    {
-     "name": "terminal-replay-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "terminal_replay",
-      "--",
-      "--test-threads=1"
-     ],
-     "minCases": 5,
-     "$note": "P3-03 切片四A 的重放集成证据(4 条)+ 收尾轮补的活流码元游标断言(第 5 条,了结四A 记下的覆盖不均:集成侧原先只在退场流上测码元游标,拒收分支没执行到)。第 5 条钉住的契约:活流上 UnitsFromStart(n>0) ⇒ Reset{from:0, reason:UnitsNotAnchorable, bytes=现存窗口}——重置视图**并**交出窗口供重绘,绝不换算;resume_after() 落在窗口末端,末端应答合法空帧;唯一无缝例外是 units=0 且保留线在 0(客户端什么都没渲染过,字节 0 就是真凭证)。变异 E(把重绘窗口吞成空)由第 5 条当场抓住。",
-     "timeoutMs": 600000
-    },
-    {
-     "name": "terminal-pty-exit-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "pty_exit",
-      "--",
-      "--test-threads=1"
-     ],
-     "minCases": 10,
-     "$note": "P3-03 切片三:退出结算的唯一决策面 + 每条来源只结算一次。真 PTY 上的真进程(node 替身新增 exit/signal/eof/child/orphan/interactive 模式;`FAKE_EXIT_CODE`/`FAKE_SIGNAL`/`FAKE_LIVE_MS` 旋钮)。测试侧走的是**同三段生产守卫**(remove_pty_handles_if_current → settle_marks_for_exit → settle_exit),只把 report_task_status 换成记账 —— 记账不去重,所以两次结算就是两条。10 条各自成来源:正常退出(含重复通知被守卫 1 吞掉)/ 非零码引用真实码 / SIGTERM 致死 / EOF 未至就先结算且 EOF 之后不再来一次(替身留一个继承 tty 的后代)/ 两代重叠只有最后退出那代结算 / 取消打整个进程组并 reap 后仍只结算一次且不给状态词 / 迟到 hook 走**真** TaskService(ADR-034;存活由真进程经 ADR-036 端口回答,另有反空转对照)/ 家族差异在真事实上成立(dsh/omp 码驱动 ≠ claude/codex 会话驱动)/ 替身能力自证。两次变异实证:关掉守卫 1 ⇒ 第一条红;把『有 session 就 done』统一套到 dsh/omp ⇒ 集成与单元各红一条。一条实测口径(反直觉,已写进用例注释):portable-pty 把信号致死折成 `exit_code=1`(vendor 的 From<std::process::ExitStatus> 里 `code()` 为 None ⇒ unwrap_or(1)),信号名只剩在 Display 里 —— 是否把『死于 SIGTERM』变成用户可见文案属文案改动,待 grill 轮。串行跑:每条用例各开一个真 PTY + node 进程。",
-     "timeoutMs": 600000
-    },
-    {
-     "name": "host-exit-settlement-goes-through-core",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "had_agent_session|if exit_ok \\|\\||status == \"failed\"",
-      "src-tauri/src/pty.rs"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric_core::terminal::settle_exit\\(&aeroric_core::terminal::ExitFacts",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "ExitDecision::NoStatus",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "reason\\.host_sentence\\(\\)",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "remove_pty_handles_if_current\\(run, child_handle\\)",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "SessionEvidence::PlaceholderOnly",
-       "src-tauri/src/pty.rs"
+    "host": {
+      "registeredBy": "P3-06",
+      "cases": [
+        {
+          "name": "host-lib-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--lib"
+          ],
+          "minCases": 25,
+          "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)。floor 从 2026-09-30 现测起算（补记二百七十八）。"
+        },
+        {
+          "name": "ipc-auth-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "ipc_auth"
+          ],
+          "minCases": 4,
+          "$note": "认证面经真 socket：未认证 mutation 拒（不泄露方法存在性）/错 token 拒且连接保未认证态/认证后未知方法 UnsupportedCapability/再握手拒。"
+        },
+        {
+          "name": "ipc-frames-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "ipc_frames"
+          ],
+          "minCases": 5,
+          "$note": "帧层三拒绝一律断连不降级：overlong 凑行前封顶/partial 不猜/malformed 断；坏连接不阻塞好连接。"
+        },
+        {
+          "name": "event-replay-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "event_replay"
+          ],
+          "minCases": 3,
+          "$note": "并发 104 append 经 RPC 补发序与 snapshot 一致（seq 严格递增+集合精确）/挤穿 watermark reset+客户端抬位/重连 backfill+live 去重不双应用。"
+        },
+        {
+          "name": "host-lifecycle-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "host_lifecycle"
+          ],
+          "minCases": 4,
+          "$note": "二次启动 lock 步拒绝（step 1 前缀可分类）/ready 帧经真管道含 Action 4 全字段/crash 等价 drop 后残留 socket 清绑重启。"
+        },
+        {
+          "name": "executor-pty-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "executor_pty"
+          ],
+          "minCases": 3,
+          "$note": "b1.1 判据：fake agent 经 TaskService 全链（create→start→真 PTY→exit→observe）结算 done＋字节环含输出＋句柄/台账退场。floor 从 2026-10-01 现测 1 起。"
+        }
       ]
-     ],
-     "$note": "P3-03 切片三的宿主侧守卫:`finalize_task_exit` 不得自己判状态。禁形 = 旧的 `had_agent_session` 判定、`if exit_ok ||` 那句、以及 `status == \"failed\"` 这种字符串回读;正控 = 它必须调 core 的 `settle_exit`、必须区分 `ExitDecision::NoStatus`(取消/手动完成不发状态)、reason 必须经 `host_sentence()`(文案留在宿主,合并到 core 那句是文案改动、待 grill 轮)、必须仍在句柄守卫上调 `remove_pty_handles_if_current`、且 Claude 的占位条目必须报成 `PlaceholderOnly`(家族事实的证据来源,不是判定)。口径限制已被补上:本 case 仍只断形状,计数由同模块的 terminal-invariants-src / terminal-invariants-unit 两条 case 承担(补记一百零六)。"
     },
-    {
-     "name": "host-reader-publishes-raw-bytes-before-decode",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "let mut leftover|valid_up_to|from_utf8\\(&combined",
-      "src-tauri/src/pty.rs"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "terminal\\.publish\\(&stream_identity",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "projection\\.push\\(chunk\\)",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric_core::terminal::Utf8Projection",
-       "src-tauri/src/pty.rs"
+    "cli": {
+      "registeredBy": "P3-07",
+      "cases": [
+        {
+          "name": "cli-no-tauri-deps",
+          "kind": "forbid",
+          "argv": [
+            "cargo",
+            "tree",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli"
+          ],
+          "forbid": [
+            "tauri v",
+            "tauri-"
+          ],
+          "mustContain": [
+            "aeroric-cli v0.1.0"
+          ],
+          "$note": "P3-07 验收行：cargo tree -p aeroric-cli 不含 Tauri。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "cli-help-matches-contract",
+          "kind": "gate",
+          "argv": [
+            "cargo",
+            "run",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--",
+            "--help"
+          ],
+          "$note": "P3-07 验收行：aeroric-cli --help 列出确定命令树与参数接口。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "cli-unit-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--bin",
+            "aeroric-cli"
+          ],
+          "minCases": 4,
+          "$note": "aeroric-cli 单元测试：命令树与退出码契约（4 条）。"
+        },
+        {
+          "name": "cli-headless-rust",
+          "kind": "test",
+          "parse": "rust",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-cli",
+            "--test",
+            "cli_headless"
+          ],
+          "minCases": 6,
+          "$note": "P3-07 验收行：真实 CLI 子进程的 mutation 拒写、非 TTY 拒绝与 approval/task 闭环（3 条）＋ SIGTERM 杀死 attach 后本地 termios 恢复（真 PTY 机器判据）＋ serve 退出序显式杀 HUP 免疫子进程（Q86 子进程策略）。"
+        },
+        {
+          "name": "cli-smoke-headless",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/smoke-headless.mjs"
+          ],
+          "$note": "P3-07 Action 5：创建 temp data-dir/fake project/fake agent，运行 serve、run、input、cancel、resume、history 并清理退出。"
+        }
       ]
-     ],
-     "$note": "Action 1 那句\"reader 首先发布原始 bytes,legacy Tauri sink 才增量解码\"在宿主侧的可执行形状。`spawn_pty_reader` 要 Wry 运行时才能真跑,所以宿主这条管道靠源码守卫钉:旧的急解码形状(`let mut leftover` / `valid_up_to` / `from_utf8(&combined`)不得复现,新形状(publish 先于 push、投影原件来自 core)必须在。三条正控证明 rg 读得到这个文件、且模式确实匹配的是产品代码而不是注释。局限如实记录:守卫证明的是\"调用了这两件原件\",顺序正确性由 core 侧用例 + 这条守卫共同围堵,完整端到端仍要 P5-01 的真终端会话。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "host-resize-rules-come-from-core",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "cols < 2 \\|\\| rows < 2",
-      "src-tauri/src/pty.rs"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric_core::terminal::decide_resize\\(",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric_core::terminal::ViewFocus::Foreground",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "stage_pending_size\\(task_id",
-       "src-tauri/src/pty.rs"
+    "swift-client": {
+      "cases": [
+        {
+          "name": "swift-client-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricClientTests"
+          ],
+          "parse": "swift",
+          "minCases": 33,
+          "$note": "P4-02 AeroricClient 门禁地板：EventReducer 10＋HostConnection 10＋Supervisor 4＋PackageSmoke(AeroricClientTests 内) 4＝28。--filter 让地板只随该 filter 变化（与 swift-package-smoke 同口径）；注意 `--filter AeroricClientTests` 也会跑 AeroricClientTests 里的 PackageSmokeTests 子集，别把全包 12 例口径混进来。教训：ProtocolCodec.encodeLine 返回值自带行尾 \\n，任何发送方再补 \\n 会产生空帧 → splitter 吐空行 → decodeLine 直接 fault——发送侧一律禁止二次加换行。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "swift-client-tsan",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--sanitize",
+            "thread",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricClientTests"
+          ],
+          "parse": "swift",
+          "minCases": 28,
+          "$note": "同 swift-client-unit 的 28 例，叠加 --sanitize thread：HostConnection actor＋SocketTransport 阻塞泵线程＋ChildHandle WNOHANG reaper 的竞态门禁。独立成 case 而非并入 unit——TSan 慢 5~10 倍且报错类别不同，混跑会把两类失败搅在一起。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "client-socket-io-single-exit",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "--glob",
+            "!HostConnection.swift",
+            "socket\\(|Darwin\\.connect|Darwin\\.socket|CFSocket|NWConnection",
+            "macos/AeroricKit/Sources/AeroricClient"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "Darwin\\.connect",
+              "macos/AeroricKit/Sources/AeroricClient/HostConnection.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "JSONLFrameSplitter",
+              "macos/AeroricKit/Sources/AeroricClient/JSONLCodec.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct SupervisorConfig",
+              "macos/AeroricKit/Sources/AeroricClient/HostSupervisor.swift"
+            ]
+          ],
+          "$note": "G09（P4-02 收口当场建）：AeroricClient 的 socket I/O 唯一出口＝HostConnection.swift（SocketTransport 阻塞泵与 Darwin.connect 在 :56/:165）。其余文件（RequestRegistry/EventReducer/HostSupervisor/JSONLCodec/ReconnectPolicy/PackageSmoke/State Store）不得直接开套接字——禁形限定到真套接字调用（Darwin.socket/connect、socket(、CFSocket、NWConnection），actor 方法调用如 connection.connect() 不属禁形。新增传输面只能从 HostConnection 走，否则请求路由、重连相位与事件泵会各自造一套连接语义。三条正控：①唯一出口真实在（否则守卫恒真）；②③被扫模块真实内容（排除路径写错致 rg 读空）。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "P3-03 切片四B 的宿主侧守卫:resize 的畸形尺寸裁决已上收 core 的 `decide_resize` 一张表,宿主只保留信箱事实(有没有活跃 master、暂存到下一次运行)。禁形 = 内联的 `cols < 2 || rows < 2` 判定;正控 = 裁决必须经 core、焦点显式按前台(旧命令层没有视图焦点概念)、`stage_pending_size` 信箱仍在宿主(窗口/进程事实,core 不猜)。局限如实记录:守卫断的是『形状』;『20 次 resize 最终尺寸正确、被拒形状一次都没打到 PTY』由 terminal-lease-rust 的真 PTY 用例承担。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "terminal-history-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--lib",
-      "--",
-      "terminal::history"
-     ],
-     "minCases": 7,
-     "$note": "P3-03 切片四C:磁盘终端历史的压实策略上收 core(terminal/history.rs),与 stream.rs 的内存 replay 窗口同归 terminal/ 一个 owner——『有界 replay 与 history compaction 共享一个 owner』(Action 4)的落地形状。7 条单元:①上限内原样;②切点永不落进多字节序列中间;③str 版 is_char_boundary 算法原样重放当 oracle,合法 UTF-8 上与字节版逐字节相等(迁移前宿主两份近重复实现由此钉住);④读侧 take(4) 跳过语义原样重放当 oracle,含全续字节垃圾的上限封顶;⑤高水位表(恰好压线=追加、+1=压实);⑥压实回 max 而非 max+slack;⑦目录巡检与追加路径是同一张表(incoming=0)。文件 I/O 与目录遍历仍在宿主 storage.rs(适配层),宿主 4 条既有 terminal_history 测试原样跑通=行为不变。",
-     "timeoutMs": 300000
-    },
-    {
-     "name": "host-history-policy-comes-from-core",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "fn utf8_tail_bytes|is_char_boundary",
-      "src-tauri/src/storage.rs"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "aeroric_core::terminal::history::utf8_tail_bytes",
-       "src-tauri/src/storage.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "skip_leading_utf8_continuations",
-       "src-tauri/src/storage.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "HistoryRetention",
-       "src-tauri/src/storage.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "needs_compaction",
-       "src-tauri/src/storage.rs"
+    "native-design": {
+      "cases": [
+        {
+          "name": "native-design-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricUIUnitTests"
+          ],
+          "parse": "swift",
+          "minCases": 14,
+          "$note": "P4-03 AeroricUI 门禁地板：ThemePolicyTests 10（tokens 数字对齐 React tokens.ts×4＋语义色动态性×2＋SurfaceChoice reduce-transparency 策略×2＋reduce-motion×1＋spacing 步数×1）＋PackageSmokeTests 4（P4-02 遗留依赖方向冒烟）＝14。--filter 只随该 filter 变化。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "design-native-and-semantic-colour",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "class_getInstanceMethod|method_exchangeImplementations|\\.subviews\\b|Color\\(red:|Color\\(hex|NSColor\\(srgbRed|NSColor\\(calibratedRed",
+            "macos/AeroricKit/Sources/AeroricUI"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "NSViewRepresentable",
+              "macos/AeroricKit/Sources/AeroricUI/Design/NativeMaterial.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "enum SurfaceChoice",
+              "macos/AeroricKit/Sources/AeroricUI/Design/GlassPanel.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "ConfiguratorView",
+              "macos/AeroricKit/Sources/AeroricUI/Design/WindowAppearance.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pickerStyle\\(\\.segmented\\)",
+              "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+            ]
+          ],
+          "$note": "P4-03 双守卫：①不 swizzle、不碰私有子视图（WindowAppearance 只设公开 NSWindow 属性，与 primuse 的按钮对齐修复面不同——Aeroric 不在标题栏上绘制任何东西）；②颜色必须来自语义 role——Design 目录禁 Color(red:)/Color(hex)/NSColor(srgbRed…)/NSColor(calibratedRed…) 一类 RGB 字面量构造（spec: colours come from semantic roles）。四条正控证明被扫文件真实存在且守卫内容在位。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "native-selection-no-hand-drawn-state",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\.background\\(|\\.overlay\\(|isActive|selectionBackground",
+            "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "pickerStyle\\(\\.segmented\\)",
+              "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+            ]
+          ],
+          "$note": "ADR-001 §4 第 2 条的机械形态：NativeSelection.swift 只封装系统控件的样式/键盘/a11y，不得新绘活动底纹（.background/.overlay/自绘 isActive）——选中态由系统 Picker(.segmented)/List(selection:) 绘制。两条正控证明系统选中态真实在用（禁形若恒真则说明封装里连系统控件都没有）。GlassPanel 的 hairline overlay 不在本文件，不受影响。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "P3-03 切片四C 的宿主侧守卫:历史压实的策略(尾切、续字节跳过、高水位判定)只有 core 一份实现。禁形 = 宿主里重新出现本地的 `fn utf8_tail_bytes` 或任何内联的字符边界判定(`is_char_boundary`——注释里也不许,判定本体只许在 core);正控 = 三个调用点(目录巡检、str 委托、追加压实)与读侧跳过都必须经 core 的原件,`needs_compaction` 证明判定走的是同一张表。宿主的文件 I/O、原子重写与权限收紧不属于策略,留在原地。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "single-pty-activation-mechanics",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "\\.spawn_command\\(|\\.try_clone_reader\\(|\\.take_writer\\(",
-      "src-tauri/src"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "activate_pty_session\\(",
-       "src-tauri/src/pty.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "activate_pty_session\\(",
-       "src-tauri/src/ssh.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "activate_pty_session\\(",
-       "src-tauri/src/wsl.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "spawn_command",
-       "core/crates/aeroric-core/src/terminal/executor.rs"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "register_pty_session",
-       "core/crates/aeroric-core/src/runtime/registry.rs"
+    "shell": {
+      "cases": [
+        {
+          "name": "shell-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "AeroricUIUnitTests"
+          ],
+          "parse": "swift",
+          "minCases": 36,
+          "$note": "P4-04/P5-01 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4＋ShellPolicyTests 10（P4-03/04）＋TerminalCoordinatorTests 12（P5-01：cursor 记账/输入策略/租约闸门/100 次 attach-detach/OSC52 与链接策略）＝36。与 native-design-unit 同 filter 同 argv，各自地板独立。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "shell-no-web-navigation",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "WKWebView|WebView\\(|loadHTMLString|loadRequest|SFSafariViewController",
+            "macos/AeroricKit/Sources/AeroricUI/Shell"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct WorkspaceRootView",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceRootView.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "enum DetailState",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceDetail.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct TitleBar",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/TitleBar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "statusbar\\.phase",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/StatusBar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "func filterCommands",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+            ]
+          ],
+          "$note": "P4-04 验收第 2 条\"无 React 根页面/远程网页承载主导航\"的机械形态：Shell 目录不得引入任何 Web 视图承载（WKWebView/WebView/loadHTMLString/loadRequest/SFSafariViewController）——主导航全部为 SwiftUI 原生（六条正控证明六个 Shell 文件真实在位）。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "shell-no-hand-drawn-selection",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "\\b(isSelected|isActive|selectionBackground|activeBackground)\\b",
+            "macos/AeroricKit/Sources/AeroricUI/Shell"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "List\\(selection:",
+              "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+            ]
+          ],
+          "$note": "ADR-001 §4 第 2 条在 Shell 的机械形态：侧栏与命令面板的选中态一律由系统 List(selection:) 绘制，禁手绘活动底纹（isSelected/isActive/selectionBackground/activeBackground 命名即暴露手绘意图）。禁形刻意缩窄到选中态特征词——Shell 目录合法的材质 .background(.thinMaterial)/.overlay 与布局 overlay（拖拽手柄、palette 遮罩）不拦（G09 教训：宽禁形误伤合法用法）。两条正控证明两处系统 List(selection:) 真实在用。",
+          "timeoutMs": 120000
+        }
       ]
-     ],
-     "$note": "P3-03 切片四D 的守卫:Action 6『不保留两份同 target 的启动 body』的可数形状——spawn→丢 slave→reader→writer→注册这五步装配机械此前在宿主有七份逐字相同拷贝(local launch/local resume/open-shell/SSH 任务/SSH 终端/WSL 任务/WSL shell),现在唯一一份在 core 的 terminal::executor::activate_pty_session,注册本体是 TaskRegistry::register_pty_session。禁形 = 宿主任何地方再出现这三个机械调用;正控 = 三个宿主文件都在调 core 装配体,且 core 两侧原件真实在位。命令构造(build_*_cmd/pty_command_from_spec/build_ssh_command)与 SSH/WSL 分支编排不属于机械,留在原处(P7 才换分支本体)。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "terminal-invariants-src",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/terminal-invariants.mjs"
-     ],
-     "$note": "P3-03 收尾轮的计数守卫(补记一百零六):`settle_exit` 在宿主必须**恰好被调用一次**,且那唯一一处必须在 `finalize_task_exit` 内;core 必须**恰好定义一次** `pub fn settle_exit`。为什么单独一条:`host-exit-settlement-goes-through-core` 是 absent 形状,只能断形状在/旧形状没了,断不了次数(它自己的 $note 就把这条列为口径限制并记在收尾)。命中前先过 codeOnly()(注释与字符串里的 settle_exit( 不算),语料读不到直接报错——D12 那条纪律:「没读到」不等于「没有」。变异实证:对 /tmp 假仓(宿主两处调用)判出 found 2 并点名两处。",
-     "timeoutMs": 180000
-    },
-    {
-     "name": "terminal-invariants-unit",
-     "kind": "test",
-     "argv": [
-      "node",
-      "--test",
-      "--test-reporter=tap",
-      "scripts/native/terminal-invariants.test.mjs"
-     ],
-     "parse": "node-test",
-     "minCases": 10,
-     "$note": "计数守卫自己的 10 条反例:一处合格 / 两处必红且点名 / 零处必红(宿主自己又决定了) / 注释里的提及不算命中(正控:不剥注释就会假绿) / 字符串里的提及同样不算 / 唯一调用挪出 finalize_task_exit 必红 / core 定义缺失必红 / core 两处定义必红 / 宿主语料为空必红 / core 文件读不到必红。",
-     "timeoutMs": 300000
-    }
-   ]
-  },
-  "host": {
-   "registeredBy": "P3-06",
-   "cases": [
-    {
-     "name": "host-lib-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--lib"
-     ],
-     "minCases": 25,
-     "$note": "aeroric-host 的单元面：codec 流边界(3)+uds 路径上限/探活/残留(3)+auth token/UID/握手判据(5)+dispatcher gate/装配(4)+subscriptions(2)。floor 从 2026-09-30 现测起算（补记二百七十八）。"
-    },
-    {
-     "name": "ipc-auth-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--test",
-      "ipc_auth"
-     ],
-     "minCases": 4,
-     "$note": "认证面经真 socket：未认证 mutation 拒（不泄露方法存在性）/错 token 拒且连接保未认证态/认证后未知方法 UnsupportedCapability/再握手拒。"
-    },
-    {
-     "name": "ipc-frames-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--test",
-      "ipc_frames"
-     ],
-     "minCases": 5,
-     "$note": "帧层三拒绝一律断连不降级：overlong 凑行前封顶/partial 不猜/malformed 断；坏连接不阻塞好连接。"
-    },
-    {
-     "name": "event-replay-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--test",
-      "event_replay"
-     ],
-     "minCases": 3,
-     "$note": "并发 104 append 经 RPC 补发序与 snapshot 一致（seq 严格递增+集合精确）/挤穿 watermark reset+客户端抬位/重连 backfill+live 去重不双应用。"
-    },
-    {
-     "name": "host-lifecycle-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--test",
-      "host_lifecycle"
-     ],
-     "minCases": 4,
-     "$note": "二次启动 lock 步拒绝（step 1 前缀可分类）/ready 帧经真管道含 Action 4 全字段/crash 等价 drop 后残留 socket 清绑重启。"
-    },
-    {
-     "name": "executor-pty-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-host",
-      "--test",
-      "executor_pty"
-     ],
-     "minCases": 3,
-     "$note": "b1.1 判据：fake agent 经 TaskService 全链（create→start→真 PTY→exit→observe）结算 done＋字节环含输出＋句柄/台账退场。floor 从 2026-10-01 现测 1 起。"
-    }
-   ]
-  },
-  "cli": {
-   "registeredBy": "P3-07",
-   "cases": [
-    {
-     "name": "cli-no-tauri-deps",
-     "kind": "forbid",
-     "argv": [
-      "cargo",
-      "tree",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-cli"
-     ],
-     "forbid": [
-      "tauri v",
-      "tauri-"
-     ],
-     "mustContain": [
-      "aeroric-cli v0.1.0"
-     ],
-     "$note": "P3-07 验收行：cargo tree -p aeroric-cli 不含 Tauri。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "cli-help-matches-contract",
-     "kind": "gate",
-     "argv": [
-      "cargo",
-      "run",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-cli",
-      "--",
-      "--help"
-     ],
-     "$note": "P3-07 验收行：aeroric-cli --help 列出确定命令树与参数接口。",
-     "timeoutMs": 120000
-    },
-    {
-     "name": "cli-unit-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-cli",
-      "--bin",
-      "aeroric-cli"
-     ],
-     "minCases": 4,
-     "$note": "aeroric-cli 单元测试：命令树与退出码契约（4 条）。"
-    },
-    {
-     "name": "cli-headless-rust",
-     "kind": "test",
-     "parse": "rust",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-cli",
-      "--test",
-      "cli_headless"
-     ],
-     "minCases": 6,
-     "$note": "P3-07 验收行：真实 CLI 子进程的 mutation 拒写、非 TTY 拒绝与 approval/task 闭环（3 条）＋ SIGTERM 杀死 attach 后本地 termios 恢复（真 PTY 机器判据）＋ serve 退出序显式杀 HUP 免疫子进程（Q86 子进程策略）。"
-    },
-    {
-     "name": "cli-smoke-headless",
-     "kind": "gate",
-     "argv": [
-      "node",
-      "scripts/native/smoke-headless.mjs"
-     ],
-     "$note": "P3-07 Action 5：创建 temp data-dir/fake project/fake agent，运行 serve、run、input、cancel、resume、history 并清理退出。"
-    }
-   ]
-  },
-  "swift-client": {
-   "cases": [
-    {
-     "name": "swift-client-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "AeroricClientTests"
-     ],
-     "parse": "swift",
-     "minCases": 33,
-     "$note": "P4-02 AeroricClient 门禁地板：EventReducer 10＋HostConnection 10＋Supervisor 4＋PackageSmoke(AeroricClientTests 内) 4＝28。--filter 让地板只随该 filter 变化（与 swift-package-smoke 同口径）；注意 `--filter AeroricClientTests` 也会跑 AeroricClientTests 里的 PackageSmokeTests 子集，别把全包 12 例口径混进来。教训：ProtocolCodec.encodeLine 返回值自带行尾 \\n，任何发送方再补 \\n 会产生空帧 → splitter 吐空行 → decodeLine 直接 fault——发送侧一律禁止二次加换行。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "swift-client-tsan",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--sanitize",
-      "thread",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "AeroricClientTests"
-     ],
-     "parse": "swift",
-     "minCases": 28,
-     "$note": "同 swift-client-unit 的 28 例，叠加 --sanitize thread：HostConnection actor＋SocketTransport 阻塞泵线程＋ChildHandle WNOHANG reaper 的竞态门禁。独立成 case 而非并入 unit——TSan 慢 5~10 倍且报错类别不同，混跑会把两类失败搅在一起。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "client-socket-io-single-exit",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "--glob",
-      "!HostConnection.swift",
-      "socket\\(|Darwin\\.connect|Darwin\\.socket|CFSocket|NWConnection",
-      "macos/AeroricKit/Sources/AeroricClient"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "Darwin\\.connect",
-       "macos/AeroricKit/Sources/AeroricClient/HostConnection.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "JSONLFrameSplitter",
-       "macos/AeroricKit/Sources/AeroricClient/JSONLCodec.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "struct SupervisorConfig",
-       "macos/AeroricKit/Sources/AeroricClient/HostSupervisor.swift"
+    "native-terminal": {
+      "cases": [
+        {
+          "name": "native-terminal-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "TerminalCoordinatorTests"
+          ],
+          "parse": "swift",
+          "minCases": 12,
+          "$note": "P5-01 TerminalCoordinatorTests 12 例：cursor 记账（seamless/evicted/notStarted）、delegate 输入路由与租约闸门、resize 转发、100 次 attach/detach 记账守恒、OSC52 永不自动写剪贴板、链接 scheme 白名单。与 shell-unit 同 filter 家族、各自地板独立（下限语义）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "native-terminal-no-local-process",
+          "kind": "absent",
+          "argv": [
+            "rg",
+            "-n",
+            "--no-ignore",
+            "LocalProcessTerminalView|LocalProcess",
+            "macos/AeroricKit/Sources/AeroricUI/Terminal"
+          ],
+          "controls": [
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "struct NativeTerminalView",
+              "macos/AeroricKit/Sources/AeroricUI/Terminal/NativeTerminalView.swift"
+            ],
+            [
+              "rg",
+              "-q",
+              "--no-ignore",
+              "TerminalCoordinator",
+              "macos/AeroricKit/Sources/AeroricUI/Terminal/TerminalCoordinator.swift"
+            ]
+          ],
+          "$note": "P5-01 Action 2 的机械形态：renderer 目录禁用会自行 spawn 的 LocalProcessTerminalView——进程由宿主管理，NSViewRepresentable 只创建渲染器。",
+          "timeoutMs": 120000
+        },
+        {
+          "name": "native-terminal-swifterm-pinned",
+          "kind": "forbid",
+          "argv": [
+            "cat",
+            "macos/AeroricKit/Package.swift"
+          ],
+          "mustContain": [
+            "migueldeicaza/swiftterm.git",
+            ".exact(\"1.2.5\")"
+          ],
+          "$note": "P5-01 Action 1：SwiftTerm 依赖钉 exact 1.2.5（Package.resolved 随提交），防止小版本静默改 delegate 面。（mustContain 一律小写：runner 先把 haystack 小写再做包含判断。）",
+          "timeoutMs": 120000,
+          "forbid": []
+        }
       ]
-     ],
-     "$note": "G09（P4-02 收口当场建）：AeroricClient 的 socket I/O 唯一出口＝HostConnection.swift（SocketTransport 阻塞泵与 Darwin.connect 在 :56/:165）。其余文件（RequestRegistry/EventReducer/HostSupervisor/JSONLCodec/ReconnectPolicy/PackageSmoke/State Store）不得直接开套接字——禁形限定到真套接字调用（Darwin.socket/connect、socket(、CFSocket、NWConnection），actor 方法调用如 connection.connect() 不属禁形。新增传输面只能从 HostConnection 走，否则请求路由、重连相位与事件泵会各自造一套连接语义。三条正控：①唯一出口真实在（否则守卫恒真）；②③被扫模块真实内容（排除路径写错致 rg 读空）。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "native-design": {
-   "cases": [
-    {
-     "name": "native-design-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "AeroricUIUnitTests"
-     ],
-     "parse": "swift",
-     "minCases": 14,
-     "$note": "P4-03 AeroricUI 门禁地板：ThemePolicyTests 10（tokens 数字对齐 React tokens.ts×4＋语义色动态性×2＋SurfaceChoice reduce-transparency 策略×2＋reduce-motion×1＋spacing 步数×1）＋PackageSmokeTests 4（P4-02 遗留依赖方向冒烟）＝14。--filter 只随该 filter 变化。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "design-native-and-semantic-colour",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "class_getInstanceMethod|method_exchangeImplementations|\\.subviews\\b|Color\\(red:|Color\\(hex|NSColor\\(srgbRed|NSColor\\(calibratedRed",
-      "macos/AeroricKit/Sources/AeroricUI"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "NSViewRepresentable",
-       "macos/AeroricKit/Sources/AeroricUI/Design/NativeMaterial.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "enum SurfaceChoice",
-       "macos/AeroricKit/Sources/AeroricUI/Design/GlassPanel.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "ConfiguratorView",
-       "macos/AeroricKit/Sources/AeroricUI/Design/WindowAppearance.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pickerStyle\\(\\.segmented\\)",
-       "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+    "mode-switch": {
+      "cases": [
+        {
+          "name": "mode-switch-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ModeSwitchTests"
+          ],
+          "parse": "swift",
+          "minCases": 9,
+          "$note": "P5-02 ModeSwitchTests 9 例：迁移默认（导入=advanced/新装=native）、Toggle 映射、保存失败回滚、呈现决策（native+未验证=requiresAdvanced 状态卡）、六步切换序列、同模式 no-op、任务协议禁用法（start/resume/cancel/reset 全禁）。",
+          "timeoutMs": 900000
+        }
       ]
-     ],
-     "$note": "P4-03 双守卫：①不 swizzle、不碰私有子视图（WindowAppearance 只设公开 NSWindow 属性，与 primuse 的按钮对齐修复面不同——Aeroric 不在标题栏上绘制任何东西）；②颜色必须来自语义 role——Design 目录禁 Color(red:)/Color(hex)/NSColor(srgbRed…)/NSColor(calibratedRed…) 一类 RGB 字面量构造（spec: colours come from semantic roles）。四条正控证明被扫文件真实存在且守卫内容在位。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "native-selection-no-hand-drawn-state",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "\\.background\\(|\\.overlay\\(|isActive|selectionBackground",
-      "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "pickerStyle\\(\\.segmented\\)",
-       "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "List\\(selection:",
-       "macos/AeroricKit/Sources/AeroricUI/Design/NativeSelection.swift"
+    "tasks-ui": {
+      "cases": [
+        {
+          "name": "tasks-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "TaskStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 10,
+          "$note": "P5-03 TaskStoreTests 5 例：镜像不推断（宿主快照权威）、同 id 更新、窗口局部过滤（大小写/空白语义）、批量逐项记账（成功/失败分开，不吞局部失败）、archive/star 镜像不代替过滤。",
+          "timeoutMs": 900000
+        }
       ]
-     ],
-     "$note": "ADR-001 §4 第 2 条的机械形态：NativeSelection.swift 只封装系统控件的样式/键盘/a11y，不得新绘活动底纹（.background/.overlay/自绘 isActive）——选中态由系统 Picker(.segmented)/List(selection:) 绘制。两条正控证明系统选中态真实在用（禁形若恒真则说明封装里连系统控件都没有）。GlassPanel 的 hairline overlay 不在本文件，不受影响。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "shell": {
-   "cases": [
-    {
-     "name": "shell-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "AeroricUIUnitTests"
-     ],
-     "parse": "swift",
-     "minCases": 36,
-     "$note": "P4-04/P5-01 AeroricUI 门禁地板：ThemePolicyTests 10＋PackageSmokeTests 4＋ShellPolicyTests 10（P4-03/04）＋TerminalCoordinatorTests 12（P5-01：cursor 记账/输入策略/租约闸门/100 次 attach-detach/OSC52 与链接策略）＝36。与 native-design-unit 同 filter 同 argv，各自地板独立。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "shell-no-web-navigation",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "WKWebView|WebView\\(|loadHTMLString|loadRequest|SFSafariViewController",
-      "macos/AeroricKit/Sources/AeroricUI/Shell"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "struct WorkspaceRootView",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceRootView.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "List\\(selection:",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "enum DetailState",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/WorkspaceDetail.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "struct TitleBar",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/TitleBar.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "statusbar\\.phase",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/StatusBar.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "func filterCommands",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+    "sessions-ui": {
+      "cases": [
+        {
+          "name": "sessions-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "SessionReducerTests|ApprovalRoutingTests|MessagePaginationTests"
+          ],
+          "parse": "swift",
+          "minCases": 20,
+          "$note": "P5-04 SessionReducerTests 7＋ApprovalRoutingTests 8＋MessagePaginationTests 5＝20：未知事件不使解码失败、重复 tool_end 不重复 row、eventId 去重/精确清除不串题、提交后 host 确认前不抹条目、游标守卫、10000 条 fixture 线性合并。filter 三套一起跑（与 tasks-ui 单 filter 同口径；| 是 swift test --filter 的正则）。",
+          "timeoutMs": 900000
+        }
       ]
-     ],
-     "$note": "P4-04 验收第 2 条\"无 React 根页面/远程网页承载主导航\"的机械形态：Shell 目录不得引入任何 Web 视图承载（WKWebView/WebView/loadHTMLString/loadRequest/SFSafariViewController）——主导航全部为 SwiftUI 原生（六条正控证明六个 Shell 文件真实在位）。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "shell-no-hand-drawn-selection",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "\\b(isSelected|isActive|selectionBackground|activeBackground)\\b",
-      "macos/AeroricKit/Sources/AeroricUI/Shell"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "List\\(selection:",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/ProjectSidebar.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "List\\(selection:",
-       "macos/AeroricKit/Sources/AeroricUI/Shell/CommandPalette.swift"
+    "settings-ui": {
+      "cases": [
+        {
+          "name": "settings-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "SettingsStoreTests|SettingsCapabilityTests"
+          ],
+          "parse": "swift",
+          "minCases": 11,
+          "$note": "P5-05 SettingsStoreTests 6＋SettingsCapabilityTests 5＝11：G11 19 panel 全映射、wsl windows-only、Secret masked/单次写入不持有、UI-only 分界、保存守卫、OMP 不支持的 effort 不发、升级需显式确认、离线目录提示。",
+          "timeoutMs": 900000
+        }
       ]
-     ],
-     "$note": "ADR-001 §4 第 2 条在 Shell 的机械形态：侧栏与命令面板的选中态一律由系统 List(selection:) 绘制，禁手绘活动底纹（isSelected/isActive/selectionBackground/activeBackground 命名即暴露手绘意图）。禁形刻意缩窄到选中态特征词——Shell 目录合法的材质 .background(.thinMaterial)/.overlay 与布局 overlay（拖拽手柄、palette 遮罩）不拦（G09 教训：宽禁形误伤合法用法）。两条正控证明两处系统 List(selection:) 真实在用。",
-     "timeoutMs": 120000
-    }
-   ]
-  },
-  "native-terminal": {
-   "cases": [
-    {
-     "name": "native-terminal-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "TerminalCoordinatorTests"
-     ],
-     "parse": "swift",
-     "minCases": 12,
-     "$note": "P5-01 TerminalCoordinatorTests 12 例：cursor 记账（seamless/evicted/notStarted）、delegate 输入路由与租约闸门、resize 转发、100 次 attach/detach 记账守恒、OSC52 永不自动写剪贴板、链接 scheme 白名单。与 shell-unit 同 filter 家族、各自地板独立（下限语义）。",
-     "timeoutMs": 900000
     },
-    {
-     "name": "native-terminal-no-local-process",
-     "kind": "absent",
-     "argv": [
-      "rg",
-      "-n",
-      "--no-ignore",
-      "LocalProcessTerminalView|LocalProcess",
-      "macos/AeroricKit/Sources/AeroricUI/Terminal"
-     ],
-     "controls": [
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "struct NativeTerminalView",
-       "macos/AeroricKit/Sources/AeroricUI/Terminal/NativeTerminalView.swift"
-      ],
-      [
-       "rg",
-       "-q",
-       "--no-ignore",
-       "TerminalCoordinator",
-       "macos/AeroricKit/Sources/AeroricUI/Terminal/TerminalCoordinator.swift"
+    "files": {
+      "cases": [
+        {
+          "name": "files-core-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "files"
+          ],
+          "parse": "rust",
+          "minCases": 13,
+          "$note": "P6-01 files.rs 13 用例：symlink escape/`..`/Unicode 空格/根校验/stale skip（写时文件被外部修改拒绝覆盖）/watcher coalesce+overflow/真实 watcher spawn+cancel。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "files-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "FileTreeTests"
+          ],
+          "parse": "swift",
+          "minCases": 4,
+          "$note": "P6-01 FileTreeTests 4 例：懒加载首次展开触发、跨项目重置、加载标记、UI 不做路径推断。",
+          "timeoutMs": 900000
+        }
       ]
-     ],
-     "$note": "P5-01 Action 2 的机械形态：renderer 目录禁用会自行 spawn 的 LocalProcessTerminalView——进程由宿主管理，NSViewRepresentable 只创建渲染器。",
-     "timeoutMs": 120000
     },
-    {
-     "name": "native-terminal-swifterm-pinned",
-     "kind": "forbid",
-     "argv": [
-      "cat",
-      "macos/AeroricKit/Package.swift"
-     ],
-     "mustContain": [
-      "migueldeicaza/swiftterm.git",
-      ".exact(\"1.2.5\")"
-     ],
-     "$note": "P5-01 Action 1：SwiftTerm 依赖钉 exact 1.2.5（Package.resolved 随提交），防止小版本静默改 delegate 面。（mustContain 一律小写：runner 先把 haystack 小写再做包含判断。）",
-     "timeoutMs": 120000,
-     "forbid": []
-    }
-   ]
-  },
-  "mode-switch": {
-   "cases": [
-    {
-     "name": "mode-switch-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "ModeSwitchTests"
-     ],
-     "parse": "swift",
-     "minCases": 9,
-     "$note": "P5-02 ModeSwitchTests 9 例：迁移默认（导入=advanced/新装=native）、Toggle 映射、保存失败回滚、呈现决策（native+未验证=requiresAdvanced 状态卡）、六步切换序列、同模式 no-op、任务协议禁用法（start/resume/cancel/reset 全禁）。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "tasks-ui": {
-   "cases": [
-    {
-     "name": "tasks-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "TaskStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 10,
-     "$note": "P5-03 TaskStoreTests 5 例：镜像不推断（宿主快照权威）、同 id 更新、窗口局部过滤（大小写/空白语义）、批量逐项记账（成功/失败分开，不吞局部失败）、archive/star 镜像不代替过滤。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "sessions-ui": {
-   "cases": [
-    {
-     "name": "sessions-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "SessionReducerTests|ApprovalRoutingTests|MessagePaginationTests"
-     ],
-     "parse": "swift",
-     "minCases": 20,
-     "$note": "P5-04 SessionReducerTests 7＋ApprovalRoutingTests 8＋MessagePaginationTests 5＝20：未知事件不使解码失败、重复 tool_end 不重复 row、eventId 去重/精确清除不串题、提交后 host 确认前不抹条目、游标守卫、10000 条 fixture 线性合并。filter 三套一起跑（与 tasks-ui 单 filter 同口径；| 是 swift test --filter 的正则）。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "settings-ui": {
-   "cases": [
-    {
-     "name": "settings-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "SettingsStoreTests|SettingsCapabilityTests"
-     ],
-     "parse": "swift",
-     "minCases": 11,
-     "$note": "P5-05 SettingsStoreTests 6＋SettingsCapabilityTests 5＝11：G11 19 panel 全映射、wsl windows-only、Secret masked/单次写入不持有、UI-only 分界、保存守卫、OMP 不支持的 effort 不发、升级需显式确认、离线目录提示。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "files": {
-   "cases": [
-    {
-     "name": "files-core-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "files"
-     ],
-     "parse": "rust",
-     "minCases": 13,
-     "$note": "P6-01 files.rs 13 用例：symlink escape/`..`/Unicode 空格/根校验/stale skip（写时文件被外部修改拒绝覆盖）/watcher coalesce+overflow/真实 watcher spawn+cancel。",
-     "timeoutMs": 900000
+    "editor": {
+      "cases": [
+        {
+          "name": "file-history-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "file_history"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "$note": "P6-02 file_history.rs 7 用例：快照 roundtrip（record/list/read/restore 兜底）、prune、discard、formatter 选型、失败原文不变、preview 判定、scheme 守卫。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "editor-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "DocumentStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 7,
+          "$note": "P6-02 DocumentStoreTests 7 例：dirty/revision、冲突不可静默覆盖、BOM/CRLF、关 tab dirty、SaveOutcome 路由、scheme 守卫。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "files-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "FileTreeTests"
-     ],
-     "parse": "swift",
-     "minCases": 4,
-     "$note": "P6-01 FileTreeTests 4 例：懒加载首次展开触发、跨项目重置、加载标记、UI 不做路径推断。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "editor": {
-   "cases": [
-    {
-     "name": "file-history-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "file_history"
-     ],
-     "parse": "rust",
-     "minCases": 7,
-     "$note": "P6-02 file_history.rs 7 用例：快照 roundtrip（record/list/read/restore 兜底）、prune、discard、formatter 选型、失败原文不变、preview 判定、scheme 守卫。",
-     "timeoutMs": 900000
+    "ide": {
+      "cases": [
+        {
+          "name": "lsp-protocol-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "lsp_protocol"
+          ],
+          "parse": "rust",
+          "minCases": 8,
+          "$note": "P6-03 lsp_protocol.rs 8 用例：UTF-16 中文/emoji 位置、过时版本丢弃、language id、tsc/eslint parser、run_config 校验/diff、DAP 生命周期、test failure 定位、preview URL。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "dap-protocol-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "dap_protocol"
+          ],
+          "parse": "rust",
+          "minCases": 2,
+          "$note": "P6-03 dap_protocol.rs 2 用例：SessionSnapshot wire roundtrip（crash/restart 生命周期）、DebugConfigDocument roundtrip＋校验（server crash/restart 由 is_action_allowed 的无会话 Start 分支承载）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "ide-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "IDEStateTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P6-03 IDEStateTests 5 例：断点 diff、诊断 version 守卫、Debug 生命周期、RunConfiguration 守卫、Symbol/Test。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "editor-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "DocumentStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 7,
-     "$note": "P6-02 DocumentStoreTests 7 例：dirty/revision、冲突不可静默覆盖、BOM/CRLF、关 tab dirty、SaveOutcome 路由、scheme 守卫。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "ide": {
-   "cases": [
-    {
-     "name": "lsp-protocol-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "lsp_protocol"
-     ],
-     "parse": "rust",
-     "minCases": 8,
-     "$note": "P6-03 lsp_protocol.rs 8 用例：UTF-16 中文/emoji 位置、过时版本丢弃、language id、tsc/eslint parser、run_config 校验/diff、DAP 生命周期、test failure 定位、preview URL。",
-     "timeoutMs": 900000
+    "git": {
+      "cases": [
+        {
+          "name": "git-service-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "git_service"
+          ],
+          "parse": "rust",
+          "minCases": 9,
+          "$note": "P6-04 git_service.rs 9 用例：选项注入守卫、untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip（临时 repo＋本地 bare remote）/discard/log/branch/stash。不触碰 Aeroric 真实暂存区。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "git-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "GitStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P6-04 GitStoreTests 5 例：staged 分节、冲突高亮、commit/branch 簿记、diff 不截断、ours/theirs 提取。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "dap-protocol-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "dap_protocol"
-     ],
-     "parse": "rust",
-     "minCases": 2,
-     "$note": "P6-03 dap_protocol.rs 2 用例：SessionSnapshot wire roundtrip（crash/restart 生命周期）、DebugConfigDocument roundtrip＋校验（server crash/restart 由 is_action_allowed 的无会话 Start 分支承载）。",
-     "timeoutMs": 900000
+    "worktree": {
+      "cases": [
+        {
+          "name": "worktree-lifecycle-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "worktree_lifecycle"
+          ],
+          "parse": "rust",
+          "minCases": 6,
+          "$note": "P6-05 worktree_lifecycle.rs 6 用例：create→task→diff→merge roundtrip、reopen 同名拒绝（不覆盖用户文件）、dirty 拒绝 merge、根外拒绝、policy 判定、task id。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "worktree-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "WorktreePolicyTests"
+          ],
+          "parse": "swift",
+          "minCases": 6,
+          "$note": "P6-05 WorktreePolicyTests 6 例：create/merge/remove/discarded/remote 判定、分支名对齐。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "ide-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "IDEStateTests"
-     ],
-     "parse": "swift",
-     "minCases": 5,
-     "$note": "P6-03 IDEStateTests 5 例：断点 diff、诊断 version 守卫、Debug 生命周期、RunConfiguration 守卫、Symbol/Test。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "git": {
-   "cases": [
-    {
-     "name": "git-service-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "git_service"
-     ],
-     "parse": "rust",
-     "minCases": 9,
-     "$note": "P6-04 git_service.rs 9 用例：选项注入守卫、untracked/rename 空格文件名/冲突/空提交/失败 push/完整 remote roundtrip（临时 repo＋本地 bare remote）/discard/log/branch/stash。不触碰 Aeroric 真实暂存区。",
-     "timeoutMs": 900000
+    "connections": {
+      "cases": [
+        {
+          "name": "ssh-host-keys-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "ssh_host_keys"
+          ],
+          "parse": "rust",
+          "minCases": 8,
+          "$note": "P7-01 ssh_host_keys.rs 8 用例：指纹/scan 去重/hostkey changed 等待确认/路径注入/sftp 校验/queue 生命周期/密码不进序列化。默认 fake；不连接真实服务器。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "connections-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ConnectionStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P7-01 ConnectionStoreTests 5 例：ingest/select、无明文密码、host key 待确认、remote cwd 分离、HostKeyPrompt 变体。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "git-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "GitStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 5,
-     "$note": "P6-04 GitStoreTests 5 例：staged 分节、冲突高亮、commit/branch 簿记、diff 不截断、ours/theirs 提取。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "worktree": {
-   "cases": [
-    {
-     "name": "worktree-lifecycle-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "worktree_lifecycle"
-     ],
-     "parse": "rust",
-     "minCases": 6,
-     "$note": "P6-05 worktree_lifecycle.rs 6 用例：create→task→diff→merge roundtrip、reopen 同名拒绝（不覆盖用户文件）、dirty 拒绝 merge、根外拒绝、policy 判定、task id。",
-     "timeoutMs": 900000
+    "platforms": {
+      "cases": [
+        {
+          "name": "platform-capabilities-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "platform_capabilities"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P7-02 platform_capabilities.rs 5 用例：macOS wsl=false（client OS 不推断 host 能力）、wsl_project_is_local 判定、settings roundtrip linuxPath 不丢、UNC 转换、wsl git 命令构建。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "worktree-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "WorktreePolicyTests"
-     ],
-     "parse": "swift",
-     "minCases": 6,
-     "$note": "P6-05 WorktreePolicyTests 6 例：create/merge/remove/discarded/remote 判定、分支名对齐。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "connections": {
-   "cases": [
-    {
-     "name": "ssh-host-keys-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "ssh_host_keys"
-     ],
-     "parse": "rust",
-     "minCases": 8,
-     "$note": "P7-01 ssh_host_keys.rs 8 用例：指纹/scan 去重/hostkey changed 等待确认/路径注入/sftp 校验/queue 生命周期/密码不进序列化。默认 fake；不连接真实服务器。",
-     "timeoutMs": 900000
+    "infrastructure": {
+      "cases": [
+        {
+          "name": "infrastructure-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "infrastructure"
+          ],
+          "parse": "rust",
+          "minCases": 6,
+          "$note": "P7-03 infrastructure.rs 6 用例：Docker parser/输出异常、只读/破坏区分、daemon unavailable/permission denied、长任务注册表、PID 身份守卫、Conda 校验/spawn policy。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "infrastructure-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "InfrastructureStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 5,
+          "$note": "P7-03 InfrastructureStoreTests 5 例：容器簿记、daemon 原因、Conda 选择、长任务状态、端口。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "connections-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "ConnectionStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 5,
-     "$note": "P7-01 ConnectionStoreTests 5 例：ingest/select、无明文密码、host key 待确认、remote cwd 分离、HostKeyPrompt 变体。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "platforms": {
-   "cases": [
-    {
-     "name": "platform-capabilities-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "platform_capabilities"
-     ],
-     "parse": "rust",
-     "minCases": 5,
-     "$note": "P7-02 platform_capabilities.rs 5 用例：macOS wsl=false（client OS 不推断 host 能力）、wsl_project_is_local 判定、settings roundtrip linuxPath 不丢、UNC 转换、wsl git 命令构建。",
-     "timeoutMs": 900000
-    }
-   ]
-  },
-  "infrastructure": {
-   "cases": [
-    {
-     "name": "infrastructure-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "infrastructure"
-     ],
-     "parse": "rust",
-     "minCases": 6,
-     "$note": "P7-03 infrastructure.rs 6 用例：Docker parser/输出异常、只读/破坏区分、daemon unavailable/permission denied、长任务注册表、PID 身份守卫、Conda 校验/spawn policy。",
-     "timeoutMs": 900000
+    "database": {
+      "cases": [
+        {
+          "name": "database-confirmation-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "database_confirmation"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "$note": "P7-04 database_confirmation.rs 7 用例：production assessment/confirmation（一次批准绑定 operationId+目标+SQL hash，不对后续所有 SQL 放行）、grid 有界分页、where 守卫。必选 SQLite 读写/事务/取消/导入导出随 dbx-core 契约测试（不接真实数据库）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "database-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "DatabaseStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 4,
+          "$note": "P7-04 DatabaseStoreTests 4 例：无明文、确认绑定、有界分页、close tab 释放。",
+          "timeoutMs": 900000
+        }
+      ]
     },
-    {
-     "name": "infrastructure-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "InfrastructureStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 5,
-     "$note": "P7-03 InfrastructureStoreTests 5 例：容器簿记、daemon 原因、Conda 选择、长任务状态、端口。",
-     "timeoutMs": 900000
+    "notebook": {
+      "cases": [
+        {
+          "name": "notebook-contract-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "notebook_contract"
+          ],
+          "parse": "rust",
+          "minCases": 12,
+          "$note": "P7-05 notebook_contract.rs 12 用例：Markdown/富文本往返、图片附件逐字节、重名标签跨文件改写、反链+标题索引、任务复选框写回、trash restore/purge、导入失败部分报告、ZIP ../ 拒绝不写出 vault、symlink 不跟随、迁移/转换不碰无关笔记与模板字节、stale 基线冲突不覆盖、allowlist 闸门。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "notebook-lib-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "notebook"
+          ],
+          "parse": "rust",
+          "minCases": 428,
+          "$note": "P7-05 搬移的既有单测（src-tauri tests.rs＋import/{apple,dir,enex,zip}_tests.rs 原样移动）：迁移幂等/回滚/非法文件名、保存冲突分支、导入护栏（Budget/read_zip_entry_limited）、landing 重名不覆盖等 428 条。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "notebook-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "NotebookStoreTests"
+          ],
+          "parse": "swift",
+          "minCases": 9,
+          "$note": "P7-05 NotebookStoreTests 9 例：基线只在确认保存后前进、冲突不改簿记、复选框行级翻转（非任务文本不动）、重名标签大小写不敏感聚合、模板占位符本地时区展开（{{title}} 留到定稿）、path 即主键、回收站新删在前、树懒加载合并。",
+          "timeoutMs": 900000
+        }
+      ]
     }
-   ]
   },
-  "database": {
-   "cases": [
-    {
-     "name": "database-confirmation-rust",
-     "kind": "test",
-     "argv": [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "core/Cargo.toml",
-      "--locked",
-      "-p",
-      "aeroric-core",
-      "--test",
-      "database_confirmation"
-     ],
-     "parse": "rust",
-     "minCases": 7,
-     "$note": "P7-04 database_confirmation.rs 7 用例：production assessment/confirmation（一次批准绑定 operationId+目标+SQL hash，不对后续所有 SQL 放行）、grid 有界分页、where 守卫。必选 SQLite 读写/事务/取消/导入导出随 dbx-core 契约测试（不接真实数据库）。",
-     "timeoutMs": 900000
-    },
-    {
-     "name": "database-ui-unit",
-     "kind": "test",
-     "argv": [
-      "swift",
-      "test",
-      "--package-path",
-      "macos/AeroricKit",
-      "--filter",
-      "DatabaseStoreTests"
-     ],
-     "parse": "swift",
-     "minCases": 4,
-     "$note": "P7-04 DatabaseStoreTests 4 例：无明文、确认绑定、有界分页、close tab 释放。",
-     "timeoutMs": 900000
-    }
-   ]
+  "plannedModules": {
+    "$comment": "Registered by the task that creates the suite, per §3.2. Listed here only so the mapping is visible and auditable; check.mjs must fail on any of these until it exists.",
+    "tasks": "P2-04",
+    "tauri-adapter": "P2-05",
+    "runtime": "P3-01",
+    "agents": "P3-02",
+    "terminal-core": "P3-03",
+    "sessions": "P3-04",
+    "dsh": "P3-05",
+    "cli": "P3-07",
+    "native-bootstrap": "P4-01",
+    "swift-client": "P4-02",
+    "native-design": "P4-03",
+    "shell": "P4-04",
+    "native-terminal": "P5-01",
+    "mode-switch": "P5-02",
+    "tasks-ui": "P5-03",
+    "sessions-ui": "P5-04",
+    "settings": "P5-05",
+    "files": "P6-01",
+    "editor": "P6-02",
+    "ide": "P6-03",
+    "git": "P6-04",
+    "worktree": "P6-05",
+    "connections": "P7-01",
+    "platforms": "P7-02",
+    "infrastructure": "P7-03",
+    "database": "P7-04",
+    "notebook": "P7-05",
+    "notebook-services": "P7-06",
+    "extensions": "P8-01",
+    "provider-services": "P8-02",
+    "remote": "P8-03",
+    "maintenance": "P8-04",
+    "cutover": "P8-05",
+    "session-controls": "P9-01",
+    "agent-work-graph": "P9-02",
+    "workflows": "P9-03",
+    "external-protocols": "P9-04",
+    "system-parity": "P10-01",
+    "accessibility": "P10-02",
+    "signing-local": "P10-03",
+    "release-contract": "P10-04",
+    "all": "P10-05"
   }
- },
- "plannedModules": {
-  "$comment": "Registered by the task that creates the suite, per §3.2. Listed here only so the mapping is visible and auditable; check.mjs must fail on any of these until it exists.",
-  "tasks": "P2-04",
-  "tauri-adapter": "P2-05",
-  "runtime": "P3-01",
-  "agents": "P3-02",
-  "terminal-core": "P3-03",
-  "sessions": "P3-04",
-  "dsh": "P3-05",
-  "cli": "P3-07",
-  "native-bootstrap": "P4-01",
-  "swift-client": "P4-02",
-  "native-design": "P4-03",
-  "shell": "P4-04",
-  "native-terminal": "P5-01",
-  "mode-switch": "P5-02",
-  "tasks-ui": "P5-03",
-  "sessions-ui": "P5-04",
-  "settings": "P5-05",
-  "files": "P6-01",
-  "editor": "P6-02",
-  "ide": "P6-03",
-  "git": "P6-04",
-  "worktree": "P6-05",
-  "connections": "P7-01",
-  "platforms": "P7-02",
-  "infrastructure": "P7-03",
-  "database": "P7-04",
-  "notebook": "P7-05",
-  "notebook-services": "P7-06",
-  "extensions": "P8-01",
-  "provider-services": "P8-02",
-  "remote": "P8-03",
-  "maintenance": "P8-04",
-  "cutover": "P8-05",
-  "session-controls": "P9-01",
-  "agent-work-graph": "P9-02",
-  "workflows": "P9-03",
-  "external-protocols": "P9-04",
-  "system-parity": "P10-01",
-  "accessibility": "P10-02",
-  "signing-local": "P10-03",
-  "release-contract": "P10-04",
-  "all": "P10-05"
- },
- "floors": {
-  "sessions-ui-unit@sessions-ui": 20
- }
 }

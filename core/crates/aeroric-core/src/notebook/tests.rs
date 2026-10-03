@@ -407,14 +407,21 @@ fn tree_lists_notes_and_hides_private_and_skip_dirs() {
 /// 走 `NOTE_LAYOUT` 换掉间隔而不是自己拼一个 layout:保留上限和目录必须还是
 /// 生产用的那两个值,否则这些测试验的是测试自己的常量。
 fn force_snapshots(vault: &Path, file: &Path, count: usize) {
-    let layout = crate::local_history::HistoryLayout {
+    let layout = crate::files::local_history::HistoryLayout {
         min_interval_ms: 0,
         ..snapshots::NOTE_LAYOUT
     };
     for index in 0..count {
         // 每次都改一下内容:`record_snapshot_in` 会跳过"下一版和当前一样"的写入。
         std::fs::write(file, format!("version {index}\n")).expect("seed content");
-        crate::local_history::record_snapshot_in(layout, vault, file, None).expect("snapshot");
+        crate::files::local_history::record_snapshot(
+            layout,
+            vault,
+            file,
+            None,
+            crate::clock::now_ms_u64(),
+        )
+        .expect("snapshot");
     }
 }
 

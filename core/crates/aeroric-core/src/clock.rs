@@ -54,6 +54,17 @@ impl Clock for FixedClock {
     }
 }
 
+/// Free-function wall clock, epoch milliseconds. The [`Clock`] trait is the
+/// injectable form tests use; this is the shared escape hatch for bookkeeping that
+/// never asserts on an exact timestamp (notebook trash stamps, snapshot ids). Same
+/// semantics as the host `clock::now_ms_u64`.
+pub fn now_ms_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_default()
+}
+
 /// Identity of one writer session. Randomness is deliberately not a core dependency
 /// yet: this is a *disambiguator*, not a security token, and the host (Task P3-06)
 /// supplies a real uuid epoch when it starts owning sessions.

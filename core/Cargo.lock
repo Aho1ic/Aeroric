@@ -55,9 +55,11 @@ dependencies = [
  "dbx-core",
  "futures-util",
  "libc",
+ "md-5",
  "notify 6.1.1",
  "parking_lot",
  "portable-pty",
+ "quick-xml",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
@@ -69,6 +71,7 @@ dependencies = [
  "trash",
  "url",
  "uuid",
+ "zip 8.6.0",
  "zstd",
 ]
 

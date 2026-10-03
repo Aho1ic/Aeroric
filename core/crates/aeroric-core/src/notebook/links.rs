@@ -52,7 +52,7 @@ pub struct NoteLinkSource {
 ///
 /// 没有链接的笔记不进结果:反链面板只关心"谁指向了谁",空文件占位只是让 payload
 /// 变大。
-pub(crate) fn scan_vault_links(root: &Path) -> Result<Vec<NoteLinkSource>, String> {
+pub fn scan_vault_links(root: &Path) -> Result<Vec<NoteLinkSource>, String> {
     let mut out = Vec::new();
     let mut total = 0usize;
     walk_notes(root, &mut |path, content| {
@@ -113,7 +113,7 @@ fn scan_links(content: &str, remaining: usize) -> Vec<NoteLinkRef> {
     out
 }
 
-pub(crate) struct LineHit {
+pub struct LineHit {
     pub raw: String,
     pub embed: bool,
     /// 这条链接在**行内**的字节区间,含 `[[` 与 `]]`,也含 `![[` 那个 `!`。
@@ -139,7 +139,7 @@ const MAX_BODY_UNITS: usize = 200;
 ///
 /// 这是前端 `/\[\[([^\]\n]{1,200})\]\]/g` 的等价实现,包括它的回溯行为:body 里
 /// 不许出现 `]`,所以遇到单个 `]` 就整个匹配失败、从下一个位置重试。
-pub(crate) fn scan_line(line: &str) -> Vec<LineHit> {
+pub fn scan_line(line: &str) -> Vec<LineHit> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let mut cursor = 0usize;

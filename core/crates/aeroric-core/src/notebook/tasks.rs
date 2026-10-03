@@ -67,7 +67,7 @@ pub struct NoteTaskSource {
 }
 
 /// 扫一遍 vault,返回每篇**有任务**的笔记及其任务。
-pub(crate) fn scan_vault_tasks(root: &Path) -> Result<Vec<NoteTaskSource>, String> {
+pub fn scan_vault_tasks(root: &Path) -> Result<Vec<NoteTaskSource>, String> {
     let mut out = Vec::new();
     let mut total = 0usize;
     walk_notes(root, &mut |path, content| {
@@ -135,7 +135,7 @@ fn parse_tasks(content: &str, remaining: usize) -> Vec<NoteTaskRef> {
 ///
 /// 认的前缀:`-` / `*` / `+` / `1.` / `1)`,可以带 `>` blockquote 前缀 —— 和
 /// `noteTasks.ts` 里 `TASK_MARK_RE` 认的那一套一致(那些 marked 都会产复选框)。
-fn task_line(line: &str) -> Option<(bool, &str)> {
+pub fn task_line(line: &str) -> Option<(bool, &str)> {
     let mut rest = line;
     // blockquote 前缀:`> `、`>> `、`  >  > ` 都算。
     loop {
@@ -188,7 +188,7 @@ fn task_line(line: &str) -> Option<(bool, &str)> {
 }
 
 /// 按**字符**截断并加省略号(不按字节 —— 中文会切在半个字上)。
-fn truncate_chars(value: &str, max: usize) -> String {
+pub fn truncate_chars(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
     }

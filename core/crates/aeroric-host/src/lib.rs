@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;
 pub mod families;
+pub mod notebook_services;
 pub mod services;
 pub mod startup;
 pub mod subscriptions;

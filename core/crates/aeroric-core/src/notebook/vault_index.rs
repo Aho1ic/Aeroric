@@ -26,7 +26,7 @@ use super::fs_ops::{is_note_file, is_scan_skip_dir};
 const HEAD_BYTES: usize = 8 * 1024;
 
 /// 扫描上限。和笔记树保持同一量级 —— 用户把 home 目录挂成 vault 时不能扫到天荒地老。
-const MAX_ENTRIES: usize = 20_000;
+pub const MAX_ENTRIES: usize = 20_000;
 const MAX_DEPTH: usize = 12;
 
 /// 一篇笔记在索引里的样子。
@@ -41,7 +41,7 @@ pub struct VaultIndexEntry {
 }
 
 /// 扫一遍 vault,返回每篇笔记的标题。
-pub(crate) fn scan_vault_titles(root: &Path) -> Result<Vec<VaultIndexEntry>, String> {
+pub fn scan_vault_titles(root: &Path) -> Result<Vec<VaultIndexEntry>, String> {
     let mut out = Vec::new();
     walk(root, 0, &mut out)?;
     // 按路径排序:同一个 vault 两次扫描的结果要一致,否则前端的"歧义时取第一篇"
@@ -50,7 +50,7 @@ pub(crate) fn scan_vault_titles(root: &Path) -> Result<Vec<VaultIndexEntry>, Str
     Ok(out)
 }
 
-fn walk(dir: &Path, depth: usize, out: &mut Vec<VaultIndexEntry>) -> Result<(), String> {
+pub fn walk(dir: &Path, depth: usize, out: &mut Vec<VaultIndexEntry>) -> Result<(), String> {
     if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES {
         return Ok(());
     }
@@ -106,7 +106,7 @@ fn read_head(path: &Path) -> Option<String> {
 
 /// 显示标题。与前端 `deriveTitle` 同一套优先级 —— 两边算出不同的标题会让
 /// 「列表里叫 A、链接解析成 B」这种谁都想不通的现象出现。
-fn derive_title(source: &str, path: &Path) -> String {
+pub fn derive_title(source: &str, path: &Path) -> String {
     let normalized = source.replace("\r\n", "\n");
     let (front, body) = split_frontmatter(&normalized);
     if let Some(title) = read_title_field(front) {
@@ -129,7 +129,7 @@ fn derive_title(source: &str, path: &Path) -> String {
 /// 字段浏览器(`fields.rs`)复用这一份而不是自己再拆一次:两处对边界给出不同答案
 /// 时,同一篇笔记会在字段浏览器里有 `title`、在笔记列表里显示文件名 —— 用户看到的
 /// 是两个视图互相矛盾。
-pub(crate) fn split_frontmatter(source: &str) -> (&str, &str) {
+pub fn split_frontmatter(source: &str) -> (&str, &str) {
     let Some(rest) = source.strip_prefix("---\n") else {
         return ("", source);
     };
@@ -159,7 +159,7 @@ fn read_title_field(front: &str) -> Option<String> {
 ///
 /// 和 `split_frontmatter` 一样给 `fields.rs` 共用:字段浏览器里的值必须和标题栏里
 /// 那个标题长得一样,否则同一个 `title` 在两处显示成两个东西。
-pub(crate) fn unquote_scalar(value: &str) -> String {
+pub fn unquote_scalar(value: &str) -> String {
     // 双引号标量:还原 `formatScalar` 的转义。
     if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
         return inner.replace("\\\"", "\"").replace("\\\\", "\\");
@@ -191,7 +191,7 @@ fn first_heading(body: &str) -> Option<String> {
     None
 }
 
-fn stem_of(path: &Path) -> String {
+pub fn stem_of(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default()

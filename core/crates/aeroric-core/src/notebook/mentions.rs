@@ -122,7 +122,7 @@ pub struct MentionSource {
 /// `self_path` 是这些名字所属的那篇笔记 —— 它自己整篇跳过。理由不只是"自己提自己没
 /// 意义":正文里写自己的标题是很常见的(H1、摘要),把它们包成指向自己的链接是一条
 /// 死循环链接,而且反链面板会立刻多出一条自引用。
-pub(crate) fn scan_vault_mentions(
+pub fn scan_vault_mentions(
     root: &Path,
     self_path: &Path,
     needles: &[String],
@@ -604,7 +604,7 @@ pub struct MentionLinkReport {
 /// 按文件分组后逐篇处理:每篇**重读一次**,在新内容上逐处校验(位置上还是那段文字吗、
 /// 是不是已经在链接里了),然后从后往前替换 —— 从后往前是因为前面的替换会让后面的偏移
 /// 全部右移,而从后往前改时尚未处理的偏移都还没被动过。
-pub(crate) fn link_mentions(
+pub fn link_mentions(
     state: &NotebookState,
     root: &Path,
     targets: &[MentionTarget],
