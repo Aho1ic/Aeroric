@@ -14,12 +14,12 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use crate::storage_backend::{
+use crate::storage_backends::box_backend::http_error_message;
+use crate::storage_backends::conn::StorageConnection;
+use crate::storage_backends::{
     join_storage_path, normalize_storage_path, path_basename, path_parent, Capability,
     StorageBackend, StorageEntry, StorageStat,
 };
-use crate::storage_backend_box::http_error_message;
-use crate::storage_conn::StorageConnection;
 
 const XPAN_FILE_BASE: &str = "https://pan.baidu.com/rest/2.0/xpan/file";
 const XPAN_MULTIMEDIA_BASE: &str = "https://pan.baidu.com/rest/2.0/xpan/multimedia";
@@ -453,7 +453,7 @@ impl StorageBackend for BaiduBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let path = crate::storage_backend::validate_storage_mutation_path(path)?;
+        let path = crate::storage_backends::validate_storage_mutation_path(path)?;
         let absolute = self.absolute(&path);
         let result = self.block(async {
             self.file_manager("delete", serde_json::json!([absolute.clone()]))
@@ -464,7 +464,7 @@ impl StorageBackend for BaiduBackend {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let from = crate::storage_backend::validate_storage_mutation_path(from)?;
+        let from = crate::storage_backends::validate_storage_mutation_path(from)?;
         let from_absolute = self.absolute(&from);
         let to_absolute = self.absolute(to);
         let from_parent = path_parent(&from_absolute);
@@ -664,7 +664,7 @@ mod tests {
             id: "conn-1".to_string(),
             name: "Baidu".to_string(),
             group: None,
-            protocol: crate::storage_conn::StorageProtocol::BaiduNetdisk,
+            protocol: crate::storage_backends::conn::StorageProtocol::BaiduNetdisk,
             config: BTreeMap::new(),
             secrets: BTreeMap::new(),
             created_at: 1,

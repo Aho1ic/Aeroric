@@ -13,19 +13,20 @@ use std::process::Command;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
-use crate::storage_backend::{
+use crate::storage_backends::conn::{StorageConnection, StorageProtocol};
+use crate::storage_backends::{
     join_storage_path, normalize_storage_path, system_time_to_ms, validate_storage_mutation_path,
     Capability, StorageBackend, StorageEntry, StorageStat,
 };
-use crate::storage_conn::{StorageConnection, StorageProtocol};
 
-/// 挂载点根目录:`~/.aeroric/mounts`。
-pub(crate) fn mounts_root() -> Result<PathBuf, String> {
-    Ok(crate::storage::aeroric_dir()?.join("mounts"))
+/// 挂载点根目录:`<data-dir>/mounts`（与宿主 `aeroric_dir()` 同一数据根，
+/// 由调用方注入——core 不解析全局 home）。
+pub(crate) fn mounts_root(data_dir: &Path) -> PathBuf {
+    data_dir.join("mounts")
 }
 
 /// 连接 id 只允许安全字符,避免拼出 `../` 之类的挂载点。
-pub(crate) fn validate_connection_id(connection_id: &str) -> Result<(), String> {
+pub fn validate_connection_id(connection_id: &str) -> Result<(), String> {
     if connection_id.is_empty() || connection_id.len() > 128 {
         return Err("Invalid connection id".to_string());
     }
@@ -39,9 +40,9 @@ pub(crate) fn validate_connection_id(connection_id: &str) -> Result<(), String> 
 }
 
 /// 某连接的挂载点路径。
-pub(crate) fn mount_point_for(connection_id: &str) -> Result<PathBuf, String> {
+pub fn mount_point_for(data_dir: &Path, connection_id: &str) -> Result<PathBuf, String> {
     validate_connection_id(connection_id)?;
-    Ok(mounts_root()?.join(connection_id))
+    Ok(mounts_root(data_dir).join(connection_id))
 }
 
 /// 把存储绝对路径转换为挂载目录句柄下的相对路径。
@@ -313,8 +314,11 @@ fn urlencode_component(value: &str) -> String {
 }
 
 /// 确保挂载存在,必要时执行挂载命令。
-pub(crate) fn ensure_mounted(connection: &StorageConnection) -> Result<PathBuf, String> {
-    let mount_point = mount_point_for(&connection.id)?;
+pub(crate) fn ensure_mounted(
+    data_dir: &Path,
+    connection: &StorageConnection,
+) -> Result<PathBuf, String> {
+    let mount_point = mount_point_for(data_dir, &connection.id)?;
     std::fs::create_dir_all(&mount_point).map_err(|e| e.to_string())?;
     if is_mounted(&mount_point) {
         return Ok(mount_point);
@@ -337,8 +341,8 @@ pub(crate) fn ensure_mounted(connection: &StorageConnection) -> Result<PathBuf, 
 }
 
 /// 卸载并清理挂载点目录。
-pub(crate) fn unmount(connection_id: &str) -> Result<(), String> {
-    let mount_point = mount_point_for(connection_id)?;
+pub fn unmount(data_dir: &Path, connection_id: &str) -> Result<(), String> {
+    let mount_point = mount_point_for(data_dir, connection_id)?;
     if !mount_point.exists() {
         return Ok(());
     }
@@ -358,8 +362,11 @@ pub(crate) fn unmount(connection_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn build(connection: &StorageConnection) -> Result<Box<dyn StorageBackend>, String> {
-    let mount_point = ensure_mounted(connection)?;
+pub fn build(
+    data_dir: &Path,
+    connection: &StorageConnection,
+) -> Result<Box<dyn StorageBackend>, String> {
+    let mount_point = ensure_mounted(data_dir, connection)?;
     Ok(Box::new(MountBackend::open(&mount_point)?))
 }
 
@@ -521,9 +528,9 @@ mod tests {
 
     #[test]
     fn mount_point_is_confined_to_the_mounts_directory() {
-        let point = mount_point_for("conn-1").unwrap();
+        let point = mount_point_for(Path::new("/tmp/aeroric-test"), "conn-1").unwrap();
         assert!(point.ends_with("mounts/conn-1"));
-        assert!(mount_point_for("../escape").is_err());
+        assert!(mount_point_for(Path::new("/tmp/aeroric-test"), "../escape").is_err());
     }
 
     #[test]

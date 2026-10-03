@@ -915,7 +915,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:304",
+      "definition_resolved": "src-tauri/src/lib.rs:299",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -948,7 +948,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:312",
+      "definition_resolved": "src-tauri/src/lib.rs:307",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -981,7 +981,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:318",
+      "definition_resolved": "src-tauri/src/lib.rs:313",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1014,7 +1014,7 @@
       "feature_ids": [
         "F25"
       ],
-      "definition_resolved": "src-tauri/src/lib.rs:324",
+      "definition_resolved": "src-tauri/src/lib.rs:319",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -1818,7 +1818,7 @@
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 1,
+        "rust_internal_refs": 0,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -5115,7 +5115,7 @@
       "feature_ids": [
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/storage_conn.rs:318",
+      "definition_resolved": "src-tauri/src/storage_conn.rs:16",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5146,7 +5146,7 @@
       "feature_ids": [
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/storage_conn.rs:329",
+      "definition_resolved": "src-tauri/src/storage_conn.rs:24",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5177,7 +5177,7 @@
       "feature_ids": [
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/storage_conn.rs:348",
+      "definition_resolved": "src-tauri/src/storage_conn.rs:33",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5210,7 +5210,7 @@
       "feature_ids": [
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/storage_conn.rs:383",
+      "definition_resolved": "src-tauri/src/storage_conn.rs:43",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5243,7 +5243,7 @@
       "feature_ids": [
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/storage_conn.rs:404",
+      "definition_resolved": "src-tauri/src/storage_conn.rs:53",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6401,7 +6401,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1819",
+      "definition_resolved": "src-tauri/src/git.rs:1799",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6435,7 +6435,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1865",
+      "definition_resolved": "src-tauri/src/git.rs:1845",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6469,7 +6469,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1889",
+      "definition_resolved": "src-tauri/src/git.rs:1869",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6503,7 +6503,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1930",
+      "definition_resolved": "src-tauri/src/git.rs:1910",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6536,7 +6536,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1944",
+      "definition_resolved": "src-tauri/src/git.rs:1924",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6570,7 +6570,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1977",
+      "definition_resolved": "src-tauri/src/git.rs:1957",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6605,7 +6605,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2012",
+      "definition_resolved": "src-tauri/src/git.rs:1992",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6639,7 +6639,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2038",
+      "definition_resolved": "src-tauri/src/git.rs:2018",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6673,7 +6673,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2064",
+      "definition_resolved": "src-tauri/src/git.rs:2044",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6706,7 +6706,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2083",
+      "definition_resolved": "src-tauri/src/git.rs:2063",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6740,7 +6740,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2102",
+      "definition_resolved": "src-tauri/src/git.rs:2082",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6879,7 +6879,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2170",
+      "definition_resolved": "src-tauri/src/git.rs:2150",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6916,7 +6916,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2216",
+      "definition_resolved": "src-tauri/src/git.rs:2196",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6954,7 +6954,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2297",
+      "definition_resolved": "src-tauri/src/git.rs:2277",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6991,7 +6991,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2341",
+      "definition_resolved": "src-tauri/src/git.rs:2321",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21302,7 +21302,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:66",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:65",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21337,7 +21337,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:75",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:74",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21372,7 +21372,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:83",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:82",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21406,7 +21406,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:94",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:93",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21440,7 +21440,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:103",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:102",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21475,7 +21475,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:115",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:114",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21510,7 +21510,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:125",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:124",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21545,7 +21545,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:134",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:133",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21581,7 +21581,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:146",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:145",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21616,7 +21616,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:157",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:156",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21652,7 +21652,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:167",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:166",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21687,7 +21687,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:180",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:179",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21722,7 +21722,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:188",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:187",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21757,7 +21757,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:201",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:200",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21795,7 +21795,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:212",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:211",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21831,7 +21831,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:253",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:252",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21868,7 +21868,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:228",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:227",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21905,7 +21905,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:268",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:267",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21940,7 +21940,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:283",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:282",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -21975,7 +21975,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:305",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:304",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22010,7 +22010,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:315",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:314",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22046,7 +22046,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:326",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:325",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22082,7 +22082,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:337",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:336",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22117,7 +22117,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:360",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:359",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22153,7 +22153,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:372",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:371",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22191,7 +22191,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:402",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:401",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22227,7 +22227,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:415",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:414",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22263,7 +22263,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:434",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:433",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22298,7 +22298,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:445",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:444",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22333,7 +22333,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:459",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:458",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22368,7 +22368,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:474",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:473",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22403,7 +22403,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:490",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:489",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22438,7 +22438,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:503",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:502",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22473,7 +22473,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:517",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:516",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22508,7 +22508,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:534",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:533",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22545,7 +22545,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:554",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:553",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22581,7 +22581,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:573",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:572",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22618,7 +22618,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:591",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:590",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22653,7 +22653,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:599",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:598",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22689,7 +22689,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:609",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:608",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22725,7 +22725,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:627",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:626",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22760,7 +22760,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:644",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:643",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22795,7 +22795,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:671",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:670",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22831,7 +22831,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:682",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:681",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22867,7 +22867,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:693",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:692",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22903,7 +22903,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:704",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:703",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22939,7 +22939,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:718",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:717",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -22975,7 +22975,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:729",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:728",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23011,7 +23011,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:740",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:739",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23207,7 +23207,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:766",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:765",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23244,7 +23244,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:755",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:754",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23280,7 +23280,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:778",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:777",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23314,7 +23314,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:791",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:790",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23350,7 +23350,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:823",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:822",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23389,7 +23389,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:843",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:845",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -23426,7 +23426,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:859",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:861",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23461,7 +23461,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:880",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:882",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23498,7 +23498,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:925",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:933",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23535,7 +23535,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:1016",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:1024",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23571,7 +23571,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:952",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:960",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23611,7 +23611,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:998",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:1006",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23647,7 +23647,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/mod.rs:659",
+      "definition_resolved": "src-tauri/src/notebook/mod.rs:658",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23682,7 +23682,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:314",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:317",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23716,7 +23716,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:323",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:326",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23751,7 +23751,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:339",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:342",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23789,7 +23789,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:379",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:382",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23824,7 +23824,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:397",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:400",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23859,7 +23859,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:413",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:416",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23897,7 +23897,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:443",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:446",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23938,7 +23938,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:511",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:514",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23975,7 +23975,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:259",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:262",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24007,7 +24007,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:248",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:251",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24041,7 +24041,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:266",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:269",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24637,7 +24637,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/notebook/rag/commands.rs:121"
+        "src-tauri/src/notebook/rag/commands.rs:129"
       ],
       "listeners": [
         "src/components/notebook/useNoteRag.ts:96"
@@ -24652,15 +24652,13 @@
       "name": "notebook-sync-updated",
       "rust_consts": [],
       "ts_consts": [],
-      "emitters": [
-        "src-tauri/src/notebook/sync/daemon.rs:372"
-      ],
+      "emitters": [],
       "listeners": [
         "src/components/notebook/useNoteSync.ts:266"
       ],
       "disposition": "in-use",
       "gap_id": null,
-      "orphan": null,
+      "orphan": "listened-without-emitter",
       "target": null,
       "note": null
     },
@@ -24862,7 +24860,10 @@
     "event_name @ src-tauri/src/dsh_webui.rs:1857",
     "event_name @ src-tauri/src/dsh_webui.rs:1905",
     "event_name @ src-tauri/src/dsh_webui.rs:1922",
-    "action.event_name() @ src-tauri/src/lib.rs:237",
+    "action.event_name() @ src-tauri/src/lib.rs:232",
+    "super::RAG_INDEX_PROGRESS_TOPIC @ src-tauri/src/notebook/rag/commands.rs:130",
+    "daemon_core::SYNC_EVENT @ src-tauri/src/notebook/sync/daemon.rs:41",
+    "daemon_core::SYNC_UPDATED_TOPIC @ src-tauri/src/notebook/sync/daemon.rs:42",
     "event_name @ src-tauri/src/pty.rs:462"
   ],
   "event_dynamic_listen_sites": [],

@@ -1770,9 +1770,11 @@ pub async fn storage_test_connection(connection_id: String) -> Result<(), String
 /// 卸载 AFP / NFS 挂载点。
 #[tauri::command]
 pub async fn storage_unmount_connection(connection_id: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || crate::storage_backend_mount::unmount(&connection_id))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        crate::storage_backend::unmount(&crate::storage::aeroric_dir()?, &connection_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn copy_or_move_paths(

@@ -32,7 +32,47 @@
 
 use std::path::Path;
 
-use crate::git::{git_dir, run_git_for, run_git_network_for};
+use std::process::Output;
+use std::sync::OnceLock;
+
+use crate::git::transport::{self, GitOutput, RepoLocks};
+
+/// 同一仓库的 mutating git 操作串行化（与 P6-04 transport 的 RepoLocks 同一份）。
+fn repo_locks() -> &'static RepoLocks {
+    static LOCKS: OnceLock<RepoLocks> = OnceLock::new();
+    LOCKS.get_or_init(RepoLocks::new)
+}
+
+/// 宿主 `run_git_for` 的 core 适配：本地 git 操作（读取/暂存/提交）走
+/// transport 的读超时；参数是静态字符串，仍过 transport 的 argv 守卫。
+fn run_git_for(repo: &str, args: &[&str]) -> Result<Output, String> {
+    let out = transport::run_git(
+        Path::new(repo),
+        args,
+        transport::READ_TIMEOUT,
+        Some(&repo_locks().lock_for(repo)),
+    )?;
+    Ok(convert(out))
+}
+
+/// 同上，但走网络的那一版（不会因为等凭据而挂住）。
+fn run_git_network_for(repo: &str, args: &[&str]) -> Result<Output, String> {
+    let out = transport::run_git(Path::new(repo), args, transport::NETWORK_TIMEOUT, None)?;
+    Ok(convert(out))
+}
+
+/// core `GitOutput` → 宿主形状（sync/git.rs 原样消费 `.status/.stdout/.stderr`）。
+fn convert(out: GitOutput) -> Output {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    Output {
+        status: std::process::ExitStatus::from_raw(if out.success { 0 } else { 1 }),
+        stdout: out.stdout.into_bytes(),
+        stderr: out.stderr.into_bytes(),
+    }
+}
 
 /// 一轮 git 同步的结果。字段直接给前端显示用。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -78,7 +118,12 @@ pub fn run(vault: &Path, message: &str) -> Result<GitSyncReport, String> {
     let repo = vault
         .to_str()
         .ok_or_else(|| "Vault path is not valid UTF-8".to_string())?;
-    git_dir(repo).map_err(|_| format!("{repo} is not a git repository"))?;
+    // 宿主 `git_dir` 的 core 适配：`rev-parse --git-dir` 成功即仓库。
+    // 与宿主同款两问：spawn 失败（Err）与 git 非零退出（status）都算不是仓库。
+    let output = run_git_for(repo, &["rev-parse", "--git-dir"])?;
+    if !output.status.success() {
+        return Err(format!("{repo} is not a git repository"));
+    }
 
     // 第一件事:冲突未解就立刻停。见模块文档 —— 在冲突态上 `add -A` 会把标记提交上去。
     let conflicts = unmerged_paths(repo)?;

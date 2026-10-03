@@ -28,6 +28,21 @@ base64 = "0.22" # 与宿主同 crate 同版本（connections/ssh 的 host key �
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] } # 与宿主 src-tauri/Cargo.toml:52 逐字一致（notebook/import 的 zip_src——P7-05）
 quick-xml = "0.41" # 与宿主同 crate 同版本（notebook/import/evernote 的 ENEX 良构 XML——P7-05）
 md-5 = "0.11" # 与宿主同 crate 同版本（ENEX <en-media hash> 的 MD5 附件对账；仅测试引用——P7-05）
+opendal = { version = "0.58.1", features = [
+  "services-s3",
+  "services-oss",
+  "services-cos",
+  "services-upyun",
+  "services-webdav",
+  "services-dropbox",
+  "services-gdrive",
+  "services-onedrive",
+  "services-aliyun-drive",
+] } # 与宿主 src-tauri/Cargo.toml:103 逐字一致（storage_backends 的 9 家对象存储/网盘——P7-06）
+smb2 = "0.18.1" # 与宿主同版本（纯 Rust SMB 客户端，无需 sudo 挂载——P7-06）
+cap-std = "4" # 与宿主同 crate 同版本（mount 后端的 ambient-authority 目录句柄——P7-06）
+rusqlite = { version = "0.32", features = ["bundled", "backup"] } # 与宿主 src-tauri/Cargo.toml:85 逐字一致（sync/store 的 sync.db＋rag/db 的 sqlite-vec——P7-06）
+sqlite-vec = "0.1" # 与宿主同 crate 同版本（rag/db 的 vec0 虚表，链接进二进制——P7-06）
 dbx-core = { path = "../../../../dbx/crates/dbx-core", default-features = false } # 与宿主同 path（database/sql_risk 纯函数——P7-04）
 serde_yaml_ng = "0.10" # 与宿主同 crate 同版本（dsh_host/client 的插件 patch/dump 线数据解析，P3-05 第十一片；纯解析零 I/O）
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] } # grill [dsh] D1（补记二百六十四，2026-09-30 用户决策）：core 自此持网络出口，`DshApiClient` 上收用；feature 集与宿主 `src-tauri/Cargo.toml:46` 逐字一致，不造第二套传输

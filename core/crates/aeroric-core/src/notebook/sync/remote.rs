@@ -34,7 +34,7 @@ use super::manifest::{
 };
 use super::scan::{self, MAX_DEPTH, MAX_FILES, MAX_HASH_BYTES, OVERSIZE_PREFIX};
 use crate::notebook::state::hash64;
-use crate::storage_backend::StorageBackend;
+use crate::storage_backends::StorageBackend;
 
 /// 一个 vault 作用域的远端。`root` 之外的东西碰不到。
 pub struct StorageRemote<'a> {
@@ -274,7 +274,7 @@ impl StorageRemote<'_> {
     fn entry_at(
         &self,
         rel_path: &str,
-    ) -> Result<Option<crate::storage_backend::StorageEntry>, String> {
+    ) -> Result<Option<crate::storage_backends::StorageEntry>, String> {
         let abs = resolve_remote(&self.root, rel_path)?;
         let (parent, name) = abs.rsplit_once('/').ok_or("Unsafe remote path")?;
         let parent = if parent.is_empty() { "/" } else { parent };
@@ -384,7 +384,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::storage_backend::{Capability, StorageEntry, StorageStat};
+    use crate::storage_backends::{Capability, StorageEntry, StorageStat};
 
     /// 内存后端。`StorageBackend` 的方法都取 `&self`,所以状态放 `Mutex` 里。
     #[derive(Default)]

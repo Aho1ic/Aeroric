@@ -397,7 +397,7 @@ fn plan_doc(
 
 /// 显示标题。与 `vault_index::derive_title` 同一套优先级,但那个函数是私有的,
 /// 而这里只需要 frontmatter title 或文件名 —— chunk 的 heading 已经带了正文标题。
-pub(super) fn title_of(content: &str, path: &str) -> String {
+pub fn title_of(content: &str, path: &str) -> String {
     let normalized = content.replace("\r\n", "\n");
     let (front, _body) = split_frontmatter(&normalized);
     for line in front.lines() {
@@ -1183,6 +1183,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = index_vault(&vault, 8, &config, IndexScope::All, &cancel, &recorder)
             .await
@@ -1204,6 +1205,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         // 先建出两篇的记录。
         let cancel = CancelToken::new();
@@ -1239,6 +1241,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let cancel = CancelToken::new();
         let recorder = Recorder::default();
@@ -1270,6 +1273,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let cancel = CancelToken::new();
         let recorder = Recorder::default();
@@ -1294,6 +1298,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let cancel = CancelToken::new();
         let outcome = index_vault(&vault, 8, &config, IndexScope::All, &cancel, &NoProgress)
@@ -1317,6 +1322,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "first-model".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         index_vault(&vault, 8, &config, IndexScope::All, &cancel, &NoProgress)
             .await
@@ -1351,6 +1357,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let cancel = CancelToken::new();
         index_vault(&vault, 8, &config, IndexScope::All, &cancel, &NoProgress)

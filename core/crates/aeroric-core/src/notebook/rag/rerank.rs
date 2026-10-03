@@ -45,6 +45,9 @@ pub const MAX_DOCUMENTS: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RerankConfig {
+    /// HTTP 代理（与 `embed::ProxyConfig` 同语义；宿主注入）。
+    #[serde(default)]
+    pub proxy: crate::notebook::rag::embed::ProxyConfig,
     /// 目前只有 `cohere`(Cohere 官方 + 任何 cohere 兼容服务)。
     pub provider: String,
     pub model: String,
@@ -177,7 +180,7 @@ pub async fn rerank(
         return_documents: false,
     };
 
-    let client = embed::client(RERANK_TIMEOUT)?;
+    let client = embed::client(RERANK_TIMEOUT, &config.proxy)?;
     let mut request = client.post(&url).json(&payload);
     let key = config.api_key.trim();
     if !key.is_empty() {
@@ -223,6 +226,7 @@ mod tests {
             model: "rerank-v3".to_string(),
             base_url: "https://api.cohere.com".to_string(),
             api_key: "k".to_string(),
+            proxy: Default::default(),
         }
     }
 

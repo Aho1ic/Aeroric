@@ -118,13 +118,16 @@ struct EventSink {
 impl ProgressSink for EventSink {
     fn report(&self, progress: &IndexProgress) {
         // 发不出去也不该让索引停下 —— 窗口可能已经关了,而索引本身是有价值的。
-        let _ = self.app.emit(
-            PROGRESS_EVENT,
-            ProgressEvent {
-                vault: self.vault.clone(),
-                progress: progress.clone(),
-            },
-        );
+        let payload = ProgressEvent {
+            vault: self.vault.clone(),
+            progress: progress.clone(),
+        };
+        // v1 topic 接线（P7-06）：旧桌面通道 verbatim ＋ v1 topic 同 payload。
+        // 两条都必须发：React 客户端只认前者，v1 事件面只认后者。
+        // ⚠️ 符号表教训：旧通道名与 `import/report.rs` 的 PROGRESS_EVENT 同名
+        // 不同值——这里只认 core `RAG_INDEX_PROGRESS_LEGACY` 的字面值。
+        let _ = self.app.emit(PROGRESS_EVENT, &payload);
+        let _ = self.app.emit(super::RAG_INDEX_PROGRESS_TOPIC, &payload);
     }
 }
 
@@ -798,6 +801,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             model: "text-embedding-3-small".to_string(),
             api_key: api_key.to_string(),
+            proxy: Default::default(),
         }
     }
 
@@ -829,6 +833,7 @@ mod tests {
             base_url: "http://127.0.0.1:11434".to_string(),
             model: "nomic-embed-text".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let resolved = with_stored_key(config, || panic!("Ollama 不该查钥匙串")).expect("resolve");
         assert!(resolved.api_key.is_empty());

@@ -9,11 +9,11 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use crate::storage_backend::{
+use crate::storage_backends::conn::StorageConnection;
+use crate::storage_backends::{
     join_storage_path, normalize_storage_path, path_basename, path_parent, Capability,
     StorageBackend, StorageEntry, StorageStat,
 };
-use crate::storage_conn::StorageConnection;
 
 const BOX_API_BASE: &str = "https://api.box.com/2.0";
 const BOX_UPLOAD_BASE: &str = "https://upload.box.com/api/2.0";
@@ -357,7 +357,7 @@ impl StorageBackend for BoxBackend {
     }
 
     fn delete(&self, path: &str) -> Result<(), String> {
-        let path = crate::storage_backend::validate_storage_mutation_path(path)?;
+        let path = crate::storage_backends::validate_storage_mutation_path(path)?;
         let absolute = self.absolute(&path);
         let result = self.block(async {
             let node = self.resolve(&absolute).await?;
@@ -385,7 +385,7 @@ impl StorageBackend for BoxBackend {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), String> {
-        let from = crate::storage_backend::validate_storage_mutation_path(from)?;
+        let from = crate::storage_backends::validate_storage_mutation_path(from)?;
         let from_absolute = self.absolute(&from);
         let to_absolute = self.absolute(to);
         let result = self.block(async {
@@ -529,7 +529,7 @@ mod tests {
             id: "conn-1".to_string(),
             name: "Box".to_string(),
             group: None,
-            protocol: crate::storage_conn::StorageProtocol::Box,
+            protocol: crate::storage_backends::conn::StorageProtocol::Box,
             config: BTreeMap::new(),
             secrets: BTreeMap::new(),
             created_at: 1,

@@ -6,11 +6,11 @@
 
 use opendal::{ErrorKind, Operator};
 
-use crate::storage_backend::{
+use crate::storage_backends::conn::{StorageConnection, StorageProtocol};
+use crate::storage_backends::{
     join_storage_path, normalize_storage_path, validate_storage_mutation_path, Capability,
     StorageBackend, StorageEntry, StorageStat,
 };
-use crate::storage_conn::{StorageConnection, StorageProtocol};
 
 /// 各云厂商 S3 兼容端点。用户不填 endpoint 时作为默认值。
 const QINIU_DEFAULT_ENDPOINT: &str = "https://s3.cn-east-1.qiniucs.com";
@@ -461,7 +461,7 @@ pub fn build(connection: &StorageConnection) -> Result<Box<dyn StorageBackend>, 
     Ok(Box::new(OpendalBackend {
         operator,
         runtime,
-        capability: crate::storage_backend::capability_for(connection.protocol),
+        capability: crate::storage_backends::capability_for(connection.protocol),
     }))
 }
 

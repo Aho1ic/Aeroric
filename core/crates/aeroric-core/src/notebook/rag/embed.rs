@@ -71,6 +71,21 @@ pub struct EmbedConfig {
     /// OpenAI 兼容一路的 key。Ollama 不需要。
     #[serde(default)]
     pub api_key: String,
+    /// HTTP 代理设置（宿主从 app_settings 注入；core 不读全局配置——
+    /// P7-06 上收时的参数化）。
+    #[serde(default)]
+    pub proxy: ProxyConfig,
+}
+
+/// 代理出站设置（空 url ＝ 直连）。宿主 app_settings 的 `proxy_settings`
+/// 四字段的镜像；core 侧不依赖宿主配置模块。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub no_proxy: String,
 }
 
 /// 一次调用的失败原因。分类的用途是决定「重试还不还有意义」。
@@ -338,24 +353,26 @@ pub fn batches(provider: EmbedProvider, count: usize) -> Vec<std::ops::Range<usi
 
 /// 构造 HTTP 客户端。形状与 `agent_tools::http_client` 一致(代理 + UA),差别是
 /// no_proxy 会兜住 loopback —— 本机 Ollama 被推去代理的话会从「能用」变「连不上」。
-pub(super) fn client(timeout: Duration) -> Result<reqwest::Client, EmbedError> {
-    let settings = crate::app_settings::load_settings_internal();
+pub(super) fn client(
+    timeout: Duration,
+    proxy_cfg: &ProxyConfig,
+) -> Result<reqwest::Client, EmbedError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(timeout)
         // embedding 端点不该重定向。跟随重定向会把 Authorization 头带去别的 host。
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(format!("Aeroric/{}", env!("CARGO_PKG_VERSION")));
-    let proxy_url = settings.proxy_settings.url.trim();
+    let proxy_url = proxy_cfg.url.trim();
     if !proxy_url.is_empty() {
         let mut proxy = reqwest::Proxy::all(proxy_url)
             .map_err(|error| EmbedError::Config(format!("Invalid proxy configuration: {error}")))?;
-        let username = settings.proxy_settings.username.trim();
+        let username = proxy_cfg.username.trim();
         if !username.is_empty() {
-            proxy = proxy.basic_auth(username, settings.proxy_settings.password.trim());
+            proxy = proxy.basic_auth(username, proxy_cfg.password.trim());
         }
         proxy = proxy.no_proxy(reqwest::NoProxy::from_string(&no_proxy_rules(
-            &settings.proxy_settings.no_proxy,
+            &proxy_cfg.no_proxy,
         )));
         builder = builder.proxy(proxy);
     }
@@ -417,7 +434,7 @@ pub async fn embed_batch(
     }
     let endpoint = endpoint_for(config.provider, &config.base_url)?;
     let body = request_body(config.provider, config.model.trim(), inputs);
-    let client = client(BATCH_TIMEOUT)?;
+    let client = client(BATCH_TIMEOUT, &config.proxy)?;
     let key = config.api_key.trim();
 
     let mut last = EmbedError::Transient("embedding request was never attempted".into());
@@ -824,6 +841,7 @@ mod tests {
             base_url: "not a url".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let never = || false;
         assert_eq!(
@@ -839,6 +857,7 @@ mod tests {
             base_url: "http://127.0.0.1:11434".into(),
             model: "  ".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let never = || false;
         let error = embed_batch(&config, &["x".into()], &never)
@@ -854,6 +873,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".into(),
             model: "m".into(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let always = || true;
         let error = embed_batch(&config, &["x".into()], &always)

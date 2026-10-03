@@ -687,3 +687,195 @@ public enum NotebookImportProvider: String, CaseIterable, Sendable {
     case evernote
     case appleNotes
 }
+
+// MARK: - P7-06：同步 / RAG / 存储连接
+
+extension NotebookClient {
+    public struct SyncRemote: Codable, Equatable, Sendable {
+        public var id: String
+        public var kind: String
+        public var root: String
+        public var connectionId: String
+        public var autoSync: Bool
+    }
+
+    public struct StoredResolution: Equatable, Sendable {
+        public var path: String
+        /// 分支/保留决策的原样 JSON（形状由宿主 `Resolution` 决定）。
+        public var resolution: [String: JSONValue]
+        public var localHash: String
+        public var remoteHash: String
+        public var decidedAtMs: UInt64
+    }
+
+    public struct RemoteStatus: Codable, Equatable, Sendable {
+        public var remoteId: String
+        public var autoSync: Bool
+        public var failures: Int
+        public var dirty: Bool
+        public var lastAttemptMs: Int64?
+        public var nextRunInMs: Int64?
+    }
+
+    public struct ImportExportProbe: Codable, Equatable, Sendable {
+        public var dim: Int
+    }
+
+    // ── 云盘同步 ──
+
+    public func syncBind(vault: String, remoteId: String, connectionId: String, root: String) async throws {
+        try await call(
+            "notebook.sync.bind",
+            params: .object([
+                "vault": .string(vault), "remoteId": .string(remoteId),
+                "connectionId": .string(connectionId), "root": .string(root),
+            ]))
+    }
+
+    public func syncUnbind(vault: String, remoteId: String) async throws {
+        try await call(
+            "notebook.sync.unbind",
+            params: .object(["vault": .string(vault), "remoteId": .string(remoteId)]))
+    }
+
+    public func syncRemotes(vault: String) async throws -> [SyncRemote] {
+        let frame = try await connection.request(
+            "notebook.sync.remotes", params: .object(["vault": .string(vault)]))
+        guard case let .array(items)? = frame.result["remotes"] else { return [] }
+        return try items.map { try decode($0, as: SyncRemote.self) }
+    }
+
+    public func syncRun(vault: String, remoteId: String, strategy: String?) async throws {
+        var params: [String: JSONValue] = [
+            "vault": .string(vault), "remoteId": .string(remoteId),
+        ]
+        if let strategy { params["strategy"] = .string(strategy) }
+        try await call("notebook.sync.run", params: .object(params))
+    }
+
+    public func syncSetAuto(vault: String, remoteId: String, enabled: Bool) async throws {
+        try await call(
+            "notebook.sync.set_auto",
+            params: .object([
+                "vault": .string(vault), "remoteId": .string(remoteId), "enabled": .bool(enabled),
+            ]))
+    }
+
+    public func syncResolve(
+        vault: String, remoteId: String, path: String, resolution: JSONValue?,
+        localHash: String, remoteHash: String
+    ) async throws {
+        var params: [String: JSONValue] = [
+            "vault": .string(vault), "remoteId": .string(remoteId), "path": .string(path),
+            "localHash": .string(localHash), "remoteHash": .string(remoteHash),
+        ]
+        if let resolution { params["resolution"] = resolution }
+        try await call("notebook.sync.resolve", params: .object(params))
+    }
+
+    public func syncResolutions(vault: String, remoteId: String) async throws -> [StoredResolution] {
+        let frame = try await connection.request(
+            "notebook.sync.resolutions",
+            params: .object(["vault": .string(vault), "remoteId": .string(remoteId)]))
+        guard case let .array(items)? = frame.result["resolutions"] else { return [] }
+        return items.compactMap { item in
+            guard let path = item["path"]?.stringValue,
+                  let localHash = item["localHash"]?.stringValue,
+                  let remoteHash = item["remoteHash"]?.stringValue
+            else { return nil }
+            return StoredResolution(
+                path: path,
+                resolution: item["resolution"]?.objectValue ?? [:],
+                localHash: localHash,
+                remoteHash: remoteHash,
+                decidedAtMs: UInt64(item["decidedAtMs"]?.numberText ?? "0") ?? 0)
+        }
+    }
+
+    public func syncStatus(vault: String, remoteIds: [String]) async throws -> [RemoteStatus] {
+        let frame = try await connection.request(
+            "notebook.sync.status",
+            params: .object([
+                "vault": .string(vault), "remoteIds": .array(remoteIds.map { .string($0) }),
+            ]))
+        guard case let .array(items)? = frame.result["status"] else { return [] }
+        return try items.map { try decode($0, as: RemoteStatus.self) }
+    }
+
+    public func gitSync(vault: String) async throws {
+        try await call("notebook.git.sync", params: .object(["vault": .string(vault)]))
+    }
+
+    // ── 存储连接（凭据不回明文：只有键名清单）──
+
+    public func storageSaveConnection(
+        id: String, name: String, protocolName: String, config: [String: String],
+        secrets: [String: String]
+    ) async throws {
+        try await call(
+            "notebook.storage.save_connection",
+            params: .object([
+                "connection": .object([
+                    "id": .string(id), "name": .string(name),
+                    "protocol": .string(protocolName),
+                    "config": .object(config.mapValues { .string($0) }),
+                    "secrets": .object(secrets.mapValues { .string($0) }),
+                    "createdAt": .number("0"),
+                ])
+            ]))
+    }
+
+    public func storageDeleteConnection(id: String) async throws {
+        try await call(
+            "notebook.storage.delete_connection", params: .object(["connectionId": .string(id)]))
+    }
+
+    // ── embedding key（不回明文）──
+
+    public func embeddingKeySet(_ key: String) async throws {
+        try await call(
+            "notebook.embedding_key.set", params: .object(["key": .string(key)]))
+    }
+
+    public func embeddingKeyStatus() async throws -> Bool {
+        let frame = try await connection.request(
+            "notebook.embedding_key.status", params: .object([:]))
+        guard case let .bool(set)? = frame.result["set"] else { return false }
+        return set
+    }
+
+    public func embeddingKeyClear() async throws {
+        try await call("notebook.embedding_key.clear", params: .object([:]))
+    }
+
+    // ── RAG ──
+
+    public func ragStats(vault: String) async throws -> [String: JSONValue] {
+        let frame = try await connection.request(
+            "notebook.rag.stats", params: .object(["vault": .string(vault)]))
+        return frame.result.objectValue ?? [:]
+    }
+
+    public func ragSearch(
+        vault: String, query: String, config: [String: JSONValue], options: [String: JSONValue]?
+    ) async throws -> [String: JSONValue] {
+        var params: [String: JSONValue] = [
+            "vault": .string(vault), "query": .string(query), "config": .object(config),
+        ]
+        if let options { params["options"] = .object(options) }
+        let frame = try await connection.request(
+            "notebook.rag.search", params: .object(params))
+        return frame.result.objectValue ?? [:]
+    }
+
+    public func ragNeighbors(vault: String, path: String, limit: Int?) async throws -> [String] {
+        var params: [String: JSONValue] = [
+            "vault": .string(vault), "path": .string(path),
+        ]
+        if let limit { params["limit"] = .number(String(limit)) }
+        let frame = try await connection.request(
+            "notebook.rag.neighbors", params: .object(params))
+        guard case let .array(items)? = frame.result["neighbors"] else { return [] }
+        return items.compactMap(\.stringValue)
+    }
+}

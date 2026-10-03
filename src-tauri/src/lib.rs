@@ -93,11 +93,6 @@ mod ssh_proxy;
 mod startup_diagnostics;
 mod storage;
 mod storage_backend;
-mod storage_backend_baidu;
-mod storage_backend_box;
-mod storage_backend_mount;
-mod storage_backend_opendal;
-mod storage_backend_smb;
 mod storage_conn;
 mod storage_location;
 mod storage_oauth;
@@ -454,7 +449,9 @@ pub fn run() {
         .manage(remote::RemoteState::new())
         .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
-        .manage(notebook::state::NotebookState::default())
+        .manage(std::sync::Arc::new(
+            notebook::state::NotebookState::default(),
+        ))
         .manage(ExitAuthorization::default())
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;

@@ -20,13 +20,11 @@
 //! 任何用户内容。这是它敢用 `synchronous = NORMAL`、也敢在维度变化时整表重建的
 //! 前提。
 
-pub mod chunk;
-pub mod cjk;
+// P7-06：业务本体上收 `aeroric_core::notebook::rag`（原样移动）；
+// topic 常量表也移到 core（`RAG_INDEX_PROGRESS_TOPIC`/`RAG_INDEX_PROGRESS_LEGACY`），
+// 宿主 emit wrapper 发两条（旧通道 verbatim＋v1 topic）。
+pub use aeroric_core::notebook::rag::{
+    context, db, embed, graph, index, rerank, search, RAG_INDEX_PROGRESS_TOPIC,
+};
+
 pub mod commands;
-pub mod context;
-pub mod db;
-pub mod embed;
-pub mod graph;
-pub mod index;
-pub mod rerank;
-pub mod search;

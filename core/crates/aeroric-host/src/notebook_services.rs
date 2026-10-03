@@ -58,8 +58,22 @@ macro_rules! try_s {
     };
 }
 
-pub fn register_notebook_services(set: &mut ServiceSet, _context: Arc<CoreContext>) {
+pub fn register_notebook_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     let handle = NotebookHandle::default();
+    macro_rules! service_ctx {
+        ($method:expr, $fn_name:ident) => {{
+            let handle = handle.clone();
+            let context = Arc::clone(&context);
+            set.register(
+                $method,
+                Arc::new(move |request, _call| {
+                    let handle = handle.clone();
+                    let context = Arc::clone(&context);
+                    Box::pin(async move { $fn_name(request, &handle, &context) })
+                }),
+            );
+        }};
+    }
     macro_rules! service {
         ($method:expr, $fn_name:ident) => {{
             let handle = handle.clone();
@@ -146,6 +160,49 @@ pub fn register_notebook_services(set: &mut ServiceSet, _context: Arc<CoreContex
     service!("notebook.export_write_file", nb_export_write_file);
     service!("notebook.export_site_write", nb_export_site_write);
     service!("notebook.html_to_markdown", nb_html_to_markdown);
+
+    // ── 云盘 / git 同步（P7-06）──
+    service_ctx!("notebook.sync_bind", nb_sync_bind);
+    service_ctx!("notebook.sync_unbind", nb_sync_unbind);
+    service_ctx!("notebook.sync_remotes", nb_sync_remotes);
+    service_ctx!("notebook.sync_run", nb_sync_run);
+    service_ctx!("notebook.sync_set_auto", nb_sync_set_auto);
+    service_ctx!("notebook.sync_resolve", nb_sync_resolve);
+    service_ctx!("notebook.sync_resolutions", nb_sync_resolutions);
+    service_ctx!("notebook.sync_status", nb_sync_status);
+    service_ctx!("notebook.git_sync", nb_git_sync);
+
+    // ── RAG（P7-06）──
+    service_ctx!("notebook.rag_probe", nb_rag_probe);
+    service_ctx!("notebook.rag_stats", nb_rag_stats);
+    service_ctx!("notebook.rag_cancel", nb_rag_cancel);
+    service_ctx!("notebook.rag_clear", nb_rag_clear);
+    service_ctx!("notebook.rag_search", nb_rag_search);
+    service_ctx!("notebook.rag_neighbors", nb_rag_neighbors);
+
+    // ── embedding key（凭据走 CoreContext SecretStore；不回明文）──
+    service_ctx!("notebook.embedding_key_set", nb_embedding_key_set);
+    service_ctx!("notebook.embedding_key_status", nb_embedding_key_status);
+    service_ctx!("notebook.embedding_key_clear", nb_embedding_key_clear);
+
+    // ── 存储连接（P7-06；数据根 = context.paths.data_dir）──
+    service_ctx!(
+        "notebook.storage_list_connections",
+        nb_storage_list_connections
+    );
+    service_ctx!("notebook.storage_secret_keys", nb_storage_secret_keys);
+    service_ctx!(
+        "notebook.storage_save_connection",
+        nb_storage_save_connection
+    );
+    service_ctx!(
+        "notebook.storage_delete_connection",
+        nb_storage_delete_connection
+    );
+    service_ctx!(
+        "notebook.storage_touch_connection",
+        nb_storage_touch_connection
+    );
 }
 
 // ── vault 注册 ──────────────────────────────────────────────────────────────
@@ -810,4 +867,513 @@ fn missing(request: &Request, key: &str) -> Frame {
         ErrorCode::InvalidArgument,
         &format!("requires params.{key}"),
     )
+}
+
+// ── 云盘 / git 同步（P7-06；命令体与 Tauri `notebook_sync_*` 逐一镜像）──────
+
+fn nb_sync_bind(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let connection_id = try_f!(need_str(&request, "connectionId"));
+    let root = try_f!(need_str(&request, "root"));
+    let data_dir = context.paths.data_dir().to_path_buf();
+    let bound = (|| -> Result<(), String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        // 绑定时就验一次连接存在。
+        aeroric_core::storage_backends::conn::find_connection(&data_dir, &connection_id)?;
+        let conn = aeroric_core::notebook::sync::store::open(&resolved)?;
+        aeroric_core::notebook::sync::store::upsert_remote(
+            &conn,
+            &remote_id,
+            "cloud",
+            &root,
+            &connection_id,
+        )
+    })();
+    match bound {
+        Ok(()) => ok(&request, json!({ "bound": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_unbind(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let unbound = (|| -> Result<(), String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let conn = aeroric_core::notebook::sync::store::open(&resolved)?;
+        aeroric_core::notebook::sync::store::remove_remote(&conn, &remote_id)
+    })();
+    match unbound {
+        Ok(()) => ok(&request, json!({ "unbound": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_remotes(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let listed = (|| -> Result<Vec<aeroric_core::notebook::sync::store::RemoteTarget>, String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        match aeroric_core::notebook::sync::store::open_existing(&resolved)? {
+            Some(conn) => aeroric_core::notebook::sync::store::list_remotes(&conn),
+            None => Ok(Vec::new()),
+        }
+    })();
+    match listed {
+        Ok(targets) => ok(&request, json!({ "remotes": targets })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_run(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let strategy = try_f!(need_opt::<
+        aeroric_core::notebook::sync::diff::ConflictStrategy,
+    >(&request, "strategy"))
+    .unwrap_or(aeroric_core::notebook::sync::diff::ConflictStrategy::Ask);
+    let data_dir = context.paths.data_dir().to_path_buf();
+    let report = (|| -> Result<aeroric_core::notebook::sync::engine::SyncReport, String> {
+        use aeroric_core::notebook::sync as ns;
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let (device, target) = {
+            let conn = ns::store::open(&resolved)?;
+            let target = ns::store::get_remote(&conn, &remote_id)?
+                .ok_or_else(|| format!("Unknown notebook sync remote: {remote_id}"))?;
+            (ns::store::device_id(&conn)?, target)
+        };
+        aeroric_core::notebook::require_cloud_target(&remote_id, &target.kind)?;
+        let connection = aeroric_core::storage_backends::conn::find_connection(
+            &data_dir,
+            &target.connection_id,
+        )?;
+        let backend = aeroric_core::storage_backends::build_backend(&data_dir, &connection)?;
+        let mut remote = ns::remote::StorageRemote::open(
+            backend.as_ref(),
+            &target.root,
+            &device,
+            target.seq + 1,
+        );
+        let mut local = ns::local::VaultLocalFs;
+        ns::engine::run(
+            &resolved,
+            &remote_id,
+            strategy,
+            aeroric_core::clock::now_ms_u64() as i64,
+            &mut remote,
+            &mut local,
+        )
+    })();
+    match report {
+        Ok(report) => ok(&request, json_value(report)),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_set_auto(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let enabled = try_f!(need::<bool>(&request, "enabled"));
+    let result = (|| -> Result<(), String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let conn = aeroric_core::notebook::sync::store::open(&resolved)?;
+        aeroric_core::notebook::sync::store::set_auto_sync(&conn, &remote_id, enabled)?;
+        if !enabled {
+            aeroric_core::notebook::sync::daemon::forget_pending(&resolved, &remote_id);
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => ok(&request, json!({ "set": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_resolve(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let path = try_f!(need_str(&request, "path"));
+    let resolution = try_f!(need_opt::<aeroric_core::notebook::sync::diff::Resolution>(
+        &request,
+        "resolution"
+    ));
+    let local_hash = try_f!(need_opt::<String>(&request, "localHash")).unwrap_or_default();
+    let remote_hash = try_f!(need_opt::<String>(&request, "remoteHash")).unwrap_or_default();
+    let result = (|| -> Result<(), String> {
+        use aeroric_core::notebook::sync as ns;
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let conn = ns::store::open(&resolved)?;
+        let Some(resolution) = resolution else {
+            return ns::store::clear_resolution(&conn, &remote_id, &path);
+        };
+        if let ns::diff::Resolution::Fork { fork_path } = &resolution {
+            if fork_path.is_empty() {
+                return Err("Fork path cannot be empty".to_string());
+            }
+            if ns::scan::is_out_of_scope(fork_path) {
+                return Err(format!(
+                    "Path is outside the notebook sync scope: {fork_path}"
+                ));
+            }
+        }
+        let decided = ns::store::StoredResolution {
+            path,
+            resolution,
+            local_hash,
+            remote_hash,
+            decided_at: aeroric_core::clock::now_ms_u64() as i64,
+        };
+        ns::store::set_resolution(&conn, &remote_id, &decided)
+    })();
+    match result {
+        Ok(()) => ok(&request, json!({ "decided": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_resolutions(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_id = try_f!(need_str(&request, "remoteId"));
+    let listed =
+        (|| -> Result<Vec<aeroric_core::notebook::sync::store::StoredResolution>, String> {
+            let resolved = handle.resolve_in_vaults(&vault, false)?;
+            let conn = aeroric_core::notebook::sync::store::open(&resolved)?;
+            aeroric_core::notebook::sync::store::resolutions(&conn, &remote_id)
+        })();
+    match listed {
+        Ok(items) => ok(&request, json!({ "resolutions": items })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_sync_status(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let remote_ids = try_f!(need::<Vec<String>>(&request, "remoteIds"));
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    ok(
+        &request,
+        json!({ "status": aeroric_core::notebook::sync::daemon::status_for(&resolved, &remote_ids) }),
+    )
+}
+
+fn nb_git_sync(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let report = (|| -> Result<aeroric_core::notebook::sync::git::GitSyncReport, String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        aeroric_core::notebook::sync::git::run(&resolved, &format!("notebook: sync {stamp}"))
+    })();
+    match report {
+        Ok(report) => ok(&request, json_value(report)),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+// ── RAG（P7-06）──────────────────────────────────────────────────────────────
+
+/// RAG 的 embedding key 账户名（与宿主 `commands.rs::EMBEDDING_KEY_ACCOUNT`
+/// 同值——同一把 key，两侧命令面共享）。
+const EMBEDDING_KEY_ACCOUNT: &str = "notebook:embedding:key";
+
+/// 原生服务的索引任务互斥表（与 Tauri 命令层的 `jobs()` 分立：两侧面板不同时
+/// 建同一 vault 的索引——桌面与原生互斥由单一客户端使用保证，边界记入评审）。
+fn native_jobs() -> &'static std::sync::Mutex<
+    std::collections::HashMap<PathBuf, aeroric_core::notebook::rag::index::CancelToken>,
+> {
+    static JOBS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, aeroric_core::notebook::rag::index::CancelToken>,
+        >,
+    > = std::sync::OnceLock::new();
+    JOBS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 在独立线程上跑一个 current-thread runtime（与 Tauri 命令层 `on_own_thread`
+/// 同语义：rusqlite 连接非 Sync、SQLite 阻塞读写不该占 async worker）。
+fn block_rag<T, F>(work: impl FnOnce() -> F + Send + 'static) -> Result<T, String>
+where
+    T: Send + 'static,
+    // F 不要求 Send：future 在 spawned 线程上创建并 poll，从不久离该线程
+    //（rusqlite 的 Connection 非 Sync/Send 正是 host `on_own_thread` 的理由）。
+    F: std::future::Future<Output = Result<T, String>> + 'static,
+{
+    std::thread::scope(|_scope| {
+        let handle = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?
+                .block_on(work())
+        });
+        handle
+            .join()
+            .map_err(|_| "rag thread panicked".to_string())?
+    })
+}
+
+/// 用 CoreContext 的 SecretStore 解析 embedding key（Ollama 不查、已带不覆盖
+/// ——与宿主 `with_stored_key` 同语义）。
+fn resolve_key_with_secrets(
+    mut config: aeroric_core::notebook::rag::embed::EmbedConfig,
+    context: &CoreContext,
+) -> Result<aeroric_core::notebook::rag::embed::EmbedConfig, String> {
+    use aeroric_core::notebook::rag::embed::EmbedProvider;
+    if config.provider == EmbedProvider::Ollama || !config.api_key.trim().is_empty() {
+        return Ok(config);
+    }
+    let key = context.secrets.get(&aeroric_core::context::SecretKey(
+        EMBEDDING_KEY_ACCOUNT.to_string(),
+    ))?;
+    if let Some(key) = key {
+        config.api_key = key;
+    }
+    Ok(config)
+}
+
+fn nb_rag_probe(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let _ = handle;
+    let config = try_f!(need::<aeroric_core::notebook::rag::embed::EmbedConfig>(
+        &request, "config"
+    ));
+    let config = try_s!(request, resolve_key_with_secrets(config, context));
+    match block_rag(move || async move {
+        aeroric_core::notebook::rag::embed::probe_dimension(&config)
+            .await
+            .map_err(|e| e.message().to_string())
+    }) {
+        Ok(dim) => ok(&request, json!({ "dim": dim })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_rag_stats(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    let stats = match aeroric_core::notebook::rag::db::peek_dim(&resolved) {
+        Some(dim) => aeroric_core::notebook::rag::index::stats(&resolved, dim),
+        None => Ok(aeroric_core::notebook::rag::index::IndexStats::default()),
+    };
+    match stats {
+        Ok(stats) => ok(&request, json_value(stats)),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_rag_cancel(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    let cancelled = match native_jobs().lock() {
+        Ok(map) => match map.get(&resolved) {
+            Some(cancel) => {
+                cancel.cancel();
+                true
+            }
+            None => false,
+        },
+        Err(_) => false,
+    };
+    ok(&request, json!({ "cancelled": cancelled }))
+}
+
+fn nb_rag_clear(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    // 占位即互斥：索引跑着的时候不删库。
+    let guard = (|| -> Result<(), String> {
+        let mut map = native_jobs().lock().map_err(|e| e.to_string())?;
+        if map.contains_key(&resolved) {
+            return Err("An index job is already running for this vault".to_string());
+        }
+        map.insert(
+            resolved.clone(),
+            aeroric_core::notebook::rag::index::CancelToken::new(),
+        );
+        Ok(())
+    })();
+    if let Err(e) = guard {
+        return failure(request.id, ErrorCode::IoError, &e);
+    }
+    let cleared = aeroric_core::notebook::rag::index::clear(&resolved);
+    native_jobs().lock().map(|mut m| m.remove(&resolved)).ok();
+    match cleared {
+        Ok(()) => ok(&request, json!({ "cleared": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_rag_search(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let query = try_f!(need_str(&request, "query"));
+    let config = try_f!(need::<aeroric_core::notebook::rag::embed::EmbedConfig>(
+        &request, "config"
+    ));
+    let options =
+        try_f!(need_opt::<aeroric_core::notebook::rag::search::SearchOptions>(&request, "options"))
+            .unwrap_or_default();
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    let Some(dim) = aeroric_core::notebook::rag::db::peek_dim(&resolved) else {
+        // 还没建过索引。vectors_missing 让 UI 提示「先建索引」。
+        return ok(
+            &request,
+            json!({ "hits": [], "degraded": [], "vectorsMissing": true }),
+        );
+    };
+    let config = try_s!(request, resolve_key_with_secrets(config, context));
+    match block_rag(move || async move {
+        aeroric_core::notebook::rag::search::search(&resolved, dim, &config, &query, &options).await
+    }) {
+        Ok(outcome) => ok(&request, json_value(outcome)),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_rag_neighbors(request: Request, handle: &NotebookHandle, _context: &CoreContext) -> Frame {
+    use aeroric_core::notebook::rag::{db, graph};
+    let vault = try_f!(need_str(&request, "vault"));
+    let path = try_f!(need_str(&request, "path"));
+    let limit = try_f!(need_opt::<usize>(&request, "limit"))
+        .unwrap_or(8)
+        .max(1);
+    let neighbors = (|| -> Result<Vec<String>, String> {
+        let resolved = handle.resolve_in_vaults(&vault, false)?;
+        let note = handle.resolve_in_vaults(&path, false)?;
+        if !note.starts_with(&resolved) {
+            return Err("Notebook note is outside the given vault".to_string());
+        }
+        let Some(dim) = db::peek_dim(&resolved) else {
+            return Ok(Vec::new());
+        };
+        let Some(conn) = db::open_existing(&resolved, dim)? else {
+            return Ok(Vec::new());
+        };
+        let docs = graph::load_docs(&conn)?;
+        let wanted = note.to_string_lossy().to_string();
+        let Some(doc) = docs.iter().find(|d| d.path == wanted) else {
+            return Ok(Vec::new());
+        };
+        let index = graph::LinkIndex::build(&docs);
+        let ids = graph::neighbors(&conn, &index, doc, limit)?;
+        let by_id: std::collections::HashMap<i64, &graph::DocRef> =
+            docs.iter().map(|d| (d.id, d)).collect();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| by_id.get(&id).map(|d| d.path.clone()))
+            .collect())
+    })();
+    match neighbors {
+        Ok(paths) => ok(&request, json!({ "neighbors": paths })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+// ── embedding key（凭据走 SecretStore；status 不回明文）─────────────────────
+
+fn nb_embedding_key_set(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let key = try_f!(need_str(&request, "key")).trim().to_string();
+    match context.secrets.set(
+        &aeroric_core::context::SecretKey(EMBEDDING_KEY_ACCOUNT.to_string()),
+        &key,
+    ) {
+        Ok(()) => ok(&request, json!({ "set": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_embedding_key_status(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    match context.secrets.get(&aeroric_core::context::SecretKey(
+        EMBEDDING_KEY_ACCOUNT.to_string(),
+    )) {
+        // 空串在 SecretStore 语义里就是删除；get 返回 None 或空都算「没设」。
+        Ok(value) => ok(&request, json!({ "set": value.is_some() })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_embedding_key_clear(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    match context.secrets.delete(&aeroric_core::context::SecretKey(
+        EMBEDDING_KEY_ACCOUNT.to_string(),
+    )) {
+        Ok(()) => ok(&request, json!({ "cleared": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+// ── 存储连接（数据根 = context.paths.data_dir）──────────────────────────────
+
+fn nb_storage_list_connections(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let repo = aeroric_core::storage_backends::conn::StorageConnRepo::new(context.paths.data_dir());
+    match repo.list_public() {
+        Ok(items) => ok(&request, json!({ "connections": items })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_storage_secret_keys(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let repo = aeroric_core::storage_backends::conn::StorageConnRepo::new(context.paths.data_dir());
+    match repo.secret_keys_set() {
+        Ok(map) => ok(&request, json!({ "secretKeys": map })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_storage_save_connection(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let connection = try_f!(need::<
+        aeroric_core::storage_backends::conn::StorageConnection,
+    >(&request, "connection"));
+    let repo = aeroric_core::storage_backends::conn::StorageConnRepo::new(context.paths.data_dir());
+    match repo.save_connection(connection) {
+        Ok(items) => ok(&request, json!({ "connections": items })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_storage_delete_connection(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let id = try_f!(need_str(&request, "connectionId"));
+    let repo = aeroric_core::storage_backends::conn::StorageConnRepo::new(context.paths.data_dir());
+    match repo.delete_connection(&id) {
+        Ok(items) => ok(&request, json!({ "connections": items })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
+}
+
+fn nb_storage_touch_connection(
+    request: Request,
+    _handle: &NotebookHandle,
+    context: &CoreContext,
+) -> Frame {
+    let id = try_f!(need_str(&request, "connectionId"));
+    let timestamp = try_f!(need::<i64>(&request, "timestamp"));
+    let repo = aeroric_core::storage_backends::conn::StorageConnRepo::new(context.paths.data_dir());
+    match repo.touch_connection(&id, timestamp) {
+        Ok(()) => ok(&request, json!({ "touched": true })),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e),
+    }
 }

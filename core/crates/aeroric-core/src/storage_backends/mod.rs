@@ -5,11 +5,18 @@
 //! 所以每个后端都要声明自己的 [`Capability`] 位,前端据此禁用不支持的动作,
 //! 而不是让用户点了之后收到一个后端错误。
 
+pub mod baidu;
+pub mod box_backend;
+pub mod conn;
+pub mod mount;
+pub mod opendal;
+pub mod smb;
+
+pub use conn::{StorageConnection, StorageProtocol};
+
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
-
-use crate::storage_conn::{StorageConnection, StorageProtocol};
 
 /// 后端支持的能力位。前端用它 gate 工具栏按钮与右键菜单。
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,7 +262,7 @@ pub fn protocol_descriptors() -> Vec<ProtocolDescriptor> {
             protocol,
             display_name: protocol_display_name(protocol).to_string(),
             capability: capability_for(protocol),
-            required_config_keys: crate::storage_conn::required_config_keys(protocol)
+            required_config_keys: conn::required_config_keys(protocol)
                 .iter()
                 .map(|key| (*key).to_string())
                 .collect(),
@@ -264,17 +271,19 @@ pub fn protocol_descriptors() -> Vec<ProtocolDescriptor> {
                 .iter()
                 .map(|key| (*key).to_string())
                 .collect(),
-            default_endpoint: crate::storage_backend_opendal::default_endpoint(protocol)
-                .map(str::to_string),
+            default_endpoint: opendal::default_endpoint(protocol).map(str::to_string),
             oauth: protocol.is_oauth(),
             system_mount: protocol.is_system_mount(),
-            deprecated: crate::storage_backend_mount::is_deprecated(protocol),
+            deprecated: mount::is_deprecated(protocol),
         })
         .collect()
 }
 
 /// 按连接构造后端实例。各协议实现随阶段逐步接入。
-pub fn build_backend(connection: &StorageConnection) -> Result<Box<dyn StorageBackend>, String> {
+pub fn build_backend(
+    data_dir: &std::path::Path,
+    connection: &StorageConnection,
+) -> Result<Box<dyn StorageBackend>, String> {
     match connection.protocol {
         StorageProtocol::S3
         | StorageProtocol::S3Compatible
@@ -288,13 +297,11 @@ pub fn build_backend(connection: &StorageConnection) -> Result<Box<dyn StorageBa
         | StorageProtocol::Dropbox
         | StorageProtocol::OneDrive
         | StorageProtocol::GoogleDrive
-        | StorageProtocol::AliyunDrive => super::storage_backend_opendal::build(connection),
-        StorageProtocol::Box => super::storage_backend_box::build(connection),
-        StorageProtocol::BaiduNetdisk => super::storage_backend_baidu::build(connection),
-        StorageProtocol::Smb => super::storage_backend_smb::build(connection),
-        StorageProtocol::Afp | StorageProtocol::Nfs => {
-            super::storage_backend_mount::build(connection)
-        }
+        | StorageProtocol::AliyunDrive => opendal::build(connection),
+        StorageProtocol::Box => box_backend::build(connection),
+        StorageProtocol::BaiduNetdisk => baidu::build(connection),
+        StorageProtocol::Smb => smb::build(connection),
+        StorageProtocol::Afp | StorageProtocol::Nfs => mount::build(data_dir, connection),
     }
 }
 

@@ -11,6 +11,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+chrono = "0.4" # 与 core/宿主同 crate 同版本（notebook.git_sync 的提交信息时间戳——P7-06）
 aeroric-core = { workspace = true }
 sha2 = "0.10.9" # 与 core 同版：ready 帧的 data-dir 标识哈希
 aeroric-protocol = { workspace = true }

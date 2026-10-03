@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "d1b44b63f53b44bcd7ae79d5ddf30cf125919d261c3144390690b2d0d1d0e054",
+  "sourceSha256": "99145825fbe47557f790b9c426661986be7cf7e40ef96fc6e87324b5c3ee2961",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -317,13 +317,15 @@
         "positive_test": "tests/notebook_contract.rs + 搬移后的既有 import/archive 测试",
         "negative_test": "ZIP ../、symlink、超大解压不得写出测试 vault；旧笔记内容 hash 不被格式化改变",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted"
+          "C": "accepted",
+          "N": "accepted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/notebook.md"
+        ]
       },
       {
         "id": "F16",
@@ -336,13 +338,15 @@
         "positive_test": "tests/{notebook_sync,rag_pipeline,storage_backends}.rs",
         "negative_test": "重复 index 不重复计费；凭据不得出现在事件快照；Keychain 错误不得降级明文",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted"
+          "C": "accepted",
+          "N": "accepted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/notebook-services.md"
+        ]
       },
       {
         "id": "F17",

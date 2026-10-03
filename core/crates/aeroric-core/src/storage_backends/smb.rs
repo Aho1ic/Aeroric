@@ -11,11 +11,11 @@ use std::sync::Mutex;
 
 use smb2::{ClientConfig, SmbClient, Tree};
 
-use crate::storage_backend::{
+use crate::storage_backends::conn::StorageConnection;
+use crate::storage_backends::{
     join_storage_path, normalize_storage_path, validate_storage_mutation_path, Capability,
     StorageBackend, StorageEntry, StorageStat,
 };
-use crate::storage_conn::StorageConnection;
 
 /// `Connection` 没有在 crate 根重新导出,这里给出完整路径别名。
 type SmbConnection = smb2::client::connection::Connection;
@@ -70,7 +70,7 @@ impl SmbBackend {
 }
 
 fn file_time_to_ms(time: smb2::pack::filetime::FileTime) -> Option<u64> {
-    crate::storage_backend::system_time_to_ms(time.to_system_time()?)
+    crate::storage_backends::system_time_to_ms(time.to_system_time()?)
 }
 
 impl StorageBackend for SmbBackend {

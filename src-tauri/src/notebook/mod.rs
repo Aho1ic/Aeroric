@@ -39,7 +39,6 @@ pub use aeroric_core::notebook::tasks;
 pub use aeroric_core::notebook::trash;
 pub use aeroric_core::notebook::user_templates;
 pub use aeroric_core::notebook::vault_index;
-pub use aeroric_core::notebook::vault_walk;
 pub use aeroric_core::notebook::{stat_note, CreatedNote, NoteStat};
 
 pub mod rag;
@@ -831,7 +830,10 @@ pub async fn notebook_sync_bind(
     blocking(move || {
         // 绑定时就验一次连接存在。等到同步那一轮才报「找不到连接」的话,用户看到的是一次
         // 失败的同步,而问题其实在配置那一步。
-        crate::storage_conn::find_connection(&connection_id)?;
+        aeroric_core::storage_backends::conn::find_connection(
+            &crate::storage::aeroric_dir()?,
+            &connection_id,
+        )?;
         let conn = sync::store::open(&resolved)?;
         sync::store::upsert_remote(&conn, &remote_id, "cloud", &root, &connection_id)
     })
@@ -895,8 +897,14 @@ pub async fn notebook_sync_run(
         // git 目标走 `notebook_git_sync`,不是这条路。两者的失败模式和用户确认都不一样,
         // 混在一个命令里只会让「同步失败」这句话失去意义。
         require_cloud_target(&remote_id, &target.kind)?;
-        let connection = crate::storage_conn::find_connection(&target.connection_id)?;
-        let backend = crate::storage_backend::build_backend(&connection)?;
+        let connection = aeroric_core::storage_backends::conn::find_connection(
+            &crate::storage::aeroric_dir()?,
+            &target.connection_id,
+        )?;
+        let backend = aeroric_core::storage_backends::build_backend(
+            &crate::storage::aeroric_dir()?,
+            &connection,
+        )?;
         let mut remote = sync::remote::StorageRemote::open(
             backend.as_ref(),
             &target.root,

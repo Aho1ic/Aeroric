@@ -72,6 +72,9 @@ impl DocStatus {
 
     /// 未知字符串按 `Pending` 处理 —— 让它被重新索引,而不是让整个查询失败。
     /// 库可能被更新的版本写过,或者被人手工改过。
+    // 与宿主 `db.rs` 同名同形（原样上收）；不实现 std FromStr 是刻意的——
+    // 未知词表要 panic 在调用点而不是静默 Default。
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(raw: &str) -> Self {
         match raw {
             "indexed" => DocStatus::Indexed,

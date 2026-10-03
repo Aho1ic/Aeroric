@@ -35,8 +35,8 @@
     "side_legend": "N=原生界面 C=核心/CLI A=外部 Agent 能力适配 K=保留跨平台实现（§1.2 marker_legend）",
     "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
     "counts": {
-      "accepted": 36,
-      "pending": 15
+      "accepted": 37,
+      "pending": 14
     }
   },
   "tasks": [
@@ -258,9 +258,9 @@
     },
     {
       "task": "P7-06",
-      "status": "pending",
-      "accepted_on": null,
-      "review": null
+      "status": "accepted",
+      "accepted_on": "2026-10-03",
+      "review": "reviews/notebook-services.md"
     },
     {
       "task": "P8-01",

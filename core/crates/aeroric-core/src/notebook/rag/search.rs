@@ -161,7 +161,8 @@ pub struct SearchOutcome {
 }
 
 /// 检索参数。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SearchOptions {
     pub limit: usize,
     /// 是否按引用图补几篇关联笔记。
@@ -1358,6 +1359,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(&vault, 4, &config, "   ", &SearchOptions::default())
             .await
@@ -1375,6 +1377,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(&vault, 4, &config, "导出", &SearchOptions::default())
             .await
@@ -1414,6 +1417,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(&vault, 4, &config, "导出", &SearchOptions::default())
             .await
@@ -1464,6 +1468,7 @@ mod tests {
             base_url,
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(&vault, 4, &config, "导出", &SearchOptions::default())
             .await
@@ -1508,6 +1513,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
@@ -1571,6 +1577,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
@@ -1653,6 +1660,7 @@ mod tests {
             // 没有人在这个端口上监听。
             base_url: "http://127.0.0.1:1".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         }
     }
 
@@ -1679,6 +1687,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
@@ -1728,6 +1737,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
@@ -1788,6 +1798,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         }
     }
 
@@ -1815,6 +1826,7 @@ mod tests {
                 expand_links: false,
                 per_doc: DEFAULT_PER_DOC,
                 rerank: Some(RerankConfig {
+                    proxy: Default::default(),
                     provider: "cohere".to_string(),
                     model: "rerank-v3".to_string(),
                     base_url,
@@ -1867,6 +1879,7 @@ mod tests {
                     model: "rerank-v3".to_string(),
                     base_url,
                     api_key: String::new(),
+                    proxy: Default::default(),
                 }),
             },
         )
@@ -1906,6 +1919,7 @@ mod tests {
                     model: "rerank-v3".to_string(),
                     base_url,
                     api_key: String::new(),
+                    proxy: Default::default(),
                 }),
             },
         )
@@ -1975,6 +1989,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
@@ -2019,6 +2034,7 @@ mod tests {
             base_url: "http://127.0.0.1:1".to_string(),
             model: "m".to_string(),
             api_key: String::new(),
+            proxy: Default::default(),
         };
         let outcome = search(
             &vault,
