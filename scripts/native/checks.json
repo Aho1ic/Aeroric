@@ -2740,6 +2740,83 @@
           "timeoutMs": 900000
         }
       ]
+    },
+    "provider-services": {
+      "cases": [
+        {
+          "name": "provider-services-contract-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--test",
+            "settings_services"
+          ],
+          "parse": "rust",
+          "minCases": 7,
+          "$note": "P8-02 settings_services.rs 7 用例：codex 目标三件套（内置+claude_gpt55+codex_like 自定义 profile——enable_chat_completions_proxy 继承）、claude 家族排除 codex_like、空 base_url profile 不路由、禁用家族无目标+默认 upstream 常量稳定、同 fixture 两次构造路由结果逐条相同（迁移前后对账面）、路由表进 RouterAgentRuntime 后 targets 不变+RouterAgent::Codex 家族按 runtime 取目标。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "provider-services-rust-operations",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "operations::tests"
+          ],
+          "parse": "rust",
+          "minCases": 9,
+          "$note": "P8-02 operations::tests 9 用例：重复 begin 回现有快照、终态保留到下次、running 按 agent 键隔离、取消标记轮询、finish 清标记、失败进度不补满、成功补 100、空收尾消息保留、迟到旧操作事件不覆盖新操作（新增负例）。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "provider-services-rust-providers",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-core",
+            "--lib",
+            "providers::tests"
+          ],
+          "parse": "rust",
+          "minCases": 19,
+          "$note": "P8-02 providers::tests 21 用例：PKCE 形状/唯一性、URL 带 PKCE/无 PKCE、回环 IPv4、state 不匹配/空值、code 提取/错误透传/缺 code、内置凭据拒绝、clientId/Secret 必填、oauth 选项与后端一致、桌面产物永不内嵌 secret 回归、非 OAuth 协议无 provider、is_oauth 全覆盖、secrets 含过期/缺可选字段。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "provider-services-ui-unit",
+          "kind": "test",
+          "argv": [
+            "swift",
+            "test",
+            "--package-path",
+            "macos/AeroricKit",
+            "--filter",
+            "ProviderSettingsTests"
+          ],
+          "parse": "swift",
+          "minCases": 9,
+          "$note": "P8-02 ProviderSettingsTests 9 例：provider catalog 与已安装 Agent 支持列表区分、凭据导出默认脱敏+二次确认、router listener 安全默认+非回环拒提交、代理 scheme 守卫（拒 ftp://、收 http/https/socks5/socks5h）、OAuth 标记与 core CredentialOptions 同源、Agent 操作面板 running 进度/取消、状态色随结果。",
+          "timeoutMs": 900000
+        }
+      ]
     }
   },
   "plannedModules": {
