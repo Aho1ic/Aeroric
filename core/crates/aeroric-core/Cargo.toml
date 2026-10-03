@@ -25,6 +25,7 @@ url = "2" # 与宿主同 crate 同版本（dsh_host/startup 的启动 URL 闸门
 trash = "=5.2.6" # 与宿主同 crate 同版本（files/delete_path 的回收站删除——不默认永久删除，P6-01）
 notify = "6" # 与宿主同 crate 同版本（files/watcher 的真实 watcher；宿主 event_watcher 同款）
 base64 = "0.22" # 与宿主同 crate 同版本（connections/ssh 的 host key 指纹）
+getrandom = "0.2" # 与宿主 src-tauri/Cargo.toml:70 逐字一致——providers/oauth 的 CSPRNG state/PKCE verifier（P8-02）
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] } # 与宿主 src-tauri/Cargo.toml:52 逐字一致（notebook/import 的 zip_src——P7-05）
 quick-xml = "0.41" # 与宿主同 crate 同版本（notebook/import/evernote 的 ENEX 良构 XML——P7-05）
 md-5 = "0.11" # 与宿主同 crate 同版本（ENEX <en-media hash> 的 MD5 附件对账；仅测试引用——P7-05）

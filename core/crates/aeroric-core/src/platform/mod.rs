@@ -1,6 +1,8 @@
 //! P7-02 Action 1：platform 模块（cfg 隔离实现——不删除 Windows 分支；与
 //! `src-tauri/src/platform/` 同源语义上收；平台探测纯函数）。
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 /// 平台形态（macOS/Windows/Linux）。
@@ -92,4 +94,55 @@ pub fn login_shell_path() -> &'static str {
 
 pub fn detect_path(binary: &str) -> String {
     imp::detect_path(binary)
+}
+
+// ── P8-02：node_runtime 的纯探测半边上收（宿主 `node_runtime.rs::detect_node`
+// 同源；`agent_scripts`/`agent_tools/node_bootstrap` 消费）。Windows 分支不删除。
+// Windows 的一键安装命令面（winget/node_version）留宿主——tokio 子进程与 Tauri
+// hooks 缓存是宿主职责。
+
+/// Windows 的标准 Node 安装位置候选。PATH 由刚装完的安装器刷新不到，所以
+/// 这些位置必须直接探测。
+#[cfg(any(windows, test))]
+pub(crate) fn windows_node_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    for key in ["NODE_HOME", "NVM_SYMLINK"] {
+        if let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+            directories.push(PathBuf::from(value));
+        }
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+            directories.push(PathBuf::from(value).join("nodejs"));
+        }
+    }
+    if let Some(value) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+        directories.push(PathBuf::from(value).join("Programs").join("nodejs"));
+    }
+    directories
+}
+
+/// Locate Node without relying exclusively on the process PATH. On Windows the
+/// PATH inherited by Aeroric predates a just-completed installer, so standard
+/// Node install locations must also be checked directly.
+pub fn detect_node() -> Option<PathBuf> {
+    let from_path = detect_path("node");
+    if !from_path.is_empty() {
+        let candidate = PathBuf::from(from_path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    {
+        for directory in windows_node_directories() {
+            let candidate = directory.join("node.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }

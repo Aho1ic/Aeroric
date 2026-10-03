@@ -20,9 +20,11 @@ pub mod local_router;
 pub mod location;
 pub mod location_probe;
 pub mod notebook;
+pub mod operations;
 pub mod paths;
 pub mod platform;
 pub mod projects;
+pub mod providers;
 pub mod runtime;
 pub mod sessions;
 #[allow(
