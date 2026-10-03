@@ -7,6 +7,10 @@
 //! **dead_code 注记**：宿主（src-tauri）仍持自己的 `app_settings` 副本（P8-02
 //! 刀五接线前两侧共存）。core 侧上收的主体在本 crate 内暂无调用者，clippy
 //! 的 never-used 在模块级放行；刀五宿主接线后逐条消费、注记删除。
+#![allow(
+    dead_code,
+    reason = "P8-02 刀五宿主接线前两侧共存；接线后逐条消费、注记删除"
+)]
 
 // 宿主 mod.rs 的 glob 面：兄弟文件经 `super::` 取这些类型（AppSettings/
 // ProxySettings 等定义在 schema.rs/models.rs，经这里的中转解析）。

@@ -27,11 +27,7 @@ pub mod projects;
 pub mod providers;
 pub mod runtime;
 pub mod sessions;
-#[allow(
-    dead_code,
-    reason = "P8-02 刀五接线前两侧共存；收口后逐条消费、注记删除"
-)]
-pub(crate) mod settings;
+pub mod settings;
 pub mod sse;
 pub mod storage;
 pub mod storage_backends;
