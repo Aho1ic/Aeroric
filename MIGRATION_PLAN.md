@@ -23,7 +23,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ## ▶ 执行进度标注（Agent 维护，暂停/继续以此为准）
 > **怎么读这份文件（2026-09-29 补记二百零三 加的导航块；行数与体积是当日实测）**：全文 **4 530 行／1.36 MB**，其中**第 63–1402 行是「续跑指令」区里的历史流水（1 340 行＝0.67 MB，占全文 49%）**，规范性正文从 **第 1439 行「## 0. 先纠正迁移起点」** 起、共 3 128 行／0.66 MB。**行号会随每轮标注漂移，所以下面一律给可重跑的 grep 锚点**：
-> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-03，第两百五十六次更新＝补记三百二十八）— P8-01 accepted（core extensions 守卫/掩码/信任判定＋六视图＋extensions 门禁 12 用例）。下一动作＝P8-02（provider、proxy、local router 与凭据边界）。**
+> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-03，第两百五十七次更新＝补记三百三十）— P8-02 in_progress（刀一已落地：local_router 全量 10.4K 行＋sse 上收 core，123 条 router 测试随迁全绿；剩余：settings/providers/operations 模块、settings_services.rs 契约测试、五视图、provider-services 门禁、grill-me [provider-services]、2 条 agent topic 接线＋G01 处置）。P8-01（c9ce060）、P7-06（1145edf）、P7-05（ad8a090）均已 accepted。**
 > - 51 个 Task 的状态 ＝ `grep -n "^### 进度总表" MIGRATION_PLAN.md` 起的那张表（今天实测表内 51 行、accepted 12）。
 > - 等你表态的全部内容 ＝ 跑 `grep -n "^**一页答题纸" MIGRATION_PLAN.md` 定位（**这里不写行号——写行号一定会烂：本行过去记的"第 217 行"今天实测已在第 247 行**）。现役 **26 项 ＋ Q1–Q7 ＋ 行政 A–D ＋ 2 项人工观察**，每题一行、带可引用的选项 token（**编号 1–9 与 11–27，缺第 10 项**——它已由 补记一百六十四 整条作废，作废说明留在清单里，所以缺号是对的、不是漏项）。**各台账项（19–25＝`G30`–`G36`）的诉求原文在 `docs/native/feature-matrix.json` 的 `gaps[].finding`／`requirement`**，由 `pnpm native:inventory --check` 每天核对 owner 与 `verified_on`；**逐项诉求的人类可读版**在 `grep -n "^\*\*待你表态清单" MIGRATION_PLAN.md` 定位的那一段（今天在第 **176** 行；它不是 `###` 标题而是加粗块，所以按标题 grep 会假称"没有这一节"——我自己就中过一次，见 补记二百一十五）。
 > - 某个 Task 的规格与它的具名移交项 ＝ `grep -n "^### Task P3-04" MIGRATION_PLAN.md`（51 个小节标题实测都在，`### Task P` 命中数＝51）。
