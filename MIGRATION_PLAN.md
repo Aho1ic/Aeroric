@@ -104,6 +104,12 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 ### ▶ P7-02 步 2（2026-10-03，刀二：UnsupportedTargetView＋CI core 检查）
 新建 `AeroricUI/Connections/UnsupportedTargetView.swift`（macOS 打开 WSL 项目保持元数据＋显示需要 Windows 主机——**禁止当作本地 path**）；`.github/workflows/checks.yml` 增 core 三作业（fmt/clippy -D warnings/test --all-targets --all-features，**保持原 Tauri matrix 与 source patches**）。**验证**：CI 命令本地复跑（core fmt/clippy/test --all-features → **650/0**、clippy 0）、AeroricKit 全包 185/0、App BUILD SUCCEEDED。
 
+### ▶ P7-03 步 1（2026-10-03，刀一：core infrastructure 模块）
+新建 `core/crates/aeroric-core/src/infrastructure/{mod,docker,ports,conda}.rs`：docker（OperationRegistry **长任务 operationId/取消/状态查询**——Cancelled 后不可改；Docker 形状 verbatim PascalCase 解析＋输出异常→空列表不 panic；**只读/破坏显式区分**；daemon_unavailable_reason——无 daemon 不弹 sudo，permission denied 有因提示）＋ports（ListeningPort、**PID 身份判定**——stop 前比对进程名避免 PID 重用误杀、can_stop_port owner/stop 显式区分）＋conda（环境发现 cfg 候选路径、`env_name_from_path` 推导、环境路径校验、**spawn 环境白名单不能污染全局 shell rc**）。新建 `tests/infrastructure.rs` 6 用例。**验证**：infrastructure 6/6、core 全量 **552/0**、clippy `-D warnings` 0、fmt 干净。接线中修掉：`env_name_from_path` 推导（conda 的 parent 是 bin，需三层路径推导）。
+
+### ▶ P7-03 步 2（2026-10-03，刀二：Infrastructure 五视图）
+新建 `AeroricUI/Infrastructure/{InfrastructureStore,InfrastructureViews}.swift`：InfrastructureStore（容器/镜像/端口/Conda 簿记＋daemon 不可用原因＋长任务状态）＋DockerPanel（无 daemon 显示不可用不弹 sudo）＋ImageList＋ContainerDetail（**Remove 二段确认**——只读/破坏显式区分）＋PortInspector（Owner/Stop 二段确认——PID 身份由宿主校验）＋CondaEnvironmentPicker。新建 `InfrastructureStoreTests`(5)。**验证**：AeroricKit 全包 190/0、App BUILD SUCCEEDED。
+
 **标注约定**：
 
 - 状态取值 `pending` / `in_progress` / `blocked` / `accepted`，与 §5.3 模板一致。
@@ -149,7 +155,8 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 | P7-01 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/connections.md`，grill-me [connections] 已真实调用、用户答复「接受并收口」。两刀：core connections 模块＋Connections 六视图。门禁 connections 2 case/13 用例、core 541/0、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | ssh_executor.rs＋legacy SSH 分支删除 → P7 接线；fake SSH e2e → P10-01 | 2026-10-03 |
 | P6-05 | **accepted — P6-05 Gate 通过 ＝ Phase 6 Gate 通过**（2026-10-02 收口：评审 `docs/native/reviews/worktree.md`，grill-me [worktree] 已真实调用、用户答复「接受并收口＋Gate 通过」。两刀：core worktree 模块（RCE 守卫＋merge-base diffstats＋生命周期判定）＋四视图。门禁 worktree 2 case/12 用例、core 533/0、AeroricKit 180/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。真实 Aeroric 仍 main、无新分支） | P2-05 临时端口 → P7 切 WorktreeService | 2026-10-02 |
 | P7-02 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/platforms.md`，grill-me [platforms] 已真实调用、用户答复「接受并收口」。两刀：core platform/wsl 模块＋UnsupportedTargetView＋CI core 三作业。门禁 platforms 1 case/5 用例、core --all-features 650/0、AeroricKit 185/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。G14 结案） | wsl_executor＋legacy 删除 → P7 接线收尾；Windows 真机 smoke → P10-01 | 2026-10-03 |
-| P7-03 ~ P7-05 | pending | Phase 7 内串行 | — |
+| P7-03 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/infrastructure.md`，grill-me [infrastructure] 已真实调用、用户答复「接受并收口」。两刀：core infrastructure 模块＋Infrastructure 五视图。门禁 infrastructure 2 case/11 用例、core 552/0、AeroricKit 190/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent） | 真 Docker smoke/CLI 执行 → P10-01 | 2026-10-03 |
+| P7-04 ~ P7-05 | pending | Phase 7 内串行 | — |
 | Phase 8 | pending | Phase 7 Gate | — |
 | Phase 9 | pending | Phase 8 Gate | — |
 | Phase 10 | pending | Phase 9 Gate | — |
@@ -178,7 +185,9 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > **【执行状态】补记三百二十三（2026-10-03）— P7-02 收口。** 步 1 侦察：wsl(2095)/wsl_fs(334)/wsl_git(1175)/platform(1062) 实现盘清；G14 finding 确认（core/ 不在 CI 覆盖内）。步 2 刀一：core `platform/{mod,unix,windows}.rs`＋`connections/{wsl,wsl_files,wsl_git}.rs`（capabilities **macOS wsl=false**——不得由 client OS 推断 host 能力＋**Windows 分支不删除**＋settings roundtrip linuxPath 不丢＋wsl.exe 命令构建）＋`tests/platform_capabilities.rs` 5 用例（platform_capabilities 5/5、core 546/0）。步 3 刀二：`AeroricUI/Connections/UnsupportedTargetView.swift`＋**checks.yml 增 core 三作业**（fmt/clippy/test --all-features，保持原 Tauri matrix 与 source patches）——CI 命令本地复跑 **650/0**（185/0）。步 4：platforms 门禁新注册（1 case/5 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [platforms] 真实调用（用户：接受并收口；**G14 结案**）；评审 `reviews/platforms.md`＋task-status accepted（counts 33/18）＋G14 closed＋inventory --freeze＋digest 重写。接线中修掉：Deserialize unused、doc comment 位置。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
 
-**当前状态（2026-10-03，第两百五十一次更新＝补记三百二十三）— P7-02 accepted（Phase 7 第二个 Task；core platform/wsl 模块＋UnsupportedTargetView＋CI core 三作业；platforms 门禁 5 用例；G14 结案）。下一动作＝P7-03（Docker、端口与 Conda）。**
+> **【执行状态】补记三百二十四（2026-10-03）— P7-03 收口。** 步 1 侦察：docker(596)/ports(788)/conda(255) 实现盘清。步 2 刀一：core `infrastructure/{mod,docker,ports,conda}.rs`（OperationRegistry **长任务 operationId/取消/状态查询**＋Docker 解析 verbatim＋**只读/破坏显式区分**＋daemon_unavailable_reason 不弹 sudo＋**PID 身份判定**避免重用误杀＋conda spawn 环境白名单不能污染 rc）＋`tests/infrastructure.rs` 6 用例（infrastructure 6/6、core 552/0）。步 3 刀二：`AeroricUI/Infrastructure/{InfrastructureStore,InfrastructureViews}.swift` 五视图（daemon 不可用显示＋Remove/Stop 二段确认）＋InfrastructureStoreTests(5)（190/0）。步 4：infrastructure 门禁新注册（2 case/11 用例＋runner.floors 双写）＋App BUILD SUCCEEDED＋smoke rc 0＋doctor 18/18＋inventory consistent；grill-me [infrastructure] 真实调用（用户：接受并收口）；评审 `reviews/infrastructure.md`＋task-status accepted（counts 34/17）＋inventory --freeze＋digest 重写。接线中修掉：`env_name_from_path` 三层路径推导。提交见 `git log`（main，未 push、无 tag、未发 Release，INV-01）。
+
+**当前状态（2026-10-03，第两百五十二次更新＝补记三百二十四）— P7-03 accepted（Phase 7 第三个 Task；core infrastructure 模块＋Infrastructure 五视图；infrastructure 门禁 11 用例）。下一动作＝P7-04（DBX 数据库能力与原生数据网格）。**
 > **（上一轮口径——第两百四十次更新，2026-10-02＝补记三百一十一）—  P4-04 accepted＝Phase 4 Gate 通过；P5-01 accepted（评审 `reviews/native-terminal.md`，grill-me [native-terminal] 真实调用＋G31 三件套；ADR-038 含修正案兑现：宿主三方法＋capability＋UnknownStream 双义拆分；SwiftTerm 1.2.5 钉版＋Terminal 五文件＋17 个新单测；smoke e2e 真链路全绿——plan_replay 28B seamless/续读/租约往返/过期票据 no-op；XCTest UI/手测按 Q96 跳过，资产在库）。下一动作＝P5-02（设置中的原生模式按钮与无损切换）。**
 > **（上一轮口径——第两百三十九次更新，2026-10-02＝补记三百零九）—  P4-04 accepted ＝ Phase 4 Gate 通过（评审 `reviews/shell.md`，grill-me [shell] 真实调用＋G31 三件套；四处真发现根修；Q96 用户裁定跳过 UI 6/6——测试资产保留、G41 accepted_by user、重开＝P10-02）。下一动作＝P5-01（用原生终端 renderer 承接同一 PTY），Phase 5 开工。**
 > **（上一轮口径——第两百三十八次更新，2026-10-02＝补记三百零八）—  P4-04 in_progress（只差一次干净开机后的单轮复测）：ui-test.mjs 已改逐测试独立 xcodebuild 会话＋失败换新会话重试（G41 解法），侧栏键盘选择改窗口级 ↑/↓ 隐藏按钮等价物（CommandPalette 先例；List 不自行响应箭头、AX 也不暴露选中态），值断言 detail.selection 头落地。当日实证：r9 5/6（Sidebar 键盘选择首次通过）、r6 TwoMain 点击流通过、钩子/projects.json 持久化稳定；深夜开机 2h 内 60+ 启动后全零窗（预算枯竭）。恢复＝重启→一轮 native:ui-test→全绿→grill-me [shell]→三处同步申报 Phase 4 Gate。全部基建入库（14a286a）。**
@@ -5149,7 +5158,7 @@ grill-me
   - **调用 `grill-me [platforms]`**。
   - **移交项（P3-03 补记一百零四 审计发现 F2 的一半）**：§3.2 把“平台兼容”写进 `native:check all` 的必含内容，而 68 条 registered case 的 argv 全量枚举显示**今天没有任何一条 case 跑 `cargo check --target`**——P2-05 当时记的是“Linux/Windows 两个 `cfg` 分支只做到 `cargo check --target` 编译验证、运行时未测”，那是手工动作、没有门禁守着，此后一直在裸奔。Action 4 的 CI 只在 push 时兜，跨目标编译**还须作为 `platforms` 模块里一条 registered case**（argv 用 `cargo check --locked --target x86_64-unknown-linux-gnu` / `x86_64-pc-windows-msvc`，`--check` 与 `runner.floors` 同批登记），这样 `all` 才真的覆盖 §3.2 那一行，而不是靠某次 CI 恰好绿。
 
-### Task P7-03 — Docker、端口与 Conda
+### Task P7-03 — Docker、端口与 Conda（**2026-10-03 accepted：评审 `docs/native/reviews/infrastructure.md`，§4.2 grill-me [infrastructure] 已真实调用、用户答复「接受并收口」。两刀全落地；门禁 infrastructure 2 case/11 用例（infrastructure 6＋InfrastructureStoreTests 5）、core 552/0、AeroricKit 190/0、App BUILD SUCCEEDED、smoke rc 0、doctor 18/18、inventory consistent。以下为原始规格，保留作为证据**）
 
 - **Input**：`src-tauri/src/{docker,ports,conda}.rs`；现有 Docker/Ports/Conda 控件。
 - **Action**：

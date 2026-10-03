@@ -336,13 +336,15 @@
       "positive_test": "tests/infrastructure.rs fake CLI 全覆盖",
       "negative_test": "无 daemon 显示不可用不得弹 sudo；端口释放前确认 PID 启动身份",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted"
+        "C": "accepted",
+        "N": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/infrastructure.md"
+      ]
     },
     {
       "id": "F14",

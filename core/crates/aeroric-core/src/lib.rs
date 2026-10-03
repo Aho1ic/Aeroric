@@ -13,6 +13,7 @@ pub mod events;
 pub mod files;
 pub mod git;
 pub mod ide;
+pub mod infrastructure;
 pub mod location;
 pub mod location_probe;
 pub mod paths;

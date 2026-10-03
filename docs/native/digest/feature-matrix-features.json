@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "c596637dfea795837c103cdbdef26df8e52b217727b5448053f1de3393c0da37",
+  "sourceSha256": "8c3c35df6ab26a77f5e71bd7ac4b639588ea38a57afb3c39719a5648816d7519",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -275,13 +275,15 @@
         "positive_test": "tests/infrastructure.rs fake CLI 全覆盖",
         "negative_test": "无 daemon 显示不可用不得弹 sudo；端口释放前确认 PID 启动身份",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted"
+          "C": "accepted",
+          "N": "accepted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/infrastructure.md"
+        ]
       },
       {
         "id": "F14",
