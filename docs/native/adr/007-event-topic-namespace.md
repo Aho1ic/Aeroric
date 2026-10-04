@@ -69,3 +69,25 @@ Q1＝留 P8-04 改派 **P8-04**——用量族代码今天不迁，事件的 v1 
 `task.session`（payload 是会话内容）留在 **P3-04**，它是本 Task 出口唯一还欠的 pending 行。
 三方计数（topics 39／mapped 3／pending 36／legacyChannels 38／reshapedPayloads 3／legacyDirectionUnproven 11）
 不变；`contracts --write` 报 1 changed／12，`--check` 逐字节。出处：`MIGRATION_PLAN.md` 补记二百四十。
+
+
+## 修正案三（2026-10-04，P8-02 刀六接线：G01 的 agent 半边出口决定）
+
+`agent.operation_changed` / `agent.tool_install_progress` 两条在 P8-02 刀六落地宿主双发接线，
+由 `pending: P8-02` 转 **mapped**（mapped 3→5、pending 36→34；`contracts --write` 报 2 changed／12，
+`--check` 逐字节复绿；Swift 金样 `testEventTopicTableBridgesEveryLegacyChannel` 计数同批 5/34）：
+
+- **接线形状**（与 notebook.sync_updated 的 P7-06 sink 双发同款）：宿主 emit wrapper 一次回调发两条——
+  旧桌面通道照发（`agent-operation-changed`／`agent-tool-install-progress`，**字面量**发射：事件扫描器按
+  src-tauri 内的字面值找发射点），v1 topic 走 core 常量（`operations::AGENT_OPERATION_TOPIC` /
+  `operations::types::TOOL_INSTALL_PROGRESS_TOPIC`，扫描器记作 dynamic 发射点、`--freeze` 逐字记录）。
+  两侧 payload 逐字同一份（快照 AgentOperationSnapshot / AgentInstallProgress，类型已上收 core
+  `operations::types`，宿主经 re-export 消费同一份 serde 形状）。
+- **权威副本**：操作注册表只有 core `operations` 一份（宿主 `agent_ops.rs` 转薄壳消费），晚挂载的
+  前端经 `get_agent_operations` 对账，不再有宿主第二份注册表。
+- **G01 出口单一决定（修正案一遗留的"不得再传一次"）**：**有订阅者，不删 emit**。两条 v1 topic 在
+  原生事件面有消费者（bridge verbatim 转发），旧通道照发不删（React 兼容面；进度信息另有
+  `agent-operation-changed`（in-use）承载同源快照）。dsh-host-remote-event / dsh-host-stream-error
+  两条仍归 P3-05 的 DSH host 面（发射点 `dsh_webui.rs` 不在 P8-02 Input 内），见台账
+  feature-matrix.json `G01` 的 2026-10-04 evidence 补记与 `MIGRATION_PLAN.md` 补记三百三十五。
+出处：评审 `docs/native/reviews/provider-services.md` §5。
