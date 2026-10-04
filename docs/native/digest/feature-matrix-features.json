@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "b52b6f69ee51fc0a05bea45fff6c89b415d94c6855b4c32a6adfa444850ae4ea",
+  "sourceSha256": "62e6d7e2ab0f38c3bdb34a7e45e5af08cc510abb15bb1fe5946ffe571fbd61d7",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -359,15 +359,16 @@
         "positive_test": "tests/extensions.rs + tests/settings_services.rs",
         "negative_test": "扫描文件不等于执行扩展；安装失败不得留半配置；MCP 校验失败回滚",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted",
-          "A": "unstarted"
+          "C": "accepted",
+          "N": "accepted",
+          "A": "accepted"
         },
         "reviews": [
-          "reviews/extensions.md"
+          "reviews/extensions.md",
+          "reviews/provider-services.md"
         ]
       },
       {

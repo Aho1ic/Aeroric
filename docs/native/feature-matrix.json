@@ -420,15 +420,16 @@
       "positive_test": "tests/extensions.rs + tests/settings_services.rs",
       "negative_test": "扫描文件不等于执行扩展；安装失败不得留半配置；MCP 校验失败回滚",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted",
-        "A": "unstarted"
+        "C": "accepted",
+        "N": "accepted",
+        "A": "accepted"
       },
       "reviews": [
-        "reviews/extensions.md"
+        "reviews/extensions.md",
+        "reviews/provider-services.md"
       ]
     },
     {
@@ -613,13 +614,13 @@
     {
       "id": "G01",
       "finding": "三个事件被后端 emit 但 React 从不 listen：agent-tool-install-progress / dsh-host-remote-event / dsh-host-stream-error（2026-09-28 复算：三者仍在发射、src/ + packages/ + mobile/ 三个字面量各 0 命中。注意『无发射点』不成立——三者都有真实 Rust 发射方，缺的只有订阅者）",
-      "evidence": "行号一律取 `.emit(` 那一行（与 command-map.json 的 emitters[] 同基；常量写在下一行参数位时相差 1）。agent-tool-install-progress：常量 `agent_tools.rs:25`、emit `agent_tools.rs:606`、`orphan: emitted-without-listener`、`disposition: redundant-channel`。dsh-host-remote-event：常量 `event_names.rs:29`、经 `dispatch_host_frame` 的 10 臂映射（`dsh_webui.rs:3066-3075`，emit `:3079`），另有**以常量名直接发射**的站点被登记者在 `:3328`。dsh-host-stream-error：常量 `event_names.rs:30`、同一张映射表，以常量名直接发射记在 `:3151/:3277/:3355/:3372`。前端订阅簇只有 8 条 `dsh-host-*`（src/hooks/useDshHostEvents.ts:106-127），`src/tauriEvents.ts` 声明的 18 个名字里没有这两条；2026-09-28 实测 src/、packages/、mobile/ 三个通道名字面量命中均为 0。注意这两条是**双路发射**：既是那张 10 臂表的两个臂（`:3066-3075`→emit `:3079`），又各另有 1 处／4 处以常量名直接 `app.emit(`；扫描认得常量名发射、认不得穿过 match 的变量发射，所以这二者的 `emitters[]` 非空而那 8 条为空。因此 P3-05 的处置面是**一张表 + 五处直发**，不是只有表  2026-09-29 复跑（判据＝宿主侧有该事件名、前端 `src/**.{ts,tsx}` 里 0 个文件引用）：`agent-tool-install-progress` 只在 `src-tauri/src/agent_tools.rs` 出现、`dsh-host-remote-event` 与 `dsh-host-stream-error` 只在 `event_names.rs` 有常量（发射经 `dsh_webui.rs:3066-3075` 的 10 臂映射按常量名发，所以字面量搜不到发射点），**前端引用文件数全为 0** ⇒ 三条孤儿今日原样。补一条口径：台账 `event-topics.json` 里 legacy 名匹配 `dsh-host-*` 的 topic 今天共 **10 条**（全部 `pending: P3-05`、全部 `legacyOrphan`），而前端 `DSH_HOST_*_EVENT` 订了 **8** 条，差集正是本条点名的 `remote-event` 与 `stream-error`——**\"10 条 topic／10 臂映射／8 条订阅\"三个数各自都成立，§进度总表 P3-05 那行过去把 8 当成 topic 数写，已同日改准。** 2026-09-30 五片·一片随迁重锚（补记二百五十）：10 臂映射与 `DSH_HOST_*` 常量已进 core `agents/dsh_host/dispatcher.rs`（表 :36-45、常量 :17-26）；宿主 `dispatch_host_frame` 只剩 emit wrapper（`dsh_webui.rs:3060-3067`），5 处常量名直发未变（当日 grep 复核 :3139/:3265/:3316/:3343/:3360）。`inventory.mjs` 的 Rust 事件语料同日扩到 core（否则 10 常量会被当成消失——`--freeze` 一度把 38 通道冻成 36，被当场抓住后修复并复冻 38）。G01 的两条孤儿归属不变。",
+      "evidence": "行号一律取 `.emit(` 那一行（与 command-map.json 的 emitters[] 同基；常量写在下一行参数位时相差 1）。agent-tool-install-progress：常量 `agent_tools.rs:25`、emit `agent_tools.rs:606`、`orphan: emitted-without-listener`、`disposition: redundant-channel`。dsh-host-remote-event：常量 `event_names.rs:29`、经 `dispatch_host_frame` 的 10 臂映射（`dsh_webui.rs:3066-3075`，emit `:3079`），另有**以常量名直接发射**的站点被登记者在 `:3328`。dsh-host-stream-error：常量 `event_names.rs:30`、同一张映射表，以常量名直接发射记在 `:3151/:3277/:3355/:3372`。前端订阅簇只有 8 条 `dsh-host-*`（src/hooks/useDshHostEvents.ts:106-127），`src/tauriEvents.ts` 声明的 18 个名字里没有这两条；2026-09-28 实测 src/、packages/、mobile/ 三个通道名字面量命中均为 0。注意这两条是**双路发射**：既是那张 10 臂表的两个臂（`:3066-3075`→emit `:3079`），又各另有 1 处／4 处以常量名直接 `app.emit(`；扫描认得常量名发射、认不得穿过 match 的变量发射，所以这二者的 `emitters[]` 非空而那 8 条为空。因此 P3-05 的处置面是**一张表 + 五处直发**，不是只有表  2026-09-29 复跑（判据＝宿主侧有该事件名、前端 `src/**.{ts,tsx}` 里 0 个文件引用）：`agent-tool-install-progress` 只在 `src-tauri/src/agent_tools.rs` 出现、`dsh-host-remote-event` 与 `dsh-host-stream-error` 只在 `event_names.rs` 有常量（发射经 `dsh_webui.rs:3066-3075` 的 10 臂映射按常量名发，所以字面量搜不到发射点），**前端引用文件数全为 0** ⇒ 三条孤儿今日原样。补一条口径：台账 `event-topics.json` 里 legacy 名匹配 `dsh-host-*` 的 topic 今天共 **10 条**（全部 `pending: P3-05`、全部 `legacyOrphan`），而前端 `DSH_HOST_*_EVENT` 订了 **8** 条，差集正是本条点名的 `remote-event` 与 `stream-error`——**\"10 条 topic／10 臂映射／8 条订阅\"三个数各自都成立，§进度总表 P3-05 那行过去把 8 当成 topic 数写，已同日改准。** 2026-09-30 五片·一片随迁重锚（补记二百五十）：10 臂映射与 `DSH_HOST_*` 常量已进 core `agents/dsh_host/dispatcher.rs`（表 :36-45、常量 :17-26）；宿主 `dispatch_host_frame` 只剩 emit wrapper（`dsh_webui.rs:3060-3067`），5 处常量名直发未变（当日 grep 复核 :3139/:3265/:3316/:3343/:3360）。`inventory.mjs` 的 Rust 事件语料同日扩到 core（否则 10 常量会被当成消失——`--freeze` 一度把 38 通道冻成 36，被当场抓住后修复并复冻 38）。G01 的两条孤儿归属不变。 2026-10-04 P8-02 刀六出口单一决定（补记三百三十五/评审 provider-services.md §5）：**有订阅者，不删 emit**。agent-tool-install-progress 的 v1 topic `agent.tool_install_progress` 与 `agent.operation_changed` 已 mapped＋宿主双发接线落地（agent_tools.rs emit_progress / agent_ops.rs emit_operation_snapshot：旧通道字面量照发，v1 topic 走 core 常量经原生事件面），安装进度另有 agent-operation-changed（in-use，useAgentVersions.tsx 消费）承载同源快照——G01 对这两条的疑问就此闭合，不再传给后续 Task。dsh-host-remote-event / dsh-host-stream-error 两条仍按 补记二百五十 归 P3-05 的 DSH host 面（发射点 dsh_webui.rs 不在 P8-02 Input 内，P8-02 无权触碰）， disposition 见台账 event-topics.json 两行（pending: P3-05，needs-native-consumer）。",
       "requirement": "每个事件要么有订阅者要么删除，不得静默丢弃",
       "task_ids": "P2-01, P3-05",
       "owner": "protocol+core:dsh_host",
       "test": "node scripts/native/inventory.mjs --check 逐条断言：orphan 事件必须有 disposition + gap_id，否则门禁失败；inventory.test.mjs 的『孤立事件未定性必须失败』是这条规则的负向测试",
       "status": "triaged-in-inventory",
-      "verified_on": "2026-09-30",
+      "verified_on": "2026-10-04",
       "retriage_note": "原 evidence 的 dsh_webui.rs:3252,3079,3201,3279,3296 五个行号已全部漂移且指向 payload 构造点而非发射点。改为记发射函数与订阅簇两个权威位置并声明行号口径（`.emit(` 行，与 command-map 的 emitters[] 同基）。本轮另查明：这三条里两条的发射面与 `dsh.host_*` 那 8 条同源（同一张 10 臂映射表），所以 P3-05 处置时**至少**要动那张表；但这二条另有 5 处以常量名的直接发射（`:3328` 与 `:3151/:3277/:3355/:3372`），删除或改向都得一并交代。 2026-09-29 复跑成立并钉死判据。"
     },
     {

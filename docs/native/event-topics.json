@@ -31,13 +31,13 @@
       ],
       "legacyDirection": "core-to-client",
       "plannedDirection": "core-to-client",
-      "payload": "reshaped: legacy payload is the AgentOperationSnapshot ({operationId, agent, requestedAgent, kind, state, stage, progress, message, errorCode, startedAtMs, finishedAtMs, installResult, upgradeResult}); core operations::report_progress_snapshot/finish_snapshot return the same snapshot for the host to emit (P8-02), so the bridge forwards it verbatim",
+      "payload": "reshaped: legacy payload is the AgentOperationSnapshot ({operationId, agent, requestedAgent, kind, state, stage, progress, message, errorCode, startedAtMs, finishedAtMs, installResult, upgradeResult}); the host emit wrapper (agent_ops.rs emit_operation_snapshot, P8-02 刀六) dual-emits the same snapshot verbatim on the legacy channel and on this v1 topic; core operations is the authoritative registry",
       "status": "mapped",
       "evidence": {
         "emitters": 1,
         "listeners": 1
       },
-      "source": "MIGRATION_PLAN.md Task P8-02 (provider/proxy/local-router plane) and core operations::AGENT_OPERATION_EVENT"
+      "source": "MIGRATION_PLAN.md §Task P8-02 具名移交项（agent_ops.rs 在 P8-02 Input 内）＋ ADR-007 修正案一（补记一百十三 T1=A 改派）；topic 常量 core operations::AGENT_OPERATION_TOPIC"
     },
     {
       "topic": "agent.tool_install_progress",
@@ -46,14 +46,14 @@
       ],
       "legacyDirection": "core-to-client",
       "plannedDirection": "core-to-client",
-      "payload": "reshaped: legacy payload is {operationId, agent, stage, progress, errorCode, message}; the host emit wrapper forwards the same shape, the backend registry (core operations) is the authoritative copy for late-mounting clients (P8-02)",
+      "payload": "reshaped: legacy payload is {operationId, agent, stage, progress, errorCode, message}; the host emit wrapper (agent_tools.rs emit_progress, P8-02 刀六) dual-emits the same AgentInstallProgress verbatim on the legacy channel and on this v1 topic; core operations is the authoritative registry for late-mounting clients",
       "status": "mapped",
       "legacyOrphan": "emitted-without-listener",
       "evidence": {
         "emitters": 1,
         "listeners": 0
       },
-      "source": "MIGRATION_PLAN.md Task P8-02 and core operations::types::AgentInstallProgress"
+      "source": "MIGRATION_PLAN.md §Task P8-02 具名移交项（agent_tools/ 在 P8-02 Input 内）＋ ADR-007 修正案一（补记一百十三 T1=A 改派）；topic 常量 core operations::types::TOOL_INSTALL_PROGRESS_TOPIC"
     },
     {
       "topic": "app.exit_requested",

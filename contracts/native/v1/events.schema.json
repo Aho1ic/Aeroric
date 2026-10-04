@@ -205,10 +205,10 @@
     },
     {
       "disposition": "in-use",
-      "emitters": 0,
+      "emitters": 1,
       "listeners": 1,
       "name": "notebook-sync-updated",
-      "orphan": "listened-without-emitter"
+      "orphan": null
     },
     {
       "disposition": "in-use",

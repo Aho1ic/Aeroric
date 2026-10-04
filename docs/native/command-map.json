@@ -16174,7 +16174,7 @@
       "rust_path": "agent_tools::get_agent_tool_status",
       "registered_at": "src-tauri/src/lib.rs:926",
       "definition_candidates": [
-        "src-tauri/src/agent_tools.rs:2516"
+        "src-tauri/src/agent_tools.rs:2424"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16186,7 +16186,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_tools.rs:2516",
+      "definition_resolved": "src-tauri/src/agent_tools.rs:2424",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16205,7 +16205,7 @@
       "rust_path": "agent_tools::get_agent_latest_versions",
       "registered_at": "src-tauri/src/lib.rs:927",
       "definition_candidates": [
-        "src-tauri/src/agent_tools.rs:2664"
+        "src-tauri/src/agent_tools.rs:2563"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16217,7 +16217,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_tools.rs:2664",
+      "definition_resolved": "src-tauri/src/agent_tools.rs:2563",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16236,7 +16236,7 @@
       "rust_path": "agent_tools::install_agent_tools",
       "registered_at": "src-tauri/src/lib.rs:928",
       "definition_candidates": [
-        "src-tauri/src/agent_tools.rs:2722"
+        "src-tauri/src/agent_tools.rs:2621"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16248,7 +16248,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_tools.rs:2722",
+      "definition_resolved": "src-tauri/src/agent_tools.rs:2621",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16270,7 +16270,7 @@
       "rust_path": "agent_tools::cancel_agent_tool_install",
       "registered_at": "src-tauri/src/lib.rs:929",
       "definition_candidates": [
-        "src-tauri/src/agent_tools.rs:2755"
+        "src-tauri/src/agent_tools.rs:2654"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16282,7 +16282,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_tools.rs:2755",
+      "definition_resolved": "src-tauri/src/agent_tools.rs:2654",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -16303,7 +16303,7 @@
       "rust_path": "agent_ops::start_agent_operation",
       "registered_at": "src-tauri/src/lib.rs:930",
       "definition_candidates": [
-        "src-tauri/src/agent_ops.rs:307"
+        "src-tauri/src/agent_ops.rs:132"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16315,7 +16315,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_ops.rs:307",
+      "definition_resolved": "src-tauri/src/agent_ops.rs:132",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16338,7 +16338,7 @@
       "rust_path": "agent_ops::get_agent_operations",
       "registered_at": "src-tauri/src/lib.rs:931",
       "definition_candidates": [
-        "src-tauri/src/agent_ops.rs:431"
+        "src-tauri/src/agent_ops.rs:258"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16350,7 +16350,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_ops.rs:431",
+      "definition_resolved": "src-tauri/src/agent_ops.rs:258",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16369,7 +16369,7 @@
       "rust_path": "agent_ops::cancel_agent_operation",
       "registered_at": "src-tauri/src/lib.rs:932",
       "definition_candidates": [
-        "src-tauri/src/agent_ops.rs:436"
+        "src-tauri/src/agent_ops.rs:263"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16381,7 +16381,7 @@
       "feature_ids": [
         "F03"
       ],
-      "definition_resolved": "src-tauri/src/agent_ops.rs:436",
+      "definition_resolved": "src-tauri/src/agent_ops.rs:263",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24078,7 +24078,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/agent_ops.rs:190"
+        "src-tauri/src/agent_ops.rs:102"
       ],
       "listeners": [
         "src/hooks/useAgentVersions.tsx:269"
@@ -24094,7 +24094,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/agent_tools.rs:606"
+        "src-tauri/src/agent_tools.rs:523"
       ],
       "listeners": [],
       "disposition": "redundant-channel",
@@ -24835,23 +24835,25 @@
     }
   ],
   "event_dynamic_emit_sites": [
-    "AgentInstallStage::Detecting @ src-tauri/src/agent_tools.rs:1812",
-    "AgentInstallStage::PreparingEnvironment @ src-tauri/src/agent_tools.rs:2032",
-    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2040",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2046",
-    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2084",
-    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2101",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2107",
-    "AgentInstallStage::Detecting @ src-tauri/src/agent_tools.rs:2118",
-    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2127",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2151",
-    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2227",
-    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2240",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2246",
-    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2399",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2415",
-    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2456",
-    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2468",
+    "operations::AGENT_OPERATION_TOPIC @ src-tauri/src/agent_ops.rs:103",
+    "TOOL_INSTALL_PROGRESS_TOPIC @ src-tauri/src/agent_tools.rs:524",
+    "AgentInstallStage::Detecting @ src-tauri/src/agent_tools.rs:1720",
+    "AgentInstallStage::PreparingEnvironment @ src-tauri/src/agent_tools.rs:1940",
+    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:1948",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:1954",
+    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:1992",
+    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2009",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2015",
+    "AgentInstallStage::Detecting @ src-tauri/src/agent_tools.rs:2026",
+    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2035",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2059",
+    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2135",
+    "AgentInstallStage::RefreshingHooks @ src-tauri/src/agent_tools.rs:2148",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2154",
+    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2307",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2323",
+    "AgentInstallStage::Installing @ src-tauri/src/agent_tools.rs:2364",
+    "AgentInstallStage::Completed @ src-tauri/src/agent_tools.rs:2376",
     "AgentInstallStage::PreparingEnvironment @ src-tauri/src/agent_tools/dsh.rs:243",
     "AgentInstallStage::Installing @ src-tauri/src/agent_tools/dsh.rs:268",
     "AgentInstallStage::VerifyingInstall @ src-tauri/src/agent_tools/dsh.rs:311",
