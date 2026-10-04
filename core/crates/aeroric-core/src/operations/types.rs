@@ -90,10 +90,6 @@ pub struct AgentInstallResult {
 }
 
 /// 单个内置 Agent 的最新可用版本。查询失败时只返回错误信息，不影响其它 Agent。
-#[allow(
-    dead_code,
-    reason = "刀五宿主接线后由 get_agent_latest_versions 消费（P8-02 types 上收）"
-)]
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentLatestVersion {
     pub agent: String,
@@ -102,13 +98,29 @@ pub struct AgentLatestVersion {
     pub error: String,
 }
 
-#[allow(
-    dead_code,
-    reason = "刀五宿主接线后由 install_agent_tools 消费（P8-02 types 上收）"
-)]
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentInstallRequest {
     #[serde(default)]
     pub operation_id: String,
     pub agents: Vec<String>,
 }
+
+/// 旧通道 `agent-tool-install-progress` 的 wire 形状（P8-02 自宿主上收）。
+/// 宿主 emit wrapper 双发同一份 payload：旧通道（React 客户端）＋ v1 topic。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AgentInstallProgress {
+    pub operation_id: String,
+    pub agent: String,
+    pub stage: AgentInstallStage,
+    pub progress: u8,
+    pub error_code: Option<AgentInstallErrorCode>,
+    pub message: String,
+}
+
+/// 安装进度事件的旧桌面通道名（React 客户端）。v1 topic 见
+/// [`TOOL_INSTALL_PROGRESS_TOPIC`]；两个字面值是在网契约，改名须双侧同步。
+pub const TOOL_INSTALL_PROGRESS_EVENT: &str = "agent-tool-install-progress";
+
+/// 安装进度事件的 v1 topic 名（`event-topics.json` 的
+/// `agent.tool_install_progress` 行，P8-02 mapped）。
+pub const TOOL_INSTALL_PROGRESS_TOPIC: &str = "agent.tool_install_progress";

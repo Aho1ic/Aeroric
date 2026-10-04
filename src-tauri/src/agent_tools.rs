@@ -22,9 +22,17 @@ const MAX_METADATA_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_CLAUDE_BINARY_BYTES: u64 = 384 * 1024 * 1024;
 const MAX_CODEX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024;
-const INSTALL_EVENT: &str = "agent-tool-install-progress";
 const CODEX_RELEASE_API: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 const CODEX_CHECKSUM_ASSET: &str = "codex-package_SHA256SUMS";
+
+// P8-02 刀六:安装/升级共享 wire 类型只剩 core `operations::types` 一份定义
+// (serde 形状逐字不变)。这里转发可见性,`agent_tools::*` 与子模块的旧路径
+// 全部照旧;旧通道名不再留宿主常量——emit 处用字面量(扫描器按 src-tauri
+// 内的字面值找发射点),v1 topic 名用 core 常量。
+pub use aeroric_core::operations::types::{
+    AgentInstallErrorCode, AgentInstallProgress, AgentInstallRequest, AgentInstallResult,
+    AgentInstallStage, AgentLatestVersion, TOOL_INSTALL_PROGRESS_TOPIC,
+};
 
 #[derive(Default)]
 struct InstallState {
@@ -90,127 +98,6 @@ pub struct AgentToolStatus {
     pub managed: bool,
     pub error_code: Option<AgentInstallErrorCode>,
     pub error: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct AgentInstallRequest {
-    #[serde(default)]
-    pub operation_id: String,
-    pub agents: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AgentInstallResult {
-    pub operation_id: String,
-    pub agent: String,
-    pub success: bool,
-    pub supported: bool,
-    pub platform: String,
-    pub architecture: String,
-    pub libc: String,
-    pub version: String,
-    pub path: String,
-    pub channel: String,
-    pub managed: bool,
-    pub stage: AgentInstallStage,
-    pub progress: u8,
-    pub login_command: String,
-    pub error_code: Option<AgentInstallErrorCode>,
-    pub message: String,
-}
-
-impl Default for AgentInstallResult {
-    fn default() -> Self {
-        Self {
-            operation_id: String::new(),
-            agent: String::new(),
-            success: false,
-            supported: false,
-            platform: std::env::consts::OS.to_string(),
-            architecture: std::env::consts::ARCH.to_string(),
-            libc: current_libc_label(),
-            version: String::new(),
-            path: String::new(),
-            channel: String::new(),
-            managed: false,
-            stage: AgentInstallStage::Failed,
-            progress: 100,
-            login_command: String::new(),
-            error_code: None,
-            message: String::new(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentInstallErrorCode {
-    UnsupportedPlatform,
-    InvalidAgent,
-    OperationConflict,
-    NetworkUnavailable,
-    ProxyAuthenticationRequired,
-    DownloadFailed,
-    DownloadInterrupted,
-    ResponseTooLarge,
-    ChecksumFailed,
-    ArchiveInvalid,
-    PermissionDenied,
-    DiskFull,
-    ProcessBlocked,
-    InstallFailed,
-    VerificationFailed,
-    Cancelled,
-    Internal,
-}
-
-impl AgentInstallErrorCode {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::UnsupportedPlatform => "unsupported_platform",
-            Self::InvalidAgent => "invalid_agent",
-            Self::OperationConflict => "operation_conflict",
-            Self::NetworkUnavailable => "network_unavailable",
-            Self::ProxyAuthenticationRequired => "proxy_authentication_required",
-            Self::DownloadFailed => "download_failed",
-            Self::DownloadInterrupted => "download_interrupted",
-            Self::ResponseTooLarge => "response_too_large",
-            Self::ChecksumFailed => "checksum_failed",
-            Self::ArchiveInvalid => "archive_invalid",
-            Self::PermissionDenied => "permission_denied",
-            Self::DiskFull => "disk_full",
-            Self::ProcessBlocked => "process_blocked",
-            Self::InstallFailed => "install_failed",
-            Self::VerificationFailed => "verification_failed",
-            Self::Cancelled => "cancelled",
-            Self::Internal => "internal",
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentInstallStage {
-    Detecting,
-    PreparingEnvironment,
-    Downloading,
-    VerifyingDownload,
-    Installing,
-    VerifyingInstall,
-    RefreshingHooks,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AgentInstallProgress {
-    pub operation_id: String,
-    pub agent: String,
-    pub stage: AgentInstallStage,
-    pub progress: u8,
-    pub error_code: Option<AgentInstallErrorCode>,
-    pub message: String,
 }
 
 #[derive(Debug)]
@@ -539,6 +426,21 @@ fn current_libc_label() -> String {
     }
 }
 
+/// 原 `AgentInstallResult: Default` 的宿主语义（P8-02 刀六类型上收后改显式
+/// 构造）:platform/arch/libc 取当前环境、失败落 `Failed`、progress 落 100。
+/// core 的 derive Default 是空壳（stage=Completed/progress=0），安装管线里
+/// 用 `..Default::default()` 补底字的构造点一律改用本函数，语义逐字不变。
+fn install_result_for_current_platform() -> AgentInstallResult {
+    AgentInstallResult {
+        platform: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        libc: current_libc_label(),
+        stage: AgentInstallStage::Failed,
+        progress: 100,
+        ..Default::default()
+    }
+}
+
 fn claude_platform_for(os: &str, arch: &str, linux_libc: LinuxLibc) -> InstallResult<&'static str> {
     match (os, arch, linux_libc) {
         ("macos", "aarch64", _) => Ok("darwin-arm64"),
@@ -591,7 +493,14 @@ fn platform_support(agent: BuiltInAgent) -> InstallResult<()> {
 }
 
 /// 进度事件对任意 agent 键通用(dsh 走的是新管线,不在 `BuiltInAgent` 里)。
-/// 同时写入后端操作注册表,这样退出设置页再进来仍能看到当前阶段。
+/// 同时写入后端操作注册表(core `operations`,唯一权威副本),这样退出设置页
+/// 再进来仍能看到当前阶段。
+///
+/// 事件**双发**(P8-02 刀六):旧桌面通道 `agent-tool-install-progress`
+/// (React 客户端;字面量发射——事件扫描器按 src-tauri 内的字面值找发射点)
+/// ＋ v1 topic `agent.tool_install_progress`(常量在 core
+/// `operations::types`,扫描器记作 dynamic 发射点——P7-06 sync daemon 先例)。
+/// 两侧 payload 逐字同一份 `AgentInstallProgress`。
 fn emit_progress(
     app: &AppHandle,
     operation_id: &str,
@@ -603,17 +512,16 @@ fn emit_progress(
 ) {
     let message = message.into();
     crate::agent_ops::report_progress(app, agent, operation_id, stage.clone(), progress, &message);
-    let _ = app.emit(
-        INSTALL_EVENT,
-        AgentInstallProgress {
-            operation_id: operation_id.to_string(),
-            agent: agent.to_string(),
-            stage,
-            progress,
-            error_code,
-            message,
-        },
-    );
+    let payload = AgentInstallProgress {
+        operation_id: operation_id.to_string(),
+        agent: agent.to_string(),
+        stage,
+        progress,
+        error_code,
+        message,
+    };
+    let _ = app.emit("agent-tool-install-progress", &payload);
+    let _ = app.emit(TOOL_INSTALL_PROGRESS_TOPIC, &payload);
 }
 
 /// 把"往哪个操作报进度"打包起来,免得每个阶段都重复传四个参数。
@@ -1753,7 +1661,7 @@ async fn install_one(
                 progress: 100,
                 login_command: agent.id().to_string(),
                 message: "installed".to_string(),
-                ..Default::default()
+                ..install_result_for_current_platform()
             }
         }
         Err(error) => {
@@ -1779,7 +1687,7 @@ async fn install_one(
                 stage,
                 error_code: Some(error.code),
                 message: error.message,
-                ..Default::default()
+                ..install_result_for_current_platform()
             }
         }
     }
@@ -2003,7 +1911,7 @@ fn dsh_install_result(
             Some(AgentInstallErrorCode::InstallFailed)
         },
         message,
-        ..Default::default()
+        ..install_result_for_current_platform()
     }
 }
 
@@ -2649,15 +2557,6 @@ async fn latest_omp_version(cancelled: &AtomicBool) -> InstallResult<String> {
             )
         })?;
     Ok(version.to_string())
-}
-
-/// 单个内置 Agent 的最新可用版本。查询失败时只返回错误信息，不影响其它 Agent。
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct AgentLatestVersion {
-    pub agent: String,
-    pub version: String,
-    pub error_code: Option<AgentInstallErrorCode>,
-    pub error: String,
 }
 
 #[tauri::command]

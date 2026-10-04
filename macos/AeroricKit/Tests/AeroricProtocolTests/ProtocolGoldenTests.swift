@@ -458,8 +458,10 @@ final class ProtocolGoldenTests: XCTestCase {
         let topics = try document("event-topics.schema.json")
         let rows = topics["rows"]?.arrayValue ?? []
         XCTAssertEqual(rows.count, 39)
-        XCTAssertEqual(number(topics["mapped"]), 3)
-        XCTAssertEqual(number(topics["pending"]), 36)
+        // P8-02 刀六起 agent.operation_changed / agent.tool_install_progress
+        // 随宿主双发接线落地而 mapped：mapped 3→5、pending 36→34。
+        XCTAssertEqual(number(topics["mapped"]), 5)
+        XCTAssertEqual(number(topics["pending"]), 34)
         var claimed: [String: Int] = [:]
         for row in rows {
             let fields = row.fields

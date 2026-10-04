@@ -1,5 +1,5 @@
 //! 随手记的 RAG 索引与检索（P7-06 自 `src-tauri/src/notebook/rag/` 上收；
-//! 9 个业务模块原样移动，`#[tauri::command]` 层留在宿主）。
+//! 9 个业务模块原样移动，Tauri 命令宏层留在宿主）。
 //!
 //! 分层:
 //!
@@ -7,7 +7,7 @@
 //! cjk      FTS5 的中日韩分词垫片。SQLite 自带的分词器不切中文,不垫这一层
 //!          关键词检索对中文恒零命中(而且不报错)。
 //! chunk    markdown 切块。按标题分段、段内按段落聚合、代码围栏整块保留。
-//! commands `#[tauri::command]` 层。allowlist、维度解析、任务互斥、进度事件。
+//! commands 的 Tauri 命令宏层。allowlist、维度解析、任务互斥、进度事件。
 //!          （宿主侧；经 re-export 使用本模块）
 //! context  AI 对话的上下文装配。当前笔记 + 检索片段,按 token 预算拼。
 //! db       索引库(`<vault>/.notebook/index.db`)的连接与 schema。

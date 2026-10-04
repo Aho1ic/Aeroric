@@ -11,10 +11,11 @@
 //! - 每次状态变化先写注册表再广播,所以晚挂载的前端可以先查询对账;
 //! - 终态快照保留到该 agent 下次操作开始,重进设置页仍能看到上次结果。
 //!
-//! 分界：本模块只收**不依赖 Tauri/AppHandle** 的纯状态半边（类型、注册表、
-//! `begin`/`apply_finish`/快照查询与取消标记）。emit 包装（`update`/`finish`/
-//! `report_progress` 的 `app.emit` 面）、`#[tauri::command]` 与
-//! `start_agent_operation` 的任务分派留宿主 `agent_ops.rs`（刀五接线后转薄壳）。
+//! 分界：本模块只收**不依赖 Tauri 句柄**的纯状态半边（类型、注册表、
+//! `begin`/`apply_finish`/快照查询与取消标记）。emit 包装（双发旧通道与 v1
+//! topic）、Tauri 命令宏与 `start_agent_operation` 的任务分派留宿主
+//! `agent_ops.rs`（P8-02 刀六起为消费本模块的薄壳：注册表与状态判定只有
+//! 这里一份，宿主不再持有第二份）。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +30,11 @@ use crate::settings::schema::AgentUpgradeResult;
 
 /// 带完整快照的操作变更事件。install 进度事件仍然照发,不破坏既有监听方。
 pub const AGENT_OPERATION_EVENT: &str = "agent-operation-changed";
+
+/// 同一快照的 v1 topic 名（`event-topics.json` 的 `agent.operation_changed`
+/// 行,P8-02 mapped）。宿主 emit wrapper 双发:旧通道照发(React 客户端监听),
+/// v1 topic 走原生事件面。payload 与旧通道逐字同一份快照。
+pub const AGENT_OPERATION_TOPIC: &str = "agent.operation_changed";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -67,7 +73,9 @@ pub struct AgentOperationSnapshot {
     pub upgrade_result: Option<AgentUpgradeResult>,
 }
 
-mod types;
+// P8-02 刀六起宿主（agent_tools/agent_ops）经 `operations::types::*` 消费
+// 同一份安装/升级 wire 类型，模块必须 pub。
+pub mod types;
 
 struct Registry {
     /// 按二进制 agent 键存当前或最近一次操作。

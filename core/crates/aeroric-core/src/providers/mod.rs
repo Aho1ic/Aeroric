@@ -11,7 +11,7 @@
 //! 分界：本模块只收**不依赖 Tauri** 的纯逻辑半边（provider 配置、授权 URL 构造、
 //! PKCE、state 校验、code 提取、token→secrets 转换、凭据来源校验）。回调服务器
 //! (`spawn_callback_server` 的 axum 面)、`exchange_code` 的 reqwest 面、
-//! `#[tauri::command]` 与 opener 留宿主 `storage_oauth.rs`（刀五接线后转薄壳）。
+//! Tauri 命令宏与 opener 留宿主 `storage_oauth.rs`（刀五接线后转薄壳）。
 
 use std::collections::BTreeMap;
 

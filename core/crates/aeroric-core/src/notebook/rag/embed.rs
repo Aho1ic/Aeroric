@@ -420,7 +420,7 @@ fn backoff(attempt: u32) -> Duration {
 ///
 /// `+ Sync` 与 [`super::index::ProgressSink`] 同一个理由:这个引用要跨 await 活着,
 /// 而 `&T` 只有在 `T: Sync` 时才是 `Send`。少了它整条调用链的 future 都不是 `Send`,
-/// `#[tauri::command]` 用不了。
+/// Tauri 命令宏用不了。
 pub async fn embed_batch(
     config: &EmbedConfig,
     inputs: &[String],

@@ -19,7 +19,7 @@
 //! 这三件是计划里明确要求的验收项(也是 Markio ROADMAP 里没关掉的一条)。
 //!
 //! - **进度**通过 [`ProgressSink`] 回调往外报,不直接依赖 Tauri —— 这一层因此
-//!   可以在没有 AppHandle 的测试里跑。发事件的活儿留给命令层。
+//!   可以在没有 Tauri 句柄的测试里跑。发事件的活儿留给命令层。
 //! - **取消**靠 [`CancelToken`],在每篇笔记与每个 embedding 批次之间检查。
 //!   取消不回滚:已经算好的向量留在库里,下次接着往前走。
 //! - **重试**靠 `docs.status`/`attempts` 落盘。失败的笔记不挡住其他笔记 ——
@@ -86,12 +86,12 @@ pub enum IndexPhase {
 
 /// 进度回调。
 ///
-/// 用 trait 而不是直接收 `AppHandle`:这一层的逻辑(状态转移、事务边界、失败
+/// 用 trait 而不是直接收 Tauri 句柄:这一层的逻辑(状态转移、事务边界、失败
 /// 隔离)是最该被测的部分,而它不需要知道 Tauri 存在。
 ///
 /// `Sync` 是必须的:`&dyn ProgressSink` 要跨 await 点活着,而 `&T` 只有在
 /// `T: Sync` 时才是 `Send` —— 不加的话 `index_vault` 的 future 不是 `Send`,
-/// `#[tauri::command]` 直接编译不过。
+/// Tauri 命令宏直接编译不过。
 pub trait ProgressSink: Sync {
     fn report(&self, progress: &IndexProgress);
 }
