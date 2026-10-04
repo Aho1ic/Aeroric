@@ -16,16 +16,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::clock::now_ms_i64;
-use crate::storage::{aeroric_dir, atomic_write_private, ensure_private_dir};
+use crate::settings::{aeroric_dir, atomic_write_private, ensure_private_dir};
 
 const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
 /// 同时存活的 invite 上限,防止无限累积。
 const MAX_PENDING_INVITES: usize = 8;
 /// 触发退避前允许的连续失败次数。
 ///
-/// `pub(crate)` 是给 `auth_stress_tests` 用的:那边要断言「凭据错误文案出现的次数
+/// `pub` 是给 `auth_stress_tests` 用的:那边要断言「凭据错误文案出现的次数
 /// 不超过免费额度」,把 3 硬编码在测试里的话,改了这个常量测试会假绿。
-pub(crate) const THROTTLE_FREE_FAILURES: u32 = 3;
+pub const THROTTLE_FREE_FAILURES: u32 = 3;
 const THROTTLE_MAX_DELAY: Duration = Duration::from_secs(300);
 
 // ── Token 基础设施 ───────────────────────────────────────────────────────────
@@ -130,11 +130,13 @@ pub struct AuthStore {
     throttle: HashMap<IpAddr, ThrottleEntry>,
     /// false 仅用于单测,避免污染真实注册表文件。
     persist: bool,
-    #[cfg(test)]
-    persist_failure: Option<String>,
+    /// 测试注入的持久化失败（跨 crate 测试支撑，宿主 network_exposure/auth_stress 使用）。
+    #[doc(hidden)]
+    pub persist_failure: Option<String>,
     /// Only used to exercise callers' rollback path after listener changes.
-    #[cfg(test)]
-    invite_failure: Option<String>,
+    /// 测试注入面（同上，跨 crate 测试支撑）。
+    #[doc(hidden)]
+    pub invite_failure: Option<String>,
 }
 
 pub enum AuthOutcome {
@@ -164,16 +166,14 @@ impl AuthStore {
             pending_pairings: HashMap::new(),
             throttle: HashMap::new(),
             persist: true,
-            #[cfg(test)]
             persist_failure: None,
-            #[cfg(test)]
             invite_failure: None,
         }
     }
 
     /// 纯内存实例,集成测试用:绝不读写真实注册表文件。
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
+    #[doc(hidden)]
+    pub fn in_memory() -> Self {
         Self {
             devices: Vec::new(),
             invites: HashMap::new(),
@@ -186,7 +186,6 @@ impl AuthStore {
     }
 
     fn persist_device_list(&self, devices: &[DeviceEntry]) -> Result<(), String> {
-        #[cfg(test)]
         if let Some(error) = &self.persist_failure {
             return Err(error.clone());
         }
@@ -215,8 +214,8 @@ impl AuthStore {
     /// Inject an invite-generation error without changing production token
     /// generation. This lets listener lifecycle tests cover a CSPRNG failure
     /// after a loopback listener has already been widened.
-    #[cfg(test)]
-    pub(crate) fn set_invite_failure(&mut self, error: Option<String>) {
+    #[doc(hidden)]
+    pub fn set_invite_failure(&mut self, error: Option<String>) {
         self.invite_failure = error;
     }
 
@@ -225,14 +224,13 @@ impl AuthStore {
     /// 只给 `auth_stress_tests` 用:那边要证明「大量不同 IP 的失败不会让这张表
     /// 无上限增长」。表本身必须保持私有(否则测试能直接构造状态,断言就变成
     /// 自说自话),所以这里只暴露一个计数。
-    #[cfg(test)]
-    pub(crate) fn throttle_len(&self) -> usize {
+    #[doc(hidden)]
+    pub fn throttle_len(&self) -> usize {
         self.throttle.len()
     }
 
     /// 生成一次性 invite,返回明文 token(嵌入 QR)。
     pub fn create_invite(&mut self) -> Result<String, String> {
-        #[cfg(test)]
         if let Some(error) = &self.invite_failure {
             return Err(error.clone());
         }

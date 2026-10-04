@@ -42,6 +42,21 @@ pub struct TerminalHub {
 
 static HUB: OnceLock<TerminalHub> = OnceLock::new();
 
+/// 首次 publish 时的历史文件长度解析器。core 不探文件系统（G24：可写面/
+/// 读取面一个点），宿主在 init 时安装（`task_terminal_history_len`），
+/// core 侧测试可装自己的解析器；未安装时按 0 处理（首个 chunk 从 0 起算）。
+type HistoryLenResolver = Arc<dyn Fn(&str) -> u64 + Send + Sync>;
+static HISTORY_LEN_RESOLVER: RwLock<Option<HistoryLenResolver>> = RwLock::new(None);
+
+pub fn set_history_len_resolver(resolver: HistoryLenResolver) {
+    *HISTORY_LEN_RESOLVER.write() = Some(resolver);
+}
+
+fn resolve_history_len(task_id: &str) -> u64 {
+    let guard = HISTORY_LEN_RESOLVER.read();
+    guard.as_ref().map_or(0, |f| f(task_id))
+}
+
 pub fn hub() -> &'static TerminalHub {
     HUB.get_or_init(|| TerminalHub {
         channels: RwLock::new(HashMap::new()),
@@ -68,7 +83,7 @@ impl TerminalHub {
         };
         let start = entry.offset.unwrap_or_else(|| {
             // 首次 publish:append 已完成,当前文件长度 - 本 chunk = 起始水位
-            crate::storage::task_terminal_history_len(task_id).saturating_sub(data.len() as u64)
+            resolve_history_len(task_id).saturating_sub(data.len() as u64)
         });
         let end_offset = start + data.len() as u64;
         entry.offset = Some(end_offset);

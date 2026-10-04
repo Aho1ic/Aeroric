@@ -4,28 +4,48 @@
 //! 局域网 WS 服务 + QR 配对 + 设备注册表 + 窄面 RPC + 事件桥。
 //! 服务默认关闭,由设置页开关控制;开关与端口持久化在
 //! `~/.aeroric/remote-config.json`(不进 settings.json,避免搅动大结构)。
+//!
+//! P8-03 刀一：纯逻辑半边（protocol/crypto/orca_crypto/terminal_frames/
+//! terminal_hub/event_log/agent_keymap/auth）已上收 core `remote`，这里
+//! re-export 保住 `super::` 旧路径；宿主只剩 WS 服务器、Tauri 事件桥、
+//! 命令壳、RPC dispatch 与审计落点。
 
 mod agent_config_rpc;
-mod agent_keymap;
 mod audit;
-mod auth;
-mod crypto;
-mod event_log;
 mod events_bridge;
 mod files_rpc;
-mod orca_crypto;
 mod orca_rpc;
-mod protocol;
 mod relay_client;
 mod rpc;
 mod server;
 mod session_push;
 mod tasks_rpc;
-mod terminal_frames;
-pub(crate) mod terminal_hub;
 mod terminal_streams;
 
+// 刀一上收 core 的九个模块，按旧名 re-export（`super::crypto` 等旧路径不变）。
+pub(crate) use aeroric_core::remote::{
+    agent_keymap, auth, crypto, event_log, orca_crypto, protocol, terminal_frames, terminal_hub,
+};
+
 pub(crate) use session_push::publish_session_appended;
+
+#[cfg(test)]
+mod protocol_golden_parity {
+    /// 刀一随 protocol.rs 上收 core：v3 golden fixture 的 hello.capabilities
+    /// 必须与宿主 rpc::rpc_capabilities_value() 逐字节一致（rpc dispatch 面
+    /// 刀二上收前，capabilities 的权威值在宿主）。
+    #[test]
+    fn v3_golden_hello_capabilities_match_host_rpc_capabilities() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../packages/remote-contracts/fixtures/rpc-golden.json"
+        ))
+        .expect("shared golden fixture");
+        assert_eq!(
+            fixture["hello"]["capabilities"],
+            super::rpc::rpc_capabilities_value()
+        );
+    }
+}
 
 #[cfg(test)]
 mod auth_stress_tests;
@@ -208,8 +228,18 @@ pub struct RemoteState {
     lifecycle: tokio::sync::Mutex<()>,
 }
 
+/// 刀一：core `terminal_hub` 不探文件系统（G24 读取面一个点），宿主在此
+/// 安装历史长度解析器；幂等——多次构造 RemoteState 只装一次。
+fn install_terminal_history_resolver() {
+    use std::sync::Arc;
+    aeroric_core::remote::terminal_hub::set_history_len_resolver(Arc::new(
+        crate::storage::task_terminal_history_len,
+    ));
+}
+
 impl RemoteState {
     pub fn new() -> Self {
+        install_terminal_history_resolver();
         // 挂在整条 `let` 上：`expect` 是下面闭包的尾表达式，属性只能上提到这里。
         #[allow(clippy::expect_used, reason = "CSPRNG 不可用属不可恢复")]
         let keys = crypto::StaticKeys::load_or_create().unwrap_or_else(|err| {
@@ -235,6 +265,7 @@ impl RemoteState {
     /// 集成测试用:内存 AuthStore + 默认配置,不触碰任何真实文件。
     #[cfg(test)]
     pub(crate) fn new_in_memory() -> Self {
+        install_terminal_history_resolver();
         Self {
             auth: parking_lot::Mutex::new(AuthStore::in_memory()),
             clients: Arc::new(ClientRegistry::default()),

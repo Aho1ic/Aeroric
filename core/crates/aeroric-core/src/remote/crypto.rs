@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::storage::{
+use crate::settings::{
     aeroric_dir, atomic_write_private, ensure_private_dir, ensure_private_file_permissions,
 };
 
@@ -134,7 +134,7 @@ impl StaticKeys {
     /// Raw static key material for a negotiated compatibility protocol. The
     /// caller remains inside the remote module and never serializes the
     /// private key; this is only used to derive an in-memory session key.
-    pub(crate) fn secret_bytes(&self) -> [u8; 32] {
+    pub fn secret_bytes(&self) -> [u8; 32] {
         self.secret.to_bytes()
     }
 
@@ -289,16 +289,17 @@ pub fn respond_handshake(
     })
 }
 
-// ── 客户端侧(集成测试模拟手机;真实客户端为 RN 端 e2ee.ts) ─────────────────
+// ── 客户端侧(集成测试模拟手机;真实客户端为 RN 端 e2ee.ts)。
+// 测试支撑面：宿主 lan_roundtrip_tests 跨 crate 使用，不再 cfg(test) 门住。──
 
-#[cfg(test)]
+#[doc(hidden)]
 pub struct ClientHandshake {
     eph_secret: StaticSecret,
     pub eph_pub_b64: String,
     server_static: PublicKey,
 }
 
-#[cfg(test)]
+#[doc(hidden)]
 pub fn initiate_handshake(server_static_pub_b64: &str) -> Result<ClientHandshake, String> {
     let server_static = parse_public_key(server_static_pub_b64)?;
     let eph_secret = random_secret()?;
@@ -310,7 +311,7 @@ pub fn initiate_handshake(server_static_pub_b64: &str) -> Result<ClientHandshake
     })
 }
 
-#[cfg(test)]
+#[doc(hidden)]
 impl ClientHandshake {
     /// 用服务端 hello_ack 完成握手;confirm 验证失败即视为主机身份不符。
     pub fn finish(

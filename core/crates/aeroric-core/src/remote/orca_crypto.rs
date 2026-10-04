@@ -31,7 +31,7 @@ const TAG_BYTES: usize = 16;
 const MAX_COUNTER: u64 = u64::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Transport {
+pub enum Transport {
     Direct,
     Relay,
 }
@@ -46,18 +46,18 @@ impl Transport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Context {
+pub struct Context {
     pub transport: Transport,
     pub relay_host_id: Option<String>,
 }
 
-pub(crate) struct HandshakeAccept {
+pub struct HandshakeAccept {
     pub ready_json: String,
     pub session: SessionCrypto,
 }
 
 /// Orca's deterministic, direction- and payload-kind-bound secretbox session.
-pub(crate) struct SessionCrypto {
+pub struct SessionCrypto {
     send: DirectionCipher,
     recv: DirectionCipher,
     transcript_hash_b64: String,
@@ -154,16 +154,16 @@ impl DirectionCipher {
 }
 
 impl SessionCrypto {
-    pub(crate) fn seal_text_base64(&mut self, plaintext: &str) -> Result<String, String> {
+    pub fn seal_text_base64(&mut self, plaintext: &str) -> Result<String, String> {
         self.seal_text(plaintext)
             .map(|frame| STANDARD.encode(frame))
     }
 
-    pub(crate) fn transcript_hash_b64(&self) -> &str {
+    pub fn transcript_hash_b64(&self) -> &str {
         &self.transcript_hash_b64
     }
 
-    pub(crate) fn open_text_base64(&mut self, frame: &str) -> Result<Vec<u8>, String> {
+    pub fn open_text_base64(&mut self, frame: &str) -> Result<Vec<u8>, String> {
         let bytes = STANDARD
             .decode(frame)
             .map_err(|_| "Invalid Orca E2EE text frame".to_string())?;
@@ -173,25 +173,25 @@ impl SessionCrypto {
         self.open_text(&bytes)
     }
 
-    pub(crate) fn seal_text(&mut self, plaintext: &str) -> Result<Vec<u8>, String> {
+    pub fn seal_text(&mut self, plaintext: &str) -> Result<Vec<u8>, String> {
         self.send.seal(TEXT_KIND, plaintext.as_bytes())
     }
 
-    pub(crate) fn seal_binary(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn seal_binary(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
         self.send.seal(BINARY_KIND, plaintext)
     }
 
-    pub(crate) fn open_text(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn open_text(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
         self.recv.open(TEXT_KIND, frame)
     }
 
-    pub(crate) fn open_binary(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn open_binary(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
         self.recv.open(BINARY_KIND, frame)
     }
 }
 
 /// Process an Orca `e2ee_hello` and create the matching `e2ee_ready`.
-pub(crate) fn respond_handshake(
+pub fn respond_handshake(
     static_keys: &StaticKeys,
     raw: &str,
     expected: &Context,

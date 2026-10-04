@@ -7,14 +7,14 @@
 //! - Claude Code 权限对话:按数字选项立即生效(1 = Yes/允许),Esc = 拒绝并可补充说明。
 //! - Codex 审批提示:y = 允许,n = 拒绝(如版本变化,可先用 action=keys 自定义序列过渡)。
 
-pub(crate) struct KeyStep {
+pub struct KeyStep {
     /// 写入 PTY 的字节(UTF-8 文本,含控制字符)。
     pub data: String,
     /// 写入前等待毫秒数(部分 TUI 的菜单需要两次写入间隔,预留)。
     pub delay_ms: u64,
 }
 
-pub(crate) enum RespondAction {
+pub enum RespondAction {
     Approve,
     Deny,
     /// 手机端直接指定按键序列(兜底通道,不经映射)。
@@ -22,7 +22,7 @@ pub(crate) enum RespondAction {
 }
 
 /// action 字符串 → RespondAction。`keys` 需要配套的序列参数。
-pub(crate) fn parse_action(action: &str, keys: Option<&str>) -> Result<RespondAction, String> {
+pub fn parse_action(action: &str, keys: Option<&str>) -> Result<RespondAction, String> {
     match action {
         "approve" => Ok(RespondAction::Approve),
         "deny" => Ok(RespondAction::Deny),
@@ -40,7 +40,7 @@ pub(crate) fn parse_action(action: &str, keys: Option<&str>) -> Result<RespondAc
     }
 }
 
-pub(crate) fn keys_for(codex_like: bool, action: RespondAction) -> Vec<KeyStep> {
+pub fn keys_for(codex_like: bool, action: RespondAction) -> Vec<KeyStep> {
     let step = |data: &str| KeyStep {
         data: data.to_string(),
         delay_ms: 0,

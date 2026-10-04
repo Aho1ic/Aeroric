@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn v3_wire_shape_matches_shared_golden_fixture() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../packages/remote-contracts/fixtures/rpc-golden.json"
+            "../../../../../packages/remote-contracts/fixtures/rpc-golden.json"
         ))
         .expect("shared golden fixture");
         let request = parse_request(&fixture["request"].to_string(), RpcVersion::V3)
@@ -245,14 +245,12 @@ mod tests {
             fixture["push"]
         );
         assert_eq!(fixture["projectProjection"]["location"]["kind"], "local");
+        // `hello.capabilities` ↔ 宿主 `rpc::rpc_capabilities_value()` 的逐字节
+        // 对账在宿主侧 golden 测试（rpc dispatch 面刀二上收前留宿主）。
         assert_eq!(fixture["taskProjection"]["dshAgentPreset"], "code");
         assert_eq!(
             fixture["sessionMessage"]["content"][3]["type"],
             "tool_result"
-        );
-        assert_eq!(
-            fixture["hello"]["capabilities"],
-            crate::remote::rpc::rpc_capabilities_value()
         );
         assert_eq!(
             fixture["pairingConfirmation"]["offer"]["pairingConfirmationVersion"],

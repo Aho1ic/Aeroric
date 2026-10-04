@@ -25,6 +25,7 @@ pub mod paths;
 pub mod platform;
 pub mod projects;
 pub mod providers;
+pub mod remote;
 pub mod runtime;
 pub mod sessions;
 pub mod settings;

@@ -102,3 +102,11 @@ mod tests {
         assert_ne!(epoch, writer_epoch(&FixedClock::at(43)));
     }
 }
+
+/// 当前 Unix epoch 毫秒,`i64`。语义同 [`now_ms_u64`]（P8-03 刀一自宿主上收）。
+pub fn now_ms_i64() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as i64)
+        .unwrap_or(0)
+}
