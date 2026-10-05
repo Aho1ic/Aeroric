@@ -1,3 +1,6 @@
+//! P8-03 刀三b 第一片：自宿主 `remote/auth_stress_tests.rs` 逐字迁移（AuthStore 已上收 core）。
+//! 后续片：lan_roundtrip 的 ws/auth/rpc 用例随 core server 上收迁入本文件（▶ 步 4 锚点）。
+
 //! `AuthStore` 的爆破 / 并发压力测试(计划 4 的第一块)。
 //!
 //! **为什么不测「猜中 token」**:invite 和 device token 都是 32 字节 CSPRNG
@@ -20,7 +23,7 @@ use std::sync::{Arc, Barrier};
 
 use parking_lot::Mutex;
 
-use super::auth::{AuthOutcome, AuthStore, THROTTLE_FREE_FAILURES};
+use aeroric_core::remote::auth::{AuthOutcome, AuthStore, THROTTLE_FREE_FAILURES};
 
 fn peer(last: u8) -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))

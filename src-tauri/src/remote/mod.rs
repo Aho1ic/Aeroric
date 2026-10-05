@@ -48,8 +48,6 @@ mod protocol_golden_parity {
 }
 
 #[cfg(test)]
-mod auth_stress_tests;
-#[cfg(test)]
 mod lan_roundtrip_tests;
 
 use std::collections::HashMap;

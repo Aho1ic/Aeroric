@@ -9066,7 +9066,7 @@
       "rust_path": "remote::remote_server_status",
       "registered_at": "src-tauri/src/lib.rs:712",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:433"
+        "src-tauri/src/remote/mod.rs:431"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9078,7 +9078,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:433",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:431",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9099,7 +9099,7 @@
       "rust_path": "remote::remote_server_start",
       "registered_at": "src-tauri/src/lib.rs:713",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:440"
+        "src-tauri/src/remote/mod.rs:438"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9111,7 +9111,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:440",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:438",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9134,7 +9134,7 @@
       "rust_path": "remote::remote_server_stop",
       "registered_at": "src-tauri/src/lib.rs:714",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:462"
+        "src-tauri/src/remote/mod.rs:460"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9146,7 +9146,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:462",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:460",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9168,7 +9168,7 @@
       "rust_path": "remote::remote_select_lan_ip",
       "registered_at": "src-tauri/src/lib.rs:715",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:413"
+        "src-tauri/src/remote/mod.rs:411"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9180,7 +9180,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:413",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:411",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9203,7 +9203,7 @@
       "rust_path": "remote::remote_update_config",
       "registered_at": "src-tauri/src/lib.rs:716",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:478"
+        "src-tauri/src/remote/mod.rs:476"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9215,7 +9215,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:478",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:476",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9240,7 +9240,7 @@
       "rust_path": "remote::remote_create_invite",
       "registered_at": "src-tauri/src/lib.rs:717",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:535"
+        "src-tauri/src/remote/mod.rs:533"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9252,7 +9252,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:535",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:533",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9273,7 +9273,7 @@
       "rust_path": "remote::remote_list_devices",
       "registered_at": "src-tauri/src/lib.rs:718",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:1105"
+        "src-tauri/src/remote/mod.rs:1103"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9285,7 +9285,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:1105",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:1103",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9306,7 +9306,7 @@
       "rust_path": "remote::remote_revoke_device",
       "registered_at": "src-tauri/src/lib.rs:719",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:1122"
+        "src-tauri/src/remote/mod.rs:1120"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9318,7 +9318,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:1122",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:1120",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9341,7 +9341,7 @@
       "rust_path": "remote::remote_complete_task_request",
       "registered_at": "src-tauri/src/lib.rs:720",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:1184"
+        "src-tauri/src/remote/mod.rs:1182"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9353,7 +9353,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:1184",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:1182",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
