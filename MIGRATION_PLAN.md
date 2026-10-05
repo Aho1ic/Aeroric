@@ -23,7 +23,7 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 ## ▶ 执行进度标注（Agent 维护，暂停/继续以此为准）
 > **怎么读这份文件（2026-09-29 补记二百零三 加的导航块；行数与体积是当日实测）**：全文 **4 530 行／1.36 MB**，其中**第 63–1402 行是「续跑指令」区里的历史流水（1 340 行＝0.67 MB，占全文 49%）**，规范性正文从 **第 1439 行「## 0. 先纠正迁移起点」** 起、共 3 128 行／0.66 MB。**行号会随每轮标注漂移，所以下面一律给可重跑的 grep 锚点**：
-> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-05，第两百六十五次更新＝补记三百三十八）— P8-03 in_progress（刀三a 已落地：core remote config/identity 纯逻辑上收＋6 新测试；core 1583/0、宿主 1293/0、tauri-adapter 12/1354、全链台账绿。刀三b 设计锚在 ▶ 步 4（core server/state＋RemoteHostHandle＋remote_headless.rs）。P8-02 accepted（39/51）。下一动作＝P8-03 刀三b。**
+> - 今天要做的事 ＝ `grep -m1 "^**当前状态（2026-10-05，第两百六十六次更新＝补记三百三十九）— P8-03 in_progress（刀三b 第一片已落地：remote_headless.rs 落 core＋auth_stress 八条迁移＋地板 1285；core 1583/0、宿主 1285/0、tauri-adapter 12/1346 全链绿。下一动作＝刀三b 第二片（core server/RemoteState 上收，▶ 步 4 锚点）→ 刀四 cli headless → 刀五 Swift 四视图 → 刀六 收口。P8-02 accepted（39/51）。**
 > - 51 个 Task 的状态 ＝ `grep -n "^### 进度总表" MIGRATION_PLAN.md` 起的那张表（今天实测表内 51 行、accepted 12）。
 > - 等你表态的全部内容 ＝ 跑 `grep -n "^**一页答题纸" MIGRATION_PLAN.md` 定位（**这里不写行号——写行号一定会烂：本行过去记的"第 217 行"今天实测已在第 247 行**）。现役 **26 项 ＋ Q1–Q7 ＋ 行政 A–D ＋ 2 项人工观察**，每题一行、带可引用的选项 token（**编号 1–9 与 11–27，缺第 10 项**——它已由 补记一百六十四 整条作废，作废说明留在清单里，所以缺号是对的、不是漏项）。**各台账项（19–25＝`G30`–`G36`）的诉求原文在 `docs/native/feature-matrix.json` 的 `gaps[].finding`／`requirement`**，由 `pnpm native:inventory --check` 每天核对 owner 与 `verified_on`；**逐项诉求的人类可读版**在 `grep -n "^\*\*待你表态清单" MIGRATION_PLAN.md` 定位的那一段（今天在第 **176** 行；它不是 `###` 标题而是加粗块，所以按标题 grep 会假称"没有这一节"——我自己就中过一次，见 补记二百一十五）。
 > - 某个 Task 的规格与它的具名移交项 ＝ `grep -n "^### Task P3-04" MIGRATION_PLAN.md`（51 个小节标题实测都在，`### Task P` 命中数＝51）。
@@ -144,6 +144,10 @@ core Cargo.toml 加 dbx-core（path `../../../../dbx/crates/dbx-core`，default-
 ### ▶ P8-03 步 5（2026-10-05，刀三a：config/identity 纯逻辑半边上收 core）
 
 **交付**：core `remote/config.rs`（RemoteConfig＋DEFAULT_PORT＋config_path＋normalize_ws_endpoint/relay_url/public_endpoint＋load_config/save_config；落盘原语走 core settings；relay ws:// 仅回环、无 token 丢弃、端点拒内嵌凭据——宿主语义逐字）＋core `remote/identity.rs`（host_name/RemoteNetworkAddress/address_priority/lan_addresses/selected_lan_ip/PairingEndpoints/pairing_endpoints；client_connect_url 经 `remote-protocol` path 依赖与宿主同源；core 新增 if-addrs 0.15/url 2 与宿主同版）；新 6 测试（relay 校验/端点凭据/默认配置/首选 IP 失效回落/端点三源覆盖/relay-only 不报 LAN）。宿主 mod.rs 删本地块改 pub re-export（`super::normalize_relay_url` 等旧路径零漂移；live_identity 留宿主——读 state.running；address_priority 经测试直引 core）。**台账**：9＋3 条 remote 命令 pin 两轮重锚（本块删除＋fmt 重排各一轮）＋freeze-reachability＋remote extraction 重建（20→16 符号）。**验证**：core **1583/0**（＋6）、宿主 **1293/0**（无代理）、两侧 clippy `--all-targets -D warnings` 0、fmt 干净、tauri-adapter **12 case/1354**、skeleton 24/188、inventory consistent、contracts 逐字节、digest verified。提交 main（未 push、无 tag、未发 Release，INV-01）。**下一动作＝刀三b（core server/state 上收＋RemoteHostHandle trait＋tests/remote_headless.rs，设计见 ▶ 步 4 锚点）。**
+
+### ▶ P8-03 步 6（2026-10-05，刀三b 第一片：remote_headless.rs 落地＋auth_stress 八条迁移）
+
+**交付**：新建 core `tests/remote_headless.rs`——`auth_stress_tests.rs`（383 行）**逐字迁移**（AuthStore 已上收 core，导入路径唯改）：爆破 TOCTOU 并发 64 路/免费额度并发钉数/单次 invite 32 路竞态/重放拒绝/限流按 IP 隔离/限流表 4096 IP 有界/报错文案不做区分（invite＋token 双面）/撤销 token 与未知 token 同文案，8 用例全绿。宿主删文件＋mod 声明；地板 1293→**1285** 双写（−8）。**台账**：9 条 remote 命令 pin 重锚（auth_stress 删除引起行移）＋freeze-reachability＋digest 重写。**验证**：core 集成 `remote_headless` **8/0**、core lib 1583/0、宿主 **1285/0**（无代理）、tauri-adapter **12 case/1346**、inventory consistent、contracts 逐字节、digest verified、两侧 clippy `--all-targets`/fmt 干净。提交 main（未 push、无 tag、未发 Release，INV-01）。**下一动作＝刀三b 第二片（core server.rs/RemoteState 上收——▶ 步 4 锚点设计不变，lan_roundtrip 864 行 ws/auth/rpc 用例随迁）→ 刀四 cli headless 配对 → 刀五 Swift 四视图 → 刀六 gap 收口＋native:check remote 门禁注册＋grill [remote]。**
 
 ### ▶ P8-02 步 6＋收口（2026-10-04，刀六：宿主薄壳化＋2 条 agent topic 双发接线＋G01 出口；grill 收口）
 
