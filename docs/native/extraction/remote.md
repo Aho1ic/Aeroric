@@ -25,7 +25,7 @@ Cross-checked: 9 command wrappers counted here against 9 matching entries in `co
 | 4 | `src-tauri/src/remote/events_bridge.rs` | `core/crates/aeroric-core/remote/events_bridge.rs` | 0 | attach() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 | 5 | `src-tauri/src/remote/files_rpc.rs` | `core/crates/aeroric-core/remote/files_rpc.rs` | 0 | git_changes(), git_diff(), project_files(), project_read_file(), project_write_file() (1 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | cfg(windows) branch; spawns task/thread (needs a cancellation token) |
 | 6 | `src-tauri/src/remote/lan_roundtrip_tests.rs` | `core/crates/aeroric-core/remote/lan_roundtrip_tests.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | emits events; credential owner |
-| 7 | `src-tauri/src/remote/mod.rs` | `core/crates/aeroric-core/remote/mod.rs` | 9 | Const DEFAULT_PORT, Struct RemoteConfig, Struct RemoteDeviceView, Struct RemoteNetworkAddress, Struct RemoteState, Struct RemoteStatus, abort_unconfirmed_pairing(), host_name(), init(), live_identity(), reconcile_listener_scope_for_current_policy(), remote_complete_task_request(), remote_create_invite(), remote_list_devices(), remote_revoke_device() +5 more (14 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; include_str! path rewrite; spawns task/thread (needs a cancellation token); credential owner |
+| 7 | `src-tauri/src/remote/mod.rs` | `core/crates/aeroric-core/remote/mod.rs` | 9 | Struct RemoteDeviceView, Struct RemoteState, Struct RemoteStatus, abort_unconfirmed_pairing(), init(), live_identity(), reconcile_listener_scope_for_current_policy(), remote_complete_task_request(), remote_create_invite(), remote_list_devices(), remote_revoke_device(), remote_select_lan_ip(), remote_server_start(), remote_server_status(), remote_server_stop() +1 more (14 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; include_str! path rewrite; spawns task/thread (needs a cancellation token); credential owner |
 | 8 | `src-tauri/src/remote/orca_rpc.rs` | `core/crates/aeroric-core/remote/orca_rpc.rs` | 0 | handle() (2 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 | 9 | `src-tauri/src/remote/relay_client.rs` | `core/crates/aeroric-core/remote/relay_client.rs` | 0 | spawn() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 10 | `src-tauri/src/remote/rpc.rs` | `core/crates/aeroric-core/remote/rpc.rs` | 0 | Const RPC_CAPABILITIES, dispatch(), rpc_capabilities_value(), str_param() (1 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
@@ -37,7 +37,7 @@ Cross-checked: 9 command wrappers counted here against 9 matching entries in `co
 
 ### Aggregate risk register for this expansion
 
-- files: **14**, lines: **7414**, command wrappers: **9**, test items excluded from the symbol lists: **47**
+- files: **14**, lines: **7139**, command wrappers: **9**, test items excluded from the symbol lists: **47**
 - files carrying `AppHandle`/`State`: **10**
 - files emitting events: **5**
 - files with `include_str!`/`include_bytes!`: **1**

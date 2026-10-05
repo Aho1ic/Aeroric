@@ -13,8 +13,10 @@
 
 pub mod agent_keymap;
 pub mod auth;
+pub mod config;
 pub mod crypto;
 pub mod event_log;
+pub mod identity;
 pub mod orca_crypto;
 pub mod protocol;
 pub mod terminal_frames;

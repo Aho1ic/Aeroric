@@ -58,11 +58,6 @@ impl TaskRequestBroker {
             .send(result)
             .map_err(|_| "Task request is no longer waiting".to_string())
     }
-
-    #[cfg(test)]
-    fn cancel(&self, request_id: &str) {
-        self.pending.lock().remove(request_id);
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -29,7 +29,10 @@ getrandom = "0.2"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
 crypto_secretbox = "0.1.1"
-hkdf = "0.12" # 与宿主 src-tauri/Cargo.toml:70 逐字一致——providers/oauth 的 CSPRNG state/PKCE verifier（P8-02）
+hkdf = "0.12"
+if-addrs = "0.15"
+# P8-03 刀三：relay 配对 URL 构造与宿主同源（宿主 :77 同一 path 依赖）。
+remote-protocol = { path = "../../../remote-protocol" } # 与宿主 src-tauri/Cargo.toml:70 逐字一致——providers/oauth 的 CSPRNG state/PKCE verifier（P8-02）
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] } # 与宿主 src-tauri/Cargo.toml:52 逐字一致（notebook/import 的 zip_src——P7-05）
 quick-xml = "0.41" # 与宿主同 crate 同版本（notebook/import/evernote 的 ENEX 良构 XML——P7-05）
 md-5 = "0.11" # 与宿主同 crate 同版本（ENEX <en-media hash> 的 MD5 附件对账；仅测试引用——P7-05）

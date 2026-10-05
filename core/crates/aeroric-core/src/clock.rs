@@ -72,6 +72,14 @@ pub fn writer_epoch(clock: &dyn Clock) -> String {
     format!("pid-{}-at-{}", std::process::id(), clock.now_ms())
 }
 
+/// 当前 Unix epoch 毫秒,`i64`。语义同 [`now_ms_u64`]（P8-03 刀一自宿主上收）。
+pub fn now_ms_i64() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,12 +109,4 @@ mod tests {
         assert!(epoch.ends_with("-at-42"), "{epoch}");
         assert_ne!(epoch, writer_epoch(&FixedClock::at(43)));
     }
-}
-
-/// 当前 Unix epoch 毫秒,`i64`。语义同 [`now_ms_u64`]（P8-03 刀一自宿主上收）。
-pub fn now_ms_i64() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as i64)
-        .unwrap_or(0)
 }

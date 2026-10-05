@@ -8,7 +8,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tauri::{Emitter, Listener, Manager};
+use tauri::{Emitter, Manager};
 use tokio::time::{timeout, Duration};
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};

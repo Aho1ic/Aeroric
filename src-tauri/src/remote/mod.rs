@@ -52,156 +52,29 @@ mod auth_stress_tests;
 #[cfg(test)]
 mod lan_roundtrip_tests;
 
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager, Runtime, State};
-use url::{Host, Url};
 
-use crate::storage::{
-    aeroric_dir, atomic_write_private, ensure_private_dir, ensure_private_file_permissions,
-};
 use auth::AuthStore;
 use event_log::EventLog;
 use server::{ClientRegistry, ListenerScope, ServerHandle};
 use tasks_rpc::{ApprovalRegistry, TaskRequestBroker};
 use terminal_streams::TerminalLeaseRegistry;
 
-pub const DEFAULT_PORT: u16 = 6790;
+// ── 配置与身份面（P8-03 刀三上收 core，这里按旧名 re-export） ──────────────
 
-// ── 配置持久化 ───────────────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RemoteConfig {
-    pub enabled: bool,
-    pub port: u16,
-    /// 配对二维码优先公布的本机 IPv4 地址；它只影响 QR 中的 LAN 候选
-    /// 地址，不决定 listener 的绑定范围。
-    #[serde(default)]
-    pub preferred_lan_ip: Option<String>,
-    /// 自托管 relay 基址(ws:// 或 wss://),空 = 不用 relay。
-    #[serde(default)]
-    pub relay_url: Option<String>,
-    /// relay 部署方设置的共享口令(RELAY_TOKEN)。
-    #[serde(default)]
-    pub relay_token: Option<String>,
-    /// 额外公网地址(Tailscale/frp/cloudflared 等),写入配对 QR。
-    #[serde(default)]
-    pub public_endpoints: Vec<String>,
-}
-
-impl Default for RemoteConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            port: DEFAULT_PORT,
-            preferred_lan_ip: None,
-            relay_url: None,
-            relay_token: None,
-            public_endpoints: Vec::new(),
-        }
-    }
-}
-
-fn config_path() -> Result<std::path::PathBuf, String> {
-    Ok(aeroric_dir()?.join("remote-config.json"))
-}
-
-fn normalize_ws_endpoint(
-    value: &str,
-    label: &str,
-    allow_non_loopback_ws: bool,
-) -> Result<String, String> {
-    let value = value.trim();
-    let url = Url::parse(value).map_err(|_| format!("{label} must be a valid WebSocket URL"))?;
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(format!("{label} must not contain embedded credentials"));
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(format!("{label} must not contain a query or fragment"));
-    }
-    let host = url
-        .host()
-        .ok_or_else(|| format!("{label} must include a host"))?;
-    let loopback = match host {
-        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
-        Host::Ipv4(address) => address.is_loopback(),
-        Host::Ipv6(address) => address.is_loopback(),
-    };
-    match url.scheme() {
-        "wss" => {}
-        "ws" if allow_non_loopback_ws || loopback => {}
-        "ws" => {
-            return Err(format!(
-                "{label} must use wss:// unless it connects to localhost"
-            ));
-        }
-        _ => return Err(format!("{label} must use ws:// or wss://")),
-    }
-    Ok(url.as_str().trim_end_matches('/').to_string())
-}
-
-fn normalize_relay_url(value: &str) -> Result<String, String> {
-    normalize_ws_endpoint(value, "Relay URL", false)
-}
-
-fn normalize_public_endpoint(value: &str) -> Result<String, String> {
-    // Direct endpoints carry the application's E2EE protocol and may
-    // intentionally be private ws:// LAN/Tailscale addresses.
-    normalize_ws_endpoint(value, "Endpoint", true)
-}
-
-fn load_config() -> RemoteConfig {
-    let Ok(path) = config_path() else {
-        return RemoteConfig::default();
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return RemoteConfig::default();
-    };
-    let _ = ensure_private_file_permissions(&path);
-    let mut config = serde_json::from_str::<RemoteConfig>(&raw).unwrap_or_default();
-    let relay_valid = config
-        .relay_url
-        .as_deref()
-        .map(normalize_relay_url)
-        .transpose()
-        .ok()
-        .flatten();
-    let relay_token = config
-        .relay_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_string);
-    if config.relay_url.is_some() && (relay_valid.is_none() || relay_token.is_none()) {
-        eprintln!("[remote] ignoring an insecure relay URL or a relay without a token");
-        config.relay_url = None;
-        config.relay_token = None;
-    } else {
-        config.relay_url = relay_valid;
-        config.relay_token = relay_token;
-    }
-    config.public_endpoints = config
-        .public_endpoints
-        .into_iter()
-        .filter_map(|endpoint| normalize_public_endpoint(&endpoint).ok())
-        .collect();
-    config
-}
-
-fn save_config(config: &RemoteConfig) -> Result<(), String> {
-    let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        ensure_private_dir(parent)?;
-    }
-    let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    atomic_write_private(&path, &raw)
-}
+pub use aeroric_core::remote::config::{
+    load_config, normalize_public_endpoint, normalize_relay_url, save_config, RemoteConfig,
+};
+pub use aeroric_core::remote::identity::{
+    host_name, lan_addresses, pairing_endpoints, selected_lan_ip, RemoteNetworkAddress,
+};
 
 // ── 全局状态 ─────────────────────────────────────────────────────────────────
 
@@ -425,155 +298,6 @@ pub(crate) async fn abort_unconfirmed_pairing<R: Runtime>(app: &AppHandle<R>, de
     }
     if let Err(error) = reconcile_listener_scope_locked(app).await {
         eprintln!("[remote] server closed after rolling back unconfirmed pairing: {error}");
-    }
-}
-
-// ── 辅助:主机名 / 局域网 IP ─────────────────────────────────────────────────
-
-pub(crate) fn host_name() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows PC".to_string())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let mut buf = [0u8; 256];
-        // SAFETY: `buf` is a valid writable byte array and its length is the
-        // exact capacity passed to libc. `gethostname` writes at most that
-        // many bytes; the result is treated as bytes until the NUL terminator
-        // is found and then validated as UTF-8 below.
-        let ok = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-        if ok == 0 {
-            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-            if let Ok(name) = std::str::from_utf8(&buf[..end]) {
-                if !name.is_empty() {
-                    return name.trim_end_matches(".local").to_string();
-                }
-            }
-        }
-        "Mac".to_string()
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteNetworkAddress {
-    pub interface_name: String,
-    pub ip: String,
-}
-
-fn address_priority(ip: Ipv4Addr, interface_name: &str) -> (u8, u8, String, u32) {
-    let [a, b, _, _] = ip.octets();
-    let range_priority = if a == 192 && b == 168 {
-        0
-    } else if a == 172 && (16..=31).contains(&b) {
-        1
-    } else if a == 10 {
-        2
-    } else if a == 100 && (64..=127).contains(&b) {
-        3
-    } else if a == 198 && (18..=19).contains(&b) {
-        // RFC 2544 benchmark ranges are commonly used by transparent proxies.
-        9
-    } else if ip.is_link_local() {
-        10
-    } else {
-        4
-    };
-    let interface_priority = if interface_name.starts_with("utun")
-        || interface_name.starts_with("tun")
-        || interface_name.starts_with("tap")
-        || interface_name.starts_with("wg")
-    {
-        1
-    } else {
-        0
-    };
-    (
-        range_priority,
-        interface_priority,
-        interface_name.to_ascii_lowercase(),
-        u32::from(ip),
-    )
-}
-
-/// 返回所有可用于手机直连的本机 IPv4，并将常规 LAN 地址排在隧道/代理地址之前。
-fn lan_addresses() -> Vec<RemoteNetworkAddress> {
-    let mut seen = HashSet::new();
-    let mut addresses = if_addrs::get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|interface| {
-            let IpAddr::V4(ip) = interface.ip() else {
-                return None;
-            };
-            if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
-                return None;
-            }
-            if !seen.insert(ip) {
-                return None;
-            }
-            Some((
-                address_priority(ip, &interface.name),
-                RemoteNetworkAddress {
-                    interface_name: interface.name,
-                    ip: ip.to_string(),
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    addresses.sort_by(|left, right| left.0.cmp(&right.0));
-    addresses.into_iter().map(|(_, address)| address).collect()
-}
-
-fn selected_lan_ip(
-    preferred_lan_ip: Option<&str>,
-    addresses: &[RemoteNetworkAddress],
-) -> Option<String> {
-    preferred_lan_ip
-        .and_then(|preferred| {
-            addresses
-                .iter()
-                .find(|address| address.ip == preferred)
-                .map(|address| address.ip.clone())
-        })
-        .or_else(|| addresses.first().map(|address| address.ip.clone()))
-}
-
-/// 生成配对码时要公布的端点快照。
-///
-/// `includes_lan` 不是仅用于展示：它表示 QR 中包含一个依赖本机 TCP
-/// listener 的地址，因此在签发邀请码前必须确认 listener 已宽绑定。相反，
-/// 只有 relay / 用户配置的公网地址时无需为了配对而扩大本地监听范围。
-#[derive(Debug, PartialEq, Eq)]
-struct PairingEndpoints {
-    endpoints: Vec<String>,
-    includes_lan: bool,
-}
-
-fn pairing_endpoints(
-    port: u16,
-    addresses: &[RemoteNetworkAddress],
-    config: &RemoteConfig,
-    host_id: &str,
-) -> PairingEndpoints {
-    let mut endpoints = Vec::new();
-    let lan_ip = selected_lan_ip(config.preferred_lan_ip.as_deref(), addresses);
-    let includes_lan = lan_ip.is_some();
-    if let Some(ip) = lan_ip {
-        endpoints.push(format!("ws://{ip}:{port}"));
-    }
-    endpoints.extend(config.public_endpoints.iter().cloned());
-    if let Some(relay_url) = config
-        .relay_url
-        .as_deref()
-        .filter(|url| !url.trim().is_empty())
-    {
-        endpoints.push(remote_protocol::client_connect_url(relay_url, host_id));
-    }
-    PairingEndpoints {
-        includes_lan,
-        endpoints,
     }
 }
 
@@ -933,9 +657,9 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
 #[cfg(test)]
 mod address_tests {
     use super::{
-        address_priority, normalize_public_endpoint, normalize_relay_url, selected_lan_ip,
-        RemoteNetworkAddress,
+        normalize_public_endpoint, normalize_relay_url, selected_lan_ip, RemoteNetworkAddress,
     };
+    use aeroric_core::remote::identity::address_priority;
     use std::net::Ipv4Addr;
 
     fn address(interface_name: &str, ip: &str) -> RemoteNetworkAddress {
