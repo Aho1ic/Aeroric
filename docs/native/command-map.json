@@ -70,7 +70,7 @@
       "reachable": 567,
       "unreachable": 93,
       "methods": 641,
-      "command_params_annotated": 658
+      "command_params_annotated": 659
     },
     "method": "机械解析注册表条目 → 56 模块级分类默认值（见 meta.category_resolution） → 命令名级 host-local override；definition_candidates 由全量 fn 声明索引得出",
     "caveats": [
@@ -9306,7 +9306,7 @@
       "rust_path": "remote::remote_revoke_device",
       "registered_at": "src-tauri/src/lib.rs:719",
       "definition_candidates": [
-        "src-tauri/src/remote/mod.rs:1123"
+        "src-tauri/src/remote/mod.rs:1122"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -9318,7 +9318,7 @@
       "feature_ids": [
         "F18"
       ],
-      "definition_resolved": "src-tauri/src/remote/mod.rs:1123",
+      "definition_resolved": "src-tauri/src/remote/mod.rs:1122",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -9330,7 +9330,11 @@
         "registered": false
       },
       "reachable": true,
-      "params": null
+      "params": [
+        "app: AppHandle<R>!",
+        "state: State<'_, RemoteState>!",
+        "device_id: String"
+      ]
     },
     {
       "command": "remote_complete_task_request",
