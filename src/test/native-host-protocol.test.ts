@@ -690,9 +690,9 @@ describe("the rules every client shares", () => {
   it("bridges every legacy channel to exactly one v1 topic (ADR-007)", () => {
     const topics = contract<TopicSurface>("event-topics.schema.json");
     expect(topics.topics).toBe(39);
-    expect(topics.mapped).toBe(3);
-    expect(topics.pending).toBe(36);
-    expect(topics.reshapedPayloads).toBe(3);
+    expect(topics.mapped).toBe(5);
+    expect(topics.pending).toBe(33); // P8-03 刀二：remote.task_request 转 not-forwarded（RPC 应答即结果）
+    expect(topics.reshapedPayloads).toBe(5); // P8-02 刀六起 agent 两条 mapped（reshaped payload）
     const claimed = new Map<string, number>();
     for (const row of topics.rows) {
       expect(String(row.topic)).toMatch(/^[a-z0-9_]+\.[a-z0-9_]+$/);
@@ -715,13 +715,19 @@ describe("the rules every client shares", () => {
       expect(claimed.get(event.name), `${event.name} is uncovered`).toBe(1);
     }
     expect(topics.contract.unknownTopic).toContain("must not fail");
-    // §2.3's own spellings are the three decided rows.
+    // §2.3 的三条＋P8-02 刀六的两条 agent 行（§Task P8-02 具名移交项）。
     expect(
       topics.rows
         .filter((r) => r.status === "mapped")
         .map((r) => r.topic)
         .sort(),
-    ).toEqual(["task.updated", "terminal.gap", "terminal.output"]);
+    ).toEqual([
+      "agent.operation_changed",
+      "agent.tool_install_progress",
+      "task.updated",
+      "terminal.gap",
+      "terminal.output",
+    ]);
   });
 
   it("publishes the same three storage refusals the Rust enum generated (ADR-011)", () => {

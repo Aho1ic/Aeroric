@@ -12,11 +12,13 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::oneshot;
 
 use super::agent_keymap;
 use super::rpc::str_param;
+use std::sync::Arc;
+
 use super::session_push::{is_ssh_project, load_project_task};
 use super::RemoteState;
 use crate::{storage, TaskManager};
@@ -32,6 +34,9 @@ pub(crate) struct TaskRequestBroker {
 }
 
 impl TaskRequestBroker {
+    /// 刀二起 task.create/resume 原生化（execute_task_request 直连），oneshot
+    /// 转发退役；register/cancel 仅存于测试（broker 语义保持可测）。
+    #[cfg(test)]
     fn register(&self) -> (String, oneshot::Receiver<Result<Value, String>>) {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
@@ -54,6 +59,7 @@ impl TaskRequestBroker {
             .map_err(|_| "Task request is no longer waiting".to_string())
     }
 
+    #[cfg(test)]
     fn cancel(&self, request_id: &str) {
         self.pending.lock().remove(request_id);
     }
@@ -340,7 +346,7 @@ pub(crate) async fn task_resume<R: Runtime>(
     let project_id = str_param(params, "projectId")?;
     let task_id = str_param(params, "taskId")?;
     crate::pty::validate_task_id(&task_id)?;
-    forward_task_request(
+    execute_task_request(
         app,
         json!({ "kind": "resume", "projectId": project_id, "taskId": task_id }),
     )
@@ -443,7 +449,7 @@ pub(crate) async fn task_create<R: Runtime>(
         speed = None;
     }
 
-    forward_task_request(
+    execute_task_request(
         app,
         json!({
             "kind": "create",
@@ -473,25 +479,304 @@ async fn require_known_agent(agent: &str) -> Result<(), String> {
     }
 }
 
-async fn forward_task_request<R: Runtime>(
+async fn wait_ready(state: &RemoteState) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + TASK_REQUEST_TIMEOUT;
+    while state.ready.get().is_none() {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("Desktop initialization did not finish in time".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
+async fn lock_project_queue(
+    state: &RemoteState,
+    project_id: &str,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    let entry = state
+        .task_queues
+        .lock()
+        .entry(project_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone();
+    entry.lock_owned().await
+}
+
+/// 任务是否带着可恢复会话（原 React `taskHasResumableSession` 逐字段镜像）。
+fn task_has_resumable_session(task: &storage::Task) -> bool {
+    task.claude_session_id.is_some()
+        || task.codex_session_id.is_some()
+        || task.claude_session_path.is_some()
+        || task.codex_session_path.is_some()
+        || task.dsh_session_id.is_some()
+        || task.dsh_session_path.is_some()
+        || task.omp_session_id.is_some()
+        || task.omp_session_path.is_some()
+}
+
+/// P8-03 刀二：task.create / task.resume 的**宿主原生化执行器**。
+///
+/// 原 React 中转（`forward_task_request`）的语义在这里逐条落地：startup 等待
+/// （`ready` 闸）→ 按 projectId 串行（`task_queues`，G05 的 host 侧等价判决）
+/// → 校验（任务/项目归属、SSH 连接在线、SSH 可恢复会话）→ 直连 core service
+/// （`TaskService.create` + `launch_via_core`/`resume_via_core`），不再 emit
+/// 到 React 后等待 oneshot。应答契约逐字不变：
+/// `Ok({"accepted":true,"taskId":…,"task":…})` / `Err(message)`。
+async fn execute_task_request<R: Runtime>(
     app: &AppHandle<R>,
     mut payload: Value,
 ) -> Result<Value, String> {
-    let broker = app.state::<RemoteState>().task_requests.clone();
-    let (request_id, receiver) = broker.register();
+    let state = app.state::<RemoteState>();
+    wait_ready(&state).await?;
+    let project_id = payload
+        .get("projectId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let task_id = payload
+        .get("taskId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    // 队列键：projectId ?? taskId 所属任务（原 React :116-120 语义）。
+    let queue_key = match (project_id.clone(), task_id.clone()) {
+        (Some(pid), _) => Some(pid),
+        (None, Some(tid)) => tauri::async_runtime::spawn_blocking(move || {
+            load_task_by_id(&tid).ok().map(|task| task.project_id)
+        })
+        .await
+        .map_err(|e| e.to_string())?,
+        (None, None) => None,
+    };
+
+    let request_id = uuid::Uuid::new_v4().to_string();
     payload["requestId"] = json!(request_id);
-    if let Err(err) = app.emit("remote-task-request", payload) {
-        broker.cancel(&request_id);
-        return Err(err.to_string());
-    }
-    match tokio::time::timeout(TASK_REQUEST_TIMEOUT, receiver).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err("Desktop task request was cancelled".to_string()),
-        Err(_) => {
-            broker.cancel(&request_id);
-            Err("Desktop did not confirm the task request in time".to_string())
+    let result = match queue_key {
+        Some(key) => {
+            let _guard = lock_project_queue(&state, &key).await;
+            run_task_request(app, &payload).await
         }
+        None => run_task_request(app, &payload).await,
+    };
+    result
+}
+
+/// 校验＋启动内核（原 React runRequest 的 resume/create 两个分支）。
+async fn run_task_request<R: Runtime>(
+    app: &AppHandle<R>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let kind = str_param(payload, "kind")?;
+    let task_id = payload
+        .get("taskId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if kind == "resume" {
+        let Some(task_id) = task_id else {
+            return Err("Resume request is missing taskId".to_string());
+        };
+        let lookup = task_id.clone();
+        let task = tauri::async_runtime::spawn_blocking(move || load_task_by_id(&lookup))
+            .await
+            .map_err(|e| e.to_string())??;
+        if let Some(project_id) = payload.get("projectId").and_then(Value::as_str) {
+            if task.project_id != project_id {
+                return Err("Task does not belong to the requested project".to_string());
+            }
+        }
+        let projects = tauri::async_runtime::spawn_blocking(storage::load_projects)
+            .await
+            .map_err(|e| e.to_string())??;
+        let Some(project) = projects.iter().find(|p| p.id == task.project_id) else {
+            return Err("Task project is missing on the desktop".to_string());
+        };
+        if is_ssh_project(project) && !ssh_connection_configured(project) {
+            return Err("SSH connection is not configured on the desktop".to_string());
+        }
+        if is_ssh_project(project) && !task_has_resumable_session(&task) {
+            return Err("SSH task has no resumable session".to_string());
+        }
+        if task.status != "todo" {
+            // 恢复：会话 id 由记录定位（原 React 的前端 session 定位逻辑，
+            // 宿主版走 read_session_id 同一内核）。
+            let session_id = resolve_resume_session_id(&task).await?;
+            let (session_id, task_id_for_core) = (session_id, task_id.clone());
+            let sink = remote_output_sink(app, &task_id_for_core);
+            crate::core_adapter::resume_via_core(
+                app,
+                &task_id_for_core,
+                &session_id,
+                sink,
+                true,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(task_accepted_payload(&task_id_for_core));
+        }
+        // todo 任务第一次启动 = 以记录里的 prompt 走 start。
+        let sink = remote_output_sink(app, &task.id);
+        crate::core_adapter::launch_via_core(
+            app,
+            &task.id,
+            sink,
+            true,
+            None,
+            false,
+            aeroric_core::tasks::Attachments::default(),
+            None,
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(task_accepted_payload(&task.id));
     }
+    if kind != "create" {
+        return Err("Invalid task creation request".to_string());
+    }
+    // create：记录经 core TaskService.create（唯一权威车道），启动走
+    // launch_via_core 同一内核。prompt 等校验已在 task_create 完成。
+    let project_id = str_param(payload, "projectId")?;
+    let prompt = str_param(payload, "prompt")?;
+    let agent = str_param(payload, "agent")?;
+    let permission_mode = str_param(payload, "permissionMode")?;
+    let projects = tauri::async_runtime::spawn_blocking(storage::load_projects)
+        .await
+        .map_err(|e| e.to_string())??;
+    let Some(project) = projects.iter().find(|p| p.id == project_id) else {
+        return Err("Project not found on the desktop".to_string());
+    };
+    if is_ssh_project(project) && !ssh_connection_configured(project) {
+        return Err("SSH connection is not configured on the desktop".to_string());
+    }
+    let new_task = aeroric_core::tasks::NewTask {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id: project_id.clone(),
+        prompt,
+        agent,
+        permission_mode,
+        immediate: true,
+        selected_model: payload
+            .get("selectedModel")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reasoning_effort: payload
+            .get("reasoningEffort")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        speed: payload
+            .get("speed")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        dsh_agent_preset: payload
+            .get("dshAgentPreset")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        images: Vec::new(),
+        texts: Vec::new(),
+    };
+    let service = app.state::<Arc<aeroric_core::tasks::TaskService>>();
+    let core_project = core_project_record(&service, &project_id)?;
+    let created = service
+        .create(&core_project, new_task)
+        .map_err(|e| e.to_string())?;
+    let task_id = created.0.id().unwrap_or_default().to_string();
+    let sink = remote_output_sink(app, &task_id);
+    crate::core_adapter::launch_via_core(
+        app,
+        &task_id,
+        sink,
+        true,
+        None,
+        false,
+        aeroric_core::tasks::Attachments::default(),
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(task_accepted_payload(&task_id))
+}
+
+/// SSH 项目必须在桌面配置过连接（宿主存储是权威；原 React 读 sshConnectionsRef）。
+fn ssh_connection_configured(project: &storage::Project) -> bool {
+    match &project.location {
+        Some(storage::ProjectLocation::Ssh { connection_id, .. }) => {
+            crate::ssh::ssh_connection_by_id(connection_id).is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// 项目 id → core `Record`（`project_record_for` 的按 id 版本）。
+fn core_project_record(
+    service: &aeroric_core::tasks::TaskService,
+    project_id: &str,
+) -> Result<aeroric_core::storage::Record, String> {
+    aeroric_core::storage::projects::load_projects(service.context())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|record| record.id() == Some(project_id))
+        .ok_or_else(|| "Project not found on the desktop".to_string())
+}
+
+/// 原生任务输出：手机端经 terminal_hub 实时订阅，桌面端打开任务时按
+/// 重连语义挂接（历史文件是权威补发源）。
+fn remote_output_sink<R: Runtime>(_app: &AppHandle<R>, task_id: &str) -> crate::pty::OutputSink {
+    let task_id = task_id.to_string();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let channel =
+        tauri::ipc::Channel::<String>::new(move |data: tauri::ipc::InvokeResponseBody| {
+            match data {
+                tauri::ipc::InvokeResponseBody::Json(text) => {
+                    let _ = tx.send(text);
+                }
+                tauri::ipc::InvokeResponseBody::Raw(bytes) => {
+                    if let Ok(text) = String::from_utf8(bytes) {
+                        let _ = tx.send(text);
+                    }
+                }
+            }
+            Ok(())
+        });
+    let hub_task_id = task_id.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            aeroric_core::remote::terminal_hub::hub().publish(&hub_task_id, &chunk);
+        }
+    });
+    crate::pty::OutputSink::Channel(channel)
+}
+
+fn task_accepted_payload(task_id: &str) -> Value {
+    json!({ "accepted": true, "taskId": task_id, "task": Value::Null })
+}
+
+/// 会话定位：优先记录里的会话 id，缺了再从会话文件头读（宿主版
+/// read_session_id 同一内核）。原 React「session 定位全在前端」的宿主化。
+async fn resolve_resume_session_id(task: &storage::Task) -> Result<String, String> {
+    let family = lifecycle_family(task).await?;
+    let (id, path) = match family {
+        crate::app_settings::AgentFamily::Dsh => {
+            (task.dsh_session_id.clone(), task.dsh_session_path.clone())
+        }
+        crate::app_settings::AgentFamily::Omp => {
+            (task.omp_session_id.clone(), task.omp_session_path.clone())
+        }
+        _ => (
+            task.claude_session_id.clone(),
+            task.claude_session_path.clone(),
+        ),
+    };
+    if let Some(id) = id {
+        return Ok(id);
+    }
+    let Some(path) = path else {
+        return Err("Task has no resumable session".to_string());
+    };
+    let is_codex = matches!(
+        lifecycle_family(task).await?,
+        crate::app_settings::AgentFamily::Codex
+    );
+    let session_id = crate::session::read_session_id(path, String::new(), is_codex, None).await?;
+    session_id.ok_or_else(|| "Task has no resumable session".to_string())
 }
 
 fn load_task_by_id(task_id: &str) -> Result<storage::Task, String> {

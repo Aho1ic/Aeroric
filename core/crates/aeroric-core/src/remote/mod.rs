@@ -1,6 +1,6 @@
 //! 手机远程连接（Mobile Remote）的**纯逻辑半边**（P8-03 刀一自宿主 `remote/` 上收）。
 //!
-//! 本模块只收**不依赖 Tauri/AppHandle** 的部分：协议类型与 RPC 版本协商
+//! 本模块只收**不依赖 Tauri 句柄**的部分：协议类型与 RPC 版本协商
 //! （`protocol`）、E2EE 握手与会话密码（`crypto`/`orca_crypto`）、终端帧编码
 //! （`terminal_frames`）与 broadcast hub（`terminal_hub`）、事件环形缓冲
 //! （`event_log`）、键位映射（`agent_keymap`）、设备注册表与配对/邀请

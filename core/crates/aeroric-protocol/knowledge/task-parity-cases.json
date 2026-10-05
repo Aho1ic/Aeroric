@@ -10263,7 +10263,7 @@
             "status": "done",
             "createdAt": 0,
             "id": "recent",
-            "completedAt": 1789272000000
+            "completedAt": 1789326000000
           },
           {
             "projectId": "p1",
@@ -10294,7 +10294,7 @@
           "hour": 20,
           "retain_days": 7
         },
-        "nowMs": 1789347600000
+        "nowMs": 1789401600000
       },
       "source": "src/taskCleanup.ts:79-96",
       "expected": [
@@ -10431,7 +10431,7 @@
             "status": "done",
             "createdAt": 0,
             "id": "recent",
-            "completedAt": 1789272000000
+            "completedAt": 1789326000000
           },
           {
             "projectId": "p1",
@@ -10462,7 +10462,7 @@
           "hour": 20,
           "retain_days": 30
         },
-        "nowMs": 1789347600000
+        "nowMs": 1789401600000
       },
       "source": "src/taskCleanup.ts:79-96",
       "expected": [
@@ -10517,10 +10517,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1788753600000
+          "last_run_at": 1788807600000
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10536,10 +10536,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1788840000000
+          "last_run_at": 1788894000000
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10556,8 +10556,8 @@
           "hour": 20,
           "retain_days": 30
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10575,8 +10575,8 @@
           "retain_days": 30,
           "last_run_at": 0
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10592,10 +10592,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1789088400000
+          "last_run_at": 1789142400000
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": true
@@ -10611,10 +10611,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1789301100000
+          "last_run_at": 1789355100000
         },
-        "nowMs": 1789311600000,
-        "offsetMinutes": 480
+        "nowMs": 1789365600000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10630,10 +10630,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1788746400000
+          "last_run_at": 1788800400000
         },
-        "nowMs": 1789300740000,
-        "offsetMinutes": 480
+        "nowMs": 1789354740000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false
@@ -10649,10 +10649,10 @@
           "weekday": 0,
           "hour": 20,
           "retain_days": 30,
-          "last_run_at": 1788699600000
+          "last_run_at": 1788753600000
         },
-        "nowMs": 1789347600000,
-        "offsetMinutes": 480
+        "nowMs": 1789401600000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": true
@@ -10669,8 +10669,8 @@
           "hour": 20,
           "retain_days": 30
         },
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420
       },
       "source": "src/taskCleanup.ts:48-58",
       "expected": false

@@ -438,6 +438,9 @@ pub fn run() {
             crate::local_router_commands::init(app.handle());
             // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
             crate::remote::init(app.handle().clone());
+            // P8-03 刀二：setup 完成，remote task.create/resume 的 ready 闸放行
+            // （原 React startupReadyRef 语义的宿主化）。
+            app.state::<remote::RemoteState>().mark_ready();
             Ok(())
         })
         .manage(TaskManager::default())

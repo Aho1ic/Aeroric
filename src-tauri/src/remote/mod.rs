@@ -52,7 +52,7 @@ mod auth_stress_tests;
 #[cfg(test)]
 mod lan_roundtrip_tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
@@ -207,6 +207,12 @@ fn save_config(config: &RemoteConfig) -> Result<(), String> {
 
 pub struct RemoteState {
     pub(crate) auth: parking_lot::Mutex<AuthStore>,
+    /// 桌面初始化完成闸（P8-03 刀二：替代 React 的 startupReadyRef）。
+    /// lib.rs setup 尾置位；置位前的 task.create/resume 请求等待而非失败。
+    pub(crate) ready: Arc<std::sync::OnceLock<()>>,
+    /// 按 projectId 串行的任务变更队列（P8-03 刀二：G05 的 host 侧等价判决，
+    /// 取代 React 的 remoteTaskMutationQueuesRef）。
+    pub(crate) task_queues: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) clients: Arc<ClientRegistry>,
     pub(crate) terminal_leases: Arc<TerminalLeaseRegistry>,
     pub(crate) approvals: Arc<ApprovalRegistry>,
@@ -238,6 +244,11 @@ fn install_terminal_history_resolver() {
 }
 
 impl RemoteState {
+    /// 桌面初始化完成（lib.rs setup 尾）。幂等。
+    pub fn mark_ready(&self) {
+        let _ = self.ready.set(());
+    }
+
     pub fn new() -> Self {
         install_terminal_history_resolver();
         // 挂在整条 `let` 上：`expect` 是下面闭包的尾表达式，属性只能上提到这里。
@@ -247,6 +258,8 @@ impl RemoteState {
             crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable")
         });
         Self {
+            ready: Arc::new(std::sync::OnceLock::new()),
+            task_queues: parking_lot::Mutex::new(HashMap::new()),
             auth: parking_lot::Mutex::new(AuthStore::load()),
             clients: Arc::new(ClientRegistry::default()),
             terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
@@ -266,7 +279,12 @@ impl RemoteState {
     #[cfg(test)]
     pub(crate) fn new_in_memory() -> Self {
         install_terminal_history_resolver();
+        let ready = Arc::new(std::sync::OnceLock::new());
+        // 集成测试的 mock 环境没有真实桌面启动闸：默认就绪。
+        let _ = ready.set(());
         Self {
+            ready,
+            task_queues: parking_lot::Mutex::new(HashMap::new()),
             auth: parking_lot::Mutex::new(AuthStore::in_memory()),
             clients: Arc::new(ClientRegistry::default()),
             terminal_leases: Arc::new(TerminalLeaseRegistry::default()),

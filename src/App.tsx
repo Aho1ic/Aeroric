@@ -42,7 +42,6 @@ import {
   useHostProjectViewsMirror,
 } from "./state/app/useAppShellHooks";
 import { useAppCoreTauriListeners } from "./state/app/useAppTauriEvents";
-import { useRemoteTaskRequests } from "./state/app/useRemoteTaskRequests";
 import { useAppStartupLoad, useDshHostEventsSubscription } from "./state/app/useAppStartup";
 import {
   useAutoCleanupTimer,
@@ -195,7 +194,6 @@ function AppShell() {
   });
 
   const pendingTaskStartsRef = useRef<Record<string, () => void>>({});
-  const remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>());
   const startupReadyRef = useRef<Promise<void>>(Promise.resolve());
   const manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set());
   const agentOptionsRef = useRef(agentOptions);
@@ -508,21 +506,9 @@ function AppShell() {
   const handleRunTodoTask = taskLifecycle.handleRunTodoTask;
   const handleResumeTask = taskLifecycle.handleResumeTask;
 
-  // 手机远程 task.create / task.resume:后端 RPC 校验后转发 remote-task-request,
-  // 这里复用桌面完整创建/恢复流程(worktree、附件、终端 buffer 等零重复,
-  // 见 src-tauri/src/remote/tasks_rpc.rs)。latest-ref 避免闭包过期 state。
-  useRemoteTaskRequests({
-    projectsRef,
-    tasksRef,
-    sshConnectionsRef,
-    startupReadyRef,
-    remoteTaskMutationQueuesRef,
-    submit: handleSubmitTask as Parameters<typeof useRemoteTaskRequests>[0]["submit"],
-    resume: handleResumeTask,
-    runTodo: handleRunTodoTask,
-    showToast,
-    translate: t,
-  });
+  // 手机远程 task.create / task.resume 已在宿主原生化（P8-03 刀二：
+  // src-tauri/src/remote/tasks_rpc.rs execute_task_request 直连 core service，
+  // 不再 emit remote-task-request 给 React；useRemoteTaskRequests hook 退役）。
 
   async function handleMergeWorktree(taskId: string) {
     await mergeTaskWorktree(

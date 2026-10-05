@@ -123,7 +123,6 @@ const EXPECTED_EVENTS = [
   "dsh-question-requested",
   "dsh-question-resolved",
   "project-pinned-changed",
-  "remote-task-request",
   "remote-terminal-resized",
   "task-session",
   "task-status",

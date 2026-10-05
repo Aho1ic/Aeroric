@@ -10147,7 +10147,7 @@
       ],
       "id": "expired:retain=7",
       "input": {
-        "nowMs": 1789347600000,
+        "nowMs": 1789401600000,
         "settings": {
           "enabled": true,
           "hour": 20,
@@ -10270,7 +10270,7 @@
           },
           {
             "agent": "claude",
-            "completedAt": 1789272000000,
+            "completedAt": 1789326000000,
             "createdAt": 0,
             "id": "recent",
             "permissionMode": "ask",
@@ -10315,7 +10315,7 @@
       ],
       "id": "expired:retain=30",
       "input": {
-        "nowMs": 1789347600000,
+        "nowMs": 1789401600000,
         "settings": {
           "enabled": true,
           "hour": 20,
@@ -10438,7 +10438,7 @@
           },
           {
             "agent": "claude",
-            "completedAt": 1789272000000,
+            "completedAt": 1789326000000,
             "createdAt": 0,
             "id": "recent",
             "permissionMode": "ask",
@@ -10506,13 +10506,13 @@
       "expected": false,
       "id": "cleanup:intervalDue",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1788753600000,
+          "last_run_at": 1788807600000,
           "mode": "interval",
           "retain_days": 30,
           "weekday": 0
@@ -10525,13 +10525,13 @@
       "expected": false,
       "id": "cleanup:intervalAlmost",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1788840000000,
+          "last_run_at": 1788894000000,
           "mode": "interval",
           "retain_days": 30,
           "weekday": 0
@@ -10544,8 +10544,8 @@
       "expected": false,
       "id": "cleanup:intervalNoRun",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
@@ -10562,8 +10562,8 @@
       "expected": false,
       "id": "cleanup:disabled",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": false,
           "hour": 20,
@@ -10581,13 +10581,13 @@
       "expected": true,
       "id": "cleanup:weeklyPast",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1789088400000,
+          "last_run_at": 1789142400000,
           "mode": "weekly",
           "retain_days": 30,
           "weekday": 0
@@ -10600,13 +10600,13 @@
       "expected": false,
       "id": "cleanup:weeklySameSlot",
       "input": {
-        "nowMs": 1789311600000,
-        "offsetMinutes": 480,
+        "nowMs": 1789365600000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1789301100000,
+          "last_run_at": 1789355100000,
           "mode": "weekly",
           "retain_days": 30,
           "weekday": 0
@@ -10619,13 +10619,13 @@
       "expected": false,
       "id": "cleanup:weeklyBeforeSlot",
       "input": {
-        "nowMs": 1789300740000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354740000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1788746400000,
+          "last_run_at": 1788800400000,
           "mode": "weekly",
           "retain_days": 30,
           "weekday": 0
@@ -10638,13 +10638,13 @@
       "expected": true,
       "id": "cleanup:weeklyCatchUp",
       "input": {
-        "nowMs": 1789347600000,
-        "offsetMinutes": 480,
+        "nowMs": 1789401600000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,
           "interval_days": 7,
-          "last_run_at": 1788699600000,
+          "last_run_at": 1788753600000,
           "mode": "weekly",
           "retain_days": 30,
           "weekday": 0
@@ -10657,8 +10657,8 @@
       "expected": false,
       "id": "cleanup:weeklyNoRun",
       "input": {
-        "nowMs": 1789300860000,
-        "offsetMinutes": 480,
+        "nowMs": 1789354860000,
+        "offsetMinutes": -420,
         "settings": {
           "enabled": true,
           "hour": 20,

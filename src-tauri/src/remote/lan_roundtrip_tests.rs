@@ -566,26 +566,6 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
     let task_id = format!("remote-m3-test-{}", uuid::Uuid::new_v4());
     let written = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
 
-    // 桌面前端视角:remote-task-request 事件桥(listen_any 与 webview 同源)
-    let (req_tx, req_rx) = std::sync::mpsc::channel::<Value>();
-    let request_handle = handle.clone();
-    handle.listen_any("remote-task-request", move |event| {
-        if let Ok(payload) = serde_json::from_str::<Value>(event.payload()) {
-            let _ = req_tx.send(payload.clone());
-            if let Some(request_id) = payload.get("requestId").and_then(Value::as_str) {
-                let result = if payload["kind"] == json!("create") {
-                    Ok(json!({ "accepted": true, "taskId": "desktop-created-task" }))
-                } else {
-                    Err("Desktop could not restore the requested session".to_string())
-                };
-                let _ = request_handle
-                    .state::<RemoteState>()
-                    .task_requests
-                    .resolve(request_id, result);
-            }
-        }
-    });
-
     tauri::async_runtime::block_on(async move {
         let state = handle.state::<RemoteState>();
         let server_pub = state.keys.public_b64();
@@ -657,22 +637,19 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
             "bad permissionMode must be rejected"
         );
 
+        // ── task.create:P8-03 刀二原生化后直连 core service——p1 不在
+        // scratch 存储 → 明确拒绝（不再经 remote-task-request 事件桥）。
         phone
             .send_json(json!({"v":2,"id":7,"method":"task.create","params":{"projectId":"p1","prompt":"do it","agent":"claude","permissionMode":"ask","dshAgentPreset":"code"}}))
             .await;
         let reply = phone.next_json().await;
-        assert_eq!(reply["ok"], json!(true));
-        assert_eq!(reply["result"]["taskId"], json!("desktop-created-task"));
-        let request = req_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("remote-task-request emitted");
-        assert_eq!(request["kind"], json!("create"));
-        assert_eq!(request["projectId"], json!("p1"));
-        assert_eq!(request["prompt"], json!("do it"));
-        assert_eq!(request["permissionMode"], json!("ask"));
-        assert_eq!(request["dshAgentPreset"], json!("code"));
+        assert_eq!(reply["ok"], json!(false));
+        assert!(reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("Project not found on the desktop"));
 
-        // ── task.resume:桌面拒绝会回传真实失败,不能提前返回 accepted ──
+        // ── task.resume:原生化后宿主权威存储查无此任务 → 明确拒绝。
         phone
             .send_json(json!({"v":2,"id":8,"method":"task.resume","params":{"projectId":"p1","taskId":task_id}}))
             .await;
@@ -681,12 +658,7 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
         assert!(reply["error"]
             .as_str()
             .unwrap()
-            .contains("could not restore"));
-        let request = req_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("resume request emitted");
-        assert_eq!(request["kind"], json!("resume"));
-        assert_eq!(request["taskId"], json!(task_id.clone()));
+            .contains(&format!("Task not found: {task_id}")));
 
         // ── 存储只读校验:不存在的项目 → 明确报错(不写任何文件) ──
         let ghost = format!("ghost-{}", uuid::Uuid::new_v4().simple());

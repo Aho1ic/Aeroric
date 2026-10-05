@@ -226,8 +226,8 @@
     },
     {
       "disposition": "in-use",
-      "emitters": 1,
-      "listeners": 1,
+      "emitters": 0,
+      "listeners": 0,
       "name": "remote-task-request",
       "orphan": null
     },

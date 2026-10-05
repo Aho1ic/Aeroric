@@ -465,13 +465,13 @@
         "remote-task-request"
       ],
       "legacyDirection": "core-to-client",
-      "plannedDirection": "pending: P8-03",
-      "payload": "pending: P8-03",
-      "status": "pending: P8-03",
+      "status": "not-forwarded: P8-03 刀二把 task.create/task.resume 原生化（execute_task_request 直连 core TaskService+launch_via_core/resume_via_core），RPC 应答即结果（Ok({accepted,taskId})）；legacy 通道 remote-task-request 的 emit→React→remote_complete_task_request oneshot 中转整体退役（G05 第三处 host 侧等价判决＝RemoteState.task_queues per-project 串行），v1 事件面不再承载它",
       "evidence": {
         "emitters": 1,
         "listeners": 1
-      }
+      },
+      "plannedDirection": "pending: P8-03",
+      "payload": "pending: P8-03"
     },
     {
       "topic": "remote.terminal_resized",
