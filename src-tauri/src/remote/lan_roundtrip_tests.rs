@@ -14,7 +14,8 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use super::terminal_frames::{decode_terminal_frame, TerminalFrame, TerminalOpcode};
-use super::{crypto, server, RemoteState};
+use super::{bridge, RemoteState};
+use aeroric_core::remote::{crypto, ListenerScope};
 
 type ClientWs = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -146,15 +147,15 @@ impl TestClient {
 #[test]
 fn lan_pairing_rpc_push_and_revoke_roundtrip() {
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     let handle = app.handle().clone();
 
     tauri::async_runtime::block_on(async move {
-        let state = handle.state::<RemoteState>();
+        let state = handle.state::<std::sync::Arc<RemoteState>>();
         let server_pub = state.keys.public_b64();
         let invite = state.auth.lock().create_invite().expect("invite");
 
-        let server = server::start(handle.clone(), 0)
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -232,7 +233,7 @@ fn lan_pairing_rpc_push_and_revoke_roundtrip() {
         second.expect_closed().await;
 
         // ── 停机后端口不再接受新连接 ──
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(connect_async(format!("ws://127.0.0.1:{port}"))
             .await
@@ -243,12 +244,15 @@ fn lan_pairing_rpc_push_and_revoke_roundtrip() {
 #[test]
 fn unauthenticated_first_message_is_rejected() {
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     let handle = app.handle().clone();
 
     tauri::async_runtime::block_on(async move {
-        let server_pub = handle.state::<RemoteState>().keys.public_b64();
-        let server = server::start(handle.clone(), 0)
+        let server_pub = handle
+            .state::<std::sync::Arc<RemoteState>>()
+            .keys
+            .public_b64();
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -268,7 +272,7 @@ fn unauthenticated_first_message_is_rejected() {
         assert_eq!(ws2.next_json().await["ok"], json!(false));
         ws2.expect_closed().await;
 
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
     });
 }
 
@@ -276,11 +280,11 @@ fn unauthenticated_first_message_is_rejected() {
 #[test]
 fn e2ee_rejects_legacy_and_wrong_key_clients() {
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     let handle = app.handle().clone();
 
     tauri::async_runtime::block_on(async move {
-        let server = server::start(handle.clone(), 0)
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -335,7 +339,7 @@ fn e2ee_rejects_legacy_and_wrong_key_clients() {
             .unwrap_err();
         assert!(err.contains("identity verification failed"));
 
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
     });
 }
 
@@ -355,9 +359,12 @@ fn terminal_stream_snapshot_live_input_and_resize() {
     }
 
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     app.manage(empty_task_manager());
     let handle = app.handle().clone();
+    // 刀三b 后 core 的 new_in_memory 不再装 resolver（lib.rs setup 才装）：
+    // mock 测试这里显式补上，hub 的水位回填才有真实历史长度。
+    super::install_terminal_history_resolver();
 
     let task_id = format!("remote-m2-test-{}", uuid::Uuid::new_v4());
     let written = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
@@ -385,10 +392,10 @@ fn terminal_stream_snapshot_live_input_and_resize() {
         let task_id = task_id.clone();
         let written = written.clone();
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let server_pub = state.keys.public_b64();
             let invite = state.auth.lock().create_invite().expect("invite");
-            let server = server::start(handle.clone(), 0)
+            let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
                 .await
                 .expect("server start");
             let port = server.port;
@@ -532,7 +539,7 @@ fn terminal_stream_snapshot_live_input_and_resize() {
                 .unwrap()
                 .contains("Too many terminal streams"));
 
-            server.shutdown(&handle);
+            server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
         });
     }));
 
@@ -559,7 +566,7 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
     }
 
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     app.manage(empty_task_manager());
     let handle = app.handle().clone();
 
@@ -567,10 +574,10 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
     let written = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
 
     tauri::async_runtime::block_on(async move {
-        let state = handle.state::<RemoteState>();
+        let state = handle.state::<std::sync::Arc<RemoteState>>();
         let server_pub = state.keys.public_b64();
         let invite = state.auth.lock().create_invite().expect("invite");
-        let server = server::start(handle.clone(), 0)
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -679,7 +686,7 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
             assert!(reply["error"].as_str().unwrap().contains("not found"));
         }
 
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
     });
 }
 
@@ -688,14 +695,14 @@ fn m3_task_rpcs_input_respond_and_event_bridge() {
 #[test]
 fn m3_session_appended_push_reaches_clients() {
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     let handle = app.handle().clone();
 
     tauri::async_runtime::block_on(async move {
-        let state = handle.state::<RemoteState>();
+        let state = handle.state::<std::sync::Arc<RemoteState>>();
         let server_pub = state.keys.public_b64();
         let invite = state.auth.lock().create_invite().expect("invite");
-        let server = server::start(handle.clone(), 0)
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -736,7 +743,7 @@ fn m3_session_appended_push_reaches_clients() {
         assert_eq!(messages[0]["content"][1]["type"], json!("tool_use"));
         assert_eq!(messages[0]["content"][1]["name"], json!("Read"));
 
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
     });
 }
 
@@ -745,14 +752,14 @@ fn m3_session_appended_push_reaches_clients() {
 #[test]
 fn m5_event_watermark_and_readonly_rpc_guards() {
     let app = tauri::test::mock_app();
-    app.manage(RemoteState::new_in_memory());
+    app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
     let handle = app.handle().clone();
 
     tauri::async_runtime::block_on(async move {
-        let state = handle.state::<RemoteState>();
+        let state = handle.state::<std::sync::Arc<RemoteState>>();
         let server_pub = state.keys.public_b64();
         let invite = state.auth.lock().create_invite().expect("invite");
-        let server = server::start(handle.clone(), 0)
+        let server = bridge::start_with_host_services(&handle, 0, ListenerScope::Network)
             .await
             .expect("server start");
         let port = server.port;
@@ -831,6 +838,6 @@ fn m5_event_watermark_and_readonly_rpc_guards() {
             .await;
         assert_eq!(phone.next_json().await["ok"], json!(false));
 
-        server.shutdown(&handle);
+        server.shutdown(&handle.state::<std::sync::Arc<RemoteState>>());
     });
 }

@@ -66,6 +66,7 @@ tungstenite = "0.24"
 # 手机远程连接(remote 模块):异步 WS 服务端 + 帧收发 + CSPRNG token
 # rustls-tls-webpki-roots:relay_client 出站 wss 连自托管 relay(Let's Encrypt 证书)
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+async-trait = "0.1"
 futures-util = "0.3"
 getrandom = "0.2"
 # E2EE(M4):X25519 握手 + ChaCha20-Poly1305 帧加密 + HKDF 密钥派生

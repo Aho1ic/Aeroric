@@ -12,8 +12,8 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use super::rpc::str_param;
 use crate::app_settings::{AgentSetupDraft, AgentSetupKind, CustomAgentProfile};
+use aeroric_core::remote::rpc::str_param;
 
 const MAX_ID_LEN: usize = 64;
 const MAX_BASE_URL_LEN: usize = 512;

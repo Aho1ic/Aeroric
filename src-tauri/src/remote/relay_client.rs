@@ -38,7 +38,9 @@ fn ws_config() -> WebSocketConfig {
 }
 
 fn set_relay_state<R: Runtime>(app: &AppHandle<R>, value: &str) {
-    *app.state::<RemoteState>().relay_state.lock() = value.to_string();
+    *app.state::<std::sync::Arc<RemoteState>>()
+        .relay_state
+        .lock() = value.to_string();
 }
 
 /// 启动 relay 维护任务。`shutdown` 与 WS 服务共享:服务停,relay 停。
@@ -135,7 +137,7 @@ async fn run_control<R: Runtime>(
     };
     let (mut sink, mut stream) = ws.split();
 
-    let host_id = app.state::<RemoteState>().keys.host_id();
+    let host_id = app.state::<std::sync::Arc<RemoteState>>().keys.host_id();
     let register = HostToRelay::Register {
         v: RELAY_PROTOCOL_VERSION,
         host_id: host_id.clone(),
@@ -168,7 +170,7 @@ async fn run_control<R: Runtime>(
         }
     }
     set_relay_state(app, "online");
-    if app.state::<RemoteState>().audit_enabled {
+    if app.state::<std::sync::Arc<RemoteState>>().audit_enabled {
         audit::log(
             "relay-registered",
             json!({ "relay": relay_url, "hostId": host_id }),
@@ -243,11 +245,15 @@ fn dial_data_connection<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         match connect_async_with_config(&url, Some(ws_config()), false).await {
             Ok((ws, _)) => {
-                super::server::serve_ws(
-                    app,
+                let state = app.state::<std::sync::Arc<RemoteState>>().inner().clone();
+                let handle: std::sync::Arc<dyn aeroric_core::remote::services::RemoteHostHandle> =
+                    std::sync::Arc::new(crate::remote::bridge::RemoteHostBridge::new(app));
+                aeroric_core::remote::server::serve_ws(
+                    state,
+                    handle,
                     ws,
                     peer_ip,
-                    super::server::ConnectionContext::Relay { host_id },
+                    aeroric_core::remote::server::ConnectionContext::Relay { host_id },
                     shutdown,
                 )
                 .await;

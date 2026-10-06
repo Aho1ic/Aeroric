@@ -6,17 +6,13 @@
 //! 请求转成 `remote-task-request` 事件,由桌面前端复用现成 handleSubmitTask /
 //! handleResumeTask 完整流程(worktree、附件、终端 buffer 等逻辑零重复)。
 
-use std::collections::HashMap;
 use std::time::Duration;
 
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
-use tokio::sync::oneshot;
 
 use super::agent_keymap;
-use super::rpc::str_param;
+use aeroric_core::remote::rpc::str_param;
 use std::sync::Arc;
 
 use super::session_push::{is_ssh_project, load_project_task};
@@ -27,113 +23,6 @@ const MAX_PROMPT_BYTES: usize = 100 * 1024;
 const MAX_DSH_PRESET_LEN: usize = 64;
 const PERMISSION_MODES: &[&str] = &["ask", "auto_edit", "full_access"];
 const TASK_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-
-#[derive(Default)]
-pub(crate) struct TaskRequestBroker {
-    pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
-}
-
-impl TaskRequestBroker {
-    /// 刀二起 task.create/resume 原生化（execute_task_request 直连），oneshot
-    /// 转发退役；register/cancel 仅存于测试（broker 语义保持可测）。
-    #[cfg(test)]
-    fn register(&self) -> (String, oneshot::Receiver<Result<Value, String>>) {
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().insert(request_id.clone(), tx);
-        (request_id, rx)
-    }
-
-    pub(crate) fn resolve(
-        &self,
-        request_id: &str,
-        result: Result<Value, String>,
-    ) -> Result<(), String> {
-        let sender = self
-            .pending
-            .lock()
-            .remove(request_id)
-            .ok_or_else(|| "Task request expired or was already completed".to_string())?;
-        sender
-            .send(result)
-            .map_err(|_| "Task request is no longer waiting".to_string())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ApprovalRequest {
-    pub request_id: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-}
-
-#[derive(Default)]
-pub(crate) struct ApprovalRegistry {
-    pending: Mutex<HashMap<String, ApprovalEntry>>,
-}
-
-#[derive(Clone)]
-struct ApprovalEntry {
-    request: ApprovalRequest,
-    agent: String,
-}
-
-impl ApprovalRegistry {
-    pub(crate) fn register(
-        &self,
-        task_id: &str,
-        agent: &str,
-        kind: &str,
-        tool_name: Option<&str>,
-    ) -> ApprovalRequest {
-        let request = ApprovalRequest {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            kind: kind.to_string(),
-            tool_name: tool_name
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string),
-        };
-        self.pending.lock().insert(
-            task_id.to_string(),
-            ApprovalEntry {
-                request: request.clone(),
-                agent: agent.to_string(),
-            },
-        );
-        request
-    }
-
-    pub(crate) fn clear(&self, task_id: &str) {
-        self.pending.lock().remove(task_id);
-    }
-
-    pub(crate) fn get(&self, task_id: &str) -> Option<ApprovalRequest> {
-        self.pending
-            .lock()
-            .get(task_id)
-            .map(|entry| entry.request.clone())
-    }
-
-    fn take_matching(&self, task_id: &str, request_id: &str) -> Result<ApprovalEntry, String> {
-        let mut pending = self.pending.lock();
-        let Some(entry) = pending.get(task_id) else {
-            return Err("Task is no longer waiting for an approval".to_string());
-        };
-        if entry.request.request_id != request_id {
-            return Err("Approval request is stale".to_string());
-        }
-        pending
-            .remove(task_id)
-            .ok_or_else(|| "Approval request disappeared before it could be consumed".to_string())
-    }
-
-    fn restore(&self, task_id: String, entry: ApprovalEntry) {
-        self.pending.lock().insert(task_id, entry);
-    }
-}
 
 /// RPC `agents.list`:手机新建任务页的 agent 选项(内置 + 自定义 profile 窄面视图,
 /// 不回传 base_url/api_key 等敏感字段 —— 建任务不需要它们)。
@@ -181,26 +70,24 @@ pub(crate) async fn agents_list() -> Result<Value, String> {
 
 /// RPC `task.input { taskId, text }`:会话页底部输入框发 prompt。
 /// bracketed paste 包裹(多行安全,与桌面终端粘贴同语义)后回车提交。
-pub(crate) fn task_input<R: Runtime>(app: &AppHandle<R>, params: &Value) -> Result<Value, String> {
-    let task_id = str_param(params, "taskId")?;
-    let text = params
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim_end_matches(['\r', '\n']);
+pub(crate) async fn task_input<R: Runtime>(
+    app: &AppHandle<R>,
+    task_id: &str,
+    text: &str,
+) -> Result<Value, String> {
     if text.trim().is_empty() {
         return Err("Empty prompt".to_string());
     }
     if text.len() > MAX_PROMPT_BYTES {
         return Err("Prompt too long".to_string());
     }
-    crate::pty::validate_task_id(&task_id)?;
+    crate::pty::validate_task_id(task_id)?;
     let tm = app.state::<TaskManager>();
-    if tm.writer_for(&task_id).is_none() {
+    if tm.writer_for(task_id).is_none() {
         return Err("Task is not running".to_string());
     }
     let data = format!("\x1b[200~{text}\x1b[201~\r");
-    crate::pty::write_task_input(&tm, &task_id, &data)?;
+    crate::pty::write_task_input(&tm, task_id, &data)?;
     Ok(json!({ "sent": true }))
 }
 
@@ -225,11 +112,11 @@ pub(crate) async fn task_respond<R: Runtime>(
         .map_err(|e| e.to_string())??;
     let agent = task.agent;
     let approval = app
-        .state::<RemoteState>()
+        .state::<std::sync::Arc<RemoteState>>()
         .approvals
         .take_matching(&task_id, &request_id)?;
     if approval.agent != agent {
-        app.state::<RemoteState>()
+        app.state::<std::sync::Arc<RemoteState>>()
             .approvals
             .restore(task_id.clone(), approval);
         return Err("Approval agent no longer matches the task".to_string());
@@ -244,7 +131,7 @@ pub(crate) async fn task_respond<R: Runtime>(
     let steps = agent_keymap::keys_for(is_codex, action);
     let tm = app.state::<TaskManager>();
     if tm.writer_for(&task_id).is_none() {
-        app.state::<RemoteState>()
+        app.state::<std::sync::Arc<RemoteState>>()
             .approvals
             .restore(task_id.clone(), approval);
         return Err("Task is not running".to_string());
@@ -254,7 +141,7 @@ pub(crate) async fn task_respond<R: Runtime>(
             tokio::time::sleep(std::time::Duration::from_millis(step.delay_ms)).await;
         }
         if let Err(err) = crate::pty::write_task_input(&tm, &task_id, &step.data) {
-            app.state::<RemoteState>()
+            app.state::<std::sync::Arc<RemoteState>>()
                 .approvals
                 .restore(task_id.clone(), approval);
             return Err(err);
@@ -332,22 +219,6 @@ async fn load_task_for_lifecycle(
     Ok((project, task))
 }
 
-/// RPC `task.resume { projectId, taskId }`:转桌面前端 handleResumeTask
-/// (session 定位/恢复逻辑全在前端,复用之)。
-pub(crate) async fn task_resume<R: Runtime>(
-    app: &AppHandle<R>,
-    params: &Value,
-) -> Result<Value, String> {
-    let project_id = str_param(params, "projectId")?;
-    let task_id = str_param(params, "taskId")?;
-    crate::pty::validate_task_id(&task_id)?;
-    execute_task_request(
-        app,
-        json!({ "kind": "resume", "projectId": project_id, "taskId": task_id }),
-    )
-    .await
-}
-
 /// RPC `agents.models { agent }`:某个 agent 的可选模型列表。
 ///
 /// 安全:只回传 `models`,刻意丢弃 `AgentModels::balance`(账户余额属敏感信息)。
@@ -362,42 +233,42 @@ pub(crate) async fn agents_models(params: &Value) -> Result<Value, String> {
     Ok(json!({ "models": models }))
 }
 
-/// RPC `task.create { projectId, prompt, agent, permissionMode }`:参数校验后
-/// 转桌面前端 handleSubmitTask。成功响应同时携带桌面生成的任务快照,
-/// 让手机可以先就地渲染,再用 tasks.list 做一致性校验。
-pub(crate) async fn task_create<R: Runtime>(
-    app: &AppHandle<R>,
-    params: &Value,
-) -> Result<Value, String> {
-    let project_id = str_param(params, "projectId")?;
-    let prompt = str_param(params, "prompt")?;
-    let agent = str_param(params, "agent")?;
-    let permission_mode = str_param(params, "permissionMode")?;
-    // 模型、推理强度和速度均由桌面端再次按 agent/model 规则校验。
-    let selected_model = params
+/// 刀三b：旧 `task_create` 的入口校验随直连合并——create/resume 的参数
+/// 边界（长度/白名单/家族规则）在进入 ready 闸与串行队列**之前**判定，
+/// 拒绝路径不消耗任何控制面资源。
+async fn validate_task_request_payload(payload: &Value) -> Result<(), String> {
+    let kind = str_param(payload, "kind")?;
+    if kind != "create" && kind != "resume" {
+        return Err("Invalid task creation request".to_string());
+    }
+    if kind == "resume" {
+        let task_id = str_param(payload, "taskId")?;
+        crate::pty::validate_task_id(&task_id)?;
+        return Ok(());
+    }
+    let prompt = str_param(payload, "prompt")?;
+    let agent = str_param(payload, "agent")?;
+    let permission_mode = str_param(payload, "permissionMode")?;
+    let selected_model = payload
         .get("selectedModel")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let reasoning_effort = params
+        .filter(|s| !s.is_empty());
+    let reasoning_effort = payload
         .get("reasoningEffort")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let dsh_agent_preset = params
+        .filter(|s| !s.is_empty());
+    let dsh_agent_preset = payload
         .get("dshAgentPreset")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let mut speed = params
+        .filter(|s| !s.is_empty());
+    let speed = payload
         .get("speed")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .filter(|s| !s.is_empty());
 
     if prompt.len() > MAX_PROMPT_BYTES {
         return Err("Prompt too long".to_string());
@@ -415,50 +286,26 @@ pub(crate) async fn task_create<R: Runtime>(
     if !PERMISSION_MODES.contains(&permission_mode.as_str()) {
         return Err(format!("Invalid permissionMode: {permission_mode}"));
     }
-    if selected_model.as_ref().is_some_and(|m| m.len() > 128) {
+    if selected_model.is_some_and(|m| m.len() > 128) {
         return Err("Invalid selectedModel".to_string());
     }
-    if reasoning_effort
-        .as_ref()
-        .is_some_and(|effort| effort.len() > 32)
-    {
+    if reasoning_effort.is_some_and(|effort| effort.len() > 32) {
         return Err("Invalid reasoningEffort".to_string());
     }
-    if speed.as_ref().is_some_and(|value| value.len() > 16) {
+    if speed.is_some_and(|value| value.len() > 16) {
         return Err("Invalid speed".to_string());
     }
-    if dsh_agent_preset
-        .as_ref()
-        .is_some_and(|value| value.len() > MAX_DSH_PRESET_LEN)
-    {
+    if dsh_agent_preset.is_some_and(|value| value.len() > MAX_DSH_PRESET_LEN) {
         return Err("Invalid dshAgentPreset".to_string());
     }
-    if family == crate::app_settings::AgentFamily::Dsh {
-        if reasoning_effort.as_ref().is_some_and(|effort| {
+    if family == crate::app_settings::AgentFamily::Dsh
+        && reasoning_effort.is_some_and(|effort| {
             !matches!(effort.to_ascii_lowercase().as_str(), "off" | "high" | "max")
-        }) {
-            return Err("Invalid reasoningEffort for DeepSeek Harness".to_string());
-        }
-        // Older mobile clients always sent `standard`; DSH has no speed setting,
-        // so strip either legacy value at the contract boundary.
-        speed = None;
+        })
+    {
+        return Err("Invalid reasoningEffort for DeepSeek Harness".to_string());
     }
-
-    execute_task_request(
-        app,
-        json!({
-            "kind": "create",
-            "projectId": project_id,
-            "prompt": prompt,
-            "agent": agent,
-            "permissionMode": permission_mode,
-            "selectedModel": selected_model,
-            "reasoningEffort": reasoning_effort,
-            "speed": speed,
-            "dshAgentPreset": dsh_agent_preset,
-        }),
-    )
-    .await
+    Ok(())
 }
 
 async fn require_known_agent(agent: &str) -> Result<(), String> {
@@ -518,11 +365,12 @@ fn task_has_resumable_session(task: &storage::Task) -> bool {
 /// （`TaskService.create` + `launch_via_core`/`resume_via_core`），不再 emit
 /// 到 React 后等待 oneshot。应答契约逐字不变：
 /// `Ok({"accepted":true,"taskId":…,"task":…})` / `Err(message)`。
-async fn execute_task_request<R: Runtime>(
+pub(crate) async fn execute_task_request<R: Runtime>(
     app: &AppHandle<R>,
     mut payload: Value,
 ) -> Result<Value, String> {
-    let state = app.state::<RemoteState>();
+    validate_task_request_payload(&payload).await?;
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     wait_ready(&state).await?;
     let project_id = payload
         .get("projectId")
@@ -823,6 +671,7 @@ pub(crate) async fn stats_summary() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeroric_core::remote::state::{ApprovalRegistry, TaskRequestBroker};
 
     #[test]
     fn approval_registry_rejects_stale_and_consumed_requests() {

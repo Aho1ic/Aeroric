@@ -50,6 +50,7 @@ name = "aeroric-core"
 version = "0.1.0"
 dependencies = [
  "aeroric-protocol",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "brotli",

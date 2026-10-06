@@ -61,6 +61,7 @@ serde_yaml_ng = "0.10" # 与宿主同 crate 同版本（dsh_host/client 的插�
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "stream", "query", "form", "multipart"] } # grill [dsh] D1（补记二百六十四，2026-09-30 用户决策）：core 自此持网络出口，`DshApiClient` 上收用；feature 集与宿主 `src-tauri/Cargo.toml:46` 逐字一致，不造第二套传输
 uuid = { version = "1", features = ["v4"] } # 与宿主 src-tauri/Cargo.toml:64 逐字一致——dsh transport 的 rpcId 铸造（`DshApiClient::call`，方法群片补记二百六十五 §3）
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] } # 与宿主 :68 逐字一致——remote_mux 的 WS 传输（方法群片随 DshApiClient 上收，D1 同类：网络出口）
+async-trait = "0.1"
 futures-util = "0.3" # 与宿主 :69 逐字一致——mux worker 的 SinkExt/StreamExt
 
 # runtime::subprocess(P3-01 切片二自宿主迁入)只在 unix 分支调 libc(setpgid/kill);

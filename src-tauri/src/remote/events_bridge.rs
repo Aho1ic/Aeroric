@@ -16,9 +16,9 @@ pub fn attach<R: Runtime>(app: &AppHandle<R>) -> Vec<tauri::EventId> {
     FORWARDED_EVENTS
         .iter()
         .map(|&event_name| {
-            let clients = app.state::<RemoteState>().clients.clone();
-            let approvals = app.state::<RemoteState>().approvals.clone();
-            let event_log = app.state::<RemoteState>().event_log.clone();
+            let clients = app.state::<std::sync::Arc<RemoteState>>().clients.clone();
+            let approvals = app.state::<std::sync::Arc<RemoteState>>().approvals.clone();
+            let event_log = app.state::<std::sync::Arc<RemoteState>>().event_log.clone();
             app.listen_any(event_name, move |event| {
                 let Ok(data) = serde_json::from_str::<Value>(event.payload()) else {
                     return;

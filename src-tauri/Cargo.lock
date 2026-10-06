@@ -33,6 +33,7 @@ name = "aeroric"
 version = "1.4.9"
 dependencies = [
  "aeroric-core",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "brotli 7.0.0",
@@ -89,6 +90,7 @@ name = "aeroric-core"
 version = "0.1.0"
 dependencies = [
  "aeroric-protocol",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "brotli 7.0.0",

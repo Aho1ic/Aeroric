@@ -227,7 +227,7 @@ fn emit_active_status<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent, sta
     if !tm.has_live_run(&ev.task_id) {
         return;
     }
-    let remote = app.state::<crate::remote::RemoteState>();
+    let remote = app.state::<std::sync::Arc<crate::remote::RemoteState>>();
     let had_approval = remote.approvals.get(&ev.task_id).is_some();
     let is_approval = status == "input_required"
         && (ev.event == "PermissionRequest"
@@ -270,7 +270,7 @@ fn emit_active_status<R: tauri::Runtime>(app: &AppHandle<R>, ev: &HookEvent, sta
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。
 pub fn cleanup_task_events<R: Runtime>(app: &AppHandle<R>, task_id: &str) {
     last_status().lock().remove(task_id);
-    app.state::<crate::remote::RemoteState>()
+    app.state::<std::sync::Arc<crate::remote::RemoteState>>()
         .approvals
         .clear(task_id);
     if let Ok(dir) = crate::hooks::events_dir_for(task_id) {

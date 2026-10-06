@@ -10,9 +10,9 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::rpc::str_param;
 use super::RemoteState;
 use crate::storage::{self, Project, ProjectLocation, Task};
+use aeroric_core::remote::rpc::str_param;
 
 /// 读取项目与任务(阻塞 IO 走 spawn_blocking)。tasks_rpc 复用。
 pub(crate) async fn load_project_task(
@@ -102,7 +102,7 @@ pub(crate) fn publish_session_appended<R: Runtime>(
     if lines.is_empty() {
         return;
     }
-    let Some(state) = app.try_state::<RemoteState>() else {
+    let Some(state) = app.try_state::<std::sync::Arc<RemoteState>>() else {
         return;
     };
     if state.clients.online_count() == 0 {

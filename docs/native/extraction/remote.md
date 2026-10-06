@@ -21,29 +21,26 @@ Cross-checked: 9 command wrappers counted here against 9 matching entries in `co
 |---|---|---|---|---|---|---|
 | 1 | `src-tauri/src/remote/agent_config_rpc.rs` | `core/crates/aeroric-core/remote/agent_config_rpc.rs` | 0 | agent_config_create(), agent_config_detect_models(), agent_config_list(), agent_config_save() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
 | 2 | `src-tauri/src/remote/audit.rs` | `core/crates/aeroric-core/remote/audit.rs` | 0 | log() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
-| 3 | `src-tauri/src/remote/auth_stress_tests.rs` | `core/crates/aeroric-core/remote/auth_stress_tests.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | spawns task/thread (needs a cancellation token); credential owner |
+| 3 | `src-tauri/src/remote/bridge.rs` | `core/crates/aeroric-core/remote/bridge.rs` | 0 | Struct RemoteHostBridge, start_with_host_services() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
 | 4 | `src-tauri/src/remote/events_bridge.rs` | `core/crates/aeroric-core/remote/events_bridge.rs` | 0 | attach() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
 | 5 | `src-tauri/src/remote/files_rpc.rs` | `core/crates/aeroric-core/remote/files_rpc.rs` | 0 | git_changes(), git_diff(), project_files(), project_read_file(), project_write_file() (1 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | cfg(windows) branch; spawns task/thread (needs a cancellation token) |
 | 6 | `src-tauri/src/remote/lan_roundtrip_tests.rs` | `core/crates/aeroric-core/remote/lan_roundtrip_tests.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | emits events; credential owner |
-| 7 | `src-tauri/src/remote/mod.rs` | `core/crates/aeroric-core/remote/mod.rs` | 9 | Struct RemoteDeviceView, Struct RemoteState, Struct RemoteStatus, abort_unconfirmed_pairing(), init(), live_identity(), reconcile_listener_scope_for_current_policy(), remote_complete_task_request(), remote_create_invite(), remote_list_devices(), remote_revoke_device(), remote_select_lan_ip(), remote_server_start(), remote_server_status(), remote_server_stop() +1 more (14 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; include_str! path rewrite; spawns task/thread (needs a cancellation token); credential owner |
-| 8 | `src-tauri/src/remote/orca_rpc.rs` | `core/crates/aeroric-core/remote/orca_rpc.rs` | 0 | handle() (2 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State |
-| 9 | `src-tauri/src/remote/relay_client.rs` | `core/crates/aeroric-core/remote/relay_client.rs` | 0 | spawn() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
-| 10 | `src-tauri/src/remote/rpc.rs` | `core/crates/aeroric-core/remote/rpc.rs` | 0 | Const RPC_CAPABILITIES, dispatch(), rpc_capabilities_value(), str_param() (1 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
-| 11 | `src-tauri/src/remote/server.rs` | `core/crates/aeroric-core/remote/server.rs` | 0 | Enum ConnectionContext, Enum ListenerScope, Struct ClientHandle, Struct ClientRegistry, Struct OutboundSender, Struct ServerHandle, serve_ws(), start(), start_with_scope() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
-| 12 | `src-tauri/src/remote/session_push.rs` | `core/crates/aeroric-core/remote/session_push.rs` | 0 | is_ssh_project(), load_project_task(), publish_session_appended(), session_messages() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
-| 13 | `src-tauri/src/remote/tasks_rpc.rs` | `core/crates/aeroric-core/remote/tasks_rpc.rs` | 0 | Struct ApprovalRegistry, Struct ApprovalRequest, Struct TaskRequestBroker, agents_list(), agents_models(), stats_summary(), task_cancel(), task_complete(), task_create(), task_input(), task_respond(), task_resume() (4 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
-| 14 | `src-tauri/src/remote/terminal_streams.rs` | `core/crates/aeroric-core/remote/terminal_streams.rs` | 0 | Struct TerminalLeaseRegistry, Struct TerminalStreams (6 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
+| 7 | `src-tauri/src/remote/mod.rs` | `core/crates/aeroric-core/remote/mod.rs` | 9 | Struct RemoteDeviceView, Struct RemoteStatus, init(), install_terminal_history_resolver(), remote_complete_task_request(), remote_create_invite(), remote_list_devices(), remote_revoke_device(), remote_select_lan_ip(), remote_server_start(), remote_server_status(), remote_server_stop(), remote_update_config() (14 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; include_str! path rewrite; spawns task/thread (needs a cancellation token); credential owner |
+| 8 | `src-tauri/src/remote/relay_client.rs` | `core/crates/aeroric-core/remote/relay_client.rs` | 0 | spawn() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 9 | `src-tauri/src/remote/session_push.rs` | `core/crates/aeroric-core/remote/session_push.rs` | 0 | is_ssh_project(), load_project_task(), publish_session_appended(), session_messages() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
+| 10 | `src-tauri/src/remote/tasks_rpc.rs` | `core/crates/aeroric-core/remote/tasks_rpc.rs` | 0 | agents_list(), agents_models(), execute_task_request(), stats_summary(), task_cancel(), task_complete(), task_input(), task_respond() (4 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token) |
+| 11 | `src-tauri/src/remote/terminal_streams.rs` | `core/crates/aeroric-core/remote/terminal_streams.rs` | 0 | Struct TerminalStreams (6 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
 <!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
-- files: **14**, lines: **7139**, command wrappers: **9**, test items excluded from the symbol lists: **47**
-- files carrying `AppHandle`/`State`: **10**
-- files emitting events: **5**
+- files: **11**, lines: **4616**, command wrappers: **9**, test items excluded from the symbol lists: **39**
+- files carrying `AppHandle`/`State`: **8**
+- files emitting events: **4**
 - files with `include_str!`/`include_bytes!`: **1**
 - files with `cfg(windows)`: **1**; with `cfg(unix)`: **0**
-- files that spawn (need an explicit cancellation/reap owner before extraction): **10**
-- files touching credentials: **6**
+- files that spawn (need an explicit cancellation/reap owner before extraction): **8**
+- files touching credentials: **5**
 
 ### Notes for the implementing task (hand-written, `--check` ignores prose)
 

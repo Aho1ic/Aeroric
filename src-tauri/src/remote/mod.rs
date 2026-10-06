@@ -12,20 +12,16 @@
 
 mod agent_config_rpc;
 mod audit;
+mod bridge;
 mod events_bridge;
 mod files_rpc;
-mod orca_rpc;
 mod relay_client;
-mod rpc;
-mod server;
 mod session_push;
 mod tasks_rpc;
 mod terminal_streams;
 
 // 刀一上收 core 的九个模块，按旧名 re-export（`super::crypto` 等旧路径不变）。
-pub(crate) use aeroric_core::remote::{
-    agent_keymap, auth, crypto, event_log, orca_crypto, protocol, terminal_frames, terminal_hub,
-};
+pub(crate) use aeroric_core::remote::{agent_keymap, protocol, terminal_frames, terminal_hub};
 
 pub(crate) use session_push::publish_session_appended;
 
@@ -42,7 +38,7 @@ mod protocol_golden_parity {
         .expect("shared golden fixture");
         assert_eq!(
             fixture["hello"]["capabilities"],
-            super::rpc::rpc_capabilities_value()
+            aeroric_core::remote::rpc::rpc_capabilities_value()
         );
     }
 }
@@ -50,7 +46,6 @@ mod protocol_golden_parity {
 #[cfg(test)]
 mod lan_roundtrip_tests;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -59,129 +54,44 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use auth::AuthStore;
-use event_log::EventLog;
-use server::{ClientRegistry, ListenerScope, ServerHandle};
-use tasks_rpc::{ApprovalRegistry, TaskRequestBroker};
-use terminal_streams::TerminalLeaseRegistry;
+use aeroric_core::remote::services::RemoteHostHandle;
+pub use aeroric_core::remote::state::RemoteState;
+use aeroric_core::remote::state::{ensure_stopped as core_ensure_stopped, ListenerScope};
 
 // ── 配置与身份面（P8-03 刀三上收 core，这里按旧名 re-export） ──────────────
 
 pub use aeroric_core::remote::config::{
-    load_config, normalize_public_endpoint, normalize_relay_url, save_config, RemoteConfig,
+    normalize_public_endpoint, normalize_relay_url, save_config,
 };
 pub use aeroric_core::remote::identity::{
     host_name, lan_addresses, pairing_endpoints, selected_lan_ip, RemoteNetworkAddress,
 };
 
-// ── 全局状态 ─────────────────────────────────────────────────────────────────
-
-pub struct RemoteState {
-    pub(crate) auth: parking_lot::Mutex<AuthStore>,
-    /// 桌面初始化完成闸（P8-03 刀二：替代 React 的 startupReadyRef）。
-    /// lib.rs setup 尾置位；置位前的 task.create/resume 请求等待而非失败。
-    pub(crate) ready: Arc<std::sync::OnceLock<()>>,
-    /// 按 projectId 串行的任务变更队列（P8-03 刀二：G05 的 host 侧等价判决，
-    /// 取代 React 的 remoteTaskMutationQueuesRef）。
-    pub(crate) task_queues: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    pub(crate) clients: Arc<ClientRegistry>,
-    pub(crate) terminal_leases: Arc<TerminalLeaseRegistry>,
-    pub(crate) approvals: Arc<ApprovalRegistry>,
-    pub(crate) task_requests: Arc<TaskRequestBroker>,
-    /// 推送事件日志:重连 watermark 补发源。
-    pub(crate) event_log: Arc<EventLog>,
-    pub(crate) config: parking_lot::Mutex<RemoteConfig>,
-    /// 静态 X25519 密钥对(E2EE 握手与 relay hostId 的根)。
-    pub(crate) keys: crypto::StaticKeys,
-    /// 内存态(测试)不写审计日志。
-    pub(crate) audit_enabled: bool,
-    /// relay 客户端状态:off | connecting | online | error:<msg>。
-    pub(crate) relay_state: Arc<parking_lot::Mutex<String>>,
-    /// tokio Mutex:start/stop 需要跨 await 持锁,防止并发启动竞态。
-    running: tokio::sync::Mutex<Option<ServerHandle>>,
-    /// 串行化会改变监听器、端点配置或邀请码的控制面操作。邀请码必须在
-    /// 已验证的 listener 仍为当前 listener 时创建，不能与 stop/restart
-    /// 或配置重启交错。
-    lifecycle: tokio::sync::Mutex<()>,
-}
+// ── 全局状态（P8-03 刀三b：RemoteState 上收 core `remote::state`，这里薄包装） ──
 
 /// 刀一：core `terminal_hub` 不探文件系统（G24 读取面一个点），宿主在此
-/// 安装历史长度解析器；幂等——多次构造 RemoteState 只装一次。
-fn install_terminal_history_resolver() {
+/// 安装历史长度解析器；幂等——多次构造只装一次。
+pub fn install_terminal_history_resolver() {
     use std::sync::Arc;
     aeroric_core::remote::terminal_hub::set_history_len_resolver(Arc::new(
         crate::storage::task_terminal_history_len,
     ));
 }
 
-impl RemoteState {
-    /// 桌面初始化完成（lib.rs setup 尾）。幂等。
-    pub fn mark_ready(&self) {
-        let _ = self.ready.set(());
-    }
-
-    pub fn new() -> Self {
-        install_terminal_history_resolver();
-        // 挂在整条 `let` 上：`expect` 是下面闭包的尾表达式，属性只能上提到这里。
-        #[allow(clippy::expect_used, reason = "CSPRNG 不可用属不可恢复")]
-        let keys = crypto::StaticKeys::load_or_create().unwrap_or_else(|err| {
-            eprintln!("[remote] keypair load failed, using in-memory keys: {err}");
-            crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable")
-        });
-        Self {
-            ready: Arc::new(std::sync::OnceLock::new()),
-            task_queues: parking_lot::Mutex::new(HashMap::new()),
-            auth: parking_lot::Mutex::new(AuthStore::load()),
-            clients: Arc::new(ClientRegistry::default()),
-            terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
-            approvals: Arc::new(ApprovalRegistry::default()),
-            task_requests: Arc::new(TaskRequestBroker::default()),
-            event_log: Arc::new(EventLog::default()),
-            config: parking_lot::Mutex::new(load_config()),
-            keys,
-            audit_enabled: true,
-            relay_state: Arc::new(parking_lot::Mutex::new("off".to_string())),
-            running: tokio::sync::Mutex::new(None),
-            lifecycle: tokio::sync::Mutex::new(()),
-        }
-    }
-
-    /// 集成测试用:内存 AuthStore + 默认配置,不触碰任何真实文件。
-    #[cfg(test)]
-    pub(crate) fn new_in_memory() -> Self {
-        install_terminal_history_resolver();
-        let ready = Arc::new(std::sync::OnceLock::new());
-        // 集成测试的 mock 环境没有真实桌面启动闸：默认就绪。
-        let _ = ready.set(());
-        Self {
-            ready,
-            task_queues: parking_lot::Mutex::new(HashMap::new()),
-            auth: parking_lot::Mutex::new(AuthStore::in_memory()),
-            clients: Arc::new(ClientRegistry::default()),
-            terminal_leases: Arc::new(TerminalLeaseRegistry::default()),
-            approvals: Arc::new(ApprovalRegistry::default()),
-            task_requests: Arc::new(TaskRequestBroker::default()),
-            event_log: Arc::new(EventLog::default()),
-            config: parking_lot::Mutex::new(RemoteConfig::default()),
-            keys: crypto::StaticKeys::ephemeral().expect("CSPRNG unavailable"),
-            audit_enabled: false,
-            relay_state: Arc::new(parking_lot::Mutex::new("off".to_string())),
-            running: tokio::sync::Mutex::new(None),
-            lifecycle: tokio::sync::Mutex::new(()),
-        }
-    }
-}
-
 /// 应用启动时调用(lib.rs setup):按持久化配置决定是否自动拉起服务。
 pub fn init<R: Runtime>(app: AppHandle<R>) {
-    let enabled = app.state::<RemoteState>().config.lock().enabled;
+    let enabled = app
+        .state::<std::sync::Arc<RemoteState>>()
+        .config
+        .lock()
+        .enabled;
     if enabled {
         tauri::async_runtime::spawn(async move {
-            let state = app.state::<RemoteState>();
-            let _lifecycle = state.lifecycle.lock().await;
+            let managed = app.state::<std::sync::Arc<RemoteState>>();
+            let _lifecycle = managed.lifecycle.lock().await;
             // The setting may have changed while this startup task waited for
             // another control-plane operation.
-            if !state.config.lock().enabled {
+            if !managed.config.lock().enabled {
                 return;
             }
             if let Err(err) = ensure_started(&app).await {
@@ -192,159 +102,24 @@ pub fn init<R: Runtime>(app: AppHandle<R>) {
 }
 
 async fn ensure_started<R: Runtime>(app: &AppHandle<R>) -> Result<u16, String> {
-    let state = app.state::<RemoteState>();
+    // 生产路径必须经宿主 wrapper：事件桥（task-status/task-session listen_any）
+    // 与 relay 出站连接挂在这里，core start_with_scope 只管 TCP。
+    let state = app.state::<std::sync::Arc<RemoteState>>().inner().clone();
     let mut running = state.running.lock().await;
-    if let Some(handle) = running.as_ref() {
-        return Ok(handle.port);
+    if let Some(server) = running.as_ref() {
+        return Ok(server.port);
     }
     let port = state.config.lock().port;
-    let scope = required_listener_scope(&state);
-    let handle = server::start_with_scope(app.clone(), port, scope).await?;
-    let bound = handle.port;
-    *running = Some(handle);
+    let scope = aeroric_core::remote::state::required_listener_scope(&state);
+    let server = bridge::start_with_host_services(app, port, scope).await?;
+    let bound = server.port;
+    *running = Some(server);
     Ok(bound)
 }
 
-/// Devices are the only implicit reason to keep a LAN listener open. A
-/// configured direct public endpoint is an explicit opt-in; relay-only access
-/// is outbound and therefore does not require a wide local TCP bind.
-fn required_listener_scope(state: &RemoteState) -> ListenerScope {
-    let has_public_endpoint = !state.config.lock().public_endpoints.is_empty();
-    let has_paired_device = !state.auth.lock().devices().is_empty();
-    if has_paired_device || has_public_endpoint {
-        ListenerScope::Network
-    } else {
-        ListenerScope::Loopback
-    }
-}
-
 async fn ensure_stopped<R: Runtime>(app: &AppHandle<R>) {
-    let state = app.state::<RemoteState>();
-    let mut running = state.running.lock().await;
-    if let Some(handle) = running.take() {
-        handle.shutdown_and_wait(app).await;
-    }
-}
-
-/// Acquire the control-plane lock before reconciling a listener after a
-/// successfully authenticated device. This also makes an in-flight pairing
-/// observe a concurrent revoke before it is registered as online.
-pub(crate) async fn reconcile_listener_scope_for_current_policy<R: Runtime>(
-    app: &AppHandle<R>,
-) -> Result<(), String> {
-    let state = app.state::<RemoteState>();
-    let _lifecycle = state.lifecycle.lock().await;
-    reconcile_listener_scope_locked(app).await
-}
-
-/// Requires `RemoteState::lifecycle`. A rebind failure is resolved by closing
-/// the complete server rather than leaving a restored listener at a wider
-/// scope than the current device/configuration policy permits.
-async fn reconcile_listener_scope_locked<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let state = app.state::<RemoteState>();
-    let required_scope = required_listener_scope(&state);
-    let mut running = state.running.lock().await;
-    let Some(mut handle) = running.take() else {
-        return Ok(());
-    };
-
-    match handle
-        .ensure_listener_scope(app.clone(), required_scope)
-        .await
-    {
-        Ok(()) if handle.is_listening() => {
-            *running = Some(handle);
-            Ok(())
-        }
-        Ok(()) => {
-            handle.shutdown_and_wait(app).await;
-            Err("Remote server listener stopped unexpectedly while changing scope".to_string())
-        }
-        Err(error) => {
-            // `ensure_listener_scope` may have restored the previous scope.
-            // Do not retain that possibly wider listener after a revoke.
-            handle.shutdown_and_wait(app).await;
-            Err(error)
-        }
-    }
-}
-
-/// Remove a device that was persisted while handling an invite but could not
-/// be committed to the peer (for example, shutdown/rebind/register/reply
-/// failure). The operation is idempotent with a concurrent user revoke and
-/// uses the same lifecycle → auth → registry lock ordering as normal revoke.
-pub(crate) async fn abort_unconfirmed_pairing<R: Runtime>(app: &AppHandle<R>, device_id: &str) {
-    let state = app.state::<RemoteState>();
-    let _lifecycle = state.lifecycle.lock().await;
-    let removed = {
-        let mut auth = state.auth.lock();
-        match auth.revoke(device_id) {
-            Ok(removed) => {
-                if removed {
-                    state.clients.disconnect_device(device_id);
-                }
-                removed
-            }
-            Err(error) => {
-                eprintln!("[remote] could not roll back unconfirmed pairing {device_id}: {error}");
-                return;
-            }
-        }
-    };
-    if !removed {
-        return;
-    }
-    if let Err(error) = reconcile_listener_scope_locked(app).await {
-        eprintln!("[remote] server closed after rolling back unconfirmed pairing: {error}");
-    }
-}
-
-/// `hello` 用的实时主机身份:hostId / hostName / 当前可直连的候选地址。
-///
-/// 与 `remote_create_invite` 同一套取法(LAN 直连 → 自定义公网地址 → relay),
-/// 区别是把**全部** LAN 地址都带上(preferred 排最前),让手机端能在换网段后
-/// 刷新已保存主机的地址,而不是新建一条记录。服务未运行时端口取配置值。
-pub(crate) async fn live_identity<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
-    let state = app.state::<RemoteState>();
-    let running_port = state.running.lock().await.as_ref().map(|h| h.port);
-    let addresses = lan_addresses();
-    let (port, preferred_lan_ip, relay_url, public_endpoints) = {
-        let cfg = state.config.lock();
-        (
-            running_port.unwrap_or(cfg.port),
-            cfg.preferred_lan_ip.clone(),
-            cfg.relay_url
-                .as_deref()
-                .filter(|u| !u.trim().is_empty())
-                .map(str::to_string),
-            cfg.public_endpoints.clone(),
-        )
-    };
-    let mut endpoints = Vec::new();
-    if let Some(ip) = selected_lan_ip(preferred_lan_ip.as_deref(), &addresses) {
-        endpoints.push(format!("ws://{ip}:{port}"));
-    }
-    for address in &addresses {
-        let endpoint = format!("ws://{}:{port}", address.ip);
-        if !endpoints.contains(&endpoint) {
-            endpoints.push(endpoint);
-        }
-    }
-    let lan_endpoints = endpoints.clone();
-    endpoints.extend(public_endpoints);
-    if let Some(relay) = relay_url {
-        endpoints.push(remote_protocol::client_connect_url(
-            &relay,
-            &state.keys.host_id(),
-        ));
-    }
-    json!({
-        "hostId": state.keys.host_id(),
-        "hostName": host_name(),
-        "endpoints": endpoints,
-        // 仅 LAN 的子集:手机端据此只替换旧的内网地址,保留用户手填的隧道地址
-        "lanEndpoints": lan_endpoints,
-    })
+    let state = app.state::<std::sync::Arc<RemoteState>>().inner().clone();
+    core_ensure_stopped(&state).await;
 }
 
 // ── Tauri commands(桌面设置页专用) ─────────────────────────────────────────
@@ -369,7 +144,7 @@ pub struct RemoteStatus {
 }
 
 async fn current_status<R: Runtime>(app: &AppHandle<R>) -> RemoteStatus {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     let (enabled, port, preferred_lan_ip, relay_url, relay_token, public_endpoints) = {
         let cfg = state.config.lock();
         (
@@ -410,7 +185,7 @@ async fn current_status<R: Runtime>(app: &AppHandle<R>) -> RemoteStatus {
 #[tauri::command]
 pub async fn remote_select_lan_ip<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
     lan_ip: String,
 ) -> Result<RemoteStatus, String> {
     let _lifecycle = state.lifecycle.lock().await;
@@ -429,7 +204,7 @@ pub async fn remote_select_lan_ip<R: Runtime>(
 
 #[tauri::command]
 pub async fn remote_server_status<R: Runtime>(app: AppHandle<R>) -> Result<RemoteStatus, String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     let _lifecycle = state.lifecycle.lock().await;
     Ok(current_status(&app).await)
 }
@@ -437,7 +212,7 @@ pub async fn remote_server_status<R: Runtime>(app: AppHandle<R>) -> Result<Remot
 #[tauri::command]
 pub async fn remote_server_start<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
     port: Option<u16>,
 ) -> Result<RemoteStatus, String> {
     let _lifecycle = state.lifecycle.lock().await;
@@ -459,7 +234,7 @@ pub async fn remote_server_start<R: Runtime>(
 #[tauri::command]
 pub async fn remote_server_stop<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
 ) -> Result<RemoteStatus, String> {
     let _lifecycle = state.lifecycle.lock().await;
     {
@@ -475,7 +250,7 @@ pub async fn remote_server_stop<R: Runtime>(
 #[tauri::command]
 pub async fn remote_update_config<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
     relay_url: Option<String>,
     relay_token: Option<String>,
     public_endpoints: Option<Vec<String>>,
@@ -533,7 +308,7 @@ pub async fn remote_update_config<R: Runtime>(
 pub async fn remote_create_invite<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<serde_json::Value, String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     let _lifecycle = state.lifecycle.lock().await;
     create_invite_for_addresses_locked(&app, lan_addresses()).await
 }
@@ -546,7 +321,7 @@ async fn create_invite_for_addresses<R: Runtime>(
     app: &AppHandle<R>,
     addresses: Vec<RemoteNetworkAddress>,
 ) -> Result<serde_json::Value, String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     let _lifecycle = state.lifecycle.lock().await;
     create_invite_for_addresses_locked(app, addresses).await
 }
@@ -558,16 +333,18 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
     app: &AppHandle<R>,
     addresses: Vec<RemoteNetworkAddress>,
 ) -> Result<serde_json::Value, String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>().inner().clone();
+    let bridge: std::sync::Arc<dyn RemoteHostHandle> =
+        std::sync::Arc::new(bridge::RemoteHostBridge::new(app.clone()));
     let mut running = state.running.lock().await;
-    let Some(mut handle) = running.take() else {
+    let Some(mut server) = running.take() else {
         return Err("Remote server is not running".to_string());
     };
 
     let result = async {
         let config = state.config.lock().clone();
         let host_id = state.keys.host_id();
-        let listener_port = handle.port;
+        let listener_port = server.port;
         let pairing_endpoints = pairing_endpoints(listener_port, &addresses, &config, &host_id);
         if pairing_endpoints.endpoints.is_empty() {
             // Do this before replacing the listener. A failed QR request must
@@ -579,14 +356,14 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
             // The LAN URL was built from this exact handle. Keeping it out of
             // `running` until the token exists prevents stop/restart from
             // making a successfully returned QR point at a stale listener.
-            handle
-                .ensure_listener_scope(app.clone(), ListenerScope::Network)
+            server
+                .ensure_listener_scope(&state, &bridge, ListenerScope::Network)
                 .await?;
-            if !handle.network_exposed() || handle.port != listener_port {
+            if !server.network_exposed() || server.port != listener_port {
                 return Err("Remote server could not verify its network listener".to_string());
             }
         }
-        if !handle.is_listening() {
+        if !server.is_listening() {
             return Err("Remote server is not running".to_string());
         }
 
@@ -628,26 +405,26 @@ async fn create_invite_for_addresses_locked<R: Runtime>(
     // itself fails, shutting down is safer than leaving a possibly-wide
     // listener running.
     if result.is_err() {
-        let required_scope = required_listener_scope(&state);
-        if let Err(scope_error) = handle
-            .ensure_listener_scope(app.clone(), required_scope)
+        let required_scope = aeroric_core::remote::state::required_listener_scope(&state);
+        if let Err(scope_error) = server
+            .ensure_listener_scope(&state, &bridge, required_scope)
             .await
         {
             #[allow(clippy::expect_used, reason = "上一行 if result.is_err() 已保证")]
             let original_error = result.expect_err("checked invite creation failure");
-            handle.shutdown_and_wait(app).await;
+            server.shutdown_and_wait(&state).await;
             return Err(format!(
                 "{original_error}; additionally failed to restore the remote listener scope: {scope_error}"
             ));
         }
     }
 
-    if handle.is_listening() {
-        *running = Some(handle);
+    if server.is_listening() {
+        *running = Some(server);
     } else {
         // Both wide bind and loopback recovery failed. Tear down the rest of
         // the server lifecycle before a later clean retry.
-        handle.shutdown_and_wait(app).await;
+        server.shutdown_and_wait(&state).await;
     }
     result
 }
@@ -729,11 +506,14 @@ mod network_exposure_tests {
 
     use tauri::Manager;
 
-    use super::auth::AuthOutcome;
     use super::{
-        abort_unconfirmed_pairing, create_invite_for_addresses, ensure_started, ensure_stopped,
-        revoke_device_for_test, RemoteNetworkAddress, RemoteState,
+        create_invite_for_addresses, ensure_started, ensure_stopped, revoke_device_for_test,
+        RemoteNetworkAddress, RemoteState,
     };
+    use crate::remote::bridge;
+    use aeroric_core::remote::auth::AuthOutcome;
+    use aeroric_core::remote::services::RemoteHostHandle;
+    use aeroric_core::remote::state::abort_unconfirmed_pairing;
 
     fn address(ip: &str) -> RemoteNetworkAddress {
         RemoteNetworkAddress {
@@ -758,17 +538,21 @@ mod network_exposure_tests {
     #[test]
     fn fresh_server_binds_loopback_then_widens_before_pairing() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            handle.state::<RemoteState>().config.lock().port = 0;
+            handle
+                .state::<std::sync::Arc<RemoteState>>()
+                .config
+                .lock()
+                .port = 0;
             let initial_port = ensure_started(&handle)
                 .await
                 .expect("start loopback server");
 
             {
-                let state = handle.state::<RemoteState>();
+                let state = handle.state::<std::sync::Arc<RemoteState>>();
                 let running = state.running.lock().await;
                 let server = running.as_ref().expect("server handle");
                 assert_eq!(server.port, initial_port);
@@ -790,7 +574,7 @@ mod network_exposure_tests {
             );
 
             {
-                let state = handle.state::<RemoteState>();
+                let state = handle.state::<std::sync::Arc<RemoteState>>();
                 let running = state.running.lock().await;
                 let server = running.as_ref().expect("server handle after widen");
                 assert_eq!(
@@ -819,11 +603,15 @@ mod network_exposure_tests {
     #[test]
     fn failed_invite_without_endpoints_keeps_loopback_listener() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            handle.state::<RemoteState>().config.lock().port = 0;
+            handle
+                .state::<std::sync::Arc<RemoteState>>()
+                .config
+                .lock()
+                .port = 0;
             ensure_started(&handle)
                 .await
                 .expect("start loopback server");
@@ -833,7 +621,7 @@ mod network_exposure_tests {
                 .expect_err("an invite without a LAN, relay, or public endpoint must fail");
             assert!(error.contains("No LAN address detected"));
 
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let running = state.running.lock().await;
             let server = running
                 .as_ref()
@@ -852,16 +640,20 @@ mod network_exposure_tests {
     #[test]
     fn failed_invite_after_widening_restores_loopback_listener() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            handle.state::<RemoteState>().config.lock().port = 0;
+            handle
+                .state::<std::sync::Arc<RemoteState>>()
+                .config
+                .lock()
+                .port = 0;
             let port = ensure_started(&handle)
                 .await
                 .expect("start loopback server");
             handle
-                .state::<RemoteState>()
+                .state::<std::sync::Arc<RemoteState>>()
                 .auth
                 .lock()
                 .set_invite_failure(Some("simulated CSPRNG unavailable".to_string()));
@@ -871,7 +663,7 @@ mod network_exposure_tests {
                 .expect_err("injected token-generation failure must reach the caller");
             assert!(error.contains("simulated CSPRNG unavailable"));
 
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let running = state.running.lock().await;
             let server = running
                 .as_ref()
@@ -897,16 +689,20 @@ mod network_exposure_tests {
     #[test]
     fn invite_creation_waits_for_the_lifecycle_transaction() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            handle.state::<RemoteState>().config.lock().port = 0;
+            handle
+                .state::<std::sync::Arc<RemoteState>>()
+                .config
+                .lock()
+                .port = 0;
             ensure_started(&handle)
                 .await
                 .expect("start loopback server");
 
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let lifecycle = state.lifecycle.lock().await;
             let pending_invite =
                 create_invite_for_addresses(&handle, vec![address("192.168.1.10")]);
@@ -928,11 +724,11 @@ mod network_exposure_tests {
     #[test]
     fn paired_device_reconnects_over_network_after_restart() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let invite = state.auth.lock().create_invite().expect("create invite");
             assert!(state
                 .auth
@@ -965,11 +761,11 @@ mod network_exposure_tests {
     #[test]
     fn revoking_last_device_downscopes_listener_to_loopback() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let device_id = pair_test_device(&state);
             state.config.lock().port = 0;
             ensure_started(&handle)
@@ -997,18 +793,26 @@ mod network_exposure_tests {
     #[test]
     fn aborting_an_unconfirmed_pairing_downscopes_to_loopback() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let device_id = pair_test_device(&state);
             state.config.lock().port = 0;
             ensure_started(&handle)
                 .await
                 .expect("start network listener for pending paired device");
 
-            abort_unconfirmed_pairing(&handle, &device_id).await;
+            {
+                let state = handle
+                    .state::<std::sync::Arc<RemoteState>>()
+                    .inner()
+                    .clone();
+                let bridge: std::sync::Arc<dyn RemoteHostHandle> =
+                    std::sync::Arc::new(bridge::RemoteHostBridge::new(handle.clone()));
+                abort_unconfirmed_pairing(&state, &bridge, &device_id).await;
+            }
 
             assert!(state.auth.lock().devices().is_empty());
             let running = state.running.lock().await;
@@ -1027,11 +831,11 @@ mod network_exposure_tests {
     #[test]
     fn revoking_last_device_keeps_network_listener_for_public_endpoint() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             let device_id = pair_test_device(&state);
             {
                 let mut config = state.config.lock();
@@ -1064,11 +868,11 @@ mod network_exposure_tests {
     #[test]
     fn configured_direct_public_endpoint_is_an_explicit_wide_bind_opt_in() {
         let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
+        app.manage(std::sync::Arc::new(RemoteState::new_in_memory()));
         let handle = app.handle().clone();
 
         tauri::async_runtime::block_on(async move {
-            let state = handle.state::<RemoteState>();
+            let state = handle.state::<std::sync::Arc<RemoteState>>();
             {
                 let mut config = state.config.lock();
                 config.port = 0;
@@ -1119,7 +923,7 @@ pub fn remote_list_devices(state: State<'_, RemoteState>) -> Result<Vec<RemoteDe
 #[tauri::command]
 pub async fn remote_revoke_device<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
     device_id: String,
 ) -> Result<(), String> {
     let _lifecycle = state.lifecycle.lock().await;
@@ -1133,7 +937,7 @@ async fn revoke_device_for_test<R: Runtime>(
     app: &AppHandle<R>,
     device_id: &str,
 ) -> Result<(), String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>();
     let _lifecycle = state.lifecycle.lock().await;
     revoke_device_locked(app, device_id).await
 }
@@ -1145,7 +949,7 @@ async fn revoke_device_locked<R: Runtime>(
     app: &AppHandle<R>,
     device_id: &str,
 ) -> Result<(), String> {
-    let state = app.state::<RemoteState>();
+    let state = app.state::<std::sync::Arc<RemoteState>>().inner().clone();
     let existed = {
         let mut auth = state.auth.lock();
         let existed = auth.revoke(device_id)?;
@@ -1163,13 +967,19 @@ async fn revoke_device_locked<R: Runtime>(
     // after the last device was revoked. Revocation itself has already been
     // persisted, so return success and let the refreshed status show a safely
     // stopped service instead of falsely claiming the revoke was rolled back.
-    if let Err(error) = reconcile_listener_scope_locked(app).await {
-        eprintln!("[remote] server closed after revoke scope reconciliation failed: {error}");
-        if state.audit_enabled {
-            audit::log(
-                "listener-closed-after-revoke",
-                json!({ "deviceId": device_id, "error": error }),
-            );
+    {
+        let bridge: std::sync::Arc<dyn RemoteHostHandle> =
+            std::sync::Arc::new(bridge::RemoteHostBridge::new(app.clone()));
+        if let Err(error) =
+            aeroric_core::remote::state::reconcile_listener_scope_locked(&state, &bridge).await
+        {
+            eprintln!("[remote] server closed after revoke scope reconciliation failed: {error}");
+            if state.audit_enabled {
+                audit::log(
+                    "listener-closed-after-revoke",
+                    json!({ "deviceId": device_id, "error": error }),
+                );
+            }
         }
     }
     if state.audit_enabled {
@@ -1180,7 +990,7 @@ async fn revoke_device_locked<R: Runtime>(
 
 #[tauri::command]
 pub fn remote_complete_task_request(
-    state: State<'_, RemoteState>,
+    state: State<'_, Arc<RemoteState>>,
     request_id: String,
     accepted: bool,
     task_id: Option<String>,

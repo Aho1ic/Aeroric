@@ -7,26 +7,24 @@
 
 use std::collections::HashMap;
 
-use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-use super::server::OutboundSender;
 use super::terminal_frames::{
     decode_terminal_frame, TerminalFrame, TerminalOpcode, MAX_PAYLOAD_BYTES,
 };
 use super::terminal_hub::hub;
 use super::RemoteState;
 use crate::TaskManager;
+use aeroric_core::remote::state::OutboundSender;
 
 /// 快照取历史尾部的上限。256KB 覆盖 TUI 整屏重绘绰绰有余,又不至于
 /// 让长任务的首屏同步拖慢。
 const SNAPSHOT_TAIL_BYTES: u64 = 256 * 1024;
 const SNAPSHOT_CHUNK_BYTES: usize = 32 * 1024;
 const MAX_STREAMS_PER_CONNECTION: usize = 8;
-const DEFAULT_DESKTOP_PTY_SIZE: (u16, u16) = (220, 50);
 
 fn frame_message(opcode: TerminalOpcode, stream_id: u32, seq: u64, payload: Vec<u8>) -> Message {
     Message::Binary(TerminalFrame::new(opcode, stream_id, seq, payload).encode())
@@ -35,46 +33,6 @@ fn frame_message(opcode: TerminalOpcode, stream_id: u32, seq: u64, payload: Vec<
 struct StreamHandle {
     task_id: String,
     forwarder: tauri::async_runtime::JoinHandle<()>,
-}
-
-#[derive(Default)]
-pub(crate) struct TerminalLeaseRegistry {
-    inner: Mutex<HashMap<String, TerminalLease>>,
-}
-
-struct TerminalLease {
-    subscribers: usize,
-    original_size: Option<(u16, u16)>,
-}
-
-impl TerminalLeaseRegistry {
-    fn acquire(&self, task_id: &str, current_size: Option<(u16, u16)>) {
-        let mut leases = self.inner.lock();
-        let lease = leases.entry(task_id.to_string()).or_insert(TerminalLease {
-            subscribers: 0,
-            original_size: Some(current_size.unwrap_or(DEFAULT_DESKTOP_PTY_SIZE)),
-        });
-        lease.subscribers += 1;
-    }
-
-    fn release(&self, task_id: &str) -> Option<(u16, u16)> {
-        let mut leases = self.inner.lock();
-        let lease = leases.get_mut(task_id)?;
-        lease.subscribers = lease.subscribers.saturating_sub(1);
-        if lease.subscribers > 0 {
-            return None;
-        }
-        leases.remove(task_id).and_then(|lease| lease.original_size)
-    }
-
-    #[cfg(test)]
-    fn subscriber_count(&self, task_id: &str) -> usize {
-        self.inner
-            .lock()
-            .get(task_id)
-            .map(|lease| lease.subscribers)
-            .unwrap_or(0)
-    }
 }
 
 pub struct TerminalStreams<R: Runtime> {
@@ -163,7 +121,7 @@ impl<R: Runtime> TerminalStreams<R> {
                 crate::pty::current_task_pty_size(&tm, &task_id)
             };
             self.app
-                .state::<RemoteState>()
+                .state::<std::sync::Arc<RemoteState>>()
                 .terminal_leases
                 .acquire(&task_id, size);
         }
@@ -234,7 +192,7 @@ impl<R: Runtime> TerminalStreams<R> {
     fn release_task(&self, task_id: &str) {
         let original_size = self
             .app
-            .state::<RemoteState>()
+            .state::<std::sync::Arc<RemoteState>>()
             .terminal_leases
             .release(task_id);
         let Some((cols, rows)) = original_size else {
@@ -432,6 +390,21 @@ fn chunk_at_char_boundaries(text: &str, max_bytes: usize) -> Vec<&str> {
     chunks
 }
 
+/// 刀三b：宿主 `TerminalStreams` 实现 core 的连接级终端流 trait，
+/// core `serve_ws` 经 `RemoteHostHandle::terminal_streams` 取用。
+#[async_trait::async_trait]
+impl<R: Runtime + 'static> aeroric_core::remote::services::RemoteTerminalStreams
+    for TerminalStreams<R>
+{
+    fn handle_frame(&mut self, bytes: &[u8]) {
+        TerminalStreams::handle_frame(self, bytes);
+    }
+
+    fn abort_all(&mut self) {
+        TerminalStreams::abort_all(self);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,7 +477,7 @@ mod tests {
 
     #[test]
     fn terminal_lease_restores_first_size_after_last_subscriber() {
-        let leases = TerminalLeaseRegistry::default();
+        let leases = aeroric_core::remote::state::TerminalLeaseRegistry::default();
         leases.acquire("task-1", Some((120, 40)));
         leases.acquire("task-1", Some((80, 24)));
 

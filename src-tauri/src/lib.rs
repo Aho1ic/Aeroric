@@ -437,10 +437,12 @@ pub fn run() {
             crate::notebook::sync::daemon::start(app.handle().clone());
             crate::local_router_commands::init(app.handle());
             // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
+            crate::remote::install_terminal_history_resolver();
             crate::remote::init(app.handle().clone());
             // P8-03 刀二：setup 完成，remote task.create/resume 的 ready 闸放行
             // （原 React startupReadyRef 语义的宿主化）。
-            app.state::<remote::RemoteState>().mark_ready();
+            app.state::<std::sync::Arc<remote::RemoteState>>()
+                .mark_ready();
             Ok(())
         })
         .manage(TaskManager::default())
@@ -448,7 +450,7 @@ pub fn run() {
             as std::sync::Arc<dyn aeroric_core::runtime::PlatformServices>)
         .manage(run_config::RunConfigState::default())
         .manage(dap::DebugState::default())
-        .manage(remote::RemoteState::new())
+        .manage(std::sync::Arc::new(remote::RemoteState::new()))
         .manage(local_router_commands::LocalRouterManager::for_app())
         .manage(dsh_webui::DshWebUiManager::new())
         .manage(std::sync::Arc::new(

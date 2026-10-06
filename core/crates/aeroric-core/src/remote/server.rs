@@ -8,17 +8,13 @@
 //! 会话主循环 `serve_ws` 对底层流泛型:LAN 直连(服务端 accept)与
 //! relay 数据连接(客户端 connect)走同一条代码路径。
 
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use parking_lot::Mutex;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
@@ -26,12 +22,17 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message, WebSocketConfig};
 use tokio_tungstenite::WebSocketStream;
 
-use super::auth::AuthOutcome;
-use super::protocol::{
-    parse_auth_request, parse_request, push_json, select_rpc_version, RpcResponse, RpcVersion,
+use crate::remote::auth::AuthOutcome;
+use crate::remote::protocol::{
+    parse_auth_request, parse_request, select_rpc_version, RpcResponse, RpcVersion,
     PAIRING_CONFIRMATION_V1, PROTOCOL_VERSION,
 };
-use super::{audit, crypto, orca_crypto, orca_rpc, rpc, RemoteState};
+use crate::remote::services::RemoteHostHandle;
+use crate::remote::state::{
+    abort_unconfirmed_pairing as state_abort_pairing, reconcile_listener_scope_for_current_policy,
+    register_authenticated_client, ListenerScope, OutboundSender, RemoteState, ServerHandle,
+};
+use crate::remote::{crypto, orca_crypto, orca_rpc};
 
 const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound sockets before the WebSocket upgrade/authentication completes. A
@@ -59,283 +60,23 @@ fn host_signed_out_close() -> Message {
     }))
 }
 
-// ── 在线客户端注册表 ─────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub(crate) struct OutboundSender {
-    sender: mpsc::Sender<Message>,
-    disconnect: watch::Sender<bool>,
-}
-
-impl OutboundSender {
-    fn new(sender: mpsc::Sender<Message>, disconnect: watch::Sender<bool>) -> Self {
-        Self { sender, disconnect }
-    }
-
-    /// 非阻塞排队。队列满说明客户端已明显落后，断开后让其重连并重新快照。
-    pub(crate) fn send(&self, message: Message) -> Result<(), ()> {
-        match self.sender.try_send(message) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                let _ = self.disconnect.send(true);
-                Err(())
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(()),
-        }
-    }
-
-    fn disconnect(&self) {
-        let _ = self.disconnect.send(true);
-    }
-}
-
-pub struct ClientHandle {
-    pub device_id: String,
-    rpc_version: RpcVersion,
-    sender: OutboundSender,
-}
-
-#[derive(Default)]
-pub struct ClientRegistry {
-    next_id: AtomicU64,
-    inner: Mutex<HashMap<u64, ClientHandle>>,
-}
-
-impl ClientRegistry {
-    fn register(&self, device_id: String, rpc_version: RpcVersion, sender: OutboundSender) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.inner.lock().insert(
-            id,
-            ClientHandle {
-                device_id,
-                rpc_version,
-                sender,
-            },
-        );
-        id
-    }
-
-    fn unregister(&self, client_id: u64) {
-        self.inner.lock().remove(&client_id);
-    }
-
-    /// 事件桥按每条连接协商出的版本编码，避免 v2/v3 客户端相互污染。
-    pub fn broadcast_push(&self, event: &str, seq: Option<u64>, data: &Value) {
-        let clients = self.inner.lock();
-        for handle in clients.values() {
-            let text = push_json(handle.rpc_version, event, seq, data);
-            let _ = handle.sender.send(Message::Text(text));
-        }
-    }
-
-    /// 撤销设备时立即断开其全部连接(发送 Close 并丢弃 sender)。
-    pub fn disconnect_device(&self, device_id: &str) {
-        let clients = self.inner.lock();
-        for handle in clients.values() {
-            if handle.device_id == device_id {
-                handle.sender.disconnect();
-            }
-        }
-    }
-
-    pub fn online_count(&self) -> usize {
-        self.inner.lock().len()
-    }
-
-    pub fn online_device_ids(&self) -> Vec<String> {
-        let clients = self.inner.lock();
-        clients.values().map(|h| h.device_id.clone()).collect()
-    }
-
-    fn clear(&self) {
-        self.inner.lock().clear();
-    }
-}
-
-/// Atomically gate online registration on the device still existing in the
-/// auth store. Device revocation takes these locks in the same order
-/// (auth → registry), so either revocation wins and no client is added, or
-/// registration wins and revocation observes and disconnects that client.
-fn register_authenticated_client(
-    state: &RemoteState,
-    device_id: &str,
-    rpc_version: RpcVersion,
-    sender: OutboundSender,
-) -> Option<u64> {
-    let auth = state.auth.lock();
-    auth.contains_device(device_id).then(|| {
-        state
-            .clients
-            .register(device_id.to_string(), rpc_version, sender)
-    })
-}
-
 // ── 服务生命周期 ─────────────────────────────────────────────────────────────
-
-/// LAN listener 的可见范围。
-///
-/// 新安装且尚未配对时只在 loopback 上监听；生成配对二维码是显式的
-/// 网络暴露动作。已有设备或用户配置的直连公网入口则直接使用全网绑定，
-/// 以免重启后破坏既有连接。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ListenerScope {
-    Loopback,
-    Network,
-}
-
-impl ListenerScope {
-    fn bind_addr(self, port: u16) -> SocketAddr {
-        let ip = match self {
-            Self::Loopback => Ipv4Addr::LOCALHOST,
-            Self::Network => Ipv4Addr::UNSPECIFIED,
-        };
-        SocketAddr::from((ip, port))
-    }
-
-    pub(crate) fn network_exposed(self) -> bool {
-        matches!(self, Self::Network)
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Loopback => "local-only",
-            Self::Network => "network",
-        }
-    }
-}
-
-pub struct ServerHandle {
-    pub port: u16,
-    /// OS 已确认的实际绑定地址。监听器恢复失败时为 None，避免把一个
-    /// 已失效的服务继续报告为 running。
-    bound_addr: Option<SocketAddr>,
-    listener_scope: ListenerScope,
-    shutdown: watch::Sender<bool>,
-    /// 仅控制 LAN listener；relay、事件桥和已建立连接仍使用 `shutdown`。
-    listener_shutdown: watch::Sender<bool>,
-    listener_stopped: Option<oneshot::Receiver<()>>,
-    listener_ids: Vec<tauri::EventId>,
-}
-
-impl ServerHandle {
-    pub(crate) fn network_exposed(&self) -> bool {
-        self.listener_scope.network_exposed() && self.bound_addr.is_some()
-    }
-
-    pub(crate) fn is_listening(&self) -> bool {
-        self.bound_addr.is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bound_addr(&self) -> Option<SocketAddr> {
-        self.bound_addr
-    }
-
-    fn signal_shutdown<R: Runtime>(&self, app: &AppHandle<R>) {
-        let _ = self.shutdown.send(true);
-        let _ = self.listener_shutdown.send(true);
-        for id in &self.listener_ids {
-            app.unlisten(*id);
-        }
-        app.state::<RemoteState>().clients.clear();
-    }
-
-    #[cfg(test)]
-    pub fn shutdown<R: Runtime>(self, app: &AppHandle<R>) {
-        self.signal_shutdown(app);
-    }
-
-    /// 完整停机并等待 listener 释放端口。控制面 rebind 需要这个确认，
-    /// 否则同端口的 0.0.0.0 绑定可能与刚关闭的 loopback listener 竞争。
-    pub async fn shutdown_and_wait<R: Runtime>(mut self, app: &AppHandle<R>) {
-        self.signal_shutdown(app);
-        self.wait_for_listener_stop().await;
-    }
-
-    /// 将 LAN listener 原子地换到所需范围。
-    ///
-    /// 只替换 TCP accept loop，保持 relay、事件桥、认证表和既有连接不变。
-    /// 目标绑定失败时尽力恢复原先范围；调用方可据此决定保留还是完整关闭
-    /// 服务，避免撤销最后一个设备后意外继续保留广域监听。
-    pub(crate) async fn ensure_listener_scope<R: Runtime>(
-        &mut self,
-        app: AppHandle<R>,
-        scope: ListenerScope,
-    ) -> Result<(), String> {
-        if self.is_listening() && self.listener_scope == scope {
-            return Ok(());
-        }
-
-        let port = self.port;
-        let previous_scope = self.listener_scope;
-        self.stop_listener().await;
-        match self.replace_listener(app.clone(), scope, port).await {
-            Ok(()) => Ok(()),
-            Err(scope_error) => {
-                let recovery = self.replace_listener(app, previous_scope, port).await;
-                match recovery {
-                    Ok(()) => Err(format!(
-                        "Failed to change the remote listener to {}: {scope_error}. The {} listener was restored.",
-                        scope.label(),
-                        previous_scope.label(),
-                    )),
-                    Err(recovery_error) => Err(format!(
-                        "Failed to change the remote listener to {}: {scope_error}. The {} listener could not be restored: {recovery_error}",
-                        scope.label(),
-                        previous_scope.label(),
-                    )),
-                }
-            }
-        }
-    }
-
-    async fn stop_listener(&mut self) {
-        let _ = self.listener_shutdown.send(true);
-        self.wait_for_listener_stop().await;
-        self.bound_addr = None;
-    }
-
-    async fn wait_for_listener_stop(&mut self) {
-        if let Some(stopped) = self.listener_stopped.take() {
-            let _ = stopped.await;
-        }
-    }
-
-    async fn replace_listener<R: Runtime>(
-        &mut self,
-        app: AppHandle<R>,
-        scope: ListenerScope,
-        port: u16,
-    ) -> Result<(), String> {
-        let listener = bind_listener(scope, port).await?;
-        let bound_addr = listener.local_addr().map_err(|e| e.to_string())?;
-        let (listener_shutdown, listener_shutdown_rx) = watch::channel(false);
-        let listener_stopped = spawn_accept_loop(
-            app,
-            listener,
-            self.shutdown.subscribe(),
-            listener_shutdown_rx,
-        );
-
-        self.port = bound_addr.port();
-        self.bound_addr = Some(bound_addr);
-        self.listener_scope = scope;
-        self.listener_shutdown = listener_shutdown;
-        self.listener_stopped = Some(listener_stopped);
-        Ok(())
-    }
-}
 
 /// 默认的低层启动入口保持全网监听，供 LAN roundtrip 测试和显式网络
 /// 调用者使用。桌面远程功能通过 `start_with_scope` 选择最小暴露范围。
-#[cfg(test)]
-pub async fn start<R: Runtime>(app: AppHandle<R>, port: u16) -> Result<ServerHandle, String> {
-    start_with_scope(app, port, ListenerScope::Network).await
+pub async fn start(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
+    port: u16,
+) -> Result<ServerHandle, String> {
+    start_with_scope(state, handle, port, ListenerScope::Network).await
 }
 
-/// 绑定指定范围的端口并启动服务生命周期。
-pub(crate) async fn start_with_scope<R: Runtime>(
-    app: AppHandle<R>,
+/// 绑定指定范围的端口并启动服务生命周期。事件桥（Tauri listen_any）与
+/// relay 出站连接由宿主 wrapper 挂接：core 只管 TCP listener 与连接循环。
+pub async fn start_with_scope(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
     port: u16,
     scope: ListenerScope,
 ) -> Result<ServerHandle, String> {
@@ -344,40 +85,13 @@ pub(crate) async fn start_with_scope<R: Runtime>(
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (listener_shutdown, listener_shutdown_rx) = watch::channel(false);
-    let listener_ids = super::events_bridge::attach(&app);
-
-    // relay 出站注册与 WS 服务同生命周期(共享 shutdown)
-    let (relay_url, relay_token) = {
-        let state = app.state::<RemoteState>();
-        let cfg = state.config.lock();
-        (cfg.relay_url.clone(), cfg.relay_token.clone())
-    };
-    if let Some(relay_url) = relay_url.filter(|u| !u.trim().is_empty()) {
-        match super::normalize_relay_url(&relay_url) {
-            Ok(relay_url)
-                if relay_token
-                    .as_deref()
-                    .is_some_and(|token| !token.trim().is_empty()) =>
-            {
-                super::relay_client::spawn(
-                    app.clone(),
-                    relay_url,
-                    relay_token,
-                    shutdown_rx.clone(),
-                );
-            }
-            Ok(_) => {
-                *app.state::<RemoteState>().relay_state.lock() =
-                    "error:relay token is required".to_string();
-            }
-            Err(error) => {
-                *app.state::<RemoteState>().relay_state.lock() = format!("error:{error}");
-            }
-        }
-    }
-
-    let listener_stopped =
-        spawn_accept_loop(app.clone(), listener, shutdown_rx, listener_shutdown_rx);
+    let listener_stopped = spawn_accept_loop(
+        Arc::clone(&state),
+        Arc::clone(&handle),
+        listener,
+        shutdown_rx,
+        listener_shutdown_rx,
+    );
 
     Ok(ServerHandle {
         port: bound_addr.port(),
@@ -386,32 +100,34 @@ pub(crate) async fn start_with_scope<R: Runtime>(
         shutdown: shutdown_tx,
         listener_shutdown,
         listener_stopped: Some(listener_stopped),
-        listener_ids,
+        post_shutdown: None,
     })
 }
 
-async fn bind_listener(scope: ListenerScope, port: u16) -> Result<TcpListener, String> {
+pub(crate) async fn bind_listener(scope: ListenerScope, port: u16) -> Result<TcpListener, String> {
     TcpListener::bind(scope.bind_addr(port))
         .await
         .map_err(|e| format!("Failed to bind port {port}: {e}"))
 }
 
-fn spawn_accept_loop<R: Runtime>(
-    app: AppHandle<R>,
+pub(crate) fn spawn_accept_loop(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
     listener: TcpListener,
     shutdown: watch::Receiver<bool>,
     listener_shutdown: watch::Receiver<bool>,
 ) -> oneshot::Receiver<()> {
     let (stopped_tx, stopped_rx) = oneshot::channel();
-    tauri::async_runtime::spawn(async move {
-        accept_loop(app, listener, shutdown, listener_shutdown).await;
+    tokio::spawn(async move {
+        accept_loop(state, handle, listener, shutdown, listener_shutdown).await;
         let _ = stopped_tx.send(());
     });
     stopped_rx
 }
 
-async fn accept_loop<R: Runtime>(
-    app: AppHandle<R>,
+async fn accept_loop(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
     listener: TcpListener,
     shutdown: watch::Receiver<bool>,
     listener_shutdown: watch::Receiver<bool>,
@@ -435,11 +151,13 @@ async fn accept_loop<R: Runtime>(
                     drop(stream);
                     continue;
                 };
-                let conn_app = app.clone();
+                let conn_state = Arc::clone(&state);
+                let conn_handle = Arc::clone(&handle);
                 let conn_shutdown = shutdown.clone();
-                tauri::async_runtime::spawn(async move {
+                tokio::spawn(async move {
                     let _slot = slot;
-                    handle_connection(conn_app, stream, peer.ip(), conn_shutdown).await;
+                    handle_connection(conn_state, conn_handle, stream, peer.ip(), conn_shutdown)
+                        .await;
                 });
             }
         }
@@ -448,8 +166,9 @@ async fn accept_loop<R: Runtime>(
 
 // ── 单连接处理 ───────────────────────────────────────────────────────────────
 
-async fn handle_connection<R: Runtime>(
-    app: AppHandle<R>,
+async fn handle_connection(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
     stream: TcpStream,
     peer: IpAddr,
     mut shutdown: watch::Receiver<bool>,
@@ -479,11 +198,9 @@ async fn handle_connection<R: Runtime>(
     if *shutdown.borrow() {
         return;
     }
-    serve_ws(app, ws, peer, ConnectionContext::Direct, shutdown).await;
+    serve_ws(state, handle, ws, peer, ConnectionContext::Direct, shutdown).await;
 }
-
-#[derive(Clone, Debug)]
-pub(crate) enum ConnectionContext {
+pub enum ConnectionContext {
     Direct,
     Relay { host_id: String },
 }
@@ -610,37 +327,35 @@ struct AuthenticatedFirstMessage {
     rpc_version: RpcVersion,
 }
 
-async fn abort_pending_pairing<R: Runtime>(
-    app: &AppHandle<R>,
+async fn abort_pending_pairing(
+    state: &Arc<RemoteState>,
+    handle: &Arc<dyn RemoteHostHandle>,
     authentication: &AuthenticatedFirstMessage,
 ) {
     if let Some(pairing_id) = authentication.provisional_pairing_id.as_deref() {
-        app.state::<RemoteState>()
-            .auth
-            .lock()
-            .abort_pairing(pairing_id);
+        state.auth.lock().abort_pairing(pairing_id);
     } else if authentication.paired_device_name.is_some() {
-        super::abort_unconfirmed_pairing(app, &authentication.device_id).await;
+        state_abort_pairing(state, handle, &authentication.device_id).await;
     }
 }
 
 /// Publish the pairing only after the peer has received its encrypted device
 /// token. A concurrent revoke may already have removed the device; in that
 /// case there is no successful pairing left to announce.
-fn commit_pending_pairing<R: Runtime>(
-    app: &AppHandle<R>,
+fn commit_pending_pairing(
+    state: &RemoteState,
+    handle: &dyn RemoteHostHandle,
     peer: IpAddr,
     authentication: &AuthenticatedFirstMessage,
 ) {
     let Some(device_name) = authentication.paired_device_name.as_deref() else {
         return;
     };
-    let state = app.state::<RemoteState>();
     if !state.auth.lock().contains_device(&authentication.device_id) {
         return;
     }
     if state.audit_enabled {
-        audit::log(
+        handle.audit_log(
             "device-paired",
             json!({
                 "peer": peer.to_string(),
@@ -650,7 +365,7 @@ fn commit_pending_pairing<R: Runtime>(
         );
     }
     // 通知设置页:配对成功(二维码视图切到完成态 + 刷新设备列表)。
-    let _ = app.emit(
+    handle.emit(
         "remote-device-paired",
         json!({
             "deviceId": authentication.device_id,
@@ -663,8 +378,9 @@ fn commit_pending_pairing<R: Runtime>(
 /// takes `lifecycle` before sending shutdown, so after the auth reply either
 /// this commit happens before stop starts or it observes the stop and leaves
 /// the device for its caller to roll back.
-async fn commit_pending_pairing_unless_stopped<R: Runtime>(
-    app: &AppHandle<R>,
+async fn commit_pending_pairing_unless_stopped(
+    state: &Arc<RemoteState>,
+    handle: &dyn RemoteHostHandle,
     peer: IpAddr,
     authentication: &AuthenticatedFirstMessage,
     shutdown: &watch::Receiver<bool>,
@@ -672,20 +388,19 @@ async fn commit_pending_pairing_unless_stopped<R: Runtime>(
     if authentication.paired_device_name.is_none() {
         return true;
     }
-    let state = app.state::<RemoteState>();
     let _lifecycle = state.lifecycle.lock().await;
     if *shutdown.borrow() {
         return false;
     }
-    commit_pending_pairing(app, peer, authentication);
+    commit_pending_pairing(state, handle, peer, authentication);
     true
 }
 
 /// Wait for the v1 confirmation on the same encrypted connection. Persistence
 /// failures are reported without dropping the in-memory reservation, so the
 /// peer may retry while the bounded authentication window remains open.
-async fn await_pairing_confirmation<R, S>(
-    app: &AppHandle<R>,
+async fn await_pairing_confirmation<S>(
+    state: &RemoteState,
     sink: &mut SplitSink<WebSocketStream<S>, Message>,
     stream: &mut SplitStream<WebSocketStream<S>>,
     session: &mut NegotiatedSession,
@@ -693,7 +408,6 @@ async fn await_pairing_confirmation<R, S>(
     shutdown: &mut watch::Receiver<bool>,
 ) -> Option<String>
 where
-    R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let expected_pairing_id = authentication.provisional_pairing_id.as_deref()?;
@@ -747,7 +461,6 @@ where
         }
 
         let confirmation = {
-            let state = app.state::<RemoteState>();
             let _lifecycle = state.lifecycle.lock().await;
             if *shutdown.borrow() {
                 return None;
@@ -775,18 +488,18 @@ where
 }
 
 /// 会话主循环:E2EE 握手 → 认证 → 请求循环。LAN 与 relay 数据连接共用。
-pub(crate) async fn serve_ws<R, S>(
-    app: AppHandle<R>,
+pub async fn serve_ws<S>(
+    state: Arc<RemoteState>,
+    handle: Arc<dyn RemoteHostHandle>,
     ws: WebSocketStream<S>,
     peer: IpAddr,
     context: ConnectionContext,
     mut shutdown: watch::Receiver<bool>,
 ) where
-    R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (mut sink, mut stream) = ws.split();
-    let audit_enabled = app.state::<RemoteState>().audit_enabled;
+    let audit_enabled = state.audit_enabled;
     if *shutdown.borrow() {
         let _ = sink.close().await;
         return;
@@ -811,7 +524,7 @@ pub(crate) async fn serve_ws<R, S>(
         let _ = sink.close().await;
         return;
     }
-    let mut session = match respond_hello(&app, &hello, &context) {
+    let mut session = match respond_hello(&state, &hello, &context) {
         Ok((ack, session)) => {
             if *shutdown.borrow() {
                 let _ = sink.close().await;
@@ -828,7 +541,7 @@ pub(crate) async fn serve_ws<R, S>(
         }
         Err(reply) => {
             if audit_enabled {
-                audit::log("handshake-rejected", json!({ "peer": peer.to_string() }));
+                handle.audit_log("handshake-rejected", json!({ "peer": peer.to_string() }));
             }
             let _ = sink.send(Message::Text(reply)).await;
             let _ = sink.close().await;
@@ -874,10 +587,15 @@ pub(crate) async fn serve_ws<R, S>(
     // across network I/O or any other await.
     let orca_transcript_hash = session.orca_transcript_hash().map(str::to_owned);
     let authentication = {
-        let state = app.state::<RemoteState>();
         let _lifecycle = state.lifecycle.lock().await;
         (!*shutdown.borrow()).then(|| {
-            authenticate_first_message(&app, peer, &first_ctrl, orca_transcript_hash.as_deref())
+            authenticate_first_message(
+                &state,
+                handle.as_ref(),
+                peer,
+                &first_ctrl,
+                orca_transcript_hash.as_deref(),
+            )
         })
     };
     let Some(authentication) = authentication else {
@@ -894,7 +612,7 @@ pub(crate) async fn serve_ws<R, S>(
         }
     };
     if *shutdown.borrow() {
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
@@ -912,11 +630,11 @@ pub(crate) async fn serve_ws<R, S>(
         )
         .await
         {
-            abort_pending_pairing(&app, &authentication).await;
+            abort_pending_pairing(&state, &handle, &authentication).await;
             return;
         }
         let reply = await_pairing_confirmation(
-            &app,
+            &state,
             &mut sink,
             &mut stream,
             &mut session,
@@ -925,7 +643,7 @@ pub(crate) async fn serve_ws<R, S>(
         )
         .await;
         let Some(reply) = reply else {
-            abort_pending_pairing(&app, &authentication).await;
+            abort_pending_pairing(&state, &handle, &authentication).await;
             let _ = sink.close().await;
             return;
         };
@@ -939,16 +657,16 @@ pub(crate) async fn serve_ws<R, S>(
     // durable device commit above; existing device-token authentication cannot
     // change listener policy.
     if authentication.paired_device_name.is_some()
-        && super::reconcile_listener_scope_for_current_policy(&app)
+        && reconcile_listener_scope_for_current_policy(&state, &handle)
             .await
             .is_err()
     {
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
     if *shutdown.borrow() {
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
@@ -956,13 +674,12 @@ pub(crate) async fn serve_ws<R, S>(
     // Register before the final reply (legacy auth result or confirmation
     // ACK), while holding the same auth lock used by revocation. This closes
     // the otherwise reachable auth-to-register window.
-    let state = app.state::<RemoteState>();
     let clients = state.clients.clone();
     let (tx, mut rx) = mpsc::channel::<Message>(OUTBOUND_QUEUE_CAPACITY);
     let (disconnect_tx, mut disconnect_rx) = watch::channel(false);
     let outbound = OutboundSender::new(tx, disconnect_tx);
     if *shutdown.borrow() {
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
@@ -973,7 +690,7 @@ pub(crate) async fn serve_ws<R, S>(
         outbound.clone(),
     );
     let Some(client_id) = client_id else {
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     };
@@ -981,7 +698,7 @@ pub(crate) async fn serve_ws<R, S>(
     // signal before reporting the final commit to the peer.
     if *shutdown.borrow() || *disconnect_rx.borrow() {
         clients.unregister(client_id);
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
@@ -999,15 +716,21 @@ pub(crate) async fn serve_ws<R, S>(
     .await
     {
         clients.unregister(client_id);
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         return;
     }
 
-    let pairing_committed =
-        commit_pending_pairing_unless_stopped(&app, peer, &authentication, &shutdown).await;
+    let pairing_committed = commit_pending_pairing_unless_stopped(
+        &state,
+        handle.as_ref(),
+        peer,
+        &authentication,
+        &shutdown,
+    )
+    .await;
     if !pairing_committed {
         clients.unregister(client_id);
-        abort_pending_pairing(&app, &authentication).await;
+        abort_pending_pairing(&state, &handle, &authentication).await;
         let _ = sink.close().await;
         return;
     }
@@ -1019,7 +742,7 @@ pub(crate) async fn serve_ws<R, S>(
     }
 
     // ── 已注册，进入请求循环 ──
-    let mut terminal = super::terminal_streams::TerminalStreams::new(app.clone(), outbound);
+    let mut terminal = handle.terminal_streams(outbound);
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1079,9 +802,9 @@ pub(crate) async fn serve_ws<R, S>(
                         match session.decrypt_message(&message) {
                             Ok(DecryptedMessage::Control(text)) => {
                                 let reply = if session.is_orca() {
-                                    orca_rpc::handle(&app, &text).await
+                                    orca_rpc::handle(&state, &handle.desktop_version(), &text).await
                                 } else {
-                                    handle_request(&app, &text, authentication.rpc_version).await
+                                    handle_request(&state, handle.as_ref(), &text, authentication.rpc_version).await
                                 };
                                 if !send_encrypted(&mut sink, &mut session, crypto::KIND_CTRL, reply.as_bytes()).await {
                                     break;
@@ -1131,8 +854,8 @@ fn hello_error(message: &str) -> String {
 }
 
 /// 处理明文 hello。Ok=(hello_ack JSON, 会话密钥);Err=hello_error JSON。
-fn respond_hello<R: Runtime>(
-    app: &AppHandle<R>,
+fn respond_hello(
+    state: &RemoteState,
     raw: &str,
     context: &ConnectionContext,
 ) -> Result<(String, NegotiatedSession), String> {
@@ -1152,7 +875,6 @@ fn respond_hello<R: Runtime>(
                 relay_host_id: Some(host_id.clone()),
             },
         };
-        let state = app.state::<RemoteState>();
         let accept = orca_crypto::respond_handshake(&state.keys, raw, &expected)
             .map_err(|error| hello_error(&error))?;
         return Ok((accept.ready_json, NegotiatedSession::Orca(accept.session)));
@@ -1165,7 +887,6 @@ fn respond_hello<R: Runtime>(
     let Some(client_pub) = parsed.get("pub").and_then(Value::as_str) else {
         return Err(hello_error("hello requires pub"));
     };
-    let state = app.state::<RemoteState>();
     let accept = crypto::respond_handshake(&state.keys, client_pub).map_err(|e| hello_error(&e))?;
     let ack = json!({
         "v": PROTOCOL_VERSION,
@@ -1178,8 +899,9 @@ fn respond_hello<R: Runtime>(
 
 /// 处理首条 auth 消息。配对的落盘发生在这里，但其审计/UI 提交会等到
 /// 加密 auth 回包成功送出后；此前失败由调用方按 device ID 回滚。
-fn authenticate_first_message<R: Runtime>(
-    app: &AppHandle<R>,
+fn authenticate_first_message(
+    state: &RemoteState,
+    handle: &dyn RemoteHostHandle,
     peer: IpAddr,
     raw: &str,
     orca_transcript_hash: Option<&str>,
@@ -1209,7 +931,6 @@ fn authenticate_first_message<R: Runtime>(
                 json!({ "type": "e2ee_error", "error": { "code": "bad_auth" } }).to_string(),
             );
         };
-        let state = app.state::<RemoteState>();
         let outcome = state
             .auth
             .lock()
@@ -1217,7 +938,7 @@ fn authenticate_first_message<R: Runtime>(
         return match outcome {
             Ok(AuthOutcome::Authenticated { device_id }) => {
                 if state.audit_enabled {
-                    audit::log(
+                    handle.audit_log(
                         "auth-ok",
                         json!({ "peer": peer.to_string(), "deviceId": device_id, "protocol": "orca" }),
                     );
@@ -1240,7 +961,7 @@ fn authenticate_first_message<R: Runtime>(
             }
             Err(error) => {
                 if state.audit_enabled {
-                    audit::log(
+                    handle.audit_log(
                         "auth-failed",
                         json!({ "peer": peer.to_string(), "error": error, "protocol": "orca" }),
                     );
@@ -1272,7 +993,6 @@ fn authenticate_first_message<R: Runtime>(
         .and_then(Value::as_u64)
         == Some(u64::from(PAIRING_CONFIRMATION_V1));
 
-    let state = app.state::<RemoteState>();
     let outcome = if pairing_confirmation && device_token.is_none() {
         match invite {
             Some(invite) => state.auth.lock().begin_pairing(peer, invite, device_name),
@@ -1287,8 +1007,8 @@ fn authenticate_first_message<R: Runtime>(
     let audit_enabled = state.audit_enabled;
 
     let host = json!({
-        "name": super::host_name(),
-        "version": app.package_info().version.to_string(),
+        "name": crate::remote::identity::host_name(),
+        "version": handle.desktop_version(),
         "platform": std::env::consts::OS,
     });
 
@@ -1307,7 +1027,7 @@ fn authenticate_first_message<R: Runtime>(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": super::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1335,7 +1055,7 @@ fn authenticate_first_message<R: Runtime>(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": super::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1348,7 +1068,7 @@ fn authenticate_first_message<R: Runtime>(
         }
         Ok(AuthOutcome::Authenticated { device_id, .. }) => {
             if audit_enabled {
-                audit::log(
+                handle.audit_log(
                     "auth-ok",
                     json!({ "peer": peer.to_string(), "deviceId": device_id }),
                 );
@@ -1361,7 +1081,7 @@ fn authenticate_first_message<R: Runtime>(
                     "host": host,
                     "rpcVersion": rpc_version.as_u32(),
                     "rpcVersions": [3, 2],
-                    "capabilities": super::rpc::rpc_capabilities_value(),
+                    "capabilities": crate::remote::rpc::rpc_capabilities_value(),
                 }),
             );
             Ok(AuthenticatedFirstMessage {
@@ -1374,7 +1094,7 @@ fn authenticate_first_message<R: Runtime>(
         }
         Err(err) => {
             if audit_enabled {
-                audit::log(
+                handle.audit_log(
                     "auth-failed",
                     json!({ "peer": peer.to_string(), "error": err }),
                 );
@@ -1384,8 +1104,9 @@ fn authenticate_first_message<R: Runtime>(
     }
 }
 
-async fn handle_request<R: Runtime>(
-    app: &AppHandle<R>,
+async fn handle_request(
+    state: &RemoteState,
+    handle: &dyn RemoteHostHandle,
     raw: &str,
     rpc_version: RpcVersion,
 ) -> String {
@@ -1397,232 +1118,8 @@ async fn handle_request<R: Runtime>(
     if req.method == "auth" {
         return RpcResponse::failure(rpc_version, req.id, "Already authenticated").to_json();
     }
-    match rpc::dispatch(app, &req.method, req.params).await {
+    match crate::remote::rpc::dispatch(state, handle, &req.method, req.params).await {
         Ok(result) => RpcResponse::success(rpc_version, req.id, result).to_json(),
         Err(err) => RpcResponse::failure(rpc_version, req.id, err).to_json(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    use tauri::{Listener, Manager};
-    use tokio_tungstenite::tungstenite::protocol::Role;
-
-    use super::*;
-    use crate::remote::auth::AuthOutcome;
-
-    fn pair_test_device(state: &RemoteState) -> String {
-        let invite = state.auth.lock().create_invite().expect("create invite");
-        match state.auth.lock().authenticate(
-            "127.0.0.1".parse().expect("loopback IP"),
-            Some(&invite),
-            None,
-            Some("Test phone"),
-        ) {
-            Ok(AuthOutcome::Paired { device_id, .. }) => device_id,
-            _ => panic!("expected paired test device"),
-        }
-    }
-
-    #[test]
-    fn outbound_queue_overflow_requests_disconnect() {
-        let (tx, _rx) = mpsc::channel(1);
-        let (disconnect_tx, disconnect_rx) = watch::channel(false);
-        let outbound = OutboundSender::new(tx, disconnect_tx);
-
-        assert!(outbound.send(Message::Text("first".to_string())).is_ok());
-        assert!(outbound
-            .send(Message::Text("overflow".to_string()))
-            .is_err());
-        assert!(*disconnect_rx.borrow());
-    }
-
-    #[test]
-    fn revoke_cannot_leave_an_authenticated_device_registered() {
-        // Revoke wins the auth→register window: the later registration gate
-        // sees no device and cannot create an online session.
-        let revoked_first = RemoteState::new_in_memory();
-        let device_id = pair_test_device(&revoked_first);
-        {
-            let mut auth = revoked_first.auth.lock();
-            assert!(auth.revoke(&device_id).expect("revoke device"));
-            revoked_first.clients.disconnect_device(&device_id);
-        }
-        let (tx, _rx) = mpsc::channel(1);
-        let (disconnect_tx, _disconnect_rx) = watch::channel(false);
-        assert!(register_authenticated_client(
-            &revoked_first,
-            &device_id,
-            RpcVersion::V2,
-            OutboundSender::new(tx, disconnect_tx),
-        )
-        .is_none());
-        assert_eq!(revoked_first.clients.online_count(), 0);
-
-        // Registration wins first: revoke acquires the same lock order and
-        // therefore sees the client and signals its connection to close.
-        let registered_first = RemoteState::new_in_memory();
-        let device_id = pair_test_device(&registered_first);
-        let (tx, _rx) = mpsc::channel(1);
-        let (disconnect_tx, disconnect_rx) = watch::channel(false);
-        assert!(register_authenticated_client(
-            &registered_first,
-            &device_id,
-            RpcVersion::V2,
-            OutboundSender::new(tx, disconnect_tx),
-        )
-        .is_some());
-        {
-            let mut auth = registered_first.auth.lock();
-            assert!(auth.revoke(&device_id).expect("revoke device"));
-            registered_first.clients.disconnect_device(&device_id);
-        }
-        assert!(*disconnect_rx.borrow());
-    }
-
-    #[test]
-    fn pairing_is_announced_only_after_reply_commit_and_rollback_is_id_specific() {
-        let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
-        let handle = app.handle().clone();
-        let pairing_events = Arc::new(AtomicUsize::new(0));
-        let event_counter = pairing_events.clone();
-        let _listener = handle.listen("remote-device-paired", move |_| {
-            event_counter.fetch_add(1, Ordering::SeqCst);
-        });
-
-        tauri::async_runtime::block_on(async {
-            let state = handle.state::<RemoteState>();
-            let first_invite = state.auth.lock().create_invite().expect("first invite");
-            let first_raw = json!({
-                "v": PROTOCOL_VERSION,
-                "id": 1,
-                "method": "auth",
-                "params": { "invite": first_invite, "deviceName": "Committed phone" },
-            })
-            .to_string();
-            let first = authenticate_first_message(
-                &handle,
-                "127.0.0.1".parse().expect("loopback IP"),
-                &first_raw,
-                None,
-            )
-            .expect("pair first device");
-            let first_id = first.device_id.clone();
-
-            assert!(first.paired_device_name.is_some());
-            assert_eq!(pairing_events.load(Ordering::SeqCst), 0);
-            commit_pending_pairing(&handle, "127.0.0.1".parse().expect("loopback IP"), &first);
-            assert_eq!(pairing_events.load(Ordering::SeqCst), 1);
-            assert!(state.auth.lock().contains_device(&first_id));
-
-            let second_invite = state.auth.lock().create_invite().expect("second invite");
-            let second_raw = json!({
-                "v": PROTOCOL_VERSION,
-                "id": 2,
-                "method": "auth",
-                "params": { "invite": second_invite, "deviceName": "Rolled back phone" },
-            })
-            .to_string();
-            let second = authenticate_first_message(
-                &handle,
-                "127.0.0.1".parse().expect("loopback IP"),
-                &second_raw,
-                None,
-            )
-            .expect("pair second device");
-            let second_id = second.device_id.clone();
-            assert_eq!(pairing_events.load(Ordering::SeqCst), 1);
-
-            abort_pending_pairing(&handle, &second).await;
-            let auth = state.auth.lock();
-            assert!(auth.contains_device(&first_id));
-            assert!(!auth.contains_device(&second_id));
-            assert_eq!(pairing_events.load(Ordering::SeqCst), 1);
-        });
-    }
-
-    #[test]
-    fn shutdown_prevents_a_pending_pairing_from_being_committed() {
-        let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
-        let handle = app.handle().clone();
-        let pairing_events = Arc::new(AtomicUsize::new(0));
-        let event_counter = pairing_events.clone();
-        let _listener = handle.listen("remote-device-paired", move |_| {
-            event_counter.fetch_add(1, Ordering::SeqCst);
-        });
-
-        tauri::async_runtime::block_on(async {
-            let state = handle.state::<RemoteState>();
-            let invite = state.auth.lock().create_invite().expect("invite");
-            let raw = json!({
-                "v": PROTOCOL_VERSION,
-                "id": 1,
-                "method": "auth",
-                "params": { "invite": invite, "deviceName": "Stopped phone" },
-            })
-            .to_string();
-            let authentication = authenticate_first_message(
-                &handle,
-                "127.0.0.1".parse().expect("loopback IP"),
-                &raw,
-                None,
-            )
-            .expect("pair device before the reply commit");
-            let device_id = authentication.device_id.clone();
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            shutdown_tx.send(true).expect("shutdown receiver exists");
-
-            assert!(
-                !commit_pending_pairing_unless_stopped(
-                    &handle,
-                    "127.0.0.1".parse().expect("loopback IP"),
-                    &authentication,
-                    &shutdown_rx,
-                )
-                .await
-            );
-            assert_eq!(pairing_events.load(Ordering::SeqCst), 0);
-
-            abort_pending_pairing(&handle, &authentication).await;
-            assert!(!state.auth.lock().contains_device(&device_id));
-        });
-    }
-
-    #[test]
-    fn shutdown_interrupts_a_connection_waiting_for_hello() {
-        let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
-        let handle = app.handle().clone();
-
-        tauri::async_runtime::block_on(async move {
-            let (server_io, _client_io) = tokio::io::duplex(1024);
-            let ws = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            let task = tauri::async_runtime::spawn(serve_ws(
-                handle.clone(),
-                ws,
-                "127.0.0.1".parse().expect("loopback IP"),
-                ConnectionContext::Direct,
-                shutdown_rx,
-            ));
-
-            tokio::task::yield_now().await;
-            shutdown_tx
-                .send(true)
-                .expect("connection still has shutdown receiver");
-            tokio::time::timeout(Duration::from_millis(250), task)
-                .await
-                .expect("shutdown must cancel the hello wait")
-                .expect("connection task must finish cleanly");
-
-            let state = handle.state::<RemoteState>();
-            assert_eq!(state.clients.online_count(), 0);
-            assert!(state.auth.lock().devices().is_empty());
-        });
     }
 }

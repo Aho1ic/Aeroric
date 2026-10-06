@@ -7,13 +7,11 @@
 //! explicit error is important here; silently translating an Orca mutation to
 //! an Aeroric operation could target the wrong task or worktree.
 
+use crate::remote::state::RemoteState;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime};
 
-use super::RemoteState;
-
-pub(crate) async fn handle<R: Runtime>(app: &AppHandle<R>, raw: &str) -> String {
-    let runtime_id = app.state::<RemoteState>().keys.host_id();
+pub async fn handle(state: &RemoteState, desktop_version: &str, raw: &str) -> String {
+    let runtime_id = state.keys.host_id();
     let parsed = serde_json::from_str::<Value>(raw);
     let Ok(request) = parsed else {
         return failure(
@@ -46,8 +44,8 @@ pub(crate) async fn handle<R: Runtime>(app: &AppHandle<R>, raw: &str) -> String 
     };
 
     let result = match method {
-        "status.get" => status(app, &runtime_id),
-        "hello" => hello(app, &runtime_id),
+        "status.get" => status(desktop_version, &runtime_id),
+        "hello" => hello(desktop_version, &runtime_id),
         "ping" => Ok(json!("pong")),
         _ => Err((
             "method_not_found".to_string(),
@@ -60,8 +58,7 @@ pub(crate) async fn handle<R: Runtime>(app: &AppHandle<R>, raw: &str) -> String 
     }
 }
 
-fn status<R: Runtime>(app: &AppHandle<R>, runtime_id: &str) -> Result<Value, (String, String)> {
-    let info = app.package_info();
+fn status(desktop_version: &str, runtime_id: &str) -> Result<Value, (String, String)> {
     Ok(json!({
         "runtimeId": runtime_id,
         "rendererGraphEpoch": 0,
@@ -71,7 +68,7 @@ fn status<R: Runtime>(app: &AppHandle<R>, runtime_id: &str) -> Result<Value, (St
         "liveTabCount": 0,
         "liveLeafCount": 0,
         "runtimeProtocolVersion": 2,
-        "minCompatibleRuntimeClientVersion": info.version.to_string(),
+        "minCompatibleRuntimeClientVersion": desktop_version.to_string(),
         "capabilities": [
             "aeroric.remote.v2",
             "aeroric.tasks.v1",
@@ -81,15 +78,14 @@ fn status<R: Runtime>(app: &AppHandle<R>, runtime_id: &str) -> Result<Value, (St
         "terminalWindowsShell": Value::Null,
         "floatingWorkspaceEnabled": true,
         "protocolVersion": 2,
-        "minCompatibleMobileVersion": info.version.to_string()
+        "minCompatibleMobileVersion": desktop_version.to_string()
     }))
 }
 
-fn hello<R: Runtime>(app: &AppHandle<R>, runtime_id: &str) -> Result<Value, (String, String)> {
-    let info = app.package_info();
+fn hello(desktop_version: &str, runtime_id: &str) -> Result<Value, (String, String)> {
     Ok(json!({
         "name": "aeroric",
-        "version": info.version.to_string(),
+        "version": desktop_version.to_string(),
         "platform": std::env::consts::OS,
         "hostId": runtime_id
     }))
@@ -115,36 +111,4 @@ fn failure(id: &str, code: &str, message: &str, runtime_id: &str) -> String {
     .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unsupported_method_uses_orca_failure_envelope() {
-        let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
-        let response = tauri::async_runtime::block_on(handle(
-            &app.handle().clone(),
-            r#"{"id":"rpc-1","method":"worktree.create","params":{}}"#,
-        ));
-        let value: Value = serde_json::from_str(&response).expect("valid response");
-        assert_eq!(value["id"], "rpc-1");
-        assert_eq!(value["ok"], false);
-        assert_eq!(value["error"]["code"], "method_not_found");
-        assert!(value["_meta"]["runtimeId"].as_str().is_some());
-    }
-
-    #[test]
-    fn status_has_runtime_metadata() {
-        let app = tauri::test::mock_app();
-        app.manage(RemoteState::new_in_memory());
-        let response = tauri::async_runtime::block_on(handle(
-            &app.handle().clone(),
-            r#"{"id":"rpc-2","method":"status.get"}"#,
-        ));
-        let value: Value = serde_json::from_str(&response).expect("valid response");
-        assert_eq!(value["ok"], true);
-        assert_eq!(value["result"]["graphStatus"], "ready");
-        assert_eq!(value["result"]["runtimeId"], value["_meta"]["runtimeId"]);
-    }
-}
+// 测试（unsupported envelope/runtime metadata 两条）随刀三b 测试片迁 core tests/remote_headless.rs。
