@@ -384,3 +384,279 @@ fn a_revoked_device_token_fails_like_an_unknown_one() {
         "已撤销的 token 和从未签发的 token 报错必须一致"
     );
 }
+
+// ── 刀四：headless 服务面 e2e ────────────────────────────────────────────
+//
+// 验收「关闭全部 GUI、只跑 `aeroric-cli serve` 时，fake 配对客户端可
+// list/create/cancel task」的机器证据：core WS server + 无头 handle
+// （CLI 生产装配在 aeroric-host 复用同一 trait，方法面与本 fake 一致）。
+
+use aeroric_core::remote::crypto;
+use aeroric_core::remote::server;
+use aeroric_core::remote::services::{RemoteHostHandle, RemoteTerminalStreams};
+use aeroric_core::remote::state::{ListenerScope, OutboundSender, RemoteState};
+
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{json, Value};
+use std::time::Duration;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::WebSocketStream;
+
+/// 无头 handle：存储/任务面全部脚本化应答，shape 与 CLI 生产装配一致。
+struct HeadlessHandle;
+
+#[async_trait]
+impl RemoteHostHandle for HeadlessHandle {
+    fn desktop_version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    fn emit(&self, _event: &str, _payload: Value) {}
+    fn audit_log(&self, _event: &str, _payload: Value) {}
+
+    async fn load_projects(&self) -> Result<Value, String> {
+        Ok(json!([{ "id": "p1", "name": "headless", "path": "/tmp/p1" }]))
+    }
+
+    async fn set_project_pinned(&self, _project_id: &str, _pinned: bool) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn load_project_tasks(&self, project_id: &str) -> Result<Value, String> {
+        if project_id == "p1" {
+            Ok(json!([{ "id": "t1", "projectId": "p1", "status": "todo" }]))
+        } else {
+            Ok(json!([]))
+        }
+    }
+
+    async fn task_input(&self, task_id: &str, _text: &str) -> Result<Value, String> {
+        Err(format!("Task is not running: {task_id}"))
+    }
+
+    async fn task_respond(&self, _task_id: &str, _params: Value) -> Result<Value, String> {
+        Err("Task is not running".to_string())
+    }
+
+    async fn task_cancel(&self, _project_id: &str, task_id: &str) -> Result<Value, String> {
+        Ok(json!({ "ok": true, "taskId": task_id, "status": "cancelled" }))
+    }
+
+    async fn task_complete(&self, _project_id: &str, task_id: &str) -> Result<Value, String> {
+        Ok(json!({ "ok": true, "taskId": task_id, "status": "done" }))
+    }
+
+    async fn task_request(&self, payload: Value) -> Result<Value, String> {
+        let kind = payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("create");
+        if kind == "create" {
+            let prompt = payload
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Ok(json!({
+                "accepted": true,
+                "taskId": format!("headless-{prompt_len}", prompt_len = prompt.len()),
+                "task": Value::Null,
+            }))
+        } else {
+            Err("Task not found: none".to_string())
+        }
+    }
+
+    async fn session_messages(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!({ "available": false }))
+    }
+
+    async fn project_files(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+
+    async fn project_read_file(&self, _params: Value) -> Result<Value, String> {
+        Err("not found".to_string())
+    }
+
+    async fn project_write_file(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!({ "ok": true }))
+    }
+
+    async fn git_changes(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+
+    async fn git_diff(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!(""))
+    }
+
+    async fn agent_config_list(&self) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+
+    async fn agent_config_save(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!({ "ok": true }))
+    }
+
+    async fn agent_config_detect_models(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!({ "models": [] }))
+    }
+
+    async fn agent_config_create(&self, _params: Value) -> Result<Value, String> {
+        Ok(json!({ "ok": true }))
+    }
+
+    async fn agents_list(&self) -> Result<Value, String> {
+        Ok(json!([{ "value": "claude", "family": "claude" }]))
+    }
+
+    async fn agents_models(&self, _agent: &str) -> Result<Value, String> {
+        Ok(json!({ "models": [] }))
+    }
+
+    async fn stats_summary(&self) -> Result<Value, String> {
+        Ok(json!({ "totalAgentsSpawned": 0 }))
+    }
+
+    fn terminal_streams(&self, _outbound: OutboundSender) -> Box<dyn RemoteTerminalStreams> {
+        struct NoStreams;
+        impl RemoteTerminalStreams for NoStreams {
+            fn handle_frame(&mut self, _bytes: &[u8]) {}
+            fn abort_all(&mut self) {}
+        }
+        Box::new(NoStreams)
+    }
+}
+
+const HEADLESS_WAIT: Duration = Duration::from_secs(5);
+
+/// 已配对的 headless 测试客户端（hello → E2EE 握手 → auth）。
+type ClientWs = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+struct HeadlessClient {
+    ws: ClientWs,
+    session: crypto::SessionCrypto,
+}
+
+impl HeadlessClient {
+    async fn send_ctrl(&mut self, value: Value) {
+        let frame = self
+            .session
+            .encrypt_frame(crypto::KIND_CTRL, value.to_string().as_bytes())
+            .expect("encrypt ctrl");
+        self.ws.send(Message::Binary(frame)).await.expect("send");
+    }
+
+    async fn next_ctrl(&mut self) -> Value {
+        loop {
+            let msg = tokio::time::timeout(HEADLESS_WAIT, self.ws.next())
+                .await
+                .expect("timed out waiting for frame")
+                .expect("stream ended")
+                .expect("frame error");
+            match msg {
+                Message::Binary(bytes) => {
+                    let (kind, plain) = self.session.decrypt_frame(&bytes).expect("decrypt");
+                    assert_eq!(kind, crypto::KIND_CTRL);
+                    return serde_json::from_str(&String::from_utf8(plain).expect("utf8"))
+                        .expect("json");
+                }
+                Message::Ping(_) | Message::Pong(_) => continue,
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        }
+    }
+}
+
+async fn headless_connect(port: u16, server_pub: &str, invite: &str) -> HeadlessClient {
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .expect("connect");
+    let handshake = crypto::initiate_handshake(server_pub).expect("initiate handshake");
+    ws.send(Message::Text(
+        json!({"v":2,"type":"hello","pub": handshake.eph_pub_b64}).to_string(),
+    ))
+    .await
+    .expect("send hello");
+    let ack = loop {
+        let msg = tokio::time::timeout(HEADLESS_WAIT, ws.next())
+            .await
+            .expect("timed out waiting for hello_ack")
+            .expect("stream ended")
+            .expect("frame error");
+        match msg {
+            Message::Text(text) => break serde_json::from_str::<Value>(&text).expect("ack json"),
+            Message::Ping(_) | Message::Pong(_) => continue,
+            other => panic!("unexpected frame during handshake: {other:?}"),
+        }
+    };
+    assert_eq!(ack["type"], json!("hello_ack"), "handshake ack: {ack}");
+    let session = handshake
+        .finish(
+            ack["pub"].as_str().unwrap(),
+            ack["confirm"].as_str().unwrap(),
+        )
+        .expect("finish handshake");
+    let mut client = HeadlessClient { ws, session };
+    client
+        .send_ctrl(json!({"v":2,"id":0,"method":"auth","params":{"invite":invite,"deviceName":"Headless"}}))
+        .await;
+    let auth = client.next_ctrl().await;
+    assert_eq!(auth["ok"], json!(true), "auth: {auth}");
+    client
+}
+
+async fn headless_rpc(client: &mut HeadlessClient, id: u64, method: &str, params: Value) -> Value {
+    client
+        .send_ctrl(json!({"v":2,"id":id,"method":method,"params":params}))
+        .await;
+    client.next_ctrl().await
+}
+
+/// e2e：headless serve 上 fake 配对客户端完成 auth → tasks.list →
+/// task.create → task.cancel 全流程（验收第 2 条的机器证据）。
+#[tokio::test]
+async fn headless_serve_serves_list_create_cancel_over_paired_ws() {
+    let state = Arc::new(RemoteState::new_in_memory());
+    let handle: Arc<dyn RemoteHostHandle> = Arc::new(HeadlessHandle);
+
+    let invite = state.auth.lock().create_invite().expect("invite");
+    let server_pub = state.keys.public_b64();
+    let server = server::start_with_scope(
+        Arc::clone(&state),
+        Arc::clone(&handle),
+        0,
+        ListenerScope::Loopback,
+    )
+    .await
+    .expect("headless server start");
+    let port = server.port;
+
+    let mut phone = headless_connect(port, &server_pub, &invite).await;
+
+    let list = headless_rpc(&mut phone, 1, "tasks.list", json!({"projectId":"p1"})).await;
+    assert_eq!(list["ok"], json!(true), "list: {list}");
+    assert_eq!(list["result"][0]["id"], json!("t1"));
+
+    let created = headless_rpc(&mut phone, 2, "task.create", json!({
+        "projectId": "p1", "prompt": "do it headless", "agent": "claude", "permissionMode": "ask"
+    })).await;
+    assert_eq!(created["ok"], json!(true), "create: {created}");
+    assert_eq!(created["result"]["accepted"], json!(true));
+    assert!(created["result"]["taskId"].as_str().is_some());
+
+    let cancelled = headless_rpc(
+        &mut phone,
+        3,
+        "task.cancel",
+        json!({
+            "projectId": "p1", "taskId": "t1"
+        }),
+    )
+    .await;
+    assert_eq!(cancelled["ok"], json!(true), "cancel: {cancelled}");
+    assert_eq!(cancelled["result"]["status"], json!("cancelled"));
+
+    server.shutdown(&state);
+}
