@@ -149,7 +149,14 @@ impl ErrorDetail {
             reason: Some(String::new()),
         };
         match serde_json::to_value(&sample) {
-            Ok(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+            Ok(serde_json::Value::Object(map)) => {
+                let mut keys: Vec<String> = map.keys().cloned().collect();
+                // 已提交契约（envelope.schema.json）是排序后的规范形；serde_json
+                // 的键序受 workspace 内 preserve_order 特性统一影响（dbx-core 的
+                // bson 栈启用它），这里显式排序使词表与特性开关无关。
+                keys.sort();
+                keys
+            }
             _ => Vec::new(),
         }
     }

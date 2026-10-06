@@ -193,6 +193,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 }
             };
             executor.attach(&task_service);
+            let task_service_for_remote = Arc::clone(&task_service);
             let services = HostServices::with_tasks(
                 Arc::clone(&started.token),
                 log,
@@ -203,6 +204,59 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 terminal,
                 registry,
             );
+            // P8-03 刀四：remote-config.json enabled 时拉起无头远程 WS 服务
+            // （core `remote::server` + CliRemoteHandle 真实任务面）。默认关闭，
+            // 与桌面端同一份配置文件语义。
+            let remote_cfg_path = data_dir.join("remote-config.json");
+            let remote_enabled = std::fs::read_to_string(&remote_cfg_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                .and_then(|cfg| cfg.get("enabled").and_then(serde_json::Value::as_bool))
+                .unwrap_or(false);
+            if remote_enabled {
+                let remote_state = Arc::new(aeroric_core::remote::state::RemoteState::new());
+                let remote_handle: Arc<dyn aeroric_core::remote::services::RemoteHostHandle> =
+                    Arc::new(aeroric_host::remote_headless::CliRemoteHandle {
+                        service: task_service_for_remote,
+                        context: Arc::clone(&started.context),
+                        executor: Arc::clone(&executor),
+                    });
+                let cfg_port = std::fs::read_to_string(&remote_cfg_path)
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                    .and_then(|cfg| {
+                        cfg.get("port")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|p| p as u16)
+                    })
+                    .unwrap_or(aeroric_core::remote::config::DEFAULT_PORT);
+                let scope = aeroric_core::remote::state::required_listener_scope(&remote_state);
+                match aeroric_core::remote::server::start_with_scope(
+                    Arc::clone(&remote_state),
+                    remote_handle,
+                    cfg_port,
+                    scope,
+                )
+                .await
+                {
+                    Ok(server) => {
+                        eprintln!(
+                            "aeroric-cli serve: remote plane listening on {} ({})",
+                            server.port,
+                            if scope.network_exposed() {
+                                "network"
+                            } else {
+                                "loopback"
+                            }
+                        );
+                        // 存回句柄：随 serve 循环生命周期，退出时 drop 停机。
+                        remote_state.running.lock().await.replace(server);
+                    }
+                    Err(e) => {
+                        eprintln!("aeroric-cli serve: remote plane failed to start: {e}");
+                    }
+                }
+            }
             let running = serve_loop(started, services);
             eprintln!("aeroric-cli serve: listening (stderr diagnostics are redacted)");
             wait_for_signal().await;

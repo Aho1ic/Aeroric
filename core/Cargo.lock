@@ -99,6 +99,7 @@ version = "0.1.0"
 dependencies = [
  "aeroric-core",
  "aeroric-protocol",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "futures-util",

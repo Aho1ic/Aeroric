@@ -25,4 +25,5 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
+async-trait = "0.1"
 libc = "0.2" # 与 core 同口径：peer-UID 的 getpeereid/SO_PEERCRED

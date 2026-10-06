@@ -9,6 +9,7 @@ pub mod dispatcher;
 pub mod executor;
 pub mod families;
 pub mod notebook_services;
+pub mod remote_headless;
 pub mod services;
 pub mod startup;
 pub mod subscriptions;

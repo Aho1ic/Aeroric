@@ -600,9 +600,11 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         "38 channels plus the synthesised terminal.gap"
     );
     assert_eq!(topics["legacyChannels"], json!(38));
-    assert_eq!(topics["mapped"], json!(3));
-    assert_eq!(topics["pending"], json!(36));
-    assert_eq!(topics["reshapedPayloads"], json!(3));
+    // P8-02 刀六起 agent 两条 mapped（3→5）；P8-03 刀三b 起 remote.task_request
+    // 转 not-forwarded（pending 36→33）。
+    assert_eq!(topics["mapped"], json!(5));
+    assert_eq!(topics["pending"], json!(33));
+    assert_eq!(topics["reshapedPayloads"], json!(5));
     assert_eq!(topics["legacyDirectionUnproven"], json!(11));
     let rows = topics["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 39);
