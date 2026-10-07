@@ -13,6 +13,7 @@ pub mod maintenance_services;
 pub mod notebook_services;
 pub mod remote_headless;
 pub mod services;
+pub mod settings_services;
 pub mod startup;
 pub mod subscriptions;
 pub mod uds;

@@ -270,6 +270,8 @@ impl HostServices {
         crate::notebook_services::register_notebook_services(&mut set, Arc::clone(&context));
         // P8-04 刀三：用量族与降级账总是注册（无头也有这两块能力）；维护面按注入
         // 注册——没有端口＝没有这个能力（见 `HostWiring::maintenance`）。
+        // P8-05 切片九：设置面（读 / 整份写 / 单字段更新）。
+        crate::settings_services::register_settings_services(&mut set, Arc::clone(&context));
         // P8-05 切片七：文件服务第二批（格式化 / 本地历史 / 复制）。
         crate::file_services2::register_file_services_batch2(
             &mut set,
