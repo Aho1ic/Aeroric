@@ -234,11 +234,13 @@ pub(crate) fn register_dsh_session_with_preset<R: tauri::Runtime>(
 // `crate::session_dsh::…` 路径与可见性不变。两条发现入口收敛为 core 的
 // `newest_dsh_session_in_dir(dir, since_ms, claimed)`，claimed 的取值照原文。
 pub(crate) use aeroric_core::sessions::dsh::{
-    line_is_dsh_header, parse_dsh_session_lines, read_compressed_dsh_lines, read_dsh_session_header,
+    parse_dsh_session_lines, read_compressed_dsh_lines, read_dsh_session_header,
 };
-// 仅宿主测试（zstd 帧串接往返）引用的两个名字：cfg(test) 导入，避免 lib 目标 unused。
+// 仅宿主测试引用的名字：`cfg(test)` 导入，避免 lib 目标 unused。
+// （`line_is_dsh_header` 的生产消费者已随 P8-04 刀二迁入 core
+// `metrics::analytics`，宿主只剩本文件自己的用例还在用。）
 #[cfg(test)]
-pub(crate) use aeroric_core::sessions::dsh::read_dsh_session_lines;
+pub(crate) use aeroric_core::sessions::dsh::{line_is_dsh_header, read_dsh_session_lines};
 
 /// 在项目会话目录下寻找 `since_ms` 之后创建的最新会话(不做认领过滤)。
 pub(crate) fn newest_dsh_session_since(
