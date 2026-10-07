@@ -198,8 +198,9 @@ fn read_usage_statistics_reports_the_seeded_window() {
     let data = root.join("data");
     std::fs::create_dir_all(&home).unwrap();
     // 用本地时间构造"今天"的语料：统计窗口按本地日历日切分。
-    let now = chrono::Local::now();
-    let stamp = now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
+    // **时间戳必须带真实偏移**（`to_rfc3339`）：把本地墙钟文本硬贴上 `+00:00` 会在
+    // UTC+8 的机器上把记录算到"明天"，于是整窗落空——这一条被门禁当场逮住过。
+    let stamp = chrono::Local::now().to_rfc3339();
     write(
         &home.join(".claude/projects/demo/session.jsonl"),
         &format!(

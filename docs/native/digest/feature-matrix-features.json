@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-features.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "b0aa87f56e2b7345124fb9ae5c5d0d91e00178ac3c8f2511807283dff167a002",
+  "sourceSha256": "07ecb46a62c82d08b81a8dde48aef91e91d2da3a26eef6dfede523257a71a00b",
   "capBytes": 32768,
   "payload": {
     "features": [
@@ -404,13 +404,15 @@
         "positive_test": "tests/maintenance.rs fake clock 验时区/幂等/重试",
         "negative_test": "ad-hoc 重签后不得虚假显示永久授权；不得后台静默 tccutil reset",
         "status": "planned",
-        "core_state": "unstarted",
-        "native_state": "unstarted",
+        "core_state": "accepted",
+        "native_state": "accepted",
         "side_states": {
-          "C": "unstarted",
-          "N": "unstarted"
+          "C": "accepted",
+          "N": "accepted"
         },
-        "reviews": []
+        "reviews": [
+          "reviews/maintenance.md"
+        ]
       },
       {
         "id": "F20",

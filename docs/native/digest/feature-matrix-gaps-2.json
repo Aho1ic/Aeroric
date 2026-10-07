@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "b0aa87f56e2b7345124fb9ae5c5d0d91e00178ac3c8f2511807283dff167a002",
+  "sourceSha256": "07ecb46a62c82d08b81a8dde48aef91e91d2da3a26eef6dfede523257a71a00b",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -13,9 +13,9 @@
         "task_ids": "P2-02, P2-04, P8-04",
         "owner": "core:storage+maintenance",
         "test": "崩溃夹在步骤中间须对账为 interrupted 而非重新 spawn；无窗口时清理仍按 opt-in 运行",
-        "status": "open",
-        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。第三条（DSH 订阅）本轮从『待核』改为准事实：**它不是计时器，是渲染驱动的宿主订阅开关**，且判据依赖前端 `agentFamily` 派生表——家系表变了宿主事件流会整条关断，这一点比『缺一个计时器』更接近 G05 的权威外溢。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。",
-        "verified_on": "2026-09-29"
+        "status": "closed",
+        "retriage_note": "四项证据里两项行号漂移（useAppMaintenance 95→92、taskFlush 3→4）、一项载体文件已被删除。gap 保持 open 且 owner 不变（P8-04 仍欠计时器面），但 P8-04 动手时不必再去找那个 350ms。第三条（DSH 订阅）本轮从『待核』改为准事实：**它不是计时器，是渲染驱动的宿主订阅开关**，且判据依赖前端 `agentFamily` 派生表——家系表变了宿主事件流会整条关断，这一点比『缺一个计时器』更接近 G05 的权威外溢。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-07（P8-04 收口）：native 路径的计时器与策略已归 core——`core/crates/aeroric-core/src/maintenance/{cleanup,reports,notifications}.rs`＋`metrics/index.rs`（扫描循环自带 30s 兜底＋30s 重解析节流，事件驱动）。判据：「执行清理的时机与候选由 core 常量与纯函数给出（`CLEANUP_TICK_MS`＋`run_cleanup_once`＋`should_run_cleanup`），旧 React 客户端的 `setInterval` 在 cutover 前仍运行，其拆除属 P8-05 的具名工作」。证据：`native:check maintenance` 的清理/周报用例；legacy 拆除在 P8-05 Action 3（删除已迁移的权威 mutation/timer 接线）。",
+        "verified_on": "2026-10-07"
       },
       {
         "id": "G07",

@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-1.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "b0aa87f56e2b7345124fb9ae5c5d0d91e00178ac3c8f2511807283dff167a002",
+  "sourceSha256": "07ecb46a62c82d08b81a8dde48aef91e91d2da3a26eef6dfede523257a71a00b",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -39,9 +39,9 @@
         ],
         "owner": "core:sessions (event_watcher + usage_index) + core:notebook (sync daemon)",
         "test": "tests/runtime_lifecycle.rs：shutdown 两次安全；启动两次不重复 watcher",
-        "status": "open",
-        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。 【2026-09-28 二次回源】本条出现过一种新的失效形状：**同一条 gap 的 finding 与 evidence 被不同轮次各自编辑，漂移方向相反**——finding 的 `lib.rs:1189` 错而 evidence 的 :1181 对，evidence 的 :1047/:402 错而 finding 的 :1048/:404 对。任何一侧单独读都会得到错的站点。判据：**回源一条 gap 时必须同批重写 finding+evidence，然后对每个 file:line 当场 grep 复核**（本轮三个线程站点的 `is_cancelled` 命中数一并数了，都是 0）。 同日 2026-09-29 复核：见 evidence 追加段。",
-        "verified_on": "2026-09-30",
+        "status": "closed",
+        "retriage_note": "P3-01（accepted 2026-09-26）交付的是机制：`WatcherSupervisor` + 10 个任务作用域 watcher 站点已接、reader/退出监控/转录走 `spawn_unique` 仅记账（补记八十五）。三个 app-lifetime 轮询线程不在那 10 站里，所以这笔账的欠方是持有这些文件的 Task：event_watcher 与 usage_index 归 P3-04，notebook sync daemon 归 P7-06。 【2026-09-28 二次回源】本条出现过一种新的失效形状：**同一条 gap 的 finding 与 evidence 被不同轮次各自编辑，漂移方向相反**——finding 的 `lib.rs:1189` 错而 evidence 的 :1181 对，evidence 的 :1047/:402 错而 finding 的 :1048/:404 对。任何一侧单独读都会得到错的站点。判据：**回源一条 gap 时必须同批重写 finding+evidence，然后对每个 file:line 当场 grep 复核**（本轮三个线程站点的 `is_cancelled` 命中数一并数了，都是 0）。 同日 2026-09-29 复核：见 evidence 追加段。 2026-10-07（P8-04 收口）：第三半关闭——`usage_index.rs:1048` 的裸 `thread::spawn` 换成 core `metrics::index::UsageIndexWatcher`（持停止位＋JoinHandle；`stop()` 幂等；`Drop` 即停；30s 兜底睡眠改 250ms 分片以保证一轮内退出），宿主侧 `UsageIndexGuard` 存进 Tauri state、app 退出 drop 即停。判据：「core 侧不再有裸 `thread::spawn` 承载长驻循环」（三半：P3-04 WatcherSupervisor／P7-06 SyncDaemonHandle／P8-04 UsageIndexWatcher）。用例 `core/crates/aeroric-core/tests/usage_index.rs::the_usage_index_watcher_can_be_stopped_twice`。",
+        "verified_on": "2026-10-07",
         "note": " 【2026-10-03 P7-06 改派】app-lifetime 两站中的 notebook/sync/daemon.rs:404 一站已由 P7-06 闭合（core SyncDaemonHandle：停止位+join，宿主 guard 入 Tauri state，退出 drop 即停）；剩余 usage_index.rs:1048 一站改派 P8-04（usage 索引属其 Input）。"
       },
       {
