@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::settings::{detect_claude_version, get_agent_launch_spec, get_login_shell_path};
@@ -230,14 +230,14 @@ impl Drop for CodexRpcClient {
 // Public types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UsageSource<T> {
     Available { data: T },
     Unavailable { reason: String },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     pub claude: UsageSource<ClaudeUsageData>,
     pub codex: UsageSource<CodexUsageData>,
@@ -245,7 +245,7 @@ pub struct UsageSnapshot {
     pub fetched_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageWindow {
     #[serde(rename = "usedPercent")]
     pub used_percent: u8,
@@ -255,7 +255,7 @@ pub struct UsageWindow {
     pub reset_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeUsageData {
     #[serde(rename = "fiveHour")]
     pub five_hour: Option<UsageWindow>,
@@ -263,7 +263,7 @@ pub struct ClaudeUsageData {
     pub seven_day: Option<UsageWindow>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexUsageData {
     pub email: Option<String>,
     #[serde(rename = "planType")]

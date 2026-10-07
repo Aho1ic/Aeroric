@@ -304,11 +304,10 @@ pub(crate) struct CoreGateway {
     /// 保持连接打开而不是连完就丢：握手是每条连接一次的（`mark_authenticated` 拒绝
     /// 二次握手），所以下一切片把 domain 命令转发到宿主时复用这条连接，而不是每次
     /// 重新握一遍。
-    #[allow(
-        dead_code,
-        reason = "消费者是下一切片（domain 命令转发到宿主）；此刻它证明的是『External 这条路真的连上过』——`attach` 失败时 placement 仍是 External 但这里为 None"
-    )]
-    host: std::sync::Mutex<Option<HostSession>>,
+    /// 宿主连接。用 `tokio::sync::Mutex` 而不是 `std`：请求-应答是异步的，而
+    /// `std::sync::MutexGuard` **不能跨 `.await`**（那会让整个 command future 变成非 Send，
+    /// Tauri 直接编译不过）。这一条在切片六接线时被编译器当场逮住。
+    host: tokio::sync::Mutex<Option<HostSession>>,
     /// `External` 判决的依据（诊断与 UI 要用）。
     host_status: Option<String>,
 }
@@ -387,7 +386,7 @@ impl CoreGateway {
             data_dir,
             location_warning: status.clone(),
             placement: CorePlacement::External,
-            host: std::sync::Mutex::new(session),
+            host: tokio::sync::Mutex::new(session),
             host_status: status,
         }
     }
@@ -405,7 +404,7 @@ impl CoreGateway {
                 data_dir,
                 location_warning: None,
                 placement: CorePlacement::Embedded,
-                host: std::sync::Mutex::new(None),
+                host: tokio::sync::Mutex::new(None),
                 host_status: None,
             };
         }
@@ -430,7 +429,7 @@ impl CoreGateway {
                     data_dir,
                     location_warning,
                     placement: CorePlacement::Embedded,
-                    host: std::sync::Mutex::new(None),
+                    host: tokio::sync::Mutex::new(None),
                     host_status: None,
                 }
             }
@@ -460,7 +459,7 @@ impl CoreGateway {
                     data_dir,
                     location_warning: Some(reason),
                     placement: CorePlacement::Embedded,
-                    host: std::sync::Mutex::new(None),
+                    host: tokio::sync::Mutex::new(None),
                     host_status: None,
                 }
             }
@@ -483,7 +482,7 @@ impl CoreGateway {
                 data_dir: PathBuf::from("~"),
                 location_warning: Some(reason),
                 placement: CorePlacement::Embedded,
-                host: std::sync::Mutex::new(None),
+                host: tokio::sync::Mutex::new(None),
                 host_status: None,
             };
         };
@@ -525,9 +524,33 @@ impl CoreGateway {
     }
 
     /// 外部宿主连接（`External` 且连上时才有）。
-    #[allow(dead_code, reason = "同上：下一切片的 domain 转发从这里取连接")]
-    pub(crate) fn host(&self) -> &std::sync::Mutex<Option<HostSession>> {
+    pub(crate) fn host(&self) -> &tokio::sync::Mutex<Option<HostSession>> {
         &self.host
+    }
+
+    /// 测试专用：直接造一个带可用宿主连接的 `External` 网关。
+    ///
+    /// 走这条路而不是 `startup_with_probe`，是因为用例要**先**起脚本化宿主、**再**连它，
+    /// 而 `startup_with_probe` 的探针接口要在构造时同步完成连接（异步测试里做不到）。
+    /// 判决本身仍然来自 [`decide_placement`]，所以这里不引入第二套语义。
+    #[cfg(test)]
+    pub(crate) fn with_host_session_for_test(
+        paths: AppPaths,
+        client: crate::host_client::HostClient,
+    ) -> Self {
+        let data_dir = paths.data_dir().to_path_buf();
+        Self {
+            context: Arc::new(CoreContext::read_only(paths)),
+            mode: CoreMode::ReadOnlyBusy,
+            data_dir,
+            location_warning: None,
+            placement: CorePlacement::External,
+            host: tokio::sync::Mutex::new(Some(HostSession {
+                client,
+                spawned: false,
+            })),
+            host_status: Some("外部宿主：本进程已连上正在运行的 host（测试构造）".to_string()),
+        }
     }
 
     /// `External` 判决的来由（诊断/UI 文案）。
@@ -1635,7 +1658,7 @@ mod tests {
             "core 也必须独立拒绝：外置时我们连租约都没有"
         );
         assert!(
-            gateway.host().lock().unwrap().is_some(),
+            gateway.host().blocking_lock().is_some(),
             "连上了就应当留着连接"
         );
         assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1670,7 +1693,7 @@ mod tests {
 
         assert_eq!(gateway.placement(), CorePlacement::External);
         assert!(!gateway.is_writer());
-        assert!(gateway.host().lock().unwrap().is_none());
+        assert!(gateway.host().blocking_lock().is_none());
         let status = gateway.host_status().unwrap_or_default();
         assert!(status.contains("未能连上"), "{status}");
         assert!(status.contains("只读"), "连不上时要说清后果：{status}");
@@ -1774,7 +1797,7 @@ mod tests {
         );
         assert!(second.notice().is_some(), "the reason must be reportable");
 
-        let listed = startup_diagnostics::list_startup_degradations();
+        let listed = startup_diagnostics::local_degradations();
         assert!(
             listed.iter().any(|d| d.component == "storage-lease"),
             "the lease conflict must reach the start-up list the frontend reads"
@@ -1808,7 +1831,7 @@ mod tests {
             data_dir,
             location_warning: None,
             placement: CorePlacement::Embedded,
-            host: std::sync::Mutex::new(None),
+            host: tokio::sync::Mutex::new(None),
             host_status: None,
         };
         assert!(!gateway.is_writer());

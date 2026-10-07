@@ -272,7 +272,7 @@ fn release_id_text(id: &serde_json::Value) -> String {
 }
 
 /// 上线给 UI 的通知项（旧 `NotificationItem`：字段名逐个显式，别改成 snake_case）。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationItem {
     pub id: String,
     pub level: String,
@@ -293,7 +293,7 @@ pub struct NotificationItem {
     pub update_install_supported: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationResult {
     pub notifications: Vec<NotificationItem>,
     #[serde(rename = "unreadCount")]

@@ -32,7 +32,7 @@ pub struct TargetPlatform<'a> {
 }
 
 /// 准备完成的待装更新（旧 `ReleaseUpdatePrepareResult`，字段名逐个显式）。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseUpdatePrepareResult {
     #[serde(rename = "tagName")]
     pub tag_name: String,

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::SystemTime;
 
-#[derive(serde::Serialize, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
 pub struct SessionMetrics {
     pub tool_calls: u64,
     pub duration_secs: f64,
@@ -325,7 +325,8 @@ pub async fn read_session_metrics_at(session_path: &str) -> Result<SessionMetric
 
 // ── Local usage statistics ──────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UsageAgent {
     Codex,
     Claude,
@@ -345,7 +346,7 @@ pub struct UsageRequest {
     pub cache_read_tokens: u64,
 }
 
-#[derive(serde::Serialize, Clone, Default, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatisticsTotals {
     pub total_tokens: u64,
@@ -362,7 +363,7 @@ pub struct UsageStatisticsTotals {
     pub estimated_request_count: u64,
 }
 
-#[derive(serde::Serialize, Clone, Default, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatisticsDay {
     pub date: String,
@@ -372,7 +373,7 @@ pub struct UsageStatisticsDay {
     pub totals: UsageStatisticsTotals,
 }
 
-#[derive(serde::Serialize, Clone, Default, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug)]
 pub struct UsageStatisticsBreakdown {
     pub codex: UsageStatisticsTotals,
     pub claude: UsageStatisticsTotals,
@@ -382,7 +383,7 @@ pub struct UsageStatisticsBreakdown {
     pub omp: UsageStatisticsTotals,
 }
 
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatistics {
     pub range_days: u32,

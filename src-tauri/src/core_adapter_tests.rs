@@ -916,7 +916,7 @@ fn a_refused_lease_is_reported_and_names_the_directory_it_will_not_write() {
     std::fs::create_dir_all(&data_dir).expect("data dir");
 
     let lease_records = || -> Vec<crate::startup_diagnostics::StartupDegradation> {
-        crate::startup_diagnostics::list_startup_degradations()
+        crate::startup_diagnostics::local_degradations()
             .into_iter()
             .filter(|entry| entry.component == "storage-lease")
             .collect()

@@ -10,10 +10,10 @@
 
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 一条降级记录。字段名按 camelCase 上线（旧前端读 `component`/`reason`/`fallback`）。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupDegradation {
     /// 组件标识，UI 据此选文案（如 `dbx-state`、`local-router`）。

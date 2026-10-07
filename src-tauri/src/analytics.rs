@@ -15,14 +15,38 @@ pub(crate) fn paths() -> Result<MetricsPaths, String> {
 }
 
 #[tauri::command]
-pub async fn read_session_metrics(session_path: String) -> Result<metrics::SessionMetrics, String> {
-    metrics::read_session_metrics_at(&session_path).await
+pub async fn read_session_metrics(
+    app: tauri::AppHandle,
+    session_path: String,
+) -> Result<metrics::SessionMetrics, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.read_session_metrics",
+        serde_json::json!({ "sessionPath": session_path }),
+        async {
+            let result = metrics::read_session_metrics_at(&session_path).await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn read_usage_statistics(
+    app: tauri::AppHandle,
     range_days: u32,
     agent: String,
 ) -> Result<metrics::UsageStatistics, String> {
-    metrics::read_usage_statistics_async(paths()?, range_days, agent).await
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.read_usage_statistics",
+        serde_json::json!({ "rangeDays": range_days, "agent": agent }),
+        async {
+            let result = metrics::read_usage_statistics_async(paths()?, range_days, agent).await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }

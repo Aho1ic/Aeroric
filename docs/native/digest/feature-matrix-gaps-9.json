@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-9.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "07ecb46a62c82d08b81a8dde48aef91e91d2da3a26eef6dfede523257a71a00b",
+  "sourceSha256": "5cb1da25a3af228a439330052a9b555eb37f6e16bb1918caae87e0a32e66c1f4",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -67,6 +67,18 @@
         "status": "accepted",
         "accepted_by": "user",
         "accepted_note": "用户裁定(2026-10-02 Q96):UI 6/6 验收跳过,残余风险用户自担;测试资产全保留,重开路径=P10-02 或随时重跑 pnpm native:ui-test。三层根修与全部诊断已入库。"
+      },
+      {
+        "id": "G42",
+        "finding": "宿主 lib 的三条 remote 用例不是并行安全的：默认多线程跑 `cargo test --locked --lib` 稳定失败 `remote::lan_roundtrip_tests::{lan_pairing_rpc_push_and_revoke_roundtrip,m3_task_rpcs_input_respond_and_event_bridge,m5_event_watermark_and_readonly_rpc_guards}`，而 `--test-threads=1` 下 1231/0 全绿；`--skip` 掉本轮新增的两个测试模块仍然失败，且在 HEAD（P8-05 切片五提交 60899068）上同样复现，故不是本轮引入。根因方向：三条用例走 `tauri::test::mock_app()` 加真实数据根（`crate::storage::load_projects` 经 `aeroric_dir()`），彼此以及与真机应用的写入窗口相互干扰——断言拿到的是一次 `ok=false` 与不同的错误文案，不是超时。",
+        "evidence": "2026-10-07 实测：`cargo test --locked --lib` 默认线程 FAILED 1229 passed / 3 failed；`-- --test-threads=1` 1231 passed / 0 failed；`--skip host_dispatch_tests` 仍 3 failed（同期还多出一条 app_settings::agent_scripts 的并行失败）；`git checkout -- .` 回到 HEAD 60899068 后默认并行同样 3 failed。门禁 `src-tauri-lib-tests` 的 argv 自带 `--test-threads=1` 且注入 `AERORIC_HOME=<scratch>`，所以门禁不受影响。",
+        "requirement": "给这三条用例一个可注入的隔离根（与 G19/G20/G21 同一个根法：AERORIC_HOME 或测试 SLOT），或把它们显式声明为只允许串行并在文件头写明原因；退出判据是默认并行跑 --lib 也全绿，不接受把并行安全当成门禁串行所以无所谓。",
+        "task_ids": "P10-05",
+        "owner": "desktop-tests",
+        "test": "默认多线程 `cargo test --locked --lib` 全绿；负控＝去掉隔离根后该用例必须红（否则等于没隔离）",
+        "status": "open",
+        "verified_on": "2026-10-07",
+        "retriage_note": "P8-05 切片六在回归全量 --lib 时发现。先如实入台账：不阻塞门禁（门禁本来串行），出口挂 P10-05 的完整矩阵。"
       }
     ]
   }

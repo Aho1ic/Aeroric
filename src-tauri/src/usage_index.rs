@@ -54,5 +54,17 @@ pub async fn refresh_usage_statistics_index(app: AppHandle) -> Result<bool, Stri
         let _ = emitter.emit("usage-statistics-updated", payload.clone());
         let _ = emitter.emit(index_core::INDEX_TOPIC, payload);
     });
-    index_core::refresh_usage_statistics_index_at(paths, sink).await
+    // 走统一判决：external 时由宿主重建索引（不然两边各自写统计库）。
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.refresh_usage_statistics_index",
+        serde_json::Value::Null,
+        async {
+            index_core::refresh_usage_statistics_index_at(paths, sink)
+                .await
+                .map(serde_json::Value::Bool)
+        },
+    )
+    .await?;
+    Ok(value.as_bool().unwrap_or(false))
 }

@@ -27,15 +27,15 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 | 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_sessions_dir_for(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | read_usage_snapshot() (0 test items excluded) | `metrics/usage.rs` | command-layer; AppHandle/State; credential owner |
-| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | load_agent_usage_snapshot(), record_agent_config_usage() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer |
+| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | load_agent_usage_snapshot(), record_agent_config_usage() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State |
 | 10 | `src-tauri/src/usage_index.rs` | `core/crates/aeroric-core/usage_index/usage_index-root.rs` | 1 | Struct UsageIndexGuard, refresh_usage_statistics_index(), start() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
-| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | paths(), read_session_metrics(), read_usage_statistics() (0 test items excluded) | `metrics/analytics.rs` | command-layer |
+| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | paths(), read_session_metrics(), read_usage_statistics() (0 test items excluded) | `metrics/analytics.rs` | command-layer; AppHandle/State |
 <!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **4700**, command wrappers: **13**, test items excluded from the symbol lists: **70**
-- files carrying `AppHandle`/`State`: **6**
+- files: **11**, lines: **4773**, command wrappers: **13**, test items excluded from the symbol lists: **70**
+- files carrying `AppHandle`/`State`: **8**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
 - files with `cfg(windows)`: **0**; with `cfg(unix)`: **0**

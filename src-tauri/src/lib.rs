@@ -44,6 +44,9 @@ mod hooks;
 mod host_client;
 #[cfg(test)]
 mod host_client_tests;
+mod host_dispatch;
+#[cfg(test)]
+mod host_dispatch_tests;
 mod host_supervisor;
 mod local_history;
 mod local_router;

@@ -33,7 +33,24 @@ pub(crate) fn record(component: &str, reason: impl Into<String>, fallback: impl 
 }
 
 /// 前端启动后查一次；空数组表示一切正常。
-#[tauri::command]
-pub fn list_startup_degradations() -> Vec<StartupDegradation> {
+/// 本进程的降级账（同步读；命令的本地分支与用例都走它）。
+pub(crate) fn local_degradations() -> Vec<StartupDegradation> {
     log().list()
+}
+
+#[tauri::command]
+pub async fn list_startup_degradations(app: tauri::AppHandle) -> Vec<StartupDegradation> {
+    // 降级账是**本进程**的启动经历：external 时宿主那份才权威（它是真正跑业务的那个），
+    // 但它失败也不该让 UI 拿不到东西——本地那份仍然是有意义的（本进程自己的降级）。
+    match crate::host_dispatch::dispatch(
+        &app,
+        "diagnostics.list_startup_degradations",
+        serde_json::Value::Null,
+        async { serde_json::to_value(local_degradations()).map_err(|error| error.to_string()) },
+    )
+    .await
+    {
+        Ok(value) => serde_json::from_value(value).unwrap_or_else(|_| local_degradations()),
+        Err(_) => local_degradations(),
+    }
 }

@@ -747,45 +747,104 @@ fn launch_update_helper() -> Result<(String, bool), String> {
 // ── Tauri 命令（薄壳：全部委托 core 编排）───────────────────────────────────
 
 #[tauri::command]
-pub async fn get_notifications(force: Option<bool>) -> Result<NotificationResult, String> {
-    service().get_notifications(force.unwrap_or(false)).await
+pub async fn get_notifications(
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<NotificationResult, String> {
+    let force = force.unwrap_or(false);
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "maintenance.get_notifications",
+        serde_json::json!({ "force": force }),
+        async {
+            let result = service().get_notifications(force).await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn mark_notification_read(id: String) -> Result<(), String> {
-    service().mark_notification_read(&id)
+pub async fn mark_notification_read(app: AppHandle, id: String) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "maintenance.mark_notification_read",
+        serde_json::json!({ "id": id }),
+        async {
+            service()
+                .mark_notification_read(&id)
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn mark_all_notifications_read() -> Result<(), String> {
-    service().mark_all_notifications_read()
+pub async fn mark_all_notifications_read(app: AppHandle) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "maintenance.mark_all_notifications_read",
+        serde_json::Value::Null,
+        async {
+            service()
+                .mark_all_notifications_read()
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
 pub async fn get_pending_release_update(
+    app: AppHandle,
     tag_name: Option<String>,
 ) -> Result<Option<ReleaseUpdatePrepareResult>, String> {
-    let pending = service().pending_update();
-    let filtered = match (pending, tag_name) {
-        (Some(pending), Some(tag)) if pending.tag_name != tag => None,
-        (pending, _) => pending,
-    };
-    Ok(filtered.map(|pending| ReleaseUpdatePrepareResult {
-        tag_name: pending.tag_name,
-        asset_name: pending.asset_name,
-        installer_path: pending.installer_path,
-        ready_to_restart: true,
-        checksum_verified: pending.checksum_verified,
-        helper_status: pending.helper_status,
-        error: pending.error,
-    }))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "maintenance.get_pending_release_update",
+        serde_json::json!({ "tagName": tag_name }),
+        async {
+            let pending = service().pending_update();
+            let filtered = match (pending, tag_name.as_deref()) {
+                (Some(pending), Some(tag)) if pending.tag_name != tag => None,
+                (pending, _) => pending,
+            };
+            let mapped = filtered.map(|pending| ReleaseUpdatePrepareResult {
+                tag_name: pending.tag_name,
+                asset_name: pending.asset_name,
+                installer_path: pending.installer_path,
+                ready_to_restart: true,
+                checksum_verified: pending.checksum_verified,
+                helper_status: pending.helper_status,
+                error: pending.error,
+            });
+            serde_json::to_value(mapped).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    // 宿主与本地都回同一个形状：`null` 或一条待装记录。
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn prepare_release_update(
+    app: AppHandle,
     tag_name: String,
 ) -> Result<ReleaseUpdatePrepareResult, String> {
-    service().prepare_release_update(&tag_name).await
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "maintenance.prepare_release_update",
+        serde_json::json!({ "tagName": tag_name }),
+        async {
+            let result = service().prepare_release_update(&tag_name).await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 替换正在运行的 app。**只有持有 app 身份的 GUI 适配器能做**——这正是 Action 5
@@ -856,7 +915,7 @@ pub async fn install_release_update(
     app: AppHandle,
     tag_name: String,
 ) -> Result<ReleaseInstallResult, String> {
-    let prepared = prepare_release_update(tag_name).await?;
+    let prepared = prepare_release_update(app.clone(), tag_name).await?;
     restart_and_install_release_update(app, prepared.tag_name).await
 }
 

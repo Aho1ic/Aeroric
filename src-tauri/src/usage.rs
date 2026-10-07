@@ -9,9 +9,20 @@ pub use aeroric_core::metrics::usage::CodexRpcClient;
 
 #[tauri::command]
 pub async fn read_usage_snapshot(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::TaskManager>,
 ) -> Result<aeroric_core::metrics::UsageSnapshot, String> {
     // 克隆 Arc 给 core：懒启动/坏掉重来都在 core 里，宿主只保证句柄槽是同一个。
     let codex_rpc = std::sync::Arc::clone(&state.codex_rpc);
-    aeroric_core::metrics::read_usage_snapshot(codex_rpc).await
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.read_usage_snapshot",
+        serde_json::Value::Null,
+        async {
+            let snapshot = aeroric_core::metrics::read_usage_snapshot(codex_rpc).await?;
+            serde_json::to_value(snapshot).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }

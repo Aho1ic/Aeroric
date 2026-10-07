@@ -71,7 +71,7 @@ pub struct AgentUsageStore {
 }
 
 /// 前端拿到的那份快照:每个配置只暴露排序需要的三个数。
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUsageStats {
     /// 近 `window_days` 个日历日内的次数(排序主键)。
@@ -82,7 +82,7 @@ pub struct AgentUsageStats {
     pub last_used_at: i64,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUsageSnapshot {
     pub agents: BTreeMap<String, AgentUsageStats>,

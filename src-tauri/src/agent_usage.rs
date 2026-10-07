@@ -7,11 +7,37 @@
 use aeroric_core::metrics::{self, AgentUsageSnapshot};
 
 #[tauri::command]
-pub fn record_agent_config_usage(agent: String) -> Result<AgentUsageSnapshot, String> {
-    metrics::record_agent_config_usage_at(&crate::analytics::paths()?, &agent)
+pub async fn record_agent_config_usage(
+    app: tauri::AppHandle,
+    agent: String,
+) -> Result<AgentUsageSnapshot, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.record_agent_config_usage",
+        serde_json::json!({ "agent": agent }),
+        async {
+            let result =
+                metrics::record_agent_config_usage_at(&crate::analytics::paths()?, &agent)?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn load_agent_usage_snapshot() -> Result<AgentUsageSnapshot, String> {
-    metrics::load_agent_usage_snapshot_at(&crate::analytics::paths()?)
+pub async fn load_agent_usage_snapshot(
+    app: tauri::AppHandle,
+) -> Result<AgentUsageSnapshot, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "usage.load_agent_usage_snapshot",
+        serde_json::Value::Null,
+        async {
+            let result = metrics::load_agent_usage_snapshot_at(&crate::analytics::paths()?)?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
