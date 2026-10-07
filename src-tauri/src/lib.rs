@@ -41,6 +41,10 @@ mod fs;
 mod git;
 mod git_path_guard;
 mod hooks;
+mod host_client;
+#[cfg(test)]
+mod host_client_tests;
+mod host_supervisor;
 mod local_history;
 mod local_router;
 mod local_router_commands;
@@ -413,7 +417,7 @@ pub fn run() {
             // （ADR-021），所以第二实例从此以只读启动并如实告知；但**这不是写权移交**——任务表
             // 仍由 storage.rs 保存，没有任何 mutation 走 TaskService。失败不阻塞启动：
             // 装载不上就记一条启动降级，旧客户端照常跑。
-            crate::core_adapter::install_core_services(
+            let core_owns_business_plane = crate::core_adapter::install_core_services(
                 app.handle(),
                 &app.package_info().version.to_string(),
             );
@@ -431,14 +435,33 @@ pub fn run() {
             std::thread::spawn(|| {
                 let _ = crate::storage::compact_oversized_terminal_histories();
             });
-            // 启动 hook 事件文件 watcher
-            crate::event_watcher::start(app.handle().clone());
-            crate::usage_index::start(app.handle().clone());
-            crate::notebook::sync::daemon::start(app.handle().clone());
-            crate::local_router_commands::init(app.handle());
-            // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
-            crate::remote::install_terminal_history_resolver();
-            crate::remote::init(app.handle().clone());
+            // P8-05 Action 2 的互斥：业务面外置（已经有别的进程当宿主）时，这些后台服务
+            // **一个都不起**——两套 watcher 会双发事件、两套用量索引会同时写统计库、
+            // 两个 remote server 会抢同一个端口。判据是 `CorePlacement`，不是"租约拿没拿到"：
+            // 只有前者能表达"我本就不该是写者"。
+            if core_owns_business_plane {
+                // 启动 hook 事件文件 watcher
+                crate::event_watcher::start(app.handle().clone());
+                crate::usage_index::start(app.handle().clone());
+                crate::notebook::sync::daemon::start(app.handle().clone());
+                crate::local_router_commands::init(app.handle());
+                // 手机远程连接:按持久化配置决定是否自动拉起 WS 服务
+                crate::remote::install_terminal_history_resolver();
+                crate::remote::init(app.handle().clone());
+            } else {
+                crate::startup_diagnostics::record(
+                    "host-attached",
+                    "本进程未拥有业务面：watcher/用量索引/笔记调度/local router/remote 由外部宿主负责"
+                        .to_string(),
+                    app.handle()
+                        .state::<crate::core_adapter::CoreGateway>()
+                        .host_status()
+                        .unwrap_or("external host")
+                        .to_string(),
+                );
+                // 终端历史 resolver 是纯读侧（远程回放要用），外置时仍然装。
+                crate::remote::install_terminal_history_resolver();
+            }
             // P8-03 刀二：setup 完成，remote task.create/resume 的 ready 闸放行
             // （原 React startupReadyRef 语义的宿主化）。
             app.state::<std::sync::Arc<remote::RemoteState>>()

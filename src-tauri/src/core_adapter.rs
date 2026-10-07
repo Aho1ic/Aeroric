@@ -82,6 +82,151 @@ impl CoreMode {
     }
 }
 
+/// 业务面由**谁**拥有（Task P8-05 Action 2 的互斥选择）。
+///
+/// 这是比 [`CoreMode`] 更外一层的判断：`CoreMode` 说"本进程能不能写"，
+/// `CorePlacement` 说"业务面归谁"。两者必须**同时**成立才不会出现两个写者：
+/// `External` 时本进程连租约都不去取（取了就是第二个写者），`Embedded` 时才走
+/// `CoreMode` 那套。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CorePlacement {
+    /// 本进程拥有业务面：起 watcher / 用量索引 / 笔记调度 / local router，并按
+    /// [`CoreMode`] 决定能不能写。今天的产品路径就是这一档。
+    Embedded,
+    /// 另一个进程（host helper）拥有业务面：本进程只连它，**不取租约、不起任何后台
+    /// 服务**（Action 2："同进程不双启动 watcher、remote server、notebook scheduler、
+    /// local router"）。
+    External,
+}
+
+/// 外部宿主的可用形态。分成三档而不是一个 bool，因为"没有宿主但有 helper"与
+/// "没有宿主也没有 helper"对下一步的动作完全不同。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostAvailability {
+    /// socket 上有活人：连它。
+    Live,
+    /// 没有宿主，但有可启动的 helper：**本片仍走 Embedded**（打包落地前，helper 的
+    /// 存在不能成为"默认外置"的理由——`pnpm native:prepare-tauri-host` 还没进产品
+    /// 流程，而每一次启动都去 spawn 一个宿主是行为变更，不是接线）。
+    AbsentButHelperPresent,
+    /// 没有宿主也没有 helper：Embedded（今天的默认）。
+    Absent,
+}
+
+/// 判决要读的两件事：有没有活宿主、以及连不连得上。
+///
+/// 拆成端口是为了让"External 时不取租约""连不上就只读而不是自立"这两条**能在没有真
+/// 宿主的情况下断言**——它们正是最贵的那两个错误。
+pub(crate) trait PlacementProbe {
+    fn availability(&self, data_dir: &Path) -> HostAvailability;
+    /// 连宿主；`Ok((client, spawned))` 里 `spawned` 表示"这次是它被我们启动的"。
+    #[allow(clippy::type_complexity)]
+    fn attach(&self, data_dir: &Path) -> Result<(crate::host_client::HostClient, bool), String>;
+}
+
+/// 生产实现：探活 + 经 `HostSupervisor` 连接。
+///
+/// **本片不 spawn**（`without_spawning`）：打包尚未落地，而"每次启动都去起一个宿主"是
+/// 行为变更，不是接线。所以 `attach` 只在真有活宿主时成功，否则报错并由调用方如实只读。
+pub(crate) struct PlacementProbeImpl {
+    pub(crate) exe_dir: PathBuf,
+    pub(crate) generated_helper: Option<PathBuf>,
+    pub(crate) allow_spawn: bool,
+}
+
+impl Default for PlacementProbeImpl {
+    fn default() -> Self {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let generated_helper = std::env::var("AERORIC_HOST_HELPER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        Self {
+            exe_dir,
+            generated_helper,
+            allow_spawn: false,
+        }
+    }
+}
+
+impl PlacementProbe for PlacementProbeImpl {
+    fn availability(&self, data_dir: &Path) -> HostAvailability {
+        let socket = crate::host_client::host_socket_path(data_dir);
+        let live = crate::host_supervisor::LivenessProbe::is_live(
+            &crate::host_supervisor::UdsLivenessProbe,
+            &socket,
+        );
+        if live {
+            return HostAvailability::Live;
+        }
+        let helper = crate::host_supervisor::HostSupervisor::new(
+            self.exe_dir.clone(),
+            self.generated_helper.clone(),
+            Arc::new(crate::host_supervisor::UdsLivenessProbe),
+            Arc::new(crate::host_supervisor::CommandHelperSpawner),
+            Arc::new(crate::host_supervisor::PollingWaiter),
+        )
+        .resolve_helper();
+        match helper {
+            Ok(_) if self.allow_spawn => HostAvailability::AbsentButHelperPresent,
+            Ok(_) => HostAvailability::AbsentButHelperPresent,
+            Err(_) => HostAvailability::Absent,
+        }
+    }
+
+    fn attach(&self, data_dir: &Path) -> Result<(crate::host_client::HostClient, bool), String> {
+        let supervisor = crate::host_supervisor::HostSupervisor::new(
+            self.exe_dir.clone(),
+            self.generated_helper.clone(),
+            Arc::new(crate::host_supervisor::UdsLivenessProbe),
+            Arc::new(crate::host_supervisor::CommandHelperSpawner),
+            Arc::new(crate::host_supervisor::PollingWaiter),
+        );
+        let supervisor = if self.allow_spawn {
+            supervisor
+        } else {
+            supervisor.without_spawning()
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let outcome = runtime
+            .block_on(supervisor.attach_or_spawn(data_dir, "tauri"))
+            .map_err(|error| error.to_string())?
+            .into_parts();
+        match outcome {
+            crate::host_supervisor::SupervisorParts::Attached(client) => Ok((client, false)),
+            crate::host_supervisor::SupervisorParts::SpawnedAndAttached(client) => {
+                Ok((client, true))
+            }
+            crate::host_supervisor::SupervisorParts::NeedsCoordinatedRestart { detail } => {
+                Err(format!("需要协调重启：{detail}"))
+            }
+        }
+    }
+}
+
+/// 纯判决：只有"macOS 且已经有活宿主"才外置。
+///
+/// 保守是刻意的：`External` 会让本进程放弃写权与后台服务，这个方向的误判代价是
+/// **界面没有数据**（可观察、可回退）；反方向的误判代价是**两个写者**（不可观察、
+/// 会丢数据）。所以判据只认"已经在跑的宿主"，不认"理论上可以起一个"。
+pub(crate) fn decide_placement(handover_allowed: bool, host: HostAvailability) -> CorePlacement {
+    if !handover_allowed {
+        return CorePlacement::Embedded;
+    }
+    match host {
+        HostAvailability::Live => CorePlacement::External,
+        HostAvailability::AbsentButHelperPresent | HostAvailability::Absent => {
+            CorePlacement::Embedded
+        }
+    }
+}
+
 /// The lease attempt, reduced to what the mode decision needs. Keeping this separate from
 /// `LeaseError` is what lets the whole matrix be tested without creating a real directory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,13 +297,103 @@ pub(crate) struct CoreGateway {
     data_dir: PathBuf,
     /// One start-up notice core itself produced (a cloud-synced root, ADR-010 decision 1).
     location_warning: Option<String>,
+    /// 业务面归谁（P8-05 Action 2）。`External` 时本进程不取租约、不起后台服务。
+    placement: CorePlacement,
+    /// `External` 且连上了宿主的连接句柄；`None` 表示"外部可用但这次没连上"。
+    ///
+    /// 保持连接打开而不是连完就丢：握手是每条连接一次的（`mark_authenticated` 拒绝
+    /// 二次握手），所以下一切片把 domain 命令转发到宿主时复用这条连接，而不是每次
+    /// 重新握一遍。
+    #[allow(
+        dead_code,
+        reason = "消费者是下一切片（domain 命令转发到宿主）；此刻它证明的是『External 这条路真的连上过』——`attach` 失败时 placement 仍是 External 但这里为 None"
+    )]
+    host: std::sync::Mutex<Option<HostSession>>,
+    /// `External` 判决的依据（诊断与 UI 要用）。
+    host_status: Option<String>,
+}
+
+/// 外部宿主的会话：一条已认证的连接。放在 `Mutex` 里是因为 `CoreGateway` 在 managed
+/// state 里被共享，而 `HostClient` 需要 `&mut` 做请求-应答。
+#[allow(
+    dead_code,
+    reason = "同上：连接由下一切片消费；`spawned` 供 UI 区分『我起的』与『本来就在』"
+)]
+pub(crate) struct HostSession {
+    pub(crate) client: crate::host_client::HostClient,
+    pub(crate) spawned: bool,
 }
 
 impl CoreGateway {
     /// Takes the writer role where ADR-021 allows it and the lease is free; otherwise
     /// starts as a reader and records why.
     pub(crate) fn startup(paths: AppPaths, version: &str) -> Self {
+        Self::startup_with_probe(paths, version, &PlacementProbeImpl::default())
+    }
+
+    /// 与 [`CoreGateway::startup`] 同一条路，但探活可注入。
+    ///
+    /// 判决必须在**取租约之前**做完：`External` 的整个意思就是"别去取"
+    /// （取了就是第二个写者，而租约层只会让后到者只读，两件事的后果不同）。
+    pub(crate) fn startup_with_probe(
+        paths: AppPaths,
+        version: &str,
+        probe: &dyn PlacementProbe,
+    ) -> Self {
         let data_dir = paths.data_dir().to_path_buf();
+        let availability = probe.availability(&data_dir);
+        let placement = decide_placement(writer_handover_allowed(), availability);
+        if placement == CorePlacement::External {
+            return Self::external(paths, probe, availability);
+        }
+        Self::embedded(paths, version, &data_dir)
+    }
+
+    /// 外置：**不取租约、不起后台服务**，只连宿主；连不上就如实只读。
+    fn external(
+        paths: AppPaths,
+        probe: &dyn PlacementProbe,
+        availability: HostAvailability,
+    ) -> Self {
+        let data_dir = paths.data_dir().to_path_buf();
+        let mut session = None;
+        let status: Option<String>;
+        match probe.attach(&data_dir) {
+            Ok((client, spawned)) => {
+                session = Some(HostSession { client, spawned });
+                status = Some(if spawned {
+                    "外部宿主：本进程连上了刚启动的 host".to_string()
+                } else {
+                    "外部宿主：本进程已连上正在运行的 host".to_string()
+                });
+            }
+            Err(error) => {
+                // 连不上就只读：**不回退成内嵌写者**（那会变成两个写者）。
+                let reason = format!(
+                    "检测到外部宿主但未能连上（{error}）；本进程以只读运行，等宿主可用后重启"
+                );
+                startup_diagnostics::record(
+                    "host-attached",
+                    reason.clone(),
+                    data_dir.display().to_string(),
+                );
+                status = Some(reason);
+            }
+        }
+        let _ = availability;
+        Self {
+            context: Arc::new(CoreContext::read_only(paths)),
+            mode: CoreMode::ReadOnlyBusy,
+            data_dir,
+            location_warning: status.clone(),
+            placement: CorePlacement::External,
+            host: std::sync::Mutex::new(session),
+            host_status: status,
+        }
+    }
+
+    fn embedded(paths: AppPaths, version: &str, data_dir: &std::path::Path) -> Self {
+        let data_dir = data_dir.to_path_buf();
         if !writer_handover_allowed() {
             // No lease attempt at all: `CoreContext::read_only` touches nothing. The saver this
             // arm installs is the whole difference between "deferred" and "read-only": a host that
@@ -169,6 +404,9 @@ impl CoreGateway {
                 mode: CoreMode::HandoverDeferred,
                 data_dir,
                 location_warning: None,
+                placement: CorePlacement::Embedded,
+                host: std::sync::Mutex::new(None),
+                host_status: None,
             };
         }
 
@@ -191,6 +429,9 @@ impl CoreGateway {
                     mode: CoreMode::Writer,
                     data_dir,
                     location_warning,
+                    placement: CorePlacement::Embedded,
+                    host: std::sync::Mutex::new(None),
+                    host_status: None,
                 }
             }
             Err(error) => {
@@ -218,6 +459,9 @@ impl CoreGateway {
                     mode,
                     data_dir,
                     location_warning: Some(reason),
+                    placement: CorePlacement::Embedded,
+                    host: std::sync::Mutex::new(None),
+                    host_status: None,
                 }
             }
         }
@@ -238,6 +482,9 @@ impl CoreGateway {
                 mode: CoreMode::ReadOnlyLocation,
                 data_dir: PathBuf::from("~"),
                 location_warning: Some(reason),
+                placement: CorePlacement::Embedded,
+                host: std::sync::Mutex::new(None),
+                host_status: None,
             };
         };
         Self::startup(AppPaths::from_user_home(home), version)
@@ -257,12 +504,35 @@ impl CoreGateway {
         &self.data_dir
     }
 
-    #[allow(
-        dead_code,
-        reason = "UI 侧的只读横幅要等 Action 3；ADR-027 要求的『持续可见』就是它，先留类型不留调用"
-    )]
     pub(crate) fn mode(&self) -> CoreMode {
         self.mode
+    }
+
+    /// 业务面归谁（P8-05 Action 2）。`lib.rs` 走的是 [`CoreGateway::owns_business_plane`]；
+    /// 这个取值器给诊断与用例用。
+    #[allow(
+        dead_code,
+        reason = "产品路径读的是 owns_business_plane()；本取值器供诊断与用例"
+    )]
+    pub(crate) fn placement(&self) -> CorePlacement {
+        self.placement
+    }
+
+    /// 本进程是否拥有业务面。后台服务（watcher/用量索引/笔记调度/local router/remote）
+    /// 只在为真时启动。
+    pub(crate) fn owns_business_plane(&self) -> bool {
+        self.placement == CorePlacement::Embedded
+    }
+
+    /// 外部宿主连接（`External` 且连上时才有）。
+    #[allow(dead_code, reason = "同上：下一切片的 domain 转发从这里取连接")]
+    pub(crate) fn host(&self) -> &std::sync::Mutex<Option<HostSession>> {
+        &self.host
+    }
+
+    /// `External` 判决的来由（诊断/UI 文案）。
+    pub(crate) fn host_status(&self) -> Option<&str> {
+        self.host_status.as_deref()
     }
 
     #[allow(
@@ -703,13 +973,22 @@ impl<R: tauri::Runtime> LiveRuns for HostLiveness<R> {
 ///    read-only refusal, and — since ADR-033/035 — the observation channel: the managed
 ///    `TaskRuntimeObserver` decides and announces without ever writing, which is exactly why the
 ///    announcement handover and the store cutover can land separately.
-pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>, version: &str) {
+///
+/// 返回本进程是否拥有业务面，调用方据此决定起不起后台服务（P8-05 Action 2）。
+///
+/// 返回 bool 而不是让调用方去读 managed state，是为了让「忘了判」在类型上就不可能：
+/// 不起服务的那个分支必须在同一个表达式里写出来。
+pub(crate) fn install_core_services<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    version: &str,
+) -> bool {
     use aeroric_core::tasks::TaskExecutor;
     use tauri::Manager;
 
     let gateway = CoreGateway::at_startup(version);
     let context = gateway.context().clone();
     let mode = gateway.mode();
+    let owns_business_plane = gateway.owns_business_plane();
     app.manage(gateway);
 
     let mailbox = Arc::new(crate::legacy_task_executor::OutputSinkMailbox::new());
@@ -743,6 +1022,7 @@ pub(crate) fn install_core_services<R: tauri::Runtime>(app: &tauri::AppHandle<R>
             String::new(),
         ),
     }
+    owns_business_plane
 }
 
 /// The frozen nine spellings, written out rather than round-tripped through serde: a payload
@@ -1217,6 +1497,207 @@ mod tests {
         AppPaths::with_data_dir(&root, Some(&root.join("data")))
     }
 
+    /// P8-05 Action 2：判决矩阵。**只有"允许移交 + 已经有活宿主"才外置**。
+    #[test]
+    fn the_placement_matrix_only_goes_external_for_a_live_host_on_macos() {
+        assert_eq!(
+            decide_placement(true, HostAvailability::Live),
+            CorePlacement::External
+        );
+        // 没有活宿主就没有外置的理由——"理论上可以起一个"不算（那会让每次启动都变成
+        // 行为变更，而 helper 打包还没落地）。
+        assert_eq!(
+            decide_placement(true, HostAvailability::AbsentButHelperPresent),
+            CorePlacement::Embedded
+        );
+        assert_eq!(
+            decide_placement(true, HostAvailability::Absent),
+            CorePlacement::Embedded
+        );
+        // 未移交写权的平台（Windows/Linux）永远内嵌：外置是 macOS 的能力，
+        // 它没有"D 盘上的 host helper"这回事。
+        for host in [
+            HostAvailability::Live,
+            HostAvailability::AbsentButHelperPresent,
+            HostAvailability::Absent,
+        ] {
+            assert_eq!(decide_placement(false, host), CorePlacement::Embedded);
+        }
+    }
+
+    /// 探针端口：判决要问的两件事都能被替身喂进去。
+    struct FakePlacementProbe {
+        availability: HostAvailability,
+        attach: Result<bool, String>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl PlacementProbe for FakePlacementProbe {
+        fn availability(&self, _data_dir: &Path) -> HostAvailability {
+            self.availability
+        }
+
+        fn attach(
+            &self,
+            data_dir: &Path,
+        ) -> Result<(crate::host_client::HostClient, bool), String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match &self.attach {
+                // 真连一条：判决要的那个"连得上"必须真发生过，否则本用例只是在测替身。
+                Ok(spawned) => {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("runtime");
+                    let client = runtime
+                        .block_on(async {
+                            // 起一个只答握手的 UDS 服务端，然后连它。
+                            // 数据目录要自己建：`CoreGateway` 在 External 路径上**碰都不碰**
+                            // 盘（这也正是本用例要证明的事之一），所以这里没有别人的副作用可借。
+                            std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+                            let listener = tokio::net::UnixListener::bind(
+                                crate::host_client::host_socket_path(data_dir),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            std::fs::write(
+                                crate::host_client::host_token_path(data_dir),
+                                "t",
+                            )
+                            .map_err(|error| error.to_string())?;
+                            let handle = tokio::spawn(async move {
+                                if let Ok((stream, _)) = listener.accept().await {
+                                    let (read, mut write) = stream.into_split();
+                                    let mut reader =
+                                        tokio::io::BufReader::new(read);
+                                    let mut line = String::new();
+                                    use tokio::io::AsyncBufReadExt as _;
+                                    use tokio::io::AsyncWriteExt as _;
+                                    let _ = reader.read_line(&mut line).await;
+                                    let reply = aeroric_protocol::envelope::encode_line(
+                                        &aeroric_protocol::envelope::Frame::Success(
+                                            aeroric_protocol::envelope::Success {
+                                                v: aeroric_protocol::PROTOCOL_VERSION,
+                                                id: "h".to_string(),
+                                                ok: true,
+                                                result: serde_json::json!({ "clientId": "tauri", "capabilities": [] }),
+                                                extra: Default::default(),
+                                            },
+                                        ),
+                                    )
+                                    .expect("encode");
+                                    let _ = write.write_all(reply.as_bytes()).await;
+                                    let _ = write.flush().await;
+                                    // 保持连接开着直到客户端读走应答。
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                }
+                            });
+                            let client =
+                                crate::host_client::HostClient::connect(data_dir, "tauri").await;
+                            let _ = handle.await;
+                            client.map_err(|error| error.to_string())
+                        })?;
+                    Ok((client, *spawned))
+                }
+                Err(reason) => Err(reason.clone()),
+            }
+        }
+    }
+
+    /// 外置用例要真绑一个 UDS socket，而 macOS 的 `$TMPDIR` 逼近 `sun_path` 上限
+    /// （276 片案底）⇒ 这几条用 `/tmp` 短根，与 host harness 同约定。
+    fn short_root_paths(tag: &str) -> AppPaths {
+        let root = std::path::PathBuf::from("/tmp").join(format!(
+            "aeg-{tag}-{}-{}",
+            std::process::id(),
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        AppPaths::with_data_dir(&root, Some(&root.join("d")))
+    }
+
+    /// External 的整个意思就是**别去取租约**：取了就是第二个写者。
+    #[test]
+    fn external_placement_never_takes_the_lease() {
+        let paths = short_root_paths("place");
+        let data_dir = paths.data_dir().to_path_buf();
+        let probe = FakePlacementProbe {
+            availability: HostAvailability::Live,
+            attach: Ok(false),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let gateway = CoreGateway::startup_with_probe(paths, "test", &probe);
+
+        assert_eq!(gateway.placement(), CorePlacement::External);
+        assert!(!gateway.owns_business_plane(), "外置时不起任何后台服务");
+        assert!(!gateway.is_writer(), "外置时本进程不是写者");
+        assert!(
+            gateway.context().require_write().is_err(),
+            "core 也必须独立拒绝：外置时我们连租约都没有"
+        );
+        assert!(
+            gateway.host().lock().unwrap().is_some(),
+            "连上了就应当留着连接"
+        );
+        assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // 租约文件不该被这份 External 启动创建出来。
+        let lease_files = std::fs::read_dir(&data_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.contains("lock") || name.contains("lease"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert!(
+            lease_files.is_empty(),
+            "External 不该产生租约文件：{lease_files:?}"
+        );
+        std::fs::remove_dir_all(data_dir.parent().unwrap()).ok();
+    }
+
+    /// 外置但连不上：**只读 + 如实报告**，绝不回退成内嵌写者（那会变成两个写者）。
+    #[test]
+    fn a_failed_external_attach_stays_read_only_instead_of_falling_back() {
+        let paths = short_root_paths("fail");
+        let data_dir = paths.data_dir().to_path_buf();
+        let probe = FakePlacementProbe {
+            availability: HostAvailability::Live,
+            attach: Err("presented token does not match this host's data directory".to_string()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let gateway = CoreGateway::startup_with_probe(paths, "test", &probe);
+
+        assert_eq!(gateway.placement(), CorePlacement::External);
+        assert!(!gateway.is_writer());
+        assert!(gateway.host().lock().unwrap().is_none());
+        let status = gateway.host_status().unwrap_or_default();
+        assert!(status.contains("未能连上"), "{status}");
+        assert!(status.contains("只读"), "连不上时要说清后果：{status}");
+        std::fs::remove_dir_all(data_dir.parent().unwrap()).ok();
+    }
+
+    /// 没有活宿主 ⇒ 内嵌（今天的产品路径），而且**不去连**。
+    #[test]
+    fn an_absent_host_keeps_the_embedded_plane_and_skips_attaching() {
+        let paths = short_root_paths("embedded");
+        let data_dir = paths.data_dir().to_path_buf();
+        let probe = FakePlacementProbe {
+            availability: HostAvailability::Absent,
+            attach: Err("must not be called".to_string()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let gateway = CoreGateway::startup_with_probe(paths, "test", &probe);
+        assert_eq!(gateway.placement(), CorePlacement::Embedded);
+        assert!(gateway.owns_business_plane());
+        assert_eq!(
+            probe.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "内嵌路径不该去连宿主（没有活人可连，连一次只是浪费 2s 超时）"
+        );
+        std::fs::remove_dir_all(data_dir.parent().unwrap()).ok();
+    }
+
     #[test]
     fn the_mode_matrix_is_decidable_without_a_filesystem() {
         // ADR-021 × ADR-027 in one table. The first two rows are the load-bearing pair:
@@ -1326,6 +1807,9 @@ mod tests {
             mode: CoreMode::ReadOnlyBusy,
             data_dir,
             location_warning: None,
+            placement: CorePlacement::Embedded,
+            host: std::sync::Mutex::new(None),
+            host_status: None,
         };
         assert!(!gateway.is_writer());
         assert!(gateway.require_writer().is_err());

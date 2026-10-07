@@ -80,6 +80,10 @@ remote-protocol = { path = "../remote-protocol" }
 # (路径成分校验、原子写字节),写入权仍在下面的 storage.rs 手里:INV-03 不允许同一个数据
 # 目录里同时跑两套 writer,整体移交是 P2-05 的原子切换。
 aeroric-core = { path = "../core/crates/aeroric-core" }
+# 宿主线协议（帧编解码/信封/错误码）。P8-05 起 Tauri 也要与外部宿主通话，而**不能有第二份
+# 编解码器**：协议漂移的失败模式是"两边都绿、接不上"，所以宁可依赖同一个 crate。
+# 它只有 serde/serde_json/thiserror 三个依赖，锁文件只多一行。
+aeroric-protocol = { path = "../core/crates/aeroric-protocol" }
 url = "2"
 trash = "=5.2.6"
 font-kit = "=0.14.3"

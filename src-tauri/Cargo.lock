@@ -33,6 +33,7 @@ name = "aeroric"
 version = "1.4.9"
 dependencies = [
  "aeroric-core",
+ "aeroric-protocol",
  "async-trait",
  "axum",
  "base64 0.22.1",
