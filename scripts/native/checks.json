@@ -36,6 +36,7 @@
       "gate-runner-unit@skeleton": 36,
       "git-service-rust@git": 9,
       "git-ui-unit@git": 5,
+      "host-cutover-rust@cutover": 5,
       "host-lib-rust@host": 25,
       "host-lifecycle-rust@host": 4,
       "ide-ui-unit@ide": 5,
@@ -3000,6 +3001,40 @@
         }
       ],
       "$note": "P8-04（统计/通知/清理/周报/权限/更新）：五条 case 覆盖 core 规则、metrics 族（G21 落点＋G03 watcher）、宿主 UDS 服务面、Swift 客户端与七视图状态面、权限呈现策略。平台权限的真实 TCC 读数与 tccutil 实跑**不在门禁里**（会改本机授权状态）——按 §5.4 交用户手测并记档。"
+    },
+    "cutover": {
+      "cases": [
+        {
+          "name": "host-cutover-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "host_cutover"
+          ],
+          "parse": "rust",
+          "minCases": 5,
+          "$note": "P8-05 切片一：host_cutover 5 用例——同进程三方冷启动只有一个持有者且两个被拒（含理由与目录）、败者不改 epoch、三客户端各连同一 host（握手形状＋同一 socket＋同一 epoch）、未来 schema 停启动且文件一字不动、尸体 socket 可回收而活宿主不可抢。",
+          "timeoutMs": 900000
+        },
+        {
+          "name": "tauri-host-smoke",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/tauri-host-smoke.mjs"
+          ],
+          "$note": "P8-05 切片一（**跨进程**那一半，单测覆盖不到）：隔离 data-dir＋repo 外 cwd＋三方同时 `serve` → 恰好一个存活、败者以 3 退出并指名持有者、PID 全回收；doctor 报同一个 socket；未来 schema 不改文件；helper 缺失明确失败。**本 case 目前只覆盖 CLI 侧仲裁**——Tauri 侧 supervisor/helper 打包（prepare-tauri-host、host_supervisor_tests、host-owner.test.ts）尚未落地，落地后同批加进本模块。",
+          "timeoutMs": 600000
+        }
+      ],
+      "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁：切片一=宿主仲裁与切换前检查。**尚未进入本模块**：Action 1/2/3 的 external gateway（host_client/host_event_bridge/host_supervisor＋Embedded|External）、Action 4 的迁移演练脚本、Action 7–10 的 helper 打包与签名验证——它们随各自切片注册。"
     }
   },
   "plannedModules": {
