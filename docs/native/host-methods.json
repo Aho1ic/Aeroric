@@ -1,7 +1,7 @@
 {
   "$comment": "台账的 `rpc_method` 是**派生列**（`inventory.mjs` 按命令名推：<模块族>.<命令名>），所以它表达的是立项期的计划命名，不是宿主真实的注册名。本文件记录两者**实际不同**的那些行：左边是派生名（台账里的那一列），右边是 `aeroric-host` 真实 `set.register` 的名字，`evidence` 写清凭什么认定这两条是同一个能力。判据由 `scripts/native/host-coverage.mjs` 校验：派生名必须真的在台账里、真实名必须真的在宿主里、一个真实名只能被一条别名占用。",
-  "generated": "2026-10-07",
-  "task": "P8-05 切片八（覆盖率量表与命名对账）",
+  "generated": "2026-10-07（切片八首次生成；切片十追加 remote 8 条）",
+  "task": "P8-05 切片八/十（覆盖率量表与命名对账）",
   "rule": "只登记**同一个能力**在两侧的不同拼写。名字像但语义不同的（例如台账 project.save_projects 与宿主 project.open）不登记——那属于「还没实现」，不是「换了个名字」。",
   "aliases": [
     {
@@ -68,6 +68,52 @@
       "derived": "session.export_session_markdown",
       "actual": "session.export",
       "evidence": "宿主 session.export ↔ Tauri export_session_markdown（同一个 core sessions::export 的 md 写作器）。"
+    },
+    {
+      "derived": "remote.remote_server_status",
+      "actual": "remote.status",
+      "evidence": "宿主 remote_headless.rs 注册 remote.status，返回 core remote control::current_status；Tauri remote::remote_server_status 同一能力（P8-03 上收 remote state/control）。"
+    },
+    {
+      "derived": "remote.remote_server_start",
+      "actual": "remote.start",
+      "evidence": "宿主 remote.start 落盘 enabled/port 并调 core remote::state::ensure_started；对应 Tauri remote::remote_server_start。"
+    },
+    {
+      "derived": "remote.remote_server_stop",
+      "actual": "remote.stop",
+      "evidence": "宿主 remote.stop 落盘 enabled=false 并调 ensure_stopped；对应 Tauri remote::remote_server_stop。"
+    },
+    {
+      "derived": "remote.remote_select_lan_ip",
+      "actual": "remote.selectLanIp",
+      "evidence": "宿主 remote.selectLanIp 调 control::select_lan_ip；对应 Tauri remote::remote_select_lan_ip。"
+    },
+    {
+      "derived": "remote.remote_update_config",
+      "actual": "remote.updateConfig",
+      "evidence": "宿主 remote.updateConfig 调 control::update_config（relayUrl/relayToken/publicEndpoints）；对应 Tauri remote::remote_update_config。"
+    },
+    {
+      "derived": "remote.remote_create_invite",
+      "actual": "remote.createInvite",
+      "evidence": "宿主 remote.createInvite 调 control::create_invite_for_addresses；对应 Tauri remote::remote_create_invite。"
+    },
+    {
+      "derived": "remote.remote_list_devices",
+      "actual": "remote.listDevices",
+      "evidence": "宿主 remote.listDevices 调 control::list_devices；对应 Tauri remote::remote_list_devices。"
+    },
+    {
+      "derived": "remote.remote_revoke_device",
+      "actual": "remote.revokeDevice",
+      "evidence": "宿主 remote.revokeDevice 调 control::revoke_device；对应 Tauri remote::remote_revoke_device。"
+    }
+  ],
+  "known_not_aliased": [
+    {
+      "derived": "remote.remote_complete_task_request",
+      "reason": "P8-03 已把 React remote task request 中转拆除（G05）；宿主不再注册这种中转方法，不是漏别名。"
     }
   ]
 }

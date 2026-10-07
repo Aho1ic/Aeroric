@@ -1,7 +1,7 @@
 {
   "meta": {
-    "generated": "2026-10-01",
-    "task": "P4-01 accepted（grill [native-bootstrap] 真实调用，评审 reviews/native-bootstrap.md）",
+    "generated": "2026-10-07",
+    "task": "P8-05 in_progress（切片九/十已落地）",
     "authoritative_source": "本文 §进度总表 与本文件互为镜像：scripts/native/task-status.mjs::crossCheckTaskStatus 逐 Task 比对，任一侧改了另一侧没改就 FAIL（F3 修法 ①）",
     "rule": "status 只能取 pending|in_progress|blocked|accepted（与 §5.3 模板一致）；accepted_on 只在 accepted 时有值；review 是 docs/native/ 下的相对路径或 null。feature-matrix.json 的 core_state/native_state/side_states/reviews 四列由本文件派生，禁止手改（改了会被 inventory --check 判红）。",
     "side_phases": {
@@ -36,7 +36,8 @@
     "state_rank": "unstarted=0 blocked=0 in_progress=1 accepted=2；一条边的状态取其所依赖 Task 中最低秩者，同为 0 时优先记 blocked。",
     "counts": {
       "accepted": 41,
-      "pending": 10
+      "in_progress": 1,
+      "pending": 9
     }
   },
   "tasks": [
@@ -288,7 +289,7 @@
     },
     {
       "task": "P8-05",
-      "status": "pending",
+      "status": "in_progress",
       "accepted_on": null,
       "review": null
     },

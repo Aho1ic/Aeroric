@@ -603,10 +603,10 @@
       "positive_test": "tests/cli_headless.rs + scripts/native/smoke-headless.mjs",
       "negative_test": "cargo tree -p aeroric-cli 不含 Tauri；attach 异常路径必须恢复 termios",
       "status": "planned",
-      "core_state": "unstarted",
+      "core_state": "in_progress",
       "native_state": "not-declared",
       "side_states": {
-        "C": "unstarted"
+        "C": "in_progress"
       },
       "reviews": [
         "reviews/cli.md",
