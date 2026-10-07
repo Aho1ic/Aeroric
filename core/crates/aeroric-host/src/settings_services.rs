@@ -189,6 +189,83 @@ pub fn register_settings_services(set: &mut ServiceSet, context: Arc<CoreContext
             }),
         );
     }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "settings.update_dsh_reasoning_effort",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { settings_update_dsh_reasoning_effort(request, context) })
+            }),
+        );
+    }
+}
+
+/// `settings.update_dsh_reasoning_effort`：只接受内置 dsh 与 off/high/max；
+/// 值原样写进 `dsh_reasoning_efforts` 对象，其余键（含第三方键）不动。
+fn settings_update_dsh_reasoning_effort(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(agent) = request
+        .params
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: agent",
+        );
+    };
+    let Some(effort) = request
+        .params
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: effort",
+        );
+    };
+    if agent != "dsh" {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Reasoning effort is only configurable for the built-in DeepSeek Harness agent",
+        );
+    }
+    let effort = effort.trim().to_ascii_lowercase();
+    match effort.as_str() {
+        "off" | "high" | "max" => {}
+        _ => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                "Invalid DeepSeek Harness reasoning effort",
+            );
+        }
+    }
+    let mut fields: Map<String, Value> =
+        match aeroric_core::storage::settings::load_settings(&context) {
+            Ok(outcome) => outcome.found().unwrap_or_default(),
+            Err(error) => {
+                return failure(request.id.clone(), ErrorCode::IoError, &error.to_string())
+            }
+        };
+    let mut reasoning = fields
+        .remove("dsh_reasoning_efforts")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    reasoning.insert(agent, Value::String(effort));
+    fields.insert(
+        "dsh_reasoning_efforts".to_string(),
+        Value::Object(reasoning),
+    );
+    match aeroric_core::storage::settings::save_settings(&context, &fields) {
+        Ok(()) => ok(&request, Value::Object(fields)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
 }
 
 /// 表与注册点的对账：每条 `FIELD_UPDATES` 都必须有一个同名的显式注册点。

@@ -316,3 +316,53 @@ async fn every_field_update_row_has_a_registered_method() {
     }
     rig.cleanup();
 }
+
+#[tokio::test]
+async fn dsh_reasoning_effort_is_validated_and_keeps_other_keys() {
+    let mut rig = Rig::start("dsh-effort").await;
+    let (mut reader, mut writer) = rig.connect().await;
+    rig.handshake(&mut reader, &mut writer).await;
+    rig.write_settings(json!({
+        "third_party_key": { "kept": true },
+        "dsh_reasoning_efforts": { "other": "low" }
+    }));
+
+    let updated = call(
+        &mut reader,
+        &mut writer,
+        "1",
+        "settings.update_dsh_reasoning_effort",
+        json!({ "agent": "dsh", "effort": " MAX " }),
+    )
+    .await;
+    let body = result(&updated);
+    assert_eq!(body["dsh_reasoning_efforts"]["dsh"], json!("max"));
+    let on_disk = rig.read_settings();
+    assert_eq!(on_disk["third_party_key"], json!({ "kept": true }));
+    assert_eq!(on_disk["dsh_reasoning_efforts"]["other"], json!("low"));
+
+    let before_invalid = rig.read_settings();
+    let invalid = call(
+        &mut reader,
+        &mut writer,
+        "2",
+        "settings.update_dsh_reasoning_effort",
+        json!({ "agent": "dsh", "effort": "ultra" }),
+    )
+    .await;
+    assert!(matches!(invalid, Frame::Failure(_)), "{invalid:?}");
+    assert_eq!(rig.read_settings(), before_invalid);
+
+    let before_non_dsh = rig.read_settings();
+    let non_dsh = call(
+        &mut reader,
+        &mut writer,
+        "3",
+        "settings.update_dsh_reasoning_effort",
+        json!({ "agent": "codex", "effort": "high" }),
+    )
+    .await;
+    assert!(matches!(non_dsh, Frame::Failure(_)), "{non_dsh:?}");
+    assert_eq!(rig.read_settings(), before_non_dsh);
+    rig.cleanup();
+}
