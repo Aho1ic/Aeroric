@@ -453,15 +453,18 @@ final class ProtocolGoldenTests: XCTestCase {
     }
 
     /// ADR-007 in Swift: the bridge table must cover each of the 38 legacy channels
-    /// exactly once, and an undecided row must not look decided.
+    /// exactly once, and an undecided row must not look decided. `events[]` 里以 v1
+    /// 主题名直接发出的字面量（P8-03 刀六起的双发接线）不属于"旧通道"，不参与这条
+    /// 覆盖判据——与 `aeroric-protocol` 的 `export-schema` 同一口径（P8-04 刀三）。
     func testEventTopicTableBridgesEveryLegacyChannel() throws {
         let topics = try document("event-topics.schema.json")
         let rows = topics["rows"]?.arrayValue ?? []
         XCTAssertEqual(rows.count, 39)
-        // P8-02 刀六 agent 两条＋P8-03 刀六 remote 四条 mapped（3→9）；
-        // remote.task_request not-forwarded（pending 36→29）。
-        XCTAssertEqual(number(topics["mapped"]), 9)
-        XCTAssertEqual(number(topics["pending"]), 29)
+        // P8-02 刀六 agent 两条＋P8-03 刀六 remote 四条 mapped（3→9）
+        // ＋P8-04 刀二/刀三两条（usage.statistics_updated / weekly.report_progress，9→11）；
+        // remote.task_request not-forwarded（pending 36→29→27）。
+        XCTAssertEqual(number(topics["mapped"]), 11)
+        XCTAssertEqual(number(topics["pending"]), 27)
         var claimed: [String: Int] = [:]
         for row in rows {
             let fields = row.fields
@@ -480,8 +483,10 @@ final class ProtocolGoldenTests: XCTestCase {
             }
         }
         XCTAssertEqual(claimed.count, 38)
+        let topicNames = Set(rows.compactMap { $0.fields["topic"]?.stringValue })
         for case let .object(fields) in try document("events.schema.json")["events"]?.arrayValue ?? [] {
             guard let name = fields["name"]?.stringValue else { continue }
+            if topicNames.contains(name) { continue }
             XCTAssertEqual(claimed[name], 1, "\(name) must be claimed by exactly one topic")
         }
     }
@@ -490,7 +495,8 @@ final class ProtocolGoldenTests: XCTestCase {
         let events = try document("events.schema.json")
         let rows = events["events"]?.arrayValue ?? []
         XCTAssertEqual(number(events["count"]), rows.count)
-        XCTAssertEqual(rows.count, 38)
+        // P8-03 刀六两条 v1 字面量＋P8-04 刀三一条（`weekly.report_progress`）：38→41。
+        XCTAssertEqual(rows.count, 41)
         let names = rows.compactMap { $0.fields["name"]?.stringValue }
         XCTAssertEqual(Set(names).count, names.count)
         XCTAssertTrue(names.contains("task-status"))
