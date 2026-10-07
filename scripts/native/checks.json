@@ -31,6 +31,7 @@
       "extensions-ui-unit@extensions": 5,
       "extraction-unit@skeleton": 19,
       "file-history-rust@editor": 7,
+      "file-services-batch2-rust@cutover": 4,
       "files-core-rust@files": 13,
       "files-ui-unit@files": 4,
       "gate-runner-unit@skeleton": 36,
@@ -3134,10 +3135,29 @@
           "argv": [
             "node",
             "scripts/native/host-coverage.mjs",
-            "--floor=17"
+            "--floor=22"
           ],
-          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 17/641（2.7%）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／platforms 62／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法后把 17 改大。",
+          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 22/641（3.4%；切片七补齐 files 格式化/本地历史/复制五条）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／platforms 62／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法后把 17 改大。",
           "timeoutMs": 300000
+        },
+        {
+          "name": "file-services-batch2-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "file_services_batch2"
+          ],
+          "parse": "rust",
+          "minCases": 4,
+          "$note": "P8-05 切片七：文件服务第二批 4 用例——五条方法都在集合里且**只认 projectId ＋ 相对路径**（绝对路径/`..` 被拒、未知项目是 NotFound 不是空结果）；本地历史列/读/恢复往返，且**恢复前有兜底快照**（恢复可撤回）；复制**拒绝覆盖**且源与目标都不得越出项目根；格式化失败时原文一字不动。",
+          "timeoutMs": 900000
         }
       ],
       "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁。切片一=宿主仲裁与切换前检查；切片三=external gateway（客户端/监督层/Embedded|External 判决）；切片四=helper 打包脚本；切片五=迁移演练（合成数据）。**刻意不在门禁里的两条**：①打包后的 bundle 取证（`AERORIC_TAURI_BUNDLE=1 node scripts/native/tauri-host-smoke.mjs`）——它要先跑 `pnpm tauri build`（~5 分钟），而 G39 之后本仓**没有 opt-in 通道**（`check-runner.test.mjs` 钉着『任何 case 再挂 optInEnv 即门禁失牙』），所以它是**手动/发布前**步骤，证据记在 `docs/native/migration-rehearsal.md` §3 与计划补记里；②domain 命令转发覆盖率与 Action 5 的真实数据演练（后者需用户同意）。"

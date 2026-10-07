@@ -1,21 +1,10 @@
 {
   "shard": "feature-matrix-gaps-9.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "5cb1da25a3af228a439330052a9b555eb37f6e16bb1918caae87e0a32e66c1f4",
+  "sourceSha256": "60219f830a411727ad811ae76aae6c94289839b60ab02223e15a0346ddd74344",
   "capBytes": 32768,
   "payload": {
     "gaps": [
-      {
-        "id": "G37",
-        "status": "open",
-        "decision_item": 26,
-        "task_ids": "P10-05",
-        "finding": "**计划自身的续跑完整性没有任何仓内仪器**：`MIGRATION_PLAN.md` 每轮都在声明「N 条记录（93…X 连续）」「ladder 严格递减」「答题纸项号 ↔ 台账 `decision_item` 对得上」，但 `grep -ln MIGRATION_PLAN scripts/native/*.mjs` 显示仓内只有三类代码读它——`task-status.mjs`（`### Task P…-…` 标题集合 ＋ §进度总表 行 ⇄ carrier 交叉校验）与 `inventory.mjs`（gap 的 owner/`task_ids`/空 owner 等台账判据），**没有一处检查记录序号连续性、ladder 单调递减、答题纸项号与 `decision_item` 的双向绑定、或加粗/反引号配对**。今天这四项只由三个**放在 `/tmp` 的临时脚本**测过（`/tmp` 重启即清空），所以本文件里那些\"连续/严格递减/0 不符\"的断言在最坏情况下会变成**无从复述也无法复核的口号**——而这份文档是整个迁移唯一的暂停-续跑载体。这与 `G22`／`G23`／`G26` 同族（指令面与工件在断言没有仪器的东西），区别在于这次的断言对象是**计划自己的完整性**。",
-        "requirement": "P10-05 出口时决定并落地（**属门禁面扩张，须用户点头**）：在 `scripts/native/` 加一台 `plan-integrity` 仪器（kind=test 的 case，归 `skeleton` 模块）至少核对四件事——① `【执行状态】补记N` 序列无缺号无重号；② 「上一轮口径——第N次更新」阶梯严格递减且与续跑行编号差一；③ 每条 `decision_item` 都是答题纸真实存在的项号、且**未带该字段的 open gap 必须出现在\"Task 债\"白名单里**（双向，防第 15／16／17／18 项那类错列）；④ 加粗与反引号奇偶（**反引号那条必须先处理三反引号围栏**，否则会把围栏当异常——今天朴素计数报 27 行、加围栏状态机后真值只有 3 行）。配 ≥4 条负例（缺号／阶梯跳号／绑定指向不存在的项／围栏误判）。**过渡要求（不需要新 case）**：在决定之前，本文不再引用任何 `/tmp` 脚本作为证据，改为把**算法**写进文档，任何会话都能照着重建。",
-        "evidence": "2026-09-29 实测：仓内读取面＝`grep -ln \"MIGRATION_PLAN\" scripts/native/*.mjs` ⇒ `build/dev/generate/ui-test/check-runner.test/inventory/task-status(+各自 .test)`，其中真正解析计划正文的只有 `task-status.mjs:315`（Task 标题）、`:432`（进度总表文本）与 `inventory.mjs` 的台账判据；`grep -n \"补记\\|ladder\\|【执行状态】\" scripts/native/*.mjs` 的命中全在注释与测试夹具里，**没有断言**。四项读数（记录序号连续、ladder 差一、绑定不符数、加粗/反引号奇偶）当天全部由 `/tmp` 临时脚本得出＝130 条 93…222 连续／ladder 头＝续跑行号−1 且 0 断裂／绑定 不符=0／加粗异常 22 行＋反引号（围栏外）3 行且全为历史行；分母随登记增长，故不在此固化，复算口径见 requirement 里的四条算法。 **2026-09-29 本条立刻有了第一个具体受害者**：全量普查本文的 `path:line` 引用后发现，`### Task P2-05` 小节里第 五十七次补记 那条\"下一轮从这里接\"仍写着改 `src/taskPersistence.ts:83`，而该文件**早已随 §12 接线删除**（后继 `src/taskIntentQueue.ts` 的文档注释第 1 条就是\"不做 350 ms 快照合并\"），同一句里等的 **Q67 也早已定案**（`docs/native/reviews/tauri-adapter.md` §8＝:265-267：ADR-022 决策 2 把读-改-写归给 `TaskService`）。**这就是\"计划自身的完整性\"缺仪器的代价**：一条历史 hand-off 指针烂在已 accepted 的 Task 小节里，下一轮会照着去找一个不存在的文件、并继续等一个已经有答案的问题。另得出一条分区判据：**历史块不只住在\"执行进度标注\"区，Task 小节内部也有带日期标题的 `第N次补记（YYYY-MM-DD…）` 块**，所以任何\"当前态 vs 历史\"的判据必须按**日期标题**识别，不能按所在小节或行号区间——我第一版就是按区间划的，把这条历史句误判成了现行指令。",
-        "verified_on": "2026-09-29",
-        "retriage_note": "补记二百二十三 登记；owner 记 P10-05（矩阵补全）。登记前先按 补记二百二十一 的教训 grep 过本文：`G31`（评审七字段结构）与 `G26`（§5.1 工件新鲜度）都是**别的对象**，没有一条覆盖\"计划自身的记录/阶梯/绑定完整性\"，所以这不是重复发现。 同日追加：本条由一次本文 `path:line` 全量普查兑现出第一个具体缺陷（P2-05 小节里的已删文件指针）。"
-      },
       {
         "id": "G38",
         "status": "open",
@@ -79,6 +68,18 @@
         "status": "open",
         "verified_on": "2026-10-07",
         "retriage_note": "P8-05 切片六在回归全量 --lib 时发现。先如实入台账：不阻塞门禁（门禁本来串行），出口挂 P10-05 的完整矩阵。"
+      },
+      {
+        "id": "G43",
+        "finding": "search 家族有两份实现，而宿主一条都不服务。`src-tauri/src/search.rs` 1884 行自成一系（根感知的 `parse_rg_json_lines(root, stdout, limit)`、`build_rg_search_args`、`structured_search_for_root`、`fallback_search`、`collect_replace_preview_*`、remote 变体四条，类型也自带一套）；`core/crates/aeroric-core/src/files/search.rs` 229 行是另一版（无 root 参数的 `parse_rg_json_lines(stdout, limit)`、`replace_preview`、`apply_replacements`），其中解析器只被 core 自己的测试引用。宿主服务面只用到 core 的 replace 两条（`files.replace_preview`/`files.apply_replacements`）；`files.search_text`/`files.search_structured`/`files.list_project_files`/`files.search_project_files` 与四条 `remote_*` 至今没有宿主实现，台账却把它们判给 `core=files::search`。两份解析器语义不同（一边带 root 参数），所以这不是重复代码那么简单，而是同一个能力有两个真相。",
+        "evidence": "2026-10-07 实测：`wc -l src-tauri/src/search.rs`＝1884；`core/crates/aeroric-core/src/files/search.rs`＝229；`grep -rn aeroric_core src-tauri/src/search.rs` 命中 0（该模块完全没接 core）；`grep -rn search::parse_rg_json_lines` 仅命中 core 自己的 tests/files.rs；`node scripts/native/host-coverage.mjs` 报 files 族 16 条台账方法缺宿主实现。",
+        "requirement": "把 search 家族整体上收 core（根感知解析、rg 参数构造、结构化查询、fallback、replace 预览收集、remote 变体），宿主注册对应方法，Tauri 侧改薄壳并接 host_dispatch；退出判据＝host-coverage 里 files 族归零，且全仓 `fn parse_rg_json_lines` 只剩一处。",
+        "task_ids": "P8-05",
+        "owner": "core:files",
+        "test": "host-coverage files 族缺失为 0；全仓 `fn parse_rg_json_lines` 只有一处；search 行为用例在 core 侧（rg JSON 语料＋root 归属＋截断＋fallback）",
+        "status": "open",
+        "verified_on": "2026-10-07",
+        "retriage_note": "P8-05 切片七在按覆盖率清单补宿主服务时发现：files 族缺口里有一半不是没写，而是写了两遍且宿主那份不在 core。"
       }
     ]
   }

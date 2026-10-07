@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;
 pub mod families;
+pub mod file_services2;
 pub mod maintenance_services;
 pub mod notebook_services;
 pub mod remote_headless;

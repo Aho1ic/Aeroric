@@ -1088,6 +1088,18 @@
       "status": "open",
       "verified_on": "2026-10-07",
       "retriage_note": "P8-05 切片六在回归全量 --lib 时发现。先如实入台账：不阻塞门禁（门禁本来串行），出口挂 P10-05 的完整矩阵。"
+    },
+    {
+      "id": "G43",
+      "finding": "search 家族有两份实现，而宿主一条都不服务。`src-tauri/src/search.rs` 1884 行自成一系（根感知的 `parse_rg_json_lines(root, stdout, limit)`、`build_rg_search_args`、`structured_search_for_root`、`fallback_search`、`collect_replace_preview_*`、remote 变体四条，类型也自带一套）；`core/crates/aeroric-core/src/files/search.rs` 229 行是另一版（无 root 参数的 `parse_rg_json_lines(stdout, limit)`、`replace_preview`、`apply_replacements`），其中解析器只被 core 自己的测试引用。宿主服务面只用到 core 的 replace 两条（`files.replace_preview`/`files.apply_replacements`）；`files.search_text`/`files.search_structured`/`files.list_project_files`/`files.search_project_files` 与四条 `remote_*` 至今没有宿主实现，台账却把它们判给 `core=files::search`。两份解析器语义不同（一边带 root 参数），所以这不是重复代码那么简单，而是同一个能力有两个真相。",
+      "evidence": "2026-10-07 实测：`wc -l src-tauri/src/search.rs`＝1884；`core/crates/aeroric-core/src/files/search.rs`＝229；`grep -rn aeroric_core src-tauri/src/search.rs` 命中 0（该模块完全没接 core）；`grep -rn search::parse_rg_json_lines` 仅命中 core 自己的 tests/files.rs；`node scripts/native/host-coverage.mjs` 报 files 族 16 条台账方法缺宿主实现。",
+      "requirement": "把 search 家族整体上收 core（根感知解析、rg 参数构造、结构化查询、fallback、replace 预览收集、remote 变体），宿主注册对应方法，Tauri 侧改薄壳并接 host_dispatch；退出判据＝host-coverage 里 files 族归零，且全仓 `fn parse_rg_json_lines` 只剩一处。",
+      "task_ids": "P8-05",
+      "owner": "core:files",
+      "test": "host-coverage files 族缺失为 0；全仓 `fn parse_rg_json_lines` 只有一处；search 行为用例在 core 侧（rg JSON 语料＋root 归属＋截断＋fallback）",
+      "status": "open",
+      "verified_on": "2026-10-07",
+      "retriage_note": "P8-05 切片七在按覆盖率清单补宿主服务时发现：files 族缺口里有一半不是没写，而是写了两遍且宿主那份不在 core。"
     }
   ]
 }
