@@ -3135,9 +3135,9 @@
           "argv": [
             "node",
             "scripts/native/host-coverage.mjs",
-            "--floor=22"
+            "--floor=35"
           ],
-          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 22/641（3.4%；切片七补齐 files 格式化/本地历史/复制五条）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／platforms 62／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法后把 17 改大。",
+          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 35/641（5.5%：切片七补齐 files 格式化/本地历史/复制五条＝22，切片八把 13 条台账方法与宿主实名对齐——files 5／task 6／session 2。**对齐依据是宿主注册名与已发布客户端（Swift FilesClient）实际调用的名字**，不是按字符串相似度猜的）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／platforms 62／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法或对齐名字后把它改大。",
           "timeoutMs": 300000
         },
         {

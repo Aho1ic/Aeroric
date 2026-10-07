@@ -38,6 +38,30 @@ function hostMethods() {
   return methods;
 }
 
+/** 命名对账表：台账派生名 ↔ 宿主真实名（`docs/native/host-methods.json`）。
+ *
+ * 台账的 `rpc_method` 是**派生列**（`inventory.mjs` 按命令名推），所以它记的是立项期的
+ * 计划命名；宿主实现选了别的拼写，两者只在这张表里对上。三条校验：派生名必须在台账里、
+ * 真实名必须在宿主里、一个真实名只能被一条别名占用（否则覆盖率会重复计数）。 */
+function aliasTable(ledgerMethods) {
+  const file = path.join(repoRoot, "docs/native", "host-methods.json");
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    return { aliases: [], problems: [`cannot read docs/native/host-methods.json: ${error.message}`] };
+  }
+  const problems = [];
+  const seen = new Map();
+  for (const row of parsed.aliases ?? []) {
+    if (!ledgerMethods.has(row.derived)) problems.push(`alias source absent from the ledger: ${row.derived}`);
+    if (seen.has(row.actual)) problems.push(`${row.actual} claimed by both ${seen.get(row.actual)} and ${row.derived}`);
+    seen.set(row.actual, row.derived);
+    if (!String(row.evidence ?? "").trim()) problems.push(`${row.derived}: alias without evidence`);
+  }
+  return { aliases: parsed.aliases ?? [], problems };
+}
+
 /** Tauri 侧的**转发调用点**：`host_dispatch::dispatch(&app, "<method>", …)`。
  *
  * 唯一真相源是调用点本身（不是一张另抄的表）：有调用点的方法才会在 external 模式下走
@@ -86,8 +110,16 @@ function main() {
     byMethod.get(row.method).push(row);
   }
 
-  const covered = [...byMethod.keys()].filter((method) => host.has(method)).sort();
-  const missing = [...byMethod.keys()].filter((method) => !host.has(method)).sort();
+  const { aliases, problems: aliasProblems } = aliasTable(new Set(byMethod.keys()));
+  const aliasFor = new Map(aliases.map((row) => [row.derived, row.actual]));
+  const isCovered = (method) => {
+    if (host.has(method)) return true;
+    const actual = aliasFor.get(method);
+    return Boolean(actual && host.has(actual));
+  };
+  const covered = [...byMethod.keys()].filter(isCovered).sort();
+  const missing = [...byMethod.keys()].filter((method) => !isCovered(method)).sort();
+  const brokenAliases = aliases.filter((row) => !host.has(row.actual));
   const total = byMethod.size;
   const percent = total === 0 ? 100 : (covered.length / total) * 100;
 
@@ -95,7 +127,14 @@ function main() {
     `host-coverage: ${covered.length}/${total} rpc methods served by aeroric-host (${percent.toFixed(1)}%)`,
   );
 
+  for (const problem of aliasProblems) console.error(`host-coverage: ${problem}`);
+  for (const row of brokenAliases) {
+    console.error(`host-coverage: alias target is not registered by the host: ${row.derived} -> ${row.actual}`);
+  }
+  if (aliasProblems.length || brokenAliases.length) process.exit(1);
+
   if (!quiet) {
+    console.log(`  命名对账: ${aliases.length} 条别名（台账派生名 ↔ 宿主真实名，逐条带证据）`);
     // 缺口按模块聚合：一个模块里"差多少条"比一整张 600 行的清单更能看出下一步该做谁。
     const gaps = new Map();
     for (const method of missing) {
