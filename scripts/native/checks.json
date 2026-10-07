@@ -3098,9 +3098,18 @@
           ],
           "$note": "P8-05 切片四：脚本在显式三元组下可运行并报出 source/target 两条路径（真构建与架构核对见 `pnpm native:prepare-tauri-host` 的手跑记录：arm64 校验通过、28 597 776 B、版本 0.1.0）。",
           "timeoutMs": 300000
+        },
+        {
+          "name": "migration-rehearsal",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/migration-rehearsal.mjs"
+          ],
+          "$note": "P8-05 Action 4：合成数据演练 16 项 check——旧客户端形状目录上启动/读得懂/启动不改任务表；字节保真（旧客户端写的 legacyLaunchFamily 与 legacyOnlyKey 原样保留）；SIGKILL 崩溃后冷启动成功且记录不少；尸体 socket 不挡重启、活宿主的第二个竞争者被拒且原宿主仍服务；数据原位读写（回退面）。**只用合成数据，不碰真实 ~/.aeroric**。"
         }
       ],
-      "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁：切片一=宿主仲裁与切换前检查。**尚未进入本模块**：Action 1/2/3 的 external gateway（host_client/host_event_bridge/host_supervisor＋Embedded|External）、Action 4 的迁移演练脚本、Action 7–10 的 helper 打包与签名验证——它们随各自切片注册。"
+      "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁。切片一=宿主仲裁与切换前检查；切片三=external gateway（客户端/监督层/Embedded|External 判决）；切片四=helper 打包脚本；切片五=迁移演练（合成数据）。**刻意不在门禁里的两条**：①打包后的 bundle 取证（`AERORIC_TAURI_BUNDLE=1 node scripts/native/tauri-host-smoke.mjs`）——它要先跑 `pnpm tauri build`（~5 分钟），而 G39 之后本仓**没有 opt-in 通道**（`check-runner.test.mjs` 钉着『任何 case 再挂 optInEnv 即门禁失牙』），所以它是**手动/发布前**步骤，证据记在 `docs/native/migration-rehearsal.md` §3 与计划补记里；②domain 命令转发覆盖率与 Action 5 的真实数据演练（后者需用户同意）。"
     }
   },
   "plannedModules": {

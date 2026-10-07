@@ -134,6 +134,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # P8-05 Action 7/8：external 模式的前置条件是 Tauri **自带**可启动的 helper，
+      # 不允许依赖用户另外装了 Native Preview。Tauri 的 macOS `bundle.externalBin`
+      # 约定是 `binaries/<name>-<target-triple>`，所以这一步按**矩阵 target** 生成：
+      # runner 架构与发布目标不是一回事（macos-15 是 arm64、macos-15-intel 是 x86_64，
+      # 但两个 job 都可能被交叉构建），猜错会打出跨架构包——打包成功、运行时 spawn 立刻失败。
+      #
+      # Windows/Linux 未启用 external：**明确不生成**（不是"忘了生成"）。
+      #
+      # 不需要在 `tauri build` 上加 `--config`：Tauri 默认就会合并平台专属文件
+      # `src-tauri/tauri.macos.conf.json`（`--help` 原文：a platform-specific file is
+      # looked up and merged with the default file by default），所以 `externalBin`
+      # 对 macOS 的两条签名路径都自动生效，Windows/Linux 不受影响。
+      - name: Prepare host helper (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          AERORIC_TAURI_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          pnpm native:prepare-tauri-host
+          ls -l src-tauri/binaries
+
       - name: Detect release signing credentials
         shell: bash
         env:
@@ -391,6 +413,21 @@ jobs:
           # 报 Signature=adhoc(因为内层 Mach-O 带着链接器加的那份),所以单看 display
           # 是分辨不出「整包签好了」和「只有内层带签名」的。
           codesign --verify --deep --strict --verbose=2 "$app_path"
+          # P8-05 Action 7/10：helper 必须在 bundle 里、架构与矩阵 target 一致，
+          # 且被上面那条 --deep --strict 的封印覆盖（`Contents/MacOS/` 是封印内的资源）。
+          helper="$app_path/Contents/MacOS/aeroric-cli"
+          test -x "$helper" || { echo "::error::host helper missing from the bundle: $helper"; exit 1; }
+          helper_archs="$(lipo -archs "$helper")"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) want="arm64" ;;
+            x86_64-apple-darwin)  want="x86_64" ;;
+            *) echo "::error::Unsupported macOS target: ${{ matrix.target }}"; exit 1 ;;
+          esac
+          case " $helper_archs " in
+            *" $want "*) ;;
+            *) echo "::error::host helper arch $helper_archs does not match $want"; exit 1 ;;
+          esac
+          echo "host helper: $helper_archs"
           # 附带确认这条路径产出的确实是 ad-hoc:签名配置被串到这一支时(比如误用了
           # Developer ID)这里会红,免得状态说明与实际产物不一致。
           if ! codesign --display --verbose=4 "$app_path" 2>&1 | grep -q 'Signature=adhoc'; then
@@ -494,6 +531,21 @@ jobs:
             exit 1
           fi
           codesign --verify --deep --strict --verbose=2 "$app_path"
+          # P8-05 Action 7/10：helper 必须在 bundle 里、架构与矩阵 target 一致，
+          # 且被上面那条 --deep --strict 的封印覆盖（`Contents/MacOS/` 是封印内的资源）。
+          helper="$app_path/Contents/MacOS/aeroric-cli"
+          test -x "$helper" || { echo "::error::host helper missing from the bundle: $helper"; exit 1; }
+          helper_archs="$(lipo -archs "$helper")"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) want="arm64" ;;
+            x86_64-apple-darwin)  want="x86_64" ;;
+            *) echo "::error::Unsupported macOS target: ${{ matrix.target }}"; exit 1 ;;
+          esac
+          case " $helper_archs " in
+            *" $want "*) ;;
+            *) echo "::error::host helper arch $helper_archs does not match $want"; exit 1 ;;
+          esac
+          echo "host helper: $helper_archs"
           spctl --assess --type execute --verbose=2 "$app_path"
           xcrun stapler validate "$dmg_path"
           printf 'macOS signature and notarization verified\n' \

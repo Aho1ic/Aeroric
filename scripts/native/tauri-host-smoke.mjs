@@ -231,6 +231,65 @@ async function main() {
     rmSync(root, { recursive: true, force: true });
   }
 
+    // ── 5. 打包后的 helper（opt-in：需要先跑一次 `pnpm tauri build`）──────────
+    //
+    // 这一步回答的是 Action 7 的前置条件："external 的启用条件是 Tauri **自带**可启动的
+    // helper，不允许依赖 Native Preview 已安装"。所以判据有三条，全部只看 Tauri 自己的
+    // bundle：helper 在包里、架构与主程序一致、从 repo 之外的 cwd 冷启动能起来。
+    const shouldCheckBundle = process.env.AERORIC_TAURI_BUNDLE === "1";
+    if (shouldCheckBundle) {
+      const appPath = path.join(
+        repoRoot,
+        "src-tauri",
+        "target",
+        "release",
+        "bundle",
+        "macos",
+        "Aeroric.app",
+      );
+      const helperPath = path.join(appPath, "Contents", "MacOS", "aeroric-cli");
+      const mainPath = path.join(appPath, "Contents", "MacOS", "aeroric");
+      check("Tauri bundle 存在（先跑 pnpm tauri build）", existsSync(appPath), appPath);
+      if (existsSync(appPath)) {
+        check("helper 在包内", existsSync(helperPath), helperPath);
+        if (existsSync(helperPath)) {
+          const helperArchs = spawnSync("/usr/bin/lipo", ["-archs", helperPath], { encoding: "utf8" });
+          const mainArchs = spawnSync("/usr/bin/lipo", ["-archs", mainPath], { encoding: "utf8" });
+          check(
+            "helper 与主程序同架构（打包成功、运行时 spawn 失败是最难查的一类）",
+            helperArchs.stdout.trim() === mainArchs.stdout.trim() &&
+              helperArchs.stdout.trim().length > 0,
+            `helper=${helperArchs.stdout.trim()} main=${mainArchs.stdout.trim()}`,
+          );
+          const sealed = spawnSync(
+            "/usr/bin/codesign",
+            ["--verify", "--deep", "--strict", appPath],
+            { encoding: "utf8" },
+          );
+          check("整包封印覆盖 helper（--deep --strict）", sealed.status === 0, sealed.stderr.slice(0, 200));
+
+          // 从 repo 之外的 cwd 冷启动包里的 helper：这条等价于"只有 Tauri、没有 Native Preview"。
+          const bundleDataDir = path.join(root, "bundle-data");
+          const bundleCwd = path.join(root, "bundle-cwd");
+          mkdirSync(bundleDataDir, { recursive: true });
+          mkdirSync(bundleCwd, { recursive: true });
+          const bundled = spawn(helperPath, ["--data-dir", bundleDataDir, "serve"], {
+            cwd: bundleCwd,
+            env: { ...process.env },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          const bundleReady = await waitForSocket(path.join(bundleDataDir, "host.sock"), 15_000);
+          check("包里的 helper 从 repo 外的 cwd 冷启动成功", bundleReady);
+          const secondCwdCheck = !existsSync(path.join(bundleCwd, ".aeroric"));
+          check("冷启动没有在 cwd 里长出数据目录", secondCwdCheck);
+          if (!bundled.killed) bundled.kill("SIGTERM");
+          await sleep(300);
+        }
+      }
+    } else {
+      console.log("▶ Tauri bundle 检查 … SKIP (opt-in：设 AERORIC_TAURI_BUNDLE=1 且先构建 bundle)");
+    }
+
   if (failures.length) {
     console.error(`\ntauri-host-smoke: ${failures.length} check(s) failed — ${failures.join(", ")}`);
     process.exit(1);
