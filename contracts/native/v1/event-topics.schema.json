@@ -15,9 +15,9 @@
   },
   "legacyChannels": 38,
   "legacyDirectionUnproven": 11,
-  "mapped": 5,
+  "mapped": 9,
   "notForwarded": 0,
-  "pending": 33,
+  "pending": 29,
   "protocolVersion": 1,
   "reshapedPayloads": 5,
   "rows": [
@@ -30,9 +30,10 @@
         "aeroric:app-settings-changed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-03",
-      "plannedDirection": "pending: P8-03",
-      "status": "pending: P8-03",
+      "payload": "verbatim: legacy payload is an empty object; the host agent_config_rpc (P8-03 刀六) dual-emits () on the legacy channel and on this v1 topic",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-03 Action 3/4（配对/审批/终端租约与远程 UI 面）；core remote control/server 双发接线（刀五/刀六）",
+      "status": "mapped",
       "topic": "aeroric.app_settings_changed"
     },
     {
@@ -451,9 +452,10 @@
         "project-pinned-changed"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-03",
-      "plannedDirection": "pending: P8-03",
-      "status": "pending: P8-03",
+      "payload": "verbatim: legacy payload is {projectId, pinned}; the core rpc dispatch (P8-03 刀五 projects_set_pinned) dual-emits the same payload on the legacy channel and on this v1 topic",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-03 Action 3/4（配对/审批/终端租约与远程 UI 面）；core remote control/server 双发接线（刀五/刀六）",
+      "status": "mapped",
       "topic": "project.pinned_changed"
     },
     {
@@ -465,9 +467,10 @@
         "remote-device-paired"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-03",
-      "plannedDirection": "pending: P8-03",
-      "status": "pending: P8-03",
+      "payload": "verbatim: legacy payload is {deviceId, deviceName}; the core server (P8-03 刀三b serve_ws commit_pending_pairing) dual-emits the same payload on the legacy channel and on this v1 topic",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-03 Action 3/4（配对/审批/终端租约与远程 UI 面）；core remote control/server 双发接线（刀五/刀六）",
+      "status": "mapped",
       "topic": "remote.device_paired"
     },
     {
@@ -493,9 +496,10 @@
         "remote-terminal-resized"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-03",
-      "plannedDirection": "pending: P8-03",
-      "status": "pending: P8-03",
+      "payload": "verbatim: legacy payload is {task_id, cols, rows}; the host TerminalStreams (P8-03 刀六) dual-emits the same payload on the legacy channel and on this v1 topic (two emit sites: resize + release restore)",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-03 Action 3/4（配对/审批/终端租约与远程 UI 面）；core remote control/server 双发接线（刀五/刀六）",
+      "status": "mapped",
       "topic": "remote.terminal_resized"
     },
     {

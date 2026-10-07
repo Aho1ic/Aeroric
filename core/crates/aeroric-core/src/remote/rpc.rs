@@ -201,8 +201,13 @@ async fn projects_set_pinned(
     handle.set_project_pinned(&project_id, pinned).await?;
     // 桌面 WebView 持有项目内存快照；字段级事件让它合并手机端写入并把
     // 当前最新快照排入持久化队列，避免下一次桌面操作把 pinned 覆盖回去。
+    // 双发:legacy 通道＋v1 topic（P8-03 刀六）。
     handle.emit(
         "project-pinned-changed",
+        json!({ "projectId": project_id, "pinned": pinned }),
+    );
+    handle.emit(
+        "project.pinned_changed",
         json!({ "projectId": project_id, "pinned": pinned }),
     );
     Ok(json!({ "ok": true }))

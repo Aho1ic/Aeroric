@@ -365,6 +365,14 @@ fn commit_pending_pairing(
         );
     }
     // 通知设置页:配对成功(二维码视图切到完成态 + 刷新设备列表)。
+    // 双发:legacy 通道（React 客户端）＋v1 topic（原生事件面，P8-03 刀六）。
+    handle.emit(
+        "remote.device_paired",
+        json!({
+            "deviceId": authentication.device_id,
+            "deviceName": device_name,
+        }),
+    );
     handle.emit(
         "remote-device-paired",
         json!({

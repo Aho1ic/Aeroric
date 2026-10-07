@@ -44,7 +44,10 @@ test("the committed inventory matches the live registration site", () => {
   assert.equal(result.registered, 660);
   assert.equal(result.mapped, 660);
   assert.equal(result.features, 26);
-  assert.equal(result.events, 38);
+  // P8-03 刀六起 4 条 v1 topic 以字面量双发（remote.terminal_resized/
+  // aeroric.app_settings_changed/remote.device_paired/project.pinned_changed），
+  // 事件通道 38→40。
+  assert.equal(result.events, 40);
   assert.equal(result.panels, 19);
   assert.equal(result.definitionsResolved, 660);
   assert.equal(result.dynamicSites, 5);

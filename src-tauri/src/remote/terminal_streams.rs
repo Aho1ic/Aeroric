@@ -167,6 +167,12 @@ impl<R: Runtime> TerminalStreams<R> {
         let tm = self.app.state::<TaskManager>();
         if crate::pty::resize_task_pty(&tm, &handle.task_id, cols, rows).is_ok() {
             // 通知桌面前端(后写优先策略;桌面重新聚焦该终端时自然 refit)
+            // 双发:legacy 通道＋v1 topic（P8-03 刀六）。
+            let _ = self.app.emit(
+                "remote.terminal_resized",
+                json!({ "task_id": handle.task_id, "cols": cols, "rows": rows }),
+            );
+
             let _ = self.app.emit(
                 "remote-terminal-resized",
                 json!({ "task_id": handle.task_id, "cols": cols, "rows": rows }),
@@ -200,6 +206,16 @@ impl<R: Runtime> TerminalStreams<R> {
         };
         let tm = self.app.state::<TaskManager>();
         if crate::pty::resize_task_pty(&tm, task_id, cols, rows).is_ok() {
+            // 双发:legacy 通道＋v1 topic（P8-03 刀六）。
+            let _ = self.app.emit(
+                "remote.terminal_resized",
+                json!({
+                    "task_id": task_id,
+                    "cols": cols,
+                    "rows": rows,
+                    "restored": true,
+                }),
+            );
             let _ = self.app.emit(
                 "remote-terminal-resized",
                 json!({

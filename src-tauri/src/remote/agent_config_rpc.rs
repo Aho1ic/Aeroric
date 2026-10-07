@@ -26,7 +26,9 @@ const MAX_BRIDGE_PYTHON_PATH_LEN: usize = 1024;
 
 fn notify_settings_changed<R: Runtime>(app: &AppHandle<R>) {
     // 配置已经原子落盘；通知失败不应让远端误以为保存失败并重复提交。
+    // 双发:legacy 通道＋v1 topic（P8-03 刀六）。
     let _ = app.emit("aeroric:app-settings-changed", ());
+    let _ = app.emit("aeroric.app_settings_changed", ());
 }
 
 fn profile_view(profile: &CustomAgentProfile, proxy_enabled: bool) -> Value {

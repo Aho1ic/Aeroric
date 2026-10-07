@@ -60,7 +60,7 @@
         "F14": 95,
         "F15": 73
       },
-      "events": 38,
+      "events": 40,
       "panels": 19,
       "dynamic_invoke_sites": 5,
       "dynamic_command_names_enumerated": 83,
@@ -24062,7 +24062,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/remote/agent_config_rpc.rs:29"
+        "src-tauri/src/remote/agent_config_rpc.rs:30"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:73"
@@ -24072,6 +24072,20 @@
       "orphan": null,
       "target": null,
       "note": null
+    },
+    {
+      "name": "aeroric.app_settings_changed",
+      "rust_consts": [],
+      "ts_consts": [],
+      "emitters": [
+        "src-tauri/src/remote/agent_config_rpc.rs:31"
+      ],
+      "listeners": [],
+      "orphan": "emitted-without-listener",
+      "disposition": "needs-native-consumer",
+      "gap_id": null,
+      "target": null,
+      "note": "P8-03 刀六：v1 topic 与 legacy 通道双发——React 只听 legacy 通道，原生客户端经 events.since 补发面消费（has a consumer path, not silent drop）。"
     },
     {
       "name": "agent-operation-changed",
@@ -24724,8 +24738,8 @@
         }
       ],
       "emitters": [
-        "src-tauri/src/remote/terminal_streams.rs:170",
-        "src-tauri/src/remote/terminal_streams.rs:203"
+        "src-tauri/src/remote/terminal_streams.rs:176",
+        "src-tauri/src/remote/terminal_streams.rs:219"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:63"
@@ -24735,6 +24749,21 @@
       "orphan": null,
       "target": null,
       "note": null
+    },
+    {
+      "name": "remote.terminal_resized",
+      "rust_consts": [],
+      "ts_consts": [],
+      "emitters": [
+        "src-tauri/src/remote/terminal_streams.rs:171",
+        "src-tauri/src/remote/terminal_streams.rs:210"
+      ],
+      "listeners": [],
+      "orphan": "emitted-without-listener",
+      "disposition": "needs-native-consumer",
+      "gap_id": null,
+      "target": null,
+      "note": "P8-03 刀六：v1 topic 与 legacy 通道双发——React 只听 legacy 通道，原生客户端经 events.since 补发面消费（has a consumer path, not silent drop）。"
     },
     {
       "name": "shell-output",

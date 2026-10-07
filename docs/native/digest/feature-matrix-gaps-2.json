@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-2.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "62e6d7e2ab0f38c3bdb34a7e45e5af08cc510abb15bb1fe5946ffe571fbd61d7",
+  "sourceSha256": "1d2d41de6a6de6bf858314e08ab7bc3579e43bdf4f768a42f4192a7a43fac94d",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -20,13 +20,13 @@
       {
         "id": "G07",
         "finding": "remote/server.rs:393 在存在任一已配对设备或任一配置的公网 endpoint 时绑定 0.0.0.0（默认端口 6790）",
-        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。 2026-09-30 P3-06 侧闭合：aeroric-host 的监听面只有 UDS（`uds::bind_listener` 全模块无 TCP 构造，codec/serve 只吃 UnixStream；`AlreadyLive` 探活挡抢绑）——「不得因原生 IPC 改造而放宽」在 host 库侧成立。P8-03 侧（remote/server.rs 的 0.0.0.0 scope 判定）仍开放，owner 收窄为 P8-03。补记二百八十。",
+        "evidence": "2026-09-28 复核：策略函数 `required_listener_scope` 在 `remote/mod.rs:291-299`（原记 :290-299 漂 1 行），条件是 `has_paired_device || has_public_endpoint` ⇒ `ListenerScope::Network`；`remote/server.rs:393` 确为 `bind_listener(scope, port)`。**一处措辞要精确保留**：函数自己的注释（:288-290）写明「设备是唯一的隐式理由，配置的直连公网 endpoint 是显式 opt-in，relay-only 是出站」——所以这不是「无意敞开」，而是既有决定；P3-06 的验收是 **host 侧绝不监听 0.0.0.0**，remote 保有自己的策略  2026-09-29 把三处引用钉准（原记只给了一个行号，读起来像\"这行写死 0.0.0.0\"）：真正的绑定发生在 `remote/server.rs:393` 的 `bind_listener(scope, port)` ⇒ `TcpListener::bind(scope.bind_addr(port))`；**\"0.0.0.0\"其实是 `server.rs:190` 的 `Self::Network => Ipv4Addr::UNSPECIFIED`**，而选到 Network 域的那一步在 **`:333` 的 `start_with_scope(app, port, ListenerScope::Network)`**；默认端口常量在**另一个文件** `remote/mod.rs:55` `pub const DEFAULT_PORT: u16 = 6790`（server.rs 里今天搜不到 6790）。⇒ 主张（有已配对设备或公网 endpoint 时全网卡绑定）成立，但今后引用要写 :190／:333／:393 ＋ `mod.rs:55` 四个点，单写 :393 会让人找不到 `0.0.0.0` 而误判为腐烂。 2026-09-30 P3-06 侧闭合：aeroric-host 的监听面只有 UDS（`uds::bind_listener` 全模块无 TCP 构造，codec/serve 只吃 UnixStream；`AlreadyLive` 探活挡抢绑）——「不得因原生 IPC 改造而放宽」在 host 库侧成立。P8-03 侧（remote/server.rs 的 0.0.0.0 scope 判定）仍开放，owner 收窄为 P8-03。补记二百八十。 2026-10-06 P8-03 刀三b：required_listener_scope/reconcile/ensure_listener_scope 全套进 core remote/state.rs＋server.rs，语义逐字（Loopback 起步、设备/公网端点才 Network、撤销后失败即关机不保留宽监听）；cli serve 与桌面共用同一 core 判定。核心测试 network_exposure 9 条随迁全绿。",
         "requirement": "host 侧必须保留同等保守的 scope 判定，不得因原生 IPC 改造而放宽",
         "task_ids": "P8-03",
         "owner": "core:host+remote",
         "test": "tests/ipc_auth.rs 断言 host 绝不监听 TCP 0.0.0.0；remote 能力只在显式开启时暴露",
-        "status": "open",
-        "verified_on": "2026-09-29",
+        "status": "closed",
+        "verified_on": "2026-10-06",
         "retriage_note": "（此条此前没有 retriage_note） 2026-09-29 静态半边复跑成立（引用已改准，非缺陷更正）"
       },
       {

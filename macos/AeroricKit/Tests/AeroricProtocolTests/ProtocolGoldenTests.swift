@@ -458,10 +458,10 @@ final class ProtocolGoldenTests: XCTestCase {
         let topics = try document("event-topics.schema.json")
         let rows = topics["rows"]?.arrayValue ?? []
         XCTAssertEqual(rows.count, 39)
-        // P8-02 刀六起 agent 两条 mapped（3→5）；P8-03 刀二起 remote.task_request
-        // 转 not-forwarded（RPC 应答即结果）：pending 36→34→33。
-        XCTAssertEqual(number(topics["mapped"]), 5)
-        XCTAssertEqual(number(topics["pending"]), 33)
+        // P8-02 刀六 agent 两条＋P8-03 刀六 remote 四条 mapped（3→9）；
+        // remote.task_request not-forwarded（pending 36→29）。
+        XCTAssertEqual(number(topics["mapped"]), 9)
+        XCTAssertEqual(number(topics["pending"]), 29)
         var claimed: [String: Int] = [:]
         for row in rows {
             let fields = row.fields
