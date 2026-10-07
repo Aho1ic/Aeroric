@@ -336,6 +336,23 @@ pub fn register_task_services(
             }),
         );
     }
+    {
+        let registry = std::sync::Arc::clone(&registry);
+        set.register(
+            "terminal.get_active_task_ids",
+            std::sync::Arc::new(move |request, _call| {
+                let registry = std::sync::Arc::clone(&registry);
+                Box::pin(async move { terminal_active_task_ids(request, &registry) })
+            }),
+        );
+    }
+}
+
+fn terminal_active_task_ids(
+    request: Request,
+    registry: &std::sync::Arc<aeroric_core::runtime::registry::TaskRegistry>,
+) -> Frame {
+    ok(&request, json!(registry.live_task_ids()))
 }
 
 fn task_run(
@@ -1939,5 +1956,15 @@ mod terminal_replay_tests {
             &terminal,
         ));
         assert_eq!(again["released"], false);
+    }
+    #[test]
+    fn active_task_ids_are_sorted_and_do_not_include_shell_namespaces() {
+        let registry = std::sync::Arc::new(TaskRegistry::default());
+        registry.runs.register("task-b", 1);
+        registry.runs.register("task-a", 1);
+        registry.runs.register("shell:project:1:1", 1);
+        registry.runs.register("ssh:project:1:1", 1);
+        let frame = terminal_active_task_ids(request(serde_json::json!({})), &registry);
+        assert_eq!(result_of(frame), serde_json::json!(["task-a", "task-b"]));
     }
 }

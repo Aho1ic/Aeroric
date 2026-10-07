@@ -199,6 +199,20 @@ impl RunRegistry {
             .count()
     }
 
+    /// Ids with at least one live run, filtered to task ids (shell namespaces
+    /// such as `shell:`/`ssh:`/`wsl:` are not tasks) and sorted by the
+    /// `BTreeMap` key order. This is the host-side answer to
+    /// `get_active_task_ids`; it deliberately reads the same `runs` leaf the
+    /// rest of ADR-020/025 addresses instead of a second map.
+    pub fn live_task_ids(&self) -> Vec<String> {
+        self.live
+            .lock()
+            .keys()
+            .filter(|id| crate::paths::AppPaths::validate_id(id, "task").is_ok())
+            .cloned()
+            .collect()
+    }
+
     /// ADR-025 rule 1, as a key. `None` means there is nothing to address — the distinction
     /// [`RunKey::UNMINTED`] exists to keep is that a registered unminted run is a real run
     /// (generation 0 is stored like any other), while "the counter reached 5" is not.
@@ -402,6 +416,11 @@ impl TaskRegistry {
     /// on `child_handles`: this stays the liveness signal, now read through the run namespace.
     pub fn has_live_run(&self, id: &str) -> bool {
         !self.runs.live_generations(id).is_empty()
+    }
+
+    /// Live task ids for the host `get_active_task_ids` surface.
+    pub fn live_task_ids(&self) -> Vec<String> {
+        self.runs.live_task_ids()
     }
 
     /// The size a run should start at, including one that has not been registered yet: a
