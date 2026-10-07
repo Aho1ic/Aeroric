@@ -366,3 +366,195 @@ impl RemoteHostHandle for CliRemoteHandle {
 pub fn audit_dir(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("remote")
 }
+
+/// `remote.*` 方法注册（P8-03 刀五）：native 客户端经 UDS 面操作远程 plane，
+/// 与桌面 Tauri 命令共用同一 core 控制面（control.rs）。调用方持有
+/// `Arc<RemoteState>` 与 handle（桌面=RemoteHostBridge，cli=CliRemoteHandle）。
+pub fn register_remote_services(
+    set: &mut crate::dispatcher::ServiceSet,
+    state: std::sync::Arc<aeroric_core::remote::state::RemoteState>,
+    handle: std::sync::Arc<dyn RemoteHostHandle>,
+) {
+    use crate::dispatcher::failure;
+    use aeroric_core::remote::control;
+    use aeroric_core::remote::identity::lan_addresses;
+    use aeroric_protocol::envelope::Request;
+    use aeroric_protocol::error::ErrorCode;
+
+    fn param_str(req: &Request, key: &str) -> Result<String, String> {
+        req.params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("Missing param: {key}"))
+    }
+
+    let s = std::sync::Arc::clone(&state);
+    set.register(
+        "remote.status",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            Box::pin(async move { crate::services::ok(&req, control::current_status(&s).await) })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    let h = std::sync::Arc::clone(&handle);
+    set.register(
+        "remote.start",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let h = std::sync::Arc::clone(&h);
+            let id = req.id.clone();
+            Box::pin(async move {
+                let port = req
+                    .params
+                    .get("port")
+                    .and_then(Value::as_u64)
+                    .map(|p| p as u16);
+                {
+                    // enabled/port 落盘 + 拉起（事件桥由桌面宿主 wrapper 附加；
+                    // 无头面无事件桥可附，行为一致：core start 只管 TCP）。
+                    let mut cfg = s.config.lock();
+                    cfg.enabled = true;
+                    if let Some(p) = port {
+                        cfg.port = p;
+                    }
+                    if let Err(e) = aeroric_core::remote::config::save_config(&cfg) {
+                        return failure(id, ErrorCode::IoError, &e);
+                    }
+                }
+                match aeroric_core::remote::state::ensure_started(&s, &h).await {
+                    Ok(_bound) => crate::services::ok(&req, control::current_status(&s).await),
+                    Err(e) => failure(id, ErrorCode::IoError, &e),
+                }
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    set.register(
+        "remote.stop",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let id = req.id.clone();
+            Box::pin(async move {
+                {
+                    let mut cfg = s.config.lock();
+                    cfg.enabled = false;
+                    if let Err(e) = aeroric_core::remote::config::save_config(&cfg) {
+                        return failure(id, ErrorCode::IoError, &e);
+                    }
+                }
+                aeroric_core::remote::state::ensure_stopped(&s).await;
+                crate::services::ok(&req, control::current_status(&s).await)
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    let h = std::sync::Arc::clone(&handle);
+    set.register(
+        "remote.updateConfig",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let h = std::sync::Arc::clone(&h);
+            let id = req.id.clone();
+            Box::pin(async move {
+                match control::update_config(
+                    &s,
+                    &h,
+                    req.params
+                        .get("relayUrl")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    req.params
+                        .get("relayToken")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    req.params
+                        .get("publicEndpoints")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        }),
+                )
+                .await
+                {
+                    Ok(v) => crate::services::ok(&req, v),
+                    Err(e) => failure(id, ErrorCode::InvalidArgument, &e),
+                }
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    set.register(
+        "remote.selectLanIp",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let id = req.id.clone();
+            Box::pin(async move {
+                let lan_ip = match param_str(&req, "lanIp") {
+                    Ok(v) => v,
+                    Err(message) => return failure(id, ErrorCode::InvalidArgument, &message),
+                };
+                match control::select_lan_ip(&s, lan_ip).await {
+                    Ok(v) => crate::services::ok(&req, v),
+                    Err(e) => failure(id, ErrorCode::InvalidArgument, &e),
+                }
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    let h = std::sync::Arc::clone(&handle);
+    set.register(
+        "remote.createInvite",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let h = std::sync::Arc::clone(&h);
+            let id = req.id.clone();
+            Box::pin(async move {
+                let _lifecycle = s.lifecycle.lock().await;
+                match control::create_invite_for_addresses(&s, &h, &lan_addresses()).await {
+                    Ok(v) => crate::services::ok(&req, v),
+                    Err(e) => failure(id, ErrorCode::IoError, &e),
+                }
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    set.register(
+        "remote.listDevices",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            Box::pin(async move {
+                match control::list_devices(&s) {
+                    Ok(v) => crate::services::ok(&req, v),
+                    Err(e) => failure(req.id.clone(), ErrorCode::IoError, &e),
+                }
+            })
+        }),
+    );
+    let s = std::sync::Arc::clone(&state);
+    let h = std::sync::Arc::clone(&handle);
+    set.register(
+        "remote.revokeDevice",
+        Arc::new(move |req: Request, _call| {
+            let s = std::sync::Arc::clone(&s);
+            let h = std::sync::Arc::clone(&h);
+            let id = req.id.clone();
+            Box::pin(async move {
+                let device_id = match param_str(&req, "deviceId") {
+                    Ok(v) => v,
+                    Err(e) => return failure(id, ErrorCode::InvalidArgument, &e),
+                };
+                let _lifecycle = s.lifecycle.lock().await;
+                match control::revoke_device(&s, &h, &device_id).await {
+                    Ok(()) => crate::services::ok(&req, json!({ "ok": true })),
+                    Err(e) => failure(id, ErrorCode::NotFound, &e),
+                }
+            })
+        }),
+    );
+}

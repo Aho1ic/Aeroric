@@ -14,6 +14,7 @@
 pub mod agent_keymap;
 pub mod auth;
 pub mod config;
+pub mod control;
 pub mod crypto;
 pub mod event_log;
 pub mod identity;
