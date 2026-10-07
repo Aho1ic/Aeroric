@@ -240,7 +240,8 @@ core Cargo.toml 加 dbx-core（path `../../../../dbx/crates/dbx-core`，default-
 | P7-06 | **accepted — Phase 7 Gate 通过**（2026-10-03 收口：评审 `docs/native/reviews/notebook-services.md`，grill-me [notebook-services] 已真实调用、用户四问全答「接受并收口」。sync/rag/storage_backends 上收 core（含 StorageConnRepo 参数化、embed ProxyConfig 参数化、daemon 重写）；宿主 23 原生服务＋五视图＋SyncStoreTests；**G03 daemon 半边闭合**（SyncDaemonHandle，usage_index 半边改派 P8-04）；**2 条 topic 接线**（sink 双发）。门禁 notebook-services 4 case/21 用例、core 1560/0、host 1466/0（无代理）、Kit 208/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿） | usage_index.rs:1048 裸 thread::spawn → P8-04（G03 改派）；真云盘/真 embedding e2e → P10-01 | 2026-10-03 |
 | P8-01 | **accepted**（2026-10-03 收口：评审 `docs/native/reviews/extensions.md`，grill-me [extensions] 已真实调用、用户答复「接受并收口」。core extensions/{mod,skills,mcp,hooks,plugins,trust}（守卫/掩码/信任判定/原子安装）＋六视图＋ExtensionStore；门禁 extensions 2 case/12 用例、core 1567/0、host 1466/0、Kit 213/0、App 构建验签 OK、smoke/doctor/contracts/inventory 全绿） | skills/mcp/hooks/dsh_plugins 的网络与钥匙串半边留宿主命令层；marketplace 抓取未动 | 2026-10-03 |
 | P8-02 | **accepted**（2026-10-04 收口：评审 `docs/native/reviews/provider-services.md`，§4.2 grill-me [provider-services] 已真实调用、四问全按推荐项获答「接受并收口」——Q-P1 G01 出口单一决定「有订阅者，不删 emit」、Q-P2 四条门禁断点修复、Q-P3 宿主地板对齐 1329、Q-P4 收口。六刀：core settings/local_router/operations/providers 上收＋platform 登录 shell＋五视图＋ProviderSettingsTests＋**刀六宿主薄壳化＋2 条 agent topic 双发接线**（agent_ops.rs 消费 core operations 唯一注册表；agent_tools.rs 类型 re-export；emit wrapper 双发旧通道字面量＋v1 topic core 常量）。门禁 provider-services 4 case/51、tauri-adapter 12 case/1390（宿主地板 2011→1329 对齐）、skeleton 24/188；core 1540/0、宿主 1329/0（无代理）、Kit 全包 0 failed、App 构建验签 OK、smoke/doctor/contracts/inventory/digest 全绿。G01 单一决定落盘 feature-matrix＋ADR-007 修正案三；event-topics mapped 3→5） | P8-03（remote/mobile）解除阻塞；AgentUpgradeResult 两侧归并→P8-05 | 2026-10-04 |
-| P8-03 ~ P8-05 | pending | P8-02 | — |
+| P8-03 | **accepted**（2026-10-06 收口：评审 `docs/native/reviews/remote.md`，grill-me [remote] 三问全按推荐获答「接受并收口/认可双面注册/G29 挂 P10-05」。六刀：core remote 纯逻辑+config+identity+server/state/rpc/orca_rpc 全套上收＋RemoteHostHandle trait＋宿主 bridge＋CliRemoteHandle＋cli serve 拉起＋Swift RemoteClient/Store/四视图＋4 条 topic 双发 mapped＋remote 门禁 4 case/30。**React 任务请求中转彻底拆除**（remote.task_request not-forwarded；G05 收口）。core 全工作区 --all-targets 2031/0（首次全绿）、宿主 1277/0、Kit/mobile/protocol/relay 全绿、smoke/doctor/contracts/inventory/digest 全绿。G05/G07/G16/G17/G29 收口落盘） | P8-04（统计/通知/清理/周报/权限/更新＋G03 usage_index 半边）解除阻塞 | 2026-10-06 |
+| P8-04 ~ P8-05 | pending | P8-03 | — |
 | Phase 9 | pending | Phase 8 Gate | — |
 | Phase 10 | pending | Phase 9 Gate | — |
 
@@ -5363,7 +5364,7 @@ grill-me
   - fake HTTP server 验证 SSE 分片、401/429/5xx、取消、circuit breaker、proxy 开关与 secret redaction；不向真实 provider 发送测试账单。
   - **调用 `grill-me [provider-services]`**。
 
-### Task P8-03 — 远程/mobile 彻底脱离 React 任务请求中转
+### Task P8-03 — 远程/mobile 彻底脱离 React 任务请求中转（**2026-10-06 accepted：评审 `docs/native/reviews/remote.md`，grill-me [remote] 三问全按推荐获答「接受并收口/认可双面注册/G29 挂 P10-05」。六刀全落地：core remote 全套上收（含 WS 服务循环/配对状态机/28 方法 dispatch）＋RemoteHostHandle trait＋宿主 bridge＋CliRemoteHandle＋cli serve 拉起＋Swift RemoteClient/四视图＋4 条 topic 双发 mapped＋remote 门禁 4 case/30；remote.task_request not-forwarded（React 中转拆除）；G05/G07/G16/G17/G29 收口。core 全工作区 2031/0、宿主 1277/0、mobile typecheck rc 0＋234 用例。以下为原始规格，保留作为证据**）
 > **具名移交项（补记一百八十二，2026-09-29 台账↔本小节对账）**：`docs/native/feature-matrix.json` 把本 Task 列为 owner、而本小节此前没有点名的 gap 共 **5** 条：`G05`、`G07`、`G16`、`G17`、`G24`。逐条的 `finding`／`requirement`／`verified_on` 以台账为准（`inventory --check` 每天核对 owner 与 `verified_on` 一致）；开工本 Task 时每条必须落成「已闭合＋证据」或「仍开放＋新 owner」，**不接受只留一句台账引用**。本节只补指针，不复述内容（避免两处真相）。
 
 

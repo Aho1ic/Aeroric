@@ -443,14 +443,16 @@
       "positive_test": "tests/remote_headless.rs 只跑 serve 时 fake 客户端可 list/create/cancel",
       "negative_test": "v2/v3 与 relay v1 版本边界不得互串；失效设备不得继续输入",
       "status": "planned",
-      "core_state": "unstarted",
-      "native_state": "unstarted",
+      "core_state": "accepted",
+      "native_state": "accepted",
       "side_states": {
-        "C": "unstarted",
-        "N": "unstarted",
-        "K": "unstarted"
+        "C": "accepted",
+        "N": "accepted",
+        "K": "accepted"
       },
-      "reviews": []
+      "reviews": [
+        "reviews/remote.md"
+      ]
     },
     {
       "id": "F19",
