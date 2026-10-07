@@ -47,6 +47,18 @@ pub struct Harness {
 
 impl Harness {
     pub async fn start(tag: &str) -> Self {
+        Self::start_with_wiring(tag, |_data_dir| {
+            aeroric_host::dispatcher::HostWiring::default()
+        })
+        .await
+    }
+
+    /// 装配时按 data dir 现造注入（P8-04 刀三：维护面端口需要在拿到数据根之后才能
+    /// 指向它，而数据根是 startup 的产物）。
+    pub async fn start_with_wiring(
+        tag: &str,
+        wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
+    ) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let root = PathBuf::from("/tmp").join(format!("ah-it-{tag}-{}-{n}", std::process::id()));
         let home = root.join("home");
@@ -76,10 +88,12 @@ impl Harness {
             .expect("token file")
             .trim()
             .to_string();
-        let services = HostServices::new(
+        let wiring = wiring(&data_dir);
+        let services = HostServices::with_wiring(
             Arc::clone(&started.token),
             Arc::new(aeroric_core::events::EventLog::default()),
             Arc::clone(&started.context),
+            wiring,
         );
         let running = Some(aeroric_host::startup::serve(started, Arc::clone(&services)));
         Self {

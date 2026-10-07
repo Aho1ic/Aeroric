@@ -194,7 +194,11 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             };
             executor.attach(&task_service);
             let task_service_for_remote = Arc::clone(&task_service);
-            let services = HostServices::with_tasks(
+            // P8-04 刀三：用量族与降级账总在；维护面端口**不给**——通知抓取与
+            // "替换正在运行的 app"是桌面宿主的能力，无头宿主注册一个空壳只会让
+            // 客户端以为能力存在（见 `HostWiring::maintenance`）。
+            let wiring = aeroric_host::dispatcher::HostWiring::default();
+            let services = HostServices::with_tasks_and_wiring(
                 Arc::clone(&started.token),
                 log,
                 Arc::clone(&started.context),
@@ -203,6 +207,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
                 Arc::clone(&executor),
                 terminal,
                 registry,
+                wiring,
             );
             // P8-03 刀四：remote-config.json enabled 时拉起无头远程 WS 服务
             // （core `remote::server` + CliRemoteHandle 真实任务面）。默认关闭，

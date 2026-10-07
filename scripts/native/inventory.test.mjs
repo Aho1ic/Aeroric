@@ -46,8 +46,9 @@ test("the committed inventory matches the live registration site", () => {
   assert.equal(result.features, 26);
   // P8-03 刀六起 4 条 v1 topic 以字面量双发（remote.terminal_resized/
   // aeroric.app_settings_changed/remote.device_paired/project.pinned_changed），
-  // 事件通道 38→40。
-  assert.equal(result.events, 40);
+  // 事件通道 38→40；P8-04 刀三再添 `weekly.report_progress`（旧通道
+  // `weekly-report-progress` 之外的 v1 名），40→41。
+  assert.equal(result.events, 41);
   assert.equal(result.panels, 19);
   assert.equal(result.definitionsResolved, 660);
   assert.equal(result.dynamicSites, 5);
@@ -551,7 +552,7 @@ test("frozen params must match the source, and an absent key is a failure", () =
     cpSync(path.join(repoRoot, "scripts/native/checks.json"), path.join(dir, "scripts/native/checks.json"));
     const map = JSON.parse(readFileSync(mapPath, "utf8"));
     const row = map.commands.find((c) => c.command === "read_usage_snapshot");
-    assert.equal(row.definition_resolved, "src-tauri/src/usage.rs:280");
+    assert.equal(row.definition_resolved, "src-tauri/src/usage.rs:11");
     const write = (mutate) => {
       const copy = structuredClone(map);
       mutate(copy.commands.find((c) => c.command === "read_usage_snapshot"));

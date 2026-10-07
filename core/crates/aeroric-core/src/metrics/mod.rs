@@ -12,7 +12,7 @@
 //!   节流），清理调度节奏在 [`crate::maintenance::cleanup`]，都不再由 React 的
 //!   `setInterval` 决定。
 //!
-//! 出口是注入的回调（[`index::IndexEventSink`]），不是 `AppHandle`：core 不认识窗口，
+//! 出口是注入的回调（[`index::IndexEventSink`]），不是宿主的事件句柄：core 不认识窗口，
 //! 宿主把回调转成旧桌面通道＋v1 topic 双发。
 
 pub mod agent_usage;

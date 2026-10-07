@@ -74,6 +74,34 @@ impl NotificationStore {
     pub fn from_json(raw: &str) -> Self {
         serde_json::from_str(raw).unwrap_or_default()
     }
+
+    /// `notifications.json` 的落点（`data_dir` 由调用方注入：G21）。
+    pub fn path(data_dir: &std::path::Path) -> std::path::PathBuf {
+        data_dir.join("notifications.json")
+    }
+
+    /// 读。`guard` 是调用方持有的记账互斥（load-modify-save 之间不能被插队），
+    /// 这里只是为了让"读也发生在锁内"这件事在签名上看得见。
+    pub fn load(data_dir: &std::path::Path, _guard: &std::sync::MutexGuard<'_, ()>) -> Self {
+        std::fs::read_to_string(Self::path(data_dir))
+            .map(|raw| Self::from_json(&raw))
+            .unwrap_or_default()
+    }
+
+    /// 原子写（0600：里面是账号相关的发布缓存与已读状态）。
+    pub fn save(
+        &self,
+        data_dir: &std::path::Path,
+        _guard: &mut std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
+        let raw = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
+        crate::storage::atomic::write_atomic(
+            &Self::path(data_dir),
+            raw.as_bytes(),
+            crate::storage::atomic::FileMode::Private,
+        )
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// 该不该去网络抓一次。`force` 是 UI 的显式刷新；节流只对自动轮询生效。

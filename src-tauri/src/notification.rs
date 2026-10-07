@@ -1,211 +1,241 @@
-use std::collections::HashSet;
+//! 通知与更新的 GUI 适配层（Task P8-04 刀三）。
+//!
+//! 编排（要不要抓、抓回来怎么对账、准备阶段的顺序、周报循环）已上收
+//! `aeroric_core::maintenance`。本文件只剩**宿主专属**的三块：
+//!
+//! 1. **网络**：`reqwest` 抓 GitHub Releases、流式下载资产（`fetch_remote` /
+//!    `fetch_release_by_tag` / `download_asset`）。
+//! 2. **平台替换**：`hdiutil`+`ditto`+`mv`（macOS）与 detached update helper
+//!    （Windows/Linux）—— 它们替换**正在运行的这个 app**，只有持有 app 身份的进程能做。
+//! 3. **Tauri 出口**：`authorize_app_restart` / `request_restart` / `exit`。
+//!
+//! 这一层实现 [`MaintenanceHost`] 端口并把 core 的 `MaintenanceService` 装起来，
+//! 所以 `#[tauri::command]` 与宿主 UDS 服务走的是**同一份编排**（§3.1 #8）。
+//! 平台权限面（`permission.*`）不在这里：那六个命令按 `command-map.json` 的
+//! `rpc_method: null` 属于 `host_local_os_ui`，只由 GUI 适配器执行。
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use futures_util::StreamExt;
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
-// 只有 macOS 分支的 dmg 安装路径用它:Windows/Linux 走 helper + `authorize_app_exit`。
 #[cfg(target_os = "macos")]
 use crate::authorize_app_restart;
-use crate::storage::atomic_write;
 
-// ── Security: hardcoded allowed notification source ──────────────────────────
+use aeroric_core::maintenance::updates::TargetPlatform;
+use aeroric_core::maintenance::{
+    sanitize_text, validate_release_asset_filename, GitHubRelease, GitHubReleaseAsset,
+    MaintenanceHost, MaintenanceService, ReleaseInstallResult, ReleaseUpdatePrepareResult,
+    RELEASES_URL,
+};
 
-const RELEASES_URL: &str = "https://api.github.com/repos/Aho1ic/Aeroric/releases";
+/// `updates/<safe_tag>`（core 的 `release_update_dir` 从 `maintenance` 根透出）。
+use aeroric_core::maintenance::updates::release_update_dir;
+use aeroric_core::tasks::cleanup::LocalCalendar;
+
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB limit
 const MAX_UPDATE_ASSET_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 const MAX_CHECKSUM_ASSET_BYTES: u64 = 1024 * 1024; // 1 MiB
-const FETCH_INTERVAL_SECS: i64 = 3600; // 1 hour
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-static NOTIFICATION_STORE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-// ── Remote JSON types ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RemoteNotification {
-    id: String,
-    level: String,
-    title: String,
-    body: String,
-    body_zh: Option<String>,
-    url: Option<String>,
-    created_at: String,
-    expires_at: Option<String>,
-    min_app_version: Option<String>,
-    max_app_version: Option<String>,
-    release_tag: Option<String>,
-    newer_than_current: bool,
-    update_install_supported: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    id: u64,
-    tag_name: String,
-    name: Option<String>,
-    body: Option<String>,
-    html_url: String,
-    published_at: Option<String>,
-    draft: bool,
-    prerelease: bool,
-    assets: Vec<GitHubReleaseAsset>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GitHubReleaseAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-// ── Local storage types ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct NotificationStore {
-    source: Option<String>,
-    read_ids: Vec<String>,
-    last_fetched_at: Option<String>,
-    cached_notifications: Option<Vec<RemoteNotification>>,
-}
-
-impl Default for NotificationStore {
-    fn default() -> Self {
-        Self {
-            source: Some(RELEASES_URL.to_string()),
-            read_ids: vec![],
-            last_fetched_at: None,
-            cached_notifications: None,
-        }
-    }
-}
-
-// ── Frontend-facing types ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NotificationItem {
-    pub id: String,
-    pub level: String,
-    pub title: String,
-    pub body: String,
-    #[serde(rename = "bodyZh")]
-    pub body_zh: Option<String>,
-    pub url: Option<String>,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    #[serde(rename = "isRead")]
-    pub is_read: bool,
-    #[serde(rename = "releaseTag")]
-    pub release_tag: Option<String>,
-    #[serde(rename = "newerThanCurrent")]
-    pub newer_than_current: bool,
-    #[serde(rename = "updateInstallSupported")]
-    pub update_install_supported: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NotificationResult {
-    pub notifications: Vec<NotificationItem>,
-    #[serde(rename = "unreadCount")]
-    pub unread_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReleaseInstallResult {
-    #[serde(rename = "tagName")]
-    pub tag_name: String,
-    #[serde(rename = "assetName")]
-    pub asset_name: String,
-    #[serde(rename = "installedAppPath")]
-    pub installed_app_path: String,
-    pub restarted: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReleaseUpdatePrepareResult {
-    #[serde(rename = "tagName")]
-    pub tag_name: String,
-    #[serde(rename = "assetName")]
-    pub asset_name: String,
-    #[serde(rename = "installerPath")]
-    pub installer_path: String,
-    #[serde(rename = "readyToRestart")]
-    pub ready_to_restart: bool,
-    #[serde(rename = "checksumVerified")]
-    pub checksum_verified: bool,
-    #[serde(rename = "helperStatus")]
-    pub helper_status: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingReleaseUpdate {
-    #[serde(rename = "tagName")]
-    tag_name: String,
-    #[serde(rename = "assetName")]
-    asset_name: String,
-    #[serde(rename = "installerPath")]
-    installer_path: String,
-    #[serde(rename = "checksumPath")]
-    checksum_path: String,
-    #[serde(rename = "checksumVerified")]
-    checksum_verified: bool,
-    #[serde(rename = "helperStatus")]
-    helper_status: String,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingReleaseUpdatePayload {
-    #[serde(rename = "tagName")]
-    tag_name: String,
-    #[serde(rename = "assetName")]
-    asset_name: String,
-    #[serde(rename = "installerPath")]
-    installer_path: String,
-    #[serde(rename = "checksumPath", default)]
-    checksum_path: String,
-    #[serde(rename = "checksumVerified", default)]
-    checksum_verified: bool,
-    #[serde(rename = "helperStatus", default)]
-    helper_status: String,
-    #[serde(default)]
-    error: Option<String>,
-}
-
 const UPDATE_HELPER_FLAG: &str = "--aeroric-update-helper";
-const UPDATE_HELPER_READY: &str = "ready";
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const UPDATE_HELPER_RUNNING: &str = "running";
 const UPDATE_HELPER_FAILED: &str = "failed";
 
-// ── Path helpers ─────────────────────────────────────────────────────────────
+/// 命令签名用的别名（core 类型是唯一真相；宿主只借名字让 `lib.rs` 的注册表读得顺）。
+pub type NotificationResult = aeroric_core::maintenance::NotificationResult;
 
-// G24 收口：本模块与 `app_settings` 各有一份逐字相同的 `aeroric_dir`——
-// 覆盖变量若只进 `storage` 那份，另两处照写真实家（止血止一半）。三处并一处。
+// ── 宿主端口：core 编排伸手要的东西 ─────────────────────────────────────────
+
+/// 本地日历：`chrono::Local` 的语义，与旧前端 `new Date(y,m,d,h)` 一致。
+struct SystemCalendar;
+
+impl LocalCalendar for SystemCalendar {
+    fn parts(&self, now_ms: i64) -> (u32, i64, i64, i64, i64) {
+        use chrono::{Datelike, Local, TimeZone, Timelike};
+        match Local.timestamp_millis_opt(now_ms).single() {
+            Some(moment) => (
+                moment.weekday().num_days_from_sunday(),
+                moment.year() as i64,
+                moment.month() as i64,
+                moment.day() as i64,
+                moment.hour() as i64,
+            ),
+            None => (0, 1970, 1, 1, 0),
+        }
+    }
+
+    fn slot_ms(&self, year: i64, month: i64, day: i64, hour: i64) -> i64 {
+        use chrono::{Local, NaiveDate, TimeZone};
+        // JS 会**归一化**越界分量（`new Date(2026, 8, -3, 20)` 是上个月末），
+        // 这里用天数偏移复现同一语义：先把 (year, month-1, 1) 当基准再加 day-1 天。
+        // 任何一步构造不出来都退 epoch/午夜——调度规则要的是"一个时刻"，不是 panic。
+        let base = NaiveDate::from_ymd_opt(year as i32, month.clamp(1, 12) as u32, 1)
+            .or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1))
+            .unwrap_or_default();
+        let mut shifted = base;
+        let month_delta = month - month.clamp(1, 12);
+        if month_delta != 0 {
+            shifted = shift_months(shifted, month_delta);
+        }
+        let shifted = shifted + chrono::Duration::days(day - 1);
+        let naive = shifted
+            .and_hms_opt(hour.clamp(0, 23) as u32, 0, 0)
+            .or_else(|| shifted.and_hms_opt(0, 0, 0))
+            .unwrap_or_default();
+        Local
+            .from_local_datetime(&naive)
+            .single()
+            .map(|moment| moment.timestamp_millis())
+            .unwrap_or_else(|| naive.and_utc().timestamp_millis())
+    }
+}
+
+fn shift_months(date: chrono::NaiveDate, delta: i64) -> chrono::NaiveDate {
+    use chrono::{Datelike, NaiveDate};
+    let mut year = date.year() as i64;
+    let mut month = date.month() as i64 + delta;
+    while month > 12 {
+        month -= 12;
+        year += 1;
+    }
+    while month < 1 {
+        month += 12;
+        year -= 1;
+    }
+    NaiveDate::from_ymd_opt(year as i32, month as u32, date.day()).unwrap_or(date)
+}
+
+/// GUI 侧的维护面端口：网络＋平台探测＋摘要。
+pub struct GuiMaintenanceHost;
+
+#[async_trait::async_trait]
+impl MaintenanceHost for GuiMaintenanceHost {
+    fn app_version(&self) -> String {
+        APP_VERSION.to_string()
+    }
+
+    fn platform(&self) -> TargetPlatform<'static> {
+        TargetPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            linux_kind: linux_package_kind(),
+        }
+    }
+
+    fn calendar(&self) -> Arc<dyn LocalCalendar> {
+        Arc::new(SystemCalendar)
+    }
+
+    async fn fetch_releases(&self) -> Result<Vec<GitHubRelease>, String> {
+        fetch_remote().await
+    }
+
+    async fn fetch_release(&self, tag: &str) -> Result<GitHubRelease, String> {
+        fetch_release_by_tag(tag).await
+    }
+
+    async fn download_release_assets(
+        &self,
+        release: &GitHubRelease,
+        asset_name: &str,
+        tag_name: &str,
+    ) -> Result<(String, String), String> {
+        let asset = release
+            .assets
+            .iter()
+            .find(|candidate| candidate.name == asset_name)
+            .cloned()
+            .ok_or_else(|| "Missing installer asset for prepared update.".to_string())?;
+        let checksum_name =
+            aeroric_core::maintenance::find_checksum_for_asset(&asset, &release.assets)?;
+        let checksum_asset = release
+            .assets
+            .iter()
+            .find(|candidate| candidate.name == checksum_name)
+            .cloned()
+            .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?;
+        let update_dir = release_update_dir(&updates_dir()?, tag_name);
+        let _ = tokio::fs::remove_dir_all(&update_dir).await;
+        tokio::fs::create_dir_all(&update_dir)
+            .await
+            .map_err(|error| format!("Create update directory failed: {error}"))?;
+        aeroric_core::maintenance::validate_release_asset_filename(&asset.name)?;
+        aeroric_core::maintenance::validate_release_asset_filename(&checksum_asset.name)?;
+        let installer_path = update_dir.join(&asset.name);
+        let checksum_path = update_dir.join(&checksum_asset.name);
+        download_asset(&asset, &installer_path, MAX_UPDATE_ASSET_BYTES).await?;
+        download_asset(&checksum_asset, &checksum_path, MAX_CHECKSUM_ASSET_BYTES).await?;
+        let checksum_text = tokio::fs::read_to_string(&checksum_path)
+            .await
+            .map_err(|error| format!("Read checksum failed: {error}"))?;
+        let verify_path = installer_path.clone();
+        let verify_name = asset.name.clone();
+        tokio::task::spawn_blocking(move || {
+            aeroric_core::maintenance::verify_downloaded_checksum(
+                &verify_path,
+                &verify_name,
+                &checksum_text,
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        Ok((
+            installer_path.to_string_lossy().into_owned(),
+            checksum_path.to_string_lossy().into_owned(),
+        ))
+    }
+
+    async fn summarize(
+        &self,
+        task: &aeroric_core::maintenance::WeeklyReportTask,
+        locale: &str,
+    ) -> Option<String> {
+        let session_path = task.session_path.as_deref()?;
+        if session_path.is_empty() {
+            return None;
+        }
+        // 认不出的家族退 `claude`（core 的 `session_family()` 已归一），最坏结果只是
+        // 这一条摘要降级成标题——旧 `report.rs` 同款。
+        // 同一份 `AgentFamily` 只存在于 core（宿主 `app_settings` 是它的 re-export）。
+        let family =
+            crate::app_settings::AgentFamily::parse(task.session_family()).unwrap_or_default();
+        crate::agent_assist::summarize_task_session(
+            session_path,
+            &task.project_path,
+            family,
+            locale,
+        )
+        .await
+    }
+}
+
+/// 进程级维护面服务（Tauri 命令与宿主 UDS 服务共用同一份编排与同一份记账锁）。
+pub fn service() -> &'static MaintenanceService {
+    static SERVICE: std::sync::LazyLock<MaintenanceService> = std::sync::LazyLock::new(|| {
+        MaintenanceService::new(
+            Arc::new(GuiMaintenanceHost),
+            crate::storage::aeroric_dir().unwrap_or_default(),
+        )
+    });
+    &SERVICE
+}
+
+// ── 宿主专属：路径 ──────────────────────────────────────────────────────────
+
 fn aeroric_dir() -> Result<PathBuf, String> {
     crate::storage::aeroric_dir()
 }
 
-fn store_path() -> Result<PathBuf, String> {
-    Ok(aeroric_dir()?.join("notifications.json"))
-}
-
 fn updates_dir() -> Result<PathBuf, String> {
     Ok(aeroric_dir()?.join("updates"))
-}
-
-fn pending_update_path() -> Result<PathBuf, String> {
-    Ok(updates_dir()?.join("pending-release-update.json"))
 }
 
 fn update_helpers_dir() -> Result<PathBuf, String> {
@@ -221,147 +251,6 @@ fn update_helper_file_name() -> &'static str {
     }
 }
 
-// ── Storage I/O ──────────────────────────────────────────────────────────────
-
-fn load_store() -> NotificationStore {
-    let Ok(path) = store_path() else {
-        return NotificationStore::default();
-    };
-    match fs::read_to_string(&path) {
-        Ok(data) => {
-            let store: NotificationStore = serde_json::from_str(&data).unwrap_or_default();
-            if store.source.as_deref() == Some(RELEASES_URL) {
-                store
-            } else {
-                NotificationStore::default()
-            }
-        }
-        Err(_) => NotificationStore::default(),
-    }
-}
-
-fn save_store(store: &NotificationStore) -> Result<(), String> {
-    let path = store_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    atomic_write(&path, &json)
-}
-
-fn notification_store_mutex() -> &'static Mutex<()> {
-    NOTIFICATION_STORE_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-fn update_store<T, F>(mutate: F) -> Result<T, String>
-where
-    F: FnOnce(&mut NotificationStore) -> Result<T, String>,
-{
-    let _guard = notification_store_mutex().lock();
-    let mut store = load_store();
-    let result = mutate(&mut store)?;
-    save_store(&store)?;
-    Ok(result)
-}
-
-// ── Utilities ────────────────────────────────────────────────────────────────
-
-fn should_fetch(store: &NotificationStore, force: bool) -> bool {
-    if force {
-        return true;
-    }
-    if store.cached_notifications.is_none() {
-        return true;
-    }
-
-    match &store.last_fetched_at {
-        None => true,
-        Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
-            Ok(last) => {
-                let elapsed = (Utc::now() - last.with_timezone(&Utc)).num_seconds();
-                elapsed > FETCH_INTERVAL_SECS
-            }
-            Err(_) => true,
-        },
-    }
-}
-
-fn apply_fetched_notifications(store: &mut NotificationStore, remote: Vec<RemoteNotification>) {
-    let remote_ids: HashSet<&str> = remote.iter().map(|n| n.id.as_str()).collect();
-    store.read_ids.retain(|id| remote_ids.contains(id.as_str()));
-    store.source = Some(RELEASES_URL.to_string());
-    store.last_fetched_at = Some(Utc::now().to_rfc3339());
-    store.cached_notifications = Some(remote);
-}
-
-/// Strip control characters (except newline) and limit length to prevent
-/// oversized or crafted strings from reaching the UI.
-fn sanitize_text(s: &str, max_len: usize) -> String {
-    s.chars()
-        .filter(|c| !c.is_control() || *c == '\n')
-        .take(max_len)
-        .collect()
-}
-
-/// Only allow http(s) URLs — reject `javascript:`, `data:`, etc.
-fn sanitize_url(url: &Option<String>) -> Option<String> {
-    url.as_ref().and_then(|u| {
-        let trimmed = u.trim();
-        if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
-            Some(sanitize_text(trimmed, 2000))
-        } else {
-            None
-        }
-    })
-}
-
-fn release_version(tag: &str) -> String {
-    tag.trim_start_matches('v')
-        .trim_start_matches('V')
-        .to_string()
-}
-
-/// Simple semver comparison (major.minor.patch).
-fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let parse = |s: &str| -> Vec<u64> {
-        s.split('.')
-            .map(|part| part.parse::<u64>().unwrap_or(0))
-            .collect()
-    };
-    let va = parse(a);
-    let vb = parse(b);
-    let max_len = va.len().max(vb.len());
-    for i in 0..max_len {
-        let a_part = va.get(i).copied().unwrap_or(0);
-        let b_part = vb.get(i).copied().unwrap_or(0);
-        match a_part.cmp(&b_part) {
-            std::cmp::Ordering::Equal => continue,
-            other => return other,
-        }
-    }
-    std::cmp::Ordering::Equal
-}
-
-fn current_arch() -> &'static str {
-    std::env::consts::ARCH
-}
-
-fn select_macos_dmg_asset<'a>(
-    assets: &'a [GitHubReleaseAsset],
-    arch: &str,
-) -> Option<&'a GitHubReleaseAsset> {
-    let arch_token = match arch {
-        "aarch64" | "arm64" => "_aarch64.dmg",
-        "x86_64" | "x64" => "_x64.dmg",
-        _ => ".dmg",
-    };
-
-    assets.iter().find(|asset| {
-        let name = asset.name.to_ascii_lowercase();
-        name.starts_with("aeroric_") && name.ends_with(arch_token)
-    })
-}
-
 fn linux_package_kind() -> Option<&'static str> {
     if Path::new("/etc/debian_version").exists() {
         Some("deb")
@@ -374,331 +263,7 @@ fn linux_package_kind() -> Option<&'static str> {
     }
 }
 
-fn select_release_installer_asset<'a>(
-    assets: &'a [GitHubReleaseAsset],
-    os: &str,
-    arch: &str,
-    linux_kind: Option<&str>,
-) -> Option<&'a GitHubReleaseAsset> {
-    match os {
-        "macos" => select_macos_dmg_asset(assets, arch),
-        "windows" => {
-            let suffix = match arch {
-                "aarch64" | "arm64" => "_arm64-setup.exe",
-                "x86_64" | "x64" => "_x64-setup.exe",
-                _ => return None,
-            };
-            assets.iter().find(|asset| {
-                let name = asset.name.to_ascii_lowercase();
-                name.starts_with("aeroric_") && name.ends_with(suffix)
-            })
-        }
-        "linux" if matches!(arch, "x86_64" | "x64") => {
-            let suffix = match linux_kind {
-                Some("deb") => "_amd64.deb",
-                Some("rpm") => "-1.x86_64.rpm",
-                _ => return None,
-            };
-            assets.iter().find(|asset| {
-                let name = asset.name.to_ascii_lowercase();
-                name.starts_with("aeroric") && name.ends_with(suffix)
-            })
-        }
-        _ => None,
-    }
-}
-
-fn expected_release_digest_asset_name(asset_name: &str) -> Option<String> {
-    [".dmg", ".exe", ".deb", ".rpm"]
-        .iter()
-        .any(|suffix| asset_name.to_ascii_lowercase().ends_with(suffix))
-        .then(|| "SHA256SUMS.txt".to_string())
-}
-
-fn find_checksum_for_asset(
-    asset: &GitHubReleaseAsset,
-    assets: &[GitHubReleaseAsset],
-) -> Result<String, String> {
-    let expected_name = expected_release_digest_asset_name(&asset.name)
-        .ok_or_else(|| "Unsupported installer asset name".to_string())?;
-    if assets
-        .iter()
-        .any(|candidate| candidate.name == expected_name)
-    {
-        return Ok(expected_name);
-    }
-    Err(format!(
-        "Missing checksum asset for {}. Expected a {expected_name} release asset.",
-        asset.name
-    ))
-}
-
-fn validate_pending_installer_path(
-    updates_root: &Path,
-    tag_name: &str,
-    asset_name: &str,
-    installer_path: &Path,
-) -> Result<PathBuf, String> {
-    let canonical_root = updates_root
-        .canonicalize()
-        .map_err(|e| format!("Resolve updates directory failed: {e}"))?;
-    let canonical_installer = installer_path
-        .canonicalize()
-        .map_err(|e| format!("Resolve installer path failed: {e}"))?;
-    let expected_dir = canonical_root.join(
-        sanitize_text(tag_name, 80)
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>(),
-    );
-
-    if canonical_installer.parent() != Some(expected_dir.as_path()) {
-        return Err("Prepared installer is outside the update directory.".to_string());
-    }
-    if canonical_installer.file_name() != Some(std::ffi::OsStr::new(asset_name)) {
-        return Err("Prepared installer does not match the selected release asset.".to_string());
-    }
-    Ok(canonical_installer)
-}
-
-fn verify_pending_update_files(
-    pending: &PendingReleaseUpdate,
-    installer_path: &Path,
-) -> Result<(), String> {
-    if !pending.checksum_verified {
-        return Err("Prepared update has not passed checksum verification.".to_string());
-    }
-    let checksum_path = Path::new(&pending.checksum_path)
-        .canonicalize()
-        .map_err(|e| format!("Resolve checksum path failed: {e}"))?;
-    let installer_path = installer_path
-        .canonicalize()
-        .map_err(|e| format!("Resolve installer path failed: {e}"))?;
-    if checksum_path.parent() != installer_path.parent()
-        || checksum_path.file_name() != Some(std::ffi::OsStr::new("SHA256SUMS.txt"))
-    {
-        return Err("Prepared checksum is outside the selected update directory.".to_string());
-    }
-    let checksum_text =
-        fs::read_to_string(&checksum_path).map_err(|e| format!("Read checksum failed: {e}"))?;
-    verify_downloaded_checksum(&installer_path, &pending.asset_name, &checksum_text)
-}
-
-fn verify_downloaded_checksum(
-    asset_path: &Path,
-    expected_file_name: &str,
-    checksum_text: &str,
-) -> Result<(), String> {
-    let expected = checksum_text
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            let mut parts = trimmed.split_whitespace();
-            let hash = parts.next()?;
-            let file_name = parts.next()?;
-            if file_name.ends_with(expected_file_name) {
-                Some(hash.trim().to_string())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| "Checksum entry for the downloaded installer was not found.".to_string())?;
-    let raw = fs::read(asset_path).map_err(|e| format!("Read installer failed: {e}"))?;
-    let mut hasher = Sha256::new();
-    hasher.update(raw);
-    let actual = format!("{:x}", hasher.finalize());
-    if actual != expected {
-        return Err("Downloaded installer checksum does not match.".to_string());
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_pending_release_update(
-    tag_name: Option<String>,
-) -> Result<Option<ReleaseUpdatePrepareResult>, String> {
-    let pending = tokio::task::spawn_blocking(load_pending_update)
-        .await
-        .map_err(|e| e.to_string())??;
-    if let Some(expected_tag) = tag_name {
-        if pending.tag_name != expected_tag {
-            return Ok(None);
-        }
-    }
-
-    let updates_root = updates_dir()?;
-    let installer_path = validate_pending_installer_path(
-        &updates_root,
-        &pending.tag_name,
-        &pending.asset_name,
-        Path::new(&pending.installer_path),
-    )?;
-    if !installer_path.exists() {
-        return Ok(None);
-    }
-
-    if verify_pending_update_files(&pending, &installer_path).is_err() {
-        return Ok(None);
-    }
-    Ok(Some(ReleaseUpdatePrepareResult {
-        tag_name: pending.tag_name,
-        asset_name: pending.asset_name,
-        installer_path: installer_path.to_string_lossy().into_owned(),
-        ready_to_restart: true,
-        checksum_verified: true,
-        helper_status: pending.helper_status,
-        error: pending.error,
-    }))
-}
-
-fn release_update_dir(tag_name: &str) -> Result<PathBuf, String> {
-    let safe_tag = sanitize_text(tag_name, 80)
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    Ok(updates_dir()?.join(safe_tag))
-}
-
-fn save_pending_update(pending: &PendingReleaseUpdate) -> Result<(), String> {
-    let path = pending_update_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Create updates directory failed: {e}"))?;
-    }
-    let raw = serde_json::to_string_pretty(pending)
-        .map_err(|e| format!("Serialize pending update failed: {e}"))?;
-    atomic_write(&path, &raw)
-}
-
-fn load_pending_update() -> Result<PendingReleaseUpdate, String> {
-    let path = pending_update_path()?;
-    let raw = fs::read_to_string(&path).map_err(|e| format!("Read pending update failed: {e}"))?;
-    let pending: PendingReleaseUpdatePayload =
-        serde_json::from_str(&raw).map_err(|e| format!("Invalid pending update JSON: {e}"))?;
-    Ok(PendingReleaseUpdate {
-        tag_name: pending.tag_name,
-        asset_name: pending.asset_name,
-        installer_path: pending.installer_path,
-        checksum_path: pending.checksum_path,
-        checksum_verified: pending.checksum_verified,
-        helper_status: if pending.helper_status.is_empty() {
-            UPDATE_HELPER_READY.to_string()
-        } else {
-            pending.helper_status
-        },
-        error: pending.error,
-    })
-}
-
-fn update_pending_helper_status(status: &str, error: Option<String>) -> Result<(), String> {
-    let mut pending = load_pending_update()?;
-    pending.helper_status = status.to_string();
-    pending.error = error;
-    save_pending_update(&pending)
-}
-
-fn clear_pending_update() -> Result<(), String> {
-    let path = pending_update_path()?;
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| format!("Remove pending update failed: {e}"))?;
-    }
-    Ok(())
-}
-
-fn release_to_notification(
-    release: GitHubRelease,
-    app_version: &str,
-    arch: &str,
-) -> RemoteNotification {
-    let title = release
-        .name
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or(release.tag_name.as_str())
-        .to_string();
-    let body = release
-        .body
-        .as_deref()
-        .filter(|body| !body.trim().is_empty())
-        .unwrap_or("No release notes.")
-        .to_string();
-    let suffix = if release.prerelease {
-        " · prerelease"
-    } else {
-        ""
-    };
-    let release_version = release_version(&release.tag_name);
-    let newer_than_current =
-        compare_versions(&release_version, app_version) == std::cmp::Ordering::Greater;
-    let update_install_supported = newer_than_current
-        && select_release_installer_asset(
-            &release.assets,
-            std::env::consts::OS,
-            arch,
-            linux_package_kind(),
-        )
-        .is_some();
-
-    RemoteNotification {
-        id: format!("release-{}", release.id),
-        level: "info".to_string(),
-        title: format!("{}{}", title, suffix),
-        body,
-        body_zh: None,
-        url: Some(release.html_url),
-        created_at: release
-            .published_at
-            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-        expires_at: None,
-        min_app_version: None,
-        max_app_version: None,
-        release_tag: Some(release.tag_name),
-        newer_than_current,
-        update_install_supported,
-    }
-}
-
-/// Check if a notification should be shown for the current app version & date.
-fn is_valid(notif: &RemoteNotification, app_version: &str) -> bool {
-    // Check expiry
-    if let Some(expires) = &notif.expires_at {
-        let today = Utc::now().format("%Y-%m-%d").to_string();
-        if expires.as_str() < today.as_str() {
-            return false;
-        }
-    }
-    // Check min version
-    if let Some(min_ver) = &notif.min_app_version {
-        if compare_versions(app_version, min_ver) == std::cmp::Ordering::Less {
-            return false;
-        }
-    }
-    // Check max version
-    if let Some(max_ver) = &notif.max_app_version {
-        if compare_versions(app_version, max_ver) == std::cmp::Ordering::Greater {
-            return false;
-        }
-    }
-    true
-}
-
-// ── HTTP fetch (async, with strict guards) ───────────────────────────────────
-
-async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
+async fn fetch_remote() -> Result<Vec<GitHubRelease>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none()) // no redirects to prevent domain bypass
@@ -748,10 +313,11 @@ async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
         return Err("Too many notifications".to_string());
     }
 
+    // 只做"抓回来 + 解析 + 滤草稿"：判定（新旧、能不能装、过期、版本区间）
+    // 全在 core 的 `release_to_notification` / `is_valid`。
     Ok(releases
         .into_iter()
         .filter(|release| !release.draft)
-        .map(|release| release_to_notification(release, APP_VERSION, current_arch()))
         .collect())
 }
 
@@ -795,18 +361,6 @@ async fn fetch_release_by_tag(tag_name: &str) -> Result<GitHubRelease, String> {
         return Err("Response exceeds 1MB limit".to_string());
     }
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))
-}
-
-fn validate_release_asset_filename(name: &str) -> Result<(), String> {
-    let path = Path::new(name);
-    if name.is_empty()
-        || path.is_absolute()
-        || path.components().count() != 1
-        || path.file_name() != Some(std::ffi::OsStr::new(name))
-    {
-        return Err("Invalid release asset filename".to_string());
-    }
-    Ok(())
 }
 
 fn checked_download_total(current: u64, chunk_bytes: usize, max_bytes: u64) -> Result<u64, String> {
@@ -1136,7 +690,7 @@ pub fn try_run_update_helper() -> bool {
         _ => Err("Invalid update helper arguments.".to_string()),
     };
     if let Err(error) = result {
-        let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error));
+        let _ = service().set_helper_status(UPDATE_HELPER_FAILED, Some(error));
         if let Some(original_exe) = args.get(3) {
             let _ = Command::new(original_exe).spawn();
         }
@@ -1190,199 +744,66 @@ fn launch_update_helper() -> Result<(String, bool), String> {
     Ok((original_exe.to_string_lossy().into_owned(), true))
 }
 
-// ── Tauri commands ───────────────────────────────────────────────────────────
+// ── Tauri 命令（薄壳：全部委托 core 编排）───────────────────────────────────
 
 #[tauri::command]
 pub async fn get_notifications(force: Option<bool>) -> Result<NotificationResult, String> {
-    let mut store = tokio::task::spawn_blocking(load_store)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let notifications = if should_fetch(&store, force.unwrap_or(false)) {
-        match fetch_remote().await {
-            Ok(remote) => {
-                let cached_remote = remote.clone();
-                store = tokio::task::spawn_blocking(move || {
-                    update_store(|store| {
-                        apply_fetched_notifications(store, cached_remote);
-                        Ok(store.clone())
-                    })
-                })
-                .await
-                .map_err(|e| e.to_string())??;
-
-                remote
-            }
-            Err(err) => {
-                if let Some(cached) = store.cached_notifications.clone() {
-                    cached
-                } else {
-                    return Err(err);
-                }
-            }
-        }
-    } else {
-        store.cached_notifications.clone().unwrap_or_default()
-    };
-
-    let read_set: HashSet<&str> = store.read_ids.iter().map(|s| s.as_str()).collect();
-
-    let items: Vec<NotificationItem> = notifications
-        .iter()
-        .filter(|n| is_valid(n, APP_VERSION))
-        .map(|n| NotificationItem {
-            id: sanitize_text(&n.id, 100),
-            level: sanitize_text(&n.level, 20),
-            title: sanitize_text(&n.title, 200),
-            body: sanitize_text(&n.body, 2000),
-            body_zh: n.body_zh.as_ref().map(|b| sanitize_text(b, 2000)),
-            url: sanitize_url(&n.url),
-            created_at: sanitize_text(&n.created_at, 20),
-            is_read: read_set.contains(n.id.as_str()),
-            release_tag: n.release_tag.as_ref().map(|tag| sanitize_text(tag, 80)),
-            newer_than_current: n.newer_than_current,
-            update_install_supported: n.update_install_supported,
-        })
-        .collect();
-
-    let unread_count = items.iter().filter(|n| !n.is_read).count();
-
-    Ok(NotificationResult {
-        notifications: items,
-        unread_count,
-    })
+    service().get_notifications(force.unwrap_or(false)).await
 }
 
 #[tauri::command]
 pub async fn mark_notification_read(id: String) -> Result<(), String> {
-    let sanitized_id = sanitize_text(&id, 100);
-    tokio::task::spawn_blocking(move || {
-        update_store(|store| {
-            if !store.read_ids.contains(&sanitized_id) {
-                store.read_ids.push(sanitized_id);
-            }
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    service().mark_notification_read(&id)
 }
 
 #[tauri::command]
 pub async fn mark_all_notifications_read() -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        update_store(|store| {
-            if let Some(cached) = store.cached_notifications.clone() {
-                for n in cached {
-                    if !store.read_ids.contains(&n.id) {
-                        store.read_ids.push(n.id);
-                    }
-                }
-            }
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    service().mark_all_notifications_read()
+}
+
+#[tauri::command]
+pub async fn get_pending_release_update(
+    tag_name: Option<String>,
+) -> Result<Option<ReleaseUpdatePrepareResult>, String> {
+    let pending = service().pending_update();
+    let filtered = match (pending, tag_name) {
+        (Some(pending), Some(tag)) if pending.tag_name != tag => None,
+        (pending, _) => pending,
+    };
+    Ok(filtered.map(|pending| ReleaseUpdatePrepareResult {
+        tag_name: pending.tag_name,
+        asset_name: pending.asset_name,
+        installer_path: pending.installer_path,
+        ready_to_restart: true,
+        checksum_verified: pending.checksum_verified,
+        helper_status: pending.helper_status,
+        error: pending.error,
+    }))
 }
 
 #[tauri::command]
 pub async fn prepare_release_update(
     tag_name: String,
 ) -> Result<ReleaseUpdatePrepareResult, String> {
-    let release = fetch_release_by_tag(&tag_name).await?;
-    let release_version = release_version(&release.tag_name);
-    if compare_versions(&release_version, APP_VERSION) != std::cmp::Ordering::Greater {
-        return Err("Selected release is not newer than the installed version.".to_string());
-    }
-    let asset = select_release_installer_asset(
-        &release.assets,
-        std::env::consts::OS,
-        current_arch(),
-        linux_package_kind(),
-    )
-    .ok_or_else(|| "No compatible installer asset found for this release.".to_string())?
-    .clone();
-    let checksum_asset_name = find_checksum_for_asset(&asset, &release.assets)?;
-    let checksum_asset = release
-        .assets
-        .iter()
-        .find(|candidate| candidate.name == checksum_asset_name)
-        .ok_or_else(|| "Missing checksum asset for prepared update.".to_string())?
-        .clone();
-    let update_dir = release_update_dir(&release.tag_name)?;
-    let _ = tokio::fs::remove_dir_all(&update_dir).await;
-    tokio::fs::create_dir_all(&update_dir)
-        .await
-        .map_err(|e| format!("Create update directory failed: {e}"))?;
-    validate_release_asset_filename(&asset.name)?;
-    validate_release_asset_filename(&checksum_asset.name)?;
-    let installer_path_buf = update_dir.join(&asset.name);
-    let checksum_path_buf = update_dir.join(&checksum_asset.name);
-
-    download_asset(&asset, &installer_path_buf, MAX_UPDATE_ASSET_BYTES).await?;
-    download_asset(
-        &checksum_asset,
-        &checksum_path_buf,
-        MAX_CHECKSUM_ASSET_BYTES,
-    )
-    .await?;
-    let checksum_text = tokio::fs::read_to_string(&checksum_path_buf)
-        .await
-        .map_err(|e| format!("Read checksum failed: {e}"))?;
-    let verify_path = installer_path_buf.clone();
-    let verify_name = asset.name.clone();
-    tokio::task::spawn_blocking(move || {
-        verify_downloaded_checksum(&verify_path, &verify_name, &checksum_text)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let installer_path = installer_path_buf
-        .to_str()
-        .ok_or_else(|| "Invalid installer path".to_string())?
-        .to_string();
-    let checksum_path = checksum_path_buf
-        .to_str()
-        .ok_or_else(|| "Invalid checksum path".to_string())?
-        .to_string();
-    let pending = PendingReleaseUpdate {
-        tag_name: release.tag_name.clone(),
-        asset_name: asset.name.clone(),
-        installer_path: installer_path.clone(),
-        checksum_path,
-        checksum_verified: true,
-        helper_status: UPDATE_HELPER_READY.to_string(),
-        error: None,
-    };
-    tokio::task::spawn_blocking(move || save_pending_update(&pending))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    Ok(ReleaseUpdatePrepareResult {
-        tag_name: release.tag_name,
-        asset_name: asset.name,
-        installer_path,
-        ready_to_restart: true,
-        checksum_verified: true,
-        helper_status: UPDATE_HELPER_READY.to_string(),
-        error: None,
-    })
+    service().prepare_release_update(&tag_name).await
 }
 
+/// 替换正在运行的 app。**只有持有 app 身份的 GUI 适配器能做**——这正是 Action 5
+/// 把"准备"与"替换"分开的原因：下载与校验可以在无头宿主里做，替换不行。
 #[tauri::command]
 pub async fn restart_and_install_release_update(
     app: AppHandle,
     tag_name: String,
 ) -> Result<ReleaseInstallResult, String> {
-    let pending = tokio::task::spawn_blocking(load_pending_update)
-        .await
-        .map_err(|e| e.to_string())??;
+    let service = service();
+    let pending = service
+        .pending_update()
+        .ok_or_else(|| "No prepared update is pending.".to_string())?;
     if pending.tag_name != tag_name {
         return Err("Prepared update does not match the selected release.".to_string());
     }
-
     let updates_root = updates_dir()?;
-    let installer_path = validate_pending_installer_path(
+    let installer_path = aeroric_core::maintenance::validate_pending_installer_path(
         &updates_root,
         &pending.tag_name,
         &pending.asset_name,
@@ -1391,13 +812,13 @@ pub async fn restart_and_install_release_update(
     if !installer_path.exists() {
         return Err("Prepared installer was not found. Download the update again.".to_string());
     }
-    verify_pending_update_files(&pending, &installer_path)?;
+    aeroric_core::maintenance::verify_pending_update_files(&pending, &installer_path)?;
 
     #[cfg(target_os = "macos")]
     let (installed_app_path, restarted) = {
         let installed_app_path = install_macos_dmg(&installer_path).await?;
         let update_dir = installer_path.parent().map(Path::to_path_buf);
-        let _ = tokio::task::spawn_blocking(clear_pending_update).await;
+        let _ = service.clear_pending_update();
         if let Some(dir) = update_dir {
             let _ = tokio::fs::remove_dir_all(dir).await;
         }
@@ -1408,7 +829,7 @@ pub async fn restart_and_install_release_update(
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let (installed_app_path, restarted) = {
         let result = launch_update_helper().inspect_err(|error| {
-            let _ = update_pending_helper_status(UPDATE_HELPER_FAILED, Some(error.clone()));
+            let _ = service.set_helper_status(UPDATE_HELPER_FAILED, Some(error.clone()));
         })?;
         crate::authorize_app_exit(&app);
         app.exit(0);
@@ -1427,12 +848,15 @@ pub async fn restart_and_install_release_update(
     })
 }
 
+/// 便捷口：准备＋替换。前端按两步走（`prepare` → 用户确认 → `restart_and_install`），
+/// 这个命令保留给"一步到位"的调用方（CLI/脚本）；它一直是零调用方，P8-04 之后
+/// 仍由上面的两步路径服务 UI。
 #[tauri::command]
 pub async fn install_release_update(
     app: AppHandle,
     tag_name: String,
 ) -> Result<ReleaseInstallResult, String> {
-    let prepared = prepare_release_update(tag_name.clone()).await?;
+    let prepared = prepare_release_update(tag_name).await?;
     restart_and_install_release_update(app, prepared.tag_name).await
 }
 
@@ -1440,115 +864,10 @@ pub async fn install_release_update(
 mod tests {
     use super::*;
 
-    fn notification(id: &str) -> RemoteNotification {
-        RemoteNotification {
-            id: id.to_string(),
-            level: "info".to_string(),
-            title: format!("title-{id}"),
-            body: format!("body-{id}"),
-            body_zh: None,
-            url: None,
-            created_at: "2026-01-01".to_string(),
-            expires_at: None,
-            min_app_version: None,
-            max_app_version: None,
-            release_tag: None,
-            newer_than_current: false,
-            update_install_supported: false,
-        }
-    }
-
-    #[test]
-    fn apply_fetched_notifications_keeps_only_existing_read_ids_in_remote() {
-        let mut store = NotificationStore {
-            source: Some(RELEASES_URL.to_string()),
-            read_ids: vec!["keep".to_string(), "drop".to_string()],
-            last_fetched_at: None,
-            cached_notifications: None,
-        };
-
-        apply_fetched_notifications(&mut store, vec![notification("keep"), notification("new")]);
-
-        assert_eq!(store.read_ids, vec!["keep".to_string()]);
-        assert_eq!(store.cached_notifications.unwrap().len(), 2);
-        assert!(store.last_fetched_at.is_some());
-    }
-
-    #[test]
-    fn should_fetch_when_forced_even_with_fresh_cache() {
-        let store = NotificationStore {
-            source: Some(RELEASES_URL.to_string()),
-            read_ids: vec![],
-            last_fetched_at: Some(Utc::now().to_rfc3339()),
-            cached_notifications: Some(vec![notification("cached")]),
-        };
-
-        assert!(should_fetch(&store, true));
-        assert!(!should_fetch(&store, false));
-    }
-
-    #[test]
-    fn selects_macos_dmg_asset_for_current_architecture() {
-        let assets = vec![
-            GitHubReleaseAsset {
-                name: "Source code (zip)".to_string(),
-                browser_download_url: "https://example.invalid/source.zip".to_string(),
-            },
-            GitHubReleaseAsset {
-                name: "Aeroric_1.2.3_x64.dmg".to_string(),
-                browser_download_url: "https://example.invalid/x64.dmg".to_string(),
-            },
-            GitHubReleaseAsset {
-                name: "Aeroric_1.2.3_aarch64.dmg".to_string(),
-                browser_download_url: "https://example.invalid/aarch64.dmg".to_string(),
-            },
-        ];
-
-        let selected = select_macos_dmg_asset(&assets, "aarch64").unwrap();
-
-        assert_eq!(selected.name, "Aeroric_1.2.3_aarch64.dmg");
-    }
-
-    #[test]
-    fn selects_windows_and_linux_installers() {
-        let assets = vec![
-            GitHubReleaseAsset {
-                name: "Aeroric_1.2.3_arm64-setup.exe".to_string(),
-                browser_download_url: "https://example.invalid/arm64.exe".to_string(),
-            },
-            GitHubReleaseAsset {
-                name: "Aeroric_1.2.3_x64-setup.exe".to_string(),
-                browser_download_url: "https://example.invalid/x64.exe".to_string(),
-            },
-            GitHubReleaseAsset {
-                name: "Aeroric_1.2.3_amd64.deb".to_string(),
-                browser_download_url: "https://example.invalid/a.deb".to_string(),
-            },
-            GitHubReleaseAsset {
-                name: "Aeroric-1.2.3-1.x86_64.rpm".to_string(),
-                browser_download_url: "https://example.invalid/a.rpm".to_string(),
-            },
-        ];
-
-        assert_eq!(
-            select_release_installer_asset(&assets, "windows", "aarch64", None)
-                .unwrap()
-                .name,
-            "Aeroric_1.2.3_arm64-setup.exe"
-        );
-        assert_eq!(
-            select_release_installer_asset(&assets, "linux", "x86_64", Some("deb"))
-                .unwrap()
-                .name,
-            "Aeroric_1.2.3_amd64.deb"
-        );
-        assert_eq!(
-            select_release_installer_asset(&assets, "linux", "x86_64", Some("rpm"))
-                .unwrap()
-                .name,
-            "Aeroric-1.2.3-1.x86_64.rpm"
-        );
-    }
+    /// 这些用例测的是**宿主留下的那一半**：平台包工具、下载上限、helper 开关。
+    /// 判定/记账/资产选择的用例随业务体上收 core
+    /// （`core/crates/aeroric-core/tests/maintenance.rs` 与 `src/maintenance/*` 单测），
+    /// 在这里重写一遍只会得到两份会漂移的断言。
 
     #[test]
     fn chooses_native_linux_package_tools() {
@@ -1564,108 +883,25 @@ mod tests {
     }
 
     #[test]
-    fn release_notifications_are_installable_only_for_newer_versions_with_dmg_asset() {
-        let release = GitHubRelease {
-            id: 1,
-            tag_name: "v9.9.9".to_string(),
-            name: Some("Aeroric v9.9.9".to_string()),
-            body: Some("notes".to_string()),
-            html_url: "https://github.com/Aho1ic/Aeroric/releases/tag/v9.9.9".to_string(),
-            published_at: Some("2026-06-24T00:00:00Z".to_string()),
-            draft: false,
-            prerelease: false,
-            assets: vec![GitHubReleaseAsset {
-                name: "Aeroric_9.9.9_aarch64.dmg".to_string(),
-                browser_download_url: "https://example.invalid/Aeroric_9.9.9_aarch64.dmg"
-                    .to_string(),
-            }],
-        };
-
-        let notification = release_to_notification(release, "1.1.4", "aarch64");
-
-        assert_eq!(notification.release_tag.as_deref(), Some("v9.9.9"));
-        assert_eq!(
-            notification.update_install_supported,
-            cfg!(target_os = "macos")
-        );
+    fn the_download_ceiling_is_a_hard_stop() {
+        assert_eq!(checked_download_total(0, 10, 100).unwrap(), 10);
+        assert!(checked_download_total(95, 10, 100).is_err());
+        assert!(checked_download_total(0, 0, 0).is_ok());
     }
 
+    /// `--aeroric-update-helper` 是**独立进程的入口**：它必须在 Tauri 起来之前被识别，
+    /// 所以这个字面量不能随手改（改了等于升级包永远装不上）。
     #[test]
-    fn validates_pending_installer_path_inside_expected_update_directory() {
-        let root =
-            std::env::temp_dir().join(format!("aeroric-update-validate-{}", uuid::Uuid::new_v4()));
-        let update_dir = root.join("v9.9.9");
-        fs::create_dir_all(&update_dir).unwrap();
-        let dmg = update_dir.join("Aeroric_9.9.9_aarch64.dmg");
-        fs::write(&dmg, "fake dmg").unwrap();
-
-        let valid =
-            validate_pending_installer_path(&root, "v9.9.9", "Aeroric_9.9.9_aarch64.dmg", &dmg)
-                .unwrap();
-        assert_eq!(valid, dmg.canonicalize().unwrap());
-
-        let outside = root.join("outside.dmg");
-        fs::write(&outside, "fake dmg").unwrap();
-        let err =
-            validate_pending_installer_path(&root, "v9.9.9", "Aeroric_9.9.9_aarch64.dmg", &outside)
-                .unwrap_err();
-        assert!(err.contains("outside the update directory"));
-
-        let _ = fs::remove_dir_all(root);
+    fn the_update_helper_flag_is_stable() {
+        assert_eq!(UPDATE_HELPER_FLAG, "--aeroric-update-helper");
     }
 
+    /// 平台探测只回答"这台机器上有没有 dmg/deb/rpm"；域外平台返回 `None`
+    /// （而不是猜一个）。选择逻辑本身在 core，这里钉的是**输入**。
     #[test]
-    fn requires_checksum_for_installable_release_asset() {
-        let dmg = GitHubReleaseAsset {
-            name: "Aeroric_9.9.9_aarch64.dmg".to_string(),
-            browser_download_url: "https://example.invalid/Aeroric_9.9.9_aarch64.dmg".to_string(),
-        };
-        let err = find_checksum_for_asset(&dmg, std::slice::from_ref(&dmg)).unwrap_err();
-
-        assert!(err.contains("checksum"));
-    }
-
-    #[test]
-    fn update_download_size_guard_rejects_oversized_streams() {
-        assert_eq!(checked_download_total(6, 4, 10).unwrap(), 10);
-        assert!(checked_download_total(10, 1, 10).is_err());
-        assert!(checked_download_total(u64::MAX, 1, u64::MAX).is_err());
-    }
-
-    #[test]
-    fn release_asset_names_cannot_escape_the_update_directory() {
-        assert!(validate_release_asset_filename("Aeroric_9.9.9_aarch64.dmg").is_ok());
-        assert!(validate_release_asset_filename("../Aeroric_9.9.9_aarch64.dmg").is_err());
-        assert!(validate_release_asset_filename("nested/Aeroric_9.9.9_aarch64.dmg").is_err());
-        assert!(validate_release_asset_filename("").is_err());
-    }
-
-    #[test]
-    fn pending_updates_remain_ready_only_while_installer_checksum_matches() {
-        let root =
-            std::env::temp_dir().join(format!("aeroric-update-checksum-{}", uuid::Uuid::new_v4()));
-        let update_dir = root.join("v9.9.9");
-        fs::create_dir_all(&update_dir).unwrap();
-        let asset_name = "Aeroric_9.9.9_x64-setup.exe";
-        let installer = update_dir.join(asset_name);
-        fs::write(&installer, b"verified installer").unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"verified installer"));
-        let checksum = update_dir.join("SHA256SUMS.txt");
-        fs::write(&checksum, format!("{digest}  {asset_name}\n")).unwrap();
-        let pending = PendingReleaseUpdate {
-            tag_name: "v9.9.9".to_string(),
-            asset_name: asset_name.to_string(),
-            installer_path: installer.to_string_lossy().into_owned(),
-            checksum_path: checksum.to_string_lossy().into_owned(),
-            checksum_verified: true,
-            helper_status: UPDATE_HELPER_READY.to_string(),
-            error: None,
-        };
-
-        verify_pending_update_files(&pending, &installer).unwrap();
-        fs::write(&installer, b"tampered installer").unwrap();
-        assert!(verify_pending_update_files(&pending, &installer).is_err());
-
-        let _ = fs::remove_dir_all(root);
+    fn the_platform_probe_reports_the_running_os() {
+        let wiring = GuiMaintenanceHost.platform();
+        assert_eq!(wiring.os, std::env::consts::OS);
+        assert_eq!(wiring.arch, std::env::consts::ARCH);
     }
 }

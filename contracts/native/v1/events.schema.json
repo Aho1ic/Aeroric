@@ -5,7 +5,7 @@
     "seq": "assigned at one ordered publish point; a gap is reported, never absorbed",
     "unknownEvent": "clients keep the frame and must not fail the stream on an unrecognised topic"
   },
-  "count": 38,
+  "count": 41,
   "events": [
     {
       "disposition": "in-use",
@@ -13,6 +13,13 @@
       "listeners": 1,
       "name": "aeroric:app-settings-changed",
       "orphan": null
+    },
+    {
+      "disposition": "needs-native-consumer",
+      "emitters": 1,
+      "listeners": 0,
+      "name": "aeroric.app_settings_changed",
+      "orphan": "emitted-without-listener"
     },
     {
       "disposition": "in-use",
@@ -239,6 +246,13 @@
       "orphan": null
     },
     {
+      "disposition": "needs-native-consumer",
+      "emitters": 2,
+      "listeners": 0,
+      "name": "remote.terminal_resized",
+      "orphan": "emitted-without-listener"
+    },
+    {
       "disposition": "emitted-dynamically",
       "emitters": 0,
       "listeners": 1,
@@ -261,17 +275,24 @@
     },
     {
       "disposition": "in-use",
-      "emitters": 1,
+      "emitters": 2,
       "listeners": 1,
       "name": "usage-statistics-updated",
       "orphan": null
     },
     {
       "disposition": "in-use",
-      "emitters": 2,
+      "emitters": 1,
       "listeners": 1,
       "name": "weekly-report-progress",
       "orphan": null
+    },
+    {
+      "disposition": "needs-native-consumer",
+      "emitters": 1,
+      "listeners": 0,
+      "name": "weekly.report_progress",
+      "orphan": "emitted-without-listener"
     }
   ],
   "title": "aeroric-local-protocol-v1-events"

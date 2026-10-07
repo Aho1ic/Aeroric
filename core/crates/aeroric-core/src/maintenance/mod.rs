@@ -18,6 +18,7 @@ pub mod cleanup;
 pub mod diagnostics;
 pub mod notifications;
 pub mod reports;
+pub mod service;
 pub mod updates;
 
 use thiserror::Error;
@@ -49,6 +50,7 @@ pub use reports::{
     ReportProgressSink, ReportSummarizer, WeekWindow, WeeklyReportProgress, WeeklyReportRequest,
     WeeklyReportTask, MAX_SUMMARIZED_TASKS,
 };
+pub use service::{MaintenanceHost, MaintenanceService};
 pub use updates::{
     compare_versions, expected_release_digest_asset_name, find_checksum_for_asset, release_version,
     safe_tag, select_macos_dmg_asset, select_release_installer_asset,

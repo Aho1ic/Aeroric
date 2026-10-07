@@ -27,7 +27,11 @@ pub const DAY_MS: u64 = 86_400_000;
 /// `new Date(y, m, d, h).getTime()` and `new Date(ms).getDay()`, including the JS habit of
 /// *normalising* an out-of-range day rather than rejecting it: `slot_ms(2026, 9, 13 - 6, 20)`
 /// is the previous Sunday, and the caller may hand it a day below 1 on purpose.
-pub trait LocalCalendar {
+///
+/// `Send + Sync` 是 P8-04 加的：日历从"清理调度的一个参数"变成"维护面的端口"之后，
+/// 它会被 `Arc<dyn LocalCalendar>` 交给异步宿主（订阅服务的 handler 要求 `Send`）。
+/// 实现本身是无状态纯函数，加这两个约束不改变任何既有语义。
+pub trait LocalCalendar: Send + Sync {
     /// `(weekday 0=Sunday, year, month 1-based, day, hour)` of this instant, local.
     fn parts(&self, now_ms: i64) -> (u32, i64, i64, i64, i64);
     /// The instant of a local wall-clock time, normalising out-of-range components.

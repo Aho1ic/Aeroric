@@ -680,7 +680,9 @@ describe("the rules every client shares", () => {
 
   it("keeps the event surface countable", () => {
     expect(eventSurface.events).toHaveLength(eventSurface.count);
-    expect(eventSurface.count).toBe(38);
+    // P8-04 刀三：`weekly.report_progress` 与两条 P8-03 遗留的 v1 字面量一起进面
+    // （38 → 41）；旧通道数仍是 38（v1 主题名不是旧通道，见下一条用例）。
+    expect(eventSurface.count).toBe(41);
     expect(eventSurface.contract.seq).toContain("publish point");
     const names = eventSurface.events.map((e) => e.name);
     expect(new Set(names).size).toBe(names.length);
@@ -690,8 +692,11 @@ describe("the rules every client shares", () => {
   it("bridges every legacy channel to exactly one v1 topic (ADR-007)", () => {
     const topics = contract<TopicSurface>("event-topics.schema.json");
     expect(topics.topics).toBe(39);
-    expect(topics.mapped).toBe(5);
-    expect(topics.pending).toBe(33); // P8-03 刀二：remote.task_request 转 not-forwarded（RPC 应答即结果）
+    // P8-04 刀二/刀三：`usage.statistics_updated` 与 `weekly.report_progress` 双发接线，
+    // mapped 5 → 11（P8-02/03 的 9 条 ＋ 本轮 2 条）。
+    expect(topics.mapped).toBe(11);
+    // P8-04 刀三：两条 pending: P8-04 接线成 mapped，pending 33 → 27。
+    expect(topics.pending).toBe(27); // P8-03 刀二：remote.task_request 转 not-forwarded（RPC 应答即结果）
     expect(topics.reshapedPayloads).toBe(5); // P8-02 刀六起 agent 两条 mapped（reshaped payload）
     const claimed = new Map<string, number>();
     for (const row of topics.rows) {
@@ -711,22 +716,35 @@ describe("the rules every client shares", () => {
       }
     }
     expect(claimed.size).toBe(38);
+    // `events[]` 里混着**旧通道**与**以 v1 主题名发出的字面量**（P8-03 刀六起的
+    // 双发接线）。后者的 v1 一侧就是它自己，不在"旧通道要由本表承接"的判据里——
+    // 与 `aeroric-protocol` 的 `export-schema` 用同一条口径（P8-04 刀三修正）。
+    const topicNames = new Set(topics.rows.map((row) => String(row.topic)));
     for (const event of eventSurface.events) {
+      if (topicNames.has(event.name)) continue;
       expect(claimed.get(event.name), `${event.name} is uncovered`).toBe(1);
     }
     expect(topics.contract.unknownTopic).toContain("must not fail");
-    // §2.3 的三条＋P8-02 刀六的两条 agent 行（§Task P8-02 具名移交项）。
+    // §2.3 的三条＋P8-02 刀六的两条 agent 行（§Task P8-02 具名移交项）
+    // ＋P8-03 刀六的四条 remote 行＋P8-04 刀三的两条（usage.statistics_updated /
+    // weekly.report_progress，都是宿主双发接线的 v1 名字）。
     expect(
       topics.rows
         .filter((r) => r.status === "mapped")
         .map((r) => r.topic)
         .sort(),
     ).toEqual([
+      "aeroric.app_settings_changed",
       "agent.operation_changed",
       "agent.tool_install_progress",
+      "project.pinned_changed",
+      "remote.device_paired",
+      "remote.terminal_resized",
       "task.updated",
       "terminal.gap",
       "terminal.output",
+      "usage.statistics_updated",
+      "weekly.report_progress",
     ]);
   });
 

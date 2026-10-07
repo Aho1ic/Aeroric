@@ -211,6 +211,49 @@ pub fn select_release_installer_asset<'a>(
     }
 }
 
+impl PendingReleaseUpdate {
+    /// `updates/pending-release-update.json`。
+    pub fn path(data_dir: &Path) -> PathBuf {
+        data_dir.join("updates").join("pending-release-update.json")
+    }
+
+    /// 读。文件不存在、缺字段、旧格式三种情况都归一到同一种形状：缺的键按
+    /// `PendingReleaseUpdatePayload` 的默认值补（旧 `load_pending_update` 的兼容分支）。
+    /// 文件在但解不开是**错误**——那说明盘上有一份谁也不认识的记录，不能装作没有。
+    pub fn load(data_dir: &Path) -> Result<Option<Self>, String> {
+        let path = Self::path(data_dir);
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("Read pending update failed: {error}")),
+        };
+        let payload: PendingReleaseUpdatePayload = serde_json::from_str(&raw)
+            .map_err(|error| format!("Invalid pending update JSON: {error}"))?;
+        Ok(Some(payload.normalize()))
+    }
+
+    pub fn save(&self, data_dir: &Path) -> Result<(), String> {
+        let path = Self::path(data_dir);
+        let raw = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
+        crate::storage::atomic::write_atomic(
+            &path,
+            raw.as_bytes(),
+            crate::storage::atomic::FileMode::Private,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// 删掉待装记录；不存在的文件也算清干净（幂等）。
+    pub fn clear(data_dir: &Path) -> Result<(), String> {
+        let path = Self::path(data_dir);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("Remove pending update failed: {error}")),
+        }
+    }
+}
+
 /// 安装包的校验文件叫什么；不认识的扩展名返回 `None`（不是"没有校验"）。
 pub fn expected_release_digest_asset_name(asset_name: &str) -> Option<String> {
     [".dmg", ".exe", ".deb", ".rpm"]

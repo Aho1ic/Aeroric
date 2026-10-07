@@ -24,12 +24,15 @@ use parse::*;
 pub(crate) use parse::parse_session_lines;
 
 use export::export_session_markdown_inner;
+/// 周报(`crate::report`)复用这套 md 清理与路径校验:另写一份迟早跟这里跑偏,
+/// 而"bullet 被换行撑破""导出路径没 canonicalize"都是已经在这里解决过的问题。
+// 生产消费者已随 P8-04 刀三迁入 core（报告渲染与落盘）；宿主只剩本文件自己的
+// 路径校验用例还在用，所以按 test-only 导入，避免 lib 目标 unused。
+#[cfg(test)]
+pub(crate) use export::validate_export_output_path;
 #[cfg(test)]
 use export::write_export_markdown;
 pub use export::ExportTaskMeta;
-/// 周报(`crate::report`)复用这套 md 清理与路径校验:另写一份迟早跟这里跑偏,
-/// 而"bullet 被换行撑破""导出路径没 canonicalize"都是已经在这里解决过的问题。
-pub(crate) use export::{format_timestamp_ms, sanitize_md_inline, validate_export_output_path};
 
 // 三族会话条目已随 P3-01 切片三迁入 core 的 TaskRegistry(它们是注册表的纯数据值)。
 // 这里 re-export 保持 `crate::session::…` 路径不变。

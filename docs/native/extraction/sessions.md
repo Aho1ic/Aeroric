@@ -26,21 +26,21 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 | 5 | `src-tauri/src/session_dsh.rs` | `core/crates/aeroric-core/session_dsh/session_dsh-root.rs` | 0 | discover_dsh_session_since(), dsh_agent_owning_session(), dsh_project_sessions_dir_for(), dsh_session_allowed_roots(), dsh_session_path_for(), dsh_sessions_root_for(), newest_dsh_session_since(), register_dsh_session(), register_dsh_session_with_preset(), spawn_dsh_session_watcher() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 6 | `src-tauri/src/session_omp.rs` | `core/crates/aeroric-core/session_omp/session_omp-root.rs` | 0 | discover_omp_session_since(), discover_unclaimed_omp_session_since(), omp_project_dir_name(), omp_session_allowed_roots(), omp_sessions_dir_for(), register_omp_session(), resolve_omp_session_ref(), spawn_omp_session_watcher() (11 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; credential owner |
 | 7 | `src-tauri/src/event_watcher.rs` | `core/crates/aeroric-core/event_watcher/event_watcher-root.rs` | 0 | cleanup_task_events(), start() (3 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
-| 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | Enum UsageSource, Struct ClaudeUsageData, Struct CodexRpcClient, Struct CodexUsageData, Struct UsageSnapshot, Struct UsageWindow, read_usage_snapshot() (3 test items excluded) | `metrics/usage.rs` | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
-| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | Struct AgentUsageSnapshot, Struct AgentUsageStats, load_agent_usage_snapshot(), record_agent_config_usage() (8 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer |
-| 10 | `src-tauri/src/usage_index.rs` | `core/crates/aeroric-core/usage_index/usage_index-root.rs` | 1 | latest_updated_at(), load_requests(), refresh_index(), refresh_usage_statistics_index(), start() (21 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
-| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | Enum UsageAgent, Struct SessionMetrics, Struct UsageRequest, Struct UsageStatistics, Struct UsageStatisticsBreakdown, Struct UsageStatisticsDay, Struct UsageStatisticsTotals, claude_context_window_for_model(), collect_jsonl_files(), is_codex_session(), is_dsh_session(), is_omp_session(), is_zstd_usage_log(), parse_claude_usage_requests(), parse_codex_usage_requests() +8 more (23 test items excluded) | `metrics/analytics.rs` | command-layer; spawns task/thread (needs a cancellation token); credential owner |
+| 8 | `src-tauri/src/usage.rs` | `core/crates/aeroric-core/usage/usage-root.rs` | 1 | read_usage_snapshot() (0 test items excluded) | `metrics/usage.rs` | command-layer; AppHandle/State; credential owner |
+| 9 | `src-tauri/src/agent_usage.rs` | `core/crates/aeroric-core/agent_usage/agent_usage-root.rs` | 2 | load_agent_usage_snapshot(), record_agent_config_usage() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer |
+| 10 | `src-tauri/src/usage_index.rs` | `core/crates/aeroric-core/usage_index/usage_index-root.rs` | 1 | Struct UsageIndexGuard, refresh_usage_statistics_index(), start() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
+| 11 | `src-tauri/src/analytics.rs` | `core/crates/aeroric-core/analytics/analytics-root.rs` | 2 | paths(), read_session_metrics(), read_usage_statistics() (0 test items excluded) | `metrics/analytics.rs` | command-layer |
 <!-- generated:end -->
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **9344**, command wrappers: **13**, test items excluded from the symbol lists: **125**
+- files: **11**, lines: **4700**, command wrappers: **13**, test items excluded from the symbol lists: **70**
 - files carrying `AppHandle`/`State`: **6**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**
 - files with `cfg(windows)`: **0**; with `cfg(unix)`: **0**
-- files that spawn (need an explicit cancellation/reap owner before extraction): **5**
-- files touching credentials: **8**
+- files that spawn (need an explicit cancellation/reap owner before extraction): **3**
+- files touching credentials: **6**
 
 ## 手写约束（`--check` 只重导上面那张表，本节不会被覆盖）
 

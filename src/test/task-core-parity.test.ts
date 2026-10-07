@@ -19,6 +19,18 @@
  * declaration is a way to hide a bug.
  */
 
+/* 时区必须是**这个夹具的时区**，不能是本机时区。
+ *
+ * 这些用例把"周日 20:00"这样的本地钟点换算成 epoch 存进表里，被测的
+ * `shouldRunCleanup` 又按**进程的**时区把 epoch 读回本地日历分量——两边只要有一边跟着
+ * 机器走，这张表就只在那台生成它的机器上成立。P8-04 刀三实测：提交表是 UTC−7 生成的
+ * （`nowMs=1789401600000`），换到 UTC+8 的机器上重算得 `1789347600000`，11 行 input
+ * 与 1 行 `expected` 同时报红。把它钉成常量之后，表在任何机器上逐字节可复现。
+ *
+ * 必须在任何 `Date` 使用之前设置：V8 在首次读时区时缓存，之后再改 `process.env.TZ`
+ * 不生效（所以要写在 import 之后、用例之前的模块顶层）。 */
+process.env.TZ = "Etc/GMT+7"; // POSIX 反号：GMT+7 == UTC−7
+
 import { describe, expect, it } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";

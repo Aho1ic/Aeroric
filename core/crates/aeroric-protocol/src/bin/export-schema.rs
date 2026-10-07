@@ -905,7 +905,15 @@ fn event_topics(table: &Value, map: &Value) -> Result<Vec<Value>, String> {
         }
     }
     let legacy: &[Value] = map["events"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let channels: Vec<&str> = legacy.iter().filter_map(|e| e["name"].as_str()).collect();
+    // `events[]` 混着两种名字：**旧通道**（要由某个 v1 topic 承接）与**直接以 v1
+    // 主题名发出的字面量**（P8-03 刀六起的双发接线——`aeroric.app_settings_changed`
+    // 这类）。后者本身就是 v1 一侧，要求"被某个 v1 topic 承接"等于要求它承接自己，
+    // 是一个永远不成立的判据。所以先把主题名从"旧通道"里滤掉，再逐条对账。
+    let channels: Vec<&str> = legacy
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .filter(|name| !seen_topics.contains(name))
+        .collect();
     for name in &channels {
         match seen_channels.get(name).copied().unwrap_or(0) {
             0 => return Err(format!("legacy channel {name:?} is covered by no v1 topic")),

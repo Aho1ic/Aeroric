@@ -23,6 +23,7 @@ uuid = { version = "1", features = ["v4"] } # 与 core/宿主同版：host token
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+parking_lot = { workspace = true } # metrics 的 codex 进程句柄槽（宿主持有，core 只借）
 
 [target.'cfg(unix)'.dependencies]
 async-trait = "0.1"

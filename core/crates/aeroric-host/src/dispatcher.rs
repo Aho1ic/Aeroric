@@ -137,6 +137,22 @@ use aeroric_protocol::envelope::Success;
 use crate::auth::{parse_handshake, HostToken};
 
 /// token 与事件日志的共享装配根。`accept` 侧（第四片）持它构造 CallContext。
+/// 装配时可选的注入（Task P8-04 刀三）。
+///
+/// 三个字段分开的原因是它们的可用性互不相关：无头 CLI 有 `codex_rpc` 槽与降级账，
+/// 但没有 `maintenance`（网络抓取与"替换正在运行的 app"是桌面宿主的事）；测试可以
+/// 只给其中一个。`Default` 是"都没给"，不是"给了一个空壳"。
+#[derive(Default)]
+pub struct HostWiring {
+    /// 维护面端口。给了才注册 `maintenance.*`（没给＝能力不存在，客户端拿到
+    /// method-not-found，而不是一个会假装工作的空壳）。
+    pub maintenance: Option<Arc<dyn aeroric_core::maintenance::MaintenanceHost>>,
+    /// `codex app-server` 的进程句柄槽（`usage.read_usage_snapshot` 用它）。
+    pub codex_rpc: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
+    /// 启动降级账（`diagnostics.list_startup_degradations` 读它）。
+    pub degradations: Arc<aeroric_core::maintenance::StartupDegradationLog>,
+}
+
 pub struct HostServices {
     pub token: Arc<HostToken>,
     pub log: Arc<EventLog>,
@@ -156,7 +172,17 @@ impl HostServices {
         log: Arc<EventLog>,
         context: Arc<aeroric_core::context::CoreContext>,
     ) -> Arc<Self> {
-        Self::assemble(token, log, context, None, None, None, None, None)
+        Self::assemble(
+            token,
+            log,
+            context,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::dispatcher::HostWiring::default(),
+        )
     }
 
     /// b1.2/b1.3：执行服务全装配（serve 在 `TaskService::new` + `attach` 之后调用）。
@@ -179,6 +205,43 @@ impl HostServices {
             Some(executor),
             Some(terminal),
             Some(registry),
+            crate::dispatcher::HostWiring::default(),
+        )
+    }
+
+    /// 只读装配＋注入（P8-04 刀三：验收用；生产走 `with_tasks_and_wiring`）。
+    pub fn with_wiring(
+        token: Arc<HostToken>,
+        log: Arc<EventLog>,
+        context: Arc<aeroric_core::context::CoreContext>,
+        wiring: HostWiring,
+    ) -> Arc<Self> {
+        Self::assemble(token, log, context, None, None, None, None, None, wiring)
+    }
+
+    /// 全装配＋可选的维护面注入（P8-04 刀三：cli serve 与桌面 embedded host 都走这里）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_tasks_and_wiring(
+        token: Arc<HostToken>,
+        log: Arc<EventLog>,
+        context: Arc<aeroric_core::context::CoreContext>,
+        service: Arc<aeroric_core::tasks::TaskService>,
+        families: Arc<dyn aeroric_core::tasks::AgentFamilies>,
+        executor: Arc<crate::executor::CliPtyExecutor>,
+        terminal: Arc<aeroric_core::terminal::pty::TerminalService>,
+        registry: Arc<aeroric_core::runtime::registry::TaskRegistry>,
+        wiring: HostWiring,
+    ) -> Arc<Self> {
+        Self::assemble(
+            token,
+            log,
+            context,
+            Some(service),
+            Some(families),
+            Some(executor),
+            Some(terminal),
+            Some(registry),
+            wiring,
         )
     }
 
@@ -191,6 +254,7 @@ impl HostServices {
         executor: Option<Arc<crate::executor::CliPtyExecutor>>,
         terminal: Option<Arc<aeroric_core::terminal::pty::TerminalService>>,
         registry: Option<Arc<aeroric_core::runtime::registry::TaskRegistry>>,
+        mut wiring: HostWiring,
     ) -> Arc<Self> {
         let mut set = ServiceSet::new();
         let mut capabilities: Vec<aeroric_protocol::capability::Capability> = Vec::new();
@@ -204,6 +268,22 @@ impl HostServices {
         let replay_context = context.clone();
         crate::services::register_file_services(&mut set, Arc::clone(&context));
         crate::notebook_services::register_notebook_services(&mut set, Arc::clone(&context));
+        // P8-04 刀三：用量族与降级账总是注册（无头也有这两块能力）；维护面按注入
+        // 注册——没有端口＝没有这个能力（见 `HostWiring::maintenance`）。
+        crate::maintenance_services::register_usage_services(
+            &mut set,
+            Arc::clone(&context),
+            Arc::clone(&wiring.codex_rpc),
+        );
+        crate::maintenance_services::register_diagnostics_services(
+            &mut set,
+            Arc::clone(&wiring.degradations),
+        );
+        crate::maintenance_services::register_if_hosted(
+            &mut set,
+            wiring.maintenance.take(),
+            context.paths.data_dir(),
+        );
         if let (Some(service), Some(families), Some(executor), Some(terminal), Some(registry)) =
             (service, families, executor, terminal, registry)
         {

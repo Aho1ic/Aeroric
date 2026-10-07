@@ -15,9 +15,9 @@
   },
   "legacyChannels": 38,
   "legacyDirectionUnproven": 11,
-  "mapped": 9,
+  "mapped": 11,
   "notForwarded": 0,
-  "pending": 29,
+  "pending": 27,
   "protocolVersion": 1,
   "reshapedPayloads": 5,
   "rows": [
@@ -569,9 +569,10 @@
         "usage-statistics-updated"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-04",
-      "plannedDirection": "pending: P8-04",
-      "status": "pending: P8-04",
+      "payload": "verbatim: legacy payload is `{updatedAt}`; the host index sink (P8-04 刀二/刀三) dual-emits the same object on the legacy channel and on this v1 topic",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-04 Action 1/3；core `metrics::index` 只认注入的 `IndexEventSink`，宿主 `usage_index.rs` 双发（刀二）",
+      "status": "mapped",
       "topic": "usage.statistics_updated"
     },
     {
@@ -583,9 +584,10 @@
         "weekly-report-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P8-04",
-      "plannedDirection": "pending: P8-04",
-      "status": "pending: P8-04",
+      "payload": "verbatim: legacy payload is `{scope, completed, total, currentTitle}`; the host progress sink (P8-04 刀三) dual-emits the same object on the legacy channel and on this v1 topic",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md §Task P8-04 Action 1/3；core `maintenance::reports` 只认注入的 `ReportProgressSink`，宿主 `report.rs` 双发",
+      "status": "mapped",
       "topic": "weekly.report_progress"
     }
   ],

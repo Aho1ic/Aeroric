@@ -11,10 +11,11 @@ use super::validate_session_path_for;
 #[cfg(test)]
 pub(crate) use aeroric_core::sessions::export::write_export_markdown;
 pub use aeroric_core::sessions::export::ExportTaskMeta;
-pub(crate) use aeroric_core::sessions::export::{
-    export_session_markdown, format_timestamp_ms, sanitize_md_inline, validate_export_output_path,
-    ExportSource,
-};
+pub(crate) use aeroric_core::sessions::export::{export_session_markdown, ExportSource};
+// 报告渲染与落盘已随 P8-04 刀三进 core（`maintenance::reports` 直接调 core 的
+// `sessions::export`）；宿主只剩 `session.rs` 的路径校验用例还在用这一个名字。
+#[cfg(test)]
+pub(crate) use aeroric_core::sessions::export::validate_export_output_path;
 
 /// 族别判定：`Claude | Codex` 仍交给 core 内的内容嗅探分支（原 `_ if is_codex_format(…)`
 /// 的形状逐字保真），`Dsh`／`Omp` 走各自的显式解析器。
