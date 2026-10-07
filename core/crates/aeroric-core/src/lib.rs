@@ -19,6 +19,7 @@ pub mod infrastructure;
 pub mod local_router;
 pub mod location;
 pub mod location_probe;
+pub mod maintenance;
 pub mod notebook;
 pub mod operations;
 pub mod paths;
