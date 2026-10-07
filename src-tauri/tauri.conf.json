@@ -4,9 +4,9 @@
   "version": "1.4.9",
   "identifier": "com.aeroric.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm native:prepare-tauri-host && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm native:prepare-tauri-host && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {

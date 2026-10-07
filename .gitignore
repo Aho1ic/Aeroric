@@ -66,6 +66,9 @@ docs/native/**
 # the shared scheme are the committed sources; the .xcodeproj is derived.
 .artifacts/native/
 core/target/
+# P8-05 Action 7：宿主 helper 的生成物（`pnpm native:prepare-tauri-host` 的产物）。
+# 机读二进制不进 git，与 dist/、core/target/ 同一类。
+src-tauri/binaries/
 macos/AeroricKit/.build/
 macos/DerivedData/
 macos/AeroricNative.xcodeproj/

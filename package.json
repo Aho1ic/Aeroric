@@ -25,6 +25,7 @@
     "test:coverage": "vitest run --coverage",
     "native:doctor": "node scripts/native/doctor.mjs",
     "native:generate": "node scripts/native/generate.mjs",
+    "native:prepare-tauri-host": "node scripts/native/prepare-tauri-host.mjs",
     "native:build": "node scripts/native/build.mjs",
     "native:dev": "node scripts/native/dev.mjs",
     "native:check": "node scripts/native/check.mjs",

@@ -62,6 +62,7 @@
       "notebook-sync-contract-rust@notebook-services": 6,
       "notebook-ui-unit@notebook": 9,
       "platform-capabilities-rust@platforms": 5,
+      "prepare-tauri-host-unit@cutover": 7,
       "projects-core-rust@projects": 16,
       "projects-parity-is-derived-from-client@projects": 2,
       "projects-save-single-queue@projects": 3,
@@ -3072,6 +3073,31 @@
           "minCases": 10,
           "$note": "P8-05 切片三：`core_adapter::tests::` 全节 10 用例（本片新增 4 条＝判决矩阵（只有『允许移交＋已有活宿主』才外置；未移交平台恒内嵌）；另 6 条是该文件既有的模式矩阵/只读拒绝/事件词表用例）＋External **不去取租约**（租约文件都不该出现、core 独立拒绝写）＋外置连不上时只读并如实报告（不回退成内嵌写者）＋无活宿主时内嵌且**不去连**（不浪费 2s 超时）。",
           "timeoutMs": 1800000
+        },
+        {
+          "name": "prepare-tauri-host-unit",
+          "kind": "test",
+          "argv": [
+            "node",
+            "--test",
+            "scripts/native/prepare-tauri-host.test.mjs"
+          ],
+          "parse": "node-test",
+          "minCases": 7,
+          "$note": "P8-05 切片四：helper 打包脚本的**拒绝行为** 7 用例——未知三元组/未知参数被拒；**CI 下缺三元组是硬拒绝且不打『推导』字样**（Action 8 禁令的可测形态）；本地兜底用 rustc 宿主三元组并大声标明来源；Tauri 自己传的 TAURI_ENV_TARGET_TRIPLE 生效；externalBin 命名约定（含 Windows 的 .exe）；--dry-run 不落盘。",
+          "timeoutMs": 300000
+        },
+        {
+          "name": "prepare-tauri-host-dry-run",
+          "kind": "gate",
+          "argv": [
+            "node",
+            "scripts/native/prepare-tauri-host.mjs",
+            "--triple=aarch64-apple-darwin",
+            "--dry-run"
+          ],
+          "$note": "P8-05 切片四：脚本在显式三元组下可运行并报出 source/target 两条路径（真构建与架构核对见 `pnpm native:prepare-tauri-host` 的手跑记录：arm64 校验通过、28 597 776 B、版本 0.1.0）。",
+          "timeoutMs": 300000
         }
       ],
       "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁：切片一=宿主仲裁与切换前检查。**尚未进入本模块**：Action 1/2/3 的 external gateway（host_client/host_event_bridge/host_supervisor＋Embedded|External）、Action 4 的迁移演练脚本、Action 7–10 的 helper 打包与签名验证——它们随各自切片注册。"
