@@ -366,3 +366,60 @@ async fn dsh_reasoning_effort_is_validated_and_keeps_other_keys() {
     assert_eq!(rig.read_settings(), before_non_dsh);
     rig.cleanup();
 }
+
+#[tokio::test]
+async fn agent_config_file_paths_read_and_write_through_configured_path() {
+    let mut rig = Rig::start("agent-config").await;
+    let (mut reader, mut writer) = rig.connect().await;
+    rig.handshake(&mut reader, &mut writer).await;
+
+    let config_path = rig.root.join("agent-config.json");
+    rig.write_settings(json!({
+        "claude_config_path": config_path.to_string_lossy(),
+    }));
+
+    let path_reply = call(
+        &mut reader,
+        &mut writer,
+        "1",
+        "settings.get_agent_config_file_path",
+        json!({ "agent": "claude" }),
+    )
+    .await;
+    assert_eq!(result(&path_reply), &json!(config_path.to_string_lossy()));
+
+    let missing = call(
+        &mut reader,
+        &mut writer,
+        "2",
+        "settings.read_agent_config_file",
+        json!({ "agent": "claude" }),
+    )
+    .await;
+    assert_eq!(result(&missing), &json!(null));
+
+    let write = call(
+        &mut reader,
+        &mut writer,
+        "3",
+        "settings.write_agent_config_file",
+        json!({ "agent": "claude", "content": "{\"ok\":true}" }),
+    )
+    .await;
+    assert!(matches!(write, Frame::Success(_)), "{write:?}");
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        "{\"ok\":true}"
+    );
+
+    let read = call(
+        &mut reader,
+        &mut writer,
+        "4",
+        "settings.read_agent_config_file",
+        json!({ "agent": "claude" }),
+    )
+    .await;
+    assert_eq!(result(&read), &json!("{\"ok\":true}"));
+    rig.cleanup();
+}

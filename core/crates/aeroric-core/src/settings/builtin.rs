@@ -188,7 +188,7 @@ pub(crate) fn omp_managed_home() -> Option<PathBuf> {
     crate::settings::home_dir().map(|home| home.join(".aeroric").join("agent-homes").join("omp"))
 }
 
-pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
+pub fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::settings::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     match agent {

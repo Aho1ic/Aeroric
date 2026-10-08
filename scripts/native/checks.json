@@ -83,7 +83,7 @@
       "remote-ui-unit@remote": 5,
       "runtime-lifecycle-rust@runtime": 5,
       "sessions-ui-unit@sessions-ui": 20,
-      "settings-services-rust@cutover": 5,
+      "settings-services-rust@cutover": 6,
       "settings-ui-unit@settings-ui": 11,
       "shell-unit@shell": 36,
       "src-tauri-lib-tests@tauri-adapter": 1231,
@@ -3136,9 +3136,9 @@
           "argv": [
             "node",
             "scripts/native/host-coverage.mjs",
-            "--floor=53"
+            "--floor=56"
           ],
-          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 53/641（8.3%；切片九补齐 settings 读/整份写/六条单字段更新＝35→43，切片十把宿主 P8-03 已实现的 remote 8 条 camelCase 实名与台账 remote_server_* 派生名对齐＝43→51，切片十一新增 terminal.get_active_task_ids＝51→52，切片十二新增 settings.update_dsh_reasoning_effort＝52→53）——切片八时 35/641（5.5%：切片七补齐 files 格式化/本地历史/复制五条＝22，切片八把 13 条台账方法与宿主实名对齐——files 5／task 6／session 2。**对齐依据是宿主注册名与已发布客户端（Swift FilesClient）实际调用的名字**，不是按字符串相似度猜的）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法或对齐名字后把它改大。",
+          "$note": "P8-05 切片六：命令映射覆盖率的**棘轮**。今日 56/641（8.7%；切片九补齐 settings 读/整份写/六条单字段更新＝35→43，切片十把宿主 P8-03 已实现的 remote 8 条 camelCase 实名与台账 remote_server_* 派生名对齐＝43→51，切片十一新增 terminal.get_active_task_ids＝51→52，切片十二新增 settings.update_dsh_reasoning_effort＝52→53，切片十三新增 get/read/write_agent_config_file 三条＝53→56）——切片八时 35/641（5.5%：切片七补齐 files 格式化/本地历史/复制五条＝22，切片八把 13 条台账方法与宿主实名对齐——files 5／task 6／session 2。**对齐依据是宿主注册名与已发布客户端（Swift FilesClient）实际调用的名字**，不是按字符串相似度猜的）宿主已服务，缺口按模块打印（database 95／notebook 73／connections 66／dsh 65／ide 62…）；同时校验**转发接线表的 28 条映射全部指向宿主真的注册过的方法**（指错即在 external 下必然失败）。floor 只许升不许降：补齐宿主方法或对齐名字后把它改大。",
           "timeoutMs": 300000
         },
         {
@@ -3175,8 +3175,8 @@
             "settings_services"
           ],
           "parse": "rust",
-          "minCases": 5,
-          "$note": "P8-05 切片九/十二：设置面宿主服务 5 用例——缺文件与空对象等价而**坏文件报错**（不被写成空对象）；单字段更新**保留其余键**（含第三方键与 custom_agents）且缺参数时磁盘不动；坏文件**从不被更新覆盖**（逐字节比对）；FIELD_UPDATES 表每一行都有可调用的注册点；dsh reasoning effort 只收 off/high/max 且保留其余键。",
+          "minCases": 6,
+          "$note": "P8-05 切片九/十二/十三：设置面宿主服务 6 用例——缺文件与空对象等价而**坏文件报错**（不被写成空对象）；单字段更新**保留其余键**（含第三方键与 custom_agents）且缺参数时磁盘不动；坏文件**从不被更新覆盖**（逐字节比对）；FIELD_UPDATES 表每一行都有可调用的注册点；dsh reasoning effort 只收 off/high/max 且保留其余键；agent config file path/read/write 走已配置路径。",
           "timeoutMs": 900000
         }
       ],

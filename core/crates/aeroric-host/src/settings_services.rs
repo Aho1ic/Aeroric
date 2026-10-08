@@ -199,6 +199,36 @@ pub fn register_settings_services(set: &mut ServiceSet, context: Arc<CoreContext
             }),
         );
     }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "settings.get_agent_config_file_path",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { settings_agent_config_file_path(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "settings.read_agent_config_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { settings_read_agent_config_file(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "settings.write_agent_config_file",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { settings_write_agent_config_file(request, context) })
+            }),
+        );
+    }
 }
 
 /// `settings.update_dsh_reasoning_effort`：只接受内置 dsh 与 off/high/max；
@@ -268,6 +298,160 @@ fn settings_update_dsh_reasoning_effort(request: Request, context: Arc<CoreConte
     }
 }
 
+fn load_typed_settings(
+    context: &Arc<CoreContext>,
+) -> Result<aeroric_core::settings::schema::AppSettings, String> {
+    let fields = match aeroric_core::storage::settings::load_settings(context) {
+        Ok(outcome) => outcome.found().unwrap_or_default(),
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(serde_json::from_value(Value::Object(fields)).unwrap_or_default())
+}
+
+fn agent_config_path_from_settings(
+    agent: &str,
+    settings: &aeroric_core::settings::schema::AppSettings,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let configured = |value: &str| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(trimmed))
+        }
+    };
+    match agent {
+        "claude" => Ok(configured(&settings.claude_config_path).or_else(|| {
+            aeroric_core::settings::builtin::default_builtin_agent_config_path("claude").ok()
+        })),
+        "claude_gpt55" => Ok(configured(&settings.claude_gpt55_config_path)),
+        "codex" => Ok(configured(&settings.codex_config_path).or_else(|| {
+            aeroric_core::settings::builtin::default_builtin_agent_config_path("codex").ok()
+        })),
+        "dsh" => Ok(configured(&settings.dsh_config_path).or_else(|| {
+            aeroric_core::settings::builtin::default_builtin_agent_config_path("dsh").ok()
+        })),
+        "omp" => Ok(aeroric_core::settings::builtin::default_builtin_agent_config_path("omp").ok()),
+        _ => settings
+            .custom_agents
+            .iter()
+            .find(|profile| profile.id == agent)
+            .map(|profile| match profile.agent_family() {
+                aeroric_core::settings::schema::AgentFamily::Omp => {
+                    aeroric_core::settings::builtin::default_builtin_agent_config_path("omp").ok()
+                }
+                aeroric_core::settings::schema::AgentFamily::Dsh => {
+                    aeroric_core::settings::normalize::custom_agent_home(&profile.id)
+                        .ok()
+                        .map(|home| home.join("settings.yaml"))
+                }
+                _ => configured(&profile.path),
+            })
+            .ok_or_else(|| format!("Unknown agent: {agent}")),
+    }
+}
+
+fn settings_agent_config_file_path(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(agent) = request
+        .params
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: agent",
+        );
+    };
+    let settings = match load_typed_settings(&context) {
+        Ok(settings) => settings,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    match agent_config_path_from_settings(&agent, &settings) {
+        Ok(Some(path)) => ok(&request, Value::String(path.to_string_lossy().into_owned())),
+        Ok(None) => ok(&request, Value::String(String::new())),
+        Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    }
+}
+
+fn settings_read_agent_config_file(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(agent) = request
+        .params
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: agent",
+        );
+    };
+    let settings = match load_typed_settings(&context) {
+        Ok(settings) => settings,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    let path = match agent_config_path_from_settings(&agent, &settings) {
+        Ok(Some(path)) => path,
+        Ok(None) => return ok(&request, Value::Null),
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    };
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => ok(&request, Value::String(content)),
+            Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+        }
+    } else {
+        ok(&request, Value::Null)
+    }
+}
+
+fn settings_write_agent_config_file(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(agent) = request
+        .params
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: agent",
+        );
+    };
+    let Some(content) = request
+        .params
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "Missing param: content",
+        );
+    };
+    let settings = match load_typed_settings(&context) {
+        Ok(settings) => settings,
+        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
+    };
+    let path = match agent_config_path_from_settings(&agent, &settings) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                "Agent config file path is not configured",
+            );
+        }
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    };
+    match aeroric_core::settings::atomic_write(&path, &content) {
+        Ok(()) => ok(&request, Value::Null),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
 /// 表与注册点的对账：每条 `FIELD_UPDATES` 都必须有一个同名的显式注册点。
 ///
 /// 这不是形式主义：注册点写成字面量之后，表里的方法名就没有机器在读，"加了一行表却忘了
