@@ -26,7 +26,10 @@ const floorArg = args.find((a) => a.startsWith("--floor="));
 const floor = floorArg ? Number(floorArg.slice("--floor=".length)) : null;
 const quiet = args.includes("--quiet");
 
-/** 宿主侧真实注册的方法名。扫源码里的 `set.register("<name>"` 与 `register.*("<name>"`。 */
+/** 宿主侧真实注册的方法名。扫源码里的 `set.register("<name>"` 与 notebook_services.rs
+ * 的 `service!("<name>"`／`service_ctx!("<name>"` 宏调用点（宏在调用点展开为同一个
+ * `set.register($method, …)`，方法名是逐调用点的字面量——切片九十前该盲区让 P7-05/06
+ * 的 71 条 notebook 注册全部不可见）。 */
 function hostMethods() {
   const dir = path.join(repoRoot, "core", "crates", "aeroric-host", "src");
   const methods = new Set();
@@ -34,6 +37,7 @@ function hostMethods() {
     if (!file.endsWith(".rs")) continue;
     const text = readFileSync(path.join(dir, file), "utf8");
     for (const match of text.matchAll(/set\.register\(\s*"([^"]+)"/g)) methods.add(match[1]);
+    for (const match of text.matchAll(/service(?:_ctx)?!\(\s*"([^"]+)"/g)) methods.add(match[1]);
   }
   return methods;
 }
