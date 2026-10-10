@@ -194,7 +194,7 @@ fn create_empty_temp_file() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBlameLine {
     pub(crate) line: u32,
@@ -206,7 +206,7 @@ pub(crate) struct GitBlameLine {
     pub(crate) content: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBlameResult {
     pub(crate) file_path: String,
@@ -2128,8 +2128,7 @@ pub async fn git_remote_counts<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_blame_file(
+pub async fn local_git_blame_file(
     project_path: String,
     file_path: String,
 ) -> Result<GitBlameResult, String> {
@@ -2150,6 +2149,26 @@ pub async fn git_blame_file(
         file_path,
         lines: parse_blame_porcelain(&output.stdout),
     })
+}
+
+#[tauri::command]
+pub async fn git_blame_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+) -> Result<GitBlameResult, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_blame_file",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path }),
+        async {
+            local_git_blame_file(project_path, file_path)
+                .await
+                .and_then(|blame| serde_json::to_value(blame).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2865,9 +2884,9 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_blame_file, git_branch_graph, git_clone, git_commit_detail, git_conflict_preview,
-        git_dir, git_fetch, git_has_head, git_resolve_conflict, git_stash_diff, git_stash_list,
-        git_worktree_root, is_protected_project_relative_path, list_untracked_files,
+        git_branch_graph, git_clone, git_commit_detail, git_conflict_preview, git_dir, git_fetch,
+        git_has_head, git_resolve_conflict, git_stash_diff, git_stash_list, git_worktree_root,
+        is_protected_project_relative_path, list_untracked_files, local_git_blame_file,
         local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
         local_git_stash_push, local_merge_task_worktree, parse_blame_porcelain,
         parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
@@ -3133,7 +3152,7 @@ mod tests {
         repo.configure_identity();
         repo.commit_file("src/app.js", "const value = 1;\n", "initial");
 
-        let blame = git_blame_file(repo.path_string(), "src/app.js".to_string())
+        let blame = local_git_blame_file(repo.path_string(), "src/app.js".to_string())
             .await
             .unwrap();
 

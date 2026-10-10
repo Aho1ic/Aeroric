@@ -267,6 +267,12 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        set.register(
+            "git.git_blame_file",
+            Arc::new(move |request, _call| Box::pin(async move { git_blame_file(request).await })),
+        );
+    }
+    {
         let context = Arc::clone(&context);
         set.register(
             "project.open",
@@ -1606,6 +1612,50 @@ async fn git_stash_push(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_blame_file(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_blame_file requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_blame_file requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_blame_file requires params.filePath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::blame_file_result(std::path::Path::new(&p_path), &f_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(blame)) => match serde_json::to_value(blame) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

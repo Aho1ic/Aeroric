@@ -1448,3 +1448,85 @@ async fn git_remote_counts_reports_ahead_and_validates_params() {
 
     drop(bare_guard);
 }
+#[tokio::test]
+async fn git_blame_file_returns_porcelain_lines_and_validates_params() {
+    let harness = Harness::start("git-blame").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-blame-test");
+    commit_file(&repo, "src/app.js", "const value = 1;\n", "initial commit");
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "blame-1",
+        "git.git_blame_file",
+        json!({ "projectPath": repo.root.to_string_lossy(), "filePath": "src/app.js" }),
+    )
+    .await;
+    let result = success_result(reply);
+    assert_eq!(result["filePath"], "src/app.js");
+    let lines = result["lines"].as_array().expect("lines array");
+    assert_eq!(lines.len(), 1, "{result}");
+    assert_eq!(lines[0]["content"], "const value = 1;");
+    assert_eq!(lines[0]["line"], 1);
+    assert_eq!(lines[0]["author"], "Test User");
+    assert_eq!(lines[0]["summary"], "initial commit");
+    // `--line-porcelain` + `core.quotePath=false` matter: the commit hash must be a real 40-char
+    // sha and the short form its first 8 characters (the legacy `short_commit_hash` rule).
+    let commit = lines[0]["commit"].as_str().expect("commit");
+    assert_eq!(commit.len(), 40, "{commit}");
+    assert_eq!(lines[0]["shortCommit"], &commit[..8]);
+    assert!(lines[0]["authorTime"].as_i64().unwrap_or(0) > 0, "{result}");
+
+    // A path that escapes the worktree is refused by the SHARED guard, before git runs.
+    // `validate_pathspec` (the looser validator) would let `sub/../x` through.
+    for bad in ["../escape.txt", "sub/../x.txt", "/abs.txt", ""] {
+        let reply_bad = query(
+            &mut reader,
+            &mut writer,
+            "blame-bad",
+            "git.git_blame_file",
+            json!({ "projectPath": repo.root.to_string_lossy(), "filePath": bad }),
+        )
+        .await;
+        let Frame::Failure(failure) = reply_bad else {
+            panic!("{bad:?} must be refused");
+        };
+        assert_eq!(failure.error.code, ErrorCode::IoError, "{bad:?}");
+    }
+
+    // Missing filePath -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "blame-missing",
+        "git.git_blame_file",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("filePath is required");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "blame-remote",
+        "git.git_blame_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "src/app.js",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

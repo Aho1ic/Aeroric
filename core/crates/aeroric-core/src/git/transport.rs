@@ -18,6 +18,8 @@ pub const STASH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `git_stash_drop` 的 timeout（legacy 给它 10s，与 push/apply 的 20s **不是**同一个值；
 /// 合并成一个常量会静默改掉其中一边）。
 pub const STASH_DROP_TIMEOUT: Duration = Duration::from_secs(10);
+/// blame / branch-graph timeout（legacy 两处都用 `Duration::from_secs(10)`）。
+pub const BLAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// mutating 操作串行化锁（相同 repo 串行——并发 mutating 会撞 index.lock）。
 #[derive(Default)]

@@ -45,6 +45,138 @@ pub struct GitConflictFile {
     pub path: String,
 }
 
+/// blame 行（legacy `GitBlameLine` 形状；wire 为 camelCase）。
+///
+/// `rename_all` 是承重的：core 的字段是 snake_case（`short_commit`/`author_time`），
+/// 而 legacy/Tauri 的 wire 是 camelCase。少了它宿主会发出 snake_case，
+/// 客户端解码出 null——本片就是被这条断言当场抓住的。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameLine {
+    pub line: u32,
+    pub commit: String,
+    pub short_commit: String,
+    pub author: String,
+    pub author_time: i64,
+    pub summary: String,
+    pub content: String,
+}
+
+/// blame 结果（legacy `GitBlameResult` 形状；同上，`filePath` 需 camelCase）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameResult {
+    pub file_path: String,
+    pub lines: Vec<GitBlameLine>,
+}
+
+/// 短 commit（legacy `short_commit_hash`：去 `^` 前缀后取**前 8 个字符**）。
+fn short_commit_hash(commit: &str) -> String {
+    commit
+        .trim_start_matches('^')
+        .chars()
+        .take(8)
+        .collect::<String>()
+}
+
+/// git 相对路径防御（legacy `git_path_guard::validate_git_relative_path` 的本地面
+/// verbatim）：非空、非绝对、无 `.`/`..` 段。**比 `validate_pathspec` 严**——
+/// 后者允许 `sub/../x` 这类写法，blame 的前端路径不该接受。
+pub fn validate_git_relative_path(file_path: &str) -> Result<(), String> {
+    if file_path.is_empty() {
+        return Err("File path must not be empty".to_string());
+    }
+    if file_path.starts_with('/') || std::path::Path::new(file_path).is_absolute() {
+        return Err("File path must be relative".to_string());
+    }
+    if file_path.split('/').any(|part| part == "." || part == "..") {
+        return Err("File path must stay inside the git worktree".to_string());
+    }
+    Ok(())
+}
+
+/// 解析 `git blame --line-porcelain`（legacy `parse_blame_porcelain` verbatim：
+/// `\t` 前缀行是内容行、`author `/`author-time `/`summary ` 是属性行，头部行需
+/// ≥3 段且首段全为十六进制或 `^` 才算 commit 头；`author-time` 解析失败取 0）。
+pub fn parse_blame_porcelain(stdout: &[u8]) -> Vec<GitBlameLine> {
+    let mut lines = Vec::new();
+    let mut commit = String::new();
+    let mut final_line = 0u32;
+    let mut author = String::new();
+    let mut author_time = 0i64;
+    let mut summary = String::new();
+
+    for line in String::from_utf8_lossy(stdout).lines() {
+        if let Some(content) = line.strip_prefix('\t') {
+            lines.push(GitBlameLine {
+                line: final_line,
+                short_commit: short_commit_hash(&commit),
+                commit: commit.clone(),
+                author: author.clone(),
+                author_time,
+                summary: summary.clone(),
+                content: content.to_string(),
+            });
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("author ") {
+            author = value.to_string();
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("author-time ") {
+            author_time = value.parse().unwrap_or(0);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("summary ") {
+            summary = value.to_string();
+            continue;
+        }
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() >= 3
+            && parts[0]
+                .chars()
+                .all(|ch| ch == '^' || ch.is_ascii_hexdigit())
+        {
+            commit = parts[0].to_string();
+            final_line = parts[2].parse().unwrap_or(0);
+            author.clear();
+            author_time = 0;
+            summary.clear();
+        }
+    }
+    lines
+}
+
+/// blame 文件（legacy `git_blame_file` verbatim，两处 argv 与旧 core **不同**：
+/// 带 `-c core.quotePath=false`，且用 `--line-porcelain` 而非默认 porcelain；
+/// 10s 超时（不是 5s）；返回结构化结果而非原始文本）。
+pub fn blame_file_result(repo_root: &Path, file_path: &str) -> Result<GitBlameResult, String> {
+    validate_git_relative_path(file_path)?;
+    let output = transport::run_git(
+        repo_root,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "blame",
+            "--line-porcelain",
+            "--",
+            file_path,
+        ],
+        transport::BLAME_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to load git blame",
+        ));
+    }
+    Ok(GitBlameResult {
+        file_path: file_path.to_string(),
+        lines: parse_blame_porcelain(output.stdout.as_bytes()),
+    })
+}
+
 /// 与上游的领先/落后计数（legacy `GitRemoteCounts` 形状：camelCase wire）。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct GitRemoteCounts {
