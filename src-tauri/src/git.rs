@@ -1058,7 +1058,7 @@ pub(crate) fn parse_git_log_output(stdout: &str) -> Vec<GitCommit> {
     commits
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitCommitFile {
     path: String,
     status: String,
@@ -1066,7 +1066,7 @@ pub(crate) struct GitCommitFile {
     deletions: i32,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitCommitDetail {
     hash: String,
     short_hash: String,
@@ -1170,8 +1170,7 @@ pub(crate) fn parse_git_commit_detail(
     }
 }
 
-#[tauri::command]
-pub async fn git_commit_detail(
+pub async fn local_git_commit_detail(
     project_path: String,
     commit_hash: String,
 ) -> Result<GitCommitDetail, String> {
@@ -1219,6 +1218,26 @@ pub async fn git_commit_detail(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_commit_detail<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    commit_hash: String,
+) -> Result<GitCommitDetail, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_commit_detail",
+        serde_json::json!({ "projectPath": project_path, "commitHash": commit_hash }),
+        async {
+            local_git_commit_detail(project_path, commit_hash)
+                .await
+                .and_then(|detail| serde_json::to_value(detail).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub async fn local_git_show_diff(
@@ -3025,9 +3044,9 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_clone, git_commit_detail, git_conflict_preview, git_dir, git_fetch, git_has_head,
-        git_resolve_conflict, git_worktree_root, is_protected_project_relative_path,
-        list_untracked_files, local_git_blame_file, local_git_branch_graph,
+        git_clone, git_conflict_preview, git_dir, git_fetch, git_has_head, git_resolve_conflict,
+        git_worktree_root, is_protected_project_relative_path, list_untracked_files,
+        local_git_blame_file, local_git_branch_graph, local_git_commit_detail,
         local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
         local_git_stash_diff, local_git_stash_list, local_git_stash_push,
         local_merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log,
@@ -3533,7 +3552,7 @@ mod tests {
         assert!(local_git_show_diff(repo_path.clone(), payload.clone())
             .await
             .is_err());
-        assert!(git_commit_detail(repo_path.clone(), payload.clone())
+        assert!(local_git_commit_detail(repo_path.clone(), payload.clone())
             .await
             .is_err());
         assert!(super::local_git_show_file_diff(

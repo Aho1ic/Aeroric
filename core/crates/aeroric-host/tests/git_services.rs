@@ -2290,3 +2290,111 @@ async fn git_show_file_diff_shows_committed_content_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_commit_detail_returns_parsed_fields_and_validates_params() {
+    let harness = Harness::start("git-commit-detail").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-commit-detail");
+    commit_file(&repo, "a.txt", "one\n", "first commit");
+    commit_file(&repo, "b.txt", "two\nthree\n", "second commit");
+
+    let head = git_output(&repo, &["rev-parse", "HEAD"]);
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "detail-1",
+        "git.git_commit_detail",
+        json!({ "projectPath": repo.root.to_string_lossy(), "commitHash": head }),
+    )
+    .await;
+    let result = success_result(reply);
+    // The legacy wire shape is snake_case (no rename on the DTO) — assert it as-is.
+    assert_eq!(result["hash"], head, "{result}");
+    assert_eq!(
+        result["short_hash"],
+        head.chars().take(7).collect::<String>(),
+        "{result}"
+    );
+    assert_eq!(result["author"], "Test User", "{result}");
+    assert_eq!(result["message"], "second commit", "{result}");
+    assert!(
+        !result["date"].as_str().unwrap_or("").is_empty(),
+        "{result}"
+    );
+    let files = result["files"].as_array().expect("files");
+    assert_eq!(files.len(), 1, "{result}");
+    assert_eq!(files[0]["path"], "b.txt", "{result}");
+    assert_eq!(files[0]["additions"], 2, "{result}");
+    assert_eq!(files[0]["deletions"], 0, "{result}");
+    assert_eq!(result["total_additions"], 2, "{result}");
+    assert_eq!(result["total_deletions"], 0, "{result}");
+
+    // A bogus-but-well-formed revision parses to an empty detail (legacy never
+    // checks the git exit codes — the parse of empty output is the behaviour).
+    let reply_bogus = query(
+        &mut reader,
+        &mut writer,
+        "detail-bogus",
+        "git.git_commit_detail",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        }),
+    )
+    .await;
+    let bogus = success_result(reply_bogus);
+    assert_eq!(bogus["hash"], "", "{bogus}");
+    assert_eq!(bogus["files"], json!([]), "{bogus}");
+
+    // Option-like revision is refused by the validator before git runs.
+    let reply_option = query(
+        &mut reader,
+        &mut writer,
+        "detail-option",
+        "git.git_commit_detail",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": "--output=/tmp/evil"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_option) = reply_option else {
+        panic!("option-like revision must fail");
+    };
+    assert_eq!(failure_option.error.code, ErrorCode::IoError);
+
+    // Missing commitHash -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "detail-missing",
+        "git.git_commit_detail",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing commitHash must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "detail-remote",
+        "git.git_commit_detail",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": head,
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

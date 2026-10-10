@@ -624,6 +624,183 @@ pub fn unstage_files(
     Ok(())
 }
 
+/// 提交内单文件（legacy `GitCommitFile` 形状）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitCommitFile {
+    pub path: String,
+    pub status: String,
+    pub additions: i32,
+    pub deletions: i32,
+}
+
+/// 提交详情（legacy `GitCommitDetail` 形状）。**没有 camelCase rename**——legacy
+/// wire 就是 snake_case（`short_hash`/`total_additions`），这里"无 rename"才是
+/// 承重件（切片 79 的 camelCase 规则只适用于 legacy wire 为 camelCase 的 DTO）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitCommitDetail {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub date: String,
+    pub message: String,
+    pub files: Vec<GitCommitFile>,
+    pub total_additions: i32,
+    pub total_deletions: i32,
+}
+
+/// 解析三段 git 输出（legacy `parse_git_commit_detail` 逐字）：info 的前缀行、
+/// name-status 的 `[st, path]`/`[st, old, new]` 两形（`R*` 一律归 `"R"`）、
+/// numstat 的 `adds\t deletes\t path`（认不出按 0）。
+pub fn parse_commit_detail(
+    info_stdout: &str,
+    name_status_stdout: &str,
+    numstat_stdout: &str,
+) -> GitCommitDetail {
+    let mut hash = String::new();
+    let mut short_hash = String::new();
+    let mut author = String::new();
+    let mut date = String::new();
+    let mut message = String::new();
+    for line in info_stdout.lines() {
+        if let Some(v) = line.strip_prefix("HASH:") {
+            hash = v.to_string();
+        } else if let Some(v) = line.strip_prefix("SHORT:") {
+            short_hash = v.to_string();
+        } else if let Some(v) = line.strip_prefix("AUTHOR:") {
+            author = v.to_string();
+        } else if let Some(v) = line.strip_prefix("DATE:") {
+            date = v.to_string();
+        } else if let Some(v) = line.strip_prefix("SUBJECT:") {
+            message = v.to_string();
+        }
+    }
+
+    let mut file_statuses: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for line in name_status_stdout.lines() {
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        match parts.as_slice() {
+            [st, path] => {
+                file_statuses.insert(
+                    path.to_string(),
+                    if st.starts_with('R') {
+                        "R".to_string()
+                    } else {
+                        st.to_string()
+                    },
+                );
+            }
+            [st, _old, new_path] => {
+                file_statuses.insert(
+                    new_path.to_string(),
+                    if st.starts_with('R') {
+                        "R".to_string()
+                    } else {
+                        st.to_string()
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut total_additions = 0i32;
+    let mut total_deletions = 0i32;
+
+    for line in numstat_stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        if parts.len() == 3 {
+            let additions: i32 = parts[0].parse().unwrap_or(0);
+            let deletions: i32 = parts[1].parse().unwrap_or(0);
+            let path = parts[2].to_string();
+            total_additions += additions;
+            total_deletions += deletions;
+            let status = file_statuses
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "M".to_string());
+            files.push(GitCommitFile {
+                path,
+                status,
+                additions,
+                deletions,
+            });
+        }
+    }
+
+    GitCommitDetail {
+        hash,
+        short_hash,
+        author,
+        date,
+        message,
+        files,
+        total_additions,
+        total_deletions,
+    }
+}
+
+/// 提交详情（legacy `git_commit_detail` verbatim；名字带 `_result` 后缀——core
+/// 已有一个返回 `GitCommit` 的旧 `commit_detail`，属另一查询，按切片 79 先例
+/// 旧入口保留不做别名改写）：三次独立 git 调用（info/name-status/numstat），
+/// **三次都不检查退出码**——坏 hash 解析成全空详情是 legacy 行为不是错误路径；
+/// revision 只过形状校验（core `validate_revision`，报文与 legacy
+/// `validate_git_revision` 不同——切片 66 起既定采用 core 版）。
+/// legacy 的同步 run_git 无超时；core 取 `READ_TIMEOUT` 并入 doc。
+pub fn commit_detail_result(
+    repo_root: &Path,
+    commit_hash: &str,
+) -> Result<GitCommitDetail, String> {
+    transport::validate_revision(commit_hash)?;
+    let info_out = transport::run_git(
+        repo_root,
+        &[
+            "show",
+            "--no-patch",
+            "--format=HASH:%H%nSHORT:%h%nAUTHOR:%an%nDATE:%ar%nSUBJECT:%s",
+            "--end-of-options",
+            commit_hash,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    let ns_out = transport::run_git(
+        repo_root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--name-status",
+            "--end-of-options",
+            commit_hash,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    let num_out = transport::run_git(
+        repo_root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--numstat",
+            "--end-of-options",
+            commit_hash,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    Ok(parse_commit_detail(
+        &info_out.stdout,
+        &ns_out.stdout,
+        &num_out.stdout,
+    ))
+}
+
 /// 字节截断（legacy 的 `&raw[..limit]`＋`from_utf8_lossy` 形状：按**字节**切，
 /// 可能劈开 UTF-8 字符——lossy 用 U+FFFD 补上；core 的 stdout 已是 String，
 /// 不能直接 `&s[..limit]`（非边界会 panic），经 as_bytes 走同一形状）。

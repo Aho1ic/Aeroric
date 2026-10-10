@@ -222,6 +222,14 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_commit_detail",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_commit_detail(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -1680,6 +1688,50 @@ async fn git_show_file_diff(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(content)) => ok(&request, Value::String(content)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_commit_detail(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit_detail requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit_detail requires params.projectPath (string)",
+        );
+    };
+    let Some(commit_hash) = params.get("commitHash").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit_detail requires params.commitHash (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let c_hash = commit_hash.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::commit_detail_result(std::path::Path::new(&p_path), &c_hash)
+    })
+    .await;
+    match result {
+        Ok(Ok(detail)) => match serde_json::to_value(detail) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

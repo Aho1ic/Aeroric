@@ -5763,7 +5763,7 @@
       "rust_path": "git::git_commit_detail",
       "registered_at": "src-tauri/src/lib.rs:618",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1174"
+        "src-tauri/src/git.rs:1224"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5775,12 +5775,12 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1174",
+      "definition_resolved": "src-tauri/src/git.rs:1224",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 2,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -5788,6 +5788,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "project_path: String",
         "commit_hash: String"
       ]
@@ -5797,7 +5798,7 @@
       "rust_path": "git::git_show_diff",
       "registered_at": "src-tauri/src/lib.rs:619",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1250"
+        "src-tauri/src/git.rs:1269"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5809,7 +5810,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1250",
+      "definition_resolved": "src-tauri/src/git.rs:1269",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5832,7 +5833,7 @@
       "rust_path": "git::git_show_file_diff",
       "registered_at": "src-tauri/src/lib.rs:620",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1910"
+        "src-tauri/src/git.rs:1929"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5844,7 +5845,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1910",
+      "definition_resolved": "src-tauri/src/git.rs:1929",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5868,7 +5869,7 @@
       "rust_path": "git::git_file_diff",
       "registered_at": "src-tauri/src/lib.rs:621",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1322"
+        "src-tauri/src/git.rs:1341"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5880,7 +5881,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1322",
+      "definition_resolved": "src-tauri/src/git.rs:1341",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5904,7 +5905,7 @@
       "rust_path": "git::git_stage",
       "registered_at": "src-tauri/src/lib.rs:622",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1351"
+        "src-tauri/src/git.rs:1370"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5916,7 +5917,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1351",
+      "definition_resolved": "src-tauri/src/git.rs:1370",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5939,7 +5940,7 @@
       "rust_path": "git::git_unstage",
       "registered_at": "src-tauri/src/lib.rs:623",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1387"
+        "src-tauri/src/git.rs:1406"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5951,7 +5952,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1387",
+      "definition_resolved": "src-tauri/src/git.rs:1406",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -5974,7 +5975,7 @@
       "rust_path": "git::git_stage_files",
       "registered_at": "src-tauri/src/lib.rs:624",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1426"
+        "src-tauri/src/git.rs:1445"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -5986,7 +5987,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1426",
+      "definition_resolved": "src-tauri/src/git.rs:1445",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6009,7 +6010,7 @@
       "rust_path": "git::git_unstage_files",
       "registered_at": "src-tauri/src/lib.rs:625",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1480"
+        "src-tauri/src/git.rs:1499"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6021,7 +6022,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1480",
+      "definition_resolved": "src-tauri/src/git.rs:1499",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6044,7 +6045,7 @@
       "rust_path": "git::git_stage_all",
       "registered_at": "src-tauri/src/lib.rs:626",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1506"
+        "src-tauri/src/git.rs:1525"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6056,7 +6057,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1506",
+      "definition_resolved": "src-tauri/src/git.rs:1525",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6078,7 +6079,7 @@
       "rust_path": "git::git_unstage_all",
       "registered_at": "src-tauri/src/lib.rs:627",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1533"
+        "src-tauri/src/git.rs:1552"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6090,7 +6091,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1533",
+      "definition_resolved": "src-tauri/src/git.rs:1552",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6112,7 +6113,7 @@
       "rust_path": "git::git_commit",
       "registered_at": "src-tauri/src/lib.rs:628",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1560"
+        "src-tauri/src/git.rs:1579"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6124,7 +6125,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1560",
+      "definition_resolved": "src-tauri/src/git.rs:1579",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6147,7 +6148,7 @@
       "rust_path": "git::git_discard_file",
       "registered_at": "src-tauri/src/lib.rs:629",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1788"
+        "src-tauri/src/git.rs:1807"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6159,7 +6160,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1788",
+      "definition_resolved": "src-tauri/src/git.rs:1807",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6182,7 +6183,7 @@
       "rust_path": "git::git_discard_files",
       "registered_at": "src-tauri/src/lib.rs:630",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1808"
+        "src-tauri/src/git.rs:1827"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6194,7 +6195,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1808",
+      "definition_resolved": "src-tauri/src/git.rs:1827",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6217,7 +6218,7 @@
       "rust_path": "git::git_discard_all",
       "registered_at": "src-tauri/src/lib.rs:631",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1844"
+        "src-tauri/src/git.rs:1863"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6229,7 +6230,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1844",
+      "definition_resolved": "src-tauri/src/git.rs:1863",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6250,7 +6251,7 @@
       "rust_path": "git::git_push",
       "registered_at": "src-tauri/src/lib.rs:632",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1935"
+        "src-tauri/src/git.rs:1954"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6262,7 +6263,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1935",
+      "definition_resolved": "src-tauri/src/git.rs:1954",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6284,7 +6285,7 @@
       "rust_path": "git::git_pull",
       "registered_at": "src-tauri/src/lib.rs:633",
       "definition_candidates": [
-        "src-tauri/src/git.rs:1959"
+        "src-tauri/src/git.rs:1978"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6296,7 +6297,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:1959",
+      "definition_resolved": "src-tauri/src/git.rs:1978",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6317,7 +6318,7 @@
       "rust_path": "git::git_init",
       "registered_at": "src-tauri/src/lib.rs:634",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2010"
+        "src-tauri/src/git.rs:2029"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6329,7 +6330,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2010",
+      "definition_resolved": "src-tauri/src/git.rs:2029",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -6352,7 +6353,7 @@
       "rust_path": "git::git_clone",
       "registered_at": "src-tauri/src/lib.rs:635",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2040"
+        "src-tauri/src/git.rs:2059"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6364,7 +6365,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2040",
+      "definition_resolved": "src-tauri/src/git.rs:2059",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -6387,7 +6388,7 @@
       "rust_path": "git::git_fetch",
       "registered_at": "src-tauri/src/lib.rs:636",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2087"
+        "src-tauri/src/git.rs:2106"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6399,7 +6400,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2087",
+      "definition_resolved": "src-tauri/src/git.rs:2106",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": false,
@@ -6421,7 +6422,7 @@
       "rust_path": "git::git_remote_counts",
       "registered_at": "src-tauri/src/lib.rs:637",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2197"
+        "src-tauri/src/git.rs:2216"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6433,7 +6434,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2197",
+      "definition_resolved": "src-tauri/src/git.rs:2216",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6456,7 +6457,7 @@
       "rust_path": "git::git_blame_file",
       "registered_at": "src-tauri/src/lib.rs:638",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2240"
+        "src-tauri/src/git.rs:2259"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6468,7 +6469,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2240",
+      "definition_resolved": "src-tauri/src/git.rs:2259",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6491,7 +6492,7 @@
       "rust_path": "git::git_branch_graph",
       "registered_at": "src-tauri/src/lib.rs:639",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2300"
+        "src-tauri/src/git.rs:2319"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6503,7 +6504,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2300",
+      "definition_resolved": "src-tauri/src/git.rs:2319",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6526,7 +6527,7 @@
       "rust_path": "git::git_stash_list",
       "registered_at": "src-tauri/src/lib.rs:640",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2333"
+        "src-tauri/src/git.rs:2352"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6538,7 +6539,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2333",
+      "definition_resolved": "src-tauri/src/git.rs:2352",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6560,7 +6561,7 @@
       "rust_path": "git::git_stash_diff",
       "registered_at": "src-tauri/src/lib.rs:641",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2384"
+        "src-tauri/src/git.rs:2403"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6572,7 +6573,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2384",
+      "definition_resolved": "src-tauri/src/git.rs:2403",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6595,7 +6596,7 @@
       "rust_path": "git::git_stash_push",
       "registered_at": "src-tauri/src/lib.rs:642",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2438"
+        "src-tauri/src/git.rs:2457"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6607,7 +6608,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2438",
+      "definition_resolved": "src-tauri/src/git.rs:2457",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6631,7 +6632,7 @@
       "rust_path": "git::git_stash_apply",
       "registered_at": "src-tauri/src/lib.rs:643",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2491"
+        "src-tauri/src/git.rs:2510"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6643,7 +6644,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2491",
+      "definition_resolved": "src-tauri/src/git.rs:2510",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6666,7 +6667,7 @@
       "rust_path": "git::git_stash_drop",
       "registered_at": "src-tauri/src/lib.rs:644",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2539"
+        "src-tauri/src/git.rs:2558"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6678,7 +6679,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2539",
+      "definition_resolved": "src-tauri/src/git.rs:2558",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6701,7 +6702,7 @@
       "rust_path": "git::git_conflict_files",
       "registered_at": "src-tauri/src/lib.rs:645",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2579"
+        "src-tauri/src/git.rs:2598"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6713,7 +6714,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2579",
+      "definition_resolved": "src-tauri/src/git.rs:2598",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6735,7 +6736,7 @@
       "rust_path": "git::git_conflict_preview",
       "registered_at": "src-tauri/src/lib.rs:646",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2598"
+        "src-tauri/src/git.rs:2617"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6747,7 +6748,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2598",
+      "definition_resolved": "src-tauri/src/git.rs:2617",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6769,7 +6770,7 @@
       "rust_path": "git::git_resolve_conflict",
       "registered_at": "src-tauri/src/lib.rs:647",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2617"
+        "src-tauri/src/git.rs:2636"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6781,7 +6782,7 @@
       "feature_ids": [
         "F09"
       ],
-      "definition_resolved": "src-tauri/src/git.rs:2617",
+      "definition_resolved": "src-tauri/src/git.rs:2636",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6906,7 +6907,7 @@
       "rust_path": "git::create_task_worktree",
       "registered_at": "src-tauri/src/lib.rs:678",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2728"
+        "src-tauri/src/git.rs:2747"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6920,7 +6921,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2728",
+      "definition_resolved": "src-tauri/src/git.rs:2747",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6944,7 +6945,7 @@
       "rust_path": "git::merge_task_worktree",
       "registered_at": "src-tauri/src/lib.rs:679",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2833"
+        "src-tauri/src/git.rs:2852"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6958,7 +6959,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2833",
+      "definition_resolved": "src-tauri/src/git.rs:2852",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -6983,7 +6984,7 @@
       "rust_path": "git::remove_task_worktree",
       "registered_at": "src-tauri/src/lib.rs:680",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2895"
+        "src-tauri/src/git.rs:2914"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -6997,7 +6998,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2895",
+      "definition_resolved": "src-tauri/src/git.rs:2914",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -7020,7 +7021,7 @@
       "command": "worktree_diff_stats",
       "rust_path": "git::worktree_diff_stats",
       "definition_candidates": [
-        "src-tauri/src/git.rs:2988"
+        "src-tauri/src/git.rs:3007"
       ],
       "category": "domain_rpc",
       "core_service": "git::worktree",
@@ -7033,7 +7034,7 @@
         "F10"
       ],
       "notes": "worktree 生命周期归 F10/P6-05，check 模块独立",
-      "definition_resolved": "src-tauri/src/git.rs:2988",
+      "definition_resolved": "src-tauri/src/git.rs:3007",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
