@@ -194,6 +194,20 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_stage_files",
+            Arc::new(move |request, _call| Box::pin(async move { git_stage_files(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_unstage_files",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_unstage_files(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -1533,6 +1547,87 @@ async fn git_commit(request: Request) -> Frame {
     let result = tokio::task::spawn_blocking(move || {
         let locks = aeroric_core::git::transport::RepoLocks::default();
         aeroric_core::git::service::commit(std::path::Path::new(&p_path), &msg, &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stage_files(request: Request) -> Frame {
+    stage_unstage_files_request(request, "git.git_stage_files", |root, file_paths, locks| {
+        aeroric_core::git::service::stage_files(root, &file_paths, locks)
+    })
+    .await
+}
+
+async fn git_unstage_files(request: Request) -> Frame {
+    stage_unstage_files_request(
+        request,
+        "git.git_unstage_files",
+        |root, file_paths, locks| {
+            aeroric_core::git::service::unstage_files(root, &file_paths, locks)
+        },
+    )
+    .await
+}
+
+/// Shared request shape for the plural stage/unstage twins (slice 82). The wire
+/// shape is identical; only the core body differs — one helper, not two copies.
+async fn stage_unstage_files_request<F>(request: Request, method: &str, run: F) -> Frame
+where
+    F: FnOnce(
+            &std::path::Path,
+            Vec<String>,
+            &aeroric_core::git::transport::RepoLocks,
+        ) -> Result<(), String>
+        + Send
+        + 'static,
+{
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params object"),
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params.projectPath (string)"),
+        );
+    };
+    let Some(file_paths) = params.get("filePaths").and_then(Value::as_array) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params.filePaths (array of strings)"),
+        );
+    };
+    let mut paths = Vec::with_capacity(file_paths.len());
+    for value in file_paths {
+        let Some(path) = value.as_str() else {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                &format!("{method} requires params.filePaths (array of strings)"),
+            );
+        };
+        paths.push(path.to_string());
+    }
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        run(std::path::Path::new(&p_path), paths, &locks)
     })
     .await;
     match result {

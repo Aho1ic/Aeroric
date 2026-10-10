@@ -71,6 +71,22 @@ fn commit_file(repo: &TempRepo, path: &str, content: &str, message: &str) {
     assert!(commit_out.status.success());
 }
 
+/// Run git in the fixture repo and return trimmed stdout (end-state assertions
+/// read real git state, not the reply payload).
+fn git_output(repo: &TempRepo, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(&repo.root)
+        .output()
+        .expect("git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {:?}",
+        out.stderr
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 async fn query(
     reader: &mut BufReader<OwnedReadHalf>,
     writer: &mut OwnedWriteHalf,
@@ -1832,6 +1848,205 @@ async fn git_stash_diff_shows_stash_patch_and_validates_params() {
         json!({
             "projectPath": repo.root.to_string_lossy(),
             "stashRef": "stash@{0}",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+#[tokio::test]
+async fn git_stage_files_stages_the_listed_files_and_validates_params() {
+    let harness = Harness::start("git-stage-files").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-stage-files");
+    commit_file(&repo, "base.txt", "base\n", "base commit");
+    std::fs::write(repo.root.join("a.txt"), "a\n").expect("write a");
+    std::fs::write(repo.root.join("b.txt"), "b\n").expect("write b");
+    std::fs::write(repo.root.join("c.txt"), "c\n").expect("write c");
+
+    // Duplicates in the list are deduped; only the listed files are staged.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "stagefiles-1",
+        "git.git_stage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["a.txt", "b.txt", "a.txt"]
+        }),
+    )
+    .await;
+    let _ = success_result(reply);
+    let staged = git_output(&repo, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged, "a.txt\nb.txt", "staged set: {staged:?}");
+    let untracked_c = git_output(&repo, &["status", "--porcelain"]);
+    assert!(untracked_c.contains("?? c.txt"), "{untracked_c:?}");
+
+    // An empty list is a SILENT SUCCESS — no git run, nothing staged.
+    let reply_empty = query(
+        &mut reader,
+        &mut writer,
+        "stagefiles-empty",
+        "git.git_stage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": []
+        }),
+    )
+    .await;
+    let _ = success_result(reply_empty);
+
+    // Escape attempt is refused before git runs.
+    let reply_escape = query(
+        &mut reader,
+        &mut writer,
+        "stagefiles-escape",
+        "git.git_stage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["sub/../a.txt"]
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_escape) = reply_escape else {
+        panic!("escape path must fail");
+    };
+    assert_eq!(failure_escape.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_escape.error.message,
+        "File path must stay inside the git worktree"
+    );
+
+    // Missing filePaths -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "stagefiles-missing",
+        "git.git_stage_files",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing filePaths must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "stagefiles-remote",
+        "git.git_stage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["a.txt"],
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_unstage_files_unstages_with_head_fallback_and_validates_params() {
+    let harness = Harness::start("git-unstage-files").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // With HEAD: staged changes come back to the worktree, the file stays modified.
+    let repo = new_repo("aeroric-git-unstage-files");
+    commit_file(&repo, "tracked.txt", "base\n", "base commit");
+    std::fs::write(repo.root.join("tracked.txt"), "changed\n").expect("modify");
+    let add = std::process::Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git add");
+    assert!(add.status.success());
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "unstagefiles-1",
+        "git.git_unstage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["tracked.txt"]
+        }),
+    )
+    .await;
+    let _ = success_result(reply);
+    let staged = git_output(&repo, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged, "", "staged must be empty: {staged:?}");
+    let status = git_output(&repo, &["status", "--porcelain"]);
+    // `git_output` trims, so the porcelain leading space is gone; `starts_with`
+    // still separates "M tracked.txt" (unstaged only) from "MM tracked.txt".
+    assert!(status.starts_with("M tracked.txt"), "{status:?}");
+
+    // Without HEAD (unborn): `restore --staged` would fail; the legacy falls back
+    // to `git reset --` — the file returns to untracked.
+    let fresh = new_repo("aeroric-git-unstage-files-unborn");
+    std::fs::write(fresh.root.join("new.txt"), "new\n").expect("write new");
+    let add_new = std::process::Command::new("git")
+        .args(["add", "new.txt"])
+        .current_dir(&fresh.root)
+        .output()
+        .expect("git add unborn");
+    assert!(add_new.status.success());
+    let reply_unborn = query(
+        &mut reader,
+        &mut writer,
+        "unstagefiles-unborn",
+        "git.git_unstage_files",
+        json!({
+            "projectPath": fresh.root.to_string_lossy(),
+            "filePaths": ["new.txt"]
+        }),
+    )
+    .await;
+    let _ = success_result(reply_unborn);
+    let status_unborn = git_output(&fresh, &["status", "--porcelain"]);
+    assert!(
+        status_unborn.contains("?? new.txt"),
+        "unborn fallback must leave the file untracked: {status_unborn:?}"
+    );
+
+    // Empty path -> IoError from the validator, before git runs.
+    let reply_blank = query(
+        &mut reader,
+        &mut writer,
+        "unstagefiles-blank",
+        "git.git_unstage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": [""]
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_blank) = reply_blank else {
+        panic!("blank path must fail");
+    };
+    assert_eq!(failure_blank.error.code, ErrorCode::IoError);
+    assert_eq!(failure_blank.error.message, "File path must not be empty");
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "unstagefiles-remote",
+        "git.git_unstage_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["tracked.txt"],
             "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
         }),
     )

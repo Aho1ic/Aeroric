@@ -535,6 +535,95 @@ pub fn unstage_all(repo_root: &Path, locks: &RepoLocks) -> Result<(), String> {
     Ok(())
 }
 
+/// 校验并去重一批相对路径（legacy `unique_git_file_paths` 本地面 verbatim：
+/// 逐个过 `validate_git_relative_path`，再按首次出现去重——重复且非法的条目
+/// 也报错，因为校验先于去重）。
+fn unique_git_file_paths(file_paths: &[String]) -> Result<Vec<&str>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut unique: Vec<&str> = Vec::new();
+    for file_path in file_paths {
+        validate_git_relative_path(file_path)?;
+        if seen.insert(file_path.as_str()) {
+            unique.push(file_path.as_str());
+        }
+    }
+    Ok(unique)
+}
+
+/// 暂存一批文件（legacy `git_stage_files` verbatim）：`add -- <paths>`；
+/// **空列表是静默成功**（不跑 git——调用方在清空选择时也会走到这里）；
+/// 超时 10s（`STAGE_FILES_TIMEOUT`，比单文件 stage 的 5s 宽）；mutating 串行化。
+pub fn stage_files(
+    repo_root: &Path,
+    file_paths: &[String],
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    let unique = unique_git_file_paths(file_paths)?;
+    if unique.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<&str> = vec!["add", "--"];
+    args.extend(unique);
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let output = transport::run_git(
+        repo_root,
+        &args,
+        transport::STAGE_FILES_TIMEOUT,
+        Some(&lock),
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to stage files",
+        ));
+    }
+    Ok(())
+}
+
+/// 取消暂存一批文件（legacy `git_unstage_files` verbatim）：先探 HEAD
+/// （`rev-parse --verify HEAD`，5s），有 HEAD 走 `restore --staged -- <paths>`、
+/// 无 HEAD 回落到不依赖 HEAD 的 `reset -- <paths>`（unborn HEAD 上
+/// `restore --staged` 会失败而 `reset` 不会——这条回落是契约，单文件版
+/// `unstage` 的 `reset HEAD --` 是另一个形状，不合并）；空列表静默成功；
+/// 主命令超时 10s；mutating 串行化。
+pub fn unstage_files(
+    repo_root: &Path,
+    file_paths: &[String],
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    let unique = unique_git_file_paths(file_paths)?;
+    if unique.is_empty() {
+        return Ok(());
+    }
+    let head = transport::run_git(
+        repo_root,
+        &["rev-parse", "--verify", "HEAD"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    let mut args: Vec<&str> = if head.success {
+        vec!["restore", "--staged"]
+    } else {
+        vec!["reset"]
+    };
+    args.push("--");
+    args.extend(unique);
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let output = transport::run_git(
+        repo_root,
+        &args,
+        transport::UNSTAGE_FILES_TIMEOUT,
+        Some(&lock),
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to unstage files",
+        ));
+    }
+    Ok(())
+}
+
 pub fn unstage(repo_root: &Path, file_path: &str, locks: &RepoLocks) -> Result<(), String> {
     transport::validate_pathspec(file_path)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());

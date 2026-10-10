@@ -1386,8 +1386,10 @@ pub async fn git_unstage<R: tauri::Runtime>(
     .map(|_| ())
 }
 
-#[tauri::command]
-pub async fn git_stage_files(project_path: String, file_paths: Vec<String>) -> Result<(), String> {
+pub async fn local_git_stage_files(
+    project_path: String,
+    file_paths: Vec<String>,
+) -> Result<(), String> {
     let args = git_path_args(&["add"], file_paths)?;
     if args.is_empty() {
         return Ok(());
@@ -1401,7 +1403,26 @@ pub async fn git_stage_files(project_path: String, file_paths: Vec<String>) -> R
 }
 
 #[tauri::command]
-pub async fn git_unstage_files(
+pub async fn git_stage_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_paths: Vec<String>,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stage_files",
+        serde_json::json!({ "projectPath": project_path, "filePaths": file_paths }),
+        async {
+            local_git_stage_files(project_path, file_paths)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_unstage_files(
     project_path: String,
     file_paths: Vec<String>,
 ) -> Result<(), String> {
@@ -1433,6 +1454,26 @@ pub async fn git_unstage_files(
         return Err(git_command_error(&output, "Failed to unstage files"));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn git_unstage_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_paths: Vec<String>,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_unstage_files",
+        serde_json::json!({ "projectPath": project_path, "filePaths": file_paths }),
+        async {
+            local_git_unstage_files(project_path, file_paths)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn local_git_stage_all(project_path: String) -> Result<(), String> {
