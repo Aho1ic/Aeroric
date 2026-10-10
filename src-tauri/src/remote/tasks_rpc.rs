@@ -618,7 +618,8 @@ async fn resolve_resume_session_id(task: &storage::Task) -> Result<String, Strin
         lifecycle_family(task).await?,
         crate::app_settings::AgentFamily::Codex
     );
-    let session_id = crate::session::read_session_id(path, String::new(), is_codex, None).await?;
+    let session_id =
+        crate::session::local_read_session_id(path, String::new(), is_codex, None).await?;
     session_id.ok_or_else(|| "Task has no resumable session".to_string())
 }
 

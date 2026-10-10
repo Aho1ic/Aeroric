@@ -21,6 +21,7 @@ use aeroric_host::dispatcher::HostServices;
 use aeroric_host::settings_services::field_update_methods;
 use aeroric_host::startup::{run_startup, serve, HostOptions, RunningHost};
 use aeroric_protocol::envelope::{decode_line, encode_line, Frame, Request};
+use aeroric_protocol::error::ErrorCode;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -142,6 +143,18 @@ impl Rig {
     }
 }
 
+impl Drop for Rig {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+async fn request(rig: &Rig, method: &str, params: serde_json::Value) -> Frame {
+    let (mut reader, mut writer) = rig.connect().await;
+    rig.handshake(&mut reader, &mut writer).await;
+    call(&mut reader, &mut writer, "preference", method, params).await
+}
+
 async fn call(
     reader: &mut BufReader<OwnedReadHalf>,
     writer: &mut OwnedWriteHalf,
@@ -169,6 +182,488 @@ async fn call(
     .expect("a reply within the deadline")
     .expect("read");
     decode_line(reply.trim_end().as_bytes()).expect("decode")
+}
+
+#[tokio::test]
+async fn preference_newline_accepts_the_real_wire_and_rejects_ambiguous_or_wrong_types() {
+    let rig = Rig::start("newline").await;
+    rig.write_settings(json!({"unknown": {"keep": true}}));
+    for params in [
+        json!({"enabled": false}),
+        json!({"enabled": true}),
+        json!({"shiftEnterNewline": false}),
+        json!({"enabled": true, "shiftEnterNewline": true}),
+    ] {
+        let expected = params
+            .get("enabled")
+            .or_else(|| params.get("shiftEnterNewline"))
+            .unwrap();
+        let reply = request(&rig, "settings.save_shift_enter_newline", params.clone()).await;
+        assert_eq!(&result(&reply)["terminal_shift_enter_newline"], expected);
+        assert_eq!(rig.read_settings()["unknown"], json!({"keep": true}));
+    }
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    for params in [
+        json!({}),
+        json!({"enabled": null}),
+        json!({"enabled": "false"}),
+        json!({"shiftEnterNewline": 0}),
+        json!({"enabled": true, "shiftEnterNewline": false}),
+    ] {
+        let reply = request(&rig, "settings.save_shift_enter_newline", params).await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn preference_shortcut_normalizes_like_desktop_without_touching_other_settings() {
+    let rig = Rig::start("shortcut").await;
+    rig.write_settings(json!({"unknown": 42, "claude_path": "/not/executed"}));
+    for (input, expected) in [
+        ("enter", "enter"),
+        ("mod_enter", "mod_enter"),
+        ("anything-else", "mod_enter"),
+        (" enter ", "mod_enter"),
+    ] {
+        let reply = request(
+            &rig,
+            "settings.save_send_shortcut",
+            json!({"sendShortcut": input}),
+        )
+        .await;
+        assert_eq!(result(&reply)["send_shortcut"], expected);
+        assert_eq!(rig.read_settings()["unknown"], 42);
+        assert_eq!(rig.read_settings()["claude_path"], "/not/executed");
+    }
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    for input in [json!(null), json!(true), json!(12), json!({})] {
+        let reply = request(
+            &rig,
+            "settings.save_send_shortcut",
+            json!({"sendShortcut": input}),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn preference_schedules_clamp_fields_preserve_timestamps_and_do_not_create_output_dirs() {
+    let rig = Rig::start("schedule").await;
+    let out = rig.root.join("not-created/report-output");
+    let reply = request(
+        &rig,
+        "settings.update_auto_cleanup_settings",
+        json!({
+            "autoCleanupSettings": {
+                "enabled": true, "mode": "unknown", "weekday": 99, "hour": 99,
+                "interval_days": 0, "retain_days": 65535, "last_run_at": 123456,
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["auto_cleanup_settings"],
+        json!({
+            "enabled": true, "mode": "weekly", "weekday": 6, "hour": 23,
+            "interval_days": 1, "retain_days": 3650, "last_run_at": 123456,
+        })
+    );
+    let reply = request(
+        &rig,
+        "settings.update_weekly_report_settings",
+        json!({
+            "weeklyReportSettings": {"week_start_day": 200, "week_end_day": 199, "output_dir": out},
+        }),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["weekly_report_settings"],
+        json!({
+            "week_start_day": 6, "week_end_day": 6, "output_dir": out,
+        })
+    );
+    assert!(
+        !out.exists(),
+        "saving a preference must not generate a report or mkdir"
+    );
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    for (method, params) in [
+        (
+            "settings.update_auto_cleanup_settings",
+            json!({"autoCleanupSettings": null}),
+        ),
+        (
+            "settings.update_auto_cleanup_settings",
+            json!({"autoCleanupSettings": {"enabled": "true"}}),
+        ),
+        (
+            "settings.update_auto_cleanup_settings",
+            json!({"autoCleanupSettings": {"weekday": 256}}),
+        ),
+        (
+            "settings.update_weekly_report_settings",
+            json!({"weeklyReportSettings": {"output_dir": 42}}),
+        ),
+        (
+            "settings.update_weekly_report_settings",
+            json!({"weeklyReportSettings": {"week_start_day": -1}}),
+        ),
+    ] {
+        let reply = request(&rig, method, params).await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn preference_updates_refuse_corrupt_or_unreturnable_settings_without_repair_side_effects() {
+    let rig = Rig::start("pref-corrupt").await;
+    for bytes in [
+        b"{ broken".as_slice(),
+        br#"{"custom_agents":"not-an-array","unknown":12}"#,
+    ] {
+        std::fs::write(rig.settings_path(), bytes).unwrap();
+        let reply = request(
+            &rig,
+            "settings.save_send_shortcut",
+            json!({"sendShortcut": "enter"}),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), bytes);
+    }
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preference_updates_share_one_transaction_across_clients() {
+    let rig = Arc::new(Rig::start("pref-concurrent").await);
+    for _ in 0..8 {
+        rig.write_settings(json!({"unknown": "x".repeat(16384)}));
+        let start = Arc::new(tokio::sync::Barrier::new(7));
+        let mut calls = Vec::new();
+        for (method, params) in [
+            (
+                "settings.save_send_shortcut",
+                json!({"sendShortcut": "enter"}),
+            ),
+            (
+                "settings.save_shift_enter_newline",
+                json!({"enabled": false}),
+            ),
+            (
+                "settings.update_auto_cleanup_settings",
+                json!({"autoCleanupSettings": {"last_run_at": 123}}),
+            ),
+            (
+                "settings.update_weekly_report_settings",
+                json!({"weeklyReportSettings": {"week_start_day": 2}}),
+            ),
+            (
+                "settings.update_notebook_embedding_settings",
+                json!({"notebookEmbeddingSettings": {"model": "synthetic"}}),
+            ),
+            (
+                "settings.update_proxy_settings",
+                json!({"proxySettings": {"url": "http://synthetic.invalid"}}),
+            ),
+            (
+                "settings.update_dsh_reasoning_effort",
+                json!({"agent": "dsh", "effort": "max"}),
+            ),
+        ] {
+            let rig = Arc::clone(&rig);
+            let start = Arc::clone(&start);
+            calls.push(tokio::spawn(async move {
+                start.wait().await;
+                let reply = request(&rig, method, params).await;
+                assert!(matches!(reply, Frame::Success(_)), "{method}: {reply:?}");
+            }));
+        }
+        for call in calls {
+            call.await.unwrap();
+        }
+        let fields = rig.read_settings();
+        assert_eq!(fields["unknown"].as_str().unwrap().len(), 16384);
+        assert_eq!(fields["send_shortcut"], "enter");
+        assert_eq!(fields["terminal_shift_enter_newline"], false);
+        assert_eq!(fields["auto_cleanup_settings"]["last_run_at"], 123);
+        assert_eq!(fields["weekly_report_settings"]["week_start_day"], 2);
+        assert_eq!(fields["notebook_embedding_settings"]["model"], "synthetic");
+        assert_eq!(fields["proxy_settings"]["url"], "http://synthetic.invalid");
+        assert_eq!(fields["dsh_reasoning_efforts"]["dsh"], "max");
+    }
+}
+
+#[tokio::test]
+async fn preference_embedding_normalizes_without_persisting_inline_keys_or_contacting_a_provider() {
+    let rig = Rig::start("embedding").await;
+    rig.write_settings(json!({"unknown": {"keep": true}}));
+    let reply = request(
+        &rig,
+        "settings.update_notebook_embedding_settings",
+        json!({
+            "notebookEmbeddingSettings": {
+                "provider": "openAi", "base_url": " \t ", "model": "  ",
+                "api_key": "synthetic-inline-key", "apiKey": "synthetic-camel-key",
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["notebook_embedding_settings"],
+        json!({
+            "provider": "openAi", "base_url": "http://127.0.0.1:11434", "model": "nomic-embed-text",
+        })
+    );
+    assert_eq!(rig.read_settings()["unknown"], json!({"keep": true}));
+    let persisted = std::fs::read_to_string(rig.settings_path()).unwrap();
+    assert!(!persisted.contains("synthetic-inline-key"));
+    assert!(!persisted.contains("synthetic-camel-key"));
+    let reply = request(&rig, "settings.update_notebook_embedding_settings", json!({
+        "notebookEmbeddingSettings": {
+            "provider": "ollama", "base_url": " https://never-contact.invalid/v1/ ", "model": " synthetic ",
+        },
+    })).await;
+    assert_eq!(
+        result(&reply)["notebook_embedding_settings"],
+        json!({
+            "provider": "ollama", "base_url": "https://never-contact.invalid/v1/", "model": "synthetic",
+        })
+    );
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    for payload in [
+        json!(null),
+        json!({"provider": "not-a-provider"}),
+        json!({"base_url": false}),
+        json!({"model": 42}),
+    ] {
+        let reply = request(
+            &rig,
+            "settings.update_notebook_embedding_settings",
+            json!({
+                "notebookEmbeddingSettings": payload,
+            }),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test]
+async fn preference_dsh_refuses_a_non_object_effort_map_before_writing() {
+    let rig = Rig::start("dsh-corrupt-map").await;
+    for effort_map in [json!(false), json!(null), json!(["high"])] {
+        rig.write_settings(json!({
+            "unknown": {"keep": true}, "dsh_reasoning_efforts": effort_map,
+        }));
+        let before = std::fs::read(rig.settings_path()).unwrap();
+        let reply = request(
+            &rig,
+            "settings.update_dsh_reasoning_effort",
+            json!({"agent": "dsh", "effort": "high"}),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test]
+async fn preference_dsh_refuses_an_unreturnable_reply_before_writing() {
+    let rig = Rig::start("dsh-corrupt-reply").await;
+    rig.write_settings(json!({
+        "custom_agents": false, "dsh_reasoning_efforts": {"other": "low"},
+    }));
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    let reply = request(
+        &rig,
+        "settings.update_dsh_reasoning_effort",
+        json!({"agent": "dsh", "effort": " MAX "}),
+    )
+    .await;
+    assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+    assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test]
+async fn preference_proxy_normalizes_complete_replacements_and_refuses_wrong_types() {
+    let rig = Rig::start("proxy-normalize").await;
+    rig.write_settings(json!({"unknown": {"keep": true}}));
+    let reply = request(
+        &rig,
+        "settings.update_proxy_settings",
+        json!({
+            "proxySettings": {
+                "url": " 127.0.0.1:7890 ", "no_proxy": " localhost, , example.invalid ,localhost ",
+                "username": " synthetic-user ", "password": " synthetic-pass ",
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["proxy_settings"],
+        json!({
+            "url": "http://127.0.0.1:7890", "no_proxy": "localhost,example.invalid,localhost",
+            "username": "synthetic-user", "password": "synthetic-pass",
+        })
+    );
+    assert_eq!(rig.read_settings()["unknown"], json!({"keep": true}));
+    let before = std::fs::read(rig.settings_path()).unwrap();
+    for payload in [
+        json!(null),
+        json!(false),
+        json!("not-an-object"),
+        json!({"url": false}),
+        json!({"no_proxy": []}),
+        json!({"username": 42}),
+        json!({"password": null}),
+    ] {
+        let reply = request(
+            &rig,
+            "settings.update_proxy_settings",
+            json!({
+                "proxySettings": payload,
+            }),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+    // Valid complete replacement can repair the exact target, not unrelated data.
+    rig.write_settings(json!({"proxy_settings": null, "unknown": true}));
+    let reply = request(
+        &rig,
+        "settings.update_proxy_settings",
+        json!({"proxySettings": {}}),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["proxy_settings"],
+        json!({
+            "url": "", "no_proxy": "", "username": "", "password": "",
+        })
+    );
+    assert_eq!(result(&reply)["unknown"], true);
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test]
+async fn preference_proxy_consumes_legacy_state_before_replacement_and_never_revives_it() {
+    let rig = Rig::start("proxy-legacy").await;
+    let profiles = json!([
+        {"id": "first", "label": "First", "path": "/never/run-first",
+            "username": "synthetic-old-user", "password": "synthetic-old-pass",
+            "future": {"username": "not-a-legacy-field"}},
+        {"id": "second", "label": "Second", "path": "/never/run-second",
+            "username": "synthetic-second-user", "password": "synthetic-second-pass",
+            "future": [1, 2, 3]},
+    ]);
+    let original = json!({
+        "unknown": {"keep": true}, "custom_agents": profiles,
+        "proxy_settings": {"url": "http://old-global.invalid", "username": "synthetic-global"},
+        "agent_proxy_enabled": {"claude": false, " OMP ": true, "": true, "codex": false},
+        "agent_proxy_overrides": {
+            " CLAUDE ": {"enabled": true, "url": "http://old-legacy.invalid"},
+            "dsh": {"enabled": false, "url": "http://unused.invalid"},
+        },
+    });
+    rig.write_settings(original.clone());
+    let reply = request(
+        &rig,
+        "settings.update_proxy_settings",
+        json!({
+            "proxySettings": {"url": "http://new.invalid:7890"},
+        }),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["agent_proxy_enabled"],
+        json!({"claude": true, "omp": true})
+    );
+    assert!(result(&reply).get("agent_proxy_overrides").is_none());
+    let mut expected_profiles = profiles;
+    for profile in expected_profiles.as_array_mut().unwrap() {
+        let fields = profile.as_object_mut().unwrap();
+        fields.remove("username");
+        fields.remove("password");
+    }
+    assert_eq!(result(&reply)["custom_agents"], expected_profiles);
+    assert_eq!(
+        result(&reply)["proxy_settings"],
+        json!({
+            "url": "http://new.invalid:7890", "no_proxy": "", "username": "", "password": "",
+        })
+    );
+    let reply = request(
+        &rig,
+        "settings.update_proxy_settings",
+        json!({"proxySettings": {}}),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["proxy_settings"],
+        json!({
+            "url": "", "no_proxy": "", "username": "", "password": "",
+        })
+    );
+    assert_eq!(result(&reply)["custom_agents"], expected_profiles);
+    assert_eq!(result(&reply)["unknown"], json!({"keep": true}));
+    // An initial empty replacement must consume legacy fields without
+    // reviving them, not just clear a previously migrated configuration.
+    rig.write_settings(original);
+    let reply = request(
+        &rig,
+        "settings.update_proxy_settings",
+        json!({"proxySettings": {}}),
+    )
+    .await;
+    assert_eq!(
+        result(&reply)["proxy_settings"],
+        json!({"url": "", "no_proxy": "", "username": "", "password": ""})
+    );
+    assert_eq!(result(&reply)["custom_agents"], expected_profiles);
+    assert_eq!(
+        result(&reply)["agent_proxy_enabled"],
+        json!({"claude": true, "omp": true})
+    );
+    assert!(result(&reply).get("agent_proxy_overrides").is_none());
+    assert_eq!(result(&reply)["unknown"], json!({"keep": true}));
+    assert_eq!(&rig.read_settings(), result(&reply));
+    assert!(!rig.data_dir.join("agent-homes").exists());
+}
+
+#[tokio::test]
+async fn preference_proxy_refuses_corrupt_migration_inputs_or_unreturnable_settings_before_writing()
+{
+    let rig = Rig::start("proxy-corrupt").await;
+    for original in [
+        json!({"custom_agents": false}),
+        json!({"agent_proxy_overrides": false}),
+        json!({"agent_proxy_enabled": {"dsh": "true"}}),
+        json!({"custom_agents": [["positional", "Synthetic", "/never/run"]]}),
+    ] {
+        rig.write_settings(original);
+        let before = std::fs::read(rig.settings_path()).unwrap();
+        let reply = request(
+            &rig,
+            "settings.update_proxy_settings",
+            json!({
+                "proxySettings": {"url": "http://never-contact.invalid"},
+            }),
+        )
+        .await;
+        assert!(matches!(reply, Frame::Failure(_)), "{reply:?}");
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
+    }
+    assert!(!rig.data_dir.join("agent-homes").exists());
 }
 
 fn result(frame: &Frame) -> &serde_json::Value {
@@ -217,7 +712,7 @@ async fn a_field_update_keeps_every_other_key() {
     rig.write_settings(json!({
         "send_shortcut": "enter",
         "third_party_key": { "kept": true },
-        "custom_agents": [{ "id": "fake" }]
+        "custom_agents": [{ "id": "fake", "label": "Synthetic", "path": "/never/run" }]
     }));
 
     let updated = call(
@@ -286,10 +781,11 @@ async fn every_field_update_row_has_a_registered_method() {
     let (mut reader, mut writer) = rig.connect().await;
     rig.handshake(&mut reader, &mut writer).await;
     rig.write_settings(json!({}));
+    let before = std::fs::read(rig.settings_path()).unwrap();
 
     for (index, row) in field_update_methods().iter().enumerate() {
-        // 缺参数时若"方法不存在"，错误会是 NotFound/InvalidArgument 之外的形状；
-        // 这里用 "方法在集合里" 这条更强的前置：给一个空对象，只看它**不是**方法缺失。
+        // Every listed field now has a typed preference. Null must be rejected
+        // as an argument error, not accepted or mistaken for a missing method.
         let reply = call(
             &mut reader,
             &mut writer,
@@ -299,20 +795,15 @@ async fn every_field_update_row_has_a_registered_method() {
         )
         .await;
         match reply {
-            Frame::Failure(failure) => assert!(
-                failure.error.message.contains("Missing param")
-                    || failure.error.message.contains("Invalid")
-                    || failure.error.message.contains("object"),
-                "{} 已注册，但拒绝方式不是参数问题：{:?}",
+            Frame::Failure(failure) => assert_eq!(
+                failure.error.code,
+                ErrorCode::InvalidArgument,
+                "{}",
                 row.method,
-                failure.error
             ),
-            Frame::Success(_) => {
-                // `null` 也是合法值（例如把某个设置清空），此时必须真写进去了。
-                assert!(rig.read_settings().get(row.key).is_some(), "{}", row.method);
-            }
             other => panic!("{}: unexpected frame {other:?}", row.method),
         }
+        assert_eq!(std::fs::read(rig.settings_path()).unwrap(), before);
     }
     rig.cleanup();
 }

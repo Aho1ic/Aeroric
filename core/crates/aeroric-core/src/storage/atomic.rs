@@ -8,6 +8,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// How private a replaced file must be. Everything under the data directory that can
 /// hold a token, a session transcript or a hook fragment is [`FileMode::Private`];
@@ -75,6 +76,47 @@ pub enum StorageError {
     Lease(#[from] crate::storage_lock::LeaseError),
     #[error("no write permission: {0}")]
     WritePermission(#[from] crate::context::StorageWritePermission),
+}
+
+/// The shipping client's non-private atomic mechanism, kept byte/error/mode
+/// compatible. Unlike `write_atomic`, this does not create parents, enforce a
+/// private mode, add a backup, or translate the OS error. Callers own authority.
+pub fn write_legacy_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let uid = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
+    {
+        let mut file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        if let Err(error) = file.write_all(content.as_bytes()) {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
+        if let Err(error) = file.sync_all() {
+            drop(file);
+            let _ = fs::remove_file(&tmp);
+            return Err(error.to_string());
+        }
+    }
+    finish_legacy_atomic_rename(&tmp, path)
+}
+
+/// Shared with the legacy private writer; a failed rename must not leak a copy.
+pub fn finish_legacy_atomic_rename(tmp: &Path, path: &Path) -> Result<(), String> {
+    match fs::rename(tmp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(tmp);
+            Err(error.to_string())
+        }
+    }
 }
 
 /// Write `bytes` so a reader never sees a half file: temp in the same directory, flush,

@@ -16,7 +16,6 @@ pub(super) static CACHED_CLAUDE_VERSION: OnceLock<Mutex<Option<Option<String>>>>
 pub(super) static CACHED_CODEX_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 pub(super) static CACHED_DSH_VERSION: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 pub(super) static CACHED_SETTINGS: OnceLock<Mutex<Option<CachedSettings>>> = OnceLock::new();
-pub(super) static SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 pub(super) static AGENT_UPGRADE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 pub(super) fn clear_cached_versions() {
@@ -28,7 +27,7 @@ pub(super) fn clear_cached_versions() {
 }
 
 pub(super) fn settings_lock() -> &'static Mutex<()> {
-    SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
+    aeroric_core::storage::settings::settings_lock()
 }
 
 pub(super) fn agent_upgrade_lock() -> &'static tokio::sync::Mutex<()> {

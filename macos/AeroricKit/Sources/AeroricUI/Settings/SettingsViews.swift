@@ -158,12 +158,7 @@ public struct ModelSettingsView: View {
     }
 
     private var allowedEfforts: [String] {
-        // capability 门控（SettingsCapability；OMP 白名单与 DSH 分家）。
-        switch family {
-        case "omp": SettingsCapability.ompThinkingLevels
-        case "dsh", "claude", "codex": SettingsCapability.dshEffortLevels
-        default: []
-        }
+        SettingsCapability.effortLevels(for: family)
     }
 
     public var body: some View {
@@ -177,8 +172,11 @@ public struct ModelSettingsView: View {
                         Text(effort).tag(effort)
                     }
                 }
-                Button("应用") { onEffortChange?(selectedEffort) }
-                    .disabled(selectedEffort.isEmpty)
+                Button("应用") {
+                    guard SettingsCapability.supportsEffort(selectedEffort, family: family) else { return }
+                    onEffortChange?(selectedEffort)
+                }
+                    .disabled(!SettingsCapability.supportsEffort(selectedEffort, family: family))
             }
         }
         .padding(16)

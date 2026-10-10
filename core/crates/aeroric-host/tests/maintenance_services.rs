@@ -11,9 +11,10 @@
 //!    下载落盘，断言 `updates/pending-release-update.json` 写在 data_dir 里，
 //!    而"替换正在运行的 app"被明确拒绝（GUI 适配器的活）。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use aeroric_core::maintenance::updates::TargetPlatform;
+use aeroric_core::maintenance::updates::{ReleaseUpdatePrepareResult, TargetPlatform};
 use aeroric_core::maintenance::{
     MaintenanceHost, MaintenanceService, NullProgress, ReportProgressSink, StartupDegradationLog,
     WeeklyReportProgress, WeeklyReportTask,
@@ -79,6 +80,7 @@ struct FakeHost {
     downloaded: std::sync::Mutex<Vec<String>>,
     assets: Vec<(String, Vec<u8>)>,
     summaries: std::sync::Mutex<usize>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl FakeHost {
@@ -89,6 +91,7 @@ impl FakeHost {
             downloaded: std::sync::Mutex::new(Vec::new()),
             assets: Vec::new(),
             summaries: std::sync::Mutex::new(0),
+            calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -96,9 +99,11 @@ impl FakeHost {
 #[async_trait::async_trait]
 impl MaintenanceHost for FakeHost {
     fn app_version(&self) -> String {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         "1.0.0".to_string()
     }
     fn platform(&self) -> TargetPlatform<'static> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         TargetPlatform {
             os: "macos",
             arch: "aarch64",
@@ -106,17 +111,20 @@ impl MaintenanceHost for FakeHost {
         }
     }
     fn calendar(&self) -> Arc<dyn LocalCalendar> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Arc::new(Utc8)
     }
     async fn fetch_releases(
         &self,
     ) -> Result<Vec<aeroric_core::maintenance::GitHubRelease>, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.releases.clone())
     }
     async fn fetch_release(
         &self,
         tag: &str,
     ) -> Result<aeroric_core::maintenance::GitHubRelease, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         self.releases
             .iter()
             .find(|release| release.tag_name == tag)
@@ -129,6 +137,7 @@ impl MaintenanceHost for FakeHost {
         asset_name: &str,
         tag_name: &str,
     ) -> Result<(String, String), String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let dir = aeroric_core::maintenance::updates::release_update_dir(
             &self.data_dir.join("updates"),
             tag_name,
@@ -150,6 +159,7 @@ impl MaintenanceHost for FakeHost {
         ))
     }
     async fn summarize(&self, task: &WeeklyReportTask, _locale: &str) -> Option<String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         if task.session_path.is_some() {
             *self.summaries.lock().unwrap() += 1;
             Some("host summary".to_string())
@@ -209,6 +219,15 @@ fn release_fixture(data_dir: &std::path::Path) -> (FakeHost, Vec<u8>) {
 /// 起一个宿主（真 socket、真握手、真 serve 循环）；wiring 按数据根现造。
 async fn hosted(tag: &str, wiring: impl FnOnce(&std::path::Path) -> HostWiring) -> Harness {
     Harness::start_with_wiring(tag, wiring).await
+}
+
+fn directory_entries(directory: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let mut entries: Vec<_> = std::fs::read_dir(directory)
+        .expect("fixture directory")
+        .map(|entry| entry.expect("fixture directory entry").file_name())
+        .collect();
+    entries.sort();
+    entries
 }
 
 #[tokio::test]
@@ -518,6 +537,256 @@ async fn the_maintenance_methods_run_the_core_orchestration() {
     )
     .await;
     assert!(matches!(broken, Frame::Failure(_)), "{broken:?}");
+}
+
+#[tokio::test]
+async fn pending_query_returns_client_dto_without_touching_files_or_ports() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::start_with_wiring("pending-dto", |dir| {
+        let mut fake = FakeHost::new(dir);
+        fake.calls = Arc::clone(&calls);
+        HostWiring {
+            maintenance: Some(Arc::new(fake)),
+            ..Default::default()
+        }
+    })
+    .await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let updates_dir = harness.data_dir.join("updates");
+    let pending_path = updates_dir.join("pending-release-update.json");
+    let installer_path = updates_dir.join("missing-installer.dmg");
+    let checksum_path = updates_dir.join("SHA256SUMS.txt");
+    std::fs::create_dir_all(&updates_dir).expect("fixture updates directory");
+
+    // 手写盘上 payload，不调用 prepare/save，也不创建安装包或校验文件。
+    let fixtures = [
+        (
+            "full",
+            json!({
+                "tagName": "v20.0.0",
+                "assetName": "synthetic-update.dmg",
+                "installerPath": installer_path.to_string_lossy(),
+                "checksumPath": checksum_path.to_string_lossy(),
+                "checksumVerified": false,
+                "helperStatus": "failed",
+                "error": "synthetic helper failure",
+                "futureMetadata": {"preserve": true}
+            }),
+            ReleaseUpdatePrepareResult {
+                tag_name: "v20.0.0".to_string(),
+                asset_name: "synthetic-update.dmg".to_string(),
+                installer_path: installer_path.to_string_lossy().into_owned(),
+                // 查询保留旧 Tauri 的 true，不按校验/helper 结果重新判断。
+                ready_to_restart: true,
+                checksum_verified: false,
+                helper_status: "failed".to_string(),
+                error: Some("synthetic helper failure".to_string()),
+            },
+        ),
+        (
+            "legacy",
+            json!({
+                "tagName": "v20.1.0",
+                "assetName": "legacy-update.dmg",
+                "installerPath": installer_path.to_string_lossy()
+            }),
+            ReleaseUpdatePrepareResult {
+                tag_name: "v20.1.0".to_string(),
+                asset_name: "legacy-update.dmg".to_string(),
+                installer_path: installer_path.to_string_lossy().into_owned(),
+                ready_to_restart: true,
+                checksum_verified: false,
+                helper_status: "ready".to_string(),
+                error: None,
+            },
+        ),
+    ];
+    for (fixture, payload, expected) in fixtures {
+        let before = serde_json::to_vec_pretty(&payload).expect("synthetic pending JSON");
+        std::fs::write(&pending_path, &before).expect("write synthetic pending fixture");
+        let entries_before = directory_entries(&updates_dir);
+        for (case, params) in [
+            ("match", json!({"tagName": &expected.tag_name})),
+            ("null", json!({"tagName": null})),
+            ("omitted", json!({})),
+        ] {
+            let reply = Harness::call(
+                &mut reader,
+                &mut writer,
+                &Harness::request(
+                    &format!("{fixture}-{case}"),
+                    "maintenance.get_pending_release_update",
+                    params,
+                ),
+            )
+            .await;
+            let Frame::Success(success) = reply else {
+                panic!("{fixture}/{case} pending query failed: {reply:?}");
+            };
+            let decoded: Option<ReleaseUpdatePrepareResult> =
+                serde_json::from_value(success.result.clone())
+                    .expect("pending query must return the actual public client DTO");
+            assert_eq!(decoded.as_ref(), Some(&expected), "{fixture}/{case}");
+            assert_eq!(
+                success.result,
+                serde_json::to_value(&expected).expect("public DTO"),
+                "all seven public fields, without checksumPath or unknown storage keys"
+            );
+            assert_eq!(
+                std::fs::read(&pending_path).expect("pending fixture remains"),
+                before,
+                "{fixture}/{case} must not rewrite even unknown stored keys"
+            );
+            assert_eq!(directory_entries(&updates_dir), entries_before);
+            assert!(
+                !installer_path.exists(),
+                "query must not create an installer"
+            );
+            assert!(
+                !checksum_path.exists(),
+                "query must not create a checksum file"
+            );
+            assert!(!harness.data_dir.join("notifications.json").exists());
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "{fixture}/{case}");
+        }
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no maintenance port was called"
+    );
+}
+
+#[tokio::test]
+async fn pending_query_preserves_absence_filter_and_read_errors_without_writes() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::start_with_wiring("pending-read", |dir| {
+        let mut fake = FakeHost::new(dir);
+        fake.calls = Arc::clone(&calls);
+        HostWiring {
+            maintenance: Some(Arc::new(fake)),
+            ..Default::default()
+        }
+    })
+    .await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let updates_dir = harness.data_dir.join("updates");
+    let pending_path = updates_dir.join("pending-release-update.json");
+    let installer_path = updates_dir.join("missing-installer.dmg");
+    assert!(!updates_dir.exists());
+    let missing = Harness::call(
+        &mut reader,
+        &mut writer,
+        &Harness::request(
+            "missing",
+            "maintenance.get_pending_release_update",
+            json!({}),
+        ),
+    )
+    .await;
+    let Frame::Success(success) = missing else {
+        panic!("missing pending query failed: {missing:?}");
+    };
+    assert_eq!(success.result, json!(null));
+    assert_eq!(
+        serde_json::from_value::<Option<ReleaseUpdatePrepareResult>>(success.result)
+            .expect("missing public result"),
+        None
+    );
+    assert!(
+        !updates_dir.exists(),
+        "missing query must not create updates"
+    );
+    assert!(!harness.data_dir.join("notifications.json").exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    std::fs::create_dir_all(&updates_dir).expect("fixture updates directory");
+    let valid = serde_json::to_vec_pretty(&json!({
+        "tagName": "v20.0.0",
+        "assetName": "synthetic-update.dmg",
+        "installerPath": installer_path.to_string_lossy()
+    }))
+    .expect("synthetic pending JSON");
+    std::fs::write(&pending_path, &valid).expect("write valid pending fixture");
+    let entries_before = directory_entries(&updates_dir);
+    for (index, tag) in ["v0.0.0", "V20.0.0", ""].into_iter().enumerate() {
+        let reply = Harness::call(
+            &mut reader,
+            &mut writer,
+            &Harness::request(
+                &format!("filter-{index}"),
+                "maintenance.get_pending_release_update",
+                json!({"tagName": tag}),
+            ),
+        )
+        .await;
+        let Frame::Success(success) = reply else {
+            panic!("filtered pending query failed for {tag:?}: {reply:?}");
+        };
+        assert_eq!(success.result, json!(null), "tag filtering is exact");
+        assert_eq!(
+            serde_json::from_value::<Option<ReleaseUpdatePrepareResult>>(success.result)
+                .expect("filtered public result"),
+            None
+        );
+        assert_eq!(std::fs::read(&pending_path).expect("valid fixture"), valid);
+        assert_eq!(directory_entries(&updates_dir), entries_before);
+        assert!(!installer_path.exists());
+        assert!(!harness.data_dir.join("notifications.json").exists());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    let corrupt = b"{ broken";
+    for (case, is_directory) in [("corrupt", false), ("directory", true)] {
+        if is_directory {
+            std::fs::remove_file(&pending_path).expect("replace only the scratch fixture");
+            std::fs::create_dir(&pending_path).expect("deterministic read-error fixture");
+        } else {
+            std::fs::write(&pending_path, corrupt).expect("corrupt pending fixture");
+        }
+        let reply = Harness::call(
+            &mut reader,
+            &mut writer,
+            &Harness::request(case, "maintenance.get_pending_release_update", json!({})),
+        )
+        .await;
+        let Frame::Success(success) = reply else {
+            panic!("{case} pending query failed: {reply:?}");
+        };
+        assert_eq!(success.result, json!(null), "read errors stay absent");
+        assert_eq!(
+            serde_json::from_value::<Option<ReleaseUpdatePrepareResult>>(success.result)
+                .expect("read-error public result"),
+            None
+        );
+        if is_directory {
+            assert!(
+                pending_path.is_dir(),
+                "query must not replace the directory"
+            );
+            assert!(directory_entries(&pending_path).is_empty());
+        } else {
+            assert_eq!(
+                std::fs::read(&pending_path).expect("corrupt fixture"),
+                corrupt
+            );
+        }
+        assert_eq!(directory_entries(&updates_dir), entries_before);
+        assert!(!installer_path.exists());
+        assert!(!harness.data_dir.join("notifications.json").exists());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{case}");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no maintenance port was called"
+    );
 }
 
 /// 直连编排层（不经 socket）也钉一遍：`NullProgress` 与真实 progress sink 的差别。

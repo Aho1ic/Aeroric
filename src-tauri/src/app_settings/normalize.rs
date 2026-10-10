@@ -10,6 +10,9 @@
 
 use super::*;
 
+pub(crate) use aeroric_core::settings::normalize::normalize_notebook_embedding_settings;
+pub(super) use aeroric_core::settings::normalize::{normalize_proxy_settings, normalize_proxy_url};
+
 pub(super) fn default_claude_gpt55_path() -> String {
     crate::platform::home_dir()
         .map(|home| home.join(".claude").join("start-gpt55.sh"))
@@ -46,19 +49,9 @@ pub(super) fn sanitize_custom_agent_id(value: &str) -> String {
 /// 必须保持一致——codex-like 脚本会把它 export 成 CODEX_HOME,MCP profile 要写进同一目录
 /// 才能被 `-p` 读到。id 先过 `sanitize_custom_agent_id`,拒绝路径穿越。
 pub fn custom_agent_home(id: &str) -> Result<PathBuf, String> {
-    let normalized = sanitize_custom_agent_id(id);
-    if normalized.is_empty() {
-        return Err(format!("Invalid custom Agent id: {id}"));
-    }
-    let root = aeroric_dir()?.join("agent-homes");
-    let home = root.join(&normalized);
-    // 双重保险:normalized 已排除分隔符,这里再确认没有逃出隔离目录。
-    if home.parent() != Some(root.as_path()) {
-        return Err(
-            "Refusing to resolve an Agent home outside the isolation directory".to_string(),
-        );
-    }
-    Ok(home)
+    aeroric_core::settings::agent_config_roots::custom_home(id, || {
+        Ok(aeroric_dir()?.join("agent-homes"))
+    })
 }
 
 pub(super) fn normalize_config_lang(value: String) -> String {
@@ -237,36 +230,6 @@ pub(super) fn normalize_dsh_reasoning_efforts(
         .collect()
 }
 
-pub(super) fn normalize_proxy_url(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if trimmed.contains("://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{}", trimmed)
-    }
-}
-
-pub(super) fn normalize_no_proxy(value: &str) -> String {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-pub(super) fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
-    ProxySettings {
-        url: normalize_proxy_url(&settings.url),
-        no_proxy: normalize_no_proxy(&settings.no_proxy),
-        username: settings.username.trim().to_string(),
-        password: settings.password.trim().to_string(),
-    }
-}
-
 pub(super) fn normalize_local_router_settings(
     settings: LocalRouterSettings,
 ) -> LocalRouterSettings {
@@ -307,34 +270,6 @@ pub(crate) fn normalize_local_router_settings_for_update(
     normalize_local_router_settings(settings)
 }
 
-/// 随手记 embedding 配置的归一化。
-///
-/// 空值补回默认而不是原样留空:空 base URL 会让 `embed::endpoint_for` 回一条
-/// `Config` 错误,而用户在设置页看到的是一个自己刚清空的输入框 —— 报错和现象对不上。
-/// 补回默认既救得回来,也顺手告诉用户「这两个字段不能空」。
-///
-/// 这里**不**校验 URL 形状:那是 `embed::endpoint_for` 的活(它还要处理重复 `/v1`
-/// 与末尾斜杠),两处各写一遍校验只会互相跑偏。
-pub(crate) fn normalize_notebook_embedding_settings(
-    settings: NotebookEmbeddingSettings,
-) -> NotebookEmbeddingSettings {
-    let base_url = settings.base_url.trim();
-    let model = settings.model.trim();
-    NotebookEmbeddingSettings {
-        provider: settings.provider,
-        base_url: if base_url.is_empty() {
-            default_notebook_embedding_base_url()
-        } else {
-            base_url.to_string()
-        },
-        model: if model.is_empty() {
-            default_notebook_embedding_model()
-        } else {
-            model.to_string()
-        },
-    }
-}
-
 pub(super) fn normalize_local_router_agent_settings(
     settings: LocalRouterAgentSettings,
 ) -> LocalRouterAgentSettings {
@@ -363,16 +298,4 @@ pub(super) fn normalize_local_router_agent_settings(
         failover_queue,
         ..settings
     }
-}
-
-pub(super) fn normalize_agent_proxy_enabled(
-    overrides: HashMap<String, bool>,
-) -> HashMap<String, bool> {
-    overrides
-        .into_iter()
-        .filter_map(|(agent, enabled)| {
-            let key = normalize_agent_label_key(&agent);
-            (!key.is_empty() && enabled).then_some((key, true))
-        })
-        .collect()
 }

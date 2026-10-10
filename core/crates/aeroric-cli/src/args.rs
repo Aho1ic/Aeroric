@@ -1,7 +1,7 @@
 //! 命令树（P3-07 Action 1 的逐字落地）。
 //!
-//! `--data-dir` 是全局必填参数：INV-03 的机器形状——CLI 不查 `$HOME`，
-//! 数据根只能由调用方给。`--help` 的等待语义与退出码表是契约文本
+//! `--data-dir` 是全局必填参数：INV-03 的机器形状——数据根不从 `$HOME` 推导，
+//! 只能由调用方给；serve 另在装配边界捕获配置用外部 home。`--help` 的等待语义与退出码表是契约文本
 //! （Action 4），不是注释。
 
 use clap::{Parser, Subcommand};
@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "aeroric-cli", version, about, long_about = None)]
 pub struct Cli {
-    /// 数据根（`~/.aeroric` 的等价物）；必填，CLI 不查环境变量。
+    /// 数据根（`~/.aeroric` 的等价物）；必填，不从环境变量推导。
     /// 顶层参数（命令树 `aeroric-cli --data-dir PATH <sub>` 的写法）——
     /// clap 的 global 与 required 互斥（debug assert 实测），且 Action 1
     /// 的树形本来就把 `--data-dir` 定在子命令之前。

@@ -11,12 +11,19 @@ use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
 use aeroric_core::projects::{mutations, ProjectService};
-use aeroric_core::storage::tasks::load_stamped;
+use aeroric_core::sessions::dsh::read_compressed_dsh_lines;
+use aeroric_core::sessions::history::{
+    read_session_page_lines, SessionMessagePage, SESSION_MESSAGE_PAGE_LINES,
+};
+use aeroric_core::sessions::parser::parse_session_messages_with_format;
+use aeroric_core::storage::tasks::{load_stamped, load_tasks};
+use aeroric_core::storage::StorageError;
 use aeroric_protocol::envelope::{Frame, Request, Success};
 use aeroric_protocol::error::ErrorCode;
 use serde_json::{json, Value};
 
 use crate::dispatcher::{failure, ServiceSet};
+use crate::file_access::{require_local_record, write_refusal, FileProjectError, FileTarget};
 
 pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     {
@@ -25,8 +32,202 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
             "project.list",
             Arc::new(move |request, _call| {
                 let context = Arc::clone(&context);
-                Box::pin(async move { project_list(request, context) })
+                Box::pin(
+                    async move { project_list(request, context, ProjectListReplyShape::Object) },
+                )
             }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "project.load_projects",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(
+                    async move { project_list(request, context, ProjectListReplyShape::Array) },
+                )
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "project.load_project_tasks",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { project_load_tasks(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "project.read_task_terminal_history",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { project_read_task_terminal_history(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "project.delete_task_terminal_histories",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(
+                    async move { project_delete_task_terminal_histories(request, context).await },
+                )
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "project.save_projects",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { project_save_projects(request, context).await })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "session.read_session_id",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { session_read_session_id(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "session.session_supports_native_resume",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { session_supports_native_resume(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "session.read_session_message_page",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { session_read_session_message_page(request, context) })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.worktree_diff_stats",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_worktree_diff_stats(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.remove_task_worktree",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_remove_task_worktree(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.create_task_worktree",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_create_task_worktree(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.merge_task_worktree",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_merge_task_worktree(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.git_status",
+            Arc::new(move |request, _call| Box::pin(async move { git_git_status(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_list_branches",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_list_branches(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.git_log",
+            Arc::new(move |request, _call| Box::pin(async move { git_git_log(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_show_diff",
+            Arc::new(move |request, _call| Box::pin(async move { git_show_diff(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_stage",
+            Arc::new(move |request, _call| Box::pin(async move { git_stage(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_unstage",
+            Arc::new(move |request, _call| Box::pin(async move { git_unstage(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_commit",
+            Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_stage_all",
+            Arc::new(move |request, _call| Box::pin(async move { git_stage_all(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_unstage_all",
+            Arc::new(move |request, _call| Box::pin(async move { git_unstage_all(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_conflict_files",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_conflict_files(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.git_init",
+            Arc::new(move |request, _call| Box::pin(async move { git_init(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_stash_push",
+            Arc::new(move |request, _call| Box::pin(async move { git_stash_push(request).await })),
         );
     }
     {
@@ -59,6 +260,32 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
             }),
         );
     }
+    {
+        set.register(
+            "platform.get_platform_runtime_info",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { platform_get_platform_runtime_info(request) })
+            }),
+        );
+    }
+    {
+        set.register(
+            "platform.build_runnable_file_command",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { platform_build_runnable_file_command(request) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "terminal.validate_agent_launch",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { terminal_validate_agent_launch(request, context) })
+            }),
+        );
+    }
 }
 
 pub(crate) fn ok(request: &Request, result: Value) -> Frame {
@@ -71,9 +298,26 @@ pub(crate) fn ok(request: &Request, result: Value) -> Frame {
     })
 }
 
-fn project_list(request: Request, context: Arc<CoreContext>) -> Frame {
+// ADR-002 freezes the legacy command's wire name. Its bare array is a distinct
+// contract from the intrinsic project.list object; only serialization differs.
+enum ProjectListReplyShape {
+    Object,
+    Array,
+}
+
+fn project_list(
+    request: Request,
+    context: Arc<CoreContext>,
+    reply_shape: ProjectListReplyShape,
+) -> Frame {
     match ProjectService::new(context).list() {
-        Ok(projects) => ok(&request, json!({ "projects": projects })),
+        Ok(projects) => ok(
+            &request,
+            match reply_shape {
+                ProjectListReplyShape::Object => json!({ "projects": projects }),
+                ProjectListReplyShape::Array => json!(projects),
+            },
+        ),
         Err(e) => failure(
             request.id,
             ErrorCode::IoError,
@@ -125,6 +369,32 @@ fn project_open(request: Request, context: Arc<CoreContext>) -> Frame {
     }
 }
 
+// The legacy query addresses one task file, including an unregistered project.
+// Do not replace it with task.list's registry scan and projectId projection.
+fn project_load_tasks(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(project_id) = request.params.get("projectId").and_then(Value::as_str) else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.load_project_tasks requires params.projectId (string)",
+        );
+    };
+    match load_tasks(&context, project_id) {
+        Ok(tasks) => ok(&request, json!(tasks)),
+        Err(error) => {
+            let code = if matches!(&error, StorageError::InvalidId(_)) {
+                ErrorCode::InvalidArgument
+            } else {
+                ErrorCode::IoError
+            };
+            failure(
+                request.id,
+                code,
+                &format!("cannot read tasks of project {project_id}: {error}"),
+            )
+        }
+    }
+}
 fn task_list(request: Request, context: Arc<CoreContext>) -> Frame {
     let projects = match ProjectService::new(Arc::clone(&context)).list() {
         Ok(projects) => projects,
@@ -214,6 +484,1214 @@ fn task_get(request: Request, context: Arc<CoreContext>) -> Frame {
         ErrorCode::NotFound,
         "no task with that id in any known project",
     )
+}
+
+fn platform_get_platform_runtime_info(request: Request) -> Frame {
+    let info = aeroric_core::platform::current_platform_runtime_info();
+    match serde_json::to_value(info) {
+        Ok(value) => ok(&request, value),
+        Err(e) => failure(request.id, ErrorCode::IoError, &e.to_string()),
+    }
+}
+
+fn platform_build_runnable_file_command(request: Request) -> Frame {
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "platform.build_runnable_file_command parameters must be an object",
+        );
+    };
+
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "filePath must be a string",
+        );
+    };
+
+    let conda_path = match params.get("condaPath") {
+        Some(Value::Null) | None => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => {
+            return failure(
+                request.id,
+                ErrorCode::InvalidArgument,
+                "condaPath must be a string or null",
+            );
+        }
+    };
+
+    let conda_python_path = match params.get("condaPythonPath") {
+        Some(Value::Null) | None => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => {
+            return failure(
+                request.id,
+                ErrorCode::InvalidArgument,
+                "condaPythonPath must be a string or null",
+            );
+        }
+    };
+
+    let remote = match params.get("remote") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return failure(
+                request.id,
+                ErrorCode::InvalidArgument,
+                "remote must be a boolean",
+            );
+        }
+    };
+
+    let shell = aeroric_core::platform::default_shell_command();
+    match aeroric_core::platform::runnable_file_command(
+        file_path,
+        conda_path,
+        conda_python_path,
+        remote,
+        &shell.program,
+    ) {
+        Ok(result) => match serde_json::to_value(result) {
+            Ok(value) => ok(&request, value),
+            Err(e) => failure(request.id, ErrorCode::IoError, &e.to_string()),
+        },
+        Err(reason) => failure(request.id, ErrorCode::InvalidArgument, &reason),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteTerminalHistoriesParams {
+    task_ids: Vec<String>,
+}
+
+async fn project_delete_task_terminal_histories(
+    request: Request,
+    context: Arc<CoreContext>,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.delete_task_terminal_histories requires params object",
+        );
+    }
+    let params: DeleteTerminalHistoriesParams = match serde_json::from_value(request.params.clone())
+    {
+        Ok(params) => params,
+        Err(error) => return failure(request.id, ErrorCode::InvalidArgument, &error.to_string()),
+    };
+    // Decode all element types before IO, but validate each string's ID only
+    // when the shared sequential algorithm reaches it (legacy partial failure).
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::terminal::history::delete_task_terminal_histories(&context, &params.task_ids)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => {
+            let code = if matches!(
+                &error,
+                aeroric_core::terminal::history::HistoryDeleteError::InvalidId(_)
+            ) {
+                ErrorCode::InvalidArgument
+            } else {
+                ErrorCode::IoError
+            };
+            failure(request.id, code, &error.to_string())
+        }
+        Err(error) => failure(
+            request.id,
+            ErrorCode::IoError,
+            &format!("terminal-history deletion worker failed: {error}"),
+        ),
+    }
+}
+async fn project_save_projects(request: Request, context: Arc<CoreContext>) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.save_projects requires params object",
+        );
+    }
+    let Some(projects_val) = request.params.get("projects").and_then(Value::as_array) else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.save_projects requires params.projects (array)",
+        );
+    };
+    let mut records = Vec::new();
+    for (i, p) in projects_val.iter().enumerate() {
+        let Some(obj) = p.as_object() else {
+            return failure(
+                request.id,
+                ErrorCode::InvalidArgument,
+                &format!("project at index {i} must be an object"),
+            );
+        };
+        records.push(aeroric_core::storage::Record(obj.clone()));
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::storage::save_projects(&context, &records)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(e)) => failure(request.id, ErrorCode::IoError, &e.to_string()),
+        Err(e) => failure(
+            request.id,
+            ErrorCode::IoError,
+            &format!("project-save worker failed: {e}"),
+        ),
+    }
+}
+
+fn project_read_task_terminal_history(request: Request, context: Arc<CoreContext>) -> Frame {
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.read_task_terminal_history requires params object",
+        );
+    };
+
+    let task_id_val = params.get("taskId").or_else(|| params.get("task_id"));
+    let Some(task_id) = task_id_val.and_then(Value::as_str) else {
+        return failure(
+            request.id,
+            ErrorCode::InvalidArgument,
+            "project.read_task_terminal_history requires params.taskId (string)",
+        );
+    };
+
+    let path = match context.paths.terminal_history_file(task_id) {
+        Ok(path) => path,
+        Err(e) => {
+            return failure(
+                request.id,
+                ErrorCode::InvalidArgument,
+                &format!("invalid taskId {task_id:?}: {e}"),
+            );
+        }
+    };
+
+    match aeroric_core::terminal::history::read_terminal_history_tail_from_path(
+        &path,
+        aeroric_core::terminal::history::HISTORY_MAX_BYTES as u64,
+    ) {
+        Ok(history) => ok(&request, json!(history)),
+        Err(e) => failure(
+            request.id,
+            ErrorCode::IoError,
+            &format!("cannot read terminal history for task {task_id}: {e}"),
+        ),
+    }
+}
+fn session_read_session_id(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.read_session_id requires params object",
+        );
+    };
+
+    let Some(session_path) = params.get("sessionPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.read_session_id requires params.sessionPath (string)",
+        );
+    };
+
+    let canonical = match std::fs::canonicalize(session_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return failure(
+                id,
+                ErrorCode::IoError,
+                &format!("Cannot resolve session path: {e}"),
+            )
+        }
+    };
+
+    if !canonical.is_file() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "Session path is not a regular file",
+        );
+    }
+
+    let is_codex = params
+        .get("isCodex")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let family_str = params
+        .get("family")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase());
+
+    let session_id = match family_str.as_deref() {
+        Some("dsh") => {
+            aeroric_core::sessions::dsh::read_dsh_session_header(&canonical).map(|(id, _)| id)
+        }
+        Some("omp") => aeroric_core::sessions::omp::read_omp_session_header(&canonical),
+        _ => aeroric_core::sessions::resume::resolve_session_id_from_file(&canonical, is_codex),
+    };
+
+    ok(&request, json!(session_id))
+}
+
+fn session_supports_native_resume(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.session_supports_native_resume requires params object",
+        );
+    };
+
+    let Some(session_path) = params.get("sessionPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.session_supports_native_resume requires params.sessionPath (string)",
+        );
+    };
+
+    let canonical = match std::fs::canonicalize(session_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return failure(
+                id,
+                ErrorCode::IoError,
+                &format!("Cannot resolve session path: {e}"),
+            )
+        }
+    };
+
+    if !canonical.is_file() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "Session path is not a regular file",
+        );
+    }
+
+    let is_codex = params
+        .get("isCodex")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let family_str = params
+        .get("family")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase());
+
+    let is_codex_effective = is_codex || family_str.as_deref() == Some("codex");
+
+    match aeroric_core::sessions::resume::session_file_supports_native_resume(
+        &canonical,
+        is_codex_effective,
+    ) {
+        Ok(supported) => ok(&request, json!(supported)),
+        Err(e) => failure(id, ErrorCode::IoError, &e),
+    }
+}
+
+/// `session.read_session_message_page {sessionPath, projectPath, isCodex, family, cursor}`：
+/// 字节游标反向分页读取（P8-05 slice 58）。与 `session.read_session_id` 同闸——
+/// canonicalize ＋ regular-file 存在性校验（slice 25 口径）；Tauri 侧的允许根
+/// 校验（`validate_session_path_for`）留在旧客户端，宿主不扫描任何 home。
+/// family 分支与宿主命令体逐字镜像：dsh 压缩 transcript 一次解全、首页后不再
+/// 重复返回；明文 transcript 走 core 分页（页上限 1 000 行）。
+fn session_read_session_message_page(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.read_session_message_page requires params object",
+        );
+    };
+
+    let Some(session_path) = params.get("sessionPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.read_session_message_page requires params.sessionPath (string)",
+        );
+    };
+    if params.get("projectPath").and_then(Value::as_str).is_none() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "session.read_session_message_page requires params.projectPath (string)",
+        );
+    }
+
+    let canonical = match std::fs::canonicalize(session_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return failure(
+                id,
+                ErrorCode::IoError,
+                &format!("Cannot resolve session path: {e}"),
+            )
+        }
+    };
+    if !canonical.is_file() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "Session path is not a regular file",
+        );
+    }
+
+    let is_codex = params
+        .get("isCodex")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let family_str = params
+        .get("family")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase());
+    let cursor = params.get("cursor").and_then(Value::as_u64);
+
+    let page = match family_str.as_deref() {
+        Some("dsh") => {
+            // 压缩 transcript 没有“字节偏移 ↔ 行”映射：一次解出全部行。
+            // 首页之后不再重复返回同一份内容，否则前端分页循环不会停。
+            if let Some(lines) = match read_compressed_dsh_lines(&canonical) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    return failure(
+                        id,
+                        ErrorCode::IoError,
+                        &format!("Cannot read session transcript: {e}"),
+                    )
+                }
+            } {
+                let messages = if cursor.is_some() {
+                    Vec::new()
+                } else {
+                    match parse_dsh_session_lines(&lines) {
+                        Ok(messages) => messages,
+                        Err(e) => {
+                            return failure(
+                                id,
+                                ErrorCode::InvalidArgument,
+                                &format!("Cannot parse dsh session: {e}"),
+                            )
+                        }
+                    }
+                };
+                SessionMessagePage {
+                    messages,
+                    next_cursor: None,
+                    has_more: false,
+                }
+            } else {
+                match read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES) {
+                    Ok((lines, next_cursor, has_more)) => match parse_dsh_session_lines(&lines) {
+                        Ok(messages) => SessionMessagePage {
+                            messages,
+                            next_cursor,
+                            has_more,
+                        },
+                        Err(e) => {
+                            return failure(
+                                id,
+                                ErrorCode::InvalidArgument,
+                                &format!("Cannot parse dsh session: {e}"),
+                            )
+                        }
+                    },
+                    Err(e) => {
+                        return failure(
+                            id,
+                            ErrorCode::IoError,
+                            &format!("Cannot read session: {e}"),
+                        )
+                    }
+                }
+            }
+        }
+        Some("omp") => {
+            match read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES) {
+                Ok((lines, next_cursor, has_more)) => match parse_omp_session_lines(&lines) {
+                    Ok(messages) => SessionMessagePage {
+                        messages,
+                        next_cursor,
+                        has_more,
+                    },
+                    Err(e) => {
+                        return failure(
+                            id,
+                            ErrorCode::InvalidArgument,
+                            &format!("Cannot parse omp session: {e}"),
+                        )
+                    }
+                },
+                Err(e) => {
+                    return failure(id, ErrorCode::IoError, &format!("Cannot read session: {e}"))
+                }
+            }
+        }
+        _ => match read_session_page_lines(&canonical, cursor, SESSION_MESSAGE_PAGE_LINES) {
+            Ok((lines, next_cursor, has_more)) => SessionMessagePage {
+                messages: parse_session_messages_with_format(&lines, is_codex, is_codex),
+                next_cursor,
+                has_more,
+            },
+            Err(e) => return failure(id, ErrorCode::IoError, &format!("Cannot read session: {e}")),
+        },
+    };
+
+    match serde_json::to_value(page) {
+        Ok(value) => ok(&request, value),
+        Err(e) => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("Cannot serialize session page: {e}"),
+        ),
+    }
+}
+
+const UNSUPPORTED_WORKTREE_TARGET: &str =
+    "Worktree target is not hosted: SSH/WSL worktrees are unavailable";
+
+async fn git_worktree_diff_stats(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.worktree_diff_stats requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.worktree_diff_stats requires params.projectPath (string)",
+        );
+    };
+    let Some(worktree_path) = params.get("worktreePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.worktree_diff_stats requires params.worktreePath (string)",
+        );
+    };
+    let Some(base_branch) = params.get("baseBranch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.worktree_diff_stats requires params.baseBranch (string)",
+        );
+    };
+    if let Some(error) = crate::local_targets::local_target_error(
+        &request,
+        project_path,
+        UNSUPPORTED_WORKTREE_TARGET,
+    ) {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let wt_path = worktree_path.to_string();
+    let b_branch = base_branch.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let svc = aeroric_core::git::worktree::WorktreeService::new();
+        svc.diff_stats(std::path::Path::new(&p_path), &wt_path, &b_branch)
+    })
+    .await;
+    match result {
+        Ok(Ok(stats)) => ok(&request, serde_json::to_value(stats).unwrap_or(Value::Null)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_remove_task_worktree(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.remove_task_worktree requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.remove_task_worktree requires params.projectPath (string)",
+        );
+    };
+    let Some(worktree_path) = params.get("worktreePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.remove_task_worktree requires params.worktreePath (string)",
+        );
+    };
+    let Some(branch) = params.get("branch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.remove_task_worktree requires params.branch (string)",
+        );
+    };
+    if let Some(error) = crate::local_targets::local_target_error(
+        &request,
+        project_path,
+        UNSUPPORTED_WORKTREE_TARGET,
+    ) {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let wt_path = worktree_path.to_string();
+    let br = branch.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let svc = aeroric_core::git::worktree::WorktreeService::new();
+        svc.remove(std::path::Path::new(&p_path), &wt_path, &br)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_create_task_worktree(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.create_task_worktree requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.create_task_worktree requires params.projectPath (string)",
+        );
+    };
+    let Some(task_id) = params.get("taskId").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.create_task_worktree requires params.taskId (string)",
+        );
+    };
+    let Some(base_branch) = params.get("baseBranch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.create_task_worktree requires params.baseBranch (string)",
+        );
+    };
+    if let Some(error) = crate::local_targets::local_target_error(
+        &request,
+        project_path,
+        UNSUPPORTED_WORKTREE_TARGET,
+    ) {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let t_id = task_id.to_string();
+    let b_branch = base_branch.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let svc = aeroric_core::git::worktree::WorktreeService::new();
+        svc.create(std::path::Path::new(&p_path), &t_id, &b_branch)
+    })
+    .await;
+    match result {
+        Ok(Ok(created)) => ok(
+            &request,
+            serde_json::to_value(created).unwrap_or(Value::Null),
+        ),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_merge_task_worktree(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.merge_task_worktree requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.merge_task_worktree requires params.projectPath (string)",
+        );
+    };
+    let Some(worktree_path) = params.get("worktreePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.merge_task_worktree requires params.worktreePath (string)",
+        );
+    };
+    let Some(branch) = params.get("branch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.merge_task_worktree requires params.branch (string)",
+        );
+    };
+    let Some(base_branch) = params.get("baseBranch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.merge_task_worktree requires params.baseBranch (string)",
+        );
+    };
+    if let Some(error) = crate::local_targets::local_target_error(
+        &request,
+        project_path,
+        UNSUPPORTED_WORKTREE_TARGET,
+    ) {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let wt_path = worktree_path.to_string();
+    let br = branch.to_string();
+    let b_branch = base_branch.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let svc = aeroric_core::git::worktree::WorktreeService::new();
+        svc.merge(std::path::Path::new(&p_path), &wt_path, &br, &b_branch)
+    })
+    .await;
+    match result {
+        Ok(Ok(message)) => ok(&request, Value::String(message)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+const UNSUPPORTED_GIT_TARGET: &str =
+    "Git target is not hosted: SSH/WSL git operations are unavailable";
+
+async fn git_git_status(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_status requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_status requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::status(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(changes)) => ok(
+            &request,
+            serde_json::to_value(changes).unwrap_or(Value::Null),
+        ),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_list_branches(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_list_branches requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_list_branches requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::list_branches(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(branches)) => ok(
+            &request,
+            serde_json::to_value(branches).unwrap_or(Value::Null),
+        ),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_git_log(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_log requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_log requires params.projectPath (string)",
+        );
+    };
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(50);
+    let search = params.get("search").and_then(Value::as_str);
+    let branch = params.get("branch").and_then(Value::as_str);
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let s_search = search.map(str::to_string);
+    let b_branch = branch.map(str::to_string);
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::log(
+            std::path::Path::new(&p_path),
+            limit,
+            s_search.as_deref(),
+            b_branch.as_deref(),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(commits)) => ok(
+            &request,
+            serde_json::to_value(commits).unwrap_or(Value::Null),
+        ),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_show_diff(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_diff requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_diff requires params.projectPath (string)",
+        );
+    };
+    let Some(commit_hash) = params.get("commitHash").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_diff requires params.commitHash (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let c_hash = commit_hash.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::show_diff(std::path::Path::new(&p_path), &c_hash)
+    })
+    .await;
+    match result {
+        Ok(Ok(diff)) => ok(&request, Value::String(diff)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stage(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stage requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stage requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stage requires params.filePath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::stage(std::path::Path::new(&p_path), &f_path, &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_unstage(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_unstage requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_unstage requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_unstage requires params.filePath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::unstage(std::path::Path::new(&p_path), &f_path, &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_commit(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit requires params.projectPath (string)",
+        );
+    };
+    let Some(message) = params.get("message").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_commit requires params.message (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let msg = message.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::commit(std::path::Path::new(&p_path), &msg, &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stage_all(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stage_all requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stage_all requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::stage_all(std::path::Path::new(&p_path), &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stash_push(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_push requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_push requires params.projectPath (string)",
+        );
+    };
+    let message = match params.get("message") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_stash_push requires params.message (string)",
+            )
+        }
+    };
+    let include_untracked = match params.get("includeUntracked") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_stash_push requires params.includeUntracked (boolean)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::stash_push(
+            std::path::Path::new(&p_path),
+            message.as_deref(),
+            include_untracked,
+            &locks,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_init(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_init requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_init requires params.projectPath (string)",
+        );
+    };
+    let initial_branch = match params.get("initialBranch") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_init requires params.initialBranch (string)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::init(
+            std::path::Path::new(&p_path),
+            initial_branch.as_deref(),
+            &locks,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_conflict_files(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_conflict_files requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_conflict_files requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::conflict_files(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(files)) => match serde_json::to_value(files) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_unstage_all(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_unstage_all requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_unstage_all requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::unstage_all(std::path::Path::new(&p_path), &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
 }
 
 // ── 执行服务（b1.2：task.run / task.cancel / task.complete）──────────────
@@ -353,6 +1831,85 @@ fn terminal_active_task_ids(
     registry: &std::sync::Arc<aeroric_core::runtime::registry::TaskRegistry>,
 ) -> Frame {
     ok(&request, json!(registry.live_task_ids()))
+}
+
+fn terminal_validate_agent_launch(
+    request: Request,
+    context: std::sync::Arc<aeroric_core::context::CoreContext>,
+) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.validate_agent_launch requires params object",
+        );
+    };
+    let Some(agent) = params
+        .get("agent")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.validate_agent_launch requires params.agent (non-empty string)",
+        );
+    };
+    let Some(project_path) = params
+        .get("projectPath")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "terminal.validate_agent_launch requires params.projectPath (non-empty string)",
+        );
+    };
+    let project_dir = std::path::Path::new(project_path);
+    if !project_dir.is_dir() {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("projectPath does not exist or is not a directory: {project_path}"),
+        );
+    }
+
+    let raw_settings = match aeroric_core::storage::settings::load_settings(&context) {
+        Ok(outcome) => outcome.found().unwrap_or_default(),
+        Err(error) => {
+            return failure(
+                id,
+                ErrorCode::IoError,
+                &format!("cannot load settings: {error}"),
+            );
+        }
+    };
+    let settings: aeroric_core::settings::schema::AppSettings =
+        serde_json::from_value(Value::Object(raw_settings)).unwrap_or_default();
+    let launch = aeroric_core::settings::get_agent_launch_spec_from_settings(&settings, agent);
+    let cwd = aeroric_core::terminal::launch_validation::agent_process_cwd(
+        project_path,
+        launch.codex_like,
+    );
+    match aeroric_core::terminal::launch_validation::preflight_agent_launch_spec(
+        &launch,
+        Some(&cwd),
+        aeroric_core::terminal::launch_validation::AGENT_LAUNCH_PREFLIGHT_TIMEOUT,
+    ) {
+        Ok(()) => ok(&request, Value::Null),
+        Err(err) => {
+            let code = if launch.family == aeroric_core::settings::schema::AgentFamily::Dsh
+                && err.contains("DeepSeek Harness is not installed")
+            {
+                ErrorCode::NotFound
+            } else {
+                ErrorCode::IoError
+            };
+            failure(id, code, &err)
+        }
+    }
 }
 
 fn task_run(
@@ -1407,7 +2964,11 @@ fn session_export(
 /// P6-01：文件服务（宿主 command 只做 adapter；业务主体在 core `files/`）。
 /// 路径校验 server 端权威（不依赖客户端过滤 `..`）；projectId → 项目根经
 /// `find_project_of_task` 同款的 record 扫描。
-pub fn register_file_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+pub fn register_file_services(
+    set: &mut ServiceSet,
+    context: Arc<CoreContext>,
+    ports: crate::file_access::FilePorts,
+) {
     {
         let context = Arc::clone(&context);
         set.register(
@@ -1460,11 +3021,13 @@ pub fn register_file_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         let context = Arc::clone(&context);
+        let trash = Arc::clone(&ports.trash);
         set.register(
             "files.delete_path",
             Arc::new(move |request, _call| {
                 let context = Arc::clone(&context);
-                Box::pin(async move { files_delete(request, context) })
+                let trash = Arc::clone(&trash);
+                Box::pin(async move { files_delete(request, context, trash) })
             }),
         );
     }
@@ -1478,37 +3041,24 @@ pub fn register_file_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
             }),
         );
     }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "files.replace_preview",
-            Arc::new(move |request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { files_replace_preview(request, context) })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "files.apply_replacements",
-            Arc::new(move |request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { files_apply_replacements(request, context) })
-            }),
-        );
-    }
 }
 
-/// projectId → 项目根（record 的 `path` 字段；与 `find_task_record` 同款扫描）。
-fn find_project_root(context: &Arc<CoreContext>, project_id: &str) -> Option<String> {
-    let projects = aeroric_core::storage::load_projects(context).ok()?;
+/// projectId → 本地项目根。先守卫 record.location，Local 保留原 `path`。
+fn find_project_root(
+    context: &Arc<CoreContext>,
+    project_id: &str,
+) -> Result<Option<String>, FileProjectError> {
+    let Ok(projects) = aeroric_core::storage::load_projects(context) else {
+        // Preserve this batch's existing missing/corrupt registry -> NotFound.
+        return Ok(None);
+    };
     for record in projects {
         if mutations::text(&record, "id") == Some(project_id) {
-            return mutations::text(&record, "path").map(str::to_string);
+            require_local_record(&record)?;
+            return Ok(mutations::text(&record, "path").map(str::to_string));
         }
     }
-    None
+    Ok(None)
 }
 
 fn file_params(request: &Request) -> Result<(String, String), Box<Frame>> {
@@ -1540,12 +3090,20 @@ fn files_read_dir(request: Request, context: Arc<CoreContext>) -> Frame {
         Ok(v) => v,
         Err(frame) => return *frame,
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1554,6 +3112,9 @@ fn files_read_dir(request: Request, context: Arc<CoreContext>) -> Frame {
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     match aeroric_core::files::read_write::read_dir_entries(&root, &relative) {
         Ok(entries) => ok(&request, serde_json::json!({ "entries": entries })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
@@ -1565,12 +3126,20 @@ fn files_read_file(request: Request, context: Arc<CoreContext>) -> Frame {
         Ok(v) => v,
         Err(frame) => return *frame,
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1579,6 +3148,9 @@ fn files_read_file(request: Request, context: Arc<CoreContext>) -> Frame {
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     match aeroric_core::files::read_write::read_file_content(&root, &relative) {
         Ok(content) => ok(&request, serde_json::json!({ "content": content })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
@@ -1597,12 +3169,23 @@ fn files_write_file(request: Request, context: Arc<CoreContext>) -> Frame {
             "requires params.content",
         );
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1611,6 +3194,9 @@ fn files_write_file(request: Request, context: Arc<CoreContext>) -> Frame {
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     match aeroric_core::files::read_write::write_file_content(&root, &relative, content) {
         Ok(()) => ok(&request, serde_json::json!({ "written": true })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
@@ -1622,12 +3208,23 @@ fn files_create(request: Request, context: Arc<CoreContext>, directory: bool) ->
         Ok(v) => v,
         Err(frame) => return *frame,
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1636,6 +3233,9 @@ fn files_create(request: Request, context: Arc<CoreContext>, directory: bool) ->
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     let result = if directory {
         aeroric_core::files::read_write::create_directory(&root, &relative)
     } else {
@@ -1647,17 +3247,32 @@ fn files_create(request: Request, context: Arc<CoreContext>, directory: bool) ->
     }
 }
 
-fn files_delete(request: Request, context: Arc<CoreContext>) -> Frame {
+fn files_delete(
+    request: Request,
+    context: Arc<CoreContext>,
+    trash: Arc<crate::file_access::TrashDelete>,
+) -> Frame {
     let (project_id, relative) = match file_params(&request) {
         Ok(v) => v,
         Err(frame) => return *frame,
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1666,8 +3281,11 @@ fn files_delete(request: Request, context: Arc<CoreContext>) -> Frame {
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     // 删除进废纸篓（不默认永久删除）；显式永久删除走独立的授权路径。
-    match aeroric_core::files::read_write::delete_path(&root, &relative) {
+    match trash(&root, &relative) {
         Ok(()) => ok(&request, serde_json::json!({ "deleted": true })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
@@ -1685,12 +3303,23 @@ fn files_rename(request: Request, context: Arc<CoreContext>) -> Frame {
             "requires params.newName",
         );
     };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
     };
     let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
         return failure(
@@ -1699,112 +3328,11 @@ fn files_rename(request: Request, context: Arc<CoreContext>) -> Frame {
             "project root is invalid",
         );
     };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
     match aeroric_core::files::read_write::rename_path(&root, &relative, new_name) {
         Ok(()) => ok(&request, serde_json::json!({ "renamed": true })),
-        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
-    }
-}
-
-fn files_replace_preview(request: Request, context: Arc<CoreContext>) -> Frame {
-    let (project_id, relative) = match file_params(&request) {
-        Ok(v) => v,
-        Err(frame) => return *frame,
-    };
-    let Some(query) = request.params.get("query").and_then(Value::as_str) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "requires params.query",
-        );
-    };
-    let Some(replacement) = request.params.get("replacement").and_then(Value::as_str) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "requires params.replacement",
-        );
-    };
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
-    };
-    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "project root is invalid",
-        );
-    };
-    let content = match aeroric_core::files::read_write::read_file_content(&root, &relative) {
-        Ok(content) => content,
-        Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
-    };
-    // 单文件 preview：按行匹配 query（大小写不敏感；regex 走 search 面后续接）。
-    let mut intervals: Vec<(u64, u64)> = Vec::new();
-    let lower = content.to_lowercase();
-    let needle = query.to_lowercase();
-    let mut offset = 0usize;
-    while let Some(found) = lower[offset..].find(&needle) {
-        let start = offset + found;
-        intervals.push((start as u64, (start + needle.len()) as u64));
-        offset = start + needle.len();
-    }
-    ok(
-        &request,
-        serde_json::json!({
-            "query": query,
-            "replacement": replacement,
-            "files": [{ "path": relative, "matches": intervals }],
-        }),
-    )
-}
-
-fn files_apply_replacements(request: Request, context: Arc<CoreContext>) -> Frame {
-    let (project_id, relative) = match file_params(&request) {
-        Ok(v) => v,
-        Err(frame) => return *frame,
-    };
-    let Some(replacement) = request.params.get("replacement").and_then(Value::as_str) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "requires params.replacement",
-        );
-    };
-    let Some(intervals) = request.params.get("matches").and_then(Value::as_array) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "requires params.matches",
-        );
-    };
-    let matches: Vec<(u64, u64)> = intervals
-        .iter()
-        .filter_map(|item| Some((item.get("start")?.as_u64()?, item.get("end")?.as_u64()?)))
-        .collect();
-    let Some(root) = find_project_root(&context, &project_id) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::NotFound,
-            "no project with that id",
-        );
-    };
-    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "project root is invalid",
-        );
-    };
-    let files = vec![aeroric_core::files::search::ReplacePreviewFile {
-        path: relative,
-        matches,
-    }];
-    match aeroric_core::files::search::apply_replacements(&root, replacement, &files) {
-        Ok(summary) => ok(&request, serde_json::json!(summary)),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
 }

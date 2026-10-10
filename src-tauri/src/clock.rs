@@ -14,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// 系统时钟早于 epoch 时返回 0 —— 调用方一律把 0 当"未知时间"处理,
 /// 这比 panic 更合适(时钟异常不该让笔记附件写不进去)。
+/// P8-05 slice52 的最后一个生产调用方已迁到 core；这里只保留旧时钟测试基线。
+#[cfg(test)]
 pub(crate) fn now_ms_u64() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21,7 +23,7 @@ pub(crate) fn now_ms_u64() -> u64 {
         .unwrap_or(0)
 }
 
-/// 当前 Unix epoch 毫秒,`i64`。语义同 [`now_ms_u64`]。
+/// 当前 Unix epoch 毫秒,`i64`。语义同 [`aeroric_core::clock::now_ms_u64`]。
 pub(crate) fn now_ms_i64() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -156,19 +156,11 @@ pub(super) fn apply_dsh_reasoning_effort_update(
     }
     // 只有内置官方 dsh 配置带 reasoning 元数据的模型目录;提供方 / 自定义提供方
     // 档案不参与推理强度传参,前端也不会展示该项。
-    if agent != "dsh" {
-        return Err(
-            "Reasoning effort is only configurable for the built-in DeepSeek Harness agent"
-                .to_string(),
-        );
-    }
-    let effort = effort.trim().to_ascii_lowercase();
-    if !matches!(effort.as_str(), "off" | "high" | "max") {
-        return Err("Invalid DeepSeek Harness reasoning effort".to_string());
-    }
+    let effort =
+        aeroric_core::settings::preferences::DshReasoningEffort::for_builtin_agent(agent, effort)?;
     settings
         .dsh_reasoning_efforts
-        .insert(agent.to_string(), effort);
+        .insert(agent.to_string(), effort.as_str().to_string());
     Ok(())
 }
 
@@ -191,16 +183,12 @@ pub(crate) fn omp_managed_home() -> Option<PathBuf> {
 pub(crate) fn default_builtin_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let home =
         crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    match agent {
-        "claude" => Ok(home.join(".claude").join("settings.json")),
-        "claude_gpt55" => Ok(home.join(".claude").join("start-gpt55.sh")),
-        "codex" => Ok(home.join(".codex").join("config.toml")),
-        "dsh" => crate::dsh_home::dsh_settings_path(),
-        "omp" => omp_managed_home()
-            .map(|dir| dir.join("config.yml"))
-            .ok_or_else(|| "Cannot find home directory".to_string()),
-        _ => Err(format!("Unknown built-in agent: {agent}")),
-    }
+    aeroric_core::settings::agent_config_roots::builtin_path(
+        agent,
+        &home,
+        crate::dsh_home::dsh_settings_path,
+        || omp_managed_home().ok_or_else(|| "Cannot find home directory".to_string()),
+    )
 }
 
 /// omp rpc-ui 模型探测的总预算:进程冷启动(Bun + native addon 解压)最慢的一档。

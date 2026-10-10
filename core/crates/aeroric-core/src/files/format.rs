@@ -1,5 +1,7 @@
-//! P6-02 Action 1：formatter 命令发现与执行（core 独占；命令发现/超时/
-//! 取消/路径校验——与 `src-tauri/src/formatter.rs` 同源语义 verbatim 上收）。
+//! Shared formatter DTOs, pure command selection and read-only path validation.
+//! The native synchronous runner below and the legacy desktop worker retain
+//! different root/history/process-environment policies; neither implements
+//! timeout, cancellation or rollback of an external formatter's writes.
 use super::path_policy;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,7 +39,7 @@ pub fn validate_file_path(project_root: &Path, file_path: &str) -> Result<PathBu
     Ok(canonical)
 }
 
-/// formatter 命令发现（与 Tauri `formatter_for_extension` 同源语义）。
+/// Shared command selection; returns program + literal argv without execution.
 pub fn formatter_for_extension(extension: &str, file_path: &str) -> Option<FormatterCommand> {
     let ext = extension.trim_start_matches('.').to_ascii_lowercase();
     match ext.as_str() {
@@ -67,10 +69,10 @@ pub fn formatter_for_extension(extension: &str, file_path: &str) -> Option<Forma
     }
 }
 
-/// 格式化（业务主体）：快照先记（调用方传 snapshot 闭包）、formatter 执行、
-/// 失败原文不变（formatter 非零退出即拒绝——原文在磁盘上未被动过）。无超时
-/// 参数（std Command 同步；超时/取消由调用方在 async 外层处理——与 Tauri
-/// `format_file` 同形状）。
+/// Native runner: validate, call the optional snapshot hook, select and execute.
+/// A snapshot or selection failure prevents spawning. After spawning, a failing
+/// formatter may already have modified the file; no automatic restore, timeout
+/// or cancellation is implemented here.
 pub fn format_file(
     project_root: &Path,
     file_path: &str,

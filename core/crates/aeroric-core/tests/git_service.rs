@@ -200,7 +200,13 @@ fn stash_roundtrip() {
     let repo = new_repo("aeroric-git-stash");
     commit_file(&repo, "a.txt", "base", "init");
     std::fs::write(repo.root.join("a.txt"), "modified").unwrap();
-    service::stash_push(&repo.root, "wip", &service::GitService::new().locks).unwrap();
+    service::stash_push(
+        &repo.root,
+        Some("wip"),
+        false,
+        &service::GitService::new().locks,
+    )
+    .unwrap();
     let list = service::stash_list(&repo.root).unwrap();
     assert!(list.iter().any(|e| e.message.contains("wip")), "stash 列出");
     // apply 后内容恢复。

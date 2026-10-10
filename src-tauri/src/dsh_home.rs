@@ -99,7 +99,9 @@ pub fn write_task_model_patch_in(
 }
 
 pub fn dsh_settings_path() -> Result<PathBuf, String> {
-    Ok(dsh_home()?.join("settings.yaml"))
+    Ok(aeroric_core::settings::agent_config::dsh_config_path(
+        &dsh_home()?,
+    ))
 }
 
 /// 每任务模型覆盖 patch(`--patch` 覆盖层,应用在受管层之后);任务结束后删除。

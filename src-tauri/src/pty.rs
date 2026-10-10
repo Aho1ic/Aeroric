@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
@@ -2058,94 +2058,105 @@ pub async fn complete_task(
 }
 
 #[tauri::command]
-pub async fn get_active_task_ids(
+pub async fn get_active_task_ids<R: tauri::Runtime>(
+    app: AppHandle<R>,
     task_manager: State<'_, TaskManager>,
 ) -> Result<Vec<String>, String> {
-    Ok(task_manager
-        .child_handles
-        .lock()
-        .keys()
-        .filter(|run| validate_task_id(run.id()).is_ok())
-        .map(|run| run.id().to_string())
-        .collect())
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "terminal.get_active_task_ids",
+        serde_json::json!({}),
+        async move {
+            let ids: Vec<String> = task_manager
+                .child_handles
+                .lock()
+                .keys()
+                .filter(|run| validate_task_id(run.id()).is_ok())
+                .map(|run| run.id().to_string())
+                .collect();
+            serde_json::to_value(ids).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
+/// Preflight an external agent executable before launching a full PTY task.
+///
+/// P8-05 slice 55: The core preflight implementation is extracted to
+/// `aeroric_core::terminal::launch_validation::preflight_agent_launch_spec`.
+/// This Tauri adapter wrapper preserves:
+/// 1. Conversion from Tauri's local `AgentLaunchSpec` to `aeroric_core` launch spec.
+/// 2. Spawning with null stdio and `--version` probe arguments.
+/// 3. Subprocess process-tree termination on deadline or error.
+/// 4. Background execution configuration preventing unwanted terminal windows.
+/// 5. Environment precedence: shell env first, then agent extra_env overrides.
+/// 6. Interactive-loop timeout acceptance (executables that ignore --version).
+/// 7. Dedicated DeepSeek Harness (DSH) NotFound error remediation message.
+///
+/// Technical rationale:
+/// - Validation runs asynchronously without tying up main thread or UI loops.
+/// - Any child process that fails to respond or exits abnormally is reaped.
+/// - Custom CLI wrappers that drop straight into interactive shells are supported.
+/// - Process cleanup uses portable process-group signaling across supported platforms.
 fn preflight_agent_launch_spec(
     launch: &crate::app_settings::AgentLaunchSpec,
     cwd: Option<&Path>,
     timeout: Duration,
 ) -> Result<(), String> {
-    let mut command = Command::new(&launch.program);
-    crate::subprocess::configure_background_command(&mut command);
-    command
-        .args(&launch.args)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
-    for (key, value) in crate::app_settings::get_login_shell_env() {
-        command.env(key, value);
-    }
-    for (key, value) in &launch.extra_env {
-        command.env(key, value);
-    }
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| {
-            if launch.family == crate::app_settings::AgentFamily::Dsh
-                && error.kind() == std::io::ErrorKind::NotFound
-            {
-                "DeepSeek Harness is not installed or not found in PATH. Configure dsh_path with the dsh executable or the DeepSeek Harness source directory, then run `pnpm install` and `pnpm run build`.".to_string()
-            } else {
-                format!("Failed to launch `{}`: {error}", launch.program)
+    let core_launch = aeroric_core::settings::schema::AgentLaunchSpec {
+        program: launch.program.clone(),
+        args: launch.args.clone(),
+        working_dir: launch.working_dir.clone(),
+        extra_env: launch.extra_env.clone(),
+        codex_like: launch.codex_like,
+        family: match launch.family {
+            crate::app_settings::AgentFamily::Claude => {
+                aeroric_core::settings::schema::AgentFamily::Claude
             }
-        })?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                return Err(format!(
-                    "Agent command `{}` exited during validation with {status}",
-                    launch.program
-                ));
+            crate::app_settings::AgentFamily::Codex => {
+                aeroric_core::settings::schema::AgentFamily::Codex
             }
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(AGENT_LAUNCH_PREFLIGHT_POLL);
+            crate::app_settings::AgentFamily::Dsh => {
+                aeroric_core::settings::schema::AgentFamily::Dsh
             }
-            Ok(None) => {
-                let _ = crate::subprocess::terminate_process_tree(&mut child);
-                let _ = child.wait();
-                // Some custom wrappers do not implement --version and enter
-                // their normal interactive loop instead. Reaching that loop
-                // still proves that the configured program can be executed.
-                return Ok(());
+            crate::app_settings::AgentFamily::Omp => {
+                aeroric_core::settings::schema::AgentFamily::Omp
             }
-            Err(error) => {
-                let _ = crate::subprocess::terminate_process_tree(&mut child);
-                let _ = child.wait();
-                return Err(format!(
-                    "Failed to validate agent command `{}`: {error}",
-                    launch.program
-                ));
-            }
-        }
-    }
+        },
+    };
+    let _ = (AGENT_LAUNCH_PREFLIGHT_POLL, Stdio::null);
+    aeroric_core::terminal::launch_validation::preflight_agent_launch_spec(
+        &core_launch,
+        cwd,
+        timeout,
+    )
 }
 
 #[tauri::command]
-pub async fn validate_agent_launch(agent: String, project_path: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let launch = crate::app_settings::get_agent_launch_spec(&agent);
-        let cwd = agent_process_cwd(&project_path, launch.codex_like);
-        preflight_agent_launch_spec(&launch, Some(&cwd), AGENT_LAUNCH_PREFLIGHT_TIMEOUT)
+pub async fn validate_agent_launch<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    agent: String,
+    project_path: String,
+) -> Result<(), String> {
+    let p = serde_json::json!({"agent": &agent, "projectPath": &project_path});
+    let v = crate::host_dispatch::dispatch(&app, "terminal.validate_agent_launch", p, async move {
+        tokio::task::spawn_blocking(move || {
+            preflight_agent_launch_spec(
+                &crate::app_settings::get_agent_launch_spec(&agent),
+                Some(&agent_process_cwd(
+                    &project_path,
+                    crate::app_settings::get_agent_launch_spec(&agent).codex_like,
+                )),
+                AGENT_LAUNCH_PREFLIGHT_TIMEOUT,
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|()| serde_json::Value::Null)
     })
-    .await
-    .map_err(|error| error.to_string())?
+    .await?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Default)]
@@ -2817,6 +2828,10 @@ pub async fn kill_shell(
     task_manager.remove_pty_handles(&RunKey::unminted(&shell_id));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "pty_active_task_ids_tests.rs"]
+mod active_task_ids_tests;
 
 #[cfg(test)]
 mod tests {

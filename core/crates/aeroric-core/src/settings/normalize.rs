@@ -46,19 +46,7 @@ pub(super) fn sanitize_custom_agent_id(value: &str) -> String {
 /// 必须保持一致——codex-like 脚本会把它 export 成 CODEX_HOME,MCP profile 要写进同一目录
 /// 才能被 `-p` 读到。id 先过 `sanitize_custom_agent_id`,拒绝路径穿越。
 pub fn custom_agent_home(id: &str) -> Result<PathBuf, String> {
-    let normalized = sanitize_custom_agent_id(id);
-    if normalized.is_empty() {
-        return Err(format!("Invalid custom Agent id: {id}"));
-    }
-    let root = aeroric_dir()?.join("agent-homes");
-    let home = root.join(&normalized);
-    // 双重保险:normalized 已排除分隔符,这里再确认没有逃出隔离目录。
-    if home.parent() != Some(root.as_path()) {
-        return Err(
-            "Refusing to resolve an Agent home outside the isolation directory".to_string(),
-        );
-    }
-    Ok(home)
+    super::agent_config_roots::custom_home(id, || Ok(aeroric_dir()?.join("agent-homes")))
 }
 
 pub(super) fn normalize_config_lang(value: String) -> String {
@@ -237,7 +225,7 @@ pub(super) fn normalize_dsh_reasoning_efforts(
         .collect()
 }
 
-pub(super) fn normalize_proxy_url(value: &str) -> String {
+pub fn normalize_proxy_url(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -258,7 +246,7 @@ pub(super) fn normalize_no_proxy(value: &str) -> String {
         .join(",")
 }
 
-pub(super) fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
+pub fn normalize_proxy_settings(settings: ProxySettings) -> ProxySettings {
     ProxySettings {
         url: normalize_proxy_url(&settings.url),
         no_proxy: normalize_no_proxy(&settings.no_proxy),
@@ -315,7 +303,7 @@ pub(crate) fn normalize_local_router_settings_for_update(
 ///
 /// 这里**不**校验 URL 形状:那是 `embed::endpoint_for` 的活(它还要处理重复 `/v1`
 /// 与末尾斜杠),两处各写一遍校验只会互相跑偏。
-pub(crate) fn normalize_notebook_embedding_settings(
+pub fn normalize_notebook_embedding_settings(
     settings: NotebookEmbeddingSettings,
 ) -> NotebookEmbeddingSettings {
     let base_url = settings.base_url.trim();

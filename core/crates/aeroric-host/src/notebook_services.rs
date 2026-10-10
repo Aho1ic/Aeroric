@@ -58,7 +58,10 @@ macro_rules! try_s {
     };
 }
 
-pub fn register_notebook_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+pub fn register_notebook_services(
+    set: &mut ServiceSet,
+    context: Arc<CoreContext>,
+) -> NotebookHandle {
     let handle = NotebookHandle::default();
     macro_rules! service_ctx {
         ($method:expr, $fn_name:ident) => {{
@@ -203,6 +206,7 @@ pub fn register_notebook_services(set: &mut ServiceSet, context: Arc<CoreContext
         "notebook.storage_touch_connection",
         nb_storage_touch_connection
     );
+    handle
 }
 
 // ── vault 注册 ──────────────────────────────────────────────────────────────

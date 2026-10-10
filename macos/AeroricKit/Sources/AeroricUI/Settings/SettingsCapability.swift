@@ -19,22 +19,30 @@ public enum SettingsCapability {
         "off", "minimal", "low", "medium", "high", "xhigh", "max",
     ]
 
-    /// DSH/claude 家的 effort 白名单（`dsh_permission_preset` 同源语义；
-    /// OMP 白名单在 ompThinkingLevels，两者不相交时以家为单位门控）。
-    public static let dshEffortLevels: [String] = ["low", "medium", "high"]
+    /// 内置 DSH 的 effort 词表，与 core/React 的 off/high/max 保持一致。
+    public static let dshEffortLevels: [String] = ["off", "high", "max"]
 
-    /// 该家是否支持该 effort（Action 5：原生设置不发 OMP 不支持的 effort）。
-    public static func supportsEffort(_ effort: String, family: String) -> Bool {
+    /// Claude/Codex 保留原有的 effort 选项，与 DSH 词表分离。
+    public static let claudeCodexEffortLevels: [String] = ["low", "medium", "high"]
+
+    /// 按族提供词表，不代表具体 Agent 有保存权限；
+    /// `settings.update_dsh_reasoning_effort` 仅允许内置 `dsh`。
+    public static func effortLevels(for family: String) -> [String] {
         switch family {
         case "omp":
-            return ompThinkingLevels.contains(effort)
+            return ompThinkingLevels
         case "dsh":
-            return dshEffortLevels.contains(effort)
+            return dshEffortLevels
         case "claude", "codex":
-            return dshEffortLevels.contains(effort)
+            return claudeCodexEffortLevels
         default:
-            return false
+            return []
         }
+    }
+
+    /// 该家是否支持该 effort；与选项展示使用同一词表。
+    public static func supportsEffort(_ effort: String, family: String) -> Bool {
+        effortLevels(for: family).contains(effort)
     }
 
     /// 自定义档案 id 是否合法（AgentFamily 派生：已知内置 → 对应 family；

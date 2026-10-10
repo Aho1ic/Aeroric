@@ -92,8 +92,16 @@ impl AppPaths {
     }
 
     pub fn terminal_history_file(&self, task_id: &str) -> Result<PathBuf, PathError> {
+        Ok(self
+            .terminal_history_dir()
+            .join(Self::terminal_history_name(task_id)?))
+    }
+
+    /// History alone trims the ID for its filename, as the shipping client does.
+    /// Project/task/event paths deliberately retain their original spelling.
+    pub fn terminal_history_name(task_id: &str) -> Result<String, PathError> {
         Self::validate_id(task_id, "task")?;
-        Ok(self.terminal_history_dir().join(format!("{task_id}.log")))
+        Ok(format!("{}.log", task_id.trim()))
     }
 
     pub fn agent_homes_dir(&self) -> PathBuf {
@@ -209,6 +217,27 @@ mod tests {
             PathBuf::from("/home/dev/.aeroric/terminal-history/t_9.log")
         );
         assert_eq!(p.user_home(), Path::new("/home/dev"));
+    }
+
+    #[test]
+    fn history_filenames_trim_ids_without_changing_project_or_event_paths() {
+        let p = paths();
+        for id in [" task-9_ ", "\t\ntask-9_\r\n", "\u{2003}task-9_\u{2003}"] {
+            assert_eq!(
+                p.terminal_history_file(id).unwrap(),
+                p.terminal_history_dir().join("task-9_.log"),
+                "legacy history filenames trim surrounding whitespace"
+            );
+            assert_eq!(p.project_dir(id).unwrap(), p.projects_dir().join(id));
+            assert_eq!(
+                p.tasks_file(id).unwrap(),
+                p.projects_dir().join(id).join("tasks.json")
+            );
+            assert_eq!(
+                p.events_dir(id).unwrap(),
+                p.data_dir().join("events").join(id)
+            );
+        }
     }
 
     /// Relocating managed data must not relocate what we only read.

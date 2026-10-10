@@ -6,12 +6,17 @@
 //! [`HISTORY_COMPACT_SLACK_BYTES`] 再压回)。owner 的含义是**策略只有一份实现**:原先
 //! 内联在宿主 `storage.rs` 的 `utf8_tail_bytes`、str 版 `utf8_tail` 与读侧的续字节跳过
 //! 是三份近似重复,这里收敛为 [`utf8_tail_bytes`] 与
-//! [`skip_leading_utf8_continuations`] 两个纯函数;文件 I/O 与目录巡检仍是宿主的事
-//! ——core 给决策,宿主给事实,与 exit/input 的分工同一条线。
+//! [`skip_leading_utf8_continuations`] 两个纯函数。P8-05 切片24/28 又上收了
+//! 注入路径的查询与显式删除；追加落盘机制与目录巡检仍是宿主的事，未假称全部迁完。
 //!
 //! 两条面的**差异是刻意的,不要"统一"**:replay 窗口按原始字节切,落在字符中间就如实
 //! 交出中间字节(有集成用例钉着);磁盘历史按字符边界对齐后才落盘,因为它的读者直接把
 //! 字节当文本。它们共享的只有"保留尾部、丢头部、对丢失如实"这条形状,不是同一套参数。
+
+use std::path::PathBuf;
+
+use crate::context::{CoreContext, StorageWritePermission};
+use crate::paths::{AppPaths, PathError};
 
 /// 磁盘终端历史的保留上限(宿主 `MAX_TERMINAL_HISTORY_BYTES` 的唯一来源)。
 pub const HISTORY_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -92,6 +97,79 @@ pub fn skip_leading_utf8_continuations(bytes: &[u8], max_skip: usize) -> usize {
         .take(max_skip)
         .take_while(|b| (**b & 0b1100_0000) == 0b1000_0000)
         .count()
+}
+
+/// 读取指定路径的终端历史尾部（≤ `max_bytes`，起点掐掉被切断的 UTF-8 续字节）。
+/// 若文件不存在返回空字符串。
+pub fn read_terminal_history_tail_from_path(
+    path: &std::path::Path,
+    max_bytes: u64,
+) -> std::io::Result<String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    use std::io::{Read as _, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let total = file.metadata()?.len();
+    let start = total.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity((total - start) as usize);
+    file.read_to_end(&mut bytes)?;
+    let skip = skip_leading_utf8_continuations(&bytes, 4);
+    if skip > 0 {
+        bytes.drain(..skip);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryDeleteError {
+    #[error(transparent)]
+    InvalidId(#[from] PathError),
+    #[error(transparent)]
+    WritePermission(#[from] StorageWritePermission),
+    #[error("{0}")]
+    ResolveDirectory(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Hosted cleanup requires current writer authority, even for an empty request.
+/// This does not stop a terminal writer or make the batch atomic: a later
+/// invalid ID/IO error leaves earlier removals applied.
+pub fn delete_task_terminal_histories(
+    context: &CoreContext,
+    task_ids: &[String],
+) -> Result<(), HistoryDeleteError> {
+    context.require_write()?;
+    delete_histories_with_directory(task_ids, || Ok(context.paths.terminal_history_dir()))
+}
+
+/// The desktop's explicit compatibility authority. Resolve its directory once
+/// per reached ID, before filename validation; an empty batch never resolves it.
+/// This seam carries ambient home resolution in the adapter, not into core.
+pub fn delete_task_terminal_histories_legacy(
+    task_ids: &[String],
+    history_dir: impl FnMut() -> Result<PathBuf, String>,
+) -> Result<(), HistoryDeleteError> {
+    delete_histories_with_directory(task_ids, history_dir)
+}
+
+fn delete_histories_with_directory(
+    task_ids: &[String],
+    mut history_dir: impl FnMut() -> Result<PathBuf, String>,
+) -> Result<(), HistoryDeleteError> {
+    for task_id in task_ids {
+        let directory = history_dir().map_err(HistoryDeleteError::ResolveDirectory)?;
+        let path = directory.join(AppPaths::terminal_history_name(task_id)?);
+        // Keep the original exists-then-remove semantics: a dangling link is
+        // left alone, a live leaf link is unlinked, and a directory errors.
+        // Do not prevalidate the whole batch, recurse, or retry an IO failure.
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

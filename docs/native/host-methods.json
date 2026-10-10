@@ -1,7 +1,7 @@
 {
   "$comment": "台账的 `rpc_method` 是**派生列**（`inventory.mjs` 按命令名推：<模块族>.<命令名>），所以它表达的是立项期的计划命名，不是宿主真实的注册名。本文件记录两者**实际不同**的那些行：左边是派生名（台账里的那一列），右边是 `aeroric-host` 真实 `set.register` 的名字，`evidence` 写清凭什么认定这两条是同一个能力。判据由 `scripts/native/host-coverage.mjs` 校验：派生名必须真的在台账里、真实名必须真的在宿主里、一个真实名只能被一条别名占用。",
-  "generated": "2026-10-07（切片八首次生成；切片十追加 remote 8 条）",
-  "task": "P8-05 切片八/十（覆盖率量表与命名对账）",
+  "generated": "2026-10-08（切片十四移除两条非语义等价 replace alias；改为真实 legacy handler）",
+  "task": "P8-05 切片八/十/十四（覆盖率量表与命名对账）",
   "rule": "只登记**同一个能力**在两侧的不同拼写。名字像但语义不同的（例如台账 project.save_projects 与宿主 project.open）不登记——那属于「还没实现」，不是「换了个名字」。",
   "aliases": [
     {
@@ -18,16 +18,6 @@
       "derived": "files.write_file_content",
       "actual": "files.write_file",
       "evidence": "同上（宿主 register_file_services 的 files.write_file；Swift FilesClient 同名）。"
-    },
-    {
-      "derived": "files.replace_text_preview",
-      "actual": "files.replace_preview",
-      "evidence": "宿主 register_file_services 的 files.replace_preview 调 core files::search::replace_preview；Swift FilesClient.replacePreview 调的也是这个名。"
-    },
-    {
-      "derived": "files.apply_text_replacements",
-      "actual": "files.apply_replacements",
-      "evidence": "宿主 register_file_services 的 files.apply_replacements 调 core files::search::apply_replacements；Swift FilesClient 同名。"
     },
     {
       "derived": "terminal.run_task",

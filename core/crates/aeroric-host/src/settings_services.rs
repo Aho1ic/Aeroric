@@ -9,21 +9,27 @@
 //!
 //! 1. **读**：把 map 原样返回（缺文件＝`{}`，不是错误）。
 //! 2. **整份写**：调用方给什么写什么（`save_settings` 会经 `require_writer` 拒只读）。
-//! 3. **单字段更新**：读 → 改一个键 → 写回，**保留其余键**；改完返回整份（客户端据此
-//!    刷新界面，与 Tauri 侧 `update_*` 返回 `AppSettings` 同形）。
+//! 3. **定向更新**：core 事务保留无关原始键（proxy 明确消费旧字段）；改完返回整份，
+//!    与 Tauri 侧 `update_*` 返回的 `AppSettings` 同形。
 //!
-//! 单字段那一族用一张表驱动（[`FieldUpdate`]）：新增一个"update 某字段"的方法只需要在
-//! 表里加一行，而"读—改—写"的三步顺序、锁、返回值形状只有一处实现。
+//! 切片十五至十八：七项纯偏好先按真实 typed wire 解码，再用 core 统一 normalization；
+//! 所有 map 更新都使用 core 的整段 RMW 事务，不能在 host 另做 load→save。
+//! [`FieldUpdate`] 记录参数/键，注册点仍显式列出，并有真调用测试交叉核对。
 
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::paths::AppPaths;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::dispatcher::{failure, ServiceSet};
+use crate::local_targets::local_target_error;
 use crate::services::ok;
+
+const UNSUPPORTED_PROJECT_CONFIG_TARGET: &str =
+    "Project-config target is not hosted: SSH/WSL configuration IO is unavailable";
 
 /// 一个"更新单个设置字段"的方法。
 pub struct FieldUpdate {
@@ -62,238 +68,271 @@ const FIELD_UPDATES: &[FieldUpdate] = &[
     },
     FieldUpdate {
         method: "settings.save_shift_enter_newline",
-        param: "shiftEnterNewline",
+        param: "enabled",
         key: "terminal_shift_enter_newline",
     },
 ];
 
-pub fn register_settings_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
-    {
+/// Disk IO and the settings critical section stay off the async executor.
+fn settings_handler(
+    context: &Arc<CoreContext>,
+    run: impl Fn(Request, Arc<CoreContext>) -> Frame + Send + Sync + 'static,
+) -> crate::dispatcher::Handler {
+    let context = Arc::clone(context);
+    let run = Arc::new(run);
+    Arc::new(move |request: Request, _call| {
         let context = Arc::clone(&context);
-        set.register(
-            "settings.load_app_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_load(request, context) })
-            }),
-        );
-    }
+        let run = Arc::clone(&run);
+        Box::pin(async move {
+            let id = request.id.clone();
+            match tokio::task::spawn_blocking(move || run(request, context)).await {
+                Ok(frame) => frame,
+                Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+            }
+        })
+    })
+}
+
+fn agent_config_handler(
+    context: &Arc<CoreContext>,
+    paths: &Arc<AppPaths>,
+    run: fn(Request, Arc<CoreContext>, &AppPaths) -> Frame,
+) -> crate::dispatcher::Handler {
+    let paths = Arc::clone(paths);
+    settings_handler(context, move |request, context| {
+        run(request, context, &paths)
+    })
+}
+
+pub fn register_settings_services(
+    set: &mut ServiceSet,
+    context: Arc<CoreContext>,
+    agent_config_external_home: Option<std::path::PathBuf>,
+) {
+    // This optional home comes from trusted composition, never request params.
+    // Config defaults may use it without expanding unrelated discovery roots.
+    let config_paths = Arc::new(AppPaths::with_data_dir(
+        agent_config_external_home
+            .as_deref()
+            .unwrap_or(context.paths.user_home()),
+        Some(context.paths.data_dir()),
+    ));
+    // Literal registrations remain machine-auditable; FIELD_UPDATES is checked
+    // against this actual callable surface, not used to fabricate coverage.
+    set.register(
+        "settings.load_app_settings",
+        settings_handler(&context, settings_load),
+    );
+    set.register(
+        "settings.save_app_settings",
+        settings_handler(&context, settings_save),
+    );
+    set.register(
+        "settings.update_proxy_settings",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::Proxy)
+        }),
+    );
+    set.register(
+        "settings.update_notebook_embedding_settings",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::NotebookEmbedding)
+        }),
+    );
+    set.register(
+        "settings.update_auto_cleanup_settings",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::AutoCleanup)
+        }),
+    );
+    set.register(
+        "settings.update_weekly_report_settings",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::WeeklyReport)
+        }),
+    );
+    set.register(
+        "settings.save_send_shortcut",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::SendShortcut)
+        }),
+    );
+    set.register(
+        "settings.save_shift_enter_newline",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::ShiftEnterNewline)
+        }),
+    );
+    set.register(
+        "settings.update_dsh_reasoning_effort",
+        settings_handler(&context, |request, context| {
+            settings_preference_update(request, context, PreferenceKind::DshReasoningEffort)
+        }),
+    );
+    set.register(
+        "settings.get_agent_config_file_path",
+        agent_config_handler(&context, &config_paths, settings_agent_config_file_path),
+    );
+    set.register(
+        "settings.read_agent_config_file",
+        agent_config_handler(&context, &config_paths, settings_read_agent_config_file),
+    );
+    set.register(
+        "settings.write_agent_config_file",
+        agent_config_handler(&context, &config_paths, settings_write_agent_config_file),
+    );
+    set.register(
+        "settings.read_project_config",
+        settings_handler(&context, settings_read_project_config),
+    );
+    set.register(
+        "settings.init_project_config",
+        settings_handler(&context, settings_init_project_config),
+    );
+    set.register(
+        "settings.write_project_config",
+        settings_handler(&context, settings_write_project_config),
+    );
+}
+
+fn settings_read_project_config(request: Request, _context: Arc<CoreContext>) -> Frame {
+    let project_path: String = match preference_param(&request, "projectPath") {
+        Ok(path) => path,
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    };
+    if let Some(error) =
+        local_target_error(&request, &project_path, UNSUPPORTED_PROJECT_CONFIG_TARGET)
     {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.save_app_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_save(request, context) })
-            }),
-        );
+        return error;
     }
-    // 单字段更新逐个**字面量**注册。
-    //
-    // 不用 `for update in FIELD_UPDATES { set.register(update.method, …) }`：那让方法名成了
-    // 运行期才能知道的字符串，而本仓的扫描器（`host-coverage.mjs` 与 extraction）靠源码里的
-    // 字面量找注册点——"扫描口径找不到"会被读成"没注册"。表仍然留着（它管参数名与键名的
-    // 对应），注册点则显式写出来。
-    for update in FIELD_UPDATES {
-        let _ = update; // 表由下面六条显式注册消费；这里只做"表与注册点同步"的锚
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.update_proxy_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(request, context, "proxySettings", "proxy_settings")
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.update_notebook_embedding_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(
-                        request,
-                        context,
-                        "notebookEmbeddingSettings",
-                        "notebook_embedding_settings",
-                    )
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.update_auto_cleanup_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(
-                        request,
-                        context,
-                        "autoCleanupSettings",
-                        "auto_cleanup_settings",
-                    )
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.update_weekly_report_settings",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(
-                        request,
-                        context,
-                        "weeklyReportSettings",
-                        "weekly_report_settings",
-                    )
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.save_send_shortcut",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(request, context, "sendShortcut", "send_shortcut")
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.save_shift_enter_newline",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move {
-                    settings_update(
-                        request,
-                        context,
-                        "shiftEnterNewline",
-                        "terminal_shift_enter_newline",
-                    )
-                })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.update_dsh_reasoning_effort",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_update_dsh_reasoning_effort(request, context) })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.get_agent_config_file_path",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_agent_config_file_path(request, context) })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.read_agent_config_file",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_read_agent_config_file(request, context) })
-            }),
-        );
-    }
-    {
-        let context = Arc::clone(&context);
-        set.register(
-            "settings.write_agent_config_file",
-            Arc::new(move |request: Request, _call| {
-                let context = Arc::clone(&context);
-                Box::pin(async move { settings_write_agent_config_file(request, context) })
-            }),
-        );
+    match aeroric_core::settings::project_config::read_project_config(&project_path) {
+        Ok(config) => ok(&request, serde_json::json!(config)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
 }
 
-/// `settings.update_dsh_reasoning_effort`：只接受内置 dsh 与 off/high/max；
-/// 值原样写进 `dsh_reasoning_efforts` 对象，其余键（含第三方键）不动。
-fn settings_update_dsh_reasoning_effort(request: Request, context: Arc<CoreContext>) -> Frame {
-    let Some(agent) = request
-        .params
-        .get("agent")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "Missing param: agent",
-        );
+fn settings_init_project_config(request: Request, context: Arc<CoreContext>) -> Frame {
+    let project_path: String = match preference_param(&request, "projectPath") {
+        Ok(path) => path,
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     };
-    let Some(effort) = request
-        .params
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "Missing param: effort",
-        );
+    if let Some(error) =
+        local_target_error(&request, &project_path, UNSUPPORTED_PROJECT_CONFIG_TARGET)
+    {
+        return error;
+    }
+    match aeroric_core::settings::project_config::init_project_config(&context, &project_path) {
+        Ok(config) => ok(&request, serde_json::json!(config)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+fn settings_write_project_config(request: Request, context: Arc<CoreContext>) -> Frame {
+    let project_path: String = match preference_param(&request, "projectPath") {
+        Ok(path) => path,
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     };
-    if agent != "dsh" {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            "Reasoning effort is only configurable for the built-in DeepSeek Harness agent",
-        );
-    }
-    let effort = effort.trim().to_ascii_lowercase();
-    match effort.as_str() {
-        "off" | "high" | "max" => {}
-        _ => {
-            return failure(
-                request.id.clone(),
-                ErrorCode::InvalidArgument,
-                "Invalid DeepSeek Harness reasoning effort",
-            );
-        }
-    }
-    let mut fields: Map<String, Value> =
-        match aeroric_core::storage::settings::load_settings(&context) {
-            Ok(outcome) => outcome.found().unwrap_or_default(),
-            Err(error) => {
-                return failure(request.id.clone(), ErrorCode::IoError, &error.to_string())
-            }
+    let config: aeroric_core::settings::project_config::ProjectConfig =
+        match preference_param(&request, "config") {
+            Ok(config) => config,
+            Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
         };
-    let mut reasoning = fields
-        .remove("dsh_reasoning_efforts")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    reasoning.insert(agent, Value::String(effort));
-    fields.insert(
-        "dsh_reasoning_efforts".to_string(),
-        Value::Object(reasoning),
-    );
-    match aeroric_core::storage::settings::save_settings(&context, &fields) {
-        Ok(()) => ok(&request, Value::Object(fields)),
+    if let Some(error) =
+        local_target_error(&request, &project_path, UNSUPPORTED_PROJECT_CONFIG_TARGET)
+    {
+        return error;
+    }
+    match aeroric_core::settings::project_config::write_project_config(
+        &context,
+        &project_path,
+        &config,
+    ) {
+        Ok(()) => ok(&request, Value::Null),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PreferenceKind {
+    SendShortcut,
+    ShiftEnterNewline,
+    AutoCleanup,
+    WeeklyReport,
+    NotebookEmbedding,
+    DshReasoningEffort,
+    Proxy,
+}
+
+fn preference_param<T: serde::de::DeserializeOwned>(
+    request: &Request,
+    name: &str,
+) -> Result<T, String> {
+    let value = request
+        .params
+        .get(name)
+        .ok_or_else(|| format!("Missing param: {name}"))?;
+    serde_json::from_value(value.clone()).map_err(|error| format!("Invalid param {name}: {error}"))
+}
+
+fn decode_preference(
+    request: &Request,
+    kind: PreferenceKind,
+) -> Result<aeroric_core::settings::preferences::PreferenceUpdate, String> {
+    use aeroric_core::settings::preferences::{DshReasoningEffort, PreferenceUpdate};
+    Ok(match kind {
+        PreferenceKind::SendShortcut => {
+            PreferenceUpdate::SendShortcut(preference_param(request, "sendShortcut")?)
+        }
+        PreferenceKind::AutoCleanup => {
+            PreferenceUpdate::AutoCleanup(preference_param(request, "autoCleanupSettings")?)
+        }
+        PreferenceKind::WeeklyReport => {
+            PreferenceUpdate::WeeklyReport(preference_param(request, "weeklyReportSettings")?)
+        }
+        PreferenceKind::NotebookEmbedding => PreferenceUpdate::NotebookEmbedding(preference_param(
+            request,
+            "notebookEmbeddingSettings",
+        )?),
+        PreferenceKind::DshReasoningEffort => {
+            let agent: String = preference_param(request, "agent")?;
+            let effort: String = preference_param(request, "effort")?;
+            PreferenceUpdate::DshReasoningEffort(DshReasoningEffort::for_builtin_agent(
+                &agent, &effort,
+            )?)
+        }
+        PreferenceKind::Proxy => {
+            PreferenceUpdate::Proxy(preference_param(request, "proxySettings")?)
+        }
+        PreferenceKind::ShiftEnterNewline => {
+            // `enabled` is the Tauri/frozen contract. Keep the previous host-only
+            // spelling as an explicit alias, never silently choose between conflicts.
+            let field = match (
+                request.params.get("enabled"),
+                request.params.get("shiftEnterNewline"),
+            ) {
+                (Some(a), Some(b)) if a != b => {
+                    return Err("Invalid conflicting enabled/shiftEnterNewline params".into())
+                }
+                (Some(_), _) => "enabled",
+                (None, Some(_)) => "shiftEnterNewline",
+                (None, None) => return Err("Missing param: enabled".into()),
+            };
+            PreferenceUpdate::ShiftEnterNewline(preference_param(request, field)?)
+        }
+    })
+}
+
+fn settings_preference_update(
+    request: Request,
+    context: Arc<CoreContext>,
+    kind: PreferenceKind,
+) -> Frame {
+    let update = match decode_preference(&request, kind) {
+        Ok(update) => update,
+        Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
+    };
+    match aeroric_core::settings::preferences::update_preference(&context, update) {
+        Ok(fields) => ok(&request, Value::Object(fields)),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
     }
 }
@@ -305,53 +344,28 @@ fn load_typed_settings(
         Ok(outcome) => outcome.found().unwrap_or_default(),
         Err(error) => return Err(error.to_string()),
     };
-    Ok(serde_json::from_value(Value::Object(fields)).unwrap_or_default())
+    // A bad typed field must not discard configured paths and select defaults.
+    serde_json::from_value(Value::Object(fields))
+        .map_err(|error| format!("invalid stored app settings: {error}"))
 }
 
 fn agent_config_path_from_settings(
     agent: &str,
     settings: &aeroric_core::settings::schema::AppSettings,
+    paths: &AppPaths,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let configured = |value: &str| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(std::path::PathBuf::from(trimmed))
-        }
-    };
-    match agent {
-        "claude" => Ok(configured(&settings.claude_config_path).or_else(|| {
-            aeroric_core::settings::builtin::default_builtin_agent_config_path("claude").ok()
-        })),
-        "claude_gpt55" => Ok(configured(&settings.claude_gpt55_config_path)),
-        "codex" => Ok(configured(&settings.codex_config_path).or_else(|| {
-            aeroric_core::settings::builtin::default_builtin_agent_config_path("codex").ok()
-        })),
-        "dsh" => Ok(configured(&settings.dsh_config_path).or_else(|| {
-            aeroric_core::settings::builtin::default_builtin_agent_config_path("dsh").ok()
-        })),
-        "omp" => Ok(aeroric_core::settings::builtin::default_builtin_agent_config_path("omp").ok()),
-        _ => settings
-            .custom_agents
-            .iter()
-            .find(|profile| profile.id == agent)
-            .map(|profile| match profile.agent_family() {
-                aeroric_core::settings::schema::AgentFamily::Omp => {
-                    aeroric_core::settings::builtin::default_builtin_agent_config_path("omp").ok()
-                }
-                aeroric_core::settings::schema::AgentFamily::Dsh => {
-                    aeroric_core::settings::normalize::custom_agent_home(&profile.id)
-                        .ok()
-                        .map(|home| home.join("settings.yaml"))
-                }
-                _ => configured(&profile.path),
-            })
-            .ok_or_else(|| format!("Unknown agent: {agent}")),
-    }
+    aeroric_core::settings::agent_config_roots::resolve_path(
+        agent,
+        &aeroric_core::settings::agent_config::AgentConfigPaths::from(settings),
+        paths,
+    )
 }
 
-fn settings_agent_config_file_path(request: Request, context: Arc<CoreContext>) -> Frame {
+fn settings_agent_config_file_path(
+    request: Request,
+    context: Arc<CoreContext>,
+    paths: &AppPaths,
+) -> Frame {
     let Some(agent) = request
         .params
         .get("agent")
@@ -368,14 +382,18 @@ fn settings_agent_config_file_path(request: Request, context: Arc<CoreContext>) 
         Ok(settings) => settings,
         Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
     };
-    match agent_config_path_from_settings(&agent, &settings) {
+    match agent_config_path_from_settings(&agent, &settings, paths) {
         Ok(Some(path)) => ok(&request, Value::String(path.to_string_lossy().into_owned())),
         Ok(None) => ok(&request, Value::String(String::new())),
         Err(error) => failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     }
 }
 
-fn settings_read_agent_config_file(request: Request, context: Arc<CoreContext>) -> Frame {
+fn settings_read_agent_config_file(
+    request: Request,
+    context: Arc<CoreContext>,
+    paths: &AppPaths,
+) -> Frame {
     let Some(agent) = request
         .params
         .get("agent")
@@ -392,22 +410,22 @@ fn settings_read_agent_config_file(request: Request, context: Arc<CoreContext>) 
         Ok(settings) => settings,
         Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
     };
-    let path = match agent_config_path_from_settings(&agent, &settings) {
+    let path = match agent_config_path_from_settings(&agent, &settings, paths) {
         Ok(Some(path)) => path,
         Ok(None) => return ok(&request, Value::Null),
         Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     };
-    if path.exists() {
-        match std::fs::read_to_string(&path) {
-            Ok(content) => ok(&request, Value::String(content)),
-            Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
-        }
-    } else {
-        ok(&request, Value::Null)
+    match aeroric_core::settings::agent_config_files::read(&path) {
+        Ok(content) => ok(&request, content.map(Value::String).unwrap_or(Value::Null)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
 }
 
-fn settings_write_agent_config_file(request: Request, context: Arc<CoreContext>) -> Frame {
+fn settings_write_agent_config_file(
+    request: Request,
+    context: Arc<CoreContext>,
+    paths: &AppPaths,
+) -> Frame {
     let Some(agent) = request
         .params
         .get("agent")
@@ -432,11 +450,16 @@ fn settings_write_agent_config_file(request: Request, context: Arc<CoreContext>)
             "Missing param: content",
         );
     };
+    // Authentication is not writer authority; check the current lease before
+    // even loading settings or resolving a possibly external config path.
+    if let Err(error) = context.require_write() {
+        return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
+    }
     let settings = match load_typed_settings(&context) {
         Ok(settings) => settings,
         Err(error) => return failure(request.id.clone(), ErrorCode::IoError, &error),
     };
-    let path = match agent_config_path_from_settings(&agent, &settings) {
+    let path = match agent_config_path_from_settings(&agent, &settings, paths) {
         Ok(Some(path)) => path,
         Ok(None) => {
             return failure(
@@ -447,7 +470,7 @@ fn settings_write_agent_config_file(request: Request, context: Arc<CoreContext>)
         }
         Err(error) => return failure(request.id.clone(), ErrorCode::InvalidArgument, &error),
     };
-    match aeroric_core::settings::atomic_write(&path, &content) {
+    match aeroric_core::settings::agent_config_files::write(&context, &path, &content) {
         Ok(()) => ok(&request, Value::Null),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
@@ -484,36 +507,6 @@ fn settings_save(request: Request, context: Arc<CoreContext>) -> Frame {
             "settings must be a JSON object",
         );
     };
-    match aeroric_core::storage::settings::save_settings(&context, &fields) {
-        Ok(()) => ok(&request, Value::Object(fields)),
-        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
-    }
-}
-
-/// 单字段更新：读 → 改一个键 → 写回，其余键原样保留（**这是本族唯一允许"改动整份文件"
-/// 的地方，所以"保留其余键"必须有用例**）。
-fn settings_update(
-    request: Request,
-    context: Arc<CoreContext>,
-    param: &'static str,
-    key: &'static str,
-) -> Frame {
-    let Some(value) = request.params.get(param).cloned() else {
-        return failure(
-            request.id.clone(),
-            ErrorCode::InvalidArgument,
-            &format!("Missing param: {param}"),
-        );
-    };
-    let mut fields: Map<String, Value> =
-        match aeroric_core::storage::settings::load_settings(&context) {
-            Ok(outcome) => outcome.found().unwrap_or_default(),
-            Err(error) => {
-                // 坏文件**不覆盖**：拒绝这次更新，让用户先去修它（与 core 的同一条规矩）。
-                return failure(request.id.clone(), ErrorCode::IoError, &error.to_string());
-            }
-        };
-    fields.insert(key.to_string(), value);
     match aeroric_core::storage::settings::save_settings(&context, &fields) {
         Ok(()) => ok(&request, Value::Object(fields)),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),

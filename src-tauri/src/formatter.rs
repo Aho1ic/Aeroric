@@ -1,65 +1,10 @@
 use crate::path_guard::validate_project_root;
-use serde::Serialize;
-use std::path::{Path, PathBuf};
+use aeroric_core::files::format::validate_file_path;
+pub use aeroric_core::files::format::{FormatFileResult, FormatterCommand};
 use std::process::Command;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FormatterCommand {
-    pub program: String,
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FormatFileResult {
-    pub file_path: String,
-    pub command: String,
-}
-
-fn validate_file_path(project_root: &Path, file_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(file_path);
-    if !path.is_absolute() {
-        return Err("File path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve file path: {e}"))?;
-    if !canonical.starts_with(project_root) {
-        return Err("File path is outside the project".to_string());
-    }
-    if !canonical.is_file() {
-        return Err("File path is not a file".to_string());
-    }
-    Ok(canonical)
-}
-
 pub fn formatter_for_extension(extension: &str, file_path: &str) -> Option<FormatterCommand> {
-    let ext = extension.trim_start_matches('.').to_ascii_lowercase();
-    match ext.as_str() {
-        "js" | "jsx" | "ts" | "tsx" | "css" | "scss" | "json" | "jsonc" | "md" | "mdx" | "html"
-        | "yaml" | "yml" => Some(FormatterCommand {
-            program: "pnpm".to_string(),
-            args: vec![
-                "exec".to_string(),
-                "prettier".to_string(),
-                "--write".to_string(),
-                file_path.to_string(),
-            ],
-        }),
-        "rs" => Some(FormatterCommand {
-            program: "rustfmt".to_string(),
-            args: vec![file_path.to_string()],
-        }),
-        "go" => Some(FormatterCommand {
-            program: "gofmt".to_string(),
-            args: vec!["-w".to_string(), file_path.to_string()],
-        }),
-        "py" => Some(FormatterCommand {
-            program: "ruff".to_string(),
-            args: vec!["format".to_string(), file_path.to_string()],
-        }),
-        _ => None,
-    }
+    aeroric_core::files::format::formatter_for_extension(extension, file_path)
 }
 
 #[tauri::command]
@@ -127,3 +72,7 @@ mod tests {
         assert!(formatter_for_extension("png", "/repo/image.png").is_none());
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_formatter_tests;

@@ -62,3 +62,23 @@ run_config/DAP/preview）＋IDE 八视图＋门禁 3 case。
   通道名）落到 v1 点号词表 → `lsp.diagnostics`；payload verbatim（
   DiagnosticItem camelCase 字段与本评审 §2 core diagnostics 对齐）；source
   例外写明于此。
+
+## 6. 后续事实更正（2026-10-08，P8-05 slice29）
+
+本记录§2的run_config “serde verbatim”并不精确：当时core漏了debug type
+的lowercase标注（Node/Python，而旧Tauri是node/python）；native
+`validate_document`也不等价于旧本地IO的路径/command/breakpoint校验。
+本片以真实serde红灯复现并修正前者，保留后者为独立native policy，再上收
+真实legacy文档读写，未删除原测试或重写历史用户验收。两条冻结父RPC的
+ADR-006 target拒绝也经真host先红后绿补齐，**不代表run/SSH/DAP已迁完**。
+边界与证据见`docs/native/extraction/run-config.md`和主计划切片二十九。
+
+## 7. 后续事实更正（2026-10-09，P8-05 slice31）
+
+DAP定义的core `DebugConfigType`也曾漏lowercase（Node/Python而非旧wire的
+node/python）；原两条self-roundtrip测试未检出。现以直接wire期望先红后绿
+纠正；native `validate_document`仍独立保留，真实legacy定义路径/attach/
+breakpoint校验及文档IO才在本片上收。原DAP29测试保留，live canonical
+resolution/remote/process不视为已经迁移。详见
+`docs/native/extraction/debug-config.md`及主计划切片三十一的实际验证记录；
+不改写此前用户验收，也不声称新的独立评审或真实调试器验证。

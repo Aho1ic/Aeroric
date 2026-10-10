@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,23 +18,23 @@ pub(crate) struct ShellCommand {
     pub(crate) args: Vec<String>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunnableFileCommand {
-    command: Option<String>,
-    unavailable_reason: Option<String>,
+    pub(crate) command: Option<String>,
+    pub(crate) unavailable_reason: Option<String>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlatformRuntimeInfo {
-    os: String,
-    arch: String,
-    shell_kind: String,
-    shell_label: String,
-    path_separator: String,
-    can_run_shell_scripts: bool,
-    shell_script_unavailable_reason: String,
+    pub(crate) os: String,
+    pub(crate) arch: String,
+    pub(crate) shell_kind: String,
+    pub(crate) shell_label: String,
+    pub(crate) path_separator: String,
+    pub(crate) can_run_shell_scripts: bool,
+    pub(crate) shell_script_unavailable_reason: String,
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -399,8 +399,7 @@ fn build_local_runnable_file_command(
     })
 }
 
-#[tauri::command]
-pub(crate) fn build_runnable_file_command(
+pub(crate) fn local_runnable_file_command(
     file_path: String,
     conda_path: Option<String>,
     conda_python_path: Option<String>,
@@ -429,7 +428,73 @@ pub(crate) fn build_runnable_file_command(
 }
 
 #[tauri::command]
-pub(crate) fn get_platform_runtime_info() -> PlatformRuntimeInfo {
+pub(crate) async fn build_runnable_file_command<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    file_path: String,
+    conda_path: Option<String>,
+    conda_python_path: Option<String>,
+    remote: bool,
+) -> Result<RunnableFileCommand, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "platform.build_runnable_file_command",
+        serde_json::json!({
+            "filePath": file_path,
+            "condaPath": conda_path,
+            "condaPythonPath": conda_python_path,
+            "remote": remote,
+        }),
+        async {
+            serde_json::to_value(local_runnable_file_command(
+                file_path,
+                conda_path,
+                conda_python_path,
+                remote,
+            )?)
+            .map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    decode_runnable_file_command(value)
+}
+
+fn decode_runnable_file_command(value: serde_json::Value) -> Result<RunnableFileCommand, String> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| "runnable file command must be an object".to_string())?;
+    let command_val = map
+        .get("command")
+        .ok_or_else(|| "missing field command".to_string())?;
+    let reason_val = map
+        .get("unavailableReason")
+        .ok_or_else(|| "missing field unavailableReason".to_string())?;
+
+    let command = match command_val {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        _ => return Err("command must be a string or null".to_string()),
+    };
+
+    let unavailable_reason = match reason_val {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        _ => return Err("unavailableReason must be a string or null".to_string()),
+    };
+
+    if command.is_some() == unavailable_reason.is_some() {
+        return Err(
+            "runnable file command must have exactly one of command or unavailableReason"
+                .to_string(),
+        );
+    }
+
+    Ok(RunnableFileCommand {
+        command,
+        unavailable_reason,
+    })
+}
+
+pub(crate) fn local_platform_runtime_info() -> PlatformRuntimeInfo {
     let shell = default_shell_command();
     let (shell_kind, shell_label) = shell_kind_and_label(&shell);
     #[cfg(windows)]
@@ -450,6 +515,24 @@ pub(crate) fn get_platform_runtime_info() -> PlatformRuntimeInfo {
         },
     }
 }
+
+#[tauri::command]
+pub(crate) async fn get_platform_runtime_info<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<PlatformRuntimeInfo, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "platform.get_platform_runtime_info",
+        serde_json::json!({}),
+        async { serde_json::to_value(local_platform_runtime_info()).map_err(|e| e.to_string()) },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[path = "platform_command_tests.rs"]
+mod command_tests;
 
 #[cfg(test)]
 mod tests {

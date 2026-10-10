@@ -19,7 +19,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 | # | source | destination（机械镜像，非落点） | commands | moved symbols (top-level public) | Action 给定的落点 | per-file hazards to verify |
 |---|---|---|---|---|---|---|
-| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher(), spawn_claude_lazy_session_attach(), spawn_codex_session_recovery(), spawn_resume_session_watcher(), spawn_status_session_watcher() +2 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
+| 1 | `src-tauri/src/session.rs` | `core/crates/aeroric-core/session/session-root.rs` | 7 | adopt_session_for_agent(), export_session_markdown(), extract_session_summary_text(), is_task_active(), local_read_session_id(), local_read_session_message_page(), local_session_supports_native_resume(), read_session_id(), read_session_message_page(), read_session_messages(), recover_task_session(), register_and_watch_session(), session_supports_native_resume(), should_start_status_session_watcher(), spawn_claude_lazy_session_attach() +5 more (42 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token); credential owner |
 | 2 | `src-tauri/src/session/approval.rs` | `core/crates/aeroric-core/session/approval.rs` | 0 | apply_patch_requires_confirmation(), assistant_message_requests_user_input(), contains_shell_redirection(), exec_command_requires_confirmation(), extract_patch_path(), is_read_only_segment(), looks_like_read_only_command(), patch_target_requires_confirmation(), tool_call_requires_confirmation() (5 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
 | 3 | `src-tauri/src/session/export.rs` | `core/crates/aeroric-core/session/export.rs` | 0 | export_session_markdown_inner() (0 test items excluded) | `core/crates/aeroric-core/src/sessions/export.rs` | — |
 | 4 | `src-tauri/src/session/parse.rs` | `core/crates/aeroric-core/session/parse.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
@@ -34,7 +34,7 @@ Cross-checked: 13 command wrappers counted here against 13 matching entries in `
 
 ### Aggregate risk register for this expansion
 
-- files: **11**, lines: **4773**, command wrappers: **13**, test items excluded from the symbol lists: **70**
+- files: **11**, lines: **4857**, command wrappers: **13**, test items excluded from the symbol lists: **70**
 - files carrying `AppHandle`/`State`: **8**
 - files emitting events: **1**
 - files with `include_str!`/`include_bytes!`: **0**

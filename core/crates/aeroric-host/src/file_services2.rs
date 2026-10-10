@@ -1,14 +1,13 @@
 //! 文件服务的**第二批**宿主方法（Task P8-05 切片七）：格式化、本地历史、路径复制。
 //!
-//! 与第一批（`register_file_services` 的九条）同一条约定：**客户端只传 `projectId` ＋
-//! 相对路径**，项目根由宿主从项目记录里查（`find_project_root`）。这不是风格问题——
-//! 让客户端直接传绝对路径等于把"能读能写哪些文件"的决定权交出去，而服务端的权威校验
-//! （`files::path_policy`）本来就是按"项目根 ＋ 相对路径"设计的。
+//! 与第一批七条非 search 方法一样，项目根由 `projectId` 对应的宿主记录决定。
+//! history/copy 使用相对路径；formatter 保留既有的绝对文件路径接口，不在这里悄悄改形状。
+//! 显式 target 必须先解码；未服务的 SSH/WSL 拒绝，Local 只可确认同一 canonical 项目根，
+//! 不能替代 projectId 选另一个根。缺省 target 保留既有本地分支。
 //!
-//! 五个方法的实现全部落在**已经上收的 core**（`files::format`/`files::local_history`），
-//! 这里只做三件事：把请求参数翻译成 core 的入参、把 `projectId` 解析成根、把结果包成帧。
-//! 于是"同一个能力在 Tauri 与宿主上语义一致"这件事由**同一份实现**保证，而不是靠对齐两
-//! 份代码。
+//! 业务在 core 的 `files::format`/`files::local_history`/`files::read_write`。
+//! 宿主负责参数/target/当前写权准入、权威根解析和结果帧，不复制业务算法，
+//! 也不把这些 projectId 协议冒充为 legacy 绝对路径命令的等价别名。
 
 use std::sync::Arc;
 
@@ -19,6 +18,7 @@ use aeroric_protocol::error::ErrorCode;
 use serde_json::Value;
 
 use crate::dispatcher::{failure, ServiceSet};
+use crate::file_access::{require_local_record, write_refusal, FileProjectError, FileTarget};
 use crate::services::ok;
 
 /// 注册第二批文件服务。
@@ -98,23 +98,39 @@ pub fn register_file_services_batch2(
 /// 项目 id → 项目根。抽成端口是为了让本模块的用例能在没有项目记录的临时目录上跑，
 /// 也让宿主的两条路径（桌面 adapter 与 CLI）能各给各的实现。
 pub trait ProjectRootResolver: Send + Sync {
-    fn resolve(&self, context: &Arc<CoreContext>, project_id: &str) -> Result<String, String>;
+    fn resolve(
+        &self,
+        context: &Arc<CoreContext>,
+        project_id: &str,
+    ) -> Result<String, FileProjectError>;
 }
 
-/// 生产实现：扫项目记录找 `path`（与 `services.rs::find_project_root` 同款）。
+/// 生产实现：先检查记录的 location，再取原 `path`；不能把远端的显示路径当本地根。
 pub struct RecordRootResolver;
 
 impl ProjectRootResolver for RecordRootResolver {
-    fn resolve(&self, context: &Arc<CoreContext>, project_id: &str) -> Result<String, String> {
-        let projects = aeroric_core::storage::load_projects(context).map_err(|e| e.to_string())?;
+    fn resolve(
+        &self,
+        context: &Arc<CoreContext>,
+        project_id: &str,
+    ) -> Result<String, FileProjectError> {
+        let projects = aeroric_core::storage::load_projects(context)
+            .map_err(|error| FileProjectError::NotFound(error.to_string()))?;
         for record in projects {
             if aeroric_core::projects::mutations::text(&record, "id") == Some(project_id) {
+                require_local_record(&record)?;
                 return aeroric_core::projects::mutations::text(&record, "path")
                     .map(str::to_string)
-                    .ok_or_else(|| format!("Project record {project_id} has no path"));
+                    .ok_or_else(|| {
+                        FileProjectError::NotFound(format!(
+                            "Project record {project_id} has no path"
+                        ))
+                    });
             }
         }
-        Err(format!("Project not found: {project_id}"))
+        Err(FileProjectError::NotFound(format!(
+            "Project not found: {project_id}"
+        )))
     }
 }
 
@@ -132,7 +148,7 @@ fn project_root(
     let project_id = param(request, "projectId")?;
     let raw = resolver
         .resolve(context, &project_id)
-        .map_err(|error| Box::new(failure(request.id.clone(), ErrorCode::NotFound, &error)))?;
+        .map_err(|error| Box::new(error.into_frame(request)))?;
     aeroric_core::files::path_policy::validate_project_root(&raw).map_err(|error| {
         Box::new(failure(
             request.id.clone(),
@@ -175,12 +191,22 @@ fn files_format_file(
         Ok(value) => value,
         Err(frame) => return *frame,
     };
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
     let root_path = match project_root(&request, &context, &resolver) {
         Ok(root) => root,
         Err(frame) => return *frame,
     };
-    // 快照钩子：先记再格式化，失败即中止（与 Tauri 侧同序；core 的 `format_file` 保证
-    // 非零退出时原文不变）。
+    if let Some(frame) = target.root_refusal(&request, &root_path) {
+        return frame;
+    }
+    // Snapshot failure prevents spawning. An external formatter's nonzero exit
+    // does not restore its writes; the snapshot remains available for recovery.
     let snapshot = |absolute: &str| -> Result<(), String> {
         let file = std::path::PathBuf::from(absolute);
         history::force_snapshot(
@@ -213,10 +239,22 @@ fn files_local_history(
         Ok(value) => value,
         Err(frame) => return *frame,
     };
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if matches!(op, HistoryOp::Restore) {
+        if let Some(frame) = write_refusal(&request, &context) {
+            return frame;
+        }
+    }
     let root_path = match project_root(&request, &context, &resolver) {
         Ok(root) => root,
         Err(frame) => return *frame,
     };
+    if let Some(frame) = target.root_refusal(&request, &root_path) {
+        return frame;
+    }
     // 相对路径经过 core 的权威校验（拒 `..`/绝对路径/空段）。
     let file = match aeroric_core::files::path_policy::resolve_within(&root_path, &path) {
         Ok(file) => file,
@@ -261,9 +299,8 @@ fn files_local_history(
 
 /// `files.copy_paths_to_directory`：把项目内的若干相对路径复制到项目内的目标目录。
 ///
-/// **两侧都过权威校验**（源与目标都 `resolve_within`），所以既不能借 `..` 读外面，
-/// 也不能写到外面；目标目录不存在就建（`create_dir_all`），已存在的同名文件**拒绝**
-/// 而不是覆盖——覆盖是不可撤回的，而"复制失败"用户可以重来。
+/// core 对源使用 `resolve_within`，对可缺失的目标目录检查最近既存祖先，再逐项拒绝
+/// 任意已存在的目标叶子（含悬空链接）。保留部分进度；这是路径时点检查，不是 TOCTOU 事务。
 fn files_copy_paths(
     request: Request,
     context: Arc<CoreContext>,
@@ -292,42 +329,25 @@ fn files_copy_paths(
             "Missing param: paths",
         );
     }
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    if let Some(frame) = write_refusal(&request, &context) {
+        return frame;
+    }
     let root_path = match project_root(&request, &context, &resolver) {
         Ok(root) => root,
         Err(frame) => return *frame,
     };
-    // 目标目录可能还不存在 ⇒ 不能用 `resolve_within`（它要求目标已存在）。这里用
-    // **相对路径校验 ＋ 根下拼接**：`..`/绝对路径在 `validate_relative_path` 就被拒，
-    // 拼接结果按构造落根内，然后才 `create_dir_all`。
-    if let Err(error) = aeroric_core::files::path_policy::validate_relative_path(&target_dir) {
-        return failure(request.id.clone(), ErrorCode::InvalidArgument, &error);
+    if let Some(frame) = target.root_refusal(&request, &root_path) {
+        return frame;
     }
-    let result = copy_into(&root_path, &root_path.join(&target_dir), &sources);
+    let result = aeroric_core::files::read_write::copy_project_paths_to_directory(
+        &root_path,
+        &target_dir,
+        &sources,
+    )
+    .map(|copied| serde_json::json!({ "copied": copied }));
     value_frame(&request, result)
-}
-
-fn copy_into(
-    root: &std::path::Path,
-    target: &std::path::Path,
-    sources: &[String],
-) -> Result<Value, String> {
-    std::fs::create_dir_all(target).map_err(|error| format!("Create target failed: {error}"))?;
-    let mut copied = Vec::new();
-    for source in sources {
-        let from = aeroric_core::files::path_policy::resolve_within(root, source)
-            .map_err(|error| error.to_string())?;
-        let name = from
-            .file_name()
-            .ok_or_else(|| format!("Source has no file name: {source}"))?;
-        let to = target.join(name);
-        if to.exists() {
-            return Err(format!(
-                "Refusing to overwrite {}: the target already exists",
-                to.display()
-            ));
-        }
-        std::fs::copy(&from, &to).map_err(|error| format!("Copy failed: {error}"))?;
-        copied.push(to.to_string_lossy().into_owned());
-    }
-    Ok(serde_json::json!({ "copied": copied }))
 }

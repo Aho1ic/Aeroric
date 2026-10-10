@@ -1,6 +1,6 @@
-//! P6-02 Action 1：本地历史（core 独占；快照记录/列出/读取/恢复——与
-//! `src-tauri/src/local_history.rs` 同源语义 verbatim 上收；restore 有预览/
-//! 确认且可撤回：恢复前先兜底快照）。
+//! Native raw-layout local history with force-backup restore semantics.
+//! Legacy hex-layout history has distinct admission/errors/skip behavior and
+//! lives in `legacy_history`; only their DTOs/layout values are shared.
 use std::path::{Path, PathBuf};
 
 pub const HISTORY_DIR: &str = ".aeroric/local-history";

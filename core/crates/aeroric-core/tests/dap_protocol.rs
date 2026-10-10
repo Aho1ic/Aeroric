@@ -3,6 +3,39 @@
 use aeroric_core::ide::dap;
 
 #[test]
+fn debug_definition_wire_matches_legacy_lowercase_and_launch_attach_defaults() {
+    use serde_json::json;
+    // Direct external expectations, not a self-roundtrip that hides a wrong enum.
+    for (kind, value) in [
+        (dap::DebugConfigType::Node, "node"),
+        (dap::DebugConfigType::Python, "python"),
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), json!(value));
+        let config: dap::DebugConfig = serde_json::from_value(json!({
+            "id":"synthetic", "name":" 中文 ", "type":value,
+            "program":"missing.py", "cwd":"."
+        }))
+        .unwrap();
+        assert_eq!(config.config_type, kind);
+        assert_eq!(config.request, dap::DebugRequestType::Launch);
+        assert_eq!(config.attach_host, "127.0.0.1");
+        assert_eq!(config.attach_port, None);
+        assert!(config.args.is_empty() && config.env.is_empty() && config.breakpoints.is_empty());
+        assert_eq!(
+            serde_json::to_value(config).unwrap(),
+            json!({
+                "id":"synthetic", "name":" 中文 ", "type":value, "request":"launch",
+                "program":"missing.py", "cwd":".", "attachHost":"127.0.0.1",
+                "args":[], "env":{}, "breakpoints":[]
+            })
+        );
+    }
+    for wrong in ["Node", "Python", "shell", "debug"] {
+        assert!(serde_json::from_value::<dap::DebugConfigType>(json!(wrong)).is_err());
+    }
+}
+
+#[test]
 fn debug_session_snapshot_roundtrip() {
     let snapshot = dap::DebugSessionSnapshot {
         debug_id: "d1".to_string(),

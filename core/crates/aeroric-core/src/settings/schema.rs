@@ -8,7 +8,7 @@ pub(super) fn default_send_shortcut() -> String {
     "mod_enter".to_string()
 }
 
-pub(super) fn normalize_send_shortcut(value: String) -> String {
+pub fn normalize_send_shortcut(value: String) -> String {
     match value.as_str() {
         "enter" | "mod_enter" => value,
         _ => default_send_shortcut(),
@@ -491,9 +491,7 @@ impl Default for AutoCleanupSettings {
 
 /// 越界值一律夹紧而不报错:UI 只给合法选项,这里防的是手改 `settings.json`。
 /// 报错会让一个手抖的数字把整份设置卡住。
-pub(super) fn normalize_auto_cleanup_settings(
-    mut settings: AutoCleanupSettings,
-) -> AutoCleanupSettings {
+pub fn normalize_auto_cleanup_settings(mut settings: AutoCleanupSettings) -> AutoCleanupSettings {
     if settings.mode != "weekly" && settings.mode != "interval" {
         settings.mode = default_cleanup_mode();
     }
@@ -532,7 +530,7 @@ impl Default for WeeklyReportSettings {
 
 /// `output_dir` 原样保留:目录可能暂时不存在(外置盘未挂载),校验留给生成时的
 /// `validate_export_output_path`,否则设置面板会因为一次未挂载而存不下路径。
-pub(super) fn normalize_weekly_report_settings(
+pub fn normalize_weekly_report_settings(
     mut settings: WeeklyReportSettings,
 ) -> WeeklyReportSettings {
     settings.week_start_day = settings.week_start_day.min(6);

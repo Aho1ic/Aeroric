@@ -97,6 +97,7 @@ fn approval_and_task_lifecycle_real_cli_e2e() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("HOME", &scratch.0)
         .arg("--data-dir")
         .arg(&data_dir)
         .arg("serve")
@@ -333,6 +334,7 @@ fn sigterm_killed_attach_restores_the_local_termios() {
     let data_dir = scratch.0.join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let server = Command::new(env!("CARGO_BIN_EXE_aeroric-cli"))
+        .env("HOME", &scratch.0)
         .arg("--data-dir")
         .arg(&data_dir)
         .arg("serve")

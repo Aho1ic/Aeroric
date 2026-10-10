@@ -15,8 +15,6 @@ final class SettingsCapabilityTests: XCTestCase {
         XCTAssertFalse(SettingsCapability.ompThinkingLevels.contains("ultra"), "OMP 无 ultra")
         XCTAssertTrue(SettingsCapability.supportsEffort("max", family: "omp"))
         XCTAssertFalse(SettingsCapability.supportsEffort("ultra", family: "omp"))
-        XCTAssertFalse(SettingsCapability.supportsEffort("max", family: "dsh"), "DSH effort 白名单外拒绝")
-        XCTAssertTrue(SettingsCapability.supportsEffort("high", family: "dsh"))
     }
 
     func testFamilyOfAgentID() {
@@ -24,6 +22,34 @@ final class SettingsCapabilityTests: XCTestCase {
         XCTAssertEqual(SettingsCapability.familyOf(agentID: "omp", declared: nil), "omp")
         XCTAssertNil(SettingsCapability.familyOf(agentID: "custom-x", declared: nil), "未知 id 无声明＝nil")
         XCTAssertEqual(SettingsCapability.familyOf(agentID: "custom-x", declared: "claude"), "claude")
+    }
+
+    func testDshUsesBuiltinOffHighMaxVocabulary() {
+        XCTAssertEqual(SettingsCapability.dshEffortLevels, ["off", "high", "max"])
+        XCTAssertEqual(SettingsCapability.effortLevels(for: "dsh"), ["off", "high", "max"])
+        for effort in ["off", "high", "max"] {
+            XCTAssertTrue(SettingsCapability.supportsEffort(effort, family: "dsh"), effort)
+        }
+        for effort in ["", "low", "medium", "xhigh", "ultra"] {
+            XCTAssertFalse(SettingsCapability.supportsEffort(effort, family: "dsh"), effort)
+        }
+    }
+
+    func testDshVocabularyDoesNotChangeOtherFamilyChoicesOrPermitStaleSelections() {
+        for family in ["claude", "codex"] {
+            XCTAssertEqual(SettingsCapability.effortLevels(for: family), ["low", "medium", "high"])
+            for effort in ["low", "medium", "high"] {
+                XCTAssertTrue(SettingsCapability.supportsEffort(effort, family: family))
+            }
+            for effort in ["", "off", "max"] {
+                XCTAssertFalse(SettingsCapability.supportsEffort(effort, family: family))
+            }
+        }
+        XCTAssertTrue(SettingsCapability.supportsEffort("max", family: "omp"))
+        XCTAssertFalse(SettingsCapability.supportsEffort("", family: "omp"))
+        XCTAssertFalse(SettingsCapability.supportsEffort("high", family: "unknown"))
+        XCTAssertEqual(SettingsCapability.effortLevels(for: "omp"), SettingsCapability.ompThinkingLevels)
+        XCTAssertEqual(SettingsCapability.effortLevels(for: "unknown"), [])
     }
 
     func testUpdateRequiresExplicitUserConfirmation() {

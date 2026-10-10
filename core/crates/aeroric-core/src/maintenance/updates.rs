@@ -7,8 +7,9 @@
 //! 因为它们要求"替换正在运行的那个 app"，而 core 不是那个 app。
 //!
 //! 一条硬约束写在这里而不是注释里：**本计划实施期间 preview app 不覆盖旧
-//! Aeroric**。所以 [`ReleaseUpdatePrepareResult::ready_to_restart`] 永远来自
-//! 校验结果，而不是"下载完了就算准备好"。
+//! Aeroric**。准备流程的 [`ReleaseUpdatePrepareResult::ready_to_restart`] 来自
+//! 校验结果，而不是"下载完了就算准备好"。旧待装查询的快照语义单独保留在
+//! [`pending_update_result`]，不代表重新校验或安装许可。
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -110,6 +111,29 @@ impl PendingReleaseUpdatePayload {
             error: self.error,
         }
     }
+}
+
+/// 旧待装查询的公开回复：按原始 tag 精确筛选，不读资产、不重新校验或改写记录。
+///
+/// `ready_to_restart` 保留旧查询的恒真语义；checksum/helper/error 仍独立透传。
+/// 这不是准备流程的校验结果，也不赋予调用方安装或重启的权限。
+pub fn pending_update_result(
+    pending: Option<PendingReleaseUpdate>,
+    tag_name: Option<&str>,
+) -> Option<ReleaseUpdatePrepareResult> {
+    let filtered = match (pending, tag_name) {
+        (Some(pending), Some(tag)) if pending.tag_name != tag => None,
+        (pending, _) => pending,
+    };
+    filtered.map(|pending| ReleaseUpdatePrepareResult {
+        tag_name: pending.tag_name,
+        asset_name: pending.asset_name,
+        installer_path: pending.installer_path,
+        ready_to_restart: true,
+        checksum_verified: pending.checksum_verified,
+        helper_status: pending.helper_status,
+        error: pending.error,
+    })
 }
 
 /// `v1.2.3` / `V1.2.3` → `1.2.3`。

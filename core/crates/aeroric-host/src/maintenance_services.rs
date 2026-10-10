@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::maintenance::updates::pending_update_result;
 use aeroric_core::maintenance::{MaintenanceHost, MaintenanceService};
 use aeroric_core::metrics::{self, MetricsPaths};
 use aeroric_protocol::envelope::{Frame, Request};
@@ -298,13 +299,9 @@ pub fn register_maintenance_services(set: &mut ServiceSet, service: Arc<Maintena
             Arc::new(move |request: Request, _call| {
                 let service = Arc::clone(&service);
                 Box::pin(async move {
-                    let pending = service.pending_update();
                     let tag = request.params.get("tagName").and_then(Value::as_str);
-                    let filtered = match (pending, tag) {
-                        (Some(pending), Some(tag)) if pending.tag_name != tag => None,
-                        (pending, _) => pending,
-                    };
-                    ok(&request, serde_json::json!(filtered))
+                    let result = pending_update_result(service.pending_update(), tag);
+                    ok(&request, serde_json::json!(result))
                 })
             }),
         );

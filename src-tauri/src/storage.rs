@@ -7,6 +7,20 @@ use std::time::SystemTime;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub mod commands;
+
+#[cfg(test)]
+#[path = "storage_load_projects_tests.rs"]
+mod load_projects_tests;
+
+#[cfg(test)]
+#[path = "storage_load_project_tasks_tests.rs"]
+mod load_project_tasks_tests;
+
+#[cfg(test)]
+#[path = "storage_read_terminal_history_tests.rs"]
+mod read_terminal_history_tests;
+
 static PROJECTS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 // 数值与"为什么要有 slack"的裁定都在 core 的 terminal::history(P3-03 切片四C 把
@@ -293,9 +307,8 @@ fn terminal_history_dir() -> Result<PathBuf, String> {
 }
 
 fn safe_task_history_name(task_id: &str) -> Result<String, String> {
-    validate_storage_id(task_id, "task")?;
-    let trimmed = task_id.trim();
-    Ok(format!("{trimmed}.log"))
+    aeroric_core::paths::AppPaths::terminal_history_name(task_id)
+        .map_err(|_| "Invalid task id".to_string())
 }
 
 pub(crate) fn terminal_history_path(task_id: &str) -> Result<PathBuf, String> {
@@ -386,7 +399,8 @@ fn resolve_data_dir_from(primary: Result<PathBuf, String>) -> DataDir {
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
-#[tauri::command]
+// Synchronous internal reader; the IPC entry lives in commands::load_projects so
+// External IPC requests never evaluate this helper's directory/permission work.
 pub fn load_projects() -> Result<Vec<Project>, String> {
     let _guard = projects_lock().lock();
     load_projects_unlocked()
@@ -404,9 +418,22 @@ fn load_projects_unlocked() -> Result<Vec<Project>, String> {
 }
 
 #[tauri::command]
-pub fn save_projects(projects: Vec<Project>) -> Result<(), String> {
-    let _guard = projects_lock().lock();
-    save_projects_unlocked(&projects)
+pub async fn save_projects<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    projects: Vec<Project>,
+) -> Result<(), String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "project.save_projects",
+        serde_json::json!({ "projects": &projects }),
+        async move {
+            let _guard = projects_lock().lock();
+            save_projects_unlocked(&projects)?;
+            Ok(serde_json::Value::Null)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 fn save_projects_unlocked(projects: &[Project]) -> Result<(), String> {
@@ -425,7 +452,8 @@ pub(crate) fn update_projects<R>(
     Ok((result, projects))
 }
 
-#[tauri::command]
+// Synchronous internal reader; commands::load_project_tasks owns IPC placement.
+// Keep this helper's directory/permission ordering unchanged for Embedded callers.
 pub fn load_project_tasks(project_id: String) -> Result<Vec<Task>, String> {
     ensure_project_dir(&project_id)?;
     let path = tasks_path(&project_id)?;
@@ -601,7 +629,6 @@ fn read_terminal_history_tail_from_path(
     Ok((total, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-#[tauri::command]
 pub async fn read_task_terminal_history(task_id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         read_task_terminal_history_tail(&task_id, MAX_TERMINAL_HISTORY_BYTES as u64)
@@ -611,15 +638,18 @@ pub async fn read_task_terminal_history(task_id: String) -> Result<String, Strin
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+/// Synchronous compatibility helper; the actual IPC defers this to Embedded.
 pub fn delete_task_terminal_histories(task_ids: Vec<String>) -> Result<(), String> {
-    for task_id in task_ids {
-        let path = terminal_history_path(&task_id)?;
-        if path.exists() {
-            fs::remove_file(path).map_err(|e| e.to_string())?;
+    aeroric_core::terminal::history::delete_task_terminal_histories_legacy(
+        &task_ids,
+        terminal_history_dir,
+    )
+    .map_err(|error| match error {
+        aeroric_core::terminal::history::HistoryDeleteError::InvalidId(_) => {
+            "Invalid task id".to_string()
         }
-    }
-    Ok(())
+        other => other.to_string(),
+    })
 }
 
 // ── Atomic write (write to tmp then rename) ───────────────────────────────────
@@ -627,32 +657,7 @@ pub fn delete_task_terminal_histories(task_ids: Vec<String>) -> Result<(), Strin
 /// 原子写入：先写入唯一临时文件，再 rename 到目标路径。
 /// 临时文件名包含 pid + 纳秒时间戳，避免并发写入时临时文件相互覆盖。
 pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
-    let uid = format!(
-        "{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let tmp = path.with_file_name(format!(".{file_name}.{uid}.tmp"));
-    {
-        let mut file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        // 写失败也要清掉半份临时文件,否则失败一次就留一份垃圾。
-        if let Err(error) = file.write_all(content.as_bytes()) {
-            drop(file);
-            let _ = fs::remove_file(&tmp);
-            return Err(error.to_string());
-        }
-        // rename 前刷盘:崩溃后落到目标路径的文件才不会截断或丢内容。
-        if let Err(error) = file.sync_all() {
-            drop(file);
-            let _ = fs::remove_file(&tmp);
-            return Err(error.to_string());
-        }
-    }
-    finish_atomic_rename(&tmp, path)
+    aeroric_core::storage::atomic::write_legacy_atomic(path, content)
 }
 
 /// 收尾 rename,失败时把临时文件删掉再回错。
@@ -661,13 +666,7 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 /// 级别的 `.log.<pid>-<ns>.tmp`（其中一份来自早已退出的进程）。这些残留没有任何
 /// 消费者,只会让目录体积随失败次数单调增长。
 fn finish_atomic_rename(tmp: &Path, path: &Path) -> Result<(), String> {
-    match fs::rename(tmp, path) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = fs::remove_file(tmp);
-            Err(error.to_string())
-        }
-    }
+    aeroric_core::storage::atomic::finish_legacy_atomic_rename(tmp, path)
 }
 
 fn utf8_tail(content: &str, max_bytes: usize) -> &str {

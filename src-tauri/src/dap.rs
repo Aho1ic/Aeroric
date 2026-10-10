@@ -3,10 +3,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -21,9 +20,14 @@ use uuid::Uuid;
 
 use crate::ssh::SshConnection;
 
+pub mod commands;
+
 mod paths;
 mod protocol;
 mod remote;
+
+#[cfg(test)]
+mod command_tests;
 
 // 两段实现搬进了子模块,它们都以 `use super::*;` 开头直接拿本文件的 import 和私有类型;
 // 这里反过来把它们的项拉回本作用域,于是原有调用点一处都不用改。
@@ -41,83 +45,11 @@ use protocol::{
     parse_debug_variables_from_properties, read_debug_adapter_message, write_debug_adapter_message,
 };
 
-const DEBUG_CONFIG_VERSION: u32 = 1;
+pub use aeroric_core::ide::dap::{
+    DebugBreakpoint, DebugConfig, DebugConfigDocument, DebugConfigType, DebugRequestType,
+    DEBUG_CONFIG_VERSION,
+};
 const MAX_RETAINED_FINISHED_SESSIONS: usize = 64;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DebugConfigType {
-    Node,
-    Python,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DebugRequestType {
-    Launch,
-    Attach,
-}
-
-fn default_debug_request_type() -> DebugRequestType {
-    DebugRequestType::Launch
-}
-
-fn default_attach_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DebugBreakpoint {
-    pub file: String,
-    pub line: u32,
-    pub column: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub condition: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DebugConfig {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub config_type: DebugConfigType,
-    #[serde(default = "default_debug_request_type")]
-    pub request: DebugRequestType,
-    pub program: String,
-    pub cwd: String,
-    #[serde(default = "default_attach_host")]
-    pub attach_host: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attach_port: Option<u16>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-    #[serde(default)]
-    pub breakpoints: Vec<DebugBreakpoint>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DebugConfigDocument {
-    #[serde(default = "default_debug_config_version")]
-    pub version: u32,
-    #[serde(default)]
-    pub configs: Vec<DebugConfig>,
-}
-
-impl Default for DebugConfigDocument {
-    fn default() -> Self {
-        Self {
-            version: DEBUG_CONFIG_VERSION,
-            configs: Vec::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -300,10 +232,6 @@ fn spawn_debug_session_cleanup(
         prune_finished_sessions(&mut sessions.lock());
         break;
     });
-}
-
-fn default_debug_config_version() -> u32 {
-    DEBUG_CONFIG_VERSION
 }
 
 fn now_millis() -> u128 {
@@ -2010,21 +1938,6 @@ fn fail_start_debug_session_with_tunnel(
 }
 
 #[tauri::command]
-pub fn read_debug_configs(project_path: String) -> Result<DebugConfigDocument, String> {
-    let root = validate_project_root(&project_path)?;
-    read_debug_configs_from_root(&root)
-}
-
-#[tauri::command]
-pub fn write_debug_configs(
-    project_path: String,
-    document: DebugConfigDocument,
-) -> Result<DebugConfigDocument, String> {
-    let root = validate_project_root(&project_path)?;
-    write_debug_configs_from_root(&root, document)
-}
-
-#[tauri::command]
 pub async fn remote_read_debug_configs(
     connection: SshConnection,
     remote_project_path: String,
@@ -2095,7 +2008,7 @@ pub fn start_debug_config(
         finished_at: None,
     }));
 
-    let (child, command_tx) = match (config.config_type.clone(), config.request.clone()) {
+    let (child, command_tx) = match (config.config_type, config.request) {
         (DebugConfigType::Node, DebugRequestType::Launch) => {
             let program = program
                 .as_ref()
@@ -2328,8 +2241,8 @@ pub fn remote_start_debug_config(
     } else {
         None
     };
-    let config_type = config.config_type.clone();
-    let request = config.request.clone();
+    let config_type = config.config_type;
+    let request = config.request;
 
     let debug_id = format!("debug-{}", Uuid::new_v4());
     let started_at = now_millis();
@@ -2358,7 +2271,7 @@ pub fn remote_start_debug_config(
         finished_at: None,
     }));
 
-    let (child, tunnel_child, remote_child, command_tx) = match (config_type.clone(), request) {
+    let (child, tunnel_child, remote_child, command_tx) = match (config_type, request) {
         (DebugConfigType::Node, DebugRequestType::Launch) => {
             let breakpoint_targets =
                 resolve_remote_node_breakpoint_targets(&remote_root, &config.breakpoints)

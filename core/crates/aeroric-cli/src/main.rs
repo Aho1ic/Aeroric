@@ -122,6 +122,25 @@ async fn doctor(data_dir: &Path, json: bool) -> i32 {
 
 // ── serve：本 CLI 的 host 进程形态 ────────────────────────────────────────
 
+/// Capture only the external home used for agent-config defaults. The managed
+/// data root remains an explicit CLI argument; other services retain their own
+/// root/capability boundary rather than implicitly gaining external history.
+fn agent_config_external_home() -> Result<std::path::PathBuf, String> {
+    #[cfg(unix)]
+    let home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(any(unix, windows)))]
+    let home: Option<std::ffi::OsString> = None;
+
+    home.map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            "Cannot resolve an absolute external user home (HOME/USERPROFILE) for agent configs"
+                .to_string()
+        })
+}
+
 /// lock → data compat → runtime → listener → ready，然后常驻到 SIGINT/SIGTERM。
 /// token 明文在启动后立即登记进 Redactor：进程 stderr 上出现的任何错误文本
 /// （含 panic hook）先洗再写（Action 5 的脱敏半边）。
@@ -130,6 +149,15 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
     use aeroric_host::dispatcher::HostServices;
     use aeroric_host::startup::{run_startup, serve as serve_loop, HostOptions};
 
+    let agent_config_external_home = match agent_config_external_home() {
+        Ok(home) => home,
+        Err(error) => {
+            eprintln!("aeroric-cli serve: {error}");
+            return exit::CONNECT;
+        }
+    };
+    // Do not rebind this shared context as an agent-config side effect: metrics
+    // and session discovery have separate external-history admission boundaries.
     let paths = aeroric_core::paths::AppPaths::with_data_dir(Path::new("/"), Some(data_dir));
     let socket_path = aeroric_host::uds::default_socket_path(data_dir);
     let owner = LeaseOwner {
@@ -197,7 +225,10 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
             // P8-04 刀三：用量族与降级账总在；维护面端口**不给**——通知抓取与
             // "替换正在运行的 app"是桌面宿主的能力，无头宿主注册一个空壳只会让
             // 客户端以为能力存在（见 `HostWiring::maintenance`）。
-            let wiring = aeroric_host::dispatcher::HostWiring::default();
+            let wiring = aeroric_host::dispatcher::HostWiring {
+                agent_config_external_home: Some(agent_config_external_home),
+                ..Default::default()
+            };
             let services = HostServices::with_tasks_and_wiring(
                 Arc::clone(&started.token),
                 log,

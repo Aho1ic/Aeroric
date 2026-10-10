@@ -1,6 +1,6 @@
 //! P6-04 Action 1：git status/diff/index/commit/history/refs/stash/conflicts
 //! 的业务主体（core 独占；与 `src-tauri/src/git.rs` 同源语义 verbatim 上收）。
-use super::transport::{self, RepoLocks};
+use super::transport::{self, RepoLocks, STASH_TIMEOUT};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
@@ -148,6 +148,39 @@ pub fn stage(repo_root: &Path, file_path: &str, locks: &RepoLocks) -> Result<(),
     )?;
     if !output.success {
         return Err(transport::git_command_error(&output, "Failed to stage"));
+    }
+    Ok(())
+}
+
+pub fn stage_all(repo_root: &Path, locks: &RepoLocks) -> Result<(), String> {
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let output = transport::run_git(
+        repo_root,
+        &["add", "-A"],
+        transport::READ_TIMEOUT,
+        Some(&lock),
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(&output, "Failed to stage all"));
+    }
+    Ok(())
+}
+
+/// 取消暂存全部（与 `git_unstage_all` 同源：`restore --staged .`，首次提交前
+/// 无 HEAD 会失败——legacy 语义如此，不做静默降级）。
+pub fn unstage_all(repo_root: &Path, locks: &RepoLocks) -> Result<(), String> {
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let output = transport::run_git(
+        repo_root,
+        &["restore", "--staged", "."],
+        transport::READ_TIMEOUT,
+        Some(&lock),
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to unstage all",
+        ));
     }
     Ok(())
 }
@@ -446,19 +479,42 @@ pub fn stash_list(repo_root: &Path) -> Result<Vec<GitStashEntry>, String> {
         .collect())
 }
 
-pub fn stash_push(repo_root: &Path, message: &str, locks: &RepoLocks) -> Result<(), String> {
-    transport::validate_git_arg(message)?;
-    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
-    let output = transport::run_git(
-        repo_root,
-        &["stash", "push", "-m", message],
-        transport::READ_TIMEOUT,
-        Some(&lock),
-    )?;
-    if !output.success {
-        return Err(transport::git_command_error(&output, "Failed to stash"));
+/// stash push（mutating；串行化）。
+///
+/// 与 legacy `git_stash_push` 逐项对齐，三处**不是**等价替换、必须显式照抄：
+/// ① message 先 `trim` 再去空——空白消息不发 `-m`；② 返回 `stdout + stderr`（**顺序**
+/// 是 stdout 在前；core 的 `GitOutput::combined()` 是 stderr 在前，用它会换序）；
+/// ③ 超时 20s（legacy 的 `Duration::from_secs(20)`，不是默认 `READ_TIMEOUT` 的 5s）。
+/// 失败回落文案也照 legacy：`Failed to create git stash`。
+pub fn stash_push(
+    repo_root: &Path,
+    message: Option<&str>,
+    include_untracked: bool,
+    locks: &RepoLocks,
+) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("--include-untracked");
     }
-    Ok(())
+    let trimmed = message.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(message) = trimmed {
+        transport::validate_git_arg(message)?;
+        args.push("-m");
+        args.push(message);
+    }
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let output = transport::run_git(repo_root, &args, STASH_TIMEOUT, Some(&lock))?;
+    let combined = format!("{}{}", output.stdout, output.stderr)
+        .trim()
+        .to_string();
+    if !output.success {
+        return Err(if combined.is_empty() {
+            "Failed to create git stash".to_string()
+        } else {
+            combined
+        });
+    }
+    Ok(combined)
 }
 
 pub fn stash_apply(repo_root: &Path, stash_ref: &str, locks: &RepoLocks) -> Result<String, String> {
@@ -497,12 +553,54 @@ pub fn stash_drop(repo_root: &Path, stash_ref: &str, locks: &RepoLocks) -> Resul
     Ok(output.combined())
 }
 
-/// 冲突文件列表。
+/// `git init`（幂等：已是仓库则**不重跑**——legacy `git_init` 先探 `rev-parse --git-dir`
+/// 成功即返回 Ok，所以在既有仓库上换 `initial_branch` 不会改分支）。
+pub fn init(
+    repo_root: &Path,
+    initial_branch: Option<&str>,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    if let Some(branch) = initial_branch {
+        if !branch.is_empty() {
+            transport::validate_revision(branch)?;
+        }
+    }
+    let branch = initial_branch
+        .filter(|value| !value.is_empty())
+        .unwrap_or("main");
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let probe = transport::run_git(
+        repo_root,
+        &["rev-parse", "--git-dir"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if probe.success {
+        return Ok(());
+    }
+    let branch_arg = format!("--initial-branch={branch}");
+    let output = transport::run_git(
+        repo_root,
+        &["init", &branch_arg],
+        transport::READ_TIMEOUT,
+        Some(&lock),
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(&output, "Failed to init"));
+    }
+    Ok(())
+}
+
+/// 冲突文件列表（与 legacy `git diff --name-only --diff-filter=U -z` 等价：**每个
+/// 路径一条**。porcelain 对 `UU` 会各报 index/worktree 一侧，直接映射会重复计数，
+/// 所以按首次出现去重并保留原顺序）。
 pub fn conflict_files(repo_root: &Path) -> Result<Vec<GitConflictFile>, String> {
     let entries = status(repo_root)?;
+    let mut seen = std::collections::HashSet::new();
     Ok(entries
         .into_iter()
         .filter(|c| c.status.contains('U') || c.status == "AA" || c.status == "DD")
+        .filter(|c| seen.insert(c.path.clone()))
         .map(|c| GitConflictFile { path: c.path })
         .collect())
 }

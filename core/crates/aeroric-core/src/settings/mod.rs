@@ -23,14 +23,13 @@ use config_bundles::*;
     reason = "glob 转手：兄弟文件经 super:: 取 custom_agents 项"
 )]
 use custom_agents::*;
+pub use launch_spec::get_agent_launch_spec_from_settings;
+pub(crate) use launch_spec::normalize_agent_configured_path;
 #[allow(
     unused_imports,
     reason = "glob 转手：兄弟文件经 super:: 取 launch_spec 项"
 )]
 use launch_spec::*;
-pub(crate) use launch_spec::{
-    get_agent_launch_spec_from_settings, normalize_agent_configured_path,
-};
 use load_save::*;
 #[allow(
     unused_imports,
@@ -42,6 +41,9 @@ use normalize::*;
 use schema::*;
 use versions::*;
 
+pub mod agent_config;
+pub mod agent_config_files;
+pub mod agent_config_roots;
 pub mod agent_env;
 pub mod agent_scripts;
 pub mod builtin;
@@ -54,6 +56,8 @@ pub mod model_detect;
 pub mod models;
 pub mod normalize;
 pub mod omp_home;
+pub mod preferences;
+pub mod project_config;
 pub mod schema;
 pub mod versions;
 

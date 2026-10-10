@@ -33,74 +33,131 @@ pub async fn update_builtin_agent_access(
 
 #[tauri::command]
 pub async fn update_dsh_reasoning_effort(
+    app: tauri::AppHandle,
     agent: String,
     effort: String,
 ) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
-            apply_dsh_reasoning_effort_update(settings, &agent, &effort)
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.update_dsh_reasoning_effort",
+        serde_json::json!({"agent": &agent, "effort": &effort}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                update_settings_locked(move |settings| {
+                    apply_dsh_reasoning_effort_update(settings, &agent, &effort)
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            serde_json::to_value(settings).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn update_proxy_settings(proxy_settings: ProxySettings) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
-            settings.proxy_settings = proxy_settings;
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub async fn update_proxy_settings(
+    app: tauri::AppHandle,
+    proxy_settings: ProxySettings,
+) -> Result<AppSettings, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.update_proxy_settings",
+        serde_json::json!({"proxySettings": &proxy_settings}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                update_settings_locked(move |settings| {
+                    settings.proxy_settings = proxy_settings;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            serde_json::to_value(settings).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 随手记 embedding provider 的配置。**不含 key** —— key 走
 /// `notebook_embedding_key_set`(OS 钥匙串)。
 #[tauri::command]
 pub async fn update_notebook_embedding_settings(
+    app: tauri::AppHandle,
     notebook_embedding_settings: NotebookEmbeddingSettings,
 ) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
-            settings.notebook_embedding_settings = notebook_embedding_settings;
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.update_notebook_embedding_settings",
+        serde_json::json!({"notebookEmbeddingSettings": &notebook_embedding_settings}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                update_settings_locked(move |settings| {
+                    settings.notebook_embedding_settings = notebook_embedding_settings;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            serde_json::to_value(settings).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 夹紧不在这里做:`normalize_settings` 已经过一遍 `normalize_auto_cleanup_settings`,
 /// 于是手改文件与走 UI 两条路得到同一份约束。
 #[tauri::command]
 pub async fn update_auto_cleanup_settings(
+    app: tauri::AppHandle,
     auto_cleanup_settings: AutoCleanupSettings,
 ) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
-            settings.auto_cleanup_settings = auto_cleanup_settings;
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.update_auto_cleanup_settings",
+        serde_json::json!({"autoCleanupSettings": &auto_cleanup_settings}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                update_settings_locked(move |settings| {
+                    settings.auto_cleanup_settings = auto_cleanup_settings;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            serde_json::to_value(settings).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn update_weekly_report_settings(
+    app: tauri::AppHandle,
     weekly_report_settings: WeeklyReportSettings,
 ) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        update_settings_locked(move |settings| {
-            settings.weekly_report_settings = weekly_report_settings;
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.update_weekly_report_settings",
+        serde_json::json!({"weeklyReportSettings": &weekly_report_settings}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                update_settings_locked(move |settings| {
+                    settings.weekly_report_settings = weekly_report_settings;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            serde_json::to_value(settings).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -944,41 +1001,67 @@ pub async fn rename_custom_agent_profile(id: String, label: String) -> Result<Ap
 }
 
 #[tauri::command]
-pub async fn save_send_shortcut(send_shortcut: String) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        settings.send_shortcut = normalize_send_shortcut(send_shortcut);
+pub async fn save_send_shortcut(
+    app: tauri::AppHandle,
+    send_shortcut: String,
+) -> Result<AppSettings, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.save_send_shortcut",
+        serde_json::json!({"sendShortcut": &send_shortcut}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                let _guard = settings_lock().lock();
+                let mut settings = load_settings_unlocked();
+                settings.send_shortcut = normalize_send_shortcut(send_shortcut);
 
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+                let dir = aeroric_dir()?;
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = settings_path()?;
+                let normalized = normalize_settings(settings);
+                let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+                atomic_write_private(&path, &raw)?;
+                Ok::<AppSettings, String>(normalized)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            serde_json::to_value(settings).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn save_shift_enter_newline(enabled: bool) -> Result<AppSettings, String> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        settings.terminal_shift_enter_newline = enabled;
+pub async fn save_shift_enter_newline(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<AppSettings, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "settings.save_shift_enter_newline",
+        serde_json::json!({"enabled": enabled}),
+        async move {
+            let settings = tokio::task::spawn_blocking(move || {
+                let _guard = settings_lock().lock();
+                let mut settings = load_settings_unlocked();
+                settings.terminal_shift_enter_newline = enabled;
 
-        let dir = aeroric_dir()?;
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = settings_path()?;
-        let normalized = normalize_settings(settings);
-        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
-        atomic_write_private(&path, &raw)?;
-        Ok::<AppSettings, String>(normalized)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+                let dir = aeroric_dir()?;
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = settings_path()?;
+                let normalized = normalize_settings(settings);
+                let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+                atomic_write_private(&path, &raw)?;
+                Ok::<AppSettings, String>(normalized)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            serde_json::to_value(settings).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

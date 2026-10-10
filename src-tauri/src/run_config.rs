@@ -1,9 +1,7 @@
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -14,93 +12,25 @@ use uuid::Uuid;
 use crate::path_guard::validate_project_root;
 use crate::ssh::SshConnection;
 
-const RUN_CONFIG_VERSION: u32 = 1;
+#[cfg(test)]
+#[path = "run_config/command_tests.rs"]
+mod command_tests;
+
 const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_RETAINED_FINISHED_PROCESSES: usize = 64;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RunDebugConfigType {
-    Node,
-    Python,
-}
+use aeroric_core::ide::run_config::{
+    legacy_cwd_candidate as cwd_candidate, validate_legacy_run_config as validate_run_config,
+    validate_legacy_run_config_identity as validate_run_config_identity,
+};
+#[cfg(test)]
+use aeroric_core::ide::run_config::{read_run_configs_from_root, RunDebugConfigType};
+pub use aeroric_core::ide::run_config::{
+    RunConfig, RunConfigDocument, RunDebugBreakpoint, RunProcessSnapshot, RunProcessStatus,
+    RUN_CONFIG_VERSION,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RunDebugBreakpoint {
-    pub file: String,
-    pub line: u32,
-    pub column: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum RunConfig {
-    Shell {
-        id: String,
-        name: String,
-        command: String,
-        cwd: String,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-    },
-    Debug {
-        id: String,
-        name: String,
-        #[serde(rename = "debugType", default = "default_run_debug_config_type")]
-        debug_type: RunDebugConfigType,
-        program: String,
-        cwd: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-        #[serde(default)]
-        breakpoints: Vec<RunDebugBreakpoint>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RunConfigDocument {
-    #[serde(default = "default_run_config_version")]
-    pub version: u32,
-    #[serde(default)]
-    pub configs: Vec<RunConfig>,
-}
-
-impl Default for RunConfigDocument {
-    fn default() -> Self {
-        Self {
-            version: RUN_CONFIG_VERSION,
-            configs: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RunProcessStatus {
-    Running,
-    Exited,
-    Failed,
-    Stopped,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RunProcessSnapshot {
-    pub run_id: String,
-    pub config_id: String,
-    pub name: String,
-    pub command: String,
-    pub cwd: String,
-    pub status: RunProcessStatus,
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub started_at: u128,
-    pub finished_at: Option<u128>,
-}
+pub mod commands;
 
 #[derive(Clone)]
 struct RunProcessHandle {
@@ -160,132 +90,11 @@ fn spawn_process_cleanup(
     });
 }
 
-fn default_run_config_version() -> u32 {
-    RUN_CONFIG_VERSION
-}
-
-fn default_run_debug_config_type() -> RunDebugConfigType {
-    RunDebugConfigType::Node
-}
-
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
-}
-
-fn run_configs_path(root: &Path) -> PathBuf {
-    root.join(".aeroric").join("run-configs.json")
-}
-
-fn normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn path_candidate(root: &Path, value: &str, empty_error: &str) -> Result<PathBuf, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(empty_error.to_string());
-    }
-    let path = Path::new(trimmed);
-    Ok(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    })
-}
-
-fn cwd_candidate(root: &Path, cwd: &str) -> Result<PathBuf, String> {
-    path_candidate(root, cwd, "Run config cwd cannot be empty")
-}
-
-fn ensure_path_inside_root(root: &Path, path: &Path, label: &str) -> Result<(), String> {
-    let normalized_root = normalize_path_lexically(root);
-    let normalized_path = normalize_path_lexically(path);
-    if normalized_path.starts_with(&normalized_root) {
-        Ok(())
-    } else {
-        Err(format!("{label} is outside project root"))
-    }
-}
-
-fn validate_run_config(root: &Path, config: &RunConfig) -> Result<(), String> {
-    match config {
-        RunConfig::Shell {
-            id,
-            name,
-            command,
-            cwd,
-            ..
-        } => {
-            validate_run_config_identity(id, name)?;
-            if command.trim().is_empty() {
-                return Err("Run config command cannot be empty".to_string());
-            }
-            let candidate = cwd_candidate(root, cwd)?;
-            ensure_path_inside_root(root, &candidate, "Run config cwd")
-        }
-        RunConfig::Debug {
-            id,
-            name,
-            program,
-            cwd,
-            breakpoints,
-            ..
-        } => {
-            validate_run_config_identity(id, name)?;
-            if program.trim().is_empty() {
-                return Err("Run debug program cannot be empty".to_string());
-            }
-            let program = path_candidate(root, program, "Run debug program cannot be empty")?;
-            ensure_path_inside_root(root, &program, "Run debug program")?;
-            let cwd = cwd_candidate(root, cwd)?;
-            ensure_path_inside_root(root, &cwd, "Run config cwd")?;
-            for breakpoint in breakpoints {
-                validate_run_debug_breakpoint(root, breakpoint)?;
-            }
-            Ok(())
-        }
-    }
-}
-
-fn validate_run_config_identity(id: &str, name: &str) -> Result<(), String> {
-    if id.trim().is_empty() {
-        return Err("Run config id cannot be empty".to_string());
-    }
-    if name.trim().is_empty() {
-        return Err("Run config name cannot be empty".to_string());
-    }
-    Ok(())
-}
-
-fn validate_run_debug_breakpoint(
-    root: &Path,
-    breakpoint: &RunDebugBreakpoint,
-) -> Result<(), String> {
-    if breakpoint.line == 0 {
-        return Err("Run debug breakpoint line must be at least 1".to_string());
-    }
-    if breakpoint.column == 0 {
-        return Err("Run debug breakpoint column must be at least 1".to_string());
-    }
-    let file = path_candidate(
-        root,
-        &breakpoint.file,
-        "Run debug breakpoint file cannot be empty",
-    )?;
-    ensure_path_inside_root(root, &file, "Run debug breakpoint")
 }
 
 fn remote_run_path_has_relative_components(path: &str) -> bool {
@@ -448,39 +257,6 @@ fn resolve_run_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
         return Err("Run cwd is outside project root".to_string());
     }
     Ok(canonical)
-}
-
-fn read_run_configs_from_root(root: &Path) -> Result<RunConfigDocument, String> {
-    let path = run_configs_path(root);
-    if !path.exists() {
-        return Ok(RunConfigDocument::default());
-    }
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut document: RunConfigDocument = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if document.version == 0 {
-        document.version = RUN_CONFIG_VERSION;
-    }
-    for config in &document.configs {
-        validate_run_config(root, config)?;
-    }
-    Ok(document)
-}
-
-fn write_run_configs_from_root(
-    root: &Path,
-    mut document: RunConfigDocument,
-) -> Result<RunConfigDocument, String> {
-    document.version = RUN_CONFIG_VERSION;
-    for config in &document.configs {
-        validate_run_config(root, config)?;
-    }
-    let path = run_configs_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let raw = serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?;
-    crate::storage::atomic_write(&path, &raw)?;
-    Ok(document)
 }
 
 fn build_remote_run_read_configs_command(remote_root: &str) -> String {
@@ -695,21 +471,6 @@ fn build_remote_shell_run_command(
         crate::ssh::shell_quote_posix(cwd),
         command_parts.join(" ")
     )
-}
-
-#[tauri::command]
-pub fn read_run_configs(project_path: String) -> Result<RunConfigDocument, String> {
-    let root = validate_project_root(&project_path)?;
-    read_run_configs_from_root(&root)
-}
-
-#[tauri::command]
-pub fn write_run_configs(
-    project_path: String,
-    document: RunConfigDocument,
-) -> Result<RunConfigDocument, String> {
-    let root = validate_project_root(&project_path)?;
-    write_run_configs_from_root(&root, document)
 }
 
 #[tauri::command]

@@ -59,11 +59,57 @@ impl Harness {
         tag: &str,
         wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
     ) -> Self {
+        Self::start_inner(tag, wiring, false).await
+    }
+
+    /// Real startup/socket authentication, but business services have no writer lease.
+    pub async fn start_read_only(tag: &str) -> Self {
+        Self::start_read_only_with_wiring(tag, |_| aeroric_host::dispatcher::HostWiring::default())
+            .await
+    }
+
+    /// Isolate side effects even in a regression's pre-fix (unauthorized) path.
+    pub async fn start_read_only_with_wiring(
+        tag: &str,
+        wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
+    ) -> Self {
+        Self::start_inner(tag, wiring, true).await
+    }
+
+    async fn start_inner(
+        tag: &str,
+        wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
+        read_only: bool,
+    ) -> Self {
+        Self::start_with_layout(tag, wiring, read_only, false).await
+    }
+
+    /// Opt-in fixture: managed data is not the injected user's ~/.aeroric.
+    pub async fn start_relocated(tag: &str, read_only: bool) -> Self {
+        Self::start_with_layout(
+            tag,
+            |_| aeroric_host::dispatcher::HostWiring::default(),
+            read_only,
+            true,
+        )
+        .await
+    }
+
+    async fn start_with_layout(
+        tag: &str,
+        wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
+        read_only: bool,
+        relocated: bool,
+    ) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let root = PathBuf::from("/tmp").join(format!("ah-it-{tag}-{}-{n}", std::process::id()));
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
-        let paths = AppPaths::from_user_home(&home);
+        let paths = if relocated {
+            AppPaths::with_data_dir(&home, Some(&root.join("managed")))
+        } else {
+            AppPaths::from_user_home(&home)
+        };
         let data_dir = paths.data_dir().to_path_buf();
         let socket_path = data_dir.join("host.sock");
         let started = run_startup(
@@ -89,10 +135,17 @@ impl Harness {
             .trim()
             .to_string();
         let wiring = wiring(&data_dir);
+        let context = if read_only {
+            Arc::new(aeroric_core::context::CoreContext::read_only(
+                started.context.paths.clone(),
+            ))
+        } else {
+            Arc::clone(&started.context)
+        };
         let services = HostServices::with_wiring(
             Arc::clone(&started.token),
             Arc::new(aeroric_core::events::EventLog::default()),
-            Arc::clone(&started.context),
+            context,
             wiring,
         );
         let running = Some(aeroric_host::startup::serve(started, Arc::clone(&services)));

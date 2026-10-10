@@ -600,14 +600,36 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         "38 channels plus the synthesised terminal.gap"
     );
     assert_eq!(topics["legacyChannels"], json!(38));
-    // P8-02 刀六 agent 两条＋P8-03 刀六 remote 四条 mapped（3→9）；remote.task_request
-    // not-forwarded（pending 36→29）。
-    assert_eq!(topics["mapped"], json!(9));
-    assert_eq!(topics["pending"], json!(29));
+    // P8-02 agent + P8-03 remote mapped3→9; P8-04 usage/weekly mapped9→11.
+    // remote.task_request remains not-forwarded, leaving27 pending topics.
+    assert_eq!(topics["mapped"], json!(11));
+    assert_eq!(topics["pending"], json!(27));
     assert_eq!(topics["reshapedPayloads"], json!(5));
     assert_eq!(topics["legacyDirectionUnproven"], json!(11));
     let rows = topics["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 39);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["status"] == json!("mapped"))
+            .map(|row| row["topic"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "aeroric.app_settings_changed",
+            "agent.operation_changed",
+            "agent.tool_install_progress",
+            "project.pinned_changed",
+            "remote.device_paired",
+            "remote.terminal_resized",
+            "task.updated",
+            "terminal.gap",
+            "terminal.output",
+            "usage.statistics_updated",
+            "weekly.report_progress",
+        ]
+        .into_iter()
+        .collect(),
+        "mapped totals must reflect the exact reviewed topics, not substitute names"
+    );
     let mut claimed: BTreeMap<&str, usize> = BTreeMap::new();
     for row in rows {
         let topic = row["topic"].as_str().unwrap();
@@ -637,8 +659,25 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         }
     }
     let legacy = contract("events.schema.json");
+    // The source inventory includes direct v1 dual-emits as well as legacy
+    // channels. Match export-schema and the Swift/TS decoders: a v1 topic
+    // does not have to claim itself as a legacy channel.
+    let topic_names = rows
+        .iter()
+        .map(|row| row["topic"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut legacy_names = std::collections::BTreeSet::new();
+    let mut direct_topics = std::collections::BTreeSet::new();
     for event in legacy["events"].as_array().unwrap() {
         let name = event["name"].as_str().unwrap();
+        if topic_names.contains(name) {
+            direct_topics.insert(name);
+            continue;
+        }
+        assert!(
+            legacy_names.insert(name),
+            "duplicate legacy channel {name:?}"
+        );
         assert_eq!(
             claimed.get(name).copied().unwrap_or(0),
             1,
@@ -650,9 +689,28 @@ fn the_committed_schema_agrees_with_the_rust_vocabularies() {
         38,
         "the table claims a channel that does not exist"
     );
+    assert_eq!(
+        claimed
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        legacy_names,
+        "legacy coverage must be a bijection, not just equal counts"
+    );
+    assert_eq!(
+        direct_topics,
+        [
+            "aeroric.app_settings_changed",
+            "remote.terminal_resized",
+            "weekly.report_progress",
+        ]
+        .into_iter()
+        .collect(),
+        "only the known direct v1 dual-emits are excluded from legacy coverage"
+    );
 
     let events = contract("events.schema.json");
-    assert_eq!(events["count"], json!(38));
+    assert_eq!(events["count"], json!(41));
     assert_eq!(
         events["count"].as_u64().unwrap(),
         events["events"].as_array().unwrap().len() as u64

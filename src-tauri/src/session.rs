@@ -603,8 +603,7 @@ pub(crate) use aeroric_core::sessions::resume::{
     session_file_supports_native_resume,
 };
 
-#[tauri::command]
-pub async fn session_supports_native_resume(
+pub async fn local_session_supports_native_resume(
     session_path: String,
     project_path: String,
     is_codex: bool,
@@ -620,6 +619,33 @@ pub async fn session_supports_native_resume(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn session_supports_native_resume<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    family: Option<String>,
+) -> Result<bool, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "session.session_supports_native_resume",
+        serde_json::json!({
+            "sessionPath": session_path,
+            "projectPath": project_path,
+            "isCodex": is_codex,
+            "family": family,
+        }),
+        async {
+            local_session_supports_native_resume(session_path, project_path, is_codex, family)
+                .await
+                .map(serde_json::Value::from)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -654,8 +680,7 @@ pub async fn read_session_messages(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn read_session_message_page(
+pub async fn local_read_session_message_page(
     session_path: String,
     project_path: String,
     is_codex: bool,
@@ -705,7 +730,35 @@ pub async fn read_session_message_page(
 }
 
 #[tauri::command]
-pub async fn read_session_id(
+pub async fn read_session_message_page<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    family: Option<String>,
+    cursor: Option<u64>,
+) -> Result<SessionMessagePage, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "session.read_session_message_page",
+        serde_json::json!({
+            "sessionPath": session_path,
+            "projectPath": project_path,
+            "isCodex": is_codex,
+            "family": family,
+            "cursor": cursor,
+        }),
+        async {
+            local_read_session_message_page(session_path, project_path, is_codex, family, cursor)
+                .await
+                .and_then(|page| serde_json::to_value(page).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_read_session_id(
     session_path: String,
     project_path: String,
     is_codex: bool,
@@ -724,6 +777,33 @@ pub async fn read_session_id(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_session_id<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    session_path: String,
+    project_path: String,
+    is_codex: bool,
+    family: Option<String>,
+) -> Result<Option<String>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "session.read_session_id",
+        serde_json::json!({
+            "sessionPath": session_path,
+            "projectPath": project_path,
+            "isCodex": is_codex,
+            "family": family,
+        }),
+        async {
+            local_read_session_id(session_path, project_path, is_codex, family)
+                .await
+                .and_then(|opt| serde_json::to_value(opt).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1957,6 +2037,10 @@ pub async fn export_session_markdown(
 }
 
 // ── 测试 ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "session_query_command_tests.rs"]
+mod session_query_tests;
 
 #[cfg(test)]
 mod tests {

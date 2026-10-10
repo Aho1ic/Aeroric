@@ -1,56 +1,19 @@
-//! 调试配置的路径解析、校验与读写。
+//! Live debug-path resolution and remote validation/IO helpers.
 //!
-//! 从 `dap.rs` 整块搬出来,内容一行没改。单独成文件是因为这里**全是安全边界**:
-//! 用户在调试配置里填的 program / cwd / 断点文件路径都要先钉死在项目根目录内,
-//! 否则调试器会被用来读写项目外的文件。本地一套(`ensure_path_inside_root` /
-//! `candidate_path` 走 `normalize_path_lexically`,不跟随符号链接地做词法归一)、
-//! 远程一套(`remote_debug_path_*`,纯字符串判断,因为拿不到远端文件系统)。
-//!
-//! `validate_*` 几个是对外的入口,`read/write_debug_configs_from_root` 负责
-//! `.aeroric/debug.json` 的实际读写。
+//! Definition-time lexical validation is shared with core; it does not follow
+//! candidate symlinks. Keep live cwd/program canonicalization below, and remote
+//! path policy/IO, distinct from that definition compatibility boundary.
 
 use super::*;
 
-pub(super) fn debug_configs_path(root: &Path) -> PathBuf {
-    root.join(".aeroric").join("debug-configs.json")
-}
-
-pub(super) fn normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
-pub(super) fn ensure_path_inside_root(root: &Path, path: &Path) -> Result<(), String> {
-    let normalized_root = normalize_path_lexically(root);
-    let normalized_path = normalize_path_lexically(path);
-    if normalized_path.starts_with(&normalized_root) {
-        Ok(())
-    } else {
-        Err("Path is outside project root".to_string())
-    }
-}
-
-pub(super) fn candidate_path(root: &Path, value: &str) -> Result<PathBuf, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err("Path cannot be empty".to_string());
-    }
-    let path = Path::new(trimmed);
-    Ok(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    })
-}
+#[cfg(test)]
+pub(super) use aeroric_core::ide::dap::read_debug_configs_from_root;
+pub(super) use aeroric_core::ide::dap::{
+    ensure_legacy_path_inside_root as ensure_path_inside_root,
+    legacy_path_candidate as candidate_path,
+    validate_legacy_attach_endpoint as validate_attach_endpoint,
+    validate_legacy_debug_config as validate_debug_config,
+};
 
 pub(super) fn remote_debug_path_has_relative_components(path: &str) -> bool {
     path.split('/')
@@ -185,79 +148,6 @@ pub(super) fn validate_remote_debug_configs(
     Ok(())
 }
 
-pub(super) fn validate_breakpoint(root: &Path, breakpoint: &DebugBreakpoint) -> Result<(), String> {
-    if breakpoint.line == 0 {
-        return Err("Breakpoint line must be at least 1".to_string());
-    }
-    if breakpoint.column == 0 {
-        return Err("Breakpoint column must be at least 1".to_string());
-    }
-    if breakpoint
-        .condition
-        .as_deref()
-        .is_some_and(|condition| condition.trim().is_empty())
-    {
-        return Err("Breakpoint condition cannot be empty".to_string());
-    }
-    if breakpoint
-        .log_message
-        .as_deref()
-        .is_some_and(|message| message.trim().is_empty())
-    {
-        return Err("Breakpoint log message cannot be empty".to_string());
-    }
-    let candidate = candidate_path(root, &breakpoint.file)?;
-    ensure_path_inside_root(root, &candidate)
-}
-
-pub(super) fn validate_debug_config(root: &Path, config: &DebugConfig) -> Result<(), String> {
-    if config.id.trim().is_empty() {
-        return Err("Debug config id cannot be empty".to_string());
-    }
-    if config.name.trim().is_empty() {
-        return Err("Debug config name cannot be empty".to_string());
-    }
-    let cwd = candidate_path(root, &config.cwd)?;
-    ensure_path_inside_root(root, &cwd)?;
-    match config.request {
-        DebugRequestType::Launch => {
-            if config.program.trim().is_empty() {
-                return Err("Debug program cannot be empty".to_string());
-            }
-            let program = candidate_path(root, &config.program)?;
-            ensure_path_inside_root(root, &program)?;
-        }
-        DebugRequestType::Attach => {
-            validate_attach_endpoint(&config.attach_host, config.attach_port)?;
-            if !config.program.trim().is_empty() {
-                let program = candidate_path(root, &config.program)?;
-                ensure_path_inside_root(root, &program)?;
-            }
-        }
-    }
-    for breakpoint in &config.breakpoints {
-        validate_breakpoint(root, breakpoint)?;
-    }
-    Ok(())
-}
-
-pub(super) fn validate_attach_endpoint(host: &str, port: Option<u16>) -> Result<(), String> {
-    let host = host.trim();
-    if host.is_empty() {
-        return Err("Attach host cannot be empty".to_string());
-    }
-    if host
-        .chars()
-        .any(|character| character.is_whitespace() || matches!(character, '/' | '\\'))
-    {
-        return Err("Attach host cannot contain whitespace or URL separators".to_string());
-    }
-    match port {
-        Some(port) if port > 0 => Ok(()),
-        _ => Err("Attach port must be between 1 and 65535".to_string()),
-    }
-}
-
 pub(super) fn resolve_debug_cwd(root: &Path, cwd: &str) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
@@ -290,40 +180,6 @@ pub(super) fn resolve_debug_program(root: &Path, program: &str) -> Result<PathBu
         return Err("Debug program is outside project root".to_string());
     }
     Ok(canonical)
-}
-
-pub(super) fn read_debug_configs_from_root(root: &Path) -> Result<DebugConfigDocument, String> {
-    let path = debug_configs_path(root);
-    if !path.exists() {
-        return Ok(DebugConfigDocument::default());
-    }
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut document: DebugConfigDocument =
-        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if document.version == 0 {
-        document.version = DEBUG_CONFIG_VERSION;
-    }
-    for config in &document.configs {
-        validate_debug_config(root, config)?;
-    }
-    Ok(document)
-}
-
-pub(super) fn write_debug_configs_from_root(
-    root: &Path,
-    mut document: DebugConfigDocument,
-) -> Result<DebugConfigDocument, String> {
-    document.version = DEBUG_CONFIG_VERSION;
-    for config in &document.configs {
-        validate_debug_config(root, config)?;
-    }
-    let path = debug_configs_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let raw = serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?;
-    crate::storage::atomic_write(&path, &raw)?;
-    Ok(document)
 }
 
 /// 测试用的一次性临时目录。**放在模块层而不是 `tests` 里**:父模块测试块

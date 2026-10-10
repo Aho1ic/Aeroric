@@ -143,25 +143,25 @@ test("a chunk that loses a row fails the reconstruction assertion, not just the 
   cleanup();
 });
 
-test("the gaps array ships in nine shards, all with injection headroom", () => {
+test("the gaps array ships in ten shards, all with injection headroom", () => {
   const { problems, rows, index } = runShards({ repoRoot });
   assert.deepEqual(problems, []);
   const names = rows.map((r) => r.file);
-  for (let shard = 1; shard <= 9; shard += 1) {
+  for (let shard = 1; shard <= 10; shard += 1) {
     assert.ok(names.includes(`docs/native/digest/feature-matrix-gaps-${shard}.json`), names.join(" "));
   }
   assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps.json"), "the unsplit shard must be gone, not left behind as a stale copy");
-  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps-10.json"), "a 10th shard means the constant moved without this expectation");
+  assert.ok(!names.includes("docs/native/digest/feature-matrix-gaps-11.json"), "an 11th shard means the constant moved without this expectation");
   for (const row of rows.filter((r) => /gaps/.test(r.file))) {
     assert.ok(row.bytes < 32768 * 0.8, `${row.file} is at ${row.bytes} B — headroom is the point of chunking`);
   }
   const fm = index.sources.find((s2) => s2.path === "docs/native/feature-matrix.json");
-  assert.equal(fm.shards.filter((s2) => /gaps/.test(s2.file)).length, 9);
+  assert.equal(fm.shards.filter((s2) => /gaps/.test(s2.file)).length, 10);
 });
 test("a shard the plan no longer emits is reported instead of lingering", () => {
   const { dir, cleanup } = tempCopy();
-  writeJson(dir, "docs/native/digest/feature-matrix-gaps-10.json", { shard: "x", payload: { gaps: [] } });
+  writeJson(dir, "docs/native/digest/feature-matrix-gaps-11.json", { shard: "x", payload: { gaps: [] } });
   const { problems } = runShards({ repoRoot: dir });
-  assert.match(problems.join("\n"), /feature-matrix-gaps-10\.json: stale shard/);
+  assert.match(problems.join("\n"), /feature-matrix-gaps-11\.json: stale shard/);
   cleanup();
 });

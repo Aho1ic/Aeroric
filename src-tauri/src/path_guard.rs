@@ -8,9 +8,7 @@
 //!
 //! 复制 9 份的真实代价是:将来要加强校验(比如拒绝 symlink 指向仓库外、
 //! 或要求路径在已注册的项目列表里)就得同时改 9 处,漏一处就是一个活着的漏洞。
-//! 所以这里收敛成一处,新增校验只改这个文件。
-
-use std::path::{Path, PathBuf};
+//! P8-05 slice29将同一legacy算法上收core；这里保留旧名供原调用方使用。
 
 /// 校验并规范化项目根目录。
 ///
@@ -21,19 +19,7 @@ use std::path::{Path, PathBuf};
 ///
 /// 返回规范化后的绝对路径,调用方应当用**返回值**做后续拼接,而不是原始入参 ——
 /// 用原始入参就绕掉了 `..` 的解析。
-pub(crate) fn validate_project_root(project_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(project_path);
-    if !path.is_absolute() {
-        return Err("Project path must be absolute".to_string());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve project path: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("Project path is not a directory".to_string());
-    }
-    Ok(canonical)
-}
+pub(crate) use aeroric_core::files::path_policy::validate_legacy_project_root as validate_project_root;
 
 /// 远端(SSH)路径里是否含 `.` 或 `..` 段。
 ///

@@ -4,15 +4,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub(super) use aeroric_core::settings::schema::{
+    normalize_auto_cleanup_settings, normalize_send_shortcut, normalize_weekly_report_settings,
+};
+pub use aeroric_core::settings::schema::{
+    AutoCleanupSettings, LegacyAgentProxyConfig, NotebookEmbeddingSettings, ProxySettings,
+    WeeklyReportSettings,
+};
+
 pub(super) fn default_send_shortcut() -> String {
     "mod_enter".to_string()
-}
-
-pub(super) fn normalize_send_shortcut(value: String) -> String {
-    match value.as_str() {
-        "enter" | "mod_enter" => value,
-        _ => default_send_shortcut(),
-    }
 }
 
 pub(super) fn default_shift_enter_newline() -> bool {
@@ -213,28 +214,6 @@ pub struct AllAgentConfigExportResult {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct ProxySettings {
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub no_proxy: String,
-    #[serde(default)]
-    pub username: String,
-    #[serde(default)]
-    pub password: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct LegacyAgentProxyConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub no_proxy: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuiltInAgentCredentials {
     #[serde(default)]
     pub base_url: String,
@@ -391,153 +370,6 @@ impl Default for LocalRouterSettings {
             codex: LocalRouterAgentSettings::default(),
         }
     }
-}
-
-/// 随手记 RAG 的 embedding provider 配置。
-///
-/// 复用 `notebook::rag::embed::EmbedProvider` 而不是在这里另起一个同形状的枚举:两个枚举
-/// 早晚会跑偏,而 `embed.rs` 那一侧的取值决定了真的会去调哪个 endpoint。方向上
-/// `notebook::rag::embed` 本来就在读 `app_settings`(取代理配置),反过来引用一个类型不构成
-/// 新的耦合。
-///
-/// **key 刻意不在这里。** 整个结构体会原样写进 `settings.json`(明文),而 embedding key 走
-/// OS 钥匙串(`crate::secrets`)。
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct NotebookEmbeddingSettings {
-    #[serde(default)]
-    pub provider: crate::notebook::rag::embed::EmbedProvider,
-    #[serde(default = "default_notebook_embedding_base_url")]
-    pub base_url: String,
-    #[serde(default = "default_notebook_embedding_model")]
-    pub model: String,
-}
-
-/// 本机 Ollama 的默认地址。与设置页出现之前前端硬编码的那个值一致,于是升级不改变行为。
-pub(super) fn default_notebook_embedding_base_url() -> String {
-    "http://127.0.0.1:11434".to_string()
-}
-
-pub(super) fn default_notebook_embedding_model() -> String {
-    "nomic-embed-text".to_string()
-}
-
-impl Default for NotebookEmbeddingSettings {
-    fn default() -> Self {
-        Self {
-            provider: crate::notebook::rag::embed::EmbedProvider::default(),
-            base_url: default_notebook_embedding_base_url(),
-            model: default_notebook_embedding_model(),
-        }
-    }
-}
-
-/// 自动物理删除对话记录的调度配置。
-///
-/// `mode == "weekly"` 时看 `weekday`/`hour`,`mode == "interval"` 时看 `interval_days`。
-/// 判定与执行都在前端(`src/taskCleanup.ts`):删除的唯一收口 `deleteTasks` 在那边,
-/// 后端另写一套会让前端内存里的旧任务数组在下次落盘时把已删任务写回去。
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct AutoCleanupSettings {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_cleanup_mode")]
-    pub mode: String,
-    /// 0 = 周日,6 = 周六。仅 `mode == "weekly"` 生效。
-    #[serde(default)]
-    pub weekday: u8,
-    /// 0-23 本地小时。仅 `mode == "weekly"` 生效。
-    #[serde(default = "default_cleanup_hour")]
-    pub hour: u8,
-    /// 仅 `mode == "interval"` 生效。
-    #[serde(default = "default_cleanup_interval_days")]
-    pub interval_days: u16,
-    /// 任务进入终态后保留多少天才允许删。对齐 Claude Code 的 `cleanupPeriodDays` 默认 30。
-    #[serde(default = "default_cleanup_retain_days")]
-    pub retain_days: u16,
-    /// 上次实际执行的时刻,epoch 毫秒。首次启用时由前端置为当前时间,避免立刻删一大批。
-    #[serde(default)]
-    pub last_run_at: Option<i64>,
-}
-
-pub(super) fn default_cleanup_mode() -> String {
-    "weekly".to_string()
-}
-
-pub(super) fn default_cleanup_hour() -> u8 {
-    20
-}
-
-pub(super) fn default_cleanup_interval_days() -> u16 {
-    7
-}
-
-pub(super) fn default_cleanup_retain_days() -> u16 {
-    30
-}
-
-impl Default for AutoCleanupSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            mode: default_cleanup_mode(),
-            weekday: 0,
-            hour: default_cleanup_hour(),
-            interval_days: default_cleanup_interval_days(),
-            retain_days: default_cleanup_retain_days(),
-            last_run_at: None,
-        }
-    }
-}
-
-/// 越界值一律夹紧而不报错:UI 只给合法选项,这里防的是手改 `settings.json`。
-/// 报错会让一个手抖的数字把整份设置卡住。
-pub(super) fn normalize_auto_cleanup_settings(
-    mut settings: AutoCleanupSettings,
-) -> AutoCleanupSettings {
-    if settings.mode != "weekly" && settings.mode != "interval" {
-        settings.mode = default_cleanup_mode();
-    }
-    settings.weekday = settings.weekday.min(6);
-    settings.hour = settings.hour.min(23);
-    settings.interval_days = settings.interval_days.clamp(1, 365);
-    settings.retain_days = settings.retain_days.clamp(1, 3650);
-    settings
-}
-
-/// 周报配置。`week_start_day` / `week_end_day` 用 0=周日 .. 6=周六,默认 1 → 0 即周一到周日。
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct WeeklyReportSettings {
-    #[serde(default = "default_week_start_day")]
-    pub week_start_day: u8,
-    #[serde(default)]
-    pub week_end_day: u8,
-    /// md 输出目录绝对路径。为空时前端每次弹目录选择框。
-    #[serde(default)]
-    pub output_dir: String,
-}
-
-pub(super) fn default_week_start_day() -> u8 {
-    1
-}
-
-impl Default for WeeklyReportSettings {
-    fn default() -> Self {
-        Self {
-            week_start_day: default_week_start_day(),
-            week_end_day: 0,
-            output_dir: String::new(),
-        }
-    }
-}
-
-/// `output_dir` 原样保留:目录可能暂时不存在(外置盘未挂载),校验留给生成时的
-/// `validate_export_output_path`,否则设置面板会因为一次未挂载而存不下路径。
-pub(super) fn normalize_weekly_report_settings(
-    mut settings: WeeklyReportSettings,
-) -> WeeklyReportSettings {
-    settings.week_start_day = settings.week_start_day.min(6);
-    settings.week_end_day = settings.week_end_day.min(6);
-    settings
 }
 
 pub(super) fn default_custom_agent_codex_like() -> bool {

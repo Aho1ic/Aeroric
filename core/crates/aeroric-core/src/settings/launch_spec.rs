@@ -443,10 +443,7 @@ pub(super) fn build_agent_launch_spec(
     spec
 }
 
-pub(crate) fn get_agent_launch_spec_from_settings(
-    settings: &AppSettings,
-    agent: &str,
-) -> AgentLaunchSpec {
+pub fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
     let router_listening =
         crate::local_router::is_listening_on(settings.local_router_settings.listen_port);
     build_agent_launch_spec(settings, agent, router_listening)

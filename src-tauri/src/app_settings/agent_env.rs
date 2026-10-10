@@ -9,49 +9,21 @@
 use super::*;
 
 pub(super) fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
-    let mut proxy = if !settings.proxy_settings.url.trim().is_empty()
-        || !settings.proxy_settings.no_proxy.trim().is_empty()
-        || !settings.proxy_settings.username.trim().is_empty()
-        || !settings.proxy_settings.password.trim().is_empty()
-    {
-        normalize_proxy_settings(settings.proxy_settings.clone())
-    } else {
+    aeroric_core::settings::agent_env::migrate_legacy_proxy_fields(
+        &settings.proxy_settings,
+        &settings.agent_proxy_overrides,
         settings
-            .agent_proxy_overrides
-            .values()
-            .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
-            .map(|config| {
-                normalize_proxy_settings(ProxySettings {
-                    url: config.url.clone(),
-                    no_proxy: config.no_proxy.clone(),
-                    username: String::new(),
-                    password: String::new(),
-                })
-            })
-            .unwrap_or_default()
-    };
-
-    if proxy.username.is_empty() && proxy.password.is_empty() {
-        if let Some(profile) = settings.custom_agents.iter().find(|profile| {
-            !profile.username.trim().is_empty() || !profile.password.trim().is_empty()
-        }) {
-            proxy.username = profile.username.trim().to_string();
-            proxy.password = profile.password.trim().to_string();
-        }
-    }
-
-    proxy
+            .custom_agents
+            .iter()
+            .map(|profile| (profile.username.as_str(), profile.password.as_str())),
+    )
 }
 
 pub(super) fn migrate_agent_proxy_enabled(settings: &AppSettings) -> HashMap<String, bool> {
-    let mut enabled = normalize_agent_proxy_enabled(settings.agent_proxy_enabled.clone());
-    for (agent, config) in &settings.agent_proxy_overrides {
-        let key = normalize_agent_label_key(agent);
-        if !key.is_empty() && config.enabled {
-            enabled.insert(key, true);
-        }
-    }
-    enabled
+    aeroric_core::settings::agent_env::migrate_agent_proxy_enabled_fields(
+        &settings.agent_proxy_enabled,
+        &settings.agent_proxy_overrides,
+    )
 }
 
 pub(super) fn append_agent_proxy_env(

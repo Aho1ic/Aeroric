@@ -7,6 +7,33 @@ use aeroric_core::ide::run_config;
 use aeroric_core::ide::ProjectTarget;
 
 #[test]
+fn run_debug_type_wire_matches_legacy_lowercase_and_document_defaults() {
+    use run_config::{RunConfigDocument, RunDebugConfigType};
+    for (kind, wire) in [
+        (RunDebugConfigType::Node, "node"),
+        (RunDebugConfigType::Python, "python"),
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::json!(wire));
+        assert_eq!(
+            serde_json::from_value::<RunDebugConfigType>(serde_json::json!(wire)).unwrap(),
+            kind
+        );
+    }
+    let document: RunConfigDocument = serde_json::from_value(serde_json::json!({
+        "configs": [{
+            "type": "debug", "id": "d", "name": "debug", "program": "missing.js", "cwd": "."
+        }]
+    }))
+    .unwrap();
+    assert_eq!(document.version, 1);
+    let value = serde_json::to_value(document).unwrap();
+    assert_eq!(value["configs"][0]["debugType"], "node");
+    assert_eq!(value["configs"][0]["args"], serde_json::json!([]));
+    assert_eq!(value["configs"][0]["env"], serde_json::json!({}));
+    assert_eq!(value["configs"][0]["breakpoints"], serde_json::json!([]));
+}
+
+#[test]
 fn utf16_offset_handles_cjk_and_emoji() {
     // 中文：每个字符 1 个 UTF-16 code unit（字节索引是 UTF-8 字节）。
     let line = "你好世界";

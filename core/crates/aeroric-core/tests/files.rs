@@ -53,7 +53,8 @@ fn project_root_requires_absolute_existing_directory() {
 #[test]
 fn resolve_within_rejects_symlink_escape() {
     let (_tmp, root) = temp_project();
-    let outside = std::env::temp_dir().join("aeroric-files-outside.txt");
+    let (_outside_tmp, outside_root) = temp_project();
+    let outside = outside_root.join("outside.txt");
     std::fs::write(&outside, "secret").unwrap();
     std::os::unix::fs::symlink(&outside, root.join("link.txt")).unwrap();
     let err = path_policy::resolve_within(&root, "link.txt").unwrap_err();
@@ -96,10 +97,16 @@ fn create_file_rejects_existing_and_delete_uses_trash() {
         read_write::create_file(&root, "new.txt").is_err(),
         "已存在拒绝"
     );
-    // 删除进废纸篓（DELETE_USES_TRASH 常量断言在 clippy 下属恒真；不默认
-    // 永久删除的语义由 delete_path 的 trash 实现保证）。
-    read_write::delete_path(&root, "new.txt").unwrap();
+    // Inject the OS boundary: this test must not write the user's real Trash.
+    let trash = root.join("scratch-trash");
+    std::fs::create_dir(&trash).unwrap();
+    read_write::delete_path_with_trash(&root, "new.txt", |path| {
+        assert_eq!(path, root.join("new.txt").canonicalize().unwrap());
+        std::fs::rename(path, trash.join("new.txt")).map_err(|error| error.to_string())
+    })
+    .unwrap();
     assert!(!root.join("new.txt").exists());
+    assert!(trash.join("new.txt").exists());
 }
 
 #[test]
@@ -127,32 +134,40 @@ fn rename_stays_within_root() {
 fn rg_parse_and_replace_preview_and_stale_skip() {
     let (_tmp, root) = temp_project();
     read_write::write_file_content(&root, "code.txt", "alpha beta alpha\n").unwrap();
-    // 构造 rg JSON 行（begin + match）。
-    let stdout = format!(
-        r#"{{"type":"begin","data":{{"path":{{"text":"{}"}}}}}}
-{{"type":"match","data":{{"line_number":1,"absolute_offset":6,"submatches":[{{"match":{{"text":"beta"}},"start":0,"end":4}}]}}}}
-"#,
-        root.join("code.txt").display()
-    );
-    let matches = search::parse_rg_json_lines(&stdout, 500);
+    // Actual rg match records are self-contained; no begin-dependent parser.
+    let stdout = r#"{"type":"match","data":{"path":{"text":"code.txt"},"lines":{"text":"alpha beta alpha\n"},"line_number":1,"absolute_offset":0,"submatches":[{"match":{"text":"beta"},"start":6,"end":10}]}}"#;
+    let matches = search::parse_rg_json_lines(&root, stdout, 500);
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].submatches[0].match_text, "beta");
-    let mut preview = search::replace_preview("beta", "gamma", &matches);
+    assert_eq!(matches[0].match_text, "beta");
+    let preview = search::replace_text_preview_for_file(
+        &root,
+        "code.txt",
+        "beta",
+        "gamma",
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(preview.files.len(), 1);
-    // rg 的 begin path 是绝对路径；宿主服务在提交前把它归一为相对路径。
-    preview.files[0].path = "code.txt".to_string();
-    let summary = search::apply_replacements(&root, "gamma", &preview.files).unwrap();
+    let replacements: Vec<_> = preview
+        .files
+        .into_iter()
+        .flat_map(|file| file.matches.into_iter().map(search::TextReplacement::from))
+        .collect();
+    let summary = search::apply_text_replacements_for_root(&root, &replacements).unwrap();
     assert_eq!(summary.replacements_applied, 1);
     assert_eq!(
         read_write::read_file_content(&root, "code.txt").unwrap(),
         "alpha gamma alpha\n"
     );
     // stale：预览区间超出当前文件长度 → skip 不覆盖。
-    let stale = vec![search::ReplacePreviewFile {
-        path: "code.txt".to_string(),
-        matches: vec![(1000, 2000)],
+    let stale = vec![search::TextReplacement {
+        path: root.join("code.txt").to_string_lossy().into_owned(),
+        start: 1000,
+        end: 2000,
+        match_text: "beta".into(),
+        replacement_text: "gamma".into(),
     }];
-    let summary = search::apply_replacements(&root, "gamma", &stale).unwrap();
+    let summary = search::apply_text_replacements_for_root(&root, &stale).unwrap();
     assert_eq!(
         summary.replacements_skipped, 1,
         "写时文件被外部修改 → 拒绝覆盖"

@@ -1,7 +1,7 @@
 {
   "meta": {
-    "generated": "2026-10-07",
-    "task": "P8-05 in_progress（切片九/十/十一/十二/十三已落地）",
+    "generated": "2026-10-08",
+    "task": "P8-05 in_progress（切片十四至二十二已验证；二十二22.0–22.2红灯→复绿并复验，22.3验收进行中；未收口cutover）",
     "authoritative_source": "本文 §进度总表 与本文件互为镜像：scripts/native/task-status.mjs::crossCheckTaskStatus 逐 Task 比对，任一侧改了另一侧没改就 FAIL（F3 修法 ①）",
     "rule": "status 只能取 pending|in_progress|blocked|accepted（与 §5.3 模板一致）；accepted_on 只在 accepted 时有值；review 是 docs/native/ 下的相对路径或 null。feature-matrix.json 的 core_state/native_state/side_states/reviews 四列由本文件派生，禁止手改（改了会被 inventory --check 判红）。",
     "side_phases": {

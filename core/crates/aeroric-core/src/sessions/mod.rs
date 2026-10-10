@@ -27,7 +27,7 @@ pub mod parser;
 pub mod resume;
 
 /// 一条已解析的会话消息。字段与宿主 `session.rs:671` 逐字对应。
-#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SessionMessage {
     pub role: String,
     pub content: Vec<SessionContent>,
@@ -36,7 +36,7 @@ pub struct SessionMessage {
 }
 
 /// 消息内容块。变体名与字段名即旧客户端 JSON 的 `type`／字段，勿改。
-#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionContent {
     Text {

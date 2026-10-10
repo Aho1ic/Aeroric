@@ -27,7 +27,7 @@ use tokio::io::AsyncWriteExt;
 #[cfg(target_os = "macos")]
 use crate::authorize_app_restart;
 
-use aeroric_core::maintenance::updates::TargetPlatform;
+use aeroric_core::maintenance::updates::{pending_update_result, TargetPlatform};
 use aeroric_core::maintenance::{
     sanitize_text, validate_release_asset_filename, GitHubRelease, GitHubReleaseAsset,
     MaintenanceHost, MaintenanceService, ReleaseInstallResult, ReleaseUpdatePrepareResult,
@@ -807,25 +807,12 @@ pub async fn get_pending_release_update(
         "maintenance.get_pending_release_update",
         serde_json::json!({ "tagName": tag_name }),
         async {
-            let pending = service().pending_update();
-            let filtered = match (pending, tag_name.as_deref()) {
-                (Some(pending), Some(tag)) if pending.tag_name != tag => None,
-                (pending, _) => pending,
-            };
-            let mapped = filtered.map(|pending| ReleaseUpdatePrepareResult {
-                tag_name: pending.tag_name,
-                asset_name: pending.asset_name,
-                installer_path: pending.installer_path,
-                ready_to_restart: true,
-                checksum_verified: pending.checksum_verified,
-                helper_status: pending.helper_status,
-                error: pending.error,
-            });
-            serde_json::to_value(mapped).map_err(|error| error.to_string())
+            let result = pending_update_result(service().pending_update(), tag_name.as_deref());
+            serde_json::to_value(result).map_err(|error| error.to_string())
         },
     )
     .await?;
-    // 宿主与本地都回同一个形状：`null` 或一条待装记录。
+    // 宿主与本地都回公开 DTO：`null` 或 ReleaseUpdatePrepareResult，不是落盘记录。
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 

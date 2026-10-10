@@ -1,157 +1,27 @@
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 
 use crate::app_settings::{self, AppSettings};
 use crate::ssh::SshConnection;
-use crate::storage::atomic_write;
 
-const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 15;
+#[cfg(test)]
+#[cfg(unix)]
+mod agent_config_command_tests;
+#[cfg(test)]
+mod project_config_command_tests;
 
-const DEFAULT_CONFIG: &str = r#"# Aeroric project configuration
+pub use aeroric_core::settings::project_config::ProjectConfig;
+#[cfg(test)]
+use aeroric_core::settings::project_config::DEFAULT_CONFIG;
 
-[agent]
-# Default agent to use for new tasks: "claude", "claude_gpt55", or "codex"
-default = "claude"
-# Default permission mode for new tasks: "ask", "auto_edit", or "full_access"
-default_permission_mode = "full_access"
-# Text automatically prepended (followed by a newline) to every task prompt
-prompt_prefix = ""
+pub mod commands;
 
-[git]
-# Prompt used when generating commit messages via the AI agent
-commit_prompt = "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting"
-# Timeout in seconds when generating commit messages via the AI agent
-commit_message_timeout_secs = 15
-
-[editor]
-# Format editable local files after saving
-format_on_save = false
-# Default sort order for the file browser and SFTP panels
-file_browser_sort = { field = "modified", direction = "desc" }
-sftp_sort = { field = "modified", direction = "desc" }
-"#;
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct AgentConfig {
-    pub default: String,
-    #[serde(default = "default_permission_mode")]
-    pub default_permission_mode: String,
-    #[serde(default)]
-    pub prompt_prefix: String,
-}
-
-fn default_permission_mode() -> String {
-    "full_access".to_string()
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct GitConfig {
-    pub commit_prompt: String,
-    #[serde(default = "default_commit_message_timeout_secs")]
-    pub commit_message_timeout_secs: u64,
-}
-
-fn default_commit_message_timeout_secs() -> u64 {
-    DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct SortPreferenceConfig {
-    pub field: String,
-    pub direction: String,
-}
-
-impl Default for SortPreferenceConfig {
-    fn default() -> Self {
-        SortPreferenceConfig {
-            field: "modified".to_string(),
-            direction: "desc".to_string(),
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
-pub struct EditorConfig {
-    #[serde(default)]
-    pub format_on_save: bool,
-    #[serde(default)]
-    pub file_browser_sort: SortPreferenceConfig,
-    #[serde(default)]
-    pub sftp_sort: SortPreferenceConfig,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct ProjectConfig {
-    pub agent: AgentConfig,
-    pub git: GitConfig,
-    #[serde(default)]
-    pub editor: EditorConfig,
-}
-
-impl Default for ProjectConfig {
-    fn default() -> Self {
-        ProjectConfig {
-            agent: AgentConfig {
-                default: "claude".to_string(),
-                default_permission_mode: "full_access".to_string(),
-                prompt_prefix: String::new(),
-            },
-            git: GitConfig {
-                commit_prompt: "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting".to_string(),
-                commit_message_timeout_secs: default_commit_message_timeout_secs(),
-            },
-            editor: EditorConfig::default(),
-        }
-    }
-}
-
-/// Creates `.aeroric/config.toml` in the project directory if it doesn't already exist.
-/// Also ensures `.aeroric/attachments/` exists.
-/// Returns the parsed config.
-#[tauri::command]
-pub fn init_project_config(project_path: String) -> Result<ProjectConfig, String> {
-    let aeroric_dir = Path::new(&project_path).join(".aeroric");
-    let config_path = aeroric_dir.join("config.toml");
-    let attachments_dir = aeroric_dir.join("attachments");
-
-    fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
-
-    if !config_path.exists() {
-        fs::write(&config_path, DEFAULT_CONFIG).map_err(|e| e.to_string())?;
-    }
-
-    let raw = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
-    let config: ProjectConfig = toml::from_str(&raw).unwrap_or_default();
-
-    Ok(config)
-}
-
-/// Reads `.aeroric/config.toml` from the project directory.
-/// Returns the default config if the file doesn't exist yet.
-#[tauri::command]
+/// Synchronous internal reader retained for PTY and Git. The actual IPC lives
+/// in `commands`, where all local IO is deferred until Embedded is selected.
 pub fn read_project_config(project_path: String) -> Result<ProjectConfig, String> {
-    let config_path = Path::new(&project_path)
-        .join(".aeroric")
-        .join("config.toml");
-    if !config_path.exists() {
-        return Ok(ProjectConfig::default());
-    }
-    let raw = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
-    let config: ProjectConfig = toml::from_str(&raw).unwrap_or_default();
-    Ok(config)
-}
-
-/// Writes updated config to `.aeroric/config.toml`, creating the directory if needed.
-#[tauri::command]
-pub fn write_project_config(project_path: String, config: ProjectConfig) -> Result<(), String> {
-    let aeroric_dir = Path::new(&project_path).join(".aeroric");
-    fs::create_dir_all(&aeroric_dir).map_err(|e| e.to_string())?;
-    let config_path = aeroric_dir.join("config.toml");
-    let raw = toml::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    atomic_write(&config_path, &raw)
+    aeroric_core::settings::project_config::read_project_config(&project_path)
 }
 
 fn remote_config_path_has_relative_components(path: &str) -> bool {
@@ -384,12 +254,26 @@ pub async fn write_wsl_project_config(
     .map_err(|error| error.to_string())?
 }
 
-fn configured_path(value: &str) -> Option<PathBuf> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
+/// Project the temporary desktop settings schema without copying credentials.
+fn agent_config_paths(
+    settings: &AppSettings,
+) -> aeroric_core::settings::agent_config::AgentConfigPaths<'_> {
+    use aeroric_core::settings::agent_config::{AgentConfigPaths, CustomAgentConfigPath};
+    AgentConfigPaths {
+        claude_config_path: &settings.claude_config_path,
+        claude_gpt55_config_path: &settings.claude_gpt55_config_path,
+        codex_config_path: &settings.codex_config_path,
+        dsh_config_path: &settings.dsh_config_path,
+        custom_agents: settings
+            .custom_agents
+            .iter()
+            .map(|profile| CustomAgentConfigPath {
+                id: &profile.id,
+                path: &profile.path,
+                family: &profile.family,
+                codex_like: profile.codex_like,
+            })
+            .collect(),
     }
 }
 
@@ -397,72 +281,12 @@ fn agent_config_path_from_settings(
     agent: &str,
     settings: &AppSettings,
 ) -> Result<Option<PathBuf>, String> {
-    match agent {
-        "claude" => Ok(configured_path(&settings.claude_config_path)
-            .or_else(|| app_settings::default_builtin_agent_config_path("claude").ok())),
-        "claude_gpt55" => Ok(configured_path(&settings.claude_gpt55_config_path)),
-        "codex" => Ok(configured_path(&settings.codex_config_path)
-            .or_else(|| app_settings::default_builtin_agent_config_path("codex").ok())),
-        "dsh" => Ok(configured_path(&settings.dsh_config_path)
-            .or_else(|| app_settings::default_builtin_agent_config_path("dsh").ok())),
-        // omp 配置固定在托管 home 的 config.yml(Phase 1 的默认路径解析已覆盖)。
-        "omp" => Ok(app_settings::default_builtin_agent_config_path("omp").ok()),
-        _ => settings
-            .custom_agents
-            .iter()
-            .find(|profile| profile.id == agent)
-            .map(|profile| match profile.agent_family() {
-                // profile.path 的语义是"可执行 wrapper 脚本"(见自定义 agent 表单提示),
-                // 不是配置文件——omp 家族用户常直接填 omp 二进制,读它只会报
-                // "stream did not contain valid UTF-8"。omp 家族的配置与内置 omp
-                // 一样固定在托管 home 的 config.yml。
-                app_settings::AgentFamily::Omp => {
-                    app_settings::default_builtin_agent_config_path("omp").ok()
-                }
-                app_settings::AgentFamily::Dsh => app_settings::custom_agent_home(&profile.id)
-                    .ok()
-                    .map(|home| home.join("settings.yaml")),
-                _ => configured_path(&profile.path),
-            })
-            .ok_or_else(|| format!("Unknown agent: {}", agent)),
-    }
-}
-
-#[tauri::command]
-pub fn get_agent_config_file_path(agent: String) -> Result<String, String> {
-    let settings = app_settings::load_settings_internal();
-    Ok(agent_config_path_from_settings(&agent, &settings)?
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default())
-}
-
-/// Reads the local settings file for the given agent ("claude", "claude_gpt55", or "codex").
-/// Returns None if the file doesn't exist.
-#[tauri::command]
-pub fn read_agent_config_file(agent: String) -> Result<Option<String>, String> {
-    let settings = app_settings::load_settings_internal();
-    let Some(path) = agent_config_path_from_settings(&agent, &settings)? else {
-        return Ok(None);
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    fs::read_to_string(&path)
-        .map(Some)
-        .map_err(|e| e.to_string())
-}
-
-/// Writes raw content back to the agent's local settings file.
-#[tauri::command]
-pub fn write_agent_config_file(agent: String, content: String) -> Result<(), String> {
-    let settings = app_settings::load_settings_internal();
-    let Some(path) = agent_config_path_from_settings(&agent, &settings)? else {
-        return Err("Agent config file path is not configured".to_string());
-    };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    atomic_write(&path, &content)
+    aeroric_core::settings::agent_config::resolve_path(
+        agent,
+        &agent_config_paths(settings),
+        app_settings::default_builtin_agent_config_path,
+        app_settings::custom_agent_home,
+    )
 }
 
 /// 配置里没有显式写过推理强度时使用的默认值。
@@ -555,6 +379,73 @@ fn is_valid_effort(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_config_projection_preserves_raw_selection_fields_without_credentials() {
+        use aeroric_core::settings::agent_config::{AgentConfigPaths, CustomAgentConfigPath};
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "claude_config_path": " c ", "claude_gpt55_config_path": " g ",
+            "codex_config_path": " x ", "dsh_config_path": " d ",
+            "custom_agents": [{
+                "id": " raw ", "label": "not in projection", "path": " p ",
+                "family": " omp ", "codex_like": false, "api_key": "synthetic-not-in-view"
+            }]
+        }))
+        .unwrap();
+        let paths = agent_config_paths(&settings);
+        assert_eq!(
+            paths,
+            AgentConfigPaths {
+                claude_config_path: " c ",
+                claude_gpt55_config_path: " g ",
+                codex_config_path: " x ",
+                dsh_config_path: " d ",
+                custom_agents: vec![CustomAgentConfigPath {
+                    id: " raw ",
+                    path: " p ",
+                    family: " omp ",
+                    codex_like: false,
+                }],
+            }
+        );
+        assert_eq!(
+            paths.claude_config_path.as_ptr(),
+            settings.claude_config_path.as_ptr()
+        );
+        assert_eq!(
+            paths.custom_agents[0].path.as_ptr(),
+            settings.custom_agents[0].path.as_ptr()
+        );
+    }
+
+    #[test]
+    fn agent_config_adapter_retains_exact_configured_paths_without_home_fallback() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "claude_config_path": " /fake/claude ", "claude_gpt55_config_path": "/fake/gpt55",
+            "codex_config_path": "\t/fake/codex", "dsh_config_path": "/fake/dsh\n",
+            "custom_agents": [
+                {"id": "fixture", "label": "Synthetic", "path": " ~/literal/custom ", "family": "claude"},
+                {"id": "fixture", "label": "Ignored duplicate", "path": "/wrong", "family": "omp"}
+            ]
+        }))
+        .unwrap();
+        for (agent, expected) in [
+            ("claude", "/fake/claude"),
+            ("claude_gpt55", "/fake/gpt55"),
+            ("codex", "/fake/codex"),
+            ("dsh", "/fake/dsh"),
+            ("fixture", "~/literal/custom"),
+        ] {
+            assert_eq!(
+                agent_config_path_from_settings(agent, &settings).unwrap(),
+                Some(PathBuf::from(expected))
+            );
+        }
+        assert_eq!(
+            agent_config_path_from_settings(" fixture ", &settings),
+            Err("Unknown agent:  fixture ".into())
+        );
+    }
 
     #[test]
     fn reads_root_toml_reasoning_settings() {

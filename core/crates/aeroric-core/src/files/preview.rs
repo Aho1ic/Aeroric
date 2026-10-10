@@ -1,7 +1,7 @@
 //! P6-02 Action 1/6：预览（图片/大文件/二进制/未知编码的有因只读判定）。
 pub use super::path_policy::MAX_FILE_BYTES;
 
-/// 图片预览上限（与 Tauri `MAX_IMAGE_PREVIEW_BYTES` 同值）。
+/// 图片预览上限（与 legacy_read::MAX_IMAGE_PREVIEW_BYTES 同值；策略独立）。
 pub const MAX_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
 
 /// 预览模式（Action 6：大文件/二进制/未知编码显示有原因的只读模式与显式

@@ -25,9 +25,10 @@ use aeroric_core::maintenance::reports::{
     WeeklyReportTask, MAX_SUMMARIZED_TASKS,
 };
 use aeroric_core::maintenance::updates::{
-    compare_versions, expected_release_digest_asset_name, find_checksum_for_asset, release_version,
-    safe_tag, select_release_installer_asset, validate_pending_installer_path,
-    verify_downloaded_checksum, PendingReleaseUpdate, UPDATE_HELPER_READY,
+    compare_versions, expected_release_digest_asset_name, find_checksum_for_asset,
+    pending_update_result, release_version, safe_tag, select_release_installer_asset,
+    validate_pending_installer_path, verify_downloaded_checksum, PendingReleaseUpdate,
+    PendingReleaseUpdatePayload, ReleaseUpdatePrepareResult, UPDATE_HELPER_READY,
 };
 use aeroric_core::maintenance::MaintenanceError;
 use aeroric_core::storage::compat::Record;
@@ -832,6 +833,93 @@ fn checksum_asset_must_be_present_and_named() {
     assert!(!valid_asset_filename("../escape.dmg"));
     assert!(!valid_asset_filename("/abs.dmg"));
     assert!(!valid_asset_filename(""));
+}
+
+#[test]
+fn pending_update_result_preserves_the_public_reply_without_revalidation() {
+    let pending = PendingReleaseUpdate {
+        tag_name: "v1.2.3".into(),
+        asset_name: "Aeroric_1.2.3_x64.dmg".into(),
+        installer_path: "/fictional/updates/v1.2.3/Aeroric_1.2.3_x64.dmg".into(),
+        checksum_path: "/fictional/updates/v1.2.3/SHA256SUMS.txt".into(),
+        checksum_verified: false,
+        helper_status: "failed".into(),
+        error: Some("synthetic helper failure".into()),
+    };
+
+    for tag_name in [None, Some("v1.2.3")] {
+        let result: ReleaseUpdatePrepareResult =
+            pending_update_result(Some(pending.clone()), tag_name).expect("pending query result");
+        assert_eq!(result.tag_name, pending.tag_name);
+        assert_eq!(result.asset_name, pending.asset_name);
+        assert_eq!(result.installer_path, pending.installer_path);
+        // 查询的 ready 标记保留旧语义，不代表重新校验通过或获得安装许可。
+        assert!(result.ready_to_restart);
+        assert_eq!(result.checksum_verified, pending.checksum_verified);
+        assert_eq!(result.helper_status, pending.helper_status);
+        assert_eq!(result.error, pending.error);
+
+        let value = serde_json::to_value(&result).expect("public pending query wire");
+        assert_eq!(
+            value,
+            json!({
+                "tagName": "v1.2.3",
+                "assetName": "Aeroric_1.2.3_x64.dmg",
+                "installerPath": "/fictional/updates/v1.2.3/Aeroric_1.2.3_x64.dmg",
+                "readyToRestart": true,
+                "checksumVerified": false,
+                "helperStatus": "failed",
+                "error": "synthetic helper failure",
+            })
+        );
+        assert_eq!(value.as_object().unwrap().len(), 7);
+        assert!(value.get("checksumPath").is_none());
+    }
+}
+
+#[test]
+fn pending_update_result_preserves_legacy_defaults_and_exact_optional_tags() {
+    let payload: PendingReleaseUpdatePayload = serde_json::from_value(json!({
+        "tagName": "v1.2.3",
+        "assetName": "Aeroric_1.2.3_x64.dmg",
+        "installerPath": "/fictional/updates/v1.2.3/Aeroric_1.2.3_x64.dmg",
+    }))
+    .expect("minimal legacy pending payload");
+    let pending = payload.normalize();
+    assert!(pending.checksum_path.is_empty());
+    assert_eq!(pending.helper_status, "ready");
+    assert!(!pending.checksum_verified);
+    assert_eq!(pending.error, None);
+
+    let expected = ReleaseUpdatePrepareResult {
+        tag_name: pending.tag_name.clone(),
+        asset_name: pending.asset_name.clone(),
+        installer_path: pending.installer_path.clone(),
+        ready_to_restart: true,
+        checksum_verified: false,
+        helper_status: "ready".into(),
+        error: None,
+    };
+    for (tag_name, matches) in [
+        (None, true),
+        (Some("v1.2.3"), true),
+        (Some("v9.9.9"), false),
+        (Some(""), false),
+        (Some("V1.2.3"), false),
+        (Some(" v1.2.3"), false),
+        (Some("v1.2.3 "), false),
+        (Some(" v1.2.3 "), false),
+    ] {
+        assert_eq!(
+            pending_update_result(Some(pending.clone()), tag_name),
+            matches.then(|| expected.clone()),
+            "tag must match exactly without trimming: {tag_name:?}"
+        );
+        assert!(
+            pending_update_result(None, tag_name).is_none(),
+            "no record must remain None for tag {tag_name:?}"
+        );
+    }
 }
 
 #[test]

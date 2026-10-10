@@ -9,15 +9,30 @@
 use super::*;
 
 pub(super) fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySettings {
-    let mut proxy = if !settings.proxy_settings.url.trim().is_empty()
-        || !settings.proxy_settings.no_proxy.trim().is_empty()
-        || !settings.proxy_settings.username.trim().is_empty()
-        || !settings.proxy_settings.password.trim().is_empty()
-    {
-        normalize_proxy_settings(settings.proxy_settings.clone())
-    } else {
+    migrate_legacy_proxy_fields(
+        &settings.proxy_settings,
+        &settings.agent_proxy_overrides,
         settings
-            .agent_proxy_overrides
+            .custom_agents
+            .iter()
+            .map(|profile| (profile.username.as_str(), profile.password.as_str())),
+    )
+}
+
+/// Pure field migration preserving raw-presence and legacy credential order.
+pub fn migrate_legacy_proxy_fields<'a>(
+    proxy_settings: &ProxySettings,
+    agent_proxy_overrides: &HashMap<String, LegacyAgentProxyConfig>,
+    legacy_credentials: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> ProxySettings {
+    let mut proxy = if !proxy_settings.url.trim().is_empty()
+        || !proxy_settings.no_proxy.trim().is_empty()
+        || !proxy_settings.username.trim().is_empty()
+        || !proxy_settings.password.trim().is_empty()
+    {
+        normalize_proxy_settings(proxy_settings.clone())
+    } else {
+        agent_proxy_overrides
             .values()
             .find(|config| !config.url.trim().is_empty() || !config.no_proxy.trim().is_empty())
             .map(|config| {
@@ -32,11 +47,12 @@ pub(super) fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySett
     };
 
     if proxy.username.is_empty() && proxy.password.is_empty() {
-        if let Some(profile) = settings.custom_agents.iter().find(|profile| {
-            !profile.username.trim().is_empty() || !profile.password.trim().is_empty()
-        }) {
-            proxy.username = profile.username.trim().to_string();
-            proxy.password = profile.password.trim().to_string();
+        if let Some((username, password)) = legacy_credentials
+            .into_iter()
+            .find(|(username, password)| !username.trim().is_empty() || !password.trim().is_empty())
+        {
+            proxy.username = username.trim().to_string();
+            proxy.password = password.trim().to_string();
         }
     }
 
@@ -44,8 +60,19 @@ pub(super) fn migrate_legacy_proxy_settings(settings: &AppSettings) -> ProxySett
 }
 
 pub(super) fn migrate_agent_proxy_enabled(settings: &AppSettings) -> HashMap<String, bool> {
-    let mut enabled = normalize_agent_proxy_enabled(settings.agent_proxy_enabled.clone());
-    for (agent, config) in &settings.agent_proxy_overrides {
+    migrate_agent_proxy_enabled_fields(
+        &settings.agent_proxy_enabled,
+        &settings.agent_proxy_overrides,
+    )
+}
+
+/// Pure field migration preserving normalized keys and legacy-true precedence.
+pub fn migrate_agent_proxy_enabled_fields(
+    agent_proxy_enabled: &HashMap<String, bool>,
+    agent_proxy_overrides: &HashMap<String, LegacyAgentProxyConfig>,
+) -> HashMap<String, bool> {
+    let mut enabled = normalize_agent_proxy_enabled(agent_proxy_enabled.clone());
+    for (agent, config) in agent_proxy_overrides {
         let key = normalize_agent_label_key(agent);
         if !key.is_empty() && config.enabled {
             enabled.insert(key, true);

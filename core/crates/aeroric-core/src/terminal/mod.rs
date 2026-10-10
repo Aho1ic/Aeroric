@@ -11,6 +11,7 @@ pub mod executor;
 pub mod exit;
 pub mod history;
 pub mod input;
+pub mod launch_validation;
 pub mod lease;
 pub mod pty;
 pub mod replay;

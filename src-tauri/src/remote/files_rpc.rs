@@ -187,7 +187,7 @@ pub(crate) async fn git_changes(params: Value) -> Result<Value, String> {
         Ok(root) => root,
         Err(reason) => return Ok(unavailable(reason)),
     };
-    let changes = crate::git::git_status(root).await?;
+    let changes = crate::git::local_git_status(root).await?;
     Ok(json!({
         "available": true,
         "changes": serde_json::to_value(changes).map_err(|e| e.to_string())?,

@@ -139,7 +139,7 @@ use crate::auth::{parse_handshake, HostToken};
 /// token 与事件日志的共享装配根。`accept` 侧（第四片）持它构造 CallContext。
 /// 装配时可选的注入（Task P8-04 刀三）。
 ///
-/// 三个字段分开的原因是它们的可用性互不相关：无头 CLI 有 `codex_rpc` 槽与降级账，
+/// 这些字段分开的原因是它们的可用性互不相关：无头 CLI 有 `codex_rpc` 槽与降级账，
 /// 但没有 `maintenance`（网络抓取与"替换正在运行的 app"是桌面宿主的事）；测试可以
 /// 只给其中一个。`Default` 是"都没给"，不是"给了一个空壳"。
 #[derive(Default)]
@@ -151,6 +151,14 @@ pub struct HostWiring {
     pub codex_rpc: Arc<parking_lot::Mutex<Option<aeroric_core::metrics::usage::CodexRpcClient>>>,
     /// 启动降级账（`diagnostics.list_startup_degradations` 读它）。
     pub degradations: Arc<aeroric_core::maintenance::StartupDegradationLog>,
+    /// G43: executable/environment injection for search and filename enumeration.
+    pub search: crate::search_services::SearchPrograms,
+    /// File side-effect ports; default retains core's OS-trash policy.
+    pub files: crate::file_access::FilePorts,
+    /// Trusted composition only: external home for agent-config defaults.
+    /// None uses the context home. Managed roots always remain context-owned;
+    /// this must not rebind unrelated metrics/session discovery roots.
+    pub agent_config_external_home: Option<std::path::PathBuf>,
 }
 
 pub struct HostServices {
@@ -266,12 +274,28 @@ impl HostServices {
         // 先克隆 context：下面的 if-let 分支里 register_session_services 会
         // 把它 move 走，而重放面还要一份。
         let replay_context = context.clone();
-        crate::services::register_file_services(&mut set, Arc::clone(&context));
-        crate::notebook_services::register_notebook_services(&mut set, Arc::clone(&context));
+        crate::services::register_file_services(
+            &mut set,
+            Arc::clone(&context),
+            wiring.files.clone(),
+        );
+        let notebook =
+            crate::notebook_services::register_notebook_services(&mut set, Arc::clone(&context));
+        crate::search_services::register_search_services(
+            &mut set,
+            Arc::clone(&context),
+            notebook,
+            wiring.search.clone(),
+        );
         // P8-04 刀三：用量族与降级账总是注册（无头也有这两块能力）；维护面按注入
         // 注册——没有端口＝没有这个能力（见 `HostWiring::maintenance`）。
         // P8-05 切片九：设置面（读 / 整份写 / 单字段更新）。
-        crate::settings_services::register_settings_services(&mut set, Arc::clone(&context));
+        crate::settings_services::register_settings_services(
+            &mut set,
+            Arc::clone(&context),
+            wiring.agent_config_external_home.take(),
+        );
+        crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         // P8-05 切片七：文件服务第二批（格式化 / 本地历史 / 复制）。
         crate::file_services2::register_file_services_batch2(
             &mut set,

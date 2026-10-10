@@ -2,8 +2,9 @@
 //! adapter）。操作上限与 symlink 判定在 path_policy。
 pub use super::path_policy::{validate_content_size, MAX_FILE_BYTES};
 
-/// 目录条目（与 Tauri `fs::FsEntry` 的 wire 字段逐字对齐：
-/// name/path/isDir/isGitignored/isSymlink/modifiedAtMs）。
+/// Native directory entry: six camelCase keys and a project-relative path.
+/// Legacy `legacy_directory::FsEntry` has seven snake_case keys and absolute
+/// paths; the two established wire contracts must not be aliased.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
@@ -64,27 +65,34 @@ pub fn read_file_content(root: &std::path::Path, relative: &str) -> Result<Strin
     std::fs::read_to_string(&canonical).map_err(|error| format!("cannot read file: {error}"))
 }
 
-/// 写文件内容（业务主体）：父目录判定（TOCTOU：先 resolve_parent_within，
-/// 再在返回的父目录下写）＋内容大小守卫。
+/// 写文件内容（业务主体）：内容大小守卫先行，父目录与既存叶子均须落根内；
+/// 使用解析出的目标写入，保留有效根内链接。路径检查仍有 TOCTOU 窗口。
 pub fn write_file_content(
     root: &std::path::Path,
     relative: &str,
     content: &str,
 ) -> Result<(), String> {
     super::path_policy::validate_content_size(content)?;
-    let (parent, name) = super::path_policy::resolve_parent_within(root, relative)?;
-    let target = parent.join(&name);
+    let target = super::path_policy::resolve_file_write_destination(root, relative)?;
     std::fs::write(&target, content).map_err(|error| format!("cannot write file: {error}"))
 }
 
-/// 新建文件（业务主体）：已存在拒绝；父目录判定同 write。
+/// 新建文件（业务主体）：父目录判定后独占创建；任意已有叶子（含悬空链接）拒绝。
 pub fn create_file(root: &std::path::Path, relative: &str) -> Result<(), String> {
     let (parent, name) = super::path_policy::resolve_parent_within(root, relative)?;
     let target = parent.join(&name);
-    if target.exists() {
-        return Err("file already exists".to_string());
-    }
-    std::fs::write(&target, "").map_err(|error| format!("cannot create file: {error}"))
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map(|_| ())
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                "file already exists".to_string()
+            } else {
+                format!("cannot create file: {error}")
+            }
+        })
 }
 
 /// 新建目录（业务主体）：已存在拒绝。
@@ -122,6 +130,55 @@ pub fn rename_path(root: &std::path::Path, relative: &str, new_name: &str) -> Re
 /// 删除（业务主体）：进废纸篓（trash crate；DELETE_USES_TRASH）——**不默认
 /// 永久删除**；trash 不可用时拒绝（不回退 rm）。
 pub fn delete_path(root: &std::path::Path, relative: &str) -> Result<(), String> {
+    delete_path_with_trash(root, relative, |path| {
+        trash::delete(path).map_err(|error| format!("cannot trash path: {error}"))
+    })
+}
+
+/// Keep OS trash access at the boundary. Tests inject a scratch trash directory
+/// rather than moving fixture files into the real user's ~/.Trash.
+pub fn delete_path_with_trash(
+    root: &std::path::Path,
+    relative: &str,
+    trash: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
     let canonical = super::path_policy::resolve_within(root, relative)?;
-    trash::delete(&canonical).map_err(|error| format!("cannot trash path: {error}"))
+    trash(&canonical)
+}
+
+/// Existing hosted project-scoped copy, not legacy absolute/external-source
+/// clipboard copy. The host checks its current writer before calling this
+/// path-only helper. A later bad source preserves earlier copies (no transaction).
+pub fn copy_project_paths_to_directory(
+    root: &std::path::Path,
+    target_dir: &str,
+    sources: &[String],
+) -> Result<Vec<String>, String> {
+    super::path_policy::validate_relative_path(target_dir)?;
+    let target = root.join(target_dir);
+    super::path_policy::validate_directory_destination(root, &target)?;
+    std::fs::create_dir_all(&target).map_err(|error| format!("Create target failed: {error}"))?;
+    let mut copied = Vec::new();
+    for source in sources {
+        let from =
+            super::path_policy::resolve_within(root, source).map_err(|error| error.to_string())?;
+        let name = from
+            .file_name()
+            .ok_or_else(|| format!("Source has no file name: {source}"))?;
+        let to = target.join(name);
+        // exists() follows symlinks and mistakes a dangling leaf for a free name.
+        match std::fs::symlink_metadata(&to) {
+            Ok(_) => {
+                return Err(format!(
+                    "Refusing to overwrite {}: the target already exists",
+                    to.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect copy target: {error}")),
+        }
+        std::fs::copy(&from, &to).map_err(|error| format!("Copy failed: {error}"))?;
+        copied.push(to.to_string_lossy().into_owned());
+    }
+    Ok(copied)
 }

@@ -121,11 +121,23 @@ public struct FilesClient: Sendable {
 
     // MARK: - files.replace_preview / files.apply_replacements
 
+    public struct ReplacementMatch: Sendable, Equatable {
+        public var start: UInt64
+        public var end: UInt64
+        public var matchText: String
+
+        public init(start: UInt64, end: UInt64, matchText: String) {
+            self.start = start
+            self.end = end
+            self.matchText = matchText
+        }
+    }
+
     public struct ReplacePreviewFile: Sendable {
         public var path: String
-        public var matches: [(start: UInt64, end: UInt64)]
+        public var matches: [ReplacementMatch]
 
-        public init(path: String, matches: [(start: UInt64, end: UInt64)]) {
+        public init(path: String, matches: [ReplacementMatch]) {
             self.path = path
             self.matches = matches
         }
@@ -157,34 +169,44 @@ public struct FilesClient: Sendable {
         guard case let .array(files)? = frame.result["files"] else {
             throw MalformedReply.malformedReply("files.replace_preview reply missing files array")
         }
-        let parsed = files.compactMap { item -> ReplacePreviewFile? in
+        guard case let .string(query)? = frame.result["query"],
+              case let .string(replacement)? = frame.result["replacement"]
+        else {
+            throw MalformedReply.malformedReply("files.replace_preview reply requires string query and replacement")
+        }
+        let parsed = try files.map { item -> ReplacePreviewFile in
             guard case let .object(object) = item,
                   case let .string(path)? = object["path"],
                   case let .array(matches)? = object["matches"]
-            else { return nil }
-            let intervals: [(start: UInt64, end: UInt64)] = matches.compactMap { m in
+            else {
+                throw MalformedReply.malformedReply("files.replace_preview file requires path and matches array")
+            }
+            let intervals = try matches.map { m -> ReplacementMatch in
                 guard case let .object(pair) = m,
                       let start = pair["start"]?.numberText.flatMap(UInt64.init),
-                      let end = pair["end"]?.numberText.flatMap(UInt64.init)
-                else { return nil }
-                return (start, end)
+                      let end = pair["end"]?.numberText.flatMap(UInt64.init),
+                      start <= end,
+                      case let .string(matchText)? = pair["matchText"]
+                else {
+                    throw MalformedReply.malformedReply("files.replace_preview match requires ordered UInt64 offsets and matchText")
+                }
+                return ReplacementMatch(start: start, end: end, matchText: matchText)
             }
             return ReplacePreviewFile(path: path, matches: intervals)
         }
-        let query: String
-        if case let .string(value)? = frame.result["query"] { query = value } else { query = "" }
-        let replacement: String
-        if case let .string(value)? = frame.result["replacement"] { replacement = value } else { replacement = "" }
         return ReplacePreview(query: query, replacement: replacement, files: parsed)
     }
 
-    /// 按匹配区间提交改动（stale 区间由宿主拒绝覆盖——skip 不写）。
+    /// 原样提交匹配原文与 UTF-8 字节区间（stale 由宿主拒绝覆盖——skip 不写）。
     public func applyReplacements(
         projectId: String, path: String, replacement: String, files: [ReplacePreviewFile]
     ) async throws -> ReplaceSummary {
         let file = files.first { $0.path == path }
         let matches: [JSONValue] = (file?.matches ?? []).map { pair in
-            .object(["start": .number(String(pair.start)), "end": .number(String(pair.end))])
+            .object([
+                "start": .number(String(pair.start)), "end": .number(String(pair.end)),
+                "matchText": .string(pair.matchText),
+            ])
         }
         let frame = try await connection.request(
             "files.apply_replacements",

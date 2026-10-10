@@ -1,310 +1,52 @@
 use crate::path_guard::validate_project_root;
-use base64::Engine;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::UNIX_EPOCH;
+#[cfg(all(test, unix))]
+use aeroric_core::files::legacy_copy::copy_path_recursive;
+#[cfg(test)]
+use aeroric_core::files::legacy_copy::ensure_copy_target_not_inside_source;
+#[cfg(all(test, unix))]
+use aeroric_core::files::legacy_entry::validate_entry_name;
+use aeroric_core::files::legacy_entry::validate_new_path_within;
+use aeroric_core::files::legacy_modify::validate_existing_path_for_delete;
+#[cfg(all(test, unix))]
+use aeroric_core::files::legacy_modify::validate_existing_path_for_modify;
+use aeroric_core::files::legacy_path::validate_path_within;
+#[cfg(test)]
+use std::path::PathBuf;
 use tauri::Manager;
 
-/// 目录项。字段名一律下划线,前端 `src/components/file-explorer/types.ts` 的
-/// `FsEntry` 逐字段镜像这份形状 —— 结构体上没有 `rename_all`,所以 serde 发出去的
-/// 就是这里的名字。改名/加字段必须两边一起改,`fs_entry_wire_field_names_match_the_frontend_type`
-/// 会锁住这份键集。
-#[derive(serde::Serialize)]
-pub(crate) struct FsEntry {
-    name: String,
-    path: String,
-    is_dir: bool,
-    extension: Option<String>,
-    modified_at_ms: Option<u64>,
-    is_gitignored: bool,
-    /// 条目本身是符号链接。`is_dir` 走的是跟随链接后的类型,所以指向目录的链接
-    /// 两个标记同时为真 —— 前端图标按「先看 is_symlink」判。
-    is_symlink: bool,
-}
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_copy_tests;
 
-#[derive(serde::Serialize)]
-pub(crate) struct ProjectFileSearchResult {
-    path: String,
-    name: String,
-    dir: String,
-    extension: Option<String>,
-}
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_directory_tests;
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ImagePreviewData {
-    data_url: String,
-    mime_type: String,
-    byte_length: u64,
-}
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_entry_tests;
 
-const IGNORED_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    ".next",
-    ".nuxt",
-    "dist",
-    "build",
-    "target",
-    "__pycache__",
-    ".cache",
-    "coverage",
-    ".turbo",
-    ".expo",
-    "out",
-    ".output",
-    ".venv",
-    "venv",
-    ".tox",
-];
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_modify_tests;
 
-const MAX_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
-const MAX_FILE_SEARCH_RESULTS: usize = 200;
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_path_tests;
 
-/// Validate that `target` is an absolute path within `allowed_root` (prevents directory traversal).
-/// Validate that `target` is reachable within `allowed_root`.
-///
-/// When `allow_symlink_escape` is false, the target is fully canonicalized and
-/// must land inside the root — symlinks pointing outside the project are rejected
-/// (use this for writes, so a planted symlink can't clobber external files).
-///
-/// When true, a symlink whose *location* is inside the project but whose target
-/// is outside is also accepted (e.g. a symlinked CLAUDE.md / AGENTS.md). `../`
-/// traversal in the path itself stays rejected in both modes.
-fn validate_path_within(
-    target: &str,
-    allowed_root: &str,
-    allow_symlink_escape: bool,
-) -> Result<std::path::PathBuf, String> {
-    let target_path = Path::new(target);
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_read_tests;
 
-    if !target_path.is_absolute() {
-        return Err("Path must be absolute".to_string());
-    }
+#[cfg(test)]
+#[cfg(unix)]
+mod legacy_write_tests;
 
-    let canonical_root = Path::new(allowed_root)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve root directory: {}", e))?;
+pub(crate) use aeroric_core::files::legacy_directory::FsEntry;
 
-    // Fast path: fully resolve the target (following symlinks). If it still lands
-    // inside the project root, accept it as-is.
-    if let Ok(canonical_target) = target_path.canonicalize() {
-        if canonical_target.starts_with(&canonical_root) {
-            return Ok(canonical_target);
-        }
-    }
+pub(crate) use aeroric_core::files::project_files::ProjectFileSearchResult;
 
-    if !allow_symlink_escape {
-        return Err("Path is outside the allowed directory".to_string());
-    }
-
-    // Fall back to validating the *location* of the path: canonicalize only the
-    // parent directory (which resolves intermediate symlinks and `..` segments,
-    // so directory traversal is still rejected) and keep the final component
-    // un-resolved. This lets symlinks that live inside the project but point
-    // outside it — e.g. a symlinked CLAUDE.md / AGENTS.md — remain readable.
-    let file_name = target_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file name".to_string())?;
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve path: {}", e))?;
-
-    if !canonical_parent.starts_with(&canonical_root) {
-        return Err("Path is outside the allowed directory".to_string());
-    }
-
-    Ok(canonical_parent.join(file_name))
-}
-
-/// Enumerate project files when Git is unavailable (a common case for a
-/// freshly installed Windows desktop client). This keeps @-references useful
-/// for ordinary folders while avoiding the dependency directories that make a
-/// recursive fallback prohibitively large.
-fn list_project_files_from_directory(root: &Path) -> Result<Vec<String>, String> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut files = Vec::new();
-
-    while let Some(directory) = pending.pop() {
-        let entries = std::fs::read_dir(&directory)
-            .map_err(|error| format!("Cannot read {}: {error}", directory.display()))?;
-
-        for entry in entries {
-            let entry = entry.map_err(|error| format!("Cannot read project entry: {error}"))?;
-            let file_type = entry
-                .file_type()
-                .map_err(|error| format!("Cannot inspect {}: {error}", entry.path().display()))?;
-
-            if file_type.is_dir() {
-                let name = entry.file_name();
-                if IGNORED_DIRS
-                    .iter()
-                    .any(|ignored| name.to_string_lossy().eq_ignore_ascii_case(ignored))
-                {
-                    continue;
-                }
-                pending.push(entry.path());
-                continue;
-            }
-
-            // Do not follow symlinked directories during a fallback walk. A
-            // project may contain links into large external trees, and Git's
-            // file list does not traverse those directories either.
-            if !file_type.is_file() {
-                continue;
-            }
-
-            let relative = entry
-                .path()
-                .strip_prefix(root)
-                .map_err(|error| format!("Cannot make project path relative: {error}"))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            if !relative.is_empty() && relative_git_path_is_safe(&relative) {
-                files.push(relative);
-            }
-        }
-    }
-
-    files.sort();
-    files.dedup();
-    Ok(files)
-}
-
-/// Names whose stem (the substring before the first `.`) are reserved on Windows. Only consulted
-/// when compiling for Windows; on Unix these are perfectly valid filenames (matching VS Code's
-/// behavior of validating against the running OS, not the lowest common denominator).
-#[cfg(target_os = "windows")]
-const WINDOWS_RESERVED_STEMS: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-    "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-];
-
-/// Validate a single path component that the user wants to create.
-///
-/// Cross-platform rejects (always):
-/// - empty / `.` / `..`
-/// - longer than 255 UTF-8 bytes
-/// - contains `/`, `\\`, or NUL
-///
-/// Windows-only rejects (mirroring `CreateFileW` rules):
-/// - extra forbidden characters (`< > : " | ? *`)
-/// - ASCII control characters (< 0x20)
-/// - trailing space or dot (Win32 would silently strip them)
-/// - reserved DOS device names (CON/PRN/AUX/NUL/COM[0-9]/LPT[0-9]), case-insensitive
-fn validate_entry_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("File name cannot be empty".to_string());
-    }
-    if name.len() > 255 {
-        return Err("File name is too long (max 255 bytes)".to_string());
-    }
-    if name == "." || name == ".." {
-        return Err("Invalid file name".to_string());
-    }
-    if name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return Err("File name contains forbidden characters".to_string());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        for ch in name.chars() {
-            if matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*') {
-                return Err("File name contains forbidden characters".to_string());
-            }
-            if (ch as u32) < 0x20 {
-                return Err("File name contains control characters".to_string());
-            }
-        }
-        if name.ends_with(' ') || name.ends_with('.') {
-            return Err("File name cannot end with a space or a dot".to_string());
-        }
-        let stem = name.split_once('.').map(|(s, _)| s).unwrap_or(name);
-        if !stem.is_empty() {
-            let stem_upper = stem.to_ascii_uppercase();
-            if WINDOWS_RESERVED_STEMS.iter().any(|r| *r == stem_upper) {
-                return Err(format!("File name '{}' is reserved on Windows", stem));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn ensure_not_protected_path(path: &Path, root: &Path, action: &str) -> Result<(), String> {
-    if path == root {
-        return Err(format!("Cannot {} the project root", action));
-    }
-    if let Ok(rel) = path.strip_prefix(root) {
-        if let Some(first) = rel.components().next() {
-            if let Some(name) = first.as_os_str().to_str() {
-                if PROTECTED_FIRST_SEGMENTS
-                    .iter()
-                    .any(|protected| protected.eq_ignore_ascii_case(name))
-                {
-                    return Err(format!("Cannot {} protected directory: {}", action, name));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Validate a not-yet-existing `target` path. Returns the canonicalized parent directory and the
-/// raw basename. Existence is *not* checked here — the caller must use atomic create operations
-/// (`OpenOptions::create_new` / `create_dir`) to avoid TOCTOU between an existence check and the
-/// actual create.
-fn validate_new_path_within(
-    target: &str,
-    allowed_root: &str,
-) -> Result<(std::path::PathBuf, String), String> {
-    let target_path = Path::new(target);
-
-    if !target_path.is_absolute() {
-        return Err("Path must be absolute".to_string());
-    }
-
-    let file_name = target_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file name".to_string())?
-        .to_string();
-
-    validate_entry_name(&file_name)?;
-
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve parent directory: {}", e))?;
-    let canonical_root = Path::new(allowed_root)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve root directory: {}", e))?;
-
-    if !canonical_parent.starts_with(&canonical_root) {
-        return Err("Path is outside the allowed directory".to_string());
-    }
-
-    Ok((canonical_parent, file_name))
-}
-
-fn previewable_image_mime_type(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    match ext.as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "bmp" => Some("image/bmp"),
-        "svg" => Some("image/svg+xml"),
-        _ => None,
-    }
-}
+pub(crate) use aeroric_core::files::legacy_read::ImagePreviewData;
 
 #[tauri::command]
 pub async fn open_in_system_file_manager(
@@ -328,92 +70,7 @@ pub async fn open_in_system_file_manager(
 pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<FsEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let directory = validate_path_within(&path, &project_path, false)?;
-        let entries = std::fs::read_dir(&directory).map_err(|e| e.to_string())?;
-        let mut result: Vec<FsEntry> = entries
-            .flatten()
-            .filter(|entry| {
-                let p = entry.path();
-                if p.is_dir() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    !IGNORED_DIRS.contains(&name_str.as_ref())
-                } else {
-                    true
-                }
-            })
-            .map(|entry| {
-                let p = entry.path();
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let is_dir = p.is_dir();
-                let extension = p
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase());
-                let modified_at_ms = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|metadata| metadata.modified().ok())
-                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_millis() as u64);
-                // `DirEntry::file_type` 不跟随链接,正是要判的那一层;
-                // 上面的 `metadata()` 跟随链接,所以两者不能互相替代。
-                let is_symlink = entry
-                    .file_type()
-                    .map(|file_type| file_type.is_symlink())
-                    .unwrap_or(false);
-                FsEntry {
-                    name,
-                    path: p.to_string_lossy().into_owned(),
-                    is_dir,
-                    extension,
-                    modified_at_ms,
-                    is_gitignored: false,
-                    is_symlink,
-                }
-            })
-            .collect();
-        result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        });
-
-        // Mark gitignored entries via `git check-ignore --stdin`
-        if !result.is_empty() {
-            let ignored_set: std::collections::HashSet<String> = {
-                use std::io::Write;
-                let mut cmd = std::process::Command::new("git");
-                crate::subprocess::configure_background_command(&mut cmd);
-                cmd.args(["check-ignore", "--stdin"])
-                    .current_dir(&project_path)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null());
-                match cmd.spawn() {
-                    Ok(mut child) => {
-                        if let Some(ref mut stdin) = child.stdin {
-                            for entry in &result {
-                                let _ = writeln!(stdin, "{}", entry.path);
-                            }
-                        }
-                        match child.wait_with_output() {
-                            Ok(output) => String::from_utf8_lossy(&output.stdout)
-                                .lines()
-                                .filter(|l| !l.is_empty())
-                                .map(|l| l.to_string())
-                                .collect(),
-                            Err(_) => std::collections::HashSet::new(),
-                        }
-                    }
-                    Err(_) => std::collections::HashSet::new(),
-                }
-            };
-            for entry in &mut result {
-                entry.is_gitignored = ignored_set.contains(&entry.path);
-            }
-        }
-
-        Ok(result)
+        aeroric_core::files::legacy_directory::read_dir_entries(&directory, &project_path)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -442,20 +99,7 @@ async fn read_file_content_with_policy(
     let validated_path = validate_path_within(&path, &project_path, allow_symlink_escape)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        use std::io::Read;
-        let file = std::fs::File::open(&validated_path).map_err(|e| e.to_string())?;
-        let meta = file.metadata().map_err(|e| e.to_string())?;
-        if meta.len() > 2 * 1024 * 1024 {
-            return Err(format!(
-                "File too large ({:.1} MB)",
-                meta.len() as f64 / 1024.0 / 1024.0
-            ));
-        }
-        let mut buf = String::with_capacity(meta.len() as usize);
-        std::io::BufReader::new(file)
-            .read_to_string(&mut buf)
-            .map_err(|e| e.to_string())?;
-        Ok(buf)
+        aeroric_core::files::legacy_read::read_file_content(&validated_path)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -469,34 +113,7 @@ pub async fn read_image_preview(
     let validated_path = validate_path_within(&path, &project_path, true)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        use std::io::Read;
-
-        let mime_type = previewable_image_mime_type(&validated_path)
-            .ok_or_else(|| "Unsupported image format".to_string())?;
-
-        let file = std::fs::File::open(&validated_path).map_err(|e| e.to_string())?;
-        let meta = file.metadata().map_err(|e| e.to_string())?;
-        if meta.len() > MAX_IMAGE_PREVIEW_BYTES {
-            return Err(format!(
-                "Image too large ({:.1} MB)",
-                meta.len() as f64 / 1024.0 / 1024.0
-            ));
-        }
-
-        let mut bytes = Vec::with_capacity(meta.len() as usize);
-        std::io::BufReader::new(file)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-
-        Ok(ImagePreviewData {
-            data_url: format!(
-                "data:{};base64,{}",
-                mime_type,
-                base64::engine::general_purpose::STANDARD.encode(bytes)
-            ),
-            mime_type: mime_type.to_string(),
-            byte_length: meta.len(),
-        })
+        aeroric_core::files::legacy_read::read_image_preview(&validated_path)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -509,14 +126,7 @@ pub async fn write_file_content(
     project_path: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let validated_path = validate_path_within(&path, &project_path, false)?;
-        let validated_path_text = validated_path.to_string_lossy();
-        crate::local_history::record_snapshot_before_write(
-            &project_path,
-            &validated_path_text,
-            &content,
-        )?;
-        std::fs::write(validated_path, content).map_err(|e| e.to_string())
+        aeroric_core::files::legacy_write::write_file_content(&project_path, &path, &content)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -527,17 +137,7 @@ pub async fn create_file(path: String, project_path: String) -> Result<(), Strin
     tauri::async_runtime::spawn_blocking(move || {
         let (parent, file_name) = validate_new_path_within(&path, &project_path)?;
         let target = parent.join(&file_name);
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map(|_| ())
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::AlreadyExists => {
-                    "A file or folder with that name already exists".to_string()
-                }
-                _ => e.to_string(),
-            })
+        aeroric_core::files::legacy_entry::create_file(&target)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -548,61 +148,10 @@ pub async fn create_directory(path: String, project_path: String) -> Result<(), 
     tauri::async_runtime::spawn_blocking(move || {
         let (parent, file_name) = validate_new_path_within(&path, &project_path)?;
         let target = parent.join(&file_name);
-        std::fs::create_dir(&target).map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                "A file or folder with that name already exists".to_string()
-            }
-            _ => e.to_string(),
-        })
+        aeroric_core::files::legacy_entry::create_directory(&target)
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// First-segment names under the project root that are never deletable through this command.
-const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".aeroric"];
-
-/// Validate a deletion target. Unlike `validate_path_within`, the target itself is NOT
-/// canonicalized — only its parent — so symlinks are moved to trash as themselves rather than
-/// following through to the link target. Also enforces a denylist on the first segment under
-/// the project root.
-fn validate_existing_path_for_delete(
-    target: &str,
-    allowed_root: &str,
-) -> Result<std::path::PathBuf, String> {
-    let target_path = Path::new(target);
-
-    if !target_path.is_absolute() {
-        return Err("Path must be absolute".to_string());
-    }
-
-    let file_name = target_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file name".to_string())?;
-
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve parent directory: {}", e))?;
-    let canonical_root = Path::new(allowed_root)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve root directory: {}", e))?;
-
-    if !canonical_parent.starts_with(&canonical_root) {
-        return Err("Path is outside the allowed directory".to_string());
-    }
-
-    let resolved = canonical_parent.join(file_name);
-
-    if resolved.symlink_metadata().is_err() {
-        return Err("Path does not exist".to_string());
-    }
-
-    ensure_not_protected_path(&resolved, &canonical_root, "delete")?;
-    Ok(resolved)
 }
 
 #[tauri::command]
@@ -615,103 +164,6 @@ pub async fn delete_path(path: String, project_path: String) -> Result<(), Strin
     .map_err(|e| e.to_string())?
 }
 
-fn validate_existing_path_for_modify(
-    target: &str,
-    allowed_root: &str,
-    action: &str,
-) -> Result<(PathBuf, PathBuf), String> {
-    let target_path = Path::new(target);
-
-    if !target_path.is_absolute() {
-        return Err("Path must be absolute".to_string());
-    }
-
-    let file_name = target_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file name".to_string())?;
-
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve parent directory: {}", e))?;
-    let canonical_root = Path::new(allowed_root)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve root directory: {}", e))?;
-
-    if !canonical_parent.starts_with(&canonical_root) {
-        return Err("Path is outside the allowed directory".to_string());
-    }
-
-    let resolved = canonical_parent.join(file_name);
-    if resolved.symlink_metadata().is_err() {
-        return Err("Path does not exist".to_string());
-    }
-    ensure_not_protected_path(&resolved, &canonical_root, action)?;
-    Ok((resolved, canonical_root))
-}
-
-fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> {
-    let metadata = source.symlink_metadata().map_err(|e| e.to_string())?;
-    if metadata.file_type().is_symlink() {
-        let target = std::fs::read_link(source).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(target, destination).map_err(|e| e.to_string())?;
-        }
-        #[cfg(windows)]
-        {
-            if source.is_dir() {
-                std::os::windows::fs::symlink_dir(target, destination)
-                    .map_err(|e| e.to_string())?;
-            } else {
-                std::os::windows::fs::symlink_file(target, destination)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        std::fs::create_dir(destination).map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                "A file or folder with that name already exists".to_string()
-            }
-            _ => e.to_string(),
-        })?;
-        for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            copy_path_recursive(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-        return Ok(());
-    }
-    std::fs::copy(source, destination)
-        .map(|_| ())
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                "A file or folder with that name already exists".to_string()
-            }
-            _ => e.to_string(),
-        })
-}
-
-fn ensure_copy_target_not_inside_source(source: &Path, target: &Path) -> Result<(), String> {
-    if !source.is_dir() {
-        return Ok(());
-    }
-    let canonical_source = source
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve source directory: {}", e))?;
-    let canonical_target = target
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve paste target: {}", e))?;
-    if canonical_target.starts_with(&canonical_source) {
-        return Err("Cannot copy a folder into itself".to_string());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn rename_path(
     path: String,
@@ -719,17 +171,7 @@ pub async fn rename_path(
     project_path: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let name = new_name.trim();
-        validate_entry_name(name)?;
-        let (source, _) = validate_existing_path_for_modify(&path, &project_path, "rename")?;
-        let parent = source
-            .parent()
-            .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
-        let destination = parent.join(name);
-        if destination.exists() {
-            return Err("A file or folder with that name already exists".to_string());
-        }
-        std::fs::rename(&source, &destination).map_err(|e| e.to_string())
+        aeroric_core::files::legacy_modify::rename_path(path, new_name, project_path)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -746,30 +188,7 @@ pub async fn copy_paths_to_directory(
             return Ok(());
         }
         let target = validate_path_within(&target_directory, &project_path, false)?;
-        if !target.is_dir() {
-            return Err("Paste target must be a directory".to_string());
-        }
-        for source_path in source_paths {
-            let source = PathBuf::from(&source_path);
-            if !source.is_absolute() {
-                return Err("Source path must be absolute".to_string());
-            }
-            if !source.exists() {
-                return Err(format!("Source path does not exist: {}", source_path));
-            }
-            let name = source
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| "Invalid source file name".to_string())?;
-            validate_entry_name(name)?;
-            let destination = target.join(name);
-            if destination.exists() {
-                return Err("A file or folder with that name already exists".to_string());
-            }
-            ensure_copy_target_not_inside_source(&source, &target)?;
-            copy_path_recursive(&source, &destination)?;
-        }
-        Ok(())
+        aeroric_core::files::legacy_copy::copy_paths_to_directory(source_paths, target)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -839,7 +258,8 @@ mod tests {
             .expect("create dependency file");
         std::fs::write(root.join(".git").join("config"), "git").expect("create git metadata");
 
-        let files = list_project_files_from_directory(&root).expect("list project files");
+        let files = aeroric_core::files::project_files::list_project_files(&root, None, &[])
+            .expect("list project files");
 
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(
@@ -976,167 +396,53 @@ mod tests {
 }
 
 #[tauri::command]
-pub async fn list_project_files(project_path: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = validate_project_root(&project_path)?;
-        let git_path = crate::platform::detect_path("git");
-        if git_path.is_empty() {
-            return list_project_files_from_directory(&root);
-        }
-
-        let mut cmd = std::process::Command::new(git_path);
-        crate::subprocess::configure_background_command(&mut cmd);
-        let output = cmd
-            .args([
-                "-c",
-                "core.quotePath=false",
-                "ls-files",
-                "-c",
-                "-o",
-                "--exclude-standard",
-            ])
-            .current_dir(&root)
-            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-            .output();
-
-        let Ok(output) = output else {
-            return list_project_files_from_directory(&root);
-        };
-
-        if !output.status.success() {
-            return list_project_files_from_directory(&root);
-        }
-
-        let mut files: Vec<String> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|l| l.trim_end_matches('\r').replace('\\', "/"))
-            .filter(|l| !l.is_empty() && relative_git_path_is_safe(l))
-            .collect();
-
-        files.sort();
-        files.dedup();
-        Ok(files)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-fn relative_git_path_is_safe(path: &str) -> bool {
-    let path = Path::new(path);
-    path.components().all(|component| {
-        matches!(
-            component,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )
-    })
-}
-
-fn split_relative_file_path(path: &str) -> (String, String) {
-    match path.rsplit_once('/') {
-        Some((dir, name)) => (dir.to_string(), name.to_string()),
-        None => ("".to_string(), path.to_string()),
-    }
-}
-
-fn file_extension_lower(name: &str) -> Option<String> {
-    name.rsplit_once('.')
-        .and_then(|(_, ext)| (!ext.is_empty()).then(|| ext.to_ascii_lowercase()))
+pub async fn list_project_files(
+    app: tauri::AppHandle,
+    project_path: String,
+) -> Result<Vec<String>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "files.list_project_files",
+        serde_json::json!({"projectPath": project_path}),
+        async move {
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let root = validate_project_root(&project_path)?;
+                let git = crate::platform::detect_path("git");
+                aeroric_core::files::project_files::list_project_files(
+                    &root,
+                    Some(&git),
+                    crate::app_settings::get_login_shell_env(),
+                )
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn search_project_files(
+    app: tauri::AppHandle,
     project_path: String,
     query: String,
     extensions: Vec<String>,
     limit: Option<usize>,
 ) -> Result<Vec<ProjectFileSearchResult>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = validate_project_root(&project_path)?;
-        let query = query.trim().to_ascii_lowercase();
-        let extension_filters: std::collections::HashSet<String> = extensions
-            .into_iter()
-            .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
-            .filter(|ext| !ext.is_empty())
-            .collect();
-        let limit = limit.unwrap_or(80).clamp(1, MAX_FILE_SEARCH_RESULTS);
-
-        let mut cmd = Command::new("git");
-        crate::subprocess::configure_background_command(&mut cmd);
-        let output = cmd
-            .args(["-c", "core.quotePath=false", "ls-files", "-z"])
-            .current_dir(&root)
-            .envs(crate::app_settings::get_login_shell_env().iter().cloned())
-            .output()
-            .map_err(|e| e.to_string())?;
-
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-
-        let mut matches: Vec<(u8, ProjectFileSearchResult)> = Vec::new();
-        for rel in String::from_utf8_lossy(&output.stdout).split('\0') {
-            if rel.is_empty() || !relative_git_path_is_safe(rel) {
-                continue;
-            }
-
-            let (dir, name) = split_relative_file_path(rel);
-            let name_lower = name.to_ascii_lowercase();
-            if !query.is_empty() && !name_lower.contains(&query) {
-                continue;
-            }
-
-            let extension = file_extension_lower(&name);
-            if !extension_filters.is_empty()
-                && !extension
-                    .as_ref()
-                    .is_some_and(|ext| extension_filters.contains(ext))
-            {
-                continue;
-            }
-
-            let score = if query.is_empty() {
-                3
-            } else if name_lower == query {
-                0
-            } else if name_lower.starts_with(&query) {
-                1
-            } else {
-                2
-            };
-
-            let full_path = root.join(rel);
-            if !full_path.is_file() {
-                continue;
-            }
-
-            matches.push((
-                score,
-                ProjectFileSearchResult {
-                    path: full_path.to_string_lossy().into_owned(),
-                    name,
-                    dir,
-                    extension,
-                },
-            ));
-        }
-
-        matches.sort_by(|(score_a, a), (score_b, b)| {
-            score_a
-                .cmp(score_b)
-                .then_with(|| {
-                    a.name
-                        .to_ascii_lowercase()
-                        .cmp(&b.name.to_ascii_lowercase())
-                })
-                .then_with(|| a.dir.cmp(&b.dir))
-        });
-
-        Ok(matches
-            .into_iter()
-            .take(limit)
-            .map(|(_, result)| result)
-            .collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let value = crate::host_dispatch::dispatch(
+        &app, "files.search_project_files",
+        serde_json::json!({"projectPath": project_path, "query": query, "extensions": extensions, "limit": limit}),
+        async move {
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let root = validate_project_root(&project_path)?;
+                aeroric_core::files::project_files::search_project_files(
+                    &root, &query, &extensions, limit, "git", crate::app_settings::get_login_shell_env(),
+                )
+            }).await.map_err(|e| e.to_string())??;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        },
+    ).await?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }

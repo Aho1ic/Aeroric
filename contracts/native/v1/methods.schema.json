@@ -403,7 +403,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "editor",
-      "coreService": "files::local_history",
+      "coreService": "files::legacy_history",
       "featureIds": [
         "F07"
       ],
@@ -420,7 +420,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "editor",
-      "coreService": "files::local_history",
+      "coreService": "files::legacy_history",
       "featureIds": [
         "F07"
       ],
@@ -437,7 +437,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "editor",
-      "coreService": "files::local_history",
+      "coreService": "files::legacy_history",
       "featureIds": [
         "F07"
       ],
@@ -556,7 +556,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "files",
-      "coreService": "files",
+      "coreService": "files::project_files",
       "featureIds": [
         "F07"
       ],
@@ -573,7 +573,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "files",
-      "coreService": "files",
+      "coreService": "files::project_files",
       "featureIds": [
         "F07"
       ],
@@ -3634,7 +3634,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -3652,7 +3652,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -3724,7 +3724,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -4168,7 +4168,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -4186,7 +4186,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -4204,7 +4204,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"
@@ -4222,7 +4222,7 @@
       "callerEvidence": null,
       "category": "domain_rpc",
       "checkModule": "settings",
-      "coreService": "settings",
+      "coreService": "settings::preferences",
       "featureIds": [
         "F03",
         "F19"

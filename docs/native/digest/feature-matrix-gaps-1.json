@@ -1,7 +1,7 @@
 {
   "shard": "feature-matrix-gaps-1.json",
   "from": "docs/native/feature-matrix.json",
-  "sourceSha256": "8789a083fbde86c4447f0086e48071ee366816a28e61fc2e395de1fa8f8607a5",
+  "sourceSha256": "bc8d8146a1b3ed528cde1bb5c9c7c446b77ee026a4d1ee41f075a75a47e6750d",
   "capBytes": 32768,
   "payload": {
     "gaps": [
@@ -55,18 +55,6 @@
         "status": "closed-by-implementation",
         "retriage_note": "原判据引用的 session.rs:1845/1847、session_dsh.rs:630、session_omp.rs:300 全部漂移（分别漂到 :1999 一带、:621、:299），且「无显式取消」在今天只对 1 站成立——P3-01 切片四（补记八十五）已把六站接进 WatcherSupervisor。owner 仍是 P3-04（未开工），故本条不改派，只把事实改准。 【2026-09-28 二次回源】DSH/OMP 两站行号又各漂 11 行（:621→:632、:299→:310），实质判定不变（两处闭包都真查 `token.is_cancelled()`）；`session.rs:1999` 的裸 `thread::spawn` 与 `:2360` 的 `move |_token|` 复算仍在原位。 同日 2026-09-29 复核：见 evidence 追加段。",
         "verified_on": "2026-09-30"
-      },
-      {
-        "id": "G05",
-        "finding": "React 仍持有后端不知道的权威状态，2026-09-28 逐条核对后剩三处：`pendingTaskStartsRef`（App.tsx:201，延迟启动闭包，:1086 消费）→ P3-07 的无头入口必须能复现；`manuallyCompletedDshTasksRef`（App.tsx:204，抑制后端状态事件，:376 作为 isManuallyCompletedDsh 注入）→ P3-05；`remoteTaskMutationQueuesRef`（App.tsx:202 的串行 Promise 队列）→ P8-03。原列五项中的两项**不是缺陷**：`taskId.ts` 铸 ID 正是 ADR-013 定的「调用方给 uuidv7」；`projectMutations` 合成 project id 与 orderIndex 的权威已在 P2-03 的 core reorder/group 里。",
-        "evidence": "App.tsx:201/202/204/376/1086（当天 grep 计数 14 处引用）；taskId.ts:5 uuidv7、:10 兜底串；projectMutations.ts:87/93/121/127 orderIndex 仍在客户端合成 2026-09-29 逐行复跑：`App.tsx:201`＝`const pendingTaskStartsRef = useRef<Record<string, () => void>>({})`、`:202`＝`remoteTaskMutationQueuesRef = useRef(new Map<string, Promise<void>>())`、`:204`＝`manuallyCompletedDshTasksRef = useRef<Set<string>>(new Set())`；`:1086` 仍是 `const startTask = pendingTaskStartsRef.current[taskId]`、`:376` 仍以 `isManuallyCompletedDsh: (taskId) => …has(taskId)` 注入。三处权威状态与行号一字未漂。 2026-10-04 P8-03 刀二：remoteTaskMutationQueuesRef 半边闭合——RemoteState.task_queues（per-project tokio Mutex）＋execute_task_request 串行队列锁（host 侧等价判决），React hook 退役。G05 三处全部闭合（P3-07 pendingTaskStartsRef＋P3-05 manuallyCompleted＋P8-03 队列）。",
-        "requirement": "这三处必须变成 host 侧状态或有 host 侧等价判决，否则无头入口语义不完整",
-        "task_ids": "P3-07, P3-05, P8-03",
-        "owner": "core:tasks (headless launch) + core:dsh (manual-complete) + core:remote (mutation queue)",
-        "test": "tests/task_idempotency.rs；无 listener 场景下 pending start 不得丢失",
-        "status": "closed",
-        "retriage_note": "原判 `task_ids: P2-02~P2-05` 是一条区间，而区间无法回答「谁还欠这笔」——四个 Task 现已全部 accepted，gap 却仍 open。按当天 grep 结果改成显式三点名，并记下两项关闭及其决定出处（ADR-013 / P2-03）。 2026-09-29 静态半边复跑成立，`verified_on` 已盖到当日。 2026-10-01 P3-07 ⑦ 分片落判：pendingTaskStartsRef 片闭合——无头 `task.run` 一次 RPC 建+启动＝无 pending 窗口（smoke-headless 全程无 listener run→done＋executor_pty 3/0）；G05 整条仍 open（P3-05 片在其小节无分片落判记录、P8-03 片未开工），owner 不变。",
-        "verified_on": "2026-10-04"
       }
     ]
   }

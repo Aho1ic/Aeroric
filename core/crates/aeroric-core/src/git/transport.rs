@@ -12,6 +12,9 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// 网络命令 timeout（fetch/pull/push——不会因为等凭据而挂住的策略由调用方
 /// 凭据助手承载）。
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(60);
+/// stash 家族 timeout（legacy `git_stash_push`/`apply`/`drop` 用的是 20s，比
+/// `READ_TIMEOUT` 宽——大仓库的 stash 可能超过 5s）。
+pub const STASH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// mutating 操作串行化锁（相同 repo 串行——并发 mutating 会撞 index.lock）。
 #[derive(Default)]

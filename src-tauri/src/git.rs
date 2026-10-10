@@ -250,7 +250,7 @@ pub(crate) struct GitStashDiff {
     pub(crate) truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictFile {
     pub(crate) path: String,
@@ -661,7 +661,7 @@ pub async fn generate_commit_message(project_path: String) -> Result<String, Str
     Ok(result)
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitFileChange {
     path: String,
     status: String,
@@ -714,8 +714,7 @@ pub(crate) fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
     changes
 }
 
-#[tauri::command]
-pub async fn git_status(project_path: String) -> Result<Vec<GitFileChange>, String> {
+pub async fn local_git_status(project_path: String) -> Result<Vec<GitFileChange>, String> {
     let args = vec![
         "-c".to_string(),
         "core.quotePath=false".to_string(),
@@ -742,7 +741,28 @@ pub async fn git_status(project_path: String) -> Result<Vec<GitFileChange>, Stri
     Ok(parse_porcelain_z_status(&output.stdout))
 }
 
-#[derive(serde::Serialize, Clone)]
+#[tauri::command]
+pub async fn git_status<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<Vec<GitFileChange>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_status",
+        serde_json::json!({
+            "projectPath": project_path,
+        }),
+        async {
+            local_git_status(project_path)
+                .await
+                .and_then(|changes| serde_json::to_value(changes).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct GitCommit {
     hash: String,
     short_hash: String,
@@ -752,7 +772,7 @@ pub(crate) struct GitCommit {
     refs: Vec<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitBranchInfo {
     name: String,
     current: bool,
@@ -791,8 +811,7 @@ pub(crate) fn parse_git_branch_list(stdout: &str) -> Vec<GitBranchInfo> {
     branches
 }
 
-#[tauri::command]
-pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
+pub async fn local_git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
     let output = run_git_with_timeout(
         project_path,
         vec!["branch".to_string(), "-a".to_string()],
@@ -801,6 +820,27 @@ pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo
     .await?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     Ok(parse_git_branch_list(&stdout))
+}
+
+#[tauri::command]
+pub async fn git_list_branches<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<Vec<GitBranchInfo>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_list_branches",
+        serde_json::json!({
+            "projectPath": project_path,
+        }),
+        async {
+            local_git_list_branches(project_path)
+                .await
+                .and_then(|branches| serde_json::to_value(branches).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -852,8 +892,7 @@ pub async fn git_create_branch(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn git_log(
+pub async fn local_git_log(
     project_path: String,
     limit: u32,
     search: Option<String>,
@@ -868,6 +907,33 @@ pub async fn git_log(
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     Ok(parse_git_log_output(&stdout))
+}
+
+#[tauri::command]
+pub async fn git_log<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    limit: u32,
+    search: Option<String>,
+    branch: Option<String>,
+) -> Result<Vec<GitCommit>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_log",
+        serde_json::json!({
+            "projectPath": project_path,
+            "limit": limit,
+            "search": search,
+            "branch": branch,
+        }),
+        async {
+            local_git_log(project_path, limit, search, branch)
+                .await
+                .and_then(|commits| serde_json::to_value(commits).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub(crate) fn build_git_log_args(
@@ -1105,8 +1171,10 @@ pub async fn git_commit_detail(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn git_show_diff(project_path: String, commit_hash: String) -> Result<String, String> {
+pub async fn local_git_show_diff(
+    project_path: String,
+    commit_hash: String,
+) -> Result<String, String> {
     validate_git_revision(&commit_hash)?;
     let args = vec![
         "show".to_string(),
@@ -1126,6 +1194,29 @@ pub async fn git_show_diff(project_path: String, commit_hash: String) -> Result<
         &raw
     })
     .into_owned())
+}
+
+#[tauri::command]
+pub async fn git_show_diff<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    commit_hash: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_show_diff",
+        serde_json::json!({
+            "projectPath": project_path,
+            "commitHash": commit_hash,
+        }),
+        async {
+            local_git_show_diff(project_path, commit_hash)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1178,8 +1269,7 @@ pub async fn git_file_diff(
     .into_owned())
 }
 
-#[tauri::command]
-pub async fn git_stage(project_path: String, file_path: String) -> Result<(), String> {
+pub async fn local_git_stage(project_path: String, file_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_git_check(&project_path, &["add", "--", &file_path])
     })
@@ -1188,7 +1278,29 @@ pub async fn git_stage(project_path: String, file_path: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn git_unstage(project_path: String, file_path: String) -> Result<(), String> {
+pub async fn git_stage<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stage",
+        serde_json::json!({
+            "projectPath": project_path,
+            "filePath": file_path,
+        }),
+        async {
+            local_git_stage(project_path, file_path)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_unstage(project_path: String, file_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         if git_has_head(&project_path)? {
             run_git_check(&project_path, &["restore", "--staged", "--", &file_path])
@@ -1199,6 +1311,29 @@ pub async fn git_unstage(project_path: String, file_path: String) -> Result<(), 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_unstage<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_unstage",
+        serde_json::json!({
+            "projectPath": project_path,
+            "filePath": file_path,
+        }),
+        async {
+            local_git_unstage(project_path, file_path)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -1250,15 +1385,32 @@ pub async fn git_unstage_files(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn git_stage_all(project_path: String) -> Result<(), String> {
+pub async fn local_git_stage_all(project_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || run_git_check(&project_path, &["add", "-A"]))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn git_unstage_all(project_path: String) -> Result<(), String> {
+pub async fn git_stage_all<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stage_all",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_stage_all(project_path)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_unstage_all(project_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_git_check(&project_path, &["restore", "--staged", "."])
     })
@@ -1267,12 +1419,53 @@ pub async fn git_unstage_all(project_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn git_commit(project_path: String, message: String) -> Result<(), String> {
+pub async fn git_unstage_all<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_unstage_all",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_unstage_all(project_path)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_commit(project_path: String, message: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         run_git_check(&project_path, &["commit", "-m", &message])
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_commit<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    message: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_commit",
+        serde_json::json!({
+            "projectPath": project_path,
+            "message": message,
+        }),
+        async {
+            local_git_commit(project_path, message)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 fn untracked_files_under_directory<'a>(
@@ -1654,8 +1847,10 @@ pub async fn git_pull(project_path: String) -> Result<String, String> {
 /// `--initial-branch` 显式给出而不是靠 git 的默认值:那个默认值取决于用户的
 /// `init.defaultBranch`,不给的话两台机器可能一台 `main` 一台 `master`,推送时就成了
 /// 两条无关的分支。
-#[tauri::command]
-pub async fn git_init(project_path: String, initial_branch: Option<String>) -> Result<(), String> {
+pub async fn local_git_init(
+    project_path: String,
+    initial_branch: Option<String>,
+) -> Result<(), String> {
     if let Some(branch) = initial_branch.as_deref().filter(|value| !value.is_empty()) {
         validate_git_revision(branch)?;
     }
@@ -1674,6 +1869,29 @@ pub async fn git_init(project_path: String, initial_branch: Option<String>) -> R
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_init<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    initial_branch: Option<String>,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_init",
+        serde_json::json!({
+            "projectPath": project_path,
+            "initialBranch": initial_branch,
+        }),
+        async {
+            local_git_init(project_path, initial_branch)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// clone 到一个空的/不存在的目录。
@@ -1953,8 +2171,7 @@ pub async fn git_stash_diff(
     })
 }
 
-#[tauri::command]
-pub async fn git_stash_push(
+pub async fn local_git_stash_push(
     project_path: String,
     message: Option<String>,
     include_untracked: bool,
@@ -1986,6 +2203,31 @@ pub async fn git_stash_push(
         });
     }
     Ok(combined)
+}
+
+#[tauri::command]
+pub async fn git_stash_push<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    message: Option<String>,
+    include_untracked: bool,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stash_push",
+        serde_json::json!({
+            "projectPath": project_path,
+            "message": message,
+            "includeUntracked": include_untracked,
+        }),
+        async {
+            local_git_stash_push(project_path, message, include_untracked)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2040,8 +2282,9 @@ pub async fn git_stash_drop(project_path: String, stash_ref: String) -> Result<S
     Ok(combined)
 }
 
-#[tauri::command]
-pub async fn git_conflict_files(project_path: String) -> Result<Vec<GitConflictFile>, String> {
+pub async fn local_git_conflict_files(
+    project_path: String,
+) -> Result<Vec<GitConflictFile>, String> {
     let output = run_git_with_timeout(
         project_path,
         vec![
@@ -2057,6 +2300,25 @@ pub async fn git_conflict_files(project_path: String) -> Result<Vec<GitConflictF
         return Err(git_command_error(&output, "Failed to list conflict files"));
     }
     Ok(parse_conflict_paths_z(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn git_conflict_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<Vec<GitConflictFile>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_conflict_files",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_conflict_files(project_path)
+                .await
+                .and_then(|files| serde_json::to_value(files).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2111,13 +2373,11 @@ pub async fn git_resolve_conflict(
 
 // ── Task worktree management ─────────────────────────────────────────────────
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WorktreeCreated {
-    #[serde(rename = "worktreePath")]
     worktree_path: String,
-    #[serde(rename = "worktreeBranch")]
     worktree_branch: String,
-    #[serde(rename = "baseBranch")]
     base_branch: String,
 }
 
@@ -2146,8 +2406,7 @@ fn ensure_path_under_worktrees_root(project_path: &str, worktree_path: &str) -> 
     Ok(())
 }
 
-#[tauri::command]
-pub async fn create_task_worktree(
+pub async fn local_create_task_worktree(
     project_path: String,
     task_id: String,
     base_branch: String,
@@ -2193,7 +2452,31 @@ pub async fn create_task_worktree(
 }
 
 #[tauri::command]
-pub async fn merge_task_worktree(
+pub async fn create_task_worktree<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    task_id: String,
+    base_branch: String,
+) -> Result<WorktreeCreated, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.create_task_worktree",
+        serde_json::json!({
+            "projectPath": project_path,
+            "taskId": task_id,
+            "baseBranch": base_branch,
+        }),
+        async {
+            local_create_task_worktree(project_path, task_id, base_branch)
+                .await
+                .and_then(|created| serde_json::to_value(created).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_merge_task_worktree(
     project_path: String,
     worktree_path: String,
     branch: String,
@@ -2274,7 +2557,33 @@ pub async fn merge_task_worktree(
 }
 
 #[tauri::command]
-pub async fn remove_task_worktree(
+pub async fn merge_task_worktree<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    worktree_path: String,
+    branch: String,
+    base_branch: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.merge_task_worktree",
+        serde_json::json!({
+            "projectPath": project_path,
+            "worktreePath": worktree_path,
+            "branch": branch,
+            "baseBranch": base_branch,
+        }),
+        async {
+            local_merge_task_worktree(project_path, worktree_path, branch, base_branch)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_remove_task_worktree(
     project_path: String,
     worktree_path: String,
     branch: String,
@@ -2309,16 +2618,39 @@ pub async fn remove_task_worktree(
     .map_err(|e| format!("Remove worktree task panicked: {}", e))?
 }
 
-#[derive(serde::Serialize)]
+#[tauri::command]
+pub async fn remove_task_worktree<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    worktree_path: String,
+    branch: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.remove_task_worktree",
+        serde_json::json!({
+            "projectPath": project_path,
+            "worktreePath": worktree_path,
+            "branch": branch,
+        }),
+        async {
+            local_remove_task_worktree(project_path, worktree_path, branch)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct WorktreeDiffStats {
     pub additions: i32,
     pub deletions: i32,
 }
 
-/// 计算 worktree 工作树（含未提交改动 + 未跟踪文件）相对于 `base_branch` 与 HEAD 的 merge-base 的 +/− 行数。
-/// 用 merge-base 而非 base_branch 本身，避免主仓 base 推进后把别人提交的改动算到本任务头上。
-#[tauri::command]
-pub async fn worktree_diff_stats(
+pub async fn local_worktree_diff_stats(
     project_path: String,
     worktree_path: String,
     base_branch: String,
@@ -2377,6 +2709,33 @@ pub async fn worktree_diff_stats(
     .map_err(|e| format!("Diff stats task panicked: {}", e))?
 }
 
+/// 计算 worktree 工作树（含未提交改动 + 未跟踪文件）相对于 `base_branch` 与 HEAD 的 merge-base 的 +/− 行数。
+/// 用 merge-base 而非 base_branch 本身，避免主仓 base 推进后把别人提交的改动算到本任务头上。
+#[tauri::command]
+pub async fn worktree_diff_stats<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    worktree_path: String,
+    base_branch: String,
+) -> Result<WorktreeDiffStats, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.worktree_diff_stats",
+        serde_json::json!({
+            "projectPath": project_path,
+            "worktreePath": worktree_path,
+            "baseBranch": base_branch,
+        }),
+        async {
+            local_worktree_diff_stats(project_path, worktree_path, base_branch)
+                .await
+                .and_then(|stats| serde_json::to_value(stats).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
 /// 解析 `git diff --numstat` 输出累加 +/− 行数。
 /// numstat 对二进制文件输出 `-\t-\t<path>`，parse 失败时按 0 跳过。
 fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
@@ -2393,13 +2752,14 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_blame_file, git_branch_graph, git_clone, git_commit_detail, git_conflict_files,
-        git_conflict_preview, git_dir, git_fetch, git_has_head, git_init, git_log,
-        git_resolve_conflict, git_show_diff, git_stash_diff, git_stash_list, git_stash_push,
+        git_blame_file, git_branch_graph, git_clone, git_commit_detail, git_conflict_preview,
+        git_dir, git_fetch, git_has_head, git_resolve_conflict, git_stash_diff, git_stash_list,
         git_worktree_root, is_protected_project_relative_path, list_untracked_files,
-        merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
-        parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list, path_to_string,
-        resolve_conflict_markers_keep_both, run_git, run_git_check,
+        local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
+        local_git_stash_push, local_merge_task_worktree, parse_blame_porcelain,
+        parse_branch_graph_log,
+        parse_conflict_hunks, parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list,
+        path_to_string, resolve_conflict_markers_keep_both, run_git, run_git_check,
         untracked_files_under_directory, validate_clone_target, validate_git_revision,
         validate_git_url, validate_project_path, validate_stash_ref, GitBlameLine,
         GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
@@ -2677,7 +3037,7 @@ mod tests {
         repo.commit_file("app.js", "one\n", "initial");
         fs::write(repo.path.join("app.js"), "two\n").unwrap();
 
-        git_stash_push(
+        local_git_stash_push(
             repo.path_string(),
             Some("save app change".to_string()),
             false,
@@ -2698,7 +3058,7 @@ mod tests {
         repo.commit_file("app.js", "one\n", "initial");
         fs::write(repo.path.join("app.js"), "two\n").unwrap();
 
-        git_stash_push(repo.path_string(), Some("preview".to_string()), false)
+        local_git_stash_push(repo.path_string(), Some("preview".to_string()), false)
             .await
             .unwrap();
         let diff = git_stash_diff(repo.path_string(), "stash@{0}".to_string())
@@ -2756,7 +3116,7 @@ mod tests {
         let merge = run_git(&repo_path, &["merge", "feature"]).unwrap();
         assert!(!merge.status.success());
 
-        let conflicts = git_conflict_files(repo_path.clone()).await.unwrap();
+        let conflicts = local_git_conflict_files(repo_path.clone()).await.unwrap();
         assert_eq!(
             conflicts,
             vec![GitConflictFile {
@@ -2772,7 +3132,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(git_conflict_files(repo_path.clone())
+        assert!(local_git_conflict_files(repo_path.clone())
             .await
             .unwrap()
             .is_empty());
@@ -2897,7 +3257,7 @@ mod tests {
         // this test fails loudly if the guard is ever removed.
         run_git_check(&repo_path, &["update-ref", "refs/heads/injected", "HEAD"]).unwrap();
 
-        assert!(git_show_diff(repo_path.clone(), payload.clone())
+        assert!(local_git_show_diff(repo_path.clone(), payload.clone())
             .await
             .is_err());
         assert!(git_commit_detail(repo_path.clone(), payload.clone())
@@ -2910,9 +3270,11 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(git_log(repo_path.clone(), 50, None, Some(payload.clone()))
-            .await
-            .is_err());
+        assert!(
+            local_git_log(repo_path.clone(), 50, None, Some(payload.clone()))
+                .await
+                .is_err()
+        );
 
         assert!(
             !sentinel.exists(),
@@ -2921,9 +3283,11 @@ mod tests {
         );
 
         // A legitimate revision still works.
-        assert!(git_log(repo_path, 50, None, Some("injected".to_string()))
-            .await
-            .is_ok());
+        assert!(
+            local_git_log(repo_path, 50, None, Some("injected".to_string()))
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3019,7 +3383,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = path_to_string(&dir.canonicalize().unwrap()).unwrap();
 
-        git_init(path.clone(), None).await.expect("init");
+        local_git_init(path.clone(), None).await.expect("init");
         assert!(dir.join(".git").exists());
         // 分支名显式给出,不靠用户的 init.defaultBranch —— 否则两台机器可能一台 main
         // 一台 master,推送时成了两条无关的分支。
@@ -3028,7 +3392,9 @@ mod tests {
 
         // 再调一次不该报错:上层每次进入 git 同步模式都会调,报错会让正常的重复调用
         // 看起来像故障。
-        git_init(path, None).await.expect("second init is a no-op");
+        local_git_init(path, None)
+            .await
+            .expect("second init is a no-op");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3039,7 +3405,9 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = path_to_string(&dir.canonicalize().unwrap()).unwrap();
 
-        assert!(git_init(path, Some("--bare".to_string())).await.is_err());
+        assert!(local_git_init(path, Some("--bare".to_string()))
+            .await
+            .is_err());
         assert!(!dir.join(".git").exists());
 
         let _ = fs::remove_dir_all(&dir);
@@ -3105,7 +3473,7 @@ mod tests {
             std::env::temp_dir().join(format!("aeroric-merge-rce-{}", uuid::Uuid::new_v4()));
         let payload = format!("--upload-pack=touch {};git-upload-pack", sentinel.display());
 
-        let error = merge_task_worktree(
+        let error = local_merge_task_worktree(
             project_path.clone(),
             worktree_path.clone(),
             payload.clone(),
@@ -3118,7 +3486,7 @@ mod tests {
 
         // base_branch 也是 refspec 的一半,同样得挡。
         let error =
-            merge_task_worktree(project_path, worktree_path, "feature".to_string(), payload)
+            local_merge_task_worktree(project_path, worktree_path, "feature".to_string(), payload)
                 .await
                 .unwrap_err();
         assert_eq!(error, "Invalid git revision", "error = {error}");
