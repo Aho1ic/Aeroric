@@ -2056,3 +2056,237 @@ async fn git_unstage_files_unstages_with_head_fallback_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_file_diff_returns_worktree_diff_and_untracked_fallback() {
+    let harness = Harness::start("git-file-diff").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-file-diff");
+    commit_file(&repo, "a.txt", "one\n", "base commit");
+    std::fs::write(repo.root.join("a.txt"), "two\n").expect("modify a");
+
+    // Unstaged worktree diff for a tracked file.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "filediff-1",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "staged": false
+        }),
+    )
+    .await;
+    let diff = success_result(reply)
+        .as_str()
+        .expect("diff string")
+        .to_string();
+    assert!(diff.contains("-one") && diff.contains("+two"), "{diff:?}");
+
+    // Staged diff needs --cached to see the same change.
+    let add = std::process::Command::new("git")
+        .args(["add", "a.txt"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git add");
+    assert!(add.status.success());
+    let reply_staged = query(
+        &mut reader,
+        &mut writer,
+        "filediff-staged",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "staged": true
+        }),
+    )
+    .await;
+    let staged_diff = success_result(reply_staged)
+        .as_str()
+        .expect("diff string")
+        .to_string();
+    assert!(
+        staged_diff.contains("-one") && staged_diff.contains("+two"),
+        "{staged_diff:?}"
+    );
+
+    // An untracked file falls back to `diff --no-index` against an empty file.
+    std::fs::write(repo.root.join("b.txt"), "brand new\n").expect("write b");
+    let reply_untracked = query(
+        &mut reader,
+        &mut writer,
+        "filediff-untracked",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "b.txt",
+            "staged": false
+        }),
+    )
+    .await;
+    let untracked = success_result(reply_untracked)
+        .as_str()
+        .expect("diff string")
+        .to_string();
+    assert!(untracked.contains("b.txt"), "{untracked:?}");
+    assert!(untracked.contains("brand new"), "{untracked:?}");
+
+    // A `..` path is refused before git runs — the --no-index fallback would
+    // otherwise turn this method into a file-read primitive outside the worktree.
+    let reply_escape = query(
+        &mut reader,
+        &mut writer,
+        "filediff-escape",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "../secrets.txt",
+            "staged": false
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_escape) = reply_escape else {
+        panic!("escape path must fail");
+    };
+    assert_eq!(failure_escape.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_escape.error.message,
+        "File path must stay inside the git worktree"
+    );
+
+    // Missing staged flag -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "filediff-missing",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing staged must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "filediff-remote",
+        "git.git_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "staged": false,
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_show_file_diff_shows_committed_content_and_validates_params() {
+    let harness = Harness::start("git-show-file-diff").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-show-file-diff");
+    commit_file(&repo, "a.txt", "one\n", "first commit");
+    let first = git_output(&repo, &["rev-parse", "HEAD"]);
+    commit_file(&repo, "a.txt", "two\n", "second commit");
+
+    // `show --format= <hash> -- <file>` returns the PATCH of that file in that
+    // commit (a pathspec turns `git show` into a per-path diff — the method name
+    // says file_diff, not blob). The first commit adds the file, so the patch is
+    // a new-file diff; assert its shape, not a guessed blob body.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "showdiff-1",
+        "git.git_show_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": first,
+            "filePath": "a.txt"
+        }),
+    )
+    .await;
+    let result = success_result(reply);
+    let content = result.as_str().expect("content string");
+    assert!(
+        content.contains("diff --git a/a.txt b/a.txt"),
+        "{content:?}"
+    );
+    assert!(content.contains("new file mode"), "{content:?}");
+    assert!(content.contains("+one"), "{content:?}");
+
+    // An option-like revision is refused before git runs.
+    let reply_option = query(
+        &mut reader,
+        &mut writer,
+        "showdiff-option",
+        "git.git_show_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": "--output=/tmp/evil",
+            "filePath": "a.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_option) = reply_option else {
+        panic!("option-like revision must fail");
+    };
+    assert_eq!(failure_option.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_option.error.message,
+        "revision must not start with '-'"
+    );
+
+    // Missing commitHash -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "showdiff-missing",
+        "git.git_show_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing commitHash must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "showdiff-remote",
+        "git.git_show_file_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "commitHash": first,
+            "filePath": "a.txt",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

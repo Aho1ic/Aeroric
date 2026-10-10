@@ -18,6 +18,9 @@ pub const STASH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `git_stash_drop` 的 timeout（legacy 给它 10s，与 push/apply 的 20s **不是**同一个值；
 /// 合并成一个常量会静默改掉其中一边）。
 pub const STASH_DROP_TIMEOUT: Duration = Duration::from_secs(10);
+/// `git_file_diff` 主命令与 untracked 回落的 timeout（legacy 两处都用
+/// `Duration::from_secs(10)`）。
+pub const FILE_DIFF_TIMEOUT: Duration = Duration::from_secs(10);
 /// `git_stage_files`/`git_unstage_files` 主命令的 timeout（legacy 用
 /// `Duration::from_secs(10)`——比单文件 stage/unstage 的 `READ_TIMEOUT` 宽）。
 pub const STAGE_FILES_TIMEOUT: Duration = Duration::from_secs(10);

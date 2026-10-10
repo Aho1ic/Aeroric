@@ -624,6 +624,101 @@ pub fn unstage_files(
     Ok(())
 }
 
+/// 字节截断（legacy 的 `&raw[..limit]`＋`from_utf8_lossy` 形状：按**字节**切，
+/// 可能劈开 UTF-8 字符——lossy 用 U+FFFD 补上；core 的 stdout 已是 String，
+/// 不能直接 `&s[..limit]`（非边界会 panic），经 as_bytes 走同一形状）。
+fn truncate_bytes(raw: &str, limit: usize) -> String {
+    let bytes = raw.as_bytes();
+    String::from_utf8_lossy(if bytes.len() > limit {
+        &bytes[..limit]
+    } else {
+        bytes
+    })
+    .into_owned()
+}
+
+/// 单文件 diff（legacy `git_file_diff` verbatim，外加一条**刻意收紧**的路径守卫）。
+///
+/// argv：`diff [--cached] -- <file>`（10s）。主路径**不检查** git 退出码（legacy
+/// 如此）：stdout 为空且未 staged 时回落 `diff --no-index <空文件> <绝对路径>`
+/// （空临时文件用 uuid 命名；先删临时文件再传播回落错误，顺序逐字）。
+///
+/// **刻意收紧**：legacy 对 `file_path` 零校验，而回落的 `--no-index` 把它变成
+/// 任意文件读取原语（绝对路径经 `root.join` 整体替换，`../` 越 worktree）。
+/// 本地实现按 P6-01 path_policy 的服务端权威原则加 `validate_git_relative_path`
+/// （切片 79「更严的守卫保持更严」先例）——合法路径行为逐字不变，越界路径从
+/// "泄露文件"变"拒绝"。两条截断上限都是 200 * 1024 **字节**（不是字符）。
+pub fn file_diff(repo_root: &Path, file_path: &str, staged: bool) -> Result<String, String> {
+    validate_git_relative_path(file_path)?;
+    let limit = 200 * 1024;
+    let mut args: Vec<&str> = vec!["diff"];
+    if staged {
+        args.push("--cached");
+    }
+    args.push("--");
+    args.push(file_path);
+    let output = transport::run_git(repo_root, &args, transport::FILE_DIFF_TIMEOUT, None)?;
+    let raw = output.stdout;
+    if raw.is_empty() && !staged {
+        let abs_path = repo_root.join(file_path);
+        let abs_path_str = abs_path.to_string_lossy().into_owned();
+        let empty_file = std::env::temp_dir().join(format!(
+            "aeroric-empty-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::File::create(&empty_file)
+            .map_err(|error| format!("Failed to create temporary file for git diff: {error}"))?;
+        let empty_str = empty_file.to_string_lossy().into_owned();
+        let fallback_args = vec![
+            "diff",
+            "--no-index",
+            empty_str.as_str(),
+            abs_path_str.as_str(),
+        ];
+        let fallback = transport::run_git(
+            repo_root,
+            &fallback_args,
+            transport::FILE_DIFF_TIMEOUT,
+            None,
+        );
+        let _ = std::fs::remove_file(&empty_file);
+        let fallback = fallback?;
+        return Ok(truncate_bytes(&fallback.stdout, limit));
+    }
+    Ok(truncate_bytes(&raw, limit))
+}
+
+/// 提交里某文件的完整内容（legacy `git_show_file_diff` verbatim）：
+/// `show --format= --end-of-options <hash> -- <file>`；失败回落**仅 stderr**
+/// （不是 combined()）；截断上限 500 * 1024 **字节**。legacy 的同步 run_git
+/// 没有超时；core 的 run_git 必须给，取 `READ_TIMEOUT`（本地单文件 blob 读取，
+/// 不是行为差异的载体）。legacy 只校验 revision（`validate_git_revision`，
+/// 报文与 core `validate_revision` 不同——切片 66 起既定采用 core 版）。
+pub fn show_file_diff(
+    repo_root: &Path,
+    commit_hash: &str,
+    file_path: &str,
+) -> Result<String, String> {
+    transport::validate_revision(commit_hash)?;
+    let output = transport::run_git(
+        repo_root,
+        &[
+            "show",
+            "--format=",
+            "--end-of-options",
+            commit_hash,
+            "--",
+            file_path,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(output.stderr);
+    }
+    Ok(truncate_bytes(&output.stdout, 500 * 1024))
+}
+
 pub fn unstage(repo_root: &Path, file_path: &str, locks: &RepoLocks) -> Result<(), String> {
     transport::validate_pathspec(file_path)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());

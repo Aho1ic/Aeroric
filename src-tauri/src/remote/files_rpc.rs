@@ -206,7 +206,7 @@ pub(crate) async fn git_diff(params: Value) -> Result<Value, String> {
         Ok(root) => root,
         Err(reason) => return Ok(unavailable(reason)),
     };
-    let diff = crate::git::git_file_diff(root, file_path, staged).await?;
+    let diff = crate::git::local_git_file_diff(root, file_path, staged).await?;
     Ok(json!({ "available": true, "diff": diff }))
 }
 

@@ -1269,8 +1269,7 @@ pub async fn git_show_diff<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_file_diff(
+pub async fn local_git_file_diff(
     project_path: String,
     file_path: String,
     staged: bool,
@@ -1317,6 +1316,27 @@ pub async fn git_file_diff(
         &raw
     })
     .into_owned())
+}
+
+#[tauri::command]
+pub async fn git_file_diff<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+    staged: bool,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_file_diff",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path, "staged": staged }),
+        async {
+            local_git_file_diff(project_path, file_path, staged)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub async fn local_git_stage(project_path: String, file_path: String) -> Result<(), String> {
@@ -1852,8 +1872,7 @@ pub async fn git_discard_all(project_path: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn git_show_file_diff(
+pub async fn local_git_show_file_diff(
     project_path: String,
     commit_hash: String,
     file_path: String,
@@ -1885,6 +1904,31 @@ pub async fn git_show_file_diff(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_show_file_diff<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    commit_hash: String,
+    file_path: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_show_file_diff",
+        serde_json::json!({
+            "projectPath": project_path,
+            "commitHash": commit_hash,
+            "filePath": file_path
+        }),
+        async {
+            local_git_show_file_diff(project_path, commit_hash, file_path)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3492,7 +3536,7 @@ mod tests {
         assert!(git_commit_detail(repo_path.clone(), payload.clone())
             .await
             .is_err());
-        assert!(super::git_show_file_diff(
+        assert!(super::local_git_show_file_diff(
             repo_path.clone(),
             payload.clone(),
             "app.js".to_string()

@@ -208,6 +208,20 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_file_diff",
+            Arc::new(move |request, _call| Box::pin(async move { git_file_diff(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_show_file_diff",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_show_file_diff(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -1572,6 +1586,103 @@ async fn git_unstage_files(request: Request) -> Frame {
         },
     )
     .await
+}
+
+async fn git_file_diff(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_file_diff requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_file_diff requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_file_diff requires params.filePath (string)",
+        );
+    };
+    let Some(staged) = params.get("staged").and_then(Value::as_bool) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_file_diff requires params.staged (boolean)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::file_diff(std::path::Path::new(&p_path), &f_path, staged)
+    })
+    .await;
+    match result {
+        Ok(Ok(diff)) => ok(&request, Value::String(diff)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_show_file_diff(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_file_diff requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_file_diff requires params.projectPath (string)",
+        );
+    };
+    let Some(commit_hash) = params.get("commitHash").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_file_diff requires params.commitHash (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_show_file_diff requires params.filePath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let c_hash = commit_hash.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::show_file_diff(std::path::Path::new(&p_path), &c_hash, &f_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(content)) => ok(&request, Value::String(content)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
 }
 
 /// Shared request shape for the plural stage/unstage twins (slice 82). The wire
