@@ -801,6 +801,237 @@ pub fn commit_detail_result(
     ))
 }
 
+// ===== 冲突预览/解决家族（切片 86）=====
+
+/// 冲突解决选项（legacy `GitConflictResolution` verbatim：wire 小写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitConflictResolution {
+    Ours,
+    Theirs,
+    Both,
+}
+
+/// 冲突块（legacy `GitConflictHunk` 形状；wire 为 camelCase——`base` 在无
+/// diff3 段时为 null）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConflictHunk {
+    pub index: u32,
+    pub ours: String,
+    pub base: Option<String>,
+    pub theirs: String,
+}
+
+/// 冲突预览（legacy `GitConflictPreview` 形状；wire 为 camelCase——`filePath`
+/// 承重）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConflictPreview {
+    pub file_path: String,
+    pub hunks: Vec<GitConflictHunk>,
+}
+
+/// 解析冲突标记（legacy `parse_conflict_hunks` 逐字）：`<<<<<<< `/`||||||| `/`
+/// =======`/`>>>>>>> ` 四态机；split_inclusive 保留行尾；未闭合/无块各报各错；
+/// index 从 1 起；无 diff3 段 ⇒ base 为 None。
+pub fn parse_conflict_hunks(content: &str) -> Result<Vec<GitConflictHunk>, String> {
+    enum State {
+        Normal,
+        Ours,
+        Base,
+        Theirs,
+    }
+
+    let mut state = State::Normal;
+    let mut ours = String::new();
+    let mut base = String::new();
+    let mut theirs = String::new();
+    let mut hunks = Vec::new();
+
+    for line in content.split_inclusive('\n') {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        match state {
+            State::Normal if marker.starts_with("<<<<<<< ") => {
+                state = State::Ours;
+                ours.clear();
+                base.clear();
+                theirs.clear();
+            }
+            State::Ours if marker.starts_with("||||||| ") => {
+                state = State::Base;
+            }
+            State::Ours if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Ours => ours.push_str(line),
+            State::Base if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Base => base.push_str(line),
+            State::Theirs if marker.starts_with(">>>>>>> ") => {
+                hunks.push(GitConflictHunk {
+                    index: hunks.len() as u32 + 1,
+                    ours: ours.clone(),
+                    base: (!base.is_empty()).then(|| base.clone()),
+                    theirs: theirs.clone(),
+                });
+                state = State::Normal;
+            }
+            State::Normal => {}
+            State::Theirs => theirs.push_str(line),
+        }
+    }
+
+    if !matches!(state, State::Normal) {
+        return Err("Unclosed conflict marker block".to_string());
+    }
+    if hunks.is_empty() {
+        return Err("No conflict markers found".to_string());
+    }
+    Ok(hunks)
+}
+
+/// keep-both 合并（legacy `resolve_conflict_markers_keep_both` 逐字）：先过
+/// `parse_conflict_hunks` 的校验（未闭合/无块先报错），再按 ours＋theirs 顺序
+/// 拼接——两侧都非空且 ours 不以换行结尾时补一个换行。
+pub fn resolve_conflict_markers_keep_both(content: &str) -> Result<String, String> {
+    enum State {
+        Normal,
+        Ours,
+        Base,
+        Theirs,
+    }
+
+    parse_conflict_hunks(content)?;
+
+    let mut state = State::Normal;
+    let mut output = String::new();
+    let mut ours = String::new();
+    let mut theirs = String::new();
+
+    for line in content.split_inclusive('\n') {
+        let marker = line.trim_end_matches(['\r', '\n']);
+        match state {
+            State::Normal if marker.starts_with("<<<<<<< ") => {
+                state = State::Ours;
+                ours.clear();
+                theirs.clear();
+            }
+            State::Normal => output.push_str(line),
+            State::Ours if marker.starts_with("||||||| ") => {
+                state = State::Base;
+            }
+            State::Ours if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Ours => ours.push_str(line),
+            State::Base if marker.starts_with("=======") => {
+                state = State::Theirs;
+            }
+            State::Base => {}
+            State::Theirs if marker.starts_with(">>>>>>> ") => {
+                output.push_str(&ours);
+                if !ours.is_empty() && !theirs.is_empty() && !ours.ends_with('\n') {
+                    output.push('\n');
+                }
+                output.push_str(&theirs);
+                state = State::Normal;
+            }
+            State::Theirs => theirs.push_str(line),
+        }
+    }
+    Ok(output)
+}
+
+/// 项目相对路径解析（legacy `resolve_project_relative_file_path` verbatim）：
+/// 相对校验＋canonical 双方＋parent 包含判定（symlink 落点在项目内才算合法）。
+fn resolve_project_relative_file_path(
+    project_path: &Path,
+    file_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    validate_git_relative_path(file_path)?;
+    let project = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+    let target = project.join(file_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Cannot resolve parent directory".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve parent directory: {error}"))?;
+    if !parent.starts_with(&project) {
+        return Err("File path is outside project root".to_string());
+    }
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "Cannot resolve file name".to_string())?;
+    Ok(parent.join(file_name))
+}
+
+/// 冲突预览（legacy `git_conflict_preview` verbatim；名带 `_result` 后缀——core
+/// 已有 P6-04 的旧 `conflict_preview`（git diff 形状、core 测试在用），按切片
+/// 77/79 先例旧入口保留）。读文件＋解析标记；读失败与解析失败各自回落原文。
+pub fn conflict_preview_result(
+    project_path: &Path,
+    file_path: &str,
+) -> Result<GitConflictPreview, String> {
+    let target = resolve_project_relative_file_path(project_path, file_path)?;
+    let content = std::fs::read_to_string(&target)
+        .map_err(|error| format!("Failed to read conflict file: {error}"))?;
+    Ok(GitConflictPreview {
+        file_path: file_path.to_string(),
+        hunks: parse_conflict_hunks(&content)?,
+    })
+}
+
+/// 冲突解决（legacy `git_resolve_conflict` verbatim；名带后缀——core 已有
+/// P6-04 的旧 `resolve_conflict`（写入选定内容形状、core 测试在用），旧入口
+/// 保留）。ours/theirs 走 `checkout --ours|--theirs -- <file>`，both 走
+/// keep-both 原地写回；**三条都以 `add -- <file>` 收尾**（legacy 如此——
+/// resolve 即 stage）。mutating 串行化；失败回落仅 stderr trim（run_git_check
+/// 形状）。
+pub fn resolve_conflict_with_resolution(
+    project_path: &Path,
+    file_path: &str,
+    resolution: GitConflictResolution,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    let lock = locks.lock_for(project_path.to_str().unwrap_or_default());
+    match resolution {
+        GitConflictResolution::Ours => {
+            run_git_check(
+                project_path,
+                &["checkout", "--ours", "--", file_path],
+                transport::READ_TIMEOUT,
+                Some(&lock),
+            )?;
+        }
+        GitConflictResolution::Theirs => {
+            run_git_check(
+                project_path,
+                &["checkout", "--theirs", "--", file_path],
+                transport::READ_TIMEOUT,
+                Some(&lock),
+            )?;
+        }
+        GitConflictResolution::Both => {
+            let target = resolve_project_relative_file_path(project_path, file_path)?;
+            let content = std::fs::read_to_string(&target)
+                .map_err(|error| format!("Failed to read conflict file: {error}"))?;
+            let resolved = resolve_conflict_markers_keep_both(&content)?;
+            std::fs::write(&target, resolved)
+                .map_err(|error| format!("Failed to write resolved conflict file: {error}"))?;
+        }
+    }
+    run_git_check(
+        project_path,
+        &["add", "--", file_path],
+        transport::READ_TIMEOUT,
+        Some(&lock),
+    )
+}
+
 // ===== discard 家族（切片 85）=====
 
 /// 解析 worktree root（legacy `git_worktree_root` verbatim）：`rev-parse

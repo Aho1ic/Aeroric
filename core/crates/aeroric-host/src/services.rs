@@ -252,6 +252,22 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_conflict_preview",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_conflict_preview(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.git_resolve_conflict",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_resolve_conflict(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -1902,6 +1918,109 @@ async fn git_discard_all(request: Request) -> Frame {
     let result = tokio::task::spawn_blocking(move || {
         let locks = aeroric_core::git::transport::RepoLocks::default();
         aeroric_core::git::service::discard_all(std::path::Path::new(&p_path), &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_conflict_preview(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_conflict_preview requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_conflict_preview requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_conflict_preview requires params.filePath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::conflict_preview_result(std::path::Path::new(&p_path), &f_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(preview)) => match serde_json::to_value(preview) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_resolve_conflict(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_resolve_conflict requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_resolve_conflict requires params.projectPath (string)",
+        );
+    };
+    let Some(file_path) = params.get("filePath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_resolve_conflict requires params.filePath (string)",
+        );
+    };
+    let resolution = match params.get("resolution").and_then(Value::as_str) {
+        Some("ours") => aeroric_core::git::service::GitConflictResolution::Ours,
+        Some("theirs") => aeroric_core::git::service::GitConflictResolution::Theirs,
+        Some("both") => aeroric_core::git::service::GitConflictResolution::Both,
+        _ => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_resolve_conflict requires params.resolution (ours|theirs|both)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let f_path = file_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::resolve_conflict_with_resolution(
+            std::path::Path::new(&p_path),
+            &f_path,
+            resolution,
+            &locks,
+        )
     })
     .await;
     match result {

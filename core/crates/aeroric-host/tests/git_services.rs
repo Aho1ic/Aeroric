@@ -2721,3 +2721,252 @@ async fn git_discard_all_resets_worktree_and_trashes_untracked() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+fn conflicting_repo(label: &str, ours: &str, theirs: &str) -> TempRepo {
+    let repo = new_repo(label);
+    commit_file(&repo, "a.txt", "base\n", "base commit");
+    std::process::Command::new("git")
+        .args(["checkout", "-b", "b"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("checkout -b");
+    commit_file(&repo, "a.txt", &format!("{theirs}\n"), "theirs change");
+    std::process::Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("checkout main");
+    commit_file(&repo, "a.txt", &format!("{ours}\n"), "ours change");
+    let merge = std::process::Command::new("git")
+        .args(["merge", "b"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("merge");
+    assert!(
+        !merge.status.success(),
+        "merge must conflict for the fixture"
+    );
+    repo
+}
+
+#[tokio::test]
+async fn git_conflict_preview_returns_hunks_and_validates_params() {
+    let harness = Harness::start("git-conflict-preview").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = conflicting_repo("aeroric-git-conflict-preview", "from main", "from b");
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "preview-1",
+        "git.git_conflict_preview",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt"
+        }),
+    )
+    .await;
+    let result = success_result(reply);
+    assert_eq!(result["filePath"], "a.txt", "{result}");
+    let hunks = result["hunks"].as_array().expect("hunks");
+    assert_eq!(hunks.len(), 1, "{result}");
+    assert_eq!(hunks[0]["index"], 1, "{result}");
+    assert_eq!(hunks[0]["ours"], "from main\n", "{result}");
+    assert_eq!(hunks[0]["theirs"], "from b\n", "{result}");
+    // Default merge style has no diff3 base section.
+    assert!(hunks[0]["base"].is_null(), "{result}");
+
+    // A file without markers is an ERROR ("No conflict markers found"). A separate
+    // repo: the conflicted one can't commit while a.txt is unmerged.
+    let clean_repo = new_repo("aeroric-git-conflict-preview-clean");
+    commit_file(&clean_repo, "clean.txt", "no markers\n", "clean file");
+    let reply_clean = query(
+        &mut reader,
+        &mut writer,
+        "preview-clean",
+        "git.git_conflict_preview",
+        json!({
+            "projectPath": clean_repo.root.to_string_lossy(),
+            "filePath": "clean.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_clean) = reply_clean else {
+        panic!("non-conflict file must fail");
+    };
+    assert_eq!(failure_clean.error.code, ErrorCode::IoError);
+    assert_eq!(failure_clean.error.message, "No conflict markers found");
+
+    // Escape path refused before any read.
+    let reply_escape = query(
+        &mut reader,
+        &mut writer,
+        "preview-escape",
+        "git.git_conflict_preview",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "../secrets.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_escape) = reply_escape else {
+        panic!("escape path must fail");
+    };
+    assert_eq!(failure_escape.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_escape.error.message,
+        "File path must stay inside the git worktree"
+    );
+
+    // Missing filePath -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "preview-missing",
+        "git.git_conflict_preview",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing filePath must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "preview-remote",
+        "git.git_conflict_preview",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_resolve_conflict_resolves_and_stages() {
+    let harness = Harness::start("git-resolve-conflict").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // ours: file content becomes the ours side and the path is staged.
+    let repo = conflicting_repo("aeroric-git-resolve-ours", "from main", "from b");
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "resolve-ours",
+        "git.git_resolve_conflict",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "resolution": "ours"
+        }),
+    )
+    .await;
+    let _ = success_result(reply);
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("a.txt")).expect("read ours"),
+        "from main\n"
+    );
+    // Ours == HEAD here, so porcelain is clean once resolved — the resolution
+    // criterion is "no unmerged entries left", not a staged-M status.
+    let unmerged = git_output(&repo, &["ls-files", "-u"]);
+    assert_eq!(unmerged, "", "ours must resolve the conflict: {unmerged:?}");
+    let status = git_output(&repo, &["status", "--porcelain"]);
+    assert_eq!(
+        status, "",
+        "ours (== HEAD) leaves a clean worktree: {status:?}"
+    );
+
+    // theirs
+    let repo_theirs = conflicting_repo("aeroric-git-resolve-theirs", "from main", "from b");
+    let reply_theirs = query(
+        &mut reader,
+        &mut writer,
+        "resolve-theirs",
+        "git.git_resolve_conflict",
+        json!({
+            "projectPath": repo_theirs.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "resolution": "theirs"
+        }),
+    )
+    .await;
+    let _ = success_result(reply_theirs);
+    assert_eq!(
+        std::fs::read_to_string(repo_theirs.root.join("a.txt")).expect("read theirs"),
+        "from b\n"
+    );
+
+    // both: keep-both concatenation, then staged.
+    let repo_both = conflicting_repo("aeroric-git-resolve-both", "from main", "from b");
+    let reply_both = query(
+        &mut reader,
+        &mut writer,
+        "resolve-both",
+        "git.git_resolve_conflict",
+        json!({
+            "projectPath": repo_both.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "resolution": "both"
+        }),
+    )
+    .await;
+    let _ = success_result(reply_both);
+    assert_eq!(
+        std::fs::read_to_string(repo_both.root.join("a.txt")).expect("read both"),
+        "from main\nfrom b\n"
+    );
+    let status_both = git_output(&repo_both, &["status", "--porcelain"]);
+    assert!(
+        status_both.starts_with("M  a.txt"),
+        "both must be staged: {status_both:?}"
+    );
+
+    // An unknown resolution value is refused.
+    let reply_bad = query(
+        &mut reader,
+        &mut writer,
+        "resolve-bad",
+        "git.git_resolve_conflict",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "resolution": "mine"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_bad) = reply_bad else {
+        panic!("unknown resolution must fail");
+    };
+    assert_eq!(failure_bad.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "resolve-remote",
+        "git.git_resolve_conflict",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "a.txt",
+            "resolution": "ours",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

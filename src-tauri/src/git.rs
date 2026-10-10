@@ -256,7 +256,7 @@ pub(crate) struct GitConflictFile {
     pub(crate) path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictHunk {
     pub(crate) index: u32,
@@ -265,14 +265,14 @@ pub(crate) struct GitConflictHunk {
     pub(crate) theirs: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitConflictPreview {
     pub(crate) file_path: String,
     pub(crate) hunks: Vec<GitConflictHunk>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum GitConflictResolution {
     Ours,
@@ -2671,8 +2671,7 @@ pub async fn git_conflict_files<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_conflict_preview(
+pub async fn local_git_conflict_preview(
     project_path: String,
     file_path: String,
 ) -> Result<GitConflictPreview, String> {
@@ -2691,7 +2690,26 @@ pub async fn git_conflict_preview(
 }
 
 #[tauri::command]
-pub async fn git_resolve_conflict(
+pub async fn git_conflict_preview<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+) -> Result<GitConflictPreview, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_conflict_preview",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path }),
+        async {
+            local_git_conflict_preview(project_path, file_path)
+                .await
+                .and_then(|preview| serde_json::to_value(preview).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_git_resolve_conflict(
     project_path: String,
     file_path: String,
     resolution: GitConflictResolution,
@@ -2719,6 +2737,27 @@ pub async fn git_resolve_conflict(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_resolve_conflict<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+    resolution: GitConflictResolution,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_resolve_conflict",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path, "resolution": resolution }),
+        async {
+            local_git_resolve_conflict(project_path, file_path, resolution)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 // ── Task worktree management ─────────────────────────────────────────────────
@@ -3102,11 +3141,11 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_clone, git_conflict_preview, git_dir, git_fetch, git_has_head, git_resolve_conflict,
-        git_worktree_root, is_protected_project_relative_path, list_untracked_files,
-        local_git_blame_file, local_git_branch_graph, local_git_commit_detail,
-        local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
-        local_git_stash_diff, local_git_stash_list, local_git_stash_push,
+        git_clone, git_dir, git_fetch, git_has_head, git_worktree_root,
+        is_protected_project_relative_path, list_untracked_files, local_git_blame_file,
+        local_git_branch_graph, local_git_commit_detail, local_git_conflict_files,
+        local_git_conflict_preview, local_git_init, local_git_log, local_git_resolve_conflict,
+        local_git_show_diff, local_git_stash_diff, local_git_stash_list, local_git_stash_push,
         local_merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log,
         parse_conflict_hunks, parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list,
         path_to_string, resolve_conflict_markers_keep_both, run_git, run_git_check,
@@ -3474,7 +3513,7 @@ mod tests {
             }]
         );
 
-        git_resolve_conflict(
+        local_git_resolve_conflict(
             repo_path.clone(),
             "app.txt".to_string(),
             GitConflictResolution::Ours,
@@ -3506,7 +3545,7 @@ mod tests {
         let merge = run_git(&repo_path, &["merge", "feature"]).unwrap();
         assert!(!merge.status.success());
 
-        let preview = git_conflict_preview(repo_path, "app.txt".to_string())
+        let preview = local_git_conflict_preview(repo_path, "app.txt".to_string())
             .await
             .unwrap();
 
