@@ -32,10 +32,15 @@ pub struct GitCommit {
     pub refs: Vec<String>,
 }
 
-/// stash 条目。
+/// stash 条目（legacy `GitStashEntry` 形状：五个字段逐字——index/name/commit/date/message；
+/// 字段名都是单词，camelCase 与 snake_case 同形，但 rename_all 仍要挂着以防未来加多词字段）。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GitStashEntry {
-    pub index: usize,
+    pub index: u32,
+    pub name: String,
+    pub commit: String,
+    pub date: String,
     pub message: String,
 }
 
@@ -861,37 +866,120 @@ pub fn discard_files(
     Ok(())
 }
 
-/// stash（mutating；串行化）。
+/// 解析 `stash list --format=%gd%x1f%H%x1f%cr%x1f%s`（legacy `parse_stash_list`
+/// 逐字：四段按 \x1f 切；name 空则整行跳过；index 从 `stash@{N}` 提取，认不出
+/// 就回落 0）。
+pub fn parse_stash_list(stdout: &[u8]) -> Vec<GitStashEntry> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\x1f');
+            let name = parts.next()?.trim().to_string();
+            let commit = parts.next().unwrap_or_default().trim().to_string();
+            let date = parts.next().unwrap_or_default().trim().to_string();
+            let message = parts.next().unwrap_or_default().trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let index = name
+                .strip_prefix("stash@{")
+                .and_then(|value| value.strip_suffix('}'))
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            Some(GitStashEntry {
+                index,
+                name,
+                commit,
+                date,
+                message,
+            })
+        })
+        .collect()
+}
+
+/// stash 列表（legacy `git_stash_list` verbatim）。
+///
+/// 与旧 core `stash_list` 的四条轴差异（旧版无消费方，按 legacy 改齐而非并存）：
+/// ① argv 的 format 是**四段** `%gd%x1f%H%x1f%cr%x1f%s`（旧版两段 `%gd%x1f%gs`，
+///    丢掉 commit/date）；② 超时 10s（旧版 5s）；③ 回落文案 `Failed to list git
+///    stashes`（旧版 `Failed to list stash`）；④ 条目形状五个字段（旧版两个）。
+/// 空行过滤的差异也在此对齐：legacy 的解析按"**name** 为空跳过"，不是按整行空。
 pub fn stash_list(repo_root: &Path) -> Result<Vec<GitStashEntry>, String> {
     let output = transport::run_git(
         repo_root,
-        &["stash", "list", "--format=%gd%x1f%gs"],
-        transport::READ_TIMEOUT,
+        &["stash", "list", "--format=%gd%x1f%H%x1f%cr%x1f%s"],
+        transport::STASH_LIST_TIMEOUT,
         None,
     )?;
     if !output.success {
         return Err(transport::git_command_error(
             &output,
-            "Failed to list stash",
+            "Failed to list git stashes",
         ));
     }
-    Ok(output
-        .stdout
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let mut parts = line.splitn(2, '\x1f');
-            let index = parts
-                .next()
-                .unwrap_or("")
-                .trim_start_matches("stash@{")
-                .trim_end_matches('}')
-                .parse()
-                .unwrap_or(0);
-            let message = parts.next().unwrap_or("").to_string();
-            GitStashEntry { index, message }
-        })
-        .collect())
+    Ok(parse_stash_list(output.stdout.as_bytes()))
+}
+
+/// stash diff 截断上限（legacy `MAX_STASH_DIFF_CHARS`：按**字符**数计，不是字节）。
+pub const MAX_STASH_DIFF_CHARS: usize = 200_000;
+
+/// 截断长文本（legacy `truncate_text` 逐字：超出按字符数切，补 `...(truncated)`
+/// 后缀并置 true；字符边界用 `char_indices` 对齐，不劈开 UTF-8 字符）。
+pub fn truncate_text(value: String, max_chars: usize) -> (String, bool) {
+    if value.chars().count() <= max_chars {
+        return (value, false);
+    }
+    let cutoff = value
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len());
+    (format!("{}...(truncated)", &value[..cutoff]), true)
+}
+
+/// stash diff 结果（legacy `GitStashDiff` 形状；wire 为 camelCase——`stash_ref`
+/// 变 `stashRef` 是承重的，缺 rename 客户端解到 null）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashDiff {
+    pub stash_ref: String,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+/// stash diff（legacy `git_stash_diff` verbatim）：形状校验在跑 git 之前拒绝
+/// 松散引用（`HEAD` 不是 stash）；argv 七个开关逐字；diff 按 `MAX_STASH_DIFF_CHARS`
+/// 字符截断（截断是正常分支不是错误）。
+pub fn stash_diff(repo_root: &Path, stash_ref: &str) -> Result<GitStashDiff, String> {
+    validate_stash_ref(stash_ref)?;
+    let output = transport::run_git(
+        repo_root,
+        &[
+            "stash",
+            "show",
+            "--patch",
+            "--stat",
+            "--include-untracked",
+            "--no-ext-diff",
+            "--no-color",
+            stash_ref,
+        ],
+        transport::STASH_DIFF_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to load git stash diff",
+        ));
+    }
+    let raw = output.stdout;
+    let (diff, truncated) = truncate_text(raw, MAX_STASH_DIFF_CHARS);
+    Ok(GitStashDiff {
+        stash_ref: stash_ref.to_string(),
+        diff,
+        truncated,
+    })
 }
 
 /// stash push（mutating；串行化）。

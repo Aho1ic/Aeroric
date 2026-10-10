@@ -1672,3 +1672,172 @@ async fn git_branch_graph_returns_structured_commits_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_stash_list_returns_entries_and_validates_params() {
+    let harness = Harness::start("git-stash-list").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-stash-list");
+    commit_file(&repo, "tracked.txt", "base\n", "base commit");
+    // End state fixture: a real stash must exist, created by git itself.
+    std::fs::write(repo.root.join("tracked.txt"), "changed\n").expect("modify file");
+    let stash_out = std::process::Command::new("git")
+        .args(["stash", "push", "-m", "wip change"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git stash push");
+    assert!(stash_out.status.success(), "git stash push failed");
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "stashes-1",
+        "git.git_stash_list",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let result = success_result(reply);
+    let stashes = result.as_array().expect("stash array");
+    assert_eq!(stashes.len(), 1, "{result}");
+    assert_eq!(stashes[0]["name"], "stash@{0}", "{result}");
+    assert_eq!(stashes[0]["index"], 0, "{result}");
+    assert_eq!(stashes[0]["message"], "On main: wip change", "{result}");
+    let commit = stashes[0]["commit"].as_str().expect("commit hash");
+    assert_eq!(commit.len(), 40, "{commit}");
+    assert!(
+        !stashes[0]["date"].as_str().unwrap_or("").is_empty(),
+        "{result}"
+    );
+
+    // A repository with no stashes is a SUCCESS with an empty array.
+    let empty = new_repo("aeroric-git-stash-list-empty");
+    commit_file(&empty, "a.txt", "one\n", "first");
+    let reply_empty = query(
+        &mut reader,
+        &mut writer,
+        "stashes-empty",
+        "git.git_stash_list",
+        json!({ "projectPath": empty.root.to_string_lossy() }),
+    )
+    .await;
+    assert_eq!(success_result(reply_empty), json!([]));
+
+    // Missing projectPath -> InvalidArgument
+    let reply_bad = query(
+        &mut reader,
+        &mut writer,
+        "stashes-bad",
+        "git.git_stash_list",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure) = reply_bad else {
+        panic!("missing params must fail");
+    };
+    assert_eq!(failure.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "stashes-remote",
+        "git.git_stash_list",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_stash_diff_shows_stash_patch_and_validates_params() {
+    let harness = Harness::start("git-stash-diff").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-stash-diff");
+    commit_file(&repo, "tracked.txt", "base\n", "base commit");
+    std::fs::write(repo.root.join("tracked.txt"), "changed\n").expect("modify file");
+    let stash_out = std::process::Command::new("git")
+        .args(["stash", "push", "-m", "wip change"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git stash push");
+    assert!(stash_out.status.success(), "git stash push failed");
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "stashdiff-1",
+        "git.git_stash_diff",
+        json!({ "projectPath": repo.root.to_string_lossy(), "stashRef": "stash@{0}" }),
+    )
+    .await;
+    let result = success_result(reply);
+    assert_eq!(result["stashRef"], "stash@{0}", "{result}");
+    assert_eq!(result["truncated"], false, "{result}");
+    let diff = result["diff"].as_str().expect("diff text");
+    assert!(diff.contains("tracked.txt"), "{result}");
+    assert!(
+        diff.contains("base") && diff.contains("changed"),
+        "{result}"
+    );
+
+    // A loose ref is refused by the shape validator BEFORE git runs. The established
+    // host mapping (slice 76's stash_ref_request) surfaces core validation failures
+    // as IoError, not InvalidArgument; the exact message is what proves the refusal
+    // came from the validator and not from git (git's failure text is its own stderr).
+    let reply_bad_ref = query(
+        &mut reader,
+        &mut writer,
+        "stashdiff-badref",
+        "git.git_stash_diff",
+        json!({ "projectPath": repo.root.to_string_lossy(), "stashRef": "HEAD" }),
+    )
+    .await;
+    let Frame::Failure(failure_ref) = reply_bad_ref else {
+        panic!("loose stash ref must fail");
+    };
+    assert_eq!(failure_ref.error.code, ErrorCode::IoError);
+    assert_eq!(failure_ref.error.message, "Invalid stash reference");
+
+    // Missing stashRef -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "stashdiff-missing",
+        "git.git_stash_diff",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing stashRef must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "stashdiff-remote",
+        "git.git_stash_diff",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "stashRef": "stash@{0}",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

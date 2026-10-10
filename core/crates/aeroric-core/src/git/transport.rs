@@ -18,6 +18,11 @@ pub const STASH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `git_stash_drop` 的 timeout（legacy 给它 10s，与 push/apply 的 20s **不是**同一个值；
 /// 合并成一个常量会静默改掉其中一边）。
 pub const STASH_DROP_TIMEOUT: Duration = Duration::from_secs(10);
+/// `git_stash_list` 的 timeout（legacy 用 `Duration::from_secs(10)`）。
+pub const STASH_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+/// `git_stash_diff` 的 timeout（legacy 用 `Duration::from_secs(10)`；与 list 同值但
+/// 不是同一个死线——合并常量会让改一边静默改掉另一边）。
+pub const STASH_DIFF_TIMEOUT: Duration = Duration::from_secs(10);
 /// blame timeout（legacy `git_blame_file` 用 `Duration::from_secs(10)`）。
 pub const BLAME_TIMEOUT: Duration = Duration::from_secs(10);
 /// branch-graph timeout（legacy `git_branch_graph` 用 `Duration::from_secs(10)`；

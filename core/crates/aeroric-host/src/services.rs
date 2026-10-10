@@ -244,6 +244,18 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_stash_list",
+            Arc::new(move |request, _call| Box::pin(async move { git_stash_list(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_stash_diff",
+            Arc::new(move |request, _call| Box::pin(async move { git_stash_diff(request).await })),
+        );
+    }
+    {
+        set.register(
             "git.git_create_branch",
             Arc::new(move |request, _call| {
                 Box::pin(async move { git_create_branch(request).await })
@@ -1559,6 +1571,86 @@ async fn git_stage_all(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stash_list(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_list requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_list requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::stash_list(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(stashes)) => ok(
+            &request,
+            serde_json::to_value(stashes).unwrap_or(Value::Null),
+        ),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stash_diff(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_diff requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_diff requires params.projectPath (string)",
+        );
+    };
+    let Some(stash_ref) = params.get("stashRef").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_stash_diff requires params.stashRef (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let s_ref = stash_ref.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::stash_diff(std::path::Path::new(&p_path), &s_ref)
+    })
+    .await;
+    match result {
+        Ok(Ok(diff)) => match serde_json::to_value(diff) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

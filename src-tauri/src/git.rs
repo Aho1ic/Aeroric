@@ -232,7 +232,7 @@ pub(crate) struct GitBranchGraphResult {
     pub(crate) truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitStashEntry {
     pub(crate) index: u32,
@@ -242,7 +242,7 @@ pub(crate) struct GitStashEntry {
     pub(crate) message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitStashDiff {
     pub(crate) stash_ref: String,
@@ -2231,8 +2231,7 @@ pub async fn git_branch_graph<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_stash_list(project_path: String) -> Result<Vec<GitStashEntry>, String> {
+pub async fn local_git_stash_list(project_path: String) -> Result<Vec<GitStashEntry>, String> {
     let args = vec![
         "stash".to_string(),
         "list".to_string(),
@@ -2246,7 +2245,25 @@ pub async fn git_stash_list(project_path: String) -> Result<Vec<GitStashEntry>, 
 }
 
 #[tauri::command]
-pub async fn git_stash_diff(
+pub async fn git_stash_list<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<Vec<GitStashEntry>, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stash_list",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_stash_list(project_path)
+                .await
+                .and_then(|stashes| serde_json::to_value(stashes).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_git_stash_diff(
     project_path: String,
     stash_ref: String,
 ) -> Result<GitStashDiff, String> {
@@ -2276,6 +2293,26 @@ pub async fn git_stash_diff(
         diff,
         truncated,
     })
+}
+
+#[tauri::command]
+pub async fn git_stash_diff<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    stash_ref: String,
+) -> Result<GitStashDiff, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stash_diff",
+        serde_json::json!({ "projectPath": project_path, "stashRef": stash_ref }),
+        async {
+            local_git_stash_diff(project_path, stash_ref)
+                .await
+                .and_then(|diff| serde_json::to_value(diff).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub async fn local_git_stash_push(
@@ -2904,13 +2941,13 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 mod tests {
     use super::{
         git_clone, git_commit_detail, git_conflict_preview, git_dir, git_fetch, git_has_head,
-        git_resolve_conflict, git_stash_diff, git_stash_list, git_worktree_root,
-        is_protected_project_relative_path, list_untracked_files, local_git_blame_file,
-        local_git_branch_graph, local_git_conflict_files, local_git_init, local_git_log,
-        local_git_show_diff, local_git_stash_push, local_merge_task_worktree,
-        parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
-        parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list, path_to_string,
-        resolve_conflict_markers_keep_both, run_git, run_git_check,
+        git_resolve_conflict, git_worktree_root, is_protected_project_relative_path,
+        list_untracked_files, local_git_blame_file, local_git_branch_graph,
+        local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
+        local_git_stash_diff, local_git_stash_list, local_git_stash_push,
+        local_merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log,
+        parse_conflict_hunks, parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list,
+        path_to_string, resolve_conflict_markers_keep_both, run_git, run_git_check,
         untracked_files_under_directory, validate_clone_target, validate_git_revision,
         validate_git_url, validate_project_path, validate_stash_ref, GitBlameLine,
         GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
@@ -3195,7 +3232,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let stashes = git_stash_list(repo.path_string()).await.unwrap();
+        let stashes = local_git_stash_list(repo.path_string()).await.unwrap();
 
         assert_eq!(stashes.len(), 1);
         assert_eq!(stashes[0].name, "stash@{0}");
@@ -3212,7 +3249,7 @@ mod tests {
         local_git_stash_push(repo.path_string(), Some("preview".to_string()), false)
             .await
             .unwrap();
-        let diff = git_stash_diff(repo.path_string(), "stash@{0}".to_string())
+        let diff = local_git_stash_diff(repo.path_string(), "stash@{0}".to_string())
             .await
             .unwrap();
 
