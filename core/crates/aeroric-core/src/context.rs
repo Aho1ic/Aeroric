@@ -149,6 +149,10 @@ pub struct CoreContext {
     pub clock: Arc<dyn Clock>,
     pub secrets: Arc<dyn SecretStore>,
     pub hooks: Arc<dyn HookProvider>,
+    /// OS 服务端口（剪贴板/文件管理器 reveal）。默认 [`NoPlatformServices`]——
+    /// 剪贴板按端口契约返回空列表，调用方拿到的是中性的"没有能力"而不是错误；
+    /// 真正的宿主（Tauri/CLI/headless host）用 [`CoreContext::with_platform`] 注入。
+    pub platform: Arc<dyn crate::runtime::PlatformServices>,
     /// `Some` while this process holds the single-writer lease. A service that intends
     /// to write must be built from a context that has one; readers may proceed without
     /// it, because a shared read of a directory mid-write is recoverable, whereas a
@@ -167,6 +171,7 @@ impl CoreContext {
             clock: Arc::new(SystemClock),
             secrets: Arc::new(MemorySecrets::default()),
             hooks: Arc::new(NoHooks),
+            platform: Arc::new(NoPlatformServices),
             lease: None,
             task_saver: None,
         }
@@ -200,6 +205,11 @@ impl CoreContext {
         self
     }
 
+    pub fn with_platform(mut self, platform: Arc<dyn crate::runtime::PlatformServices>) -> Self {
+        self.platform = platform;
+        self
+    }
+
     /// Takes the writer role. Fails if another live process (or this one) holds it, or
     /// if the probe says this location should not host a writer (ADR-010).
     ///
@@ -225,6 +235,7 @@ impl CoreContext {
             clock,
             secrets: Arc::new(MemorySecrets::default()),
             hooks: Arc::new(NoHooks),
+            platform: Arc::new(NoPlatformServices),
             lease: Some(lease),
             task_saver: None,
         })
@@ -286,6 +297,25 @@ impl StorageWritePermission {
             why: format!("the lease was lost: {reason}"),
             ..self
         }
+    }
+}
+
+/// 无 OS 服务的默认实现（测试/未注入宿主）。剪贴板按端口契约返回空列表
+/// （"平台没有对应能力"的中性答案），reveal 返回 `Unsupported`。
+pub struct NoPlatformServices;
+
+impl crate::runtime::PlatformServices for NoPlatformServices {
+    fn reveal_in_file_manager(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<(), crate::runtime::PlatformError> {
+        Err(crate::runtime::PlatformError::Unsupported(
+            "no platform services installed",
+        ))
+    }
+
+    fn read_clipboard_file_paths(&self) -> Result<Vec<String>, crate::runtime::PlatformError> {
+        Ok(Vec::new())
     }
 }
 

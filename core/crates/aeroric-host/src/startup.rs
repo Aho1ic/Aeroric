@@ -86,12 +86,10 @@ pub async fn run_startup(
     protocol_hash: &str,
 ) -> Result<StartedHost, StartupError> {
     // 1. lock —— 写租约（连卷探测），失败即「另一个写者持有着」，绝不排队等。
-    let context = Arc::new(CoreContext::acquire(
-        options.paths.clone(),
-        clock,
-        owner,
-        probe,
-    )?);
+    let context = Arc::new(
+        CoreContext::acquire(options.paths.clone(), clock, owner, probe)?
+            .with_platform(std::sync::Arc::new(crate::platform_adapter::HostOsServices)),
+    );
 
     // 2. data compat —— schema 版本判定（load 自带 UnsupportedSchema/Corrupt 拒绝）。
     let outcome = load_runtime(&context).map_err(|e| StartupError::DataCompat(e.to_string()))?;

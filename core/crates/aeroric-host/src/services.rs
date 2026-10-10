@@ -4293,6 +4293,26 @@ pub fn register_file_services(
             }),
         );
     }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.read_image_preview",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_read_image_preview(request, context) })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "files.read_clipboard_file_paths",
+            Arc::new(move |request, _call| {
+                let context = Arc::clone(&context);
+                Box::pin(async move { files_read_clipboard_file_paths(request, context) })
+            }),
+        );
+    }
 }
 
 /// projectId → 本地项目根。先守卫 record.location，Local 保留原 `path`。
@@ -4406,6 +4426,83 @@ fn files_read_file(request: Request, context: Arc<CoreContext>) -> Frame {
     match aeroric_core::files::read_write::read_file_content(&root, &relative) {
         Ok(content) => ok(&request, serde_json::json!({ "content": content })),
         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+/// 图片预览（切片九十二）。projectId＋相对路径的服务端权威形状（与
+/// files_read_file 同一条校验链）；回复是 legacy 的 `ImagePreviewData`
+///（camelCase）。**帧上限是硬边界**：UDS 单帧 1 MiB，一张大图的 base64
+/// 回复会让 `encode_line` 拒绝并砸断连接——所以在这里先用帧层自己的
+/// 判定预检成功帧，超限就回一个干净的 `InvalidArgument`（点明 1 MiB
+/// 上限与图片字节数），**绝不写出超长帧**。Embedded（Tauri 进程内）不
+/// 经 UDS，10 MiB 旧上限原样保留。
+fn files_read_image_preview(request: Request, context: Arc<CoreContext>) -> Frame {
+    let (project_id, relative) = match file_params(&request) {
+        Ok(v) => v,
+        Err(frame) => return *frame,
+    };
+    let target = match FileTarget::decode(&request) {
+        Ok(target) => target,
+        Err(frame) => return *frame,
+    };
+    let root = match find_project_root(&context, &project_id) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::NotFound,
+                "no project with that id",
+            );
+        }
+        Err(error) => return error.into_frame(&request),
+    };
+    let Ok(root) = aeroric_core::files::path_policy::validate_project_root(&root) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "project root is invalid",
+        );
+    };
+    if let Some(frame) = target.root_refusal(&request, &root) {
+        return frame;
+    }
+    let Ok(validated) = aeroric_core::files::path_policy::resolve_within(&root, &relative) else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "path escapes the project root",
+        );
+    };
+    match aeroric_core::files::legacy_read::read_image_preview(&validated) {
+        Ok(preview) => match serde_json::to_value(&preview) {
+            Ok(value) => {
+                let frame = ok(&request, value);
+                match aeroric_protocol::envelope::encode_line(&frame) {
+                    Ok(_) => frame,
+                    Err(_) => failure(
+                        request.id.clone(),
+                        ErrorCode::InvalidArgument,
+                        &format!(
+                            "image preview is too large for the host transport (single-frame limit 1 MiB, image is {} B); open the file externally instead",
+                            preview.byte_length
+                        ),
+                    ),
+                }
+            }
+            Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+        },
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+/// 剪贴板文件路径（切片九十二）。legacy 的参数只有注入的运行时句柄，wire
+/// params 为空对象；实现走 `CoreContext.platform` 端口——headless 宿主在
+/// 同一台机器上，macOS 经 osascript/NSPasteboard 原生可答（与 Tauri 适配层
+/// 同一脚本），非 macOS 按端口契约返回空列表。
+fn files_read_clipboard_file_paths(request: Request, context: Arc<CoreContext>) -> Frame {
+    match context.platform.read_clipboard_file_paths() {
+        Ok(paths) => ok(&request, serde_json::json!(paths)),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
     }
 }
 

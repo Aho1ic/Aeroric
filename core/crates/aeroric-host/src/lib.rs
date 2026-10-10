@@ -14,6 +14,7 @@ pub mod ide_services;
 pub(crate) mod local_targets;
 pub mod maintenance_services;
 pub mod notebook_services;
+pub mod platform_adapter;
 pub mod remote_headless;
 pub mod search_services;
 pub mod services;
