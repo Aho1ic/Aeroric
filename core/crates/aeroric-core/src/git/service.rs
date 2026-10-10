@@ -45,6 +45,153 @@ pub struct GitConflictFile {
     pub path: String,
 }
 
+/// 分支图提交（legacy `GitBranchGraphCommit` 形状；wire 为 camelCase）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchGraphCommit {
+    pub hash: String,
+    pub short_hash: String,
+    pub parents: Vec<String>,
+    pub refs: Vec<String>,
+    pub subject: String,
+    pub author: String,
+    pub relative_time: String,
+}
+
+/// 分支图结果（legacy 形状）。`truncated` 的语义是 legacy 的：`limit + 1` 条里
+/// 拿得回这么多就说明还有更多，于是截到 `limit` 并置 true。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchGraphResult {
+    pub commits: Vec<GitBranchGraphCommit>,
+    pub truncated: bool,
+}
+
+/// 解析 `log --pretty=%H%x1f%P%x1f%D%x1f%an%x1f%cr%x1f%s`（legacy verbatim：
+/// hash 空则跳过；parents 按空白切；refs 按 `", "` 切并去空）。
+pub fn parse_branch_graph_log(stdout: &[u8]) -> Vec<GitBranchGraphCommit> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(6, '\x1f');
+            let hash = parts.next()?.trim().to_string();
+            if hash.is_empty() {
+                return None;
+            }
+            let parents = parts
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|parent| parent.to_string())
+                .collect::<Vec<_>>();
+            let refs = parts
+                .next()
+                .unwrap_or_default()
+                .split(", ")
+                .map(str::trim)
+                .filter(|reference| !reference.is_empty())
+                .map(|reference| reference.to_string())
+                .collect::<Vec<_>>();
+            let author = parts.next().unwrap_or_default().trim().to_string();
+            let relative_time = parts.next().unwrap_or_default().trim().to_string();
+            let subject = parts.next().unwrap_or_default().trim().to_string();
+
+            Some(GitBranchGraphCommit {
+                short_hash: short_commit_hash(&hash),
+                hash,
+                parents,
+                refs,
+                subject,
+                author,
+                relative_time,
+            })
+        })
+        .collect()
+}
+
+/// 分支图（legacy `git_branch_graph` verbatim）。
+///
+/// legacy 的机制是三步，**不是**"跑 log 看输出"：
+/// ① 先解析 worktree root（legacy `git_worktree_root`：`rev-parse --show-toplevel`，
+///    非 repo 在这一步就报错并原样上抛 git 的 stderr，随后 canonicalize 双方并做
+///    root 包含判定）——把非 repo 路径回落成空图是行为变更；
+/// ② 再探 HEAD（legacy `git_has_head`：`rev-parse --verify HEAD`，失败一律当 false），
+///    无提交的仓库**返回空结果而不是错误**，且根本不跑 log；
+/// ③ 最后才跑 log：`limit` 缺省 80 并 clamp 到 1..=200，取 `limit+1` 条判定
+///    `truncated`；`-n` 与条数是两个独立 argv（legacy verbatim）。
+///
+/// 探测两步在 legacy 走不带超时的 `run_git`；core 的 `run_git` 必须给超时，取
+/// `READ_TIMEOUT`（本地 rev-parse 正常即时返回，这不是行为差异的载体）。
+pub fn branch_graph_result(
+    repo_root: &Path,
+    limit: Option<u32>,
+) -> Result<GitBranchGraphResult, String> {
+    let probed = transport::run_git(
+        repo_root,
+        &["rev-parse", "--show-toplevel"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if !probed.success {
+        return Err(probed.stderr.trim().to_string());
+    }
+    let root = probed.stdout.trim().to_string();
+    if root.is_empty() {
+        return Err("Cannot resolve git worktree root".to_string());
+    }
+    let root = std::path::PathBuf::from(&root)
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve git worktree root: {error}"))?;
+    let project = repo_root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+    if !project.starts_with(&root) {
+        return Err("Git worktree root does not contain project path".to_string());
+    }
+
+    let head = transport::run_git(
+        &root,
+        &["rev-parse", "--verify", "HEAD"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if !head.success {
+        return Ok(GitBranchGraphResult {
+            commits: Vec::new(),
+            truncated: false,
+        });
+    }
+
+    let limit = limit.unwrap_or(80).clamp(1, 200);
+    let fetch_limit = (limit + 1).to_string();
+    let output = transport::run_git(
+        &root,
+        &[
+            "log",
+            "--all",
+            "--decorate=short",
+            "--date=relative",
+            "--pretty=format:%H%x1f%P%x1f%D%x1f%an%x1f%cr%x1f%s",
+            "-n",
+            &fetch_limit,
+        ],
+        transport::BRANCH_GRAPH_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to load git branch graph",
+        ));
+    }
+    let mut commits = parse_branch_graph_log(output.stdout.as_bytes());
+    let truncated = commits.len() > limit as usize;
+    if truncated {
+        commits.truncate(limit as usize);
+    }
+    Ok(GitBranchGraphResult { commits, truncated })
+}
+
 /// blame 行（legacy `GitBlameLine` 形状；wire 为 camelCase）。
 ///
 /// `rename_all` 是承重的：core 的字段是 snake_case（`short_commit`/`author_time`），

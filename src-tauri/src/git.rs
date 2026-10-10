@@ -213,7 +213,7 @@ pub(crate) struct GitBlameResult {
     pub(crate) lines: Vec<GitBlameLine>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBranchGraphCommit {
     pub(crate) hash: String,
@@ -225,7 +225,7 @@ pub(crate) struct GitBranchGraphCommit {
     pub(crate) relative_time: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitBranchGraphResult {
     pub(crate) commits: Vec<GitBranchGraphCommit>,
@@ -2171,8 +2171,7 @@ pub async fn git_blame_file<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_branch_graph(
+pub async fn local_git_branch_graph(
     project_path: String,
     limit: Option<u32>,
 ) -> Result<GitBranchGraphResult, String> {
@@ -2210,6 +2209,26 @@ pub async fn git_branch_graph(
         commits.truncate(limit as usize);
     }
     Ok(GitBranchGraphResult { commits, truncated })
+}
+
+#[tauri::command]
+pub async fn git_branch_graph<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    limit: Option<u32>,
+) -> Result<GitBranchGraphResult, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_branch_graph",
+        serde_json::json!({ "projectPath": project_path, "limit": limit }),
+        async {
+            local_git_branch_graph(project_path, limit)
+                .await
+                .and_then(|graph| serde_json::to_value(graph).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2884,13 +2903,13 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_branch_graph, git_clone, git_commit_detail, git_conflict_preview, git_dir, git_fetch,
-        git_has_head, git_resolve_conflict, git_stash_diff, git_stash_list, git_worktree_root,
+        git_clone, git_commit_detail, git_conflict_preview, git_dir, git_fetch, git_has_head,
+        git_resolve_conflict, git_stash_diff, git_stash_list, git_worktree_root,
         is_protected_project_relative_path, list_untracked_files, local_git_blame_file,
-        local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
-        local_git_stash_push, local_merge_task_worktree, parse_blame_porcelain,
-        parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
-        parse_porcelain_z_status, parse_stash_list, path_to_string,
+        local_git_branch_graph, local_git_conflict_files, local_git_init, local_git_log,
+        local_git_show_diff, local_git_stash_push, local_merge_task_worktree,
+        parse_blame_porcelain, parse_branch_graph_log, parse_conflict_hunks,
+        parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list, path_to_string,
         resolve_conflict_markers_keep_both, run_git, run_git_check,
         untracked_files_under_directory, validate_clone_target, validate_git_revision,
         validate_git_url, validate_project_path, validate_stash_ref, GitBlameLine,
@@ -3220,7 +3239,7 @@ mod tests {
         run_git_check(&repo_path, &["checkout", base_branch.as_str()]).unwrap();
         repo.commit_file("main.txt", "main\n", "main change");
 
-        let graph = git_branch_graph(repo_path, Some(20)).await.unwrap();
+        let graph = local_git_branch_graph(repo_path, Some(20)).await.unwrap();
 
         assert!(!graph.truncated);
         assert!(graph.commits.len() >= 3);

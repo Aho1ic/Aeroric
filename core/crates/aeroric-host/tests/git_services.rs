@@ -1530,3 +1530,145 @@ async fn git_blame_file_returns_porcelain_lines_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_branch_graph_returns_structured_commits_and_validates_params() {
+    let harness = Harness::start("git-branch-graph").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-branch-graph-test");
+    commit_file(&repo, "a.txt", "one\n", "first commit");
+    commit_file(&repo, "b.txt", "two\n", "second commit");
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "graph-1",
+        "git.git_branch_graph",
+        json!({ "projectPath": repo.root.to_string_lossy(), "limit": 10 }),
+    )
+    .await;
+    let result = success_result(reply);
+    let commits = result["commits"].as_array().expect("commits array");
+    assert_eq!(commits.len(), 2, "{result}");
+    assert_eq!(result["truncated"], false);
+    // Newest first: `log` order, and the payload carries per-commit metadata.
+    assert_eq!(commits[0]["subject"], "second commit");
+    assert_eq!(commits[1]["subject"], "first commit");
+    assert_eq!(commits[0]["author"], "Test User");
+    let hash = commits[0]["hash"].as_str().expect("hash");
+    assert_eq!(hash.len(), 40, "{hash}");
+    assert_eq!(commits[0]["shortHash"], &hash[..8]);
+    // Parents are real shas (the second commit's parent is the first).
+    let parents = commits[0]["parents"].as_array().expect("parents");
+    assert_eq!(parents.len(), 1);
+    assert_eq!(
+        parents[0].as_str().unwrap(),
+        commits[1]["hash"].as_str().unwrap()
+    );
+    assert!(
+        !commits[0]["relativeTime"].as_str().unwrap_or("").is_empty(),
+        "{result}"
+    );
+    // HEAD is decorated.
+    let refs = commits[0]["refs"].as_array().expect("refs");
+    assert!(
+        refs.iter()
+            .any(|r| r.as_str().unwrap_or("").contains("main")),
+        "HEAD decoration: {result}"
+    );
+
+    // `limit` truncates: ask for 1 and expect `truncated: true`.
+    let reply_limited = query(
+        &mut reader,
+        &mut writer,
+        "graph-limited",
+        "git.git_branch_graph",
+        json!({ "projectPath": repo.root.to_string_lossy(), "limit": 1 }),
+    )
+    .await;
+    let limited = success_result(reply_limited);
+    assert_eq!(limited["commits"].as_array().unwrap().len(), 1, "{limited}");
+    assert_eq!(limited["truncated"], true, "{limited}");
+
+    // An empty repository (`no HEAD`) is a SUCCESS with no commits, not an error.
+    let empty = new_repo("aeroric-git-branch-graph-empty");
+    let reply_empty = query(
+        &mut reader,
+        &mut writer,
+        "graph-empty",
+        "git.git_branch_graph",
+        json!({ "projectPath": empty.root.to_string_lossy() }),
+    )
+    .await;
+    let empty_result = success_result(reply_empty);
+    assert_eq!(empty_result["commits"], json!([]), "{empty_result}");
+    assert_eq!(empty_result["truncated"], false);
+
+    // A plain directory (not a repository) is an ERROR, not an empty graph: legacy
+    // fails at the worktree-root resolution step (`rev-parse --show-toplevel`) and
+    // surfaces git's stderr verbatim — which is locale-dependent, so the assertion
+    // pins the mechanism, not the message: non-empty (git's stderr) and NOT the
+    // log-step fallback (proving the probe step refused before log ever ran).
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let plain = std::env::temp_dir().join(format!(
+        "aeroric-git-branch-graph-plain-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&plain);
+    std::fs::create_dir_all(&plain).expect("create plain dir");
+    let reply_plain = query(
+        &mut reader,
+        &mut writer,
+        "graph-plain",
+        "git.git_branch_graph",
+        json!({ "projectPath": plain.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_plain) = reply_plain else {
+        panic!("non-repo path must fail");
+    };
+    assert_eq!(
+        failure_plain.error.code,
+        ErrorCode::IoError,
+        "{failure_plain:?}"
+    );
+    assert!(!failure_plain.error.message.is_empty(), "{failure_plain:?}");
+    assert_ne!(
+        failure_plain.error.message, "Failed to load git branch graph",
+        "error must come from the worktree-root probe, not the log step: {failure_plain:?}"
+    );
+    let _ = std::fs::remove_dir_all(&plain);
+
+    // Missing projectPath -> InvalidArgument
+    let reply_bad = query(
+        &mut reader,
+        &mut writer,
+        "graph-bad",
+        "git.git_branch_graph",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure) = reply_bad else {
+        panic!("missing params must fail");
+    };
+    assert_eq!(failure.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "graph-remote",
+        "git.git_branch_graph",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

@@ -273,6 +273,14 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        set.register(
+            "git.git_branch_graph",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_branch_graph(request).await })
+            }),
+        );
+    }
+    {
         let context = Arc::clone(&context);
         set.register(
             "project.open",
@@ -1612,6 +1620,62 @@ async fn git_stash_push(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_branch_graph(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_branch_graph requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_branch_graph requires params.projectPath (string)",
+        );
+    };
+    let limit = match params.get("limit") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(value)) => match value.as_u64() {
+            Some(value) => Some(value as u32),
+            None => {
+                return failure(
+                    id,
+                    ErrorCode::InvalidArgument,
+                    "git.git_branch_graph requires params.limit (non-negative integer)",
+                )
+            }
+        },
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_branch_graph requires params.limit (number)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::branch_graph_result(std::path::Path::new(&p_path), limit)
+    })
+    .await;
+    match result {
+        Ok(Ok(graph)) => match serde_json::to_value(graph) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }
