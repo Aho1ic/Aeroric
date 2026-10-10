@@ -292,6 +292,14 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.generate_commit_message",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_generate_commit_message(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -2217,6 +2225,34 @@ async fn git_clone(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_generate_commit_message(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.generate_commit_message requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.generate_commit_message requires params.projectPath (string)",
+        );
+    };
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::generate_commit_message(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(message)) => ok(&request, Value::String(message)),
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

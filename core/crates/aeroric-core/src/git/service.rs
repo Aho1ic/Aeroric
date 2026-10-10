@@ -801,6 +801,131 @@ pub fn commit_detail_result(
     ))
 }
 
+// ===== generate_commit_message（切片 89；agent 孵化面）=====
+
+/// 生成提交信息（legacy `generate_commit_message` verbatim，两处**刻意差异**
+/// 见 doc）：① staged diff 为空 ⇒ 原文拒绝（"No staged changes to generate a
+/// commit message for."）；② 50_000 **字节**截断＋`...(diff truncated)` 后缀
+/// （legacy 直接 `&diff[..50_000]` 切 String——多字节字符跨界会 panic，是
+/// latent bug 不是契约，按 file_diff 的字节语义实现）；③ 项目配置的
+/// `git.commit_prompt` 与 `git.commit_message_timeout_secs.clamp(1, 120)`；
+/// ④ 临时策略逐字：**一律用 codex**（claude `-p` 计费变动期间），未安装原文
+/// 拒绝、不回落项目默认 agent；⑤ prompt 模板逐字；⑥ agent 以 launch spec
+/// 孵化（codex_like ⇒ `exec <prompt>`，否则 `-p <prompt> --output-format text`）
+/// ，失败 `Agent failed: <stderr+stdout>`、空结果 "Agent returned empty
+/// response."。
+///
+/// **刻意差异（两处，都写死在注释里）**：超时从"放弃等待但留下进程继续跑"
+/// 改为 **deadline 到点 kill**——遗留实现把 spawn_blocking 挂在 tokio timeout
+/// 下，超时后 JoinHandle 被丢弃、codex 进程继续消耗付费 API；kill 是泄漏
+/// 修复不是行为变更（agent 结果本来就没人读了）。core 是同步体，deadline
+/// 用 try_wait 轮询实现（同 transport::collect_output 形状）。
+pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
+    let diff_output = transport::run_git(
+        project_path,
+        &["diff", "--staged"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    let diff = diff_output.stdout;
+    if diff.trim().is_empty() {
+        return Err("No staged changes to generate a commit message for.".to_string());
+    }
+
+    let diff = if diff.len() > 50_000 {
+        let bytes = diff.as_bytes();
+        format!(
+            "{}...(diff truncated)",
+            String::from_utf8_lossy(&bytes[..50_000])
+        )
+    } else {
+        diff
+    };
+
+    let config = crate::settings::project_config::read_project_config(
+        project_path.to_str().unwrap_or_default(),
+    )?;
+    let commit_prompt = config.git.commit_prompt;
+    let timeout_secs = config.git.commit_message_timeout_secs.clamp(1, 120);
+
+    let agent = if crate::settings::detect_codex_version().is_some() {
+        "codex"
+    } else {
+        return Err("codex 未安装，无法生成提交信息。请安装 codex 后重试。".to_string());
+    };
+
+    let full_prompt = format!(
+        "{}\n\nGit diff:\n```diff\n{}\n```\n\nOutput only the commit message, nothing else.",
+        commit_prompt, diff
+    );
+
+    let launch = crate::settings::get_agent_launch_spec(agent);
+    let mut cmd = std::process::Command::new(&launch.program);
+    crate::runtime::subprocess::configure_background_command(&mut cmd);
+    cmd.args(&launch.args);
+    if launch.codex_like {
+        cmd.args(["exec", &full_prompt]);
+    } else {
+        cmd.args(["-p", &full_prompt, "--output-format", "text"]);
+    }
+    cmd.current_dir(project_path);
+    cmd.stdin(std::process::Stdio::null());
+    for (key, value) in &launch.extra_env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|error| format!("Failed to run {agent}: {error}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+                break (status, stdout, stderr);
+            }
+            Ok(None) => {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("生成提交信息超时（{}秒）", timeout_secs));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(error) => return Err(format!("生成提交信息线程错误: {error}")),
+        }
+    };
+    let (status, stdout, stderr) = output;
+    if !status.success() {
+        return Err(format!("Agent failed: {stderr}{stdout}"));
+    }
+
+    let result = stdout.trim().to_string();
+    if result.is_empty() {
+        return Err("Agent returned empty response.".to_string());
+    }
+    Ok(result)
+}
+
 // ===== clone（切片 88）=====
 
 /// 仓库 URL 校验（legacy `validate_git_url` verbatim）：非空、不以 `-` 开头、

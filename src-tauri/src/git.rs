@@ -602,8 +602,7 @@ fn resolve_project_relative_file_path(
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn generate_commit_message(project_path: String) -> Result<String, String> {
+pub async fn local_generate_commit_message(project_path: String) -> Result<String, String> {
     // 1. Get staged diff
     let diff_output = run_git(&project_path, &["diff", "--staged"])?;
     let diff = String::from_utf8_lossy(&diff_output.stdout).into_owned();
@@ -659,6 +658,25 @@ pub async fn generate_commit_message(project_path: String) -> Result<String, Str
         return Err("Agent returned empty response.".to_string());
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn generate_commit_message<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.generate_commit_message",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_generate_commit_message(project_path)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

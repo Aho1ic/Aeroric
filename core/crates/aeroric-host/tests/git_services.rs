@@ -3401,3 +3401,45 @@ async fn git_clone_creates_repo_and_validates_params() {
     let _ = std::fs::remove_dir_all(&target);
     let _ = std::fs::remove_dir_all(&target_topic);
 }
+#[tokio::test]
+async fn git_generate_commit_message_rejects_when_nothing_staged() {
+    let harness = Harness::start("git-gcm").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // A repo with a commit but nothing staged: the rejection happens before any
+    // agent spawn, so this is machine-testable without codex.
+    let repo = new_repo("aeroric-git-gcm-empty");
+    commit_file(&repo, "a.txt", "one\n", "first commit");
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "gcm-1",
+        "git.generate_commit_message",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure) = reply else {
+        panic!("no-staged-changes must fail");
+    };
+    assert_eq!(failure.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure.error.message,
+        "No staged changes to generate a commit message for."
+    );
+
+    // Missing projectPath -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "gcm-missing",
+        "git.generate_commit_message",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing projectPath must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+}
