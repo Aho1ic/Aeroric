@@ -211,6 +211,8 @@
       "git-services-host-rust@cutover": 31,
       "file-preview-host-rust@files": 2,
       "file-preview-host-rust@cutover": 2,
+      "database-legacy-sqlite-host-rust@files": 3,
+      "database-legacy-sqlite-host-rust@cutover": 3,
       "watcher-discipline-unit@skeleton": 11,
       "worktree-lifecycle-rust@worktree": 6,
       "worktree-ui-unit@worktree": 6
@@ -2637,6 +2639,25 @@
           "$note": "P8-05切片92：files.read_image_preview（projectId+相对路径服务端权威形状；UDS 单帧 1 MiB 是硬边界——宿主用帧层自己的 encode_line 判定预检成功帧，超限回干净 InvalidArgument 点明上限与图片字节数，绝不写出超长帧砸连接；同连接恢复断言在案）与files.read_clipboard_file_paths（走 CoreContext.platform 端口：macOS osascript/NSPasteboard 与 Tauri 适配层同一脚本，非 macOS 按端口契约回空列表；测试用 NoPlatform 默认实现断言中性空列表，绝不触碰真剪贴板）。"
         },
         {
+          "name": "database-legacy-sqlite-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_legacy_sqlite_services"
+          ],
+          "parse": "rust",
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "P8-05切片94（database刀零）：legacy SQLite 八条真UDS往返——db_inspect 模式形状/db_query_table 分页与rowid键/db_execute_sql 多语句与只读拒绝/update_cell、insert_row、delete_row 端状态/db_load+save_connections 与0600私有权限；SSH endpoint 一律 UnsupportedCapability（宿主无远程数据库执行器）；saved 连接的权威只读覆盖与endpoint不匹配拒绝逐字；业务主体在 core database::legacy_sqlite（八条Tauri命令同批接host_dispatch转发，External绝不本地回退）。"
+        },
+        {
           "name": "legacy-directory-core-rust",
           "kind": "test",
           "argv": [
@@ -4041,9 +4062,9 @@
           "kind": "gate",
           "argv": [
             "scripts/native/host-coverage.mjs",
-            "--floor=190"
+            "--floor=198"
           ],
-          "$note": "P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。 P8-05切片80：git.git_branch_graph 真实宿主注册（worktree-root 探测→has_head 探测→log 的 legacy 三步机制逐字），101/641、floor101、转发点 73→74、git 缺口 18→17。 P8-05切片81：git.git_stash_list＋git.git_stash_diff 一对 stash 读侧孪生上收（core 旧 stash_list 四轴不等价就地改齐：四段 format/10s/回落文案/五字段 DTO），103/641、floor103、转发点 74→76、git 缺口 17→15。 P8-05切片82：git.git_stage_files＋git.git_unstage_files 复数孪生上收（HEAD 探测回落 reset 是契约、空列表静默成功、去重先校验后去重），105/641、floor105、转发点 76→78、git 缺口 15→13。 P8-05切片83：git.git_file_diff＋git.git_show_file_diff 上收（file_diff 补 validate_git_relative_path——legacy 的 --no-index 回落是任意文件读取原语，服务端权威校验优先），107/641、floor107、转发点 78→80、git 缺口 13→11。 P8-05切片84：git.git_commit_detail 上收（三段输出解析逐字、三次调用都不查退出码是 legacy 行为、wire 是 snake_case 无 rename），108/641、floor108、转发点 80→81、git 缺口 11→10。 P8-05切片85：discard 三件套上收（trash 进废纸篓不永久删除、保护路径跳过而非报错、unborn HEAD 走 rm --cached、幸存保护目录本身是 untracked），111/641、floor111、转发点 81→84、git 缺口 10→7。 P8-05切片86：git.git_conflict_preview＋git.git_resolve_conflict 上收（core 旧 conflict_preview/resolve_conflict 形状不同且测试在用，新函数 _result/_with_resolution 后缀保留旧入口；resolve 即 stage 是 legacy 语义），113/641、floor113、转发点 84→86、git 缺口 7→5。 P8-05切片87：网络三件套上收（core 新增 run_git_network 防挂死环境、legacy 三条的 trim 不对称逐字保留、--all/prune 轴、本地 bare remote 全程端状态断言），116/641、floor116、转发点 86→89、git 缺口 5→2。 P8-05切片88：git.git_clone 上收（URL 传输助手形态拒绝、clone 目标按定义不存在故用专用校验、--branch 轴、父目录执行），117/641、floor117、转发点 89→90、git 缺口 2→1。 P8-05切片89：git.generate_commit_message 上收（agent 孵化面——codex 一律策略逐字、超时改 kill 是泄漏修复、50_000 字节截断修 legacy panic 隐患；机器可测面只有无暂存拒绝），118/641、floor118、转发点 90→91、git 缺口 1→0（git 族全量闭合）。 P8-05切片90：notebook 族命名对账——修仪器盲区（host-coverage 扫描器此前不认 service!/service_ctx! 宏调用点，P7-05/06 的 71 条 notebook 注册全部不可见）＋70 条别名入表（台账双前缀 notebook.notebook_X ↔ 宿主 notebook.X；52 条带 Swift NotebookClient 字面证据、18 条 sync/rag 面证据为宿主注册＋P7-06 同一 core 实现），188/641、floor188；notebook 缺口 73→3（attachment_save_from_path/rag_index/rag_context 待查）。 P8-05切片92：files.read_image_preview＋files.read_clipboard_file_paths 上收（CoreContext 新增 platform 端口＋宿主 HostOsServices 适配器；帧上限预检回干净错误），190/641、floor190。",
+          "$note": "P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。 P8-05切片80：git.git_branch_graph 真实宿主注册（worktree-root 探测→has_head 探测→log 的 legacy 三步机制逐字），101/641、floor101、转发点 73→74、git 缺口 18→17。 P8-05切片81：git.git_stash_list＋git.git_stash_diff 一对 stash 读侧孪生上收（core 旧 stash_list 四轴不等价就地改齐：四段 format/10s/回落文案/五字段 DTO），103/641、floor103、转发点 74→76、git 缺口 17→15。 P8-05切片82：git.git_stage_files＋git.git_unstage_files 复数孪生上收（HEAD 探测回落 reset 是契约、空列表静默成功、去重先校验后去重），105/641、floor105、转发点 76→78、git 缺口 15→13。 P8-05切片83：git.git_file_diff＋git.git_show_file_diff 上收（file_diff 补 validate_git_relative_path——legacy 的 --no-index 回落是任意文件读取原语，服务端权威校验优先），107/641、floor107、转发点 78→80、git 缺口 13→11。 P8-05切片84：git.git_commit_detail 上收（三段输出解析逐字、三次调用都不查退出码是 legacy 行为、wire 是 snake_case 无 rename），108/641、floor108、转发点 80→81、git 缺口 11→10。 P8-05切片85：discard 三件套上收（trash 进废纸篓不永久删除、保护路径跳过而非报错、unborn HEAD 走 rm --cached、幸存保护目录本身是 untracked），111/641、floor111、转发点 81→84、git 缺口 10→7。 P8-05切片86：git.git_conflict_preview＋git.git_resolve_conflict 上收（core 旧 conflict_preview/resolve_conflict 形状不同且测试在用，新函数 _result/_with_resolution 后缀保留旧入口；resolve 即 stage 是 legacy 语义），113/641、floor113、转发点 84→86、git 缺口 7→5。 P8-05切片87：网络三件套上收（core 新增 run_git_network 防挂死环境、legacy 三条的 trim 不对称逐字保留、--all/prune 轴、本地 bare remote 全程端状态断言），116/641、floor116、转发点 86→89、git 缺口 5→2。 P8-05切片88：git.git_clone 上收（URL 传输助手形态拒绝、clone 目标按定义不存在故用专用校验、--branch 轴、父目录执行），117/641、floor117、转发点 89→90、git 缺口 2→1。 P8-05切片89：git.generate_commit_message 上收（agent 孵化面——codex 一律策略逐字、超时改 kill 是泄漏修复、50_000 字节截断修 legacy panic 隐患；机器可测面只有无暂存拒绝），118/641、floor118、转发点 90→91、git 缺口 1→0（git 族全量闭合）。 P8-05切片90：notebook 族命名对账——修仪器盲区（host-coverage 扫描器此前不认 service!/service_ctx! 宏调用点，P7-05/06 的 71 条 notebook 注册全部不可见）＋70 条别名入表（台账双前缀 notebook.notebook_X ↔ 宿主 notebook.X；52 条带 Swift NotebookClient 字面证据、18 条 sync/rag 面证据为宿主注册＋P7-06 同一 core 实现），188/641、floor188；notebook 缺口 73→3（attachment_save_from_path/rag_index/rag_context 待查）。 P8-05切片92：files.read_image_preview＋files.read_clipboard_file_paths 上收（CoreContext 新增 platform 端口＋宿主 HostOsServices 适配器；帧上限预检回干净错误），190/641、floor190。 P8-05切片94（database刀零）：legacy_sqlite 八条上收（业务主体 core database::legacy_sqlite verbatim ~800行；连接文件 Value 直读直写防typed round-trip丢字段；SSH endpoint 显式 UnsupportedCapability；八条Tauri命令同批转发），198/641、floor198。",
           "timeoutMs": 300000
         },
         {
@@ -4977,6 +4998,25 @@
           "minCases": 2,
           "timeoutMs": 900000,
           "$note": "P8-05切片92：files.read_image_preview（projectId+相对路径服务端权威形状；UDS 单帧 1 MiB 是硬边界——宿主用帧层自己的 encode_line 判定预检成功帧，超限回干净 InvalidArgument 点明上限与图片字节数，绝不写出超长帧砸连接；同连接恢复断言在案）与files.read_clipboard_file_paths（走 CoreContext.platform 端口：macOS osascript/NSPasteboard 与 Tauri 适配层同一脚本，非 macOS 按端口契约回空列表；测试用 NoPlatform 默认实现断言中性空列表，绝不触碰真剪贴板）。"
+        },
+        {
+          "name": "database-legacy-sqlite-host-rust",
+          "kind": "test",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "core/Cargo.toml",
+            "--locked",
+            "-p",
+            "aeroric-host",
+            "--test",
+            "database_legacy_sqlite_services"
+          ],
+          "parse": "rust",
+          "minCases": 3,
+          "timeoutMs": 900000,
+          "$note": "P8-05切片94（database刀零）：legacy SQLite 八条真UDS往返——db_inspect 模式形状/db_query_table 分页与rowid键/db_execute_sql 多语句与只读拒绝/update_cell、insert_row、delete_row 端状态/db_load+save_connections 与0600私有权限；SSH endpoint 一律 UnsupportedCapability（宿主无远程数据库执行器）；saved 连接的权威只读覆盖与endpoint不匹配拒绝逐字；业务主体在 core database::legacy_sqlite（八条Tauri命令同批接host_dispatch转发，External绝不本地回退）。"
         },
         {
           "name": "agent-config-authority-host-rust",

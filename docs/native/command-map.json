@@ -16683,7 +16683,7 @@
       "rust_path": "database::legacy_sqlite::db_load_connections",
       "registered_at": "src-tauri/src/lib.rs:939",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1191"
+        "src-tauri/src/database/legacy_sqlite.rs:366"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16695,26 +16695,28 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1191",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:366",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
         "registered": false
       },
       "reachable": true,
-      "params": []
+      "params": [
+        "app: tauri::AppHandle<R>!"
+      ]
     },
     {
       "command": "db_save_connections",
       "rust_path": "database::legacy_sqlite::db_save_connections",
       "registered_at": "src-tauri/src/lib.rs:940",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1210"
+        "src-tauri/src/database/legacy_sqlite.rs:401"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16726,12 +16728,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1210",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:401",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16739,6 +16741,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "connections: Vec<DbConnectionConfig>"
       ]
     },
@@ -16747,7 +16750,7 @@
       "rust_path": "database::legacy_sqlite::db_read_sql_file",
       "registered_at": "src-tauri/src/lib.rs:941",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1224"
+        "src-tauri/src/database/legacy_sqlite.rs:420"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16759,7 +16762,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1224",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:420",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -16780,7 +16783,7 @@
       "rust_path": "database::legacy_sqlite::db_inspect",
       "registered_at": "src-tauri/src/lib.rs:942",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1240"
+        "src-tauri/src/database/legacy_sqlite.rs:445"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16792,12 +16795,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1240",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:445",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16805,6 +16808,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "project_root: Option<String>"
       ]
@@ -16814,7 +16818,7 @@
       "rust_path": "database::legacy_sqlite::db_query_table",
       "registered_at": "src-tauri/src/lib.rs:943",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1250"
+        "src-tauri/src/database/legacy_sqlite.rs:481"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16826,12 +16830,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1250",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:481",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16839,6 +16843,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "table: String",
         "page: i64",
@@ -16851,7 +16856,7 @@
       "rust_path": "database::legacy_sqlite::db_update_cell",
       "registered_at": "src-tauri/src/lib.rs:944",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1267"
+        "src-tauri/src/database/legacy_sqlite.rs:524"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16863,12 +16868,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1267",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:524",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16876,6 +16881,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "table: String",
         "row_key: DbRowKey",
@@ -16891,7 +16897,7 @@
       "rust_path": "database::legacy_sqlite::db_insert_row",
       "registered_at": "src-tauri/src/lib.rs:945",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1292"
+        "src-tauri/src/database/legacy_sqlite.rs:568"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16903,12 +16909,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1292",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:568",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16916,6 +16922,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "table: String",
         "values: Vec<DbCellValue>",
@@ -16929,7 +16936,7 @@
       "rust_path": "database::legacy_sqlite::db_delete_row",
       "registered_at": "src-tauri/src/lib.rs:946",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1315"
+        "src-tauri/src/database/legacy_sqlite.rs:610"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16941,12 +16948,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1315",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:610",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16954,6 +16961,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "table: String",
         "row_key: DbRowKey",
@@ -16967,7 +16975,7 @@
       "rust_path": "database::legacy_sqlite::db_execute_sql",
       "registered_at": "src-tauri/src/lib.rs:947",
       "definition_candidates": [
-        "src-tauri/src/database/legacy_sqlite.rs:1338"
+        "src-tauri/src/database/legacy_sqlite.rs:656"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -16979,12 +16987,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:1338",
+      "definition_resolved": "src-tauri/src/database/legacy_sqlite.rs:656",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -16992,6 +17000,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "endpoint: DbEndpoint",
         "sql: String",
         "page: Option<i64>",

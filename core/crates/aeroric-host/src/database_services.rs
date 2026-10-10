@@ -1,0 +1,542 @@
+//! P8-05 切片九十四（database 刀零）：legacy (v1) SQLite 文件命令的宿主服务面。
+//!
+//! 八条 `database.*` 方法；业务主体全部在 core `database::legacy_sqlite`，
+//! 这里只做四件事：把 wire 参数翻成 core 入参、把连接文件锚在宿主 data-dir、
+//! 做 saved 连接的权威只读判定（Value 直读直写——typed round-trip 会丢未知
+//! 字段，字节保真纪律 favor 保留）、把 SSH endpoint 显式拒掉（宿主没有远程
+//! 数据库执行器——下载/回传那半边留在 Tauri 适配层）。连接文件与 Tauri 共用
+//! 同一个 `<data-dir>/database-connections.json`（单写者租约保证两个进程不会
+//! 同时持有它），读写都按 legacy 的私有权限语义。
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use aeroric_core::context::CoreContext;
+use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_protocol::envelope::{Frame, Request};
+use aeroric_protocol::error::ErrorCode;
+use serde_json::{json, Value};
+
+use crate::dispatcher::{failure, ServiceSet};
+use crate::services::ok;
+
+const CONNECTIONS_FILE: &str = "database-connections.json";
+
+/// 注册点逐条写成源码字面量：本仓的覆盖率/台账扫描器靠 `set.register("…"`
+/// 的字面量找注册，循环＋变量会变成覆盖率假缺口（切片九的同款陷阱）。
+pub fn register_database_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_inspect",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_inspect";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_query_table",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_query_table";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_execute_sql",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_execute_sql";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_update_cell",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_update_cell";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_insert_row",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_insert_row";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_delete_row",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_delete_row";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_load_connections",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_load_connections";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+
+    {
+        let context = Arc::clone(&context);
+        set.register(
+            "database.db_save_connections",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let method = "database.db_save_connections";
+                Box::pin(async move {
+                    let id = request.id.clone();
+                    let run = move || dispatch(request, context, method);
+                    match tokio::task::spawn_blocking(run).await {
+                        Ok(frame) => frame,
+                        Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+                    }
+                })
+            }),
+        );
+    }
+}
+
+fn dispatch(request: Request, context: Arc<CoreContext>, method: &str) -> Frame {
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params object"),
+        );
+    };
+    let params = Value::Object(params.clone());
+    let connections_path = context.paths.data_dir().join(CONNECTIONS_FILE);
+    match method {
+        "database.db_inspect" => {
+            let endpoint = param_value(&params, "endpoint");
+            let project_root = match opt_string(&request, &params, "projectRoot") {
+                Ok(value) => value,
+                Err(frame) => return *frame,
+            };
+            with_local(&request, endpoint, project_root, |path| {
+                let schema: Value = biz::inspect_schema(path).and_then(|schema| {
+                    serde_json::to_value(&schema).map_err(|error| error.to_string())
+                })?;
+                Ok(schema)
+            })
+        }
+        "database.db_query_table" => {
+            let Some(table) = str_param(&params, "table") else {
+                return invalid(&request, "table (string)");
+            };
+            let Some(page) = int_param(&params, "page") else {
+                return invalid(&request, "page (integer)");
+            };
+            let page_size = params.get("pageSize").and_then(Value::as_i64);
+            let project_root = match opt_string(&request, &params, "projectRoot") {
+                Ok(value) => value,
+                Err(frame) => return *frame,
+            };
+            let endpoint = param_value(&params, "endpoint");
+            with_local(&request, endpoint, project_root, move |path| {
+                biz::query_table(path, &table, page, biz::normalize_page_size(page_size))
+                    .and_then(|result| serde_json::to_value(&result).map_err(|e| e.to_string()))
+            })
+        }
+        "database.db_execute_sql" => {
+            let Some(sql) = str_param(&params, "sql") else {
+                return invalid(&request, "sql (string)");
+            };
+            let page = params.get("page").and_then(Value::as_i64);
+            let page_size = params.get("pageSize").and_then(Value::as_i64);
+            let read_only = match effective_read_only(&params, &connections_path) {
+                Ok(read_only) => read_only,
+                Err(message) => return failure(request.id.clone(), ErrorCode::IoError, &message),
+            };
+            let project_root = match opt_string(&request, &params, "projectRoot") {
+                Ok(value) => value,
+                Err(frame) => return *frame,
+            };
+            let endpoint = param_value(&params, "endpoint");
+            with_local(&request, endpoint, project_root, move |path| {
+                biz::execute_sql(path, &sql, page.unwrap_or(1), page_size, read_only)
+                    .and_then(|result| serde_json::to_value(&result).map_err(|e| e.to_string()))
+            })
+        }
+        "database.db_update_cell" | "database.db_insert_row" | "database.db_delete_row" => {
+            let Some(table) = str_param(&params, "table") else {
+                return invalid(&request, "table (string)");
+            };
+            let read_only = match effective_read_only(&params, &connections_path) {
+                Ok(read_only) => read_only,
+                Err(message) => return failure(request.id.clone(), ErrorCode::IoError, &message),
+            };
+            let project_root = match opt_string(&request, &params, "projectRoot") {
+                Ok(value) => value,
+                Err(frame) => return *frame,
+            };
+            let endpoint = param_value(&params, "endpoint");
+            let row_key_value = param_value(&params, "rowKey");
+            let values_value = param_value(&params, "values");
+            let column = params
+                .get("column")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let value_string = params
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let is_update = method == "database.db_update_cell";
+            let is_insert = method == "database.db_insert_row";
+            with_local(&request, endpoint, project_root, move |path| {
+                if is_update {
+                    let Some(column) = column else {
+                        return Err("requires params.column (string)".to_string());
+                    };
+                    let row_key: biz::DbRowKey = serde_json::from_value(row_key_value)
+                        .map_err(|error| format!("rowKey: {error}"))?;
+                    biz::update_cell(path, &table, row_key, &column, value_string, read_only)?;
+                    Ok(Value::Null)
+                } else if is_insert {
+                    let values: Vec<biz::DbCellValue> = serde_json::from_value(values_value)
+                        .map_err(|error| format!("values: {error}"))?;
+                    biz::insert_row(path, &table, values, read_only)?;
+                    Ok(Value::Null)
+                } else {
+                    let row_key: biz::DbRowKey = serde_json::from_value(row_key_value)
+                        .map_err(|error| format!("rowKey: {error}"))?;
+                    biz::delete_row(path, &table, row_key, read_only)?;
+                    Ok(Value::Null)
+                }
+            })
+        }
+        "database.db_load_connections" => match load_connections(&connections_path) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+        },
+        "database.db_save_connections" => {
+            let Some(connections) = params.get("connections") else {
+                return invalid(&request, "connections (array)");
+            };
+            if let Err(message) = validate_connections_shape(connections) {
+                return invalid(&request, &message);
+            }
+            match save_connections(&connections_path, connections) {
+                Ok(()) => ok(&request, Value::Null),
+                Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+            }
+        }
+        _ => failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            &format!("unknown database method {method}"),
+        ),
+    }
+}
+
+// ── 共享形状 ────────────────────────────────────────────────────────────────
+
+fn invalid(request: &Request, what: &str) -> Frame {
+    failure(
+        request.id.clone(),
+        ErrorCode::InvalidArgument,
+        &format!("requires params.{what}"),
+    )
+}
+
+fn str_param(params: &Value, name: &str) -> Option<String> {
+    params.get(name).and_then(Value::as_str).map(str::to_string)
+}
+
+fn int_param(params: &Value, name: &str) -> Option<i64> {
+    params.get(name).and_then(Value::as_i64)
+}
+
+fn param_value(params: &Value, name: &str) -> Value {
+    params.get(name).cloned().unwrap_or(Value::Null)
+}
+
+fn opt_string(request: &Request, params: &Value, name: &str) -> Result<Option<String>, Box<Frame>> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(Box::new(invalid(request, &format!("{name} (string)")))),
+    }
+}
+
+/// endpoint 解码：`{"kind":"local","path":…}` 或 `{"kind":"ssh",…}`。
+/// SSH 一律 `UnsupportedCapability`——宿主没有远程数据库执行器，下载/回传
+/// 那半边留在 Tauri 适配层；这不是缺别名，是能力边界（与 takesTarget 的
+/// 远程守卫同型）。
+fn with_local(
+    request: &Request,
+    endpoint: Value,
+    project_root: Option<String>,
+    action: impl FnOnce(&Path) -> Result<Value, String> + Send + 'static,
+) -> Frame {
+    let raw_path = match endpoint.as_object().map(|object| {
+        (
+            object.get("kind").and_then(Value::as_str),
+            object.get("path").and_then(Value::as_str),
+        )
+    }) {
+        Some((Some("local"), Some(path))) => PathBuf::from(path),
+        Some((Some("ssh"), _)) => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::UnsupportedCapability,
+                "this host does not execute remote (ssh) database endpoints",
+            );
+        }
+        Some((Some("local"), None)) => {
+            return invalid(request, "endpoint.path (string)");
+        }
+        _ => {
+            return invalid(request, "endpoint (object with kind local/ssh)");
+        }
+    };
+    match biz::validate_local_db_path(&raw_path.to_string_lossy(), project_root.as_deref()) {
+        Ok(path) => match action(&path) {
+            Ok(value) => ok(request, value),
+            Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+        },
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+    }
+}
+
+// ── 连接文件（Value 直读直写：legacy 的 typed round-trip 会丢未知字段，
+// 字节保真纪律 favor 保留——校验收紧到承重形状：数组＋id/name/endpoint.kind）──
+
+fn load_connections(path: &Path) -> Result<Value, String> {
+    if !path.exists() {
+        return Ok(json!([]));
+    }
+    aeroric_core::settings::ensure_private_file_permissions(path)
+        .map_err(|error| error.to_string())?;
+    let content = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(&content).map_err(|error| error.to_string())?;
+    if !value.is_array() {
+        return Err("connections file must contain an array".to_string());
+    }
+    Ok(value)
+}
+
+fn validate_connections_shape(connections: &Value) -> Result<(), String> {
+    let Some(entries) = connections.as_array() else {
+        return Err("connections (array)".to_string());
+    };
+    for entry in entries {
+        let Some(entry) = entry.as_object() else {
+            return Err("connections (array of objects)".to_string());
+        };
+        let id_ok = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.is_empty());
+        let name_ok = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.is_empty());
+        let endpoint_ok = entry
+            .get("endpoint")
+            .and_then(Value::as_object)
+            .is_some_and(|e| e.contains_key("kind"));
+        if !id_ok || !name_ok || !endpoint_ok {
+            return Err(
+                "connections (each entry needs id, name and an endpoint object)".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn save_connections(path: &Path, connections: &Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(connections).map_err(|error| error.to_string())?;
+    aeroric_core::settings::atomic_write_private(path, &format!("{content}\n"))
+}
+
+/// 权威只读判定（legacy `resolve_connection_read_only` 的 Value 版）。返回
+/// `Err(文案)` 的两种情况：connection_id 指向的 saved 连接 endpoint 不匹配
+/// （legacy 文案逐字），或生效只读却落在写命令上（调用方只对写命令取 Err；
+/// 只读查询不受限）。找不到 saved 连接 ⇒ 用请求里的 readOnly。
+fn effective_read_only(params: &Value, connections_path: &Path) -> Result<bool, String> {
+    let requested = params
+        .get("readOnly")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let connection_id = params
+        .get("connectionId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let content = match std::fs::read_to_string(connections_path) {
+        Ok(content) => content,
+        Err(_) => return Ok(requested),
+    };
+    let Ok(connections) = serde_json::from_str::<Value>(&content) else {
+        return Ok(requested);
+    };
+    let Some(entries) = connections.as_array() else {
+        return Ok(requested);
+    };
+    let endpoint = params.get("endpoint").cloned().unwrap_or(Value::Null);
+    if let Some(id) = connection_id {
+        if let Some(saved) = entries
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(id))
+        {
+            if !endpoints_match_value(saved.get("endpoint").unwrap_or(&Value::Null), &endpoint) {
+                return Err("Connection endpoint does not match saved configuration".to_string());
+            }
+            // 只读的拒绝发生在各写命令的 ensure_writable / execute_sql 的
+            // 只读连接判定里——查询在只读连接上是合法的，这里只报事实。
+            return Ok(saved
+                .get("readOnly")
+                .and_then(Value::as_bool)
+                .unwrap_or(false));
+        }
+    }
+    let matching: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| {
+            endpoints_match_value(entry.get("endpoint").unwrap_or(&Value::Null), &endpoint)
+        })
+        .collect();
+    if matching.is_empty() {
+        return Ok(requested);
+    }
+    Ok(matching.iter().any(|entry| {
+        entry
+            .get("readOnly")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }))
+}
+
+fn endpoints_match_value(left: &Value, right: &Value) -> bool {
+    let (Some(left), Some(right)) = (left.as_object(), right.as_object()) else {
+        return false;
+    };
+    let (Some(lk), Some(rk)) = (
+        left.get("kind").and_then(Value::as_str),
+        right.get("kind").and_then(Value::as_str),
+    ) else {
+        return false;
+    };
+    if lk != rk {
+        return false;
+    }
+    match lk {
+        "local" => {
+            let lp = left.get("path").and_then(Value::as_str).unwrap_or_default();
+            let rp = right
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let lc = std::fs::canonicalize(lp).unwrap_or(PathBuf::from(lp));
+            let rc = std::fs::canonicalize(rp).unwrap_or(PathBuf::from(rp));
+            lc == rc
+        }
+        "ssh" => {
+            let path_match = left
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|p| p.trim_end_matches('/'))
+                == right
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(|p| p.trim_end_matches('/'));
+            let connection_match = match (left.get("connection"), right.get("connection")) {
+                (Some(l), Some(r)) => {
+                    l.get("host").and_then(Value::as_str) == r.get("host").and_then(Value::as_str)
+                        && l.get("port").and_then(Value::as_u64)
+                            == r.get("port").and_then(Value::as_u64)
+                        && l.get("username").and_then(Value::as_str)
+                            == r.get("username").and_then(Value::as_str)
+                }
+                _ => false,
+            };
+            path_match && connection_match
+        }
+        _ => false,
+    }
+}

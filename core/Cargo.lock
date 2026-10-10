@@ -106,6 +106,7 @@ dependencies = [
  "libc",
  "parking_lot",
  "portable-pty",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
