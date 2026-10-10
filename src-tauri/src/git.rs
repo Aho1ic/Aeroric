@@ -2008,8 +2008,10 @@ pub async fn git_show_file_diff<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_push(project_path: String, branch: Option<String>) -> Result<String, String> {
+pub async fn local_git_push(
+    project_path: String,
+    branch: Option<String>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut args = vec!["push".to_string()];
         if let Some(ref b) = branch.filter(|s| !s.is_empty()) {
@@ -2033,7 +2035,26 @@ pub async fn git_push(project_path: String, branch: Option<String>) -> Result<St
 }
 
 #[tauri::command]
-pub async fn git_pull(project_path: String) -> Result<String, String> {
+pub async fn git_push<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    branch: Option<String>,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_push",
+        serde_json::json!({ "projectPath": project_path, "branch": branch }),
+        async {
+            local_git_push(project_path, branch)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_git_pull(project_path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         validate_project_path(&project_path)?;
         let output = run_git_network(&project_path, &["pull"])?;
@@ -2049,6 +2070,25 @@ pub async fn git_pull(project_path: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_pull<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_pull",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_pull(project_path)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 在一个已存在的目录里建仓库。
@@ -2160,8 +2200,7 @@ pub async fn git_clone(
 ///
 /// 同步流程里先 fetch 再判断要不要 pull:fetch 不改工作区也不产生冲突,所以可以放心
 /// 定时跑;拿到 ahead/behind 之后才决定是否合并。
-#[tauri::command]
-pub async fn git_fetch(project_path: String, prune: Option<bool>) -> Result<String, String> {
+pub async fn local_git_fetch(project_path: String, prune: Option<bool>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         validate_project_path(&project_path)?;
         let mut args: Vec<&str> = vec!["fetch", "--all"];
@@ -2181,6 +2220,26 @@ pub async fn git_fetch(project_path: String, prune: Option<bool>) -> Result<Stri
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_fetch<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    prune: Option<bool>,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_fetch",
+        serde_json::json!({ "projectPath": project_path, "prune": prune }),
+        async {
+            local_git_fetch(project_path, prune)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 这个目录是不是 git 仓库(工作区)。返回 `.git` 的位置。
@@ -3141,10 +3200,10 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_clone, git_dir, git_fetch, git_has_head, git_worktree_root,
-        is_protected_project_relative_path, list_untracked_files, local_git_blame_file,
-        local_git_branch_graph, local_git_commit_detail, local_git_conflict_files,
-        local_git_conflict_preview, local_git_init, local_git_log, local_git_resolve_conflict,
+        git_clone, git_dir, git_has_head, git_worktree_root, is_protected_project_relative_path,
+        list_untracked_files, local_git_blame_file, local_git_branch_graph,
+        local_git_commit_detail, local_git_conflict_files, local_git_conflict_preview,
+        local_git_fetch, local_git_init, local_git_log, local_git_resolve_conflict,
         local_git_show_diff, local_git_stash_diff, local_git_stash_list, local_git_stash_push,
         local_merge_task_worktree, parse_blame_porcelain, parse_branch_graph_log,
         parse_conflict_hunks, parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list,
@@ -3896,7 +3955,9 @@ mod tests {
             .expect("clone");
 
         source.commit_file("note.md", "two", "second");
-        git_fetch(target_path.clone(), None).await.expect("fetch");
+        local_git_fetch(target_path.clone(), None)
+            .await
+            .expect("fetch");
 
         // fetch 只动 remote-tracking ref,**不动工作区** —— 所以工作区还是旧内容。
         // 这一点是同步编排敢定时跑 fetch 的前提:它不产生冲突。

@@ -801,6 +801,55 @@ pub fn commit_detail_result(
     ))
 }
 
+// ===== 网络三件套（切片 87）=====
+
+/// fetch（legacy `git_fetch` verbatim；名带 `_result` 后缀——core 已有 P6-04 的
+/// 旧 `fetch`（无 `--all`、prune 为 bool、git_command_error 回落、core 测试在
+/// 用），旧入口保留）：`fetch --all` ＋可选 `--prune`（缺省 false＝不带旗标）；
+/// combined ＝ **stdout+stderr**（legacy 顺序）；失败 `Err(combined.trim())`、
+/// 成功 `Ok(combined.trim())`（都 trim）。走网络环境（防挂死）。
+pub fn fetch_result(repo_root: &Path, prune: Option<bool>) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["fetch", "--all"];
+    if prune.unwrap_or(false) {
+        args.push("--prune");
+    }
+    let output = transport::run_git_network(repo_root, &args, transport::NETWORK_TIMEOUT)?;
+    let combined = format!("{}{}", output.stdout, output.stderr);
+    if !output.success {
+        return Err(combined.trim().to_string());
+    }
+    Ok(combined.trim().to_string())
+}
+
+/// pull（legacy `git_pull` verbatim；名带 `_result` 后缀，同上）：单 `pull`；
+/// 失败 `Err(combined)` **不 trim**（legacy 三条各自的 trim 不对称——fetch 失败
+/// trim、pull/push 失败不 trim——逐字保留，别"顺手统一"）。
+pub fn pull_result(repo_root: &Path) -> Result<String, String> {
+    let output = transport::run_git_network(repo_root, &["pull"], transport::NETWORK_TIMEOUT)?;
+    let combined = format!("{}{}", output.stdout, output.stderr);
+    if !output.success {
+        return Err(combined);
+    }
+    Ok(combined.trim().to_string())
+}
+
+/// push（legacy `git_push` verbatim；名带 `_result` 后缀，同上）：branch 非空 ⇒
+/// `push origin <branch>`，否则裸 `push`（靠上游配置）；失败 `Err(combined)`
+/// 不 trim。
+pub fn push_result(repo_root: &Path, branch: Option<&str>) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["push"];
+    if let Some(branch) = branch.filter(|value| !value.is_empty()) {
+        args.push("origin");
+        args.push(branch);
+    }
+    let output = transport::run_git_network(repo_root, &args, transport::NETWORK_TIMEOUT)?;
+    let combined = format!("{}{}", output.stdout, output.stderr);
+    if !output.success {
+        return Err(combined);
+    }
+    Ok(combined.trim().to_string())
+}
+
 // ===== 冲突预览/解决家族（切片 86）=====
 
 /// 冲突解决选项（legacy `GitConflictResolution` verbatim：wire 小写）。

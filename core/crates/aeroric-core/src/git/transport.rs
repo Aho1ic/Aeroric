@@ -119,6 +119,52 @@ impl GitOutput {
     }
 }
 
+/// 等待子进程并收集输出（run_git/run_git_network 共用；read timeout kill
+/// child——不留持锁进程）。
+fn collect_output(mut child: std::process::Child, timeout: Duration) -> Result<GitOutput, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+                return Ok(GitOutput {
+                    stdout,
+                    stderr,
+                    success: status.success(),
+                });
+            }
+            Ok(None) => {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("git command timed out".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 /// 运行 git（业务主体；read timeout kill child——不留持锁进程；mutating
 /// 操作传 `serial: Some(&lock)` 串行化）。
 pub fn run_git(
@@ -132,7 +178,7 @@ pub fn run_git(
         validate_git_arg(arg)?;
     }
     let run = || -> Result<GitOutput, String> {
-        let mut child = Command::new("git")
+        let child = Command::new("git")
             .args(args)
             .current_dir(repo_root)
             .stdin(std::process::Stdio::null())
@@ -140,48 +186,7 @@ pub fn run_git(
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to run git: {e}"))?;
-        // read timeout：超时 kill child（不留持锁进程）。
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    let stdout = child
-                        .stdout
-                        .take()
-                        .map(|mut s| {
-                            use std::io::Read;
-                            let mut buf = String::new();
-                            let _ = s.read_to_string(&mut buf);
-                            buf
-                        })
-                        .unwrap_or_default();
-                    let stderr = child
-                        .stderr
-                        .take()
-                        .map(|mut s| {
-                            use std::io::Read;
-                            let mut buf = String::new();
-                            let _ = s.read_to_string(&mut buf);
-                            buf
-                        })
-                        .unwrap_or_default();
-                    return Ok(GitOutput {
-                        stdout,
-                        stderr,
-                        success: status.success(),
-                    });
-                }
-                Ok(None) => {
-                    if std::time::Instant::now() > deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err("git command timed out".to_string());
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => return Err(e.to_string()),
-            }
-        }
+        collect_output(child, timeout)
     };
     match serial {
         Some(lock) => {
@@ -192,6 +197,37 @@ pub fn run_git(
         }
         None => run(),
     }
+}
+
+/// 网络命令（legacy `run_git_network` 的 core 形状）：与 `run_git` 同一条
+/// collect 循环，外加防挂死网络环境——`GIT_TERMINAL_PROMPT=0` 管 HTTP(S)，
+/// `ssh -oBatchMode=yes` 管 SSH（口令/host key 确认都会失败而不是挂住）；
+/// **只在用户没设过 `GIT_SSH_COMMAND` 时补默认值**（有人靠它指定专用私钥或
+/// 跳板机，覆盖掉会把「能同步」变成「不能同步」——补默认，不抢配置权）。
+/// legacy 的同步 run_git_network 无超时；core 取 `NETWORK_TIMEOUT` 并入 doc。
+pub fn run_git_network(
+    repo_root: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<GitOutput, String> {
+    for arg in args {
+        validate_git_arg(arg)?;
+    }
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .current_dir(repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    }
+    let child = command
+        .spawn()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    collect_output(child, timeout)
 }
 
 /// git 命令错误（combined 输出即错误文案）。

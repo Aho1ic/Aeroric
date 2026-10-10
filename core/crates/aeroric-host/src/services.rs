@@ -268,6 +268,24 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_fetch",
+            Arc::new(move |request, _call| Box::pin(async move { git_fetch(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_pull",
+            Arc::new(move |request, _call| Box::pin(async move { git_pull(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_push",
+            Arc::new(move |request, _call| Box::pin(async move { git_push(request).await })),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -2025,6 +2043,127 @@ async fn git_resolve_conflict(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_fetch(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_fetch requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_fetch requires params.projectPath (string)",
+        );
+    };
+    let prune = match params.get("prune") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(value)) => Some(*value),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_fetch requires params.prune (boolean)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::fetch_result(std::path::Path::new(&p_path), prune)
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_pull(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_pull requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_pull requires params.projectPath (string)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::pull_result(std::path::Path::new(&p_path))
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_push(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_push requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_push requires params.projectPath (string)",
+        );
+    };
+    let branch = match params.get("branch") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_push requires params.branch (string)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::push_result(std::path::Path::new(&p_path), branch.as_deref())
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(&request, Value::String(text)),
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

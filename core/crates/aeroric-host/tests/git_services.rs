@@ -2970,3 +2970,244 @@ async fn git_resolve_conflict_resolves_and_stages() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_fetch_pull_push_roundtrip_against_local_remote() {
+    let harness = Harness::start("git-network").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // Fixture: a working repo pushed to a local bare remote, plus a second clone.
+    let repo = new_repo("aeroric-git-network-repo");
+    commit_file(&repo, "a.txt", "one\n", "first commit");
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let bare = std::env::temp_dir().join(format!(
+        "aeroric-git-network-bare-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&bare);
+    let init = std::process::Command::new("git")
+        .args(["init", "--bare", "-b", "main"])
+        .arg(&bare)
+        .output()
+        .expect("git init --bare");
+    assert!(init.status.success(), "bare init failed");
+    std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(&bare)
+        .current_dir(&repo.root)
+        .output()
+        .expect("git remote add");
+    let push_out = std::process::Command::new("git")
+        .args(["push", "-u", "origin", "main"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git push -u");
+    assert!(push_out.status.success(), "initial push failed");
+
+    // A second clone whose origin is the same bare remote.
+    let clone = std::env::temp_dir().join(format!(
+        "aeroric-git-network-clone-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&clone);
+    let clone_out = std::process::Command::new("git")
+        .args([
+            "clone",
+            bare.to_str().expect("bare path"),
+            clone.to_str().expect("clone path"),
+        ])
+        .output()
+        .expect("git clone");
+    assert!(clone_out.status.success(), "clone failed");
+
+    // New commit lands on the bare remote from the original repo.
+    commit_file(&repo, "b.txt", "two\n", "second commit");
+    let push2 = std::process::Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git push");
+    assert!(push2.status.success());
+
+    // FETCH: `fetch --all` (no prune) — the reply is the combined chatter; the
+    // end state is that origin/main advanced in the clone.
+    let reply_fetch = query(
+        &mut reader,
+        &mut writer,
+        "net-fetch",
+        "git.git_fetch",
+        json!({ "projectPath": clone.to_string_lossy() }),
+    )
+    .await;
+    let _ = success_result(reply_fetch);
+    let fetched = std::process::Command::new("git")
+        .args(["rev-parse", "origin/main"])
+        .current_dir(&clone)
+        .output()
+        .expect("rev-parse origin/main");
+    let bare_main = std::process::Command::new("git")
+        .args(["rev-parse", "main"])
+        .current_dir(&bare)
+        .output()
+        .expect("rev-parse bare main");
+    assert_eq!(
+        String::from_utf8_lossy(&fetched.stdout).trim(),
+        String::from_utf8_lossy(&bare_main.stdout).trim(),
+        "fetch must advance origin/main"
+    );
+
+    // PULL: the clone's working main advances to the fetched commit.
+    let reply_pull = query(
+        &mut reader,
+        &mut writer,
+        "net-pull",
+        "git.git_pull",
+        json!({ "projectPath": clone.to_string_lossy() }),
+    )
+    .await;
+    let _ = success_result(reply_pull);
+    let clone_main = std::process::Command::new("git")
+        .args(["rev-parse", "main"])
+        .current_dir(&clone)
+        .output()
+        .expect("rev-parse clone main");
+    assert_eq!(
+        String::from_utf8_lossy(&clone_main.stdout).trim(),
+        String::from_utf8_lossy(&bare_main.stdout).trim(),
+        "pull must advance the local main"
+    );
+
+    // PUSH: a commit in the clone reaches the bare remote via `push origin main`.
+    std::fs::write(clone.join("c.txt"), "three\n").expect("write c");
+    let add_c = std::process::Command::new("git")
+        .args(["add", "c.txt"])
+        .current_dir(&clone)
+        .output()
+        .expect("git add");
+    assert!(add_c.status.success());
+    let commit_c = std::process::Command::new("git")
+        .args(["commit", "-m", "clone commit"])
+        .current_dir(&clone)
+        .output()
+        .expect("git commit");
+    assert!(commit_c.status.success());
+    let clone_head = std::process::Command::new("git")
+        .args(["rev-parse", "main"])
+        .current_dir(&clone)
+        .output()
+        .expect("rev-parse clone main after commit");
+    let reply_push = query(
+        &mut reader,
+        &mut writer,
+        "net-push",
+        "git.git_push",
+        json!({ "projectPath": clone.to_string_lossy(), "branch": "main" }),
+    )
+    .await;
+    let _ = success_result(reply_push);
+    let pushed = std::process::Command::new("git")
+        .args(["rev-parse", "main"])
+        .current_dir(&bare)
+        .output()
+        .expect("rev-parse bare after push");
+    assert_eq!(
+        String::from_utf8_lossy(&pushed.stdout).trim(),
+        String::from_utf8_lossy(&clone_head.stdout).trim(),
+        "push must land the clone commit on the remote"
+    );
+
+    // Fetch with prune: publish a second branch, delete it on the remote, then
+    // `--prune` drops the stale remote-tracking ref while plain fetch keeps it.
+    // (The checked-out branch's own upstream is protected by git — pruning a
+    // secondary branch keeps the scenario unambiguous.)
+    std::process::Command::new("git")
+        .args(["branch", "topic", "main"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("create topic");
+    let push_topic = std::process::Command::new("git")
+        .args(["push", "origin", "topic"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("push topic");
+    assert!(push_topic.status.success());
+    let fetch_topic = std::process::Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(&clone)
+        .output()
+        .expect("clone fetches topic");
+    assert!(fetch_topic.status.success());
+    let del = std::process::Command::new("git")
+        .args(["push", "origin", "--delete", "topic"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("delete remote topic");
+    assert!(del.status.success());
+
+    let reply_noprune = query(
+        &mut reader,
+        &mut writer,
+        "net-fetch-noprune",
+        "git.git_fetch",
+        json!({ "projectPath": clone.to_string_lossy(), "prune": false }),
+    )
+    .await;
+    let _ = success_result(reply_noprune);
+    let kept = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "origin/topic"])
+        .current_dir(&clone)
+        .output()
+        .expect("verify origin/topic kept");
+    assert!(kept.status.success(), "no-prune fetch keeps the stale ref");
+
+    let reply_prune = query(
+        &mut reader,
+        &mut writer,
+        "net-fetch-prune",
+        "git.git_fetch",
+        json!({ "projectPath": clone.to_string_lossy(), "prune": true }),
+    )
+    .await;
+    let _ = success_result(reply_prune);
+    let pruned = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "origin/topic"])
+        .current_dir(&clone)
+        .output()
+        .expect("verify origin/topic pruned");
+    assert!(!pruned.status.success(), "--prune drops the stale ref");
+
+    // Missing projectPath -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "net-missing",
+        "git.git_fetch",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing projectPath must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "net-remote",
+        "git.git_fetch",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+
+    let _ = std::fs::remove_dir_all(&bare);
+    let _ = std::fs::remove_dir_all(&clone);
+}
