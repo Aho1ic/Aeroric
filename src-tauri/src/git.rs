@@ -2034,7 +2034,7 @@ pub(crate) fn git_dir(project_path: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitRemoteCounts {
     ahead: i32,
     behind: i32,
@@ -2063,8 +2063,7 @@ pub(crate) fn git_remote_counts_from_rev_list(
     }
 }
 
-#[tauri::command]
-pub async fn git_remote_counts(
+pub async fn local_git_remote_counts(
     project_path: String,
     branch: Option<String>,
 ) -> Result<GitRemoteCounts, String> {
@@ -2107,6 +2106,26 @@ pub async fn git_remote_counts(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_remote_counts<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    branch: Option<String>,
+) -> Result<GitRemoteCounts, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_remote_counts",
+        serde_json::json!({ "projectPath": project_path, "branch": branch }),
+        async {
+            local_git_remote_counts(project_path, branch)
+                .await
+                .and_then(|counts| serde_json::to_value(counts).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

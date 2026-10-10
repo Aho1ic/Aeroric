@@ -259,6 +259,14 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        set.register(
+            "git.git_remote_counts",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_remote_counts(request).await })
+            }),
+        );
+    }
+    {
         let context = Arc::clone(&context);
         set.register(
             "project.open",
@@ -1598,6 +1606,53 @@ async fn git_stash_push(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_remote_counts(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_remote_counts requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_remote_counts requires params.projectPath (string)",
+        );
+    };
+    let branch = match params.get("branch") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_remote_counts requires params.branch (string)",
+            )
+        }
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::remote_counts(std::path::Path::new(&p_path), branch.as_deref())
+    })
+    .await;
+    match result {
+        Ok(Ok(counts)) => match serde_json::to_value(counts) {
+            Ok(value) => ok(&request, value),
+            Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
+        },
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

@@ -45,6 +45,72 @@ pub struct GitConflictFile {
     pub path: String,
 }
 
+/// 与上游的领先/落后计数（legacy `GitRemoteCounts` 形状：camelCase wire）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitRemoteCounts {
+    pub ahead: i32,
+    pub behind: i32,
+    pub branch: String,
+}
+
+/// `rev-list --count --left-right <branch>...@{u}` 的解析（legacy verbatim：
+/// 两段十进制才取数，否则**回落 (0,0)**——无上游不是错误）。
+pub fn remote_counts_from_rev_list(branch: &str, rev_list_stdout: Option<&str>) -> GitRemoteCounts {
+    let (ahead, behind) = rev_list_stdout
+        .and_then(|stdout| {
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+            if parts.len() == 2 {
+                Some((parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0)))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((0, 0));
+    GitRemoteCounts {
+        ahead,
+        behind,
+        branch: branch.to_string(),
+    }
+}
+
+/// 领先/落后计数（只读）。`branch` 为空/缺省时取当前分支
+/// （`rev-parse --abbrev-ref HEAD`，取不到就用空串——legacy 不把它当错误）。
+pub fn remote_counts(repo_root: &Path, branch: Option<&str>) -> Result<GitRemoteCounts, String> {
+    let branch = match branch.filter(|value| !value.is_empty()) {
+        Some(branch) => {
+            transport::validate_revision(branch)?;
+            branch.to_string()
+        }
+        None => {
+            let output = transport::run_git(
+                repo_root,
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+                transport::READ_TIMEOUT,
+                None,
+            )?;
+            output.stdout.trim().to_string()
+        }
+    };
+    let rev_str = format!("{branch}...@{{u}}");
+    let rev_out = transport::run_git(
+        repo_root,
+        &[
+            "rev-list",
+            "--count",
+            "--left-right",
+            "--end-of-options",
+            &rev_str,
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    );
+    let rev_stdout = match rev_out {
+        Ok(output) if output.success => Some(output.stdout.trim().to_string()),
+        _ => None,
+    };
+    Ok(remote_counts_from_rev_list(&branch, rev_stdout.as_deref()))
+}
+
 /// porcelain v1 -z 状态解析（verbatim 上收；`core.quotePath=false` 的 -z
 /// 输出：X Y path\0[origPath\0]，R/C 带第二个 NUL 段）。
 pub fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {

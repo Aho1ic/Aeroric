@@ -1324,3 +1324,127 @@ async fn git_create_and_checkout_branch_validate_and_switch() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_remote_counts_reports_ahead_and_validates_params() {
+    let harness = Harness::start("git-remote-counts").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-remote-counts-test");
+    commit_file(&repo, "a.txt", "base\n", "initial");
+
+    // Local bare remote so `@{u}` resolves for real.
+    let bare = std::env::temp_dir().join(format!(
+        "aeroric-remote-counts-bare-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&bare);
+    let init_bare = std::process::Command::new("git")
+        .args(["init", "--bare", bare.to_str().unwrap()])
+        .output()
+        .expect("git init --bare");
+    assert!(init_bare.status.success());
+    let bare_guard = TempRepo { root: bare.clone() };
+    let add_remote = std::process::Command::new("git")
+        .args(["remote", "add", "origin", bare.to_str().unwrap()])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git remote add");
+    assert!(add_remote.status.success(), "git remote add failed");
+    let push = std::process::Command::new("git")
+        .args(["push", "-u", "origin", "main"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git push");
+    assert!(push.status.success(), "push failed");
+
+    // In sync: 0 ahead / 0 behind.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "counts-1",
+        "git.git_remote_counts",
+        json!({ "projectPath": repo.root.to_string_lossy(), "branch": "main" }),
+    )
+    .await;
+    let result = success_result(reply);
+    assert_eq!(result["branch"], "main");
+    assert_eq!(result["ahead"], 0, "{result}");
+    assert_eq!(result["behind"], 0, "{result}");
+
+    // One local commit -> 1 ahead / 0 behind.
+    commit_file(&repo, "b.txt", "local only\n", "local commit");
+    let reply2 = query(
+        &mut reader,
+        &mut writer,
+        "counts-2",
+        "git.git_remote_counts",
+        json!({ "projectPath": repo.root.to_string_lossy(), "branch": "main" }),
+    )
+    .await;
+    let result2 = success_result(reply2);
+    assert_eq!(result2["ahead"], 1, "{result2}");
+    assert_eq!(result2["behind"], 0, "{result2}");
+
+    // Omitting `branch` falls back to the current branch (`rev-parse --abbrev-ref HEAD`).
+    let reply3 = query(
+        &mut reader,
+        &mut writer,
+        "counts-3",
+        "git.git_remote_counts",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let result3 = success_result(reply3);
+    assert_eq!(result3["branch"], "main", "{result3}");
+    assert_eq!(result3["ahead"], 1, "{result3}");
+
+    // A branch with no upstream is NOT an error: counts fall back to (0, 0) and the name is echoed.
+    let reply4 = query(
+        &mut reader,
+        &mut writer,
+        "counts-4",
+        "git.git_remote_counts",
+        json!({ "projectPath": repo.root.to_string_lossy(), "branch": "no-such-branch" }),
+    )
+    .await;
+    let result4 = success_result(reply4);
+    assert_eq!(result4["branch"], "no-such-branch");
+    assert_eq!(result4["ahead"], 0, "{result4}");
+    assert_eq!(result4["behind"], 0, "{result4}");
+
+    // Missing projectPath -> InvalidArgument
+    let reply_bad = query(
+        &mut reader,
+        &mut writer,
+        "counts-bad",
+        "git.git_remote_counts",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure) = reply_bad else {
+        panic!("missing params must fail");
+    };
+    assert_eq!(failure.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "counts-remote",
+        "git.git_remote_counts",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+
+    drop(bare_guard);
+}
