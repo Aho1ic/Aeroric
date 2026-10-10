@@ -1803,8 +1803,7 @@ fn list_untracked_files(project_path: &str) -> Result<Vec<String>, String> {
 /// We deliberately don't expose a "discard staged" path here — staged-only files have no per-row
 /// discard button in the UI (matching VSCode), and "Discard All" handles the staged side via
 /// `git_discard_all` which correctly undoes renames too.
-#[tauri::command]
-pub async fn git_discard_file(
+pub async fn local_git_discard_file(
     project_path: String,
     file_path: String,
     untracked: bool,
@@ -1824,7 +1823,27 @@ pub async fn git_discard_file(
 }
 
 #[tauri::command]
-pub async fn git_discard_files(
+pub async fn git_discard_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_path: String,
+    untracked: bool,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_discard_file",
+        serde_json::json!({ "projectPath": project_path, "filePath": file_path, "untracked": untracked }),
+        async {
+            local_git_discard_file(project_path, file_path, untracked)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_discard_files(
     project_path: String,
     file_paths: Vec<String>,
     untracked: bool,
@@ -1860,7 +1879,27 @@ pub async fn git_discard_files(
 }
 
 #[tauri::command]
-pub async fn git_discard_all(project_path: String) -> Result<(), String> {
+pub async fn git_discard_files<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    file_paths: Vec<String>,
+    untracked: bool,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_discard_files",
+        serde_json::json!({ "projectPath": project_path, "filePaths": file_paths, "untracked": untracked }),
+        async {
+            local_git_discard_files(project_path, file_paths, untracked)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn local_git_discard_all(project_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         validate_project_path(&project_path)?;
         let worktree_root = git_worktree_root(&project_path)?;
@@ -1889,6 +1928,25 @@ pub async fn git_discard_all(project_path: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_discard_all<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_discard_all",
+        serde_json::json!({ "projectPath": project_path }),
+        async {
+            local_git_discard_all(project_path)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn local_git_show_file_diff(

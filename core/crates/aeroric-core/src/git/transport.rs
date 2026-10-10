@@ -18,6 +18,9 @@ pub const STASH_TIMEOUT: Duration = Duration::from_secs(20);
 /// `git_stash_drop` 的 timeout（legacy 给它 10s，与 push/apply 的 20s **不是**同一个值；
 /// 合并成一个常量会静默改掉其中一边）。
 pub const STASH_DROP_TIMEOUT: Duration = Duration::from_secs(10);
+/// discard 家族的 timeout（legacy `run_git_check` 无超时；core 必须给——
+/// `restore`/`rm` 本地即时，取 10s 级别并独立成常量）。
+pub const DISCARD_TIMEOUT: Duration = Duration::from_secs(10);
 /// `git_file_diff` 主命令与 untracked 回落的 timeout（legacy 两处都用
 /// `Duration::from_secs(10)`）。
 pub const FILE_DIFF_TIMEOUT: Duration = Duration::from_secs(10);

@@ -2398,3 +2398,326 @@ async fn git_commit_detail_returns_parsed_fields_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_discard_file_restores_tracked_and_trashes_untracked() {
+    let harness = Harness::start("git-discard-file").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-discard-file");
+    commit_file(&repo, "tracked.txt", "base\n", "base commit");
+
+    // Tracked: a modified file is restored to HEAD content.
+    std::fs::write(repo.root.join("tracked.txt"), "changed\n").expect("modify");
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "discardfile-1",
+        "git.git_discard_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "tracked.txt",
+            "untracked": false
+        }),
+    )
+    .await;
+    let _ = success_result(reply);
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("tracked.txt")).expect("read back"),
+        "base\n"
+    );
+
+    // Untracked: the file goes to the trash (gone from the worktree).
+    std::fs::write(repo.root.join("fresh.txt"), "new\n").expect("write fresh");
+    let reply_untracked = query(
+        &mut reader,
+        &mut writer,
+        "discardfile-untracked",
+        "git.git_discard_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "fresh.txt",
+            "untracked": true
+        }),
+    )
+    .await;
+    let _ = success_result(reply_untracked);
+    assert!(
+        !repo.root.join("fresh.txt").exists(),
+        "untracked file must leave the worktree"
+    );
+
+    // Protected metadata is refused before any delete.
+    std::fs::create_dir_all(repo.root.join(".aeroric")).expect("create .aeroric");
+    std::fs::write(repo.root.join(".aeroric/state.json"), "{}").expect("write state");
+    let reply_protected = query(
+        &mut reader,
+        &mut writer,
+        "discardfile-protected",
+        "git.git_discard_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": ".aeroric/state.json",
+            "untracked": true
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_protected) = reply_protected else {
+        panic!("protected path must fail");
+    };
+    assert_eq!(failure_protected.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_protected.error.message,
+        "Refusing to delete protected project metadata"
+    );
+    assert!(
+        repo.root.join(".aeroric/state.json").exists(),
+        "protected file must survive"
+    );
+
+    // Missing untracked flag -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "discardfile-missing",
+        "git.git_discard_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "tracked.txt"
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing untracked must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "discardfile-remote",
+        "git.git_discard_file",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePath": "tracked.txt",
+            "untracked": false,
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_discard_files_restores_batch_and_validates_params() {
+    let harness = Harness::start("git-discard-files").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-discard-files");
+    commit_file(&repo, "a.txt", "base a\n", "base commit");
+    commit_file(&repo, "b.txt", "base b\n", "second commit");
+    std::fs::write(repo.root.join("a.txt"), "changed a\n").expect("modify a");
+    std::fs::write(repo.root.join("b.txt"), "changed b\n").expect("modify b");
+    std::fs::write(repo.root.join("c.txt"), "changed c\n").expect("modify c");
+
+    // Duplicates dedupe; only the listed files are restored, others stay changed.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "discardfiles-1",
+        "git.git_discard_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["a.txt", "b.txt", "a.txt"],
+            "untracked": false
+        }),
+    )
+    .await;
+    let _ = success_result(reply);
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("a.txt")).expect("read a"),
+        "base a\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("b.txt")).expect("read b"),
+        "base b\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("c.txt")).expect("read c"),
+        "changed c\n",
+        "unlisted file must stay changed"
+    );
+
+    // An empty list is a SILENT SUCCESS (no git run).
+    let reply_empty = query(
+        &mut reader,
+        &mut writer,
+        "discardfiles-empty",
+        "git.git_discard_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": [],
+            "untracked": false
+        }),
+    )
+    .await;
+    let _ = success_result(reply_empty);
+
+    // Escape path refused before git runs.
+    let reply_escape = query(
+        &mut reader,
+        &mut writer,
+        "discardfiles-escape",
+        "git.git_discard_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["sub/../a.txt"],
+            "untracked": false
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_escape) = reply_escape else {
+        panic!("escape path must fail");
+    };
+    assert_eq!(failure_escape.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_escape.error.message,
+        "File path must stay inside the git worktree"
+    );
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "discardfiles-remote",
+        "git.git_discard_files",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "filePaths": ["a.txt"],
+            "untracked": false,
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}
+
+#[tokio::test]
+async fn git_discard_all_resets_worktree_and_trashes_untracked() {
+    let harness = Harness::start("git-discard-all").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // With HEAD: tracked restored, staged-add and untracked trashed, protected kept.
+    let repo = new_repo("aeroric-git-discard-all");
+    commit_file(&repo, "tracked.txt", "base\n", "base commit");
+    std::fs::write(repo.root.join("tracked.txt"), "changed\n").expect("modify");
+    std::fs::write(repo.root.join("staged-new.txt"), "staged\n").expect("write staged");
+    let add = std::process::Command::new("git")
+        .args(["add", "staged-new.txt"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git add");
+    assert!(add.status.success());
+    std::fs::write(repo.root.join("loose.txt"), "loose\n").expect("write loose");
+    std::fs::create_dir_all(repo.root.join(".aeroric")).expect("create .aeroric");
+    std::fs::write(repo.root.join(".aeroric/state.json"), "{}").expect("write state");
+
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "discardall-1",
+        "git.git_discard_all",
+        json!({ "projectPath": repo.root.to_string_lossy() }),
+    )
+    .await;
+    let _ = success_result(reply);
+
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("tracked.txt")).expect("read tracked"),
+        "base\n",
+        "tracked file must be restored to HEAD"
+    );
+    assert!(
+        !repo.root.join("staged-new.txt").exists(),
+        "staged-only add resets to untracked and is then trashed"
+    );
+    assert!(
+        !repo.root.join("loose.txt").exists(),
+        "untracked file must be trashed"
+    );
+    assert!(
+        repo.root.join(".aeroric/state.json").exists(),
+        "protected metadata must survive discard_all"
+    );
+    let status = git_output(&repo, &["status", "--porcelain"]);
+    // The surviving protected directory is itself untracked — the only thing
+    // left in porcelain is exactly that.
+    assert_eq!(status, "?? .aeroric/", "{status:?}");
+
+    // Unborn HEAD: `rm -r --cached` unstages, then the untracked pass trashes.
+    let fresh = new_repo("aeroric-git-discard-all-unborn");
+    std::fs::write(fresh.root.join("only.txt"), "only\n").expect("write only");
+    let add_only = std::process::Command::new("git")
+        .args(["add", "only.txt"])
+        .current_dir(&fresh.root)
+        .output()
+        .expect("git add unborn");
+    assert!(add_only.status.success());
+
+    let reply_unborn = query(
+        &mut reader,
+        &mut writer,
+        "discardall-unborn",
+        "git.git_discard_all",
+        json!({ "projectPath": fresh.root.to_string_lossy() }),
+    )
+    .await;
+    let _ = success_result(reply_unborn);
+    assert!(
+        !fresh.root.join("only.txt").exists(),
+        "staged file on unborn HEAD must be unstaged and trashed"
+    );
+
+    // Missing projectPath -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "discardall-missing",
+        "git.git_discard_all",
+        json!({}),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing projectPath must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "discardall-remote",
+        "git.git_discard_all",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

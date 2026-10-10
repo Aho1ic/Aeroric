@@ -801,6 +801,374 @@ pub fn commit_detail_result(
     ))
 }
 
+// ===== discard 家族（切片 85）=====
+
+/// 解析 worktree root（legacy `git_worktree_root` verbatim）：`rev-parse
+/// --show-toplevel` 失败原样上抛 git stderr；空 root / canonicalize 失败 /
+/// 越出 root 各有专属文案。切片 80 的 `branch_graph_result` 内联了同一段逻辑，
+/// 本助手自本片起共享（branch_graph 的内联副本留待后续统一，不在本片回改）。
+pub fn worktree_root_of(project_path: &Path) -> Result<std::path::PathBuf, String> {
+    let output = transport::run_git(
+        project_path,
+        &["rev-parse", "--show-toplevel"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(output.stderr.trim().to_string());
+    }
+    let root = output.stdout.trim().to_string();
+    if root.is_empty() {
+        return Err("Cannot resolve git worktree root".to_string());
+    }
+    let root = std::path::PathBuf::from(&root)
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve git worktree root: {error}"))?;
+    let project = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+    if !project.starts_with(&root) {
+        return Err("Git worktree root does not contain project path".to_string());
+    }
+    Ok(root)
+}
+
+/// 保护路径判定（legacy 经 git_path_guard `is_protected_git_relative_path`
+/// verbatim：首段 `.git`/`.aeroric`，大小写不敏感，`Path::components` 取段）。
+pub fn is_protected_project_relative_path(file_path: &str) -> bool {
+    const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".aeroric"];
+    Path::new(file_path)
+        .components()
+        .find_map(|component| match component {
+            std::path::Component::Normal(name) => name.to_str().map(|name| {
+                PROTECTED_FIRST_SEGMENTS
+                    .iter()
+                    .any(|protected| name.eq_ignore_ascii_case(protected))
+            }),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// 列出 untracked（legacy `list_untracked_files` verbatim）：`-c
+/// core.quotePath=false ls-files --others --exclude-standard -z`，NUL 分隔；
+/// 失败回落**仅 stderr trim**（同 run_git_check 形状，非 combined）。
+pub fn list_untracked_files(repo_root: &Path) -> Result<Vec<String>, String> {
+    let output = transport::run_git(
+        repo_root,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if !output.success {
+        return Err(output.stderr.trim().to_string());
+    }
+    Ok(output
+        .stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect())
+}
+
+/// 目录下的 untracked 条目（legacy `untracked_files_under_directory` verbatim，
+/// 纯函数：路径本身不算"其目录之下"）。
+pub fn untracked_files_under_directory<'a>(
+    directory_path: &str,
+    untracked_files: &'a [String],
+) -> Vec<&'a str> {
+    let directory = Path::new(directory_path);
+    untracked_files
+        .iter()
+        .map(String::as_str)
+        .filter(|path| {
+            let path = Path::new(path);
+            path != directory && path.starts_with(directory)
+        })
+        .collect()
+}
+
+/// 是否在 untracked 列表（legacy `is_listed_untracked_file` verbatim，
+/// 按 Path 语义比较而非字符串相等）。
+pub fn is_listed_untracked_file(relative_path: &str, untracked_files: &[String]) -> bool {
+    let relative_path = Path::new(relative_path);
+    untracked_files
+        .iter()
+        .any(|path| Path::new(path) == relative_path)
+}
+
+/// worktree 相对路径是否受保护（legacy `is_protected_worktree_relative_path`
+/// verbatim：项目内相对路径过保护判定，越出项目的路径不受本判定管——
+/// trash 步另有 root 包含守卫）。
+pub fn is_protected_worktree_relative_path(
+    worktree_root: &Path,
+    project_path: &Path,
+    relative_path: &str,
+) -> bool {
+    if is_protected_project_relative_path(relative_path) {
+        return true;
+    }
+
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() {
+        return false;
+    }
+
+    let canonical_project = match project_path.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let target = worktree_root.join(rel);
+    let Some(file_name) = target.file_name() else {
+        return false;
+    };
+    let Some(parent) = target.parent() else {
+        return false;
+    };
+    let Ok(canonical_parent) = parent.canonicalize() else {
+        return false;
+    };
+    let resolved = canonical_parent.join(file_name);
+
+    resolved
+        .strip_prefix(&canonical_project)
+        .ok()
+        .map(|rel_from_project| {
+            is_protected_project_relative_path(&rel_from_project.to_string_lossy())
+        })
+        .unwrap_or(false)
+}
+
+/// 回收站删除（legacy `trash_worktree_relative_path` verbatim）：canonical
+/// 双方＋root 包含判定＋拒根＋拒保护路径（相对 root 与相对项目各查一次）＋
+/// `trash::delete`——**进废纸篓，不默认永久删除**（P6-01 同款）。
+fn trash_worktree_relative_path(
+    worktree_root: &Path,
+    project_path: &Path,
+    relative_path: &str,
+) -> Result<(), String> {
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() {
+        return Err("Untracked path must be relative".to_string());
+    }
+
+    let target = worktree_root.join(rel);
+    let file_name = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Invalid file name".to_string())?
+        .to_string();
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Cannot resolve parent directory".to_string())?;
+
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve parent directory: {error}"))?;
+    let canonical_root = worktree_root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve git worktree root: {error}"))?;
+    let canonical_project = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve project path: {error}"))?;
+
+    if !canonical_parent.starts_with(&canonical_root) {
+        return Err("Path is outside the git worktree".to_string());
+    }
+
+    let resolved = canonical_parent.join(&file_name);
+    if resolved == canonical_root {
+        return Err("Refusing to delete project root".to_string());
+    }
+    if resolved.symlink_metadata().is_err() {
+        return Err("Path does not exist".to_string());
+    }
+    if is_protected_project_relative_path(relative_path) {
+        return Err("Refusing to delete protected project metadata".to_string());
+    }
+    if let Ok(rel_from_project) = resolved.strip_prefix(&canonical_project) {
+        let rel_from_project = rel_from_project.to_string_lossy();
+        if is_protected_project_relative_path(&rel_from_project) {
+            return Err("Refusing to delete protected project metadata".to_string());
+        }
+    }
+
+    trash::delete(&resolved).map_err(|error| error.to_string())
+}
+
+/// 删除一个 untracked 路径（legacy `discard_untracked_path` verbatim）：绝对
+/// 路径拒、保护路径拒、symlink_metadata 探存在；目录 ⇒ 逐个 trash 其 untracked
+/// 条目（受保护的跳过）；文件 ⇒ 必须真的在 untracked 列表里才 trash。
+fn discard_untracked_path(
+    project_path: &Path,
+    worktree_root: &Path,
+    relative_path: &str,
+    untracked_files: &[String],
+) -> Result<(), String> {
+    let rel = Path::new(relative_path);
+    if rel.is_absolute() {
+        return Err("Untracked path must be relative".to_string());
+    }
+    if is_protected_worktree_relative_path(worktree_root, project_path, relative_path) {
+        return Err("Refusing to delete protected project metadata".to_string());
+    }
+
+    let target = worktree_root.join(rel);
+    let metadata = target
+        .symlink_metadata()
+        .map_err(|_| "Path does not exist".to_string())?;
+
+    if metadata.file_type().is_dir() {
+        for rel in untracked_files_under_directory(relative_path, untracked_files) {
+            if is_protected_worktree_relative_path(worktree_root, project_path, rel) {
+                continue;
+            }
+            trash_worktree_relative_path(worktree_root, project_path, rel)?;
+        }
+        return Ok(());
+    }
+
+    if !is_listed_untracked_file(relative_path, untracked_files) {
+        return Err("Path is not an untracked file".to_string());
+    }
+
+    trash_worktree_relative_path(worktree_root, project_path, relative_path)
+}
+
+/// run_git_check 的 core 形状（legacy `run_git_check` verbatim：失败回落
+/// **仅 stderr trim**，非 combined）。
+fn run_git_check(
+    repo_root: &Path,
+    args: &[&str],
+    timeout: std::time::Duration,
+    lock: Option<&Arc<std::sync::Mutex<()>>>,
+) -> Result<(), String> {
+    let output = transport::run_git(repo_root, args, timeout, lock)?;
+    if !output.success {
+        return Err(output.stderr.trim().to_string());
+    }
+    Ok(())
+}
+
+/// 丢单文件改动（legacy `git_discard_file` verbatim）：tracked 走
+/// `restore -- <file>`（在 worktree root 上执行）；untracked 走回收站路径
+/// （`discard_untracked_file` ＝ 现列 untracked 再 `discard_untracked_path`）。
+/// mutating 串行化；10s（legacy 的 run_git_check 无超时，core 取
+/// `STAGE_FILES_TIMEOUT` 同款 10s 级别——这里用独立常量）。
+pub fn discard_file(
+    project_path: &Path,
+    file_path: &str,
+    untracked: bool,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    let worktree_root = worktree_root_of(project_path)?;
+    if untracked {
+        let worktree_root_string = worktree_root.to_string_lossy().into_owned();
+        let untracked_files = list_untracked_files(Path::new(&worktree_root_string))?;
+        discard_untracked_path(project_path, &worktree_root, file_path, &untracked_files)
+    } else {
+        let lock = locks.lock_for(project_path.to_str().unwrap_or_default());
+        run_git_check(
+            &worktree_root,
+            &["restore", "--", file_path],
+            transport::DISCARD_TIMEOUT,
+            Some(&lock),
+        )
+    }
+}
+
+/// 丢一批改动（legacy `git_discard_files` verbatim；名带 `_at` 后缀——core 已有
+/// P6-04 的旧 `discard_files`（`checkout --` 形状、core 自身测试在用），按切片
+/// 77/79 先例旧入口保留不做合并）：先校验＋去重（`validate_git_relative_path`
+/// 逐个＋首次出现去重），**空列表静默成功**；untracked 批量逐个
+/// `discard_untracked_path`（共享一次 untracked 枚举）；tracked 批量一条
+/// `restore -- <paths...>`；mutating 串行化。
+pub fn discard_files_at(
+    project_path: &Path,
+    file_paths: &[String],
+    untracked: bool,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut unique: Vec<&str> = Vec::new();
+    for file_path in file_paths {
+        validate_git_relative_path(file_path)?;
+        if seen.insert(file_path.as_str()) {
+            unique.push(file_path.as_str());
+        }
+    }
+    if unique.is_empty() {
+        return Ok(());
+    }
+
+    let worktree_root = worktree_root_of(project_path)?;
+    if untracked {
+        let worktree_root_string = worktree_root.to_string_lossy().into_owned();
+        let untracked_files = list_untracked_files(Path::new(&worktree_root_string))?;
+        for file_path in unique {
+            discard_untracked_path(project_path, &worktree_root, file_path, &untracked_files)?;
+        }
+        return Ok(());
+    }
+
+    let mut args: Vec<&str> = vec!["restore", "--"];
+    args.extend(unique);
+    let lock = locks.lock_for(project_path.to_str().unwrap_or_default());
+    run_git_check(
+        &worktree_root,
+        &args,
+        transport::DISCARD_TIMEOUT,
+        Some(&lock),
+    )
+}
+
+/// 丢全部改动（legacy `git_discard_all` verbatim）：有 HEAD 走
+/// `restore --source=HEAD --staged --worktree .`（staged-only 的新文件在这一步
+/// 变回 untracked）；无 HEAD 走 `rm -r --cached --ignore-unmatch -- .`；随后
+/// 枚举 untracked 逐个回收站（**受保护路径跳过而非报错**——批量语义）。
+/// mutating 串行化。
+pub fn discard_all(project_path: &Path, locks: &RepoLocks) -> Result<(), String> {
+    let worktree_root = worktree_root_of(project_path)?;
+    let lock = locks.lock_for(project_path.to_str().unwrap_or_default());
+    let head = transport::run_git(
+        &worktree_root,
+        &["rev-parse", "--verify", "HEAD"],
+        transport::READ_TIMEOUT,
+        None,
+    )?;
+    if head.success {
+        run_git_check(
+            &worktree_root,
+            &["restore", "--source=HEAD", "--staged", "--worktree", "."],
+            transport::DISCARD_TIMEOUT,
+            Some(&lock),
+        )?;
+    } else {
+        run_git_check(
+            &worktree_root,
+            &["rm", "-r", "--cached", "--ignore-unmatch", "--", "."],
+            transport::DISCARD_TIMEOUT,
+            Some(&lock),
+        )?;
+    }
+
+    let worktree_root_string = worktree_root.to_string_lossy().into_owned();
+    for rel in list_untracked_files(Path::new(&worktree_root_string))? {
+        if is_protected_worktree_relative_path(&worktree_root, project_path, &rel) {
+            continue;
+        }
+        trash_worktree_relative_path(&worktree_root, project_path, &rel)?;
+    }
+    Ok(())
+}
+
 /// 字节截断（legacy 的 `&raw[..limit]`＋`from_utf8_lossy` 形状：按**字节**切，
 /// 可能劈开 UTF-8 字符——lossy 用 U+FFFD 补上；core 的 stdout 已是 String，
 /// 不能直接 `&s[..limit]`（非边界会 panic），经 as_bytes 走同一形状）。
