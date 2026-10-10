@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod codec;
+pub mod database_services;
 pub mod diagnostics;
 pub mod dispatcher;
 pub mod executor;
