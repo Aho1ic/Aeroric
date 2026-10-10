@@ -517,40 +517,69 @@ pub fn stash_push(
     Ok(combined)
 }
 
+/// stash 引用校验：**必须**是 `stash@{<digits>}`。
+///
+/// 这不是 `validate_revision` 的重复：`validate_revision` 只要求非空且不以 `-` 开头，
+/// 因此 `HEAD`、`main`、`stash@{-1}` 都能过；而 legacy 两个 stash 命令用的是更窄的
+/// `strip_prefix("stash@{")` ＋ 全 ASCII 数字 判定。放宽成 revision 会让这些串真的
+/// 到达 git（`stash@{-1}` 还能选中上一个 stash），所以照 legacy 收紧。
+pub fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
+    transport::validate_git_arg(stash_ref)?;
+    let Some(index) = stash_ref
+        .strip_prefix("stash@{")
+        .and_then(|value| value.strip_suffix('}'))
+    else {
+        return Err("Invalid stash reference".to_string());
+    };
+    if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("Invalid stash reference".to_string());
+    }
+    Ok(())
+}
+
+/// stash apply（mutating；串行化；20s——与 legacy 同）。
 pub fn stash_apply(repo_root: &Path, stash_ref: &str, locks: &RepoLocks) -> Result<String, String> {
-    transport::validate_revision(stash_ref)?;
+    validate_stash_ref(stash_ref)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
     let output = transport::run_git(
         repo_root,
         &["stash", "apply", stash_ref],
-        transport::READ_TIMEOUT,
+        STASH_TIMEOUT,
         Some(&lock),
     )?;
+    let combined = format!("{}{}", output.stdout, output.stderr)
+        .trim()
+        .to_string();
     if !output.success {
-        return Err(transport::git_command_error(
-            &output,
-            "Failed to apply stash",
-        ));
+        return Err(if combined.is_empty() {
+            "Failed to apply git stash".to_string()
+        } else {
+            combined
+        });
     }
-    Ok(output.combined())
+    Ok(combined)
 }
 
 pub fn stash_drop(repo_root: &Path, stash_ref: &str, locks: &RepoLocks) -> Result<String, String> {
-    transport::validate_revision(stash_ref)?;
+    validate_stash_ref(stash_ref)?;
     let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
     let output = transport::run_git(
         repo_root,
         &["stash", "drop", stash_ref],
-        transport::READ_TIMEOUT,
+        transport::STASH_DROP_TIMEOUT,
         Some(&lock),
     )?;
+    let combined = format!("{}{}", output.stdout, output.stderr)
+        .trim()
+        .to_string();
     if !output.success {
-        return Err(transport::git_command_error(
-            &output,
-            "Failed to drop stash",
-        ));
+        return Err(if combined.is_empty() {
+            "Failed to drop git stash".to_string()
+        } else {
+            combined
+        });
     }
-    Ok(output.combined())
+    Ok(combined)
 }
 
 /// `git init`（幂等：已是仓库则**不重跑**——legacy `git_init` 先探 `rev-parse --git-dir`

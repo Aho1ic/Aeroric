@@ -1077,3 +1077,117 @@ async fn git_stash_push_stashes_changes_and_validates_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_stash_apply_and_drop_roundtrip_and_validate_params() {
+    let harness = Harness::start("git-stash-apply").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-stash-apply-test");
+    commit_file(&repo, "file1.txt", "hello world\n", "initial");
+    std::fs::write(repo.root.join("file1.txt"), "hello world\nstashed\n").expect("modify file");
+    let stashed = std::process::Command::new("git")
+        .args(["stash", "push", "-m", "wip"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git stash push");
+    assert!(stashed.status.success());
+
+    // apply restores the change.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "stash-apply-1",
+        "git.git_stash_apply",
+        json!({ "projectPath": repo.root.to_string_lossy(), "stashRef": "stash@{0}" }),
+    )
+    .await;
+    let applied = success_result(reply);
+    assert!(applied.is_string(), "{applied}");
+    let content = std::fs::read_to_string(repo.root.join("file1.txt")).expect("read file");
+    assert!(
+        content.contains("stashed"),
+        "apply restored the change: {content}"
+    );
+
+    // drop removes the entry from the list.
+    let reply_drop = query(
+        &mut reader,
+        &mut writer,
+        "stash-drop-1",
+        "git.git_stash_drop",
+        json!({ "projectPath": repo.root.to_string_lossy(), "stashRef": "stash@{0}" }),
+    )
+    .await;
+    assert!(success_result(reply_drop).is_string());
+    let list = std::process::Command::new("git")
+        .args(["stash", "list"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git stash list");
+    assert!(
+        String::from_utf8_lossy(&list.stdout).trim().is_empty(),
+        "stash dropped"
+    );
+
+    // Refs that are not `stash@{<digits>}` must be refused by BOTH methods. The legacy command
+    // validates the ref itself; a looser revision check would let these reach real git.
+    for bad_ref in ["HEAD", "main", "stash@{main}", "stash@{-1}", "--all"] {
+        for method in ["git.git_stash_apply", "git.git_stash_drop"] {
+            let reply_bad = query(
+                &mut reader,
+                &mut writer,
+                "stash-bad-ref",
+                method,
+                json!({
+                    "projectPath": repo.root.to_string_lossy(),
+                    "stashRef": bad_ref,
+                }),
+            )
+            .await;
+            let Frame::Failure(failure) = reply_bad else {
+                panic!("{method} must refuse {bad_ref}");
+            };
+            assert_eq!(
+                failure.error.code,
+                ErrorCode::IoError,
+                "{method} on {bad_ref}"
+            );
+        }
+    }
+
+    // Missing stashRef -> InvalidArgument, for both methods.
+    for method in ["git.git_stash_apply", "git.git_stash_drop"] {
+        let reply_missing = query(
+            &mut reader,
+            &mut writer,
+            "stash-missing",
+            method,
+            json!({ "projectPath": repo.root.to_string_lossy() }),
+        )
+        .await;
+        let Frame::Failure(failure) = reply_missing else {
+            panic!("{method} must require stashRef");
+        };
+        assert_eq!(failure.error.code, ErrorCode::InvalidArgument);
+    }
+
+    // Remote target -> UnsupportedCapability.
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "stash-remote",
+        "git.git_stash_apply",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "stashRef": "stash@{0}",
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

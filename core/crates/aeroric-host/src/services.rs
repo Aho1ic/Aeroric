@@ -231,6 +231,18 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        set.register(
+            "git.git_stash_apply",
+            Arc::new(move |request, _call| Box::pin(async move { git_stash_apply(request).await })),
+        );
+    }
+    {
+        set.register(
+            "git.git_stash_drop",
+            Arc::new(move |request, _call| Box::pin(async move { git_stash_drop(request).await })),
+        );
+    }
+    {
         let context = Arc::clone(&context);
         set.register(
             "project.open",
@@ -1573,6 +1585,73 @@ async fn git_stash_push(request: Request) -> Frame {
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }
+}
+
+/// `git.git_stash_apply` 与 `git.git_stash_drop` 共用同一请求外形（projectPath＋stashRef），
+/// 只差 core 调用，所以走一个参数化助手——两份复制体迟早会漂移。
+async fn stash_ref_request<F>(request: &Request, method: &str, run: F) -> Frame
+where
+    F: FnOnce(
+            &std::path::Path,
+            &str,
+            &aeroric_core::git::transport::RepoLocks,
+        ) -> Result<String, String>
+        + Send
+        + 'static,
+{
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params object"),
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params.projectPath (string)"),
+        );
+    };
+    let Some(stash_ref) = params.get("stashRef").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params.stashRef (string)"),
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let s_ref = stash_ref.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        run(std::path::Path::new(&p_path), &s_ref, &locks)
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_stash_apply(request: Request) -> Frame {
+    stash_ref_request(&request, "git.git_stash_apply", |root, stash_ref, locks| {
+        aeroric_core::git::service::stash_apply(root, stash_ref, locks)
+    })
+    .await
+}
+
+async fn git_stash_drop(request: Request) -> Frame {
+    stash_ref_request(&request, "git.git_stash_drop", |root, stash_ref, locks| {
+        aeroric_core::git::service::stash_drop(root, stash_ref, locks)
+    })
+    .await
 }
 
 async fn git_init(request: Request) -> Frame {

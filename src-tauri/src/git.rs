@@ -2230,8 +2230,10 @@ pub async fn git_stash_push<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_stash_apply(project_path: String, stash_ref: String) -> Result<String, String> {
+pub async fn local_git_stash_apply(
+    project_path: String,
+    stash_ref: String,
+) -> Result<String, String> {
     validate_stash_ref(&stash_ref)?;
     let output = run_git_with_timeout(
         project_path,
@@ -2257,7 +2259,29 @@ pub async fn git_stash_apply(project_path: String, stash_ref: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn git_stash_drop(project_path: String, stash_ref: String) -> Result<String, String> {
+pub async fn git_stash_apply<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    stash_ref: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stash_apply",
+        serde_json::json!({ "projectPath": project_path, "stashRef": stash_ref }),
+        async {
+            local_git_stash_apply(project_path, stash_ref)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub async fn local_git_stash_drop(
+    project_path: String,
+    stash_ref: String,
+) -> Result<String, String> {
     validate_stash_ref(&stash_ref)?;
     let output = run_git_with_timeout(
         project_path,
@@ -2280,6 +2304,26 @@ pub async fn git_stash_drop(project_path: String, stash_ref: String) -> Result<S
         });
     }
     Ok(combined)
+}
+
+#[tauri::command]
+pub async fn git_stash_drop<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    stash_ref: String,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_stash_drop",
+        serde_json::json!({ "projectPath": project_path, "stashRef": stash_ref }),
+        async {
+            local_git_stash_drop(project_path, stash_ref)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 pub async fn local_git_conflict_files(
@@ -2757,9 +2801,9 @@ mod tests {
         git_worktree_root, is_protected_project_relative_path, list_untracked_files,
         local_git_conflict_files, local_git_init, local_git_log, local_git_show_diff,
         local_git_stash_push, local_merge_task_worktree, parse_blame_porcelain,
-        parse_branch_graph_log,
-        parse_conflict_hunks, parse_conflict_paths_z, parse_porcelain_z_status, parse_stash_list,
-        path_to_string, resolve_conflict_markers_keep_both, run_git, run_git_check,
+        parse_branch_graph_log, parse_conflict_hunks, parse_conflict_paths_z,
+        parse_porcelain_z_status, parse_stash_list, path_to_string,
+        resolve_conflict_markers_keep_both, run_git, run_git_check,
         untracked_files_under_directory, validate_clone_target, validate_git_revision,
         validate_git_url, validate_project_path, validate_stash_ref, GitBlameLine,
         GitBranchGraphCommit, GitConflictFile, GitConflictResolution, GitFileChange, GitStashEntry,
