@@ -843,8 +843,7 @@ pub async fn git_list_branches<R: tauri::Runtime>(
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn git_checkout_branch(
+pub async fn local_git_checkout_branch(
     project_path: String,
     branch_name: String,
     is_remote: bool,
@@ -871,8 +870,7 @@ pub async fn git_checkout_branch(
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn git_create_branch(
+pub async fn local_git_create_branch(
     project_path: String,
     branch_name: String,
     from_branch: String,
@@ -890,6 +888,58 @@ pub async fn git_create_branch(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_create_branch<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    branch_name: String,
+    from_branch: String,
+    checkout: bool,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_create_branch",
+        serde_json::json!({
+            "projectPath": project_path,
+            "branchName": branch_name,
+            "fromBranch": from_branch,
+            "checkout": checkout,
+        }),
+        async {
+            local_git_create_branch(project_path, branch_name, from_branch, checkout)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn git_checkout_branch<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    project_path: String,
+    branch_name: String,
+    is_remote: bool,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "git.git_checkout_branch",
+        serde_json::json!({
+            "projectPath": project_path,
+            "branchName": branch_name,
+            "isRemote": is_remote,
+        }),
+        async {
+            local_git_checkout_branch(project_path, branch_name, is_remote)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn local_git_log(

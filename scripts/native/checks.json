@@ -208,7 +208,7 @@
       "terminal-unit-rust@terminal-core": 66,
       "validate-agent-launch-host-rust@cutover": 2,
       "worktree-diff-stats-host-rust@cutover": 4,
-      "git-services-host-rust@cutover": 13,
+      "git-services-host-rust@cutover": 14,
       "watcher-discipline-unit@skeleton": 11,
       "worktree-lifecycle-rust@worktree": 6,
       "worktree-ui-unit@worktree": 6
@@ -4020,7 +4020,7 @@
           "kind": "gate",
           "argv": [
             "scripts/native/host-coverage.mjs",
-            "--floor=96"
+            "--floor=98"
           ],
           "$note": "P8-05切片十四：60/641棘轮（56→58 本地text/structured；→60 文件名list/search）。两个replace假alias删除，由真实legacy handler保住原有两条覆盖。远端target未实现不计入；22处可静态识别dispatch均指向已注册父方法，target能力另外由UDS用例钉拒绝。 P8-05切片21：保留ADR-002冻结的project.load_projects并补真实裸数组handler，既有project.list对象wire不变；共享core读取，禁止用改映射或错shape alias虚抬覆盖。返工后真实新增注册上已重测61/641、31处dispatch（dualwire-final.M056zV），不是首版错误改名的暂态读数。 P8-05切片22：真实project.load_project_tasks直接复用core load_tasks，非task.list别名；定向实测62/641、32处dispatch，命令新8/0及真host3/0。 Slice27: measured70/641 and40 actual dispatches after real config init/write registration; read-only lease and no-local-fallback behavior tested. Slice28: measured71/641,41 actual dispatch sites after real sequential history-delete registration; floor71. Slice29: frozen ide.read_run_configs/write_run_configs real local handlers,73/641 and43 actual dispatches. Remote targets explicitly refused, not credited as SSH/WSL coverage. Slice31 measured75/641,45 dispatches: real debug-config definition read/write, not remote DAP support. P8-05切片58：+session.read_session_message_page 真实宿主注册（read-only 分页，codex/dsh/omp/family 分支），78/641、floor78、转发点 50→51。",
           "timeoutMs": 300000
@@ -5656,9 +5656,9 @@
             "git_services"
           ],
           "parse": "rust",
-          "minCases": 13,
+          "minCases": 14,
           "timeoutMs": 900000,
-          "$note": "P8-05切片64/65/66/67/68/69/70/71/72/73/74/75/76：真实host git status、list branches、git log、git show diff、git stage、git unstage与git commit服务UDS测试；git.git_status、git.git_list_branches、git.git_log、git.git_show_diff、git.git_stage、git.git_unstage、git.git_commit、git.git_stage_all、git.git_unstage_all、git.git_conflict_files、git.git_init、git.git_stash_push、git.git_stash_apply与git.git_stash_drop查询状态、分支、提交历史、diff、暂存/取消暂存文件、提交、全量暂存/取消暂存、冲突文件列表与幂等初始化，逐条校验参数与target拒绝；冲突用例另与 legacy argv 逐路径对账，init 用例断言「已是仓库则不重跑」与 symbolic-ref 分支，stash_push 用例断言 includeUntracked 的两种端状态。"
+          "$note": "P8-05切片64/…/77：真实host git status、list branches、git log、git show diff、git stage、git unstage与git commit服务UDS测试；git.git_status、git.git_list_branches、git.git_log、git.git_show_diff、git.git_stage、git.git_unstage、git.git_commit、git.git_stage_all、git.git_unstage_all、git.git_conflict_files、git.git_init、git.git_stash_push、git.git_stash_apply、git.git_stash_drop、git.git_create_branch与git.git_checkout_branch查询状态、分支、提交历史、diff、暂存/取消暂存文件、提交、全量暂存/取消暂存、冲突文件列表与幂等初始化，逐条校验参数与target拒绝；冲突用例另与 legacy argv 逐路径对账，init 用例断言「已是仓库则不重跑」与 symbolic-ref 分支，stash_push 用例断言 includeUntracked 的两种端状态。"
         }
       ],
       "$note": "P8-05（切换同一宿主与生产数据迁移演练）的增量门禁。切片一=宿主仲裁与切换前检查；切片三=external gateway（客户端/监督层/Embedded|External 判决）；切片四=helper 打包脚本；切片五=迁移演练（合成数据）。**刻意不在门禁里的两条**：①打包后的 bundle 取证（`AERORIC_TAURI_BUNDLE=1 node scripts/native/tauri-host-smoke.mjs`）——它要先跑 `pnpm tauri build`（~5 分钟），而 G39 之后本仓**没有 opt-in 通道**（`check-runner.test.mjs` 钉着『任何 case 再挂 optInEnv 即门禁失牙』），所以它是**手动/发布前**步骤，证据记在 `docs/native/migration-rehearsal.md` §3 与计划补记里；②domain 命令转发覆盖率与 Action 5 的真实数据演练（后者需用户同意）。"

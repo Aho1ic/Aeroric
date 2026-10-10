@@ -243,6 +243,22 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
         );
     }
     {
+        set.register(
+            "git.git_create_branch",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_create_branch(request).await })
+            }),
+        );
+    }
+    {
+        set.register(
+            "git.git_checkout_branch",
+            Arc::new(move |request, _call| {
+                Box::pin(async move { git_checkout_branch(request).await })
+            }),
+        );
+    }
+    {
         let context = Arc::clone(&context);
         set.register(
             "project.open",
@@ -1582,6 +1598,123 @@ async fn git_stash_push(request: Request) -> Frame {
     .await;
     match result {
         Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_create_branch(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_create_branch requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_create_branch requires params.projectPath (string)",
+        );
+    };
+    let Some(branch_name) = params.get("branchName").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_create_branch requires params.branchName (string)",
+        );
+    };
+    let Some(from_branch) = params.get("fromBranch").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_create_branch requires params.fromBranch (string)",
+        );
+    };
+    let Some(checkout) = params.get("checkout").and_then(Value::as_bool) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_create_branch requires params.checkout (boolean)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let b_name = branch_name.to_string();
+    let f_branch = from_branch.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::create_branch_at(
+            std::path::Path::new(&p_path),
+            &b_name,
+            &f_branch,
+            checkout,
+            &locks,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_checkout_branch(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_checkout_branch requires params object",
+        );
+    };
+    let Some(project_path) = params.get("projectPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_checkout_branch requires params.projectPath (string)",
+        );
+    };
+    let Some(branch_name) = params.get("branchName").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_checkout_branch requires params.branchName (string)",
+        );
+    };
+    let Some(is_remote) = params.get("isRemote").and_then(Value::as_bool) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_checkout_branch requires params.isRemote (boolean)",
+        );
+    };
+    if let Some(error) =
+        crate::local_targets::local_target_error(&request, project_path, UNSUPPORTED_GIT_TARGET)
+    {
+        return error;
+    }
+    let p_path = project_path.to_string();
+    let b_name = branch_name.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let locks = aeroric_core::git::transport::RepoLocks::default();
+        aeroric_core::git::service::checkout_branch_tracking(
+            std::path::Path::new(&p_path),
+            &b_name,
+            is_remote,
+            &locks,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => ok(&request, Value::Null),
         Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
         Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
     }

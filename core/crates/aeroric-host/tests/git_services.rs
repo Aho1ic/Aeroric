@@ -1191,3 +1191,136 @@ async fn git_stash_apply_and_drop_roundtrip_and_validate_params() {
     };
     assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
 }
+#[tokio::test]
+async fn git_create_and_checkout_branch_validate_and_switch() {
+    let harness = Harness::start("git-branch").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    let repo = new_repo("aeroric-git-branch-test");
+    commit_file(&repo, "a.txt", "base\n", "initial");
+    let head = |repo: &TempRepo| {
+        let out = std::process::Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(&repo.root)
+            .output()
+            .expect("git symbolic-ref");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // create without checkout: branch exists, HEAD unchanged.
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "branch-create",
+        "git.git_create_branch",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "branchName": "feature",
+            "fromBranch": "main",
+            "checkout": false,
+        }),
+    )
+    .await;
+    assert_eq!(success_result(reply), Value::Null);
+    assert_eq!(head(&repo), "main", "HEAD must not move without checkout");
+    let list = std::process::Command::new("git")
+        .args(["branch", "--list", "feature"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("git branch --list");
+    assert!(String::from_utf8_lossy(&list.stdout).contains("feature"));
+
+    // checkout: HEAD moves.
+    let reply_c = query(
+        &mut reader,
+        &mut writer,
+        "branch-checkout",
+        "git.git_checkout_branch",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "branchName": "feature",
+            "isRemote": false,
+        }),
+    )
+    .await;
+    assert_eq!(success_result(reply_c), Value::Null);
+    assert_eq!(head(&repo), "feature");
+
+    // create with checkout: HEAD moves, and `fromBranch` is the base.
+    let reply_cc = query(
+        &mut reader,
+        &mut writer,
+        "branch-create-checkout",
+        "git.git_create_branch",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "branchName": "feature2",
+            "fromBranch": "main",
+            "checkout": true,
+        }),
+    )
+    .await;
+    assert_eq!(success_result(reply_cc), Value::Null);
+    assert_eq!(head(&repo), "feature2");
+
+    // Option-injection-shaped names are refused by BOTH methods (legacy validator), and the
+    // refusal must happen before any branch is created.
+    for bad in ["-d", "--all", ""] {
+        for method in ["git.git_create_branch", "git.git_checkout_branch"] {
+            let params = if method == "git.git_create_branch" {
+                json!({
+                    "projectPath": repo.root.to_string_lossy(),
+                    "branchName": bad,
+                    "fromBranch": "main",
+                    "checkout": false,
+                })
+            } else {
+                json!({
+                    "projectPath": repo.root.to_string_lossy(),
+                    "branchName": bad,
+                    "isRemote": false,
+                })
+            };
+            let reply_bad = query(&mut reader, &mut writer, "branch-bad", method, params).await;
+            let Frame::Failure(failure) = reply_bad else {
+                panic!("{method} must refuse {bad:?}");
+            };
+            assert_eq!(failure.error.code, ErrorCode::IoError, "{method} {bad:?}");
+        }
+    }
+
+    // Missing params -> InvalidArgument.
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "branch-missing",
+        "git.git_create_branch",
+        json!({ "projectPath": repo.root.to_string_lossy(), "branchName": "x" }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("fromBranch is required");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    // Remote target -> UnsupportedCapability.
+    let reply_remote = query(
+        &mut reader,
+        &mut writer,
+        "branch-remote",
+        "git.git_checkout_branch",
+        json!({
+            "projectPath": repo.root.to_string_lossy(),
+            "branchName": "main",
+            "isRemote": false,
+            "target": { "kind": "ssh", "connectionId": "c1", "remotePath": "/var/remote" }
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_remote) = reply_remote else {
+        panic!("remote target must fail");
+    };
+    assert_eq!(failure_remote.error.code, ErrorCode::UnsupportedCapability);
+}

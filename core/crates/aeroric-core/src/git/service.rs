@@ -355,6 +355,76 @@ pub fn checkout_branch(repo_root: &Path, branch: &str, locks: &RepoLocks) -> Res
     Ok(())
 }
 
+/// 分支名形状校验（legacy `validate_git_branch_name` verbatim）：非空、不以 `-` 开头。
+/// 与 `validate_revision` 的区别是**空串**：revision 校验空串报 "revision is empty"，
+/// 这里报 "Branch name must not be empty"——报文按 legacy 保留，不合并成一条。
+pub fn validate_branch_name(branch_name: &str) -> Result<(), String> {
+    if branch_name.is_empty() {
+        return Err("Branch name must not be empty".to_string());
+    }
+    if branch_name.starts_with('-') {
+        return Err("Branch name must not start with '-'".to_string());
+    }
+    Ok(())
+}
+
+/// 建分支（legacy `git_create_branch` verbatim）：`checkout: true` 走
+/// `checkout -b <branch> <from>`，否则走 `branch <branch> <from>`。
+/// **`from` 是必填**——legacy 签名就是 `String`，不像旧 core 的 `Option` 会省略基准。
+pub fn create_branch_at(
+    repo_root: &Path,
+    branch: &str,
+    from: &str,
+    checkout: bool,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    validate_branch_name(branch)?;
+    validate_branch_name(from)?;
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let args: Vec<&str> = if checkout {
+        vec!["checkout", "-b", branch, from]
+    } else {
+        vec!["branch", branch, from]
+    };
+    let output = transport::run_git(repo_root, &args, transport::READ_TIMEOUT, Some(&lock))?;
+    if !output.success {
+        return Err(transport::git_command_error(
+            &output,
+            "Failed to create branch",
+        ));
+    }
+    Ok(())
+}
+
+/// 切分支（legacy `git_checkout_branch` verbatim）：`is_remote: true` 时把
+/// `origin/main` 拆成本地名 `main` 并 `checkout -b main --track remotes/origin/main`
+/// （**`remotes/` 前缀是 legacy 的写法**，不是 `origin/main`）。
+pub fn checkout_branch_tracking(
+    repo_root: &Path,
+    branch: &str,
+    is_remote: bool,
+    locks: &RepoLocks,
+) -> Result<(), String> {
+    validate_branch_name(branch)?;
+    let local_name = branch
+        .split_once('/')
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| branch.to_string());
+    let tracking = format!("remotes/{branch}");
+    let lock = locks.lock_for(repo_root.to_str().unwrap_or_default());
+    let args: Vec<&str> = if is_remote {
+        vec!["checkout", "-b", &local_name, "--track", &tracking]
+    } else {
+        vec!["checkout", branch]
+    };
+    let output = transport::run_git(repo_root, &args, transport::READ_TIMEOUT, Some(&lock))?;
+    if !output.success {
+        return Err(transport::git_command_error(&output, "Failed to checkout"));
+    }
+    Ok(())
+}
+
+/// 建分支（不带基准省略语义的旧 core 入口，仍被 core 测试使用）。
 pub fn create_branch(
     repo_root: &Path,
     branch: &str,
