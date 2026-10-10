@@ -286,6 +286,12 @@ pub fn register_read_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
     }
     {
         set.register(
+            "git.git_clone",
+            Arc::new(move |request, _call| Box::pin(async move { git_clone(request).await })),
+        );
+    }
+    {
+        set.register(
             "git.git_commit",
             Arc::new(move |request, _call| Box::pin(async move { git_commit(request).await })),
         );
@@ -2160,6 +2166,53 @@ async fn git_push(request: Request) -> Frame {
     let p_path = project_path.to_string();
     let result = tokio::task::spawn_blocking(move || {
         aeroric_core::git::service::push_result(std::path::Path::new(&p_path), branch.as_deref())
+    })
+    .await;
+    match result {
+        Ok(Ok(text)) => ok(&request, Value::String(text)),
+        Ok(Err(error)) => failure(id, ErrorCode::IoError, &error),
+        Err(join_err) => failure(id, ErrorCode::IoError, &join_err.to_string()),
+    }
+}
+
+async fn git_clone(request: Request) -> Frame {
+    let id = request.id.clone();
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_clone requires params object",
+        );
+    };
+    let Some(url) = params.get("url").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_clone requires params.url (string)",
+        );
+    };
+    let Some(target_path) = params.get("targetPath").and_then(Value::as_str) else {
+        return failure(
+            id,
+            ErrorCode::InvalidArgument,
+            "git.git_clone requires params.targetPath (string)",
+        );
+    };
+    let branch = match params.get("branch") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return failure(
+                id,
+                ErrorCode::InvalidArgument,
+                "git.git_clone requires params.branch (string)",
+            )
+        }
+    };
+    let u = url.to_string();
+    let t = target_path.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        aeroric_core::git::service::clone(&u, &t, branch.as_deref())
     })
     .await;
     match result {

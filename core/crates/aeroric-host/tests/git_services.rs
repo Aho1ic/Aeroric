@@ -3211,3 +3211,193 @@ async fn git_fetch_pull_push_roundtrip_against_local_remote() {
     let _ = std::fs::remove_dir_all(&bare);
     let _ = std::fs::remove_dir_all(&clone);
 }
+#[tokio::test]
+async fn git_clone_creates_repo_and_validates_params() {
+    let harness = Harness::start("git-clone").await;
+    let (mut reader, mut writer) = harness.connect().await;
+    let handshake = Harness::handshake(&mut reader, &mut writer, &harness.token, "cli").await;
+    assert!(matches!(handshake, Frame::Success(_)), "{handshake:?}");
+
+    // Fixture: a bare remote carrying main and topic.
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let seed = std::env::temp_dir().join(format!(
+        "aeroric-git-clone-seed-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&seed);
+    std::fs::create_dir_all(&seed).expect("create seed");
+    std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&seed)
+        .output()
+        .expect("git init");
+    for (cfg, val) in [
+        ("user.name", "Test User"),
+        ("user.email", "test@example.com"),
+    ] {
+        std::process::Command::new("git")
+            .args(["config", cfg, val])
+            .current_dir(&seed)
+            .output()
+            .expect("git config");
+    }
+    std::fs::write(seed.join("a.txt"), "seeded\n").expect("write a");
+    std::process::Command::new("git")
+        .args(["add", "a.txt"])
+        .current_dir(&seed)
+        .output()
+        .expect("add");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "seed commit"])
+        .current_dir(&seed)
+        .output()
+        .expect("commit");
+    std::process::Command::new("git")
+        .args(["branch", "topic"])
+        .current_dir(&seed)
+        .output()
+        .expect("branch topic");
+    let bare = std::env::temp_dir().join(format!(
+        "aeroric-git-clone-bare-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&bare);
+    std::process::Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            seed.to_str().expect("seed"),
+            bare.to_str().expect("bare"),
+        ])
+        .output()
+        .expect("clone --bare");
+    let bare_head = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(&bare)
+        .output()
+        .expect("bare HEAD");
+    assert_eq!(String::from_utf8_lossy(&bare_head.stdout).trim(), "main");
+
+    // Clone without branch → HEAD is the remote default (main).
+    let target = std::env::temp_dir().join(format!(
+        "aeroric-git-clone-target-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&target);
+    let reply = query(
+        &mut reader,
+        &mut writer,
+        "clone-1",
+        "git.git_clone",
+        json!({ "url": bare.to_string_lossy(), "targetPath": target.to_string_lossy() }),
+    )
+    .await;
+    let _ = success_result(reply);
+    assert!(
+        target.join("a.txt").exists(),
+        "clone must materialize the remote content"
+    );
+    let cloned_head = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(&target)
+        .output()
+        .expect("cloned HEAD");
+    assert_eq!(String::from_utf8_lossy(&cloned_head.stdout).trim(), "main");
+
+    // Clone with --branch axis.
+    let target_topic = std::env::temp_dir().join(format!(
+        "aeroric-git-clone-topic-{seq}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&target_topic);
+    let reply_topic = query(
+        &mut reader,
+        &mut writer,
+        "clone-topic",
+        "git.git_clone",
+        json!({
+            "url": bare.to_string_lossy(),
+            "targetPath": target_topic.to_string_lossy(),
+            "branch": "topic"
+        }),
+    )
+    .await;
+    let _ = success_result(reply_topic);
+    let topic_head = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(&target_topic)
+        .output()
+        .expect("topic HEAD");
+    assert_eq!(String::from_utf8_lossy(&topic_head.stdout).trim(), "topic");
+
+    // Option-like URL is refused before git runs.
+    let reply_url = query(
+        &mut reader,
+        &mut writer,
+        "clone-url",
+        "git.git_clone",
+        json!({
+            "url": "--upload-pack=evil",
+            "targetPath": target.to_string_lossy()
+        }),
+    )
+    .await;
+    let Frame::Failure(failure_url) = reply_url else {
+        panic!("option-like url must fail");
+    };
+    assert_eq!(failure_url.error.code, ErrorCode::IoError);
+    assert_eq!(
+        failure_url.error.message,
+        "Repository URL must not start with '-'"
+    );
+
+    // Relative target is refused.
+    let reply_relative = query(
+        &mut reader,
+        &mut writer,
+        "clone-relative",
+        "git.git_clone",
+        json!({ "url": bare.to_string_lossy(), "targetPath": "relative/target" }),
+    )
+    .await;
+    let Frame::Failure(failure_relative) = reply_relative else {
+        panic!("relative target must fail");
+    };
+    assert_eq!(
+        failure_relative.error.message,
+        "Target path must be absolute"
+    );
+
+    // A non-empty target directory is refused.
+    let reply_full = query(
+        &mut reader,
+        &mut writer,
+        "clone-full",
+        "git.git_clone",
+        json!({ "url": bare.to_string_lossy(), "targetPath": target.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_full) = reply_full else {
+        panic!("non-empty target must fail");
+    };
+    assert_eq!(failure_full.error.message, "Target directory is not empty");
+
+    // Missing url -> InvalidArgument
+    let reply_missing = query(
+        &mut reader,
+        &mut writer,
+        "clone-missing",
+        "git.git_clone",
+        json!({ "targetPath": target.to_string_lossy() }),
+    )
+    .await;
+    let Frame::Failure(failure_missing) = reply_missing else {
+        panic!("missing url must fail");
+    };
+    assert_eq!(failure_missing.error.code, ErrorCode::InvalidArgument);
+
+    let _ = std::fs::remove_dir_all(&seed);
+    let _ = std::fs::remove_dir_all(&bare);
+    let _ = std::fs::remove_dir_all(&target);
+    let _ = std::fs::remove_dir_all(&target_topic);
+}

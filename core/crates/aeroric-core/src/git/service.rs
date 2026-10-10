@@ -801,6 +801,100 @@ pub fn commit_detail_result(
     ))
 }
 
+// ===== clone（切片 88）=====
+
+/// 仓库 URL 校验（legacy `validate_git_url` verbatim）：非空、不以 `-` 开头、
+/// 无控制字符（NUL/换行/回车）、拒 `scheme::` 传输助手形态（先看 `://`——
+/// `https://a::b` 的 `::` 在路径部分是合法的）；本地路径放行。
+pub fn validate_git_url(url: &str) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Repository URL must not be empty".to_string());
+    }
+    if trimmed.starts_with('-') {
+        return Err("Repository URL must not start with '-'".to_string());
+    }
+    if trimmed.contains('\0') || trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err("Repository URL contains control characters".to_string());
+    }
+
+    let scheme_end = trimmed.find("://");
+    let helper_sep = trimmed.find("::");
+    if let Some(helper) = helper_sep {
+        if scheme_end.is_none_or(|scheme| helper < scheme) {
+            return Err(format!(
+                "Unsupported repository transport: {}",
+                &trimmed[..helper]
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// clone 目标校验（legacy `validate_clone_target` verbatim）：目标按定义还不
+/// 存在，`validate_project_path` 用不了——绝对路径、父目录必须在（不替用户
+/// 凭空造一层）、目标要么不存在要么是**空目录**（空目录放行：用户可能先用
+/// 文件管理器建好了文件夹，git 自己也允许）；非空一律拒。
+pub fn validate_clone_target(target: &str) -> Result<(), String> {
+    let path = Path::new(target);
+    if !path.is_absolute() {
+        return Err("Target path must be absolute".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Target path has no parent directory".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Parent directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err("Target directory is not empty".to_string());
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot use target directory: {error}")),
+    }
+}
+
+/// clone（legacy `git_clone` verbatim）：先过 URL/目标/branch 三个校验，再在
+/// **父目录**跑 `clone [--branch <b>] -- <url> <target>`（网络环境）；失败
+/// `Err(combined.trim())`、成功 `Ok(combined.trim())`。clone 没有 projectPath
+/// 也没有 target 轴（frozen takesTarget 为空），不走 `local_target_error`。
+pub fn clone(url: &str, target_path: &str, branch: Option<&str>) -> Result<String, String> {
+    validate_git_url(url)?;
+    validate_clone_target(target_path)?;
+    if let Some(branch) = branch.filter(|value| !value.is_empty()) {
+        transport::validate_revision(branch)?;
+    }
+    let target = Path::new(target_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Target path has no parent directory".to_string())?
+        .to_string_lossy()
+        .to_string();
+
+    let mut args: Vec<&str> = vec!["clone"];
+    if let Some(branch) = branch.filter(|value| !value.is_empty()) {
+        args.push("--branch");
+        args.push(branch);
+    }
+    args.push("--");
+    args.push(url.trim());
+    args.push(target_path);
+
+    let output = transport::run_git_network(Path::new(&parent), &args, transport::NETWORK_TIMEOUT)?;
+    let combined = format!("{}{}", output.stdout, output.stderr);
+    if !output.success {
+        return Err(combined.trim().to_string());
+    }
+    Ok(combined.trim().to_string())
+}
+
 // ===== 网络三件套（切片 87）=====
 
 /// fetch（legacy `git_fetch` verbatim；名带 `_result` 后缀——core 已有 P6-04 的

@@ -2153,8 +2153,7 @@ pub async fn git_init<R: tauri::Runtime>(
 /// `--` 放在 URL 前面:URL 是外部输入,而 `--` 之后 git 不再把参数当选项。
 /// 注意这**不能替代** [`validate_git_url`] 的第一个字符检查:`--upload-pack=` 这类选项
 /// 是在 `--` 之前被解析的,而攻击者控制的正是 URL 那个位置的值。两道都要。
-#[tauri::command]
-pub async fn git_clone(
+pub async fn local_git_clone(
     url: String,
     target_path: String,
     branch: Option<String>,
@@ -2194,6 +2193,27 @@ pub async fn git_clone(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_clone<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    url: String,
+    target_path: String,
+    branch: Option<String>,
+) -> Result<String, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "git.git_clone",
+        serde_json::json!({ "url": url, "targetPath": target_path, "branch": branch }),
+        async {
+            local_git_clone(url, target_path, branch)
+                .await
+                .map(serde_json::Value::String)
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 取远端最新状态但**不动工作区**。
@@ -3200,8 +3220,8 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_clone, git_dir, git_has_head, git_worktree_root, is_protected_project_relative_path,
-        list_untracked_files, local_git_blame_file, local_git_branch_graph,
+        git_dir, git_has_head, git_worktree_root, is_protected_project_relative_path,
+        list_untracked_files, local_git_blame_file, local_git_branch_graph, local_git_clone,
         local_git_commit_detail, local_git_conflict_files, local_git_conflict_preview,
         local_git_fetch, local_git_init, local_git_log, local_git_resolve_conflict,
         local_git_show_diff, local_git_stash_diff, local_git_stash_list, local_git_stash_push,
@@ -3871,7 +3891,7 @@ mod tests {
             std::env::temp_dir().join(format!("aeroric-git-clone-{}", uuid::Uuid::new_v4()));
         let target_path = path_to_string(&target).unwrap();
 
-        git_clone(source.path_string(), target_path.clone(), None)
+        local_git_clone(source.path_string(), target_path.clone(), None)
             .await
             .expect("clone");
         assert_eq!(fs::read_to_string(target.join("note.md")).unwrap(), "hello");
@@ -3888,7 +3908,7 @@ mod tests {
         let target =
             std::env::temp_dir().join(format!("aeroric-git-clone-{}", uuid::Uuid::new_v4()));
 
-        let error = git_clone(
+        let error = local_git_clone(
             format!("--upload-pack=touch {};git-upload-pack", sentinel.display()),
             path_to_string(&target).unwrap(),
             None,
@@ -3950,7 +3970,7 @@ mod tests {
         let target =
             std::env::temp_dir().join(format!("aeroric-git-fetch-{}", uuid::Uuid::new_v4()));
         let target_path = path_to_string(&target).unwrap();
-        git_clone(source.path_string(), target_path.clone(), None)
+        local_git_clone(source.path_string(), target_path.clone(), None)
             .await
             .expect("clone");
 
