@@ -8,5 +8,6 @@ pub mod execution;
 pub mod grid;
 pub mod legacy_sqlite;
 pub mod query;
+pub mod redis_face;
 pub mod schema_face;
 pub mod sql_builders;

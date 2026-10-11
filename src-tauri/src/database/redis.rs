@@ -1,347 +1,105 @@
-use base64::Engine as _;
-use dbx_core::db::redis_driver::{
-    RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisCommandResult, RedisCommandSafety,
-    RedisDatabaseInfo, RedisScanResult, RedisValue, RedisValueData,
-};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::State;
+// ── 切片一百（database）：redis 面 18 条改宿主转发壳。业务主体在 core
+// `database::redis_face`（ensure_connected/ensure_writable/适配器/安全闸
+// verbatim 上收）；Embedded 本地闭包与宿主服务调同一函数，External 绝不
+// 本地回退。
 
-use super::connections;
+use super::connection_secrets::KeyringDbxConnectionSecretStore;
 use super::dbx_state::DbxState;
+use aeroric_core::database::dbx_connections::DbxConnectionPaths;
+use aeroric_core::database::redis_face;
+use dbx_core::db::redis_driver::{RedisCommandResult, RedisDatabaseInfo, RedisScanResult};
 
-/// Administrative Redis commands that the shared core classifier currently
-/// leaves as `Allowed` but which can disrupt the server, exfiltrate data, or
-/// reconfigure security. They are never issued by the frontend UI, so this
-/// entry point rejects them outright for defense-in-depth. Names are compared
-/// case-insensitively against the parsed command token.
-// Only commands that are destructive or destabilizing with no meaningful
-// read-only form are listed here. Administrative commands with important
-// read subcommands (CLUSTER INFO, CLIENT LIST, ACL WHOAMI, LATENCY, ...) are
-// intentionally left to the core classifier so diagnostic reads keep working.
-const SUPPLEMENTAL_BLOCKED_COMMANDS: &[&str] = &[
-    "SWAPDB",
-    "DEBUG",
-    "RESET",
-    "FAILOVER",
-    "BGREWRITEAOF",
-    "MONITOR",
-    "PSYNC",
-    "SYNC",
-];
-
-fn is_supplemental_blocked_command(command_name: &str) -> bool {
-    let upper = command_name.to_ascii_uppercase();
-    SUPPLEMENTAL_BLOCKED_COMMANDS.contains(&upper.as_str())
-}
-
-fn normalize_pattern(pattern: Option<String>) -> String {
-    pattern
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .unwrap_or_else(|| "*".to_string())
-}
-
-fn normalize_count(count: Option<usize>) -> usize {
-    count.unwrap_or(200).clamp(1, 5000)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RedisCreateKeyRequest {
-    connection_id: String,
-    db: u32,
-    key_raw: String,
-    key_type: String,
-    value: String,
-    #[serde(default)]
-    field: Option<String>,
-    #[serde(default)]
-    score: Option<f64>,
-    #[serde(default)]
-    entry_id: Option<String>,
-    #[serde(default)]
-    ttl: Option<i64>,
-}
-
-fn normalize_key_type(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct AeroricRedisValue {
-    key_display: String,
-    key_raw: String,
-    key_type: String,
-    ttl: i64,
-    value_is_binary: bool,
-    value: Value,
-    total: Option<u64>,
-    scan_cursor: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum AeroricRedisCollectionPage {
-    List {
-        items: Vec<Value>,
-        scan_cursor: Option<u64>,
-    },
-    Set {
-        items: Vec<Value>,
-        scan_cursor: Option<u64>,
-    },
-    Hash {
-        items: Vec<Value>,
-        scan_cursor: Option<u64>,
-    },
-    Zset {
-        items: Vec<Value>,
-        scan_cursor: Option<u64>,
-    },
-}
-
-fn redis_blob_bytes(blob: &RedisBlob) -> Vec<u8> {
-    base64::engine::general_purpose::STANDARD
-        .decode(&blob.raw_base64)
-        .unwrap_or_default()
-}
-
-fn redis_blob_display(blob: &RedisBlob) -> String {
-    let bytes = redis_blob_bytes(blob);
-    if let Ok(text) = std::str::from_utf8(&bytes) {
-        return text.replace('\\', "\\\\");
-    }
-    let mut output = String::new();
-    for byte in bytes {
-        match byte {
-            b'\\' => output.push_str("\\\\"),
-            0x20..=0x7e => output.push(byte as char),
-            _ => output.push_str(&format!("\\x{byte:02x}")),
-        }
-    }
-    output
-}
-
-fn redis_blob_value(blob: &RedisBlob) -> Value {
-    Value::String(redis_blob_display(blob))
-}
-
-fn redis_blob_is_binary(blob: &RedisBlob) -> bool {
-    matches!(blob.encoding, RedisBlobEncoding::Binary)
-}
-
-fn redis_list_items(items: Vec<dbx_core::db::redis_driver::RedisListItem>) -> Vec<Value> {
-    items
-        .into_iter()
-        .map(|item| redis_blob_value(&item.value))
-        .collect()
-}
-
-fn redis_set_items(items: Vec<dbx_core::db::redis_driver::RedisSetItem>) -> Vec<Value> {
-    items
-        .into_iter()
-        .map(|item| redis_blob_value(&item.member))
-        .collect()
-}
-
-fn redis_hash_items(items: Vec<dbx_core::db::redis_driver::RedisHashItem>) -> Vec<Value> {
-    items
-        .into_iter()
-        .map(|item| {
-            json!({
-                "field": redis_blob_display(&item.field),
-                "value": redis_blob_display(&item.value),
-            })
-        })
-        .collect()
-}
-
-fn redis_zset_items(items: Vec<dbx_core::db::redis_driver::RedisZsetItem>) -> Vec<Value> {
-    items
-        .into_iter()
-        .map(|item| {
-            json!({
-                "score": item.score,
-                "member": redis_blob_display(&item.member),
-            })
-        })
-        .collect()
-}
-
-fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
-    let RedisValue {
-        key_display,
-        key_raw,
-        ttl,
-        redis_type,
-        data,
-    } = value;
-    let (value, value_is_binary, total, scan_cursor) = match data {
-        RedisValueData::String { content } => (
-            redis_blob_value(&content),
-            redis_blob_is_binary(&content),
-            None,
-            None,
-        ),
-        RedisValueData::Json { value } => (Value::String(value), false, None, None),
-        RedisValueData::List {
-            items,
-            total,
-            scan_cursor,
-        } => (
-            Value::Array(redis_list_items(items)),
-            false,
-            Some(total),
-            scan_cursor,
-        ),
-        RedisValueData::Set {
-            items,
-            total,
-            scan_cursor,
-        } => (
-            Value::Array(redis_set_items(items)),
-            false,
-            Some(total),
-            scan_cursor,
-        ),
-        RedisValueData::Hash {
-            items,
-            total,
-            scan_cursor,
-        } => (
-            Value::Array(redis_hash_items(items)),
-            false,
-            Some(total),
-            scan_cursor,
-        ),
-        RedisValueData::Zset {
-            items,
-            total,
-            scan_cursor,
-        } => (
-            Value::Array(redis_zset_items(items)),
-            false,
-            Some(total),
-            scan_cursor,
-        ),
-        RedisValueData::Stream { entries, total, .. } => (
-            Value::Array(
-                entries
-                    .into_iter()
-                    .map(|entry| {
-                        let fields = entry
-                            .fields
-                            .into_iter()
-                            .map(|field| (field.field, Value::String(field.value)))
-                            .collect::<serde_json::Map<_, _>>();
-                        json!({ "id": entry.id, "fields": fields })
-                    })
-                    .collect(),
-            ),
-            false,
-            total,
-            None,
-        ),
-        RedisValueData::Unknown => (Value::Null, false, None, None),
-    };
-    AeroricRedisValue {
-        key_display,
-        key_raw,
-        key_type: redis_type,
-        ttl,
-        value_is_binary,
-        value,
-        total,
-        scan_cursor,
-    }
-}
-
-fn adapt_redis_collection_page(page: RedisCollectionPage) -> AeroricRedisCollectionPage {
-    match page {
-        RedisCollectionPage::List { items, scan_cursor } => AeroricRedisCollectionPage::List {
-            items: redis_list_items(items),
-            scan_cursor,
-        },
-        RedisCollectionPage::Set { items, scan_cursor } => AeroricRedisCollectionPage::Set {
-            items: redis_set_items(items),
-            scan_cursor,
-        },
-        RedisCollectionPage::Hash { items, scan_cursor } => AeroricRedisCollectionPage::Hash {
-            items: redis_hash_items(items),
-            scan_cursor,
-        },
-        RedisCollectionPage::Zset { items, scan_cursor } => AeroricRedisCollectionPage::Zset {
-            items: redis_zset_items(items),
-            scan_cursor,
-        },
-    }
+fn local_connection_paths() -> Result<DbxConnectionPaths, String> {
+    Ok(DbxConnectionPaths::from_data_dir(
+        &crate::storage::aeroric_dir()?,
+    ))
 }
 
 #[tauri::command]
-pub async fn dbx_redis_list_databases(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_list_databases<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
 ) -> Result<Vec<RedisDatabaseInfo>, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    dbx_core::redis_ops::redis_list_databases_core(&state.app_state, &connection_id).await
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_list_databases",
+        serde_json::json!({ "connectionId": connection_id }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_list_databases(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                connection_id,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_scan_keys(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_scan_keys<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     cursor: u64,
     pattern: Option<String>,
     count: Option<usize>,
 ) -> Result<RedisScanResult, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    let pattern = normalize_pattern(pattern);
-    dbx_core::redis_ops::redis_scan_keys_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        cursor,
-        &pattern,
-        normalize_count(count),
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_scan_keys",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "cursor": cursor, "pattern": pattern, "count": count }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_scan_keys(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, cursor, pattern, count)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_get_value(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_get_value<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
-) -> Result<AeroricRedisValue, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    dbx_core::redis_ops::redis_get_value_in_db_core(&state.app_state, &connection_id, db, &key_raw)
-        .await
-        .map(adapt_redis_value)
+) -> Result<redis_face::AeroricRedisValue, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_get_value",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_get_value(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                connection_id,
+                db,
+                key_raw,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_load_more(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_load_more<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
@@ -349,198 +107,155 @@ pub async fn dbx_redis_load_more(
     cursor: u64,
     count: Option<usize>,
     filter: Option<String>,
-) -> Result<AeroricRedisCollectionPage, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    dbx_core::redis_ops::redis_load_more_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &key_type,
-        cursor,
-        normalize_count(count),
-        filter.as_deref(),
-        // 新增的 sort_direction 参数,None 等于原来的驱动默认顺序。
-        None,
+) -> Result<redis_face::AeroricRedisCollectionPage, String> {
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_load_more",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "keyType": key_type, "cursor": cursor, "count": count, "filter": filter }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_load_more(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, key_type, cursor, count, filter)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
-    .map(adapt_redis_collection_page)
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_set_value(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_set_value<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     value: String,
     ttl: Option<i64>,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "SET").await?;
-    dbx_core::redis_ops::redis_set_string_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &value,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_set_value",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "value": value, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_set_value(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, value, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_delete_key(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_delete_key<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "Delete key").await?;
-    dbx_core::redis_ops::redis_delete_key_in_db_core(&state.app_state, &connection_id, db, &key_raw)
-        .await
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_delete_key",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_delete_key(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                connection_id,
+                db,
+                key_raw,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_set_ttl(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_set_ttl<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     ttl: i64,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "EXPIRE").await?;
-    dbx_core::redis_ops::redis_set_ttl_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_set_ttl",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_set_ttl(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_create_key(
-    state: State<'_, DbxState>,
-    request: RedisCreateKeyRequest,
+pub async fn dbx_redis_create_key<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
+    request: redis_face::RedisCreateKeyRequest,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &request.connection_id).await?;
-    connections::ensure_writable(&state, &request.connection_id, "Create key").await?;
-    let key_type = normalize_key_type(&request.key_type);
-    match key_type.as_str() {
-        "string" => {
-            dbx_core::redis_ops::redis_set_string_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &request.value,
-                request.ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_create_key",
+        serde_json::json!({ "request": &request }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_create_key(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                request,
             )
             .await
-        }
-        "hash" => {
-            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
-            dbx_core::redis_ops::redis_hash_set_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &field,
-                &request.value,
-                request.ttl,
-            )
-            .await
-        }
-        "list" => {
-            dbx_core::redis_ops::redis_list_push_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &request.value,
-                request.ttl,
-            )
-            .await
-        }
-        "set" => {
-            dbx_core::redis_ops::redis_set_add_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &request.value,
-                request.ttl,
-            )
-            .await
-        }
-        "zset" => {
-            dbx_core::redis_ops::redis_zadd_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &request.value,
-                request.score.unwrap_or(0.0),
-                request.ttl,
-            )
-            .await
-        }
-        "stream" => {
-            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
-            let entry_id = non_empty(request.entry_id).unwrap_or_else(|| "*".to_string());
-            dbx_core::redis_ops::redis_stream_add_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &entry_id,
-                vec![(field, request.value)],
-                request.ttl,
-            )
-            .await
-        }
-        "json" => {
-            dbx_core::redis_ops::redis_json_set_in_db_core(
-                &state.app_state,
-                &request.connection_id,
-                request.db,
-                &request.key_raw,
-                &request.value,
-                request.ttl,
-            )
-            .await
-        }
-        _ => Err(format!("Unsupported Redis key type: {}", request.key_type)),
-    }
+            .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_hash_del(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_hash_del<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     field: String,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "HDEL").await?;
-    dbx_core::redis_ops::redis_hash_del_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &field,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_hash_del",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "field": field }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_hash_del(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, field)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_hash_set(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_hash_set<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
@@ -548,149 +263,172 @@ pub async fn dbx_redis_hash_set(
     value: String,
     ttl: Option<i64>,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "HSET").await?;
-    dbx_core::redis_ops::redis_hash_set_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &field,
-        &value,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_hash_set",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "field": field, "value": value, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_hash_set(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, field, value, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_list_remove(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_list_remove<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     index: i64,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "LREM").await?;
-    dbx_core::redis_ops::redis_list_remove_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        index,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_list_remove",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "index": index }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_list_remove(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, index)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_list_push(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_list_push<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     value: String,
     ttl: Option<i64>,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "RPUSH").await?;
-    dbx_core::redis_ops::redis_list_push_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &value,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_list_push",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "value": value, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_list_push(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, value, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_list_set(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_list_set<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     index: i64,
     value: String,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "LSET").await?;
-    dbx_core::redis_ops::redis_list_set_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        index,
-        &value,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_list_set",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "index": index, "value": value }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_list_set(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, index, value)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_set_remove(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_set_remove<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     member: String,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "SREM").await?;
-    dbx_core::redis_ops::redis_set_remove_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &member,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_set_remove",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "member": member }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_set_remove(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, member)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_set_add(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_set_add<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     member: String,
     ttl: Option<i64>,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "SADD").await?;
-    dbx_core::redis_ops::redis_set_add_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &member,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_set_add",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "member": member, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_set_add(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, member, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_zrem(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_zrem<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
     member: String,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "ZREM").await?;
-    dbx_core::redis_ops::redis_zrem_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &member,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_zrem",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "member": member }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_zrem(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, member)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_zadd(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_zadd<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     key_raw: String,
@@ -698,190 +436,41 @@ pub async fn dbx_redis_zadd(
     score: f64,
     ttl: Option<i64>,
 ) -> Result<(), String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "ZADD").await?;
-    dbx_core::redis_ops::redis_zadd_in_db_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &key_raw,
-        &member,
-        score,
-        ttl,
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_zadd",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "keyRaw": key_raw, "member": member, "score": score, "ttl": ttl }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_zadd(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, key_raw, member, score, ttl)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_redis_execute_command(
-    state: State<'_, DbxState>,
+pub async fn dbx_redis_execute_command<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     db: u32,
     command: String,
     skip_safety_check: Option<bool>,
 ) -> Result<RedisCommandResult, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    // Resolve the command name with the same quote-aware parser the core uses,
-    // so classification cannot be bypassed by quoting (e.g. `"FLUSHALL"`), which
-    // split_whitespace would otherwise treat as an unrecognized (Allowed) token.
-    let command_name = dbx_core::db::redis_driver::parse_command_argv(&command)
-        .ok()
-        .and_then(|argv| argv.into_iter().next())
-        .unwrap_or_default();
-    // Supplemental deny-list for dangerous administrative commands that the core
-    // classifier currently leaves as Allowed (e.g. SWAPDB, DEBUG, ACL, CLIENT).
-    // These are never legitimately issued by the frontend, so blocking them here
-    // provides defense-in-depth without touching the shared core crate.
-    if is_supplemental_blocked_command(&command_name) {
-        return Err(format!(
-            "Redis command is blocked for safety: {command_name}"
-        ));
-    }
-    let safety = dbx_core::db::redis_driver::classify_command(&command_name);
-    // Blocked commands are never permitted from this entry point, regardless of
-    // the caller-supplied skip flag. The frontend only sets skip for confirmed
-    // Write/Confirm commands, never for Blocked ones, so enforcing here closes a
-    // caller-controlled guardrail bypass without affecting legitimate flows.
-    if safety == RedisCommandSafety::Blocked {
-        return Err(format!(
-            "Redis command is blocked for safety: {command_name}"
-        ));
-    }
-    if safety != RedisCommandSafety::Allowed {
-        connections::ensure_writable(&state, &connection_id, &command_name).await?;
-    }
-    dbx_core::redis_ops::redis_execute_command_core(
-        &state.app_state,
-        &connection_id,
-        db,
-        &command,
-        skip_safety_check.unwrap_or(false),
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_redis_execute_command",
+        serde_json::json!({ "connectionId": connection_id, "db": db, "command": command, "skipSafetyCheck": skip_safety_check }),
+        async {
+            let paths = local_connection_paths()?;
+            redis_face::dbx_redis_execute_command(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, db, command, skip_safety_check)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        adapt_redis_collection_page, adapt_redis_value, is_supplemental_blocked_command, non_empty,
-        normalize_count, normalize_key_type, normalize_pattern, AeroricRedisCollectionPage,
-    };
-    use base64::Engine as _;
-    use dbx_core::db::redis_driver::{
-        RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisHashItem, RedisValue,
-        RedisValueData,
-    };
-    use serde_json::json;
-
-    fn blob(bytes: &[u8], encoding: RedisBlobEncoding) -> RedisBlob {
-        RedisBlob {
-            raw_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            encoding,
-        }
-    }
-
-    #[test]
-    fn redis_scan_defaults_are_bounded() {
-        assert_eq!(normalize_pattern(None), "*");
-        assert_eq!(
-            normalize_pattern(Some("  users:*  ".to_string())),
-            "users:*"
-        );
-        assert_eq!(normalize_count(None), 200);
-        assert_eq!(normalize_count(Some(0)), 1);
-        assert_eq!(normalize_count(Some(10_000)), 5000);
-    }
-
-    #[test]
-    fn redis_create_key_type_is_normalized() {
-        assert_eq!(normalize_key_type(" String "), "string");
-        assert_eq!(normalize_key_type("ZSET"), "zset");
-    }
-
-    #[test]
-    fn blank_create_key_field_is_ignored() {
-        assert_eq!(
-            non_empty(Some(" field ".to_string())),
-            Some("field".to_string())
-        );
-        assert_eq!(non_empty(Some("   ".to_string())), None);
-        assert_eq!(non_empty(None), None);
-    }
-
-    #[test]
-    fn adapts_new_redis_value_shape_to_the_existing_frontend_contract() {
-        let value = adapt_redis_value(RedisValue {
-            key_display: "path".to_string(),
-            key_raw: "cGF0aA==".to_string(),
-            ttl: 60,
-            redis_type: "string".to_string(),
-            data: RedisValueData::String {
-                content: blob(br"C:\tmp", RedisBlobEncoding::Utf8),
-            },
-        });
-
-        assert_eq!(value.key_type, "string");
-        assert_eq!(value.ttl, 60);
-        assert!(!value.value_is_binary);
-        assert_eq!(value.value, json!(r"C:\\tmp"));
-        assert_eq!(value.total, None);
-        assert_eq!(value.scan_cursor, None);
-    }
-
-    #[test]
-    fn marks_binary_string_values_and_escapes_non_utf8_bytes() {
-        let value = adapt_redis_value(RedisValue {
-            key_display: "binary".to_string(),
-            key_raw: "YmluYXJ5".to_string(),
-            ttl: -1,
-            redis_type: "string".to_string(),
-            data: RedisValueData::String {
-                content: blob(&[0xff, b'\\'], RedisBlobEncoding::Binary),
-            },
-        });
-
-        assert!(value.value_is_binary);
-        assert_eq!(value.value, json!("\\xff\\\\"));
-    }
-
-    #[test]
-    fn adapts_typed_hash_pages_without_fabricating_key_metadata() {
-        let page = adapt_redis_collection_page(RedisCollectionPage::Hash {
-            items: vec![RedisHashItem {
-                field: blob(b"role", RedisBlobEncoding::Utf8),
-                value: blob(b"admin", RedisBlobEncoding::Utf8),
-                // None = 服务端不暴露 hash field 过期时间,与 redis_hash_items
-                // 当前不透出该字段一致。
-                field_ttl: None,
-            }],
-            scan_cursor: Some(42),
-        });
-
-        match page {
-            AeroricRedisCollectionPage::Hash { items, scan_cursor } => {
-                assert_eq!(items, vec![json!({ "field": "role", "value": "admin" })]);
-                assert_eq!(scan_cursor, Some(42));
-            }
-            other => panic!("expected hash page, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn supplemental_block_list_matches_case_insensitively() {
-        assert!(is_supplemental_blocked_command("SWAPDB"));
-        assert!(is_supplemental_blocked_command("swapdb"));
-        assert!(is_supplemental_blocked_command("Debug"));
-        assert!(is_supplemental_blocked_command("MONITOR"));
-    }
-
-    #[test]
-    fn supplemental_block_list_leaves_admin_reads_and_normal_commands_alone() {
-        // Administrative commands with legitimate read subcommands must not be
-        // blocked wholesale, and ordinary data commands stay allowed.
-        assert!(!is_supplemental_blocked_command("CLUSTER"));
-        assert!(!is_supplemental_blocked_command("CLIENT"));
-        assert!(!is_supplemental_blocked_command("ACL"));
-        assert!(!is_supplemental_blocked_command("GET"));
-        assert!(!is_supplemental_blocked_command("SET"));
-    }
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }

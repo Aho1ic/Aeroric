@@ -17,6 +17,7 @@ use aeroric_core::database::dbx_state::DbxState;
 use aeroric_core::database::execution;
 use aeroric_core::database::grid as grid_biz;
 use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_core::database::redis_face;
 use aeroric_core::database::schema_face;
 use aeroric_core::database::sql_builders as builders;
 use aeroric_core::events::EventLog;
@@ -51,6 +52,394 @@ impl HostedDbx {
                 state
             })
             .await
+    }
+}
+
+/// 切片一百：redis 面统一 decode→call→reply。参数是位置形（connectionId/db/
+/// keyRaw/...），camelCase 与 Tauri invoke 形状逐字；db 用 u32、cursor u64。
+async fn redis_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let params = request.params.clone();
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let id = request.id.clone();
+    let state = hosted.state(&context).await;
+    let strp = |name: &str| params.get(name).and_then(Value::as_str).map(str::to_string);
+    let u32p = |name: &str| params.get(name).and_then(Value::as_u64).map(|v| v as u32);
+    let i64p = |name: &str| params.get(name).and_then(Value::as_i64);
+    let uszp = |name: &str| params.get(name).and_then(Value::as_u64).map(|v| v as usize);
+    macro_rules! need_str {
+        ($name:expr) => {
+            match strp($name) {
+                Some(value) => value,
+                None => return invalid(&request, &format!("{} (string)", $name)),
+            }
+        };
+    }
+    macro_rules! need_u32 {
+        ($name:expr) => {
+            match u32p($name) {
+                Some(value) => value,
+                None => return invalid(&request, &format!("{} (integer)", $name)),
+            }
+        };
+    }
+    let reply = |result: Result<Value, String>| match result {
+        Ok(value) => ok(&request, value),
+        Err(error) => failure(id.clone(), ErrorCode::IoError, &error),
+    };
+    match method {
+        "database.dbx_redis_list_databases" => {
+            let connection_id = need_str!("connectionId");
+            reply(
+                redis_face::dbx_redis_list_databases(state, &paths, &store, connection_id)
+                    .await
+                    .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_redis_scan_keys" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let cursor = params.get("cursor").and_then(Value::as_u64).unwrap_or(0);
+            reply(
+                redis_face::dbx_redis_scan_keys(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    cursor,
+                    strp("pattern"),
+                    uszp("count"),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_redis_get_value" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            reply(
+                redis_face::dbx_redis_get_value(state, &paths, &store, connection_id, db, key_raw)
+                    .await
+                    .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_redis_load_more" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let key_type = need_str!("keyType");
+            let cursor = params.get("cursor").and_then(Value::as_u64).unwrap_or(0);
+            reply(
+                redis_face::dbx_redis_load_more(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    key_type,
+                    cursor,
+                    uszp("count"),
+                    strp("filter"),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_redis_set_value" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let value = need_str!("value");
+            reply(
+                redis_face::dbx_redis_set_value(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    value,
+                    i64p("ttl"),
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_delete_key" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            reply(
+                redis_face::dbx_redis_delete_key(state, &paths, &store, connection_id, db, key_raw)
+                    .await
+                    .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_set_ttl" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let ttl = match i64p("ttl") {
+                Some(value) => value,
+                None => return invalid(&request, "ttl (integer)"),
+            };
+            reply(
+                redis_face::dbx_redis_set_ttl(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    ttl,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_create_key" => {
+            let body = match params.get("request").cloned() {
+                Some(value) => value,
+                None => return invalid(&request, "request (object)"),
+            };
+            let parsed: redis_face::RedisCreateKeyRequest = match serde_json::from_value(body) {
+                Ok(value) => value,
+                Err(error) => return invalid(&request, &format!("request: {error}")),
+            };
+            reply(
+                redis_face::dbx_redis_create_key(state, &paths, &store, parsed)
+                    .await
+                    .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_hash_del" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let field = need_str!("field");
+            reply(
+                redis_face::dbx_redis_hash_del(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    field,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_hash_set" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let field = need_str!("field");
+            let value = need_str!("value");
+            reply(
+                redis_face::dbx_redis_hash_set(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    field,
+                    value,
+                    i64p("ttl"),
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_list_remove" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let index = match i64p("index") {
+                Some(value) => value,
+                None => return invalid(&request, "index (integer)"),
+            };
+            reply(
+                redis_face::dbx_redis_list_remove(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    index,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_list_push" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let value = need_str!("value");
+            reply(
+                redis_face::dbx_redis_list_push(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    value,
+                    i64p("ttl"),
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_list_set" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let index = match i64p("index") {
+                Some(value) => value,
+                None => return invalid(&request, "index (integer)"),
+            };
+            let value = need_str!("value");
+            reply(
+                redis_face::dbx_redis_list_set(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    index,
+                    value,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_set_remove" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let member = need_str!("member");
+            reply(
+                redis_face::dbx_redis_set_remove(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    member,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_set_add" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let value = need_str!("value");
+            reply(
+                redis_face::dbx_redis_set_add(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    value,
+                    i64p("ttl"),
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_zrem" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let member = need_str!("member");
+            reply(
+                redis_face::dbx_redis_zrem(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    member,
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_zadd" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let key_raw = need_str!("keyRaw");
+            let member = need_str!("member");
+            let score = match params.get("score").and_then(Value::as_f64) {
+                Some(value) => value,
+                None => return invalid(&request, "score (number)"),
+            };
+            reply(
+                redis_face::dbx_redis_zadd(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    key_raw,
+                    member,
+                    score,
+                    i64p("ttl"),
+                )
+                .await
+                .map(|_| Value::Null),
+            )
+        }
+        "database.dbx_redis_execute_command" => {
+            let connection_id = need_str!("connectionId");
+            let db = need_u32!("db");
+            let command = need_str!("command");
+            reply(
+                redis_face::dbx_redis_execute_command(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    db,
+                    command,
+                    params.get("skipSafetyCheck").and_then(Value::as_bool),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        _ => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("unknown database redis method {method}"),
+        ),
     }
 }
 
@@ -1124,6 +1513,260 @@ pub fn register_database_services(
                         Ok(value) => ok(&request, value),
                         Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
                     }
+                })
+            }),
+        );
+    }
+    // ── 切片一百（database）：redis 面 18 条（字面量注册，切片九同款陷阱规避）──
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_list_databases",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_list_databases").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_scan_keys",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_scan_keys").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_get_value",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_get_value").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_load_more",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_load_more").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_set_value",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_set_value").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_delete_key",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_delete_key").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_set_ttl",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_set_ttl").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_create_key",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_create_key").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_hash_del",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_hash_del").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_hash_set",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_hash_set").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_list_remove",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_list_remove").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_list_push",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_list_push").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_list_set",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_list_set").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_set_remove",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_set_remove").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_set_add",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_set_add").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_zrem",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_zrem").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_zadd",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_zadd").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_redis_execute_command",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    redis_dispatch(request, context, dbx, "database.dbx_redis_execute_command")
+                        .await
                 })
             }),
         );

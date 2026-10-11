@@ -1,0 +1,910 @@
+//! P8-05 切片一百（database）：redis 面 18 条的宿主依赖点。与
+//! `src-tauri/src/database/redis.rs` 同源 verbatim 上收：ensure_connected／
+//! ensure_writable 走 core `database::dbx_connections`（调用方注入
+//! paths＋secrets），适配器/归一化/安全闸逐字；连接池在 dbx-core `AppState`。
+
+use base64::Engine as _;
+use dbx_core::db::redis_driver::{
+    RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisCommandResult, RedisCommandSafety,
+    RedisDatabaseInfo, RedisScanResult, RedisValue, RedisValueData,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::database::dbx_connections::{ensure_connected, ensure_writable, DbxConnectionPaths};
+use crate::database::dbx_secrets::DbxConnectionSecretStore;
+use crate::database::dbx_state::DbxState;
+
+/// Administrative Redis commands that the shared core classifier currently
+/// leaves as `Allowed` but which can disrupt the server, exfiltrate data, or
+/// reconfigure security. They are never issued by the frontend UI, so this
+/// entry point rejects them outright for defense-in-depth. Names are compared
+/// case-insensitively against the parsed command token.
+// Only commands that are destructive or destabilizing with no meaningful
+// read-only form are listed here. Administrative commands with important
+// read subcommands (CLUSTER INFO, CLIENT LIST, ACL WHOAMI, LATENCY, ...) are
+// intentionally left to the core classifier so diagnostic reads keep working.
+const SUPPLEMENTAL_BLOCKED_COMMANDS: &[&str] = &[
+    "SWAPDB",
+    "DEBUG",
+    "RESET",
+    "FAILOVER",
+    "BGREWRITEAOF",
+    "MONITOR",
+    "PSYNC",
+    "SYNC",
+];
+
+fn is_supplemental_blocked_command(command_name: &str) -> bool {
+    let upper = command_name.to_ascii_uppercase();
+    SUPPLEMENTAL_BLOCKED_COMMANDS.contains(&upper.as_str())
+}
+
+fn normalize_pattern(pattern: Option<String>) -> String {
+    pattern
+        .and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .unwrap_or_else(|| "*".to_string())
+}
+
+fn normalize_count(count: Option<usize>) -> usize {
+    count.unwrap_or(200).clamp(1, 5000)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedisCreateKeyRequest {
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    key_type: String,
+    value: String,
+    #[serde(default)]
+    field: Option<String>,
+    #[serde(default)]
+    score: Option<f64>,
+    #[serde(default)]
+    entry_id: Option<String>,
+    #[serde(default)]
+    ttl: Option<i64>,
+}
+
+fn normalize_key_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AeroricRedisValue {
+    key_display: String,
+    key_raw: String,
+    key_type: String,
+    ttl: i64,
+    value_is_binary: bool,
+    value: Value,
+    total: Option<u64>,
+    scan_cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AeroricRedisCollectionPage {
+    List {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Set {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Hash {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+    Zset {
+        items: Vec<Value>,
+        scan_cursor: Option<u64>,
+    },
+}
+
+fn redis_blob_bytes(blob: &RedisBlob) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(&blob.raw_base64)
+        .unwrap_or_default()
+}
+
+fn redis_blob_display(blob: &RedisBlob) -> String {
+    let bytes = redis_blob_bytes(blob);
+    if let Ok(text) = std::str::from_utf8(&bytes) {
+        return text.replace('\\', "\\\\");
+    }
+    let mut output = String::new();
+    for byte in bytes {
+        match byte {
+            b'\\' => output.push_str("\\\\"),
+            0x20..=0x7e => output.push(byte as char),
+            _ => output.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    output
+}
+
+fn redis_blob_value(blob: &RedisBlob) -> Value {
+    Value::String(redis_blob_display(blob))
+}
+
+fn redis_blob_is_binary(blob: &RedisBlob) -> bool {
+    matches!(blob.encoding, RedisBlobEncoding::Binary)
+}
+
+fn redis_list_items(items: Vec<dbx_core::db::redis_driver::RedisListItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| redis_blob_value(&item.value))
+        .collect()
+}
+
+fn redis_set_items(items: Vec<dbx_core::db::redis_driver::RedisSetItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| redis_blob_value(&item.member))
+        .collect()
+}
+
+fn redis_hash_items(items: Vec<dbx_core::db::redis_driver::RedisHashItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| {
+            json!({
+                "field": redis_blob_display(&item.field),
+                "value": redis_blob_display(&item.value),
+            })
+        })
+        .collect()
+}
+
+fn redis_zset_items(items: Vec<dbx_core::db::redis_driver::RedisZsetItem>) -> Vec<Value> {
+    items
+        .into_iter()
+        .map(|item| {
+            json!({
+                "score": item.score,
+                "member": redis_blob_display(&item.member),
+            })
+        })
+        .collect()
+}
+
+fn adapt_redis_value(value: RedisValue) -> AeroricRedisValue {
+    let RedisValue {
+        key_display,
+        key_raw,
+        ttl,
+        redis_type,
+        data,
+    } = value;
+    let (value, value_is_binary, total, scan_cursor) = match data {
+        RedisValueData::String { content } => (
+            redis_blob_value(&content),
+            redis_blob_is_binary(&content),
+            None,
+            None,
+        ),
+        RedisValueData::Json { value } => (Value::String(value), false, None, None),
+        RedisValueData::List {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_list_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Set {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_set_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Hash {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_hash_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Zset {
+            items,
+            total,
+            scan_cursor,
+        } => (
+            Value::Array(redis_zset_items(items)),
+            false,
+            Some(total),
+            scan_cursor,
+        ),
+        RedisValueData::Stream { entries, total, .. } => (
+            Value::Array(
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        let fields = entry
+                            .fields
+                            .into_iter()
+                            .map(|field| (field.field, Value::String(field.value)))
+                            .collect::<serde_json::Map<_, _>>();
+                        json!({ "id": entry.id, "fields": fields })
+                    })
+                    .collect(),
+            ),
+            false,
+            total,
+            None,
+        ),
+        RedisValueData::Unknown => (Value::Null, false, None, None),
+    };
+    AeroricRedisValue {
+        key_display,
+        key_raw,
+        key_type: redis_type,
+        ttl,
+        value_is_binary,
+        value,
+        total,
+        scan_cursor,
+    }
+}
+
+fn adapt_redis_collection_page(page: RedisCollectionPage) -> AeroricRedisCollectionPage {
+    match page {
+        RedisCollectionPage::List { items, scan_cursor } => AeroricRedisCollectionPage::List {
+            items: redis_list_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Set { items, scan_cursor } => AeroricRedisCollectionPage::Set {
+            items: redis_set_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Hash { items, scan_cursor } => AeroricRedisCollectionPage::Hash {
+            items: redis_hash_items(items),
+            scan_cursor,
+        },
+        RedisCollectionPage::Zset { items, scan_cursor } => AeroricRedisCollectionPage::Zset {
+            items: redis_zset_items(items),
+            scan_cursor,
+        },
+    }
+}
+
+pub async fn dbx_redis_list_databases(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+) -> Result<Vec<RedisDatabaseInfo>, String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    dbx_core::redis_ops::redis_list_databases_core(&state.app_state, &connection_id).await
+}
+
+pub async fn dbx_redis_scan_keys(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    cursor: u64,
+    pattern: Option<String>,
+    count: Option<usize>,
+) -> Result<RedisScanResult, String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    let pattern = normalize_pattern(pattern);
+    dbx_core::redis_ops::redis_scan_keys_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        cursor,
+        &pattern,
+        normalize_count(count),
+    )
+    .await
+}
+
+pub async fn dbx_redis_get_value(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+) -> Result<AeroricRedisValue, String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    dbx_core::redis_ops::redis_get_value_in_db_core(&state.app_state, &connection_id, db, &key_raw)
+        .await
+        .map(adapt_redis_value)
+}
+
+pub async fn dbx_redis_load_more(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    key_type: String,
+    cursor: u64,
+    count: Option<usize>,
+    filter: Option<String>,
+) -> Result<AeroricRedisCollectionPage, String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    dbx_core::redis_ops::redis_load_more_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &key_type,
+        cursor,
+        normalize_count(count),
+        filter.as_deref(),
+        // 新增的 sort_direction 参数,None 等于原来的驱动默认顺序。
+        None,
+    )
+    .await
+    .map(adapt_redis_collection_page)
+}
+
+pub async fn dbx_redis_set_value(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    value: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "SET").await?;
+    dbx_core::redis_ops::redis_set_string_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &value,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_delete_key(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "Delete key").await?;
+    dbx_core::redis_ops::redis_delete_key_in_db_core(&state.app_state, &connection_id, db, &key_raw)
+        .await
+}
+
+pub async fn dbx_redis_set_ttl(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    ttl: i64,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "EXPIRE").await?;
+    dbx_core::redis_ops::redis_set_ttl_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_create_key(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    request: RedisCreateKeyRequest,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &request.connection_id).await?;
+    ensure_writable(state, &request.connection_id, "Create key").await?;
+    let key_type = normalize_key_type(&request.key_type);
+    match key_type.as_str() {
+        "string" => {
+            dbx_core::redis_ops::redis_set_string_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "hash" => {
+            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
+            dbx_core::redis_ops::redis_hash_set_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &field,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "list" => {
+            dbx_core::redis_ops::redis_list_push_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "set" => {
+            dbx_core::redis_ops::redis_set_add_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        "zset" => {
+            dbx_core::redis_ops::redis_zadd_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.score.unwrap_or(0.0),
+                request.ttl,
+            )
+            .await
+        }
+        "stream" => {
+            let field = non_empty(request.field).unwrap_or_else(|| "field".to_string());
+            let entry_id = non_empty(request.entry_id).unwrap_or_else(|| "*".to_string());
+            dbx_core::redis_ops::redis_stream_add_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &entry_id,
+                vec![(field, request.value)],
+                request.ttl,
+            )
+            .await
+        }
+        "json" => {
+            dbx_core::redis_ops::redis_json_set_in_db_core(
+                &state.app_state,
+                &request.connection_id,
+                request.db,
+                &request.key_raw,
+                &request.value,
+                request.ttl,
+            )
+            .await
+        }
+        _ => Err(format!("Unsupported Redis key type: {}", request.key_type)),
+    }
+}
+
+pub async fn dbx_redis_hash_del(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    field: String,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "HDEL").await?;
+    dbx_core::redis_ops::redis_hash_del_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &field,
+    )
+    .await
+}
+
+pub async fn dbx_redis_hash_set(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    field: String,
+    value: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "HSET").await?;
+    dbx_core::redis_ops::redis_hash_set_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &field,
+        &value,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_list_remove(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    index: i64,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "LREM").await?;
+    dbx_core::redis_ops::redis_list_remove_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        index,
+    )
+    .await
+}
+
+pub async fn dbx_redis_list_push(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    value: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "RPUSH").await?;
+    dbx_core::redis_ops::redis_list_push_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &value,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_list_set(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    index: i64,
+    value: String,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "LSET").await?;
+    dbx_core::redis_ops::redis_list_set_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        index,
+        &value,
+    )
+    .await
+}
+
+pub async fn dbx_redis_set_remove(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "SREM").await?;
+    dbx_core::redis_ops::redis_set_remove_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+    )
+    .await
+}
+
+pub async fn dbx_redis_set_add(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "SADD").await?;
+    dbx_core::redis_ops::redis_set_add_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_zrem(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "ZREM").await?;
+    dbx_core::redis_ops::redis_zrem_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+    )
+    .await
+}
+
+pub async fn dbx_redis_zadd(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    key_raw: String,
+    member: String,
+    score: f64,
+    ttl: Option<i64>,
+) -> Result<(), String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    ensure_writable(state, &connection_id, "ZADD").await?;
+    dbx_core::redis_ops::redis_zadd_in_db_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &key_raw,
+        &member,
+        score,
+        ttl,
+    )
+    .await
+}
+
+pub async fn dbx_redis_execute_command(
+    state: &DbxState,
+    paths: &DbxConnectionPaths,
+    store: &dyn DbxConnectionSecretStore,
+    connection_id: String,
+    db: u32,
+    command: String,
+    skip_safety_check: Option<bool>,
+) -> Result<RedisCommandResult, String> {
+    ensure_connected(state, paths, store, &connection_id).await?;
+    // Resolve the command name with the same quote-aware parser the core uses,
+    // so classification cannot be bypassed by quoting (e.g. `"FLUSHALL"`), which
+    // split_whitespace would otherwise treat as an unrecognized (Allowed) token.
+    let command_name = dbx_core::db::redis_driver::parse_command_argv(&command)
+        .ok()
+        .and_then(|argv| argv.into_iter().next())
+        .unwrap_or_default();
+    // Supplemental deny-list for dangerous administrative commands that the core
+    // classifier currently leaves as Allowed (e.g. SWAPDB, DEBUG, ACL, CLIENT).
+    // These are never legitimately issued by the frontend, so blocking them here
+    // provides defense-in-depth without touching the shared core crate.
+    if is_supplemental_blocked_command(&command_name) {
+        return Err(format!(
+            "Redis command is blocked for safety: {command_name}"
+        ));
+    }
+    let safety = dbx_core::db::redis_driver::classify_command(&command_name);
+    // Blocked commands are never permitted from this entry point, regardless of
+    // the caller-supplied skip flag. The frontend only sets skip for confirmed
+    // Write/Confirm commands, never for Blocked ones, so enforcing here closes a
+    // caller-controlled guardrail bypass without affecting legitimate flows.
+    if safety == RedisCommandSafety::Blocked {
+        return Err(format!(
+            "Redis command is blocked for safety: {command_name}"
+        ));
+    }
+    if safety != RedisCommandSafety::Allowed {
+        ensure_writable(state, &connection_id, &command_name).await?;
+    }
+    dbx_core::redis_ops::redis_execute_command_core(
+        &state.app_state,
+        &connection_id,
+        db,
+        &command,
+        skip_safety_check.unwrap_or(false),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        adapt_redis_collection_page, adapt_redis_value, is_supplemental_blocked_command, non_empty,
+        normalize_count, normalize_key_type, normalize_pattern, AeroricRedisCollectionPage,
+    };
+    use base64::Engine as _;
+    use dbx_core::db::redis_driver::{
+        RedisBlob, RedisBlobEncoding, RedisCollectionPage, RedisHashItem, RedisValue,
+        RedisValueData,
+    };
+    use serde_json::json;
+
+    fn blob(bytes: &[u8], encoding: RedisBlobEncoding) -> RedisBlob {
+        RedisBlob {
+            raw_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            encoding,
+        }
+    }
+
+    #[test]
+    fn redis_scan_defaults_are_bounded() {
+        assert_eq!(normalize_pattern(None), "*");
+        assert_eq!(
+            normalize_pattern(Some("  users:*  ".to_string())),
+            "users:*"
+        );
+        assert_eq!(normalize_count(None), 200);
+        assert_eq!(normalize_count(Some(0)), 1);
+        assert_eq!(normalize_count(Some(10_000)), 5000);
+    }
+
+    #[test]
+    fn redis_create_key_type_is_normalized() {
+        assert_eq!(normalize_key_type(" String "), "string");
+        assert_eq!(normalize_key_type("ZSET"), "zset");
+    }
+
+    #[test]
+    fn blank_create_key_field_is_ignored() {
+        assert_eq!(
+            non_empty(Some(" field ".to_string())),
+            Some("field".to_string())
+        );
+        assert_eq!(non_empty(Some("   ".to_string())), None);
+        assert_eq!(non_empty(None), None);
+    }
+
+    #[test]
+    fn adapts_new_redis_value_shape_to_the_existing_frontend_contract() {
+        let value = adapt_redis_value(RedisValue {
+            key_display: "path".to_string(),
+            key_raw: "cGF0aA==".to_string(),
+            ttl: 60,
+            redis_type: "string".to_string(),
+            data: RedisValueData::String {
+                content: blob(br"C:\tmp", RedisBlobEncoding::Utf8),
+            },
+        });
+
+        assert_eq!(value.key_type, "string");
+        assert_eq!(value.ttl, 60);
+        assert!(!value.value_is_binary);
+        assert_eq!(value.value, json!(r"C:\\tmp"));
+        assert_eq!(value.total, None);
+        assert_eq!(value.scan_cursor, None);
+    }
+
+    #[test]
+    fn marks_binary_string_values_and_escapes_non_utf8_bytes() {
+        let value = adapt_redis_value(RedisValue {
+            key_display: "binary".to_string(),
+            key_raw: "YmluYXJ5".to_string(),
+            ttl: -1,
+            redis_type: "string".to_string(),
+            data: RedisValueData::String {
+                content: blob(&[0xff, b'\\'], RedisBlobEncoding::Binary),
+            },
+        });
+
+        assert!(value.value_is_binary);
+        assert_eq!(value.value, json!("\\xff\\\\"));
+    }
+
+    #[test]
+    fn adapts_typed_hash_pages_without_fabricating_key_metadata() {
+        let page = adapt_redis_collection_page(RedisCollectionPage::Hash {
+            items: vec![RedisHashItem {
+                field: blob(b"role", RedisBlobEncoding::Utf8),
+                value: blob(b"admin", RedisBlobEncoding::Utf8),
+                // None = 服务端不暴露 hash field 过期时间,与 redis_hash_items
+                // 当前不透出该字段一致。
+                field_ttl: None,
+            }],
+            scan_cursor: Some(42),
+        });
+
+        match page {
+            AeroricRedisCollectionPage::Hash { items, scan_cursor } => {
+                assert_eq!(items, vec![json!({ "field": "role", "value": "admin" })]);
+                assert_eq!(scan_cursor, Some(42));
+            }
+            other => panic!("expected hash page, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supplemental_block_list_matches_case_insensitively() {
+        assert!(is_supplemental_blocked_command("SWAPDB"));
+        assert!(is_supplemental_blocked_command("swapdb"));
+        assert!(is_supplemental_blocked_command("Debug"));
+        assert!(is_supplemental_blocked_command("MONITOR"));
+    }
+
+    #[test]
+    fn supplemental_block_list_leaves_admin_reads_and_normal_commands_alone() {
+        // Administrative commands with legitimate read subcommands must not be
+        // blocked wholesale, and ordinary data commands stay allowed.
+        assert!(!is_supplemental_blocked_command("CLUSTER"));
+        assert!(!is_supplemental_blocked_command("CLIENT"));
+        assert!(!is_supplemental_blocked_command("ACL"));
+        assert!(!is_supplemental_blocked_command("GET"));
+        assert!(!is_supplemental_blocked_command("SET"));
+    }
+}

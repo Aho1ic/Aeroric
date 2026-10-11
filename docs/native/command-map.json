@@ -18890,7 +18890,7 @@
       "rust_path": "database::redis::dbx_redis_list_databases",
       "registered_at": "src-tauri/src/lib.rs:1002",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:299"
+        "src-tauri/src/database/redis.rs:19"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18902,12 +18902,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:299",
+      "definition_resolved": "src-tauri/src/database/redis.rs:19",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18915,7 +18915,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String"
       ]
     },
@@ -18924,7 +18925,7 @@
       "rust_path": "database::redis::dbx_redis_scan_keys",
       "registered_at": "src-tauri/src/lib.rs:1003",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:308"
+        "src-tauri/src/database/redis.rs:45"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18936,12 +18937,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:308",
+      "definition_resolved": "src-tauri/src/database/redis.rs:45",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18949,7 +18950,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "cursor: u64",
@@ -18962,7 +18964,7 @@
       "rust_path": "database::redis::dbx_redis_get_value",
       "registered_at": "src-tauri/src/lib.rs:1004",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:330"
+        "src-tauri/src/database/redis.rs:70"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18974,12 +18976,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:330",
+      "definition_resolved": "src-tauri/src/database/redis.rs:70",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18987,7 +18989,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String"
@@ -18998,7 +19001,7 @@
       "rust_path": "database::redis::dbx_redis_load_more",
       "registered_at": "src-tauri/src/lib.rs:1005",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:343"
+        "src-tauri/src/database/redis.rs:100"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19010,12 +19013,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:343",
+      "definition_resolved": "src-tauri/src/database/redis.rs:100",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19023,7 +19026,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19038,7 +19042,7 @@
       "rust_path": "database::redis::dbx_redis_set_value",
       "registered_at": "src-tauri/src/lib.rs:1006",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:371"
+        "src-tauri/src/database/redis.rs:127"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19050,12 +19054,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:371",
+      "definition_resolved": "src-tauri/src/database/redis.rs:127",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19063,7 +19067,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19076,7 +19081,7 @@
       "rust_path": "database::redis::dbx_redis_delete_key",
       "registered_at": "src-tauri/src/lib.rs:1007",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:393"
+        "src-tauri/src/database/redis.rs:152"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19088,12 +19093,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:393",
+      "definition_resolved": "src-tauri/src/database/redis.rs:152",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19101,7 +19106,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String"
@@ -19112,7 +19118,7 @@
       "rust_path": "database::redis::dbx_redis_set_ttl",
       "registered_at": "src-tauri/src/lib.rs:1008",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:406"
+        "src-tauri/src/database/redis.rs:182"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19124,12 +19130,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:406",
+      "definition_resolved": "src-tauri/src/database/redis.rs:182",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19137,7 +19143,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19149,7 +19156,7 @@
       "rust_path": "database::redis::dbx_redis_create_key",
       "registered_at": "src-tauri/src/lib.rs:1009",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:426"
+        "src-tauri/src/database/redis.rs:206"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19161,12 +19168,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:426",
+      "definition_resolved": "src-tauri/src/database/redis.rs:206",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19174,8 +19181,9 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
-        "request: RedisCreateKeyRequest"
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
+        "request: redis_face::RedisCreateKeyRequest"
       ]
     },
     {
@@ -19183,7 +19191,7 @@
       "rust_path": "database::redis::dbx_redis_hash_del",
       "registered_at": "src-tauri/src/lib.rs:1010",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:522"
+        "src-tauri/src/database/redis.rs:232"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19195,12 +19203,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:522",
+      "definition_resolved": "src-tauri/src/database/redis.rs:232",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19208,7 +19216,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19220,7 +19229,7 @@
       "rust_path": "database::redis::dbx_redis_hash_set",
       "registered_at": "src-tauri/src/lib.rs:1011",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:542"
+        "src-tauri/src/database/redis.rs:256"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19232,12 +19241,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:542",
+      "definition_resolved": "src-tauri/src/database/redis.rs:256",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19245,7 +19254,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19259,7 +19269,7 @@
       "rust_path": "database::redis::dbx_redis_list_remove",
       "registered_at": "src-tauri/src/lib.rs:1012",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:566"
+        "src-tauri/src/database/redis.rs:282"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19271,12 +19281,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:566",
+      "definition_resolved": "src-tauri/src/database/redis.rs:282",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19284,7 +19294,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19296,7 +19307,7 @@
       "rust_path": "database::redis::dbx_redis_list_push",
       "registered_at": "src-tauri/src/lib.rs:1013",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:586"
+        "src-tauri/src/database/redis.rs:306"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19308,12 +19319,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:586",
+      "definition_resolved": "src-tauri/src/database/redis.rs:306",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19321,7 +19332,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19334,7 +19346,7 @@
       "rust_path": "database::redis::dbx_redis_list_set",
       "registered_at": "src-tauri/src/lib.rs:1014",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:608"
+        "src-tauri/src/database/redis.rs:331"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19346,12 +19358,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:608",
+      "definition_resolved": "src-tauri/src/database/redis.rs:331",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19359,7 +19371,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19372,7 +19385,7 @@
       "rust_path": "database::redis::dbx_redis_set_remove",
       "registered_at": "src-tauri/src/lib.rs:1015",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:630"
+        "src-tauri/src/database/redis.rs:356"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19384,12 +19397,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:630",
+      "definition_resolved": "src-tauri/src/database/redis.rs:356",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19397,7 +19410,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19409,7 +19423,7 @@
       "rust_path": "database::redis::dbx_redis_set_add",
       "registered_at": "src-tauri/src/lib.rs:1016",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:650"
+        "src-tauri/src/database/redis.rs:380"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19421,12 +19435,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:650",
+      "definition_resolved": "src-tauri/src/database/redis.rs:380",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19434,7 +19448,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19447,7 +19462,7 @@
       "rust_path": "database::redis::dbx_redis_zrem",
       "registered_at": "src-tauri/src/lib.rs:1017",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:672"
+        "src-tauri/src/database/redis.rs:405"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19459,12 +19474,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:672",
+      "definition_resolved": "src-tauri/src/database/redis.rs:405",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19472,7 +19487,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19484,7 +19500,7 @@
       "rust_path": "database::redis::dbx_redis_zadd",
       "registered_at": "src-tauri/src/lib.rs:1018",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:692"
+        "src-tauri/src/database/redis.rs:429"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19496,12 +19512,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:692",
+      "definition_resolved": "src-tauri/src/database/redis.rs:429",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19509,7 +19525,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "key_raw: String",
@@ -19523,7 +19540,7 @@
       "rust_path": "database::redis::dbx_redis_execute_command",
       "registered_at": "src-tauri/src/lib.rs:1019",
       "definition_candidates": [
-        "src-tauri/src/database/redis.rs:716"
+        "src-tauri/src/database/redis.rs:455"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19535,12 +19552,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/redis.rs:716",
+      "definition_resolved": "src-tauri/src/database/redis.rs:455",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19548,7 +19565,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "db: u32",
         "command: String",

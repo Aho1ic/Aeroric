@@ -5,6 +5,8 @@
 > child task because `.trellis/` is gitignored here — a plan artifact that exists on one machine is
 > not a checklist. Companion: `docs/native/command-map.json`, `docs/native/reachability-triage.md`.
 >
+> **Corrected 2026-10-11 (P8-05 切片一百).** redis 面 18 条主体＋适配器/归一化/补充安全闸上收 core `database::redis_face`：redis.rs 8 条单测随迁（test items 8→0），redis.rs 只剩转发壳（moved 相应减少）；register 标量按生成值（testOnlyItemsExcluded 53→45、pubSymbolsTotal 207→204）。
+>
 > **Corrected 2026-10-11 (P8-05 切片九十九).** rag_index／rag_context 主体上收 core `notebook::rag::face`：commands.rs 两符号迁走（moved 14→12；本地 ContextOptionsDto/ContextBundle 死代码删除，TestOptionsDto 测试半边随迁）；register 标量按生成值（pubSymbolsTotal 209→207）。commands.rs 剩 search/probe/cancel/clear/stats 等本地命令与转发壳。
 >
 > **Corrected 2026-10-11 (P8-05 切片九十八).** schema／驱动面 7 条改宿主转发壳：drivers.rs 的静态清单测试随实现迁 core `database::schema_face`（schema.rs 6 条本无测试）；register 标量按生成值（testOnlyItemsExcluded 54→53、pubSymbolsTotal 210→209）。schema.rs/drivers.rs 全部成为转发壳。
@@ -64,7 +66,7 @@ whose body moves out while a same-named wrapper stays behind. Destination mirror
 | 9 | `src-tauri/src/database/mod.rs` | `core/crates/aeroric-core/database/mod.rs` | 0 | Mod connection_secrets, Mod connections, Mod dbx_state, Mod drivers, Mod grid, Mod import_export, Mod legacy_sqlite, Mod mongo, Mod query, Mod redis, Mod schema, Mod transfer, Mod types (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
 | 10 | `src-tauri/src/database/mongo.rs` | `core/crates/aeroric-core/database/mongo.rs` | 6 | dbx_mongo_delete_documents(), dbx_mongo_find_documents(), dbx_mongo_insert_document(), dbx_mongo_list_collections(), dbx_mongo_list_databases(), dbx_mongo_update_document() (1 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; credential owner |
 | 11 | `src-tauri/src/database/query.rs` | `core/crates/aeroric-core/database/query.rs` | 23 | dbx_assess_production_sql(), dbx_assess_production_target(), dbx_build_create_database_sql(), dbx_build_create_schema_sql(), dbx_build_database_search_sql(), dbx_build_drop_database_sql(), dbx_build_drop_object_sql(), dbx_build_drop_schema_sql(), dbx_build_drop_table_child_object_sql(), dbx_build_drop_table_sql(), dbx_build_duckdb_attach_database_sql(), dbx_build_duplicate_table_structure_sql(), dbx_build_empty_table_sql(), dbx_build_rename_object_sql(), dbx_build_search_result_where() +8 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; credential owner |
-| 12 | `src-tauri/src/database/redis.rs` | `core/crates/aeroric-core/database/redis.rs` | 18 | Enum AeroricRedisCollectionPage, Struct AeroricRedisValue, Struct RedisCreateKeyRequest, dbx_redis_create_key(), dbx_redis_delete_key(), dbx_redis_execute_command(), dbx_redis_get_value(), dbx_redis_hash_del(), dbx_redis_hash_set(), dbx_redis_list_databases(), dbx_redis_list_push(), dbx_redis_list_remove(), dbx_redis_list_set(), dbx_redis_load_more(), dbx_redis_scan_keys() +6 more (8 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; credential owner |
+| 12 | `src-tauri/src/database/redis.rs` | `core/crates/aeroric-core/database/redis.rs` | 18 | dbx_redis_create_key(), dbx_redis_delete_key(), dbx_redis_execute_command(), dbx_redis_get_value(), dbx_redis_hash_del(), dbx_redis_hash_set(), dbx_redis_list_databases(), dbx_redis_list_push(), dbx_redis_list_remove(), dbx_redis_list_set(), dbx_redis_load_more(), dbx_redis_scan_keys(), dbx_redis_set_add(), dbx_redis_set_remove(), dbx_redis_set_ttl() +3 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; credential owner |
 | 13 | `src-tauri/src/database/schema.rs` | `core/crates/aeroric-core/database/schema.rs` | 6 | dbx_get_columns(), dbx_get_object_source(), dbx_get_table_ddl(), dbx_list_databases(), dbx_list_objects(), dbx_list_schemas() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; credential owner |
 | 14 | `src-tauri/src/database/transfer.rs` | `core/crates/aeroric-core/database/transfer.rs` | 7 | dbx_build_data_compare_sync_plan(), dbx_cancel_transfer(), dbx_generate_schema_sync_sql(), dbx_prepare_data_compare(), dbx_prepare_data_compare_from_tables(), dbx_prepare_schema_diff(), dbx_start_transfer() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
 | 15 | `src-tauri/src/database/types.rs` | `core/crates/aeroric-core/database/types.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
@@ -81,8 +83,8 @@ whose body moves out while a same-named wrapper stays behind. Destination mirror
 {
   "files": 20,
   "commands": 168,
-  "testOnlyItemsExcluded": 53,
-  "pubSymbolsTotal": 207,
+  "testOnlyItemsExcluded": 45,
+  "pubSymbolsTotal": 204,
   "withAppHandle": [
     "src-tauri/src/database/connections.rs",
     "src-tauri/src/database/grid.rs",

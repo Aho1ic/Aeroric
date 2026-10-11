@@ -207,8 +207,6 @@ async fn malformed_params_refuse_and_unregistered_family_stays_unsupported() {
 
     // 尚未上收的驱动专属面必须保持不可达：宿主不虚报能力。
     for method in [
-        "database.dbx_redis_get_value",
-        "database.dbx_redis_scan_keys",
         "database.dbx_mongo_find_documents",
         "database.dbx_start_transfer",
         "database.dbx_import_table_file",

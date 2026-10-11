@@ -196,7 +196,9 @@ fn invalid_external_home_refuses_before_startup_or_managed_directory_creation() 
             .spawn()
             .unwrap();
         let mut server = Server(Some(child));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // 防挂看门狗（不是行为断言）：切片95–100 后二进制变大，并行冷启动的
+        // 签名校验能超过 2s——真挂（serve 循环不退）仍会被杀并记 stayed_running。
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut stayed_running = false;
         while server.0.as_mut().unwrap().try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
