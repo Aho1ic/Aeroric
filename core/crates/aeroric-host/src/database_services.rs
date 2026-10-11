@@ -17,6 +17,7 @@ use aeroric_core::database::dbx_state::DbxState;
 use aeroric_core::database::execution;
 use aeroric_core::database::grid as grid_biz;
 use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_core::database::schema_face;
 use aeroric_core::database::sql_builders as builders;
 use aeroric_core::events::EventLog;
 use aeroric_core::maintenance::StartupDegradationLog;
@@ -50,6 +51,177 @@ impl HostedDbx {
                 state
             })
             .await
+    }
+}
+
+/// 切片九十八：schema／驱动面统一 decode→call→reply（连接面 async 直接
+/// await；driver manifest 是静态资产，无需连接）。
+async fn schema_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    _log: Arc<EventLog>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let params = request.params.clone();
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let id = request.id.clone();
+    let opt_string = |name: &str| params.get(name).and_then(Value::as_str).map(str::to_string);
+    let state = hosted.state(&context).await;
+    match method {
+        "database.dbx_list_databases" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            match schema_face::list_databases(state, &paths, &store, connection_id).await {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_list_schemas" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            match schema_face::list_schemas(
+                state,
+                &paths,
+                &store,
+                connection_id,
+                opt_string("database"),
+            )
+            .await
+            {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_list_objects" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let object_types = params
+                .get("objectTypes")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                });
+            match schema_face::list_objects(
+                state,
+                &paths,
+                &store,
+                connection_id,
+                opt_string("database"),
+                opt_string("schema"),
+                opt_string("filter"),
+                params
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
+                params
+                    .get("offset")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
+                object_types,
+            )
+            .await
+            {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_get_columns" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let Some(table) = str_param(&params, "table") else {
+                return invalid(&request, "table (string)");
+            };
+            match schema_face::get_columns(
+                state,
+                &paths,
+                &store,
+                connection_id,
+                opt_string("database"),
+                opt_string("schema"),
+                table,
+            )
+            .await
+            {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_get_table_ddl" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let Some(table) = str_param(&params, "table") else {
+                return invalid(&request, "table (string)");
+            };
+            match schema_face::get_table_ddl(
+                state,
+                &paths,
+                &store,
+                connection_id,
+                opt_string("database"),
+                opt_string("schema"),
+                table,
+            )
+            .await
+            {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_get_object_source" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let Some(name) = str_param(&params, "name") else {
+                return invalid(&request, "name (string)");
+            };
+            let Some(object_type) = params.get("objectType").and_then(Value::as_str) else {
+                return invalid(&request, "objectType (string)");
+            };
+            let Ok(kind) = serde_json::from_value::<
+                aeroric_core::database::schema_face::ObjectSourceKind,
+            >(Value::String(object_type.to_string())) else {
+                return invalid(&request, "objectType (known object source kind)");
+            };
+            match schema_face::get_object_source(
+                state,
+                &paths,
+                &store,
+                connection_id,
+                opt_string("database"),
+                opt_string("schema"),
+                name,
+                kind,
+                opt_string("signature"),
+            )
+            .await
+            {
+                Ok(result) => typed_reply(&request, &result),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        _ => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("unknown database schema method {method}"),
+        ),
     }
 }
 
@@ -841,6 +1013,117 @@ pub fn register_database_services(
                         "database.respond_dbx_production_confirmation",
                     )
                     .await
+                })
+            }),
+        );
+    }
+    // ── 切片九十八（database 收尾）：schema／驱动面 7 条 ──
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_list_databases",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_list_databases").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_list_schemas",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_list_schemas").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_list_objects",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_list_objects").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_get_columns",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_get_columns").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_get_table_ddl",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_get_table_ddl").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_get_object_source",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    schema_dispatch(request, context, log, dbx, "database.dbx_get_object_source")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_driver_manifest",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    match schema_face::driver_manifest_value() {
+                        Ok(value) => ok(&request, value),
+                        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+                    }
                 })
             }),
         );

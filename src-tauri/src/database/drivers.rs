@@ -1,36 +1,15 @@
-use serde_json::Value;
-
-const DRIVER_MANIFEST_JSON: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../dbx/crates/dbx-core/assets/database-drivers.manifest.json"
-));
-
-pub(crate) fn driver_manifest_value() -> Result<Value, String> {
-    serde_json::from_str(DRIVER_MANIFEST_JSON).map_err(|error| error.to_string())
-}
+// ── 切片九十八（database 收尾）：驱动清单改宿主转发壳。静态资产读取在
+// core `database::schema_face`（include_str 路径随 crate 换相对深度）。
 
 #[tauri::command]
-pub async fn dbx_driver_manifest() -> Result<Value, String> {
-    driver_manifest_value()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::driver_manifest_value;
-
-    #[test]
-    fn dbx_driver_manifest_contains_core_drivers() {
-        let manifest = driver_manifest_value().unwrap();
-        let drivers = manifest["drivers"].as_array().unwrap();
-        let driver_types = drivers
-            .iter()
-            .filter_map(|driver| driver["dbType"].as_str())
-            .collect::<Vec<_>>();
-
-        assert!(driver_types.contains(&"sqlite"));
-        assert!(driver_types.contains(&"postgres"));
-        assert!(driver_types.contains(&"mysql"));
-        assert!(driver_types.contains(&"redis"));
-        assert!(driver_types.contains(&"mongodb"));
-    }
+pub async fn dbx_driver_manifest<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_driver_manifest",
+        serde_json::json!({}),
+        async { aeroric_core::database::schema_face::driver_manifest_value() },
+    )
+    .await
 }

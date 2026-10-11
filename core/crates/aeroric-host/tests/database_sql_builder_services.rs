@@ -614,13 +614,9 @@ async fn unregistered_database_family_stays_unsupported() {
     let host = Harness::start("sql-builders-boundary").await;
     let (mut reader, mut writer) = authenticated(&host).await;
 
-    // 切片九十七上收了执行面 11 条；仍未上收的 schema/驱动/传输面必须保持
-    // 不可达：宿主不虚报能力。
+    // 切片九十七/九十八上收了执行面与 schema／驱动面；仍未上收的驱动专属
+    // 面必须保持不可达：宿主不虚报能力。
     for method in [
-        "database.dbx_list_databases",
-        "database.dbx_list_schemas",
-        "database.dbx_list_objects",
-        "database.dbx_get_columns",
         "database.dbx_redis_get_value",
         "database.dbx_mongo_find_documents",
         "database.dbx_start_transfer",

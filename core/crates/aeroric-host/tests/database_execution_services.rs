@@ -304,13 +304,9 @@ async fn unregistered_database_methods_stay_unsupported() {
     let host = Harness::start("execution-boundary").await;
     let (mut reader, mut writer) = authenticated(&host).await;
 
-    // 尚未上收的方法必须保持不可达：宿主不虚报能力（dbx_list_databases 等
-    // schema/驱动面属后续切片；本切片只到执行面 11 条）。
+    // 切片九十八上收了 schema／驱动面 7 条；仍未上收的驱动专属面必须保持
+    // 不可达：宿主不虚报能力。
     for method in [
-        "database.dbx_list_databases",
-        "database.dbx_list_schemas",
-        "database.dbx_list_objects",
-        "database.dbx_get_columns",
         "database.dbx_redis_get_value",
         "database.dbx_mongo_find_documents",
         "database.dbx_start_transfer",
