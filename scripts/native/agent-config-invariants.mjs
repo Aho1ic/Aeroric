@@ -165,7 +165,9 @@ assert.match(home, /std::env::var_os\("USERPROFILE"\)/);
 assert.match(home, /\.filter\(\|path\| path\.is_absolute\(\)\)/);
 assert.doesNotMatch(home, /std::fs|std::process|unwrap_or|canonicalize|trim\(/);
 const serve = functionBody(cli, "serve");
-assert(serve.indexOf("match agent_config_external_home()") < serve.indexOf("match run_startup("));
+// 切片95：run_startup 改名 run_startup_with_secrets（OS 密钥适配仅由生产 CLI 显式注入），
+// 顺序语义不变——可信 HOME 捕获仍必须先于 startup。
+assert(serve.indexOf("match agent_config_external_home()") < serve.indexOf("match run_startup_with_secrets("));
 assert.match(serve, /Err\(error\) => \{\s*eprintln!\("aeroric-cli serve: \{error\}"\);\s*return exit::CONNECT;/);
 assert.match(serve, /agent_config_external_home: Some\(agent_config_external_home\)/);
 assert.match(serve, /AppPaths::with_data_dir\(Path::new\("\/"\), Some\(data_dir\)\)/,

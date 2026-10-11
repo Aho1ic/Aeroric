@@ -297,7 +297,11 @@ impl HostServices {
         );
         crate::ide_services::register_ide_services(&mut set, Arc::clone(&context));
         // P8-05 切片九十四（database 刀零）：legacy SQLite 文件命令的宿主服务面。
-        crate::database_services::register_database_services(&mut set, Arc::clone(&context));
+        crate::database_services::register_database_services(
+            &mut set,
+            Arc::clone(&context),
+            Arc::clone(&wiring.degradations),
+        );
         // P8-05 切片七：文件服务第二批（格式化 / 本地历史 / 复制）。
         crate::file_services2::register_file_services_batch2(
             &mut set,

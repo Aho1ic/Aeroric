@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::database::dbx_connections as dbx;
+use aeroric_core::database::dbx_state::DbxState;
 use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_core::maintenance::StartupDegradationLog;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
 use serde_json::{json, Value};
@@ -21,10 +24,55 @@ use crate::dispatcher::{failure, ServiceSet};
 use crate::services::ok;
 
 const CONNECTIONS_FILE: &str = "database-connections.json";
+const DBX_APP_VERSION: &str = concat!("aeroric-host ", env!("CARGO_PKG_VERSION"));
+
+/// Per service assembly, never process-global: distinct hosts/data dirs must
+/// not share pools, connection registries or lazy initialization.
+struct HostedDbx {
+    state: tokio::sync::OnceCell<DbxState>,
+    operations: tokio::sync::Mutex<()>,
+    degradations: Arc<StartupDegradationLog>,
+}
+
+impl HostedDbx {
+    async fn state(&self, context: &CoreContext) -> &DbxState {
+        self.state
+            .get_or_init(|| async {
+                let (state, degradation) =
+                    DbxState::new(context.paths.data_dir(), DBX_APP_VERSION).await;
+                if let Some(reason) = degradation {
+                    self.degradations.record("dbx-state", reason, ":memory:");
+                }
+                state
+            })
+            .await
+    }
+}
+
+fn dbx_paths(context: &CoreContext) -> dbx::DbxConnectionPaths {
+    dbx::DbxConnectionPaths::from_data_dir(context.paths.data_dir())
+}
+
+fn dbx_store(
+    context: &CoreContext,
+) -> aeroric_core::database::dbx_secrets::SecretStoreDbxSecretStore<'_> {
+    aeroric_core::database::dbx_secrets::SecretStoreDbxSecretStore {
+        store: context.secrets.as_ref(),
+    }
+}
 
 /// 注册点逐条写成源码字面量：本仓的覆盖率/台账扫描器靠 `set.register("…"`
 /// 的字面量找注册，循环＋变量会变成覆盖率假缺口（切片九的同款陷阱）。
-pub fn register_database_services(set: &mut ServiceSet, context: Arc<CoreContext>) {
+pub fn register_database_services(
+    set: &mut ServiceSet,
+    context: Arc<CoreContext>,
+    degradations: Arc<StartupDegradationLog>,
+) {
+    let dbx = Arc::new(HostedDbx {
+        state: tokio::sync::OnceCell::new(),
+        operations: tokio::sync::Mutex::new(()),
+        degradations,
+    });
     {
         let context = Arc::clone(&context);
         set.register(
@@ -158,6 +206,68 @@ pub fn register_database_services(set: &mut ServiceSet, context: Arc<CoreContext
         );
     }
 
+    {
+        // dbx 五条的命令体是 tokio RwLock 的 async 业务（连接池注册在 async
+        // 上下文），直接 await dispatch；spawn_blocking 里拿不到运行时。
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_list_connections",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_save_connection",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_delete_connection",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_test_connection",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_connect",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
     {
         let context = Arc::clone(&context);
         set.register(
@@ -308,6 +418,103 @@ fn dispatch(request: Request, context: Arc<CoreContext>, method: &str) -> Frame 
             ErrorCode::InvalidArgument,
             &format!("unknown database method {method}"),
         ),
+    }
+}
+
+/// Decode wire arguments without IO; initialization itself needs the writer
+/// because list can create storage, chmod JSON and migrate credentials on read.
+async fn dbx_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    hosted: Arc<HostedDbx>,
+) -> Frame {
+    use aeroric_core::database::dbx_types::AeroricDbConnectionConfig;
+
+    enum Operation {
+        List,
+        Save(AeroricDbConnectionConfig),
+        Delete(String),
+        Test(AeroricDbConnectionConfig),
+        Connect(String),
+    }
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let operation = match request.method.as_str() {
+        "database.dbx_list_connections" => Operation::List,
+        "database.dbx_save_connection" | "database.dbx_test_connection" => {
+            let connection =
+                match serde_json::from_value(param_value(&request.params, "connection")) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return failure(
+                            request.id.clone(),
+                            ErrorCode::InvalidArgument,
+                            &format!("connection: {error}"),
+                        )
+                    }
+                };
+            if request.method == "database.dbx_save_connection" {
+                Operation::Save(connection)
+            } else {
+                Operation::Test(connection)
+            }
+        }
+        "database.dbx_delete_connection" | "database.dbx_connect" => {
+            let Some(id) = str_param(&request.params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            if request.method == "database.dbx_delete_connection" {
+                Operation::Delete(id)
+            } else {
+                Operation::Connect(id)
+            }
+        }
+        _ => {
+            return failure(
+                request.id.clone(),
+                ErrorCode::InvalidArgument,
+                "unknown database dbx method",
+            )
+        }
+    };
+    // Check after queueing, not before: a request waiting behind another DBX
+    // operation must not reuse an admission made against an earlier lease.
+    let _operation = hosted.operations.lock().await;
+    if let Some(refusal) = crate::file_access::write_refusal(&request, &context) {
+        return refusal;
+    }
+    let state = hosted.state(&context).await;
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let result = match operation {
+        Operation::List => {
+            dbx::list_connections(state, &paths, &store)
+                .await
+                .and_then(|connections| {
+                    serde_json::to_value(connections).map_err(|error| error.to_string())
+                })
+        }
+        Operation::Save(connection) => dbx::save_connection(state, &paths, &store, connection)
+            .await
+            .map(|()| Value::Null),
+        Operation::Delete(id) => dbx::delete_connection(state, &paths, &store, &id)
+            .await
+            .map(|()| Value::Null),
+        Operation::Test(connection) => dbx::test_connection(state, &paths, &store, connection)
+            .await
+            .map(|()| Value::Null),
+        Operation::Connect(id) => dbx::connect(state, &paths, &store, &id)
+            .await
+            .map(|()| Value::Null),
+    };
+    match result {
+        Ok(value) => ok(&request, value),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
     }
 }
 

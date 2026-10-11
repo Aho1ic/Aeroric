@@ -11,3 +11,6 @@ pub(crate) mod redis;
 pub(crate) mod schema;
 pub(crate) mod transfer;
 pub(crate) mod types;
+
+#[cfg(test)]
+mod connection_command_tests;

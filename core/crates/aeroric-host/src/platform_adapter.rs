@@ -93,6 +93,50 @@ fn read_clipboard_file_paths_sync() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+/// 宿主进程的 OS 钥匙串实现（core `SecretStore` 端口）。service 与 account
+/// 方案**与 Tauri 适配层逐字一致**（`com.aeroric.desktop` ＋
+/// `ssh-password:`/`dbx-connection-secrets:`/`notebook:` 前缀的 account）——
+/// 两个进程写同一台机器的同一把钥匙串，Embedded 与 External 交接时凭据不换家。
+/// Linux 上 key 存在会话 keyring、重启后要重填的代价与 `secrets.rs` 模块注释
+/// 同源（本机平台能力，不是宿主化引入的）。
+pub struct KeyringSecrets;
+
+impl aeroric_core::context::SecretStore for KeyringSecrets {
+    fn get(&self, key: &aeroric_core::context::SecretKey) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
+            .map_err(|error| error.to_string())?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value).filter(|value| !value.is_empty())),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn set(&self, key: &aeroric_core::context::SecretKey, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
+            .map_err(|error| error.to_string())?;
+        if value.is_empty() {
+            match entry.delete_credential() {
+                Ok(()) => Ok(()),
+                Err(keyring::Error::NoEntry) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
+        } else {
+            entry.set_password(value).map_err(|error| error.to_string())
+        }
+    }
+
+    fn delete(&self, key: &aeroric_core::context::SecretKey) -> Result<(), String> {
+        let entry = keyring::Entry::new("com.aeroric.desktop", &key.0)
+            .map_err(|error| error.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::parse_clipboard_file_paths_output;

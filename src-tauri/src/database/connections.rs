@@ -1,696 +1,150 @@
 use std::fs;
 use std::path::PathBuf;
 
-use dbx_core::connection::metadata_connection_config;
-use dbx_core::models::connection::{
-    default_connect_timeout_secs, default_idle_timeout_secs, default_keepalive_interval_secs,
-    default_query_timeout_secs, default_redis_key_separator, ConnectionConfig, DatabaseType,
-};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use tauri::State;
-use url::{form_urlencoded, Url};
+use aeroric_core::database::dbx_connections::{self as biz, DbxConnectionPaths};
+use dbx_core::models::connection::DatabaseType;
+use tauri::{Manager, State};
 
-use super::connection_secrets::{
-    delete_connection_secrets, hydrate_blank_secrets, hydrate_connections_on_load,
-    is_sensitive_key, is_sensitive_url_parameter, prepare_connections_for_disk,
-    save_password_enabled, KeyringDbxConnectionSecretStore,
-};
+pub(crate) use aeroric_core::database::dbx_connections::{ensure_writable, parse_core_config};
+
+use super::connection_secrets::KeyringDbxConnectionSecretStore;
 use super::dbx_state::DbxState;
-use super::types::{AeroricDbConnectionConfig, DbxDatabaseType, ProjectScope};
+use super::types::AeroricDbConnectionConfig;
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-enum LegacyEndpoint {
-    Local {
-        path: String,
-    },
-    Ssh {
-        connection: LegacySshConnection,
-        path: String,
-        #[serde(default)]
-        project_path: Option<String>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacySshConnection {
-    id: String,
-    #[serde(default)]
-    remote_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyConnection {
-    id: String,
-    name: String,
-    endpoint: LegacyEndpoint,
-    #[serde(default)]
-    read_only: Option<bool>,
-    created_at: i64,
-    #[serde(default)]
-    last_opened_at: Option<i64>,
-}
-
-fn v2_connections_path() -> Result<PathBuf, String> {
-    Ok(crate::storage::aeroric_dir()?.join("database-connections-v2.json"))
-}
-
-fn legacy_connections_path() -> Result<PathBuf, String> {
-    Ok(crate::storage::aeroric_dir()?.join("database-connections.json"))
-}
-
-fn dbx_type_to_core(db_type: DbxDatabaseType) -> DatabaseType {
-    match db_type {
-        DbxDatabaseType::Sqlite => DatabaseType::Sqlite,
-        DbxDatabaseType::Mysql => DatabaseType::Mysql,
-        DbxDatabaseType::Postgres => DatabaseType::Postgres,
-        DbxDatabaseType::Duckdb => DatabaseType::DuckDb,
-        DbxDatabaseType::Redis => DatabaseType::Redis,
-        DbxDatabaseType::Mongodb => DatabaseType::MongoDb,
-        DbxDatabaseType::Sqlserver => DatabaseType::SqlServer,
-        DbxDatabaseType::Oracle => DatabaseType::Oracle,
-        DbxDatabaseType::Clickhouse => DatabaseType::ClickHouse,
-    }
-}
-
-fn core_type_to_dbx(db_type: DatabaseType) -> Option<DbxDatabaseType> {
-    match db_type {
-        DatabaseType::Sqlite => Some(DbxDatabaseType::Sqlite),
-        DatabaseType::Mysql => Some(DbxDatabaseType::Mysql),
-        DatabaseType::Postgres => Some(DbxDatabaseType::Postgres),
-        DatabaseType::DuckDb => Some(DbxDatabaseType::Duckdb),
-        DatabaseType::Redis => Some(DbxDatabaseType::Redis),
-        DatabaseType::MongoDb => Some(DbxDatabaseType::Mongodb),
-        DatabaseType::SqlServer => Some(DbxDatabaseType::Sqlserver),
-        DatabaseType::Oracle => Some(DbxDatabaseType::Oracle),
-        DatabaseType::ClickHouse => Some(DbxDatabaseType::Clickhouse),
-        _ => None,
-    }
-}
-
-fn default_connection_config(
-    id: &str,
-    name: &str,
-    db_type: DbxDatabaseType,
-    host: String,
-    port: u16,
-    database: Option<String>,
-    read_only: bool,
-) -> ConnectionConfig {
-    ConnectionConfig {
-        id: id.to_string(),
-        name: name.to_string(),
-        note: String::new(),
-        db_type: dbx_type_to_core(db_type),
-        driver_profile: None,
-        driver_label: None,
-        url_params: None,
-        agent_java_options: Vec::new(),
-        host,
-        port,
-        username: String::new(),
-        password: String::new(),
-        database,
-        default_schema: None,
-        visible_databases: None,
-        visible_schemas: None,
-        show_system_schemas: false,
-        attached_databases: Vec::new(),
-        init_script: None,
-        color: None,
-        docs_notes_path: None,
-        transport_layers: Vec::new(),
-        connect_timeout_secs: default_connect_timeout_secs(),
-        query_timeout_secs: default_query_timeout_secs(),
-        idle_timeout_secs: default_idle_timeout_secs(),
-        keepalive_interval_secs: default_keepalive_interval_secs(),
-        ssl: false,
-        ca_cert_path: String::new(),
-        client_cert_path: String::new(),
-        client_key_path: String::new(),
-        sysdba: false,
-        oracle_connection_type: None,
-        connection_string: None,
-        redis_connection_mode: None,
-        redis_sentinel_master: String::new(),
-        redis_sentinel_nodes: String::new(),
-        redis_sentinel_username: String::new(),
-        redis_sentinel_password: String::new(),
-        redis_sentinel_tls: false,
-        redis_cluster_nodes: String::new(),
-        redis_key_separator: default_redis_key_separator(),
-        redis_scan_page_size: None,
-        redis_database_aliases: std::collections::HashMap::new(),
-        etcd_endpoints: String::new(),
-        gbase_server: String::new(),
-        informix_server: String::new(),
-        external_config: None,
-        jdbc_driver_class: None,
-        jdbc_driver_paths: Vec::new(),
-        one_time: false,
-        // 必须是 true。dbx 侧对这个字段用了 `#[serde(default = "default_true")]`,
-        // 因为 false 会让已保存连接在下次保存时删掉本地存储的密码。
-        save_password: true,
-        read_only,
-        is_production: false,
-        production_databases: Vec::new(),
-        database_info: None,
-    }
-}
-
-fn legacy_to_aeroric(connection: LegacyConnection) -> AeroricDbConnectionConfig {
-    let read_only = connection.read_only.unwrap_or(false);
-    let (host, project_scope) = match connection.endpoint {
-        LegacyEndpoint::Local { path } => (
-            path,
-            Some(ProjectScope {
-                kind: "local".to_string(),
-                project_root: None,
-                remote_project_path: None,
-                ssh_connection_id: None,
-            }),
-        ),
-        LegacyEndpoint::Ssh {
-            connection,
-            path,
-            project_path,
-        } => {
-            let remote_project_path = project_path.or(connection.remote_path);
-            (
-                path,
-                Some(ProjectScope {
-                    kind: "ssh".to_string(),
-                    project_root: None,
-                    remote_project_path,
-                    ssh_connection_id: Some(connection.id),
-                }),
-            )
-        }
-    };
-    let dbx = serde_json::to_value(default_connection_config(
-        &connection.id,
-        &connection.name,
-        DbxDatabaseType::Sqlite,
-        host,
-        0,
-        None,
-        read_only,
+fn connection_paths() -> Result<DbxConnectionPaths, String> {
+    Ok(DbxConnectionPaths::from_data_dir(
+        &crate::storage::aeroric_dir()?,
     ))
-    .unwrap_or_else(|_| json!({}));
-    AeroricDbConnectionConfig {
-        id: connection.id,
-        name: connection.name,
-        db_type: DbxDatabaseType::Sqlite,
-        read_only,
-        project_scope,
-        dbx,
-        created_at: connection.created_at,
-        last_opened_at: connection.last_opened_at,
-        migrated_from_legacy: Some(true),
-        connection_group: None,
-        pinned: None,
-    }
-}
-
-fn redact_url_params(value: &str) -> String {
-    let mut serializer = form_urlencoded::Serializer::new(String::new());
-    for (key, value) in form_urlencoded::parse(value.as_bytes()) {
-        serializer.append_pair(
-            key.as_ref(),
-            if is_sensitive_url_parameter(key.as_ref()) {
-                ""
-            } else {
-                value.as_ref()
-            },
-        );
-    }
-    serializer.finish()
-}
-
-fn redact_connection_string(value: &str) -> String {
-    let Ok(mut url) = Url::parse(value) else {
-        // Unknown connection-string formats cannot be safely inspected. Returning
-        // an empty value keeps the renderer outside the credential boundary; the
-        // save path restores the existing value when the user leaves it untouched.
-        return String::new();
-    };
-    if url.cannot_be_a_base() {
-        return String::new();
-    }
-    let _ = url.set_password(None);
-    url.set_fragment(None);
-    if let Some(query) = url.query() {
-        let redacted = redact_url_params(query);
-        url.set_query((!redacted.is_empty()).then_some(&redacted));
-    }
-    url.to_string()
-}
-
-fn redact_sensitive_json(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map.iter_mut() {
-                let normalized_key = key.to_ascii_lowercase();
-                if normalized_key == "connection_string" {
-                    if let Some(connection_string) = value.as_str() {
-                        *value = Value::String(redact_connection_string(connection_string));
-                    }
-                } else if normalized_key == "url_params" {
-                    if let Some(params) = value.as_str() {
-                        *value = Value::String(redact_url_params(params));
-                    }
-                } else if is_sensitive_key(&normalized_key) {
-                    *value = Value::String(String::new());
-                } else {
-                    redact_sensitive_json(value);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn sanitized(connection: &AeroricDbConnectionConfig) -> AeroricDbConnectionConfig {
-    let mut next = connection.clone();
-    redact_sensitive_json(&mut next.dbx);
-    next
-}
-
-pub(crate) fn parse_core_config(
-    connection: &AeroricDbConnectionConfig,
-) -> Result<ConnectionConfig, String> {
-    let mut dbx = connection.dbx.clone();
-    if let Value::Object(config) = &mut dbx {
-        let legacy_sysdba = config.remove("oracle_sysdba");
-        if !config.contains_key("sysdba") {
-            if let Some(Value::Bool(sysdba)) = legacy_sysdba {
-                config.insert("sysdba".to_string(), Value::Bool(sysdba));
-            }
-        }
-    }
-    let mut config: ConnectionConfig = serde_json::from_value(dbx).map_err(|e| e.to_string())?;
-    config.id = connection.id.clone();
-    config.name = connection.name.clone();
-    config.db_type = dbx_type_to_core(connection.db_type);
-    config.read_only = connection.read_only;
-    Ok(config.canonicalized())
-}
-
-fn normalize_incoming(
-    mut connection: AeroricDbConnectionConfig,
-) -> Result<AeroricDbConnectionConfig, String> {
-    if connection.id.trim().is_empty() {
-        return Err("Connection id is required".to_string());
-    }
-    if connection.name.trim().is_empty() {
-        return Err("Connection name is required".to_string());
-    }
-    if let Ok(config) = parse_core_config(&connection) {
-        if let Some(db_type) = core_type_to_dbx(config.db_type) {
-            connection.db_type = db_type;
-        }
-        connection.dbx = serde_json::to_value(config).map_err(|e| e.to_string())?;
-    }
-    Ok(connection)
-}
-
-async fn load_connections_from_disk() -> Result<Vec<AeroricDbConnectionConfig>, String> {
-    let v2_path = v2_connections_path()?;
-    if v2_path.exists() {
-        crate::storage::ensure_private_file_permissions(&v2_path)?;
-        let data = fs::read_to_string(v2_path).map_err(|e| e.to_string())?;
-        return serde_json::from_str(&data).map_err(|e| e.to_string());
-    }
-
-    let legacy_path = legacy_connections_path()?;
-    if !legacy_path.exists() {
-        return Ok(Vec::new());
-    }
-    crate::storage::ensure_private_file_permissions(&legacy_path)?;
-    let data = fs::read_to_string(legacy_path).map_err(|e| e.to_string())?;
-    let legacy: Vec<LegacyConnection> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    let migrated: Vec<_> = legacy.into_iter().map(legacy_to_aeroric).collect();
-    save_connections_to_disk(&migrated).await?;
-    Ok(migrated)
-}
-
-async fn save_connections_to_disk(connections: &[AeroricDbConnectionConfig]) -> Result<(), String> {
-    save_connections_to_disk_with(&KeyringDbxConnectionSecretStore, connections).await
-}
-
-async fn save_connections_to_disk_with(
-    store: &dyn super::connection_secrets::DbxConnectionSecretStore,
-    connections: &[AeroricDbConnectionConfig],
-) -> Result<(), String> {
-    crate::storage::ensure_aeroric_dirs()?;
-    // Extract secrets into the keyring and blank them on the disk clone.
-    // Keyring write failure keeps plaintext (legacy fallback) so restart reconnect works.
-    let prepared = prepare_connections_for_disk(store, connections)?;
-    let data = connections_disk_json(&prepared)?;
-    // Connection configs hold plaintext DB passwords only when keyring is down;
-    // keep the file owner-only either way.
-    crate::storage::atomic_write_private(&v2_connections_path()?, &format!("{data}\n"))
-}
-
-fn connections_disk_json(connections: &[AeroricDbConnectionConfig]) -> Result<String, String> {
-    serde_json::to_string_pretty(connections).map_err(|e| e.to_string())
 }
 
 pub(crate) async fn ensure_loaded(state: &DbxState) -> Result<(), String> {
-    if *state.loaded_connections.read().await {
-        return Ok(());
-    }
-    let mut loaded = load_connections_from_disk().await?;
-    // Hydrate secrets from keyring; migrate-on-read when disk still has plaintext.
-    hydrate_connections_on_load(&KeyringDbxConnectionSecretStore, &mut loaded);
-    let mut map = state.connections.write().await;
-    if !*state.loaded_connections.read().await {
-        map.clear();
-        for connection in loaded {
-            map.insert(connection.id.clone(), connection);
-        }
-        *state.loaded_connections.write().await = true;
-    }
-    Ok(())
+    let paths = connection_paths()?;
+    biz::ensure_loaded(state, &paths, &KeyringDbxConnectionSecretStore).await
 }
 
 pub(crate) async fn ensure_connected(state: &DbxState, connection_id: &str) -> Result<(), String> {
-    ensure_loaded(state).await?;
-    let connection = state
-        .connections
-        .read()
-        .await
-        .get(connection_id)
-        .cloned()
-        .ok_or_else(|| "Connection not found".to_string())?;
-    // Backend holds connections for query/reconnect; renderer never needs plaintext.
-    // Fill any blank secret fields from keyring so disk-blanked restarts still connect.
-    let mut connection = connection;
-    hydrate_blank_secrets(&KeyringDbxConnectionSecretStore, &mut connection);
-    let config = parse_core_config(&connection)?;
-    let metadata_config = metadata_connection_config(&config);
-    state
-        .app_state
-        .configs
-        .write()
-        .await
-        .insert(connection_id.to_string(), metadata_config);
-    state
-        .app_state
-        .get_or_create_pool(connection_id, None)
-        .await
-        .map(|_| ())
-}
-
-pub(crate) async fn ensure_writable(
-    state: &DbxState,
-    connection_id: &str,
-    action: &str,
-) -> Result<(), String> {
-    if let Some(name) =
-        dbx_core::query::connection_readonly_name(&state.app_state, connection_id).await
-    {
-        return Err(format!(
-            "Read-only mode: connection '{}' has read-only protection enabled. {} blocked.",
-            name, action
-        ));
-    }
-    Ok(())
-}
-
-async fn persist_state_connections(
-    state: &DbxState,
-) -> Result<Vec<AeroricDbConnectionConfig>, String> {
-    let mut connections: Vec<_> = state.connections.read().await.values().cloned().collect();
-    connections.sort_by(|a, b| {
-        b.last_opened_at
-            .cmp(&a.last_opened_at)
-            .then_with(|| b.created_at.cmp(&a.created_at))
-    });
-    save_connections_to_disk(&connections).await?;
-    Ok(connections
-        .into_iter()
-        .map(|connection| sanitized(&connection))
-        .collect())
+    let paths = connection_paths()?;
+    biz::ensure_connected(
+        state,
+        &paths,
+        &KeyringDbxConnectionSecretStore,
+        connection_id,
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn dbx_list_connections(
-    state: State<'_, DbxState>,
+pub async fn dbx_list_connections<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
 ) -> Result<Vec<AeroricDbConnectionConfig>, String> {
-    ensure_loaded(&state).await?;
-    let mut connections: Vec<_> = state.connections.read().await.values().cloned().collect();
-    connections.sort_by(|a, b| {
-        b.last_opened_at
-            .cmp(&a.last_opened_at)
-            .then_with(|| b.created_at.cmp(&a.created_at))
-    });
-    Ok(connections
-        .into_iter()
-        .map(|connection| sanitized(&connection))
-        .collect())
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_list_connections",
+        serde_json::json!({}),
+        async {
+            let state = app.state::<DbxState>();
+            let paths = connection_paths()?;
+            biz::list_connections(&state, &paths, &KeyringDbxConnectionSecretStore)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_save_connection(
-    state: State<'_, DbxState>,
+pub async fn dbx_save_connection<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     connection: AeroricDbConnectionConfig,
 ) -> Result<(), String> {
-    ensure_loaded(&state).await?;
-    let connection = normalize_incoming(connection)?;
-    // `save_password=false` means "do not keep this password": skip preserve,
-    // blank secrets in memory, and let persist delete the keyring entry.
-    let connection = if save_password_enabled(&connection) {
-        preserve_existing_secrets(&state, connection).await
-    } else {
-        let mut cleared = connection;
-        super::connection_secrets::blank_secrets_in_dbx(&mut cleared.dbx);
-        cleared
-    };
-    let core_config = parse_core_config(&connection)?;
-    state
-        .app_state
-        .configs
-        .write()
-        .await
-        .insert(connection.id.clone(), core_config);
-    state
-        .connections
-        .write()
-        .await
-        .insert(connection.id.clone(), connection);
-    persist_state_connections(&state).await?;
-    Ok(())
-}
-
-async fn preserve_existing_secrets(
-    state: &DbxState,
-    incoming: AeroricDbConnectionConfig,
-) -> AeroricDbConnectionConfig {
-    let map = state.connections.read().await;
-    let existing = match map.get(&incoming.id) {
-        Some(e) => e.clone(),
-        None => return incoming,
-    };
-    drop(map);
-
-    preserve_existing_secrets_from_existing(incoming, &existing)
-}
-
-fn preserve_existing_secrets_from_existing(
-    mut incoming: AeroricDbConnectionConfig,
-    existing: &AeroricDbConnectionConfig,
-) -> AeroricDbConnectionConfig {
-    merge_sensitive_json(&mut incoming.dbx, &existing.dbx);
-    incoming
-}
-
-fn merge_url_params_secrets(incoming: &str, existing: &str) -> String {
-    let existing_secrets: std::collections::HashMap<String, String> =
-        form_urlencoded::parse(existing.as_bytes())
-            .filter(|(key, value)| is_sensitive_url_parameter(key) && !value.is_empty())
-            .map(|(key, value)| (key.to_ascii_lowercase(), value.into_owned()))
-            .collect();
-    let mut serializer = form_urlencoded::Serializer::new(String::new());
-    for (key, value) in form_urlencoded::parse(incoming.as_bytes()) {
-        let restored = if is_sensitive_url_parameter(&key) && value.is_empty() {
-            existing_secrets
-                .get(&key.to_ascii_lowercase())
-                .map(String::as_str)
-        } else {
-            None
-        };
-        serializer.append_pair(key.as_ref(), restored.unwrap_or(value.as_ref()));
-    }
-    serializer.finish()
-}
-
-fn merge_connection_string_secrets(incoming: &str, existing: &str) -> String {
-    if incoming.trim().is_empty() {
-        return existing.to_string();
-    }
-    let (Ok(mut incoming_url), Ok(existing_url)) = (Url::parse(incoming), Url::parse(existing))
-    else {
-        return incoming.to_string();
-    };
-    let same_credential_scope = incoming_url.scheme() == existing_url.scheme()
-        && incoming_url.host_str() == existing_url.host_str()
-        && incoming_url.port_or_known_default() == existing_url.port_or_known_default()
-        && incoming_url.username() == existing_url.username();
-    if !same_credential_scope {
-        return incoming.to_string();
-    }
-    if incoming_url.password().is_none() {
-        if let Some(password) = existing_url.password() {
-            let _ = incoming_url.set_password(Some(password));
-        }
-    }
-    if let Some(incoming_query) = incoming_url.query() {
-        let merged = merge_url_params_secrets(incoming_query, existing_url.query().unwrap_or(""));
-        incoming_url.set_query((!merged.is_empty()).then_some(&merged));
-    }
-    incoming_url.to_string()
-}
-
-fn stable_json_id(value: &Value) -> Option<&str> {
-    value
-        .as_object()?
-        .get("id")?
-        .as_str()
-        .filter(|id| !id.trim().is_empty())
-}
-
-fn merge_sensitive_json(incoming: &mut Value, existing: &Value) {
-    match (incoming, existing) {
-        (Value::Object(incoming_map), Value::Object(existing_map)) => {
-            for (key, existing_value) in existing_map {
-                if key.eq_ignore_ascii_case("connection_string") {
-                    let incoming_text = incoming_map.get(key).and_then(Value::as_str).unwrap_or("");
-                    if let Some(existing_text) = existing_value.as_str() {
-                        incoming_map.insert(
-                            key.clone(),
-                            Value::String(merge_connection_string_secrets(
-                                incoming_text,
-                                existing_text,
-                            )),
-                        );
-                    }
-                    continue;
-                }
-                if key.eq_ignore_ascii_case("url_params") {
-                    let incoming_text = incoming_map.get(key).and_then(Value::as_str).unwrap_or("");
-                    if let Some(existing_text) = existing_value.as_str() {
-                        incoming_map.insert(
-                            key.clone(),
-                            Value::String(merge_url_params_secrets(incoming_text, existing_text)),
-                        );
-                    }
-                    continue;
-                }
-                if is_sensitive_key(key) {
-                    let incoming_empty = incoming_map
-                        .get(key)
-                        .and_then(|value| value.as_str())
-                        .map(|value| value.is_empty())
-                        .unwrap_or(true);
-                    if incoming_empty {
-                        if let Some(existing_text) = existing_value.as_str() {
-                            if !existing_text.is_empty() {
-                                incoming_map
-                                    .insert(key.clone(), Value::String(existing_text.to_string()));
-                            }
-                        }
-                    }
-                    continue;
-                }
-                if let Some(incoming_value) = incoming_map.get_mut(key) {
-                    merge_sensitive_json(incoming_value, existing_value);
-                }
-            }
-        }
-        (Value::Array(incoming_items), Value::Array(existing_items)) => {
-            for incoming_item in incoming_items {
-                let Some(id) = stable_json_id(incoming_item) else {
-                    continue;
-                };
-                if let Some(existing_item) = existing_items
-                    .iter()
-                    .find(|existing_item| stable_json_id(existing_item) == Some(id))
-                {
-                    merge_sensitive_json(incoming_item, existing_item);
-                }
-            }
-        }
-        _ => {}
-    }
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_save_connection",
+        serde_json::json!({ "connection": connection }),
+        async {
+            let state = app.state::<DbxState>();
+            let paths = connection_paths()?;
+            biz::save_connection(&state, &paths, &KeyringDbxConnectionSecretStore, connection)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_delete_connection(
-    state: State<'_, DbxState>,
+pub async fn dbx_delete_connection<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     connection_id: String,
 ) -> Result<(), String> {
-    ensure_loaded(&state).await?;
-    state
-        .app_state
-        .remove_connection_pools(&connection_id)
-        .await;
-    state
-        .app_state
-        .reset_connection_transport(&connection_id)
-        .await;
-    state.app_state.configs.write().await.remove(&connection_id);
-    state.connections.write().await.remove(&connection_id);
-    // Drop the keyring blob with the connection; missing entry is success.
-    delete_connection_secrets(&KeyringDbxConnectionSecretStore, &connection_id);
-    persist_state_connections(&state).await?;
-    Ok(())
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_delete_connection",
+        serde_json::json!({ "connectionId": connection_id }),
+        async {
+            let state = app.state::<DbxState>();
+            let paths = connection_paths()?;
+            biz::delete_connection(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                &connection_id,
+            )
+            .await
+            .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_test_connection(
-    state: State<'_, DbxState>,
+pub async fn dbx_test_connection<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     connection: AeroricDbConnectionConfig,
 ) -> Result<(), String> {
-    ensure_loaded(&state).await?;
-    let connection = normalize_incoming(connection)?;
-    // Renderer only ever sees sanitized connections. Prefer in-memory secrets,
-    // then fill blanks from keyring so "Test" on a saved connection works.
-    let connection = preserve_existing_secrets(&state, connection).await;
-    let mut connection = connection;
-    hydrate_blank_secrets(&KeyringDbxConnectionSecretStore, &mut connection);
-    let config = parse_core_config(&connection)?;
-    let id = format!("{}:test", config.id);
-    let mut test_config = config.clone();
-    test_config.id = id.clone();
-    state
-        .app_state
-        .configs
-        .write()
-        .await
-        .insert(id.clone(), test_config);
-    let result = state
-        .app_state
-        .get_or_create_pool(&id, None)
-        .await
-        .map(|_| ());
-    state.app_state.remove_connection_pools(&id).await;
-    state.app_state.reset_connection_transport(&id).await;
-    state.app_state.configs.write().await.remove(&id);
-    result
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_test_connection",
+        serde_json::json!({ "connection": connection }),
+        async {
+            let state = app.state::<DbxState>();
+            let paths = connection_paths()?;
+            biz::test_connection(&state, &paths, &KeyringDbxConnectionSecretStore, connection)
+                .await
+                .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn dbx_connect(state: State<'_, DbxState>, connection_id: String) -> Result<(), String> {
-    ensure_connected(&state, &connection_id).await
+pub async fn dbx_connect<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    connection_id: String,
+) -> Result<(), String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_connect",
+        serde_json::json!({ "connectionId": connection_id }),
+        async {
+            let state = app.state::<DbxState>();
+            let paths = connection_paths()?;
+            biz::connect(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                &connection_id,
+            )
+            .await
+            .map(|_| serde_json::Value::Null)
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -758,382 +212,4 @@ pub async fn dbx_backup_sqlite_database(
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mysql_connection_with_dbx(dbx: Value) -> AeroricDbConnectionConfig {
-        AeroricDbConnectionConfig {
-            id: "mysql-1".to_string(),
-            name: "mysql".to_string(),
-            db_type: DbxDatabaseType::Mysql,
-            read_only: false,
-            project_scope: None,
-            dbx,
-            created_at: 1,
-            last_opened_at: None,
-            migrated_from_legacy: None,
-            connection_group: None,
-            pinned: None,
-        }
-    }
-
-    #[test]
-    fn legacy_local_connection_migrates_to_sqlite_dbx_config() {
-        let legacy = LegacyConnection {
-            id: "one".to_string(),
-            name: "local".to_string(),
-            endpoint: LegacyEndpoint::Local {
-                path: "/tmp/a.db".to_string(),
-            },
-            read_only: Some(true),
-            created_at: 1,
-            last_opened_at: Some(2),
-        };
-
-        let migrated = legacy_to_aeroric(legacy);
-        let core = parse_core_config(&migrated).unwrap();
-
-        assert_eq!(migrated.db_type, DbxDatabaseType::Sqlite);
-        assert!(migrated.migrated_from_legacy.unwrap());
-        assert_eq!(core.db_type, DatabaseType::Sqlite);
-        assert_eq!(core.host, "/tmp/a.db");
-        assert!(core.read_only);
-    }
-
-    #[test]
-    fn default_connection_config_round_trips_new_dbx_fields() {
-        let mut config = default_connection_config(
-            "mysql-1",
-            "mysql",
-            DbxDatabaseType::Mysql,
-            "127.0.0.1".to_string(),
-            3306,
-            Some("app".to_string()),
-            true,
-        );
-        // 必须填非默认值:这几个字段的 serde 属性都是 `#[serde(default)]`,
-        // 断言空值/false 的话,「解析器完整读回」与「解析器根本不读这几个键、
-        // 靠 default 兜底」两种结果一模一样。
-        config.agent_java_options = vec!["-Xmx512m".to_string(), "-Duser.timezone=UTC".to_string()];
-        config.init_script = Some("SET NAMES utf8mb4".to_string());
-        config.is_production = true;
-        config.production_databases = vec!["orders".to_string(), "billing".to_string()];
-
-        let mut connection = mysql_connection_with_dbx(serde_json::to_value(&config).unwrap());
-        connection.read_only = true;
-
-        let parsed = parse_core_config(&connection).unwrap();
-
-        assert_eq!(
-            parsed.agent_java_options,
-            vec!["-Xmx512m".to_string(), "-Duser.timezone=UTC".to_string()]
-        );
-        assert_eq!(parsed.init_script.as_deref(), Some("SET NAMES utf8mb4"));
-        // is_production / production_databases 决定危险 SQL 要不要先弹确认框,
-        // 丢了就等于在生产库上静默执行 DELETE。
-        assert!(parsed.is_production);
-        assert_eq!(
-            parsed.production_databases,
-            vec!["orders".to_string(), "billing".to_string()]
-        );
-        assert!(parsed.read_only);
-        // 顺带钉住 default_connection_config 自己给的非平凡默认值:
-        // save_password 一旦退成 false,下次保存会删掉已存的密码。
-        assert!(parsed.save_password);
-    }
-
-    #[test]
-    fn an_absent_production_marker_parses_as_not_production() {
-        // 老配置文件里没有这几个键,必须仍能解析,且不能把普通库误标成生产库
-        // (误标只会多弹一次确认框,漏标才是删错数据)。
-        let parsed = parse_core_config(&mysql_connection_with_dbx(json!({
-            "id": "mysql-2",
-            "name": "mysql",
-            "db_type": "mysql",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "username": "root",
-            "password": "",
-        })))
-        .unwrap();
-
-        assert!(!parsed.is_production);
-        assert!(parsed.production_databases.is_empty());
-        assert!(parsed.agent_java_options.is_empty());
-        assert_eq!(parsed.init_script, None);
-    }
-
-    #[test]
-    fn oracle_sysdba_uses_canonical_key_and_accepts_legacy_alias() {
-        let canonical_dbx = json!({
-            "id": "oracle-1",
-            "name": "oracle",
-            "db_type": "oracle",
-            "host": "127.0.0.1",
-            "port": 1521,
-            "username": "sys",
-            "password": "",
-            "database": "ORCL",
-            "sysdba": true,
-        });
-        let mut canonical = mysql_connection_with_dbx(canonical_dbx);
-        canonical.id = "oracle-1".to_string();
-        canonical.name = "oracle".to_string();
-        canonical.db_type = DbxDatabaseType::Oracle;
-        assert!(parse_core_config(&canonical).unwrap().sysdba);
-
-        let mut legacy = canonical.clone();
-        legacy.dbx.as_object_mut().unwrap().remove("sysdba");
-        legacy.dbx["oracle_sysdba"] = Value::Bool(true);
-        assert!(parse_core_config(&legacy).unwrap().sysdba);
-
-        let normalized = normalize_incoming(legacy).unwrap();
-        assert_eq!(normalized.dbx["sysdba"], true);
-        assert!(normalized.dbx.get("oracle_sysdba").is_none());
-    }
-
-    #[test]
-    fn sanitized_connection_removes_password_fields() {
-        let connection = AeroricDbConnectionConfig {
-            id: "secret".to_string(),
-            name: "secret".to_string(),
-            db_type: DbxDatabaseType::Mysql,
-            read_only: false,
-            project_scope: None,
-            dbx: json!({
-                "id": "secret",
-                "name": "secret",
-                "db_type": "mysql",
-                "host": "127.0.0.1",
-                "port": 3306,
-                "username": "root",
-                "password": "pw",
-                "database": null,
-                "transport_layers": [{ "type": "ssh", "password": "ssh", "key_passphrase": "key" }]
-            }),
-            created_at: 1,
-            last_opened_at: None,
-            migrated_from_legacy: None,
-            connection_group: None,
-            pinned: None,
-        };
-
-        let sanitized = sanitized(&connection);
-
-        assert_eq!(sanitized.dbx["password"], "");
-        assert_eq!(sanitized.dbx["transport_layers"][0]["password"], "");
-        assert_eq!(sanitized.dbx["transport_layers"][0]["key_passphrase"], "");
-    }
-
-    #[test]
-    fn disk_connection_json_blanks_password_when_keyring_write_succeeds() {
-        use super::super::connection_secrets::{
-            prepare_connection_for_disk, test_support::MemoryDbxSecretStore,
-        };
-
-        let connection = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "name": "mysql",
-            "db_type": "mysql",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "username": "root",
-            "password": "root-secret",
-            "database": null
-        }));
-
-        let api_connection = sanitized(&connection);
-        let store = MemoryDbxSecretStore::default();
-        let prepared = prepare_connection_for_disk(&store, &connection).expect("prepare");
-        let disk_json = connections_disk_json(&[prepared]).unwrap();
-
-        assert_eq!(api_connection.dbx["password"], "");
-        assert!(
-            !disk_json.contains("root-secret"),
-            "keyring write success must blank plaintext on disk: {disk_json}"
-        );
-        let blob = store.blob("mysql-1").expect("secrets must live in keyring");
-        assert!(blob.contains("root-secret"));
-    }
-
-    #[test]
-    fn disk_connection_json_keeps_password_when_keyring_write_fails() {
-        use super::super::connection_secrets::{
-            prepare_connection_for_disk, test_support::MemoryDbxSecretStore,
-        };
-
-        let connection = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "name": "mysql",
-            "db_type": "mysql",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "username": "root",
-            "password": "root-secret",
-            "database": null
-        }));
-
-        let store = MemoryDbxSecretStore::default();
-        store.fail_writes(true);
-        let prepared = prepare_connection_for_disk(&store, &connection).expect("prepare");
-        let disk_json = connections_disk_json(&[prepared]).unwrap();
-
-        // Legacy fallback: when keyring is unavailable, restart reconnect still
-        // needs the password on disk; migrate-on-read retries keyring next load.
-        assert!(disk_json.contains("\"password\": \"root-secret\""));
-    }
-
-    #[test]
-    fn sanitized_edit_preserves_existing_sensitive_values() {
-        let existing = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "name": "mysql",
-            "db_type": "mysql",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "username": "root",
-            "password": "root-secret",
-            "redis_sentinel_password": "sentinel-secret",
-            "transport_layers": [{
-                "id": "transport-1",
-                "type": "ssh",
-                "password": "ssh-secret",
-                "key_passphrase": "key-secret"
-            }]
-        }));
-        let incoming = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "name": "mysql",
-            "db_type": "mysql",
-            "host": "127.0.0.1",
-            "port": 3306,
-            "username": "root",
-            "password": "",
-            "redis_sentinel_password": "",
-            "transport_layers": [{
-                "id": "transport-1",
-                "type": "ssh",
-                "password": "",
-                "key_passphrase": ""
-            }]
-        }));
-
-        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
-
-        assert_eq!(preserved.dbx["password"], "root-secret");
-        assert_eq!(preserved.dbx["redis_sentinel_password"], "sentinel-secret");
-        assert_eq!(
-            preserved.dbx["transport_layers"][0]["password"],
-            "ssh-secret"
-        );
-        assert_eq!(
-            preserved.dbx["transport_layers"][0]["key_passphrase"],
-            "key-secret"
-        );
-    }
-
-    #[test]
-    fn sanitized_connection_hides_and_restores_uri_credentials() {
-        let existing = mysql_connection_with_dbx(json!({
-            "id": "mongo-1",
-            "name": "mongo",
-            "db_type": "mongodb",
-            "connection_string": "mongodb+srv://user:uri-secret@cluster.example/app?retryWrites=true&access_token=query-secret",
-            "url_params": "sslmode=require&%70assword=param-secret"
-        }));
-
-        let api_connection = sanitized(&existing);
-        let safe_uri = api_connection.dbx["connection_string"].as_str().unwrap();
-        let safe_params = api_connection.dbx["url_params"].as_str().unwrap();
-        assert!(!safe_uri.contains("uri-secret"));
-        assert!(!safe_uri.contains("query-secret"));
-        assert!(!safe_params.contains("param-secret"));
-        assert!(safe_uri.contains("retryWrites=true"));
-        assert!(safe_params.contains("sslmode=require"));
-
-        let preserved = preserve_existing_secrets_from_existing(api_connection, &existing);
-        let restored_uri = preserved.dbx["connection_string"].as_str().unwrap();
-        let restored_params = preserved.dbx["url_params"].as_str().unwrap();
-        assert!(restored_uri.contains("uri-secret"));
-        assert!(restored_uri.contains("query-secret"));
-        assert!(restored_params.contains("param-secret"));
-    }
-
-    #[test]
-    fn opaque_connection_strings_are_not_returned_to_the_renderer() {
-        let connection = mysql_connection_with_dbx(json!({
-            "id": "jdbc-1",
-            "name": "jdbc",
-            "db_type": "postgres",
-            "connection_string": "jdbc:postgresql://user:secret@localhost/app"
-        }));
-
-        assert_eq!(sanitized(&connection).dbx["connection_string"], "");
-    }
-
-    #[test]
-    fn uri_credentials_are_not_reused_for_a_different_endpoint() {
-        let merged = merge_connection_string_secrets(
-            "mongodb://user@new.example/app?access_token=",
-            "mongodb://user:old-password@old.example/app?access_token=old-token",
-        );
-
-        assert!(!merged.contains("old-password"));
-        assert!(!merged.contains("old-token"));
-    }
-
-    #[test]
-    fn clearing_url_parameters_does_not_restore_the_previous_value() {
-        assert_eq!(
-            merge_url_params_secrets("", "sslmode=require&password=old-secret"),
-            ""
-        );
-    }
-
-    #[test]
-    fn transport_secrets_follow_stable_ids_when_layers_are_reordered() {
-        let existing = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "transport_layers": [
-                { "id": "transport-a", "type": "ssh", "password": "secret-a" },
-                { "id": "transport-b", "type": "ssh", "password": "secret-b" }
-            ]
-        }));
-        let incoming = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "transport_layers": [
-                { "id": "transport-b", "type": "ssh", "password": "" },
-                { "id": "transport-a", "type": "ssh", "password": "" },
-                { "id": "transport-new", "type": "ssh", "password": "" }
-            ]
-        }));
-
-        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
-        assert_eq!(preserved.dbx["transport_layers"][0]["password"], "secret-b");
-        assert_eq!(preserved.dbx["transport_layers"][1]["password"], "secret-a");
-        assert_eq!(preserved.dbx["transport_layers"][2]["password"], "");
-    }
-
-    #[test]
-    fn deleting_a_transport_layer_does_not_copy_its_secret_to_the_next_layer() {
-        let existing = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "transport_layers": [
-                { "id": "transport-a", "type": "ssh", "password": "secret-a" },
-                { "id": "transport-b", "type": "ssh", "password": "secret-b" }
-            ]
-        }));
-        let incoming = mysql_connection_with_dbx(json!({
-            "id": "mysql-1",
-            "transport_layers": [
-                { "id": "transport-b", "type": "ssh", "password": "" }
-            ]
-        }));
-
-        let preserved = preserve_existing_secrets_from_existing(incoming, &existing);
-        assert_eq!(preserved.dbx["transport_layers"][0]["password"], "secret-b");
-    }
 }

@@ -1,22 +1,11 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+pub(crate) struct DbxState(pub(crate) aeroric_core::database::dbx_state::DbxState);
 
-use dbx_core::connection::AppState;
-use dbx_core::storage::Storage;
-use tokio::sync::{oneshot, Mutex, RwLock};
+impl std::ops::Deref for DbxState {
+    type Target = aeroric_core::database::dbx_state::DbxState;
 
-use super::types::AeroricDbConnectionConfig;
-
-pub(crate) struct DbxState {
-    pub app_state: Arc<AppState>,
-    pub connections: RwLock<HashMap<String, AeroricDbConnectionConfig>>,
-    pub loaded_connections: RwLock<bool>,
-    /// 等待前端答复的生产库确认。key 是 request id,前端带着它回调
-    /// `respond_dbx_production_confirmation`。
-    ///
-    /// 挂在这里而不是 `AppState`:后者来自 dbx_core(path 依赖的外部 crate),
-    /// 不该为 Aeroric 的 UI 流程改它的形状。
-    pub pending_production_confirmations: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl DbxState {
@@ -36,39 +25,14 @@ impl DbxState {
                 data_dir.path.display().to_string(),
             );
         }
-        let plugin_dir = data_dir.path.join("dbx-plugins");
-        let agent_dir = data_dir.path.join("dbx-agents");
-        // 插件/agent 目录建不出来只影响这两项功能,不影响连库,失败不升级。
-        let _ = std::fs::create_dir_all(&plugin_dir);
-        let _ = std::fs::create_dir_all(&agent_dir);
-
-        let db_path = data_dir.path.join("dbx-core.db");
-        // 挂在整条 `let` 上：`panic!` 是下面 `Err` 分支里闭包的尾表达式，属性只能上提到这里。
-        #[allow(clippy::panic, reason = "内存库都起不来，刻意 fail-fast")]
-        let storage = match tauri::async_runtime::block_on(Storage::open(&db_path)) {
-            Ok(storage) => storage,
-            Err(disk_error) => {
-                // 最后一层退路:内存库。连接配置不跨重启保留,但应用能开、能用。
-                crate::startup_diagnostics::record("dbx-state", disk_error, ":memory:");
-                tauri::async_runtime::block_on(Storage::open(std::path::Path::new(":memory:")))
-                    .unwrap_or_else(|memory_error| {
-                        // 内存库都开不起来说明 SQLite 本身不可用,已无退路可选。
-                        // 这里保留 panic 而不是静默:继续跑只会在每条命令上报错。
-                        panic!("SQLite is unusable, even in-memory: {memory_error}")
-                    })
-            }
-        };
-        let app_state = Arc::new(AppState::new_with_plugin_and_agent_dir_and_app_version(
-            storage,
-            plugin_dir,
-            agent_dir,
-            env!("CARGO_PKG_VERSION"),
-        ));
-        Self {
-            app_state,
-            connections: RwLock::new(HashMap::new()),
-            loaded_connections: RwLock::new(false),
-            pending_production_confirmations: Mutex::new(HashMap::new()),
+        let (state, degraded_reason) =
+            tauri::async_runtime::block_on(aeroric_core::database::dbx_state::DbxState::new(
+                &data_dir.path,
+                env!("CARGO_PKG_VERSION"),
+            ));
+        if let Some(reason) = degraded_reason {
+            crate::startup_diagnostics::record("dbx-state", reason, ":memory:");
         }
+        Self(state)
     }
 }

@@ -10,11 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use aeroric_core::clock::SystemClock;
+use aeroric_core::context::{MemorySecrets, SecretStore};
 use aeroric_core::location::{StorageLocation, StorageLocationProbe, VolumeKind};
 use aeroric_core::paths::AppPaths;
 use aeroric_core::storage_lock::LeaseOwner;
 use aeroric_host::dispatcher::HostServices;
-use aeroric_host::startup::{run_startup, RunningHost};
+use aeroric_host::startup::{run_startup_with_secrets, RunningHost};
 use aeroric_protocol::envelope::{decode_line, encode_line, Frame, Request};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -43,6 +44,7 @@ pub struct Harness {
     pub token: String,
     pub services: Arc<HostServices>,
     running: Option<RunningHost>,
+    keep_files: bool,
 }
 
 impl Harness {
@@ -81,7 +83,14 @@ impl Harness {
         wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
         read_only: bool,
     ) -> Self {
-        Self::start_with_layout(tag, wiring, read_only, false).await
+        Self::start_with_layout(
+            tag,
+            wiring,
+            read_only,
+            false,
+            Arc::new(MemorySecrets::default()),
+        )
+        .await
     }
 
     /// Opt-in fixture: managed data is not the injected user's ~/.aeroric.
@@ -91,6 +100,24 @@ impl Harness {
             |_| aeroric_host::dispatcher::HostWiring::default(),
             read_only,
             true,
+            Arc::new(MemorySecrets::default()),
+        )
+        .await
+    }
+
+    /// Explicitly injected secrets, including read-only business services.
+    /// Never select an OS credential service in a test.
+    pub async fn start_with_secrets(
+        tag: &str,
+        read_only: bool,
+        secrets: Arc<dyn SecretStore>,
+    ) -> Self {
+        Self::start_with_layout(
+            tag,
+            |_| aeroric_host::dispatcher::HostWiring::default(),
+            read_only,
+            false,
+            secrets,
         )
         .await
     }
@@ -100,9 +127,20 @@ impl Harness {
         wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
         read_only: bool,
         relocated: bool,
+        secrets: Arc<dyn SecretStore>,
     ) -> Self {
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let root = PathBuf::from("/tmp").join(format!("ah-it-{tag}-{}-{n}", std::process::id()));
+        Self::start_at(root, wiring, read_only, relocated, secrets).await
+    }
+
+    async fn start_at(
+        root: PathBuf,
+        wiring: impl FnOnce(&Path) -> aeroric_host::dispatcher::HostWiring,
+        read_only: bool,
+        relocated: bool,
+        secrets: Arc<dyn SecretStore>,
+    ) -> Self {
         let home = root.join("home");
         std::fs::create_dir_all(&home).expect("home");
         let paths = if relocated {
@@ -112,7 +150,7 @@ impl Harness {
         };
         let data_dir = paths.data_dir().to_path_buf();
         let socket_path = data_dir.join("host.sock");
-        let started = run_startup(
+        let started = run_startup_with_secrets(
             &aeroric_host::startup::HostOptions {
                 paths,
                 socket_path: socket_path.clone(),
@@ -126,6 +164,7 @@ impl Harness {
             &LocalProbe,
             "build-hash-test",
             "protocol-hash-test",
+            Arc::clone(&secrets),
         )
         .await
         .expect("startup must succeed");
@@ -136,9 +175,10 @@ impl Harness {
             .to_string();
         let wiring = wiring(&data_dir);
         let context = if read_only {
-            Arc::new(aeroric_core::context::CoreContext::read_only(
-                started.context.paths.clone(),
-            ))
+            Arc::new(
+                aeroric_core::context::CoreContext::read_only(started.context.paths.clone())
+                    .with_secrets(secrets),
+            )
         } else {
             Arc::clone(&started.context)
         };
@@ -156,7 +196,36 @@ impl Harness {
             token,
             services,
             running,
+            keep_files: false,
         }
+    }
+
+    /// Shut down the old listener and release all service state/leases, then
+    /// start a new host against the same scratch files. Drop clients first.
+    pub async fn restart(mut self, secrets: Arc<dyn SecretStore>) -> Self {
+        let root = self.home.clone();
+        let socket = self.socket_path.clone();
+        let relocated = self.data_dir != root.join("home").join(".aeroric");
+        self.keep_files = true;
+        if let Some(running) = self.running.take() {
+            running.shutdown();
+        }
+        drop(self);
+        tokio::time::timeout(std::time::Duration::from_secs(7), async {
+            while socket.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("old host must release its socket and lease");
+        Self::start_at(
+            root,
+            |_| aeroric_host::dispatcher::HostWiring::default(),
+            false,
+            relocated,
+            secrets,
+        )
+        .await
     }
 
     pub async fn connect(&self) -> (BufReader<OwnedReadHalf>, OwnedWriteHalf) {
@@ -215,7 +284,9 @@ impl Drop for Harness {
         if let Some(running) = self.running.take() {
             running.shutdown();
         }
-        std::fs::remove_dir_all(&self.home).ok();
+        if !self.keep_files {
+            std::fs::remove_dir_all(&self.home).ok();
+        }
     }
 }
 

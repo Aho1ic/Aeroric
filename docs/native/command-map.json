@@ -17015,7 +17015,7 @@
       "rust_path": "database::connections::dbx_list_connections",
       "registered_at": "src-tauri/src/lib.rs:948",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:446"
+        "src-tauri/src/database/connections.rs:37"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17027,12 +17027,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:446",
+      "definition_resolved": "src-tauri/src/database/connections.rs:37",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17040,7 +17040,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!"
+        "app: tauri::AppHandle<R>!"
       ]
     },
     {
@@ -17048,7 +17048,7 @@
       "rust_path": "database::connections::dbx_save_connection",
       "registered_at": "src-tauri/src/lib.rs:949",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:463"
+        "src-tauri/src/database/connections.rs:57"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17060,12 +17060,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:463",
+      "definition_resolved": "src-tauri/src/database/connections.rs:57",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17073,7 +17073,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection: AeroricDbConnectionConfig"
       ]
     },
@@ -17082,7 +17082,7 @@
       "rust_path": "database::connections::dbx_delete_connection",
       "registered_at": "src-tauri/src/lib.rs:950",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:637"
+        "src-tauri/src/database/connections.rs:78"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17094,12 +17094,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:637",
+      "definition_resolved": "src-tauri/src/database/connections.rs:78",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17107,7 +17107,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection_id: String"
       ]
     },
@@ -17116,7 +17116,7 @@
       "rust_path": "database::connections::dbx_test_connection",
       "registered_at": "src-tauri/src/lib.rs:951",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:659"
+        "src-tauri/src/database/connections.rs:104"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17128,12 +17128,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:659",
+      "definition_resolved": "src-tauri/src/database/connections.rs:104",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17141,7 +17141,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection: AeroricDbConnectionConfig"
       ]
     },
@@ -17150,7 +17150,7 @@
       "rust_path": "database::connections::dbx_connect",
       "registered_at": "src-tauri/src/lib.rs:952",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:692"
+        "src-tauri/src/database/connections.rs:125"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17162,12 +17162,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:692",
+      "definition_resolved": "src-tauri/src/database/connections.rs:125",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17175,7 +17175,7 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
         "connection_id: String"
       ]
     },
@@ -17184,7 +17184,7 @@
       "rust_path": "database::connections::dbx_disconnect",
       "registered_at": "src-tauri/src/lib.rs:953",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:697"
+        "src-tauri/src/database/connections.rs:151"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17196,7 +17196,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:697",
+      "definition_resolved": "src-tauri/src/database/connections.rs:151",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17218,7 +17218,7 @@
       "rust_path": "database::connections::dbx_backup_sqlite_database",
       "registered_at": "src-tauri/src/lib.rs:954",
       "definition_candidates": [
-        "src-tauri/src/database/connections.rs:713"
+        "src-tauri/src/database/connections.rs:167"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17230,7 +17230,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/connections.rs:713",
+      "definition_resolved": "src-tauri/src/database/connections.rs:167",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,

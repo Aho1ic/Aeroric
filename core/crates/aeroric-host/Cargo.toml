@@ -29,6 +29,15 @@ parking_lot = { workspace = true } # metrics 的 codex 进程句柄槽（宿主�
 async-trait = "0.1"
 libc = "0.2" # 与 core 同口径：peer-UID 的 getpeereid/SO_PEERCRED
 
+# 切片九十五刀一：宿主进程的 OS keyring（与 src-tauri 同 crate 同 features——
+# 同一 service/account 方案下两个进程读写同一把钥匙串）。
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "linux-native",
+] }
+
 [dev-dependencies]
 # 切片九十四红灯夹具：直接建真 SQLite 文件（与 core 同版本共享编译产物）。
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use aeroric_core::clock::Clock;
-use aeroric_core::context::CoreContext;
+use aeroric_core::context::{CoreContext, MemorySecrets, SecretStore};
 use aeroric_core::location::StorageLocationProbe;
 use aeroric_core::paths::AppPaths;
 use aeroric_core::storage::{bump_revision, load_runtime, RuntimeMetadata};
@@ -85,10 +85,35 @@ pub async fn run_startup(
     build_hash: &str,
     protocol_hash: &str,
 ) -> Result<StartedHost, StartupError> {
+    run_startup_with_secrets(
+        options,
+        clock,
+        owner,
+        probe,
+        build_hash,
+        protocol_hash,
+        Arc::new(MemorySecrets::default()),
+    )
+    .await
+}
+
+/// Explicit secret-store composition. The library startup above is safe for
+/// embedding/tests; only the production binary selects the OS credential store.
+/// Changing HOME cannot isolate that OS service.
+pub async fn run_startup_with_secrets(
+    options: &HostOptions,
+    clock: Arc<dyn Clock>,
+    owner: &LeaseOwner,
+    probe: &dyn StorageLocationProbe,
+    build_hash: &str,
+    protocol_hash: &str,
+    secrets: Arc<dyn SecretStore>,
+) -> Result<StartedHost, StartupError> {
     // 1. lock —— 写租约（连卷探测），失败即「另一个写者持有着」，绝不排队等。
     let context = Arc::new(
         CoreContext::acquire(options.paths.clone(), clock, owner, probe)?
-            .with_platform(std::sync::Arc::new(crate::platform_adapter::HostOsServices)),
+            .with_platform(std::sync::Arc::new(crate::platform_adapter::HostOsServices))
+            .with_secrets(secrets),
     );
 
     // 2. data compat —— schema 版本判定（load 自带 UnsupportedSchema/Corrupt 拒绝）。

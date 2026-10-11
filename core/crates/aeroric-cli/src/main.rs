@@ -147,7 +147,7 @@ fn agent_config_external_home() -> Result<std::path::PathBuf, String> {
 async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
     use aeroric_core::storage_lock::LeaseOwner;
     use aeroric_host::dispatcher::HostServices;
-    use aeroric_host::startup::{run_startup, serve as serve_loop, HostOptions};
+    use aeroric_host::startup::{run_startup_with_secrets, serve as serve_loop, HostOptions};
 
     let agent_config_external_home = match agent_config_external_home() {
         Ok(home) => home,
@@ -166,7 +166,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
     };
     // build/protocol 两个 hash：CLI 构建没有 git 元数据注入，如实给版本串
     // （supervisor 区分「不同 build」够用，不假装有 commit hash）。
-    match run_startup(
+    match run_startup_with_secrets(
         &HostOptions {
             paths,
             socket_path,
@@ -177,6 +177,7 @@ async fn serve(data_dir: &Path, ready_fd: Option<i32>) -> i32 {
         &aeroric_core::location_probe::RawPlatformProbe,
         &format!("aeroric-cli-{}", env!("CARGO_PKG_VERSION")),
         &format!("protocol-v{}", aeroric_protocol::PROTOCOL_VERSION),
+        Arc::new(aeroric_host::platform_adapter::KeyringSecrets),
     )
     .await
     {
