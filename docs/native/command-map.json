@@ -17475,7 +17475,7 @@
       "rust_path": "database::query::dbx_assess_production_sql",
       "registered_at": "src-tauri/src/lib.rs:961",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:369"
+        "src-tauri/src/database/query.rs:362"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17487,7 +17487,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:369",
+      "definition_resolved": "src-tauri/src/database/query.rs:362",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17509,7 +17509,7 @@
       "rust_path": "database::query::dbx_assess_production_target",
       "registered_at": "src-tauri/src/lib.rs:962",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:378"
+        "src-tauri/src/database/query.rs:371"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17521,7 +17521,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:378",
+      "definition_resolved": "src-tauri/src/database/query.rs:371",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17543,7 +17543,7 @@
       "rust_path": "database::query::respond_dbx_production_confirmation",
       "registered_at": "src-tauri/src/lib.rs:963",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:359"
+        "src-tauri/src/database/query.rs:352"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17555,7 +17555,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:359",
+      "definition_resolved": "src-tauri/src/database/query.rs:352",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17578,7 +17578,7 @@
       "rust_path": "database::query::dbx_execute_query",
       "registered_at": "src-tauri/src/lib.rs:964",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:387"
+        "src-tauri/src/database/query.rs:380"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17590,7 +17590,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:387",
+      "definition_resolved": "src-tauri/src/database/query.rs:380",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17613,7 +17613,7 @@
       "rust_path": "database::query::dbx_execute_multi",
       "registered_at": "src-tauri/src/lib.rs:965",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:420"
+        "src-tauri/src/database/query.rs:413"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17625,7 +17625,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:420",
+      "definition_resolved": "src-tauri/src/database/query.rs:413",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17648,7 +17648,7 @@
       "rust_path": "database::query::dbx_cancel_query",
       "registered_at": "src-tauri/src/lib.rs:966",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:453"
+        "src-tauri/src/database/query.rs:446"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17660,7 +17660,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:453",
+      "definition_resolved": "src-tauri/src/database/query.rs:446",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17682,7 +17682,7 @@
       "rust_path": "database::query::dbx_close_result_session",
       "registered_at": "src-tauri/src/lib.rs:967",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:462"
+        "src-tauri/src/database/query.rs:455"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17694,7 +17694,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:462",
+      "definition_resolved": "src-tauri/src/database/query.rs:455",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17719,7 +17719,7 @@
       "rust_path": "database::query::dbx_build_table_structure_change_sql",
       "registered_at": "src-tauri/src/lib.rs:968",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:483"
+        "src-tauri/src/database/query.rs:480"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17731,12 +17731,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:483",
+      "definition_resolved": "src-tauri/src/database/query.rs:480",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17744,6 +17744,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::table_structure_sql::TableStructureSqlOptions"
       ]
     },
@@ -17752,7 +17753,7 @@
       "rust_path": "database::query::dbx_build_single_column_alter_sql",
       "registered_at": "src-tauri/src/lib.rs:969",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:490"
+        "src-tauri/src/database/query.rs:499"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17764,12 +17765,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:490",
+      "definition_resolved": "src-tauri/src/database/query.rs:499",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -17777,6 +17778,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::table_structure_sql::SingleColumnAlterSqlOptions"
       ]
     },
@@ -17785,7 +17787,7 @@
       "rust_path": "database::query::dbx_build_create_database_sql",
       "registered_at": "src-tauri/src/lib.rs:970",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:497"
+        "src-tauri/src/database/query.rs:518"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17797,7 +17799,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:497",
+      "definition_resolved": "src-tauri/src/database/query.rs:518",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17810,6 +17812,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::CreateDatabaseSqlOptions"
       ]
     },
@@ -17818,7 +17821,7 @@
       "rust_path": "database::query::dbx_build_duckdb_attach_database_sql",
       "registered_at": "src-tauri/src/lib.rs:971",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:512"
+        "src-tauri/src/database/query.rs:536"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17830,7 +17833,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:512",
+      "definition_resolved": "src-tauri/src/database/query.rs:536",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17843,7 +17846,8 @@
       },
       "reachable": true,
       "params": [
-        "options: DuckDbAttachDatabaseSqlOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: aeroric_core::database::sql_builders::DuckDbAttachDatabaseSqlOptions"
       ]
     },
     {
@@ -17851,7 +17855,7 @@
       "rust_path": "database::query::dbx_build_rename_object_sql",
       "registered_at": "src-tauri/src/lib.rs:972",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:523"
+        "src-tauri/src/database/query.rs:557"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17863,7 +17867,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:523",
+      "definition_resolved": "src-tauri/src/database/query.rs:557",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17876,6 +17880,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::RenameObjectSqlOptions"
       ]
     },
@@ -17884,7 +17889,7 @@
       "rust_path": "database::query::dbx_build_drop_database_sql",
       "registered_at": "src-tauri/src/lib.rs:973",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:530"
+        "src-tauri/src/database/query.rs:575"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17896,7 +17901,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:530",
+      "definition_resolved": "src-tauri/src/database/query.rs:575",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17909,6 +17914,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::DatabaseNameSqlOptions"
       ]
     },
@@ -17917,7 +17923,7 @@
       "rust_path": "database::query::dbx_build_create_schema_sql",
       "registered_at": "src-tauri/src/lib.rs:974",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:537"
+        "src-tauri/src/database/query.rs:594"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17929,7 +17935,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:537",
+      "definition_resolved": "src-tauri/src/database/query.rs:594",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17942,6 +17948,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::SchemaNameSqlOptions"
       ]
     },
@@ -17950,7 +17957,7 @@
       "rust_path": "database::query::dbx_build_drop_schema_sql",
       "registered_at": "src-tauri/src/lib.rs:975",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:544"
+        "src-tauri/src/database/query.rs:612"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17962,7 +17969,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:544",
+      "definition_resolved": "src-tauri/src/database/query.rs:612",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -17975,6 +17982,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::SchemaNameSqlOptions"
       ]
     },
@@ -17983,7 +17991,7 @@
       "rust_path": "database::query::dbx_build_drop_table_sql",
       "registered_at": "src-tauri/src/lib.rs:976",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:551"
+        "src-tauri/src/database/query.rs:631"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -17995,12 +18003,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:551",
+      "definition_resolved": "src-tauri/src/database/query.rs:631",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18008,6 +18016,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::TableAdminSqlOptions"
       ]
     },
@@ -18016,7 +18025,7 @@
       "rust_path": "database::query::dbx_build_truncate_table_sql",
       "registered_at": "src-tauri/src/lib.rs:977",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:558"
+        "src-tauri/src/database/query.rs:650"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18028,12 +18037,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:558",
+      "definition_resolved": "src-tauri/src/database/query.rs:650",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18041,6 +18050,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::TableAdminSqlOptions"
       ]
     },
@@ -18049,7 +18059,7 @@
       "rust_path": "database::query::dbx_build_empty_table_sql",
       "registered_at": "src-tauri/src/lib.rs:978",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:565"
+        "src-tauri/src/database/query.rs:669"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18061,12 +18071,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:565",
+      "definition_resolved": "src-tauri/src/database/query.rs:669",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18074,6 +18084,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::TableAdminSqlOptions"
       ]
     },
@@ -18082,7 +18093,7 @@
       "rust_path": "database::query::dbx_build_drop_object_sql",
       "registered_at": "src-tauri/src/lib.rs:979",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:572"
+        "src-tauri/src/database/query.rs:688"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18094,12 +18105,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:572",
+      "definition_resolved": "src-tauri/src/database/query.rs:688",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18107,6 +18118,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::DropObjectSqlOptions"
       ]
     },
@@ -18115,7 +18127,7 @@
       "rust_path": "database::query::dbx_build_drop_table_child_object_sql",
       "registered_at": "src-tauri/src/lib.rs:980",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:579"
+        "src-tauri/src/database/query.rs:707"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18127,12 +18139,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:579",
+      "definition_resolved": "src-tauri/src/database/query.rs:707",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18140,6 +18152,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::DropTableChildObjectSqlOptions"
       ]
     },
@@ -18148,7 +18161,7 @@
       "rust_path": "database::query::dbx_build_duplicate_table_structure_sql",
       "registered_at": "src-tauri/src/lib.rs:981",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:586"
+        "src-tauri/src/database/query.rs:725"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18160,12 +18173,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:586",
+      "definition_resolved": "src-tauri/src/database/query.rs:725",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18173,6 +18186,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::db_admin_sql::DuplicateTableStructureSqlOptions"
       ]
     },
@@ -18181,7 +18195,7 @@
       "rust_path": "database::query::dbx_build_database_search_sql",
       "registered_at": "src-tauri/src/lib.rs:982",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:595"
+        "src-tauri/src/database/query.rs:744"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18193,7 +18207,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:595",
+      "definition_resolved": "src-tauri/src/database/query.rs:744",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18206,6 +18220,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::database_search_sql::DatabaseSearchSqlOptions"
       ]
     },
@@ -18214,7 +18229,7 @@
       "rust_path": "database::query::dbx_build_search_result_where",
       "registered_at": "src-tauri/src/lib.rs:983",
       "definition_candidates": [
-        "src-tauri/src/database/query.rs:604"
+        "src-tauri/src/database/query.rs:764"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18226,7 +18241,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/query.rs:604",
+      "definition_resolved": "src-tauri/src/database/query.rs:764",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18239,6 +18254,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: dbx_core::database_search_sql::SearchResultWhereOptions"
       ]
     },
@@ -18247,7 +18263,7 @@
       "rust_path": "database::grid::dbx_query_table_data",
       "registered_at": "src-tauri/src/lib.rs:984",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:163"
+        "src-tauri/src/database/grid.rs:126"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18259,7 +18275,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:163",
+      "definition_resolved": "src-tauri/src/database/grid.rs:126",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18281,7 +18297,7 @@
       "rust_path": "database::grid::dbx_update_cell",
       "registered_at": "src-tauri/src/lib.rs:985",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:303"
+        "src-tauri/src/database/grid.rs:318"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18293,7 +18309,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:303",
+      "definition_resolved": "src-tauri/src/database/grid.rs:318",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18315,7 +18331,7 @@
       "rust_path": "database::grid::dbx_insert_row",
       "registered_at": "src-tauri/src/lib.rs:986",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:311"
+        "src-tauri/src/database/grid.rs:326"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18327,7 +18343,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:311",
+      "definition_resolved": "src-tauri/src/database/grid.rs:326",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18349,7 +18365,7 @@
       "rust_path": "database::grid::dbx_delete_rows",
       "registered_at": "src-tauri/src/lib.rs:987",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:319"
+        "src-tauri/src/database/grid.rs:334"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18361,7 +18377,7 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:319",
+      "definition_resolved": "src-tauri/src/database/grid.rs:334",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -18383,7 +18399,7 @@
       "rust_path": "database::grid::dbx_preview_grid_sql",
       "registered_at": "src-tauri/src/lib.rs:988",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:271"
+        "src-tauri/src/database/grid.rs:238"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18395,12 +18411,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:271",
+      "definition_resolved": "src-tauri/src/database/grid.rs:238",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18408,6 +18424,7 @@
       },
       "reachable": true,
       "params": [
+        "app: tauri::AppHandle<R>!",
         "options: DataGridSaveStatementOptions"
       ]
     },
@@ -18416,7 +18433,7 @@
       "rust_path": "database::grid::dbx_build_data_grid_context_filter_condition",
       "registered_at": "src-tauri/src/lib.rs:989",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:296"
+        "src-tauri/src/database/grid.rs:297"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18428,12 +18445,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:296",
+      "definition_resolved": "src-tauri/src/database/grid.rs:297",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18441,7 +18458,8 @@
       },
       "reachable": true,
       "params": [
-        "options: DataGridContextFilterConditionOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: aeroric_core::database::grid::DataGridContextFilterConditionOptions"
       ]
     },
     {
@@ -18449,7 +18467,7 @@
       "rust_path": "database::grid::dbx_build_data_grid_copy_insert_statement",
       "registered_at": "src-tauri/src/lib.rs:990",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:282"
+        "src-tauri/src/database/grid.rs:256"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18461,12 +18479,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:282",
+      "definition_resolved": "src-tauri/src/database/grid.rs:256",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18474,7 +18492,8 @@
       },
       "reachable": true,
       "params": [
-        "options: DataGridCopyInsertStatementOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: aeroric_core::database::grid::DataGridCopyInsertStatementOptions"
       ]
     },
     {
@@ -18482,7 +18501,7 @@
       "rust_path": "database::grid::dbx_build_data_grid_copy_update_statements",
       "registered_at": "src-tauri/src/lib.rs:991",
       "definition_candidates": [
-        "src-tauri/src/database/grid.rs:289"
+        "src-tauri/src/database/grid.rs:277"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -18494,12 +18513,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/grid.rs:289",
+      "definition_resolved": "src-tauri/src/database/grid.rs:277",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 1,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -18507,7 +18526,8 @@
       },
       "reachable": true,
       "params": [
-        "options: DataGridCopyUpdateStatementOptions"
+        "app: tauri::AppHandle<R>!",
+        "options: aeroric_core::database::grid::DataGridCopyUpdateStatementOptions"
       ]
     },
     {
@@ -24261,7 +24281,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/database/query.rs:298"
+        "src-tauri/src/database/query.rs:291"
       ],
       "listeners": [
         "src/state/app/useAppTauriEvents.ts:76"

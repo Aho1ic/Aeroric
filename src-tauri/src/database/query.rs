@@ -114,13 +114,6 @@ pub struct ProductionTargetAssessment {
     production_databases: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DuckDbAttachDatabaseSqlOptions {
-    path: String,
-    name: String,
-}
-
 fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -479,134 +472,311 @@ pub async fn dbx_close_result_session(
     .map(|_| ())
 }
 
+// ── 切片九十六（database 刀二）：16 条 SQL builders 改宿主转发壳。业务主体
+// 在 dbx-core，core `database::sql_builders` 是宿主侧的同一依赖点；Embedded
+// 本地闭包与宿主服务调同一个函数，External 绝不本地回退。 ──
+
 #[tauri::command]
-pub fn dbx_build_table_structure_change_sql(
+pub async fn dbx_build_table_structure_change_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::table_structure_sql::TableStructureSqlOptions,
 ) -> Result<dbx_core::table_structure_sql::TableStructureSqlResult, String> {
-    Ok(dbx_core::table_structure_sql::build_table_structure_change_sql(options))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_table_structure_change_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            let result =
+                aeroric_core::database::sql_builders::build_table_structure_change_sql(options);
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn dbx_build_single_column_alter_sql(
+pub async fn dbx_build_single_column_alter_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::table_structure_sql::SingleColumnAlterSqlOptions,
 ) -> Result<dbx_core::table_structure_sql::TableStructureSqlResult, String> {
-    Ok(dbx_core::table_structure_sql::build_single_column_alter_sql(options))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_single_column_alter_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            let result =
+                aeroric_core::database::sql_builders::build_single_column_alter_sql(options);
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn dbx_build_create_database_sql(
+pub async fn dbx_build_create_database_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::CreateDatabaseSqlOptions,
 ) -> Result<String, String> {
-    dbx_core::db_admin_sql::build_create_database_sql(options)
-}
-
-fn quote_duckdb_identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn quote_sql_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_create_database_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            aeroric_core::database::sql_builders::build_create_database_sql(options)
+                .map(serde_json::Value::String)
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_duckdb_attach_database_sql(
-    options: DuckDbAttachDatabaseSqlOptions,
+pub async fn dbx_build_duckdb_attach_database_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    options: aeroric_core::database::sql_builders::DuckDbAttachDatabaseSqlOptions,
 ) -> Result<String, String> {
-    Ok(format!(
-        "ATTACH {} AS {};",
-        quote_sql_string(&options.path),
-        quote_duckdb_identifier(&options.name)
-    ))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_duckdb_attach_database_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            // dbx-core 的同名函数被 duckdb-sidecar feature 门控；这行本地构造
+            // 是 feature 关闭时的生产路径（core 逐字上收同一实现）。
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_duckdb_attach_database_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_rename_object_sql(
+pub async fn dbx_build_rename_object_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::RenameObjectSqlOptions,
 ) -> Result<String, String> {
-    dbx_core::db_admin_sql::build_rename_object_sql(options)
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_rename_object_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            aeroric_core::database::sql_builders::build_rename_object_sql(options)
+                .map(serde_json::Value::String)
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_drop_database_sql(
+pub async fn dbx_build_drop_database_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::DatabaseNameSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_drop_database_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_drop_database_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_drop_database_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_create_schema_sql(
+pub async fn dbx_build_create_schema_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::SchemaNameSqlOptions,
 ) -> Result<String, String> {
-    dbx_core::db_admin_sql::build_create_schema_sql(options)
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_create_schema_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            aeroric_core::database::sql_builders::build_create_schema_sql(options)
+                .map(serde_json::Value::String)
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_drop_schema_sql(
+pub async fn dbx_build_drop_schema_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::SchemaNameSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_drop_schema_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_drop_schema_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_drop_schema_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_drop_table_sql(
+pub async fn dbx_build_drop_table_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::TableAdminSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_drop_table_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_drop_table_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_drop_table_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_truncate_table_sql(
+pub async fn dbx_build_truncate_table_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::TableAdminSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_truncate_table_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_truncate_table_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_truncate_table_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_empty_table_sql(
+pub async fn dbx_build_empty_table_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::TableAdminSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_empty_table_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_empty_table_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_empty_table_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_drop_object_sql(
+pub async fn dbx_build_drop_object_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::DropObjectSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_drop_object_sql(options))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_drop_object_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_drop_object_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_drop_table_child_object_sql(
+pub async fn dbx_build_drop_table_child_object_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::DropTableChildObjectSqlOptions,
 ) -> Result<String, String> {
-    dbx_core::db_admin_sql::build_drop_table_child_object_sql(options)
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_drop_table_child_object_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            aeroric_core::database::sql_builders::build_drop_table_child_object_sql(options)
+                .map(serde_json::Value::String)
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_duplicate_table_structure_sql(
+pub async fn dbx_build_duplicate_table_structure_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::db_admin_sql::DuplicateTableStructureSqlOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::db_admin_sql::build_duplicate_table_structure_sql(
-        options,
-    ))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_duplicate_table_structure_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_duplicate_table_structure_sql(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
-pub fn dbx_build_database_search_sql(
+pub async fn dbx_build_database_search_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::database_search_sql::DatabaseSearchSqlOptions,
 ) -> Result<Option<dbx_core::database_search_sql::DatabaseSearchSql>, String> {
-    Ok(dbx_core::database_search_sql::build_database_search_sql(
-        options,
-    ))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_database_search_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            match aeroric_core::database::sql_builders::build_database_search_sql(options) {
+                Some(result) => serde_json::to_value(result).map_err(|error| error.to_string()),
+                None => Ok(serde_json::Value::Null),
+            }
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn dbx_build_search_result_where(
+pub async fn dbx_build_search_result_where<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: dbx_core::database_search_sql::SearchResultWhereOptions,
 ) -> Result<String, String> {
-    Ok(dbx_core::database_search_sql::build_search_result_where(
-        options,
-    ))
+    crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_search_result_where",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(serde_json::Value::String(
+                aeroric_core::database::sql_builders::build_search_result_where(options),
+            ))
+        },
+    )
+    .await
+    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))
 }
 
 #[cfg(test)]
@@ -759,129 +929,6 @@ mod tests {
             assessment.production_databases,
             vec!["prod_app", "prod_analytics"]
         );
-    }
-
-    #[test]
-    fn builds_create_database_sql_with_dbx_core() {
-        let sql = dbx_build_create_database_sql(dbx_core::db_admin_sql::CreateDatabaseSqlOptions {
-            database_type: Some(dbx_core::models::connection::DatabaseType::Mysql),
-            driver_profile: Some("mysql".to_string()),
-            target: None,
-            parent: None,
-            name: "app".to_string(),
-            charset: Some("utf8mb4".to_string()),
-            collation: Some("utf8mb4_unicode_ci".to_string()),
-        })
-        .unwrap();
-
-        assert_eq!(
-            sql,
-            "CREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-        );
-    }
-
-    #[test]
-    fn builds_duckdb_attach_sql_without_duckdb_bundled_feature() {
-        let sql = dbx_build_duckdb_attach_database_sql(DuckDbAttachDatabaseSqlOptions {
-            path: "/tmp/app's.duckdb".to_string(),
-            name: "app db".to_string(),
-        })
-        .unwrap();
-
-        assert_eq!(sql, "ATTACH '/tmp/app''s.duckdb' AS \"app db\";");
-    }
-
-    #[test]
-    fn builds_drop_database_and_schema_sql_with_dbx_core() {
-        let database_sql =
-            dbx_build_drop_database_sql(dbx_core::db_admin_sql::DatabaseNameSqlOptions {
-                database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-                name: "app".to_string(),
-            })
-            .unwrap();
-        let create_schema_sql =
-            dbx_build_create_schema_sql(dbx_core::db_admin_sql::SchemaNameSqlOptions {
-                database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-                name: "analytics".to_string(),
-            })
-            .unwrap();
-        let drop_schema_sql =
-            dbx_build_drop_schema_sql(dbx_core::db_admin_sql::SchemaNameSqlOptions {
-                database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-                name: "analytics".to_string(),
-            })
-            .unwrap();
-
-        assert_eq!(database_sql, "DROP DATABASE \"app\";");
-        assert_eq!(create_schema_sql, "CREATE SCHEMA \"analytics\";");
-        assert_eq!(drop_schema_sql, "DROP SCHEMA \"analytics\" CASCADE;");
-    }
-
-    #[test]
-    fn builds_rename_object_sql_with_dbx_core() {
-        let sql = dbx_build_rename_object_sql(dbx_core::db_admin_sql::RenameObjectSqlOptions {
-            database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-            object_type: dbx_core::db_admin_sql::DatabaseObjectType::Table,
-            schema: Some("public".to_string()),
-            old_name: "users".to_string(),
-            new_name: "app_users".to_string(),
-        })
-        .unwrap();
-
-        assert_eq!(
-            sql,
-            "ALTER TABLE \"public\".\"users\" RENAME TO \"app_users\";"
-        );
-    }
-
-    #[test]
-    fn builds_database_search_sql_with_dbx_core() {
-        let query = dbx_build_database_search_sql(
-            dbx_core::database_search_sql::DatabaseSearchSqlOptions {
-                database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-                schema: Some("public".to_string()),
-                table_name: "users".to_string(),
-                columns: vec![
-                    dbx_core::database_search_sql::DatabaseSearchColumn {
-                        name: "id".to_string(),
-                        data_type: "integer".to_string(),
-                        is_primary_key: true,
-                    },
-                    dbx_core::database_search_sql::DatabaseSearchColumn {
-                        name: "email".to_string(),
-                        data_type: "text".to_string(),
-                        is_primary_key: false,
-                    },
-                ],
-                term: "alice".to_string(),
-                limit: Some(10),
-            },
-        )
-        .unwrap()
-        .unwrap();
-
-        assert!(query.sql.contains("FROM \"public\".\"users\""));
-        assert_eq!(query.searchable_columns, vec!["email"]);
-
-        let where_input = dbx_build_search_result_where(
-            dbx_core::database_search_sql::SearchResultWhereOptions {
-                database_type: Some(dbx_core::models::connection::DatabaseType::Postgres),
-                columns: vec![dbx_core::database_search_sql::DatabaseSearchColumn {
-                    name: "id".to_string(),
-                    data_type: "integer".to_string(),
-                    is_primary_key: true,
-                }],
-                result_columns: vec!["id".to_string(), "email".to_string()],
-                row: vec![
-                    serde_json::json!(42),
-                    serde_json::json!("alice@example.com"),
-                ],
-                matched_columns: vec!["email".to_string()],
-            },
-        )
-        .unwrap();
-
-        assert_eq!(where_input, "\"id\" = 42");
     }
 
     /* 生产库确认的往返记账。

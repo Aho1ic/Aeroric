@@ -14,7 +14,9 @@ use std::sync::Arc;
 use aeroric_core::context::CoreContext;
 use aeroric_core::database::dbx_connections as dbx;
 use aeroric_core::database::dbx_state::DbxState;
+use aeroric_core::database::grid as grid_biz;
 use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_core::database::sql_builders as builders;
 use aeroric_core::maintenance::StartupDegradationLog;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
@@ -51,6 +53,141 @@ impl HostedDbx {
 
 fn dbx_paths(context: &CoreContext) -> dbx::DbxConnectionPaths {
     dbx::DbxConnectionPaths::from_data_dir(context.paths.data_dir())
+}
+
+/// 切片九十六：SQL builders／grid 预览的统一 decode→call→reply。
+/// 纯函数（无状态、无 IO、无 await），失败面只有两种：`options` 解不开
+/// （InvalidArgument）与 builder 自身校验拒绝（IoError，legacy Tauri 命令的
+/// Err(String) 同文案——见 with_local 的同款映射）。
+fn builder_dispatch(request: Request, method: &str) -> Frame {
+    let Some(params) = request.params.as_object() else {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            &format!("{method} requires params object"),
+        );
+    };
+    let options = params.get("options").cloned().unwrap_or(Value::Null);
+
+    macro_rules! build {
+        ($options_ty:ty, $call:expr) => {
+            match serde_json::from_value::<$options_ty>(options) {
+                Ok(options) => match serde_json::to_value(($call)(options)) {
+                    Ok(value) => ok(&request, value),
+                    Err(error) => {
+                        failure(request.id.clone(), ErrorCode::IoError, &error.to_string())
+                    }
+                },
+                Err(error) => invalid(&request, &format!("options: {error}")),
+            }
+        };
+    }
+    macro_rules! build_checked {
+        ($options_ty:ty, $call:expr) => {
+            match serde_json::from_value::<$options_ty>(options) {
+                Ok(options) => match ($call)(options) {
+                    Ok(value) => match serde_json::to_value(value) {
+                        Ok(value) => ok(&request, value),
+                        Err(error) => {
+                            failure(request.id.clone(), ErrorCode::IoError, &error.to_string())
+                        }
+                    },
+                    Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error),
+                },
+                Err(error) => invalid(&request, &format!("options: {error}")),
+            }
+        };
+    }
+
+    match method {
+        "database.dbx_build_table_structure_change_sql" => build!(
+            builders::TableStructureSqlOptions,
+            builders::build_table_structure_change_sql
+        ),
+        "database.dbx_build_single_column_alter_sql" => build!(
+            builders::SingleColumnAlterSqlOptions,
+            builders::build_single_column_alter_sql
+        ),
+        "database.dbx_build_create_database_sql" => build_checked!(
+            builders::CreateDatabaseSqlOptions,
+            builders::build_create_database_sql
+        ),
+        "database.dbx_build_duckdb_attach_database_sql" => build!(
+            builders::DuckDbAttachDatabaseSqlOptions,
+            builders::build_duckdb_attach_database_sql
+        ),
+        "database.dbx_build_rename_object_sql" => build_checked!(
+            builders::RenameObjectSqlOptions,
+            builders::build_rename_object_sql
+        ),
+        "database.dbx_build_drop_database_sql" => build!(
+            builders::DatabaseNameSqlOptions,
+            builders::build_drop_database_sql
+        ),
+        "database.dbx_build_create_schema_sql" => build_checked!(
+            builders::SchemaNameSqlOptions,
+            builders::build_create_schema_sql
+        ),
+        "database.dbx_build_drop_schema_sql" => build!(
+            builders::SchemaNameSqlOptions,
+            builders::build_drop_schema_sql
+        ),
+        "database.dbx_build_drop_table_sql" => build!(
+            builders::TableAdminSqlOptions,
+            builders::build_drop_table_sql
+        ),
+        "database.dbx_build_truncate_table_sql" => build!(
+            builders::TableAdminSqlOptions,
+            builders::build_truncate_table_sql
+        ),
+        "database.dbx_build_empty_table_sql" => build!(
+            builders::TableAdminSqlOptions,
+            builders::build_empty_table_sql
+        ),
+        "database.dbx_build_drop_object_sql" => build!(
+            builders::DropObjectSqlOptions,
+            builders::build_drop_object_sql
+        ),
+        "database.dbx_build_drop_table_child_object_sql" => build_checked!(
+            builders::DropTableChildObjectSqlOptions,
+            builders::build_drop_table_child_object_sql
+        ),
+        "database.dbx_build_duplicate_table_structure_sql" => build!(
+            builders::DuplicateTableStructureSqlOptions,
+            builders::build_duplicate_table_structure_sql
+        ),
+        "database.dbx_build_database_search_sql" => build!(
+            builders::DatabaseSearchSqlOptions,
+            builders::build_database_search_sql
+        ),
+        "database.dbx_build_search_result_where" => build!(
+            builders::SearchResultWhereOptions,
+            builders::build_search_result_where
+        ),
+        "database.dbx_preview_grid_sql" => {
+            build!(
+                grid_biz::DataGridSaveStatementOptions,
+                grid_biz::preview_grid_sql
+            )
+        }
+        "database.dbx_build_data_grid_copy_insert_statement" => build!(
+            grid_biz::DataGridCopyInsertStatementOptions,
+            grid_biz::build_data_grid_copy_insert_statement
+        ),
+        "database.dbx_build_data_grid_copy_update_statements" => build!(
+            grid_biz::DataGridCopyUpdateStatementOptions,
+            grid_biz::build_data_grid_copy_update_statements
+        ),
+        "database.dbx_build_data_grid_context_filter_condition" => build!(
+            grid_biz::DataGridContextFilterConditionOptions,
+            grid_biz::build_data_grid_context_filter_condition
+        ),
+        _ => failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            &format!("unknown database builder method {method}"),
+        ),
+    }
 }
 
 fn dbx_store(
@@ -282,6 +419,218 @@ pub fn register_database_services(
                         Ok(frame) => frame,
                         Err(error) => failure(id, ErrorCode::IoError, &error.to_string()),
                     }
+                })
+            }),
+        );
+    }
+
+    // ── 切片九十六（database 刀二）：SQL builders／grid 预览纯函数族 20 条 ──
+    // 注册点逐条写成源码字面量（覆盖率/台账扫描器只认 `set.register("…"` 的
+    // 字面量——切片九同款陷阱第四次规避）。纯函数无状态、无 IO、不需要
+    // context；decode `options` → core 再导出函数 → typed reply。
+    {
+        set.register(
+            "database.dbx_build_table_structure_change_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_table_structure_change_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_single_column_alter_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_single_column_alter_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_create_database_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_create_database_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_duckdb_attach_database_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_duckdb_attach_database_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_rename_object_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_rename_object_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_drop_database_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_drop_database_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_create_schema_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_create_schema_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_drop_schema_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(
+                    async move { builder_dispatch(request, "database.dbx_build_drop_schema_sql") },
+                )
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_drop_table_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(
+                    async move { builder_dispatch(request, "database.dbx_build_drop_table_sql") },
+                )
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_truncate_table_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_truncate_table_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_empty_table_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(
+                    async move { builder_dispatch(request, "database.dbx_build_empty_table_sql") },
+                )
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_drop_object_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(
+                    async move { builder_dispatch(request, "database.dbx_build_drop_object_sql") },
+                )
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_drop_table_child_object_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_drop_table_child_object_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_duplicate_table_structure_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_duplicate_table_structure_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_database_search_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_database_search_sql")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_search_result_where",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(request, "database.dbx_build_search_result_where")
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_preview_grid_sql",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move { builder_dispatch(request, "database.dbx_preview_grid_sql") })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_data_grid_copy_insert_statement",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(
+                        request,
+                        "database.dbx_build_data_grid_copy_insert_statement",
+                    )
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_data_grid_copy_update_statements",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(
+                        request,
+                        "database.dbx_build_data_grid_copy_update_statements",
+                    )
+                })
+            }),
+        );
+    }
+    {
+        set.register(
+            "database.dbx_build_data_grid_context_filter_condition",
+            Arc::new(move |request: Request, _call| {
+                Box::pin(async move {
+                    builder_dispatch(
+                        request,
+                        "database.dbx_build_data_grid_context_filter_condition",
+                    )
                 })
             }),
         );

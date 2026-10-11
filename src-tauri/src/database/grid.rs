@@ -1,7 +1,6 @@
-use dbx_core::data_grid_sql::{
-    self, DataGridContextFilterConditionOptions, DataGridCopyInsertStatementOptions,
-    DataGridCopyUpdateStatementOptions, DataGridSavePreparation, DataGridSaveStatementOptions,
-};
+use aeroric_core::database::grid as grid_biz;
+use aeroric_core::database::grid::{DataGridSaveStatementOptions, SqlPreviewResponse};
+use dbx_core::data_grid_sql;
 use dbx_core::db;
 use dbx_core::models::connection::DatabaseType;
 use dbx_core::query::QueryExecutionOptions;
@@ -54,17 +53,6 @@ pub(crate) struct GridSaveRequest {
     options: DataGridSaveStatementOptions,
     #[serde(default)]
     execute: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SqlPreviewResponse {
-    statements: Vec<String>,
-    rollback_statements: Vec<String>,
-    validation_error: Option<String>,
-    execution_schema: Option<String>,
-    executed: bool,
-    rows_affected: u64,
 }
 
 fn default_page() -> usize {
@@ -132,32 +120,7 @@ async fn execute_grid_save(
     Ok(preview_response(preparation, true, result.affected_rows))
 }
 
-fn preview_response(
-    preparation: DataGridSavePreparation,
-    executed: bool,
-    rows_affected: u64,
-) -> SqlPreviewResponse {
-    SqlPreviewResponse {
-        statements: preparation.statements,
-        rollback_statements: preparation.rollback_statements,
-        validation_error: preparation.validation_error,
-        execution_schema: preparation.execution_schema,
-        executed,
-        rows_affected,
-    }
-}
-
-fn copy_insert_statement(options: DataGridCopyInsertStatementOptions) -> Option<String> {
-    data_grid_sql::build_data_grid_copy_insert_statement(options)
-}
-
-fn copy_update_statements(options: DataGridCopyUpdateStatementOptions) -> Vec<String> {
-    data_grid_sql::build_data_grid_copy_update_statements(options)
-}
-
-fn context_filter_condition(options: DataGridContextFilterConditionOptions) -> Option<String> {
-    data_grid_sql::build_data_grid_context_filter_condition(options)
-}
+use grid_biz::preview_response;
 
 #[tauri::command]
 pub async fn dbx_query_table_data(
@@ -267,36 +230,88 @@ pub async fn dbx_query_table_data(
     })
 }
 
+// ── 切片九十六（database 刀二）：grid 预览/复制四条改宿主转发壳。业务主体
+// 在 dbx-core data_grid_sql，core `database::grid` re-export 为宿主同一依赖
+// 点；Embedded 本地闭包与宿主服务调同一个函数，External 绝不本地回退。 ──
+
 #[tauri::command]
-pub async fn dbx_preview_grid_sql(
+pub async fn dbx_preview_grid_sql<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     options: DataGridSaveStatementOptions,
 ) -> Result<SqlPreviewResponse, String> {
-    Ok(preview_response(
-        data_grid_sql::prepare_data_grid_save(options),
-        false,
-        0,
-    ))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_preview_grid_sql",
+        serde_json::json!({ "options": &options }),
+        async {
+            serde_json::to_value(grid_biz::preview_grid_sql(options))
+                .map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_build_data_grid_copy_insert_statement(
-    options: DataGridCopyInsertStatementOptions,
+pub async fn dbx_build_data_grid_copy_insert_statement<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    options: aeroric_core::database::grid::DataGridCopyInsertStatementOptions,
 ) -> Result<Option<String>, String> {
-    Ok(copy_insert_statement(options))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_data_grid_copy_insert_statement",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(
+                aeroric_core::database::grid::build_data_grid_copy_insert_statement(options)
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_build_data_grid_copy_update_statements(
-    options: DataGridCopyUpdateStatementOptions,
+pub async fn dbx_build_data_grid_copy_update_statements<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    options: aeroric_core::database::grid::DataGridCopyUpdateStatementOptions,
 ) -> Result<Vec<String>, String> {
-    Ok(copy_update_statements(options))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_data_grid_copy_update_statements",
+        serde_json::json!({ "options": &options }),
+        async {
+            serde_json::to_value(
+                aeroric_core::database::grid::build_data_grid_copy_update_statements(options),
+            )
+            .map_err(|error| error.to_string())
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_build_data_grid_context_filter_condition(
-    options: DataGridContextFilterConditionOptions,
+pub async fn dbx_build_data_grid_context_filter_condition<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    options: aeroric_core::database::grid::DataGridContextFilterConditionOptions,
 ) -> Result<Option<String>, String> {
-    Ok(context_filter_condition(options))
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_build_data_grid_context_filter_condition",
+        serde_json::json!({ "options": &options }),
+        async {
+            Ok(
+                aeroric_core::database::grid::build_data_grid_context_filter_condition(options)
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -325,42 +340,9 @@ pub async fn dbx_delete_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        context_filter_condition, copy_insert_statement, copy_update_statements, first_u64_cell,
-        normalize_page_size,
-    };
-    use dbx_core::data_grid_sql::{
-        DataGridColumnInfo, DataGridContextFilterConditionOptions, DataGridContextFilterMode,
-        DataGridCopyInsertStatementOptions, DataGridCopyUpdateStatementOptions, DataGridTableMeta,
-    };
+    use super::{first_u64_cell, normalize_page_size};
     use dbx_core::db::QueryResult;
-    use dbx_core::models::connection::DatabaseType;
     use serde_json::json;
-
-    fn test_column(name: &str, data_type: &str, is_primary_key: bool) -> DataGridColumnInfo {
-        DataGridColumnInfo {
-            name: name.to_string(),
-            data_type: data_type.to_string(),
-            is_nullable: !is_primary_key,
-            is_primary_key,
-            column_default: None,
-            extra: None,
-        }
-    }
-
-    fn test_table_meta() -> DataGridTableMeta {
-        DataGridTableMeta {
-            catalog: None,
-            database: None,
-            schema: Some("public".to_string()),
-            table_name: "users".to_string(),
-            primary_keys: vec!["id".to_string()],
-            columns: Some(vec![
-                test_column("id", "integer", true),
-                test_column("email", "text", false),
-            ]),
-        }
-    }
 
     #[test]
     fn normalizes_grid_page_size() {
@@ -388,67 +370,5 @@ mod tests {
         };
 
         assert_eq!(first_u64_cell(&result), Some(42));
-    }
-
-    #[test]
-    fn builds_copy_insert_statement_with_dbx_core() {
-        let statement = copy_insert_statement(DataGridCopyInsertStatementOptions {
-            database_type: Some(DatabaseType::Postgres),
-            // None 表示沿用 database_type 的方言默认引号,Postgres 下仍是 `"`。
-            identifier_quote: None,
-            table_meta: Some(test_table_meta()),
-            columns: vec!["id".to_string(), "email".to_string()],
-            column_types: None,
-            source_columns: Some(vec![Some("id".to_string()), Some("email".to_string())]),
-            rows: vec![vec![json!(1), json!("alice@example.com")]],
-            exclude_primary_keys: false,
-            include_computed_columns: false,
-            insert_mode: Default::default(),
-        });
-
-        assert_eq!(
-            statement.as_deref(),
-            Some(
-                "INSERT INTO \"public\".\"users\" (\"id\", \"email\") VALUES (1, 'alice@example.com');",
-            )
-        );
-    }
-
-    #[test]
-    fn builds_copy_update_statements_with_dbx_core() {
-        let statements = copy_update_statements(DataGridCopyUpdateStatementOptions {
-            database_type: Some(DatabaseType::Postgres),
-            identifier_quote: None,
-            table_meta: test_table_meta(),
-            columns: vec!["id".to_string(), "email".to_string()],
-            source_columns: Some(vec![Some("id".to_string()), Some("email".to_string())]),
-            rows: vec![vec![json!(1), json!("alice@example.com")]],
-        });
-
-        assert_eq!(
-            statements,
-            vec![
-                "UPDATE \"public\".\"users\" SET \"email\" = 'alice@example.com' WHERE \"id\" = 1;",
-            ]
-        );
-    }
-
-    #[test]
-    fn builds_context_filter_condition_with_dbx_core() {
-        let condition = context_filter_condition(DataGridContextFilterConditionOptions {
-            database_type: Some(DatabaseType::Postgres),
-            identifier_quote: None,
-            column_name: "email".to_string(),
-            mode: DataGridContextFilterMode::Like,
-            value: json!("alice@example.com"),
-            values: Vec::new(),
-            end_value: None,
-            column_info: Some(test_column("email", "text", false)),
-        });
-
-        assert_eq!(
-            condition.as_deref(),
-            Some("\"email\" LIKE '%alice@example.com%'"),
-        );
     }
 }

@@ -7,3 +7,4 @@ pub mod dbx_types;
 pub mod grid;
 pub mod legacy_sqlite;
 pub mod query;
+pub mod sql_builders;
