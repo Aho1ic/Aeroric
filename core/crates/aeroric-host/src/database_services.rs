@@ -17,6 +17,7 @@ use aeroric_core::database::dbx_state::DbxState;
 use aeroric_core::database::execution;
 use aeroric_core::database::grid as grid_biz;
 use aeroric_core::database::legacy_sqlite as biz;
+use aeroric_core::database::mongo_face;
 use aeroric_core::database::redis_face;
 use aeroric_core::database::schema_face;
 use aeroric_core::database::sql_builders as builders;
@@ -52,6 +53,158 @@ impl HostedDbx {
                 state
             })
             .await
+    }
+}
+
+/// 切片一百零一：mongo 面统一 decode→call→reply（注册逐条字面量——切片九
+/// 同款陷阱规避）。
+async fn mongo_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let params = request.params.clone();
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    let id = request.id.clone();
+    let state = hosted.state(&context).await;
+    let strp = |name: &str| params.get(name).and_then(Value::as_str).map(str::to_string);
+    macro_rules! need_str {
+        ($name:expr) => {
+            match strp($name) {
+                Some(value) => value,
+                None => return invalid(&request, &format!("{} (string)", $name)),
+            }
+        };
+    }
+    macro_rules! need_db_coll {
+        () => {{
+            let database = need_str!("database");
+            let collection = need_str!("collection");
+            (database, collection)
+        }};
+    }
+    let reply = |result: Result<Value, String>| match result {
+        Ok(value) => ok(&request, value),
+        Err(error) => failure(id.clone(), ErrorCode::IoError, &error),
+    };
+    match method {
+        "database.dbx_mongo_list_databases" => {
+            let connection_id = need_str!("connectionId");
+            reply(
+                mongo_face::dbx_mongo_list_databases(state, &paths, &store, connection_id)
+                    .await
+                    .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_mongo_list_collections" => {
+            let connection_id = need_str!("connectionId");
+            let database = need_str!("database");
+            reply(
+                mongo_face::dbx_mongo_list_collections(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    database,
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_mongo_find_documents" => {
+            let connection_id = need_str!("connectionId");
+            let (database, collection) = need_db_coll!();
+            reply(
+                mongo_face::dbx_mongo_find_documents(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    database,
+                    collection,
+                    params.get("skip").and_then(Value::as_u64),
+                    params.get("limit").and_then(Value::as_i64),
+                    strp("filter"),
+                    strp("projection"),
+                    strp("sort"),
+                    strp("executionId"),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_mongo_insert_document" => {
+            let connection_id = need_str!("connectionId");
+            let (database, collection) = need_db_coll!();
+            let doc_json = need_str!("docJson");
+            reply(
+                mongo_face::dbx_mongo_insert_document(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    database,
+                    collection,
+                    doc_json,
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_mongo_update_document" => {
+            let connection_id = need_str!("connectionId");
+            let (database, collection) = need_db_coll!();
+            let doc_id = need_str!("id");
+            let doc_json = need_str!("docJson");
+            reply(
+                mongo_face::dbx_mongo_update_document(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    database,
+                    collection,
+                    doc_id,
+                    doc_json,
+                    strp("routing"),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        "database.dbx_mongo_delete_documents" => {
+            let connection_id = need_str!("connectionId");
+            let (database, collection) = need_db_coll!();
+            let filter_json = need_str!("filterJson");
+            reply(
+                mongo_face::dbx_mongo_delete_documents(
+                    state,
+                    &paths,
+                    &store,
+                    connection_id,
+                    database,
+                    collection,
+                    filter_json,
+                    params.get("many").and_then(Value::as_bool),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+            )
+        }
+        _ => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("unknown database mongo method {method}"),
+        ),
     }
 }
 
@@ -1766,6 +1919,96 @@ pub fn register_database_services(
                 let dbx = Arc::clone(&dbx);
                 Box::pin(async move {
                     redis_dispatch(request, context, dbx, "database.dbx_redis_execute_command")
+                        .await
+                })
+            }),
+        );
+    }
+    // ── 切片一百零一（database）：mongo 面 6 条（字面量注册——扫描器只认
+    // set.register 的字面量，循环＋变量是切片九同款陷阱）──
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_list_databases",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_list_databases").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_list_collections",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_list_collections")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_find_documents",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_find_documents").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_insert_document",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_insert_document")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_update_document",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_update_document")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_mongo_delete_documents",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    mongo_dispatch(request, context, dbx, "database.dbx_mongo_delete_documents")
                         .await
                 })
             }),

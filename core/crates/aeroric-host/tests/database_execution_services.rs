@@ -307,7 +307,6 @@ async fn unregistered_database_methods_stay_unsupported() {
     // 切片九十八上收了 schema／驱动面 7 条；仍未上收的驱动专属面必须保持
     // 不可达：宿主不虚报能力。
     for method in [
-        "database.dbx_mongo_find_documents",
         "database.dbx_start_transfer",
     ] {
         let reply = call(&mut reader, &mut writer, method, json!({})).await;

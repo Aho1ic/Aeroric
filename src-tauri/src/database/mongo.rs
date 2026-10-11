@@ -1,80 +1,79 @@
-use std::future::Future;
-use std::sync::Arc;
+// ── 切片一百零一（database）：mongo 面 6 条改宿主转发壳。业务主体在 core
+// `database::mongo_face`（run_cancellable 取消登记/可写闸/mongo_ops verbatim
+// 上收）；Embedded 本地闭包与宿主服务调同一函数，External 绝不本地回退。
 
-use dbx_core::connection::AppState;
 use dbx_core::db::mongo_driver::MongoDocumentResult;
-use tauri::State;
 
-use super::connections;
+use super::connection_secrets::KeyringDbxConnectionSecretStore;
 use super::dbx_state::DbxState;
+use aeroric_core::database::dbx_connections::DbxConnectionPaths;
+use aeroric_core::database::mongo_face;
 
-async fn run_cancellable<T, F>(
-    state: &Arc<AppState>,
-    execution_id: Option<String>,
-    future: F,
-) -> Result<T, String>
-where
-    F: Future<Output = Result<T, String>>,
-{
-    let registered_query = execution_id
-        .as_ref()
-        .and_then(|id| non_empty(id.clone()))
-        .map(|id| state.running_queries.register(id));
-    if let Some(query) = registered_query.as_ref() {
-        let token = query.token();
-        tokio::select! {
-            biased;
-            _ = token.cancelled() => Err(dbx_core::query::canceled_error()),
-            result = future => result,
-        }
-    } else {
-        future.await
-    }
-}
-
-fn non_empty(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn normalize_limit(limit: Option<i64>) -> i64 {
-    limit.unwrap_or(100).clamp(1, 1000)
+fn local_connection_paths() -> Result<DbxConnectionPaths, String> {
+    Ok(DbxConnectionPaths::from_data_dir(
+        &crate::storage::aeroric_dir()?,
+    ))
 }
 
 #[tauri::command]
-pub async fn dbx_mongo_list_databases(
-    state: State<'_, DbxState>,
+pub async fn dbx_mongo_list_databases<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
 ) -> Result<Vec<String>, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    dbx_core::mongo_ops::mongo_list_databases_core(&state.app_state, &connection_id).await
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_mongo_list_databases",
+        serde_json::json!({ "connectionId": connection_id }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_list_databases(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                connection_id,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_mongo_list_collections(
-    state: State<'_, DbxState>,
+pub async fn dbx_mongo_list_collections<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     database: String,
 ) -> Result<Vec<String>, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    dbx_core::mongo_ops::mongo_list_collections_core(&state.app_state, &connection_id, &database)
-        .await
-        .map(|collections| {
-            collections
-                .into_iter()
-                .map(|collection| collection.name)
-                .collect()
-        })
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_mongo_list_collections",
+        serde_json::json!({ "connectionId": connection_id, "database": database }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_list_collections(
+                &state,
+                &paths,
+                &KeyringDbxConnectionSecretStore,
+                connection_id,
+                database,
+            )
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn dbx_mongo_find_documents(
-    state: State<'_, DbxState>,
+#[tauri::command]
+pub async fn dbx_mongo_find_documents<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     database: String,
     collection: String,
@@ -85,51 +84,49 @@ pub async fn dbx_mongo_find_documents(
     sort: Option<String>,
     execution_id: Option<String>,
 ) -> Result<MongoDocumentResult, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    let app = state.app_state.clone();
-    run_cancellable(
+    let value = crate::host_dispatch::dispatch(
         &app,
-        execution_id,
-        dbx_core::mongo_ops::mongo_find_documents_core(
-            &app,
-            &connection_id,
-            &database,
-            &collection,
-            skip.unwrap_or(0),
-            normalize_limit(limit),
-            filter.as_deref(),
-            projection.as_deref(),
-            sort.as_deref(),
-            // 新增的 collation 参数,None 等于原来的默认排序规则。
-            None,
-        ),
+        "database.dbx_mongo_find_documents",
+        serde_json::json!({ "connectionId": connection_id, "database": database, "collection": collection, "skip": skip, "limit": limit, "filter": filter, "projection": projection, "sort": sort, "executionId": execution_id }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_find_documents(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, database, collection, skip, limit, filter, projection, sort, execution_id)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_mongo_insert_document(
-    state: State<'_, DbxState>,
+pub async fn dbx_mongo_insert_document<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     database: String,
     collection: String,
     doc_json: String,
 ) -> Result<String, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "Insert").await?;
-    dbx_core::mongo_ops::mongo_insert_document_core(
-        &state.app_state,
-        &connection_id,
-        &database,
-        &collection,
-        &doc_json,
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_mongo_insert_document",
+        serde_json::json!({ "connectionId": connection_id, "database": database, "collection": collection, "docJson": doc_json }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_insert_document(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, database, collection, doc_json)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_mongo_update_document(
-    state: State<'_, DbxState>,
+pub async fn dbx_mongo_update_document<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     database: String,
     collection: String,
@@ -137,52 +134,42 @@ pub async fn dbx_mongo_update_document(
     doc_json: String,
     routing: Option<String>,
 ) -> Result<u64, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "Update").await?;
-    dbx_core::mongo_ops::mongo_update_document_core(
-        &state.app_state,
-        &connection_id,
-        &database,
-        &collection,
-        &id,
-        &doc_json,
-        routing.as_deref(),
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_mongo_update_document",
+        serde_json::json!({ "connectionId": connection_id, "database": database, "collection": collection, "id": id, "docJson": doc_json, "routing": routing }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_update_document(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, database, collection, id, doc_json, routing)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn dbx_mongo_delete_documents(
-    state: State<'_, DbxState>,
+pub async fn dbx_mongo_delete_documents<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, DbxState>,
     connection_id: String,
     database: String,
     collection: String,
     filter_json: String,
     many: Option<bool>,
 ) -> Result<u64, String> {
-    connections::ensure_connected(&state, &connection_id).await?;
-    connections::ensure_writable(&state, &connection_id, "Delete").await?;
-    dbx_core::mongo_ops::mongo_delete_documents_core(
-        &state.app_state,
-        &connection_id,
-        &database,
-        &collection,
-        &filter_json,
-        many.unwrap_or(false),
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "database.dbx_mongo_delete_documents",
+        serde_json::json!({ "connectionId": connection_id, "database": database, "collection": collection, "filterJson": filter_json, "many": many }),
+        async {
+            let paths = local_connection_paths()?;
+            mongo_face::dbx_mongo_delete_documents(&state, &paths, &KeyringDbxConnectionSecretStore, connection_id, database, collection, filter_json, many)
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        },
     )
-    .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{non_empty, normalize_limit};
-
-    #[test]
-    fn mongo_defaults_are_bounded() {
-        assert_eq!(non_empty(" exec ".to_string()), Some("exec".to_string()));
-        assert_eq!(non_empty("  ".to_string()), None);
-        assert_eq!(normalize_limit(None), 100);
-        assert_eq!(normalize_limit(Some(0)), 1);
-        assert_eq!(normalize_limit(Some(5000)), 1000);
-    }
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }

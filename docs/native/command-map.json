@@ -19578,7 +19578,7 @@
       "rust_path": "database::mongo::dbx_mongo_list_databases",
       "registered_at": "src-tauri/src/lib.rs:1020",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:49"
+        "src-tauri/src/database/mongo.rs:19"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19590,12 +19590,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:49",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:19",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19603,7 +19603,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String"
       ]
     },
@@ -19612,7 +19613,7 @@
       "rust_path": "database::mongo::dbx_mongo_list_collections",
       "registered_at": "src-tauri/src/lib.rs:1021",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:58"
+        "src-tauri/src/database/mongo.rs:45"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19624,12 +19625,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:58",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:45",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19637,7 +19638,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "database: String"
       ]
@@ -19647,7 +19649,7 @@
       "rust_path": "database::mongo::dbx_mongo_find_documents",
       "registered_at": "src-tauri/src/lib.rs:1022",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:76"
+        "src-tauri/src/database/mongo.rs:74"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19659,12 +19661,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:76",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:74",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19672,7 +19674,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "database: String",
         "collection: String",
@@ -19689,7 +19692,7 @@
       "rust_path": "database::mongo::dbx_mongo_insert_document",
       "registered_at": "src-tauri/src/lib.rs:1023",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:111"
+        "src-tauri/src/database/mongo.rs:103"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19701,12 +19704,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:111",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:103",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19714,7 +19717,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "database: String",
         "collection: String",
@@ -19726,7 +19730,7 @@
       "rust_path": "database::mongo::dbx_mongo_update_document",
       "registered_at": "src-tauri/src/lib.rs:1024",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:131"
+        "src-tauri/src/database/mongo.rs:127"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19738,12 +19742,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:131",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:127",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19751,7 +19755,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "database: String",
         "collection: String",
@@ -19765,7 +19770,7 @@
       "rust_path": "database::mongo::dbx_mongo_delete_documents",
       "registered_at": "src-tauri/src/lib.rs:1025",
       "definition_candidates": [
-        "src-tauri/src/database/mongo.rs:155"
+        "src-tauri/src/database/mongo.rs:153"
       ],
       "definition_unique": true,
       "category": "domain_rpc",
@@ -19777,12 +19782,12 @@
       "feature_ids": [
         "F14"
       ],
-      "definition_resolved": "src-tauri/src/database/mongo.rs:155",
+      "definition_resolved": "src-tauri/src/database/mongo.rs:153",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
         "other_package_literal": false,
-        "rust_internal_refs": 0,
+        "rust_internal_refs": 2,
         "test_only_literal": false,
         "prefix_derived_of": null,
         "prefix_derived_parent_reachable": null,
@@ -19790,7 +19795,8 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, DbxState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, DbxState>!",
         "connection_id: String",
         "database: String",
         "collection: String",

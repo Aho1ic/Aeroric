@@ -7,6 +7,7 @@ pub mod dbx_types;
 pub mod execution;
 pub mod grid;
 pub mod legacy_sqlite;
+pub mod mongo_face;
 pub mod query;
 pub mod redis_face;
 pub mod schema_face;
