@@ -15,9 +15,9 @@
   },
   "legacyChannels": 38,
   "legacyDirectionUnproven": 11,
-  "mapped": 11,
+  "mapped": 12,
   "notForwarded": 0,
-  "pending": 27,
+  "pending": 26,
   "protocolVersion": 1,
   "reshapedPayloads": 5,
   "rows": [
@@ -106,9 +106,10 @@
         "dbx-production-confirm-requested"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P7-04",
-      "plannedDirection": "pending: P7-04",
-      "status": "pending: P7-04",
+      "payload": "verbatim: legacy payload is `{requestId, connection, databases, sql}` (camelCase); the confirm loop (P8-05 切片九十七) emits it on the legacy channel and the host EventLog carries the same object for this v1 topic — answer path is the UDS method `database.respond_dbx_production_confirmation`",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md 切片九十七开工锚点 §97.1；core `database::execution` 只认注入的 `ConfirmEventSink`，宿主 `database_services.rs` append 进 EventLog（legacy 通道名，executor task-status 先例）、Tauri `query.rs` emit 到窗口",
+      "status": "mapped",
       "topic": "dbx.production_confirm_requested"
     },
     {

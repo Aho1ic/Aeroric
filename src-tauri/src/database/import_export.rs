@@ -9,12 +9,12 @@ use dbx_core::table_export::TableExportRequest;
 use dbx_core::table_export::{ExportStatus, TableExportProgress};
 use dbx_core::table_import::{TableImportPreview, TableImportRequest, TableImportSummary};
 use serde::Deserialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use zip::ZipArchive;
 
+use super::connection_secrets::KeyringDbxConnectionSecretStore;
 use super::connections;
 use super::dbx_state::DbxState;
-use super::query;
 
 const MAX_EXCEL_ZIP_ENTRIES: usize = 2_048;
 const MAX_EXCEL_ENTRY_BYTES: u64 = 128 * 1024 * 1024;
@@ -294,14 +294,36 @@ pub async fn dbx_execute_sql_file(
 ) -> Result<Vec<db::QueryResult>, String> {
     let path = validate_sql_file_path(&request.path)?;
     let sql = read_sql_file(&path)?;
-    query::enforce_production_sql_confirmation(
-        &app,
-        &state,
-        &request.connection_id,
-        request.database.clone(),
-        &sql,
-    )
-    .await?;
+    {
+        // 刀三起 enforce 主体在 core execution；Tauri 本地路径的出口仍是窗口
+        // emit（legacy 通道名逐字）。import/export 面属后续切片，这里只换闸。
+        let paths = aeroric_core::database::dbx_connections::DbxConnectionPaths::from_data_dir(
+            &crate::storage::aeroric_dir()?,
+        );
+        let sink: aeroric_core::database::execution::ConfirmEventSink = {
+            use aeroric_core::database::execution::ProductionConfirmRequest;
+            let app = app.clone();
+            std::sync::Arc::new(move |request: &ProductionConfirmRequest| {
+                if let Ok(payload) = serde_json::to_value(request) {
+                    let _ = app.emit(
+                        aeroric_core::database::execution::PRODUCTION_CONFIRM_EVENT,
+                        payload,
+                    );
+                }
+            })
+        };
+        aeroric_core::database::execution::enforce_production_sql_confirmation(
+            &state,
+            &paths,
+            &KeyringDbxConnectionSecretStore,
+            &request.connection_id,
+            request.database.clone(),
+            &sql,
+            Some(&sink),
+            aeroric_core::database::execution::PRODUCTION_CONFIRM_TIMEOUT,
+        )
+        .await?;
+    }
     connections::ensure_connected(&state, &request.connection_id).await?;
     let execution_id = format!("sql-file:{}", uuid::Uuid::new_v4());
     let registered_query = state

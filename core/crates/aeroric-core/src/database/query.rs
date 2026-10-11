@@ -3,10 +3,10 @@
 //! DBX 业务主体在 dbx-core，这里承载 assessment 形状与确认链）。
 use dbx_core::models::connection::ConnectionConfig;
 use dbx_core::sql_risk::SqlRisk;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// SQL 风险评估结果（与 Tauri `ProductionSqlAssessment` camelCase 字段对齐）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductionSqlAssessment {
     pub requires_confirmation: bool,
@@ -15,7 +15,7 @@ pub struct ProductionSqlAssessment {
 }
 
 /// 目标评估结果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductionTargetAssessment {
     pub requires_confirmation: bool,

@@ -4,6 +4,7 @@ pub mod dbx_connections;
 pub mod dbx_secrets;
 pub mod dbx_state;
 pub mod dbx_types;
+pub mod execution;
 pub mod grid;
 pub mod legacy_sqlite;
 pub mod query;

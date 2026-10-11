@@ -14,9 +14,11 @@ use std::sync::Arc;
 use aeroric_core::context::CoreContext;
 use aeroric_core::database::dbx_connections as dbx;
 use aeroric_core::database::dbx_state::DbxState;
+use aeroric_core::database::execution;
 use aeroric_core::database::grid as grid_biz;
 use aeroric_core::database::legacy_sqlite as biz;
 use aeroric_core::database::sql_builders as builders;
+use aeroric_core::events::EventLog;
 use aeroric_core::maintenance::StartupDegradationLog;
 use aeroric_protocol::envelope::{Frame, Request};
 use aeroric_protocol::error::ErrorCode;
@@ -49,6 +51,232 @@ impl HostedDbx {
             })
             .await
     }
+}
+
+/// 切片九十七：执行面统一 decode→call→reply。连接池/注册表是 async 业务，
+/// 直接 await（spawn_blocking 拿不到运行时——dbx 五条同款注释）。
+async fn execution_dispatch(
+    request: Request,
+    context: Arc<CoreContext>,
+    log: Arc<EventLog>,
+    hosted: Arc<HostedDbx>,
+    method: &str,
+) -> Frame {
+    if !request.params.is_object() {
+        return failure(
+            request.id.clone(),
+            ErrorCode::InvalidArgument,
+            "requires params object",
+        );
+    }
+    let params = request.params.clone();
+    let paths = dbx_paths(&context);
+    let store = dbx_store(&context);
+    fn decode_request<T: serde::de::DeserializeOwned>(
+        request: &Request,
+        params: &Value,
+    ) -> Result<T, Box<Frame>> {
+        let body = params.get("request").cloned().unwrap_or(Value::Null);
+        serde_json::from_value(body)
+            .map_err(|error| Box::new(invalid(request, &format!("request: {error}"))))
+    }
+
+    let sink = confirm_event_sink(&log);
+    let id = request.id.clone();
+    match method {
+        "database.dbx_execute_query" => {
+            match decode_request::<execution::ExecuteQueryRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::execute_query(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        Some(&sink),
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => typed_reply(&request, &result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.dbx_execute_multi" => {
+            match decode_request::<execution::ExecuteMultiRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::execute_multi(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        Some(&sink),
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => typed_reply(&request, &result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.dbx_cancel_query" => {
+            let Some(execution_id) = str_param(&params, "executionId") else {
+                return invalid(&request, "executionId (string)");
+            };
+            match execution::cancel_query(hosted.state(&context).await, execution_id) {
+                Ok(()) => ok(&request, Value::Null),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_close_result_session" => {
+            let Some(connection_id) = str_param(&params, "connectionId") else {
+                return invalid(&request, "connectionId (string)");
+            };
+            let Some(session_id) = str_param(&params, "sessionId") else {
+                return invalid(&request, "sessionId (string)");
+            };
+            let database = params
+                .get("database")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let client_session_id = params
+                .get("clientSessionId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match execution::close_result_session(
+                hosted.state(&context).await,
+                connection_id,
+                session_id,
+                database,
+                client_session_id,
+            )
+            .await
+            {
+                Ok(()) => ok(&request, Value::Null),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        "database.dbx_query_table_data" => {
+            match decode_request::<execution::GridTableDataRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::query_table_data(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => ok(&request, result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.dbx_update_cell" | "database.dbx_insert_row" | "database.dbx_delete_rows" => {
+            match decode_request::<execution::GridSaveRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::execute_grid_save(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => ok(&request, result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.dbx_assess_production_sql" => {
+            match decode_request::<execution::AssessProductionSqlRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::assess_sql(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => typed_reply(&request, &result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.dbx_assess_production_target" => {
+            match decode_request::<execution::AssessProductionTargetRequest>(&request, &params) {
+                Ok(parsed) => {
+                    match execution::assess_target(
+                        hosted.state(&context).await,
+                        &paths,
+                        &store,
+                        parsed,
+                    )
+                    .await
+                    {
+                        Ok(result) => typed_reply(&request, &result),
+                        Err(error) => failure(id, ErrorCode::IoError, &error),
+                    }
+                }
+                Err(frame) => *frame,
+            }
+        }
+        "database.respond_dbx_production_confirmation" => {
+            let Some(request_id) = str_param(&params, "requestId") else {
+                return invalid(&request, "requestId (string)");
+            };
+            let Some(approved) = params.get("approved").and_then(Value::as_bool) else {
+                return invalid(&request, "approved (boolean)");
+            };
+            let mut pending = hosted
+                .state(&context)
+                .await
+                .pending_production_confirmations
+                .lock()
+                .await;
+            match execution::resolve_pending_production_confirmation(
+                &mut pending,
+                &request_id,
+                approved,
+            ) {
+                Ok(()) => ok(&request, Value::Null),
+                Err(error) => failure(id, ErrorCode::IoError, &error),
+            }
+        }
+        _ => failure(
+            id,
+            ErrorCode::InvalidArgument,
+            &format!("unknown database execution method {method}"),
+        ),
+    }
+}
+
+fn typed_reply<T: serde::Serialize>(request: &Request, value: &T) -> Frame {
+    match serde_json::to_value(value) {
+        Ok(value) => ok(request, value),
+        Err(error) => failure(request.id.clone(), ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+/// 确认请求出口：EventLog append（legacy 通道名，v1 台账映射
+/// `dbx.production_confirm_requested`）。core 不认识连接——出口注入。
+fn confirm_event_sink(log: &Arc<EventLog>) -> execution::ConfirmEventSink {
+    let log = Arc::clone(log);
+    Arc::new(move |request: &execution::ProductionConfirmRequest| {
+        if let Ok(payload) = serde_json::to_value(request) {
+            log.append(execution::PRODUCTION_CONFIRM_EVENT, payload);
+        }
+    })
 }
 
 fn dbx_paths(context: &CoreContext) -> dbx::DbxConnectionPaths {
@@ -204,6 +432,7 @@ pub fn register_database_services(
     set: &mut ServiceSet,
     context: Arc<CoreContext>,
     degradations: Arc<StartupDegradationLog>,
+    log: Arc<EventLog>,
 ) {
     let dbx = Arc::new(HostedDbx {
         state: tokio::sync::OnceCell::new(),
@@ -402,6 +631,217 @@ pub fn register_database_services(
                 let context = Arc::clone(&context);
                 let dbx = Arc::clone(&dbx);
                 Box::pin(async move { dbx_dispatch(request, context, dbx).await })
+            }),
+        );
+    }
+    // ── 切片九十七（database 刀三）：执行面＋生产确认回路 11 条 ──
+    // 确认请求出口＝EventLog append（legacy 通道名；executor "task-status"
+    // 先例）——core 不认识连接，emit 出口是注入的 ConfirmEventSink。
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_execute_query",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_execute_query")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_execute_multi",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_execute_multi")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_cancel_query",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_cancel_query")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_close_result_session",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_close_result_session",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_query_table_data",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_query_table_data")
+                        .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_update_cell",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_update_cell").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_insert_row",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_insert_row").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_delete_rows",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(request, context, log, dbx, "database.dbx_delete_rows").await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_assess_production_sql",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_assess_production_sql",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.dbx_assess_production_target",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.dbx_assess_production_target",
+                    )
+                    .await
+                })
+            }),
+        );
+    }
+    {
+        let context = Arc::clone(&context);
+        let log = Arc::clone(&log);
+        let dbx = Arc::clone(&dbx);
+        set.register(
+            "database.respond_dbx_production_confirmation",
+            Arc::new(move |request: Request, _call| {
+                let context = Arc::clone(&context);
+                let log = Arc::clone(&log);
+                let dbx = Arc::clone(&dbx);
+                Box::pin(async move {
+                    execution_dispatch(
+                        request,
+                        context,
+                        log,
+                        dbx,
+                        "database.respond_dbx_production_confirmation",
+                    )
+                    .await
+                })
             }),
         );
     }

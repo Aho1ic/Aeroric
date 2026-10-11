@@ -610,20 +610,20 @@ async fn malformed_options_are_invalid_argument() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn execution_face_stays_unsupported_until_slice_ninety_seven() {
+async fn unregistered_database_family_stays_unsupported() {
     let host = Harness::start("sql-builders-boundary").await;
     let (mut reader, mut writer) = authenticated(&host).await;
 
-    // 刀三未动工的执行面/确认回路必须仍然不可达：宿主不虚报能力。
+    // 切片九十七上收了执行面 11 条；仍未上收的 schema/驱动/传输面必须保持
+    // 不可达：宿主不虚报能力。
     for method in [
-        "database.dbx_execute_query",
-        "database.dbx_execute_multi",
-        "database.dbx_update_cell",
-        "database.dbx_insert_row",
-        "database.dbx_delete_rows",
-        "database.dbx_query_table_data",
-        "database.dbx_assess_production_sql",
-        "database.respond_dbx_production_confirmation",
+        "database.dbx_list_databases",
+        "database.dbx_list_schemas",
+        "database.dbx_list_objects",
+        "database.dbx_get_columns",
+        "database.dbx_redis_get_value",
+        "database.dbx_mongo_find_documents",
+        "database.dbx_start_transfer",
     ] {
         let reply = call(&mut reader, &mut writer, method, json!({})).await;
         assert_eq!(

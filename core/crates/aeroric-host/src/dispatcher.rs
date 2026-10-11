@@ -301,6 +301,7 @@ impl HostServices {
             &mut set,
             Arc::clone(&context),
             Arc::clone(&wiring.degradations),
+            Arc::clone(&log),
         );
         // P8-05 切片七：文件服务第二批（格式化 / 本地历史 / 复制）。
         crate::file_services2::register_file_services_batch2(
