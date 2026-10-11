@@ -60,6 +60,15 @@ Input 中省略根前缀的既有 Rust 模块，如 `app_settings/schema.rs`，�
 
 > 切片98收尾备注（2026-10-11）：database 族宿主化三刀＋收尾共 46 条上收（8 legacy＋5 CRUD＋20 builders/preview＋11 执行面＋7 schema/驱动——覆盖率 190→241）；**剩余 44 条**（redis 16/mongo 6/transfer 3/import_export 8/execute_sql_file 等）需专用驱动或文件面，机器可测面窄，按缺口台账续接。本切片无tag/release、无生产数据切换或用户/grill验收授权；P8-05仍`in_progress`、G43仍open、默认Embedded不变。下一片＝99 按 host-coverage 缺口续接（redis/mongo/transfer/import 面或 connections/dsh 族）或推进 P8-05 剩余项（G43/事件泵）。
 
+### ▶ P8-05 切片九十九开工锚点（2026-10-11，notebook 缺口三条：别名一条＋rag index/context 两条——续跑用）
+
+**勘察结论（2026-10-11 实测）**：切片90 遗留的三条 notebook 缺口两条性质不同——
+① `notebook.notebook_attachment_save_from_path`＝**别名对账**（切片90 同款）：宿主 `notebook_services.rs:126` **已注册** `notebook.attachment_save_from_path`（nb_attachment_save_from_path），台账派生名是双前缀 `notebook.notebook_attachment_save_from_path`——只需按切片90 流程加别名行（四项校验＋`host-methods.json` aliases），零运行时改动。
+② `notebook.notebook_rag_index`／`notebook.notebook_rag_context`＝**真缺口**：宿主只注册了 rag_probe/stats/cancel/clear/search/neighbors 六条（`notebook_services.rs:179-184`）；index/context 的业务体已在 core（`notebook/rag/index.rs::index_vault`＋`notebook/rag/context.rs::assemble`），Tauri `rag/commands.rs:342/446` 是最后消费者。
+- **rag_index 的设计点**：Tauri 版签名带 `AppHandle`（索引进度事件）＋`JobGuard` 防并发写库＋`resolve_key_with_secrets`（同 nb_rag_search:1226 的密钥解析先例）——宿主化时进度事件的出口要按切片97 的 `ConfirmEventSink` 同款注入模式决策（EventLog append 或 sink 注入），JobGuard 是 core notebook state 既有件。
+- **机器可测面窄**：embedding 需要真实供应商 API（花钱）；可测＝无索引时 context/search 的 `vectorsMissing` 形状、config 缺密钥拒绝、JobGuard 并发拒绝。
+- **验收锚**：别名行四项校验过＋rag_context 无索引形状＋rag_index 缺密钥拒绝；覆盖率 241→243。
+
 > **怎么读这份文件（2026-09-29 补记二百零三 加的导航块；行数与体积是当日实测）**：全文 **4 530 行／1.36 MB**，其中**第 63–1402 行是「续跑指令」区里的历史流水（1 340 行＝0.67 MB，占全文 49%）**，规范性正文从 **第 1439 行「## 0. 先纠正迁移起点」** 起、共 3 128 行／0.66 MB。**行号会随每轮标注漂移，所以下面一律给可重跑的 grep 锚点**：
 > - 今天要做的事 ＝ `grep -m1 "^\\*\\*当前状态（" MIGRATION_PLAN.md`；当前行位于“▶ 执行进度标注”区末尾，日期/补记号随每轮更新，不引用固定行号或历史字符串。
 > - 51 个 Task 的状态 ＝ `grep -n "^### 进度总表" MIGRATION_PLAN.md` 起的那张表（今天实测表内 51 行、accepted 12）。
