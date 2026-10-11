@@ -42,7 +42,7 @@ const RERANK_TIMEOUT: Duration = Duration::from_secs(30);
 /// 进去只会让用户等着。
 pub const MAX_DOCUMENTS: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RerankConfig {
     /// HTTP 代理（与 `embed::ProxyConfig` 同语义；宿主注入）。

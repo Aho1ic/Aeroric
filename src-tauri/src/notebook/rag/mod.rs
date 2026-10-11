@@ -24,7 +24,7 @@
 // topic 常量表也移到 core（`RAG_INDEX_PROGRESS_TOPIC`/`RAG_INDEX_PROGRESS_LEGACY`），
 // 宿主 emit wrapper 发两条（旧通道 verbatim＋v1 topic）。
 pub use aeroric_core::notebook::rag::{
-    context, db, embed, graph, index, rerank, search, RAG_INDEX_PROGRESS_TOPIC,
+    db, embed, graph, index, rerank, search, RAG_INDEX_PROGRESS_TOPIC,
 };
 
 pub mod commands;

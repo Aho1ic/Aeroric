@@ -128,7 +128,7 @@ impl CancelToken {
 }
 
 /// 一次索引运行的结果。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexOutcome {
     pub indexed: usize,
@@ -139,7 +139,7 @@ pub struct IndexOutcome {
 }
 
 /// 本次运行要覆盖哪些笔记。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum IndexScope {
     /// 全库:按指纹决定每篇做什么。

@@ -23820,7 +23820,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:317",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:285",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23854,7 +23854,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:326",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:294",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23889,7 +23889,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:342",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:323",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23902,11 +23902,11 @@
       },
       "reachable": true,
       "params": [
-        "app: AppHandle!",
-        "state: State<'_, NotebookState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, NotebookState>!",
         "vault: String",
-        "config: EmbedConfig",
-        "scope: Option<IndexScope>"
+        "config: aeroric_core::notebook::rag::embed::EmbedConfig",
+        "scope: Option<index::IndexScope>"
       ]
     },
     {
@@ -23927,7 +23927,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:382",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:373",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23962,7 +23962,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:400",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:391",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -23997,7 +23997,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:416",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:407",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24035,7 +24035,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:446",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:438",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24048,14 +24048,15 @@
       },
       "reachable": true,
       "params": [
-        "state: State<'_, NotebookState>!",
+        "app: tauri::AppHandle<R>!",
+        "state: tauri::State<'_, NotebookState>!",
         "vault: String",
         "query: String",
-        "config: EmbedConfig",
+        "config: aeroric_core::notebook::rag::embed::EmbedConfig",
         "current_path: Option<String>",
         "current_body: Option<String>",
-        "search_options: Option<SearchOptionsDto>",
-        "context_options: Option<ContextOptionsDto>"
+        "search_options: Option<aeroric_core::notebook::rag::face::SearchOptionsDto>",
+        "context_options: Option<aeroric_core::notebook::rag::face::ContextOptionsDto>"
       ]
     },
     {
@@ -24076,7 +24077,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:514",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:494",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24113,7 +24114,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:262",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:230",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24145,7 +24146,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:251",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:219",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24179,7 +24180,7 @@
         "F15",
         "F16"
       ],
-      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:269",
+      "definition_resolved": "src-tauri/src/notebook/rag/commands.rs:237",
       "resolution": "module-subtree-unique",
       "reachability": {
         "frontend_literal": true,
@@ -24787,7 +24788,7 @@
       "rust_consts": [],
       "ts_consts": [],
       "emitters": [
-        "src-tauri/src/notebook/rag/commands.rs:129"
+        "src-tauri/src/notebook/rag/commands.rs:127"
       ],
       "listeners": [
         "src/components/notebook/useNoteRag.ts:96"
@@ -25038,7 +25039,7 @@
     "event_name @ src-tauri/src/dsh_webui.rs:1905",
     "event_name @ src-tauri/src/dsh_webui.rs:1922",
     "action.event_name() @ src-tauri/src/lib.rs:238",
-    "super::RAG_INDEX_PROGRESS_TOPIC @ src-tauri/src/notebook/rag/commands.rs:130",
+    "super::RAG_INDEX_PROGRESS_TOPIC @ src-tauri/src/notebook/rag/commands.rs:128",
     "daemon_core::SYNC_UPDATED_TOPIC @ src-tauri/src/notebook/sync/daemon.rs:44",
     "event_name @ src-tauri/src/pty.rs:462",
     "event @ src-tauri/src/remote/bridge.rs:35",

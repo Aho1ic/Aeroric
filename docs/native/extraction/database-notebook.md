@@ -5,6 +5,8 @@
 > child task because `.trellis/` is gitignored here — a plan artifact that exists on one machine is
 > not a checklist. Companion: `docs/native/command-map.json`, `docs/native/reachability-triage.md`.
 >
+> **Corrected 2026-10-11 (P8-05 切片九十九).** rag_index／rag_context 主体上收 core `notebook::rag::face`：commands.rs 两符号迁走（moved 14→12；本地 ContextOptionsDto/ContextBundle 死代码删除，TestOptionsDto 测试半边随迁）；register 标量按生成值（pubSymbolsTotal 209→207）。commands.rs 剩 search/probe/cancel/clear/stats 等本地命令与转发壳。
+>
 > **Corrected 2026-10-11 (P8-05 切片九十八).** schema／驱动面 7 条改宿主转发壳：drivers.rs 的静态清单测试随实现迁 core `database::schema_face`（schema.rs 6 条本无测试）；register 标量按生成值（testOnlyItemsExcluded 54→53、pubSymbolsTotal 210→209）。schema.rs/drivers.rs 全部成为转发壳。
 >
 > **Corrected 2026-10-11 (P8-05 切片九十七).** 执行面 11 条改宿主转发壳＋确认回路主体上收 core `database::execution`：query.rs 全部 13 条测试随迁（test items 13→0）、grid.rs 2 条随迁（2→0），本地 assess/confirm/options/DTO 符号随主体迁走（moved 31→23／11→8）；register 标量按生成值（testOnlyItemsExcluded 69→54、pubSymbolsTotal 221→210）。执行/保存/评估的业务主体留在 src-tauri 的只剩转发壳与本地路径/密钥适配。
@@ -67,7 +69,7 @@ whose body moves out while a same-named wrapper stays behind. Destination mirror
 | 14 | `src-tauri/src/database/transfer.rs` | `core/crates/aeroric-core/database/transfer.rs` | 7 | dbx_build_data_compare_sync_plan(), dbx_cancel_transfer(), dbx_generate_schema_sync_sql(), dbx_prepare_data_compare(), dbx_prepare_data_compare_from_tables(), dbx_prepare_schema_diff(), dbx_start_transfer() (9 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
 | 15 | `src-tauri/src/database/types.rs` | `core/crates/aeroric-core/database/types.rs` | 0 | — (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
 | 16 | `src-tauri/src/notebook/mod.rs` | `core/crates/aeroric-core/notebook/mod.rs` | 62 | Mod rag, Mod sync, notebook_attachment_list(), notebook_attachment_read(), notebook_attachment_save(), notebook_attachment_save_from_path(), notebook_close_note(), notebook_convert_richtext(), notebook_create_folder(), notebook_create_note(), notebook_create_note_in_vault(), notebook_delete_note(), notebook_ensure_default_vault(), notebook_ensure_project_vault(), notebook_export_site_write() +49 more (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; spawns task/thread (needs a cancellation token) |
-| 17 | `src-tauri/src/notebook/rag/commands.rs` | `core/crates/aeroric-core/notebook/rag/commands.rs` | 11 | Struct ContextBundle, Struct ContextOptionsDto, Struct SearchOptionsDto, notebook_embedding_key_clear(), notebook_embedding_key_set(), notebook_embedding_key_status(), notebook_rag_cancel(), notebook_rag_clear(), notebook_rag_context(), notebook_rag_index(), notebook_rag_neighbors(), notebook_rag_probe(), notebook_rag_search(), notebook_rag_stats() (23 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
+| 17 | `src-tauri/src/notebook/rag/commands.rs` | `core/crates/aeroric-core/notebook/rag/commands.rs` | 11 | Struct SearchOptionsDto, notebook_embedding_key_clear(), notebook_embedding_key_set(), notebook_embedding_key_status(), notebook_rag_cancel(), notebook_rag_clear(), notebook_rag_context(), notebook_rag_index(), notebook_rag_neighbors(), notebook_rag_probe(), notebook_rag_search(), notebook_rag_stats() (23 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | command-layer; AppHandle/State; emits events; spawns task/thread (needs a cancellation token); credential owner |
 | 18 | `src-tauri/src/notebook/rag/mod.rs` | `core/crates/aeroric-core/notebook/rag/mod.rs` | 0 | Mod commands (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | credential owner |
 | 19 | `src-tauri/src/notebook/sync/daemon.rs` | `core/crates/aeroric-core/notebook/sync/daemon.rs` | 0 | Struct SyncDaemonGuard, start() (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | AppHandle/State; emits events; spawns task/thread (needs a cancellation token) |
 | 20 | `src-tauri/src/notebook/sync/mod.rs` | `core/crates/aeroric-core/notebook/sync/mod.rs` | 0 | Mod daemon (0 test items excluded) | unmapped（Action 未给同名文件，见上方 Action 原文） | — |
@@ -80,7 +82,7 @@ whose body moves out while a same-named wrapper stays behind. Destination mirror
   "files": 20,
   "commands": 168,
   "testOnlyItemsExcluded": 53,
-  "pubSymbolsTotal": 209,
+  "pubSymbolsTotal": 207,
   "withAppHandle": [
     "src-tauri/src/database/connections.rs",
     "src-tauri/src/database/grid.rs",

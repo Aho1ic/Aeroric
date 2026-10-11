@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeroric_core::context::CoreContext;
+use aeroric_core::events::EventLog;
 use aeroric_core::notebook::state::NotebookState;
 use aeroric_core::notebook::{
     attachments, export, fields, html2md, import, links, mentions, migrate, snapshots, state,
@@ -29,6 +30,8 @@ use crate::services::ok;
 #[derive(Clone, Default)]
 pub struct NotebookHandle {
     state: Arc<NotebookState>,
+    /// 切片九十九：rag 索引进度的宿主出口（EventLog＝宿主的 v1 事件面）。
+    log: Arc<EventLog>,
 }
 
 impl std::ops::Deref for NotebookHandle {
@@ -61,8 +64,12 @@ macro_rules! try_s {
 pub fn register_notebook_services(
     set: &mut ServiceSet,
     context: Arc<CoreContext>,
+    log: Arc<EventLog>,
 ) -> NotebookHandle {
-    let handle = NotebookHandle::default();
+    let handle = NotebookHandle {
+        state: Arc::new(NotebookState::default()),
+        log: Arc::clone(&log),
+    };
     macro_rules! service_ctx {
         ($method:expr, $fn_name:ident) => {{
             let handle = handle.clone();
@@ -182,6 +189,33 @@ pub fn register_notebook_services(
     service_ctx!("notebook.rag_clear", nb_rag_clear);
     service_ctx!("notebook.rag_search", nb_rag_search);
     service_ctx!("notebook.rag_neighbors", nb_rag_neighbors);
+    // 切片九十九：这两条是 async handler（索引要跑分钟级，不能 block 住
+    // dispatcher 的 worker）——显式注册（同 file/db 服务的形状），方法名
+    // 仍是扫描器认的字面量。
+    {
+        let handle = handle.clone();
+        let context = Arc::clone(&context);
+        set.register(
+            "notebook.rag_index",
+            Arc::new(move |request, _call| {
+                let handle = handle.clone();
+                let context = Arc::clone(&context);
+                Box::pin(async move { nb_rag_index(request, &handle, &context).await })
+            }),
+        );
+    }
+    {
+        let handle = handle.clone();
+        let context = Arc::clone(&context);
+        set.register(
+            "notebook.rag_context",
+            Arc::new(move |request, _call| {
+                let handle = handle.clone();
+                let context = Arc::clone(&context);
+                Box::pin(async move { nb_rag_context(request, &handle, &context).await })
+            }),
+        );
+    }
 
     // ── embedding key（凭据走 CoreContext SecretStore；不回明文）──
     service_ctx!("notebook.embedding_key_set", nb_embedding_key_set);
@@ -1115,17 +1149,166 @@ where
     })
 }
 
+/// 切片九十九：rag 索引进度的宿主出口。EventLog 是宿主的 v1 事件面——
+/// append 到 v1 topic（`notebook.rag_index_progress`）；legacy 通道留在 Tauri
+/// 窗口（Embedded 双发原样），External 侧由事件泵切片接手转发。
+struct RagProgressLogSink {
+    log: std::sync::Arc<EventLog>,
+    vault: String,
+}
+
+impl aeroric_core::notebook::rag::index::ProgressSink for RagProgressLogSink {
+    fn report(&self, progress: &aeroric_core::notebook::rag::index::IndexProgress) {
+        // 发不出去也不该让索引停下 —— 消费者可能不在线,而索引本身是有价值的。
+        let payload = json!({
+            "vault": self.vault,
+            "progress": json_value(progress),
+        });
+        self.log.append(
+            aeroric_core::notebook::rag::RAG_INDEX_PROGRESS_TOPIC,
+            payload,
+        );
+    }
+}
+
+/// 原生侧的 JobGuard：登记进 `native_jobs`，离开作用域自动注销（与 Tauri
+/// `JobGuard` 同语义——`index_vault` 有多条 return，交给 Drop 比手工注销可靠）。
+struct NativeJobGuard {
+    vault: PathBuf,
+    cancel: aeroric_core::notebook::rag::index::CancelToken,
+}
+
+impl NativeJobGuard {
+    fn begin(vault: &Path) -> Result<Self, String> {
+        let mut map = native_jobs().lock().map_err(|e| e.to_string())?;
+        if map.contains_key(vault) {
+            return Err("Notebook index is already running for this vault".to_string());
+        }
+        let cancel = aeroric_core::notebook::rag::index::CancelToken::new();
+        map.insert(vault.to_path_buf(), cancel.clone());
+        Ok(Self {
+            vault: vault.to_path_buf(),
+            cancel,
+        })
+    }
+}
+
+impl Drop for NativeJobGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = native_jobs().lock() {
+            map.remove(&self.vault);
+        }
+    }
+}
+
+async fn nb_rag_index(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let config = try_f!(need::<aeroric_core::notebook::rag::embed::EmbedConfig>(
+        &request, "config"
+    ));
+    let scope = try_f!(need_opt::<aeroric_core::notebook::rag::index::IndexScope>(
+        &request, "scope"
+    ))
+    .unwrap_or_default();
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    // 先占住这个 vault 再做别的:反过来的话探测维度那几百毫秒里第二次点击会溜
+    // 进来,于是两个任务并发写同一个库。
+    let guard = try_s!(request, NativeJobGuard::begin(&resolved));
+    let cancel = guard.cancel.clone();
+    let vault_label = resolved.to_string_lossy().to_string();
+    let log = Arc::clone(&handle.log);
+    let secrets = Arc::clone(&context.secrets);
+    let outcome = tokio::task::spawn_blocking(move || {
+        // 任务登记随线程结束而注销 —— `index_vault` 有多条 return,交给 Drop 比
+        // 每条路径手工注销可靠。
+        let _guard = guard;
+        block_rag(move || async move {
+            let sink = RagProgressLogSink {
+                log,
+                vault: vault_label,
+            };
+            aeroric_core::notebook::rag::face::rag_index(
+                &resolved,
+                config,
+                scope,
+                &cancel,
+                &sink,
+                &|config| resolve_key_with_secrets(config, &*secrets),
+            )
+            .await
+        })
+    })
+    .await;
+    match outcome {
+        Ok(Ok(outcome)) => ok(&request, json_value(outcome)),
+        Ok(Err(e)) => failure(request.id, ErrorCode::IoError, &e),
+        Err(error) => failure(request.id, ErrorCode::IoError, &error.to_string()),
+    }
+}
+
+async fn nb_rag_context(request: Request, handle: &NotebookHandle, context: &CoreContext) -> Frame {
+    let vault = try_f!(need_str(&request, "vault"));
+    let query = try_f!(need_str(&request, "query"));
+    let config = try_f!(need::<aeroric_core::notebook::rag::embed::EmbedConfig>(
+        &request, "config"
+    ));
+    let current_path = try_f!(need_opt::<String>(&request, "currentPath"));
+    let current_body = try_f!(need_opt::<String>(&request, "currentBody"));
+    let search_options = try_f!(need_opt::<
+        aeroric_core::notebook::rag::face::SearchOptionsDto,
+    >(&request, "searchOptions"))
+    .unwrap_or_default();
+    let context_options = try_f!(need_opt::<
+        aeroric_core::notebook::rag::face::ContextOptionsDto,
+    >(&request, "contextOptions"))
+    .unwrap_or_default();
+    let resolved = try_s!(request, handle.resolve_in_vaults(&vault, false));
+    let current = match current_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        Some(path) => {
+            let note_path = try_s!(request, handle.resolve_in_vaults(path, true));
+            if let Err(e) =
+                aeroric_core::notebook::rag::face::ensure_note_in_vault(&note_path, &resolved)
+            {
+                return failure(request.id, ErrorCode::InvalidArgument, &e);
+            }
+            Some((note_path, current_body.unwrap_or_default()))
+        }
+        None => None,
+    };
+    let secrets = Arc::clone(&context.secrets);
+    let outcome = tokio::task::spawn_blocking(move || {
+        block_rag(move || async move {
+            aeroric_core::notebook::rag::face::rag_context(
+                &resolved,
+                current,
+                &query,
+                config,
+                search_options,
+                context_options,
+                &|config| resolve_key_with_secrets(config, &*secrets),
+            )
+            .await
+        })
+    })
+    .await;
+    match outcome {
+        Ok(Ok(bundle)) => ok(&request, json_value(bundle)),
+        Ok(Err(e)) => failure(request.id, ErrorCode::IoError, &e),
+        Err(error) => failure(request.id, ErrorCode::IoError, &error.to_string()),
+    }
+}
+
 /// 用 CoreContext 的 SecretStore 解析 embedding key（Ollama 不查、已带不覆盖
 /// ——与宿主 `with_stored_key` 同语义）。
 fn resolve_key_with_secrets(
     mut config: aeroric_core::notebook::rag::embed::EmbedConfig,
-    context: &CoreContext,
+    secrets: &dyn aeroric_core::context::SecretStore,
 ) -> Result<aeroric_core::notebook::rag::embed::EmbedConfig, String> {
     use aeroric_core::notebook::rag::embed::EmbedProvider;
     if config.provider == EmbedProvider::Ollama || !config.api_key.trim().is_empty() {
         return Ok(config);
     }
-    let key = context.secrets.get(&aeroric_core::context::SecretKey(
+    let key = secrets.get(&aeroric_core::context::SecretKey(
         EMBEDDING_KEY_ACCOUNT.to_string(),
     ))?;
     if let Some(key) = key {
@@ -1139,7 +1322,7 @@ fn nb_rag_probe(request: Request, handle: &NotebookHandle, context: &CoreContext
     let config = try_f!(need::<aeroric_core::notebook::rag::embed::EmbedConfig>(
         &request, "config"
     ));
-    let config = try_s!(request, resolve_key_with_secrets(config, context));
+    let config = try_s!(request, resolve_key_with_secrets(config, &*context.secrets));
     match block_rag(move || async move {
         aeroric_core::notebook::rag::embed::probe_dimension(&config)
             .await
@@ -1222,7 +1405,7 @@ fn nb_rag_search(request: Request, handle: &NotebookHandle, context: &CoreContex
             json!({ "hits": [], "degraded": [], "vectorsMissing": true }),
         );
     };
-    let config = try_s!(request, resolve_key_with_secrets(config, context));
+    let config = try_s!(request, resolve_key_with_secrets(config, &*context.secrets));
     match block_rag(move || async move {
         aeroric_core::notebook::rag::search::search(&resolved, dim, &config, &query, &options).await
     }) {

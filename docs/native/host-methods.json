@@ -225,6 +225,11 @@
       "evidence": "宿主 notebook_services.rs 注册 notebook.attachment_save；已发布的 Swift NotebookClient 调用的也是 notebook.attachment_save（macos/AeroricKit/Sources/AeroricClient/NotebookClient.swift 字符串）——两侧一致，只有台账派生名不同（模块族 notebook＋notebook_ 命令名的双前缀）。"
     },
     {
+      "derived": "notebook.notebook_attachment_save_from_path",
+      "actual": "notebook.attachment_save_from_path",
+      "evidence": "宿主 notebook_services.rs 注册 notebook.attachment_save_from_path（nb_attachment_save_from_path，与 attachment_save 并排注册）；已发布的 Swift NotebookClient 调用的也是 notebook.attachment_save_from_path（macos/Aerokit/Sources/AeroricClient/NotebookClient.swift 的 attachmentSaveFromPath 字符串）——两侧一致，只有台账派生名不同（模块族 notebook＋notebook_ 命令名的双前缀）。"
+    },
+    {
       "derived": "notebook.notebook_attachment_list",
       "actual": "notebook.attachment_list",
       "evidence": "宿主 notebook_services.rs 注册 notebook.attachment_list；已发布的 Swift NotebookClient 调用的也是 notebook.attachment_list（macos/AeroricKit/Sources/AeroricClient/NotebookClient.swift 字符串）——两侧一致，只有台账派生名不同（模块族 notebook＋notebook_ 命令名的双前缀）。"
@@ -413,6 +418,16 @@
       "derived": "notebook.notebook_rag_stats",
       "actual": "notebook.rag_stats",
       "evidence": "宿主 notebook_services.rs 注册 notebook.rag_stats（P7-06 sync/rag/storage_backends 面上收，命令体与 Tauri `rag::commands::notebook_rag_stats` 逐一镜像同一条 core 实现）；Swift 客户端尚未接线该面（P7-06 评审在案），宿主注册与 Tauri 命令同源是对账依据；台账派生名差异同上（双前缀）。"
+    },
+    {
+      "derived": "notebook.notebook_rag_index",
+      "actual": "notebook.rag_index",
+      "evidence": "切片九十九：宿主 notebook_services.rs 注册 notebook.rag_index（nb_rag_index，显式 set.register 字面量）；业务主体 core notebook::rag::face::rag_index（P7-06 同一实现链，commands.rs::notebook_rag_index verbatim 上收）。Swift NotebookClient 未接线（如实留档），与切片九十的 sync/rag 面同口径。"
+    },
+    {
+      "derived": "notebook.notebook_rag_context",
+      "actual": "notebook.rag_context",
+      "evidence": "切片九十九：宿主 notebook_services.rs 注册 notebook.rag_context（nb_rag_context，显式 set.register 字面量）；业务主体 core notebook::rag::face::rag_context（P7-06 同一实现链，commands.rs::notebook_rag_context verbatim 上收）。Swift NotebookClient 未接线（如实留档）。"
     },
     {
       "derived": "notebook.notebook_rag_cancel",

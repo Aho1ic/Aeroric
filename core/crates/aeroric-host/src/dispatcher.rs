@@ -279,8 +279,11 @@ impl HostServices {
             Arc::clone(&context),
             wiring.files.clone(),
         );
-        let notebook =
-            crate::notebook_services::register_notebook_services(&mut set, Arc::clone(&context));
+        let notebook = crate::notebook_services::register_notebook_services(
+            &mut set,
+            Arc::clone(&context),
+            Arc::clone(&log),
+        );
         crate::search_services::register_search_services(
             &mut set,
             Arc::clone(&context),

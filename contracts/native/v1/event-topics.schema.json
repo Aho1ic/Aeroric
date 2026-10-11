@@ -15,9 +15,9 @@
   },
   "legacyChannels": 38,
   "legacyDirectionUnproven": 11,
-  "mapped": 12,
+  "mapped": 13,
   "notForwarded": 0,
-  "pending": 26,
+  "pending": 25,
   "protocolVersion": 1,
   "reshapedPayloads": 5,
   "rows": [
@@ -425,9 +425,10 @@
         "notebook-rag-index-progress"
       ],
       "legacyDirection": "core-to-client",
-      "payload": "pending: P7-06",
-      "plannedDirection": "pending: P7-06",
-      "status": "pending: P7-06",
+      "payload": "verbatim: legacy payload is `{vault, progress}` (camelCase, progress flattened); the host rag_index (P8-05 切片九十九) appends the same object to the EventLog under this v1 topic — the Tauri Embedded path dual-fires the legacy channel and this topic to the window",
+      "plannedDirection": "core-to-client",
+      "source": "MIGRATION_PLAN.md 切片九十九开工锚点 §99；core `notebook::rag::face` 只认注入的 ProgressSink，宿主 `RagProgressLogSink` append 进 EventLog、Tauri `EventSink` 窗口双发（P7-06 先例）",
+      "status": "mapped",
       "topic": "notebook.rag_index_progress"
     },
     {

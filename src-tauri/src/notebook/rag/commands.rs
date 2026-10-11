@@ -22,14 +22,12 @@ use std::sync::{Mutex, OnceLock};
 
 use tauri::{AppHandle, Emitter, State};
 
-use super::context::{self, ContextOptions, CurrentNote};
 use super::embed::{self, EmbedConfig};
-use super::index::{self, CancelToken, IndexProgress, IndexScope, ProgressSink};
+use super::index::{self, CancelToken, IndexProgress, ProgressSink};
 use super::rerank::RerankConfig;
 use super::search::{self, SearchOptions, SearchOutcome};
 use super::{db, graph};
 use crate::notebook::state::NotebookState;
-use crate::notebook::vault_index::split_frontmatter;
 
 /// 进度事件名。前端 `listen` 这个 topic。
 const PROGRESS_EVENT: &str = "notebook-rag-index-progress";
@@ -110,12 +108,12 @@ struct ProgressEvent {
 ///
 /// 持有 `AppHandle` 而不是借用:索引跑在自己的线程上(见 [`on_own_thread`]),
 /// 借用活不过命令返回。`AppHandle` 是 `Clone + Send + Sync`,克隆是廉价的。
-struct EventSink {
-    app: AppHandle,
+struct EventSink<R: tauri::Runtime> {
+    app: AppHandle<R>,
     vault: String,
 }
 
-impl ProgressSink for EventSink {
+impl<R: tauri::Runtime> ProgressSink for EventSink<R> {
     fn report(&self, progress: &IndexProgress) {
         // 发不出去也不该让索引停下 —— 窗口可能已经关了,而索引本身是有价值的。
         let payload = ProgressEvent {
@@ -173,7 +171,7 @@ where
 }
 
 /// 检索参数的前端形状。全部可省,省了就用 [`SearchOptions::default`] 的值。
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchOptionsDto {
     pub limit: Option<usize>,
@@ -205,36 +203,6 @@ impl SearchOptionsDto {
             rerank: self.rerank,
         }
     }
-}
-
-/// 上下文预算的前端形状。
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextOptionsDto {
-    pub max_tokens: Option<usize>,
-    pub current_chars: Option<usize>,
-}
-
-impl ContextOptionsDto {
-    fn into_options(self) -> ContextOptions {
-        let defaults = ContextOptions::default();
-        ContextOptions {
-            max_tokens: positive_or(self.max_tokens, defaults.max_tokens),
-            current_chars: positive_or(self.current_chars, defaults.current_chars),
-        }
-    }
-}
-
-/// 一次问答的上下文。
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextBundle {
-    #[serde(flatten)]
-    pub assembled: context::Assembled,
-    /// 检索时哪几路降级了。装配层不知道这件事,但 UI 必须一起显示 —— 否则
-    /// 「上下文里没有想要的片段」看起来像是检索没找到,而实际是模型没连上。
-    pub degraded: Vec<search::Degraded>,
-    pub vectors_missing: bool,
 }
 
 /// embedding key 在钥匙串里的账户名。
@@ -336,42 +304,65 @@ pub async fn notebook_rag_stats(
     .await
 }
 
-/// 建索引。进度走 `notebook-rag-index-progress` 事件,可用
-/// [`notebook_rag_cancel`] 取消。
+// 建索引。进度在 Embedded 仍走 `notebook-rag-index-progress` 窗口事件（legacy
+// 通道＋v1 topic 双发），可用 [`notebook_rag_cancel`] 取消。
+// ── 切片九十九（notebook 缺口三条之二）：rag_index／rag_context 改宿主转发
+// 壳。业务主体在 core `notebook::rag::face`；Embedded 本地闭包与宿主服务调
+// 同一函数，External 绝不本地回退。差异只在两个出口的注入：进度事件在
+// Embedded 仍是窗口双发（legacy 通道＋v1 topic，EventSink 原样），宿主侧是
+// EventLog append；补 key 在 Embedded 走钥匙串、宿主走 SecretStore——都在
+// block_rag 自己的线程上同步跑（on_own_thread 的本意）。 ──
+
+fn rag_key_from_keyring(
+    config: aeroric_core::notebook::rag::embed::EmbedConfig,
+) -> Result<aeroric_core::notebook::rag::embed::EmbedConfig, String> {
+    with_stored_key(config, || crate::secrets::get(EMBEDDING_KEY_ACCOUNT))
+}
+
 #[tauri::command]
-pub async fn notebook_rag_index(
-    app: AppHandle,
-    state: State<'_, NotebookState>,
+pub async fn notebook_rag_index<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, NotebookState>,
     vault: String,
-    config: EmbedConfig,
-    scope: Option<IndexScope>,
+    config: aeroric_core::notebook::rag::embed::EmbedConfig,
+    scope: Option<index::IndexScope>,
 ) -> Result<index::IndexOutcome, String> {
-    let resolved = state.resolve_in_vaults(&vault, false)?;
-    // 先占住这个 vault 再做别的:反过来的话探测维度那几百毫秒里第二次点击会溜
-    // 进来,于是两个任务并发写同一个库。
-    let guard = JobGuard::begin(&resolved)?;
-    // 补 key 排在占位**之后**,同一个理由:钥匙串读在 macOS 上可能弹一个授权框,那
-    // 期间的第二次点击必须撞在 JobGuard 上。
-    let config = resolve_key(config).await?;
-    let cancel = guard.cancel.clone();
-    let scope = scope.unwrap_or_default();
-    let vault_label = resolved.to_string_lossy().to_string();
-    on_own_thread(move || async move {
-        // 任务登记随线程结束而注销 —— `index_vault` 有多条 return,交给 Drop 比
-        // 每条路径手工注销可靠。
-        let _guard = guard;
-        // 维度也在这条线程上探:它是索引的一部分,provider 连不上时这一轮本来
-        // 就做不了,不该先占着位置再回去报错。
-        let dim = embed::probe_dimension(&config)
+    let window = app.clone();
+    let value = crate::host_dispatch::dispatch(
+        &app,
+        "notebook.rag_index",
+        serde_json::json!({ "vault": vault, "config": &config, "scope": scope }),
+        async {
+            let resolved = state.resolve_in_vaults(&vault, false)?;
+            // 先占住这个 vault 再做别的:反过来的话探测维度那几百毫秒里第二次点击会溜
+            // 进来,于是两个任务并发写同一个库。
+            let guard = JobGuard::begin(&resolved)?;
+            let cancel = guard.cancel.clone();
+            let vault_label = resolved.to_string_lossy().to_string();
+            on_own_thread(move || async move {
+                // 任务登记随线程结束而注销 —— `index_vault` 有多条 return,交给 Drop 比
+                // 每条路径手工注销可靠。
+                let _guard = guard;
+                let sink = EventSink {
+                    app: window,
+                    vault: vault_label,
+                };
+                aeroric_core::notebook::rag::face::rag_index(
+                    &resolved,
+                    config,
+                    scope.unwrap_or_default(),
+                    &cancel,
+                    &sink,
+                    &rag_key_from_keyring,
+                )
+                .await
+            })
             .await
-            .map_err(|e| e.message().to_string())?;
-        let sink = EventSink {
-            app,
-            vault: vault_label,
-        };
-        index::index_vault(&resolved, dim, &config, scope, &cancel, &sink).await
-    })
-    .await
+            .and_then(|outcome| serde_json::to_value(outcome).map_err(|e| e.to_string()))
+        },
+    )
+    .await?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// 请求取消这个 vault 上正在跑的索引。返回是否真有任务被通知到。
@@ -443,67 +434,56 @@ pub async fn notebook_rag_search(
 /// 刚写下还没保存的那几行,读盘会拿到一份旧的。路径仍然要过 allowlist(它会进
 /// 返回值,也用于与命中去重),并且允许尚不存在 —— 新建还没保存的笔记正是主场景。
 #[tauri::command]
-pub async fn notebook_rag_context(
-    state: State<'_, NotebookState>,
+#[allow(clippy::too_many_arguments)]
+pub async fn notebook_rag_context<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, NotebookState>,
     vault: String,
     query: String,
-    config: EmbedConfig,
+    config: aeroric_core::notebook::rag::embed::EmbedConfig,
     current_path: Option<String>,
     current_body: Option<String>,
-    search_options: Option<SearchOptionsDto>,
-    context_options: Option<ContextOptionsDto>,
-) -> Result<ContextBundle, String> {
-    let resolved = state.resolve_in_vaults(&vault, false)?;
-    let current = match current_path.as_deref().filter(|p| !p.trim().is_empty()) {
-        Some(path) => {
-            let note_path = state.resolve_in_vaults(path, true)?;
-            ensure_note_in_vault(&note_path, &resolved)?;
-            let raw = current_body.unwrap_or_default();
-            // 与建索引同一套口径:归一化换行、剥掉 frontmatter。不一致的话
-            // `char_start` 与这里的偏移不在同一个坐标系里,去重会错位。
-            let normalized = raw.replace("\r\n", "\n");
-            let (_front, body) = split_frontmatter(&normalized);
-            let path_string = note_path.to_string_lossy().to_string();
-            Some(CurrentNote {
-                title: index::title_of(&raw, &path_string),
-                path: path_string,
-                body: body.to_string(),
-            })
-        }
-        None => None,
-    };
-
-    let outcome = match db::peek_dim(&resolved) {
-        Some(dim) => {
-            let options = search_options.unwrap_or_default().into_options();
-            let vault_path = resolved.clone();
-            // 补 key 放在这个分支里而不是函数开头:没建过索引时下面根本不发 embedding
-            // 请求,那就不该去碰钥匙串。
-            let config = resolve_key(config).await?;
+    search_options: Option<aeroric_core::notebook::rag::face::SearchOptionsDto>,
+    context_options: Option<aeroric_core::notebook::rag::face::ContextOptionsDto>,
+) -> Result<serde_json::Value, String> {
+    crate::host_dispatch::dispatch(
+        &app,
+        "notebook.rag_context",
+        serde_json::json!({
+            "vault": vault,
+            "query": query,
+            "config": &config,
+            "currentPath": current_path,
+            "currentBody": current_body,
+            "searchOptions": search_options,
+            "contextOptions": context_options
+        }),
+        async {
+            let resolved = state.resolve_in_vaults(&vault, false)?;
+            let current = match current_path.as_deref().filter(|p| !p.trim().is_empty()) {
+                Some(path) => {
+                    let note_path = state.resolve_in_vaults(path, true)?;
+                    Some((note_path, current_body.unwrap_or_default()))
+                }
+                None => None,
+            };
             on_own_thread(move || async move {
-                search::search(&vault_path, dim, &config, &query, &options).await
+                let bundle = aeroric_core::notebook::rag::face::rag_context(
+                    &resolved,
+                    current,
+                    &query,
+                    config,
+                    search_options.unwrap_or_default(),
+                    context_options.unwrap_or_default(),
+                    &rag_key_from_keyring,
+                )
+                .await?;
+                serde_json::to_value(bundle).map_err(|e| e.to_string())
             })
-            .await?
-        }
-        // 没索引也要出上下文:当前笔记本身仍然是有用的上下文,而这正是「刚装好、
-        // 还没建索引」时用户的第一次提问。
-        None => SearchOutcome {
-            hits: Vec::new(),
-            degraded: Vec::new(),
-            vectors_missing: true,
+            .await
         },
-    };
-
-    let assembled = context::assemble(
-        current.as_ref(),
-        &outcome.hits,
-        &context_options.unwrap_or_default().into_options(),
-    );
-    Ok(ContextBundle {
-        assembled,
-        degraded: outcome.degraded,
-        vectors_missing: outcome.vectors_missing,
-    })
+    )
+    .await
 }
 
 /// 一篇笔记的邻居(它引用的 + 引用它的),给引用面板与「相关笔记」用。
@@ -547,8 +527,10 @@ pub async fn notebook_rag_neighbors(
 
 #[cfg(test)]
 mod tests {
+    use super::index::IndexScope;
     use super::*;
     use crate::notebook::rag::index::IndexPhase;
+    use aeroric_core::notebook::rag::face::ContextBundle;
 
     /// 每个测试一个独立的 vault 路径。任务注册表是进程全局的,共用路径会让并行跑的
     /// 测试互相抢锁。路径不必真的存在 —— [`JobGuard`] 只拿它当键。
@@ -663,22 +645,7 @@ mod tests {
         .into_options();
         assert_eq!(search.limit, 8);
 
-        let zeroed = ContextOptionsDto {
-            max_tokens: Some(0),
-            current_chars: Some(0),
-        }
-        .into_options();
-        assert_eq!(zeroed.max_tokens, 3000);
-        assert_eq!(zeroed.current_chars, 1200);
-
-        // Some(0) 与 None 必须走同一条路径;漏掉 None 会让「没填」和「清空」分叉。
-        let omitted = ContextOptionsDto {
-            max_tokens: None,
-            current_chars: None,
-        }
-        .into_options();
-        assert_eq!(omitted.max_tokens, 3000);
-        assert_eq!(omitted.current_chars, 1200);
+        // ContextOptionsDto 的同款口径随实现迁 core `rag::face`（切片九十九）。
     }
 
     #[test]
@@ -726,7 +693,11 @@ mod tests {
     #[test]
     fn the_context_bundle_is_flat() {
         let bundle = ContextBundle {
-            assembled: context::assemble(None, &[], &ContextOptions::default()),
+            assembled: aeroric_core::notebook::rag::context::assemble(
+                None,
+                &[],
+                &aeroric_core::notebook::rag::context::ContextOptions::default(),
+            ),
             degraded: vec![search::Degraded {
                 stage: "vector".to_string(),
                 detail: "boom".to_string(),

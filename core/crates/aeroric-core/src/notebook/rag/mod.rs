@@ -38,6 +38,7 @@ pub mod cjk;
 pub mod context;
 pub mod db;
 pub mod embed;
+pub mod face;
 pub mod graph;
 pub mod index;
 pub mod rerank;
