@@ -5,6 +5,9 @@
 //! 先按 macOS `open -R` 实现放在端口后面，等它的第一个调用者。
 
 use std::path::Path;
+// `Command` is used only by the macOS-gated helpers below; on other targets it is a
+// deny-warnings unused import (CI's ubuntu/windows clippy caught it).
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use aeroric_core::runtime::{PlatformError, PlatformServices};
@@ -47,7 +50,7 @@ fn reveal_sync(_path: &Path) -> Result<(), PlatformError> {
     Err(PlatformError::Unsupported("reveal_in_file_manager"))
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn parse_clipboard_file_paths_output(raw: &str) -> Vec<String> {
     raw.lines()
         .map(str::trim)
