@@ -691,7 +691,7 @@ describe("the rules every client shares", () => {
 
   it("bridges every legacy channel to exactly one v1 topic (ADR-007)", () => {
     const topics = contract<TopicSurface>("event-topics.schema.json");
-expect(topics.topics).toBe(39);
+    expect(topics.topics).toBe(39);
     // P8-04 刀二/刀三:`usage.statistics_updated` 与 `weekly.report_progress` 双发接线,
     // mapped 5 → 11(P8-02/03 的 9 条 + 本轮 2 条)。P8-05 切片九十七/九十九/一百零三
     // 再把 dbx.production_confirm_requested、notebook.rag_index_progress、

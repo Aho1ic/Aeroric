@@ -159,9 +159,7 @@ function corePayloadKeys(functionName: string, variant: "Status" | "Session"): s
   const body = text.slice(brace, end);
   const armStart = body.indexOf(`TaskNotification::${variant}`);
   const armEnd =
-    variant === "Status"
-      ? body.indexOf("TaskNotification::Session(facts)")
-      : body.length;
+    variant === "Status" ? body.indexOf("TaskNotification::Session(facts)") : body.length;
   expect(armStart, `${variant} arm must exist in window_payload`).toBeGreaterThan(-1);
   const arm = body.slice(armStart, armEnd);
   const keys = new Set<string>();
