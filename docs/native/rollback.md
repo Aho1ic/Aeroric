@@ -54,6 +54,7 @@ A rollback is only meaningful if you know which knob turns what off.
 | P3–P7 | do not launch `aeroric-cli serve` / Native Preview against `~/.aeroric`; they only accept a test `--data-dir` | Tauri client with stepwise embedded core | isolated temp dirs only; user data never touched |
 | P8-05 onwards | set the embedded/external choice back to **embedded** in `src-tauri/src/core_adapter.rs`; the Tauri external adapter is the first rollback target | Tauri embedded core | the **same** host data format — rolling back the client must not roll back formats |
 | P10 | keep Native Preview as a non-default entry point | Tauri as macOS default | as above |
+| **ADR-039(转型)** | 尚未执行删除 ⇒ 今天没有要回退的东西。一旦按 ADR-039 §6 执行:R5 改写 INV-09 后回退需还原 `tauri.conf.json` 的 ad-hoc 基线;**R4「逐步废除 React」的冻结期**窗口内可随时解冻(源代码不动,只是不投新功能);**R1/R3 删 CI 与跨平台代码是唯一不可逆项**(须先有 SwiftUI 客户端能跑,见 ADR-039 §6 S1) | 冻结期:Same as today(R1–R6 尚未落地);执行期:Same as today(旧 Tauri 仍是回退面,直到删除动作发生) | 无——ADR-039 本身不写数据;它改的是「谁能启动、CI 跑什么、签名基线」 |
 
 Rules that survive every rollback:
 

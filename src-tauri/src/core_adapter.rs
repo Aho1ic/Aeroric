@@ -1540,6 +1540,10 @@ mod tests {
     }
 
     /// External 的整个意思就是**别去取租约**：取了就是第二个写者。
+    /// `writer_handover_allowed() = cfg!(target_os = "macos")`(ADR-021):非 macOS 上
+    /// `decide_placement` 直接短路成 `Embedded`,External 这一档根本走不到 ⇒ 本用例
+    /// 只在 macOS runner 上断言(CI 的 ubuntu/windows job 曾因此红;ADR-039 §4 S2)。
+    #[cfg(target_os = "macos")]
     #[test]
     fn external_placement_never_takes_the_lease() {
         let paths = short_root_paths("place");
@@ -1581,6 +1585,7 @@ mod tests {
     }
 
     /// 外置但连不上：**只读 + 如实报告**，绝不回退成内嵌写者（那会变成两个写者）。
+    #[cfg(target_os = "macos")] // 同上:非 macOS 不走进 External 档。
     #[test]
     fn a_failed_external_attach_stays_read_only_instead_of_falling_back() {
         let paths = short_root_paths("fail");
@@ -1662,6 +1667,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")] // 非 macOS 上 mode 是 HandoverDeferred,不是 Writer。
     #[test]
     fn a_free_temp_directory_makes_this_process_the_writer() {
         // The point of prerequisite ①: the probe must be good enough that a normal local
@@ -1677,6 +1683,7 @@ mod tests {
         assert!(gateway.require_writer().is_ok());
     }
 
+    #[cfg(target_os = "macos")] // 同上:租约这一档只在 macOS 上存在。
     #[test]
     fn a_second_instance_over_the_same_directory_starts_read_only_and_says_so() {
         // ADR-027 end to end, on a real lease. The first holder must stay writable: if

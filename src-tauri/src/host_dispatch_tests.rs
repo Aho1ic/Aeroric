@@ -148,6 +148,9 @@ async fn a_bad_argument_is_not_dressed_up_as_a_missing_method() {
     assert!(error.contains("Missing param"), "原始原因要透出：{error}");
 }
 
+// 非 macOS 上 `writer_handover_allowed()` 为 false ⇒ `decide_placement` 短路成
+// `Embedded`,External 档走不到(ADR-039 §4 S2)。
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn external_without_a_session_refuses_rather_than_running_locally() {
     let root =

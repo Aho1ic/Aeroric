@@ -290,7 +290,7 @@
     {
       "task": "P8-05",
       "status": "in_progress",
-      "note": "切片102-110 已提交(1dca3e3f);grill-me [ide/slice110] 已调用(评审 §8,Q2-Q4 维持现状=零返工);Q1 的项目转型声明登记为 ADR-039 proposed(与 INV-10/INV-11/§6.1 冲突,需显式评审),未删任何跨平台实现、CI 与签名基线未动;未切真实 数据、未打 tag;G43 open",
+      "note": "切片102-110 已提交(1dca3e3f);grill-me [ide/slice110] 已调用(评审 §8,Q2-Q4 维持现状=零返工);Q1 的项目转型声明登记为 ADR-039 proposed(与 INV-10/INV-11/§6.1 冲突,需显式评审),未删任何跨平台实现、CI 与签名基线未动;未切真实数据、未打 tag;G43 open。ADR-039 逐行确认(6 行全定:删跨平台/删 WSL/删 CI/改写 INV-11/改写 INV-09/保留 remote+iOS 接入);执行排序四问亦定(S1 冻结 React 待 SwiftUI 能跑、S2 六条平台语义用例 gate 到 macOS、S3 先登记 rollback/task-status、S4 先动可逆的 CI);实际删除动作未开始",
       "accepted_on": null,
       "review": null
     },

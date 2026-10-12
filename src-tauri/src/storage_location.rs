@@ -113,6 +113,9 @@ mod tests {
         );
     }
 
+    // 这条钉的是「本机」——Linux runner 的 /tmp 卷被探成 `Unknown` ⇒ `VolumeUnverified`。
+    // 名字里的 on_this_machine 就是它自己的适用范围(ADR-039 §4 S2)。
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_wired_probe_grants_the_writer_role_on_this_machine() {
         // "接不上就是红的": the point of the exercise is that `CoreContext::acquire` gets a
