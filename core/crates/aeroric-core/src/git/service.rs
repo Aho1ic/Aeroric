@@ -877,7 +877,10 @@ pub fn generate_commit_message(project_path: &Path) -> Result<String, String> {
     let mut child = cmd
         .spawn()
         .map_err(|error| format!("Failed to run {agent}: {error}"))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+    // `commit_message_timeout_secs` is already u64 (settings::project_config), so no
+    // cast: clippy's `unnecessary_cast` fires on the same-type cast, and it is a lint
+    // the local toolchain only raises in some installs — CI caught it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let output = loop {
         match child.try_wait() {
             Ok(Some(status)) => {

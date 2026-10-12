@@ -627,14 +627,20 @@ fn wait_for_parent_exit(pid: u32) -> Result<(), String> {
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn run_update_helper(parent_pid: u32, original_exe: &Path) -> Result<(), String> {
-    let pending = load_pending_update()?;
-    let installer = validate_pending_installer_path(
+    // P8-04 把「读待装记录/校验/清理」上收 core(`maintenance`),本文件只留平台替换;
+    // macOS 路径已用 qualified 调用,这里当年漏改 ⇒ Windows/Linux 编译失败(只在
+    // 非 macOS 目标上暴露,本机从不编译到那里)。
+    let service = service();
+    let pending = service
+        .pending_update()
+        .ok_or_else(|| "No prepared update is pending.".to_string())?;
+    let installer = aeroric_core::maintenance::validate_pending_installer_path(
         &updates_dir()?,
         &pending.tag_name,
         &pending.asset_name,
         Path::new(&pending.installer_path),
     )?;
-    verify_pending_update_files(&pending, &installer)?;
+    aeroric_core::maintenance::verify_pending_update_files(&pending, &installer)?;
     wait_for_parent_exit(parent_pid)?;
 
     #[cfg(target_os = "windows")]
@@ -644,7 +650,7 @@ fn run_update_helper(parent_pid: u32, original_exe: &Path) -> Result<(), String>
     Command::new(original_exe)
         .spawn()
         .map_err(|error| format!("Update installed, but Aeroric could not restart: {error}"))?;
-    clear_pending_update()?;
+    service.clear_pending_update()?;
     if let Some(update_dir) = installer.parent() {
         let _ = fs::remove_dir_all(update_dir);
     }
@@ -702,7 +708,9 @@ pub fn try_run_update_helper() -> bool {
 fn launch_update_helper() -> Result<(String, bool), String> {
     #[cfg(target_os = "linux")]
     {
-        let pending = load_pending_update()?;
+        let pending = service()
+            .pending_update()
+            .ok_or_else(|| "No prepared update is pending.".to_string())?;
         ensure_linux_update_prerequisites(&pending.asset_name)?;
     }
 

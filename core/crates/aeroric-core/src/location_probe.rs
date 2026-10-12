@@ -245,10 +245,8 @@ pub fn nearest_existing_ancestor(path: &Path) -> Option<&Path> {
         if std::fs::symlink_metadata(cursor).is_ok() {
             return Some(cursor);
         }
-        match cursor.parent() {
-            Some(up) => cursor = up,
-            None => return None,
-        }
+        // clippy 的 `question_mark`:与 match/let-else 同语义,`?` 是最短写法。
+        cursor = cursor.parent()?;
     }
 }
 
