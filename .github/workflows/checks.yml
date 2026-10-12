@@ -161,7 +161,16 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Check core formatting
-        run: cargo fmt --manifest-path core/Cargo.toml -- --check
+        # `core/Cargo.toml` is a virtual workspace, so `cargo fmt --manifest-path
+        # core/Cargo.toml --check` from the repo root fails with "Failed to find
+        # targets" on every platform — the step never actually checked formatting.
+        # `--all` is also wrong here: core's dbx path dependency pulls in the dbx
+        # workspace (its vendored `wry` is absent locally). Run the same check the
+        # native gate uses (`scripts/native/checks.json` → `core-cargo-fmt`),
+        # from inside `core/`.
+        shell: bash
+        run: |
+          cd core && cargo fmt --check
 
       - name: Check remote protocol formatting
         run: cargo fmt --manifest-path remote-protocol/Cargo.toml -- --check
